@@ -20,12 +20,18 @@ use serde_json::json;
 /// on the lowest passing code). At 16x16 one flip is 0.4 points.
 const COVERAGE_MIN_TEXELS: u32 = 256;
 
+/// Slack on the coverage tolerance, in points: a drift of exactly the tolerance is within it, but in f64
+/// `(0.52 - 0.5) * 100.0` is 2.0000000000000018.
+const COVERAGE_EPS: f64 = 1e-9;
+
 pub struct ValidationInput<'a> {
     pub bytes: &'a [u8],
     pub profile: &'a Profile,
     /// What went into the encoder, largest level first (enables the per-mip error and exact-opaque checks).
     pub encoder_input: Option<&'a [EncoderInput]>,
     /// Coverage of mip 0 under the profile's threshold and comparison (enables the coverage check).
+    /// Callers pass `None` when the alpha policy is `remove`: a removed channel decodes to all-255, which
+    /// would otherwise be compared against the source's coverage.
     pub base_coverage: Option<f64>,
     /// Peak luminance of the HDR source (enables the BC6H peak check).
     pub source_peak: Option<f32>,
@@ -80,6 +86,18 @@ fn finish(mut summary: ValidationSummary, warnings: Vec<Warning>) -> ValidationR
 ///
 /// Never panics on malformed bytes: header and decode failures become `VAL-HEADER` errors. `passed` is true
 /// when no warning has `Error` severity.
+///
+/// Gating on the stored alpha (`alpha.policy != remove`):
+/// - `VAL-M-GRAYSCALE` reads RGB only, so it runs for every complex `_m`, with or without stored alpha.
+/// - `VAL-M-COMPLEX-MARGIN` and `VAL-M-HEIGHT-CLIP` measure the stored alpha and are skipped under `remove`
+///   (they would only see the synthesised 255). A complex `_m` whose alpha is removed is Resolve's finding
+///   (`LOSS-ALPHA-DATA` for a varying source, a violation for a flat one), not a Validate one.
+/// - `VAL-PGPATCHER-50` likewise needs stored alpha.
+/// - The remove guarantee (decoded alpha >= 254 for BC7 without `exact_opaque`, else 255) is checked for
+///   BC1, BC3 and BC7 only; BC1 and BC3 store 255 exactly.
+///
+/// `encoder_input` is a contract with the caller: its level count and per-level texel counts must match the
+/// file. A mismatch is a caller bug; it is reported as `VAL-HEADER` and trips a `debug_assert!`.
 pub fn validate(inp: &ValidationInput) -> ValidationReport {
     let p = inp.profile;
     let v = &p.validation;
@@ -132,16 +150,16 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
     let alpha_present = p.alpha.policy != AlphaPolicy::Remove;
 
     // Per-mip error and exact-opaque blocks.
+    let mut opaque_causes: Vec<String> = vec![];
     if let Some(enc) = inp.encoder_input {
         if enc.len() != decoded.len() {
-            w.push(Warning::new(
-                Code::ValHeader,
-                format!(
-                    "encoder input has {} levels, the file {}",
-                    enc.len(),
-                    decoded.len()
-                ),
-            ));
+            let msg = format!(
+                "caller supplied encoder_input does not match the file: {} levels, the file {}",
+                enc.len(),
+                decoded.len()
+            );
+            debug_assert!(false, "{msg}");
+            w.push(Warning::new(Code::ValHeader, msg));
         }
         let ch: Vec<usize> = match p.format {
             Format::Bc4 => vec![0],
@@ -155,14 +173,13 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                 continue;
             };
             if d.len() != e.len() {
-                w.push(Warning::new(
-                    Code::ValHeader,
-                    format!(
-                        "mip {l}: encoder input has {} texels, the decoded level {}",
-                        e.len(),
-                        d.len()
-                    ),
-                ));
+                let msg = format!(
+                    "caller supplied encoder_input does not match the file: mip {l} has {} texels, the decoded level {}",
+                    e.len(),
+                    d.len()
+                );
+                debug_assert!(false, "{msg}");
+                w.push(Warning::new(Code::ValHeader, msg));
                 continue;
             }
             let q = psnr(e, d, &ch);
@@ -179,9 +196,8 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             if p.format == Format::Bc7 && p.alpha.exact_opaque {
                 let bad = opaque_block_violations(e, d, *lw, *lh);
                 if bad > 0 {
-                    w.push(Warning::new(
-                        Code::ValAlphaGuarantee,
-                        format!("mip {l}: {bad} texels of all-255 blocks decode below 255"),
+                    opaque_causes.push(format!(
+                        "mip {l}: {bad} texels of all-255 blocks decode below 255"
                     ));
                 }
             }
@@ -198,39 +214,49 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             .collect();
         s.alpha = ldr.iter().map(|(_, _, px)| alpha_stats(px)).collect();
 
+        let guarantee = if p.format == Format::Bc7 && !p.alpha.exact_opaque {
+            254
+        } else {
+            255
+        };
+        let mut causes: Vec<String> = vec![];
         if p.alpha.policy == AlphaPolicy::Remove {
-            let guarantee = if p.format == Format::Bc7 && !p.alpha.exact_opaque {
-                254
-            } else {
-                255
-            };
             for (l, st) in s.alpha.iter().enumerate() {
                 if st.min < guarantee {
-                    w.push(Warning::new(
-                        Code::ValAlphaGuarantee,
-                        format!(
-                            "mip {l}: decoded alpha {} below the guarantee {guarantee}",
-                            st.min
-                        ),
+                    causes.push(format!(
+                        "mip {l}: decoded alpha {} below the guarantee {guarantee}",
+                        st.min
                     ));
                 }
             }
-            if guarantee == 254 && s.alpha.iter().any(|a| a.eq254 > 0) {
-                let (first, last) = (s.alpha[0], *s.alpha.last().expect("alpha has a level"));
-                w.push(
-                    Warning::new(
-                        Code::Alpha254,
-                        format!(
-                            "decoded alpha 254 on {:.1}% of mip 0 and {:.1}% of the smallest mip",
-                            first.share_254() * 100.0,
-                            last.share_254() * 100.0
-                        ),
-                    )
-                    .with_data(
-                        json!({"mip0_share": first.share_254(), "smallest_share": last.share_254()}),
+        }
+        causes.extend(opaque_causes);
+        // One error per file naming every cause: under `remove` with `exact_opaque` the opaque-block texels
+        // are a subset of the decoded-alpha ones, so separate errors would only duplicate the finding.
+        if !causes.is_empty() {
+            w.push(
+                Warning::new(Code::ValAlphaGuarantee, causes.join("; "))
+                    .with_data(json!({"causes": causes})),
+            );
+        }
+        if p.alpha.policy == AlphaPolicy::Remove
+            && guarantee == 254
+            && s.alpha.iter().any(|a| a.eq254 > 0)
+        {
+            let (first, last) = (s.alpha[0], *s.alpha.last().expect("alpha has a level"));
+            w.push(
+                Warning::new(
+                    Code::Alpha254,
+                    format!(
+                        "decoded alpha 254 on {:.1}% of mip 0 and {:.1}% of the smallest mip",
+                        first.share_254() * 100.0,
+                        last.share_254() * 100.0
                     ),
-                );
-            }
+                )
+                .with_data(
+                    json!({"mip0_share": first.share_254(), "smallest_share": last.share_254()}),
+                ),
+            );
         }
 
         if p.coverage_enabled() {
@@ -243,7 +269,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                     );
                     s.coverage.push(c);
                     if u64::from(*lw) * u64::from(*lh) >= u64::from(COVERAGE_MIN_TEXELS)
-                        && (c - base).abs() * 100.0 > v.coverage_tolerance_pts
+                        && (c - base).abs() * 100.0 > v.coverage_tolerance_pts + COVERAGE_EPS
                     {
                         w.push(
                             Warning::new(
@@ -261,8 +287,8 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             }
         }
 
-        if p.subtype == Subtype::ComplexMaterial && alpha_present {
-            if let Some((_, _, px)) = ldr.last() {
+        if p.subtype == Subtype::ComplexMaterial {
+            if let Some((_, _, px)) = ldr.last().filter(|_| alpha_present) {
                 let a = px.iter().map(|q| q[3]).max().unwrap_or(0);
                 if a >= v.complex_m_warn_alpha {
                     w.push(Warning::new(
@@ -275,12 +301,10 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             }
             if let Some((_, _, px)) = ldr.first() {
                 let n = px.len().max(1) as f64;
+                // Same definition as Analyse (`analyse.rs`): the whole R/G/B spread within 4 codes.
                 let gray = px
                     .iter()
-                    .filter(|q| {
-                        (q[0] as i32 - q[1] as i32).abs() <= 4
-                            && (q[1] as i32 - q[2] as i32).abs() <= 4
-                    })
+                    .filter(|q| q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]) <= 4)
                     .count() as f64
                     / n;
                 let mean = px
@@ -295,7 +319,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                     ));
                 }
                 let clip = px.iter().filter(|q| q[3] <= 4 || q[3] >= 251).count() as f64 / n;
-                if clip > 0.25 {
+                if alpha_present && clip > 0.25 {
                     w.push(Warning::new(
                         Code::ValMHeightClip,
                         format!("{:.0}% of height alpha is ≤4 or ≥251", clip * 100.0),

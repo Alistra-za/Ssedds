@@ -74,12 +74,28 @@ fn codes(r: &ValidationReport) -> Vec<Code> {
     r.warnings.iter().map(|w| w.code).collect()
 }
 
-fn mode6_p0_payload(blocks: usize) -> Vec<u8> {
+/// One BC7 mode 6 block (7-bit endpoints + p-bits, all indices 0) that decodes to alpha `alpha` on every texel.
+/// Bit layout: mode bit 6, then R0 R1 G0 G1 B0 B1 A0 A1 at 7 bits each from bit 7, then p-bits at 63 and 64
+/// (see bc7e.ispc / bc7_fixup.rs). The colour endpoints are 10 (decoded 20 or 21).
+fn mode6_block(alpha: u8) -> Vec<u8> {
     let mut v: u128 = 1 << 6;
     for i in 0..8 {
-        v |= (if i >= 6 { 127u128 } else { 10 }) << (7 + 7 * i);
+        let ep = if i >= 6 { alpha >> 1 } else { 10 };
+        v |= u128::from(ep) << (7 + 7 * i);
     }
-    v.to_le_bytes().repeat(blocks)
+    let p = u128::from(alpha & 1);
+    v |= (p << 63) | (p << 64);
+    v.to_le_bytes().to_vec()
+}
+
+/// Mode 6 block with alpha endpoints 127 and p-bits 0: decoded alpha 254.
+fn mode6_p0_payload(blocks: usize) -> Vec<u8> {
+    mode6_block(254).repeat(blocks)
+}
+
+/// A 4x4 BC7 file (one block) for `p` whose texels all decode to `alpha`.
+fn one_block_file(p: &Profile, alpha: u8) -> Vec<u8> {
+    wrap(p, 4, 4, &[mode6_block(alpha)])
 }
 
 fn flat(n: u32, px: [u8; 4]) -> Level {
@@ -146,6 +162,54 @@ fn alpha_254_is_info_with_flag_off_and_an_error_with_flag_on() {
     assert!(codes(&r).contains(&Code::ValAlphaGuarantee));
 }
 
+/// Mip 0 has one 254 block in four, the next two mips are 255, the smallest is all 254: the info reports the
+/// share of the first and of the last level separately.
+#[test]
+fn alpha_254_reports_the_first_and_the_smallest_mip_shares() {
+    let p = profile(Subtype::Diffuse);
+    let mip0 = [mode6_block(254), mode6_block(255).repeat(3)].concat();
+    let b = wrap(
+        &p,
+        8,
+        8,
+        &[mip0, mode6_block(255), mode6_block(255), mode6_block(254)],
+    );
+    let r = run(&b, &p, None, None, Some(4));
+    assert!(r.summary.passed, "{:?}", r.warnings);
+    assert_eq!(r.summary.alpha.len(), 4);
+    let w = r
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::Alpha254)
+        .unwrap();
+    assert_eq!(w.data["mip0_share"].as_f64().unwrap(), 0.25);
+    assert_eq!(w.data["smallest_share"].as_f64().unwrap(), 1.0);
+}
+
+/// Flag off, `remove`: BC7 may decode to 254 but not below. Decoded alpha 253, 200 and 0 are errors.
+#[test]
+fn remove_without_exact_opaque_rejects_decoded_alpha_below_254() {
+    let p = profile(Subtype::Diffuse);
+    assert_eq!(p.alpha.policy, AlphaPolicy::Remove);
+    assert!(!p.alpha.exact_opaque);
+    for alpha in [255u8, 254] {
+        let r = run(&one_block_file(&p, alpha), &p, None, None, Some(1));
+        assert!(r.summary.passed, "alpha {alpha}: {:?}", r.warnings);
+    }
+    for alpha in [253u8, 200, 0] {
+        let r = run(&one_block_file(&p, alpha), &p, None, None, Some(1));
+        assert!(!r.summary.passed, "alpha {alpha}");
+        let g: Vec<_> = r
+            .warnings
+            .iter()
+            .filter(|w| w.code == Code::ValAlphaGuarantee)
+            .collect();
+        assert_eq!(g.len(), 1, "alpha {alpha}: {:?}", r.warnings);
+        assert!(g[0].message.contains("below the guarantee 254"));
+        assert_eq!(r.summary.alpha[0].min, alpha);
+    }
+}
+
 #[test]
 fn header_and_format_mismatch_are_errors() {
     let p = profile(Subtype::PbrAlbedo); // expects BC7_UNORM_SRGB
@@ -170,9 +234,6 @@ fn mip_count_mismatch_and_unreadable_files_are_header_errors() {
     assert_eq!(codes(&r), vec![Code::ValHeader]);
     assert!(!r.summary.passed);
     assert!(run(&b, &p, Some(&inputs), None, Some(2)).summary.passed);
-    // Fewer encoder-input levels than file levels.
-    let r = run(&b, &p, Some(&inputs[..1]), None, None);
-    assert!(codes(&r).contains(&Code::ValHeader));
     // Truncated, empty and non-DDS inputs report instead of panicking.
     for bytes in [
         &b[..100],
@@ -214,6 +275,32 @@ fn coverage_drift_and_complex_m_margin() {
     );
 }
 
+/// A drift of exactly the tolerance (2.0 points) is within it; f64 gives 2.0000000000000018 for 0.52 - 0.5.
+#[test]
+fn coverage_drift_of_exactly_the_tolerance_is_not_flagged() {
+    let mut p = profile(Subtype::Diffuse);
+    p.alpha.policy = AlphaPolicy::Cutout;
+    assert_eq!(p.validation.coverage_tolerance_pts, 2.0);
+    // 20x20 = 400 texels; `on` of them opaque.
+    let level = |on: usize| {
+        let px: Vec<[u8; 4]> = (0..400)
+            .map(|i| [128, 128, 128, if i < on { 255 } else { 0 }])
+            .collect();
+        (20, 20, px)
+    };
+    let (b, inputs) = dds(&p, &[level(208)]);
+    let r = run(&b, &p, Some(&inputs), Some(0.5), Some(1));
+    assert_eq!(r.summary.coverage, vec![208.0 / 400.0]);
+    assert!(!codes(&r).contains(&Code::ValCoverage), "{:?}", r.warnings);
+    // The other direction at the limit, and one texel beyond it (2.25 points).
+    let (b, inputs) = dds(&p, &[level(192)]);
+    let r = run(&b, &p, Some(&inputs), Some(0.5), Some(1));
+    assert!(!codes(&r).contains(&Code::ValCoverage), "{:?}", r.warnings);
+    let (b, inputs) = dds(&p, &[level(209)]);
+    let r = run(&b, &p, Some(&inputs), Some(0.5), Some(1));
+    assert!(codes(&r).contains(&Code::ValCoverage), "{:?}", r.warnings);
+}
+
 #[test]
 fn coverage_is_not_checked_below_256_texels_and_needs_a_base() {
     let mut p = profile(Subtype::Diffuse);
@@ -253,10 +340,59 @@ fn per_mip_error_is_a_warning_not_a_failure() {
     assert_eq!(w.severity, Severity::Warning);
     assert!(r.summary.passed);
     assert!(r.summary.min_mip_psnr_db.unwrap() < p.validation.min_mip_psnr_db);
-    // An encoder input whose size does not match the level is reported, not a panic.
+}
+
+/// An encoder input that does not match the file is a caller bug: a `debug_assert!` in debug builds, a
+/// `VAL-HEADER` error naming the caller in release builds.
+fn encoder_input_level_count_mismatch() -> ValidationReport {
+    let p = profile(Subtype::Diffuse);
+    let (b, inputs) = dds(&p, &[flat(4, [9, 9, 9, 255]), flat(2, [9, 9, 9, 255])]);
+    run(&b, &p, Some(&inputs[..1]), None, None)
+}
+
+fn encoder_input_texel_count_mismatch() -> ValidationReport {
+    let p = profile(Subtype::Diffuse);
+    let (b, _) = dds(&p, &[flat(8, [10, 10, 10, 255])]);
     let short = [EncoderInput::Ldr(vec![[1, 2, 3, 255]; 10])];
-    let r = run(&b, &p, Some(&short), None, None);
-    assert!(codes(&r).contains(&Code::ValHeader));
+    run(&b, &p, Some(&short), None, None)
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn encoder_input_mismatch_is_a_caller_labelled_header_error() {
+    for r in [
+        encoder_input_level_count_mismatch(),
+        encoder_input_texel_count_mismatch(),
+    ] {
+        assert!(!r.summary.passed);
+        let w = r
+            .warnings
+            .iter()
+            .find(|w| w.code == Code::ValHeader)
+            .unwrap();
+        assert!(
+            w.message
+                .contains("caller supplied encoder_input does not match the file"),
+            "{}",
+            w.message
+        );
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "caller supplied encoder_input does not match the file: 1 levels")]
+fn encoder_input_level_count_mismatch_asserts_in_debug() {
+    encoder_input_level_count_mismatch();
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(
+    expected = "caller supplied encoder_input does not match the file: mip 0 has 10 texels"
+)]
+fn encoder_input_texel_count_mismatch_asserts_in_debug() {
+    encoder_input_texel_count_mismatch();
 }
 
 #[test]
@@ -302,6 +438,93 @@ fn complex_m_grayscale_and_height_clip() {
     let r = run(&b, &p, Some(&inputs), None, Some(1));
     assert!(!codes(&r).contains(&Code::ValMGrayscale));
     assert!(!codes(&r).contains(&Code::ValMHeightClip));
+}
+
+/// Complex `_m` file whose texels all have colour `rgb` and a mid-range height.
+fn complex_m_file(p: &Profile, rgb: [u8; 3]) -> (Vec<u8>, Vec<EncoderInput>) {
+    let px: Vec<[u8; 4]> = (0..64)
+        .map(|i| [rgb[0], rgb[1], rgb[2], 100 + i as u8])
+        .collect();
+    dds(p, &[(8, 8, px)])
+}
+
+/// The same R/G/B spread as Analyse (`max - min <= 4`): (100,102,104) is gray, (100,104,108) is not even
+/// though each neighbouring pair is within 4.
+#[test]
+fn complex_m_grayscale_uses_the_whole_channel_spread() {
+    let p = profile(Subtype::ComplexMaterial);
+    let (b, inputs) = complex_m_file(&p, [100, 102, 104]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(codes(&r).contains(&Code::ValMGrayscale), "{:?}", r.warnings);
+    let (b, inputs) = complex_m_file(&p, [100, 104, 108]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(
+        !codes(&r).contains(&Code::ValMGrayscale),
+        "{:?}",
+        r.warnings
+    );
+}
+
+/// Under `remove` there is no stored alpha, so the alpha-based `_m` checks have nothing to measure, but the
+/// grayscale check reads RGB only and still fires.
+#[test]
+fn complex_m_grayscale_still_fires_when_alpha_is_removed() {
+    let mut p = profile(Subtype::ComplexMaterial);
+    p.alpha.policy = AlphaPolicy::Remove;
+    let (b, inputs) = complex_m_file(&p, [100, 100, 100]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    let c = codes(&r);
+    assert!(c.contains(&Code::ValMGrayscale), "{:?}", r.warnings);
+    // Decoded alpha is the synthesised 255: not reported as a margin or height-clip problem.
+    assert!(!c.contains(&Code::ValMComplexMargin), "{:?}", r.warnings);
+    assert!(!c.contains(&Code::ValMHeightClip), "{:?}", r.warnings);
+}
+
+/// `complex_m_warn_alpha` (247) is inclusive: the smallest mip at 247 warns, at 246 it does not.
+#[test]
+fn complex_m_margin_boundary() {
+    let p = profile(Subtype::ComplexMaterial);
+    assert_eq!(p.validation.complex_m_warn_alpha, 247);
+    let r = run(&one_block_file(&p, 246), &p, None, None, Some(1));
+    assert!(
+        !codes(&r).contains(&Code::ValMComplexMargin),
+        "{:?}",
+        r.warnings
+    );
+    let r = run(&one_block_file(&p, 247), &p, None, None, Some(1));
+    assert!(
+        codes(&r).contains(&Code::ValMComplexMargin),
+        "{:?}",
+        r.warnings
+    );
+}
+
+/// `pgpatcher_non_white_share` (0.5) is inclusive: 8 of 16 blocks with alpha 100 warn, 7 of 16 do not.
+#[test]
+fn pgpatcher_share_boundary() {
+    let mut p = profile(Subtype::Envmask);
+    p.format = Format::Bc7;
+    p.alpha.policy = AlphaPolicy::Data;
+    assert_eq!(p.validation.pgpatcher_non_white_share, 0.5);
+    let file = |non_white_blocks: usize| {
+        let mip0: Vec<u8> = (0..16)
+            .flat_map(|i| mode6_block(if i < non_white_blocks { 100 } else { 255 }))
+            .collect();
+        wrap(&p, 16, 16, &[mip0])
+    };
+    let r = run(&file(7), &p, None, None, Some(1));
+    assert!(
+        !codes(&r).contains(&Code::ValPgpatcher50),
+        "{:?}",
+        r.warnings
+    );
+    assert!((r.summary.alpha[0].share_not_255() - 7.0 / 16.0).abs() < 1e-12);
+    let r = run(&file(8), &p, None, None, Some(1));
+    assert!(
+        codes(&r).contains(&Code::ValPgpatcher50),
+        "{:?}",
+        r.warnings
+    );
 }
 
 #[test]
@@ -361,8 +584,10 @@ fn bc6h_peak_ratio() {
         .is_none());
 }
 
-/// Task 32: exact opaque holds on every block, rotated mode 4/5 included, so a BC7 encode of opaque noise
-/// decodes to alpha 255 at every texel of every level.
+/// Smoke test: a BC7 encode of opaque noise with `exact_opaque` decodes to alpha 255 at every texel of every
+/// level, including levels whose size is not a multiple of 4. It passes with the flag off as well (noise
+/// does not pick the blocks the flag fixes), so the mechanism itself is shown by
+/// `exact_opaque_flag_is_what_makes_dark_blocks_255`; rotated mode 4/5 blocks are covered by Task 32's tests.
 #[test]
 fn bc7_exact_opaque_noise_decodes_to_255_everywhere() {
     for policy in [AlphaPolicy::Remove, AlphaPolicy::Data] {
@@ -428,7 +653,20 @@ fn exact_opaque_flag_is_what_makes_dark_blocks_255() {
             Some(2),
         );
         assert!(!r.summary.passed, "{policy:?}");
-        assert!(codes(&r).contains(&Code::ValAlphaGuarantee), "{policy:?}");
+        // One error per file; under `remove` it names both causes.
+        let g: Vec<_> = r
+            .warnings
+            .iter()
+            .filter(|w| w.code == Code::ValAlphaGuarantee)
+            .collect();
+        assert_eq!(g.len(), 1, "{policy:?}: {:?}", r.warnings);
+        assert!(g[0].message.contains("all-255 blocks"), "{}", g[0].message);
+        assert_eq!(
+            g[0].message.contains("below the guarantee 255"),
+            policy == AlphaPolicy::Remove,
+            "{}",
+            g[0].message
+        );
     }
 }
 
@@ -438,5 +676,4 @@ fn passed_means_no_error_severity_warning() {
     let r = run(b"DDS ", &p, None, None, None);
     assert!(!r.summary.passed);
     assert!(r.warnings.iter().any(|w| w.severity == Severity::Error));
-    assert_eq!(ValidationSummary::default().levels, 0);
 }
