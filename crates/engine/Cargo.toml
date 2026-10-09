@@ -9,4 +9,19 @@ publish.workspace = true
 encoders-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
+schemars.workspace = true
 thiserror.workspace = true
+image.workspace = true
+half.workspace = true
+bcdec_rs.workspace = true
+rayon.workspace = true
+sha2.workspace = true
+hex.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+tempfile.workspace = true
+humantime.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
