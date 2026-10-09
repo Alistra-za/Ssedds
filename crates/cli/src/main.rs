@@ -57,9 +57,8 @@ fn run(cli: Cli) -> Result<i32, EngineError> {
         Command::Convert(a) => convert(a),
         Command::Inspect(a) => verbs::inspect(a),
         Command::Validate(a) => verbs::validate_files(a),
-        _ => Err(EngineError::Usage(
-            "this command is not implemented yet".into(),
-        )),
+        Command::Presets(c) => verbs::presets(c),
+        Command::Encoders(a) => verbs::encoders(a),
     }
 }
 

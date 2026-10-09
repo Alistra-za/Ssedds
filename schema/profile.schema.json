@@ -1,0 +1,413 @@
+{
+  "$defs": {
+    "AlphaCompare": {
+      "enum": [
+        "gt",
+        "ge"
+      ],
+      "type": "string"
+    },
+    "AlphaPolicy": {
+      "enum": [
+        "remove",
+        "cutout",
+        "blend",
+        "cutout_blend",
+        "data"
+      ],
+      "type": "string"
+    },
+    "AlphaSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "compare": {
+          "$ref": "#/$defs/AlphaCompare"
+        },
+        "exact_opaque": {
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "#/$defs/AlphaPolicy"
+        },
+        "threshold": {
+          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy",
+        "threshold",
+        "compare",
+        "exact_opaque"
+      ],
+      "type": "object"
+    },
+    "Backend": {
+      "enum": [
+        "bc7e",
+        "rgbcx",
+        "ispc_bc6h",
+        "nvtt"
+      ],
+      "type": "string"
+    },
+    "Category": {
+      "enum": [
+        "color",
+        "normal",
+        "mixed_packed",
+        "grayscale",
+        "hdr"
+      ],
+      "type": "string"
+    },
+    "ChannelSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "flip_green": {
+          "type": "boolean"
+        },
+        "grayscale_source": {
+          "$ref": "#/$defs/GraySource"
+        },
+        "green_convention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GreenConvention"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Green (Y) convention of a normal source (spec §3.2, §4.4, DECISIONS Note H); None = unstated.\n`opengl` makes Resolve set `flip_green`."
+        },
+        "reconstruct_z": {
+          "type": "boolean"
+        },
+        "swizzle": {
+          "default": null,
+          "description": "Four characters from r, g, b, a, 0, 1 (e.g. \"bgra\", \"rrr1\"); None = identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "flip_green",
+        "reconstruct_z",
+        "grayscale_source"
+      ],
+      "type": "object"
+    },
+    "ColorContent": {
+      "enum": [
+        "srgb",
+        "linear"
+      ],
+      "type": "string"
+    },
+    "ColorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/ColorContent"
+        },
+        "tag": {
+          "$ref": "#/$defs/ColorTag"
+        }
+      },
+      "required": [
+        "content",
+        "tag"
+      ],
+      "type": "object"
+    },
+    "ColorTag": {
+      "enum": [
+        "srgb",
+        "unorm",
+        "n/a"
+      ],
+      "type": "string"
+    },
+    "CoverageMode": {
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "type": "string"
+    },
+    "Effort": {
+      "enum": [
+        "ultrafast",
+        "veryfast",
+        "fast",
+        "basic",
+        "veryslow",
+        "slowest"
+      ],
+      "type": "string"
+    },
+    "EncoderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Backend"
+        },
+        "bc1_transparent_black": {
+          "type": "boolean"
+        },
+        "bc45_search_radius": {
+          "$ref": "#/$defs/SearchRadius"
+        },
+        "effort": {
+          "$ref": "#/$defs/Effort"
+        },
+        "perceptual": {
+          "type": "boolean"
+        },
+        "rgbcx_level": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend",
+        "effort",
+        "rgbcx_level",
+        "perceptual",
+        "bc1_transparent_black",
+        "bc45_search_radius"
+      ],
+      "type": "object"
+    },
+    "Format": {
+      "enum": [
+        "bc1",
+        "bc3",
+        "bc4",
+        "bc5",
+        "bc6h_uf16",
+        "bc7"
+      ],
+      "type": "string"
+    },
+    "GraySource": {
+      "enum": [
+        "r",
+        "luma"
+      ],
+      "type": "string"
+    },
+    "GreenConvention": {
+      "enum": [
+        "directx",
+        "opengl"
+      ],
+      "type": "string"
+    },
+    "HeaderForm": {
+      "enum": [
+        "auto",
+        "dx10",
+        "legacy"
+      ],
+      "type": "string"
+    },
+    "MipFilter": {
+      "enum": [
+        "box"
+      ],
+      "type": "string"
+    },
+    "MipKeyword": {
+      "enum": [
+        "full",
+        "none"
+      ],
+      "type": "string"
+    },
+    "MipLevels": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MipKeyword"
+        },
+        {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "MipSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/CoverageMode",
+          "description": "Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and\n`cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,\n`data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity."
+        },
+        "filter": {
+          "$ref": "#/$defs/MipFilter"
+        },
+        "levels": {
+          "$ref": "#/$defs/MipLevels"
+        },
+        "normal": {
+          "$ref": "#/$defs/NormalMips"
+        }
+      },
+      "required": [
+        "levels",
+        "filter",
+        "normal",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "NormalMips": {
+      "enum": [
+        "renormalize",
+        "renormalize_bake"
+      ],
+      "type": "string"
+    },
+    "SearchRadius": {
+      "enum": [
+        "default",
+        "max"
+      ],
+      "type": "string"
+    },
+    "Subtype": {
+      "enum": [
+        "diffuse",
+        "landscape_diffuse",
+        "pbr_albedo",
+        "pbr_emissive",
+        "glow",
+        "pbr_subsurface",
+        "pbr_fuzz",
+        "subsurface_tint",
+        "backlight_tint",
+        "ui_sky",
+        "normal",
+        "landscape_normal",
+        "pbr_normal",
+        "msn",
+        "coat_normal",
+        "envmask",
+        "complex_material",
+        "rmaos",
+        "rfaos",
+        "flow",
+        "height",
+        "msn_specular",
+        "generic_two_channel",
+        "generic_data",
+        "hdr_sky"
+      ],
+      "type": "string"
+    },
+    "Target": {
+      "enum": [
+        "cs",
+        "cpm",
+        "vanilla"
+      ],
+      "type": "string"
+    },
+    "ValidationSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "bc6h_min_peak_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "complex_m_warn_alpha": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "coverage_tolerance_pts": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_mip_psnr_db": {
+          "format": "double",
+          "type": "number"
+        },
+        "pgpatcher_non_white_share": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min_mip_psnr_db",
+        "coverage_tolerance_pts",
+        "complex_m_warn_alpha",
+        "bc6h_min_peak_ratio",
+        "pgpatcher_non_white_share"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "alpha": {
+      "$ref": "#/$defs/AlphaSpec"
+    },
+    "category": {
+      "$ref": "#/$defs/Category"
+    },
+    "channels": {
+      "$ref": "#/$defs/ChannelSpec"
+    },
+    "color": {
+      "$ref": "#/$defs/ColorSpec"
+    },
+    "encoder": {
+      "$ref": "#/$defs/EncoderSpec"
+    },
+    "format": {
+      "$ref": "#/$defs/Format"
+    },
+    "header": {
+      "$ref": "#/$defs/HeaderForm"
+    },
+    "mips": {
+      "$ref": "#/$defs/MipSpec"
+    },
+    "subtype": {
+      "$ref": "#/$defs/Subtype"
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    },
+    "validation": {
+      "$ref": "#/$defs/ValidationSpec"
+    }
+  },
+  "required": [
+    "target",
+    "category",
+    "subtype",
+    "color",
+    "alpha",
+    "channels",
+    "mips",
+    "format",
+    "header",
+    "encoder",
+    "validation"
+  ],
+  "title": "Profile",
+  "type": "object"
+}

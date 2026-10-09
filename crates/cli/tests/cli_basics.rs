@@ -345,9 +345,3 @@ fn unwritable_output_root_is_fatal_exit_3() {
         .unwrap();
     assert_eq!(code(&o), 3, "{}", text(&o.stderr));
 }
-
-#[test]
-fn unimplemented_verbs_are_not_silent_successes() {
-    let o = sdc().arg("encoders").output().unwrap();
-    assert_ne!(code(&o), 0);
-}

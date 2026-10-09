@@ -1,0 +1,184 @@
+{
+  "$defs": {
+    "AlphaContent": {
+      "enum": [
+        "none",
+        "constant255",
+        "varying"
+      ],
+      "type": "string"
+    },
+    "Rule": {
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "$ref": "#/$defs/RuleMatch"
+        },
+        "overrides": {
+          "default": null
+        },
+        "subtype": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Subtype"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "match"
+      ],
+      "type": "object"
+    },
+    "RuleMatch": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlphaContent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "glob": {
+          "default": null,
+          "description": "Glob over the game-relative path (lower case, '/'), e.g. \"**/armor/**/*_n.png\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "set_has": {
+          "default": null,
+          "description": "The file's texture set contains a member with this suffix.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suffix": {
+          "default": null,
+          "description": "Recognised suffix without underscore, e.g. \"n\", \"rmaos\"; \"\" = no suffix.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Subtype": {
+      "enum": [
+        "diffuse",
+        "landscape_diffuse",
+        "pbr_albedo",
+        "pbr_emissive",
+        "glow",
+        "pbr_subsurface",
+        "pbr_fuzz",
+        "subsurface_tint",
+        "backlight_tint",
+        "ui_sky",
+        "normal",
+        "landscape_normal",
+        "pbr_normal",
+        "msn",
+        "coat_normal",
+        "envmask",
+        "complex_material",
+        "rmaos",
+        "rfaos",
+        "flow",
+        "height",
+        "msn_specular",
+        "generic_two_channel",
+        "generic_data",
+        "hdr_sky"
+      ],
+      "type": "string"
+    },
+    "Target": {
+      "enum": [
+        "cs",
+        "cpm",
+        "vanilla"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "User config (%APPDATA%\\sdc\\config.toml) and project config (sdc.toml / --config).",
+  "properties": {
+    "defaults": {
+      "default": null
+    },
+    "preset": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rules": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Rule"
+      },
+      "type": "array"
+    },
+    "subtypes": {
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "backlight_tint": true,
+        "coat_normal": true,
+        "complex_material": true,
+        "diffuse": true,
+        "envmask": true,
+        "flow": true,
+        "generic_data": true,
+        "generic_two_channel": true,
+        "glow": true,
+        "hdr_sky": true,
+        "height": true,
+        "landscape_diffuse": true,
+        "landscape_normal": true,
+        "msn": true,
+        "msn_specular": true,
+        "normal": true,
+        "pbr_albedo": true,
+        "pbr_emissive": true,
+        "pbr_fuzz": true,
+        "pbr_normal": true,
+        "pbr_subsurface": true,
+        "rfaos": true,
+        "rmaos": true,
+        "subsurface_tint": true,
+        "ui_sky": true
+      },
+      "type": "object"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Target"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "ConfigFile",
+  "type": "object"
+}

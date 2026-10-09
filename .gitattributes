@@ -1,2 +1,3 @@
 crates/encoders-sys/vendor/** -text
 tests/** -text
+schema/*.json text eol=lf

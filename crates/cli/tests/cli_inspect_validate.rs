@@ -82,6 +82,10 @@ fn inspect_reports_suggestions_and_dds_headers() {
     let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["mip_count"], 1);
     assert_eq!(v["mips"][0]["alpha"]["min"], 254);
+    assert_eq!(v["schema"], 1);
+    // The object is exactly what `schema/dds-info.schema.json` describes.
+    let info: engine::reports::DdsInfo = serde_json::from_value(v).unwrap();
+    assert!(matches!(info, engine::reports::DdsInfo::Info(_)));
 }
 
 #[test]
@@ -238,6 +242,9 @@ fn validate_accepts_an_sdc_output_and_fails_one_with_a_bad_header() {
     assert_eq!(v["kind"], "dds_validation");
     assert_eq!(v["passed"], true);
     assert_eq!(v["subtype"], "normal");
+    assert_eq!(v["schema"], 1);
+    let rec: engine::reports::DdsValidation = serde_json::from_value(v).unwrap();
+    assert!(matches!(rec, engine::reports::DdsValidation::Validated(_)));
 
     // Clear the LINEARSIZE flag: a header rule (spec §5.7) the file now breaks.
     let mut bytes = std::fs::read(&dds).unwrap();

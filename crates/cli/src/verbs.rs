@@ -18,6 +18,11 @@ use engine::events::{
 use engine::group::split_suffix_with;
 use engine::policy::{availability, Availability};
 use engine::presets::{default_preset_for, AlphaContent};
+use engine::reports::{
+    DdsHeaderInfo, DdsInfo, DdsInfoKind, DdsMipInfo, DdsUnreadable, DdsValidation,
+    DdsValidationKind, DdsValidationUnreadable, DdsVerdict, REPORT_SCHEMA,
+};
+use engine::schemas::SchemaKind;
 use engine::suggest::{suggest, SuggestContext};
 use engine::validate::alpha::{alpha_stats, AlphaStats};
 use engine::validate::{validate, ValidationReport, ValidationSummary};
@@ -61,33 +66,53 @@ fn read_file(path: &Path) -> Result<(Vec<u8>, DdsFile), String> {
 }
 
 /// The `dds_info` object for one file: header facts and per-mip decoded-alpha statistics.
-fn dds_info(path: &Path, model: Bc1Model) -> Value {
+fn dds_info(path: &Path, model: Bc1Model) -> DdsInfo {
     let path_s = path.to_string_lossy().replace('\\', "/");
     let file = match read_file(path) {
         Ok((_, f)) => f,
-        Err(e) => return json!({ "kind": "dds_info", "path": path_s, "error": e }),
+        Err(error) => {
+            return DdsInfo::Unreadable(DdsUnreadable {
+                kind: DdsInfoKind::DdsInfo,
+                schema: REPORT_SCHEMA,
+                path: path_s,
+                error,
+            })
+        }
     };
-    let mips: Vec<Value> = file
+    let mips: Vec<DdsMipInfo> = file
         .levels
         .iter()
         .map(|(w, h, r)| {
-            let mut m = json!({ "width": w, "height": h });
+            let mut m = DdsMipInfo {
+                width: *w,
+                height: *h,
+                alpha: None,
+                decode_error: None,
+            };
             if carries_alpha(file.format) {
                 match decode_level(file.format, *w, *h, &file.data[r.clone()], Some(model)) {
-                    Ok(Decoded::Ldr(px)) => m["alpha"] = json!(alpha_stats(&px)),
+                    Ok(Decoded::Ldr(px)) => m.alpha = Some(alpha_stats(&px)),
                     Ok(Decoded::Hdr(_)) => {}
-                    Err(e) => m["decode_error"] = json!(e.to_string()),
+                    Err(e) => m.decode_error = Some(e.to_string()),
                 }
             }
             m
         })
         .collect();
     let (format, srgb) = format_name(file.format);
-    json!({
-        "kind": "dds_info", "path": path_s, "format": format, "srgb": srgb,
-        "header": file.header_kind, "width": file.width, "height": file.height,
-        "mip_count": file.mip_count, "cubemap": file.is_cubemap,
-        "header_issues": check_header(&file), "mips": mips,
+    DdsInfo::Info(DdsHeaderInfo {
+        kind: DdsInfoKind::DdsInfo,
+        schema: REPORT_SCHEMA,
+        path: path_s,
+        format,
+        srgb,
+        header: file.header_kind,
+        width: file.width,
+        height: file.height,
+        mip_count: file.mip_count,
+        cubemap: file.is_cubemap,
+        header_issues: check_header(&file),
+        mips,
     })
 }
 
@@ -274,8 +299,9 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
     let mut unreadable = 0u32;
     for f in found.iter().filter(|f| f.kind == InputKind::Dds) {
-        let v = dds_info(&f.path, model);
-        unreadable += u32::from(v["error"].is_string());
+        let info = dds_info(&f.path, model);
+        unreadable += u32::from(matches!(info, DdsInfo::Unreadable(_)));
+        let v = serde_json::to_value(&info).unwrap_or(Value::Null);
         if json {
             println!("{v}");
         } else {
@@ -442,6 +468,11 @@ fn header_only_report(file: &DdsFile) -> ValidationReport {
     }
 }
 
+/// One report object as a single JSON line.
+fn json_line(v: &DdsValidation) -> String {
+    serde_json::to_string(v).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+}
+
 /// Result-verb output: stdout, or stderr when stdout is reserved for JSON.
 fn say(json: bool, line: String) {
     if json {
@@ -495,10 +526,15 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
             Err(e) => {
                 say(json, format!("FAIL  {path_s}: cannot be read: {e}"));
                 if json {
-                    println!(
-                        "{}",
-                        json!({ "kind": "dds_validation", "path": path_s, "readable": false, "passed": false, "error": e })
-                    );
+                    let rec = DdsValidation::Unreadable(DdsValidationUnreadable {
+                        kind: DdsValidationKind::DdsValidation,
+                        schema: REPORT_SCHEMA,
+                        path: path_s,
+                        readable: false,
+                        passed: false,
+                        error: e,
+                    });
+                    println!("{}", json_line(&rec));
                 }
                 unreadable += 1;
                 continue;
@@ -568,14 +604,20 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
             );
         }
         if json {
-            println!(
-                "{}",
-                json!({
-                    "kind": "dds_validation", "path": path_s, "readable": true, "subtype": st,
-                    "alpha_policy": policy, "judged": judged, "note": note,
-                    "passed": passed, "summary": report.summary, "warnings": report.warnings,
-                })
-            );
+            let rec = DdsValidation::Validated(DdsVerdict {
+                kind: DdsValidationKind::DdsValidation,
+                schema: REPORT_SCHEMA,
+                path: path_s,
+                readable: true,
+                subtype: st,
+                alpha_policy: policy,
+                judged,
+                note,
+                passed,
+                summary: report.summary,
+                warnings: report.warnings,
+            });
+            println!("{}", json_line(&rec));
         }
         failed += u32::from(!passed);
         not_judged += u32::from(passed && !judged);
@@ -606,9 +648,223 @@ fn policy_id(p: AlphaPolicy) -> String {
     }
 }
 
+/// `sdc presets list|show|schema`. Result verb: the report goes to stdout (DECISIONS Note J).
+pub fn presets(cmd: PresetsCmd) -> Result<i32, EngineError> {
+    let engine = Engine::new()?;
+    let reg = engine.registry();
+    match cmd {
+        PresetsCmd::List { json } => {
+            for p in reg.selectable() {
+                if json {
+                    println!(
+                        "{}",
+                        json!({
+                            "id": p.id, "version": p.version, "target": p.target,
+                            "description": p.description, "suffix_aliases": p.suffix_aliases,
+                        })
+                    );
+                } else {
+                    let aliases = alias_list(&p.suffix_aliases)
+                        .map(|a| format!("  aliases: {a}"))
+                        .unwrap_or_default();
+                    println!(
+                        "{:<18} {:<8} {:<8} {}{aliases}",
+                        p.id,
+                        p.version,
+                        p.target
+                            .map(|t| format!("{t:?}").to_lowercase())
+                            .unwrap_or_default(),
+                        p.description
+                    );
+                }
+            }
+            Ok(0)
+        }
+        PresetsCmd::Show {
+            id,
+            subtype,
+            target,
+        } => {
+            let usage = |e: engine::presets::PresetError| EngineError::Usage(e.to_string());
+            reg.chain(&id).map_err(usage)?;
+            let preset = reg
+                .get(&id)
+                .ok_or_else(|| EngineError::Usage(format!("unknown preset '{id}'")))?;
+            let target = target
+                .map(Target::from)
+                .or(preset.target)
+                .unwrap_or(Target::Cs);
+            let subtypes: Vec<Subtype> = match subtype {
+                Some(s) => vec![serde_json::from_value(Value::String(s.clone()))
+                    .map_err(|_| EngineError::Usage(format!("--subtype {s}: unknown sub-type")))?],
+                None => Subtype::ALL.to_vec(),
+            };
+            if let Some(a) = alias_list(&preset.suffix_aliases) {
+                println!("suffix aliases: {a}");
+            }
+            for st in subtypes {
+                let profile = reg.profile(&id, target, st).map_err(usage)?;
+                let mut prov = BTreeMap::new();
+                for (source, patch) in reg.layers(&id, st).map_err(usage)? {
+                    let mut paths = vec![];
+                    engine::presets::leaf_paths(&patch, "", &mut paths);
+                    for p in paths {
+                        prov.insert(p, source.to_string());
+                    }
+                }
+                let shown = json!({ "subtype": st, "profile": profile, "provenance": prov });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&shown).unwrap_or_default()
+                );
+            }
+            Ok(0)
+        }
+        PresetsCmd::Schema { which, out } => {
+            match (SchemaKind::from(which), out) {
+                (SchemaKind::All, Some(dir)) => {
+                    engine::schemas::write_all(&dir)
+                        .map_err(|e| EngineError::Fatal(format!("{}: {e}", dir.display())))?;
+                    println!(
+                        "wrote {} schemas to {}",
+                        SchemaKind::FILES.len(),
+                        dir.display()
+                    );
+                }
+                (SchemaKind::All, None) => {
+                    return Err(EngineError::Usage("schema all needs --out <dir>".into()))
+                }
+                (kind, Some(dir)) => {
+                    std::fs::create_dir_all(&dir)
+                        .and_then(|()| {
+                            std::fs::write(
+                                dir.join(kind.file_name()),
+                                engine::schemas::schema_json(kind),
+                            )
+                        })
+                        .map_err(|e| EngineError::Fatal(format!("{}: {e}", dir.display())))?;
+                    println!("wrote {} to {}", kind.file_name(), dir.display());
+                }
+                (kind, None) => print!("{}", engine::schemas::schema_json(kind)),
+            }
+            Ok(0)
+        }
+    }
+}
+
+/// `alias→canonical, ...`, or `None` when there are no aliases.
+fn alias_list(aliases: &BTreeMap<String, String>) -> Option<String> {
+    (!aliases.is_empty()).then(|| {
+        aliases
+            .iter()
+            .map(|(a, c)| format!("{a}\u{2192}{c}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+}
+
+/// Where NVTT's `nvcompress` was found (never bundled, spec §8).
+#[derive(Debug, PartialEq)]
+struct NvttStatus {
+    path: Option<PathBuf>,
+    /// `--nvtt` or `PATH`; for a missing `--nvtt` file, `--nvtt` with no path.
+    source: &'static str,
+}
+
+/// `--nvtt <file>` if given (it must exist), else `nvcompress.exe` on `path_var`.
+fn find_nvtt(explicit: Option<&Path>, path_var: Option<&std::ffi::OsStr>) -> NvttStatus {
+    if let Some(p) = explicit {
+        return NvttStatus {
+            path: p.is_file().then(|| p.to_path_buf()),
+            source: "--nvtt",
+        };
+    }
+    let path = path_var.and_then(|v| {
+        std::env::split_paths(v)
+            .map(|d| d.join("nvcompress.exe"))
+            .find(|c| c.is_file())
+    });
+    NvttStatus {
+        path,
+        source: "PATH",
+    }
+}
+
+/// `sdc encoders`: the vendored encoder versions, the ISA the ISPC kernels dispatch to, the active BC1 model
+/// and whether NVTT can be found. Result verb: stdout (DECISIONS Note J); `--json` prints one object.
+pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
+    let v = engine::manifest::EncoderVersions::current();
+    let isa = engine::manifest::dispatched_isa();
+    let model = engine::manifest::bc1_model_id(a.bc1_decoder.into());
+    let nvtt = find_nvtt(a.nvtt.as_deref(), std::env::var_os("PATH").as_deref());
+    let nvtt_path = nvtt
+        .path
+        .as_ref()
+        .map(|p| p.to_string_lossy().replace('\\', "/"));
+    if a.json {
+        println!(
+            "{}",
+            json!({
+                "kind": "encoders",
+                "bc7enc_rdo": v.bc7enc_rdo, "ispc_texture_compressor": v.ispctc, "ispc": v.ispc,
+                "bc7e_patch": v.bc7e_patch, "isa": isa, "bc1_model": model,
+                "nvtt": { "found": nvtt.path.is_some(), "path": nvtt_path, "source": nvtt.source },
+            })
+        );
+        return Ok(0);
+    }
+    println!(
+        "bc7e (bc7enc_rdo {}) patch {}",
+        v.bc7enc_rdo,
+        v.bc7e_patch.as_deref().unwrap_or("none")
+    );
+    println!("rgbcx (bc7enc_rdo {})", v.bc7enc_rdo);
+    println!("ISPC Texture Compressor {} (BC6H)", v.ispctc);
+    println!("ISPC {} objects; dispatched ISA on this CPU: {isa}", v.ispc);
+    println!("BC1 decoder model: {model}");
+    match nvtt_path {
+        Some(p) => println!("NVTT: found at {p} (backend arrives in milestone M5)"),
+        None => println!(
+            "NVTT: not found ({}; backend arrives in milestone M5)",
+            if nvtt.source == "PATH" {
+                "not on PATH, use --nvtt <nvcompress.exe>"
+            } else {
+                "no such file"
+            }
+        ),
+    }
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nvtt_is_found_on_path_or_by_flag_only() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let exe = b.join("nvcompress.exe");
+        std::fs::write(&exe, b"").unwrap();
+        let var = std::env::join_paths([&a, &b]).unwrap();
+        let on_path = find_nvtt(None, Some(&var));
+        assert_eq!(
+            (on_path.path.as_deref(), on_path.source),
+            (Some(exe.as_path()), "PATH")
+        );
+        assert_eq!(find_nvtt(None, None).path, None);
+        assert_eq!(find_nvtt(None, Some(a.as_os_str())).path, None);
+        // The flag wins over PATH, and a missing file is not found (no fall-back to PATH).
+        let missing = a.join("nvcompress.exe");
+        let flagged = find_nvtt(Some(&missing), Some(&var));
+        assert_eq!((flagged.path, flagged.source), (None, "--nvtt"));
+        assert_eq!(
+            find_nvtt(Some(&exe), None).path.as_deref(),
+            Some(exe.as_path())
+        );
+    }
 
     #[test]
     fn format_name_splits_the_srgb_tag() {

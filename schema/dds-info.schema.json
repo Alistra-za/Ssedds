@@ -1,0 +1,205 @@
+{
+  "$defs": {
+    "AlphaStats": {
+      "description": "Counts of decoded alpha values over one image.",
+      "properties": {
+        "below254": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eq254": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eq255": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixels": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pixels",
+        "eq255",
+        "eq254",
+        "below254",
+        "min"
+      ],
+      "type": "object"
+    },
+    "DdsHeaderInfo": {
+      "properties": {
+        "cubemap": {
+          "type": "boolean"
+        },
+        "format": {
+          "description": "The pixel format's name, e.g. `Bc7`.",
+          "type": "string"
+        },
+        "header": {
+          "$ref": "#/$defs/HeaderKind"
+        },
+        "header_issues": {
+          "description": "Header findings of spec §5.8 (empty for a clean header).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/DdsInfoKind"
+        },
+        "mip_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mips": {
+          "items": {
+            "$ref": "#/$defs/DdsMipInfo"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "'/'-separated, as given on the command line.",
+          "type": "string"
+        },
+        "schema": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "srgb": {
+          "description": "The `_SRGB` tag for formats that have one; null otherwise.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "schema",
+        "path",
+        "format",
+        "header",
+        "width",
+        "height",
+        "mip_count",
+        "cubemap",
+        "header_issues",
+        "mips"
+      ],
+      "type": "object"
+    },
+    "DdsInfoKind": {
+      "description": "The `kind` of a `dds_info` object.",
+      "enum": [
+        "dds_info"
+      ],
+      "type": "string"
+    },
+    "DdsMipInfo": {
+      "description": "One mip level of a [`DdsInfo`]: its size and, for formats that carry alpha, the decoded-alpha statistics.",
+      "properties": {
+        "alpha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlphaStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decode_error": {
+          "description": "Why the level could not be decoded for the statistics.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DdsUnreadable": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DdsInfoKind"
+        },
+        "path": {
+          "type": "string"
+        },
+        "schema": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "schema",
+        "path",
+        "error"
+      ],
+      "type": "object"
+    },
+    "HeaderKind": {
+      "enum": [
+        "Legacy",
+        "Dx10"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/DdsHeaderInfo"
+    },
+    {
+      "$ref": "#/$defs/DdsUnreadable"
+    }
+  ],
+  "description": "`sdc inspect` on a DDS: the file's header facts and per-mip decoded-alpha statistics, or why it cannot be\nread.",
+  "title": "DdsInfo"
+}

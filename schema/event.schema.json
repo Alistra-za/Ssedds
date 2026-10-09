@@ -1,0 +1,503 @@
+{
+  "$defs": {
+    "AlphaStats": {
+      "description": "Counts of decoded alpha values over one image.",
+      "properties": {
+        "below254": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eq254": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eq255": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixels": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pixels",
+        "eq255",
+        "eq254",
+        "below254",
+        "min"
+      ],
+      "type": "object"
+    },
+    "Code": {
+      "enum": [
+        "LOSS-ALPHA-DATA",
+        "LOSS-CLAMP-HDR",
+        "LOSS-BITDEPTH",
+        "LOSS-REENCODE",
+        "CHAN-NOT-GRAY",
+        "CHAN-CONSTANT-ALPHA-DATA",
+        "CHAN-NORMAL-LENGTH",
+        "CHAN-AO-INVERTED",
+        "CHAN-GLOSS-AS-ROUGH",
+        "FMT-BC5-NORMAL",
+        "FMT-LANDSCAPE-BC1",
+        "FMT-BC1-ALPHA",
+        "FMT-PERCEPTUAL-DATA",
+        "ALPHA-EXACT-OFF-M",
+        "ALPHA-254",
+        "TAG-SRGB-VANILLA",
+        "TAG-SRGB-NONPBR",
+        "TAG-UNORM-PBR",
+        "TAG-SRGB-LOD",
+        "TAG-CONTENT-MISMATCH",
+        "CFG-UNAVAILABLE",
+        "CFG-INVALID",
+        "DIM-NPOT",
+        "DIM-SMALL",
+        "DIM-FLOW-SMALL",
+        "DIM-TOO-LARGE",
+        "SET-MISSING-COMPANION",
+        "SET-COMPANION-OUTSIDE",
+        "SET-COMPANION-DDS",
+        "SET-BAKE-RATIO",
+        "SUG-LOW-CONFIDENCE",
+        "SUG-CONTRADICTION",
+        "VAL-ALPHA-GUARANTEE",
+        "VAL-COVERAGE",
+        "VAL-M-COMPLEX-MARGIN",
+        "VAL-M-GRAYSCALE",
+        "VAL-M-HEIGHT-CLIP",
+        "VAL-PGPATCHER-50",
+        "VAL-BC6H-PEAK",
+        "VAL-HEADER",
+        "VAL-MIP-ERROR",
+        "ENC-NVTT-MISSING",
+        "ENC-NVTT-VERSION",
+        "IN-DUPLICATE",
+        "IN-DDS-SKIPPED",
+        "IN-PACKING-INPUT",
+        "IN-GREEN-UNSTATED",
+        "IN-DECODE",
+        "IN-NONFINITE",
+        "OUT-UNKNOWN-EXISTING"
+      ],
+      "type": "string"
+    },
+    "Severity": {
+      "enum": [
+        "info",
+        "warning",
+        "blocking",
+        "error"
+      ],
+      "type": "string"
+    },
+    "Stage": {
+      "enum": [
+        "discover",
+        "group",
+        "load",
+        "analyse",
+        "resolve",
+        "preprocess",
+        "mipmaps",
+        "compress",
+        "write",
+        "validate"
+      ],
+      "type": "string"
+    },
+    "Target": {
+      "enum": [
+        "cs",
+        "cpm",
+        "vanilla"
+      ],
+      "type": "string"
+    },
+    "ValidationSummary": {
+      "properties": {
+        "alpha": {
+          "description": "Decoded-alpha statistics per level, for formats that carry alpha (BC1, BC3, BC7).",
+          "items": {
+            "$ref": "#/$defs/AlphaStats"
+          },
+          "type": "array"
+        },
+        "bc6h_peak_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "coverage": {
+          "description": "Decoded coverage per level; filled only when the coverage check ran.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "levels": {
+          "description": "The header's mip count.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_mip_psnr_db": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "passed": {
+          "description": "No `Error`-severity warning.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed",
+        "levels",
+        "alpha",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "Warning": {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/Code"
+        },
+        "data": {
+          "default": null
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "properties": {
+        "inputs": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "const": "batch_started",
+          "type": "string"
+        },
+        "preset": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        }
+      },
+      "required": [
+        "kind",
+        "target",
+        "preset",
+        "inputs"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "file_discovered",
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "output"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "bake": {
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "set_resolved",
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pbr": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "members",
+        "pbr",
+        "bake"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "job": true,
+        "kind": {
+          "const": "file_planned",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "job"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "file_started",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "done": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "const": "progress",
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/$defs/Stage"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "stage",
+        "done",
+        "total"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/Warning",
+      "properties": {
+        "kind": {
+          "const": "warning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "kind": {
+          "const": "file_done",
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationSummary"
+        }
+      },
+      "required": [
+        "kind",
+        "output",
+        "validation"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Code"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "file_skipped",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "file_failed",
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/$defs/Stage"
+        }
+      },
+      "required": [
+        "kind",
+        "stage",
+        "error"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "cancelled": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "converted": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "const": "batch_done",
+          "type": "string"
+        },
+        "skipped": {
+          "description": "Every `file_skipped` that is not up to date and not a packing input.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped_intentional": {
+          "default": 0,
+          "description": "Of `skipped`, those skipped on purpose (`IN-DDS-SKIPPED`, `--on-existing skip`); they do not make\nthe batch exit 1 (DECISIONS Note I). Absent in older streams.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "up_to_date": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "validation_failed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "converted",
+        "up_to_date",
+        "skipped",
+        "failed",
+        "validation_failed",
+        "cancelled"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "batch": {
+      "type": "string"
+    },
+    "path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "seq": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "set": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ts": {
+      "description": "RFC 3339, UTC, millisecond precision.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "seq",
+    "ts",
+    "batch"
+  ],
+  "title": "EngineEvent",
+  "type": "object"
+}

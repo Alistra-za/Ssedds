@@ -7,6 +7,7 @@ use engine::config::Target;
 use engine::overrides::parse_set;
 use engine::policy::AcceptSuggestions;
 use engine::presets::PresetRegistry;
+use engine::schemas::SchemaKind;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -32,7 +33,7 @@ pub enum Command {
     #[command(subcommand)]
     Presets(PresetsCmd),
     /// Built-in encoder versions and NVTT detection.
-    Encoders,
+    Encoders(EncodersArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -154,6 +155,19 @@ pub struct ConvertArgs {
 }
 
 #[derive(Args)]
+pub struct EncodersArgs {
+    /// Path to nvcompress.exe (default: look for it on PATH; NVTT is never bundled).
+    #[arg(long)]
+    pub nvtt: Option<PathBuf>,
+    /// BC1 decoder model to report as active (the batch-wide default is `ideal`).
+    #[arg(long, value_enum, default_value = "ideal")]
+    pub bc1_decoder: Bc1Arg,
+    /// Print one JSON object instead of the human report.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
 pub struct InspectArgs {
     #[command(flatten)]
     pub batch: BatchArgs,
@@ -183,6 +197,34 @@ pub struct ValidateArgs {
     pub bc1_decoder: Bc1Arg,
 }
 
+/// The schema to print. Mirrors `engine::schemas::SchemaKind`, which stays free of clap.
+#[derive(Clone, Copy, ValueEnum)]
+pub enum SchemaArg {
+    All,
+    Profile,
+    Preset,
+    Config,
+    Event,
+    Manifest,
+    DdsInfo,
+    DdsValidation,
+}
+
+impl From<SchemaArg> for SchemaKind {
+    fn from(s: SchemaArg) -> SchemaKind {
+        match s {
+            SchemaArg::All => SchemaKind::All,
+            SchemaArg::Profile => SchemaKind::Profile,
+            SchemaArg::Preset => SchemaKind::Preset,
+            SchemaArg::Config => SchemaKind::Config,
+            SchemaArg::Event => SchemaKind::Event,
+            SchemaArg::Manifest => SchemaKind::Manifest,
+            SchemaArg::DdsInfo => SchemaKind::DdsInfo,
+            SchemaArg::DdsValidation => SchemaKind::DdsValidation,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum PresetsCmd {
     /// List selectable presets.
@@ -198,10 +240,10 @@ pub enum PresetsCmd {
         #[arg(long, value_enum)]
         target: Option<TargetArg>,
     },
-    /// Print a JSON Schema (profile, preset, config, event, manifest) or write all to a folder.
+    /// Print a JSON Schema (profile, preset, config, event, manifest, dds-info, dds-validation) or write all to a folder.
     Schema {
-        /// Task 43 changes this to `#[arg(value_enum)] which: engine::schemas::SchemaKind`.
-        which: String,
+        #[arg(value_enum)]
+        which: SchemaArg,
         #[arg(long)]
         out: Option<PathBuf>,
     },

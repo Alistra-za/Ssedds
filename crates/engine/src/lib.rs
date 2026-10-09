@@ -21,6 +21,8 @@ pub mod pipeline;
 pub mod policy;
 pub mod presets;
 pub mod quantize;
+pub mod reports;
+pub mod schemas;
 pub mod suggest;
 pub mod sysmem;
 pub mod validate;
