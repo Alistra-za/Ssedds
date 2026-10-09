@@ -803,15 +803,16 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
         );
     }
     if matches!(st, Subtype::Envmask | Subtype::ComplexMaterial)
-        && stores_alpha(p.format)
+        && p.format == Format::Bc7
         && !p.alpha.exact_opaque
     {
-        // Not conditional on the alpha policy: `remove` drops the source alpha, but BC7 still encodes an alpha
-        // channel, which decodes as 254 unless exact-opaque handling is on (DECISIONS Notes A and D, spec §5.8).
+        // BC7 only: its alpha endpoints are quantised, so opaque alpha can decode as 254 unless exact-opaque
+        // handling is on. BC3's alpha block stores 255 exactly, so it carries no such risk. Not conditional on
+        // the alpha policy: `remove` drops the source alpha, but BC7 still encodes an alpha channel
+        // (DECISIONS Notes A and D, spec §5.8).
         add(
             AlphaExactOffM,
-            "exact opaque alpha is off on an _m written in a format that stores alpha; 254 may reach PGPatcher/ENB"
-                .into(),
+            "exact opaque alpha is off on an _m written as BC7; 254 may reach PGPatcher/ENB".into(),
         );
     }
     if !a.is_pot {

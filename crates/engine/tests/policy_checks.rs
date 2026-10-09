@@ -1264,6 +1264,14 @@ fn alpha_exact_off_warns_for_bc7_envmask_even_when_alpha_is_removed() {
         "{:?}",
         j.warnings
     );
+    // BC3 stores 255 exactly: no 254 risk
+    let j = envmask(&["format=bc3", "encoder.backend=rgbcx"]);
+    assert_eq!(j.profile.format, Format::Bc3);
+    assert!(
+        !codes(&j).contains(&Code::AlphaExactOffM),
+        "{:?}",
+        j.warnings
+    );
     // BC4 stores no alpha
     let j = envmask(&[]);
     assert_eq!(j.profile.format, Format::Bc4);
