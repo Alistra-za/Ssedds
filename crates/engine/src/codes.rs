@@ -1,6 +1,6 @@
-//! Warning and error codes (spec §10). Two codes are added by this plan: VAL-MIP-ERROR (§5.8 per-mip error
-//! warning, which §10 does not name) and CFG-INVALID (a field value outside its allowed range or an
-//! encoder/format mismatch).
+//! Warning and error codes (spec §10). Three codes are added by this plan: VAL-MIP-ERROR (§5.8 per-mip error
+//! warning, which §10 does not name), CFG-INVALID (a field value outside its allowed range or an
+//! encoder/format mismatch) and IN-NONFINITE (NaN or infinite source samples replaced in Preprocess).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -78,6 +78,7 @@ codes! {
     InPackingInput = "IN-PACKING-INPUT" => Warning,
     InGreenUnstated = "IN-GREEN-UNSTATED" => Blocking,
     InDecode = "IN-DECODE" => Error,
+    InNonfinite = "IN-NONFINITE" => Warning,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
 }
 
@@ -149,7 +150,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 49);
+        assert_eq!(Code::ALL.len(), 50);
     }
 
     #[test]
