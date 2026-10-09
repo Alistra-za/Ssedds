@@ -65,3 +65,18 @@ fn s5c_native_patch_flag_on_gives_255_within_0_05_db() {
     let r = gates::exact_opaque(&bench_root(), gates::ExactMode::Native).unwrap();
     assert!(r.pass, "{r}");
 }
+
+/// What `gate all` enforces for the exact-opaque row: alpha == 255 everywhere. The -0.05 dB RGB limit is
+/// printed as info (Task 38 ruling, DECISIONS S5), so this passes on the corpus where the strict gate above fails.
+#[test]
+fn exact_opaque_in_all_passes_on_alpha_and_reports_drgb_as_info() {
+    let r = gates::exact_opaque_alpha_only(&bench_root(), gates::ExactMode::Native).unwrap();
+    assert!(r.pass, "{r}");
+    assert!(
+        r.lines
+            .iter()
+            .any(|l| l.starts_with("info") && l.contains("mean dRGB") && l.contains("limit -0.05")),
+        "{r}"
+    );
+    assert!(!r.lines.iter().any(|l| l.starts_with("FAIL")), "{r}");
+}

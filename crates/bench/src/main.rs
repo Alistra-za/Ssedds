@@ -8,13 +8,16 @@ use std::process::ExitCode;
     about = "sdc regression harness over F:/ai/dds/bench (SDC_BENCH_ROOT)"
 )]
 struct Cli {
+    /// Run every gate (same as `gate all`).
+    #[arg(long)]
+    gates: bool,
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run a named gate (s3, ...) and print its report.
+    /// Run a named gate (s3, ..., or `all`) and print its report.
     Gate { name: String },
     /// Record SHA-256s of u5 flag-off BC7 payloads of every bench image (reference for the patch bit-identity gate).
     DumpBc7e {
@@ -27,27 +30,39 @@ enum Cmd {
     S7Nvtt,
 }
 
+/// Print every report on stdout; exit 0 when all pass, 1 when any fails, 3 on an error before a verdict.
+fn print_reports(r: anyhow::Result<Vec<gates::GateReport>>) -> ExitCode {
+    match r {
+        Ok(reports) => {
+            let ok = reports.iter().all(|r| r.pass);
+            for r in &reports {
+                println!("{r}");
+            }
+            if ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            ExitCode::from(3)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let root = bench_root();
-    match Cli::parse().cmd {
-        Cmd::Gate { name } => match gates::run(&name, &root) {
-            Ok(reports) => {
-                let mut ok = true;
-                for r in &reports {
-                    println!("{r}");
-                    ok &= r.pass;
-                }
-                if ok {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::from(1)
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {e:#}");
-                ExitCode::from(3)
-            }
-        },
+    let cli = Cli::parse();
+    if cli.gates {
+        return print_reports(gates::run("all", &root));
+    }
+    let Some(cmd) = cli.cmd else {
+        eprintln!("use --gates or a subcommand");
+        return ExitCode::from(2);
+    };
+    match cmd {
+        Cmd::Gate { name } => print_reports(gates::run(&name, &root)),
         Cmd::SpeedBc7e => {
             encoders_sys::init(encoders_sys::Bc1Model::Ideal).unwrap();
             let mut imgs = vec![];

@@ -434,13 +434,33 @@ pub const EXACT_OPAQUE_SETS: [(&str, usize); 4] = [
 
 /// Spec §11.2 exact-opaque row at mip 0: opaque sets plus stray sets after `remove` (alpha forced to 255 before encoding).
 /// Pass: decoded alpha == 255 on every pixel; per-set mean RGB PSNR within 0.05 dB of plain u5. Worst image reported.
+/// The standalone S5 gate: it fails by design on the real corpus (DECISIONS S5); `run("all")` uses
+/// [`exact_opaque_alpha_only`] instead.
 pub fn exact_opaque(root: &Path, mode: ExactMode) -> Result<GateReport> {
+    exact_opaque_checked(root, mode, true)
+}
+
+/// The exact-opaque row as `gate all` enforces it (Task 38 ruling: the flag is scoped to `_m`, and the owner
+/// accepted the RGB cost, DECISIONS S5): pass is decoded alpha == 255 on every pixel and the image counts. The
+/// per-set mean dRGB (limit -0.05 dB) is printed as info, not a criterion.
+pub fn exact_opaque_alpha_only(root: &Path, mode: ExactMode) -> Result<GateReport> {
+    exact_opaque_checked(root, mode, false)
+}
+
+fn exact_opaque_checked(root: &Path, mode: ExactMode, enforce_drgb: bool) -> Result<GateReport> {
     use encoders_sys::bc7_fixup::force_opaque_mode6;
     if mode == ExactMode::Native && !encoders_sys::BC7E_EXACT_OPAQUE_NATIVE {
         bail!("ExactMode::Native needs the patched bc7e objects (Task 14)");
     }
     init(Bc1Model::Ideal)?;
-    let mut r = GateReport::new(&format!("exact opaque alpha ({mode:?}), mip 0"));
+    let mut r = GateReport::new(&format!(
+        "exact opaque alpha ({mode:?}), mip 0{}",
+        if enforce_drgb {
+            ""
+        } else {
+            ", alpha == 255 (dRGB info)"
+        }
+    ));
     for (set, expected) in EXACT_OPAQUE_SETS {
         let files = set_files(root, "images", set, "png")?;
         r.check(
@@ -493,10 +513,12 @@ pub fn exact_opaque(root: &Path, mode: ExactMode) -> Result<GateReport> {
         }
         let worst = deltas.iter().cloned().fold(f64::INFINITY, f64::min);
         let m = metrics::mean(&deltas);
-        r.check(
-            m >= -0.05,
-            format!("{set}: mean dRGB {m:+.4} dB (limit -0.05), worst image {worst:+.4} dB"),
-        );
+        let line = format!("{set}: mean dRGB {m:+.4} dB (limit -0.05), worst image {worst:+.4} dB");
+        if enforce_drgb {
+            r.check(m >= -0.05, line);
+        } else {
+            r.info(line);
+        }
     }
     Ok(r)
 }
@@ -593,6 +615,31 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
         "alpha-scan" => vec![alpha_scan(root)?],
         "engine-parity" => vec![crate::engine_gates::engine_parity(root)?],
         "full-chain" => vec![crate::engine_gates::full_chain_exact_opaque(root)?],
+        // Spec §11.2: every gate in one run. The exact-opaque row passes on alpha == 255 (dRGB is info) plus the
+        // bc7e flag-off bit-identity check; the standalone `exact-opaque-*` gates keep the -0.05 dB criterion.
+        "all" => {
+            let mut v = vec![];
+            for g in [
+                "s3",
+                "rgbcx",
+                "bc6h",
+                "alpha-scan",
+                "engine-parity",
+                "full-chain",
+            ] {
+                v.extend(run(g, root)?);
+            }
+            v.push(exact_opaque_alpha_only(
+                root,
+                if encoders_sys::BC7E_EXACT_OPAQUE_NATIVE {
+                    ExactMode::Native
+                } else {
+                    ExactMode::BytePatch
+                },
+            )?);
+            v.push(bc7e_matches_dump(root, &pre_patch_hashes())?);
+            v
+        }
         "exact-opaque-bytepatch" => vec![exact_opaque(root, ExactMode::BytePatch)?],
         "exact-opaque-native" => vec![
             exact_opaque(root, ExactMode::Native)?,
