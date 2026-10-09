@@ -98,3 +98,16 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
   blocks per image, and near-lossless images lose the most. The patch bounds the extra error to +1 LSB per channel.
 - Consequence: the byte patch is only a last-resort fallback behind the native bc7e patch (Task 14, `0001-exact-opaque-alpha`),
   which chooses p-bits with the RGB fit. Full per-image output: `cargo run --release -p sdc-bench -- gate exact-opaque-bytepatch`.
+
+## Spike S5 — smallest-mip alpha check and exact opaque alpha cost (2026-10-09)
+
+- Check implemented (`engine::validate::alpha`); agrees with Note C (bc7e -u6 Bricks104 254 share 20.96%, Note C 21.0%) and NVTT (0%).
+- Native patch 0001: flag off bit-identical on 39/39 images; flag on: alpha == 255 on every texel of rgb_real, rgb_grad, stray_* (mip 0), 18/18 images.
+  Mean dRGB per set: rgb_real −0.515, rgb_grad −1.020, stray_real −0.078, stray_grad −0.382 dB; worst image rgb_grad/subtle_dark −5.166 dB (84.01 → 78.85).
+  Result: **FAIL on RGB cost** (limit 0.05 dB per set; not loosened). `s5c_native_patch_flag_on_gives_255_within_0_05_db` is `#[ignore]`d with this note.
+  Why: with both p-bits forced to 1, mode-6 RGB endpoints can only take odd 8-bit values, i.e. 7-bit precision; bc7e re-fits under that constraint
+  (and still falls back to modes 1–5 where they win), so the loss is the constraint itself, not a missed re-fit. Near-lossless and dark gradients lose most.
+- Byte-patch fallback: mean dRGB rgb_real −2.696, rgb_grad −8.410, stray_real −1.015, stray_grad −4.899 dB. The native patch is better on every image.
+- Full-chain (every mip) part of the gate: Task 38.
+- Shipped mechanism: native patch when `alpha.exact_opaque` is on (proposed: better than the byte patch on every image; owner confirms at Task 17). Open item §14 #5: dRGB <= 0.05 dB on all opaque sets → do not propose exact_opaque on everywhere (owner decides; Task 17).
+  Full per-image output: `cargo run --release -p sdc-bench -- gate exact-opaque-native`.
