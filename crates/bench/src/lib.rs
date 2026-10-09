@@ -2,4 +2,5 @@
 pub mod codec;
 pub mod corpus;
 pub mod ddsraw;
+pub mod gates;
 pub mod metrics;
