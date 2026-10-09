@@ -1,6 +1,7 @@
 //! Input discovery: turns the files and folders given on the command line into `InputFile`s,
 //! each with its game-relative path and the DDS path it will be written to.
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const IMAGE_EXTS: [&str; 4] = ["png", "tga", "tif", "tiff"];
@@ -123,4 +124,26 @@ pub fn discover(
     }
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
     Ok(files)
+}
+
+/// Spec §3.7: an input whose stem ends in a preset suffix alias is written under its canonical
+/// suffix (`iron_rmaosultrahigh.png` → `iron_rmaos.dds`). Only `output` changes; `rel` and
+/// `game_path` keep the source name, so rule globs match what is on disk. Run before grouping.
+pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>) {
+    if aliases.is_empty() {
+        return;
+    }
+    for f in files {
+        let stem = f
+            .rel
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let split = crate::group::split_suffix_with(&stem, aliases);
+        if let (Some(_), Some(canonical)) = (&split.alias, &split.suffix) {
+            f.output
+                .set_file_name(format!("{}_{canonical}.dds", split.base));
+        }
+    }
 }

@@ -1,5 +1,6 @@
 //! Presets (spec §3.5): versioned bundles of profile defaults plus ordered rules, with single inheritance.
 use crate::config::*;
+use crate::group::SUFFIXES;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -39,6 +40,9 @@ pub enum PresetError {
     NewerSchema(u32),
     #[error("invalid profile: {0}")]
     Invalid(String),
+    /// An invalid or conflicting suffix alias (spec §3.7); the message starts `CFG-INVALID:`.
+    #[error("{0}")]
+    Alias(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -96,6 +100,9 @@ pub struct PresetFile {
     pub subtypes: BTreeMap<Subtype, Value>,
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// Exact suffix aliases (spec §3.7, DECISIONS Note G): `alias = "canonical"`, e.g. `rmaosultrahigh = "rmaos"`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub suffix_aliases: BTreeMap<String, String>,
 }
 
 /// User config (%APPDATA%\sdc\config.toml) and project config (sdc.toml / --config).
@@ -229,6 +236,10 @@ pub fn leaf_paths(v: &Value, prefix: &str, out: &mut Vec<String>) {
 #[derive(Debug, Clone, Default)]
 pub struct PresetRegistry {
     presets: BTreeMap<String, PresetFile>,
+    /// Alias → canonical suffix, over every loaded preset.
+    aliases: BTreeMap<String, String>,
+    /// Alias → id of the preset that declares it.
+    alias_owner: BTreeMap<String, String>,
 }
 
 impl PresetRegistry {
@@ -245,9 +256,66 @@ impl PresetRegistry {
         if p.schema_version > SCHEMA_VERSION {
             return Err(PresetError::NewerSchema(p.schema_version));
         }
+        self.check_aliases(&p)?;
         let id = p.id.clone();
+        // Reloading a preset id replaces its aliases.
+        let owner = &self.alias_owner;
+        self.aliases.retain(|a, _| owner.get(a) != Some(&id));
+        self.alias_owner.retain(|_, o| *o != id);
+        for (alias, canonical) in &p.suffix_aliases {
+            self.aliases.insert(alias.clone(), canonical.clone());
+            self.alias_owner.insert(alias.clone(), id.clone());
+        }
         self.presets.insert(id.clone(), p);
         Ok(id)
+    }
+
+    /// Spec §3.7: an alias is `[a-z0-9]+`, is not a §6.1 suffix, maps to a §6.1 suffix and is unique across
+    /// loaded presets.
+    fn check_aliases(&self, p: &PresetFile) -> Result<(), PresetError> {
+        let bad = |m: String| PresetError::Alias(format!("CFG-INVALID: preset '{}': {m}", p.id));
+        for (alias, canonical) in &p.suffix_aliases {
+            if alias.is_empty()
+                || !alias
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' must be lower-case ASCII letters and digits, without '_'"
+                )));
+            }
+            if SUFFIXES.contains(&alias.as_str()) {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' is a canonical suffix (spec §6.1)"
+                )));
+            }
+            if !SUFFIXES.contains(&canonical.as_str()) {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' maps to '{canonical}', which is not a canonical suffix (spec §6.1)"
+                )));
+            }
+            if let Some(owner) = self.alias_owner.get(alias).filter(|o| **o != p.id) {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' is already declared by preset '{owner}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// `(canonical suffix, declaring preset id)` for an alias, case-insensitive.
+    pub fn alias_for(&self, alias: &str) -> Option<(&str, &str)> {
+        let a = alias.to_ascii_lowercase();
+        Some((
+            self.aliases.get(&a)?.as_str(),
+            self.alias_owner.get(&a)?.as_str(),
+        ))
+    }
+
+    /// Alias → canonical suffix over every loaded preset (input to `group::split_suffix_with`,
+    /// `discover::canonicalise_outputs` and `group::group_sets_with`).
+    pub fn alias_table(&self) -> &BTreeMap<String, String> {
+        &self.aliases
     }
 
     pub fn add_file(&mut self, path: &Path) -> Result<String, PresetError> {
@@ -298,6 +366,24 @@ impl PresetRegistry {
         Ok(out)
     }
 
+    /// The chain that resolves a file matched by one of `id`'s suffix aliases (spec §3.7): `id`'s own chain, or,
+    /// when `id` declares no `base`, the built-in quality preset chain of `target` followed by `id`, so the alias
+    /// preset layers on top of the target preset.
+    pub fn alias_chain(&self, id: &str, target: Target) -> Result<Vec<&PresetFile>, PresetError> {
+        let p = self
+            .presets
+            .get(id)
+            .ok_or_else(|| PresetError::Unknown(id.to_string()))?;
+        if p.base.is_some() {
+            return self.chain(id);
+        }
+        let mut chain = self.chain(default_preset_for(target))?;
+        if !chain.iter().any(|c| c.id == p.id) {
+            chain.push(p);
+        }
+        Ok(chain)
+    }
+
     /// SHA-256 of the preset's canonical JSON form (manifest provenance, spec §3.6).
     pub fn sha256(&self, id: &str) -> Option<String> {
         let p = self.presets.get(id)?;
@@ -313,7 +399,11 @@ impl PresetRegistry {
         id: &str,
         subtype: Subtype,
     ) -> Result<Vec<(Provenance, Value)>, PresetError> {
-        let chain = self.chain(id)?;
+        Ok(Self::layers_of(&self.chain(id)?, subtype))
+    }
+
+    /// `layers` over an explicit chain (root base first), e.g. one from `alias_chain`.
+    pub fn layers_of(chain: &[&PresetFile], subtype: Subtype) -> Vec<(Provenance, Value)> {
         let label = |p: &PresetFile| {
             if p.id == BASE_ID {
                 Provenance::Builtin
@@ -328,7 +418,7 @@ impl PresetRegistry {
         let specific = chain
             .iter()
             .filter_map(|p| p.subtypes.get(&subtype).map(|s| (label(p), s.clone())));
-        Ok(defaults.chain(specific).collect())
+        defaults.chain(specific).collect()
     }
 
     /// Profile from presets alone (no config, rules, analysis or overrides). Used by tests and `presets show`.

@@ -42,7 +42,10 @@ pub struct ResolveCtx<'a> {
 
 pub struct FileFacts<'a> {
     pub input: &'a InputFile,
+    /// Canonical suffix (an alias already mapped to its target, spec §3.7).
     pub suffix: Option<&'a str>,
+    /// The suffix alias the file name matched (`group::split_suffix_with`), if any.
+    pub alias: Option<&'a str>,
     pub set: &'a TextureSet,
     pub analysis: &'a Analysis,
     pub info: &'a SourceInfo,
@@ -56,6 +59,46 @@ pub struct SubtypeDecision {
     /// `--accept-suggestions high`.
     pub decided: bool,
     pub suggestions: Vec<Suggestion>,
+}
+
+/// A suffix alias in use for one file (spec §3.7, DECISIONS Note G).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct AliasUse {
+    pub alias: String,
+    pub canonical: String,
+    pub preset: String,
+}
+
+/// `(alias, canonical, preset id)` when the file matched an alias the registry knows.
+fn alias_parts<'a>(ctx: &ResolveCtx<'a>, f: &FileFacts) -> Option<(String, &'a str, &'a str)> {
+    let alias = f.alias?.to_ascii_lowercase();
+    let (canonical, preset) = ctx.registry.alias_for(&alias)?;
+    Some((alias, canonical, preset))
+}
+
+/// The preset whose chain resolves this file: the alias preset for an aliased file, else the batch preset.
+pub fn preset_for<'a>(ctx: &ResolveCtx<'a>, f: &FileFacts) -> &'a str {
+    alias_parts(ctx, f).map_or(ctx.preset, |(_, _, p)| p)
+}
+
+fn alias_use(ctx: &ResolveCtx, f: &FileFacts) -> Option<AliasUse> {
+    alias_parts(ctx, f).map(|(alias, c, p)| AliasUse {
+        alias,
+        canonical: c.to_string(),
+        preset: p.to_string(),
+    })
+}
+
+/// The file's preset chain, root base first: the batch preset's, or for an aliased file the alias preset's
+/// (`PresetRegistry::alias_chain`: an alias preset without `base` sits on the target's quality preset).
+fn preset_chain<'a>(
+    ctx: &ResolveCtx<'a>,
+    f: &FileFacts,
+) -> Result<Vec<&'a PresetFile>, PresetError> {
+    match alias_parts(ctx, f) {
+        Some((_, _, p)) => ctx.registry.alias_chain(p, ctx.target),
+        None => ctx.registry.chain(ctx.preset),
+    }
 }
 
 /// Case-insensitive glob over the game path or the input-relative path. A glob without '/' also matches the
@@ -89,14 +132,12 @@ pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
         && m.alpha.is_none_or(|a| a == f.analysis.alpha)
 }
 
-/// Rule sources in precedence order: the preset chain (base first), user config, project config.
-/// `preset` is the file's preset, a parameter so a per-file preset can stand in for the batch preset.
-fn rule_sources<'a>(ctx: &'a ResolveCtx, preset: &str) -> Vec<(String, &'a [Rule])> {
-    let mut v: Vec<(String, &[Rule])> = vec![];
-    if let Ok(chain) = ctx.registry.chain(preset) {
-        for p in chain {
-            v.push((p.id.clone(), &p.rules));
-        }
+/// Rule sources in precedence order: the file's preset chain (base first; `preset_chain`), user config,
+/// project config.
+fn rule_sources<'a>(ctx: &ResolveCtx<'a>, chain: &[&'a PresetFile]) -> Vec<(String, &'a [Rule])> {
+    let mut v: Vec<(String, &'a [Rule])> = vec![];
+    for p in chain {
+        v.push((p.id.clone(), &p.rules));
     }
     if let Some(c) = ctx.user_config {
         v.push(("user".into(), &c.rules));
@@ -135,8 +176,9 @@ fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
 }
 
 pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
-    let preset = ctx.preset;
-    let suggestions = suggest(&SuggestContext {
+    // An invalid chain is reported by `layered_profile`; here it only contributes no rules.
+    let chain = preset_chain(ctx, f).unwrap_or_default();
+    let mut suggestions = suggest(&SuggestContext {
         target: ctx.target,
         suffix: f.suffix,
         game_path: &f.input.game_path,
@@ -144,6 +186,20 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         alpha: f.analysis.alpha,
         is_float: f.info.is_float,
     });
+    if let Some((alias, canonical, preset)) = alias_parts(ctx, f) {
+        for s in &mut suggestions {
+            s.reason = format!(
+                "suffix alias _{alias} → _{canonical} (preset {preset}); {}",
+                s.reason
+            );
+        }
+        // Spec §3.7: an alias declares the suffix; `_s` keeps its ranked readings (§4.3 item 2).
+        if canonical != "s" {
+            if let Some(top) = suggestions.first_mut() {
+                top.confidence = Confidence::High;
+            }
+        }
+    }
     // --set subtype (unscoped or file-scoped): the highest-precedence one wins
     let set_subtype = ranked_overrides(ctx)
         .into_iter()
@@ -160,7 +216,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         }
     }
     // rules: highest-precedence source with a matching rule that names a sub-type
-    for (src, rules) in rule_sources(ctx, preset).into_iter().rev() {
+    for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
         if let Some((i, r)) = first_match(rules, f) {
             if let Some(st) = r.subtype {
                 return SubtypeDecision {
@@ -277,18 +333,17 @@ pub fn layered_profile(
     f: &FileFacts,
     st: Subtype,
 ) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
-    let preset = ctx.preset;
+    // The alias preset's chain for an aliased file (spec §3.7), else the batch preset's.
+    let chain = preset_chain(ctx, f)?;
     let mut doc = Value::Object(Map::new());
     let mut prov = BTreeMap::new();
     let mut sources = FormatSources::default();
-    // `layers` returns every non-null `defaults` table of the chain first, then the `subtypes.<st>` tables.
-    let generic = ctx
-        .registry
-        .chain(preset)?
-        .iter()
-        .filter(|p| !p.defaults.is_null())
-        .count();
-    for (i, (source, patch)) in ctx.registry.layers(preset, st)?.into_iter().enumerate() {
+    // `layers_of` returns every non-null `defaults` table of the chain first, then the `subtypes.<st>` tables.
+    let generic = chain.iter().filter(|p| !p.defaults.is_null()).count();
+    for (i, (source, patch)) in PresetRegistry::layers_of(&chain, st)
+        .into_iter()
+        .enumerate()
+    {
         let reach = if i < generic { GENERIC } else { SUBTYPE_TABLE };
         apply(&mut doc, &mut prov, &mut sources, &patch, source, reach);
     }
@@ -309,7 +364,7 @@ pub fn layered_profile(
             }
         }
     }
-    for (src, rules) in rule_sources(ctx, preset) {
+    for (src, rules) in rule_sources(ctx, &chain) {
         if let Some((i, r)) = first_match(rules, f) {
             apply(
                 &mut doc,
@@ -464,6 +519,9 @@ pub struct ResolvedJob {
     pub suggestions: Vec<Suggestion>,
     pub warnings: Vec<Warning>,
     pub status: JobStatus,
+    /// The suffix alias this file matched (spec §3.7); its preset chain resolved the profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suffix_alias: Option<AliasUse>,
 }
 
 /// Formats that store alpha in v1. BC1 is opaque only (spec §3.3, DECISIONS Note F), although
@@ -752,6 +810,7 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
 
 /// Resolve one file: sub-type decision, layered profile, §10 checks and status (spec §5.2).
 pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
+    let suffix_alias = alias_use(ctx, f);
     let d = decide_subtype(ctx, f);
     let mut reasons = vec![];
     if !d.decided {
@@ -809,6 +868,7 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
                 status: JobStatus::Error {
                     codes: vec![Code::CfgInvalid],
                 },
+                suffix_alias,
             };
         }
     };
@@ -869,5 +929,6 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         suggestions: d.suggestions,
         warnings,
         status,
+        suffix_alias,
     }
 }

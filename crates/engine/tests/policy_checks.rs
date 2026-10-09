@@ -58,6 +58,7 @@ fn run(
         &FileFacts {
             input: &f,
             suffix,
+            alias: None,
             set: &set,
             analysis: &a,
             info: &RGBA8,
@@ -289,6 +290,7 @@ fn run_with(
         &FileFacts {
             input: &f,
             suffix,
+            alias: None,
             set: &set,
             analysis: &a,
             info: &RGBA8,
@@ -660,6 +662,7 @@ fn preset_alpha_policy_counts_as_explicit() {
     let facts = FileFacts {
         input: &f,
         suffix: None,
+        alias: None,
         set: &set,
         analysis: &a,
         info: &RGBA8,
@@ -844,6 +847,7 @@ fn resolve_in(ctx: &ResolveCtx, rel: &str, suffix: Option<&str>, img: &Rgba32F) 
         &FileFacts {
             input: &f,
             suffix,
+            alias: None,
             set: &set,
             analysis: &a,
             info: &RGBA8,

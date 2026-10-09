@@ -25,6 +25,36 @@ pub fn split_suffix(stem: &str) -> (String, Option<String>) {
     (stem.to_string(), None)
 }
 
+/// Result of `split_suffix_with`: `suffix` is canonical (an alias's target), `alias` the alias matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuffixSplit {
+    pub base: String,
+    pub suffix: Option<String>,
+    pub alias: Option<String>,
+}
+
+/// `split_suffix` with preset suffix aliases (spec §3.7, DECISIONS Note G). The stem segment after the
+/// last '_' is looked up (lower-case) in `aliases` (alias → canonical) before the §6.1 list. Aliases
+/// contain no '_' and are never a §6.1 suffix, so a match is exact and unambiguous.
+pub fn split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> SuffixSplit {
+    if let Some((base, tail)) = stem.rsplit_once('_') {
+        let tail = tail.to_ascii_lowercase();
+        if let Some(canonical) = aliases.get(&tail).filter(|_| !base.is_empty()) {
+            return SuffixSplit {
+                base: base.to_string(),
+                suffix: Some(canonical.clone()),
+                alias: Some(tail),
+            };
+        }
+    }
+    let (base, suffix) = split_suffix(stem);
+    SuffixSplit {
+        base,
+        suffix,
+        alias: None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextureSet {
     /// Lower-case output directory + '/' + lower-case base name.
@@ -42,6 +72,15 @@ fn fold(p: &std::path::Path) -> String {
 /// Groups inputs into texture sets and reports duplicate groups: two or more inputs that map
 /// to one output path, compared case-insensitively.
 pub fn group_sets(files: &[InputFile]) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
+    group_sets_with(files, &BTreeMap::new())
+}
+
+/// `group_sets` with suffix aliases: an aliased member joins its set under the canonical suffix.
+/// Call `discover::canonicalise_outputs` first so alias/canonical collisions are duplicate groups.
+pub fn group_sets_with(
+    files: &[InputFile],
+    aliases: &BTreeMap<String, String>,
+) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
     let mut sets: BTreeMap<String, TextureSet> = BTreeMap::new();
     let mut outs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, f) in files.iter().enumerate() {
@@ -52,7 +91,7 @@ pub fn group_sets(files: &[InputFile]) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        let (base, suffix) = split_suffix(&stem);
+        let SuffixSplit { base, suffix, .. } = split_suffix_with(&stem, aliases);
         let dir = f.output.parent().map(fold).unwrap_or_default();
         let key = format!("{dir}/{}", base.to_lowercase());
         let set = sets.entry(key.clone()).or_insert_with(|| TextureSet {

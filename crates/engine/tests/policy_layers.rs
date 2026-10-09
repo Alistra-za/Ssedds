@@ -62,6 +62,7 @@ fn explicit_set_decides_subtype_and_beats_presets() {
     let facts = FileFacts {
         input: &f,
         suffix: Some("n"),
+        alias: None,
         set: &set,
         analysis: &a,
         info: &RGBA8,
@@ -92,6 +93,7 @@ fn suggestions_decide_only_when_high_and_accepted() {
     let facts = FileFacts {
         input: &f,
         suffix: Some("rmaos"),
+        alias: None,
         set: &set,
         analysis: &a,
         info: &RGB8,
@@ -160,6 +162,7 @@ fn rules_and_project_config_layer_in_order() {
     let facts = FileFacts {
         input: &f,
         suffix: None,
+        alias: None,
         set: &set,
         analysis: &a,
         info: &RGB8,
@@ -193,6 +196,7 @@ fn set_scopes_rank_above_command_line_order() {
     let facts = FileFacts {
         input: &f,
         suffix: Some("n"),
+        alias: None,
         set: &set,
         analysis: &a,
         info: &RGBA8,
