@@ -84,3 +84,17 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
 - Block payloads byte-identical to the bench: 39/39.
 - rgbcx BC4 mask_real: 7/7 bit-exact.
 - Toolchain: rustc 1.99.0 (b940084d7 2026-09-28), MSVC 14.44.35207 (VS 2022 Build Tools; cl.exe not on PATH, version read from the install directory), objects from ISPC 1.31.0 (bench build).
+
+## Spike S5b — byte-patch fallback for exact opaque alpha (2026-10-08)
+
+- Result: **FAIL on RGB cost** (criterion: decoded alpha 255 on every texel; per-set mean RGB PSNR within 0.05 dB of plain bc7e u5).
+  The test `s5b_byte_patch_gives_255_everywhere_on_opaque_sets` is `#[ignore]`d with this note; the limit was not loosened.
+- Method: bc7e u5 at mip 0 on rgb_real, rgb_grad, stray_real, stray_grad (alpha forced to 255 = `remove`), then
+  `encoders_sys::bc7_fixup::force_opaque_mode6` on every block (mode-6 blocks get alpha endpoints 127 and both p-bits 1).
+- Alpha: **0 texels != 255** on all 18 images (every non-mode-6 block already decodes 255).
+- Mean ΔRGB PSNR vs plain u5: rgb_real **−2.70 dB** (worst Metal049A −7.76), rgb_grad **−8.41 dB** (worst subtle_dark
+  −28.15: 84.01 → 55.86), stray_real −1.02 dB, stray_grad −4.90 dB. Smallest loss: Rock064 −0.07 dB.
+- Why: forcing p = 1 moves every p = 0 RGB endpoint up one 8-bit LSB without re-fitting; mode 6 is chosen on 11–99% of
+  blocks per image, and near-lossless images lose the most. The patch bounds the extra error to +1 LSB per channel.
+- Consequence: the byte patch is only a last-resort fallback behind the native bc7e patch (Task 14, `0001-exact-opaque-alpha`),
+  which chooses p-bits with the RGB fit. Full per-image output: `cargo run --release -p sdc-bench -- gate exact-opaque-bytepatch`.

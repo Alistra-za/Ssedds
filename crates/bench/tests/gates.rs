@@ -45,3 +45,10 @@ fn s5a_alpha_checker_agrees_with_recorded_measurements() {
     let r = gates::alpha_scan(&bench_root()).unwrap();
     assert!(r.pass, "{r}");
 }
+
+#[test]
+#[ignore = "byte patch exceeds 0.05 dB; see DECISIONS S5"]
+fn s5b_byte_patch_gives_255_everywhere_on_opaque_sets() {
+    let r = gates::exact_opaque(&bench_root(), gates::ExactMode::BytePatch).unwrap();
+    assert!(r.pass, "{r}");
+}

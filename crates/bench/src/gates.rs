@@ -418,6 +418,89 @@ pub fn alpha_scan(root: &Path) -> Result<GateReport> {
     Ok(r)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExactMode {
+    BytePatch,
+    Native,
+}
+
+/// Images on disk per exact-opaque set; a gate that sees fewer has been run on a shrunken corpus.
+pub const EXACT_OPAQUE_SETS: [(&str, usize); 4] = [
+    ("rgb_real", 7),
+    ("rgb_grad", 7),
+    ("stray_real", 2),
+    ("stray_grad", 2),
+];
+
+/// Spec §11.2 exact-opaque row at mip 0: opaque sets plus stray sets after `remove` (alpha forced to 255 before encoding).
+/// Pass: decoded alpha == 255 on every pixel; per-set mean RGB PSNR within 0.05 dB of plain u5. Worst image reported.
+pub fn exact_opaque(root: &Path, mode: ExactMode) -> Result<GateReport> {
+    use encoders_sys::bc7_fixup::force_opaque_mode6;
+    if mode == ExactMode::Native && !encoders_sys::BC7E_EXACT_OPAQUE_NATIVE {
+        bail!("ExactMode::Native needs the patched bc7e objects (Task 14)");
+    }
+    init(Bc1Model::Ideal)?;
+    let mut r = GateReport::new(&format!("exact opaque alpha ({mode:?}), mip 0"));
+    for (set, expected) in EXACT_OPAQUE_SETS {
+        let files = set_files(root, "images", set, "png")?;
+        r.check(
+            files.len() == expected,
+            format!("{set}: image count {} == expected {expected}", files.len()),
+        );
+        let mut deltas = vec![];
+        for src in files {
+            let stem = stem(&src);
+            let mut img = load_png_rgba8(&src)?;
+            img.px.iter_mut().for_each(|p| p[3] = 255); // alpha `remove`
+            let plain = encode_bc7_image(&img, U5);
+            let fixed = match mode {
+                ExactMode::BytePatch => {
+                    let mut b = plain.clone();
+                    let mut patched = 0;
+                    for blk in b.chunks_mut(16) {
+                        patched += force_opaque_mode6(blk.try_into().unwrap()) as usize;
+                    }
+                    r.info(format!(
+                        "{set}/{stem}: {patched}/{} blocks were mode 6 and patched",
+                        b.len() / 16
+                    ));
+                    b
+                }
+                ExactMode::Native => encode_bc7_image(
+                    &img,
+                    Bc7Params {
+                        exact_opaque: true,
+                        ..U5
+                    },
+                ),
+            };
+            let dp = decode_bc7_image(&plain, img.width, img.height);
+            let df = decode_bc7_image(&fixed, img.width, img.height);
+            let not255 = df.iter().filter(|p| p[3] != 255).count();
+            r.check(
+                not255 == 0,
+                format!("{set}/{stem}: {not255} texels with alpha != 255"),
+            );
+            let (pp, pf) = (
+                metrics::rgb_psnr(&img.px, &dp),
+                metrics::rgb_psnr(&img.px, &df),
+            );
+            let d = pf - pp;
+            r.info(format!(
+                "{set}/{stem}: dRGB {d:+.4} dB (plain {pp:.4}, exact {pf:.4})"
+            ));
+            deltas.push(d);
+        }
+        let worst = deltas.iter().cloned().fold(f64::INFINITY, f64::min);
+        let m = metrics::mean(&deltas);
+        r.check(
+            m >= -0.05,
+            format!("{set}: mean dRGB {m:+.4} dB (limit -0.05), worst image {worst:+.4} dB"),
+        );
+    }
+    Ok(r)
+}
+
 pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
     Ok(match name {
         "s3" => vec![
@@ -440,6 +523,7 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
         }
         "bc6h" => vec![bc6h_veryslow(root)?],
         "alpha-scan" => vec![alpha_scan(root)?],
+        "exact-opaque-bytepatch" => vec![exact_opaque(root, ExactMode::BytePatch)?],
         other => bail!("unknown gate '{other}'"),
     })
 }

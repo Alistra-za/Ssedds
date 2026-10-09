@@ -52,3 +52,19 @@ fn rejects_mismatched_output_length() {
     let mut out = [0u8; 8];
     bc7e_compress_blocks(&px, &mut out, U5);
 }
+
+#[test]
+#[cfg(not(sdc_bc7e_patched))]
+#[should_panic(expected = "exact_opaque needs the patched bc7e objects")]
+fn exact_opaque_without_native_support_panics() {
+    let px = vec![[0u8, 0, 0, 255]; 16];
+    let mut out = [0u8; 16];
+    bc7e_compress_blocks(
+        &px,
+        &mut out,
+        Bc7Params {
+            exact_opaque: true,
+            ..U5
+        },
+    );
+}

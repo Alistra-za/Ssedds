@@ -1,6 +1,7 @@
 //! Safe wrappers over the vendored BC encoders (bc7e, rgbcx, ISPC TC).
 mod bc6h;
 mod bc7;
+pub mod bc7_fixup;
 mod ffi;
 mod rgbcx;
 
