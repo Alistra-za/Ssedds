@@ -17,25 +17,29 @@ pub fn level_count(w: u32, h: u32, levels: &MipLevels) -> u32 {
     }
 }
 
-/// Source texel range `[start, end)` along one axis covered by destination texel `d`. For an even
-/// source size this is exactly the 2×2 box pair; a size-1 axis maps to its single texel; an odd size
-/// (NPOT is blocked upstream, so only a safety net) still covers every texel instead of dropping the edge.
-fn footprint(d: u32, src: u32, dst: u32) -> std::ops::Range<u32> {
-    let start = (u64::from(d) * u64::from(src) / u64::from(dst)) as u32;
-    let end = ((u64::from(d + 1) * u64::from(src)).div_ceil(u64::from(dst)) as u32).max(start + 1);
-    start..end.min(src)
+/// Source texels covered by destination texel `d` when every texel pairs up exactly: a size-1 axis
+/// maps to its single texel, an even size to the 2-texel box.
+fn pair_footprint(d: u32, src: u32) -> std::ops::Range<u32> {
+    if src == 1 {
+        0..1
+    } else {
+        2 * d..2 * d + 2
+    }
 }
 
-/// One box step. With `weighted`, RGB is the alpha-weighted mean of the footprint (equal to the
-/// base-footprint weighted mean when applied recursively) and falls back to the plain mean when the
-/// footprint has no alpha; alpha itself is always the plain mean.
+/// One box step. Even and size-1 axes take the 2x2 pair path; any axis with an odd size > 1 uses
+/// [`downsample_area`]. Power-of-two images only ever run the pair path.
 fn downsample(prev: &Rgba32F, weighted: bool) -> Rgba32F {
+    let odd = |n: u32| n > 1 && n % 2 == 1;
+    if odd(prev.width) || odd(prev.height) {
+        return downsample_area(prev, weighted);
+    }
     let (w, h) = ((prev.width / 2).max(1), (prev.height / 2).max(1));
     let mut out = Rgba32F::new(w, h, [0.0; 4]);
     for y in 0..h {
-        let ys = footprint(y, prev.height, h);
+        let ys = pair_footprint(y, prev.height);
         for x in 0..w {
-            let xs = footprint(x, prev.width, w);
+            let xs = pair_footprint(x, prev.width);
             let n = (xs.len() * ys.len()) as f32;
             let mut sum = [0.0f32; 4];
             let mut sum_weighted = [0.0f32; 3];
@@ -45,8 +49,10 @@ fn downsample(prev: &Rgba32F, weighted: bool) -> Rgba32F {
                     for c in 0..4 {
                         sum[c] += k[c];
                     }
-                    for c in 0..3 {
-                        sum_weighted[c] += k[c] * k[3];
+                    if weighted {
+                        for c in 0..3 {
+                            sum_weighted[c] += k[c] * k[3];
+                        }
                     }
                 }
             }
@@ -60,6 +66,63 @@ fn downsample(prev: &Rgba32F, weighted: bool) -> Rgba32F {
                 };
             }
             px[3] = sum[3] / n;
+        }
+    }
+    out
+}
+
+/// Per-axis area weights: destination texel `i` of `m` covers the source interval
+/// `[i*n/m, (i+1)*n/m)` of `n` texels; each source texel contributes its overlap length. Weights of
+/// one destination texel sum to 1.
+fn axis_weights(n: u32, m: u32) -> Vec<Vec<(u32, f64)>> {
+    let (n64, m64) = (u64::from(n), u64::from(m));
+    (0..m64)
+        .map(|i| {
+            // Work in units of 1/m texel: destination covers [i*n, (i+1)*n), source j covers [j*m, (j+1)*m).
+            let (lo, hi) = (i * n64, (i + 1) * n64);
+            let first = lo / m64;
+            let last = hi.div_ceil(m64).min(n64);
+            (first..last)
+                .map(|j| {
+                    let overlap = hi.min((j + 1) * m64) - lo.max(j * m64);
+                    (j as u32, overlap as f64 / n64 as f64)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Area-exact box step for any size (odd sizes included), accumulated in f64. Weighted RGB uses
+/// area x alpha as the weight.
+fn downsample_area(prev: &Rgba32F, weighted: bool) -> Rgba32F {
+    let (w, h) = ((prev.width / 2).max(1), (prev.height / 2).max(1));
+    let (wx, wy) = (axis_weights(prev.width, w), axis_weights(prev.height, h));
+    let mut out = Rgba32F::new(w, h, [0.0; 4]);
+    for (y, ys) in wy.iter().enumerate() {
+        for (x, xs) in wx.iter().enumerate() {
+            let mut sum = [0.0f64; 4];
+            let mut sum_weighted = [0.0f64; 3];
+            for &(cy, vy) in ys {
+                for &(cx, vx) in xs {
+                    let k = prev.at(cx, cy);
+                    let area = vx * vy;
+                    for c in 0..4 {
+                        sum[c] += area * f64::from(k[c]);
+                    }
+                    if weighted {
+                        for c in 0..3 {
+                            sum_weighted[c] += area * f64::from(k[c]) * f64::from(k[3]);
+                        }
+                    }
+                }
+            }
+            let mut px = sum.map(|v| v as f32);
+            if weighted && sum[3] > 0.0 {
+                for c in 0..3 {
+                    px[c] = (sum_weighted[c] / sum[3]) as f32;
+                }
+            }
+            *out.at_mut(x as u32, y as u32) = px;
         }
     }
     out
@@ -100,21 +163,33 @@ fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
     img
 }
 
-/// Finalised mip levels, level 0 first, in the Work's domain. Level 0 is the base exactly as given.
+/// Finalised mip levels, level 0 first, in the Work's domain.
+///
+/// Levels >= 1 are finalised and clamped (roughness √, vector renormalisation, domain clamps). Mip 0 is
+/// returned exactly as authored, so the consumer (Quantise, Task 31) must clamp it for the target format.
+/// `p.mips.normal` is not read: `RenormalizeBake` degrades to `Renormalize` until M4.
 pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F> {
     let n = level_count(work.img.width, work.img.height, &p.mips.levels);
     let weighted = work.alpha_present && p.alpha_weighted_mips();
-    let mut acc = work.img.clone();
-    if work.roughness_r_squared {
-        for px in &mut acc.px {
-            px[0] *= px[0];
-        }
-    }
     let mut out = Vec::with_capacity(n as usize);
     out.push(work.img.clone());
+    // `acc` is the unnormalised accumulation level; the first step reads the base directly unless
+    // roughness needs squaring, so the base is not cloned a second time.
+    let mut acc: Option<Rgba32F> = None;
     for _ in 1..n {
-        acc = downsample(&acc, weighted);
-        out.push(finalize(&acc, work));
+        let next = match &acc {
+            Some(prev) => downsample(prev, weighted),
+            None if work.roughness_r_squared => {
+                let mut squared = work.img.clone();
+                for px in &mut squared.px {
+                    px[0] *= px[0];
+                }
+                downsample(&squared, weighted)
+            }
+            None => downsample(&work.img, weighted),
+        };
+        out.push(finalize(&next, work));
+        acc = Some(next);
     }
     out
 }
@@ -137,6 +212,7 @@ mod tests {
             alpha_present: alpha,
             domain,
             roughness_r_squared: false,
+            nonfinite_samples: 0,
         }
     }
 
@@ -380,5 +456,275 @@ mod tests {
             &p,
         );
         assert_eq!(c.len(), 1);
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// Red = 1 on one line (column `at` when `across_x`, else row `at`), 0 elsewhere; alpha 1.
+    fn line_image(w: u32, h: u32, across_x: bool, at: u32) -> Rgba32F {
+        let mut img = Rgba32F::new(w, h, [0.0, 0.0, 0.0, 1.0]);
+        for y in 0..h {
+            for x in 0..w {
+                if (across_x && x == at) || (!across_x && y == at) {
+                    img.at_mut(x, y)[0] = 1.0;
+                }
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn odd_width_centre_column_is_area_exact_at_every_level() {
+        // 5x4 -> 2x2 -> 1x1. The centre column is split half and half between the two columns:
+        // 0.5 / 2.5 = 0.2 everywhere (overlapping whole texels would give 1/3).
+        let c = build_chain(
+            &work(line_image(5, 4, true, 2), Domain::Stored, false),
+            &profile(Subtype::GenericData),
+        );
+        assert_eq!(c.len(), 3);
+        for l in &c[1..] {
+            assert!(l.px.iter().all(|p| close(p[0], 0.2) && p[3] == 1.0));
+        }
+    }
+
+    #[test]
+    fn odd_height_centre_row_is_area_exact_at_every_level() {
+        let c = build_chain(
+            &work(line_image(4, 5, false, 2), Domain::Stored, false),
+            &profile(Subtype::GenericData),
+        );
+        assert_eq!(c.len(), 3);
+        for l in &c[1..] {
+            assert!(l.px.iter().all(|p| close(p[0], 0.2) && p[3] == 1.0));
+        }
+    }
+
+    #[test]
+    fn odd_square_centre_texel_keeps_total_energy() {
+        // 5x5 -> 2x2 -> 1x1: each child gets (0.5 * 0.5) / (2.5 * 2.5) = 0.04, and the mean of the
+        // whole image is 1/25 = 0.04 at the last level.
+        let mut img = Rgba32F::new(5, 5, [0.0, 0.0, 0.0, 1.0]);
+        img.at_mut(2, 2)[0] = 1.0;
+        let c = build_chain(
+            &work(img, Domain::Stored, false),
+            &profile(Subtype::GenericData),
+        );
+        assert_eq!(c.len(), 3);
+        assert!(c[1].px.iter().all(|p| close(p[0], 0.04)));
+        assert!(close(c[2].px[0][0], 0.04));
+    }
+
+    #[test]
+    fn odd_width_plain_alpha_average_uses_area_weights() {
+        // Alpha is data here (plain mean): a single opaque centre texel of 5 gives 0.2 per child.
+        let mut img = Rgba32F::new(5, 1, [0.0; 4]);
+        img.px[2][3] = 1.0;
+        let mut p = profile(Subtype::GenericData);
+        p.alpha.policy = AlphaPolicy::Data;
+        let c = build_chain(&work(img, Domain::Stored, true), &p);
+        assert!(close(c[1].px[0][3], 0.2) && close(c[1].px[1][3], 0.2));
+        assert!(close(c[2].px[0][3], 0.2));
+    }
+
+    #[test]
+    fn odd_width_alpha_weighted_rgb_uses_area_times_alpha() {
+        let mut img = Rgba32F::new(5, 1, [0.0; 4]);
+        for (i, (r, a)) in [
+            (0.2f32, 1.0f32),
+            (0.4, 0.5),
+            (0.6, 1.0),
+            (0.8, 0.25),
+            (1.0, 0.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            img.px[i] = [r, 0.0, 0.0, a];
+        }
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Cutout;
+        let c = build_chain(&work(img, Domain::LinearLight, true), &p);
+        // child 0 covers texels 0, 1 and half of 2; child 1 half of 2, then 3 and 4.
+        let c0 = (0.2 * 1.0 + 0.4 * 0.5 + 0.6 * 0.5) / (1.0 + 0.5 + 0.5);
+        let c1 = (0.6 * 0.5 + 0.8 * 0.25) / (0.5 + 0.25);
+        assert!(close(c[1].px[0][0], c0) && close(c[1].px[1][0], c1));
+        assert!(close(c[1].px[0][3], 2.0 / 2.5) && close(c[1].px[1][3], 0.75 / 2.5));
+        // The last level equals the base-footprint weighted mean: sum(c a) / sum(a).
+        let direct = (0.2 + 0.2 + 0.6 + 0.2) / 2.75;
+        assert!(close(c[2].px[0][0], direct), "{}", c[2].px[0][0]);
+        assert!(close(c[2].px[0][3], 2.75 / 5.0));
+    }
+
+    #[test]
+    fn area_path_agrees_with_pair_path_on_even_sizes() {
+        let mut seed = 7u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 16_777_216.0
+        };
+        for (w, h) in [(8u32, 8u32), (16, 2), (1, 8), (6, 4)] {
+            let mut img = Rgba32F::new(w, h, [0.0; 4]);
+            for p in &mut img.px {
+                *p = [rnd(), rnd(), rnd(), if rnd() < 0.3 { 0.0 } else { rnd() }];
+            }
+            for weighted in [false, true] {
+                let a = downsample_area(&img, weighted);
+                let b = downsample(&img, weighted);
+                assert_eq!((a.width, a.height), (b.width, b.height));
+                for (pa, pb) in a.px.iter().zip(&b.px) {
+                    for c in 0..4 {
+                        assert!((pa[c] - pb[c]).abs() < 1e-6, "{w}x{h} weighted={weighted}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn weighted_chain_carries_child_alpha_as_weight() {
+        // 4x1, alphas 1, 1, 0.25, 0 (the last colour is invisible and must not leak). Level 1 has
+        // alphas 1 and 0.125, so the weights at level 2 are unequal: the result is
+        // sum(c a) / sum(a) over the base, not the plain mean of the level-1 colours.
+        let mut img = Rgba32F::new(4, 1, [0.0; 4]);
+        img.px[0] = [1.0, 0.0, 0.0, 1.0];
+        img.px[1] = [0.0, 1.0, 0.0, 1.0];
+        img.px[2] = [0.0, 0.0, 1.0, 0.25];
+        img.px[3] = [1.0, 1.0, 1.0, 0.0];
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Cutout;
+        let c = build_chain(&work(img, Domain::LinearLight, true), &p);
+        let v = c[2].px[0];
+        let (e0, e1, e2) = (1.0 / 2.25, 1.0 / 2.25, 0.25 / 2.25);
+        assert!(
+            close(v[0], e0) && close(v[1], e1) && close(v[2], e2),
+            "{v:?}"
+        );
+        assert!(close(v[3], 2.25 / 4.0));
+    }
+
+    #[test]
+    fn weighted_chain_matches_direct_footprint_mean_at_every_level() {
+        let alphas = [1.0f32, 0.5, 0.0, 0.25, 0.75, 0.125, 1.0, 0.0];
+        let reds = [0.9f32, 0.1, 0.7, 0.3, 0.5, 0.2, 0.8, 0.4];
+        let mut img = Rgba32F::new(8, 1, [0.0; 4]);
+        for i in 0..8 {
+            img.px[i] = [reds[i], 0.0, 0.0, alphas[i]];
+        }
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Blend;
+        let c = build_chain(&work(img, Domain::LinearLight, true), &p);
+        assert_eq!(c.len(), 4);
+        for (k, level) in c.iter().enumerate().skip(1) {
+            let span = 1usize << k;
+            for (i, px) in level.px.iter().enumerate() {
+                let r = i * span..(i + 1) * span;
+                let sa: f32 = alphas[r.clone()].iter().sum();
+                let sca: f32 = r.clone().map(|j| reds[j] * alphas[j]).sum();
+                assert!(close(px[3], sa / span as f32), "level {k} texel {i}");
+                if sa > 0.0 {
+                    assert!(close(px[0], sca / sa), "level {k} texel {i}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nan_source_sample_does_not_poison_the_chain() {
+        let mut img = Rgba32F::new(4, 4, [1.0, 1.0, 1.0, 1.0]);
+        img.px[0][0] = f32::NAN;
+        let p = profile(Subtype::GenericData);
+        let w = preprocess(img, &p);
+        let c = build_chain(&w, &p);
+        assert_eq!(c.len(), 3);
+        for l in &c {
+            assert!(l.px.iter().all(|p| p.iter().all(|v| v.is_finite())));
+        }
+        // NaN counts as 0: 15 of 16 base texels are white.
+        assert!(close(c[2].px[0][0], 15.0 / 16.0), "{}", c[2].px[0][0]);
+        assert_eq!(&c[2].px[0][1..3], &[1.0, 1.0]);
+    }
+
+    #[test]
+    fn infinities_become_finite_before_accumulation() {
+        // LDR: +inf -> 1, -inf -> 0.
+        let mut img = Rgba32F::new(2, 1, [0.5, 0.5, 0.5, 1.0]);
+        img.px[0][0] = f32::INFINITY;
+        img.px[1][1] = f32::NEG_INFINITY;
+        let mut p = profile(Subtype::GenericData);
+        p.alpha.policy = AlphaPolicy::Data;
+        let w = preprocess(img, &p);
+        assert_eq!(&w.img.px[0][..3], &[1.0, 0.5, 0.5]);
+        assert_eq!(&w.img.px[1][..3], &[0.5, 0.0, 0.5]);
+        let c = build_chain(&w, &p);
+        assert!(close(c[1].px[0][0], 0.75) && close(c[1].px[0][1], 0.25));
+        // HDR: +inf -> 65504 (largest finite half), -inf -> 0.
+        let mut p = profile(Subtype::PbrEmissive);
+        p.color.content = ColorContent::Linear;
+        let mut img = Rgba32F::new(2, 1, [1.0, 1.0, 1.0, 1.0]);
+        img.px[0][0] = f32::INFINITY;
+        img.px[1][1] = f32::NEG_INFINITY;
+        let w = preprocess(img, &p);
+        assert_eq!(w.img.px[0][0], 65504.0);
+        assert_eq!(w.img.px[1][1], 0.0);
+        let c = build_chain(&w, &p);
+        assert!(close(c[1].px[0][0], (65504.0 + 1.0) / 2.0));
+    }
+
+    #[test]
+    fn non_finite_vector_samples_decode_to_unit_extremes() {
+        // Normal maps: -inf is the most negative component (-1 after decode), +inf is +1.
+        let mut p = profile(Subtype::Normal);
+        p.channels.reconstruct_z = false;
+        p.channels.flip_green = false;
+        let w = preprocess(
+            Rgba32F::new(1, 1, [f32::NEG_INFINITY, f32::INFINITY, f32::NAN, 1.0]),
+            &p,
+        );
+        assert_eq!(w.img.px[0][0], -1.0);
+        assert_eq!(w.img.px[0][1], 1.0);
+        assert_eq!(w.img.px[0][2], 0.0); // NaN -> 0 -> decoded -1 -> z clamps to 0
+        assert!(w.img.px[0][3].is_finite());
+        // Flow: only RG are vector channels.
+        let mut p = profile(Subtype::Flow);
+        p.alpha.policy = AlphaPolicy::Data;
+        let w = preprocess(
+            Rgba32F::new(1, 1, [f32::NEG_INFINITY, f32::INFINITY, 0.5, 1.0]),
+            &p,
+        );
+        assert_eq!(&w.img.px[0][..2], &[-1.0, 1.0]);
+    }
+
+    #[test]
+    fn non_finite_alpha_is_sanitised_when_alpha_is_kept() {
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Blend;
+        let mut img = Rgba32F::new(4, 1, [0.5, 0.5, 0.5, 0.5]);
+        img.px[0][3] = f32::NAN;
+        img.px[1][3] = f32::INFINITY;
+        img.px[2][3] = f32::NEG_INFINITY;
+        let w = preprocess(img, &p);
+        assert!(w.alpha_present);
+        let a: Vec<f32> = w.img.px.iter().map(|p| p[3]).collect();
+        assert_eq!(a, [0.0, 1.0, 0.0, 0.5]);
+        let c = build_chain(&w, &p);
+        assert!(c
+            .iter()
+            .all(|l| l.px.iter().all(|p| p.iter().all(|v| v.is_finite()))));
+    }
+
+    #[test]
+    fn hdr_negatives_are_clamped_before_accumulation() {
+        // Without the base clamp mip 1 would be (-4 + 8) / 2 = 2 while mip 0 encodes as 0 and 8.
+        let mut p = profile(Subtype::PbrEmissive);
+        p.color.content = ColorContent::Linear;
+        let mut img = Rgba32F::new(2, 1, [-4.0, 1.0, 1.0, 1.0]);
+        img.px[1][0] = 8.0;
+        let w = preprocess(img, &p);
+        assert_eq!(w.domain, Domain::Hdr);
+        let c = build_chain(&w, &p);
+        assert_eq!((c[0].px[0][0], c[0].px[1][0]), (0.0, 8.0));
+        assert!(close(c[1].px[0][0], 4.0));
     }
 }

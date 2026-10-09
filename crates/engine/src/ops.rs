@@ -1,6 +1,6 @@
 //! Preprocess (spec §5.4): channel and colour operations before mips.
 //!
-//! Steps run in spec order: (1) alpha `remove`, (2) swizzle then grayscale, (3) vector decode,
+//! Non-finite samples are sanitised first (see [`sanitize_non_finite`]). Steps then run in spec order: (1) alpha `remove`, (2) swizzle then grayscale, (3) vector decode,
 //! (4) dilation, (5) sRGB decode. Resize (step 6) is milestone M6; NPOT is blocked by `DIM-NPOT`
 //! before this stage. Renormalising normals is a mips concern (Task 29), not done here.
 use crate::config::*;
@@ -33,6 +33,9 @@ pub struct Work {
     pub domain: Domain,
     /// `_rmaos`/`_rfaos`: red is roughness, filtered in squared space by mips.
     pub roughness_r_squared: bool,
+    /// Source samples (any channel) that were NaN or infinite and were replaced before processing.
+    /// Task 37 surfaces a non-zero count as a warning.
+    pub nonfinite_samples: u64,
 }
 
 pub fn domain_for(p: &Profile) -> Domain {
@@ -86,9 +89,34 @@ fn swizzle(px: [f32; 4], s: &str) -> [f32; 4] {
     out
 }
 
+/// Replace NaN and infinite samples so they cannot poison the mip accumulation; returns how many were
+/// replaced. NaN and -inf become 0 (for vector channels that decodes to -1, the most negative
+/// component), +inf becomes 65504 in the Hdr domain and 1 otherwise. Alpha: NaN and -inf become 0,
+/// +inf becomes 1. A dropped alpha channel (`remove`) is not touched or counted.
+fn sanitize_non_finite(img: &mut Rgba32F, hdr: bool, alpha_present: bool) -> u64 {
+    let mut replaced = 0;
+    for px in &mut img.px {
+        for (c, v) in px.iter_mut().enumerate() {
+            if v.is_finite() || (c == 3 && !alpha_present) {
+                continue;
+            }
+            *v = if v.is_nan() || *v == f32::NEG_INFINITY {
+                0.0
+            } else if hdr && c < 3 {
+                65504.0
+            } else {
+                1.0
+            };
+            replaced += 1;
+        }
+    }
+    replaced
+}
+
 pub fn preprocess(mut img: Rgba32F, p: &Profile) -> Work {
     let domain = domain_for(p);
     let alpha_present = p.alpha.policy != AlphaPolicy::Remove;
+    let nonfinite_samples = sanitize_non_finite(&mut img, domain == Domain::Hdr, alpha_present);
     let grayscale = p.category == Category::Grayscale;
     for px in &mut img.px {
         if !alpha_present {
@@ -145,11 +173,20 @@ pub fn preprocess(mut img: Rgba32F, p: &Profile) -> Work {
             }
         }
     }
+    if domain == Domain::Hdr {
+        // BC6H UF16 has no negatives: clamp the base so mip 0 and the accumulated levels agree.
+        for px in &mut img.px {
+            for c in &mut px[..3] {
+                *c = c.max(0.0);
+            }
+        }
+    }
     Work {
         img,
         alpha_present,
         domain,
         roughness_r_squared: p.subtype.is_roughness_member(),
+        nonfinite_samples,
     }
 }
 
@@ -315,5 +352,39 @@ mod tests {
         p.color.content = ColorContent::Linear;
         let w = preprocess(Rgba32F::new(1, 1, [2.5, 0.5, 0.5, 1.0]), &p);
         assert_eq!(&w.img.px[0][..3], &[2.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn non_finite_samples_are_replaced_and_counted() {
+        let mut p = profile(Subtype::GenericData);
+        p.alpha.policy = AlphaPolicy::Data;
+        let mut img = Rgba32F::new(2, 1, [0.5; 4]);
+        img.px[0] = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::NAN];
+        let w = preprocess(img, &p);
+        assert_eq!(w.nonfinite_samples, 4);
+        assert_eq!(w.img.px[0], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(w.img.px[1], [0.5; 4]);
+        // clean input counts zero
+        assert_eq!(
+            preprocess(Rgba32F::new(2, 2, [0.5; 4]), &p).nonfinite_samples,
+            0
+        );
+        // a removed alpha channel is dropped, not counted
+        p.alpha.policy = AlphaPolicy::Remove;
+        let w = preprocess(Rgba32F::new(1, 1, [0.5, 0.5, 0.5, f32::NAN]), &p);
+        assert_eq!((w.nonfinite_samples, w.img.px[0][3]), (0, 1.0));
+    }
+
+    #[test]
+    fn hdr_clamps_negative_rgb_after_srgb_decode_but_not_alpha() {
+        let mut p = profile(Subtype::PbrEmissive);
+        p.color.content = ColorContent::Srgb;
+        p.alpha.policy = AlphaPolicy::Data;
+        let w = preprocess(Rgba32F::new(1, 1, [-0.5, 0.5, -2.0, -0.25]), &p);
+        assert_eq!(w.domain, Domain::Hdr);
+        assert_eq!(w.img.px[0][0], 0.0);
+        assert!((w.img.px[0][1] - 0.214_041).abs() < 1e-5);
+        assert_eq!(w.img.px[0][2], 0.0);
+        assert_eq!(w.img.px[0][3], -0.25);
     }
 }
