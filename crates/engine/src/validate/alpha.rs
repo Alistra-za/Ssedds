@@ -1,9 +1,10 @@
 //! Decoded-alpha statistics and the all-255-block check (spec §5.8).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Counts of decoded alpha values over one image.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AlphaStats {
     pub pixels: u64,
     pub eq255: u64,
@@ -48,7 +49,10 @@ pub fn alpha_stats(decoded: &[[u8; 4]]) -> AlphaStats {
 }
 
 /// Texels whose decoded alpha is not 255 inside 4x4 blocks whose encoder-input alpha is 255 on every
-/// in-image texel.
+/// in-image texel (blocks at the right and bottom edge cover only the texels inside the image).
+///
+/// Never panics. If a buffer is shorter than `width * height`, a missing input texel is not known to be
+/// opaque (its block is skipped) and a missing decoded texel inside an opaque block counts as a violation.
 pub fn opaque_block_violations(
     input: &[[u8; 4]],
     decoded: &[[u8; 4]],
@@ -56,8 +60,6 @@ pub fn opaque_block_violations(
     height: u32,
 ) -> u64 {
     let (w, h) = (width as usize, height as usize);
-    assert_eq!(input.len(), w * h);
-    assert_eq!(decoded.len(), w * h);
     let mut bad = 0u64;
     for by in (0..h).step_by(4) {
         for bx in (0..w).step_by(4) {
@@ -65,8 +67,10 @@ pub fn opaque_block_violations(
                 (by..(by + 4).min(h))
                     .flat_map(move |y| (bx..(bx + 4).min(w)).map(move |x| y * w + x))
             };
-            if texels().all(|i| input[i][3] == 255) {
-                bad += texels().filter(|&i| decoded[i][3] != 255).count() as u64;
+            if texels().all(|i| input.get(i).is_some_and(|p| p[3] == 255)) {
+                bad += texels()
+                    .filter(|&i| decoded.get(i).is_none_or(|p| p[3] != 255))
+                    .count() as u64;
             }
         }
     }
@@ -104,5 +108,50 @@ mod tests {
         dec[9] = [0, 0, 0, 254]; // row 1, x = 1 (block 0)
         dec[7] = [0, 0, 0, 100]; // block 1: not counted
         assert_eq!(opaque_block_violations(&input, &dec, 8, 4), 2);
+    }
+
+    /// Opaque `w` x `h` input and a decoded copy with alpha 254 at every `(x, y)` in `hits`.
+    fn opaque_with_hits(w: u32, h: u32, hits: &[(u32, u32)]) -> (Vec<[u8; 4]>, Vec<[u8; 4]>) {
+        let input = vec![[1u8, 2, 3, 255]; (w * h) as usize];
+        let mut dec = input.clone();
+        for &(x, y) in hits {
+            dec[(y * w + x) as usize][3] = 254;
+        }
+        (input, dec)
+    }
+
+    #[test]
+    fn edge_blocks_cover_only_in_image_texels() {
+        // 5x3: blocks at x 0..4 and x 4..5, both 3 rows tall. The right block has 3 in-image texels.
+        let (input, dec) = opaque_with_hits(5, 3, &[(4, 0), (4, 2), (3, 1)]);
+        assert_eq!(opaque_block_violations(&input, &dec, 5, 3), 3);
+        // A non-255 input texel in the right-edge block exempts that block only.
+        let (mut input, dec) = opaque_with_hits(5, 3, &[(4, 0), (3, 1)]);
+        input[2 * 5 + 4][3] = 7;
+        assert_eq!(opaque_block_violations(&input, &dec, 5, 3), 1);
+    }
+
+    #[test]
+    fn partial_blocks_on_both_axes() {
+        // 6x6: blocks (0,0) 4x4, (1,0) 2x4, (0,1) 4x2, (1,1) 2x2.
+        let (input, dec) = opaque_with_hits(6, 6, &[(5, 5), (4, 4), (5, 0), (0, 5), (2, 2)]);
+        assert_eq!(opaque_block_violations(&input, &dec, 6, 6), 5);
+        // Only the bottom-right 2x2 block is non-opaque in the input: its two hits are exempt.
+        let (mut input, dec) = opaque_with_hits(6, 6, &[(5, 5), (4, 4), (5, 0), (0, 5), (2, 2)]);
+        input[4 * 6 + 5][3] = 0;
+        assert_eq!(opaque_block_violations(&input, &dec, 6, 6), 3);
+    }
+
+    #[test]
+    fn sub_block_images_and_short_buffers_do_not_panic() {
+        let (input, dec) = opaque_with_hits(1, 1, &[(0, 0)]);
+        assert_eq!(opaque_block_violations(&input, &dec, 1, 1), 1);
+        assert_eq!(opaque_block_violations(&[], &[], 0, 0), 0);
+        let (input, dec) = opaque_with_hits(5, 3, &[]);
+        // Decoded buffer too short: the missing texels of opaque blocks count as violations.
+        assert_eq!(opaque_block_violations(&input, &dec[..4], 5, 3), 11);
+        // Input buffer too short: blocks with a missing input texel are skipped.
+        assert_eq!(opaque_block_violations(&input[..4], &dec, 5, 3), 0);
+        assert_eq!(opaque_block_violations(&[], &[], 8, 8), 0);
     }
 }
