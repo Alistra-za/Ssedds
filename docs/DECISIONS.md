@@ -215,3 +215,21 @@ Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS c
 - **Below the cutoff:** one texel below 251 keeps the normal varying-alpha rules.
 - **Override:** an explicit `alpha.policy` still wins.
 - **Why 251:** it matches Community Shaders' 251 opacity gate (Note A).
+
+## Phase 2 exit — CLI MVP (2026-10-09)
+
+- `sdc-bench --gates`: PASS, exit 0, 13/13 gate reports (target/bench/mvp-gates.txt). Exact opaque gates alpha == 255 and flag-off bit-identity; ΔRGB is info (S5).
+- Workspace tests: 472 passed, 0 failed, 4 ignored (the S5 ΔRGB tests, by design).
+- Header spot check: nvddsinfo reports the format, size and mip count sdc wrote (BC6H DX10 DXGI 95, BC7 sRGB/UNORM, BC4). texconv decodes every sampled file without error.
+- Real folder: 110 PNG sources sampled from the owner's Faultier's PBR Clutter, Faultier's PBR Landscapes 4k and Vanilla Table Replacers Complex Material, capped at 2048 (F:/ai/dds/mvp-test).
+  - First run: 85 converted. It surfaced the near-opaque normal-alpha false block, fixed as Note L.
+  - Re-run: **97 converted**. 13 skipped, all `pbr_albedo` with SUG-LOW-CONFIDENCE (medium confidence, alpha meaning unconfirmed; 6 also carry real alpha). 0 failed.
+  - `sdc validate` over the 97 outputs: 97 ok, exit 0.
+- Defects found by the MVP work and fixed:
+  - Rotated BC7 mode 4/5 alpha below 254 without exact_opaque.
+  - A DDS next to its PNG counted as a duplicate.
+  - validate judged stored alpha as removed.
+  - Near-opaque source alpha (Note L).
+  - Codex B and CLI findings.
+- In-game spikes S1, S2, S6, S8: pack and checklist ready (docs/spikes/in-game-checklist.md, target/spike-src). Results pending from the owner.
+- Next milestones: M2.5 channel packing (incl. per-channel fill values), M3 GUI, M4 variance bake, M5 NVTT, M6 presets/inputs (incl. resize), M7 CI, M8 packaging.
