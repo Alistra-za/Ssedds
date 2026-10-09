@@ -160,3 +160,11 @@ Owner answers (2026-10-09):
 - Confirm Rust (DECISIONS #14): **"Yes, Rust"**.
 - `alpha.exact_opaque` default: **"Only _m / env masks"** (S5 cost exceeded the 0.05 dB condition).
 - MVP without the variance bake: **"Yes, bake in M4"** — the MVP renormalises `_n` mips; the DECISIONS #6 bake arrives with milestone M4.
+
+## Note G — preset suffix aliases (owner, 2026-10-09)
+
+- A preset may declare **exact suffix aliases** that bind a filename suffix to a canonical sub-type suffix and to that preset's settings, e.g. `rmaosultrahigh → rmaos`.
+- Matching is **exact, no separator**: `iron_rmaosultrahigh.png` matches only an alias `rmaosultrahigh`. A preset declaring `rmaosultrahigh` does **not** make `_nultrahigh` match; each alias is declared individually.
+- The file is treated as its canonical suffix for grouping and output naming (`iron_rmaosultrahigh.png` → set `iron`, written as `iron_rmaos.dds`).
+- The alias's preset may define **any preset fields**, layered like any other preset (on top of the target preset; explicit `--set`/per-file overrides still win). Provenance records the alias.
+- A source whose alias and canonical forms collide on the same output (e.g. `iron_rmaos.png` and `iron_rmaosultrahigh.png`) is a duplicate error.
