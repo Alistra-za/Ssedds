@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-10-08 |
-| Status | Approved direction; Phase 0 spikes next, then the implementation plan |
+| Status | Approved direction. Phases 0–2 (spikes S3–S7, engine, CLI MVP) are built on `feat/phase0-2` and reviewed; milestone M2.5 (channel packing, §6.4) is next. Re-synced with the code and DECISIONS at the final review, 2026-10-09 |
 | Project licence | GPL-3.0-or-later |
 | Platform | Windows x64 only |
 | Working name | `sdc` (Skyrim DDS Converter): `sdc.exe` (CLI) and `sdc-gui.exe` (GUI); final name decided at packaging (§14) |
@@ -13,7 +13,7 @@
 
 **Citations.** [PLAN] `F:/ai/dds/reports/Skyrim DDS converter project plan.md`; [D] `F:/ai/dds/converter/docs/DECISIONS.md` (answers [D#n], notes [D-A], [D-B], [D-C], [D-G], [D-H]); [B1] `reports/BC7 encoder benchmark results.md`; [B2] `reports/BC4 BC5 BC6H and BC7 data benchmark.md`; [MIP] `reports/Mipmap filters and alpha coverage.md`; [SC], [EI], [LF] the notes `skyrim_conventions.md`, `encoder_integration.md`, `language_frameworks.md` in `research_notes/Skyrim DDS converter project plan/`; [TPM] jiayev/TruePBR-Manager (README, `SPEC.md` §3.10, §6–8, `src/core/PBRTextureSet.cpp`, `master` branch, fetched 2026-10-08).
 
-**Changes from the plan.** The owner's answers override or extend the plan in seven places. (1) The tool serves texture artists converting source images; it is not a DDS→DDS game-folder fixer. (2) Alpha *Remove* drops the channel before mips [D#8]. Because bc7e can still decode such blocks as 254 [D-A, D-C], the plan's "constrained bc7e" option becomes a per-profile *exact opaque alpha* flag backed by a small bc7e patch, on by default for `_m` only (global default pending S5), with byte-patch and NVTT fallbacks and smallest-mip validation as proof (§3.3, §5.6, §5.8). (3) The ≤128 px BC7 fallback is dropped [D#7]. (4) BC4/BC5 headers, `_SRGB` under vanilla, `_g`/`_f` colour space and BC6H under CS are decided [D#2–5]. (5) Normal mips are renormalised, with a variance bake into roughness when the set has an `_rmaos` or `_rfaos` [D#6, D-B]. (6) `_rfaos` is a real CS map (Roughness, Fuzz, AO, Specular) for advanced skin [D-B]. (7) Windows only [D#12].
+**Changes from the plan.** The owner's answers override or extend the plan in seven places. (1) The tool serves texture artists converting source images; it is not a DDS→DDS game-folder fixer. (2) Alpha *Remove* drops the channel before mips [D#8]. Because bc7e can still decode such blocks as 254 [D-A, D-C], the plan's "constrained bc7e" option becomes a per-profile *exact opaque alpha* flag backed by a small bc7e patch, on by default for `_m` only (global default decided: S5 measured an RGB cost above 0.05 dB, so it stays off elsewhere [D, Phase 0 exit]), with byte-patch and NVTT fallbacks and smallest-mip validation as proof (§3.3, §5.6, §5.8). (3) The ≤128 px BC7 fallback is dropped [D#7]. (4) BC4/BC5 headers, `_SRGB` under vanilla, `_g`/`_f` colour space and BC6H under CS are decided [D#2–5]. (5) Normal mips are renormalised, with a variance bake into roughness when the set has an `_rmaos` or `_rfaos` [D#6, D-B]. (6) `_rfaos` is a real CS map (Roughness, Fuzz, AO, Specular) for advanced skin [D-B]. (7) Windows only [D#12].
 
 ---
 
@@ -50,26 +50,26 @@ converter/
 │   ├── engine/         library: config model, policy, pipeline, mips, DDS I/O, validation, events
 │   ├── encoders-sys/   vendored encoders: prebuilt ISPC objects, rgbcx and ISPC TC host C++, C shims, patches
 │   ├── cli/            sdc.exe (clap)
-│   ├── gui/            sdc-gui.exe (eframe on wgpu)
+│   ├── gui/            sdc-gui.exe (eframe on wgpu); milestone M3, not yet created
 │   └── bench/          sdc-bench: regression harness over F:/ai/dds/bench
 ├── presets/            built-in presets (TOML), embedded at compile time
-├── schema/             generated JSON Schemas (presets, config, events, manifest)
-├── tests/golden/       per sub-type × target fixtures and expectations
-├── tests/corpus/       CC0 bench subset (Git LFS)
+├── schema/             generated JSON Schemas (preset, profile, config, event, manifest, dds-info, dds-validation)
+├── crates/engine/tests/golden.rs   per sub-type × target cases; the sources are synthesised in the test, no images are committed
+├── tests/corpus/       CC0 bench subset (Git LFS); milestone M7, not yet created
 ├── LICENSES/, THIRD_PARTY_NOTICES.md
 └── docs/               DECISIONS.md, specs, CREDITS.md, user guide
 ```
 
 | Unit | What it does | How it is used | Depends on |
 |---|---|---|---|
-| `engine` | Configuration model, presets, suffix rules, pipeline stages (§5), texture-set jobs (§6), DDS reader/writer, decoders, validation, scheduler, event stream | Linked by `cli`, `gui`, `bench` through `Engine::plan(BatchRequest) -> Plan` and `Engine::run(Plan, EventSink, CancelToken)` | `encoders-sys`; `image`, `exr`, `half`, `bcdec_rs`, `rayon`, `serde`, `toml`, `serde_json`, `schemars`, `jsonschema`, `sha2` |
+| `engine` | Configuration model, presets, suffix rules, pipeline stages (§5), texture-set jobs (§6), DDS reader/writer, decoders, validation, scheduler, event stream | Linked by `cli`, `gui`, `bench` through `Engine::plan(BatchRequest, &Reporter, &CancelToken) -> Result<Plan, EngineError>` and `Engine::run(Plan, &Reporter, &CancelToken) -> Result<BatchSummary, EngineError>`; a `Reporter` wraps an `Arc<dyn EventSink>` (§5.9) | `encoders-sys`; `image` (PNG, TGA, TIFF; `exr` joins with OpenEXR input in M6), `half`, `bcdec_rs`, `rayon`, `serde`, `toml`, `serde_json`, `schemars`, `sha2`, `hex`, `globset`, `walkdir`, `humantime`, `thiserror`. Schemas are checked by regenerating them and comparing with the committed files, so `jsonschema` is not a dependency |
 | `encoders-sys` | Safe wrappers over bc7e (BC7), rgbcx (BC1/3/4/5 encode, BC1 decode per decoder model) and ISPC TC (BC6H); reports vendored versions | Called only by `engine::encode`; one-time global init (§7.3) | Committed ISPC objects and headers; rgbcx and ISPC TC host C++ built by `build.rs` with the `cc` crate and MSVC; C shims for the C++ APIs |
-| `cli` | Commands, config and preset loading, human log on stderr, JSON Lines on stdout, exit codes | Users, scripts, CI, the GUI's isolated-worker mode | `engine`, `clap`, `indicatif` |
+| `cli` | Commands, config and preset loading, human log on stderr, JSON Lines on stdout, exit codes | Users, scripts, CI, the GUI's isolated-worker mode | `engine`, `clap`, `ctrlc`, `anyhow`; `indicatif` progress bars arrive in M6 |
 | `gui` | Source list, controls, preset inspector, GPU preview, progress, reports | Users | `engine` in-process, `eframe`/`egui`, `egui_wgpu`, `wgpu` (`TEXTURE_COMPRESSION_BC`), `rfd` |
-| `bench` | Re-runs the bench corpora through the engine; compares with recorded results; per-mip metrics and alpha counters | Local and self-hosted CI; the gates of §11.2 | `engine`; `F:/ai/dds/bench` (`SDC_BENCH_ROOT`, default that path), its `results/results.csv`, `results2.csv` and image sets; falls back to `tests/corpus` |
+| `bench` | Re-runs the bench corpora through the engine; compares with recorded results; per-mip metrics and alpha counters | Local and self-hosted CI; the gates of §11.2 | `engine`; `F:/ai/dds/bench` (`SDC_BENCH_ROOT`, default that path), its `results/results.csv`, `results2.csv` and image sets. There is no fallback yet: the committed subset `tests/corpus` and portable gates are M7, and without the bench folder the bench crate's tests fail |
 | `presets/` | Built-in presets as data | Embedded with `include_str!`, schema-validated at start-up | `engine` schema types |
 
-**Bench link.** **[Finding]** `F:/ai/dds/bench` holds the corpora, a reference decoder and about 1,770 recorded encodes [PLAN §11]. **[Proposal]** `sdc-bench` reads it in place and writes only to `target/bench/`; the CC0 gate images are also in `tests/corpus/` for hosted CI.
+**Bench link.** **[Finding]** `F:/ai/dds/bench` holds the corpora, a reference decoder and about 1,770 recorded encodes [PLAN §11]. **[Proposal]** `sdc-bench` reads it in place and writes only to `target/bench/`; the CC0 gate images will also be committed to `tests/corpus/` for hosted CI in M7.
 
 **Build requirements.** **[Requirement]** Rust stable on `x86_64-pc-windows-msvc`. **[Finding]** The GNU target would need ISPC from source or a `__chkstk`/`_fltused` shim, and prebuilt ISPC kernels exist for windows-msvc but not windows-gnu [EI §1, §2, §7]. **[Proposal]** Contributors need Rust and the MSVC Build Tools. **No ISPC at build time:** the bc7e objects (patched source, §7.1) and ISPC TC objects are built once with pinned ISPC 1.31.0 by the manual `regen-ispc` workflow and committed with SHA-256 hashes. A static CRT makes each binary a single exe.
 
@@ -111,24 +111,25 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `alpha.policy` | `remove` / `cutout` / `blend` / `cutout_blend` / `data` | Sub-type + analysis | §3.3 |
 | `alpha.threshold` | 5–200, **set per texture** | **127** [D#10] | `cutout`, `cutout_blend`; each image carries its own value (GUI per-row field, CLI per-file override / job-file entry) [Requirement] |
 | `alpha.compare` | `gt` / `ge` | `gt` **[Open]** | Shared by coverage counter and solver |
-| `alpha.exact_opaque` | bool | `true` for `envmask`, `complex_material`; `false` elsewhere (**[Open]** global default) | All-255 source blocks decode to exactly 255 (§3.3) |
+| `alpha.exact_opaque` | bool | `true` for `envmask`, `complex_material`; `false` elsewhere (**[Requirement]** owner, Phase 0 exit: `_m` / env masks only) | All-255 source blocks decode to exactly 255 (§3.3) |
 | `channels` | `swizzle`, `flip_green`, `reconstruct_z`, `grayscale_source: r / luma` | Sub-type | Preprocess (§5.4) |
 | `channels.green_convention` | `directx` / `opengl` / unset | Unset; a `_normalgl`/`_normaldx` suffix states it (§4.4) | Green (Y) convention of a normal source. `opengl` makes Resolve set `flip_green = true` (OpenGL → DirectX in Preprocess, §5.4). A plain `_normal`/`_nrm` source stays unresolved until a preset, config, rule or `--set` states it [D-H]. Ignored for `msn` and non-Normal sub-types |
 | `mips.levels` | `full` / `none` / `n` | `full`; `none` for `interface/`, `sky/` | Full chain to 1×1 |
-| `mips.filter` | `box` / `tent` / `mitchell` / `kaiser{width,alpha,stretch}` | `box` | Mitchell and Kaiser for Color only |
-| `mips.edge` | `clamp` / `wrap` | `wrap` | Irrelevant to box at power-of-two [MIP] |
+| `mips.filter` | `box` / `tent` / `mitchell` / `kaiser{width,alpha,stretch}` | `box` | Mitchell and Kaiser for Color only. Only `box` exists in the engine so far; the others arrive in M6 |
+| `mips.edge` | `clamp` / `wrap` | `wrap` | Irrelevant to box at power-of-two [MIP]. Not a `Profile` field yet; it arrives with the other filters in M6 |
 | `mips.normal` | `renormalize` / `renormalize_bake` | `renormalize`; set job may upgrade (§6) | Normal category |
-| `mips.coverage` | bool, **per texture** | `true` for `cutout` and `cutout_blend`; switchable per image [Requirement] | §5.5. Applies only to `cutout` and `cutout_blend`: on `blend`, `data` or `remove` the field is a no-op even when set on, because blended alpha keeps box-averaged opacity (§5.5) |
+| `mips.coverage` | `auto` / `on` / `off`, **per texture** | `auto` = on for `cutout` and `cutout_blend`; switchable per image [Requirement] | §5.5. Applies only to `cutout` and `cutout_blend`: on `blend`, `data` or `remove` the field is a no-op even when set on, because blended alpha keeps box-averaged opacity (§5.5) |
 | `format` | `bc1`/`bc3`/`bc4`/`bc5`/`bc6h_uf16`/`bc7` | Sub-type × target | Always unsigned |
-| `header` | `dx10` / `legacy` | `legacy` for BC1/BC3 UNORM, else `dx10` | BC4/BC5 legacy = `BC4U`/`BC5U`; `ATI1`/`ATI2` never written [D#2] |
+| `header` | `auto` / `dx10` / `legacy` | `auto` = `legacy` for BC1/BC3 UNORM, else `dx10`. An explicit `legacy` on BC6H, BC7 or any `_SRGB` is `CFG-INVALID` rather than silently becoming DX10 | BC4/BC5 legacy = `BC4U`/`BC5U`; `ATI1`/`ATI2` never written [D#2] |
 | `encoder.backend` | `bc7e` / `rgbcx` / `ispc_bc6h` / `nvtt` | Format | §7 |
 | `encoder.effort` | Named levels (§7.4) | bc7e `veryslow` (= u5); rgbcx 18; BC6H `veryslow` | |
 | `encoder.perceptual` | bool | `false` | Locked off unless Color with alpha ≠ `data` |
 | `encoder.bc1_transparent_black` | bool | `false` | rgbcx 3-colour transparent-black mode; `true` with a BC1 output is `CFG-INVALID` in v1 (DECISIONS Notes F, K) |
 | `encoder.bc45_search_radius` | `default` / `max` | `default` | `max` = radius 10 |
-| `validation` | Rules and thresholds (§5.8) | Sub-type × target | |
-| `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw` | `true`, 0.5 (**[Open]**), `prepacked` | Packed outputs only (§6.4); arrives with milestone M2.5 |
-| `output` | `path`, `on_existing` | Batch | §8 |
+| `encoder.rgbcx_level` | 0–18 | 18 | rgbcx quality level for BC1/BC3/BC4/BC5; read only when the backend is rgbcx, where a value above 18 is `CFG-INVALID` |
+| `validation` | `min_mip_psnr_db`, `coverage_tolerance_pts`, `complex_m_warn_alpha`, `bc6h_min_peak_ratio`, `pgpatcher_non_white_share` (§5.8) | 30 dB, 2 points, 247, 0.8, 0.5 | The thresholds behind `VAL-MIP-ERROR`, `VAL-COVERAGE`, `VAL-M-COMPLEX-MARGIN`, `VAL-BC6H-PEAK` and `VAL-PGPATCHER-50` |
+| `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw`, `fill` (per-role values) | `true`, 0.5 (**[Requirement]** confirmed 2026-10-09 [D-H]), `prepacked`, none | Packed outputs only (§6.4); arrives with milestone M2.5. **[Requirement]** The user can set a **global fill value for each packed channel that has no source map** (GUI slider, CLI option), which replaces the neutral default for that channel [D-H]. **[Proposal]** Field `packing.fill.<role>` (a raw-map role id of §4.4, e.g. `metallic`), 8-bit code 0–255; the CLI shorthand is `--fill <role>=<0..255>` (e.g. `--fill metallic=255`), equivalent to an unscoped `--set packing.fill.<role>=…` |
+| `output` | `path`, `on_existing` | Batch; path `./sdc-out` when no `-o` is given | §8 |
 
 **[Proposal] Batch-level settings.** `bc1_decoder_model` (default `cBC1Ideal`, **[Requirement]** owner 2026-10-08; NVIDIA / AMD / IdealRound4 selectable) is batch-level because `rgbcx::init` sets it as global, non-thread-safe state [EI §1]; a conflicting preset value raises an info event. `jobs`, `mem_budget`, the NVTT path and the preview limit are also batch-level.
 
@@ -144,7 +145,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 
 **[Requirement]** Cutout versus blend is chosen per image; threshold default 127, common range 5–200 [D#10]. **[Proposal]** For colour sources with non-constant alpha, the suggester proposes `cutout{127}` if ≥ 90% of texels are ≤ 5 or ≥ 250, else `blend`; for diffuse sub-types this is always low confidence because the mesh decides [SC §1]. Sources without alpha, or with alpha constant at 255, resolve to `remove` with high confidence. **[Proposal]** Nothing is premultiplied on disk, since NiAlphaProperty blending is straight alpha [PLAN §2]. BC1 1-bit alpha is not offered in v1. **[Finding]** On cutouts it loses anti-aliased edges and is 6.5–11.9 dB worse in visible RGB than BC7 [B1 §6].
 
-**Exact opaque alpha.** **[Finding]** BC7 mode 6 stores 7-bit endpoints plus one p-bit per endpoint shared by RGB and A, so alpha 255 needs p-bit = 1. bc7e's opaque path (`bc7e.ispc:3909`, `handle_opaque_block`) picks the p-bit for RGB only [B1 §5]. Example: the bench's bc7e `-u6` encode of `rgb_real/Bricks104`, an RGB source with no alpha, decodes to 254 on 21.0% of pixels, in mode-6 blocks [D-C]. NVTT constrains the p-bit, emits no 254 and is within 0.32 dB of bc7e on real colour [B1 §1, §5]. **[Requirement]** The flag `alpha.exact_opaque` makes every block whose source alpha is 255 throughout decode to exactly 255. It is **on by default only for `_m`** (`complex_material`, and `envmask` when written in an alpha-carrying format), because CS complex detection, ENB's "pure white = flat" rule and PGPatcher's ≥ 50% non-white rule read `_m` alpha [SC §4]. It is **off** for ordinary colour, `_n` and data maps, where 254 is harmless, so they pay no quality cost. **[Open]** If S5 measures an RGB cost ≤ 0.05 dB on the opaque bench sets, a later revision proposes it on everywhere. **[Proposal]** The flag works per block, so it also covers flat (alpha 255) regions inside a complex `_m`; the patch must constrain every bc7e path that can encode an all-255 block.
+**Exact opaque alpha.** **[Finding]** BC7 mode 6 stores 7-bit endpoints plus one p-bit per endpoint shared by RGB and A, so alpha 255 needs p-bit = 1. bc7e's opaque path (`bc7e.ispc:3909`, `handle_opaque_block`) picks the p-bit for RGB only [B1 §5]. Example: the bench's bc7e `-u6` encode of `rgb_real/Bricks104`, an RGB source with no alpha, decodes to 254 on 21.0% of pixels, in mode-6 blocks [D-C]. NVTT constrains the p-bit, emits no 254 and is within 0.32 dB of bc7e on real colour [B1 §1, §5]. **[Requirement]** The flag `alpha.exact_opaque` makes every block whose source alpha is 255 throughout decode to exactly 255. It is **on by default only for `_m`** (`complex_material`, and `envmask` when written in an alpha-carrying format), because CS complex detection, ENB's "pure white = flat" rule and PGPatcher's ≥ 50% non-white rule read `_m` alpha [SC §4]. It is **off** for ordinary colour, `_n` and data maps, where 254 is harmless, so they pay no quality cost. **[Finding]** S5 measured a mean RGB cost of −0.515 dB (`rgb_real`) and −1.020 dB (`rgb_grad`) for the native patch, above the 0.05 dB condition for proposing it everywhere (DECISIONS, Spike S5). **[Requirement]** The owner therefore kept the scope above: `_m` / env masks only (Phase 0 exit). Widening it would need a cheaper mechanism. **[Proposal]** The flag works per block, so it also covers flat (alpha 255) regions inside a complex `_m`; the patch must constrain every bc7e path that can encode an all-255 block.
 
 ### 3.4 Colour space
 
@@ -163,11 +164,11 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `rules[]` | `{ match: { glob, suffix, set_has, content predicate }, subtype, overrides }`, first match wins |
 | `suffix_aliases` | `alias = "canonical"` table: exact filename suffixes bound to a canonical suffix and to this preset (§3.7) |
 
-Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 wherever alpha is removed), "CPM – Quality", "Vanilla – Quality", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only). **Every field is inspectable** (GUI inspector, `sdc presets show`, both with provenance) and **overridable per field** at preset, rule, file or command-line level. Changing a built-in default bumps the preset version and the changelog, because CS behaviour shifts between releases [SC §4].
+Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 wherever alpha is removed), "CPM – Quality", "Vanilla – Quality", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only). **[Proposal]** The three Quality presets (`cs-quality`, `cpm-quality`, `vanilla-quality`, all based on the hidden `sdc-base`, an id user presets cannot replace) ship with the CLI MVP; the Compact presets and "Fast preview" land in M6. **Every field is inspectable** (GUI inspector, `sdc presets show`, both with provenance) and **overridable per field** at preset, rule, file or command-line level. Changing a built-in default bumps the preset version and the changelog, because CS behaviour shifts between releases [SC §4].
 
 ### 3.6 Reproducibility
 
-**[Requirement]** Preset hash and encoder versions go to a sidecar; a reserved-header hash is deferred [D#15]. **[Proposal]** Each output gets a sidecar record: engine version and commit; encoder names, vendored commits (bc7enc_rdo `b943862`, ISPC TC `79ddbc9`), the bc7e patch id and ISPC 1.31.0; the ISA the ISPC dispatcher selected; preset id, version and SHA-256 of its canonical form; the resolved profile with provenance; the source SHA-256; the batch BC1 decoder model; validation results. By default records go to one batch manifest, `<output_root>/_sdc/manifest.jsonl`, which keeps mod folders clean; a per-file `<name>.dds.json` is optional. Reserved header fields stay zero. **[Finding]** ISPC multi-target dispatch can change bits across CPUs [LF §9]. **[Proposal]** Guarantee: same input, preset, build and dispatched ISA give byte-identical output, enforced in CI with `pinned-isa` (§2).
+**[Requirement]** Preset hash and encoder versions go to a sidecar; a reserved-header hash is deferred [D#15]. **[Proposal]** Each output gets a sidecar record: engine version and commit; encoder names, vendored commits (bc7enc_rdo `b943862`, ISPC TC `79ddbc9`), the bc7e patch id and ISPC 1.31.0; the ISA the ISPC dispatcher selected (today derived from a CPUID check that mirrors the ISPC runtime; `encoders-sys` reports it under `pinned-isa` in M7); preset id, version and SHA-256 of its canonical form; the resolved profile with provenance; the source SHA-256; the batch BC1 decoder model; validation results. By default records go to one batch manifest, `<output_root>/_sdc/manifest.jsonl`, which keeps mod folders clean; a per-file `<name>.dds.json` is optional. Reserved header fields stay zero. **[Finding]** ISPC multi-target dispatch can change bits across CPUs [LF §9]. **[Proposal]** Guarantee: same input, preset, build and dispatched ISA give byte-identical output, enforced in CI with `pinned-isa` (§2).
 
 ### 3.7 Preset suffix aliases
 
@@ -332,7 +333,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 | `mips` | Float mip chain (§5.5) | Per file | `ops`; for a roughness member, the set's `_n` | Texture (set dependency) |
 | `encode` | Block compression (§5.6) | Per mip and band | `encoders-sys`, NVTT process | Texture |
 | `dds` | Container writing (§5.7) | Per file | `encode` | Texture |
-| `validate` | Re-read, decode, check (§5.8) | Per file; `validate` command | DDS reader, decoders | Texture |
+| `validate` | Parse the bytes (in memory during conversion, from disk for `sdc validate`), decode, check (§5.8) | Per file; `validate` command | DDS reader, decoders | Texture |
 | `report` | Event stream (§5.9) | CLI serialises; GUI consumes | — | Batch |
 | `scheduler` | Memory-budgeted admission, set ordering, rayon pool, cancellation, panic isolation | Wraps all stages | `rayon` | Batch |
 
@@ -340,13 +341,15 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 5.1 Load and Analyse
 
-**[Proposal]** Load produces float32 RGBA in the source's own transfer; 16-bit and float data are never quantised to 8 bits before encoding. **[Finding]** Early 8-bit quantisation is one of AlphaBloom's fidelity defects [MIP §AlphaBloom]. ICC profiles are ignored with an info event; images above 16384 px are rejected (D3D11 limit [SC §5]). Analyse computes per-channel min/max/mean and constancy; an alpha histogram (255, 254, 0, ≤ 5, ≥ 250, CS parallax band); a grayscale test (within 4/255); for normals, length statistics, Z presence and a green-convention guess; for `_m`, the PGPatcher non-white share and predicted 1×1 alpha; HDR range and peak; size and power-of-two status; the DXGI format of DDS inputs.
+**[Proposal]** Load produces float32 RGBA in the source's own transfer; 16-bit and float data are never quantised to 8 bits before encoding. **[Finding]** Early 8-bit quantisation is one of AlphaBloom's fidelity defects [MIP §AlphaBloom]. ICC profiles are ignored (the info event lands in M6); images above 16384 px are rejected (D3D11 limit [SC §5]). The loader reads PNG, TGA and TIFF (8/16-bit and 32-bit float) today; OpenEXR, Radiance HDR, BMP and JPEG arrive in M6. Analyse computes per-channel min/max/mean and constancy; an alpha histogram (255, 254, 0, ≤ 5, ≥ 250, CS parallax band); a grayscale test (within 4/255); for normals, length statistics, Z presence and a green-convention guess; for `_m`, the PGPatcher non-white share and predicted 1×1 alpha; HDR range and peak; size and power-of-two status; the DXGI format of DDS inputs. **[Finding]** The engine's `Analysis` does not yet carry the CS parallax alpha band, a Z-presence flag, the green-convention guess or a DDS input's DXGI format (the last arrives with the DDS re-encode opt-in, M6); it keeps the other statistics, plus `blue_mostly_black` and `red_mostly_high` flags, and no rule depends on the missing ones.
 
 **[Requirement]** Near-opaque alpha (DECISIONS Note L): source alpha whose minimum is ≥ 251/255 (no texel below 251) is *opaque within BC tolerance* and classed exactly like constant 255, so `remove` resolves as a high-confidence analysis fact, no `LOSS-ALPHA-DATA` is raised and the alpha meaning is not unconfirmed. When some texel is 251–254, `ALPHA-NEAR-OPAQUE` (info) reports the minimum. One texel below 251 leaves the alpha varying, and an explicit `alpha.policy` (e.g. `--set alpha.policy=data`) still wins. The test is on the stored float: an 8-bit source compares its codes, a 16-bit or float source compares against 251/255 itself.
 
+**[Proposal]** Interim float guard (final review I4, until M6). The transfer of a float source is not yet separated from the output encoding, so a 32-bit float TIFF written to an LDR format would be treated like integer data (sRGB-decoded as gamma-encoded, values above 1 clamped) and could come out visibly darker without any error. Until M6 adds the source-transfer versus output-encode split, a float source resolved to any format other than BC6H is blocked with `IN-FLOAT-LDR` (acknowledge with `--allow IN-FLOAT-LDR`, after which the values convert as stored), and values outside [0, 1] raise `LOSS-CLAMP-HDR`. A float source written as BC6H is linear content (`analysis:float-source`, §5.2).
+
 ### 5.2 Resolve
 
-**[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `rule:<n>`, `analysis` / `analysis:<fact>` — e.g. `analysis:float-source`: a float source written as BC6H is linear content —, `set`, `user`). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run. **[Requirement]** A plain `_normal`/`_nrm` source whose green convention is unstated is `unresolved` as well [D-H]. **[Proposal]** A raw packing input resolves to `packing_input` (§4.4) and is not converted on its own; from M2.5 it is consumed by a packing recipe (§6.4).
+**[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `user_config`, `project_config`, `rule:<source>#<n>` — `<source>` is a preset id, `user` or `project` and `<n>` the 0-based rule index —, `analysis` / `analysis:<fact>` — e.g. `analysis:float-source`: a float source written as BC6H is linear content —, `suffix:<term>` for a fact stated by an exporter term such as `_normalgl` (§4.4), `suggestion`, `user` for `--set` and per-file edits, and `fallback` for a sub-type replaced by its §4.2 fallback after `--allow CFG-UNAVAILABLE`; `set` is reserved for set-level decisions such as the M4 bake and is not emitted yet). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run. **[Requirement]** A plain `_normal`/`_nrm` source whose green convention is unstated is `unresolved` as well [D-H]. **[Proposal]** A raw packing input resolves to `packing_input` (§4.4) and is not converted on its own; from M2.5 it is consumed by a packing recipe (§6.4).
 
 ### 5.3 Why channel surgery precedes mips
 
@@ -377,7 +380,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 **[Finding]** Averaging gamma-encoded values darkens thin bright detail; box is area-exact and never overshoots; sinc kernels help only LDR colour [MIP §1, §"Averaging sRGB"].
 
-**Coverage preservation (Cutout and Cutout+Blend; on by default, switchable per image; threshold *t* set per texture).** **[Requirement]** Rebuild AlphaBloom's Auto Coverage in the new engine, with credit [D#13]. **[Finding]** Castaño's method rescales each mip's alpha so its alpha-test coverage matches mip 0; AlphaBloom's exact-quantile solve has no ×4 cap, so sparse low mips can recover where DirectXTex and NVTT cannot [MIP §"Alpha-tested", §AlphaBloom]. **[Proposal]** For each mip ≥ 1, after filtering and before encoding: count base texels passing `alpha <compare> t`; find the quantile *a* in the mip's float alpha giving the same pass fraction; scale alpha by *t/a*, clamped to [0, 1]. The rebuild avoids AlphaBloom's suspected defects [MIP §AlphaBloom, 2–4, 10]: a mip whose target count rounds to zero is left unchanged (not scaled by t/255); the solve uses float alpha with no truncating 8-bit LUT, and the boundary texel lands at or above *t*; no "force opaque" runs before coverage; counter and solver share the `compare` field. **[Proposal]** Implementation note: the uniform *t/a* scale is replaced by a monotone piecewise remap that keeps 0 and 1 (`[0, a] → [0, T]`, `[a, 1] → [T, 1]`, *T* the smallest float whose 8-bit code passes), anchored on the distinct alpha whose pass count is nearest the target (larger on a tie), so opaque interiors stay at 1.0 (when the anchor is itself 1.0, the next lower distinct alpha is anchored just below *T* so the lower, already-passing groups fail); controller ruling, owner check. **[Finding]** Scaling saturates gradients, so blended alpha must keep box-averaged opacity [MIP]. **[Requirement]** `cutout_blend` still gets the coverage step by default at its threshold *t*, because the alpha-test pass is what thins out at distance (owner decision, DECISIONS Note E); it is switchable per image. **[Open]** If in-game checks (§11.6) show the blended edge fading wrongly at distance, a "partial coverage" option is added.
+**Coverage preservation (Cutout and Cutout+Blend; on by default, switchable per image; threshold *t* set per texture).** **[Requirement]** Rebuild AlphaBloom's Auto Coverage in the new engine, with credit [D#13]. **[Finding]** Castaño's method rescales each mip's alpha so its alpha-test coverage matches mip 0; AlphaBloom's exact-quantile solve has no ×4 cap, so sparse low mips can recover where DirectXTex and NVTT cannot [MIP §"Alpha-tested", §AlphaBloom]. **[Proposal]** For each mip ≥ 1, after filtering and before encoding: count base texels passing `alpha <compare> t`; find the quantile *a* in the mip's float alpha giving the same pass fraction; scale alpha by *t/a*, clamped to [0, 1]. The rebuild avoids AlphaBloom's suspected defects [MIP §AlphaBloom, 2–4, 10]: a mip whose target count rounds to zero is left unchanged (not scaled by t/255); the solve uses float alpha with no truncating 8-bit LUT, and the boundary texel lands at or above *t*; no "force opaque" runs before coverage; counter and solver share the `compare` field. **[Proposal]** Implementation note: the uniform *t/a* scale is replaced by a monotone piecewise remap that keeps 0 and 1 (`[0, a] → [0, T]`, `[a, 1] → [T, 1]`, *T* the smallest float whose 8-bit code passes), anchored on the distinct alpha whose pass count is nearest the target (larger on a tie), so opaque interiors stay at 1.0 (when the anchor is itself 1.0, the next lower distinct alpha is anchored just below *T* so the lower, already-passing groups fail); controller ruling, owner check (DECISIONS, owner checks pending). **[Proposal]** Two documented limits (`coverage.rs`). A level whose target count rounds to zero stays unchanged and is a box-filtered descendant of level 0: it passes only where its footprint holds a passing base texel, so ordinary content stays within about one texel of the expected count, but this is not a hard bound, because failing alpha just below the threshold around sparse passing texels can lift several footprints at once. A monotone remap cannot split equal alphas, so on binary alpha the achievable count is the nearest group (the larger on a tie) and small mips can over-cover by up to the tie group; the §11.5 in-game check watches for thick distant edges. **[Finding]** Scaling saturates gradients, so blended alpha must keep box-averaged opacity [MIP]. **[Requirement]** `cutout_blend` still gets the coverage step by default at its threshold *t*, because the alpha-test pass is what thins out at distance (owner decision, DECISIONS Note E); it is switchable per image. **[Open]** If in-game checks (§11.5) show the blended edge fading wrongly at distance, a "partial coverage" option is added.
 
 ### 5.6 Compress
 
@@ -393,7 +396,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 | BC6H UF16 | ISPC TC `bc6h_veryslow` | **[Finding]** Best mPSNR (51.50 dB), fastest (0.19 s/Mpix), but cut the venice sun's peak to 22% [B2 §6] |
 | BC7/BC6H via NVTT (optional) | `nvcompress` Production, per mip (§7.5) | **[Finding]** Leads on gradients (+3.9 dB), linear data (+0.3–0.4 dB), keeps BC6H peaks (≥ 95%), at 40–60× the time [B1 §1], [B2 §5, §6] |
 
-**Exact opaque alpha.** **[Proposal]** With `alpha.exact_opaque` set and format BC7, the engine sets a field added to `bc7e_compress_block_params` by the vendored patch (§7.1): for every block whose source alpha is 255 throughout, mode-6 endpoints are evaluated and stored with p-bit = 1 and alpha endpoint 127, so bc7e re-optimises RGB under the constraint and alpha decodes to exactly 255. With the field off, output is bit-identical to upstream. Fallbacks, chosen at build time in order if the patch fails its gate (§11.2): first, a post-encode byte patch rewriting such mode-6 blocks to p-bit = 1 and alpha endpoint 127, accepting an unoptimised one-LSB RGB endpoint shift; second, routing the file to NVTT Production if installed. BC7 mode 4/5 blocks with a channel rotation (which can decode an opaque block's alpha below 255, down to 239 on noise) get a lossless post-encode fix setting the rotated slot's endpoints to all-ones; RGB is unchanged. It applies to every block whose source alpha is 255 throughout, with `exact_opaque` on or off and under any alpha policy; the flag governs only the mode-6 constraint, so with it off only mode 6 can decode 254. BC1 (transparent-black off) and BC3 need no constraint. Validate's smallest-mip check is the proof in every case.
+**Exact opaque alpha.** **[Proposal]** With `alpha.exact_opaque` set and format BC7, the engine sets a field added to `bc7e_compress_block_params` by the vendored patch (§7.1): for every block whose source alpha is 255 throughout, mode-6 endpoints are evaluated and stored with p-bit = 1 and alpha endpoint 127, so bc7e re-optimises RGB under the constraint and alpha decodes to exactly 255. With the field off, the bc7e call is bit-identical to upstream (gate §11.2); the engine's lossless rotated mode 4/5 fix below applies in any case and may change block bytes, never decoded RGB. Fallbacks, chosen at build time in order if the patch fails its gate (§11.2): first, a post-encode byte patch rewriting such mode-6 blocks to p-bit = 1 and alpha endpoint 127, accepting an unoptimised one-LSB RGB endpoint shift; second, routing the file to NVTT Production if installed. BC7 mode 4/5 blocks with a channel rotation (which can decode an opaque block's alpha below 255, down to 239 on noise) get a lossless post-encode fix setting the rotated slot's endpoints to all-ones; RGB is unchanged. It applies to every block whose source alpha is 255 throughout, with `exact_opaque` on or off and under any alpha policy; the flag governs only the mode-6 constraint, so with it off only mode 6 can decode 254. BC1 (transparent-black off) and BC3 need no constraint. Validate's smallest-mip check is the proof in every case.
 
 ### 5.7 Write DDS
 
@@ -406,15 +409,17 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 5.8 Validate
 
-**[Proposal]** Re-read with the engine's parser; decode every mip with `bcdec_rs` (BC1 also with rgbcx at the batch model); check:
+**[Proposal]** Conversion validates the exact bytes it is about to write, before the atomic write, so what is checked is what lands on disk (a failure after the write removes the output); `sdc validate` reads a file from disk. Both parse with the engine's own DDS reader; every mip is decoded with `bcdec_rs` (BC1 also with rgbcx at the batch model); check:
 
 | Check | Rule | Failure |
 |---|---|---|
 | Header | §5.7 rules | Error |
-| Per-mip error | Channel PSNR against the pre-encode float chain; angular error for normals | Warning below threshold |
-| **Smallest-mip alpha** | **Decode the smallest mip (and every level) and check alpha**: `remove` → ≥ the encoder guarantee below; with `exact_opaque`, exactly 255 on every all-255 source block; `cutout` → coverage within 2 points of mip 0; `complex_material` → 1×1 alpha < 251/255 with a 4-code-value margin (**[Open]**, S8) | Per rule |
+| Per-mip error | Channel PSNR against the encoder input (the quantised pre-encode chain), floor `validation.min_mip_psnr_db` = 30 dB (`VAL-MIP-ERROR`); the angular error for normals arrives with the per-mip metrics of M7 (§11.3) | Warning below threshold |
+| **Smallest-mip alpha** | **Decode the smallest mip (and every level) and check alpha**: `remove` → ≥ the encoder guarantee below; with `exact_opaque`, exactly 255 on every all-255 source block; `cutout` → coverage within 2 points of mip 0, checked on levels of 256 texels or more (a single flipped texel moves smaller levels by more than the tolerance); `complex_material` → 1×1 alpha < 251/255 with a 4-code-value margin (**[Open]**, S8) | Per rule |
 | PGPatcher count | `_m` outputs storing alpha: base-mip share of α ≠ 255 vs the ≥ 50% rule | Warning |
 | BC6H peak | Decoded ÷ source peak ≥ 0.8 (**[Open]**) | Warning |
+
+**[Proposal]** A file whose validation reports an error is still written and counted (exit 4, §8); a later `if-changed` run re-encodes it instead of calling it up to date.
 
 **Decoded-alpha guarantees** [D-A]. **[Finding]** Removing alpha fixes stray alpha but not decoded alpha: on RGB-only input bc7e decoded 254 on 28% of pixels (ISPC 15%, texconv 2.4%, Compressonator 1.1%, NVTT 0%) [B1 §5]; `Bricks104` shows 21.0% [D-C].
 
@@ -429,7 +434,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 5.9 Report and scheduler
 
-**[Proposal]** Every stage emits `EngineEvent`s carrying `schema: 1`, `seq`, timestamp, batch id, and set key and path where relevant. Kinds: `batch_started`, `file_discovered`, `set_resolved`, `file_planned` (dry-run `ResolvedJob`), `file_started`, `progress`, `warning` (code, severity, message, data), `file_done`, `file_skipped`, `file_failed`, `batch_done`. The CLI writes them as JSON Lines; the GUI receives the same values over a channel, so CLI stdout is valid GUI input (§9.4). The event schema is published; breaking changes bump `schema`. **[Finding]** An 8K RGBA32F buffer is 1 GiB plus about 33% for mips [LF §5]. **[Proposal]** Files are admitted by estimated bytes against `--mem-budget` (default 50% of RAM); large files use band parallelism; cancellation is checked between bands, since native calls cannot be interrupted [LF §5]; each file runs under `catch_unwind`.
+**[Proposal]** Every stage emits `EngineEvent`s carrying `schema: 1`, `seq`, timestamp, batch id, and set key and path where relevant. Kinds: `batch_started`, `file_discovered`, `set_resolved`, `file_planned` (dry-run `ResolvedJob`), `file_started`, `progress`, `warning` (code, severity, message, data), `file_done`, `file_skipped`, `file_failed`, `batch_done`. The CLI writes them as JSON Lines; the GUI receives the same values over a channel, so CLI stdout is valid GUI input (§9.4). The event schema is published; breaking changes bump `schema`. **[Finding]** An 8K RGBA32F buffer is 1 GiB plus about 33% for mips [LF §5]. **[Proposal]** Files are admitted by estimated bytes against `--mem-budget` (default 50% of RAM); large files use band parallelism; cancellation is checked between bands, since native calls cannot be interrupted [LF §5]; each file runs under `catch_unwind`, in planning as well as in conversion (a panic while loading, analysing or resolving fails that file at that stage). `progress` events are emitted only while compressing today; per-stage events (M7) will feed the GUI's stage column. A `Reporter` holds an ordering lock while delivering each event so `seq` order equals delivery order; a slow sink therefore back-pressures the workers, and a GUI sink should only forward into a channel.
 
 ---
 
@@ -441,7 +446,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 6.2 Variance bake into roughness
 
-**[Requirement]** Renormalise normal mips unless the set has an `_rmaos` — or an `_rfaos` [D-B] — in which case bake normal variance into its roughness [D#6]. *Roughness member* below means either. **[Finding]** Unity HDRP, The Order: 1886 (vMF fit) and Call of Duty: WWII average full-resolution normals over each mip footprint — never previously renormalised mips — convert the shortened length to variance, widen GGX roughness, then renormalise the stored normal [MIP §"Normal maps"]. **[Proposal]** The bake applies to a PBR set under `cs` that contains a `pbr_normal` and a roughness member, both as source images in the batch; if both `_rmaos` and `_rfaos` exist, each is baked. For each level ℓ of the roughness member:
+**[Requirement]** Renormalise normal mips unless the set has an `_rmaos` — or an `_rfaos` [D-B] — in which case bake normal variance into its roughness [D#6]. *Roughness member* below means either. **[Proposal]** The CLI MVP renormalises `_n` mips and does not bake (owner: the bake arrives in M4); `mips.normal = renormalize_bake` is accepted and behaves as `renormalize` until then. **[Finding]** Unity HDRP, The Order: 1886 (vMF fit) and Call of Duty: WWII average full-resolution normals over each mip footprint — never previously renormalised mips — convert the shortened length to variance, widen GGX roughness, then renormalise the stored normal [MIP §"Normal maps"]. **[Proposal]** The bake applies to a PBR set under `cs` that contains a `pbr_normal` and a roughness member, both as source images in the batch; if both `_rmaos` and `_rfaos` exist, each is baked. For each level ℓ of the roughness member:
 
 1. Let *F* be the UV footprint of one level-ℓ texel. Average the `_n` **base-level** unit normals (after flip and Z rebuild) over *F*, giving length *L*. If *F* covers at most one `_n` texel, *v* = 0.
 2. κ = (3L − L³)/(1 − L²); *v* = 0.25/κ; *v* = 0 when *L* ≥ 1 − 10⁻⁶ [MIP, Unity `CommonMaterial.hlsl`].
@@ -466,7 +471,7 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 
 ### 6.4 Channel packing
 
-**[Requirement]** Raw single-channel maps (§4.4: roughness, metallic, AO, specular, glossiness, height, fuzz, …) in one texture set are **packed automatically per target**: `cs` `_rmaos`/`_rfaos` + `_p`; `cpm` complex `_m`; `vanilla` `_m` only when a source exists. Raw maps are not written on their own by default; this is overridable per set. Missing channels take neutral defaults plus a warning naming each defaulted channel (AO white, metallic black, specular alpha white = the TruePBR default). Missing roughness does **not** block when an AO or metallic map is found; roughness then takes a neutral default with a warning. Packing is its own milestone right after the CLI MVP (plan M2.5) [D-H].
+**[Requirement]** Raw single-channel maps (§4.4: roughness, metallic, AO, specular, glossiness, height, fuzz, …) in one texture set are **packed automatically per target**: `cs` `_rmaos`/`_rfaos` + `_p`; `cpm` complex `_m`; `vanilla` `_m` only when a source exists. Raw maps are not written on their own by default; this is overridable per set. Missing channels take neutral defaults plus a warning naming each defaulted channel (AO white, metallic black, specular alpha white = the TruePBR default). Missing roughness does **not** block when an AO or metallic map is found; roughness then takes a neutral default with a warning. **[Requirement]** Global fill values (owner, 2026-10-09 [D-H]): for every packed channel without a source map the user can set a fill value, as a slider in the GUI and as a CLI option (e.g. `--fill metallic=255` writes 255 instead of the neutral 0); the neutral defaults below apply only when no value is given. Packing is its own milestone right after the CLI MVP (plan M2.5) [D-H].
 
 **Recipes.** Channel layouts are those of §4.1 (`rmaos`, `rfaos` [D-B], `height`, `complex_material`, `envmask`); sources and triggers are **[Proposal]** unless marked.
 
@@ -485,9 +490,11 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | AO | 1.0 (white) | [Requirement] |
 | Metallic | 0.0 (black) | [Requirement] |
 | Specular (`_rmaos`/`_rfaos` A) | 1.0 (white), the TruePBR default; with TruePBR's default `specular_level` 0.04 this is F0 0.04 | [Requirement] |
-| Roughness | 0.5, set by the preset field `packing.roughness_default` (glossiness default 1 − that value) | [Proposal]; **[Open]** until the owner confirms 0.5 [D-H] |
+| Roughness | 0.5, set by the preset field `packing.roughness_default` (glossiness default 1 − that value) | [Requirement] 0.5 confirmed by the owner 2026-10-09 [D-H] |
 | Env mask (`cpm`/`vanilla` `_m` R) | From the metallic source, else the specular source; 0.0 under `cpm` when neither exists | **[Open]** |
 | Height (`cpm` `_m` A) | 0.5. A white default would make CS read the `_m` as a plain env mask (1×1 alpha ≥ 251/255, §5.8) and ENB as flat; a constant height has no relief | **[Open]** (S8) |
+
+**[Proposal]** Fill values: a fill takes the place of the table default for a channel that has no source map and is never applied to a channel that has one. The field is `packing.fill.<role>` (a §4.4 raw-map role id such as `metallic`) holding an 8-bit code 0–255, and `--fill <role>=<0..255>` sets it for the whole batch like an unscoped `--set`; the GUI offers one slider per role in the global settings. A fill for a role that no recipe of the target packs has no effect. `packing.roughness_default` remains the preset-level neutral default for roughness, and a roughness fill wins over it. The field path, the CLI spelling and the unit are the M2.5 plan's to finalise (§14 #22).
 
 **[Proposal]** Rules:
 
@@ -500,7 +507,7 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | Dimensions | All sources of one recipe must have the same width and height; otherwise the recipe fails with `PACK-SIZE-MISMATCH` (error) listing every source file and its size. No resizing in v1. |
 | Precision | Sources load as float32 (§5.1), so 16-bit inputs keep their precision until the encoder; conversions run in float. Bit-depth loss is reported as for any file (`LOSS-BITDEPTH`). |
 | Pipeline | A recipe is a virtual job with several sources. From Preprocess on it is an ordinary job of the packed sub-type: that sub-type's profile, alpha policy, mip rules (an `_rmaos`/`_rfaos` filters R on α = r², and the variance bake of M4 applies to a packed roughness member like any other), encoder, writer, validation and §10 checks (`CHAN-AO-INVERTED`, `CHAN-GLOSS-AS-ROUGH`, `VAL-M-*`, …). |
-| Provenance | Each output channel records its source (`iron_roughness.png:R`, `1 − iron_gloss.png:R`) or `default:<value>`. The manifest record lists every source with its SHA-256 (§3.6), and `if-changed` re-encodes when any source changes. |
+| Provenance | Each output channel records its source (`iron_roughness.png:R`, `1 − iron_gloss.png:R`) or `default:<value>` for a neutral default or `fill:<value>` for a user-set fill. The manifest record lists every source with its SHA-256 (§3.6), and `if-changed` re-encodes when any source changes. |
 | Pre-packed conflict | If the set already holds a source for the packed output (`iron_rmaos.png` and raw `iron_roughness.png`; `iron_p.png` and `iron_height.png`; `iron_m.png` and raw maps under `cpm`/`vanilla`), the recipe gets the explicit status `conflict` and `PACK-CONFLICT` (warning) names both sides. With `packing.prefer = prepacked` (default: the pre-packed file wins, with the warning) the pre-packed file converts as usual and the recipe's raw inputs are reported unused; with `raw` the recipe runs and the pre-packed file is skipped with `PACK-CONFLICT`. |
 | No source | A recipe whose trigger does not hold does not run; nothing is reported for it. |
 | Reporting | `set_resolved` lists each recipe: output, sub-type, per-channel source or default, status (`run`, `conflict`, `failed`). `sdc inspect` prints the same; `file_planned` carries the virtual job with all its sources. |
@@ -535,11 +542,11 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 
 ### 7.5 NVTT 3 as an optional external process
 
-**[Requirement]** NVTT 3 is optional, user-installed, run as a separate process, never redistributed or linked [PLAN §1]. **[Finding]** Its licence forbids use that would subject it to an open-source licence; a separate user-installed process is the clean path [EI §5]. **[Proposal]** Detection checks a configured path, then `C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe`; versions other than the tested 3.2.5 need confirmation. **[Open]** Per-mip feeding (S7): each pre-built level is sent as its own `nvcompress -nomips -bc7 -production` (or `-bc6 -production`) job on a temporary RGBA8 (RGBA16F) file and the engine assembles the chain. **[Finding]** Per-process overhead is 0.15–0.17 s with CUDA [B1 §2]. If S7 fails, NVTT encodes mip 0 only and bc7e the rest, with an event.
+**[Requirement]** NVTT 3 is optional, user-installed, run as a separate process, never redistributed or linked [PLAN §1]. **[Finding]** Its licence forbids use that would subject it to an open-source licence; a separate user-installed process is the clean path [EI §5]. **[Proposal]** Detection checks a configured path, then `C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe`; versions other than the tested 3.2.5 need confirmation. **[Finding]** Per-mip feeding works (spike S7 passed, DECISIONS): each pre-built level is sent as its own `nvcompress -nomips -bc7 -production` (or `-bc6 -production`) job on a temporary RGBA8 (RGBA16F) file and the engine assembles the chain; mip-0 PSNR equals the bench's direct encode to four decimals. Per-process overhead is 0.142 s with CUDA and 0.015 s with `-nocuda`; the cost is CUDA context creation, and BC7 Production runs on the CPU either way with byte-identical output. **[Proposal]** The backend always passes `-nocuda` for BC7 Production. The BC6H half (`-bc6` on RGBA16F levels) is untested and arrives with the NVTT backend in M5; if a level cannot be fed, NVTT encodes mip 0 only and bc7e the rest, with an event.
 
 ### 7.6 Fallback, oracle, exclusions
 
-**[Open]** `basisu_bc7e_scalar.cpp` (Apache-2.0 C++17 port of bc7e) is not built; it becomes a fallback only if the ISPC objects fail on a needed Windows x64 configuration and S4 passes. **[Proposal]** DirectXTex (`texconv`, `texdiag`) is a CI oracle only (§11.4). **[Finding]** texconv is the weakest BC7 encoder at every setting [B1 §1]. **[Requirement]** Oodle is excluded. **[Proposal]** Compressonator is excluded: stagnant, unbuildable dependency, never uses BC7 modes 4/5, non-compliant BC7 headers [EI §4], [B1 §4, §8].
+**[Finding]** S4 ran and the scalar port was not adopted: 3.8–4.8× slower, and 0.0759 dB off the ISPC result on 1 of 11 images against the 0.01 dB limit (DECISIONS, Spike S4). **[Proposal]** `basisu_bc7e_scalar.cpp` (Apache-2.0 C++17 port of bc7e) stays unbuilt; it becomes a fallback only if the ISPC objects fail on a needed Windows x64 configuration and the owner accepts a looser tolerance. **[Proposal]** DirectXTex (`texconv`, `texdiag`) is a CI oracle only (§11.4). **[Finding]** texconv is the weakest BC7 encoder at every setting [B1 §1]. **[Requirement]** Oodle is excluded. **[Proposal]** Compressonator is excluded: stagnant, unbuildable dependency, never uses BC7 modes 4/5, non-compliant BC7 headers [EI §4], [B1 §4, §8].
 
 ---
 
@@ -551,13 +558,15 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 |---|---|---|
 | `sdc convert <inputs…> [-o <root>]` | Convert images or folders | Yes, unless `--dry-run` |
 | `sdc inspect <inputs…>` | Analyse; print proposed sub-type, profile, warnings; DDS headers and mip statistics | No |
-| `sdc validate <dds…> --target <t> [--subtype <id>]` | §5.8 checks on existing DDS | No |
+| `sdc validate <dds…> [--target <t>] [--subtype <id>]` | §5.8 checks on existing DDS; `--target` defaults to `cs` | No |
 | `sdc presets list / show / diff / export / validate / schema` | Inspect, compare, export, check presets; print schemas | `export` only |
 | `sdc encoders` | Built-in encoder versions; NVTT detection | No |
 
-Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; loads a preset, e.g. one declaring suffix aliases, without selecting it, §3.7), `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`.
+Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; loads a preset, e.g. one declaring suffix aliases, without selecting it, §3.7), `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`, and from M2.5 `--fill <role>=<0..255>` (repeatable, §3.2).
 
 **Batch behaviour.** **[Proposal]** Files are grouped, resolved, then scheduled in parallel under the memory budget. A file converts only when every field is decided by an explicit rule, flag or a high-confidence suggestion accepted with `--accept-suggestions high`; diffuse alpha meaning is never high confidence. Unresolved files are skipped and listed. `--dry-run` stops after Resolve and emits `file_planned` events.
+
+**Rules the engine applies where this spec was silent.** **[Proposal]** (Merged from the plan's decision list at the final review.) (1) A fact the analysis measured, not a meaning it guessed, applies without `--accept-suggestions`: `remove` for a source with no alpha, constant 255 alpha or near-opaque alpha (§5.1); an explicit `alpha.policy` still wins. (2) A file that is both unresolved and blocked reports `unresolved` first, because the decision comes before the acknowledgement. (3) A file that is up to date is not "skipped" for the exit code. (4) The default output root is `./sdc-out`. (5) An invalid value in a preset, config or rule, and an unscoped `--set` whose value is unavailable under the target, are usage errors (exit 2) found while planning, before any file is read; a combination that fails only after layering (for example `CFG-INVALID` on one file) fails that file (exit 1). (6) The project config `sdc.toml` is read from the first input only, and only when it is a folder, or from `--config`; an `sdc.toml` beside a single-file input or in a later input is ignored silently until M6 documents or warns about it. (7) A source whose size or modification time changed between planning and conversion fails at Load ("source changed since planning; re-run"), so a plan-time decision such as `remove` is never applied to different pixels.
 
 **Streams and exit codes.** **[Proposal]** Human output on stderr (result verbs `inspect`, `validate`, `presets`, `encoders` print their report on stdout [D Note J]); with `--json`, stdout carries only JSON Lines. The highest-precedence applicable code is returned: **3** fatal (output-root I/O, out of memory, internal error, a second Ctrl-C) > **2** usage or config error (bad flag, invalid preset or config, batch-wide unavailable combination) > **1** partial (any file failed, or skipped for a reason other than an intentional skip — IN-DDS-SKIPPED, `--on-existing skip`, IN-PACKING-INPUT do not count [D Note I]) > **4** completed but validation failed on an output > **0** all converted and validated.
 
@@ -569,10 +578,10 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Invalid or unreadable input | `file_failed` at Load; batch continues |
 | Same stem, different formats | `IN-DUPLICATE`; both skipped |
 | Raw packing input (§4.4) | Before M2.5: `IN-PACKING-INPUT`, reported as `file_skipped` but not counted for exit 1; from M2.5 consumed by a packing recipe (§6.4) |
-| DDS input in `convert` | Skipped (`IN-DDS-SKIPPED`) unless `--set file:<glob>.reencode=true` (`LOSS-REENCODE`) |
+| DDS input in `convert` | Skipped (`IN-DDS-SKIPPED`) unless `--set file:<glob>.reencode=true` (`LOSS-REENCODE`). The opt-in is M6: `reencode` (like `resize`) is not a settable field yet, so today it is a usage error |
 | Unsupported setting for a file (BC6H under `vanilla`, BC5 on `_n` without `--allow`) | File skipped with its blocking code; exit 1 |
 | Unsupported setting for the whole batch | Exit 2 before work starts |
-| Encoder failure or panic | That file fails; others continue; exit 1 |
+| Encoder failure or panic | That file fails, at whichever stage it was in (Load, Analyse and Resolve during planning included); others continue; exit 1 |
 | Ctrl-C | First: current bands finish, no partial output is written, `batch_done` lists cancelled files; exit 1. Second: exits 3 at once without waiting for running bands; it may leave `.sdc-*.tmp` files in the output folders and an output without a manifest record (kept as `OUT-UNKNOWN-EXISTING` on the next run), and the JSON stream ends without `batch_done` [D Note K] |
 | Read-only or locked output | `file_failed` at Write |
 | Non-ASCII or mixed-case paths | Supported; set matching is case-insensitive |
@@ -590,13 +599,13 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 3. **Preset inspector.** Each resolved field with provenance; diff against base; save, import and export TOML; built-ins read-only. A **Profiles** view hosts user presets and rule tables.
 4. **Advanced.** Perceptual, BC1 transparent-black, BC4/BC5 radius and header form, NVTT path and status, BC1 decoder model (batch), sidecar, isolated worker.
 5. **Preview.** GPU viewport with zoom/pan; R/G/B/A isolation and alpha-as-mask; mip slider; side-by-side and split source vs encoded; difference heatmap; readouts for decoded smallest-mip alpha, α ≠ 255 share, coverage per mip, normal length, BC6H peak ratio; `_SRGB` and UNORM views of the same bytes.
-6. **Batch progress and report.** Per-file stage and progress; warnings grouped by code with links; export as JSON Lines or Markdown.
+6. **Batch progress and report.** Per-file stage and progress (the stage column needs the per-stage events of M7); warnings grouped by code with links; export as JSON Lines or Markdown.
 
 **Preview implementation.** **[Finding]** wgpu `TEXTURE_COMPRESSION_BC` lets the GPU decode uploaded blocks; an 8K BC7 mip 0 takes 64 MB versus 256 MB as CPU-decoded RGBA8 [LF §2]. **[Proposal]** Encoded previews upload blocks and draw via an `egui_wgpu` paint callback; sources upload as RGBA16F; `bcdec_rs` CPU decode serves heatmaps and metrics. **[Requirement]** Preview maximum 8192 by default, 16384 as a setting [D#19]. **[Proposal]** The GUI requests the adapter's real limits and, if 16384 is unavailable, previews from the first mip that fits and says so (**[Open]**).
 
-**Interaction.** **[Proposal]** Suggestions are marked "suggested"; low-confidence items and blocking warnings need per-file or per-selection confirmation (the GUI form of `--allow`).
+**Interaction.** **[Proposal]** Suggestions are marked "suggested"; low-confidence items and blocking warnings need per-file or per-selection confirmation (the GUI form of `--allow`). The engine's `--allow` is batch-wide today and `file:` scopes are globs, so per-file acknowledgement and an exact-path `--set` scope are M3 entry work (plan, M3 carried items).
 
-**Engine coupling.** **[Proposal]** `Engine::run` runs on a worker thread and streams `EngineEvent`s over a channel. Because events serialise exactly as the CLI's JSON Lines, an isolated-worker mode can spawn `sdc.exe convert --json` and parse stdout into the same events, isolating native crashes. **[Open]** It ships off; the trigger for default-on is the crash rate measured in Phases 3–4 [D#18].
+**Engine coupling.** **[Proposal]** `Engine::plan` and `Engine::run` each take a `&CancelToken` (a fresh one per batch). `Engine::run` runs on a worker thread and streams `EngineEvent`s over a channel. Because events serialise exactly as the CLI's JSON Lines, an isolated-worker mode can spawn `sdc.exe convert --json` and parse stdout into the same events, isolating native crashes. **[Open]** It ships off; the trigger for default-on is the crash rate measured in Phases 3–4 [D#18].
 
 ---
 
@@ -607,9 +616,9 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Code | Severity | Trigger → message | Resolution |
 |---|---|---|---|
 | `LOSS-ALPHA-DATA` | blocking | Non-constant alpha (minimum < 251) discarded by `remove` or a no-alpha format | Keep alpha or acknowledge |
-| `LOSS-CLAMP-HDR` | warning | Float values outside [0, 1] written to LDR → clamped | HDR category under `cs`, or accept |
+| `LOSS-CLAMP-HDR` | warning | Float values outside [0, 1] written to LDR → clamped. Raised by the interim float guard (§5.1) until the M6 transfer split | HDR category under `cs`, or accept |
 | `LOSS-BITDEPTH` | info | 16-bit/float source to 8-bit-endpoint format | — |
-| `LOSS-REENCODE` | warning | Compressed DDS re-encoded; cannot improve it [SC §7] | Use the source |
+| `LOSS-REENCODE` (M6) | warning | Compressed DDS re-encoded; cannot improve it [SC §7]. Not emitted yet: DDS re-encode lands in M6 | Use the source |
 | `CHAN-NOT-GRAY` | warning | Grayscale sub-type, R/G/B differ > 4/255 → only R (or luma) kept | Pick channel or sub-type |
 | `CHAN-CONSTANT-ALPHA-DATA` | info | `data` alpha is constant; `remove` would save bits | Accept or switch |
 | `CHAN-NORMAL-LENGTH` | warning | Normal source far from unit length, or no Z | Check category; Z rebuild |
@@ -627,27 +636,29 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `TAG-UNORM-PBR` | warning | UNORM on PBR colour → washed out with LL off [SC §6] | `_SRGB` |
 | `TAG-SRGB-LOD` | blocking | `_SRGB` under `lod/` → LOD shaders reject sRGB [SC §4] | UNORM |
 | `TAG-CONTENT-MISMATCH` | warning | Linear content with `_SRGB` tag, or colour sub-type with linear content | Check both fields |
+| `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |
 | `CFG-UNAVAILABLE` | blocking | Sub-type or format unavailable under the target (BC6H outside `cs`, `flow` under `vanilla`) | Accept fallback or change target |
-| `DIM-NPOT` | blocking | Non-power-of-two dimension [SC §5] | Resize policy, e.g. `--set resize=pot-down` |
+| `DIM-NPOT` | blocking | Non-power-of-two dimension [SC §5] | Resize policy, e.g. `--set resize=pot-down` (M6) |
 | `DIM-SMALL` | blocking | Base dimension < 4 px [SC §5] | Resize or acknowledge |
 | `DIM-FLOW-SMALL` | warning | `_flow` dimension ≤ 32 → CS ignores it [SC §3] | ≥ 64 px |
 | `DIM-TOO-LARGE` | error | Dimension > 16384 | Downscale |
-| `SET-MISSING-COMPANION` | info | PBR set lacks `_n` or roughness member; `_msn` without `_s`; `_flow` without `_n` | Add or ignore |
-| `SET-COMPANION-OUTSIDE` | info | Roughness member on disk, not in batch → no bake | Add it |
-| `SET-COMPANION-DDS` | warning | Roughness member only as DDS → no bake | Opt in or supply source |
-| `SET-BAKE-RATIO` | warning | `_n`/roughness-member size ratio not power of two → bake off | Resize |
+| `SET-MISSING-COMPANION` (M4) | info | PBR set lacks `_n` or roughness member; `_msn` without `_s`; `_flow` without `_n` | Add or ignore |
+| `SET-COMPANION-OUTSIDE` (M4) | info | Roughness member on disk, not in batch → no bake | Add it |
+| `SET-COMPANION-DDS` (M4) | warning | Roughness member only as DDS → no bake | Opt in or supply source |
+| `SET-BAKE-RATIO` (M4) | warning | `_n`/roughness-member size ratio not power of two → bake off | Resize |
 | `SUG-LOW-CONFIDENCE` | blocking | Sub-type or alpha meaning unconfirmed | Confirm |
 | `SUG-CONTRADICTION` | warning | Content contradicts suffix | Confirm or change |
 | `VAL-ALPHA-GUARANTEE` | error | Decoded alpha below guarantee, or ≠ 255 on an all-255 block with the flag on | Report bug; the shipped mechanism is chosen by the §11.2 gate |
-| `VAL-COVERAGE` | warning | Cutout coverage drift > 2 points | Adjust threshold |
+| `VAL-COVERAGE` | warning | Cutout coverage drift > 2 points, checked on levels of 256 texels or more (§5.8) | Adjust threshold |
 | `VAL-M-COMPLEX-MARGIN` | warning | Complex `_m` 1×1 alpha ≥ 247/255 → CS detection may flip [SC §4] | Adjust height range |
 | `VAL-M-GRAYSCALE` | warning | Complex `_m` with R ≈ G ≈ B, not near black → CS rejects [SC §4] | Check channels |
 | `VAL-M-HEIGHT-CLIP` | warning | Large `_m` alpha areas ≤ 4/255 or ≥ 251/255 → no parallax (CS), flat (ENB) | Remap height |
 | `VAL-PGPATCHER-50` | warning | Alpha-carrying plain `_m` has ≥ 50% non-white → PGPatcher treats as complex | BC4 or flag on |
 | `VAL-BC6H-PEAK` | warning | BC6H peak ratio < 0.8 [B2 §6] | Try NVTT Production |
-| `VAL-HEADER` | error | Written header fails §5.7 | Report bug |
+| `VAL-HEADER` | error | Written header fails §5.7, or the encoder input handed to Validate does not match the file | Report bug |
+| `VAL-MIP-ERROR` | warning | A mip's channel PSNR against the encoder input is below `validation.min_mip_psnr_db` (default 30 dB; §5.8); names the mip and its PSNR | Check the source, raise the effort or accept |
 | `ENC-NVTT-MISSING` | blocking | NVTT chosen but not found | Install, set path, or built-in |
-| `ENC-NVTT-VERSION` | blocking | Untested NVTT version | Acknowledge |
+| `ENC-NVTT-VERSION` (M5) | blocking | Untested NVTT version | Acknowledge |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
 | `IN-DDS-SKIPPED` | info | DDS input not re-encoded by default | Opt in |
 | `IN-PACKING-INPUT` | warning | Raw single-channel map (§4.4) is a channel-packing input, not converted on its own (before M2.5, or with `packing.enabled = false`) | Wait for M2.5, enable packing, or set a sub-type for it |
@@ -667,7 +678,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 ### 11.1 Golden-image tests
 
-**[Proposal]** `tests/golden/` holds a small source (64–256 px, CC0 or self-made) per sub-type × target, including a vanilla `_n` with spec alpha, landscape diffuse with height alpha, complex `_m` with 1×1 alpha near 251, plain `_m`, `_n` + `_rmaos` and `_n` + `_rfaos` at 1:1 and 2:1, `_flow`, cutout foliage, a blended decal, a gradient sky and an HDR emissive. Each case asserts format, tag, header form, mip count, alpha policy, warning codes and per-mip metric floors. Byte hashes are asserted only under `pinned-isa`, since dispatched ISA may change bits [LF §9].
+**[Proposal]** `crates/engine/tests/golden.rs` synthesises a small source (64–256 px) per sub-type × target, including a vanilla `_n` with spec alpha, landscape diffuse with height alpha, complex `_m` with 1×1 alpha near 251, plain `_m`, `_n` + `_rmaos` and `_n` + `_rfaos` at 1:1 and 2:1, `_flow`, cutout foliage, a blended decal, a gradient sky and an HDR emissive. Each case asserts format, tag, header form, mip count, alpha policy, warning codes and per-mip metric floors. Byte hashes are asserted only under `pinned-isa`, since dispatched ISA may change bits [LF §9].
 
 ### 11.2 Bench reproduction gates
 
@@ -698,7 +709,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 ## 12. Phase 0 spikes
 
-**[Proposal]** Each spike takes at most one day; results go into `docs/DECISIONS.md`.
+**[Proposal]** Each spike takes at most one day; results go into `docs/DECISIONS.md`. **[Finding]** Status after Phase 2: S3 passed; S4 not adopted; S5 passed its alpha and bit-identity gates but missed the 0.05 dB RGB limit (the mechanism ships, scoped to `_m`); S7 passed. S1, S2, S6 and S8 need the game; the asset pack and checklist are in `docs/spikes/in-game-checklist.md` and the owner's results are pending.
 
 | Spike | Question | Method | Pass criterion | Priority |
 |---|---|---|---|---|
@@ -735,20 +746,21 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | 2 | Alpha-test comparison | `gt`, as Castaño, DirectXTex, NVTT [MIP] | NIF survey or in-game test shows `>=` | S8 extension / owner |
 | 3 | Coverage for `cutout_blend` | On (owner decision 2026-10-08); per-image switch | Blended edge fade at distance looks wrong in spot checks | Phase 6 |
 | 4 | Variance-bake clamp *t* | 0.25 (Unity HDRP value, owner-approved) | Over-rough distance or residual shimmer in spot checks → retune per preset | Phase 6 |
-| 5 | Exact opaque alpha, global default | On for `_m` only [Requirement]; off elsewhere | S5 measures ΔRGB ≤ 0.05 dB → propose on everywhere | S5, then owner |
-| 6 | Exact-opaque mechanism | Patched bc7e; then byte patch; then NVTT | Patch fails its §11.2 gate | S5 / Phase 2 |
+| 5 | Exact opaque alpha, global default | Decided: on for `_m` / env masks only, off elsewhere (owner, Phase 0 exit; S5 cost −0.515 dB `rgb_real`, −1.020 dB `rgb_grad` exceeds 0.05 dB) | — | Closed |
+| 6 | Exact-opaque mechanism | Decided: native patch 0001 (alpha == 255 on 18/18 images, flag off bit-identical on 39/39 on the host ISA); byte patch last resort, NVTT second fallback (M5) | — | Closed |
 | 7 | Complex `_m` 1×1 margin | 4 code values below 251/255 | S8 boundary | S8 |
 | 8 | BC6H peak threshold | Warn below 0.8 | Spot checks of highlight-heavy BC6H | Phase 6 |
 | 9 | Turning `exact_opaque` off for an `_m` | Warning (`ALPHA-EXACT-OFF-M`) | S6 finds a file ≥ 40% → blocking | S6 |
-| 10 | NVTT per-mip feeding | One `-nomips` process per level | S7 fails → NVTT mip 0 only | S7 |
-| 11 | Scalar bc7e fallback | Not built | ISPC objects fail on a needed configuration and S4 passes | S4 |
+| 10 | NVTT per-mip feeding | Decided: one `-nomips` process per level, always `-nocuda` (S7 passed) | — | Closed |
+| 11 | Scalar bc7e fallback | Not built (S4: not adopted, 0.0759 dB on 1 of 11 images, 3.8–4.8× slower) | ISPC objects fail on a needed configuration and the owner accepts a looser tolerance | Owner |
 | 12 | Isolated batch workers | Off | Crash rate in Phases 3–4 [D#18] | Phases 3–4 |
 | 13 | 16K preview | 8192, 16384 setting, smaller-mip fallback | Adapter limits on target hardware | GUI phase |
 | 14 | Working name | `sdc` | Packaging decision | Owner, Phase 7 |
 | 15 | Code signing and antivirus | Unsigned | False positives in release testing [D#16] | Phase 7 |
-| 16 | Roughness default when a packed `_rmaos`/`_rfaos` has no roughness source | 0.5, preset field `packing.roughness_default` (§6.4) | Owner confirms or picks another value [D-H] | Owner, M2.5 |
+| 16 | Roughness default when a packed `_rmaos`/`_rfaos` has no roughness source | Decided: 0.5, preset field `packing.roughness_default`, confirmed by the owner 2026-10-09; per-channel global fill values override it (§3.2, §6.4) [D-H] | — | Closed |
 | 17 | Output name of colour vocabulary files | `<base>.dds`; `_d` keeps `<base>_d.dds` (§4.4) | Owner prefers `<base>_d.dds` or another rule | Owner |
 | 18 | Env-mask source of a packed `cpm`/`vanilla` `_m`; `cpm` `_m` height without a source | Metallic, else specular; height 0.5 (§6.4) | Owner rule; S8 in-game check of the constant height | Owner, S8, M2.5 |
 | 19 | Raw maps without a recipe | `_opacity`, specular-only and fuzz-only sets, height under `vanilla`, RGB `_sheen`: reported, not packed (§4.4, §6.4) | Owner names a recipe (e.g. opacity into colour alpha, specular into `_n` alpha) | Owner, M2.5 |
 | 20 | Raw specular scale | Copied unchanged into `_rmaos`/`_rfaos` A | Exporter "specular level" maps (0.5 = F0 0.04) shown to need a remap to TruePBR's A | Owner, M2.5 |
 | 21 | Raw packing inputs and the exit code before M2.5 | Not counted as skipped (exit 1) | Owner wants exit 1 when a set's packed map is missing | Owner |
+| 22 | Global fill values for missing pack maps | Per-role 8-bit codes via `packing.fill.<role>` and `--fill <role>=<0..255>`; provenance `fill:<v>` (§6.4) | M2.5 plan finalises the field path, CLI spelling, GUI control and whether a filled channel is still reported | Owner, M2.5 |

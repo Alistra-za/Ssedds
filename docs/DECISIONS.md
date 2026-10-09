@@ -182,7 +182,7 @@ Owner answers (2026-10-09):
 
 - **Suffix vocabulary:** common exporter suffixes (Substance Painter/Designer, Quixel, ambientCG, Unreal/Unity) are recognised. `_d` and `_colormap` (and `_basecolor`, `_base_color`, `_albedo`, `_diffuse`, `_color`, `_col`) **can safely be assumed albedo/diffuse** (High confidence for the colour role; target/PBR set still pick `diffuse` vs `pbr_albedo`; alpha meaning is still never assumed). Normal variants (`_normal`, `_nrm`, `_normalgl`, `_normaldx`) map to `_n`. Outputs always use Skyrim names.
 - **Channel packing:** raw single-channel maps (`_roughness`, `_metallic`, `_ao`, `_specular`, `_glossiness`, `_height`, `_fuzz`, …) in one texture set are **packed automatically per target** (CS `_rmaos`/`_rfaos` + `_p`; CPM complex `_m`; vanilla `_m` only when a source exists). Raw maps are not written on their own by default; overridable per set.
-- **Missing channels:** neutral defaults plus a warning naming each defaulted channel (AO white, metallic black, specular alpha white = TruePBR default). **Do not block when roughness is missing if an AO or metallic map is found** — roughness then takes a neutral default with a warning. [Assistant proposal: default roughness 0.5, configurable in the preset; Open until the owner confirms.]
+- **Missing channels:** neutral defaults plus a warning naming each defaulted channel (AO white, metallic black, specular alpha white = TruePBR default). **Do not block when roughness is missing if an AO or metallic map is found** — roughness then takes a neutral default with a warning. [Assistant proposal: default roughness 0.5, configurable in the preset; confirmed by the owner on 2026-10-09, see the last bullet.]
 - **Plain `_normal`:** no default green convention — unresolved until a preset/flag/rule states `opengl` or `directx`; `_normalgl`/`_normaldx` resolve automatically.
 - **Timing:** suffix vocabulary lands in Phase 1 now; channel packing is its own milestone right after the CLI MVP.
 - Owner (2026-10-09): **roughness default 0.5 confirmed.** For every packed channel without a source map, the user can set a **global fill value** — a slider in the GUI and a CLI option (e.g. metallic 255 writes 255 instead of the neutral 0); the neutral defaults above apply only when no value is given. Scope: milestone M2.5.
@@ -219,7 +219,7 @@ Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS c
 ## Phase 2 exit — CLI MVP (2026-10-09)
 
 - `sdc-bench --gates`: PASS, exit 0, 13/13 gate reports (target/bench/mvp-gates.txt). Exact opaque gates alpha == 255 and flag-off bit-identity; ΔRGB is info (S5).
-- Workspace tests: 472 passed, 0 failed, 4 ignored (the S5 ΔRGB tests, by design).
+- Workspace tests: 472 passed, 0 failed, 4 ignored, by design: the two S5 ΔRGB tests (S5b byte patch, S5c native patch), the S7 NVTT test (needs `nvcompress`, about a minute) and the 512 MiB decode-limit test (allocates GiBs).
 - Header spot check: nvddsinfo reports the format, size and mip count sdc wrote (BC6H DX10 DXGI 95, BC7 sRGB/UNORM, BC4). texconv decodes every sampled file without error.
 - Real folder: 110 PNG sources sampled from the owner's Faultier's PBR Clutter, Faultier's PBR Landscapes 4k and Vanilla Table Replacers Complex Material, capped at 2048 (F:/ai/dds/mvp-test).
   - First run: 85 converted. It surfaced the near-opaque normal-alpha false block, fixed as Note L.
@@ -233,3 +233,27 @@ Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS c
   - Codex B and CLI findings.
 - In-game spikes S1, S2, S6, S8: pack and checklist ready (docs/spikes/in-game-checklist.md, target/spike-src). Results pending from the owner.
 - Next milestones: M2.5 channel packing (incl. per-channel fill values), M3 GUI, M4 variance bake, M5 NVTT, M6 presets/inputs (incl. resize), M7 CI, M8 packaging.
+
+## Final review (2026-10-09)
+
+Whole-branch review of `feat/phase0-2` (59cf60c): 0 Critical, 8 Important, 16 Minor; no wrong bytes or exit codes on any shipped path. Controller rulings:
+- **Fixed now:** I1 planning had no per-file panic isolation (a decoder panic ended the whole batch); I4 a float source written to an LDR format was silently mis-decoded (interim blocking `IN-FLOAT-LDR`, plus `LOSS-CLAMP-HDR` for values outside [0, 1], until the M6 transfer split); I7 plan-time decisions were applied to whatever the file held at run time (size and mtime are recorded at plan time and compared before Load).
+- **Docs:** I2 the fill-value requirement (Note H, last bullet) is now in spec §3.2, §6.4, §14 #16/#22 and the M2.5 scope; I3 carried items and deferred minors live in the plan, per milestone; I8 the spec is re-synced with the code and these notes.
+- **Deferred to M3 entry (one `EVENT_SCHEMA` bump):** I5 per-file event identity, typed `file_planned.job` and a skip kind; I6 per-file allow and an exact-path scope. Cost if wrong: one schema bump at M3.
+
+## Owner checks pending
+
+Open owner confirmations after Phase 2. None blocks the merge; each has a shipped default.
+1. **Coverage remap shape (Task 30).** The mip coverage step uses a monotone piecewise-linear remap (0 → 0, a → T, 1 → 1) instead of Castaño's uniform scale by t/a, so the opaque interior of a `cutout_blend` texture stays opaque. Coverage is the same; the alpha gradient at the edges differs from the spec §5.5 wording (now documented there). Cost if wrong: a different edge gradient shape.
+2. **Colour-term output names (spec §14 #17).** Exporter colour terms (`_basecolor`, `_albedo`, …) are written `<base>.dds`; `_d` keeps `<base>_d.dds`.
+3. **`_normalgl` / `_normaldx` precedence.** They state the green convention as a fact that beats presets, configs and rules but not `--set`.
+4. **Plain `_normal` / `_nrm`.** It stays unresolved, even with `--accept-suggestions high` or `--allow`, until a preset, config, rule or `--set` states `opengl` or `directx`.
+5. **Raw packing maps mark a `cs` set PBR immediately.** A raw roughness, glossiness, metallic or AO map makes the set PBR (spec §4.3 item 1) before channel packing exists in M2.5.
+6. **`_d` aliases stay High.** A preset alias to `d` raises the colour reading to High confidence (Task 26a ruling); the owner can ask to add `d` to the `_s` exception.
+7. **Open packing questions for M2.5 (spec §14 #18–#21):** the env-mask source of a packed `cpm`/`vanilla` `_m` and the constant height of a `cpm` `_m`; raw maps without a recipe (`_opacity`, specular-only and fuzz-only sets, RGB `_sheen`); the scale of a raw specular map; whether a set missing its packed map should exit 1.
+8. **Interim `IN-FLOAT-LDR` block.** Until the M6 transfer split, a 32-bit float source written to anything but BC6H needs `--allow IN-FLOAT-LDR`. Cost if wrong: float albedo TIFFs need the flag.
+9. **In-game spikes (Task 46, results pending).** Pack: `target/spike-src` (regenerate with `cargo run --release -p sdc-bench -- gen-spike-assets --out target/spike-src`); steps: `docs/spikes/in-game-checklist.md`. Append the results here.
+   - S1: BC6H `_g` and `_SRGB` `_g`/`_f` render under Community Shaders (LL on and off), and `_SRGB` `_f` matches the reference.
+   - S2: 200 small BC7 textures (16–128 px, full chains) run 10 minutes without a crash; otherwise a small-texture fallback returns (DECISIONS #7).
+   - S6: how many real plain `_m` files stored as BC7 with alpha cross PGPatcher's 50% non-white rule with the flag off; a file at 40% or more makes `ALPHA-EXACT-OFF-M` blocking (spec §14 #9).
+   - S8: where CS complex detection flips for a decoded 1×1 `_m` alpha of 245, 248, 250, 252 and 255; sets the complex-margin (`validation.complex_m_warn_alpha`, spec §14 #7) and the cpm `_m` height default.
