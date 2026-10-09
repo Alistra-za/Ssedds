@@ -32,3 +32,9 @@ fn bc1_transparent_black_off_matches_bc7enc_dash_b() {
     let r = gates::bc1_black_off_vs_tool(&bench_root(), work.path()).unwrap();
     assert!(r.pass, "{r}");
 }
+
+#[test]
+fn bc6h_veryslow_reproduces_51_50_db() {
+    let r = gates::bc6h_veryslow(&bench_root()).unwrap();
+    assert!(r.pass, "{r}");
+}

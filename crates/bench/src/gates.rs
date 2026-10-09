@@ -271,6 +271,70 @@ pub fn bc1_black_off_vs_tool(root: &Path, work: &Path) -> Result<GateReport> {
     Ok(r)
 }
 
+/// Images on disk per BC6H set; a gate that sees fewer has been run on a shrunken corpus.
+pub const HDR_REAL_IMAGES: usize = 4;
+pub const HDR_GRAD_IMAGES: usize = 4;
+
+/// Spec 11.2 last row. Input is the bench's raw `.f16` twin of each HDR image (identical data to `.ref.npy`).
+/// The bench decoded with texconv; sdc decodes with bcdec_rs (spec 11.4 asserts they agree exactly for BC6H).
+pub fn bc6h_veryslow(root: &Path) -> Result<GateReport> {
+    init(Bc1Model::Ideal)?;
+    let rows = read_results(&root.join("results/results2.csv"), "bc6_ispc_veryslow")?;
+    let mut r = GateReport::new("ISPC bc6h_veryslow reproduces results2.csv mPSNR");
+    let (mut identical, mut total) = (0, 0);
+    for (set, expected) in [("hdr_real", HDR_REAL_IMAGES), ("hdr_grad", HDR_GRAD_IMAGES)] {
+        let (mut ours, mut theirs) = (vec![], vec![]);
+        let files = set_files(root, "images2", set, "f16")?;
+        r.check(
+            files.len() == expected,
+            format!("{set}: image count {} == expected {expected}", files.len()),
+        );
+        for src in files {
+            let stem = stem(&src);
+            let img = load_f16(&src)?;
+            let enc = encode_bc6h_image(&img);
+            let bench = std::fs::read(
+                root.join("out2/bc6_ispc_veryslow")
+                    .join(set)
+                    .join(format!("{stem}.dds")),
+            )?;
+            let same = ddsraw::payload(&bench)? == enc.as_slice();
+            total += 1;
+            identical += same as usize;
+            let m = metrics::mpsnr(
+                &half_to_rgb_f32(&img),
+                &decode_bc6h_image(&enc, img.width, img.height),
+            );
+            let e = find(&rows, set, &stem)
+                .and_then(|row| row.f("mpsnr"))
+                .ok_or_else(|| anyhow!("no results2.csv row for {set}/{stem}"))?;
+            r.check(
+                (m - e).abs() <= 0.01,
+                format!(
+                    "{set}/{stem}: mPSNR {m:.4} (bench {e:.4}), bytes {}",
+                    if same { "identical" } else { "DIFFER" }
+                ),
+            );
+            ours.push(m);
+            theirs.push(e);
+        }
+        if set == "hdr_real" {
+            let m = metrics::mean(&ours);
+            r.check(
+                (m - 51.50).abs() <= 0.01,
+                format!(
+                    "hdr_real mean mPSNR {m:.4} (bench {:.4}, spec 51.50)",
+                    metrics::mean(&theirs)
+                ),
+            );
+        }
+    }
+    r.info(format!(
+        "{identical}/{total} images have block payloads byte-identical to the bench"
+    ));
+    Ok(r)
+}
+
 pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
     Ok(match name {
         "s3" => vec![
@@ -291,6 +355,7 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
             v.push(bc1_black_off_vs_tool(root, &work)?);
             v
         }
+        "bc6h" => vec![bc6h_veryslow(root)?],
         other => bail!("unknown gate '{other}'"),
     })
 }
