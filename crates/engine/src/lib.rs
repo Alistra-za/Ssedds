@@ -2,6 +2,7 @@
 pub mod analyse;
 pub mod codes;
 pub mod config;
+pub mod dilate;
 pub mod discover;
 pub mod group;
 pub mod image;
