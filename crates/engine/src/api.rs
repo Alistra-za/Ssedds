@@ -1,6 +1,7 @@
 //! Engine API (spec §2, §5.9, §8): `Engine::plan(BatchRequest) -> Plan`, then `Engine::run(Plan, events, cancel)`.
 //!
-//! `plan` runs Discover → Group → Load → Analyse → Resolve and reports every decision; nothing is written.
+//! `plan` runs Discover → Group → Load → Analyse → Resolve and reports every decision; nothing is written. Its
+//! Load/Analyse work is admitted against `--mem-budget` just like conversion.
 //! `run` applies `--on-existing`, then converts the ready files on a rayon pool of `jobs` threads, admitting them
 //! by estimated memory against `--mem-budget`. Files that are unresolved, blocked or in error are reported and
 //! never converted: the engine does not guess (spec §8, DECISIONS "never auto-decide").
@@ -21,12 +22,11 @@ use crate::policy::*;
 use crate::presets::*;
 use crate::suggest::{is_pbr_set, SuggestContext};
 use encoders_sys::Bc1Model;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// What `run` does when a ready file's output already exists (spec §3.2 `output.on_existing`, §8). It is a batch
@@ -127,6 +127,8 @@ pub struct Plan {
     pub skipped: Vec<SkippedFile>,
     /// Files that could not be loaded (`DIM-TOO-LARGE`, `IN-DECODE`).
     pub failed: Vec<FailedFile>,
+    /// The most estimated bytes admitted at once while loading and analysing (spec §5.9 memory admission).
+    pub peak_admitted_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -227,6 +229,8 @@ struct Budget {
     max_files: usize,
     /// (bytes, files) admitted and not yet released.
     used: Mutex<(u64, usize)>,
+    /// The most bytes ever admitted at once.
+    peak: AtomicU64,
     cv: Condvar,
 }
 
@@ -236,6 +240,7 @@ impl Budget {
             limit,
             max_files: max_files.max(1),
             used: Mutex::new((0, 0)),
+            peak: AtomicU64::new(0),
             cv: Condvar::new(),
         }
     }
@@ -248,6 +253,7 @@ impl Budget {
         }
         used.0 += n;
         used.1 += 1;
+        self.peak.fetch_max(used.0, Ordering::Relaxed);
     }
     fn release(&self, n: u64) {
         {
@@ -274,6 +280,15 @@ fn estimated_bytes(path: &Path) -> u64 {
     image::image_dimensions(path)
         .map(|(w, h)| u64::from(w) * u64::from(h) * 16 * 134 / 100 * 3)
         .unwrap_or(0)
+}
+
+/// The admission limit: `--mem-budget`, else half of physical memory (spec §5.9).
+fn budget_limit(req: &BatchRequest) -> u64 {
+    if req.mem_budget > 0 {
+        req.mem_budget
+    } else {
+        crate::sysmem::total_ram() / 2
+    }
 }
 
 fn thread_pool(jobs: usize) -> Result<rayon::ThreadPool, EngineError> {
@@ -499,34 +514,52 @@ impl Engine {
             accept: req.accept,
             allow: &req.allow,
         };
-        // Load and Analyse in parallel; only the `Analysis` is kept, so planning holds at most one decoded image
-        // per worker thread.
-        let resolve_one =
-            |&(set, f): &(&TextureSet, &InputFile)| -> Result<ResolvedJob, (PathBuf, LoadError)> {
-                let (img, info) = load_image(&f.path).map_err(|e| (f.path.clone(), e))?;
-                let a = analyse(&img, &info);
-                drop(img);
-                let stem = f
-                    .rel
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                let split = split_suffix_with(&stem, registry.alias_table());
-                let facts = FileFacts {
-                    input: f,
-                    suffix: split.suffix.as_deref(),
-                    alias: split.alias.as_deref(),
-                    set,
-                    analysis: &a,
-                    info: &info,
-                };
-                let mut job = resolve_file(&ctx, &facts);
-                job.provenance.insert("target".into(), target_src.clone());
-                Ok(job)
+        // Load and Analyse in parallel under the same memory admission as `run` (spec §5.9, Codex-B I1): the calling
+        // thread admits each file's estimated bytes before spawning it, and the bytes are released as soon as its
+        // analysis is done (or it unwinds). Only the `Analysis` is kept.
+        let resolve_one = |&(set, f): &(&TextureSet, &InputFile),
+                           admitted: Admitted<'_>|
+         -> Result<ResolvedJob, (PathBuf, LoadError)> {
+            let (img, info) = load_image(&f.path).map_err(|e| (f.path.clone(), e))?;
+            let a = analyse(&img, &info);
+            drop(img);
+            drop(admitted);
+            let stem = f
+                .rel
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let split = split_suffix_with(&stem, registry.alias_table());
+            let facts = FileFacts {
+                input: f,
+                suffix: split.suffix.as_deref(),
+                alias: split.alias.as_deref(),
+                set,
+                analysis: &a,
+                info: &info,
             };
-        let results: Vec<_> =
-            thread_pool(req.jobs)?.install(|| work.par_iter().map(resolve_one).collect());
+            let mut job = resolve_file(&ctx, &facts);
+            job.provenance.insert("target".into(), target_src.clone());
+            Ok(job)
+        };
+        let pool = thread_pool(req.jobs)?;
+        let budget = Budget::new(budget_limit(&req), pool.current_num_threads());
+        // One slot per work item, so results keep the input order.
+        let slots: Vec<Mutex<Option<_>>> = work.iter().map(|_| Mutex::new(None)).collect();
+        pool.in_place_scope(|scope| {
+            for (item, slot) in work.iter().zip(&slots) {
+                let est = estimated_bytes(&item.1.path);
+                budget.acquire(est);
+                let admitted = Admitted(&budget, est);
+                let resolve_one = &resolve_one;
+                scope.spawn(move |_| *lock(slot) = Some(resolve_one(item, admitted)));
+            }
+        });
+        let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
+        let results = slots
+            .into_iter()
+            .filter_map(|s| s.into_inner().unwrap_or_else(|e| e.into_inner()));
 
         let mut jobs = vec![];
         let mut failed = vec![];
@@ -603,6 +636,7 @@ impl Engine {
             jobs,
             skipped,
             failed,
+            peak_admitted_bytes,
         })
     }
 
@@ -800,13 +834,8 @@ impl Engine {
             }
         }
 
-        let limit = if req.mem_budget > 0 {
-            req.mem_budget
-        } else {
-            crate::sysmem::total_ram() / 2
-        };
         let pool = thread_pool(req.jobs)?;
-        let budget = Budget::new(limit, pool.current_num_threads());
+        let budget = Budget::new(budget_limit(req), pool.current_num_threads());
         let state = Mutex::new(summary);
         // Admission runs on the calling thread (outside the pool) and only spawns admitted files, so no pool thread
         // ever blocks on the budget. A pool thread blocked in `acquire` while its nested band-parallel encode stole

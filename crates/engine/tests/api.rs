@@ -295,6 +295,42 @@ fn files_in_flight_never_exceed_the_worker_count() {
     assert!(peak_in_flight(&ev) <= 2, "peak {}", peak_in_flight(&ev));
 }
 
+/// Codex-B I1: planning loads and analyses through the same byte admission as conversion, in a plan and in a dry
+/// run. Eight 256x256 inputs on four workers: a budget below one file admits them one at a time (the peak is one
+/// file's estimate, not the sum), and a budget of 2.5 files never holds more than two.
+#[test]
+fn planning_admits_loads_through_the_memory_budget() {
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures/armor");
+    std::fs::create_dir_all(&t).unwrap();
+    for i in 0..8u32 {
+        ImageBuffer::from_fn(256, 256, |x, y| Rgb([x as u8, y as u8, (i * 30) as u8]))
+            .save(t.join(format!("wall{i}.png")))
+            .unwrap();
+    }
+    // The conversion estimator: float RGBA base with its mip chain, counted three times.
+    let one = 256u64 * 256 * 16 * 134 / 100 * 3;
+    for dry_run in [false, true] {
+        for (budget, max_files) in [(1, 1), (one * 5 / 2, 2)] {
+            let mut req = request(d.path());
+            req.jobs = 4;
+            req.mem_budget = budget;
+            req.dry_run = dry_run;
+            let sink = Arc::new(VecSink::default());
+            let rep = Reporter::new(sink.clone(), new_batch_id());
+            let plan = Engine::new().unwrap().plan(req, &rep).unwrap();
+            assert_eq!(plan.jobs.len(), 8, "{:#?}", sink.take());
+            let peak = plan.peak_admitted_bytes;
+            let what = format!("dry_run {dry_run}, budget {budget}: peak {peak}");
+            assert!(peak >= one, "{what}");
+            assert!(peak <= one * max_files, "{what}");
+            if max_files == 1 {
+                assert_eq!(peak, one, "{what}");
+            }
+        }
+    }
+}
+
 /// I1: a failure after the DDS is written (here the manifest append) removes the output and fails the file, so
 /// the next run does not keep an unrecorded output as OUT-UNKNOWN-EXISTING.
 #[test]
