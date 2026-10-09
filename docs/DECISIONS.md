@@ -126,3 +126,20 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
 - Verdict: **do not adopt as drop-in**: it misses the per-image quality limit on one image (0.076 dB vs 0.01 dB) and sits at the speed limit. It works and is close (mean deltas ~0.003 dB), so it remains a viable
   fallback if the ISPC objects ever fail on a needed configuration; adopting it would need the owner to accept a looser per-image tolerance. Open item §14 #11 stays "not built".
   Reproduce: `cargo run --release --manifest-path spikes/s4-scalar/Cargo.toml` and `cargo run --release -p sdc-bench -- speed-bc7e`.
+
+## Spike S7 — NVTT per-mip feeding (2026-10-09)
+
+- nvcompress NVIDIA Texture Tools 3.2.5. It has no `-h`; running it with no arguments prints the usage, which lists `-nomips`, `-bc7`, `-bc6`, `-production`, `-noalpha` and `-silent` (6/6 yes).
+- Method: `rgb_real` Bricks104, Fabric084, Metal049A (first 3), each full chain to 1x1 (33 levels): each level box-filtered in 8-bit (`box_down_rgba8`), saved as PNG, encoded by its own
+  `nvcompress -silent -nomips -bc7 -production -noalpha` process, decoded, payloads concatenated. Alpha: decoded alpha 255 at every level, 33/33 (yes).
+- Mip-0 PSNR vs the bench's direct `nvtt_production` rows: max |Δ| 0.0000 dB (47.7768 / 53.1727 / 55.4568 identical to four decimals).
+- Per-level RGB PSNR of each level against the level fed in (mean of 3 images; not a comparison against anything, there is no direct encode of the downsampled levels): L0 52.14, L1 51.57, L2 51.74, L3 51.74, L4 51.72, L5 52.90, L6 55.89, L7 59.32, L8 72.11, L9 99.00, L10 99.00 dB.
+- Per-level overhead (wall time of the process): mean 0.142 s, max 0.180 s over the 18 levels of at most 32x32 texels (encode work negligible there); limit 0.2 s → pass.
+  The whole-chain mean (2.41 s per level) is dominated by BC7 Production encode time (mip 0 of a 1024x1024 image 13.9–27.1 s), which is not overhead and is not what the 0.2 s limit measures.
+  Per-level wall times (mean of 3): 18.7, 5.0, 1.34, 0.44, 0.22, 0.165, 0.137, 0.144, 0.138, 0.132, 0.135 s for levels 0..10.
+- CPU-only BC7 Production (observed with `-profile`): "NVTT Warning: BC7 Compressor: no slow-mode for bc7-gpu, using cpu instead" — `-production` runs `encode_bc7_cpu()` even with "CUDA acceleration ENABLED" (RTX 4090 present),
+  and the output is byte-identical with `-nocuda` (SHA-256 equal). It is multi-threaded: 191 s CPU for 14.7 s wall on 1024x512 (about 13 cores busy), roughly 0.036–0.07 Mpix/s.
+  The ~0.14 s fixed per-process cost is CUDA context creation (`nvtt::Context()` 0.110 s): with `-nocuda` a tiny level takes 0.015 s (5 runs, 0.015–0.018 s), so the backend should always pass `-nocuda` for BC7 Production.
+- Not tested: the BC6H half (`-bc6` on RGBA16F levels) is deferred to M5 where the NVTT backend is built; only the flag's presence is confirmed.
+- Verdict for open item §14 #10: **one `-nomips` process per level** works and meets every pass criterion; the engine can build the chain itself and feed NVTT level by level (with `-nocuda`). Caveat: Production BC7 is slow (mip 0 dominates, about 14–27 s per 1 Mpix), so it is a quality option, not a default.
+  Reproduce: `cargo run --release -p sdc-bench -- s7-nvtt` or `cargo test --release -p sdc-bench --test s7 -- --ignored --nocapture`.

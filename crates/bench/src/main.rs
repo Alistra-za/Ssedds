@@ -23,6 +23,8 @@ enum Cmd {
     },
     /// Throughput of ISPC bc7e u5 over rgb_real + alpha_real (for spike S4).
     SpeedBc7e,
+    /// Spike S7: NVTT fed one mip at a time.
+    S7Nvtt,
 }
 
 fn main() -> ExitCode {
@@ -73,6 +75,24 @@ fn main() -> ExitCode {
                 rayon::current_num_threads()
             );
             ExitCode::SUCCESS
+        }
+        Cmd::S7Nvtt => {
+            let work = std::path::PathBuf::from("target/bench/s7");
+            std::fs::create_dir_all(&work).unwrap();
+            match sdc_bench::s7::run(&root, &work) {
+                Ok(r) => {
+                    println!("{r}");
+                    if r.pass {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    ExitCode::from(3)
+                }
+            }
         }
         Cmd::DumpBc7e { out } => match gates::dump_bc7e(&root, &out) {
             Ok(n) => {
