@@ -5,11 +5,12 @@ fn u(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(b[off..off + 4].try_into().unwrap())
 }
 
+/// A full chain where level `i` is filled with the distinct byte `0x10 + i`.
 fn chain(format: Format, w: u32, h: u32) -> Vec<Vec<u8>> {
     let mut v = vec![];
     let (mut w, mut h) = (w, h);
     loop {
-        v.push(vec![0xAB; level_size(format, w, h)]);
+        v.push(vec![0x10 + v.len() as u8; level_size(format, w, h)]);
         if w == 1 && h == 1 {
             break;
         }
@@ -30,7 +31,7 @@ fn bc7_srgb_full_chain_header() {
     };
     assert_eq!(d.header, ResolvedHeader::Dx10);
     let levels = chain(Format::Bc7, 256, 64);
-    let b = dds_bytes(&d, &levels);
+    let b = dds_bytes(&d, &levels).unwrap();
     assert_eq!(&b[..4], b"DDS ");
     assert_eq!(u(&b, 4), 124);
     assert_eq!(
@@ -46,6 +47,7 @@ fn bc7_srgb_full_chain_header() {
         (u(&b, 12), u(&b, 16), u(&b, 20), u(&b, 28)),
         (64, 256, 64 * 16 * 16, 9)
     );
+    assert_eq!(u(&b, 24), 1, "dwDepth");
     assert_eq!(u(&b, 80) & DDPF_NORMAL, 0);
     assert_eq!(&b[84..88], b"DX10");
     assert_eq!(
@@ -57,7 +59,17 @@ fn bc7_srgb_full_chain_header() {
         (99, 3, 0, 1, 0)
     );
     assert!(b[32..76].iter().all(|&x| x == 0), "reserved1 must be zero");
-    assert_eq!(b.len(), 148 + levels.iter().map(Vec::len).sum::<usize>());
+    assert_payload(&b, 148, &levels);
+}
+
+/// The payload is exactly `levels` back to back from `off`, mip 0 first, with nothing after it.
+fn assert_payload(b: &[u8], off: usize, levels: &[Vec<u8>]) {
+    let mut at = off;
+    for (i, l) in levels.iter().enumerate() {
+        assert_eq!(&b[at..at + l.len()], &l[..], "level {i} at offset {at}");
+        at += l.len();
+    }
+    assert_eq!(b.len(), at, "no bytes after the last level");
 }
 
 #[test]
@@ -91,7 +103,7 @@ fn legacy_forms() {
             srgb: false,
             header: ResolvedHeader::Legacy,
         };
-        let b = dds_bytes(&d, &[vec![0; level_size(f, 4, 4)]]);
+        let b = dds_bytes(&d, &[vec![0; level_size(f, 4, 4)]]).unwrap();
         assert_eq!(&b[84..88], cc);
         assert_eq!(u(&b, 8) & DDSD_MIPMAPCOUNT, 0);
         assert_eq!(u(&b, 108), DDSCAPS_TEXTURE);
@@ -153,7 +165,7 @@ fn dxgi_values() {
 }
 
 #[test]
-fn level_size_clamps_to_one_block() {
+fn level_size_rounds_up_to_whole_blocks() {
     assert_eq!(level_size(Format::Bc1, 1, 1), 8);
     assert_eq!(level_size(Format::Bc7, 2, 3), 16);
     assert_eq!(level_size(Format::Bc1, 5, 5), 4 * 8);
@@ -180,7 +192,7 @@ fn non_square_chain_all_formats_header_consistent() {
             header,
         };
         let levels = chain(f, 37, 5);
-        let b = dds_bytes(&d, &levels);
+        let b = dds_bytes(&d, &levels).unwrap();
         let off = if header == ResolvedHeader::Dx10 {
             148
         } else {
@@ -202,7 +214,8 @@ fn non_square_chain_all_formats_header_consistent() {
             b[108 + 4..128].iter().all(|&x| x == 0),
             "caps2..4 and reserved2 must be zero"
         );
-        assert_eq!(b.len(), off + levels.iter().map(Vec::len).sum::<usize>());
+        assert_eq!(u(&b, 24), 1, "{f:?} dwDepth");
+        assert_payload(&b, off, &levels);
     }
 }
 
@@ -215,7 +228,7 @@ fn single_level_has_no_mip_flags() {
         srgb: false,
         header: ResolvedHeader::Dx10,
     };
-    let b = dds_bytes(&d, &[vec![0; level_size(Format::Bc7, 8, 8)]]);
+    let b = dds_bytes(&d, &[vec![0; level_size(Format::Bc7, 8, 8)]]).unwrap();
     assert_eq!(u(&b, 8) & DDSD_MIPMAPCOUNT, 0);
     assert_eq!(u(&b, 108), DDSCAPS_TEXTURE);
     assert_eq!(u(&b, 28), 1);
@@ -249,4 +262,167 @@ fn atomic_write_overwrites_preexisting_file_and_cleans_up_on_error() {
         .filter(|n| n.ends_with(".tmp"))
         .collect();
     assert!(leftovers.is_empty(), "temp left behind: {leftovers:?}");
+}
+
+fn desc(w: u32, h: u32, format: Format, srgb: bool, header: ResolvedHeader) -> DdsDesc {
+    DdsDesc {
+        width: w,
+        height: h,
+        format,
+        srgb,
+        header,
+    }
+}
+
+#[test]
+fn full_chain_len_counts_to_one_by_one() {
+    assert_eq!(full_chain_len(1, 1), 1);
+    assert_eq!(full_chain_len(256, 64), 9);
+    assert_eq!(full_chain_len(37, 5), 6);
+    assert_eq!(full_chain_len(16384, 1), 15);
+}
+
+#[test]
+fn partial_chain_is_allowed_but_levels_are_checked() {
+    // A chain cut short of 1x1 is accepted (the mip count follows `levels`); only an over-long one is not.
+    let d = desc(256, 64, Format::Bc7, false, ResolvedHeader::Dx10);
+    let levels = chain(Format::Bc7, 256, 64);
+    let b = dds_bytes(&d, &levels[..3]).unwrap();
+    assert_eq!(u(&b, 28), 3);
+    assert_payload(&b, 148, &levels[..3]);
+}
+
+#[test]
+fn empty_levels_is_an_error() {
+    let d = desc(8, 8, Format::Bc7, false, ResolvedHeader::Dx10);
+    assert_eq!(dds_bytes(&d, &[]), Err(DdsError::NoLevels));
+}
+
+#[test]
+fn zero_dimension_is_an_error() {
+    let d = desc(0, 8, Format::Bc7, false, ResolvedHeader::Dx10);
+    assert_eq!(
+        dds_bytes(&d, &[vec![]]),
+        Err(DdsError::ZeroDimension {
+            width: 0,
+            height: 8
+        })
+    );
+}
+
+#[test]
+fn more_levels_than_the_full_chain_is_an_error() {
+    let d = desc(256, 64, Format::Bc7, false, ResolvedHeader::Dx10);
+    let mut levels = chain(Format::Bc7, 256, 64);
+    levels.push(vec![0; 16]); // a tenth level below 1x1
+    assert_eq!(
+        dds_bytes(&d, &levels),
+        Err(DdsError::TooManyLevels {
+            levels: 10,
+            max: 9,
+            width: 256,
+            height: 64
+        })
+    );
+}
+
+#[test]
+fn wrong_level_length_is_an_error() {
+    let d = desc(256, 64, Format::Bc7, false, ResolvedHeader::Dx10);
+    let full = chain(Format::Bc7, 256, 64);
+    for (i, delta) in [(0usize, -16i64), (4, 16), (8, -1), (2, 1)] {
+        let mut levels = full.clone();
+        let expected = levels[i].len();
+        let actual = (expected as i64 + delta) as usize;
+        levels[i].resize(actual, 0);
+        assert_eq!(
+            dds_bytes(&d, &levels),
+            Err(DdsError::LevelSize {
+                level: i,
+                expected,
+                actual
+            }),
+            "level {i}"
+        );
+    }
+    // A level the size of the previous mip (an off-by-one-mip stitching bug).
+    let mut levels = full.clone();
+    levels[1] = levels[0].clone();
+    assert!(matches!(
+        dds_bytes(&d, &levels),
+        Err(DdsError::LevelSize { level: 1, .. })
+    ));
+}
+
+#[test]
+fn legacy_header_without_a_legacy_form_is_an_error_not_a_panic() {
+    for (f, srgb) in [
+        (Format::Bc7, false),
+        (Format::Bc7, true),
+        (Format::Bc6hUf16, false),
+        (Format::Bc1, true),
+        (Format::Bc3, true),
+    ] {
+        let d = desc(4, 4, f, srgb, ResolvedHeader::Legacy);
+        assert_eq!(
+            dds_bytes(&d, &[vec![0; level_size(f, 4, 4)]]),
+            Err(DdsError::NoLegacyForm { format: f, srgb }),
+            "{f:?} srgb={srgb}"
+        );
+    }
+}
+
+#[test]
+fn parallel_writes_into_one_directory_do_not_collide() {
+    let dir = tempfile::tempdir().unwrap();
+    let n = 16usize;
+    std::thread::scope(|s| {
+        for t in 0..n {
+            let dir = dir.path();
+            s.spawn(move || {
+                for round in 0..20usize {
+                    let name = format!("out{t}.dds");
+                    let payload = vec![(t * 7 + round) as u8; 4096 + t];
+                    write_atomic(&dir.join(&name), &payload).unwrap();
+                }
+            });
+        }
+    });
+    let mut names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), n, "no stray temp files: {names:?}");
+    for t in 0..n {
+        let b = std::fs::read(dir.path().join(format!("out{t}.dds"))).unwrap();
+        assert_eq!(b, vec![(t * 7 + 19) as u8; 4096 + t], "writer {t}");
+    }
+}
+
+#[test]
+fn atomic_write_to_a_read_only_target_is_an_io_error_and_leaves_no_temp() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("ro.dds");
+    std::fs::write(&p, b"keep").unwrap();
+    let mut perms = std::fs::metadata(&p).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&p, perms.clone()).unwrap();
+    let r = write_atomic(&p, b"new");
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&p, perms).unwrap();
+    assert!(r.is_err(), "replacing a read-only file must fail");
+    assert_eq!(std::fs::read(&p).unwrap(), b"keep");
+    let tmps = std::fs::read_dir(d.path())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        })
+        .count();
+    assert_eq!(tmps, 0);
 }

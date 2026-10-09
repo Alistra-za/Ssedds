@@ -6,6 +6,7 @@
 use crate::analyse::Analysis;
 use crate::codes::{Code, Severity, Warning};
 use crate::config::*;
+use crate::dds::{resolve_header, ResolvedHeader};
 use crate::discover::InputFile;
 use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};
 use crate::image::SourceInfo;
@@ -650,8 +651,10 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             format!("alpha.threshold {} outside 5..=200", p.alpha.threshold),
         );
     }
-    // Checked for every format: an out-of-range level would trip rgbcx's assert inside an encode task.
-    if p.encoder.rgbcx_level > encoders_sys::RGBCX_MAX_LEVEL {
+    // Only where rgbcx is the resolved backend (BC1/BC3/BC4/BC5): an out-of-range level would trip rgbcx's
+    // assert inside an encode task, and no other backend reads the field.
+    if p.encoder.backend == Backend::Rgbcx && p.encoder.rgbcx_level > encoders_sys::RGBCX_MAX_LEVEL
+    {
         add(
             CfgInvalid,
             format!(
@@ -667,6 +670,19 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             format!(
                 "encoder {:?} cannot write {:?}",
                 p.encoder.backend, p.format
+            ),
+        );
+    }
+    // An explicit `legacy` header needs a legacy FourCC: BC1/BC3/BC4/BC5 UNORM only. `auto` falls back to DX10.
+    if p.header == HeaderForm::Legacy
+        && resolve_header(p.format, p.srgb_tag(), HeaderForm::Legacy) != ResolvedHeader::Legacy
+    {
+        let what = if p.srgb_tag() { "_SRGB " } else { "" };
+        add(
+            CfgInvalid,
+            format!(
+                "no legacy FourCC for {what}{:?}; use dx10 (header=dx10 or auto)",
+                p.format
             ),
         );
     }

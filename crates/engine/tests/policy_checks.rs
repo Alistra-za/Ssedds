@@ -1308,3 +1308,126 @@ fn alpha_exact_off_warns_for_bc7_envmask_even_when_alpha_is_removed() {
         j.warnings
     );
 }
+
+// ---- Fix batch 33: explicit legacy header, rgbcx_level scope ----
+
+/// The "no legacy FourCC" CFG-INVALID messages for a diffuse resolved with `sets_cli`.
+fn legacy_header_errors(sets_cli: &[&str]) -> Vec<String> {
+    let mut sets = vec!["subtype=diffuse"];
+    sets.extend_from_slice(sets_cli);
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &sets,
+        &[],
+    );
+    j.warnings
+        .iter()
+        .filter(|w| w.code == Code::CfgInvalid && w.message.contains("no legacy FourCC"))
+        .map(|w| w.message.clone())
+        .collect()
+}
+
+#[test]
+fn explicit_legacy_header_without_a_legacy_form_is_cfg_invalid() {
+    for (case, sets) in [
+        ("bc7", vec!["format=bc7", "color.tag=unorm"]),
+        ("bc7 srgb", vec!["format=bc7", "color.tag=srgb"]),
+        ("bc6h", vec!["format=bc6h_uf16", "color.tag=n/a"]),
+        (
+            "bc1 srgb",
+            vec!["format=bc1", "color.tag=srgb", "alpha.policy=remove"],
+        ),
+        ("bc3 srgb", vec!["format=bc3", "color.tag=srgb"]),
+    ] {
+        let mut s = sets.clone();
+        s.push("header=legacy");
+        let m = legacy_header_errors(&s);
+        assert_eq!(m.len(), 1, "{case}: {m:?}");
+        assert!(m[0].contains("use dx10"), "{case}: {m:?}");
+    }
+    let m = legacy_header_errors(&["format=bc7", "color.tag=srgb", "header=legacy"]);
+    assert!(m[0].contains("_SRGB Bc7"), "{m:?}");
+    // The job as a whole is an error, not just warned.
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=diffuse", "format=bc7", "header=legacy"],
+        &[],
+    );
+    assert!(
+        matches!(j.status, JobStatus::Error { ref codes } if codes.contains(&Code::CfgInvalid)),
+        "{:?}",
+        j.status
+    );
+}
+
+#[test]
+fn legacy_header_is_accepted_where_a_legacy_form_exists_and_auto_never_errors() {
+    for fmt in ["bc1", "bc3", "bc4", "bc5"] {
+        let m = legacy_header_errors(&[
+            &format!("format={fmt}"),
+            "color.tag=unorm",
+            "alpha.policy=remove",
+            "header=legacy",
+        ]);
+        assert!(m.is_empty(), "{fmt} legacy: {m:?}");
+    }
+    for (fmt, tag) in [
+        ("bc7", "unorm"),
+        ("bc7", "srgb"),
+        ("bc6h_uf16", "n/a"),
+        ("bc1", "srgb"),
+    ] {
+        for header in ["auto", "dx10"] {
+            let m = legacy_header_errors(&[
+                &format!("format={fmt}"),
+                &format!("color.tag={tag}"),
+                "alpha.policy=remove",
+                &format!("header={header}"),
+            ]);
+            assert!(m.is_empty(), "{fmt} {tag} {header}: {m:?}");
+        }
+    }
+}
+
+#[test]
+fn rgbcx_level_check_applies_only_to_the_rgbcx_backend() {
+    let level_error = |fmt: &str, level: u32| {
+        let j = run(
+            Target::Cs,
+            "textures/a/x.png",
+            None,
+            &[],
+            opaque(),
+            &[
+                "subtype=diffuse",
+                &format!("format={fmt}"),
+                "color.tag=unorm",
+                "alpha.policy=remove",
+                &format!("encoder.rgbcx_level={level}"),
+            ],
+            &[],
+        );
+        j.warnings
+            .iter()
+            .any(|w| w.code == Code::CfgInvalid && w.message.contains("encoder.rgbcx_level"))
+    };
+    let too_high = encoders_sys::RGBCX_MAX_LEVEL + 1;
+    assert!(level_error("bc1", too_high), "BC1 uses rgbcx");
+    for fmt in ["bc3", "bc4", "bc5"] {
+        assert!(level_error(fmt, too_high), "{fmt} uses rgbcx");
+    }
+    assert!(!level_error("bc1", encoders_sys::RGBCX_MAX_LEVEL));
+    assert!(
+        !level_error("bc7", too_high),
+        "BC7 does not read rgbcx_level"
+    );
+    assert!(!level_error("bc6h_uf16", too_high), "BC6H does not read it");
+}

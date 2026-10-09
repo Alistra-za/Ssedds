@@ -20,7 +20,6 @@ sha2.workspace = true
 hex.workspace = true
 globset.workspace = true
 walkdir.workspace = true
-tempfile.workspace = true
 humantime.workspace = true
 
 [dev-dependencies]
