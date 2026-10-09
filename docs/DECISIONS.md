@@ -76,3 +76,11 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
 - BC1 decoder model: **one batch-wide setting, default Ideal (D3D10 formula, no rounding)**; NVIDIA / AMD / IdealRound4 selectable for vendor-specific targets.
 - Provenance: **batch manifest by default**; per-file `.dds.json` sidecars optional.
 - Tool name: deferred. `sdc` is a working placeholder only.
+
+## Spike S3 — workspace links vendored encoders and reproduces the bench (2026-10-08)
+
+- Result: **PASS** (criterion: builds without ISPC on PATH; rgb_real mean RGB PSNR within 0.01 dB of 50.98; rgbcx BC4 bit-exact on mask_real).
+- rgb_real mean RGB PSNR: 50.9771 dB (results.csv mean 50.977); largest per-image |Δ| over all 10 BC7 sets: 0.000000 dB (rgb and alpha PSNR).
+- Block payloads byte-identical to the bench: 39/39.
+- rgbcx BC4 mask_real: 7/7 bit-exact.
+- Toolchain: rustc 1.99.0 (b940084d7 2026-09-28), MSVC 14.44.35207 (VS 2022 Build Tools; cl.exe not on PATH, version read from the install directory), objects from ISPC 1.31.0 (bench build).
