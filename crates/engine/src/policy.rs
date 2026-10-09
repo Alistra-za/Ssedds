@@ -810,6 +810,17 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             "non-constant alpha would be discarded".into(),
         );
     }
+    // DECISIONS Note L: the analysis already classed near-opaque alpha as constant, so no LOSS-ALPHA-DATA above;
+    // this only reports that the (noise) alpha is dropped. Under `data` the alpha is kept, so nothing is claimed.
+    if a.alpha_near_opaque && (p.alpha.policy == AlphaPolicy::Remove || !stores_alpha(p.format)) {
+        let min = crate::analyse::code8(a.channels[3].min);
+        add(
+            AlphaNearOpaque,
+            format!(
+                "source alpha 251–254 present (min {min}): treated as opaque (BC encode artefact); alpha removed"
+            ),
+        );
+    }
     if (f.info.bit_depth > 8 || f.info.is_float) && !bc6h {
         add(
             LossBitdepth,

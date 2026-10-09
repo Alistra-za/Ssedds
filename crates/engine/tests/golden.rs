@@ -1536,3 +1536,60 @@ fn suffix_alias_writes_the_canonical_name_with_the_alias_preset_provenance() {
     assert_eq!(e.preset.as_ref().unwrap().id, "ultra");
     assert_eq!(e.raw["provenance"]["mips.levels"], "preset:ultra");
 }
+
+/// DECISIONS Note L, end to end: a PBR `_n` re-exported with alpha 251..=255 converts with the alpha removed, the
+/// ALPHA-NEAR-OPAQUE info and no LOSS-ALPHA-DATA; one texel at 250 blocks the file as varying alpha.
+#[test]
+fn near_opaque_normal_alpha_is_removed_with_an_info() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/pbr/iron_n.png",
+        rgba(64, |x, _| [128, 128, 255, 251 + (x % 5) as u8]),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["file:**/iron_n.png.subtype=pbr_normal"],
+        &[],
+    );
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    assert_profile(&o, "iron_n.png", "pbr_normal", "remove", false, "bc7");
+    let w = warning_of(&o, "iron_n.png", Code::AlphaNearOpaque);
+    assert_eq!(w.severity, Severity::Info);
+    assert!(w.message.contains("min 251"), "{}", w.message);
+    assert_eq!(warnings(&o), vec![Code::AlphaNearOpaque]);
+    assert_dds(
+        &dds(d.path(), "textures/pbr/iron_n.dds"),
+        DdsPixelFormat::Bc7 { srgb: false },
+        HeaderKind::Dx10,
+        7,
+    );
+    // The alpha was dropped: every decoded texel is opaque.
+    assert!(levels(&dds(d.path(), "textures/pbr/iron_n.dds"))[0]
+        .iter()
+        .all(|p| p[3] == 255));
+
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/pbr/iron_n.png",
+        rgba(64, |x, y| {
+            [128, 128, 255, if (x, y) == (0, 0) { 250 } else { 255 }]
+        }),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["file:**/iron_n.png.subtype=pbr_normal"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 0, "{:?}", warnings(&o));
+    assert_eq!(skip_code(&o, "iron_n.png"), Some(Code::LossAlphaData));
+    assert!(!warnings(&o).contains(&Code::AlphaNearOpaque));
+}

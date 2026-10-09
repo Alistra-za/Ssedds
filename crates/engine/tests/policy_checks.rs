@@ -1580,3 +1580,126 @@ fn bc1_transparent_black_is_cfg_invalid_with_bc1_only() {
         );
     }
 }
+
+/// A 64 px image whose alpha runs through `codes` (8-bit values) across its first texels, 255 elsewhere.
+fn alpha_codes(codes: &[u8]) -> Rgba32F {
+    let mut img = opaque();
+    for (p, &c) in img.px.iter_mut().zip(codes) {
+        p[3] = f32::from(c) / 255.0;
+    }
+    img
+}
+
+/// DECISIONS Note L: a PBR normal re-exported from BC7 with alpha 251..=255 removes the alpha silently, with the
+/// ALPHA-NEAR-OPAQUE info and no LOSS-ALPHA-DATA.
+#[test]
+fn near_opaque_alpha_on_pbr_normal_resolves_to_remove_with_an_info() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        alpha_codes(&[251, 252, 253, 254]),
+        &["subtype=pbr_normal"],
+        &[],
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert!(
+        !codes(&j).contains(&Code::LossAlphaData),
+        "{:?}",
+        j.warnings
+    );
+    let w = warning(&j, Code::AlphaNearOpaque);
+    assert_eq!(w.severity, engine::codes::Severity::Info);
+    assert_eq!(
+        w.message,
+        "source alpha 251–254 present (min 251): treated as opaque (BC encode artefact); alpha removed"
+    );
+    // One texel below the cutoff: the unchanged varying-alpha rules (LOSS-ALPHA-DATA blocks, no info).
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        alpha_codes(&[250, 252, 254]),
+        &["subtype=pbr_normal"],
+        &[],
+    );
+    assert_eq!(
+        j.status,
+        JobStatus::Blocked {
+            codes: vec![Code::LossAlphaData]
+        },
+        "{:?}",
+        j.warnings
+    );
+    assert!(!codes(&j).contains(&Code::AlphaNearOpaque));
+    // Constant 255 raises neither.
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        opaque(),
+        &["subtype=pbr_normal"],
+        &[],
+    );
+    assert!(
+        !codes(&j).contains(&Code::AlphaNearOpaque),
+        "{:?}",
+        j.warnings
+    );
+}
+
+/// An explicit `alpha.policy=data` still wins: the alpha is kept and nothing claims it was removed.
+#[test]
+fn explicit_data_policy_keeps_near_opaque_alpha() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        alpha_codes(&[252, 253]),
+        &["subtype=pbr_normal", "alpha.policy=data"],
+        &[],
+    );
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Data);
+    assert!(
+        !codes(&j).contains(&Code::AlphaNearOpaque) && !codes(&j).contains(&Code::LossAlphaData),
+        "{:?}",
+        j.warnings
+    );
+}
+
+/// A diffuse whose alpha is 252..=255 is not blocked on the alpha meaning under `--accept-suggestions high`;
+/// at 250 it still is.
+#[test]
+fn near_opaque_diffuse_alpha_is_not_an_unconfirmed_meaning() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        alpha_codes(&[252, 253, 254]),
+        &["subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert!(codes(&j).contains(&Code::AlphaNearOpaque));
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        alpha_codes(&[250, 253]),
+        &["subtype=diffuse"],
+        &[],
+    );
+    assert!(
+        matches!(j.status, JobStatus::Unresolved { .. }),
+        "{:?}",
+        j.status
+    );
+}

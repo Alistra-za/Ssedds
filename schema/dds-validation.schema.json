@@ -66,6 +66,7 @@
         "FMT-PERCEPTUAL-DATA",
         "ALPHA-EXACT-OFF-M",
         "ALPHA-254",
+        "ALPHA-NEAR-OPAQUE",
         "TAG-SRGB-VANILLA",
         "TAG-SRGB-NONPBR",
         "TAG-UNORM-PBR",

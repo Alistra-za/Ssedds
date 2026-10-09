@@ -45,6 +45,7 @@ codes! {
     FmtPerceptualData = "FMT-PERCEPTUAL-DATA" => Error,
     AlphaExactOffM = "ALPHA-EXACT-OFF-M" => Warning,
     Alpha254 = "ALPHA-254" => Info,
+    AlphaNearOpaque = "ALPHA-NEAR-OPAQUE" => Info,
     TagSrgbVanilla = "TAG-SRGB-VANILLA" => Error,
     TagSrgbNonpbr = "TAG-SRGB-NONPBR" => Blocking,
     TagUnormPbr = "TAG-UNORM-PBR" => Warning,
@@ -129,6 +130,11 @@ mod tests {
         assert_eq!(Code::FmtBc5Normal.severity(), Severity::Blocking);
         assert_eq!(Code::TagSrgbVanilla.severity(), Severity::Error);
         assert_eq!(Code::Alpha254.severity(), Severity::Info);
+        assert_eq!(Code::AlphaNearOpaque.severity(), Severity::Info);
+        assert_eq!(
+            Code::parse("ALPHA-NEAR-OPAQUE"),
+            Some(Code::AlphaNearOpaque)
+        );
         assert_eq!(Code::ValCoverage.severity(), Severity::Warning);
         assert_eq!(Code::ValMipError.severity(), Severity::Warning);
         assert_eq!(Code::CfgInvalid.severity(), Severity::Error);
@@ -150,7 +156,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 50);
+        assert_eq!(Code::ALL.len(), 51);
     }
 
     #[test]

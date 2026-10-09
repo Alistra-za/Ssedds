@@ -34,7 +34,11 @@ pub struct Analysis {
     pub is_pot: bool,
     /// R, G, B, A.
     pub channels: [ChannelStats; 4],
+    /// Alpha class. `Constant255` includes near-opaque alpha (see [`NEAR_OPAQUE_ALPHA`]).
     pub alpha: AlphaContent,
+    /// The source carries alpha whose every texel is within 251..=255 but not all 255 (DECISIONS Note L): `alpha`
+    /// is `Constant255` and the alpha is treated as BC encode noise.
+    pub alpha_near_opaque: bool,
     pub alpha_hist: AlphaHistogram,
     /// R, G and B agree within 4/255 for every pixel.
     pub grayscale: bool,
@@ -51,6 +55,13 @@ pub struct Analysis {
     /// Largest Rec. 709 luma over the image (not clamped, so HDR sources report above 1).
     pub peak_luminance: f32,
 }
+
+/// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
+/// tolerance (BC7 re-exports leave 251..=254). The comparison is on the stored float, so an 8-bit source (exact
+/// k/255) compares on its codes and a 16-bit or float source against 251/255 itself; [`NEAR_OPAQUE_EPS`] absorbs
+/// only the float rounding of the division.
+pub const NEAR_OPAQUE_ALPHA: f32 = 251.0 / 255.0;
+const NEAR_OPAQUE_EPS: f32 = 1e-6;
 
 /// Round a stored value to the nearest 8-bit code, clamping to `[0, 1]` first.
 /// NaN maps to 0.
@@ -104,9 +115,11 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         }
         c.mean /= n;
     }
+    let all_255 = hist.eq255 as usize == count;
+    let near_opaque = info.has_alpha && ch[3].min >= NEAR_OPAQUE_ALPHA - NEAR_OPAQUE_EPS;
     let alpha = if !info.has_alpha {
         AlphaContent::None
-    } else if hist.eq255 as usize == count {
+    } else if all_255 || near_opaque {
         AlphaContent::Constant255
     } else {
         AlphaContent::Varying
@@ -117,6 +130,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         is_pot: img.width.is_power_of_two() && img.height.is_power_of_two(),
         channels: ch,
         alpha,
+        alpha_near_opaque: near_opaque && !all_255,
         alpha_hist: hist,
         grayscale: gray,
         non_white_share: (count as u64 - hist.eq255) as f64 / n,
@@ -231,5 +245,50 @@ mod tests {
         let a = analyse(&empty, &RGBA8);
         assert_eq!(a.channels[0].min, 0.0);
         assert!(!a.is_pot && a.normal_len_err == 0.0 && a.non_white_share == 0.0);
+    }
+
+    /// DECISIONS Note L: a minimum of 251/255 or more is opaque within BC tolerance; one code below is varying.
+    #[test]
+    fn near_opaque_alpha_is_constant_at_min_251_and_varying_at_250() {
+        let alpha = |codes: &[u8]| {
+            let mut img = Rgba32F::new(codes.len() as u32, 1, [0.5, 0.5, 0.5, 1.0]);
+            for (p, &c) in img.px.iter_mut().zip(codes) {
+                p[3] = f32::from(c) / 255.0;
+            }
+            analyse(&img, &RGBA8)
+        };
+        let a = alpha(&[251, 252, 253, 254, 255]);
+        assert_eq!(a.alpha, AlphaContent::Constant255);
+        assert!(a.alpha_near_opaque);
+        assert_eq!(alpha(&[250, 255, 255]).alpha, AlphaContent::Varying);
+        assert!(!alpha(&[250, 255, 255]).alpha_near_opaque);
+        // Exactly 255 everywhere is opaque but not "near": nothing to report.
+        let flat = alpha(&[255, 255]);
+        assert_eq!(flat.alpha, AlphaContent::Constant255);
+        assert!(!flat.alpha_near_opaque);
+        // No alpha channel in the source: never near-opaque.
+        let none = SourceInfo {
+            channels: 3,
+            has_alpha: false,
+            ..RGBA8
+        };
+        let img = Rgba32F::new(2, 1, [0.5, 0.5, 0.5, 251.0 / 255.0]);
+        assert!(!analyse(&img, &none).alpha_near_opaque);
+    }
+
+    /// 16-bit sources: the cutoff is 251/255 in float, so 250.9/255 is varying and 251/255 is not.
+    #[test]
+    fn near_opaque_cutoff_is_251_over_255_in_float() {
+        let src = SourceInfo {
+            bit_depth: 16,
+            ..RGBA8
+        };
+        let mut img = Rgba32F::new(2, 1, [0.5, 0.5, 0.5, 1.0]);
+        img.px[0][3] = 250.9 / 255.0;
+        assert_eq!(analyse(&img, &src).alpha, AlphaContent::Varying);
+        img.px[0][3] = 251.0 / 255.0;
+        let a = analyse(&img, &src);
+        assert_eq!(a.alpha, AlphaContent::Constant255);
+        assert!(a.alpha_near_opaque);
     }
 }

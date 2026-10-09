@@ -342,6 +342,8 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 **[Proposal]** Load produces float32 RGBA in the source's own transfer; 16-bit and float data are never quantised to 8 bits before encoding. **[Finding]** Early 8-bit quantisation is one of AlphaBloom's fidelity defects [MIP §AlphaBloom]. ICC profiles are ignored with an info event; images above 16384 px are rejected (D3D11 limit [SC §5]). Analyse computes per-channel min/max/mean and constancy; an alpha histogram (255, 254, 0, ≤ 5, ≥ 250, CS parallax band); a grayscale test (within 4/255); for normals, length statistics, Z presence and a green-convention guess; for `_m`, the PGPatcher non-white share and predicted 1×1 alpha; HDR range and peak; size and power-of-two status; the DXGI format of DDS inputs.
 
+**[Requirement]** Near-opaque alpha (DECISIONS Note L): source alpha whose minimum is ≥ 251/255 (no texel below 251) is *opaque within BC tolerance* and classed exactly like constant 255, so `remove` resolves as a high-confidence analysis fact, no `LOSS-ALPHA-DATA` is raised and the alpha meaning is not unconfirmed. When some texel is 251–254, `ALPHA-NEAR-OPAQUE` (info) reports the minimum. One texel below 251 leaves the alpha varying, and an explicit `alpha.policy` (e.g. `--set alpha.policy=data`) still wins. The test is on the stored float: an 8-bit source compares its codes, a 16-bit or float source compares against 251/255 itself.
+
 ### 5.2 Resolve
 
 **[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `rule:<n>`, `analysis` / `analysis:<fact>` — e.g. `analysis:float-source`: a float source written as BC6H is linear content —, `set`, `user`). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run. **[Requirement]** A plain `_normal`/`_nrm` source whose green convention is unstated is `unresolved` as well [D-H]. **[Proposal]** A raw packing input resolves to `packing_input` (§4.4) and is not converted on its own; from M2.5 it is consumed by a packing recipe (§6.4).
@@ -604,7 +606,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 | Code | Severity | Trigger → message | Resolution |
 |---|---|---|---|
-| `LOSS-ALPHA-DATA` | blocking | Non-constant alpha discarded by `remove` or a no-alpha format | Keep alpha or acknowledge |
+| `LOSS-ALPHA-DATA` | blocking | Non-constant alpha (minimum < 251) discarded by `remove` or a no-alpha format | Keep alpha or acknowledge |
 | `LOSS-CLAMP-HDR` | warning | Float values outside [0, 1] written to LDR → clamped | HDR category under `cs`, or accept |
 | `LOSS-BITDEPTH` | info | 16-bit/float source to 8-bit-endpoint format | — |
 | `LOSS-REENCODE` | warning | Compressed DDS re-encoded; cannot improve it [SC §7] | Use the source |
@@ -619,6 +621,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `FMT-PERCEPTUAL-DATA` | error | Perceptual where locked [B2 §1] | — |
 | `ALPHA-EXACT-OFF-M` | warning | `exact_opaque` off on an `_m` written as BC7 (BC3's alpha block stores 255 exactly) → 254 may reach PGPatcher/ENB checks | Keep it on |
 | `ALPHA-254` | info | Decoded 254 present (bc7e with flag off, or a validated third-party DDS); harmless to CS's 251/255 gate [D-A] | Turn flag on if alpha is read |
+| `ALPHA-NEAR-OPAQUE` | info | Source alpha 251–254 present, minimum ≥ 251: treated as opaque (BC encode artefact); alpha removed (DECISIONS Note L) | — |
 | `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla` or `cpm` [D#4] | UNORM |
 | `TAG-SRGB-NONPBR` | blocking | `_SRGB` on a non-PBR sub-type under `cs` → renders darker [SC §6] | UNORM |
 | `TAG-UNORM-PBR` | warning | UNORM on PBR colour → washed out with LL off [SC §6] | `_SRGB` |
