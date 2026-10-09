@@ -143,3 +143,20 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
 - Not tested: the BC6H half (`-bc6` on RGBA16F levels) is deferred to M5 where the NVTT backend is built; only the flag's presence is confirmed.
 - Verdict for open item §14 #10: **one `-nomips` process per level** works and meets every pass criterion; the engine can build the chain itself and feed NVTT level by level (with `-nocuda`). Caveat: Production BC7 is slow (mip 0 dominates, about 14–27 s per 1 Mpix), so it is a quality option, not a default.
   Reproduce: `cargo run --release -p sdc-bench -- s7-nvtt` or `cargo test --release -p sdc-bench --test s7 -- --ignored --nocapture`.
+
+## Phase 0 exit (2026-10-09)
+
+| Gate | Result |
+|---|---|
+| S3 bc7e u5 rgb_real within 0.01 dB, BC4 bit-exact | PASS (39/39 payloads byte-identical, max Δ 0.000 dB, mean 50.9771; BC4 7/7) |
+| rgbcx BC1/BC3/BC4/BC5 bit-exact (+ transparent-black off vs bc7enc -b) | PASS (14/25/12/11; off 14/14) |
+| ISPC BC6H veryslow 51.50 dB | PASS (51.4995 dB; 8/8 payloads byte-identical) |
+| S5 exact opaque (mip 0): mechanism native (patch 0001), dRGB −0.515 dB rgb_real / −1.020 rgb_grad | FAIL on the 0.05 dB limit; alpha 255 PASS; flag-off bit-identical PASS |
+| S4 scalar bc7e | do not adopt (max Δ 0.0759 dB on 1/11; 3.8–4.8× slower) |
+| S7 NVTT per mip | viable (mip-0 Δ 0.0000 dB; 0.142 s fixed overhead per process) |
+| ISPC regeneration byte-reproducible (Task 3 Step 8) | yes (all objects MATCH, re-run 2026-10-09) |
+
+Owner answers (2026-10-09):
+- Confirm Rust (DECISIONS #14): **"Yes, Rust"**.
+- `alpha.exact_opaque` default: **"Only _m / env masks"** (S5 cost exceeded the 0.05 dB condition).
+- MVP without the variance bake: **"Yes, bake in M4"** — the MVP renormalises `_n` mips; the DECISIONS #6 bake arrives with milestone M4.
