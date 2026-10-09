@@ -7,6 +7,7 @@ pub mod discover;
 pub mod group;
 pub mod image;
 pub mod load;
+pub mod mips;
 pub mod ops;
 pub mod overrides;
 pub mod policy;
