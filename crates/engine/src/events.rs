@@ -67,7 +67,12 @@ pub enum EventKind {
     BatchDone {
         converted: u32,
         up_to_date: u32,
+        /// Every `file_skipped` that is not up to date and not a packing input.
         skipped: u32,
+        /// Of `skipped`, those skipped on purpose (`IN-DDS-SKIPPED`, `--on-existing skip`); they do not make
+        /// the batch exit 1 (DECISIONS Note I). Absent in older streams.
+        #[serde(default)]
+        skipped_intentional: u32,
         failed: u32,
         validation_failed: u32,
         cancelled: Vec<String>,

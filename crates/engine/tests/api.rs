@@ -396,6 +396,8 @@ fn on_existing_skip_keeps_existing_outputs() {
     req.on_existing = OnExisting::Skip;
     let (s, ev) = run(req);
     assert_eq!((s.converted, s.skipped), (1, 2), "{ev:#?}");
+    // iron.dds is kept on purpose; leaf.png is unresolved, which still makes the batch partial.
+    assert_eq!(s.skipped_intentional, 1);
     assert_eq!(s.exit_code(), 1);
     assert_eq!(std::fs::read(out.join("iron.dds")).unwrap(), b"keep me");
     let skipped: Vec<_> = ev.iter().filter(|e| kind(e) == "file_skipped").collect();

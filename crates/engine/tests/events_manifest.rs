@@ -140,6 +140,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
             converted: 1,
             up_to_date: 2,
             skipped: 3,
+            skipped_intentional: 1,
             failed: 4,
             validation_failed: 5,
             cancelled: vec!["z".into()],

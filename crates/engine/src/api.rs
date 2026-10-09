@@ -134,7 +134,11 @@ pub struct BatchSummary {
     /// Written outputs, including those whose validation failed.
     pub converted: u32,
     pub up_to_date: u32,
+    /// Every `file_skipped` except up-to-date files and raw packing inputs.
     pub skipped: u32,
+    /// Of `skipped`, those skipped on purpose: `IN-DDS-SKIPPED` inputs and outputs kept by an explicit
+    /// `--on-existing skip`. They do not make the batch partial (DECISIONS Note I).
+    pub skipped_intentional: u32,
     pub failed: u32,
     /// Written outputs whose validation reported an error (`passed = false`); also counted in `converted`.
     pub validation_failed: u32,
@@ -143,11 +147,12 @@ pub struct BatchSummary {
 }
 
 impl BatchSummary {
-    /// Spec §8 precedence for a batch that ran: 1 partial (skipped, failed or cancelled files) > 4 validation
-    /// failed > 0. Up-to-date files and raw packing inputs are not skipped files. (2 and 3 come from
-    /// `EngineError`.)
+    /// Spec §8 precedence for a batch that ran: 1 partial (unintentionally skipped, failed or cancelled
+    /// files) > 4 validation failed > 0. Up-to-date files, raw packing inputs and intentional skips
+    /// (DECISIONS Note I) do not make a batch partial. (2 and 3 come from `EngineError`.)
     pub fn exit_code(&self) -> i32 {
-        if self.skipped + self.failed > 0 || !self.cancelled.is_empty() {
+        let unintended = self.skipped.saturating_sub(self.skipped_intentional);
+        if unintended + self.failed > 0 || !self.cancelled.is_empty() {
             1
         } else if self.validation_failed > 0 {
             4
@@ -631,6 +636,10 @@ impl Engine {
                 s.reason.clone(),
                 &mut summary,
             );
+            // IN-DUPLICATE is a conflict the user must resolve; IN-DDS-SKIPPED is deliberate (Note I).
+            if s.code == Some(Code::InDdsSkipped) {
+                summary.skipped_intentional += 1;
+            }
         }
         for f in &plan.failed {
             rep.emit(
@@ -722,6 +731,7 @@ impl Engine {
                             "output exists (--on-existing skip)".into(),
                             &mut summary,
                         );
+                        summary.skipped_intentional += 1;
                         continue;
                     }
                     OnExisting::IfChanged => {
@@ -1018,6 +1028,7 @@ fn done_event(s: &BatchSummary) -> EventKind {
         converted: s.converted,
         up_to_date: s.up_to_date,
         skipped: s.skipped,
+        skipped_intentional: s.skipped_intentional,
         failed: s.failed,
         validation_failed: s.validation_failed,
         cancelled: s.cancelled.iter().map(|p| slash(p)).collect(),
@@ -1034,6 +1045,11 @@ mod tests {
         assert_eq!(s.exit_code(), 0);
         s.up_to_date = 3;
         assert_eq!(s.exit_code(), 0);
+        (s.skipped, s.skipped_intentional) = (2, 2);
+        assert_eq!(s.exit_code(), 0);
+        s.skipped = 3;
+        assert_eq!(s.exit_code(), 1);
+        s.skipped = 2;
         s.validation_failed = 1;
         assert_eq!(s.exit_code(), 4);
         s.cancelled.push("a.png".into());
