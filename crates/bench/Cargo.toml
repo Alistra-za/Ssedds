@@ -22,6 +22,8 @@ half.workspace = true
 bcdec_rs.workspace = true
 rayon.workspace = true
 clap.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

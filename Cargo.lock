@@ -666,8 +666,10 @@ dependencies = [
  "encoders-sys",
  "engine",
  "half",
+ "hex",
  "image",
  "rayon",
+ "sha2",
  "tempfile",
 ]
 

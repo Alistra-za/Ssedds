@@ -501,6 +501,74 @@ pub fn exact_opaque(root: &Path, mode: ExactMode) -> Result<GateReport> {
     Ok(r)
 }
 
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(b))
+}
+
+/// Images on disk over all `BC7_SETS` (Task 9's total); the hash dump and its gate must see exactly this many.
+pub const BC7_IMAGES: usize = 39;
+
+/// Writes "<set>/<stem> <sha256 of the u5 flag-off BC7 payload>" for every BC7 bench image.
+pub fn dump_bc7e(root: &Path, out: &Path) -> Result<usize> {
+    init(Bc1Model::Ideal)?;
+    let mut lines = vec![];
+    for set in BC7_SETS {
+        for src in set_files(root, "images", set, "png")? {
+            let enc = encode_bc7_image(&load_png_rgba8(&src)?, U5);
+            lines.push(format!("{set}/{} {}", stem(&src), sha256_hex(&enc)));
+        }
+    }
+    if lines.len() != BC7_IMAGES {
+        bail!("found {} BC7 images, expected {BC7_IMAGES}", lines.len());
+    }
+    std::fs::create_dir_all(out.parent().unwrap())?;
+    std::fs::write(
+        out,
+        lines.join(
+            "
+",
+        ) + "
+",
+    )?;
+    Ok(lines.len())
+}
+
+/// §11.2 "bc7e patch, flag off: bit-identical to unpatched upstream on every set".
+pub fn bc7e_matches_dump(root: &Path, hashes: &Path) -> Result<GateReport> {
+    init(Bc1Model::Ideal)?;
+    let text = std::fs::read_to_string(hashes)?;
+    let want: std::collections::BTreeMap<&str, &str> =
+        text.lines().filter_map(|l| l.split_once(' ')).collect();
+    let mut r = GateReport::new("bc7e flag off is bit-identical to the recorded pre-patch hashes");
+    r.check(
+        want.len() == BC7_IMAGES,
+        format!(
+            "hash file has {} entries == expected {BC7_IMAGES}",
+            want.len()
+        ),
+    );
+    let mut seen = 0;
+    for set in BC7_SETS {
+        for src in set_files(root, "images", set, "png")? {
+            let key = format!("{set}/{}", stem(&src));
+            let got = sha256_hex(&encode_bc7_image(&load_png_rgba8(&src)?, U5));
+            r.check(want.get(key.as_str()) == Some(&got.as_str()), key);
+            seen += 1;
+        }
+    }
+    r.check(
+        seen == BC7_IMAGES,
+        format!("image count {seen} == expected {BC7_IMAGES}"),
+    );
+    Ok(r)
+}
+
+/// Committed reference for the flag-off bit-identity gate (recorded from the unpatched objects).
+pub fn pre_patch_hashes() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/pre-patch-bc7e.sha256")
+}
+
 pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
     Ok(match name {
         "s3" => vec![
@@ -524,6 +592,10 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
         "bc6h" => vec![bc6h_veryslow(root)?],
         "alpha-scan" => vec![alpha_scan(root)?],
         "exact-opaque-bytepatch" => vec![exact_opaque(root, ExactMode::BytePatch)?],
+        "exact-opaque-native" => vec![
+            exact_opaque(root, ExactMode::Native)?,
+            bc7e_matches_dump(root, &pre_patch_hashes())?,
+        ],
         other => bail!("unknown gate '{other}'"),
     })
 }

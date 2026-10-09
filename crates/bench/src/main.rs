@@ -16,6 +16,11 @@ struct Cli {
 enum Cmd {
     /// Run a named gate (s3, ...) and print its report.
     Gate { name: String },
+    /// Record SHA-256s of u5 flag-off BC7 payloads of every bench image (reference for the patch bit-identity gate).
+    DumpBc7e {
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -33,6 +38,16 @@ fn main() -> ExitCode {
                 } else {
                     ExitCode::from(1)
                 }
+            }
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::from(3)
+            }
+        },
+        Cmd::DumpBc7e { out } => match gates::dump_bc7e(&root, &out) {
+            Ok(n) => {
+                println!("{n}");
+                ExitCode::SUCCESS
             }
             Err(e) => {
                 eprintln!("error: {e:#}");
