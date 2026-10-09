@@ -17,7 +17,7 @@ The brief asked for "Phase 0 (spikes) and Phase 1–2 (engine skeleton + CLI MVP
 | This plan | Contents | Project-plan roadmap phases covered |
 |---|---|---|
 | **Phase 0** (Tasks 1–17) | Toolchain, workspace, vendored encoders, spikes S3, S4, S5, S7, gates of spec §11.2 for the encoders | Phase 0 (S1, S2, S6, S8 are owner-run, Task 46) |
-| **Phase 1** (Tasks 18–39) | Engine: config, presets, policy, pipeline, DDS I/O, validation, events, manifest, scheduler, golden tests | Phase 1 (golden cases, synthetic subset), Phase 2 (core engine) |
+| **Phase 1** (Tasks 18–39, incl. 26a) | Engine: config, presets, policy, pipeline, DDS I/O, validation, events, manifest, scheduler, golden tests | Phase 1 (golden cases, synthetic subset), Phase 2 (core engine) |
 | **Phase 2** (Tasks 40–46) | CLI MVP and the MVP exit gate | Phase 3 (CLI), part of Phase 5 (three built-in "Quality" presets) |
 | **M3–M8** (milestones) | GUI, variance bake, NVTT backend, preset completion + remaining inputs, quality validation + CI, packaging | Phases 4–7 |
 
@@ -83,9 +83,9 @@ F:/ai/dds/converter/
 │   │   ├── src/image.rs             Rgba32F, SourceInfo
 │   │   ├── src/codes.rs             warning-code catalogue (§10), Severity, Warning
 │   │   ├── src/config.rs            Profile and every enum of §3.2
-│   │   ├── src/presets.rs           PresetFile, ConfigFile, Rule, PresetRegistry, JSON merge
-│   │   ├── src/discover.rs          InputFile discovery, output and game-relative paths
-│   │   ├── src/group.rs             TextureSet grouping, suffix parsing, IN-DUPLICATE
+│   │   ├── src/presets.rs           PresetFile, ConfigFile, Rule, PresetRegistry, JSON merge, suffix aliases (Task 26a)
+│   │   ├── src/discover.rs          InputFile discovery, output and game-relative paths, canonical output names for suffix aliases
+│   │   ├── src/group.rs             TextureSet grouping, suffix parsing (incl. preset suffix aliases), IN-DUPLICATE
 │   │   ├── src/load.rs              PNG/TGA/TIFF → Rgba32F
 │   │   ├── src/analyse.rs           Analysis statistics (§5.1)
 │   │   ├── src/suggest.rs           §4.3 suggestions with confidence
@@ -141,6 +141,10 @@ F:/ai/dds/converter/
 | `engine::suggest::{Confidence, Suggestion, SuggestContext, suggest}` | Task 24 | see Task 24 |
 | `engine::overrides::{SetOverride, Scope, parse_set}` | Task 25 | see Task 25 |
 | `engine::policy::{Provenance, ResolvedJob, JobStatus, ResolveCtx, resolve_file, availability, Availability}` | Tasks 25–26 | see tasks |
+| `engine::presets::{PresetFile::suffix_aliases, PresetError::Alias}`, `PresetRegistry::{alias_for, alias_table}` | Task 26a | `fn alias_for(&self, alias: &str) -> Option<(&str, &str)>` (canonical, preset id); `fn alias_table(&self) -> &BTreeMap<String, String>` |
+| `engine::group::{SuffixSplit, split_suffix_with, group_sets_with}` | Task 26a | `fn split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> SuffixSplit` |
+| `engine::discover::canonicalise_outputs` | Task 26a | `fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>)` |
+| `engine::policy::{AliasUse, preset_for}`, `FileFacts::alias`, `ResolvedJob::suffix_alias` | Task 26a | see Task 26a |
 | `engine::dilate::dilate_under_zero_alpha` | Task 27 | `fn dilate_under_zero_alpha(img: &mut Rgba32F)` |
 | `engine::ops::{Work, Domain, preprocess, srgb_to_linear, linear_to_srgb}` | Task 28 | `fn preprocess(img: Rgba32F, p: &Profile) -> Work` |
 | `engine::dds::ResolvedHeader` | Task 33 | `enum { Dx10, Legacy }` |
@@ -3196,7 +3200,7 @@ git commit -m "docs: Phase 0 exit summary and owner decisions"
 ---
 # Phase 1 — Core engine
 
-Entry: Task 17 recorded, owner confirmed Rust. Exit: Tasks 18–39 pass, including the Task 38 gates (full-chain exact opaque, engine-path parity) and the Task 39 golden tests.
+Entry: Task 17 recorded, owner confirmed Rust. Exit: Tasks 18–39 pass, including Task 26a (preset suffix aliases, DECISIONS Note G), the Task 38 gates (full-chain exact opaque, engine-path parity) and the Task 39 golden tests.
 
 Rules for every Phase 1 task: code goes under `crates/engine/src/`; run `cargo test -p engine` (debug is fine; it uses opt-level 1) and `cargo clippy -p engine --all-targets -- -D warnings` before committing. The snippets favour explicit index loops for readability; if clippy flags `needless_range_loop`, `manual_is_multiple_of` or `new_without_default`, apply its suggested rewrite (behaviour-neutral) rather than adding `allow`s.
 
@@ -5725,6 +5729,479 @@ git commit -m "feat(engine): availability per target, §10 checks and job status
 ```
 
 ---
+### Task 26a: Preset suffix aliases (DECISIONS Note G) — registry, alias-aware split, canonical output names, alias preset chain in Resolve
+
+**Files:**
+- Modify: `crates/engine/src/presets.rs`, `crates/engine/src/group.rs`, `crates/engine/src/discover.rs`, `crates/engine/src/policy.rs`
+- Modify: `crates/engine/tests/policy_layers.rs`, `crates/engine/tests/policy_checks.rs` (add `alias: None` to each `FileFacts` literal)
+- Test: `crates/engine/tests/suffix_aliases.rs`
+
+**Interfaces:**
+- Consumes: Tasks 20, 21, 24, 25, 26.
+- Produces:
+  - `presets::PresetFile` gains `pub suffix_aliases: BTreeMap<String, String>` (alias → canonical; `#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`, so the built-in presets' SHA-256 values do not change)
+  - `presets::PresetError::Alias(String)` (message starts `CFG-INVALID:`; `Engine::plan` reports it as a usage error, exit 2)
+  - `PresetRegistry::alias_for(&self, alias: &str) -> Option<(&str, &str)>` → `(canonical suffix, preset id)`, case-insensitive; `PresetRegistry::alias_table(&self) -> &BTreeMap<String, String>` (alias → canonical over all loaded presets)
+  - `group::SuffixSplit { pub base: String, pub suffix: Option<String>, pub alias: Option<String> }`; `group::split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> SuffixSplit`; `group::group_sets_with(files: &[InputFile], aliases: &BTreeMap<String, String>) -> (Vec<TextureSet>, Vec<Vec<usize>>)`. `split_suffix` and `group_sets` keep their signatures and behaviour (no aliases), so Task 21's tests are untouched.
+  - `discover::canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>)`; `discover` is unchanged.
+  - `policy::FileFacts` gains `pub alias: Option<&'a str>`; `policy::AliasUse { pub alias: String, pub canonical: String, pub preset: String }`; `policy::preset_for<'a>(ctx: &ResolveCtx<'a>, f: &FileFacts) -> &'a str`; `policy::ResolvedJob` gains `pub suffix_alias: Option<AliasUse>` (omitted from JSON when `None`)
+
+Rules (spec §3.7, DECISIONS Note G). An alias is `[a-z0-9]+`, is not a §6.1 suffix, maps to a §6.1 suffix, and is unique across loaded presets; otherwise `add_toml` fails and the registry is unchanged. The stem segment after the last `_` is looked up in the alias table before the suffix list, so matching is exact (`rmaosultrahigh` does not make `_nultrahigh` match). `FileFacts.suffix` carries the canonical suffix and `FileFacts.alias` the alias. For an aliased file, `preset_for` returns the alias preset, whose chain replaces the batch preset's chain in `layers()` and in the rule sources; config, analysis and `--set` layers are unchanged and still win. Outputs are canonicalised before grouping, so an alias/canonical collision is an ordinary `IN-DUPLICATE` group. An alias raises the top suggestion to `High` (except canonical `s`) and prefixes every suggestion reason with `suffix alias _<alias> → _<canonical> (preset <id>)`; deciding still needs `--accept-suggestions high`, a rule or `--set`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`crates/engine/tests/suffix_aliases.rs`:
+```rust
+use engine::analyse::analyse;
+use engine::config::*;
+use engine::discover::*;
+use engine::group::*;
+use engine::image::{Rgba32F, SourceInfo};
+use engine::overrides::parse_set;
+use engine::policy::*;
+use engine::presets::*;
+use engine::suggest::Confidence;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+const ULTRA: &str = r#"
+schema_version = 1
+id = "ultra"
+version = "1.0.0"
+base = "cs-quality"
+target = "cs"
+
+[suffix_aliases]
+rmaosultrahigh = "rmaos"
+backlit = "sk"
+skintint = "s"
+
+[subtypes.rmaos]
+mips = { levels = 1 }
+"#;
+
+const RGB8: SourceInfo = SourceInfo { bit_depth: 8, channels: 3, has_alpha: false, is_float: false };
+
+fn registry() -> PresetRegistry {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml(ULTRA).unwrap();
+    r
+}
+
+fn preset_with(id: &str, aliases: &str) -> String {
+    format!("schema_version = 1\nid = \"{id}\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[suffix_aliases]\n{aliases}\n")
+}
+
+fn touch(p: &Path) {
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, b"x").unwrap();
+}
+
+fn resolve(reg: &PresetRegistry, name: &str, sets_cli: &[&str], accept: AcceptSuggestions) -> ResolvedJob {
+    let overrides: Vec<_> = sets_cli.iter().map(|s| parse_set(s).unwrap()).collect();
+    let allow = BTreeSet::new();
+    let ctx = ResolveCtx { target: Target::Cs, registry: reg, preset: "cs-quality", user_config: None, project_config: None, overrides: &overrides, accept, allow: &allow };
+    let stem = Path::new(name).file_stem().unwrap().to_string_lossy().into_owned();
+    let split = split_suffix_with(&stem, reg.alias_table());
+    let f = InputFile {
+        path: PathBuf::from(name),
+        rel: PathBuf::from(name),
+        game_path: format!("textures/armor/{}", name.to_ascii_lowercase()),
+        output: PathBuf::from(name).with_extension("dds"),
+        kind: InputKind::Image,
+    };
+    let set = TextureSet { key: "textures/armor/iron".into(), members: vec![0], suffixes: split.suffix.iter().cloned().collect() };
+    let a = analyse(&Rgba32F::new(64, 64, [0.5, 0.5, 0.5, 1.0]), &RGB8);
+    resolve_file(&ctx, &FileFacts { input: &f, suffix: split.suffix.as_deref(), alias: split.alias.as_deref(), set: &set, analysis: &a, info: &RGB8 })
+}
+
+#[test]
+fn registry_validates_and_looks_up_aliases() {
+    let mut r = registry();
+    assert_eq!(r.alias_for("rmaosultrahigh"), Some(("rmaos", "ultra")));
+    assert_eq!(r.alias_for("RmaosUltraHigh"), Some(("rmaos", "ultra")));
+    assert_eq!(r.alias_for("nultrahigh"), None);
+    assert_eq!(r.alias_table().get("backlit").map(String::as_str), Some("sk"));
+    // an alias may not be a canonical suffix, must name a canonical suffix, and is [a-z0-9]+
+    for bad in ["rmaos = \"rmaos\"", "n = \"rmaos\"", "foo = \"bar\"", "foo = \"\"", "\"ultra_high\" = \"rmaos\"", "UltraHigh = \"rmaos\""] {
+        assert!(matches!(r.add_toml(&preset_with("bad", bad)), Err(PresetError::Alias(_))), "{bad}");
+        assert!(r.get("bad").is_none(), "{bad}");
+    }
+    // an alias declared by a second preset is rejected and the registry is unchanged
+    assert!(matches!(r.add_toml(&preset_with("other", "rmaosultrahigh = \"rmaos\"")), Err(PresetError::Alias(_))));
+    assert!(r.get("other").is_none());
+    assert_eq!(r.alias_for("rmaosultrahigh"), Some(("rmaos", "ultra")));
+    // reloading the same preset id replaces its aliases without a self-conflict
+    r.add_toml(ULTRA).unwrap();
+    assert_eq!(r.alias_table().len(), 3);
+    // built-in presets declare no aliases
+    assert!(PresetRegistry::builtin().unwrap().alias_table().is_empty());
+}
+
+#[test]
+fn alias_matching_is_exact_and_case_insensitive() {
+    let r = registry();
+    let s = |stem: &str| split_suffix_with(stem, r.alias_table());
+    let split = |base: &str, suffix: Option<&str>, alias: Option<&str>| SuffixSplit { base: base.into(), suffix: suffix.map(Into::into), alias: alias.map(Into::into) };
+    assert_eq!(s("iron_rmaosultrahigh"), split("iron", Some("rmaos"), Some("rmaosultrahigh")));
+    assert_eq!(s("Iron_RMAOSUltraHigh"), split("Iron", Some("rmaos"), Some("rmaosultrahigh")));
+    // declaring rmaosultrahigh does not make another "<suffix>ultrahigh" match
+    assert_eq!(s("iron_nultrahigh"), split("iron_nultrahigh", None, None));
+    // no separator inside an alias
+    assert_eq!(s("iron_rmaos_ultrahigh").alias, None);
+    // a stem that is only the alias is left whole, as with built-in suffixes
+    assert_eq!(s("_rmaosultrahigh"), split("_rmaosultrahigh", None, None));
+    // built-in suffixes still split, and the alias-free splitter is unchanged
+    assert_eq!(s("iron_n"), split("iron", Some("n"), None));
+    assert_eq!(split_suffix("iron_rmaosultrahigh"), ("iron_rmaosultrahigh".into(), None));
+}
+
+#[test]
+fn outputs_use_the_canonical_suffix_and_collisions_are_duplicates() {
+    let r = registry();
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    for f in ["iron.png", "iron_n.png", "iron_rmaosultrahigh.png", "iron_nultrahigh.png", "rock_rmaos.png", "Rock_RMAOSULTRAHIGH.tga"] {
+        touch(&src.join(f));
+    }
+    let out = d.path().join("out");
+    let mut files = discover(&[src], &out, false).unwrap();
+    canonicalise_outputs(&mut files, r.alias_table());
+    let output_of = |name: &str| files.iter().find(|f| f.rel.as_path() == Path::new(name)).unwrap().output.clone();
+    assert_eq!(output_of("iron_rmaosultrahigh.png"), out.join("iron_rmaos.dds"));
+    assert_eq!(output_of("Rock_RMAOSULTRAHIGH.tga"), out.join("Rock_rmaos.dds"));
+    assert_eq!(output_of("iron_nultrahigh.png"), out.join("iron_nultrahigh.dds"));
+    assert_eq!(output_of("iron_n.png"), out.join("iron_n.dds"));
+    let (sets, dups) = group_sets_with(&files, r.alias_table());
+    let iron = sets.iter().find(|s| s.key.ends_with("/iron")).unwrap();
+    assert_eq!(iron.members.len(), 3);
+    assert!(iron.suffixes.contains("rmaos") && iron.suffixes.contains("n"));
+    assert!(!iron.suffixes.contains("rmaosultrahigh"));
+    // rock_rmaos.png and Rock_RMAOSULTRAHIGH.tga both write rock_rmaos.dds: one IN-DUPLICATE group
+    assert_eq!(dups.len(), 1);
+    let names: BTreeSet<String> = dups[0].iter().map(|&i| files[i].rel.to_string_lossy().into_owned()).collect();
+    assert_eq!(names, BTreeSet::from(["rock_rmaos.png".to_string(), "Rock_RMAOSULTRAHIGH.tga".to_string()]));
+}
+
+#[test]
+fn alias_preset_layers_on_its_chain_and_provenance_records_it() {
+    let reg = registry();
+    let j = resolve(&reg, "iron_rmaosultrahigh.png", &[], AcceptSuggestions::High);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(j.profile.subtype, Subtype::Rmaos);
+    assert_eq!(j.profile.mips.levels, MipLevels::Count(1));
+    assert_eq!(j.provenance["mips.levels"], Provenance::Preset("ultra".into()));
+    assert_eq!(j.provenance["mips.levels"].to_string(), "preset:ultra");
+    assert_eq!(j.suffix_alias, Some(AliasUse { alias: "rmaosultrahigh".into(), canonical: "rmaos".into(), preset: "ultra".into() }));
+    assert!(j.suggestions[0].reason.starts_with("suffix alias _rmaosultrahigh → _rmaos (preset ultra)"), "{}", j.suggestions[0].reason);
+    // the canonical name alone resolves with the batch preset only
+    let plain = resolve(&reg, "iron_rmaos.png", &[], AcceptSuggestions::High);
+    assert_eq!(plain.profile.mips.levels, MipLevels::Keyword(MipKeyword::Full));
+    assert_eq!(plain.provenance["mips.levels"], Provenance::Builtin);
+    assert_eq!(plain.suffix_alias, None);
+    assert!(!plain.provenance.values().any(|p| *p == Provenance::Preset("ultra".into())));
+    // --set still beats the alias preset
+    let j = resolve(&reg, "iron_rmaosultrahigh.png", &["subtype:rmaos.mips.levels=none"], AcceptSuggestions::High);
+    assert_eq!((j.profile.mips.levels, j.provenance["mips.levels"].clone()), (MipLevels::Keyword(MipKeyword::None), Provenance::User));
+}
+
+#[test]
+fn alias_raises_suffix_confidence_except_for_s() {
+    let reg = registry();
+    // _sk alone is a low-confidence backlight; the alias declares it
+    let j = resolve(&reg, "iron_backlit.png", &[], AcceptSuggestions::High);
+    assert_eq!((j.profile.subtype, j.suggestions[0].confidence), (Subtype::BacklightTint, Confidence::High));
+    assert_eq!(j.provenance["subtype"], Provenance::Suggestion);
+    // _s keeps its ranked readings
+    let j = resolve(&reg, "iron_skintint.png", &[], AcceptSuggestions::High);
+    assert_eq!(j.profile.subtype, Subtype::SubsurfaceTint);
+    assert!(j.suggestions[0].confidence < Confidence::High);
+    assert!(matches!(j.status, JobStatus::Unresolved { .. }), "{:?}", j.status);
+    // an alias decides nothing without --accept-suggestions high
+    let j = resolve(&reg, "iron_rmaosultrahigh.png", &[], AcceptSuggestions::None);
+    assert!(matches!(j.status, JobStatus::Unresolved { .. }), "{:?}", j.status);
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cargo test -p engine --test suffix_aliases`
+Expected: FAIL to compile (`split_suffix_with`, `alias_for`, `FileFacts.alias` … not found).
+
+- [ ] **Step 3: Implement the preset field and registry lookup in `presets.rs`**
+
+Add `use crate::group::SUFFIXES;` to the imports. Add to `PresetError`:
+```rust
+    #[error("invalid suffix alias: {0}")]
+    Alias(String),
+```
+Add to `PresetFile`, after `rules`:
+```rust
+    /// Exact suffix aliases (spec §3.7, DECISIONS Note G): `alias = "canonical"`, e.g. `rmaosultrahigh = "rmaos"`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub suffix_aliases: BTreeMap<String, String>,
+```
+Replace the `PresetRegistry` struct and its `add_toml` with:
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct PresetRegistry {
+    presets: BTreeMap<String, PresetFile>,
+    /// Alias → canonical suffix, over every loaded preset.
+    aliases: BTreeMap<String, String>,
+    /// Alias → id of the preset that declares it.
+    alias_owner: BTreeMap<String, String>,
+}
+```
+```rust
+    pub fn add_toml(&mut self, text: &str) -> Result<String, PresetError> {
+        let p: PresetFile = toml::from_str(text).map_err(|e| PresetError::Parse(e.to_string()))?;
+        if p.schema_version > SCHEMA_VERSION {
+            return Err(PresetError::NewerSchema(p.schema_version));
+        }
+        self.check_aliases(&p)?;
+        let id = p.id.clone();
+        // Reloading a preset id replaces its aliases.
+        let owner = &self.alias_owner;
+        self.aliases.retain(|a, _| owner.get(a) != Some(&id));
+        self.alias_owner.retain(|_, o| *o != id);
+        for (alias, canonical) in &p.suffix_aliases {
+            self.aliases.insert(alias.clone(), canonical.clone());
+            self.alias_owner.insert(alias.clone(), id.clone());
+        }
+        self.presets.insert(id.clone(), p);
+        Ok(id)
+    }
+
+    /// Spec §3.7: `[a-z0-9]+`, not a §6.1 suffix, maps to a §6.1 suffix, unique across loaded presets.
+    fn check_aliases(&self, p: &PresetFile) -> Result<(), PresetError> {
+        let bad = |m: String| PresetError::Alias(format!("CFG-INVALID: preset '{}': {m}", p.id));
+        for (alias, canonical) in &p.suffix_aliases {
+            if alias.is_empty() || !alias.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
+                return Err(bad(format!("alias '{alias}' must be lower-case ASCII letters and digits, without '_'")));
+            }
+            if SUFFIXES.contains(&alias.as_str()) {
+                return Err(bad(format!("alias '{alias}' is a canonical suffix (spec §6.1)")));
+            }
+            if !SUFFIXES.contains(&canonical.as_str()) {
+                return Err(bad(format!("alias '{alias}' maps to '{canonical}', which is not a canonical suffix (spec §6.1)")));
+            }
+            if let Some(owner) = self.alias_owner.get(alias).filter(|o| **o != p.id) {
+                return Err(bad(format!("alias '{alias}' is already declared by preset '{owner}'")));
+            }
+        }
+        Ok(())
+    }
+
+    /// `(canonical suffix, declaring preset id)` for an alias, case-insensitive.
+    pub fn alias_for(&self, alias: &str) -> Option<(&str, &str)> {
+        let a = alias.to_ascii_lowercase();
+        Some((self.aliases.get(&a)?.as_str(), self.alias_owner.get(&a)?.as_str()))
+    }
+
+    /// Alias → canonical suffix over every loaded preset (input to `split_suffix_with`,
+    /// `canonicalise_outputs` and `group_sets_with`).
+    pub fn alias_table(&self) -> &BTreeMap<String, String> {
+        &self.aliases
+    }
+```
+Run: `cargo test -p engine --test presets` → still passes (built-in hashes and profiles unchanged).
+
+- [ ] **Step 4: Implement the alias-aware split, grouping and output names (`group.rs`, `discover.rs`)**
+
+Add to `group.rs` (after `split_suffix`, which stays as it is):
+```rust
+/// Result of `split_suffix_with`: `suffix` is canonical (an alias's target), `alias` the alias matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuffixSplit {
+    pub base: String,
+    pub suffix: Option<String>,
+    pub alias: Option<String>,
+}
+
+/// `split_suffix` with preset suffix aliases (spec §3.7, DECISIONS Note G). The stem segment after the
+/// last '_' is looked up (lower-case) in `aliases` (alias → canonical) before the §6.1 list. Aliases
+/// contain no '_' and are never a §6.1 suffix, so a match is exact and unambiguous.
+pub fn split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> SuffixSplit {
+    if let Some((base, tail)) = stem.rsplit_once('_') {
+        let tail = tail.to_ascii_lowercase();
+        if !base.is_empty() {
+            if let Some(canonical) = aliases.get(&tail) {
+                return SuffixSplit { base: base.to_string(), suffix: Some(canonical.clone()), alias: Some(tail) };
+            }
+        }
+    }
+    let (base, suffix) = split_suffix(stem);
+    SuffixSplit { base, suffix, alias: None }
+}
+```
+Replace `group_sets` with a delegating wrapper plus `group_sets_with` (same body, alias-aware split):
+```rust
+pub fn group_sets(files: &[InputFile]) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
+    group_sets_with(files, &BTreeMap::new())
+}
+
+/// `group_sets` with suffix aliases: an aliased member joins its set under the canonical suffix.
+/// Call `discover::canonicalise_outputs` first so alias/canonical collisions are duplicate groups.
+pub fn group_sets_with(files: &[InputFile], aliases: &BTreeMap<String, String>) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
+    let mut sets: BTreeMap<String, TextureSet> = BTreeMap::new();
+    let mut outs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, f) in files.iter().enumerate() {
+        outs.entry(fold(&f.output)).or_default().push(i);
+        let stem = f.rel.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let SuffixSplit { base, suffix, .. } = split_suffix_with(&stem, aliases);
+        let dir = f.output.parent().map(fold).unwrap_or_default();
+        let key = format!("{dir}/{}", base.to_lowercase());
+        let set = sets.entry(key.clone()).or_insert_with(|| TextureSet { key, members: vec![], suffixes: BTreeSet::new() });
+        set.members.push(i);
+        if let Some(s) = suffix {
+            set.suffixes.insert(s);
+        }
+    }
+    let dups = outs.into_values().filter(|v| v.len() > 1).collect();
+    (sets.into_values().collect(), dups)
+}
+```
+Add to `discover.rs` (and `use std::collections::BTreeMap;`):
+```rust
+/// Spec §3.7: an input whose stem ends in a preset suffix alias is written under its canonical
+/// suffix (`iron_rmaosultrahigh.png` → `iron_rmaos.dds`). Only `output` changes; `rel` and
+/// `game_path` keep the source name, so rule globs match what is on disk. Run before grouping.
+pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>) {
+    if aliases.is_empty() {
+        return;
+    }
+    for f in files {
+        let stem = f.rel.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let split = crate::group::split_suffix_with(&stem, aliases);
+        if let (Some(_), Some(canonical)) = (&split.alias, &split.suffix) {
+            f.output.set_file_name(format!("{}_{canonical}.dds", split.base));
+        }
+    }
+}
+```
+Run: `cargo test -p engine --test discover_group` → still passes.
+
+- [ ] **Step 5: Use the alias preset in Resolve (`policy.rs`) and update the `FileFacts` literals**
+
+In `FileFacts`, document `suffix` as canonical and add the alias:
+```rust
+pub struct FileFacts<'a> {
+    pub input: &'a InputFile,
+    /// Canonical suffix (an alias already mapped to its target, spec §3.7).
+    pub suffix: Option<&'a str>,
+    /// The suffix alias the file name matched (`group::split_suffix_with`), if any.
+    pub alias: Option<&'a str>,
+    pub set: &'a TextureSet,
+    pub analysis: &'a Analysis,
+    pub info: &'a SourceInfo,
+}
+```
+Add:
+```rust
+/// A suffix alias in use for one file (spec §3.7, DECISIONS Note G).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct AliasUse {
+    pub alias: String,
+    pub canonical: String,
+    pub preset: String,
+}
+
+/// `(alias, canonical, preset id)` when the file matched an alias the registry knows.
+fn alias_parts<'a>(ctx: &ResolveCtx<'a>, f: &FileFacts) -> Option<(String, &'a str, &'a str)> {
+    let alias = f.alias?.to_ascii_lowercase();
+    let (canonical, preset) = ctx.registry.alias_for(&alias)?;
+    Some((alias, canonical, preset))
+}
+
+/// The preset whose chain resolves this file: the alias preset for an aliased file, else the batch preset.
+pub fn preset_for<'a>(ctx: &ResolveCtx<'a>, f: &FileFacts) -> &'a str {
+    alias_parts(ctx, f).map_or(ctx.preset, |(_, _, p)| p)
+}
+
+fn alias_use(ctx: &ResolveCtx, f: &FileFacts) -> Option<AliasUse> {
+    alias_parts(ctx, f).map(|(alias, c, p)| AliasUse { alias, canonical: c.to_string(), preset: p.to_string() })
+}
+```
+Give `rule_sources` the file's preset:
+```rust
+/// Rule sources in precedence order: the file's preset chain (base first; the alias preset's chain for an
+/// aliased file), user config, project config.
+fn rule_sources<'a>(ctx: &'a ResolveCtx, preset: &str) -> Vec<(String, &'a [Rule])> {
+    let mut v: Vec<(String, &[Rule])> = vec![];
+    if let Ok(chain) = ctx.registry.chain(preset) {
+        for p in chain {
+            v.push((p.id.clone(), &p.rules));
+        }
+    }
+    if let Some(c) = ctx.user_config {
+        v.push(("user".into(), &c.rules));
+    }
+    if let Some(c) = ctx.project_config {
+        v.push(("project".into(), &c.rules));
+    }
+    v
+}
+```
+In `decide_subtype`, make the suggestions mutable and apply the alias right after `suggest(…)`:
+```rust
+    let mut suggestions = suggest(&SuggestContext {
+        target: ctx.target,
+        suffix: f.suffix,
+        game_path: &f.input.game_path,
+        set_suffixes: &f.set.suffixes,
+        alpha: f.analysis.alpha,
+        is_float: f.info.is_float,
+    });
+    if let Some((alias, canonical, preset)) = alias_parts(ctx, f) {
+        for s in &mut suggestions {
+            s.reason = format!("suffix alias _{alias} → _{canonical} (preset {preset}); {}", s.reason);
+        }
+        // Spec §3.7: an alias declares the suffix; `_s` keeps its ranked readings (§4.3 item 2).
+        if canonical != "s" {
+            if let Some(top) = suggestions.first_mut() {
+                top.confidence = Confidence::High;
+            }
+        }
+    }
+```
+and change its rule loop to `for (src, rules) in rule_sources(ctx, preset_for(ctx, f)).into_iter().rev() {`.
+
+In `layered_profile`, use the file's preset for both the preset layers and the rules:
+```rust
+    let preset = preset_for(ctx, f);
+    for (source, patch) in ctx.registry.layers(preset, st)? {
+        apply(&mut doc, &mut prov, &patch, source);
+    }
+```
+```rust
+    for (src, rules) in rule_sources(ctx, preset) {
+```
+Add to `ResolvedJob`, after `status`:
+```rust
+    /// The suffix alias this file matched (spec §3.7); its preset chain resolved the profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suffix_alias: Option<AliasUse>,
+```
+In `resolve_file`, compute `let suffix_alias = alias_use(ctx, f);` as the first line and add `suffix_alias,` to both `ResolvedJob { … }` literals (the `Err` arm returns, so the move is fine).
+
+In `crates/engine/tests/policy_layers.rs` (three literals) and `crates/engine/tests/policy_checks.rs` (the literal in `run`), add `alias: None,` after `suffix: …,` in every `FileFacts { … }`.
+
+- [ ] **Step 6: Run the tests**
+
+Run: `cargo test -p engine --test suffix_aliases`
+Expected: 5 passed.
+Run: `cargo test -p engine` and `cargo clippy -p engine --all-targets -- -D warnings`
+Expected: all pass (Tasks 20, 21, 25 and 26 tests unchanged apart from `alias: None`); no clippy warnings.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add crates/engine
+git commit -m "feat(engine): exact preset suffix aliases with canonical output names and alias preset layering (Note G)"
+```
+
+---
+
 ### Task 27: Push-pull RGB dilation under α = 0
 
 **Files:**
@@ -8218,6 +8695,8 @@ git commit -m "feat(engine): JSON Lines events with sinks and the batch manifest
 
 Behaviour (spec §5.9, §8): `plan` validates the preset and every `--set` value up front (bad ones → `Usage`), loads configs (`Usage` on parse errors; the project config defaults to `sdc.toml` in the first input folder), discovers (`Usage` if an input does not exist), groups, skips `IN-DUPLICATE` pairs and DDS inputs (`IN-DDS-SKIPPED`), loads and analyses each image in parallel (load errors become `FailedFile` at `Load`, with `DIM-TOO-LARGE` or `IN-DECODE`), resolves, and emits `batch_started`, `file_discovered`, `set_resolved`, `file_planned` and every warning. `run` stops after reporting when `dry_run`; otherwise it initialises the encoders with the batch BC1 model (`Fatal` on mismatch), applies `on_existing` against the manifest (`if-changed`: re-encode when source hash, profile hash or engine version differ; an existing output with no record is kept with `OUT-UNKNOWN-EXISTING`), admits files by estimated bytes (`w·h·16·1.34·3`) against the memory budget, processes them on a rayon pool of `jobs` threads under `catch_unwind` (admission happens on the calling thread via `ThreadPool::in_place_scope`, never inside a pool thread, to avoid budget deadlocks with nested band parallelism), checks cancellation between bands and before each file, writes the DDS atomically, re-reads and validates it, appends a manifest record (and a `<name>.dds.json` sidecar with `--sidecar`), and emits `file_done`/`file_skipped`/`file_failed` and `batch_done`.
 
+Suffix aliases (Task 26a, spec §3.7): `plan` checks every alias preset's chain for every sub-type up front (usage error otherwise), canonicalises output names right after `discover` (so `file_discovered` shows the canonical output and alias/canonical collisions become `IN-DUPLICATE`), groups with `group_sets_with`, passes the canonical suffix and the alias to `FileFacts`, and `run` writes the alias preset's id, version and SHA-256 into the manifest `PresetRef` of an aliased file.
+
 - [ ] **Step 1: Write the failing tests**
 
 `crates/engine/tests/api.rs`:
@@ -8472,9 +8951,9 @@ pub fn process_file(job: &ResolvedJob, req: &BatchRequest, preset: &PresetRef, c
 use crate::analyse::analyse;
 use crate::codes::{Code, Warning};
 use crate::config::*;
-use crate::discover::{discover, InputKind};
+use crate::discover::{canonicalise_outputs, discover, InputKind};
 use crate::events::{EventKind, Reporter, Stage};
-use crate::group::{group_sets, split_suffix};
+use crate::group::{group_sets_with, split_suffix_with};
 use crate::load::{load_image, LoadError};
 use crate::manifest::{sha256_file, sha256_json, Manifest, PresetRef, ENGINE_VERSION};
 use crate::overrides::{to_patch, SetOverride};
@@ -8671,6 +9150,13 @@ impl Engine {
             .or_else(|| user_config.as_ref().and_then(|c| c.preset.clone()))
             .unwrap_or_else(|| default_preset_for(req.target).to_string());
         let chain = registry.chain(&preset_id).map_err(|e| usage(e.to_string()))?;
+        // Spec §3.7: every alias preset's chain must build a valid profile for every sub-type.
+        for alias in registry.alias_table().keys() {
+            let (_, pid) = registry.alias_for(alias).expect("alias in table");
+            for st in Subtype::ALL {
+                registry.profile(pid, req.target, st).map_err(|e| usage(format!("preset '{pid}' (suffix alias '{alias}'), sub-type {}: {e}", st.id())))?;
+            }
+        }
         // Spec §8: an invalid preset, config, rule or --set value is a usage error (exit 2) before any work.
         let configs: Vec<&ConfigFile> = user_config.iter().chain(project_config.iter()).collect();
         let rules: Vec<&Rule> = chain.iter().flat_map(|p| p.rules.iter()).chain(configs.iter().flat_map(|c| c.rules.iter())).collect();
@@ -8718,12 +9204,13 @@ impl Engine {
                 return Err(usage(format!("input not found: {}", i.display())));
             }
         }
-        let files = discover(&req.inputs, &req.output_root, req.recursive).map_err(|e| usage(e.to_string()))?;
+        let mut files = discover(&req.inputs, &req.output_root, req.recursive).map_err(|e| usage(e.to_string()))?;
+        canonicalise_outputs(&mut files, registry.alias_table());
         rep.emit(None, None, EventKind::BatchStarted { target: req.target, preset: preset_id.clone(), inputs: files.len() });
         for f in &files {
             rep.emit(None, Some(&f.path), EventKind::FileDiscovered { output: f.output.to_string_lossy().replace('\\', "/") });
         }
-        let (sets, dups) = group_sets(&files);
+        let (sets, dups) = group_sets_with(&files, registry.alias_table());
         let mut skipped = vec![];
         let dup_idx: BTreeSet<usize> = dups.iter().flatten().copied().collect();
         for &i in &dup_idx {
@@ -8762,8 +9249,8 @@ impl Engine {
                         let a = analyse(&img, &info);
                         drop(img);
                         let stem = f.rel.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-                        let suffix = split_suffix(&stem).1;
-                        let facts = FileFacts { input: f, suffix: suffix.as_deref(), set, analysis: &a, info: &info };
+                        let split = split_suffix_with(&stem, registry.alias_table());
+                        let facts = FileFacts { input: f, suffix: split.suffix.as_deref(), alias: split.alias.as_deref(), set, analysis: &a, info: &info };
                         Ok(resolve_file(&ctx, &facts))
                     }
                 }
@@ -8829,10 +9316,10 @@ impl Engine {
         std::fs::create_dir_all(&req.output_root).map_err(|e| EngineError::Fatal(format!("output root: {e}")))?;
         let manifest = Manifest::at(&req.output_root);
         let existing = manifest.load().map_err(|e| EngineError::Fatal(format!("manifest: {e}")))?;
-        let preset = PresetRef {
-            id: plan.preset_id.clone(),
-            version: plan.registry.get(&plan.preset_id).map(|p| p.version.clone()).unwrap_or_default(),
-            sha256: plan.registry.sha256(&plan.preset_id).unwrap_or_default(),
+        let preset_ref = |id: &str| PresetRef {
+            id: id.to_string(),
+            version: plan.registry.get(id).map(|p| p.version.clone()).unwrap_or_default(),
+            sha256: plan.registry.sha256(id).unwrap_or_default(),
         };
         let mut todo = vec![];
         for job in ready {
@@ -8880,7 +9367,9 @@ impl Engine {
                 }
                 let est = image::image_dimensions(&job.input).map(|(w, h)| w as u64 * h as u64 * 16 * 134 / 100 * 3).unwrap_or(0);
                 budget.acquire(est);
-                let (summary_m, budget, manifest, preset) = (&summary_m, &budget, &manifest, &preset);
+                // Spec §3.7: an aliased file records its alias preset.
+                let preset = preset_ref(job.suffix_alias.as_ref().map_or(plan.preset_id.as_str(), |a| a.preset.as_str()));
+                let (summary_m, budget, manifest) = (&summary_m, &budget, &manifest);
                 scope.spawn(move |_| {
                     if cancel.is_cancelled() {
                         budget.release(est);
@@ -8888,7 +9377,7 @@ impl Engine {
                         return;
                     }
                     rep.emit(Some(&job.set_key), Some(&job.input), EventKind::FileStarted);
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process_file(job, req, preset, cancel, rep)));
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process_file(job, req, &preset, cancel, rep)));
                     budget.release(est);
                     let mut s = summary_m.lock().unwrap();
                     match r {
@@ -9123,6 +9612,8 @@ git commit -m "test(bench): engine-path parity and full-chain exact-opaque gates
 
 Fixtures are generated in the test (CC0 by construction, nothing committed); each case runs the full `Engine::plan` + `Engine::run` and asserts format, tag, header form, mip count, alpha policy outcome and warning codes. Byte hashes are not asserted (they belong to the `pinned-isa` CI job, milestone M7).
 
+Suffix aliases (Task 26a): add one case that writes a preset file `ultra.toml` (`base = "cs-quality"`, `[suffix_aliases] rmaosultrahigh = "rmaos"`, `[subtypes.rmaos] mips = { levels = 1 }`) to the temp dir, passes it in `BatchRequest.preset_files`, converts `textures/armor/iron_rmaosultrahigh.png` with `--accept-suggestions high`, and asserts that `iron_rmaos.dds` exists with 1 mip, no `iron_rmaosultrahigh.dds` is written, and the manifest record has `preset.id == "ultra"` and `provenance["mips.levels"] == "preset:ultra"`.
+
 **Files:**
 - Test: `crates/engine/tests/golden.rs`
 
@@ -9342,7 +9833,7 @@ git commit -m "test(engine): golden cases per sub-type x target with synthetic f
 ---
 # Phase 2 — CLI MVP
 
-Entry: Phase 1 exit (Tasks 18–39 green, Task 38 gates recorded). Exit (Task 45): every gate green in one run, the CLI converts and audits a real mod folder, and the owner has the S1/S2/S6/S8 asset pack (Task 46).
+Entry: Phase 1 exit (Tasks 18–39 and 26a green, Task 38 gates recorded). Exit (Task 45): every gate green in one run, the CLI converts and audits a real mod folder, and the owner has the S1/S2/S6/S8 asset pack (Task 46).
 
 ### Task 40: `sdc` CLI skeleton — arguments, human/JSON output, exit codes
 
@@ -9355,9 +9846,9 @@ Entry: Phase 1 exit (Tasks 18–39 green, Task 38 gates recorded). Exit (Task 45
 - Consumes: `engine::api::*`, `engine::events::*`.
 - Produces:
   - `args::Cli { cmd: Command }`; `args::Command { Convert(ConvertArgs), Inspect(InspectArgs), Validate(ValidateArgs), Presets(PresetsCmd), Encoders }`
-  - `args::BatchArgs { inputs: Vec<PathBuf>, target: TargetArg, preset: Option<String>, config: Option<PathBuf>, set: Vec<String>, accept_suggestions: AcceptArg, allow: Vec<String>, recursive: bool, json: bool }`
+  - `args::BatchArgs { inputs: Vec<PathBuf>, target: TargetArg, preset: Option<String>, preset_file: Vec<PathBuf>, config: Option<PathBuf>, set: Vec<String>, accept_suggestions: AcceptArg, allow: Vec<String>, recursive: bool, json: bool }`
   - `args::ConvertArgs { batch: BatchArgs, output: Option<PathBuf>, jobs: usize, mem_budget: Option<String>, on_existing: OnExistingArg, dry_run: bool, sidecar: bool, nvtt: Option<PathBuf>, bc1_decoder: Bc1Arg }`
-  - `args::build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, String>` (parses `--set`, `--allow`, `--preset <id|file.toml>`, user config `%APPDATA%\sdc\config.toml`)
+  - `args::build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, String>` (parses `--set`, `--allow`, `--preset <id|file.toml>`, `--preset-file <file.toml>` (repeatable; loaded, not selected — how a preset declaring suffix aliases (Task 26a, spec §3.7) is loaded beside the batch preset), user config `%APPDATA%\sdc\config.toml`)
   - `args::parse_bytes(s: &str) -> Result<u64, String>` (`"8G"`, `"512M"`, plain bytes)
   - `human::HumanSink` (`EventSink` writing concise lines to stderr); `human::TeeSink(Vec<Arc<dyn EventSink>>)`
   - exit codes: clap usage errors 2; `EngineError::exit_code()`; `BatchSummary::exit_code()`
@@ -9535,6 +10026,9 @@ pub struct BatchArgs {
     /// Preset id, or a path to a preset .toml file.
     #[arg(long)]
     pub preset: Option<String>,
+    /// Load a preset .toml without selecting it, e.g. one declaring suffix aliases (repeatable).
+    #[arg(long = "preset-file")]
+    pub preset_file: Vec<PathBuf>,
     /// Project config (default: sdc.toml in the first input folder).
     #[arg(long)]
     pub config: Option<PathBuf>,
@@ -9649,6 +10143,7 @@ pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, Str
         Some(p) => r.preset = Some(p.clone()),
         None => {}
     }
+    r.preset_files.extend(b.preset_file.iter().cloned());
     r.project_config = b.config.clone();
     r.user_config = std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("config.toml"));
     r.overrides = b.set.iter().map(|s| parse_set(s)).collect::<Result<_, _>>()?;
@@ -9827,6 +10322,8 @@ git commit -m "feat(cli): sdc convert with JSON Lines on stdout, human log on st
 
 This task proves spec §8's precedence (built-in → preset → user config → project config → rules → accepted suggestions → `--set`) and the batch options through the real binary.
 
+Suffix aliases (Task 26a): add one test that writes `ultra.toml` (`base = "cs-quality"`, `[suffix_aliases] wallultra = "n"`), runs `sdc convert <in> -o <out> --preset-file ultra.toml --accept-suggestions high` on a `wall_wallultra.png` normal map, and asserts `wall_n.dds` is written and `wall_wallultra.dds` is not.
+
 - [ ] **Step 1: Write the tests**
 
 `crates/cli/tests/cli_convert.rs`:
@@ -9940,6 +10437,8 @@ git commit -m "test(cli): config precedence, scoped overrides, dry-run, if-chang
 `inspect` = a dry-run plan (no output root needed; a temp root under `%TEMP%` is used for path mapping) that prints, per image, sub-type with confidence, format/tag/alpha/status and warnings; for `.dds` inputs it prints the header (format, size, mips, header kind, cubemap) and per-mip decoded-alpha statistics. With `--json`, it prints `file_planned` events (images) and one JSON object per DDS (`{"kind":"dds_info", …}`). Exit 0 (inspection never fails unless a usage error).
 
 `validate` builds a profile per file from `--subtype` (or the suffix suggestion, else `generic_data`) under `--target`, but takes **format and tag from the file itself** (so third-party files are judged on header rules and alpha/`_m` rules, not on sdc's preferred format), and runs `engine::validate::validate` without encoder input. Exit 4 if any file fails validation, 1 if a file cannot be read, else 0.
+
+Suffix aliases (Task 26a): `inspect` goes through `Engine::plan`, so its `file_planned` output carries `suffix_alias` and canonical output names. `validate` loads no user presets, so it uses the alias-free `split_suffix`; judge an aliased DDS with `--subtype`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -10147,6 +10646,8 @@ git commit -m "feat(cli): inspect (plans and DDS headers/mip alpha) and validate
 **Interfaces:**
 - Produces: `engine::schemas::SchemaKind { All, Profile, Preset, Config, Event, Manifest }` (`clap::ValueEnum`); `engine::schemas::schema_json(kind: SchemaKind) -> String` (pretty JSON + trailing newline); `engine::schemas::write_all(dir: &Path) -> io::Result<()>`; CLI `sdc presets list [--json]`, `sdc presets show <id> [--subtype <id>] [--target <t>]`, `sdc presets schema <kind> [--out <dir>]`, `sdc encoders`.
 
+Suffix aliases (Task 26a): `presets list --json` adds `"suffix_aliases": p.suffix_aliases` to each object and the human line appends `aliases: <alias>→<canonical>, …` when non-empty; `presets show` prints the preset's alias table before the profiles. Built-ins declare none, so this shows only for a loaded user preset (`presets` verbs gain `--preset-file` in M6). `schema/preset.schema.json` gains `suffix_aliases` automatically.
+
 - [ ] **Step 1: Write the failing drift test**
 
 `crates/engine/tests/schemas.rs`:
@@ -10239,7 +10740,7 @@ pub fn presets(cmd: PresetsCmd) -> Result<i32, EngineError> {
         PresetsCmd::List { json } => {
             for p in reg.selectable() {
                 if json {
-                    println!("{}", serde_json::json!({"id": p.id, "version": p.version, "target": p.target, "description": p.description}));
+                    println!("{}", serde_json::json!({"id": p.id, "version": p.version, "target": p.target, "description": p.description, "suffix_aliases": p.suffix_aliases}));
                 } else {
                     println!("{:<18} {:<8} {:<8} {}", p.id, p.version, p.target.map(|t| format!("{t:?}").to_lowercase()).unwrap_or_default(), p.description);
                 }
@@ -10629,7 +11130,7 @@ Each milestone gets its own `writing-plans` document when its entry criteria are
 
 ### M6 — Presets completion and remaining inputs
 
-- **Scope:** built-ins "CS – Compact", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only); `sdc presets diff/export/validate`; schema migrations for older `schema_version`; user rule tables; inputs OpenEXR, Radiance HDR, BMP, JPEG, 32-bit float TIFF (`LOSS-CLAMP-HDR`); DDS re-encode opt-in (`--set file:<glob>.reencode=true`, `LOSS-REENCODE`); NPOT resize policy (`resize=pot-down`, polyphase in the content's domain); tent/Mitchell/Kaiser filters and `mips.edge`; ICC-profile info event; progress bars.
+- **Scope:** built-ins "CS – Compact", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only); `sdc presets diff/export/validate`; `--preset-file` for the `presets` verbs (user presets and their suffix aliases, Task 26a); schema migrations for older `schema_version`; user rule tables; inputs OpenEXR, Radiance HDR, BMP, JPEG, 32-bit float TIFF (`LOSS-CLAMP-HDR`); DDS re-encode opt-in (`--set file:<glob>.reencode=true`, `LOSS-REENCODE`); NPOT resize policy (`resize=pot-down`, polyphase in the content's domain); tent/Mitchell/Kaiser filters and `mips.edge`; ICC-profile info event; progress bars.
 - **Entry:** Phase 2 exit.
 - **Exit:** preset tests per target; golden cases for each new input type; preset changelog entries.
 
@@ -10653,6 +11154,6 @@ Spec §13 future extensions (PGPatcher PBR JSON generator, RDO, reserved-header 
 
 # Self-review notes (writing-plans checklist)
 
-**Spec coverage (Phases 0–2):** §1 inputs PNG/TGA/TIFF 8/16 (Task 22; others M6), outputs BC1/3/4/5/6H/7 (Tasks 5–7, 32–33), mirror tree + manifest (Tasks 21, 36–37); §2 workspace, static CRT, no ISPC at build (Tasks 2–4), CI (M7); §3.1–3.2 config model (Task 19), §3.3 alpha policies + exact opaque (Tasks 13–14, 27–30, 32, 35), §3.4 colour fields (Tasks 19, 26, 28, 31), §3.5 presets (Task 20; Compact/Fast preview M6), §3.6 manifest/sidecar (Task 36–37); §4 sub-type tables (Task 20), availability (Task 26), suggestions (Task 24); §5 stages (Tasks 21–37); §6 grouping (Task 21), bake (M4); §7 vendoring, licences, threading, effort levels (Tasks 3–7, 32), NVTT (S7 Task 16, M5), scalar fallback (S4 Task 15); §8 CLI verbs/options/exit codes/edge cases (Tasks 40–44); `presets diff/export/validate` (M6); §9 GUI (M3); §10 codes (Task 18; triggers in Tasks 26, 35, 37); §11.1 golden (Task 39), §11.2 gates (Tasks 9–11, 13–14, 38, 45), §11.3–11.5 (M7, Task 45 spot check); §12 spikes (Tasks 9, 12–17, 46).
+**Spec coverage (Phases 0–2):** §1 inputs PNG/TGA/TIFF 8/16 (Task 22; others M6), outputs BC1/3/4/5/6H/7 (Tasks 5–7, 32–33), mirror tree + manifest (Tasks 21, 36–37); §2 workspace, static CRT, no ISPC at build (Tasks 2–4), CI (M7); §3.1–3.2 config model (Task 19), §3.3 alpha policies + exact opaque (Tasks 13–14, 27–30, 32, 35), §3.4 colour fields (Tasks 19, 26, 28, 31), §3.5 presets (Task 20; Compact/Fast preview M6), §3.7 preset suffix aliases (Task 26a; surfaced in Tasks 37, 39–43), §3.6 manifest/sidecar (Task 36–37); §4 sub-type tables (Task 20), availability (Task 26), suggestions (Task 24); §5 stages (Tasks 21–37); §6 grouping (Task 21), bake (M4); §7 vendoring, licences, threading, effort levels (Tasks 3–7, 32), NVTT (S7 Task 16, M5), scalar fallback (S4 Task 15); §8 CLI verbs/options/exit codes/edge cases (Tasks 40–44); `presets diff/export/validate` (M6); §9 GUI (M3); §10 codes (Task 18; triggers in Tasks 26, 35, 37); §11.1 golden (Task 39), §11.2 gates (Tasks 9–11, 13–14, 38, 45), §11.3–11.5 (M7, Task 45 spot check); §12 spikes (Tasks 9, 12–17, 46).
 
 **Decisions this plan makes where the spec is silent** (all called out in the report): `header`/`mips.coverage` gain `auto`; `encoder.rgbcx_level` field; `mips.edge` deferred; codes `VAL-MIP-ERROR` and `CFG-INVALID`; coverage check only on levels ≥ 256 texels; analysis-derived `remove` applies without `--accept-suggestions`; unresolved outranks blocked in job status; up-to-date files do not count as "skipped" for exit code 1; default output root `./sdc-out`; validation PSNR floor 30 dB; status of `_e` suffix = no suggestion; an invalid preset/config/rule value and an unscoped `--set` that is unavailable under the target are usage errors (exit 2) found in `plan`; MVP renormalises `_n` without the M4 variance bake.

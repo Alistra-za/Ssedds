@@ -11,7 +11,7 @@
 
 **Tags.** Every substantive statement carries one tag, as in the plan. **[Requirement]**: decided by the owner (plan requirements or `DECISIONS.md`). **[Finding]**: backed by research notes, local benchmarks or a fetched source, cited. **[Proposal]**: a design choice made here. **[Open]**: undecided; the shipped default and the trigger that changes it are stated, and the item is listed in §14.
 
-**Citations.** [PLAN] `F:/ai/dds/reports/Skyrim DDS converter project plan.md`; [D] `F:/ai/dds/converter/docs/DECISIONS.md` (answers [D#n], notes [D-A], [D-B], [D-C]); [B1] `reports/BC7 encoder benchmark results.md`; [B2] `reports/BC4 BC5 BC6H and BC7 data benchmark.md`; [MIP] `reports/Mipmap filters and alpha coverage.md`; [SC], [EI], [LF] the notes `skyrim_conventions.md`, `encoder_integration.md`, `language_frameworks.md` in `research_notes/Skyrim DDS converter project plan/`; [TPM] jiayev/TruePBR-Manager (README, `SPEC.md` §3.10, §6–8, `src/core/PBRTextureSet.cpp`, `master` branch, fetched 2026-10-08).
+**Citations.** [PLAN] `F:/ai/dds/reports/Skyrim DDS converter project plan.md`; [D] `F:/ai/dds/converter/docs/DECISIONS.md` (answers [D#n], notes [D-A], [D-B], [D-C], [D-G]); [B1] `reports/BC7 encoder benchmark results.md`; [B2] `reports/BC4 BC5 BC6H and BC7 data benchmark.md`; [MIP] `reports/Mipmap filters and alpha coverage.md`; [SC], [EI], [LF] the notes `skyrim_conventions.md`, `encoder_integration.md`, `language_frameworks.md` in `research_notes/Skyrim DDS converter project plan/`; [TPM] jiayev/TruePBR-Manager (README, `SPEC.md` §3.10, §6–8, `src/core/PBRTextureSet.cpp`, `master` branch, fetched 2026-10-08).
 
 **Changes from the plan.** The owner's answers override or extend the plan in seven places. (1) The tool serves texture artists converting source images; it is not a DDS→DDS game-folder fixer. (2) Alpha *Remove* drops the channel before mips [D#8]. Because bc7e can still decode such blocks as 254 [D-A, D-C], the plan's "constrained bc7e" option becomes a per-profile *exact opaque alpha* flag backed by a small bc7e patch, on by default for `_m` only (global default pending S5), with byte-patch and NVTT fallbacks and smallest-mip validation as proof (§3.3, §5.6, §5.8). (3) The ≤128 px BC7 fallback is dropped [D#7]. (4) BC4/BC5 headers, `_SRGB` under vanilla, `_g`/`_f` colour space and BC6H under CS are decided [D#2–5]. (5) Normal mips are renormalised, with a variance bake into roughness when the set has an `_rmaos` or `_rfaos` [D#6, D-B]. (6) `_rfaos` is a real CS map (Roughness, Fuzz, AO, Specular) for advanced skin [D-B]. (7) Windows only [D#12].
 
@@ -159,12 +159,31 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `target` | Target the preset serves |
 | `subtypes.<id>` | Overrides of any §3.2 field |
 | `rules[]` | `{ match: { glob, suffix, set_has, content predicate }, subtype, overrides }`, first match wins |
+| `suffix_aliases` | `alias = "canonical"` table: exact filename suffixes bound to a canonical suffix and to this preset (§3.7) |
 
 Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 wherever alpha is removed), "CPM – Quality", "Vanilla – Quality", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only). **Every field is inspectable** (GUI inspector, `sdc presets show`, both with provenance) and **overridable per field** at preset, rule, file or command-line level. Changing a built-in default bumps the preset version and the changelog, because CS behaviour shifts between releases [SC §4].
 
 ### 3.6 Reproducibility
 
 **[Requirement]** Preset hash and encoder versions go to a sidecar; a reserved-header hash is deferred [D#15]. **[Proposal]** Each output gets a sidecar record: engine version and commit; encoder names, vendored commits (bc7enc_rdo `b943862`, ISPC TC `79ddbc9`), the bc7e patch id and ISPC 1.31.0; the ISA the ISPC dispatcher selected; preset id, version and SHA-256 of its canonical form; the resolved profile with provenance; the source SHA-256; validation results. By default records go to one batch manifest, `<output_root>/_sdc/manifest.jsonl`, which keeps mod folders clean; a per-file `<name>.dds.json` is optional. Reserved header fields stay zero. **[Finding]** ISPC multi-target dispatch can change bits across CPUs [LF §9]. **[Proposal]** Guarantee: same input, preset, build and dispatched ISA give byte-identical output, enforced in CI with `pinned-isa` (§2).
+
+### 3.7 Preset suffix aliases
+
+**[Requirement]** A preset may declare exact suffix aliases that bind a filename suffix to a canonical sub-type suffix and to that preset's settings, e.g. `rmaosultrahigh → rmaos` [D-G]. Matching is exact, with no separator: `iron_rmaosultrahigh.png` matches only an alias `rmaosultrahigh`, and declaring it does not make `_nultrahigh` match; each alias is declared individually. The file is grouped and written under its canonical suffix (`iron_rmaosultrahigh.png` → set `iron`, output `iron_rmaos.dds`). The alias's preset may define any preset field and is layered like any preset; `--set` and per-file overrides still win. Provenance records the alias. A source whose alias and canonical forms collide on one output (`iron_rmaos.png` and `iron_rmaosultrahigh.png`) is `IN-DUPLICATE`.
+
+**[Proposal]** The details:
+
+| Topic | Rule |
+|---|---|
+| Field | `suffix_aliases` in a preset file, a table `alias = "canonical"` (e.g. `[suffix_aliases]` with `rmaosultrahigh = "rmaos"`). Config files (`config.toml`, `sdc.toml`) declare none. Built-in presets declare none; aliases come from user and project presets. |
+| Validity | An alias is lower-case ASCII letters and digits (`[a-z0-9]+`, no `_`) and must not equal a §6.1 suffix; its value must be a §6.1 suffix without the `_`. An alias is unique across all loaded presets. A second preset declaring it, or any invalid entry, is a config error (`CFG-INVALID`, exit 2, §8) and that preset is not loaded. Reloading a preset under the same id replaces its aliases. |
+| Activation | The aliases of every loaded preset are active, whether or not it is the batch preset. `--preset <file>` loads and selects a preset; `--preset-file <file>` (repeatable) loads one without selecting it (§8). |
+| Matching | The stem segment after the last `_` is looked up, case-insensitively, in the alias table before the §6.1 list is tried; the segment must equal an alias exactly, and a base name must precede the `_`. Because aliases contain no `_` and never equal a §6.1 suffix, a stem has at most one reading. |
+| Grouping and naming | Everywhere after Discover, the file counts as having its canonical suffix: set key, the set's suffix list (PBR detection, `_s` disambiguation, the bake), rule `suffix` and `set_has` matches, and the suggester. The output is `<base>_<canonical>.dds` in the mirrored folder. Rule globs still match the source path and name. |
+| Layering | For an aliased file, the alias preset's inheritance chain is the preset chain in the §3.5/§8 order: `defaults` tables base → child, then `subtypes.<id>` tables base → child, then user config, project config, rule matches (the alias chain's rules are that file's preset rules), analysis facts and `--set`. An alias preset therefore sets `base` to the preset it refines (e.g. `base = "cs-quality"`); a batch preset that is not in its chain does not apply to the file. |
+| Provenance | Fields set by the alias chain carry `preset:<alias preset id>`. The `ResolvedJob` records `suffix_alias = { alias, canonical, preset }`; each suggestion's reason begins `suffix alias _<alias> → _<canonical> (preset <id>)`; the manifest's preset reference (id, version, SHA-256, §3.6) names the alias preset. |
+| Duplicates | Output names are canonicalised before grouping, so an alias source and a canonical source (or two aliases of one canonical suffix) on the same base collide on one output and are both `IN-DUPLICATE` (§6.1). |
+| Confidence | An alias match is an explicit user declaration of the suffix, so the top suggestion for the canonical suffix is raised to high confidence. `_s` is the exception: its four readings (§4.3 item 2) keep their ranking, and the alias preset adds a rule naming the sub-type to fix one. As for any high-confidence suggestion, the file converts only with `--accept-suggestions high` or when a rule or `--set` decides. |
 
 ---
 
@@ -242,6 +261,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 3. **`_m`** → `complex_material` if alpha is not constant 255, else `envmask`; always `envmask` under `vanilla`.
 4. **`_rfaos`** → `rfaos`, high confidence [D-B]; green is a fuzz mask, not metalness.
 5. Analysis can raise or lower confidence but never overrides an explicit choice; contradictions (an `_n` with constant alpha in a non-PBR set, a `pbr` path with a vanilla `_s`) are reported.
+6. **Suffix aliases** (§3.7) are read as their canonical suffix; an alias match raises the top suggestion to high confidence, except for `_s` [D-G].
 
 ---
 
@@ -363,7 +383,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 ### 6.1 Grouping
 
-**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
+**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
 
 ### 6.2 Variance bake into roughness
 
@@ -439,13 +459,13 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | `sdc presets list / show / diff / export / validate / schema` | Inspect, compare, export, check presets; print schemas | `export` only |
 | `sdc encoders` | Built-in encoder versions; NVTT detection | No |
 
-Options: `--target`, `--preset <id|file>`, `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`.
+Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; loads a preset, e.g. one declaring suffix aliases, without selecting it, §3.7), `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`.
 
 **Batch behaviour.** **[Proposal]** Files are grouped, resolved, then scheduled in parallel under the memory budget. A file converts only when every field is decided by an explicit rule, flag or a high-confidence suggestion accepted with `--accept-suggestions high`; diffuse alpha meaning is never high confidence. Unresolved files are skipped and listed. `--dry-run` stops after Resolve and emits `file_planned` events.
 
 **Streams and exit codes.** **[Proposal]** Human output on stderr; with `--json`, stdout carries only JSON Lines. The highest-precedence applicable code is returned: **3** fatal (output-root I/O, out of memory, internal error) > **2** usage or config error (bad flag, invalid preset or config, batch-wide unavailable combination) > **1** partial (any file skipped or failed) > **4** completed but validation failed on an output > **0** all converted and validated.
 
-**Config precedence.** **[Proposal]** Lowest to highest: built-in defaults → preset and its `base` chain → user config `%APPDATA%\sdc\config.toml` → project config (`sdc.toml` in the input root, or `--config`) → preset rule matches → suggestions accepted by flag → `--set` overrides (GUI per-file edits sit here). Presets and config are TOML validated against the schema; machine outputs are JSON.
+**Config precedence.** **[Proposal]** Lowest to highest: built-in defaults → preset and its `base` chain (for a file matched by a suffix alias, the alias preset's chain, §3.7) → user config `%APPDATA%\sdc\config.toml` → project config (`sdc.toml` in the input root, or `--config`) → preset rule matches → suggestions accepted by flag → `--set` overrides (GUI per-file edits sit here). Presets and config are TOML validated against the schema; machine outputs are JSON.
 
 | Edge case | Behaviour |
 |---|---|
