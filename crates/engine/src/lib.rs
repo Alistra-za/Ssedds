@@ -3,6 +3,7 @@ pub mod analyse;
 pub mod codes;
 pub mod config;
 pub mod coverage;
+pub mod dds;
 pub mod dilate;
 pub mod discover;
 pub mod encode;
