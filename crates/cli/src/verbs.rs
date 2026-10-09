@@ -8,19 +8,19 @@ use encoders_sys::Bc1Model;
 use engine::api::{Engine, EngineError};
 use engine::codes::{Code, Warning};
 use engine::config::*;
-use engine::dds::{DdsFile, DdsPixelFormat, check_header, read_dds};
-use engine::decode::{Decoded, decode_level};
-use engine::discover::{InputKind, discover, game_path};
+use engine::dds::{check_header, read_dds, DdsFile, DdsPixelFormat};
+use engine::decode::{decode_level, Decoded};
+use engine::discover::{discover, game_path, InputKind};
 use engine::events::{
-    EngineEvent, EventKind, EventSink, JsonLinesSink, Reporter, VecSink, new_batch_id,
+    new_batch_id, EngineEvent, EventKind, EventSink, JsonLinesSink, Reporter, VecSink,
 };
 use engine::group::split_suffix_with;
-use engine::policy::{Availability, availability};
-use engine::presets::{AlphaContent, default_preset_for};
-use engine::suggest::{SuggestContext, suggest};
-use engine::validate::alpha::{AlphaStats, alpha_stats};
-use engine::validate::{ValidationReport, ValidationSummary, validate};
-use serde_json::{Value, json};
+use engine::policy::{availability, Availability};
+use engine::presets::{default_preset_for, AlphaContent};
+use engine::suggest::{suggest, SuggestContext};
+use engine::validate::alpha::{alpha_stats, AlphaStats};
+use engine::validate::{validate, ValidationReport, ValidationSummary};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
