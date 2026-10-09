@@ -32,7 +32,16 @@ pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
             dim: w.max(h),
         });
     }
-    let img = image::open(path).map_err(err)?;
+    // The explicit MAX_DIM header check bounds the size, so the crate's default
+    // 512 MiB allocation cap (which rejects valid 16384 px images) is lifted.
+    let mut reader = image::ImageReader::open(path)
+        .and_then(image::ImageReader::with_guessed_format)
+        .map_err(|e| LoadError::Decode {
+            path: path.to_path_buf(),
+            msg: e.to_string(),
+        })?;
+    reader.no_limits();
+    let img = reader.decode().map_err(err)?;
     let ct = img.color();
     let channels = ct.channel_count();
     let info = SourceInfo {
@@ -44,8 +53,8 @@ pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
     let px = img.to_rgba32f().pixels().map(|p| p.0).collect();
     Ok((
         Rgba32F {
-            width: w,
-            height: h,
+            width: img.width(),
+            height: img.height(),
             px,
         },
         info,
