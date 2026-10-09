@@ -591,6 +591,8 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
         }
         "bc6h" => vec![bc6h_veryslow(root)?],
         "alpha-scan" => vec![alpha_scan(root)?],
+        "engine-parity" => vec![crate::engine_gates::engine_parity(root)?],
+        "full-chain" => vec![crate::engine_gates::full_chain_exact_opaque(root)?],
         "exact-opaque-bytepatch" => vec![exact_opaque(root, ExactMode::BytePatch)?],
         "exact-opaque-native" => vec![
             exact_opaque(root, ExactMode::Native)?,

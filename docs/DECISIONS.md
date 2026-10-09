@@ -108,7 +108,9 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
   Why: with both p-bits forced to 1, mode-6 RGB endpoints can only take odd 8-bit values, i.e. 7-bit precision; bc7e re-fits under that constraint
   (and still falls back to modes 1–5 where they win), so the loss is the constraint itself, not a missed re-fit. Near-lossless and dark gradients lose most.
 - Byte-patch fallback: mean dRGB rgb_real −2.696, rgb_grad −8.410, stray_real −1.015, stray_grad −4.899 dB. The native patch is better on every image.
-- Full-chain (every mip) part of the gate: Task 38.
+- Full chain (Task 38, `cargo run --release -p sdc-bench -- gate full-chain`, per-level 254 shares in target/bench/s5-full-chain.txt): flag off >= 254 at every mip down to 1x1 on rgb_real, rgb_grad, stray_real, stray_grad (18/18 images; 254 share at 1x1: 0% on all, but 100% at 2x2 on Metal049A, 4x2 on PaintedPlaster017 and 4x4 on subtle_dark);
+  flag on and BC1 (Ideal and bcdec decoders): 255 at every mip incl. 1x1 on all 18 images; mean dRGB at mip 0 (engine path == S5 codec path, RGB bit-identical): rgb_real -0.515, rgb_grad -1.020, stray_real -0.078, stray_grad -0.382 dB (the 0.05 dB RGB-cost limit stays unmet, see above; recorded, not gated).
+- Engine path (load -> preprocess -> quantise -> encode) reproduces the bench bc7e u5 mip 0 bytes: 39/39 BC7 bench images (generic_data, alpha kept) and 14/14 on rgb_real/rgb_grad under `remove`; the quantised level equals the PNG's 8-bit RGBA on 53/53 (`gate engine-parity`).
 - Shipped mechanism: native patch when `alpha.exact_opaque` is on (proposed: better than the byte patch on every image; owner confirms at Task 17). Open item §14 #5: dRGB <= 0.05 dB on all opaque sets → do not propose exact_opaque on everywhere (owner decides; Task 17).
   Full per-image output: `cargo run --release -p sdc-bench -- gate exact-opaque-native`.
 
