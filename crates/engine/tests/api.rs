@@ -744,6 +744,41 @@ fn a_file_panicking_while_planning_fails_alone() {
     assert_eq!(kinds(&ev, "batch_done"), 1);
 }
 
+/// Final review I7: decisions made at plan time apply only to the file that was analysed. A source rewritten
+/// between `plan` and `run` fails at Load ("source changed since planning"); the other files still convert.
+#[test]
+fn a_source_changed_after_planning_fails_at_load() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "drift");
+    let e = Engine::new().unwrap();
+    let plan = e
+        .plan(request(d.path()), &rep, &CancelToken::default())
+        .unwrap();
+    // Re-exported with real alpha and another size, so the byte size changes whatever the timestamp resolution.
+    ImageBuffer::from_fn(32, 32, |x, _| Rgba([x as u8 * 8, 0, 0, x as u8 * 8]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let s = e.run(plan, &rep, &CancelToken::default()).unwrap();
+    let ev = sink.take();
+    assert_eq!((s.converted, s.failed), (1, 1), "{ev:#?}");
+    assert_eq!(s.exit_code(), 1);
+    assert!(
+        ev.iter().any(
+            |e| e.path.as_deref().is_some_and(|p| p.ends_with("iron.png"))
+                && matches!(
+                    &e.kind,
+                    EventKind::FileFailed { stage: Stage::Load, error }
+                        if error.contains("source changed since planning; re-run")
+                )
+        ),
+        "{ev:#?}"
+    );
+    assert!(!d.path().join("out/armor/iron.dds").exists());
+    assert!(d.path().join("out/armor/iron_n.dds").exists());
+}
+
 #[test]
 fn nonfinite_source_samples_raise_a_warning() {
     let d = tempfile::tempdir().unwrap();

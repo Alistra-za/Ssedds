@@ -21,7 +21,7 @@ use crate::manifest::{
 };
 use crate::mips::build_chain;
 use crate::ops::preprocess;
-use crate::policy::ResolvedJob;
+use crate::policy::{ResolvedJob, SourceStamp};
 use crate::quantize::{to_encoder_input, EncoderInput};
 use crate::validate::{validate, ValidationInput, ValidationReport};
 use std::cell::Cell;
@@ -141,6 +141,14 @@ pub fn process_file(
         }
     };
 
+    // Final review I7: the plan's decisions (alpha policy, sub-type facts, ...) hold only for the file it analysed.
+    if let Some(planned) = job.source {
+        if SourceStamp::of(&job.input) != Some(planned) {
+            return Err(fail(Stage::Load)(
+                "source changed since planning; re-run".into(),
+            ));
+        }
+    }
     let source_sha256 = sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
     let (img, _) = load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
     stop()?;

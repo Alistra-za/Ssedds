@@ -585,6 +585,8 @@ impl Engine {
                 panic_while_planning_for_test(&f.path, st);
             };
             enter(Stage::Load);
+            // Taken before the read, so a change made while it is loaded is seen as a change too.
+            let source = SourceStamp::of(&f.path);
             let (img, info) = load_image(&f.path)?;
             enter(Stage::Analyse);
             let a = analyse(&img, &info);
@@ -608,6 +610,7 @@ impl Engine {
             };
             let mut job = resolve_file(&ctx, &facts);
             job.provenance.insert("target".into(), target_src.clone());
+            job.source = source;
             Ok(job)
         };
         let pool = thread_pool(req.jobs)?;
@@ -1269,6 +1272,7 @@ mod tests {
             warnings: vec![],
             status: JobStatus::Ready,
             suffix_alias: None,
+            source: None,
         };
         let enc = EncoderVersions::current();
         let entry_for = |job: &ResolvedJob| ManifestEntry {

@@ -598,6 +598,36 @@ pub struct ResolvedJob {
     /// The suffix alias this file matched (spec §3.7); its preset chain resolved the profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suffix_alias: Option<AliasUse>,
+    /// The source's size and modification time when `Engine::plan` read it (final review I7). `run` converts the
+    /// file only while they still match; `None` (a job not made by `plan`) is not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceStamp>,
+}
+
+/// A source file's size and modification time, to tell whether it changed between planning and conversion.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SourceStamp {
+    pub size: u64,
+    /// Nanoseconds since the Unix epoch.
+    pub mtime_ns: u64,
+}
+
+impl SourceStamp {
+    /// The stamp of `path` now; `None` when it cannot be read (the file is gone or has no usable timestamp).
+    pub fn of(path: &std::path::Path) -> Option<SourceStamp> {
+        let m = std::fs::metadata(path).ok()?;
+        let since = m
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        Some(SourceStamp {
+            size: m.len(),
+            mtime_ns: u64::try_from(since.as_nanos()).unwrap_or(u64::MAX),
+        })
+    }
 }
 
 /// Formats that store alpha in v1. BC1 is opaque only (spec §3.3, DECISIONS Note F), although
@@ -978,6 +1008,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
             .with_data(json!({ "role": role, "term": term }))],
         status: JobStatus::PackingInput { role },
         suffix_alias: None,
+        source: None,
     }
 }
 
@@ -1049,6 +1080,7 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
                     codes: vec![Code::CfgInvalid],
                 },
                 suffix_alias,
+                source: None,
             };
         }
     };
@@ -1142,5 +1174,6 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         warnings,
         status,
         suffix_alias,
+        source: None,
     }
 }
