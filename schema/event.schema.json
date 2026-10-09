@@ -91,6 +91,7 @@
         "IN-GREEN-UNSTATED",
         "IN-DECODE",
         "IN-NONFINITE",
+        "IN-FLOAT-LDR",
         "OUT-UNKNOWN-EXISTING"
       ],
       "type": "string"

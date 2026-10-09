@@ -757,6 +757,8 @@ fn nonfinite_source_samples_raise_a_warning() {
         .unwrap();
     let mut req = BatchRequest::new(vec![t], d.path().join("out"), Target::Cs);
     req.overrides = vec![parse_set("subtype=diffuse").unwrap()];
+    // A float source to BC7 is held by IN-FLOAT-LDR until acknowledged (final review I4).
+    req.allow = [Code::InFloatLdr].into();
     let (s, ev) = run(req);
     assert_eq!(s.converted, 1, "{ev:#?}");
     let w = ev

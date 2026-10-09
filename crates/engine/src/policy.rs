@@ -821,6 +821,30 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             ),
         );
     }
+    // Final review I4, an interim guard until the M6 source-transfer split: a float source's transfer (linear or
+    // sRGB-encoded) is unknown, and an LDR format would read its stored values as if they were gamma-encoded, so
+    // it is held until acknowledged. Values outside [0, 1] are clamped by Quantise.
+    if f.info.is_float && !bc6h {
+        add(
+            InFloatLdr,
+            format!(
+                "32-bit float source written to {}: transfer handling lands in M6; acknowledge with --allow IN-FLOAT-LDR to convert as stored values",
+                format!("{:?}", p.format).to_uppercase()
+            ),
+        );
+        let channels = if f.info.has_alpha { 4 } else { 3 };
+        let (lo, hi) = a.channels[..channels]
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), c| {
+                (lo.min(c.min), hi.max(c.max))
+            });
+        if lo < 0.0 || hi > 1.0 {
+            add(
+                LossClampHdr,
+                format!("float values range {lo} to {hi}: those outside [0, 1] are clamped"),
+            );
+        }
+    }
     if (f.info.bit_depth > 8 || f.info.is_float) && !bc6h {
         add(
             LossBitdepth,

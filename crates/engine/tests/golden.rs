@@ -1162,6 +1162,66 @@ fn hdr_float_emissive_content_is_linear() {
     }
 }
 
+/// Final review I4 (interim guard until the M6 source-transfer split): a float source resolved to an LDR format is
+/// blocked by IN-FLOAT-LDR; `--allow IN-FLOAT-LDR` converts it as stored values, with LOSS-CLAMP-HDR (warning)
+/// for the values above 1. The float BC6H cases above are unchanged.
+#[test]
+fn float_source_to_an_ldr_format_is_blocked_until_allowed() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/lamp.tif", hdr_emissive());
+    let sets = ["subtype=diffuse"];
+    let o = convert(d.path(), Target::Cs, &sets, &[]);
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (0, 1),
+        "{:?}",
+        warnings(&o)
+    );
+    assert_eq!(skip_code(&o, "lamp.tif"), Some(Code::InFloatLdr));
+    let w = warning_of(&o, "lamp.tif", Code::InFloatLdr);
+    assert_eq!(w.severity, Severity::Blocking);
+    assert!(
+        w.message.contains("32-bit float source written to BC7")
+            && w.message.contains("--allow IN-FLOAT-LDR"),
+        "{}",
+        w.message
+    );
+    assert!(!d.path().join("out/textures/a/lamp.dds").exists());
+
+    let o = convert(d.path(), Target::Cs, &sets, &[Code::InFloatLdr]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        warning_of(&o, "lamp.tif", Code::InFloatLdr).severity,
+        Severity::Warning
+    );
+    let clamp = warning_of(&o, "lamp.tif", Code::LossClampHdr);
+    assert_eq!(clamp.severity, Severity::Warning);
+    assert_profile(&o, "lamp.tif", "diffuse", "remove", false, "bc7");
+}
+
+/// A float source whose values all lie in [0, 1] is still blocked by IN-FLOAT-LDR (its transfer is unknown) but
+/// has nothing to clamp: no LOSS-CLAMP-HDR.
+#[test]
+fn in_range_float_source_has_no_clamp_warning() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/plate.tif",
+        DynamicImage::ImageRgb32F(ImageBuffer::from_fn(64, 64, |x, y| {
+            Rgb([x as f32 / 63.0, y as f32 / 63.0, 0.5])
+        })),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["subtype=diffuse"],
+        &[Code::InFloatLdr],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert!(warnings(&o).contains(&Code::InFloatLdr));
+    assert!(!warnings(&o).contains(&Code::LossClampHdr));
+}
+
 /// Spec §3.4/§4.2: `_SRGB` only for PBR colour under cs (albedo, `_g` when not BC6H, `_f`, `_s`); non-PBR colour,
 /// normals and landscape are UNORM.
 #[test]
