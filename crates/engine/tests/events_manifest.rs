@@ -1,0 +1,354 @@
+use engine::codes::{Code, Warning};
+use engine::config::*;
+use engine::events::*;
+use engine::manifest::*;
+use engine::presets::PresetRegistry;
+use std::sync::Arc;
+
+fn record(
+    output: &str,
+    source_sha256: &str,
+    profile: Profile,
+    preset: PresetRef,
+) -> ManifestRecord {
+    ManifestRecord {
+        schema: 1,
+        ts: now_rfc3339(),
+        engine_version: ENGINE_VERSION.into(),
+        engine_commit: engine_commit().into(),
+        encoders: EncoderVersions::current(),
+        isa: dispatched_isa().into(),
+        preset,
+        profile_sha256: sha256_json(&profile),
+        profile,
+        provenance: Default::default(),
+        source: "in/x_n.png".into(),
+        source_sha256: source_sha256.into(),
+        output: output.into(),
+        validation: Default::default(),
+    }
+}
+
+fn cs_quality() -> (Profile, PresetRef) {
+    let reg = PresetRegistry::builtin().unwrap();
+    let profile = reg
+        .profile("cs-quality", Target::Cs, Subtype::Normal)
+        .unwrap();
+    let preset = PresetRef::for_preset(&reg, "cs-quality", None).unwrap();
+    (profile, preset)
+}
+
+#[test]
+fn events_serialise_as_flat_json_lines_with_seq() {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "b1");
+    rep.emit(
+        None,
+        None,
+        EventKind::BatchStarted {
+            target: Target::Cs,
+            preset: "cs-quality".into(),
+            inputs: 2,
+        },
+    );
+    rep.emit(
+        Some("set"),
+        Some(std::path::Path::new("a/x.png")),
+        EventKind::Warning(Warning::new(Code::DimNpot, "npot")),
+    );
+    rep.emit(None, None, EventKind::FileStarted);
+    let ev = sink.take();
+    assert_eq!(ev.iter().map(|e| e.seq).collect::<Vec<_>>(), [0, 1, 2]);
+    let line = serde_json::to_string(&ev[1]).unwrap();
+    assert!(
+        line.contains("\"kind\":\"warning\"")
+            && line.contains("\"code\":\"DIM-NPOT\"")
+            && line.contains("\"schema\":1"),
+        "{line}"
+    );
+    assert!(line.contains("\"path\":\"a/x.png\""));
+    let back: EngineEvent = serde_json::from_str(&line).unwrap();
+    assert_eq!(back, ev[1]);
+
+    let mut buf = Vec::new();
+    {
+        let jl = JsonLinesSink::new(&mut buf);
+        jl.emit(&ev[0]);
+        jl.emit(&ev[2]);
+    }
+    let text = String::from_utf8(buf).unwrap();
+    assert_eq!(text.lines().count(), 2);
+    assert!(text
+        .lines()
+        .nth(1)
+        .unwrap()
+        .contains("\"kind\":\"file_started\""));
+}
+
+#[test]
+fn timestamps_are_rfc3339_utc() {
+    let sink = Arc::new(VecSink::default());
+    Reporter::new(sink.clone(), "b").emit(None, None, EventKind::FileStarted);
+    let ts = sink.take().remove(0).ts;
+    // 2026-10-09T12:34:56.789Z
+    let b = ts.as_bytes();
+    assert_eq!(ts.len(), 24, "{ts}");
+    assert!(
+        ts.ends_with('Z') && b[4] == b'-' && b[10] == b'T' && b[19] == b'.',
+        "{ts}"
+    );
+    assert!(humantime::parse_rfc3339(&ts).is_ok(), "{ts}");
+    assert!(humantime::parse_rfc3339(&now_rfc3339()).is_ok());
+}
+
+#[test]
+fn paths_use_forward_slashes_and_every_kind_round_trips() {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), new_batch_id());
+    let kinds = vec![
+        EventKind::FileDiscovered {
+            output: "a.dds".into(),
+        },
+        EventKind::SetResolved {
+            members: vec!["a_d.png".into()],
+            pbr: true,
+            bake: false,
+        },
+        EventKind::FilePlanned {
+            job: serde_json::json!({"format": "bc7"}),
+        },
+        EventKind::Progress {
+            stage: Stage::Compress,
+            done: 1,
+            total: 4,
+        },
+        EventKind::FileDone {
+            output: "a.dds".into(),
+            validation: Default::default(),
+        },
+        EventKind::FileSkipped {
+            code: Some(Code::DimNpot),
+            reason: "r".into(),
+        },
+        EventKind::FileFailed {
+            stage: Stage::Write,
+            error: "e".into(),
+        },
+        EventKind::BatchDone {
+            converted: 1,
+            up_to_date: 2,
+            skipped: 3,
+            failed: 4,
+            validation_failed: 5,
+            cancelled: vec!["z".into()],
+        },
+    ];
+    for k in kinds {
+        rep.emit(None, Some(std::path::Path::new("a\\b\\c.png")), k);
+    }
+    for e in sink.take() {
+        assert_eq!(e.path.as_deref(), Some("a/b/c.png"));
+        let line = serde_json::to_string(&e).unwrap();
+        assert_eq!(
+            serde_json::from_str::<EngineEvent>(&line).unwrap(),
+            e,
+            "{line}"
+        );
+    }
+    let _ = schemars::schema_for!(EngineEvent);
+}
+
+#[test]
+fn parallel_emits_keep_seq_in_delivery_order() {
+    let sink = Arc::new(VecSink::default());
+    let rep = Arc::new(Reporter::new(sink.clone(), "b"));
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            let rep = rep.clone();
+            s.spawn(move || {
+                for _ in 0..100 {
+                    rep.emit(None, None, EventKind::FileStarted);
+                }
+            });
+        }
+    });
+    let seqs: Vec<u64> = sink.take().iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, (0..800).collect::<Vec<_>>());
+}
+
+#[test]
+fn manifest_appends_and_last_record_wins() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let (profile, preset) = cs_quality();
+    let mut r = record("x_n.dds", "aa", profile, preset);
+    m.append(&r).unwrap();
+    r.source_sha256 = "bb".into();
+    m.append(&r).unwrap();
+    let mut bytes = std::fs::read(m.path()).unwrap();
+    bytes.extend_from_slice(b"not json\n");
+    std::fs::write(m.path(), bytes).unwrap();
+    let all = m.load().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all["x_n.dds"].source_sha256, "bb");
+    assert!(m.path().ends_with("_sdc/manifest.jsonl"));
+    assert!(["sse2", "sse4", "avx", "avx2"].contains(&dispatched_isa()));
+}
+
+#[test]
+fn load_of_a_missing_manifest_is_empty() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(Manifest::at(d.path()).load().unwrap().is_empty());
+}
+
+#[test]
+fn invalid_utf8_and_torn_lines_do_not_lose_later_records() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let (profile, preset) = cs_quality();
+    m.append(&record("a.dds", "1", profile.clone(), preset.clone()))
+        .unwrap();
+    // A crashed writer left raw non-UTF-8 bytes and a torn line without a final newline.
+    let mut bytes = std::fs::read(m.path()).unwrap();
+    bytes.extend_from_slice(b"\xff\xfe\n{\"schema\":1,\"ts\":");
+    std::fs::write(m.path(), bytes).unwrap();
+    m.append(&record("b.dds", "2", profile, preset)).unwrap();
+    let all = m.load().unwrap();
+    assert_eq!(
+        all.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["a.dds", "b.dds"]
+    );
+}
+
+#[test]
+fn concurrent_appends_write_one_whole_line_each() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Arc::new(Manifest::at(d.path()));
+    let (profile, preset) = cs_quality();
+    const THREADS: usize = 8;
+    const EACH: usize = 40;
+    std::thread::scope(|s| {
+        for t in 0..THREADS {
+            let (m, profile, preset) = (m.clone(), profile.clone(), preset.clone());
+            s.spawn(move || {
+                for i in 0..EACH {
+                    let r = record(
+                        &format!("t{t}_{i}.dds"),
+                        "s",
+                        profile.clone(),
+                        preset.clone(),
+                    );
+                    m.append(&r).unwrap();
+                }
+            });
+        }
+    });
+    let text = std::fs::read_to_string(m.path()).unwrap();
+    assert_eq!(text.lines().count(), THREADS * EACH);
+    for l in text.lines() {
+        serde_json::from_str::<ManifestRecord>(l).expect(l);
+    }
+    assert_eq!(m.load().unwrap().len(), THREADS * EACH);
+
+    // Two Manifest values on one root share the process-wide lock.
+    let m2 = Arc::new(Manifest::at(d.path()));
+    std::thread::scope(|s| {
+        for (k, mm) in [m.clone(), m2].into_iter().enumerate() {
+            let (profile, preset) = (profile.clone(), preset.clone());
+            s.spawn(move || {
+                for i in 0..EACH {
+                    let r = record(
+                        &format!("u{k}_{i}.dds"),
+                        "s",
+                        profile.clone(),
+                        preset.clone(),
+                    );
+                    mm.append(&r).unwrap();
+                }
+            });
+        }
+    });
+    assert_eq!(m.load().unwrap().len(), THREADS * EACH + 2 * EACH);
+}
+
+#[test]
+fn encoder_versions_come_from_the_encoders_crate() {
+    let v = encoders_sys::versions();
+    let e = EncoderVersions::current();
+    assert_eq!(
+        (e.bc7enc_rdo.as_str(), e.ispctc.as_str(), e.ispc.as_str()),
+        (v.bc7enc_rdo, v.ispctc, v.ispc)
+    );
+    let patch = e.bc7e_patch.expect("the vendored bc7e is patched");
+    let hash = sha256_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../encoders-sys/vendor/bc7e/patches/0001-exact-opaque-alpha.patch"
+    )))
+    .unwrap();
+    assert_eq!(patch, format!("{}@sha256:{hash}", v.bc7e_patch.unwrap()));
+}
+
+#[test]
+fn engine_identity_is_filled() {
+    assert!(!ENGINE_VERSION.is_empty());
+    let c = engine_commit();
+    assert!(
+        c == "unknown" || c.chars().all(|ch| ch.is_ascii_hexdigit()),
+        "{c}"
+    );
+}
+
+#[test]
+fn preset_ref_names_the_resolving_preset_and_alias_chain() {
+    let mut reg = PresetRegistry::builtin().unwrap();
+    reg.add_toml(
+        r#"
+schema_version = 1
+id = "ultra"
+version = "2.1.0"
+base = "cs-quality"
+target = "cs"
+
+[suffix_aliases]
+rmaosultrahigh = "rmaos"
+"#,
+    )
+    .unwrap();
+    let plain = PresetRef::for_preset(&reg, "cs-quality", None).unwrap();
+    assert_eq!(plain.id, "cs-quality");
+    assert!(plain.alias_chain.is_empty());
+    assert_eq!(plain.sha256, reg.sha256("cs-quality").unwrap());
+
+    let chain = reg.alias_chain("ultra", Target::Cs).unwrap();
+    let r = PresetRef::for_preset(&reg, "ultra", Some(&chain)).unwrap();
+    assert_eq!((r.id.as_str(), r.version.as_str()), ("ultra", "2.1.0"));
+    assert_eq!(r.sha256, reg.sha256("ultra").unwrap());
+    assert_eq!(r.alias_chain.last().map(String::as_str), Some("ultra"));
+    assert_eq!(
+        r.alias_chain,
+        chain.iter().map(|p| p.id.clone()).collect::<Vec<_>>()
+    );
+
+    // Records written without the field still load, and an empty chain is not written.
+    let mut v = serde_json::to_value(&plain).unwrap();
+    assert!(v.get("alias_chain").is_none());
+    v.as_object_mut().unwrap().remove("alias_chain");
+    assert_eq!(serde_json::from_value::<PresetRef>(v).unwrap(), plain);
+    assert!(PresetRef::for_preset(&reg, "nope", None).is_none());
+}
+
+#[test]
+fn sha256_helpers() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("f");
+    std::fs::write(&p, b"abc").unwrap();
+    assert_eq!(
+        sha256_file(&p).unwrap(),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        sha256_json(&serde_json::json!({"a": 1})),
+        sha256_json(&serde_json::json!({"a": 1}))
+    );
+    assert!(sha256_file(&d.path().join("missing")).is_err());
+}
