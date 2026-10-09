@@ -24,6 +24,7 @@ use crate::suggest::{is_pbr_set, SuggestContext};
 use encoders_sys::Bc1Model;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -116,6 +117,12 @@ pub struct FailedFile {
     pub error: String,
 }
 
+/// Why planning produced no job for a file: its Load failed, or it panicked at the stage it had entered.
+enum PlanFailure {
+    Load(LoadError),
+    Panic(Stage, String),
+}
+
 pub struct Plan {
     pub request: BatchRequest,
     pub registry: PresetRegistry,
@@ -125,7 +132,8 @@ pub struct Plan {
     pub jobs: Vec<ResolvedJob>,
     /// Files reported before Resolve: `IN-DUPLICATE` and `IN-DDS-SKIPPED`.
     pub skipped: Vec<SkippedFile>,
-    /// Files that could not be loaded (`DIM-TOO-LARGE`, `IN-DECODE`).
+    /// Files that could not be loaded (`DIM-TOO-LARGE`, `IN-DECODE`), or that panicked while planning (at the
+    /// stage they had entered: Load, Analyse or Resolve).
     pub failed: Vec<FailedFile>,
     /// The most estimated bytes admitted at once while loading and analysing (spec §5.9 memory admission).
     pub peak_admitted_bytes: u64,
@@ -473,7 +481,8 @@ impl Engine {
     /// Discover, group, load, analyse and resolve every input, emitting `batch_started`, `file_discovered`,
     /// `set_resolved`, `file_planned` and every warning. Presets, configs, rules and `--set` values are
     /// validated first ([`Engine::preflight`]): any invalid one is an error (exit 2) before any file is read.
-    /// Once `cancel` is set, no further file is loaded; those files are returned in `Plan::cancelled`.
+    /// Once `cancel` is set, no further file is loaded; those files are returned in `Plan::cancelled`. Each file's
+    /// Load, Analyse and Resolve run under `catch_unwind`: a panic fails that file alone (`Plan::failed`).
     pub fn plan(
         &self,
         req: BatchRequest,
@@ -567,12 +576,21 @@ impl Engine {
         // thread admits each file's estimated bytes before spawning it, and the bytes are released as soon as its
         // analysis is done (or it unwinds). Only the `Analysis` is kept.
         let resolve_one = |&(set, f): &(&TextureSet, &InputFile),
-                           admitted: Admitted<'_>|
-         -> Result<ResolvedJob, (PathBuf, LoadError)> {
-            let (img, info) = load_image(&f.path).map_err(|e| (f.path.clone(), e))?;
+                           admitted: Admitted<'_>,
+                           stage: &Cell<Stage>|
+         -> Result<ResolvedJob, LoadError> {
+            let enter = |st: Stage| {
+                stage.set(st);
+                #[cfg(feature = "test-hooks")]
+                panic_while_planning_for_test(&f.path, st);
+            };
+            enter(Stage::Load);
+            let (img, info) = load_image(&f.path)?;
+            enter(Stage::Analyse);
             let a = analyse(&img, &info);
             drop(img);
             drop(admitted);
+            enter(Stage::Resolve);
             let stem = f
                 .rel
                 .file_stem()
@@ -610,7 +628,19 @@ impl Engine {
                 let resolve_one = &resolve_one;
                 scope.spawn(move |_| {
                     if !cancel.is_cancelled() {
-                        *lock(slot) = Some(resolve_one(item, admitted));
+                        // Spec §5.9, §8 (final review I1): a panic fails this file alone, at the stage it had
+                        // entered, as in `run_one`. The admitted bytes are released while it unwinds.
+                        let stage = Cell::new(Stage::Load);
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            resolve_one(item, admitted, &stage)
+                        }));
+                        *lock(slot) = Some(match r {
+                            Ok(r) => r.map_err(PlanFailure::Load),
+                            Err(panic) => Err(PlanFailure::Panic(
+                                stage.get(),
+                                format!("internal error: {}", panic_message(&*panic)),
+                            )),
+                        });
                     }
                 });
             }
@@ -625,9 +655,10 @@ impl Engine {
                 cancelled.push(item.1.path.clone());
                 continue;
             };
+            let path = item.1.path.clone();
             match r {
                 Ok(job) => jobs.push(job),
-                Err((path, e)) => {
+                Err(PlanFailure::Load(e)) => {
                     let code = match e {
                         LoadError::TooLarge { .. } => Code::DimTooLarge,
                         LoadError::Decode { .. } => Code::InDecode,
@@ -642,6 +673,9 @@ impl Engine {
                         stage: Stage::Load,
                         error: e.to_string(),
                     });
+                }
+                Err(PlanFailure::Panic(stage, error)) => {
+                    failed.push(FailedFile { path, stage, error })
                 }
             }
         }
@@ -992,14 +1026,10 @@ fn run_one(
             return;
         }
         Ok(Err(FileError::Failed(stage, error))) => (stage, error),
-        Err(panic) => {
-            let msg = panic
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| panic.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "panic".into());
-            (tracker.stage.get(), format!("internal error: {msg}"))
-        }
+        Err(panic) => (
+            tracker.stage.get(),
+            format!("internal error: {}", panic_message(&*panic)),
+        ),
     };
     if tracker.written.get() {
         let _ = std::fs::remove_file(&job.output);
@@ -1011,6 +1041,15 @@ fn run_one(
     rep.emit(set, path, EventKind::FileFailed { stage, error });
 }
 
+/// The text of a caught panic's payload (`panic!` with a literal or a formatted message), or `panic`.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic".into())
+}
+
 /// Test hook (`test-hooks` feature only): when `SDC_TEST_CANCEL_ON` names an input's file name, planning cancels
 /// the batch just before that file's Load, as a Ctrl-C would, so the CLI's cancelled-plan path can be tested
 /// without a console.
@@ -1020,6 +1059,30 @@ fn cancel_on_load_for_test(path: &Path, cancel: &CancelToken) {
         .is_some_and(|v| path.file_name() == Some(v.as_os_str()))
     {
         cancel.cancel();
+    }
+}
+
+/// Test hook (`test-hooks` feature only, final review I1): when `SDC_TEST_PANIC_ON_PLAN` is `<file name>` or
+/// `<file name>@<stage>` (`load`, the default, `analyse` or `resolve`), planning panics as that input enters that
+/// stage, to prove per-file panic isolation while planning.
+#[cfg(feature = "test-hooks")]
+fn panic_while_planning_for_test(path: &Path, stage: Stage) {
+    let Some(v) = std::env::var_os("SDC_TEST_PANIC_ON_PLAN") else {
+        return;
+    };
+    let v = v.to_string_lossy();
+    let (name, at) = v.split_once('@').unwrap_or((&v, "load"));
+    let at = match at {
+        "analyse" => Stage::Analyse,
+        "resolve" => Stage::Resolve,
+        _ => Stage::Load,
+    };
+    if stage == at
+        && path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy() == name)
+    {
+        panic!("test hook: SDC_TEST_PANIC_ON_PLAN");
     }
 }
 

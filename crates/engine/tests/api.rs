@@ -665,6 +665,23 @@ fn cancel_during_a_file_leaves_no_output_and_lists_every_unfinished_file() {
     }
 }
 
+/// Sets an engine test-hook variable for one test and removes it when dropped, panic or not (review m2). Each hook
+/// test uses its own variable and a file name no other test has, so tests running in parallel never see it.
+struct HookVar(&'static str);
+
+impl HookVar {
+    fn set(name: &'static str, value: &str) -> HookVar {
+        std::env::set_var(name, value);
+        HookVar(name)
+    }
+}
+
+impl Drop for HookVar {
+    fn drop(&mut self) {
+        std::env::remove_var(self.0);
+    }
+}
+
 #[test]
 fn a_panicking_file_fails_alone() {
     let d = tempfile::tempdir().unwrap();
@@ -674,8 +691,7 @@ fn a_panicking_file_fails_alone() {
         d.path().join("textures/armor/boom_panic_hook.png"),
     )
     .unwrap();
-    // Only this test's file name matches, so other tests in the binary are unaffected.
-    std::env::set_var("SDC_TEST_PANIC_ON", "boom_panic_hook.png");
+    let _hook = HookVar::set("SDC_TEST_PANIC_ON", "boom_panic_hook.png");
     let mut req = request(d.path());
     req.overrides
         .push(parse_set("file:**/boom_panic_hook.png.subtype=diffuse").unwrap());
@@ -689,6 +705,43 @@ fn a_panicking_file_fails_alone() {
         )),
         "{ev:#?}"
     );
+}
+
+/// Final review I1: a panic while planning (Load, Analyse or Resolve) fails that file alone at the stage it had
+/// entered; the other files are still planned and converted, and the batch is partial (exit 1).
+#[test]
+fn a_file_panicking_while_planning_fails_alone() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    std::fs::copy(
+        d.path().join("textures/armor/iron.png"),
+        d.path().join("textures/armor/boom_plan_hook.png"),
+    )
+    .unwrap();
+    let _hook = HookVar::set("SDC_TEST_PANIC_ON_PLAN", "boom_plan_hook.png@analyse");
+    let mut req = request(d.path());
+    req.overrides
+        .push(parse_set("file:**/boom_plan_hook.png.subtype=diffuse").unwrap());
+    let (s, ev) = run(req);
+    assert_eq!((s.converted, s.failed), (2, 1), "{ev:#?}");
+    assert_eq!(s.exit_code(), 1);
+    let failed: Vec<_> = ev
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FileFailed { stage, error } => Some((e.path.clone(), *stage, error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    let (path, stage, error) = &failed[0];
+    assert!(path.as_deref().unwrap().ends_with("boom_plan_hook.png"));
+    // The stage is the one the file had entered: Analyse, not the Load it started with.
+    assert_eq!(*stage, Stage::Analyse);
+    assert!(
+        error.contains("internal error") && error.contains("test hook"),
+        "{error}"
+    );
+    assert_eq!(kinds(&ev, "batch_done"), 1);
 }
 
 #[test]
