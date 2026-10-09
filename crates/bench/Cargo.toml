@@ -1,0 +1,27 @@
+[package]
+name = "sdc-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sdc_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sdc-bench"
+path = "src/main.rs"
+
+[dependencies]
+encoders-sys.workspace = true
+engine.workspace = true
+anyhow.workspace = true
+image.workspace = true
+half.workspace = true
+bcdec_rs.workspace = true
+rayon.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

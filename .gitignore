@@ -2,3 +2,5 @@ target/
 *.dds
 /out/
 .superpowers/
+_sdc/
+*.tmp

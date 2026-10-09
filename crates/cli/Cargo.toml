@@ -1,0 +1,18 @@
+[package]
+name = "sdc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sdc"
+path = "src/main.rs"
+
+[dependencies]
+engine.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true

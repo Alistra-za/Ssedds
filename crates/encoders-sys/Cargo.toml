@@ -1,0 +1,20 @@
+[package]
+name = "encoders-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+links = "sdc_encoders"
+
+[dependencies]
+thiserror.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+hex.workspace = true
+bcdec_rs.workspace = true
+half.workspace = true
