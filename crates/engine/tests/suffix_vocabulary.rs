@@ -513,3 +513,43 @@ fn aliases_may_not_shadow_the_vocabulary() {
     }
     assert!(is_vocabulary("normalgl") && !is_vocabulary("n") && !is_vocabulary("rmaosultrahigh"));
 }
+
+/// 27a review: the unstated green convention is its own blocking code, never allowable, with a file-scoped hint.
+#[test]
+fn unstated_green_convention_is_in_green_unstated_and_not_allowable() {
+    for allow in [
+        vec![],
+        vec![Code::InGreenUnstated],
+        vec![Code::SugLowConfidence],
+    ] {
+        let j = resolve_img("iron_normal.png", &[], &[], &allow, &flat_normal(), &RGB8);
+        let reasons = match &j.status {
+            JobStatus::Unresolved { reasons } => reasons,
+            s => panic!("{allow:?}: {s:?}"),
+        };
+        let w = j
+            .warnings
+            .iter()
+            .find(|w| w.code == Code::InGreenUnstated)
+            .unwrap_or_else(|| panic!("{:?}", j.warnings));
+        assert_eq!(w.severity, Severity::Blocking, "{allow:?}");
+        assert!(
+            !j.warnings.iter().any(|w| w.code == Code::SugLowConfidence),
+            "{:?}",
+            j.warnings
+        );
+        let hint = "--set 'file:iron_normal.png.channels.green_convention=opengl|directx'";
+        assert!(w.message.contains(hint), "{}", w.message);
+        assert!(reasons.iter().any(|r| r.contains(hint)), "{reasons:?}");
+    }
+    // stating it clears the code
+    let j = resolve_img(
+        "iron_normal.png",
+        &[],
+        &["channels.green_convention=directx"],
+        &[],
+        &flat_normal(),
+        &RGB8,
+    );
+    assert!(!j.warnings.iter().any(|w| w.code == Code::InGreenUnstated));
+}

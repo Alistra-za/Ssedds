@@ -121,10 +121,11 @@ fn takes_green(st: Subtype) -> bool {
     st.category() == Category::Normal && st != Subtype::Msn
 }
 
-/// Case-insensitive glob over the game path or the input-relative path. A glob without '/' also matches the
-/// file name alone, so `file:*.png` and `file:wood01.png` work in any folder.
+/// Case-insensitive glob (Unicode simple lower-casing of the pattern and both paths) over the game path or the
+/// input-relative path. A glob without '/' also matches the file name alone, so `file:*.png` and
+/// `file:wood01.png` work in any folder.
 fn glob_match(glob: &str, f: &FileFacts) -> bool {
-    let Ok(g) = globset::GlobBuilder::new(&glob.to_ascii_lowercase())
+    let Ok(g) = globset::GlobBuilder::new(&glob.to_lowercase())
         .literal_separator(true)
         .build()
     else {
@@ -136,9 +137,11 @@ fn glob_match(glob: &str, f: &FileFacts) -> bool {
         .rel
         .to_string_lossy()
         .replace('\\', "/")
-        .to_ascii_lowercase();
+        .to_lowercase();
     let name = rel.rsplit('/').next().unwrap_or_default();
-    m.is_match(&f.input.game_path) || m.is_match(&rel) || (!glob.contains('/') && m.is_match(name))
+    m.is_match(f.input.game_path.to_lowercase())
+        || m.is_match(&rel)
+        || (!glob.contains('/') && m.is_match(name))
 }
 
 pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
@@ -802,11 +805,12 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
     if matches!(st, Subtype::Envmask | Subtype::ComplexMaterial)
         && stores_alpha(p.format)
         && !p.alpha.exact_opaque
-        && p.alpha.policy != AlphaPolicy::Remove
     {
+        // Not conditional on the alpha policy: `remove` drops the source alpha, but BC7 still encodes an alpha
+        // channel, which decodes as 254 unless exact-opaque handling is on (DECISIONS Notes A and D, spec §5.8).
         add(
             AlphaExactOffM,
-            "exact opaque alpha is off on an _m that stores alpha; 254 may reach PGPatcher/ENB"
+            "exact opaque alpha is off on an _m written in a format that stores alpha; 254 may reach PGPatcher/ENB"
                 .into(),
         );
     }
@@ -864,10 +868,7 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
 /// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
 /// placeholder and is never used. Milestone M2.5 consumes these files in packing recipes.
 fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) -> ResolvedJob {
-    let profile = ctx
-        .registry
-        .profile(BASE_ID, ctx.target, Subtype::GenericData)
-        .expect("sdc-base profile is valid");
+    let profile = ctx.registry.base_profile(ctx.target, Subtype::GenericData);
     let msg = format!(
         "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
         role.id()
@@ -939,12 +940,9 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
     let (profile, mut provenance) = match layered_profile(ctx, f, subtype) {
         Ok(v) => v,
         Err(e) => {
-            // The built-in base preset is valid by construction (Task 20 test), so this cannot fail.
-            // Engine::plan (Task 37) validates presets, configs and rules up front, so this path is rare.
-            let fallback = ctx
-                .registry
-                .profile(BASE_ID, ctx.target, subtype)
-                .expect("sdc-base profile is valid");
+            // Engine::plan (Task 37) validates presets, configs and rules up front, so this path is rare. The
+            // placeholder profile comes from `sdc-base`, which user presets cannot replace.
+            let fallback = ctx.registry.base_profile(ctx.target, subtype);
             return ResolvedJob {
                 input: f.input.path.clone(),
                 output: f.input.output.clone(),
@@ -978,17 +976,21 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         ));
     }
     // Spec §4.4 (DECISIONS Note H): a plain `_normal`/`_nrm` has no default green convention. It is not a suggestion,
-    // so neither --accept-suggestions high nor --allow SUG-LOW-CONFIDENCE settles it.
-    let mut green_unstated = false;
+    // so neither --accept-suggestions high nor --allow settles it (IN-GREEN-UNSTATED is never allowable).
+    let mut green_reason = None;
     if let Some(Vocab {
         term,
         role: VocabRole::Normal(None),
     }) = vocab_for(f)
     {
         if takes_green(profile.subtype) && profile.channels.green_convention.is_none() {
-            green_unstated = true;
-            reasons.push(format!(
-                "green convention of _{term} is unstated: set channels.green_convention=opengl or directx (preset, config, rule or --set)"
+            green_reason = Some(format!(
+                "green convention of _{term} is unstated: pass --set 'file:{}.channels.green_convention=opengl|directx' (or set channels.green_convention in a preset, config or rule)",
+                f.input
+                    .rel
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
             ));
         }
     }
@@ -1000,11 +1002,17 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
                 .with_data(json!({ "suggestions": d.suggestions })),
         );
     }
+    if let Some(r) = &green_reason {
+        warnings.push(Warning::new(Code::InGreenUnstated, r.clone()));
+        // Reported next to the other reasons.
+        reasons.push(r.clone());
+    }
     // `--allow` turns a blocking code into a warning. CFG-UNAVAILABLE is acknowledged only by accepting a
     // fallback (above), and warnings that `check_profile` raised to error stay errors.
     for w in &mut warnings {
         if w.severity == Severity::Blocking
             && w.code != Code::CfgUnavailable
+            && w.code != Code::InGreenUnstated
             && ctx.allow.contains(&w.code)
         {
             w.severity = Severity::Warning;
@@ -1017,7 +1025,7 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
     let status = if !errors.is_empty() {
         JobStatus::Error { codes: errors }
     } else if (!reasons.is_empty() && !ctx.allow.contains(&Code::SugLowConfidence))
-        || green_unstated
+        || green_reason.is_some()
     {
         JobStatus::Unresolved { reasons }
     } else if !blocking.is_empty() {

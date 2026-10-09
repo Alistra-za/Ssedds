@@ -648,6 +648,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
 | `IN-DDS-SKIPPED` | info | DDS input not re-encoded by default | Opt in |
 | `IN-PACKING-INPUT` | warning | Raw single-channel map (§4.4) is a channel-packing input, not converted on its own (before M2.5, or with `packing.enabled = false`) | Wait for M2.5, enable packing, or set a sub-type for it |
+| `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm` states no green convention (§4.4); never settled by `--accept-suggestions` or `--allow` | `--set 'file:<name>.channels.green_convention=opengl\|directx'` |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |
 | `PACK-DEFAULTED` (M2.5) | warning | A packed channel has no source → neutral default (names output and channel) [D-H] | Supply the map or accept |

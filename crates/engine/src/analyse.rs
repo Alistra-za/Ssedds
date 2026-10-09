@@ -90,7 +90,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
             i32::from(code8(p[1])),
             i32::from(code8(p[2])),
         );
-        gray &= (r - g).abs() <= 4 && (g - b).abs() <= 4;
+        gray &= r.max(g).max(b) - r.min(g).min(b) <= 4;
         let v = [p[0] * 2.0 - 1.0, p[1] * 2.0 - 1.0, p[2] * 2.0 - 1.0];
         len_err += f64::from(((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs());
         bb += u64::from(p[2] < 0.1);
@@ -169,6 +169,14 @@ mod tests {
         assert!(analyse(&img, &RGBA8).grayscale);
         img.px[1] = [0.5, 0.5 + 6.0 / 255.0, 0.5, 1.0];
         assert!(!analyse(&img, &RGBA8).grayscale);
+    }
+
+    /// Pairwise tolerance is not transitive: the whole R/G/B spread must be within 4 codes.
+    #[test]
+    fn grayscale_spread_covers_red_to_blue() {
+        let px = |c: [f32; 3]| Rgba32F::new(2, 2, [c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0]);
+        assert!(!analyse(&px([100.0, 104.0, 108.0]), &RGBA8).grayscale);
+        assert!(analyse(&px([100.0, 102.0, 104.0]), &RGBA8).grayscale);
     }
 
     #[test]

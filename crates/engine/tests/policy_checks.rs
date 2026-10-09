@@ -1138,3 +1138,138 @@ fn na_tag_message_suggests_srgb_only_for_pbr_colour_under_cs() {
         .message
         .contains("set color.tag=srgb for a non-BC6H _g"));
 }
+
+/// Codex #2: replacing `sdc-base` is refused, so resolving never reaches an unusable base; a cycle through user
+/// presets yields an error status, not a panic.
+#[test]
+fn reserved_base_and_preset_cycles_give_errors_not_panics() {
+    let mut reg = PresetRegistry::builtin().unwrap();
+    assert!(reg
+        .add_toml(
+            "schema_version = 1
+id = \"sdc-base\"
+version = \"1\"
+"
+        )
+        .is_err());
+    let j = run_with(&reg, "cs-quality", None, "a/x_n.png", Some("n"), &[]);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+
+    reg.add_toml(
+        "schema_version = 1
+id = \"cyc-a\"
+version = \"1\"
+base = \"cyc-b\"
+",
+    )
+    .unwrap();
+    reg.add_toml(
+        "schema_version = 1
+id = \"cyc-b\"
+version = \"1\"
+base = \"cyc-a\"
+",
+    )
+    .unwrap();
+    let j = run_with(&reg, "cyc-a", None, "a/x_n.png", Some("n"), &[]);
+    assert_eq!(
+        j.status,
+        JobStatus::Error {
+            codes: vec![Code::CfgInvalid]
+        }
+    );
+    assert!(warning(&j, Code::CfgInvalid).message.contains("cycle"));
+
+    // A registry with no base at all (never built by the CLI) also errors instead of panicking.
+    let empty = PresetRegistry::default();
+    let j = run_with(&empty, "cs-quality", None, "a/x_n.png", Some("n"), &[]);
+    assert!(
+        matches!(j.status, JobStatus::Error { .. }),
+        "{:?}",
+        j.status
+    );
+}
+
+/// Codex #5: file overrides match case-insensitively beyond ASCII.
+#[test]
+fn file_override_matches_non_ascii_case_differences() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        None,
+        "Ärmör_n.png",
+        Some("n"),
+        &["file:ärmör_n.png.channels.flip_green=true"],
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert!(j.profile.channels.flip_green);
+    assert_eq!(j.provenance["channels.flip_green"], Provenance::User);
+    // the same pattern in upper case, and a rule glob, behave alike
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        None,
+        "ärmör_n.png",
+        Some("n"),
+        &["file:ÄRMÖR_N.PNG.channels.flip_green=true"],
+    );
+    assert!(j.profile.channels.flip_green);
+    let project = ConfigFile {
+        rules: vec![Rule {
+            matcher: RuleMatch {
+                glob: Some("**/ÄRMÖR_*.png".into()),
+                ..Default::default()
+            },
+            subtype: None,
+            overrides: serde_json::json!({ "channels": { "flip_green": true } }),
+        }],
+        ..Default::default()
+    };
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        Some(&project),
+        "x/Ärmör_n.png",
+        Some("n"),
+        &[],
+    );
+    assert!(j.profile.channels.flip_green);
+    assert!(matches!(
+        j.provenance["channels.flip_green"],
+        Provenance::Rule(_)
+    ));
+}
+
+/// Codex #6: ALPHA-EXACT-OFF-M follows the output format, not the alpha policy.
+#[test]
+fn alpha_exact_off_warns_for_bc7_envmask_even_when_alpha_is_removed() {
+    let envmask = |extra: &[&str]| {
+        let mut sets = vec!["subtype=envmask", "alpha.exact_opaque=false"];
+        sets.extend_from_slice(extra);
+        run(
+            Target::Cs,
+            "textures/a/x_m.png",
+            Some("m"),
+            &["m"],
+            Rgba32F::new(64, 64, [0.5, 0.5, 0.5, 1.0]),
+            &sets,
+            &[],
+        )
+    };
+    let j = envmask(&["format=bc7", "encoder.backend=bc7e"]);
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert!(
+        codes(&j).contains(&Code::AlphaExactOffM),
+        "{:?}",
+        j.warnings
+    );
+    // BC4 stores no alpha
+    let j = envmask(&[]);
+    assert_eq!(j.profile.format, Format::Bc4);
+    assert!(
+        !codes(&j).contains(&Code::AlphaExactOffM),
+        "{:?}",
+        j.warnings
+    );
+}

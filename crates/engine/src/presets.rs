@@ -40,7 +40,8 @@ pub enum PresetError {
     NewerSchema(u32),
     #[error("invalid profile: {0}")]
     Invalid(String),
-    /// An invalid or conflicting suffix alias (spec §3.7); the message starts `CFG-INVALID:`.
+    /// A configuration the registry refuses (an invalid or conflicting suffix alias, spec §3.7, or a user preset
+    /// under the reserved id `sdc-base`); the message starts `CFG-INVALID:`.
     #[error("{0}")]
     Alias(String),
 }
@@ -253,13 +254,24 @@ impl PresetRegistry {
     pub fn builtin() -> Result<Self, PresetError> {
         let mut r = PresetRegistry::default();
         for text in BUILTIN {
-            r.add_toml(text)?;
+            r.insert_toml(text, true)?;
         }
         Ok(r)
     }
 
+    /// Load a user preset. The internal base id `sdc-base` is reserved: it can be neither replaced nor extended
+    /// (`CFG-INVALID`), so the error path of `policy::resolve_file` can always fall back on the built-in base.
     pub fn add_toml(&mut self, text: &str) -> Result<String, PresetError> {
+        self.insert_toml(text, false)
+    }
+
+    fn insert_toml(&mut self, text: &str, builtin: bool) -> Result<String, PresetError> {
         let p: PresetFile = toml::from_str(text).map_err(|e| PresetError::Parse(e.to_string()))?;
+        if !builtin && p.id == BASE_ID {
+            return Err(PresetError::Alias(format!(
+                "CFG-INVALID: preset id '{BASE_ID}' is reserved for the built-in base profile"
+            )));
+        }
         if p.schema_version > SCHEMA_VERSION {
             return Err(PresetError::NewerSchema(p.schema_version));
         }
@@ -394,6 +406,22 @@ impl PresetRegistry {
             chain.push(p);
         }
         Ok(chain)
+    }
+
+    /// The `sdc-base` profile of `subtype`, for error paths that need a placeholder profile. Read from this registry,
+    /// where `sdc-base` is the built-in base (user presets cannot replace it); a registry without one (e.g.
+    /// `PresetRegistry::default()`) falls back on the embedded built-in base. Never fails.
+    pub fn base_profile(&self, target: Target, subtype: Subtype) -> Profile {
+        static EMBEDDED: std::sync::OnceLock<PresetRegistry> = std::sync::OnceLock::new();
+        self.profile(BASE_ID, target, subtype).unwrap_or_else(|_| {
+            EMBEDDED
+                .get_or_init(|| {
+                    PresetRegistry::builtin()
+                        .expect("embedded presets are valid (tests/presets.rs)")
+                })
+                .profile(BASE_ID, target, subtype)
+                .expect("embedded sdc-base is valid for every sub-type (tests/presets.rs)")
+        })
     }
 
     /// SHA-256 of the preset's canonical JSON form (manifest provenance, spec §3.6).

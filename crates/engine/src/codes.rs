@@ -76,15 +76,19 @@ codes! {
     InDuplicate = "IN-DUPLICATE" => Blocking,
     InDdsSkipped = "IN-DDS-SKIPPED" => Info,
     InPackingInput = "IN-PACKING-INPUT" => Warning,
+    InGreenUnstated = "IN-GREEN-UNSTATED" => Blocking,
     InDecode = "IN-DECODE" => Error,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
 }
 
 impl Code {
     /// `--allow <code>` (or GUI acknowledgement) turns a blocking code into a warning; errors stay errors.
+    /// `IN-GREEN-UNSTATED` is a missing fact, not a risk to accept, so it is never allowable.
     pub fn effective(self, allow: &BTreeSet<Code>) -> Severity {
         match self.severity() {
-            Severity::Blocking if allow.contains(&self) => Severity::Warning,
+            Severity::Blocking if allow.contains(&self) && self != Code::InGreenUnstated => {
+                Severity::Warning
+            }
             s => s,
         }
     }
@@ -128,6 +132,11 @@ mod tests {
         assert_eq!(Code::ValMipError.severity(), Severity::Warning);
         assert_eq!(Code::CfgInvalid.severity(), Severity::Error);
         assert_eq!(Code::InPackingInput.severity(), Severity::Warning);
+        assert_eq!(Code::InGreenUnstated.severity(), Severity::Blocking);
+        assert_eq!(
+            Code::parse("IN-GREEN-UNSTATED"),
+            Some(Code::InGreenUnstated)
+        );
         assert_eq!(Code::parse("IN-PACKING-INPUT"), Some(Code::InPackingInput));
     }
 
@@ -140,7 +149,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 48);
+        assert_eq!(Code::ALL.len(), 49);
     }
 
     #[test]
@@ -148,5 +157,7 @@ mod tests {
         let allow: BTreeSet<Code> = [Code::FmtBc5Normal, Code::TagSrgbVanilla].into();
         assert_eq!(Code::FmtBc5Normal.effective(&allow), Severity::Warning);
         assert_eq!(Code::TagSrgbVanilla.effective(&allow), Severity::Error);
+        let green: BTreeSet<Code> = [Code::InGreenUnstated].into();
+        assert_eq!(Code::InGreenUnstated.effective(&green), Severity::Blocking);
     }
 }
