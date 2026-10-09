@@ -28,6 +28,41 @@ enum Cmd {
     SpeedBc7e,
     /// Spike S7: NVTT fed one mip at a time.
     S7Nvtt,
+    /// Write the S2 small-texture and S8 `_m` variant source PNGs (owner in-game spikes).
+    GenSpikeAssets {
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+}
+
+/// S2: 200 varied 16-128 px sources; S8: constant-alpha `_m` variants plus a height-mask gradient.
+/// Returns the number of files written.
+fn gen_spike_assets(out: &std::path::Path) -> anyhow::Result<usize> {
+    let sizes = [16u32, 32, 64, 128];
+    std::fs::create_dir_all(out.join("s2"))?;
+    std::fs::create_dir_all(out.join("s8"))?;
+    let mut count = 0;
+    for n in 0..200u32 {
+        let s = sizes[(n % 4) as usize];
+        let img = image::ImageBuffer::from_fn(s, s, |x, y| {
+            image::Rgba([
+                (x * 255 / s) as u8,
+                (y * 255 / s) as u8,
+                (n * 37 % 256) as u8,
+                255,
+            ])
+        });
+        img.save(out.join(format!("s2/small_{n:03}_{s}.png")))?;
+        count += 1;
+    }
+    for a in [245u8, 248, 250, 252, 255] {
+        image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgba([80u8, 160, 40, a]))
+            .save(out.join(format!("s8/m_{a}_m.png")))?;
+        count += 1;
+    }
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Rgba([0u8, 0, 0, (x * 4) as u8]))
+        .save(out.join("s8/heightmask_m.png"))?;
+    Ok(count + 1)
 }
 
 /// Print every report on stdout; exit 0 when all pass, 1 when any fails, 3 on an error before a verdict.
@@ -109,6 +144,16 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Cmd::GenSpikeAssets { out } => match gen_spike_assets(&out) {
+            Ok(n) => {
+                println!("wrote {n} files to {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::from(3)
+            }
+        },
         Cmd::DumpBc7e { out } => match gates::dump_bc7e(&root, &out) {
             Ok(n) => {
                 println!("{n}");
