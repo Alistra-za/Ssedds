@@ -133,7 +133,7 @@ impl ConfigFile {
 /// Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.
 ///
 /// Serialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the
-/// `<source>#<n>` part), `suffix:<term>`, and the snake_case variant name for the rest.
+/// `<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, and the snake_case variant name for the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[schemars(with = "String")]
 pub enum Provenance {
@@ -143,6 +143,9 @@ pub enum Provenance {
     ProjectConfig,
     Rule(String),
     Analysis,
+    /// A named fact derived from the source's analysis, applied at the analysis position. Shown as
+    /// `analysis:<fact>`, e.g. `analysis:float-source`.
+    AnalysisFact(String),
     /// A fact stated by an exporter vocabulary term, e.g. `_normalgl` (spec §4.4); applied at the analysis
     /// position. Shown as `suffix:<term>`.
     Suffix(String),
@@ -162,6 +165,7 @@ impl fmt::Display for Provenance {
             Provenance::ProjectConfig => f.write_str("project_config"),
             Provenance::Rule(src) => write!(f, "rule:{src}"),
             Provenance::Analysis => f.write_str("analysis"),
+            Provenance::AnalysisFact(t) => write!(f, "analysis:{t}"),
             Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::Set => f.write_str("set"),
@@ -179,6 +183,9 @@ impl std::str::FromStr for Provenance {
         }
         if let Some(src) = s.strip_prefix("rule:") {
             return Ok(Provenance::Rule(src.to_string()));
+        }
+        if let Some(t) = s.strip_prefix("analysis:") {
+            return Ok(Provenance::AnalysisFact(t.to_string()));
         }
         if let Some(t) = s.strip_prefix("suffix:") {
             return Ok(Provenance::Suffix(t.to_string()));

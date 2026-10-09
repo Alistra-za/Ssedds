@@ -1132,7 +1132,6 @@ fn hdr_float_emissive_is_bc6h() {
 /// Spec §4.1 `pbr_emissive` content: "sRGB (8/16-bit) or linear (float)"; §4.2: only an 8/16-bit `_g` is
 /// decoded from sRGB. A float source is linear radiance and must reach BC6H unchanged (up to BC6H error).
 #[test]
-#[ignore = "BUG: a float pbr_emissive source resolves color.content=srgb, so Preprocess applies the sRGB EOTF to linear HDR radiance (4.0 decodes as 23.7, 0.25 as 0.051); spec §4.1 says float content is linear"]
 fn hdr_float_emissive_content_is_linear() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "textures/pbr/lamp_g.tif", hdr_emissive());
@@ -1147,11 +1146,16 @@ fn hdr_float_emissive_content_is_linear() {
     let Decoded::Hdr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
         panic!("BC6H decodes to float");
     };
+    // BC6H error scales with the block's range, not the texel (measured max 3.2 % of the 4.0 peak); the sRGB
+    // bug this guards against turns 4.0 into 23.7 and 0.25 into 0.051.
+    const PEAK: f32 = 4.0;
     let src = hdr_emissive().to_rgb32f();
+    let top = px.iter().flatten().cloned().fold(0.0_f32, f32::max);
+    assert!((top - PEAK).abs() <= 0.05 * PEAK, "decoded peak {top}");
     for (i, (p, s)) in px.iter().zip(src.pixels()).enumerate() {
         for (c, (got, want)) in p.iter().zip(s.0).enumerate() {
             assert!(
-                (got - want).abs() <= 0.05 * want.max(0.25),
+                (got - want).abs() <= 0.04 * PEAK,
                 "texel {i} channel {c}: {got} vs source {want}"
             );
         }

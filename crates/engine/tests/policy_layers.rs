@@ -247,3 +247,106 @@ fn set_scopes_rank_above_command_line_order() {
         Format::Bc1
     );
 }
+
+const RGB32F: SourceInfo = SourceInfo {
+    bit_depth: 32,
+    channels: 3,
+    has_alpha: false,
+    is_float: true,
+};
+
+/// Resolves `game` as `st` under cs / cs-quality and returns the profile's `color.content` with its provenance.
+fn content_of(
+    game: &str,
+    suffix: &str,
+    info: &SourceInfo,
+    st: Subtype,
+    sets: &[&str],
+) -> (ColorContent, String) {
+    let reg = PresetRegistry::builtin().unwrap();
+    let allow = BTreeSet::new();
+    let overrides: Vec<_> = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+    let ctx = ResolveCtx {
+        target: Target::Cs,
+        registry: &reg,
+        preset: "cs-quality",
+        user_config: None,
+        project_config: None,
+        overrides: &overrides,
+        accept: AcceptSuggestions::None,
+        allow: &allow,
+    };
+    let img = Rgba32F::new(4, 4, [4.0, 2.0, 0.5, 1.0]);
+    let a = analyse(&img, info);
+    let f = input(game);
+    let set = TextureSet {
+        key: "x".into(),
+        members: vec![0],
+        suffixes: [suffix.to_string()].into(),
+    };
+    let facts = FileFacts {
+        input: &f,
+        suffix: Some(suffix),
+        alias: None,
+        set: &set,
+        analysis: &a,
+        info,
+    };
+    let (p, prov) = layered_profile(&ctx, &facts, st).unwrap();
+    (p.color.content, prov["color.content"].to_string())
+}
+
+/// Spec §4.1 `pbr_emissive` / `hdr_sky`: content is linear for a float source that goes to BC6H, an analysis
+/// fact (above presets, config and rules; below `--set`) with provenance `analysis:float-source`.
+#[test]
+fn float_source_to_bc6h_resolves_linear_content_as_an_analysis_fact() {
+    let g = "textures/pbr/lamp_g.tif";
+    assert_eq!(
+        content_of(g, "g", &RGB32F, Subtype::PbrEmissive, &[]),
+        (ColorContent::Linear, "analysis:float-source".into())
+    );
+    assert_eq!(
+        content_of(
+            "textures/sky/dome.tif",
+            "d",
+            &RGB32F,
+            Subtype::HdrSky,
+            &["file:**/dome.tif.format=bc6h_uf16"]
+        )
+        .0,
+        ColorContent::Linear
+    );
+    // 8-bit stays sRGB.
+    assert_eq!(
+        content_of(
+            "textures/pbr/lamp_g.png",
+            "g",
+            &RGB8,
+            Subtype::PbrEmissive,
+            &[]
+        )
+        .0,
+        ColorContent::Srgb
+    );
+    // An explicit --set wins, at any scope.
+    for s in [
+        "color.content=srgb",
+        "file:**/lamp_g.tif.color.content=srgb",
+    ] {
+        assert_eq!(
+            content_of(g, "g", &RGB32F, Subtype::PbrEmissive, &[s]),
+            (ColorContent::Srgb, "user".into()),
+            "{s}"
+        );
+    }
+    // The fact needs BC6H: a float source forced to BC7 keeps the LDR rule (separate carry).
+    assert_eq!(
+        content_of(g, "g", &RGB32F, Subtype::PbrEmissive, &["format=bc7"]).0,
+        ColorContent::Srgb
+    );
+    // A float LDR sub-type is out of scope.
+    assert_eq!(
+        content_of("textures/a/rock_d.tif", "d", &RGB32F, Subtype::Diffuse, &[]).0,
+        ColorContent::Srgb
+    );
+}

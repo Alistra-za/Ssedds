@@ -458,6 +458,7 @@ pub fn layered_profile(
     }
     let mut profile = finish_profile(doc, ctx.target, st)?;
     backend_follows_format(&mut profile, &mut prov, &sources);
+    float_source_is_linear(&mut profile, &mut prov, f);
     // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
     if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
         profile.channels.flip_green = true;
@@ -466,6 +467,24 @@ pub fn layered_profile(
         }
     }
     Ok((profile, prov))
+}
+
+/// Spec §4.1 (`pbr_emissive`, `hdr_sky`): a float source that goes to BC6H is linear radiance, so
+/// `color.content` resolves `linear` as an analysis fact (`analysis:float-source`): above presets, config
+/// and rules, below suffix facts and `--set`. It reads the resolved format, so it runs after the layers.
+/// Float sources written to LDR formats keep the sub-type's content (a separate carry).
+fn float_source_is_linear(p: &mut Profile, prov: &mut BTreeMap<String, Provenance>, f: &FileFacts) {
+    const FIELD: &str = "color.content";
+    let overruled = prov
+        .get(FIELD)
+        .is_some_and(|s| *s >= Provenance::Suffix(String::new()));
+    if f.info.is_float && p.format == Format::Bc6hUf16 && !overruled {
+        p.color.content = ColorContent::Linear;
+        prov.insert(
+            FIELD.into(),
+            Provenance::AnalysisFact("float-source".into()),
+        );
+    }
 }
 
 /// Whether `b` can write format `f`.

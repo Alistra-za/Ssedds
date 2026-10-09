@@ -185,6 +185,10 @@ fn provenance_serialises_as_spec_strings() {
         (Provenance::ProjectConfig, "project_config"),
         (Provenance::Rule("sdc.toml#3".into()), "rule:sdc.toml#3"),
         (Provenance::Analysis, "analysis"),
+        (
+            Provenance::AnalysisFact("float-source".into()),
+            "analysis:float-source",
+        ),
         (Provenance::Suggestion, "suggestion"),
         (Provenance::Set, "set"),
         (Provenance::User, "user"),
