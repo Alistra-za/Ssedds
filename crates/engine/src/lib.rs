@@ -6,6 +6,8 @@ pub mod discover;
 pub mod group;
 pub mod image;
 pub mod load;
+pub mod overrides;
+pub mod policy;
 pub mod presets;
 pub mod suggest;
 pub mod validate;
