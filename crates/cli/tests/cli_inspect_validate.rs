@@ -119,7 +119,7 @@ fn inspect_json_mode_prints_only_json_lines() {
         .arg(&dir)
         .output()
         .unwrap();
-    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr)); // bad.png cannot be read
     let lines: Vec<serde_json::Value> = text(&o.stdout)
         .lines()
         .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON: {l}: {e}")))
@@ -141,7 +141,7 @@ fn inspect_lists_dds_files_found_in_a_folder_and_reports_unreadable_ones() {
         .arg(dds.parent().unwrap())
         .output()
         .unwrap();
-    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr)); // junk.dds cannot be read
     let out = text(&o.stdout);
     assert!(
         out.contains("wall_n.dds") && out.contains("format Bc"),
@@ -192,7 +192,7 @@ fn validate_flags_254_as_info_and_passes_bench_bc7() {
             .output()
             .unwrap();
         assert_eq!(code(&o), 0, "{}", text(&o.stderr));
-        let err = text(&o.stderr);
+        let err = text(&o.stdout);
         assert!(err.contains("ALPHA-254") && err.contains("ok"), "{err}");
     }
 }
@@ -204,7 +204,7 @@ fn validate_unreadable_file_exits_1_even_next_to_a_good_one() {
     std::fs::write(&junk, b"not a dds").unwrap();
     let o = sdc().arg("validate").arg(&junk).output().unwrap();
     assert_eq!(code(&o), 1);
-    assert!(text(&o.stderr).contains("cannot be read"));
+    assert!(text(&o.stdout).contains("cannot be read"));
     let o = sdc()
         .arg("validate")
         .arg(d.path().join("missing.dds"))
@@ -263,7 +263,7 @@ fn validate_infers_the_subtype_from_the_name_and_rejects_bad_flags() {
     let dds = converted_normal(d.path());
     let o = sdc().arg("validate").arg(&dds).output().unwrap();
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
-    assert!(text(&o.stderr).contains("(normal)"), "{}", text(&o.stderr));
+    assert!(text(&o.stdout).contains("(normal"), "{}", text(&o.stdout));
     for args in [
         &["--subtype", "nonsense"][..],
         &["--subtype", "pbr_albedo", "--target", "vanilla"],
@@ -271,4 +271,334 @@ fn validate_infers_the_subtype_from_the_name_and_rejects_bad_flags() {
         let o = sdc().arg("validate").args(args).arg(&dds).output().unwrap();
         assert_eq!(code(&o), 2, "{args:?}");
     }
+}
+
+/// `<root>/in/<name>.png` (16x16 RGBA, alpha from `alpha(x, y)`) converted with `extra`; returns the DDS.
+fn converted_rgba(
+    root: &Path,
+    name: &str,
+    alpha: impl Fn(u32, u32) -> u8,
+    extra: &[&str],
+) -> PathBuf {
+    let src = root.join("in");
+    std::fs::create_dir_all(&src).unwrap();
+    let png = src.join(format!("{name}.png"));
+    ImageBuffer::from_fn(16, 16, |x, y| {
+        image::Rgba([x as u8 * 12, y as u8 * 12, 90, alpha(x, y)])
+    })
+    .save(&png)
+    .unwrap();
+    let out = root.join("out");
+    let o = sdc()
+        .args(["convert", "--accept-suggestions", "high", "-o"])
+        .arg(&out)
+        .arg(&png)
+        .args(extra)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    out.join(format!("{name}.dds"))
+}
+
+fn validate(args: &[&str], dds: &Path) -> Output {
+    sdc().arg("validate").args(args).arg(dds).output().unwrap()
+}
+
+#[test]
+fn validate_judges_a_file_that_stores_alpha_by_the_alpha_it_stores() {
+    // Review I1: any file with real alpha used to fail VAL-ALPHA-GUARANTEE under the subtype's `remove`.
+    let d = tempfile::tempdir().unwrap();
+    let blend = converted_rgba(
+        d.path(),
+        "leaf_d",
+        |x, y| (x * 16 + y) as u8 % 250,
+        &["--set", "subtype:diffuse.alpha.policy=blend"],
+    );
+    for target in ["cs", "vanilla"] {
+        let o = validate(&["--target", target], &blend);
+        let out = text(&o.stdout);
+        assert_eq!(code(&o), 0, "{target}: {out}");
+        assert!(!out.contains("VAL-ALPHA-GUARANTEE"), "{out}");
+    }
+    // The same pixels under the names of other sub-types that default to `remove`: `_p` (height) and `_m`.
+    for name in ["foo_p", "rock_m"] {
+        let copy = d.path().join(format!("{name}.dds"));
+        std::fs::copy(&blend, &copy).unwrap();
+        for target in ["cs", "vanilla"] {
+            let o = validate(&["--target", target], &copy);
+            let out = text(&o.stdout);
+            assert!(
+                !out.contains("VAL-ALPHA-GUARANTEE"),
+                "{name} {target}: {out}"
+            );
+            assert_eq!(code(&o), 0, "{name} {target}: {out}");
+        }
+    }
+}
+
+#[test]
+fn validate_applies_the_remove_guarantee_only_when_the_policy_is_remove() {
+    // Mostly opaque with a few texels at 239: the file stores alpha, so by default it is judged as `data`;
+    // `--alpha-policy remove` holds it to the >= 254 guarantee and fails it.
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_rgba(
+        d.path(),
+        "plate_d",
+        |x, y| if x < 2 && y < 2 { 239 } else { 255 },
+        &["--set", "subtype:diffuse.alpha.policy=data"],
+    );
+    let o = validate(&[], &dds);
+    assert_eq!(code(&o), 0, "{}", text(&o.stdout));
+    assert!(
+        text(&o.stdout).contains("alpha data"),
+        "{}",
+        text(&o.stdout)
+    );
+
+    let o = validate(&["--alpha-policy", "remove", "--json"], &dds);
+    assert_eq!(code(&o), 4, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["alpha_policy"], "remove");
+    assert!(
+        v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == "VAL-ALPHA-GUARANTEE"),
+        "{v}"
+    );
+    let o = validate(&["--alpha-policy", "bogus"], &dds);
+    assert_eq!(code(&o), 2);
+}
+
+#[test]
+fn validate_infers_remove_for_a_flat_opaque_file() {
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_rgba(d.path(), "wall_d", |_, _| 255, &[]);
+    let o = validate(&["--json"], &dds);
+    assert_eq!(code(&o), 0, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["alpha_policy"], "remove", "{v}");
+}
+
+#[test]
+fn result_verbs_print_their_report_on_stdout_and_only_json_with_json() {
+    // DECISIONS Note J.
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_normal(d.path());
+    let o = validate(&[], &dds);
+    assert_eq!(code(&o), 0);
+    let (out, err) = (text(&o.stdout), text(&o.stderr));
+    assert!(
+        out.contains("wall_n.dds") && out.contains("validated 1"),
+        "{out}"
+    );
+    assert!(err.is_empty(), "{err}");
+    let o = validate(&["--json"], &dds);
+    for l in text(&o.stdout).lines() {
+        serde_json::from_str::<serde_json::Value>(l).unwrap_or_else(|e| panic!("{l}: {e}"));
+    }
+    let o = validate(&[], &d.path().join("missing.dds"));
+    assert_eq!(code(&o), 1);
+    assert!(
+        text(&o.stdout).contains("cannot be read"),
+        "{}",
+        text(&o.stdout)
+    );
+}
+
+#[test]
+fn inspect_json_is_deterministic_and_relative_to_the_mapped_root() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&dir).unwrap();
+    ImageBuffer::from_fn(8, 8, |_, _| Rgb([128u8, 128, 255]))
+        .save(dir.join("rock_n.png"))
+        .unwrap();
+    let run = || {
+        let tmp = tempfile::tempdir().unwrap();
+        let o = sdc()
+            .env("TMP", tmp.path())
+            .env("TEMP", tmp.path())
+            .args(["inspect", "--json", "--recursive"])
+            .args(["--set", "file:**/rock_n.png.alpha.threshold=100"])
+            .arg(d.path().join("in"))
+            .output()
+            .unwrap();
+        assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+        text(&o.stdout)
+            .lines()
+            .map(|l| {
+                let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+                v["ts"].take();
+                v["batch"].take();
+                v
+            })
+            .collect::<Vec<_>>()
+    };
+    let (a, b) = (run(), run());
+    assert_eq!(a, b);
+    let all = serde_json::to_string(&a).unwrap();
+    assert!(!all.contains("sdc-inspect-"), "{all}");
+    let disc = a.iter().find(|v| v["kind"] == "file_discovered").unwrap();
+    assert_eq!(disc["output"], "textures/a/rock_n.dds");
+    let planned = a.iter().find(|v| v["kind"] == "file_planned").unwrap();
+    assert_eq!(planned["job"]["output"], "textures/a/rock_n.dds");
+    let set = a.iter().find(|v| v["kind"] == "set_resolved").unwrap();
+    assert!(
+        set["set"].as_str().unwrap().starts_with("textures/a/"),
+        "{set}"
+    );
+}
+
+#[test]
+fn inspect_honours_bc1_decoder_and_exits_1_when_an_input_cannot_be_read() {
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_normal(d.path());
+    for model in ["ideal", "ideal-round4", "nvidia", "amd"] {
+        let o = sdc()
+            .args(["inspect", "--bc1-decoder", model])
+            .arg(&dds)
+            .output()
+            .unwrap();
+        assert_eq!(code(&o), 0, "{model}: {}", text(&o.stderr));
+    }
+    let o = sdc()
+        .args(["inspect", "--bc1-decoder", "bogus"])
+        .arg(&dds)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2);
+
+    let junk = d.path().join("junk.dds");
+    std::fs::write(&junk, b"not a dds").unwrap();
+    let o = sdc().arg("inspect").arg(&junk).output().unwrap();
+    assert_eq!(code(&o), 1);
+    assert!(text(&o.stdout).contains("cannot be read"));
+    let png = d.path().join("bad.png");
+    std::fs::write(&png, b"not a png").unwrap();
+    let o = sdc()
+        .args(["inspect", "--json"])
+        .arg(&png)
+        .arg(&dds)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 1);
+    // A missing input stays a usage error.
+    let o = sdc().args(["inspect", "nope.png"]).output().unwrap();
+    assert_eq!(code(&o), 2);
+}
+
+#[test]
+fn inspect_and_dry_run_convert_plan_an_image_next_to_its_same_stem_dds() {
+    // Review I2: both used to be IN-DUPLICATE and the image lost its plan.
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("mixed");
+    std::fs::create_dir_all(&dir).unwrap();
+    ImageBuffer::from_fn(8, 8, |_, _| Rgb([128u8, 128, 255]))
+        .save(dir.join("rock_n.png"))
+        .unwrap();
+    let dds = converted_normal(d.path());
+    std::fs::copy(&dds, dir.join("rock_n.dds")).unwrap();
+
+    let o = sdc()
+        .args(["inspect", "--json"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("\"kind\":\"file_planned\""), "{out}");
+    assert!(out.contains("\"kind\":\"dds_info\""), "{out}");
+    assert!(!out.contains("IN-DUPLICATE"), "{out}");
+    let o = sdc().arg("inspect").arg(&dir).output().unwrap();
+    assert!(
+        text(&o.stdout).contains("suggested normal"),
+        "{}",
+        text(&o.stdout)
+    );
+
+    let o = sdc()
+        .args(["convert", "--dry-run", "--accept-suggestions", "high", "-o"])
+        .arg(d.path().join("planned"))
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(
+        !text(&o.stderr).contains("IN-DUPLICATE"),
+        "{}",
+        text(&o.stderr)
+    );
+}
+
+/// A 4x4 BC2 (DXT3) file, or the same with the LINEARSIZE flag cleared.
+fn bc2_file(dir: &Path, name: &str, break_header: bool) -> PathBuf {
+    let mut b = vec![0u8; 128 + 16];
+    let put = |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    b[0..4].copy_from_slice(b"DDS ");
+    put(&mut b, 4, 124);
+    // CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE
+    put(&mut b, 8, if break_header { 0x1007 } else { 0x8_1007 });
+    put(&mut b, 12, 4);
+    put(&mut b, 16, 4);
+    put(&mut b, 20, 16);
+    put(&mut b, 76, 32);
+    put(&mut b, 80, 4); // DDPF_FOURCC
+    b[84..88].copy_from_slice(b"DXT3");
+    put(&mut b, 108, 0x1000); // TEXTURE
+    let p = dir.join(name);
+    std::fs::write(&p, b).unwrap();
+    p
+}
+
+#[test]
+fn validate_does_not_judge_formats_sdc_never_writes_but_still_checks_their_header() {
+    let d = tempfile::tempdir().unwrap();
+    let good = bc2_file(d.path(), "ui_d.dds", false);
+    let o = validate(&["--json"], &good);
+    assert_eq!(code(&o), 0, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["judged"], false, "{v}");
+    assert_eq!(v["passed"], true);
+    let note = v["note"].as_str().unwrap();
+    assert!(
+        note.contains("not judged: format not produced by sdc"),
+        "{v}"
+    );
+    let o = validate(&[], &good);
+    assert!(text(&o.stdout).contains("not judged: format not produced by sdc"));
+
+    let bad = bc2_file(d.path(), "ui2_d.dds", true);
+    let o = validate(&["--json"], &bad);
+    assert_eq!(code(&o), 4, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["warnings"][0]["code"], "VAL-HEADER", "{v}");
+}
+
+#[test]
+fn validate_falls_back_when_the_inferred_subtype_is_unavailable_but_not_an_explicit_one() {
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_normal(d.path());
+    let rmaos = d.path().join("foo_rmaos.dds");
+    std::fs::copy(&dds, &rmaos).unwrap();
+    let o = validate(&["--target", "vanilla"], &rmaos);
+    assert_eq!(code(&o), 0, "{}", text(&o.stdout));
+    let out = text(&o.stdout);
+    assert!(
+        out.contains("rmaos is unavailable") && out.contains("generic_data"),
+        "{out}"
+    );
+    let o = validate(&["--target", "vanilla", "--subtype", "rmaos"], &rmaos);
+    assert_eq!(code(&o), 2);
+}
+
+#[test]
+fn validate_target_help_states_the_default() {
+    let o = sdc().args(["validate", "--help"]).output().unwrap();
+    assert!(
+        text(&o.stdout).contains("default cs"),
+        "{}",
+        text(&o.stdout)
+    );
 }

@@ -823,15 +823,34 @@ fn intentional_skips_exit_0_and_unintended_ones_exit_1() {
         (Some(1), Some(1), Some(1))
     );
 
-    // (b) A DDS and a PNG for the same output are a duplicate to resolve: exit 1, nothing is intentional.
-    fx.write("in/textures/a/wall.dds", "not a real dds");
+    // (b) Two images for the same output are a duplicate to resolve: exit 1, nothing is intentional.
+    fx.rgb("wall.tga");
     let o = fx.convert_to("out2", &DIFFUSE);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     let s = skips(&o);
     assert!(s.contains(&("wall.png".into(), Some("IN-DUPLICATE".into()))));
-    assert!(s.contains(&("wall.dds".into(), Some("IN-DUPLICATE".into()))));
+    assert!(s.contains(&("wall.tga".into(), Some("IN-DUPLICATE".into()))));
     assert_eq!(batch_done(&o)["skipped_intentional"], 1); // only other.dds
     assert!(!fx.p("out2/textures/a/wall.dds").exists());
+
+    // (c) A DDS next to the image for the same output has no output of its own: the image converts, the DDS
+    // is skipped on purpose, exit 0.
+    std::fs::remove_file(fx.p("in/textures/a/wall.tga")).unwrap();
+    fx.write("in/textures/a/wall.dds", "not a real dds");
+    let o = fx.convert_to("out3", &DIFFUSE);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let s = skips(&o);
+    assert!(s.contains(&("wall.dds".into(), Some("IN-DDS-SKIPPED".into()))));
+    assert!(!s.iter().any(|(_, c)| c.as_deref() == Some("IN-DUPLICATE")));
+    let done = batch_done(&o);
+    assert_eq!(
+        (
+            done["converted"].as_u64(),
+            done["skipped_intentional"].as_u64()
+        ),
+        (Some(1), Some(2))
+    );
+    assert!(fx.p("out3/textures/a/wall.dds").exists());
 }
 
 #[test]

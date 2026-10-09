@@ -157,17 +157,26 @@ pub struct ConvertArgs {
 pub struct InspectArgs {
     #[command(flatten)]
     pub batch: BatchArgs,
+    /// BC1 decoder model used to decode DDS inputs.
+    #[arg(long, value_enum, default_value = "ideal")]
+    pub bc1_decoder: Bc1Arg,
 }
 
 #[derive(Args)]
 pub struct ValidateArgs {
     #[arg(required = true)]
     pub dds: Vec<PathBuf>,
+    /// Target whose rules apply (default cs).
     #[arg(long, value_enum)]
     pub target: Option<TargetArg>,
     /// Sub-type the files are meant to be (default: inferred from the file name).
     #[arg(long)]
     pub subtype: Option<String>,
+    /// Alpha policy the files are meant to follow (default: inferred from the stored alpha; `remove` if
+    /// every mip-0 alpha is at least 254).
+    #[arg(long, value_parser = ["remove", "cutout", "blend", "cutout_blend", "data"])]
+    pub alpha_policy: Option<String>,
+    /// Write one JSON object per file to stdout (the human report goes to stderr).
     #[arg(long)]
     pub json: bool,
     #[arg(long, value_enum, default_value = "ideal")]
