@@ -2,6 +2,7 @@
 //! Exit codes, highest precedence first: 3 fatal > 2 usage/config > 1 partial > 4 validation failed > 0.
 mod args;
 mod human;
+mod verbs;
 
 use args::*;
 use clap::Parser;
@@ -54,6 +55,8 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
 fn run(cli: Cli) -> Result<i32, EngineError> {
     match cli.cmd {
         Command::Convert(a) => convert(a),
+        Command::Inspect(a) => verbs::inspect(a),
+        Command::Validate(a) => verbs::validate_files(a),
         _ => Err(EngineError::Usage(
             "this command is not implemented yet".into(),
         )),
