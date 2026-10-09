@@ -674,7 +674,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | bc7e u5, flag off, `rgb_real` (mip 0) | Mean RGB PSNR within **0.01 dB** of the bench's 50.98 dB, each image within 0.01 dB, same decoder [B1 §3] |
 | bc7e u5 on alpha and packed sets | Each image within 0.01 dB of `results.csv` |
 | bc7e patch, flag off | Bit-identical to unpatched upstream on every set |
-| bc7e patch, flag on (and byte-patch fallback) | Decoded alpha **== 255 on every pixel** of the opaque sets (`rgb_real`, `rgb_grad`, `stray_*` after `remove`) at every mip of full chains; mean RGB PSNR per set within **0.05 dB** of unpatched u5, worst image reported |
+| bc7e patch, flag on (and byte-patch fallback) | Decoded alpha **== 255 on every pixel** of the opaque sets (`rgb_real`, `rgb_grad`, `stray_*` after `remove`) at every mip of full chains; mean RGB PSNR per set within **0.05 dB** of unpatched u5, worst image reported. *Measured −0.08 to −1.02 dB (S5): the 0.05 dB limit decides only whether the flag goes on everywhere (§14 #5, not proposed); `sdc-bench --gates` gates alpha == 255 and flag-off bit-identity, and reports ΔRGB as info [D S5].* |
 | rgbcx BC1/BC3 L18, BC4 `-4`, BC5 `-5` | **Bit-exact** versus bc7enc_rdo in the bench's configuration [B1 §6], [B2 §3–4], including BC1 transparent-black **on** as the bench ran; a second bit-exact check compares the shipped **off** setting with `bc7enc` run with that mode disabled |
 | ISPC `bc6h_veryslow`, `hdr_real` | mPSNR within 0.01 dB of 51.50 dB [B2 §6] |
 

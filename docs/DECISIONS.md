@@ -207,3 +207,11 @@ A DDS in a format sdc never writes (BC2, uncompressed, signed) gets header check
 - **`--mem-budget 0`** is a usage error (exit 2), not "default"; omit the flag for 50% of RAM.
 - **`encoder.bc1_transparent_black = true` with a BC1 output is `CFG-INVALID`** (Note F: BC1 is opaque-only in v1). The setting stays in the schema for the day BC1 alpha is offered; it is inert for other formats.
 - **Test-only hooks** (behind the engine cargo feature `test-hooks`, off by default; the `sdc` feature of the same name forwards to it; compiled out of `cargo build --release -p sdc`, which has no `SDC_TEST_*` strings. Engine and CLI dev-dependencies enable the feature, so plain `cargo test --workspace` runs the tests that use them): `SDC_TEST_PANIC_ON=<input file name>` panics that file; `SDC_TEST_FAIL_VALIDATION=<input file stem>` adds one `VAL-HEADER` error to that file's validation report. The second exists because no setting reaches an error-severity `VAL-*` code, so exit 4 would otherwise have no deterministic trigger.
+
+## Note L — near-opaque source alpha (owner, 2026-10-09)
+
+Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS carry alpha 251–255. That is BC encode noise, not data.
+- **Rule:** source alpha whose minimum is **≥ 251** (no texel below 251) is treated as opaque. It resolves like constant-255 alpha, so `remove` applies and no LOSS-ALPHA-DATA is raised. An info code `ALPHA-NEAR-OPAQUE` reports the minimum.
+- **Below the cutoff:** one texel below 251 keeps the normal varying-alpha rules.
+- **Override:** an explicit `alpha.policy` still wins.
+- **Why 251:** it matches Community Shaders' 251 opacity gate (Note A).
