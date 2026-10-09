@@ -937,13 +937,9 @@ fn a_layered_validation_threshold_changes_what_validation_reports() {
             .map(|e| e["message"].as_str().unwrap().to_string())
             .collect()
     };
-    // `alpha.exact_opaque` keeps the decoded alpha at 255 on this noise (see the exit-4 test below).
-    let base = [
-        "--set",
-        "subtype=diffuse",
-        "--set",
-        "alpha.exact_opaque=true",
-    ];
+    // The defaults (`alpha.exact_opaque` off, alpha removed) hold the decoded-alpha guarantee on this noise (fix
+    // batch 41), so every run exits 0 and only the warning moves.
+    let base = DIFFUSE;
     let o = fx.convert(&base);
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
     assert!(
@@ -972,17 +968,41 @@ validation = { min_mip_psnr_db = 1.0 }
     );
 }
 
+/// A 16 px checker of pure black and orange at `in/textures/a/<name>` (RGB, so the alpha is removed).
+fn black_checker(fx: &Fx, name: &str) {
+    ImageBuffer::from_fn(16, 16, |x, y| {
+        if (x + y) % 2 == 0 {
+            Rgb([0u8, 0, 0])
+        } else {
+            Rgb([230, 120, 20])
+        }
+    })
+    .save(fx.p(&format!("in/textures/a/{name}")))
+    .unwrap();
+}
+
+/// Settings under which a written output fails validation deterministically: BC1 with transparent-black texels
+/// switched on (off by default, DECISIONS Note F) and the alpha removed. rgbcx writes the black texels with BC1's
+/// transparent index, they decode alpha 0, and the `remove` guarantee for BC1 is 255 (spec §5.8), so validation
+/// reports `VAL-ALPHA-GUARANTEE`, an error. (`VAL-MIP-ERROR` is only a warning, and `VAL-HEADER` cannot be reached
+/// through settings.)
+const FAILS_VALIDATION: [&str; 8] = [
+    "--set",
+    "subtype=diffuse",
+    "--set",
+    "format=bc1",
+    "--set",
+    "encoder.backend=rgbcx",
+    "--set",
+    "encoder.bc1_transparent_black=true",
+];
+
 /// Spec §8: a written output that fails validation exits 4, and a partial batch (1) outranks it.
-///
-/// The failure comes from the current bc7e behaviour on white noise: with `alpha.exact_opaque` off (the diffuse
-/// default) and the alpha removed, the decoded alpha of this image is 239, below the 254 guarantee
-/// (`VAL-ALPHA-GUARANTEE`, DECISIONS Note A). If the encoder is ever made to hold the guarantee here, pick another
-/// way to fail validation; the exit-code rule is what this test is about.
 #[test]
 fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
     let fx = Fx::new();
-    noise(&fx, "noise.png");
-    let o = fx.convert(&DIFFUSE);
+    black_checker(&fx, "checker.png");
+    let o = fx.convert(&FAILS_VALIDATION);
     assert_eq!(code(&o), 4, "{}", text(&o.stderr));
     let done = batch_done(&o);
     assert_eq!(
@@ -995,20 +1015,17 @@ fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
     assert!(text(&o.stderr).contains("[VALIDATION FAILED]"));
     assert!(text(&o.stderr).contains("VAL-ALPHA-GUARANTEE"));
     // The output is still written (the report says so; the file is not deleted).
-    assert!(fx.dds("textures/a/noise.dds").exists());
+    assert!(fx.dds("textures/a/checker.dds").exists());
     // A failed validation is not up to date: the next run encodes it again and reports it again.
-    let o = fx.convert(&DIFFUSE);
+    let o = fx.convert(&FAILS_VALIDATION);
     assert_eq!(code(&o), 4, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["converted"], 1);
 
     // Partial (exit 1) outranks validation failed (exit 4).
     fx.rgb("bad.png");
-    let o = fx.convert(&[
-        "--set",
-        "subtype=diffuse",
-        "--set",
-        "file:**/bad.png.alpha.threshold=3",
-    ]);
+    let mut args = FAILS_VALIDATION.to_vec();
+    args.extend(["--set", "file:**/bad.png.alpha.threshold=3"]);
+    let o = fx.convert(&args);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["validation_failed"], 1);
 }

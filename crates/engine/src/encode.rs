@@ -56,9 +56,14 @@ pub fn radius(r: SearchRadius) -> u32 {
 }
 
 /// Encode one band (one block row) of an LDR image. `b` holds 16 texels per block (see
-/// `gather_blocks`), `o` the matching output bytes. With `p.alpha.exact_opaque`, every block whose
-/// input alpha is 255 throughout gets exact opaque alpha: `native` selects the bc7e flag for mode 6
-/// (else the mode-6 byte patch), and rotated mode 4/5 blocks are patched in both cases.
+/// `gather_blocks`), `o` the matching output bytes.
+///
+/// BC7 blocks whose input alpha is 255 throughout (spec §5.6, §5.8):
+/// - Rotated mode 4/5 blocks always get the lossless rotated-slot fix, whatever `alpha.exact_opaque`
+///   and the alpha policy (fix batch 41). Without it bc7e can decode such a block's alpha well below
+///   254 (239 on white noise), which would break the `remove` guarantee.
+/// - `alpha.exact_opaque` controls only mode 6, the part that costs RGB: `native` selects the bc7e
+///   flag (else the mode-6 byte patch). With the flag off, mode 6 is the only source of alpha 254.
 fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
     let e = &p.encoder;
     match p.format {
@@ -74,17 +79,15 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
             {
                 bc7e_compress_blocks(bc, oc, params);
             }
-            if p.alpha.exact_opaque {
-                for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
-                    if src.iter().all(|t| t[3] == 255) {
-                        let blk: &mut [u8; 16] = blk.try_into().unwrap();
-                        if !native {
-                            force_opaque_mode6(blk);
-                        }
-                        // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native
-                        // flag nor the mode-6 patch covers them. Lossless for RGB.
-                        force_opaque_rotated(blk);
+            for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
+                if src.iter().all(|t| t[3] == 255) {
+                    let blk: &mut [u8; 16] = blk.try_into().unwrap();
+                    if p.alpha.exact_opaque && !native {
+                        force_opaque_mode6(blk);
                     }
+                    // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native flag
+                    // nor the mode-6 patch covers them. Lossless for RGB, so it runs with the flag off.
+                    force_opaque_rotated(blk);
                 }
             }
         }

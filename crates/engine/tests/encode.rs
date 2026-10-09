@@ -1,7 +1,10 @@
 use engine::config::*;
 use engine::encode::*;
+use engine::image::Rgba32F;
+use engine::mips::build_chain;
+use engine::ops::preprocess;
 use engine::presets::PresetRegistry;
-use engine::quantize::EncoderInput;
+use engine::quantize::{to_encoder_input, EncoderInput};
 use std::sync::{atomic::AtomicBool, Arc};
 
 fn profile(st: Subtype) -> Profile {
@@ -180,30 +183,157 @@ fn exact_opaque_covers_rotated_mode4_and_mode5_on_opaque_noise() {
     assert!(fixed_blocks > 0, "no rotated mode 4/5 block needed a fix");
 }
 
-/// With `exact_opaque` off the encode stage returns bc7e's bytes untouched, rotated blocks included.
-#[test]
-fn exact_opaque_off_leaves_bc7e_output_unchanged() {
-    let mut p = profile(Subtype::Diffuse);
-    p.format = Format::Bc7;
-    p.encoder.perceptual = false;
-    p.alpha.exact_opaque = false;
-    let px = opaque_noise(1, 64 * 64);
-    let out = encode(&EncoderInput::Ldr(px.clone()), 64, 64, &p);
-    let blocks = encoders_sys::gather_blocks(&px, 64, 64);
-    let mut raw = vec![0u8; out.len()];
-    let params = encoders_sys::Bc7Params {
-        level: bc7_level(p.encoder.effort),
-        perceptual: false,
-        exact_opaque: false,
-    };
+/// Raw bc7e output for a row-major image: the same calls as the encode stage, without any post-encode fix.
+fn raw_bc7e(px: &[[u8; 4]], w: u32, h: u32, params: encoders_sys::Bc7Params) -> Vec<u8> {
+    let blocks = encoders_sys::gather_blocks(px, w, h);
+    let mut raw = vec![0u8; blocks.len()];
     for (o, b) in raw.chunks_mut(64 * 16).zip(blocks.chunks(64 * 16)) {
         encoders_sys::bc7e_compress_blocks(b, o, params);
     }
-    assert!(
-        raw.chunks(16).any(rotated_mode45),
-        "probe needs rotated blocks"
+    raw
+}
+
+fn min_decoded_alpha(bc7: &[u8]) -> u8 {
+    bc7.chunks(16)
+        .map(|b| {
+            let mut d = [0u8; 64];
+            bcdec_rs::bc7(b, &mut d, 16);
+            d.chunks(4).map(|t| t[3]).min().unwrap()
+        })
+        .min()
+        .unwrap()
+}
+
+/// Checks `out` against the raw bc7e bytes of the same opaque input: every block that differs is a rotated
+/// mode 4/5 block that decodes alpha 255 throughout and RGB bit-identical to the raw block. Returns the number
+/// of changed blocks whose raw version decoded some alpha below 255 (the ones the fix was needed for).
+fn only_rotated_blocks_fixed(out: &[u8], raw: &[u8], what: &str) -> usize {
+    assert_eq!(out.len(), raw.len(), "{what}");
+    let mut needed = 0;
+    for (i, (f, r)) in out.chunks(16).zip(raw.chunks(16)).enumerate() {
+        if f == r {
+            continue;
+        }
+        assert!(
+            rotated_mode45(r),
+            "{what} block {i}: only rotated mode 4/5 blocks may change"
+        );
+        let (mut df, mut dr) = ([0u8; 64], [0u8; 64]);
+        bcdec_rs::bc7(f, &mut df, 16);
+        bcdec_rs::bc7(r, &mut dr, 16);
+        for (tf, tr) in df.chunks(4).zip(dr.chunks(4)) {
+            assert_eq!(
+                tf[..3],
+                tr[..3],
+                "{what} block {i}: RGB must stay bit-identical"
+            );
+            assert_eq!(tf[3], 255, "{what} block {i}: alpha after the fix");
+        }
+        needed += dr.chunks(4).any(|t| t[3] != 255) as usize;
+    }
+    needed
+}
+
+/// With `exact_opaque` off, rotated mode 4/5 blocks of all-255 input are still fixed (the fix is lossless, so it is
+/// unconditional; fix batch 41), whatever the alpha policy; every other block keeps bc7e's bytes.
+#[test]
+fn exact_opaque_off_still_fixes_rotated_blocks_and_nothing_else() {
+    for policy in [AlphaPolicy::Remove, AlphaPolicy::Data] {
+        let mut p = profile(Subtype::Diffuse);
+        p.format = Format::Bc7;
+        p.encoder.perceptual = false;
+        p.alpha.exact_opaque = false;
+        p.alpha.policy = policy;
+        let px = opaque_noise(1, 64 * 64);
+        let out = encode(&EncoderInput::Ldr(px.clone()), 64, 64, &p);
+        let raw = raw_bc7e(
+            &px,
+            64,
+            64,
+            encoders_sys::Bc7Params {
+                level: bc7_level(p.encoder.effort),
+                perceptual: false,
+                exact_opaque: false,
+            },
+        );
+        assert!(
+            min_decoded_alpha(&raw) < 254,
+            "probe needs a broken rotated block"
+        );
+        let mut want = raw.clone();
+        for b in want.chunks_mut(16) {
+            encoders_sys::bc7_fixup::force_opaque_rotated(b.try_into().unwrap());
+        }
+        assert!(
+            out == want,
+            "{policy:?}: output != bc7e bytes with the rotated fix applied"
+        );
+        assert!(only_rotated_blocks_fixed(&out, &raw, &format!("{policy:?}")) > 0);
+        assert_eq!(min_decoded_alpha(&out), 255, "{policy:?}");
+    }
+}
+
+/// Task 41's CLI fixture (`cli/tests/cli_convert.rs`, `noise`): 64x64 RGB white noise from an LCG, as
+/// `load_image` returns an 8-bit RGB PNG.
+fn task41_noise() -> Rgba32F {
+    let mut state = 12345u32;
+    let mut next = move || {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (state >> 24) as f32 / 255.0
+    };
+    let px = (0..64 * 64)
+        .map(|_| {
+            let (r, g, b) = (next(), next(), next());
+            [r, g, b, 1.0]
+        })
+        .collect();
+    Rgba32F {
+        width: 64,
+        height: 64,
+        px,
+    }
+}
+
+/// Task 41 / fix batch 41: a diffuse with the defaults (`remove`, `exact_opaque` off) decoded alpha 239 on white
+/// noise. Through the pipeline's own stages every mip now decodes alpha >= 254 (spec §5.8), and the only
+/// difference from the unfixed bc7e encode is the lossless rotated-block fix.
+#[test]
+fn remove_guarantee_holds_on_task41_noise_with_exact_opaque_off() {
+    let p = profile(Subtype::Diffuse);
+    assert_eq!(
+        (p.format, p.alpha.policy, p.alpha.exact_opaque),
+        (Format::Bc7, AlphaPolicy::Remove, false)
     );
-    assert_eq!(out, raw);
+    let work = preprocess(task41_noise(), &p);
+    let chain = build_chain(&work, &p);
+    assert_eq!(chain.len(), 7, "full chain 64 -> 1");
+    let raw_params = encoders_sys::Bc7Params {
+        level: bc7_level(p.encoder.effort),
+        perceptual: p.encoder.perceptual,
+        exact_opaque: false,
+    };
+    let (mut raw_broken, mut needed) = (0, 0);
+    for (l, level) in chain.iter().enumerate() {
+        let EncoderInput::Ldr(px) = to_encoder_input(level, &work, &p) else {
+            panic!("LDR input expected");
+        };
+        assert!(
+            px.iter().all(|t| t[3] == 255),
+            "mip {l}: removed alpha is 255"
+        );
+        let (w, h) = (level.width, level.height);
+        let out = encode(&EncoderInput::Ldr(px.clone()), w, h, &p);
+        let min = min_decoded_alpha(&out);
+        assert!(min >= 254, "mip {l}: decoded alpha {min} below 254");
+        let raw = raw_bc7e(&px, w, h, raw_params);
+        raw_broken += (min_decoded_alpha(&raw) < 254) as usize;
+        needed += only_rotated_blocks_fixed(&out, &raw, &format!("mip {l}"));
+    }
+    assert!(
+        raw_broken > 0,
+        "the unfixed encode must break the guarantee here (Task 41 saw alpha 239)"
+    );
+    assert!(needed > 0);
 }
 
 #[test]
@@ -214,6 +344,8 @@ fn exact_opaque_leaves_transparent_blocks_alone() {
     p.alpha.policy = AlphaPolicy::Data;
     p.encoder.perceptual = false; // also allow modes 4/5, which the rotated fix touches
     assert!(p.alpha.exact_opaque);
+    let mut off = p.clone();
+    off.alpha.exact_opaque = false; // the rotated fix runs with the flag off too
     let src: Vec<[u8; 4]> = (0..16 * 16u32)
         .map(|i| {
             [
@@ -224,19 +356,22 @@ fn exact_opaque_leaves_transparent_blocks_alone() {
             ]
         })
         .collect();
-    let out = encode(&EncoderInput::Ldr(src.clone()), 16, 16, &p);
-    for (bi, blk) in out.chunks(16).enumerate() {
-        let mut d = [0u8; 64];
-        bcdec_rs::bc7(blk, &mut d, 16);
-        let (bx, by) = (bi as u32 % 4 * 4, bi as u32 / 4 * 4);
-        for (ti, t) in d.chunks(4).enumerate() {
-            let (x, y) = (bx + ti as u32 % 4, by + ti as u32 / 4);
-            let want = src[(y * 16 + x) as usize][3] as i32;
-            assert!(
-                (t[3] as i32 - want).abs() <= 8,
-                "block {bi} texel {ti}: alpha {} for source {want}",
-                t[3]
-            );
+    for p in [&p, &off] {
+        let out = encode(&EncoderInput::Ldr(src.clone()), 16, 16, p);
+        for (bi, blk) in out.chunks(16).enumerate() {
+            let mut d = [0u8; 64];
+            bcdec_rs::bc7(blk, &mut d, 16);
+            let (bx, by) = (bi as u32 % 4 * 4, bi as u32 / 4 * 4);
+            for (ti, t) in d.chunks(4).enumerate() {
+                let (x, y) = (bx + ti as u32 % 4, by + ti as u32 / 4);
+                let want = src[(y * 16 + x) as usize][3] as i32;
+                assert!(
+                    (t[3] as i32 - want).abs() <= 8,
+                    "exact_opaque {}: block {bi} texel {ti}: alpha {} for source {want}",
+                    p.alpha.exact_opaque,
+                    t[3]
+                );
+            }
         }
     }
 }
