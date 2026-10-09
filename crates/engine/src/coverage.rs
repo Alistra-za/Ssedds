@@ -20,7 +20,10 @@
 //!   the anchor's group is 1.0 that halves opaque interiors, which visibly breaks
 //!   `cutout_blend`. This module uses a monotone piecewise-linear remap keeping 0 → 0 and
 //!   1 → 1: `[0, a] → [0, T]`, `[a, 1] → [T, 1]`. The pass set depends only on order and the
-//!   boundary, so coverage is the same (controller ruling, owner check; spec §5.5 note).
+//!   boundary, so coverage is the same (controller ruling, owner check; spec §5.5 note). When
+//!   the anchor is 1.0 and lower alphas already pass, the knot is the next lower distinct alpha
+//!   `b`, mapped to the largest failing float (`[0, b] → [0, T⁻]`, `[b, 1] → [T⁻, 1]`), so the
+//!   1.0 group stays 1.0 and is the only one that passes.
 //! - **`k = 0`.** A level whose target rounds to zero is left unchanged (spec). Its "within
 //!   one texel" result relies on the level being a box-filtered descendant of level 0: a box
 //!   average passes only if its footprint holds a passing base texel, so ordinary content
@@ -122,9 +125,10 @@ fn nearest_group(w: &mut [f32], k: usize) -> Option<(f32, usize)> {
 /// left untouched). Per level the target is `k = round(p · n)`; the anchor `a` is the distinct
 /// alpha whose count `#(alpha >= a)` is nearest `k` (ties to the larger count). Alpha is then
 /// remapped piecewise-linearly, `[0, a] → [0, T]` and `[a, 1] → [T, 1]` with `T` the smallest
-/// float whose code passes, so exactly the texels `>= a` pass. A level is left unchanged when
-/// `k = 0`, when it has no positive alpha, when its pass set already matches, or when the
-/// anchor is 1.0.
+/// float whose code passes, so exactly the texels `>= a` pass. When `a` is 1.0 the knot moves
+/// to the next lower distinct alpha `b`, mapped to the largest failing float, so 1.0 stays 1.0
+/// and `b` and everything below fail. A level is left unchanged when `k = 0`, when it has no
+/// positive alpha, or when its pass count already equals the chosen count.
 pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCompare) {
     let Some((base, rest)) = chain.split_first_mut() else {
         return;
@@ -154,19 +158,36 @@ pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCom
             continue;
         };
         // The current pass set is an upper set in alpha order, so an equal count is the same
-        // set. An anchor of 1.0 cannot move to `T` while keeping 1 at 1 (controller ruling).
-        if pass_count(level) == count || a >= 1.0 {
+        // set: nothing to do.
+        let passing = pass_count(level);
+        if passing == count {
             continue;
         }
-        let low = t / a; // finite: a >= f32::MIN_POSITIVE
-        let high = (1.0 - t) / (1.0 - a);
+        // The knot `(x, y)` of the remap. Normally the anchor `a` goes to `T`. An anchor of 1.0
+        // must stay 1.0, so the next lower distinct alpha `b` goes to the largest failing
+        // float instead (`[0, b] -> [0, T-]`, `[b, 1] -> [T-, 1]`) and only the 1.0 group
+        // passes. `passing > count` here (1.0 always passes), so a lower passing `b` exists.
+        let (x, y) = if a < 1.0 {
+            (a, t)
+        } else {
+            let Some(b) = w.iter().copied().filter(|&v| v < 1.0).reduce(f32::max) else {
+                continue;
+            };
+            if b < f32::MIN_POSITIVE {
+                continue;
+            }
+            (b, t_fail)
+        };
+        let low = y / x; // finite: x >= f32::MIN_POSITIVE
+        let high = (1.0 - y) / (1.0 - x);
         for q in &mut level.px {
             let w = unit_alpha(q[3]);
             q[3] = if w >= 1.0 {
                 1.0
-            } else if w >= a {
-                // Every term is >= 0, so the result is >= T and passes; w = a gives T exactly.
-                (t + (w - a) * high).min(1.0)
+            } else if w >= x {
+                // Every term is >= 0, so the result is >= y; w = x gives y exactly. With
+                // `y = T-` the only input here is `b` itself (nothing lies in `(b, 1)`).
+                (y + (w - x) * high).min(1.0)
             } else {
                 // Capped at the largest failing float, so f32 rounding cannot promote it.
                 (w * low).min(t_fail)
@@ -392,6 +413,39 @@ mod tests {
         preserve_coverage(&mut c, 200, AlphaCompare::Gt);
         assert_eq!(alpha_of(&c[1]).filter(|&a| a == 1.0).count(), 4);
         assert_eq!(pass_count(&c[1], 200, AlphaCompare::Gt), 6);
+    }
+
+    #[test]
+    fn opaque_anchor_with_lower_passing_group_demotes_the_lower_group() {
+        // Level 1 (4x4): 3 x 1.0, 5 x 0.9, 8 x 0.2. Base p = 3/16, so k = 3 and the nearest
+        // achievable count is the 1.0 group. The 0.9s already pass, so leaving the level alone
+        // would over-cover (8). They must drop to the largest failing float, 1.0 stays 1.0.
+        for compare in [AlphaCompare::Gt, AlphaCompare::Ge] {
+            let mut base = Rgba32F::new(4, 4, [0.0; 4]);
+            for x in 0..3 {
+                base.at_mut(x, 0)[3] = 1.0;
+            }
+            let mut lvl1 = Rgba32F::new(4, 4, [0.0; 4]);
+            for (i, p) in lvl1.px.iter_mut().enumerate() {
+                p[3] = match i {
+                    0..=2 => 1.0,
+                    3..=7 => 0.9,
+                    _ => 0.2,
+                };
+            }
+            assert_eq!(pass_count(&lvl1, 127, compare), 8);
+            let mut c = vec![base, lvl1];
+            preserve_coverage(&mut c, 127, compare);
+            let t_fail = first_passing_float(127, compare).next_down();
+            assert_eq!(pass_count(&c[1], 127, compare), 3, "{compare:?}");
+            for (i, p) in c[1].px.iter().enumerate() {
+                match i {
+                    0..=2 => assert_eq!(p[3], 1.0),
+                    3..=7 => assert_eq!(p[3], t_fail, "{compare:?}"),
+                    _ => assert!(p[3] > 0.0 && p[3] < t_fail, "order kept: {}", p[3]),
+                }
+            }
+        }
     }
 
     #[test]
