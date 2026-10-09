@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    // `--no-optional-locks`: `git status` must not take index.lock while another git process is committing.
     let out = Command::new("git")
+        .arg("--no-optional-locks")
         .args(args)
         .current_dir(dir)
         .output()
