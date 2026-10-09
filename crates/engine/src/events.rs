@@ -177,10 +177,14 @@ pub fn now_rfc3339() -> String {
     humantime::format_rfc3339_millis(std::time::SystemTime::now()).to_string()
 }
 
+/// `<ms since epoch>-<pid>-<n>`: the process-local counter `n` keeps two batches started in the same millisecond
+/// (a GUI queue) apart.
 pub fn new_batch_id() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    format!("{ms:x}-{:x}", std::process::id())
+    format!("{ms:x}-{:x}-{n:x}", std::process::id())
 }

@@ -12,18 +12,19 @@ fn record(
     preset: PresetRef,
 ) -> ManifestRecord {
     ManifestRecord {
-        schema: 1,
+        schema: MANIFEST_SCHEMA,
         ts: now_rfc3339(),
         engine_version: ENGINE_VERSION.into(),
         engine_commit: engine_commit().into(),
         encoders: EncoderVersions::current(),
         isa: dispatched_isa().into(),
         preset,
-        profile_sha256: sha256_json(&profile),
+        profile_sha256: sha256_json(&profile).unwrap(),
         profile,
         provenance: Default::default(),
         source: "in/x_n.png".into(),
         source_sha256: source_sha256.into(),
+        sources: vec![],
         output: output.into(),
         validation: Default::default(),
     }
@@ -292,8 +293,9 @@ fn encoder_versions_come_from_the_encoders_crate() {
 fn engine_identity_is_filled() {
     assert!(!ENGINE_VERSION.is_empty());
     let c = engine_commit();
+    let hash = c.strip_suffix("-dirty").unwrap_or(c);
     assert!(
-        c == "unknown" || c.chars().all(|ch| ch.is_ascii_hexdigit()),
+        c == "unknown" || (hash.len() == 12 && hash.chars().all(|ch| ch.is_ascii_hexdigit())),
         "{c}"
     );
 }
@@ -347,8 +349,172 @@ fn sha256_helpers() {
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
     assert_eq!(
-        sha256_json(&serde_json::json!({"a": 1})),
-        sha256_json(&serde_json::json!({"a": 1}))
+        sha256_json(&serde_json::json!({"a": 1})).unwrap(),
+        sha256_json(&serde_json::json!({"a": 1})).unwrap()
     );
+    // A value that cannot be serialised is an error, not the hash of empty input.
+    let mut bad = std::collections::HashMap::new();
+    bad.insert((1, 2), 3);
+    assert!(sha256_json(&bad).is_err());
     assert!(sha256_file(&d.path().join("missing")).is_err());
+}
+
+#[test]
+fn output_key_is_root_relative_slashed_and_case_folded() {
+    use std::path::Path;
+    let k = |root: &str, out: &str| output_key(Path::new(root), Path::new(out));
+    assert_eq!(k("out", "out/Armor/Iron_n.dds"), "armor/iron_n.dds");
+    assert_eq!(k("out", "out\\Armor\\Iron_N.DDS"), "armor/iron_n.dds");
+    assert_eq!(k(".\\out\\", "out/Armor/Iron_n.dds"), "armor/iron_n.dds");
+    assert_eq!(k("out", ".\\out\\Armor\\Iron_n.dds"), "armor/iron_n.dds");
+    assert_eq!(k("out/", "./out/./Armor//Iron_n.dds"), "armor/iron_n.dds");
+    assert_eq!(k("C:\\Mods\\Out", "c:/mods/out/Tex/A.dds"), "tex/a.dds");
+    // Unicode, not just ASCII, case folding.
+    assert_eq!(
+        k("out", "out/\u{c4}rmel/\u{d6}l.dds"),
+        "\u{e4}rmel/\u{f6}l.dds"
+    );
+    // A sibling directory that merely shares the root's prefix is not under the root.
+    assert_eq!(k("out", "outer/a.dds"), "outer/a.dds");
+    // Already a key: unchanged.
+    assert_eq!(k("out", "armor/iron_n.dds"), "armor/iron_n.dds");
+}
+
+#[test]
+fn records_written_under_any_spelling_of_the_key_collide_on_load() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let (profile, preset) = cs_quality();
+    let root = std::path::Path::new("out");
+    let key = |o: &str| output_key(root, std::path::Path::new(o));
+    m.append(&record(
+        &key("out\\Armor\\Iron_n.dds"),
+        "old",
+        profile.clone(),
+        preset.clone(),
+    ))
+    .unwrap();
+    m.append(&record(
+        &key("./out/armor/iron_n.dds"),
+        "new",
+        profile.clone(),
+        preset.clone(),
+    ))
+    .unwrap();
+    // A record from before the key rule: raw spelling, re-folded on load.
+    m.append(&record("Armor\\Old_n.DDS", "x", profile, preset))
+        .unwrap();
+    let all = m.load().unwrap();
+    assert_eq!(
+        all.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["armor/iron_n.dds", "armor/old_n.dds"]
+    );
+    assert_eq!(all["armor/iron_n.dds"].source_sha256, "new");
+}
+
+#[test]
+fn records_survive_profile_and_summary_evolution() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let (profile, preset) = cs_quality();
+    let r = record("x_n.dds", "aa", profile, preset);
+    let mut v = serde_json::to_value(&r).unwrap();
+    // A later release added a Profile field (Profile is deny_unknown_fields) and a ValidationSummary field was
+    // removed; old and new records must still load.
+    v["profile"]["field_from_the_future"] = serde_json::json!(true);
+    let summary = v["validation"].as_object_mut().unwrap();
+    let dropped = summary.keys().next().cloned().expect("summary has fields");
+    summary.remove(&dropped);
+    assert!(serde_json::from_value::<ManifestRecord>(v.clone()).is_err());
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    std::fs::write(m.path(), format!("{v}\n")).unwrap();
+    let all = m.load().unwrap();
+    let e = &all["x_n.dds"];
+    assert_eq!(e.schema, MANIFEST_SCHEMA);
+    assert!(!e.is_newer_schema());
+    assert_eq!(e.source_sha256, "aa");
+    assert_eq!(e.profile_sha256, r.profile_sha256);
+    assert_eq!(e.engine_version, ENGINE_VERSION);
+    assert_eq!(e.encoders.as_ref(), Some(&r.encoders));
+    assert_eq!(e.preset.as_ref(), Some(&r.preset));
+    assert_eq!(e.raw, v);
+}
+
+#[test]
+fn newer_schema_records_are_kept_and_flagged() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let line = serde_json::json!({
+        "schema": MANIFEST_SCHEMA + 1,
+        "output": "Tex\\New.dds",
+        "profile": {"a": "shape nobody here understands"},
+        "something_new": [1, 2, 3],
+    });
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    std::fs::write(m.path(), format!("{line}\n{{\"unrelated\":1}}\n")).unwrap();
+    let all = m.load().unwrap();
+    assert_eq!(all.len(), 1);
+    let e = &all["tex/new.dds"];
+    assert!(e.is_newer_schema());
+    assert_eq!(e.raw["something_new"], serde_json::json!([1, 2, 3]));
+}
+
+#[test]
+fn multi_source_records_round_trip_and_single_source_omits_the_list() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    let (profile, preset) = cs_quality();
+    let mut r = record("x_rmaos.dds", "aa", profile, preset);
+    let line = serde_json::to_value(&r).unwrap();
+    assert!(line.get("sources").is_none());
+    r.sources = vec![
+        SourceRef {
+            path: "in/x_r.png".into(),
+            sha256: "11".into(),
+        },
+        SourceRef {
+            path: "in/x_m.png".into(),
+            sha256: "22".into(),
+        },
+    ];
+    m.append(&r).unwrap();
+    assert_eq!(m.load().unwrap()["x_rmaos.dds"].sources, r.sources);
+    let text = std::fs::read_to_string(m.path()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<ManifestRecord>(text.trim()).unwrap(),
+        r
+    );
+}
+
+#[test]
+fn unit_and_newtype_events_have_an_exact_json_layout() {
+    let ev = |kind| EngineEvent {
+        schema: EVENT_SCHEMA,
+        seq: 7,
+        ts: "2026-10-09T12:34:56.789Z".into(),
+        batch: "b1".into(),
+        set: None,
+        path: None,
+        kind,
+    };
+    assert_eq!(
+        serde_json::to_string(&ev(EventKind::FileStarted)).unwrap(),
+        r#"{"schema":1,"seq":7,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","kind":"file_started"}"#
+    );
+    let mut w = ev(EventKind::Warning(Warning::new(Code::DimNpot, "npot")));
+    w.set = Some("s".into());
+    w.path = Some("a/x.png".into());
+    let sev = serde_json::to_string(&Warning::new(Code::DimNpot, "").severity).unwrap();
+    assert_eq!(
+        serde_json::to_string(&w).unwrap(),
+        format!(
+            r#"{{"schema":1,"seq":7,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","set":"s","path":"a/x.png","kind":"warning","code":"DIM-NPOT","severity":{sev},"message":"npot","data":null}}"#
+        )
+    );
+}
+
+#[test]
+fn batch_ids_are_unique_within_a_process() {
+    let ids: std::collections::HashSet<String> = (0..1000).map(|_| new_batch_id()).collect();
+    assert_eq!(ids.len(), 1000);
 }

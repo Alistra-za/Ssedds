@@ -14,12 +14,17 @@ pub use crate::events::now_rfc3339;
 
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The `schema` written into every [`ManifestRecord`]. `load` keeps records of a newer schema as raw entries
+/// (see [`ManifestEntry::is_newer_schema`]) instead of interpreting them.
+pub const MANIFEST_SCHEMA: u32 = 1;
+
 /// The vendored bc7e patch as built into `encoders-sys`; hashed for the manifest (it is the only change to a
 /// vendored encoder). `vendor/**` is `-text` in `.gitattributes`, so the bytes do not depend on the checkout.
 const BC7E_PATCH: &[u8] =
     include_bytes!("../../encoders-sys/vendor/bc7e/patches/0001-exact-opaque-alpha.patch");
 
-/// Short git commit of the source tree at build time, or `unknown` (no git, or not a checkout; see `build.rs`).
+/// Git commit of the source tree at build time (12 hex digits, plus `-dirty` when tracked files had uncommitted
+/// changes when the build script last ran), or `unknown` (no git, or not a checkout; see `build.rs`).
 pub fn engine_commit() -> &'static str {
     env!("SDC_GIT_COMMIT")
 }
@@ -101,6 +106,14 @@ impl PresetRef {
     }
 }
 
+/// One source file of a record: its path and SHA-256. A recipe built from several sources (`_rmaos`, `_p`) lists
+/// them all so `if-changed` can re-encode when any of them changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SourceRef {
+    pub path: String,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestRecord {
     pub schema: u32,
@@ -116,8 +129,91 @@ pub struct ManifestRecord {
     pub provenance: BTreeMap<String, Provenance>,
     pub source: String,
     pub source_sha256: String,
+    /// Every source of a multi-source recipe; empty for a single-source output (`source` is then the only one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceRef>,
+    /// The canonical key from [`output_key`].
     pub output: String,
     pub validation: ValidationSummary,
+}
+
+/// What the up-to-date check needs from a stored record, read tolerantly: a field added to or removed from
+/// `Profile`, `ValidationSummary` or the other embedded types never makes an older record unreadable.
+/// `raw` is the whole line as JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManifestEntry {
+    pub schema: u32,
+    /// The canonical key (re-normalised on load).
+    pub output: String,
+    pub source_sha256: String,
+    pub sources: Vec<SourceRef>,
+    pub profile_sha256: String,
+    pub engine_version: String,
+    pub encoders: Option<EncoderVersions>,
+    pub preset: Option<PresetRef>,
+    pub raw: serde_json::Value,
+}
+
+impl ManifestEntry {
+    /// Written by a newer engine: only `raw` and `output` are dependable, so a caller should treat the record as
+    /// not comparable (and warn) rather than as up to date.
+    pub fn is_newer_schema(&self) -> bool {
+        self.schema > MANIFEST_SCHEMA
+    }
+
+    /// `None` when the line is not a manifest record (no string `output`, no integer `schema`).
+    fn from_value(raw: serde_json::Value) -> Option<Self> {
+        let get = |k: &str| raw.get(k);
+        let text = |k: &str| {
+            get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        fn lenient<T: serde::de::DeserializeOwned>(raw: &serde_json::Value, k: &str) -> Option<T> {
+            serde_json::from_value(raw.get(k)?.clone()).ok()
+        }
+        let schema = get("schema")?.as_u64()?.try_into().unwrap_or(u32::MAX);
+        let output = normalize_key(get("output")?.as_str()?);
+        Some(ManifestEntry {
+            schema,
+            output,
+            source_sha256: text("source_sha256"),
+            sources: lenient(&raw, "sources").unwrap_or_default(),
+            profile_sha256: text("profile_sha256"),
+            engine_version: text("engine_version"),
+            encoders: lenient(&raw, "encoders"),
+            preset: lenient(&raw, "preset"),
+            raw,
+        })
+    }
+}
+
+/// Folds a root-relative path into the manifest key form: `/` separators, no empty or `.` segments (so no leading
+/// `./`), and Unicode lower case, because Windows paths are case-insensitive.
+fn normalize_key(rel: &str) -> String {
+    rel.replace('\\', "/")
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+        .to_lowercase()
+}
+
+/// The canonical manifest key for `output` under `output_root`: root-relative, `/` separators, no leading `./`,
+/// case-folded. `ManifestRecord::output` stores it and `Manifest::load` is keyed by it, so the up-to-date check
+/// (Task 37) must look records up with this function and nothing else. An `output` that is not under
+/// `output_root` keeps its whole (normalised) path.
+pub fn output_key(output_root: &Path, output: &Path) -> String {
+    let root = normalize_key(&output_root.to_string_lossy());
+    let out = normalize_key(&output.to_string_lossy());
+    if root.is_empty() {
+        return out;
+    }
+    match out.strip_prefix(&root) {
+        Some(rest) if rest.starts_with('/') => rest[1..].to_string(),
+        _ => out,
+    }
 }
 
 /// Serialises appends from every `Manifest` in the process, so two values on one root cannot interleave either.
@@ -164,8 +260,9 @@ impl Manifest {
         f.write_all(&line)
     }
 
-    /// The latest record per `output`. Lines that are not a valid record (torn, foreign, not UTF-8) are skipped.
-    pub fn load(&self) -> io::Result<BTreeMap<String, ManifestRecord>> {
+    /// The latest entry per canonical output key. Lines that are not a manifest record (torn, foreign, not UTF-8)
+    /// are skipped; records of a newer schema are kept (see [`ManifestEntry::is_newer_schema`]).
+    pub fn load(&self) -> io::Result<BTreeMap<String, ManifestEntry>> {
         let mut map = BTreeMap::new();
         let f = match std::fs::File::open(&self.path) {
             Ok(f) => f,
@@ -173,8 +270,11 @@ impl Manifest {
             Err(e) => return Err(e),
         };
         for line in io::BufReader::new(f).split(b'\n') {
-            if let Ok(r) = serde_json::from_slice::<ManifestRecord>(&line?) {
-                map.insert(r.output.clone(), r);
+            let Ok(raw) = serde_json::from_slice::<serde_json::Value>(&line?) else {
+                continue;
+            };
+            if let Some(e) = ManifestEntry::from_value(raw) {
+                map.insert(e.output.clone(), e);
             }
         }
         Ok(map)
@@ -190,6 +290,6 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
 
 /// SHA-256 of the value's compact JSON. Struct fields serialise in declaration order and maps are ordered, so the
 /// hash is stable for equal values.
-pub fn sha256_json<T: Serialize>(v: &T) -> String {
-    hex::encode(Sha256::digest(serde_json::to_vec(v).unwrap_or_default()))
+pub fn sha256_json<T: Serialize>(v: &T) -> Result<String, serde_json::Error> {
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(v)?)))
 }
