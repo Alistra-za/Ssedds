@@ -150,7 +150,6 @@ pub enum Provenance {
     /// position. Shown as `suffix:<term>`.
     Suffix(String),
     Suggestion,
-    Set,
     User,
     /// The sub-type was replaced by its spec §4.2 fallback, accepted with `--allow CFG-UNAVAILABLE`.
     Fallback,
@@ -168,7 +167,6 @@ impl fmt::Display for Provenance {
             Provenance::AnalysisFact(t) => write!(f, "analysis:{t}"),
             Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
-            Provenance::Set => f.write_str("set"),
             Provenance::User => f.write_str("user"),
             Provenance::Fallback => f.write_str("fallback"),
         }
@@ -196,7 +194,6 @@ impl std::str::FromStr for Provenance {
             "project_config" => Provenance::ProjectConfig,
             "analysis" => Provenance::Analysis,
             "suggestion" => Provenance::Suggestion,
-            "set" => Provenance::Set,
             "user" => Provenance::User,
             "fallback" => Provenance::Fallback,
             other => return Err(format!("unknown provenance '{other}'")),

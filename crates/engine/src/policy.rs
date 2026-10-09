@@ -894,10 +894,16 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
         );
     }
     if p.alpha.policy == AlphaPolicy::Data && a.alpha == AlphaContent::Constant255 {
-        add(
-            ChanConstantAlphaData,
-            "data alpha is constant 255; remove would save bits".into(),
-        );
+        // DECISIONS Note L: near-opaque alpha (minimum 251..=254) is classed constant too; say what it holds.
+        let msg = if a.alpha_near_opaque {
+            format!(
+                "data alpha is near-opaque (min {}, 251–254 is BC encode noise); remove would save bits",
+                crate::analyse::code8(a.channels[3].min)
+            )
+        } else {
+            "data alpha is constant 255; remove would save bits".to_string()
+        };
+        add(ChanConstantAlphaData, msg);
     }
     if p.category == Category::Normal
         && st != Subtype::Msn

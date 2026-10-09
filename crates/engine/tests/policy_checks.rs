@@ -1670,6 +1670,24 @@ fn explicit_data_policy_keeps_near_opaque_alpha() {
         "{:?}",
         j.warnings
     );
+    // Final review m8: the info says what the alpha holds, not "constant 255".
+    assert_eq!(
+        warning(&j, Code::ChanConstantAlphaData).message,
+        "data alpha is near-opaque (min 252, 251–254 is BC encode noise); remove would save bits"
+    );
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        opaque(),
+        &["subtype=pbr_normal", "alpha.policy=data"],
+        &[],
+    );
+    assert_eq!(
+        warning(&j, Code::ChanConstantAlphaData).message,
+        "data alpha is constant 255; remove would save bits"
+    );
 }
 
 /// A diffuse whose alpha is 252..=255 is not blocked on the alpha meaning under `--accept-suggestions high`;

@@ -45,7 +45,8 @@ pub fn dispatched_isa() -> &'static str {
         if is_x86_feature_detected!("avx") {
             return "avx";
         }
-        if is_x86_feature_detected!("sse4.1") {
+        // ISPC's sse4 target needs SSE4.2 (review m9).
+        if is_x86_feature_detected!("sse4.2") {
             return "sse4";
         }
     }

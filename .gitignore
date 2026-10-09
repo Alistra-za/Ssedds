@@ -4,3 +4,4 @@ target/
 .superpowers/
 _sdc/
 *.tmp
+/sdc-out/

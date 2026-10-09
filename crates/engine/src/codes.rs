@@ -4,7 +4,6 @@
 //! source written to an LDR format, an interim guard until the M6 source-transfer split).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
@@ -85,19 +84,6 @@ codes! {
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
 }
 
-impl Code {
-    /// `--allow <code>` (or GUI acknowledgement) turns a blocking code into a warning; errors stay errors.
-    /// `IN-GREEN-UNSTATED` is a missing fact, not a risk to accept, so it is never allowable.
-    pub fn effective(self, allow: &BTreeSet<Code>) -> Severity {
-        match self.severity() {
-            Severity::Blocking if allow.contains(&self) && self != Code::InGreenUnstated => {
-                Severity::Warning
-            }
-            s => s,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Warning {
     pub code: Code,
@@ -159,14 +145,5 @@ mod tests {
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
         assert_eq!(Code::ALL.len(), 52);
-    }
-
-    #[test]
-    fn allow_downgrades_blocking_only() {
-        let allow: BTreeSet<Code> = [Code::FmtBc5Normal, Code::TagSrgbVanilla].into();
-        assert_eq!(Code::FmtBc5Normal.effective(&allow), Severity::Warning);
-        assert_eq!(Code::TagSrgbVanilla.effective(&allow), Severity::Error);
-        let green: BTreeSet<Code> = [Code::InGreenUnstated].into();
-        assert_eq!(Code::InGreenUnstated.effective(&green), Severity::Blocking);
     }
 }
