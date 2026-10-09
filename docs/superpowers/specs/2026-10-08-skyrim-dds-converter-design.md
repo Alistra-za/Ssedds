@@ -124,7 +124,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `encoder.backend` | `bc7e` / `rgbcx` / `ispc_bc6h` / `nvtt` | Format | §7 |
 | `encoder.effort` | Named levels (§7.4) | bc7e `veryslow` (= u5); rgbcx 18; BC6H `veryslow` | |
 | `encoder.perceptual` | bool | `false` | Locked off unless Color with alpha ≠ `data` |
-| `encoder.bc1_transparent_black` | bool | `false` | rgbcx 3-colour transparent-black mode |
+| `encoder.bc1_transparent_black` | bool | `false` | rgbcx 3-colour transparent-black mode; `true` with a BC1 output is `CFG-INVALID` in v1 (DECISIONS Notes F, K) |
 | `encoder.bc45_search_radius` | `default` / `max` | `default` | `max` = radius 10 |
 | `validation` | Rules and thresholds (§5.8) | Sub-type × target | |
 | `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw` | `true`, 0.5 (**[Open]**), `prepacked` | Packed outputs only (§6.4); arrives with milestone M2.5 |

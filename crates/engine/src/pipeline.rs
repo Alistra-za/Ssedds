@@ -88,6 +88,23 @@ fn source_peak(level: &Rgba32F, p: &Profile) -> Option<f32> {
     })
 }
 
+/// Test hook (Task 44): when `SDC_TEST_FAIL_VALIDATION` names the input's file stem, add one `VAL-HEADER` error to
+/// its validation report, so a written output fails validation (exit 4). No setting reaches an error-severity
+/// `VAL-*` code (`bc1_transparent_black` is `CFG-INVALID` with BC1, DECISIONS Note F), so the exit-4 path has no
+/// other deterministic trigger. Compiled into every build and inert unless the variable is set; never set it
+/// outside tests.
+fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationReport) {
+    if std::env::var_os("SDC_TEST_FAIL_VALIDATION")
+        .is_some_and(|v| job.input.file_stem() == Some(v.as_os_str()))
+    {
+        report.warnings.push(Warning::new(
+            Code::ValHeader,
+            "test hook: SDC_TEST_FAIL_VALIDATION",
+        ));
+        report.summary.passed = false;
+    }
+}
+
 /// Convert one file and append its manifest record. Cancellation is checked between stages and between encode
 /// bands, last just before the write, so a cancelled file never leaves an output behind. Everything that can fail
 /// before the output exists (validation of the in-memory DDS bytes, the profile hash, the record and sidecar text)
@@ -200,7 +217,7 @@ pub fn process_file(
 
     // Validate the exact bytes about to be written: `validate` parses them with the engine's DDS reader (spec §5.8).
     enter(Stage::Validate);
-    let report = validate(&ValidationInput {
+    let mut report = validate(&ValidationInput {
         bytes: &bytes,
         profile: p,
         encoder_input: Some(&inputs),
@@ -210,6 +227,7 @@ pub fn process_file(
         expected_levels: Some(total),
     });
     drop(inputs);
+    force_validation_failure_for_test(job, &mut report);
     enter(Stage::Write);
     let record = ManifestRecord {
         schema: MANIFEST_SCHEMA,

@@ -200,3 +200,10 @@ The verbs whose report *is* the result print their human report on **stdout**: `
 `convert` prints its progress log on **stderr**. With `--json`, stdout carries only JSON Lines for every verb.
 `validate` infers the alpha policy from the file: mip-0 alpha ≥ 254 everywhere → `remove`; otherwise the sub-type's alpha-keeping default, or `data`. `--alpha-policy` overrides it.
 A DDS in a format sdc never writes (BC2, uncompressed, signed) gets header checks only; a clean header gives "not judged", exit 0.
+
+## Note K — Task 44 CLI edge-case rulings (controller, 2026-10-09)
+
+- **Ctrl-C:** the handler is installed before planning (a failed install prints a warning to stderr). The first Ctrl-C cancels cooperatively (exit 1, cancelled files listed in `batch_done`); a second one exits 3 at once. Outputs are written atomically, so an abort never leaves a partial `.dds`; it can leave `.sdc-*.tmp` files in the output folders and a just-renamed output without a manifest record (reported as `OUT-UNKNOWN-EXISTING` next run; `--on-existing overwrite` replaces it).
+- **`--mem-budget 0`** is a usage error (exit 2), not "default"; omit the flag for 50% of RAM.
+- **`encoder.bc1_transparent_black = true` with a BC1 output is `CFG-INVALID`** (Note F: BC1 is opaque-only in v1). The setting stays in the schema for the day BC1 alpha is offered; it is inert for other formats.
+- **Test-only hooks** (compiled into every build, inert unless the variable is set): `SDC_TEST_PANIC_ON=<input file name>` panics that file; `SDC_TEST_FAIL_VALIDATION=<input file stem>` adds one `VAL-HEADER` error to that file's validation report. The second exists because no setting reaches an error-severity `VAL-*` code, so exit 4 would otherwise have no deterministic trigger.

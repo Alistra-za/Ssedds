@@ -1516,3 +1516,62 @@ fn rgbcx_level_check_applies_only_to_the_rgbcx_backend() {
     );
     assert!(!level_error("bc6h_uf16", too_high), "BC6H does not read it");
 }
+
+/// DECISIONS Note F: BC1 is opaque-only in v1, so `encoder.bc1_transparent_black = true` with a BC1 output is
+/// CFG-INVALID (an error, not acknowledgeable); the setting is inert for every other format.
+#[test]
+fn bc1_transparent_black_is_cfg_invalid_with_bc1_only() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &[
+            "subtype=diffuse",
+            "format=bc1",
+            "encoder.backend=rgbcx",
+            "encoder.bc1_transparent_black=true",
+        ],
+        &[Code::CfgInvalid],
+    );
+    assert!(
+        matches!(&j.status, JobStatus::Error { codes } if codes == &vec![Code::CfgInvalid]),
+        "{:?}",
+        j.status
+    );
+    let w = j
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::CfgInvalid)
+        .unwrap();
+    assert!(w.message.contains("bc1_transparent_black"), "{}", w.message);
+    // Off (the default) is fine, and so is the setting under another format.
+    for sets in [
+        vec![
+            "subtype=diffuse",
+            "format=bc1",
+            "encoder.bc1_transparent_black=false",
+        ],
+        vec![
+            "subtype=diffuse",
+            "format=bc7",
+            "encoder.bc1_transparent_black=true",
+        ],
+    ] {
+        let j = run(
+            Target::Cs,
+            "textures/a/x.png",
+            None,
+            &[],
+            opaque(),
+            &sets,
+            &[],
+        );
+        assert!(
+            !codes(&j).contains(&Code::CfgInvalid),
+            "{sets:?}: {:?}",
+            j.warnings
+        );
+    }
+}

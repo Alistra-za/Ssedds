@@ -1,6 +1,7 @@
 //! `sdc` command line (spec §8). Human output goes to stderr; with `--json`, stdout carries only JSON Lines.
 //! Exit codes, highest precedence first: 3 fatal > 2 usage/config > 1 partial > 4 validation failed > 0.
 mod args;
+mod cancel;
 mod human;
 mod verbs;
 
@@ -40,15 +41,17 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
     if a.nvtt.is_some() {
         eprintln!("note: --nvtt is accepted but the NVTT backend arrives in milestone M5");
     }
+    // Before planning, so a Ctrl-C during a long scan is not lost. A failed install is not fatal, but it is
+    // reported: without the handler Ctrl-C ends the process at once, as for any console program.
+    let cancel = CancelToken::default();
+    if let Err(e) = cancel::install(cancel.clone()) {
+        eprintln!(
+            "warning: could not install the Ctrl-C handler ({e}); Ctrl-C will end sdc immediately"
+        );
+    }
     let rep = reporter(a.batch.json);
     let engine = Engine::new()?;
     let plan = engine.plan(req, &rep)?;
-    let cancel = CancelToken::default();
-    let c2 = cancel.clone();
-    let _ = ctrlc::set_handler(move || {
-        eprintln!("cancelling: finishing current bands...");
-        c2.cancel();
-    });
     Ok(engine.run(plan, &rep, &cancel)?.exit_code())
 }
 

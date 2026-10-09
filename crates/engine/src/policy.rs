@@ -786,6 +786,14 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             ),
         );
     }
+    // DECISIONS Note F: BC1 is opaque-only in v1, so rgbcx must never emit transparent-black texels.
+    if p.format == Format::Bc1 && p.encoder.bc1_transparent_black {
+        add(
+            CfgInvalid,
+            "encoder.bc1_transparent_black=true: BC1 is opaque-only in v1 (no 1-bit alpha), so the              3-colour mode never emits transparent-black texels; set it to false"
+                .into(),
+        );
+    }
     if p.encoder.perceptual
         && !(p.category == Category::Color && p.alpha.policy != AlphaPolicy::Data)
     {

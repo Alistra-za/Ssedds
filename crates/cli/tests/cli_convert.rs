@@ -987,41 +987,37 @@ validation = { min_mip_psnr_db = 1.0 }
     );
 }
 
-/// A 16 px checker of pure black and orange at `in/textures/a/<name>` (RGB, so the alpha is removed).
-fn black_checker(fx: &Fx, name: &str) {
-    ImageBuffer::from_fn(16, 16, |x, y| {
-        if (x + y) % 2 == 0 {
-            Rgb([0u8, 0, 0])
-        } else {
-            Rgb([230, 120, 20])
-        }
-    })
-    .save(fx.p(&format!("in/textures/a/{name}")))
-    .unwrap();
-}
+/// No setting reaches an error-severity `VAL-*` code (`encoder.bc1_transparent_black=true` with BC1 is
+/// `CFG-INVALID`, DECISIONS Note F), so exit 4 is triggered by the engine's test-only hook: the named file's
+/// validation report gets one `VAL-HEADER` error. The variable is set on the child process only.
+const FAIL_VALIDATION_ON: (&str, &str) = ("SDC_TEST_FAIL_VALIDATION", "checker");
 
-/// Settings under which a written output fails validation deterministically: BC1 with transparent-black texels
-/// switched on (off by default, DECISIONS Note F) and the alpha removed. rgbcx writes the black texels with BC1's
-/// transparent index, they decode alpha 0, and the `remove` guarantee for BC1 is 255 (spec §5.8), so validation
-/// reports `VAL-ALPHA-GUARANTEE`, an error. (`VAL-MIP-ERROR` is only a warning, and `VAL-HEADER` cannot be reached
-/// through settings.)
-const FAILS_VALIDATION: [&str; 8] = [
-    "--set",
-    "subtype=diffuse",
-    "--set",
-    "format=bc1",
-    "--set",
-    "encoder.backend=rgbcx",
-    "--set",
-    "encoder.bc1_transparent_black=true",
-];
+impl Fx {
+    fn convert_failing_validation(&self, extra: &[&str]) -> Output {
+        self.sdc()
+            .env(FAIL_VALIDATION_ON.0, FAIL_VALIDATION_ON.1)
+            .args([
+                "convert",
+                "--json",
+                "--recursive",
+                "--set",
+                "subtype=diffuse",
+            ])
+            .args(extra)
+            .arg("-o")
+            .arg(self.p("out"))
+            .arg(self.p("in"))
+            .output()
+            .unwrap()
+    }
+}
 
 /// Spec §8: a written output that fails validation exits 4, and a partial batch (1) outranks it.
 #[test]
 fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
     let fx = Fx::new();
-    black_checker(&fx, "checker.png");
-    let o = fx.convert(&FAILS_VALIDATION);
+    fx.rgb("checker.png");
+    let o = fx.convert_failing_validation(&[]);
     assert_eq!(code(&o), 4, "{}", text(&o.stderr));
     let done = batch_done(&o);
     assert_eq!(
@@ -1032,19 +1028,42 @@ fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
         (Some(1), Some(1))
     );
     assert!(text(&o.stderr).contains("[VALIDATION FAILED]"));
-    assert!(text(&o.stderr).contains("VAL-ALPHA-GUARANTEE"));
+    assert!(text(&o.stderr).contains("VAL-HEADER"));
     // The output is still written (the report says so; the file is not deleted).
     assert!(fx.dds("textures/a/checker.dds").exists());
     // A failed validation is not up to date: the next run encodes it again and reports it again.
-    let o = fx.convert(&FAILS_VALIDATION);
+    let o = fx.convert_failing_validation(&[]);
     assert_eq!(code(&o), 4, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["converted"], 1);
 
     // Partial (exit 1) outranks validation failed (exit 4).
     fx.rgb("bad.png");
-    let mut args = FAILS_VALIDATION.to_vec();
-    args.extend(["--set", "file:**/bad.png.alpha.threshold=3"]);
-    let o = fx.convert(&args);
+    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=3"]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["validation_failed"], 1);
+}
+
+/// DECISIONS Note F: BC1 with transparent-black texels is not offered in v1, so the setting is a `CFG-INVALID`
+/// failure of the file (exit 1), not a way to a failed validation.
+#[test]
+fn bc1_transparent_black_is_a_file_error_not_a_validation_failure() {
+    let fx = Fx::new();
+    fx.rgb("a.png");
+    let o = fx.convert(&[
+        "--set",
+        "subtype=diffuse",
+        "--set",
+        "format=bc1",
+        "--set",
+        "encoder.backend=rgbcx",
+        "--set",
+        "encoder.bc1_transparent_black=true",
+    ]);
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("CFG-INVALID"),
+        "{}",
+        text(&o.stderr)
+    );
+    assert!(!fx.dds("textures/a/a.dds").exists());
 }

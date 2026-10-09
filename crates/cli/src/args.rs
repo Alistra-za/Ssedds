@@ -258,11 +258,19 @@ pub fn parse_bytes(s: &str) -> Result<u64, String> {
         Some(c) if c.is_ascii_digit() => (s, 1),
         _ => return Err(format!("--mem-budget '{s}': use bytes or a G/M suffix")),
     };
-    num.trim()
+    match num
+        .trim()
         .parse::<u64>()
         .ok()
         .and_then(|n| n.checked_mul(mul))
-        .ok_or_else(|| format!("--mem-budget '{s}': not a valid size"))
+    {
+        // The engine reads 0 as "default", so an explicit 0 would silently mean 50% of RAM.
+        Some(0) => Err(format!(
+            "--mem-budget '{s}': must be greater than 0 (omit the flag for the default, 50% of RAM)"
+        )),
+        Some(n) => Ok(n),
+        None => Err(format!("--mem-budget '{s}': not a valid size")),
+    }
 }
 
 /// Translate the shared batch flags into a `BatchRequest`. Errors are usage or configuration errors (exit 2).
@@ -316,8 +324,19 @@ mod tests {
         assert_eq!(parse_bytes("512M"), Ok(512 << 20));
         assert_eq!(parse_bytes("8G"), Ok(8 << 30));
         assert_eq!(parse_bytes(" 2g "), Ok(2 << 30));
-        for bad in ["", "G", "8Q", "-1", "1.5G", "99999999999999999999G"] {
+        for bad in [
+            "",
+            "G",
+            "8Q",
+            "-1",
+            "1.5G",
+            "99999999999999999999G",
+            "0",
+            "0G",
+            "00M",
+        ] {
             assert!(parse_bytes(bad).is_err(), "{bad}");
         }
+        assert!(parse_bytes("0").unwrap_err().contains("greater than 0"));
     }
 }
