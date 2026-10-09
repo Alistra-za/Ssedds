@@ -287,14 +287,19 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
             p.display()
         )));
     }
-    // The BC1 model is global rgbcx state; set it before any decode.
-    encoders_sys::init(model).map_err(|e| EngineError::Fatal(e.to_string()))?;
     // The plan maps outputs under a root nothing is written to; a fresh temp folder keeps it unique and is
     // removed when `root` drops.
     let root = tempfile::Builder::new()
         .prefix("sdc-inspect-")
         .tempdir()
         .map_err(|e| EngineError::Fatal(format!("temp folder: {e}")))?;
+    // Codex-CLI 2: the shared batch options and every config are checked before any output, even when only DDS
+    // files (or nothing) are found and no plan runs.
+    let mut req = build_request(&a.batch, root.path().to_path_buf()).map_err(EngineError::Usage)?;
+    let engine = Engine::new()?;
+    engine.preflight(&req)?;
+    // The BC1 model is global rgbcx state; set it before any decode.
+    encoders_sys::init(model).map_err(|e| EngineError::Fatal(e.to_string()))?;
     let found = discover(&a.batch.inputs, root.path(), a.batch.recursive)
         .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
     let mut unreadable = 0u32;
@@ -312,7 +317,6 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         return Ok(i32::from(unreadable > 0));
     }
 
-    let mut req = build_request(&a.batch, root.path().to_path_buf()).map_err(EngineError::Usage)?;
     req.dry_run = true;
     req.bc1_model = model;
     let events = Arc::new(VecSink::default());
@@ -329,7 +333,7 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         inner: Arc::new(TeeSink(sinks)),
     };
     let rep = Reporter::new(Arc::new(sink), new_batch_id());
-    let plan = Engine::new()?.plan(req, &rep, &CancelToken::default())?;
+    let plan = engine.plan(req, &rep, &CancelToken::default())?;
     // What `run` would report for the files `plan` set aside. DDS files are inspected above, not skipped.
     for sk in plan
         .skipped

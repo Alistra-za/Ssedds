@@ -660,3 +660,70 @@ fn validate_target_help_states_the_default() {
         text(&o.stdout)
     );
 }
+
+/// Codex-CLI 2: `inspect` validates the shared batch options (`--set`, `--allow`, `--preset`, `--preset-file`,
+/// `--config`, the user config and a folder's `sdc.toml`) before any output, even when there is no image to
+/// plan: a DDS-only input and an empty folder exit 2 like an image input would.
+#[test]
+fn inspect_rejects_invalid_options_and_configs_without_images() {
+    let d = tempfile::tempdir().unwrap();
+    let dds_dir = d.path().join("dds");
+    std::fs::create_dir_all(&dds_dir).unwrap();
+    bc2_file(&dds_dir, "ui_d.dds", false);
+    let empty = d.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let bad_toml = d.path().join("bad.toml");
+    std::fs::write(&bad_toml, "this is = = not toml").unwrap();
+    let bad_cfg = d.path().join("bad_cfg.toml");
+    std::fs::write(&bad_cfg, "target = \"nope\"\n").unwrap();
+    let appdata = d.path().join("appdata");
+    std::fs::create_dir_all(appdata.join("sdc")).unwrap();
+    std::fs::write(appdata.join("sdc/config.toml"), "target = \"nope\"\n").unwrap();
+    let bad_toml_s = bad_toml.to_str().unwrap();
+    let bad_cfg_s = bad_cfg.to_str().unwrap();
+
+    for input in [&dds_dir, &empty] {
+        // Valid options: exit 0.
+        let o = sdc().arg("inspect").arg(input).output().unwrap();
+        assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+        let cases: [(&str, Vec<&str>); 7] = [
+            ("bad --set value", vec!["--set", "format=bc9"]),
+            ("unparsable --set", vec!["--set", "garbage"]),
+            ("unknown --allow code", vec!["--allow", "NOT-A-CODE"]),
+            ("unknown --preset", vec!["--preset", "no-such-preset"]),
+            ("invalid --preset-file", vec!["--preset-file", bad_toml_s]),
+            ("invalid --config", vec!["--config", bad_cfg_s]),
+            ("invalid --preset file", vec!["--preset", bad_toml_s]),
+        ];
+        for (what, args) in &cases {
+            let o = sdc().arg("inspect").args(args).arg(input).output().unwrap();
+            assert_eq!(
+                code(&o),
+                2,
+                "{what} {}: {}",
+                input.display(),
+                text(&o.stderr)
+            );
+            assert!(o.stdout.is_empty(), "{what}: {}", text(&o.stdout));
+        }
+        let o = sdc()
+            .env("APPDATA", &appdata)
+            .arg("inspect")
+            .arg(input)
+            .output()
+            .unwrap();
+        assert_eq!(
+            code(&o),
+            2,
+            "user config {}: {}",
+            input.display(),
+            text(&o.stderr)
+        );
+        assert!(o.stdout.is_empty(), "{}", text(&o.stdout));
+    }
+    // A folder's own sdc.toml is its project config.
+    std::fs::write(dds_dir.join("sdc.toml"), "target = \"nope\"\n").unwrap();
+    let o = sdc().arg("inspect").arg(&dds_dir).output().unwrap();
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(o.stdout.is_empty(), "{}", text(&o.stdout));
+}

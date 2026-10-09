@@ -381,6 +381,16 @@ pub struct Engine {
     registry: PresetRegistry,
 }
 
+/// What [`Engine::preflight`]'s checks resolve, kept for planning.
+struct Setup {
+    registry: PresetRegistry,
+    user_config: Option<ConfigFile>,
+    project_config: Option<ConfigFile>,
+    target: Target,
+    target_src: Provenance,
+    preset_id: String,
+}
+
 impl Engine {
     pub fn new() -> Result<Self, EngineError> {
         Ok(Engine {
@@ -392,16 +402,15 @@ impl Engine {
         &self.registry
     }
 
-    /// Discover, group, load, analyse and resolve every input, emitting `batch_started`, `file_discovered`,
-    /// `set_resolved`, `file_planned` and every warning. Presets, configs, rules and `--set` values are
-    /// validated first: any invalid one is an error (exit 2) before any file is read. Once `cancel` is set, no
-    /// further file is loaded; those files are returned in `Plan::cancelled`.
-    pub fn plan(
-        &self,
-        req: BatchRequest,
-        rep: &Reporter,
-        cancel: &CancelToken,
-    ) -> Result<Plan, EngineError> {
+    /// Spec §8 up-front checks without reading any input: load the preset files and the configs (the user
+    /// config, `--config` or the first input folder's `sdc.toml`), resolve the target and preset, and build every
+    /// profile with each rule and `--set` value. An invalid one is an error (exit 2). `plan` runs the same checks
+    /// first; `inspect` calls this on its own so a DDS-only or empty input is held to them too (Codex-CLI 2).
+    pub fn preflight(&self, req: &BatchRequest) -> Result<(), EngineError> {
+        self.setup(req).map(|_| ())
+    }
+
+    fn setup(&self, req: &BatchRequest) -> Result<Setup, EngineError> {
         let mut registry = self.registry.clone();
         for f in &req.preset_files {
             registry.add_file(f).map_err(config_err)?;
@@ -425,7 +434,6 @@ impl Engine {
             .map(ConfigFile::load)
             .transpose()
             .map_err(config_err)?;
-        let configs: Vec<&ConfigFile> = user_config.iter().chain(project_config.iter()).collect();
 
         // Target and preset. An explicitly chosen preset may state the target; otherwise the target picks the
         // default preset.
@@ -434,20 +442,52 @@ impl Engine {
             .clone()
             .or_else(|| project_config.as_ref().and_then(|c| c.preset.clone()))
             .or_else(|| user_config.as_ref().and_then(|c| c.preset.clone()));
-        let chosen_chain = match &chosen {
-            Some(id) => registry.chain(id).map_err(preset_err)?,
-            None => vec![],
+        let (target, target_src, preset_id) = {
+            let chosen_chain = match &chosen {
+                Some(id) => registry.chain(id).map_err(preset_err)?,
+                None => vec![],
+            };
+            let (target, target_src) = resolve_target(
+                req,
+                project_config.as_ref(),
+                user_config.as_ref(),
+                &chosen_chain,
+            );
+            let preset_id = chosen.unwrap_or_else(|| default_preset_for(target).to_string());
+            let chain = registry.chain(&preset_id).map_err(preset_err)?;
+            let configs: Vec<&ConfigFile> =
+                user_config.iter().chain(project_config.iter()).collect();
+            check_up_front(req, &registry, target, &chain, &configs)?;
+            (target, target_src, preset_id)
         };
-        let (target, target_src) = resolve_target(
-            &req,
-            project_config.as_ref(),
-            user_config.as_ref(),
-            &chosen_chain,
-        );
-        let preset_id = chosen.unwrap_or_else(|| default_preset_for(target).to_string());
-        let chain = registry.chain(&preset_id).map_err(preset_err)?;
+        Ok(Setup {
+            registry,
+            user_config,
+            project_config,
+            target,
+            target_src,
+            preset_id,
+        })
+    }
 
-        check_up_front(&req, &registry, target, &chain, &configs)?;
+    /// Discover, group, load, analyse and resolve every input, emitting `batch_started`, `file_discovered`,
+    /// `set_resolved`, `file_planned` and every warning. Presets, configs, rules and `--set` values are
+    /// validated first ([`Engine::preflight`]): any invalid one is an error (exit 2) before any file is read.
+    /// Once `cancel` is set, no further file is loaded; those files are returned in `Plan::cancelled`.
+    pub fn plan(
+        &self,
+        req: BatchRequest,
+        rep: &Reporter,
+        cancel: &CancelToken,
+    ) -> Result<Plan, EngineError> {
+        let Setup {
+            registry,
+            user_config,
+            project_config,
+            target,
+            target_src,
+            preset_id,
+        } = self.setup(&req)?;
 
         for i in &req.inputs {
             if !i.exists() {
