@@ -168,3 +168,4 @@ Owner answers (2026-10-09):
 - The file is treated as its canonical suffix for grouping and output naming (`iron_rmaosultrahigh.png` → set `iron`, written as `iron_rmaos.dds`).
 - The alias's preset may define **any preset fields**, layered like any other preset (on top of the target preset; explicit `--set`/per-file overrides still win). Provenance records the alias.
 - A source whose alias and canonical forms collide on the same output (e.g. `iron_rmaos.png` and `iron_rmaosultrahigh.png`) is a duplicate error.
+- Clarification (owner, 2026-10-09): an alias is any declared name, not a tag appended to its target. Example: one preset declares `rmaosultrahigh = "rmaos"`, another declares `randomsuffix = "n"`. The `_nultrahigh` example meant only that `_nultrahigh` is not inferred from `rmaosultrahigh`; any preset can declare it (or any other name) with its own target. Matching is the exact declared name in both the preset and the filename.
