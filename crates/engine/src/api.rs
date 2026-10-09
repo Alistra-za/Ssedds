@@ -129,6 +129,9 @@ pub struct Plan {
     pub failed: Vec<FailedFile>,
     /// The most estimated bytes admitted at once while loading and analysing (spec §5.9 memory admission).
     pub peak_admitted_bytes: u64,
+    /// Files whose Load/Analyse never ran because the batch was cancelled while planning. `run` lists them as
+    /// cancelled in `batch_done` (exit 1).
+    pub cancelled: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -391,8 +394,14 @@ impl Engine {
 
     /// Discover, group, load, analyse and resolve every input, emitting `batch_started`, `file_discovered`,
     /// `set_resolved`, `file_planned` and every warning. Presets, configs, rules and `--set` values are
-    /// validated first: any invalid one is an error (exit 2) before any file is read.
-    pub fn plan(&self, req: BatchRequest, rep: &Reporter) -> Result<Plan, EngineError> {
+    /// validated first: any invalid one is an error (exit 2) before any file is read. Once `cancel` is set, no
+    /// further file is loaded; those files are returned in `Plan::cancelled`.
+    pub fn plan(
+        &self,
+        req: BatchRequest,
+        rep: &Reporter,
+        cancel: &CancelToken,
+    ) -> Result<Plan, EngineError> {
         let mut registry = self.registry.clone();
         for f in &req.preset_files {
             registry.add_file(f).map_err(config_err)?;
@@ -545,25 +554,37 @@ impl Engine {
         };
         let pool = thread_pool(req.jobs)?;
         let budget = Budget::new(budget_limit(&req), pool.current_num_threads());
-        // One slot per work item, so results keep the input order.
+        // One slot per work item, so results keep the input order. A slot left empty is a file that was cancelled
+        // before its Load started.
         let slots: Vec<Mutex<Option<_>>> = work.iter().map(|_| Mutex::new(None)).collect();
         pool.in_place_scope(|scope| {
             for (item, slot) in work.iter().zip(&slots) {
+                #[cfg(feature = "test-hooks")]
+                cancel_on_load_for_test(&item.1.path, cancel);
+                if cancel.is_cancelled() {
+                    continue;
+                }
                 let est = estimated_bytes(&item.1.path);
                 budget.acquire(est);
                 let admitted = Admitted(&budget, est);
                 let resolve_one = &resolve_one;
-                scope.spawn(move |_| *lock(slot) = Some(resolve_one(item, admitted)));
+                scope.spawn(move |_| {
+                    if !cancel.is_cancelled() {
+                        *lock(slot) = Some(resolve_one(item, admitted));
+                    }
+                });
             }
         });
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
-        let results = slots
-            .into_iter()
-            .filter_map(|s| s.into_inner().unwrap_or_else(|e| e.into_inner()));
 
         let mut jobs = vec![];
         let mut failed = vec![];
-        for r in results {
+        let mut cancelled = vec![];
+        for (item, slot) in work.iter().zip(slots) {
+            let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
+                cancelled.push(item.1.path.clone());
+                continue;
+            };
             match r {
                 Ok(job) => jobs.push(job),
                 Err((path, e)) => {
@@ -637,11 +658,14 @@ impl Engine {
             skipped,
             failed,
             peak_admitted_bytes,
+            cancelled,
         })
     }
 
     /// Report the plan's skipped and failed files, then (unless `dry_run`) convert every ready file and emit
-    /// `batch_done`. Cancelled files are listed in `batch_done` and leave no output.
+    /// `batch_done`. Cancelled files are listed in `batch_done` and leave no output: the files cancelled while
+    /// planning, and once `cancel` is set every ready file not yet started, including one a dry run would only
+    /// have listed and one that would have been up to date or kept by `--on-existing`.
     pub fn run(
         &self,
         plan: Plan,
@@ -651,6 +675,7 @@ impl Engine {
         let req = &plan.request;
         let mut summary = BatchSummary {
             failed: plan.failed.len() as u32,
+            cancelled: plan.cancelled.clone(),
             ..Default::default()
         };
         // Every skip carries the file's set key (review M9).
@@ -737,6 +762,12 @@ impl Engine {
             }
         }
         if req.dry_run {
+            if cancel.is_cancelled() {
+                summary
+                    .cancelled
+                    .extend(ready.iter().map(|j| j.input.clone()));
+            }
+            summary.cancelled.sort();
             rep.emit(None, None, done_event(&summary));
             return Ok(summary);
         }
@@ -754,6 +785,10 @@ impl Engine {
 
         let mut todo: Vec<(&ResolvedJob, PresetRef)> = vec![];
         for job in ready {
+            if cancel.is_cancelled() {
+                summary.cancelled.push(job.input.clone());
+                continue;
+            }
             if job.output.exists() {
                 match req.on_existing {
                     OnExisting::Overwrite => {}
@@ -934,6 +969,18 @@ fn run_one(
     }
     lock(state).failed += 1;
     rep.emit(set, path, EventKind::FileFailed { stage, error });
+}
+
+/// Test hook (`test-hooks` feature only): when `SDC_TEST_CANCEL_ON` names an input's file name, planning cancels
+/// the batch just before that file's Load, as a Ctrl-C would, so the CLI's cancelled-plan path can be tested
+/// without a console.
+#[cfg(feature = "test-hooks")]
+fn cancel_on_load_for_test(path: &Path, cancel: &CancelToken) {
+    if std::env::var_os("SDC_TEST_CANCEL_ON")
+        .is_some_and(|v| path.file_name() == Some(v.as_os_str()))
+    {
+        cancel.cancel();
+    }
 }
 
 /// Spec §8: an invalid preset, config, rule or `--set` value, or a setting unavailable for the whole batch, is an

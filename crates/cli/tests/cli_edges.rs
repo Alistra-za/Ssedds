@@ -2,7 +2,7 @@
 //! `--mem-budget`, read-only outputs, an output root that is a file, and non-ASCII paths.
 //!
 //! Every test points `APPDATA` at a path that does not exist, so the developer's `%APPDATA%\sdc\config.toml`
-//! is never read. `SDC_TEST_PANIC_ON` and `SDC_TEST_FAIL_VALIDATION` are engine test hooks (cargo feature `test-hooks`,
+//! is never read. `SDC_TEST_PANIC_ON`, `SDC_TEST_FAIL_VALIDATION` and `SDC_TEST_CANCEL_ON` are engine test hooks (cargo feature `test-hooks`,
 //! which this crate's dev-dependency on `engine` enables for `cargo test`), set on the child only.
 use image::{ImageBuffer, Rgb};
 use serde_json::Value;
@@ -416,4 +416,33 @@ fn non_ascii_paths_round_trip() {
     // The human log (stderr) names them too.
     assert!(stderr(&o).contains("Ärmör_n.png"), "{}", stderr(&o));
     no_temp_files(&out);
+}
+
+/// Codex-CLI 4: a Ctrl-C while planning (simulated by the `SDC_TEST_CANCEL_ON` hook, which cancels just before
+/// the named file loads) is not a success: a dry run and a real run both list every pending file as cancelled
+/// and exit 1, and nothing is written.
+#[test]
+fn a_cancel_while_planning_exits_1_and_lists_the_pending_files() {
+    let d = tempfile::tempdir().unwrap();
+    img(&d.path().join("in/a.png"));
+    img(&d.path().join("in/b.png"));
+    let out = d.path().join("out");
+    for extra in [&["--dry-run"][..], &[]] {
+        let o = convert(&d.path().join("in"), &out, extra)
+            .env("SDC_TEST_CANCEL_ON", "b.png")
+            .output()
+            .unwrap();
+        assert_eq!(code(&o), 1, "{extra:?}: {}", stderr(&o));
+        let done = batch_done(&o);
+        let cancelled: Vec<&str> = done["cancelled"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap().rsplit('/').next().unwrap())
+            .collect();
+        assert_eq!(cancelled, ["a.png", "b.png"], "{extra:?}: {done}");
+        assert_eq!(done["converted"], 0);
+        assert!(stderr(&o).contains("2 cancelled"), "{}", stderr(&o));
+        assert!(!out.join("a.dds").exists() && !out.join("b.dds").exists());
+    }
 }

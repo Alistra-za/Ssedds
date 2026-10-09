@@ -3,7 +3,10 @@
 //! - First Ctrl-C: cooperative cancel. Running files stop at their next band boundary, no new file starts,
 //!   `batch_done` lists the cancelled files and the batch exits 1.
 //! - Second Ctrl-C: exit 3 at once, without waiting for the running bands (a native encode call cannot be
-//!   interrupted, so a long band could otherwise keep the process alive).
+//!   interrupted, so a long band could otherwise keep the process alive) and without writing anything.
+//!
+//! The handler itself does no I/O (Codex-CLI 1, DECISIONS Note K); a Ctrl-C while planning is honoured too
+//! (`Engine::plan` takes the token).
 //!
 //! Outputs are written with `write_atomic` (temp file in the target directory, then rename), so an abort never
 //! leaves a partial `.dds`. It can leave `.sdc-*.tmp` files behind in the output folders, and a file that was
@@ -13,35 +16,61 @@
 use engine::api::CancelToken;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 /// Exit code of the second Ctrl-C (spec §8: fatal).
 pub const ABORT_EXIT_CODE: i32 = 3;
 
-/// One interrupt. `seen` counts the interrupts so far (injected so the logic is testable without a console);
-/// `abort` is called with [`ABORT_EXIT_CODE`] from the second interrupt on.
-pub fn on_interrupt(seen: &AtomicU32, cancel: &CancelToken, abort: impl Fn(i32)) {
+/// The note printed (by a helper thread, never by the handler) after the first Ctrl-C.
+const CANCELLING_NOTE: &str =
+    "cancelling: finishing current bands... (Ctrl-C again to exit immediately)";
+
+/// One interrupt. It does no I/O (Codex-CLI 1): a full, undrained stderr pipe would block a write here, and
+/// ctrlc runs its callbacks one at a time, so a blocked first callback would keep the second Ctrl-C from ever
+/// exiting. `seen` counts the interrupts so far; the first sets the cancel flag and calls `notify` (which only
+/// wakes the thread that prints the note); every later one calls `abort` with [`ABORT_EXIT_CODE`]. All three
+/// are injected so the logic is testable without a console.
+pub fn on_interrupt(
+    seen: &AtomicU32,
+    cancel: &CancelToken,
+    notify: impl FnOnce(),
+    abort: impl FnOnce(i32),
+) {
     if seen.fetch_add(1, Ordering::SeqCst) == 0 {
-        // Cancel first, and ignore write errors: a closed stderr pipe must not panic this thread, because the
-        // handler would then never run again and Ctrl-C would stop working for the rest of the run.
         cancel.cancel();
-        let _ = writeln!(
-            std::io::stderr(),
-            "cancelling: finishing current bands... (Ctrl-C again to exit immediately)"
-        );
+        notify();
     } else {
-        let _ = writeln!(
-            std::io::stderr(),
-            "aborting: exit 3; unfinished temp files (.sdc-*.tmp) may remain in the output folders"
-        );
         abort(ABORT_EXIT_CODE);
     }
 }
 
 /// Install the process-wide handler. Call it before planning, so a Ctrl-C during a long scan is not lost.
+///
+/// The "cancelling" note is printed by a helper thread the handler wakes through a channel, so a blocked
+/// stderr can stall only that thread. The second Ctrl-C calls `std::process::exit(3)` without writing anything.
 pub fn install(cancel: CancelToken) -> Result<(), ctrlc::Error> {
+    let (tx, rx) = mpsc::channel::<()>();
+    // Without the helper thread the note is simply not printed; cancelling still works.
+    let _ = std::thread::Builder::new()
+        .name("sdc-ctrlc-note".into())
+        .spawn(move || {
+            if rx.recv().is_ok() {
+                // A closed stderr pipe is ignored: the note is advisory.
+                let _ = writeln!(std::io::stderr(), "{CANCELLING_NOTE}");
+            }
+        });
     let seen = Arc::new(AtomicU32::new(0));
-    ctrlc::set_handler(move || on_interrupt(&seen, &cancel, |c| std::process::exit(c)))
+    ctrlc::set_handler(move || {
+        on_interrupt(
+            &seen,
+            &cancel,
+            || {
+                // Never blocks (unbounded channel); an error only means the helper thread is gone.
+                let _ = tx.send(());
+            },
+            |c| std::process::exit(c),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -50,14 +79,27 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
-    fn first_interrupt_cancels_second_aborts_with_3() {
-        let (seen, cancel, exited) = (AtomicU32::new(0), CancelToken::default(), Cell::new(None));
-        on_interrupt(&seen, &cancel, |c| exited.set(Some(c)));
+    fn first_interrupt_cancels_and_notifies_later_ones_abort_with_3_without_notifying() {
+        let (seen, cancel) = (AtomicU32::new(0), CancelToken::default());
+        let (notes, exited) = (Cell::new(0u32), Cell::new(None));
+        let interrupt = || {
+            on_interrupt(
+                &seen,
+                &cancel,
+                || notes.set(notes.get() + 1),
+                |c| exited.set(Some(c)),
+            )
+        };
+        interrupt();
         assert!(cancel.is_cancelled());
+        assert_eq!(notes.get(), 1, "the first Ctrl-C wakes the note thread");
         assert_eq!(exited.get(), None, "the first Ctrl-C must not exit");
-        on_interrupt(&seen, &cancel, |c| exited.set(Some(c)));
+        interrupt();
         assert_eq!(exited.get(), Some(3));
-        on_interrupt(&seen, &cancel, |c| exited.set(Some(c)));
+        assert_eq!(notes.get(), 1, "the second Ctrl-C exits without any output");
+        exited.set(None);
+        interrupt();
         assert_eq!(exited.get(), Some(3), "every later Ctrl-C keeps aborting");
+        assert_eq!(notes.get(), 1);
     }
 }

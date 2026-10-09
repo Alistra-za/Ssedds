@@ -6,7 +6,7 @@
 use crate::args::*;
 use crate::human::TeeSink;
 use encoders_sys::Bc1Model;
-use engine::api::{Engine, EngineError};
+use engine::api::{CancelToken, Engine, EngineError};
 use engine::codes::{Code, Warning};
 use engine::config::*;
 use engine::dds::{check_header, read_dds, DdsFile, DdsPixelFormat};
@@ -329,7 +329,7 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         inner: Arc::new(TeeSink(sinks)),
     };
     let rep = Reporter::new(Arc::new(sink), new_batch_id());
-    let plan = Engine::new()?.plan(req, &rep)?;
+    let plan = Engine::new()?.plan(req, &rep, &CancelToken::default())?;
     // What `run` would report for the files `plan` set aside. DDS files are inspected above, not skipped.
     for sk in plan
         .skipped

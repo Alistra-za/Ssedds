@@ -53,7 +53,7 @@ fn run(req: BatchRequest) -> (BatchSummary, Vec<EngineEvent>) {
     let sink = Arc::new(VecSink::default());
     let rep = Reporter::new(sink.clone(), new_batch_id());
     let e = Engine::new().unwrap();
-    let plan = e.plan(req, &rep).unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
     let s = e.run(plan, &rep, &CancelToken::default()).unwrap();
     (s, sink.take())
 }
@@ -160,12 +160,16 @@ fn bad_override_value_is_a_usage_error_and_cancel_cancels() {
     req.overrides.push(parse_set("format=bc9").unwrap());
     let rep = Reporter::new(Arc::new(NullSink), "x");
     assert!(matches!(
-        Engine::new().unwrap().plan(req, &rep),
+        Engine::new()
+            .unwrap()
+            .plan(req, &rep, &CancelToken::default()),
         Err(EngineError::Usage(_))
     ));
 
     let e = Engine::new().unwrap();
-    let plan = e.plan(request(d.path()), &rep).unwrap();
+    let plan = e
+        .plan(request(d.path()), &rep, &CancelToken::default())
+        .unwrap();
     let c = CancelToken::default();
     c.cancel();
     let s = e.run(plan, &rep, &c).unwrap();
@@ -187,7 +191,7 @@ fn duplicates_and_dds_inputs_are_skipped_with_codes() {
     let rep = Reporter::new(Arc::new(NullSink), "x");
     let plan = Engine::new()
         .unwrap()
-        .plan(request(d.path()), &rep)
+        .plan(request(d.path()), &rep, &CancelToken::default())
         .unwrap();
     let codes: Vec<_> = plan.skipped.iter().map(|s| s.code).collect();
     assert_eq!(
@@ -318,7 +322,10 @@ fn planning_admits_loads_through_the_memory_budget() {
             req.dry_run = dry_run;
             let sink = Arc::new(VecSink::default());
             let rep = Reporter::new(sink.clone(), new_batch_id());
-            let plan = Engine::new().unwrap().plan(req, &rep).unwrap();
+            let plan = Engine::new()
+                .unwrap()
+                .plan(req, &rep, &CancelToken::default())
+                .unwrap();
             assert_eq!(plan.jobs.len(), 8, "{:#?}", sink.take());
             let peak = plan.peak_admitted_bytes;
             let what = format!("dry_run {dry_run}, budget {budget}: peak {peak}");
@@ -547,7 +554,10 @@ fn target_comes_from_the_project_config_when_not_given() {
     let mut req = request(d.path());
     req.target = None;
     let rep = Reporter::new(Arc::new(NullSink), "x");
-    let plan = Engine::new().unwrap().plan(req, &rep).unwrap();
+    let plan = Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
     assert_eq!(plan.target, Target::Vanilla);
     assert_eq!(plan.preset_id, "vanilla-quality");
     for j in &plan.jobs {
@@ -557,7 +567,7 @@ fn target_comes_from_the_project_config_when_not_given() {
 
     let plan = Engine::new()
         .unwrap()
-        .plan(request(d.path()), &rep)
+        .plan(request(d.path()), &rep, &CancelToken::default())
         .unwrap();
     assert_eq!(plan.target, Target::Cs);
     assert!(plan
@@ -599,7 +609,7 @@ fn suffix_alias_preset_is_recorded_in_the_manifest() {
     let rep = Reporter::new(Arc::new(NullSink), "x");
     let err = Engine::new()
         .unwrap()
-        .plan(req.clone(), &rep)
+        .plan(req.clone(), &rep, &CancelToken::default())
         .err()
         .unwrap();
     assert!(matches!(err, EngineError::Config(_)), "{err:?}");
@@ -640,7 +650,7 @@ fn cancel_during_a_file_leaves_no_output_and_lists_every_unfinished_file() {
     let sink = Arc::new(CancelOnStart(cancel.clone(), VecSink::default()));
     let rep = Reporter::new(sink.clone(), "c");
     let e = Engine::new().unwrap();
-    let plan = e.plan(req, &rep).unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
     let s = e.run(plan, &rep, &cancel).unwrap();
     assert_eq!(s.cancelled.len(), 2, "{s:?}");
     assert_eq!(s.converted, 0);
@@ -718,7 +728,7 @@ fn a_dds_next_to_a_same_stem_image_is_skipped_and_the_image_still_plans() {
     let rep = Reporter::new(Arc::new(NullSink), "x");
     let plan = Engine::new()
         .unwrap()
-        .plan(request(d.path()), &rep)
+        .plan(request(d.path()), &rep, &CancelToken::default())
         .unwrap();
     let skipped: Vec<(String, Option<Code>)> = plan
         .skipped
@@ -749,4 +759,105 @@ fn a_dds_next_to_a_same_stem_image_is_skipped_and_the_image_still_plans() {
         planned.contains(&"iron.png".to_string()) && planned.contains(&"iron_n.png".to_string()),
         "{planned:?}"
     );
+}
+
+/// `request` with leaf.png given a cutout policy, so every file is ready and an exit 1 can only come from a cancel.
+fn request_all_ready(dir: &Path) -> BatchRequest {
+    let mut r = request(dir);
+    r.overrides
+        .push(parse_set("file:**/leaf.png.alpha.policy=cutout").unwrap());
+    r
+}
+
+fn cancelled_names(s: &BatchSummary) -> Vec<String> {
+    s.cancelled
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Codex-CLI 4: a Ctrl-C that lands after planning is not reported as a successful dry run.
+#[test]
+fn a_cancelled_dry_run_lists_its_pending_files_and_exits_1() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let mut req = request_all_ready(d.path());
+    req.dry_run = true;
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "c");
+    let e = Engine::new().unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let s = e.run(plan, &rep, &cancel).unwrap();
+    assert_eq!(
+        cancelled_names(&s),
+        ["iron.png", "iron_n.png", "leaf.png"],
+        "{s:?}"
+    );
+    assert_eq!(s.exit_code(), 1);
+    match &sink.take().last().unwrap().kind {
+        EventKind::BatchDone { cancelled, .. } => assert_eq!(cancelled.len(), 3),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// Codex-CLI 4: when every ready file would be up to date, a cancel is still recorded (the files were pending
+/// when it arrived).
+#[test]
+fn a_cancel_is_recorded_when_every_ready_file_is_up_to_date() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let (s, _) = run(request_all_ready(d.path()));
+    assert_eq!((s.converted, s.exit_code()), (3, 0), "{s:?}");
+    let (s, _) = run(request_all_ready(d.path()));
+    assert_eq!((s.up_to_date, s.exit_code()), (3, 0), "{s:?}");
+
+    let rep = Reporter::new(Arc::new(NullSink), "c");
+    let e = Engine::new().unwrap();
+    let plan = e
+        .plan(request_all_ready(d.path()), &rep, &CancelToken::default())
+        .unwrap();
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let s = e.run(plan, &rep, &cancel).unwrap();
+    assert_eq!(s.up_to_date, 0, "{s:?}");
+    assert_eq!(cancelled_names(&s).len(), 3, "{s:?}");
+    assert_eq!(s.exit_code(), 1);
+}
+
+/// Codex-CLI 4: a batch cancelled before or during planning loads nothing more, and a dry run of it lists every
+/// file it did not plan as cancelled (exit 1) instead of reporting success.
+#[test]
+fn a_dry_run_cancelled_while_planning_lists_the_unplanned_files_and_exits_1() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let mut req = request_all_ready(d.path());
+    req.dry_run = true;
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "c");
+    let e = Engine::new().unwrap();
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let plan = e.plan(req, &rep, &cancel).unwrap();
+    assert!(plan.jobs.is_empty());
+    assert_eq!(plan.cancelled.len(), 3);
+    let s = e.run(plan, &rep, &cancel).unwrap();
+    assert_eq!(
+        cancelled_names(&s),
+        ["iron.png", "iron_n.png", "leaf.png"],
+        "{s:?}"
+    );
+    assert_eq!(s.exit_code(), 1);
+    let ev = sink.take();
+    assert_eq!(kinds(&ev, "file_planned"), 0);
+    match &ev.last().unwrap().kind {
+        EventKind::BatchDone { cancelled, .. } => assert_eq!(cancelled.len(), 3),
+        k => panic!("{k:?}"),
+    }
+    // A real run of a plan cancelled while planning writes nothing and also exits 1.
+    let plan = e.plan(request_all_ready(d.path()), &rep, &cancel).unwrap();
+    let s = e.run(plan, &rep, &cancel).unwrap();
+    assert_eq!((s.converted, s.cancelled.len(), s.exit_code()), (0, 3, 1));
+    assert!(files_with_ext(&d.path().join("out"), "dds").is_empty());
 }

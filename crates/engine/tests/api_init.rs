@@ -24,7 +24,7 @@ fn a_bc1_model_mismatch_is_fatal_before_any_work() {
     let sink = Arc::new(VecSink::default());
     let rep = Reporter::new(sink.clone(), "init");
     let e = Engine::new().unwrap();
-    let plan = e.plan(req, &rep).unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
     let err = e.run(plan, &rep, &CancelToken::default()).err().unwrap();
     assert!(matches!(err, EngineError::Fatal(_)), "{err:?}");
     assert_eq!(err.exit_code(), 3);

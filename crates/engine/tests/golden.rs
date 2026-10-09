@@ -34,7 +34,7 @@ fn run(req: BatchRequest) -> Out {
     let sink = Arc::new(VecSink::default());
     let rep = Reporter::new(sink.clone(), "golden");
     let e = Engine::new().unwrap();
-    let plan = e.plan(req, &rep).unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
     let summary = e.run(plan, &rep, &CancelToken::default()).unwrap();
     Out {
         summary,

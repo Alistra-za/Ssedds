@@ -51,7 +51,7 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
     }
     let rep = reporter(a.batch.json);
     let engine = Engine::new()?;
-    let plan = engine.plan(req, &rep)?;
+    let plan = engine.plan(req, &rep, &cancel)?;
     Ok(engine.run(plan, &rep, &cancel)?.exit_code())
 }
 
