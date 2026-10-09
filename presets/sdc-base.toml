@@ -1,0 +1,88 @@
+schema_version = 1
+id = "sdc-base"
+version = "1.0.0"
+hidden = true
+description = "Per-sub-type defaults from spec §4.1/§4.2. Not selectable; every preset inherits it."
+
+[defaults]
+color = { content = "linear", tag = "unorm" }
+alpha = { policy = "remove", threshold = 127, compare = "gt", exact_opaque = false }
+channels = { flip_green = false, reconstruct_z = false, grayscale_source = "r" }
+mips = { levels = "full", filter = "box", normal = "renormalize", coverage = "auto" }
+format = "bc7"
+header = "auto"
+encoder = { backend = "bc7e", effort = "veryslow", rgbcx_level = 18, perceptual = false, bc1_transparent_black = false, bc45_search_radius = "default" }
+validation = { min_mip_psnr_db = 30.0, coverage_tolerance_pts = 2.0, complex_m_warn_alpha = 247, bc6h_min_peak_ratio = 0.8, pgpatcher_non_white_share = 0.5 }
+
+[subtypes.diffuse]
+color = { content = "srgb", tag = "unorm" }
+[subtypes.landscape_diffuse]
+color = { content = "srgb", tag = "unorm" }
+alpha = { policy = "data" }
+[subtypes.pbr_albedo]
+color = { content = "srgb", tag = "srgb" }
+[subtypes.pbr_emissive]
+color = { content = "srgb", tag = "n/a" }
+format = "bc6h_uf16"
+encoder = { backend = "ispc_bc6h" }
+[subtypes.glow]
+color = { content = "srgb", tag = "unorm" }
+[subtypes.pbr_subsurface]
+color = { content = "srgb", tag = "srgb" }
+alpha = { policy = "data" }
+[subtypes.pbr_fuzz]
+color = { content = "srgb", tag = "srgb" }
+alpha = { policy = "data" }
+[subtypes.subsurface_tint]
+color = { content = "srgb", tag = "unorm" }
+[subtypes.backlight_tint]
+color = { content = "srgb", tag = "unorm" }
+[subtypes.ui_sky]
+color = { content = "srgb", tag = "unorm" }
+mips = { levels = "none" }
+[subtypes.normal]
+alpha = { policy = "data" }
+[subtypes.landscape_normal]
+alpha = { policy = "data" }
+[subtypes.pbr_normal]
+alpha = { policy = "remove" }
+[subtypes.msn]
+alpha = { policy = "remove" }
+[subtypes.coat_normal]
+alpha = { policy = "data" }
+[subtypes.envmask]
+alpha = { policy = "remove", exact_opaque = true }
+format = "bc4"
+encoder = { backend = "rgbcx" }
+[subtypes.complex_material]
+alpha = { policy = "data", exact_opaque = true }
+[subtypes.rmaos]
+alpha = { policy = "data" }
+[subtypes.rfaos]
+alpha = { policy = "data" }
+[subtypes.flow]
+format = "bc5"
+encoder = { backend = "rgbcx" }
+[subtypes.height]
+format = "bc4"
+encoder = { backend = "rgbcx" }
+[subtypes.msn_specular]
+format = "bc4"
+encoder = { backend = "rgbcx" }
+[subtypes.generic_two_channel]
+format = "bc5"
+encoder = { backend = "rgbcx" }
+[subtypes.generic_data]
+alpha = { policy = "data" }
+[subtypes.hdr_sky]
+color = { content = "linear", tag = "n/a" }
+format = "bc6h_uf16"
+encoder = { backend = "ispc_bc6h" }
+
+[[rules]]
+match = { glob = "**/interface/**" }
+overrides = { mips = { levels = "none" } }
+
+[[rules]]
+match = { glob = "**/sky/**" }
+overrides = { mips = { levels = "none" } }

@@ -1,0 +1,6 @@
+schema_version = 1
+id = "cpm-quality"
+version = "1.0.0"
+base = "sdc-base"
+target = "cpm"
+description = "CPM – Quality: CPM / ENB complex material; no _SRGB, no BC6H."

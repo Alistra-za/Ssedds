@@ -1,0 +1,6 @@
+schema_version = 1
+id = "cs-quality"
+version = "1.0.0"
+base = "sdc-base"
+target = "cs"
+description = "CS – Quality (default): Community Shaders incl. TruePBR; bc7e veryslow; BC6H emissive."
