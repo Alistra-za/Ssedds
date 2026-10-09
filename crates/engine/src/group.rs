@@ -1,6 +1,6 @@
 //! Texture-set grouping (spec §6.1): inputs sharing an output directory and a base name.
 use crate::config::{GreenConvention, RawMap};
-use crate::discover::InputFile;
+use crate::discover::{InputFile, InputKind};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Spec §6.1 suffix list, longest first so `_msn` wins over `_n` and `_envmask` over `_m`.
@@ -179,7 +179,7 @@ fn fold(p: &std::path::Path) -> String {
 }
 
 /// Groups inputs into texture sets and reports duplicate groups: two or more inputs that map
-/// to one output path, compared case-insensitively.
+/// to one output path, compared case-insensitively. DDS inputs take no part: they are skipped, not written.
 pub fn group_sets(files: &[InputFile]) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
     group_sets_with(files, &BTreeMap::new())
 }
@@ -193,7 +193,10 @@ pub fn group_sets_with(
     let mut sets: BTreeMap<String, TextureSet> = BTreeMap::new();
     let mut outs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, f) in files.iter().enumerate() {
-        outs.entry(fold(&f.output)).or_default().push(i);
+        // A DDS input is never re-encoded (spec §2, DECISIONS Note I), so it has no output to collide on.
+        if f.kind != InputKind::Dds {
+            outs.entry(fold(&f.output)).or_default().push(i);
+        }
         let stem = f
             .rel
             .file_stem()

@@ -669,3 +669,48 @@ fn nonfinite_source_samples_raise_a_warning() {
         .expect("IN-NONFINITE warning");
     assert_eq!(w.data["samples"], 1);
 }
+
+#[test]
+fn a_dds_next_to_a_same_stem_image_is_skipped_and_the_image_still_plans() {
+    // Spec §2 (DDS input is secondary), DECISIONS Note I: a DDS has no output of its own, so it cannot
+    // collide with the image that maps to the same path.
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let t = d.path().join("textures/armor");
+    std::fs::write(t.join("iron.dds"), b"DDS ").unwrap();
+    std::fs::write(t.join("IRON_N.DDS"), b"DDS ").unwrap();
+    let rep = Reporter::new(Arc::new(NullSink), "x");
+    let plan = Engine::new()
+        .unwrap()
+        .plan(request(d.path()), &rep)
+        .unwrap();
+    let skipped: Vec<(String, Option<Code>)> = plan
+        .skipped
+        .iter()
+        .map(|s| {
+            (
+                s.path.file_name().unwrap().to_string_lossy().to_lowercase(),
+                s.code,
+            )
+        })
+        .collect();
+    assert!(
+        !skipped.iter().any(|(_, c)| *c == Some(Code::InDuplicate)),
+        "{skipped:?}"
+    );
+    for dds in ["iron.dds", "iron_n.dds"] {
+        assert!(
+            skipped.contains(&(dds.into(), Some(Code::InDdsSkipped))),
+            "{skipped:?}"
+        );
+    }
+    let planned: Vec<String> = plan
+        .jobs
+        .iter()
+        .map(|j| j.input.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        planned.contains(&"iron.png".to_string()) && planned.contains(&"iron_n.png".to_string()),
+        "{planned:?}"
+    );
+}
