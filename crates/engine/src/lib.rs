@@ -1,5 +1,6 @@
 //! sdc engine: configuration, policy, pipeline, DDS I/O, validation, events.
 pub mod analyse;
+pub mod api;
 pub mod codes;
 pub mod config;
 pub mod coverage;
@@ -16,8 +17,10 @@ pub mod manifest;
 pub mod mips;
 pub mod ops;
 pub mod overrides;
+pub mod pipeline;
 pub mod policy;
 pub mod presets;
 pub mod quantize;
 pub mod suggest;
+pub mod sysmem;
 pub mod validate;
