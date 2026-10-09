@@ -617,7 +617,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `FMT-LANDSCAPE-BC1` | blocking | BC1 on `landscape_diffuse` → destroys snow mask/height [SC §4] | BC7 or BC3 |
 | `FMT-BC1-ALPHA` | blocking | BC1 with policy ≠ `remove` (v1 BC1 has no alpha) | BC7/BC3 or `remove` |
 | `FMT-PERCEPTUAL-DATA` | error | Perceptual where locked [B2 §1] | — |
-| `ALPHA-EXACT-OFF-M` | warning | `exact_opaque` off on an `_m` storing alpha → 254 may reach PGPatcher/ENB checks | Keep it on |
+| `ALPHA-EXACT-OFF-M` | warning | `exact_opaque` off on an `_m` written as BC7 (BC3's alpha block stores 255 exactly) → 254 may reach PGPatcher/ENB checks | Keep it on |
 | `ALPHA-254` | info | Decoded 254 present (bc7e with flag off, or a validated third-party DDS); harmless to CS's 251/255 gate [D-A] | Turn flag on if alpha is read |
 | `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla` or `cpm` [D#4] | UNORM |
 | `TAG-SRGB-NONPBR` | blocking | `_SRGB` on a non-PBR sub-type under `cs` → renders darker [SC §6] | UNORM |

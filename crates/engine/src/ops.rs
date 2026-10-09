@@ -96,6 +96,9 @@ pub fn preprocess(mut img: Rgba32F, p: &Profile) -> Work {
         }
         if let Some(s) = &p.channels.swizzle {
             *px = swizzle(*px, s); // (2)
+            if !alpha_present {
+                px[3] = 1.0; // a swizzle such as `rgb0` must not bring back a dropped alpha
+            }
         }
         if grayscale {
             let g = match p.channels.grayscale_source {
@@ -275,5 +278,42 @@ mod tests {
         assert!(w.alpha_present);
         assert!((w.img.px[0][0] - 0.214_041).abs() < 1e-5);
         assert_eq!(w.img.px[0][3], 0.5);
+    }
+
+    #[test]
+    fn z_rebuild_and_flip_change_the_vector() {
+        let mut p = profile(Subtype::Normal);
+        p.channels.flip_green = true;
+        p.channels.reconstruct_z = true;
+        // x = 0.3, y = 0.4 before the flip, stored z = -1: the rebuild replaces z.
+        let w = preprocess(Rgba32F::new(1, 1, [0.65, 0.7, 0.0, 1.0]), &p);
+        let v = w.img.px[0];
+        assert!((v[0] - 0.3).abs() < 1e-6 && (v[1] + 0.4).abs() < 1e-6);
+        assert!((v[2] - 0.75f32.sqrt()).abs() < 1e-6);
+        p.channels.reconstruct_z = false;
+        let w = preprocess(Rgba32F::new(1, 1, [0.65, 0.7, 0.0, 1.0]), &p);
+        assert_eq!(w.img.px[0][2], 0.0);
+    }
+
+    #[test]
+    fn swizzle_cannot_restore_a_removed_alpha() {
+        let mut p = profile(Subtype::GenericData);
+        p.alpha.policy = AlphaPolicy::Remove;
+        p.channels.swizzle = Some("rgb0".into());
+        let w = preprocess(Rgba32F::new(1, 1, [0.1, 0.2, 0.3, 0.4]), &p);
+        assert!(!w.alpha_present);
+        assert_eq!(w.img.px[0][3], 1.0);
+    }
+
+    #[test]
+    fn hdr_decodes_srgb_content_and_leaves_linear_content() {
+        let mut p = profile(Subtype::PbrEmissive);
+        p.color.content = ColorContent::Srgb;
+        let w = preprocess(Rgba32F::new(1, 1, [0.5, 0.5, 0.5, 1.0]), &p);
+        assert_eq!(w.domain, Domain::Hdr);
+        assert!((w.img.px[0][0] - 0.214_041).abs() < 1e-5);
+        p.color.content = ColorContent::Linear;
+        let w = preprocess(Rgba32F::new(1, 1, [2.5, 0.5, 0.5, 1.0]), &p);
+        assert_eq!(&w.img.px[0][..3], &[2.5, 0.5, 0.5]);
     }
 }
