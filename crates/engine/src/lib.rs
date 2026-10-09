@@ -13,5 +13,6 @@ pub mod ops;
 pub mod overrides;
 pub mod policy;
 pub mod presets;
+pub mod quantize;
 pub mod suggest;
 pub mod validate;
