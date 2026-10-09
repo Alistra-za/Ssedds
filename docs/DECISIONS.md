@@ -198,7 +198,7 @@ Owner answer to the Task 37 review question O1: files skipped on purpose do not 
 
 The verbs whose report *is* the result print their human report on **stdout**: `inspect`, `validate`, `presets` and `encoders`.
 `convert` prints its progress log on **stderr**. With `--json`, stdout carries only JSON Lines for every verb.
-`validate` infers the alpha policy from the file: mip-0 alpha ≥ 254 everywhere → `remove`; otherwise the sub-type's alpha-keeping default, or `data`. `--alpha-policy` overrides it.
+`validate` infers the alpha policy from the file: mip-0 alpha ≥ 254 everywhere → `remove`; otherwise the sub-type's alpha-keeping default, or `data`. `--alpha-policy` overrides it. `alpha.exact_opaque` is a promise of sdc's own encoder, so `validate` sets it off whatever the sub-type's preset says (a third-party BC7 whose alpha decodes to 254 passes with the `ALPHA-254` info); `--exact-opaque` asks for the 255 guarantee (Codex-CLI 3). Conversion-time validation is unchanged. For sub-type inference, mip-0 alpha with a minimum of 251 or more is not varying (Note L).
 A DDS in a format sdc never writes (BC2, uncompressed, signed) gets header checks only; a clean header gives "not judged", exit 0.
 
 ## Note K — Task 44 CLI edge-case rulings (controller, 2026-10-09)

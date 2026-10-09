@@ -367,9 +367,9 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
     Ok(i32::from(unreadable > 0 || !plan.failed.is_empty()))
 }
 
-/// Mip-0 decoded alpha below this is "varying" for sub-type inference: under the 251/255 complex gate of
-/// spec §5.8 (BC7's 254 is not).
-const VARYING_ALPHA_BELOW: u8 = 250;
+/// Mip-0 decoded alpha below this is "varying" for sub-type inference. DECISIONS Note L: alpha whose minimum
+/// is 251 or more is opaque (BC encode noise, Community Shaders' 251 opacity gate), so BC7's 254 is not varying.
+const VARYING_ALPHA_BELOW: u8 = 251;
 
 /// Mip-0 decoded alpha at or above this is flat opaque: the file carries no alpha worth keeping, so it is
 /// held to the `remove` guarantee (spec §5.8: decoded alpha >= 254 for BC7, 255 otherwise). It is the
@@ -488,8 +488,9 @@ fn say(json: bool, line: String) {
 
 /// `sdc validate`: the spec §5.8 checks on existing DDS files. The profile comes from the sub-type and the
 /// target, but its format, `_SRGB` tag and alpha policy from the file, so third-party files are judged on the
-/// header rules and the alpha rules rather than on sdc's preferred format. A format sdc never writes only has
-/// its header checked. Exit 1 if a file cannot be read, else 4 if one fails validation, else 0.
+/// header rules and the alpha rules rather than on sdc's preferred format. `alpha.exact_opaque` is off unless
+/// `--exact-opaque` is given. A format sdc never writes only has its header checked. Exit 1 if a file cannot
+/// be read, else 4 if one fails validation, else 0.
 pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
     let target = a.target.map_or(Target::Cs, Target::from);
     let model: Bc1Model = a.bc1_decoder.into();
@@ -570,6 +571,9 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
                 };
                 p.alpha.policy = explicit_policy
                     .unwrap_or_else(|| infer_alpha_policy(alpha_min, p.alpha.policy));
+                // Codex-CLI 3: exact-opaque is a promise of sdc's own encoder (on by default for `envmask` and
+                // `complex_material`), not of the file, so it is not inherited from the sub-type's preset.
+                p.alpha.exact_opaque = a.exact_opaque;
                 policy = Some(p.alpha.policy);
                 validate(&engine::validate::ValidationInput {
                     bytes: &bytes,

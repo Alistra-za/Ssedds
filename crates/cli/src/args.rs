@@ -190,6 +190,10 @@ pub struct ValidateArgs {
     /// every mip-0 alpha is at least 254).
     #[arg(long, value_parser = ["remove", "cutout", "blend", "cutout_blend", "data"])]
     pub alpha_policy: Option<String>,
+    /// Hold BC7 files under `remove` to sdc's exact-opaque guarantee (decoded alpha 255, not 254). Off by
+    /// default: only sdc's own encoder promises it, so third-party files are not judged by it.
+    #[arg(long)]
+    pub exact_opaque: bool,
     /// Write one JSON object per file to stdout (the human report goes to stderr).
     #[arg(long)]
     pub json: bool,

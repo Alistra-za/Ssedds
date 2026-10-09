@@ -727,3 +727,85 @@ fn inspect_rejects_invalid_options_and_configs_without_images() {
     assert_eq!(code(&o), 2, "{}", text(&o.stderr));
     assert!(o.stdout.is_empty(), "{}", text(&o.stdout));
 }
+
+/// A 4x4 BC7 (DX10 `BC7_UNORM`) file of one mode-6 block whose every texel decodes to RGB 128 (or 129) and alpha
+/// `(a7 << 1) | p`.
+fn bc7_flat_alpha_file(dir: &Path, name: &str, a7: u128, p: u128) -> PathBuf {
+    let mut b = vec![0u8; 128 + 20 + 16];
+    let put = |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    b[0..4].copy_from_slice(b"DDS ");
+    put(&mut b, 4, 124);
+    put(&mut b, 8, 0x8_1007); // CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE
+    put(&mut b, 12, 4);
+    put(&mut b, 16, 4);
+    put(&mut b, 20, 16);
+    put(&mut b, 76, 32);
+    put(&mut b, 80, 4); // DDPF_FOURCC
+    b[84..88].copy_from_slice(b"DX10");
+    put(&mut b, 108, 0x1000); // TEXTURE
+    put(&mut b, 128, 98); // DXGI_FORMAT_BC7_UNORM
+    put(&mut b, 132, 3); // TEXTURE2D
+    put(&mut b, 140, 1); // array size
+                         // Mode 6: endpoints R0 R1 G0 G1 B0 B1 A0 A1 (7 bits each) from bit 7, p-bits at 63 and 64, indices 0.
+    let mut block: u128 = 1 << 6;
+    for (i, v) in [64u128, 64, 64, 64, 64, 64, a7, a7].into_iter().enumerate() {
+        block |= v << (7 + 7 * i);
+    }
+    block |= (p << 63) | (p << 64);
+    b[148..164].copy_from_slice(&block.to_le_bytes());
+    let path = dir.join(name);
+    std::fs::write(&path, b).unwrap();
+    path
+}
+/// Codex-CLI 3: standalone `validate` does not hold a third-party file to `alpha.exact_opaque`, which only
+/// sdc's own encoder promises (the `envmask` and `complex_material` presets turn it on). A clean BC7 `_m` whose
+/// alpha decodes to 254 passes with the ALPHA-254 info; `--exact-opaque` asks for the 255 guarantee.
+#[test]
+fn validate_does_not_inherit_exact_opaque_unless_asked() {
+    let d = tempfile::tempdir().unwrap();
+    let dds = bc7_flat_alpha_file(d.path(), "rock_m.dds", 127, 0);
+    for target in ["cs", "vanilla"] {
+        let o = validate(&["--target", target, "--json"], &dds);
+        assert_eq!(code(&o), 0, "{target}: {}", text(&o.stdout));
+        let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+        assert_eq!(v["subtype"], "envmask", "{v}");
+        assert_eq!(v["alpha_policy"], "remove", "{v}");
+        let codes: Vec<&str> = v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["code"].as_str().unwrap())
+            .collect();
+        assert!(codes.contains(&"ALPHA-254"), "{v}");
+        assert!(!codes.contains(&"VAL-ALPHA-GUARANTEE"), "{v}");
+
+        let o = validate(&["--target", target, "--exact-opaque", "--json"], &dds);
+        assert_eq!(code(&o), 4, "{target}: {}", text(&o.stdout));
+        let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+        assert!(
+            v["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["code"] == "VAL-ALPHA-GUARANTEE"
+                    && w["message"].as_str().unwrap().contains("guarantee 255")),
+            "{v}"
+        );
+    }
+}
+
+/// Codex-CLI 5 (DECISIONS Note L): for sub-type inference a stored alpha whose minimum is 251 or more is opaque,
+/// one at 250 is varying. Under `cs` that is the difference between `envmask` and `complex_material` for `_m`.
+#[test]
+fn validate_infers_varying_alpha_below_the_note_l_cutoff() {
+    let d = tempfile::tempdir().unwrap();
+    for (name, a7, p, want) in [
+        ("a250_m.dds", 125, 0, "complex_material"),
+        ("a251_m.dds", 125, 1, "envmask"),
+    ] {
+        let dds = bc7_flat_alpha_file(d.path(), name, a7, p);
+        let o = validate(&["--json"], &dds);
+        let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+        assert_eq!(v["subtype"], want, "{name}: {v}");
+    }
+}
