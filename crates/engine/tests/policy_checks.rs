@@ -385,7 +385,8 @@ fn srgb_and_bc6h_are_gated_by_target() {
             codes: vec![Code::TagSrgbVanilla]
         }
     );
-    // pbr_emissive under cpm: unavailable sub-type and BC6H outside cs, one code in the status
+    // pbr_emissive under cpm: unavailable sub-type (blocking) and inherited BC6H outside cs (error), one code
+    // in the status
     let j = run(
         Target::Cpm,
         "textures/a/x_g.png",
@@ -397,7 +398,7 @@ fn srgb_and_bc6h_are_gated_by_target() {
     );
     assert_eq!(
         j.status,
-        JobStatus::Blocked {
+        JobStatus::Error {
             codes: vec![Code::CfgUnavailable]
         },
         "{:?}",
@@ -422,7 +423,7 @@ fn srgb_and_bc6h_are_gated_by_target() {
     );
     assert_eq!(
         j.status,
-        JobStatus::Blocked {
+        JobStatus::Error {
             codes: vec![Code::CfgUnavailable]
         },
         "{:?}",
@@ -496,7 +497,8 @@ fn bc1_blocks_every_alpha_policy_but_remove() {
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
 }
 
-/// Carry 6: the backend follows the format unless it was set at the same or a higher layer.
+/// Carry 6 (+ fix round 1): the backend follows the format unless the format's own patch set it, or it was
+/// pinned (sub-type- or file-scoped --set, rule) at least as specifically as the format.
 #[test]
 fn backend_follows_format() {
     let j = run(
@@ -518,7 +520,7 @@ fn backend_follows_format() {
         "{:?}",
         j.warnings
     );
-    // an explicit, mismatched backend is kept and reported
+    // an unscoped --set backend applies only where it fits
     let j = run(
         Target::Cs,
         "textures/a/x_n.png",
@@ -526,6 +528,18 @@ fn backend_follows_format() {
         &["n"],
         opaque(),
         &["encoder.backend=rgbcx"],
+        &[],
+    );
+    assert_eq!(j.profile.encoder.backend, Backend::Bc7e);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    // a sub-type-scoped, mismatched backend is pinned, kept and reported
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        opaque(),
+        &["subtype:normal.encoder.backend=rgbcx"],
         &[],
     );
     assert_eq!(j.profile.encoder.backend, Backend::Rgbcx);
@@ -678,7 +692,7 @@ fn preset_alpha_policy_counts_as_explicit() {
     assert!(codes(&j).contains(&Code::SugLowConfidence));
 }
 
-/// Carry 9: sub-type, category and target record where they came from.
+/// Carry 9: sub-type and category record where they came from; the target's origin is left to Engine::plan.
 #[test]
 fn identity_fields_have_provenance() {
     let j = run(
@@ -692,7 +706,7 @@ fn identity_fields_have_provenance() {
     );
     assert_eq!(j.provenance["subtype"], Provenance::User);
     assert_eq!(j.provenance["category"], Provenance::User);
-    assert_eq!(j.provenance["target"], Provenance::User);
+    assert!(!j.provenance.contains_key("target"));
     let j = run(
         Target::Cs,
         "textures/a/x_n.png",
@@ -803,4 +817,320 @@ fn resolved_job_json_shape() {
     assert_eq!(ready["status"], serde_json::json!({ "state": "ready" }));
     let schema = serde_json::to_string(&schemars::schema_for!(ResolvedJob)).unwrap();
     assert!(schema.contains("\"state\""));
+}
+
+// ---- Fix round 1 ----
+
+fn sets(cli: &[&str]) -> Vec<engine::overrides::SetOverride> {
+    cli.iter().map(|s| parse_set(s).unwrap()).collect()
+}
+
+fn resolve_in(ctx: &ResolveCtx, rel: &str, suffix: Option<&str>, img: &Rgba32F) -> ResolvedJob {
+    let f = InputFile {
+        path: rel.into(),
+        rel: rel.into(),
+        game_path: format!("textures/{rel}"),
+        output: PathBuf::from(rel).with_extension("dds"),
+        kind: InputKind::Image,
+    };
+    let set = TextureSet {
+        key: "k".into(),
+        members: vec![0],
+        suffixes: suffix.iter().map(|s| s.to_string()).collect(),
+    };
+    let a = analyse(img, &RGBA8);
+    resolve_file(
+        ctx,
+        &FileFacts {
+            input: &f,
+            suffix,
+            set: &set,
+            analysis: &a,
+            info: &RGBA8,
+        },
+    )
+}
+
+/// IMPORTANT 1: `--allow CFG-UNAVAILABLE` accepts a §4.2 fallback; no-fallback sub-types and BC6H outside cs
+/// stay out.
+#[test]
+fn allow_cfg_unavailable_accepts_fallbacks_only() {
+    let allow = &[Code::CfgUnavailable];
+    // BC6H outside cs: an error even with --allow
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=glow", "format=bc6h_uf16", "color.tag=n/a"],
+        allow,
+    );
+    assert_eq!(
+        j.status,
+        JobStatus::Error {
+            codes: vec![Code::CfgUnavailable]
+        },
+        "{:?}",
+        j.warnings
+    );
+    // pbr_albedo under vanilla resolves as diffuse
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=pbr_albedo"],
+        allow,
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(
+        (j.profile.subtype, j.profile.color.tag),
+        (Subtype::Diffuse, ColorTag::Unorm)
+    );
+    assert_eq!(j.provenance["subtype"], Provenance::Fallback);
+    assert_eq!(j.provenance["subtype"].to_string(), "fallback");
+    let w = warning(&j, Code::CfgUnavailable);
+    assert_eq!(w.severity, engine::codes::Severity::Warning);
+    assert!(w.message.contains("fallback diffuse"), "{}", w.message);
+    // pbr_emissive under cpm resolves as glow (BC7, not the inherited BC6H)
+    let j = run(
+        Target::Cpm,
+        "textures/a/x_g.png",
+        Some("g"),
+        &["g"],
+        opaque(),
+        &["subtype=pbr_emissive"],
+        allow,
+    );
+    assert_eq!(
+        (j.profile.subtype, j.profile.format, j.status.clone()),
+        (Subtype::Glow, Format::Bc7, JobStatus::Ready),
+        "{:?}",
+        j.warnings
+    );
+    // complex_material under vanilla falls back to envmask, and its varying alpha is reported as lost
+    let mut m = Rgba32F::new(64, 64, [0.2, 0.6, 0.1, 1.0]);
+    m.px[0][3] = 0.5;
+    let reg = PresetRegistry::builtin().unwrap();
+    let overrides = sets(&["subtype=complex_material"]);
+    let allow_set: BTreeSet<Code> = [Code::CfgUnavailable].into();
+    let ctx = ResolveCtx {
+        target: Target::Vanilla,
+        registry: &reg,
+        preset: "vanilla-quality",
+        user_config: None,
+        project_config: None,
+        overrides: &overrides,
+        accept: AcceptSuggestions::High,
+        allow: &allow_set,
+    };
+    let j = resolve_in(&ctx, "a/x_m.png", Some("m"), &m);
+    assert_eq!(
+        (j.profile.subtype, j.status.clone()),
+        (
+            Subtype::Envmask,
+            JobStatus::Blocked {
+                codes: vec![Code::LossAlphaData]
+            }
+        ),
+        "{:?}",
+        j.warnings
+    );
+    // no fallback: still blocked
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x_rmaos.png",
+        Some("rmaos"),
+        &["rmaos"],
+        opaque(),
+        &[],
+        allow,
+    );
+    assert_eq!(j.profile.subtype, Subtype::Rmaos);
+    assert_eq!(
+        j.status,
+        JobStatus::Blocked {
+            codes: vec![Code::CfgUnavailable]
+        },
+        "{:?}",
+        j.warnings
+    );
+    // without --allow the fallback is only offered
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        opaque(),
+        &["subtype=pbr_normal"],
+        &[],
+    );
+    assert_eq!(j.profile.subtype, Subtype::PbrNormal);
+    assert_eq!(
+        j.status,
+        JobStatus::Blocked {
+            codes: vec![Code::CfgUnavailable]
+        },
+        "{:?}",
+        j.warnings
+    );
+    assert!(warning(&j, Code::CfgUnavailable)
+        .message
+        .contains("--allow CFG-UNAVAILABLE"));
+}
+
+/// IMPORTANT 2: config and preset tables never pin a backend against a more specific format.
+#[test]
+fn table_backends_follow_more_specific_formats() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let user: ConfigFile =
+        toml::from_str("[defaults]\nencoder = { backend = \"nvtt\" }\n").unwrap();
+    let allow = BTreeSet::new();
+    let o_env = sets(&["subtype=envmask"]);
+    let c = ResolveCtx {
+        target: Target::Cs,
+        registry: &reg,
+        preset: "cs-quality",
+        user_config: Some(&user),
+        project_config: None,
+        overrides: &o_env,
+        accept: AcceptSuggestions::High,
+        allow: &allow,
+    };
+    let j = resolve_in(&c, "a/x_m.png", Some("m"), &opaque());
+    assert_eq!(
+        (j.profile.format, j.profile.encoder.backend),
+        (Format::Bc4, Backend::Rgbcx)
+    );
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+    assert_eq!(j.provenance["encoder.backend"], Provenance::Builtin);
+    // the same config on a BC7 diffuse keeps NVTT
+    let o_dif = sets(&["subtype=diffuse"]);
+    let c = ResolveCtx {
+        overrides: &o_dif,
+        ..c
+    };
+    let j = resolve_in(&c, "a/x.png", None, &opaque());
+    assert_eq!(
+        (j.profile.format, j.profile.encoder.backend),
+        (Format::Bc7, Backend::Nvtt)
+    );
+    assert_eq!(j.provenance["encoder.backend"], Provenance::UserConfig);
+    // a rule that sets format=bc1 and backend=bc7e is an explicit conflict
+    let project: ConfigFile = toml::from_str("[[rules]]\nmatch = { glob = \"*.png\" }\noverrides = { format = \"bc1\", encoder = { backend = \"bc7e\" } }\n").unwrap();
+    let c = ResolveCtx {
+        user_config: None,
+        project_config: Some(&project),
+        ..c
+    };
+    let j = resolve_in(&c, "a/x.png", None, &opaque());
+    assert_eq!(
+        (j.profile.format, j.profile.encoder.backend),
+        (Format::Bc1, Backend::Bc7e)
+    );
+    assert!(
+        matches!(&j.status, JobStatus::Error { codes } if codes.contains(&Code::CfgInvalid)),
+        "{:?}",
+        j.status
+    );
+    // ... while a rule setting only format=bc1 takes rgbcx
+    let project: ConfigFile = toml::from_str(
+        "[[rules]]\nmatch = { glob = \"*.png\" }\noverrides = { format = \"bc1\" }\n",
+    )
+    .unwrap();
+    let c = ResolveCtx {
+        project_config: Some(&project),
+        ..c
+    };
+    let j = resolve_in(&c, "a/x.png", None, &opaque());
+    assert_eq!(j.profile.encoder.backend, Backend::Rgbcx);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+}
+
+/// M1: a built-in preset's alpha policy is a default, not a choice.
+#[test]
+fn builtin_presets_never_confirm_mesh_alpha() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let mut img = opaque();
+    img.px[0][3] = 0.5;
+    let allow = BTreeSet::new();
+    assert!(reg.is_builtin(BASE_ID));
+    for target in [Target::Cs, Target::Cpm, Target::Vanilla] {
+        let preset = default_preset_for(target);
+        assert!(reg.is_builtin(preset));
+        for st in ["diffuse", "pbr_albedo", "ui_sky"] {
+            let overrides = sets(&[&format!("subtype={st}")]);
+            // resolved under cs so pbr_albedo is available and the alpha gate alone decides the status
+            let ctx = ResolveCtx {
+                target: Target::Cs,
+                registry: &reg,
+                preset,
+                user_config: None,
+                project_config: None,
+                overrides: &overrides,
+                accept: AcceptSuggestions::High,
+                allow: &allow,
+            };
+            let j = resolve_in(&ctx, "a/x.png", None, &img);
+            match &j.status {
+                JobStatus::Unresolved { reasons } => assert!(
+                    reasons
+                        .iter()
+                        .any(|r| r.contains("alpha meaning is unconfirmed")),
+                    "{preset}/{st}: {reasons:?}"
+                ),
+                s => panic!("{preset}/{st}: {s:?}"),
+            }
+        }
+    }
+    // a user preset loaded under a built-in id is not built in
+    let mut reg = PresetRegistry::builtin().unwrap();
+    reg.add_toml("schema_version = 1\nid = \"cs-quality\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n[subtypes.diffuse]\nalpha = { policy = \"blend\" }\n").unwrap();
+    assert!(!reg.is_builtin("cs-quality"));
+    let overrides = sets(&["subtype=diffuse"]);
+    let ctx = ResolveCtx {
+        target: Target::Cs,
+        registry: &reg,
+        preset: "cs-quality",
+        user_config: None,
+        project_config: None,
+        overrides: &overrides,
+        accept: AcceptSuggestions::High,
+        allow: &allow,
+    };
+    let j = resolve_in(&ctx, "a/x.png", None, &img);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+}
+
+/// M4: the tag to suggest for a non-BC6H format is srgb only for PBR colour under cs.
+#[test]
+fn na_tag_message_suggests_srgb_only_for_pbr_colour_under_cs() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=glow", "color.tag=n/a"],
+        &[],
+    );
+    let m = &warning(&j, Code::CfgInvalid).message;
+    assert!(
+        m.contains("set color.tag=unorm") && !m.contains("srgb"),
+        "{m}"
+    );
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=pbr_albedo", "color.tag=n/a"],
+        &[],
+    );
+    assert!(warning(&j, Code::CfgInvalid)
+        .message
+        .contains("set color.tag=srgb for a non-BC6H _g"));
 }

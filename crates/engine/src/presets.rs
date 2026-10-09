@@ -138,6 +138,8 @@ pub enum Provenance {
     Suggestion,
     Set,
     User,
+    /// The sub-type was replaced by its spec §4.2 fallback, accepted with `--allow CFG-UNAVAILABLE`.
+    Fallback,
 }
 
 impl fmt::Display for Provenance {
@@ -152,6 +154,7 @@ impl fmt::Display for Provenance {
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::Set => f.write_str("set"),
             Provenance::User => f.write_str("user"),
+            Provenance::Fallback => f.write_str("fallback"),
         }
     }
 }
@@ -173,6 +176,7 @@ impl std::str::FromStr for Provenance {
             "suggestion" => Provenance::Suggestion,
             "set" => Provenance::Set,
             "user" => Provenance::User,
+            "fallback" => Provenance::Fallback,
             other => return Err(format!("unknown provenance '{other}'")),
         })
     }
@@ -254,6 +258,21 @@ impl PresetRegistry {
 
     pub fn get(&self, id: &str) -> Option<&PresetFile> {
         self.presets.get(id)
+    }
+
+    /// True when `id` is loaded and identical to the built-in preset of that id (a user preset loaded under a
+    /// built-in id is not built in).
+    pub fn is_builtin(&self, id: &str) -> bool {
+        static BUILTINS: std::sync::OnceLock<BTreeMap<String, PresetFile>> =
+            std::sync::OnceLock::new();
+        let builtins = BUILTINS.get_or_init(|| {
+            BUILTIN
+                .iter()
+                .filter_map(|t| toml::from_str::<PresetFile>(t).ok())
+                .map(|p| (p.id.clone(), p))
+                .collect()
+        });
+        matches!((self.presets.get(id), builtins.get(id)), (Some(a), Some(b)) if a == b)
     }
 
     pub fn selectable(&self) -> Vec<&PresetFile> {

@@ -188,6 +188,7 @@ fn provenance_serialises_as_spec_strings() {
         (Provenance::Suggestion, "suggestion"),
         (Provenance::Set, "set"),
         (Provenance::User, "user"),
+        (Provenance::Fallback, "fallback"),
     ];
     for (p, s) in cases {
         assert_eq!(serde_json::to_value(&p).unwrap(), json!(s));

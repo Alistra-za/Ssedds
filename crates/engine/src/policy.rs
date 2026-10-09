@@ -191,26 +191,80 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     }
 }
 
+/// How specifically a layer patch addresses this file, for `backend_follows_format`.
+#[derive(Debug, Clone, Copy)]
+struct Reach {
+    /// 0 = every sub-type (`defaults` tables, unscoped `--set`), 1 = this sub-type, 2 = this file.
+    level: u8,
+    /// Whether a backend set here is kept against the format: only sub-type- or file-scoped `--set` and rules.
+    /// Preset and config tables never pin a backend unless the same table also sets the format.
+    pins: bool,
+}
+
+const GENERIC: Reach = Reach {
+    level: 0,
+    pins: false,
+};
+const SUBTYPE_TABLE: Reach = Reach {
+    level: 1,
+    pins: false,
+};
+const SUBTYPE_SET: Reach = Reach {
+    level: 1,
+    pins: true,
+};
+const FILE: Reach = Reach {
+    level: 2,
+    pins: true,
+};
+
+/// Which patch last set `format` and `encoder.backend`, and how specifically.
+#[derive(Debug, Default)]
+struct FormatSources {
+    patches: usize,
+    format: Option<(Reach, usize)>,
+    backend: Option<(Reach, usize)>,
+}
+
 fn apply(
     doc: &mut Value,
     prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
     patch: &Value,
     source: Provenance,
+    reach: Reach,
 ) {
     let mut paths = vec![];
     leaf_paths(patch, "", &mut paths);
     merge_json(doc, patch);
+    let id = sources.patches;
+    sources.patches += 1;
     for p in paths {
+        match p.as_str() {
+            "format" => sources.format = Some((reach, id)),
+            "encoder.backend" => sources.backend = Some((reach, id)),
+            _ => {}
+        }
         prov.insert(p, source.clone());
     }
 }
 
-fn config_patches(c: &ConfigFile, st: Subtype) -> Vec<Value> {
-    let mut v = vec![c.defaults.clone()];
+fn config_patches(c: &ConfigFile, st: Subtype) -> Vec<(Reach, Value)> {
+    let mut v = vec![(GENERIC, c.defaults.clone())];
     if let Some(s) = c.subtypes.get(&st) {
-        v.push(s.clone());
+        v.push((SUBTYPE_TABLE, s.clone()));
     }
     v
+}
+
+/// Whether `alpha.policy` was chosen by an explicit layer (spec §5.2): a user or project preset, a config, a
+/// rule or `--set`. The hidden base and the built-in presets only carry defaults.
+fn alpha_policy_explicit(ctx: &ResolveCtx, prov: &BTreeMap<String, Provenance>) -> bool {
+    match prov.get("alpha.policy") {
+        None | Some(Provenance::Builtin) => false,
+        Some(Provenance::Preset(id)) => !ctx.registry.is_builtin(id),
+        Some(_) => true,
+    }
 }
 
 /// The profile for sub-type `st` with the source of every field (dotted path → provenance).
@@ -226,16 +280,32 @@ pub fn layered_profile(
     let preset = ctx.preset;
     let mut doc = Value::Object(Map::new());
     let mut prov = BTreeMap::new();
-    for (source, patch) in ctx.registry.layers(preset, st)? {
-        apply(&mut doc, &mut prov, &patch, source);
+    let mut sources = FormatSources::default();
+    // `layers` returns every non-null `defaults` table of the chain first, then the `subtypes.<st>` tables.
+    let generic = ctx
+        .registry
+        .chain(preset)?
+        .iter()
+        .filter(|p| !p.defaults.is_null())
+        .count();
+    for (i, (source, patch)) in ctx.registry.layers(preset, st)?.into_iter().enumerate() {
+        let reach = if i < generic { GENERIC } else { SUBTYPE_TABLE };
+        apply(&mut doc, &mut prov, &mut sources, &patch, source, reach);
     }
     for (cfg, source) in [
         (ctx.user_config, Provenance::UserConfig),
         (ctx.project_config, Provenance::ProjectConfig),
     ] {
         if let Some(c) = cfg {
-            for patch in config_patches(c, st) {
-                apply(&mut doc, &mut prov, &patch, source.clone());
+            for (reach, patch) in config_patches(c, st) {
+                apply(
+                    &mut doc,
+                    &mut prov,
+                    &mut sources,
+                    &patch,
+                    source.clone(),
+                    reach,
+                );
             }
         }
     }
@@ -244,13 +314,14 @@ pub fn layered_profile(
             apply(
                 &mut doc,
                 &mut prov,
+                &mut sources,
                 &r.overrides,
                 Provenance::Rule(format!("{src}#{i}")),
+                FILE,
             );
         }
     }
-    let policy_is_default = matches!(prov.get("alpha.policy"), None | Some(Provenance::Builtin));
-    if policy_is_default {
+    if !alpha_policy_explicit(ctx, &prov) {
         if let Some((policy, Confidence::High, _)) =
             suggest_alpha(st, f.analysis.alpha, near_binary(f.analysis))
         {
@@ -258,8 +329,10 @@ pub fn layered_profile(
             apply(
                 &mut doc,
                 &mut prov,
+                &mut sources,
                 &to_patch("alpha.policy", &value),
                 Provenance::Analysis,
+                GENERIC,
             );
         }
     }
@@ -268,35 +341,24 @@ pub fn layered_profile(
         .filter(|o| o.field != "subtype")
     {
         if override_applies(o, Some(st), f) {
+            let reach = match o.scope {
+                Scope::All => GENERIC,
+                Scope::Subtype(_) => SUBTYPE_SET,
+                Scope::File(_) => FILE,
+            };
             apply(
                 &mut doc,
                 &mut prov,
+                &mut sources,
                 &to_patch(&o.field, &o.value),
                 Provenance::User,
+                reach,
             );
         }
     }
     let mut profile = finish_profile(doc, ctx.target, st)?;
-    backend_follows_format(&mut profile, &mut prov);
-    // The target is batch-level (`--target`, or the config/preset Engine::plan chose it from).
-    prov.insert("target".into(), Provenance::User);
+    backend_follows_format(&mut profile, &mut prov, &sources);
     Ok((profile, prov))
-}
-
-/// Precedence rank of a layer (spec §8), lowest first. `Provenance`'s derived `Ord` also compares payloads
-/// (`Preset(a)` vs `Preset(b)` by id), so it cannot be used for this.
-fn layer_rank(p: &Provenance) -> u8 {
-    match p {
-        Provenance::Builtin => 0,
-        Provenance::Preset(_) => 1,
-        Provenance::UserConfig => 2,
-        Provenance::ProjectConfig => 3,
-        Provenance::Rule(_) => 4,
-        Provenance::Analysis => 5,
-        Provenance::Suggestion => 6,
-        Provenance::Set => 7,
-        Provenance::User => 8,
-    }
 }
 
 /// Whether `b` can write format `f`.
@@ -310,7 +372,7 @@ fn backend_fits(b: Backend, f: Format) -> bool {
 }
 
 /// The built-in encoder for a format (spec §3.2 `encoder.backend` default "Format"); never NVTT.
-pub fn default_backend(f: Format) -> Backend {
+pub(crate) fn default_backend(f: Format) -> Backend {
     match f {
         Format::Bc1 | Format::Bc3 | Format::Bc4 | Format::Bc5 => Backend::Rgbcx,
         Format::Bc6hUf16 => Backend::IspcBc6h,
@@ -318,21 +380,28 @@ pub fn default_backend(f: Format) -> Backend {
     }
 }
 
-/// A layer that changes only `format` takes the backend with it: when the backend does not fit the format and
-/// was set at a lower layer than the format, it becomes the format's default backend, with the format's
-/// provenance. A backend set at the same or a higher layer is kept, and `check_profile` reports the mismatch.
-/// Limitation: two presets in one chain share a rank, so a child preset that sets only `format` over a parent
-/// preset's backend keeps the parent's backend (and gets CFG-INVALID); the built-in base is ranked below both.
-fn backend_follows_format(p: &mut Profile, prov: &mut BTreeMap<String, Provenance>) {
+/// A layer that changes only `format` takes the backend with it. A backend that does not fit the format is
+/// kept only when the patch that set the format also set it, or when it was pinned (sub-type- or file-scoped
+/// `--set`, or a rule) at least as specifically as the format; `check_profile` then reports CFG-INVALID.
+/// Otherwise it becomes the format's default backend, with the format's provenance. So a config or preset
+/// `defaults.encoder.backend = "nvtt"` applies where NVTT fits and leaves BC4/BC5 sub-types on rgbcx.
+fn backend_follows_format(
+    p: &mut Profile,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &FormatSources,
+) {
     if backend_fits(p.encoder.backend, p.format) {
         return;
     }
-    let (Some(fmt), Some(be)) = (prov.get("format"), prov.get("encoder.backend")) else {
-        return;
+    let keep = match (sources.format, sources.backend) {
+        (Some((fr, fp)), Some((br, bp))) => bp == fp || (br.pins && br.level >= fr.level),
+        _ => false,
     };
-    if layer_rank(be) < layer_rank(fmt) {
-        let fmt = fmt.clone();
-        p.encoder.backend = default_backend(p.format);
+    if keep {
+        return;
+    }
+    p.encoder.backend = default_backend(p.format);
+    if let Some(fmt) = prov.get("format").cloned() {
         prov.insert("encoder.backend".into(), fmt);
     }
 }
@@ -447,22 +516,20 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     let st = p.subtype;
     if let Availability::Unavailable { fallback } = availability(p.target, st) {
-        let fallback = fallback.map_or_else(|| "none".to_string(), Subtype::id);
-        add(
-            CfgUnavailable,
-            format!(
-                "{} is unavailable under {:?}; fallback: {fallback}",
-                st.id(),
-                p.target
+        let fix = match fallback {
+            Some(fb) => format!(
+                "accept the fallback {} with --allow CFG-UNAVAILABLE",
+                fb.id()
             ),
-        );
-    }
-    if p.format == Format::Bc6hUf16 && p.target != Target::Cs {
+            None => "no fallback; change the sub-type or the target".to_string(),
+        };
         add(
             CfgUnavailable,
-            "BC6H is usable only under Community Shaders [D#3]".into(),
+            format!("{} is unavailable under {:?}; {fix}", st.id(), p.target),
         );
     }
+    // BC6H outside cs cannot be acknowledged: an error, added after the other checks.
+    let bc6h_outside_cs = p.format == Format::Bc6hUf16 && p.target != Target::Cs;
     if !(5..=200).contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
@@ -491,9 +558,9 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
     if bc6h != (p.color.tag == ColorTag::NotApplicable) {
         let msg = if bc6h {
             "BC6H has no _SRGB or UNORM form; set color.tag=n/a".to_string()
-        } else if p.color.content == ColorContent::Srgb {
+        } else if st.is_pbr_color() && p.target == Target::Cs {
             format!(
-                "color.tag n/a is only for BC6H on {}: set color.tag=srgb for a non-BC6H _g (unorm outside PBR colour)",
+                "color.tag n/a is only for BC6H on {}: set color.tag=srgb for a non-BC6H _g",
                 st.id()
             )
         } else {
@@ -656,6 +723,16 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
     for c in contradictions(p, f) {
         add(SugContradiction, c);
     }
+    if bc6h_outside_cs {
+        // Not a "—" cell with a fallback to accept: `--allow CFG-UNAVAILABLE` must not let it through [D#3].
+        w.push(Warning {
+            severity: Severity::Error,
+            ..Warning::new(
+                CfgUnavailable,
+                "BC6H is usable only under Community Shaders [D#3]; choose another format",
+            )
+        });
+    }
     w
 }
 
@@ -688,14 +765,37 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             None => "no sub-type could be suggested; set one".into(),
         });
     }
-    let (profile, mut provenance) = match layered_profile(ctx, f, d.subtype) {
+    // Spec §4.2: an unavailable sub-type with a fallback is resolved as the fallback when the user accepts it
+    // with `--allow CFG-UNAVAILABLE`; one without a fallback stays blocked.
+    let mut subtype = d.subtype;
+    let mut subtype_prov = d.provenance.clone();
+    let mut fallback_note = None;
+    if ctx.allow.contains(&Code::CfgUnavailable) {
+        if let Availability::Unavailable { fallback: Some(fb) } = availability(ctx.target, subtype)
+        {
+            let msg = format!(
+                "{} is unavailable under {:?}; resolved as its fallback {} (--allow CFG-UNAVAILABLE)",
+                subtype.id(),
+                ctx.target,
+                fb.id()
+            );
+            fallback_note = Some(Warning {
+                severity: Severity::Warning,
+                ..Warning::new(Code::CfgUnavailable, msg)
+                    .with_data(json!({ "from": subtype, "to": fb }))
+            });
+            subtype = fb;
+            subtype_prov = Provenance::Fallback;
+        }
+    }
+    let (profile, mut provenance) = match layered_profile(ctx, f, subtype) {
         Ok(v) => v,
         Err(e) => {
             // The built-in base preset is valid by construction (Task 20 test), so this cannot fail.
             // Engine::plan (Task 37) validates presets, configs and rules up front, so this path is rare.
             let fallback = ctx
                 .registry
-                .profile(BASE_ID, ctx.target, d.subtype)
+                .profile(BASE_ID, ctx.target, subtype)
                 .expect("sdc-base profile is valid");
             return ResolvedJob {
                 input: f.input.path.clone(),
@@ -713,16 +813,13 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         }
     };
     // The category follows the sub-type.
-    provenance.insert("subtype".into(), d.provenance.clone());
-    provenance.insert("category".into(), d.provenance.clone());
-    // Spec §3.3/§5.2: a mesh-dependent alpha meaning is unconfirmed unless an explicit layer (preset, config,
-    // rule or --set) chose the policy; the built-in default does not count.
+    provenance.insert("subtype".into(), subtype_prov.clone());
+    provenance.insert("category".into(), subtype_prov);
+    // Spec §3.3/§5.2: a mesh-dependent alpha meaning is unconfirmed unless an explicit layer (a user or project
+    // preset, a config, a rule or --set) chose the policy; built-in defaults do not count.
     if profile.subtype.alpha_from_mesh()
         && f.analysis.alpha == AlphaContent::Varying
-        && matches!(
-            provenance.get("alpha.policy"),
-            None | Some(Provenance::Builtin)
-        )
+        && !alpha_policy_explicit(ctx, &provenance)
     {
         let hint = suggest_alpha(profile.subtype, f.analysis.alpha, near_binary(f.analysis))
             .map(|(p, _, why)| format!("{p:?}: {why}"));
@@ -731,15 +828,23 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             hint.unwrap_or_default()
         ));
     }
-    let mut warnings = check_profile(&profile, f);
+    let mut warnings: Vec<Warning> = fallback_note.into_iter().collect();
+    warnings.extend(check_profile(&profile, f));
     if !reasons.is_empty() {
         warnings.push(
             Warning::new(Code::SugLowConfidence, reasons.join("; "))
                 .with_data(json!({ "suggestions": d.suggestions })),
         );
     }
+    // `--allow` turns a blocking code into a warning. CFG-UNAVAILABLE is acknowledged only by accepting a
+    // fallback (above), and warnings that `check_profile` raised to error stay errors.
     for w in &mut warnings {
-        w.severity = w.code.effective(ctx.allow);
+        if w.severity == Severity::Blocking
+            && w.code != Code::CfgUnavailable
+            && ctx.allow.contains(&w.code)
+        {
+            w.severity = Severity::Warning;
+        }
     }
     let errors = codes_at(&warnings, Severity::Error);
     let blocking = codes_at(&warnings, Severity::Blocking);
