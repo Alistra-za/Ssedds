@@ -344,7 +344,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 5.2 Resolve
 
-**[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `rule:<n>`, `analysis`, `set`, `user`). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run. **[Requirement]** A plain `_normal`/`_nrm` source whose green convention is unstated is `unresolved` as well [D-H]. **[Proposal]** A raw packing input resolves to `packing_input` (§4.4) and is not converted on its own; from M2.5 it is consumed by a packing recipe (§6.4).
+**[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `rule:<n>`, `analysis` / `analysis:<fact>` — e.g. `analysis:float-source`: a float source written as BC6H is linear content —, `set`, `user`). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run. **[Requirement]** A plain `_normal`/`_nrm` source whose green convention is unstated is `unresolved` as well [D-H]. **[Proposal]** A raw packing input resolves to `packing_input` (§4.4) and is not converted on its own; from M2.5 it is consumed by a packing recipe (§6.4).
 
 ### 5.3 Why channel surgery precedes mips
 
