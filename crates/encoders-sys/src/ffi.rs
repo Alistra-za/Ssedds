@@ -1,5 +1,4 @@
 //! Raw C ABI of shim/sdc_shim.cpp. Only this crate calls these.
-#![allow(dead_code)] // the safe wrappers that call these arrive in later tasks
 extern "C" {
     pub fn sdc_init(bc1_mode: i32);
     pub fn sdc_bc7e_compress(
@@ -10,11 +9,17 @@ extern "C" {
         perceptual: i32,
         exact: i32,
     );
+    #[allow(dead_code)] // safe wrapper arrives in a later task
     pub fn sdc_bc1_encode(dst: *mut u8, px: *const u8, level: u32, allow3: i32, black: i32);
+    #[allow(dead_code)] // safe wrapper arrives in a later task
     pub fn sdc_bc3_encode(dst: *mut u8, px: *const u8, level: u32, rad: u32);
+    #[allow(dead_code)] // safe wrapper arrives in a later task
     pub fn sdc_bc4_encode(dst: *mut u8, px: *const u8, stride: u32, rad: u32);
+    #[allow(dead_code)] // safe wrapper arrives in a later task
     pub fn sdc_bc5_encode(dst: *mut u8, px: *const u8, rad: u32);
+    #[allow(dead_code)] // safe wrapper arrives in a later task
     pub fn sdc_bc1_decode(src: *const u8, px: *mut u8, mode: i32) -> i32;
+    #[allow(dead_code)] // safe wrapper arrives in a later task
     pub fn sdc_bc6h_compress(
         rgba16f: *const u16,
         width: i32,

@@ -1,5 +1,8 @@
 //! Safe wrappers over the vendored BC encoders (bc7e, rgbcx, ISPC TC).
+mod bc7;
 mod ffi;
+
+pub use bc7::{bc7e_compress_blocks, Bc7Level, Bc7Params, BC7E_EXACT_OPAQUE_NATIVE};
 
 use std::sync::OnceLock;
 
@@ -44,7 +47,6 @@ pub fn active_bc1_model() -> Option<Bc1Model> {
     ACTIVE.get().copied()
 }
 
-#[allow(dead_code)] // first caller arrives with the safe encoder wrappers
 pub(crate) fn ensure_init() {
     let _ = ACTIVE.get_or_init(|| {
         unsafe { ffi::sdc_init(Bc1Model::Ideal as i32) };
@@ -74,4 +76,26 @@ pub fn versions() -> Versions {
             None
         },
     }
+}
+
+/// Re-arrange a row-major RGBA8 image into 4x4 blocks (row-major blocks, row-major texels inside a block).
+/// Texels past the right or bottom edge replicate the nearest edge texel.
+pub fn gather_blocks(px: &[[u8; 4]], width: u32, height: u32) -> Vec<[u8; 4]> {
+    let (w, h) = (width as usize, height as usize);
+    assert!(w > 0 && h > 0, "empty image");
+    assert_eq!(px.len(), w * h, "pixel count does not match width*height");
+    let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+    let mut out = Vec::with_capacity(bw * bh * 16);
+    for by in 0..bh {
+        for bx in 0..bw {
+            for y in 0..4 {
+                let sy = (by * 4 + y).min(h - 1);
+                for x in 0..4 {
+                    let sx = (bx * 4 + x).min(w - 1);
+                    out.push(px[sy * w + sx]);
+                }
+            }
+        }
+    }
+    out
 }
