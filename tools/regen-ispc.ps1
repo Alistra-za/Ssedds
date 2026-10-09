@@ -7,7 +7,7 @@
 # temp dir) is normalised to the bare file name before hashing and vendoring.
 param(
   [string]$Ispc = "F:\ai\dds\bench\tools\dl_ispc\ispc-v1.31.0-windows\bin\ispc.exe",
-  [string]$Bc7eSource = "$PSScriptRoot\..\crates\encoders-sys\vendor\bc7enc_rdo\bc7e.ispc",
+  [string]$Bc7eSource = "$PSScriptRoot\..\crates\encoders-sys\vendor\bc7e\bc7e.ispc",
   [switch]$Update,
   # with -Update: replace only the bc7e objects (leave the ISPC TC objects untouched)
   [switch]$Bc7eOnly

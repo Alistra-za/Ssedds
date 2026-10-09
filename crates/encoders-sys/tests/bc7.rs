@@ -68,3 +68,38 @@ fn exact_opaque_without_native_support_panics() {
         },
     );
 }
+
+#[test]
+#[allow(clippy::assertions_on_constants)] // the constant is what this test checks (build.rs cfg)
+fn patched_objects_are_vendored() {
+    assert!(encoders_sys::BC7E_EXACT_OPAQUE_NATIVE);
+    assert_eq!(
+        encoders_sys::versions().bc7e_patch,
+        Some("0001-exact-opaque-alpha")
+    );
+}
+
+#[test]
+fn exact_opaque_decodes_alpha_exactly_255_where_upstream_gives_254() {
+    // A dark opaque ramp that upstream bc7e u5 encodes in mode 6 with a p-bit 0 endpoint (alpha 254).
+    let px: Vec<[u8; 4]> = (0..16u8).map(|i| [i, i / 2, 100 + i, 255]).collect();
+    let (mut off, mut on) = ([0u8; 16], [0u8; 16]);
+    bc7e_compress_blocks(&px, &mut off, U5);
+    bc7e_compress_blocks(
+        &px,
+        &mut on,
+        Bc7Params {
+            exact_opaque: true,
+            ..U5
+        },
+    );
+    assert!(
+        decode(&off).iter().any(|p| p[3] == 254),
+        "flag off: {off:02x?}"
+    );
+    assert_eq!(on[0] & 0x7f, 0x40, "flag on: still mode 6: {on:02x?}");
+    assert!(
+        decode(&on).iter().all(|p| p[3] == 255),
+        "flag on: {on:02x?}"
+    );
+}

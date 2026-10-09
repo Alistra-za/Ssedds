@@ -52,3 +52,16 @@ fn s5b_byte_patch_gives_255_everywhere_on_opaque_sets() {
     let r = gates::exact_opaque(&bench_root(), gates::ExactMode::BytePatch).unwrap();
     assert!(r.pass, "{r}");
 }
+
+#[test]
+fn s5c_native_patch_flag_off_is_bit_identical() {
+    let r = gates::bc7e_matches_dump(&bench_root(), &gates::pre_patch_hashes()).unwrap();
+    assert!(r.pass, "{r}");
+}
+
+#[test]
+#[ignore = "native patch: alpha 255 everywhere but RGB cost exceeds 0.05 dB; see DECISIONS S5 (owner decides, Task 17)"]
+fn s5c_native_patch_flag_on_gives_255_within_0_05_db() {
+    let r = gates::exact_opaque(&bench_root(), gates::ExactMode::Native).unwrap();
+    assert!(r.pass, "{r}");
+}

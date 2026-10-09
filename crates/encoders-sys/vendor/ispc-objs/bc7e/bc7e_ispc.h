@@ -80,7 +80,7 @@ struct bc7e_compress_block_params {
     bool m_perceptual;
     bool m_pbit_search;
     bool m_mode6_only;
-    bool m_unused0;
+    bool m_exact_opaque_alpha;
     struct $anon0 m_opaque_settings;
     struct $anon1 m_alpha_settings;
 };
