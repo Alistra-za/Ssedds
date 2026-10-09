@@ -180,3 +180,10 @@ Owner answers (2026-10-09):
 - **Plain `_normal`:** no default green convention — unresolved until a preset/flag/rule states `opengl` or `directx`; `_normalgl`/`_normaldx` resolve automatically.
 - **Timing:** suffix vocabulary lands in Phase 1 now; channel packing is its own milestone right after the CLI MVP.
 - Owner (2026-10-09): **roughness default 0.5 confirmed.** For every packed channel without a source map, the user can set a **global fill value** — a slider in the GUI and a CLI option (e.g. metallic 255 writes 255 instead of the neutral 0); the neutral defaults above apply only when no value is given. Scope: milestone M2.5.
+
+## Note I — intentional skips do not make the batch exit 1 (owner, 2026-10-09)
+
+Owner answer to the Task 37 review question O1: files skipped on purpose do not count toward exit code 1.
+- **Covers:** existing `.dds` inputs next to sources (IN-DDS-SKIPPED), outputs skipped by an explicit `--on-existing skip`, and raw packing inputs (IN-PACKING-INPUT, already exempt).
+- **Still exit 1:** unresolved and blocked files, unknown existing outputs (OUT-UNKNOWN-EXISTING), and failures.
+- **Reporting:** intentional skips are still reported as `file_skipped` events and counted in the summary.
