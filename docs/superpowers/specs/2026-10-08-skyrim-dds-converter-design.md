@@ -654,6 +654,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm` states no green convention (§4.4); never settled by `--accept-suggestions` or `--allow` | `--set 'file:<name>.channels.green_convention=opengl\|directx'` |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `IN-NONFINITE` | warning | Source has NaN or infinite samples; Preprocess replaced them (NaN and −∞ → 0, +∞ → 1, or the half-float maximum for HDR colour) | Fix the source |
+| `IN-FLOAT-LDR` | blocking | 32-bit float source resolved to a format other than BC6H; its transfer is not separated from the output encoding until M6 → "32-bit float source written to <fmt>: transfer handling lands in M6; acknowledge with --allow IN-FLOAT-LDR to convert as stored values" (interim guard, final review I4) | BC6H for HDR content under `cs`, an 8/16-bit source, or `--allow IN-FLOAT-LDR` |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |
 | `PACK-DEFAULTED` (M2.5) | warning | A packed channel has no source → neutral default (names output and channel) [D-H] | Supply the map or accept |
 | `PACK-SIZE-MISMATCH` (M2.5) | error | Sources of one recipe differ in size (lists every file and size) | Resize the sources |
