@@ -557,7 +557,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 **Batch behaviour.** **[Proposal]** Files are grouped, resolved, then scheduled in parallel under the memory budget. A file converts only when every field is decided by an explicit rule, flag or a high-confidence suggestion accepted with `--accept-suggestions high`; diffuse alpha meaning is never high confidence. Unresolved files are skipped and listed. `--dry-run` stops after Resolve and emits `file_planned` events.
 
-**Streams and exit codes.** **[Proposal]** Human output on stderr (result verbs `inspect`, `validate`, `presets`, `encoders` print their report on stdout [D Note J]); with `--json`, stdout carries only JSON Lines. The highest-precedence applicable code is returned: **3** fatal (output-root I/O, out of memory, internal error) > **2** usage or config error (bad flag, invalid preset or config, batch-wide unavailable combination) > **1** partial (any file failed, or skipped for a reason other than an intentional skip — IN-DDS-SKIPPED, `--on-existing skip`, IN-PACKING-INPUT do not count [D Note I]) > **4** completed but validation failed on an output > **0** all converted and validated.
+**Streams and exit codes.** **[Proposal]** Human output on stderr (result verbs `inspect`, `validate`, `presets`, `encoders` print their report on stdout [D Note J]); with `--json`, stdout carries only JSON Lines. The highest-precedence applicable code is returned: **3** fatal (output-root I/O, out of memory, internal error, a second Ctrl-C) > **2** usage or config error (bad flag, invalid preset or config, batch-wide unavailable combination) > **1** partial (any file failed, or skipped for a reason other than an intentional skip — IN-DDS-SKIPPED, `--on-existing skip`, IN-PACKING-INPUT do not count [D Note I]) > **4** completed but validation failed on an output > **0** all converted and validated.
 
 **Config precedence.** **[Proposal]** Lowest to highest: built-in defaults → preset and its `base` chain (for a file matched by a suffix alias, the alias preset's chain, §3.7) → user config `%APPDATA%\sdc\config.toml` → project config (`sdc.toml` in the input root, or `--config`) → preset rule matches → suggestions accepted by flag → `--set` overrides (GUI per-file edits sit here). Presets and config are TOML validated against the schema; machine outputs are JSON.
 
@@ -571,7 +571,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Unsupported setting for a file (BC6H under `vanilla`, BC5 on `_n` without `--allow`) | File skipped with its blocking code; exit 1 |
 | Unsupported setting for the whole batch | Exit 2 before work starts |
 | Encoder failure or panic | That file fails; others continue; exit 1 |
-| Ctrl-C | Current bands finish, temp files removed, `batch_done` lists cancelled files; exit 1 |
+| Ctrl-C | First: current bands finish, no partial output is written, `batch_done` lists cancelled files; exit 1. Second: exits 3 at once without waiting for running bands; it may leave `.sdc-*.tmp` files in the output folders and an output without a manifest record (kept as `OUT-UNKNOWN-EXISTING` on the next run), and the JSON stream ends without `batch_done` [D Note K] |
 | Read-only or locked output | `file_failed` at Write |
 | Non-ASCII or mixed-case paths | Supported; set matching is case-insensitive |
 

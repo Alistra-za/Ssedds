@@ -321,6 +321,7 @@ version = "0.1.0"
 dependencies = [
  "bcdec_rs",
  "encoders-sys",
+ "engine",
  "globset",
  "half",
  "hex",

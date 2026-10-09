@@ -91,8 +91,8 @@ fn source_peak(level: &Rgba32F, p: &Profile) -> Option<f32> {
 /// Test hook (Task 44): when `SDC_TEST_FAIL_VALIDATION` names the input's file stem, add one `VAL-HEADER` error to
 /// its validation report, so a written output fails validation (exit 4). No setting reaches an error-severity
 /// `VAL-*` code (`bc1_transparent_black` is `CFG-INVALID` with BC1, DECISIONS Note F), so the exit-4 path has no
-/// other deterministic trigger. Compiled into every build and inert unless the variable is set; never set it
-/// outside tests.
+/// other deterministic trigger. Compiled only with the `test-hooks` cargo feature (off in release builds).
+#[cfg(feature = "test-hooks")]
 fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationReport) {
     if std::env::var_os("SDC_TEST_FAIL_VALIDATION")
         .is_some_and(|v| job.input.file_stem() == Some(v.as_os_str()))
@@ -109,8 +109,9 @@ fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationR
 /// bands, last just before the write, so a cancelled file never leaves an output behind. Everything that can fail
 /// before the output exists (validation of the in-memory DDS bytes, the profile hash, the record and sidecar text)
 /// runs before the write; only the sidecar write and the manifest append come after it. When one of those fails,
-/// or anything panics, `tracker.written` tells the caller to remove the output, so an output on disk always has
-/// its record. A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
+/// or anything panics, `tracker.written` tells the caller to remove the output, so an output on disk has its
+/// record, except after a second Ctrl-C: that aborts the process (exit 3) and can leave `.sdc-*.tmp` files, or an
+/// output without a record (`OUT-UNKNOWN-EXISTING` on the next run). A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
 pub fn process_file(
     job: &ResolvedJob,
     req: &BatchRequest,
@@ -122,7 +123,8 @@ pub fn process_file(
 ) -> Result<FileOutcome, FileError> {
     let enter = |st: Stage| tracker.stage.set(st);
     enter(Stage::Load);
-    // Test hook (Task 44): panic on the named input file to prove per-file panic isolation.
+    // Test hook (Task 44, `test-hooks` feature only): panic on the named input file to prove per-file panic isolation.
+    #[cfg(feature = "test-hooks")]
     if std::env::var_os("SDC_TEST_PANIC_ON")
         .is_some_and(|v| job.input.file_name() == Some(v.as_os_str()))
     {
@@ -217,6 +219,8 @@ pub fn process_file(
 
     // Validate the exact bytes about to be written: `validate` parses them with the engine's DDS reader (spec §5.8).
     enter(Stage::Validate);
+    #[cfg_attr(not(feature = "test-hooks"), allow(unused_mut))]
+    // only the test hook mutates the report
     let mut report = validate(&ValidationInput {
         bytes: &bytes,
         profile: p,
@@ -227,6 +231,7 @@ pub fn process_file(
         expected_levels: Some(total),
     });
     drop(inputs);
+    #[cfg(feature = "test-hooks")]
     force_validation_failure_for_test(job, &mut report);
     enter(Stage::Write);
     let record = ManifestRecord {

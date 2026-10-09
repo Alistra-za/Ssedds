@@ -11,6 +11,7 @@
 //! reports the record-less output as `OUT-UNKNOWN-EXISTING` and `--on-existing overwrite` replaces it; the temp
 //! files can be deleted by hand.
 use engine::api::CancelToken;
+use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -21,10 +22,16 @@ pub const ABORT_EXIT_CODE: i32 = 3;
 /// `abort` is called with [`ABORT_EXIT_CODE`] from the second interrupt on.
 pub fn on_interrupt(seen: &AtomicU32, cancel: &CancelToken, abort: impl Fn(i32)) {
     if seen.fetch_add(1, Ordering::SeqCst) == 0 {
-        eprintln!("cancelling: finishing current bands... (Ctrl-C again to exit immediately)");
+        // Cancel first, and ignore write errors: a closed stderr pipe must not panic this thread, because the
+        // handler would then never run again and Ctrl-C would stop working for the rest of the run.
         cancel.cancel();
+        let _ = writeln!(
+            std::io::stderr(),
+            "cancelling: finishing current bands... (Ctrl-C again to exit immediately)"
+        );
     } else {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "aborting: exit 3; unfinished temp files (.sdc-*.tmp) may remain in the output folders"
         );
         abort(ABORT_EXIT_CODE);

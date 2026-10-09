@@ -1546,6 +1546,11 @@ fn bc1_transparent_black_is_cfg_invalid_with_bc1_only() {
         .find(|w| w.code == Code::CfgInvalid)
         .unwrap();
     assert!(w.message.contains("bc1_transparent_black"), "{}", w.message);
+    assert!(
+        !w.message.contains("  "),
+        "stray run of spaces: {}",
+        w.message
+    );
     // Off (the default) is fine, and so is the setting under another format.
     for sets in [
         vec![

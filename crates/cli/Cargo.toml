@@ -20,6 +20,12 @@ schemars.workspace = true
 anyhow.workspace = true
 tempfile.workspace = true
 
+[features]
+# Forwards to the engine's env-driven test hooks. Off by default; `cargo test` enables the engine feature through
+# the dev-dependency below, so this one is only for building a hook-enabled `sdc` by hand.
+test-hooks = ["engine/test-hooks"]
+
 [dev-dependencies]
+engine = { workspace = true, features = ["test-hooks"] }
 image.workspace = true
 serde_json.workspace = true

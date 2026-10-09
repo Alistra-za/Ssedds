@@ -2,7 +2,8 @@
 //! `--mem-budget`, read-only outputs, an output root that is a file, and non-ASCII paths.
 //!
 //! Every test points `APPDATA` at a path that does not exist, so the developer's `%APPDATA%\sdc\config.toml`
-//! is never read. `SDC_TEST_PANIC_ON` and `SDC_TEST_FAIL_VALIDATION` are engine test hooks, set on the child only.
+//! is never read. `SDC_TEST_PANIC_ON` and `SDC_TEST_FAIL_VALIDATION` are engine test hooks (cargo feature `test-hooks`,
+//! which this crate's dev-dependency on `engine` enables for `cargo test`), set on the child only.
 use image::{ImageBuffer, Rgb};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -310,7 +311,10 @@ impl Drop for DenyWrite {
 }
 
 /// A folder that rejects new files: every file in it fails at Write (exit 1), nothing partial is left, and the
-/// batch is not fatal because the output root itself exists.
+/// batch is not fatal because the output root itself exists. Windows only (the ACL is the mechanism). When the
+/// ACL cannot be set, or is set but does not stop this process from writing (e.g. a privilege that bypasses
+/// deny entries), the test prints `SKIPPED` with the reason and returns; libtest still reports it as passed.
+#[cfg(windows)]
 #[test]
 fn read_only_output_folder_fails_at_write() {
     let d = tempfile::tempdir().unwrap();
@@ -319,13 +323,15 @@ fn read_only_output_folder_fails_at_write() {
     let out = d.path().join("out");
     std::fs::create_dir_all(&out).unwrap();
     let Some(_deny) = DenyWrite::new(&out) else {
-        eprintln!("skipped: icacls could not deny writes on the temp folder");
+        eprintln!("SKIPPED read_only_output_folder_fails_at_write: icacls could not deny writes on the temp folder");
         return;
     };
-    assert!(
-        std::fs::write(out.join("probe"), b"x").is_err(),
-        "the ACL did not take effect; the test would prove nothing"
-    );
+    if std::fs::write(out.join("probe"), b"x").is_ok() {
+        eprintln!(
+            "SKIPPED read_only_output_folder_fails_at_write: the deny ACL is ineffective for this process,              so the test would prove nothing"
+        );
+        return;
+    }
     let o = convert(&d.path().join("in"), &out, &[]).output().unwrap();
     assert_eq!(code(&o), 1, "{}", stderr(&o));
     let f = failures(&o);

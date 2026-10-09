@@ -790,7 +790,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
     if p.format == Format::Bc1 && p.encoder.bc1_transparent_black {
         add(
             CfgInvalid,
-            "encoder.bc1_transparent_black=true: BC1 is opaque-only in v1 (no 1-bit alpha), so the              3-colour mode never emits transparent-black texels; set it to false"
+            "encoder.bc1_transparent_black=true: BC1 is opaque-only in v1 (no 1-bit alpha), so the 3-colour mode never emits transparent-black texels; set it to false"
                 .into(),
         );
     }
