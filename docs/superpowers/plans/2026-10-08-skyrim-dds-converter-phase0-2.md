@@ -17,8 +17,9 @@ The brief asked for "Phase 0 (spikes) and Phase 1–2 (engine skeleton + CLI MVP
 | This plan | Contents | Project-plan roadmap phases covered |
 |---|---|---|
 | **Phase 0** (Tasks 1–17) | Toolchain, workspace, vendored encoders, spikes S3, S4, S5, S7, gates of spec §11.2 for the encoders | Phase 0 (S1, S2, S6, S8 are owner-run, Task 46) |
-| **Phase 1** (Tasks 18–39, incl. 26a) | Engine: config, presets, policy, pipeline, DDS I/O, validation, events, manifest, scheduler, golden tests | Phase 1 (golden cases, synthetic subset), Phase 2 (core engine) |
+| **Phase 1** (Tasks 18–39, incl. 26a, 27a) | Engine: config, presets (incl. suffix aliases), exporter suffix vocabulary, policy, pipeline, DDS I/O, validation, events, manifest, scheduler, golden tests | Phase 1 (golden cases, synthetic subset), Phase 2 (core engine) |
 | **Phase 2** (Tasks 40–46) | CLI MVP and the MVP exit gate | Phase 3 (CLI), part of Phase 5 (three built-in "Quality" presets) |
+| **M2.5** (milestone) | Channel packing of raw single-channel maps (spec §6.4, DECISIONS Note H), right after the CLI MVP | Not in the project-plan roadmap (owner addition, Note H); sits between Phases 3 and 4 |
 | **M3–M8** (milestones) | GUI, variance bake, NVTT backend, preset completion + remaining inputs, quality validation + CI, packaging | Phases 4–7 |
 
 ## Global Constraints
@@ -84,13 +85,14 @@ F:/ai/dds/converter/
 │   │   ├── src/codes.rs             warning-code catalogue (§10), Severity, Warning
 │   │   ├── src/config.rs            Profile and every enum of §3.2
 │   │   ├── src/presets.rs           PresetFile, ConfigFile, Rule, PresetRegistry, JSON merge, suffix aliases (Task 26a)
-│   │   ├── src/discover.rs          InputFile discovery, output and game-relative paths, canonical output names for suffix aliases
-│   │   ├── src/group.rs             TextureSet grouping, suffix parsing (incl. preset suffix aliases), IN-DUPLICATE
+│   │   ├── src/discover.rs          InputFile discovery, output and game-relative paths, canonical output names for suffix aliases and exporter vocabulary
+│   │   ├── src/group.rs             TextureSet grouping, suffix parsing (incl. preset suffix aliases and the exporter vocabulary, Task 27a), IN-DUPLICATE
 │   │   ├── src/load.rs              PNG/TGA/TIFF → Rgba32F
 │   │   ├── src/analyse.rs           Analysis statistics (§5.1)
 │   │   ├── src/suggest.rs           §4.3 suggestions with confidence
 │   │   ├── src/overrides.rs         --set parsing (scoped field overrides)
 │   │   ├── src/policy.rs            Resolve: layering, provenance, availability, checks → ResolvedJob
+│   │   ├── src/pack.rs              (milestone M2.5) channel-packing recipes → virtual jobs with several sources
 │   │   ├── src/ops.rs               Preprocess (§5.4) → Work
 │   │   ├── src/dilate.rs            push-pull RGB dilation under α = 0
 │   │   ├── src/mips.rs              float mip chain per domain (§5.5)
@@ -146,6 +148,10 @@ F:/ai/dds/converter/
 | `engine::discover::canonicalise_outputs` | Task 26a | `fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>)` |
 | `engine::policy::{AliasUse, preset_for}`, `FileFacts::alias`, `ResolvedJob::suffix_alias` | Task 26a | see Task 26a |
 | `engine::dilate::dilate_under_zero_alpha` | Task 27 | `fn dilate_under_zero_alpha(img: &mut Rgba32F)` |
+| `engine::config::{GreenConvention, RawMap}`, `ChannelSpec::green_convention` | Task 27a | `enum GreenConvention { Directx, Opengl }`; `enum RawMap { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz }` with `id()`, `starts_rmaos()`; `green_convention: Option<GreenConvention>` |
+| `engine::group::{VocabRole, Vocab, VOCABULARY, split_vocab, vocab_of, is_vocabulary}` | Task 27a | `fn vocab_of(stem: &str) -> Option<&'static Vocab>`; `split_suffix_with` checks the vocabulary after aliases |
+| `engine::suggest::apply_vocabulary`, `engine::presets::Provenance::Suffix`, `engine::codes::Code::InPackingInput` | Task 27a | `fn apply_vocabulary(suggestions: &mut [Suggestion], v: &Vocab)`; `suffix:<term>`; `IN-PACKING-INPUT` (warning) |
+| `engine::policy::{vocab_for, JobStatus::PackingInput}` | Task 27a | `fn vocab_for(f: &FileFacts) -> Option<&'static Vocab>`; `PackingInput { role: RawMap }` |
 | `engine::ops::{Work, Domain, preprocess, srgb_to_linear, linear_to_srgb}` | Task 28 | `fn preprocess(img: Rgba32F, p: &Profile) -> Work` |
 | `engine::dds::ResolvedHeader` | Task 33 | `enum { Dx10, Legacy }` |
 | `sdc_bench::engine_gates::{engine_parity, full_chain_exact_opaque}` | Task 38 | `fn(root: &Path) -> anyhow::Result<GateReport>` |
@@ -6339,6 +6345,722 @@ git commit -m "feat(engine): push-pull RGB dilation under zero alpha"
 
 ---
 
+### Task 27a: Industry suffix vocabulary (DECISIONS Note H) — exporter terms as Skyrim roles, green convention, raw maps as packing inputs
+
+Lands in Phase 1 now; channel packing itself is milestone M2.5. Tasks 18–27 (incl. 26a) are implemented, so the code below is written against the current `group.rs`, `discover.rs`, `suggest.rs`, `policy.rs`, `presets.rs`, `overrides.rs`, `codes.rs` and `config.rs`.
+
+**Files:**
+- Modify: `crates/engine/src/config.rs` (`GreenConvention`, `RawMap`, `ChannelSpec::green_convention`)
+- Modify: `crates/engine/src/group.rs` (vocabulary table and split; `split_suffix_with` checks it after aliases)
+- Modify: `crates/engine/src/discover.rs` (`canonicalise_outputs` writes Skyrim names for vocabulary files, also with no aliases)
+- Modify: `crates/engine/src/suggest.rs` (`_d` high; raw packing inputs mark a `cs` set PBR; `apply_vocabulary`)
+- Modify: `crates/engine/src/presets.rs` (`Provenance::Suffix`; an alias may not be a vocabulary term)
+- Modify: `crates/engine/src/overrides.rs` (`channels.green_convention` is settable)
+- Modify: `crates/engine/src/codes.rs` (`IN-PACKING-INPUT`; catalogue count 47 → 48)
+- Modify: `crates/engine/src/policy.rs` (green-convention fact layer and flip, unresolved plain `_normal`, `JobStatus::PackingInput`)
+- Test: `crates/engine/tests/suffix_vocabulary.rs`; unit tests in `suggest.rs` and `codes.rs`
+
+**Interfaces:**
+- Consumes: Tasks 19, 20, 21, 24, 25, 26, 26a.
+- Produces:
+  - `config::GreenConvention { Directx, Opengl }` (serde `directx` / `opengl`); `config::RawMap { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz }` (serde lower-case) with `RawMap::ALL: [RawMap; 8]`, `RawMap::id(self) -> String`, `RawMap::starts_rmaos(self) -> bool`
+  - `config::ChannelSpec` gains `pub green_convention: Option<GreenConvention>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`, so the built-in presets and their SHA-256 values do not change)
+  - `group::VocabRole { Colour, Normal(Option<GreenConvention>), Emissive, PackingInput(RawMap) }`; `group::Vocab { pub term: &'static str, pub role: VocabRole }` with `Vocab::canonical(&self) -> Option<String>`; `group::VOCABULARY: [Vocab; 31]` (a `static`, longest term first); `group::split_vocab(stem: &str) -> Option<(String, &'static Vocab)>`; `group::vocab_of(stem: &str) -> Option<&'static Vocab>`; `group::is_vocabulary(term: &str) -> bool`. `split_suffix`, `SUFFIXES` (19), `split_suffix_with`, `group_sets`, `group_sets_with` and `canonicalise_outputs` keep their signatures; `SuffixSplit` and `FileFacts` are unchanged (Resolve reads the term from `FileFacts.input.rel`).
+  - `suggest::apply_vocabulary(suggestions: &mut [Suggestion], v: &Vocab)`
+  - `presets::Provenance::Suffix(String)` (shown and parsed as `suffix:<term>`)
+  - `codes::Code::InPackingInput` (`"IN-PACKING-INPUT"`, warning)
+  - `policy::vocab_for(f: &FileFacts) -> Option<&'static Vocab>`; `policy::JobStatus::PackingInput { role: RawMap }` (serialises `{"state": "packing_input", "role": "roughness"}`)
+
+Rules (spec §4.4, §3.2, §5.2, §6.4, DECISIONS Note H). Split order: preset alias (§3.7), then the vocabulary (whole trailing `_<term>`, case-insensitive, longest first, a base must precede), then the §6.1 list. Canonical suffix: colour terms → none (the colour member), normal terms → `n`, emissive terms → `g`, raw maps → their role id, which enters the set's suffix list. Output names: colour terms `<base>.dds`, normal `<base>_n.dds`, emissive `<base>_g.dds`; `_d` (a §6.1 suffix) keeps its stem; raw maps keep their name and are never written on their own. Suggestions: `_d` and colour terms give the colour member high confidence (not `hdr_sky`); alpha meaning is still never assumed; every reason of a vocabulary file starts `exporter suffix _<term> (<role>)`. Under `cs`, a raw roughness, glossiness, metallic or AO input marks the set PBR. Green convention: `_normalgl`/`_normaldx` apply `channels.green_convention` as a fact layer at the analysis position (provenance `suffix:<term>`; `--set` still wins); after layering, `opengl` sets `flip_green = true` with the same provenance (Task 28 flips it unchanged); a plain `_normal`/`_nrm` with no stated convention is `Unresolved` and neither `--accept-suggestions high` nor `--allow SUG-LOW-CONFIDENCE` settles it; `msn` and non-Normal sub-types ignore the field; Skyrim `_n` needs no statement. Raw maps: `JobStatus::PackingInput` with one `IN-PACKING-INPUT` warning and the `sdc-base` `generic_data` profile as an unused placeholder, unless a rule or `--set` names a sub-type for the file, which makes it an ordinary file. An alias may not equal a vocabulary term.
+
+- [ ] **Step 1: Write the failing tests**
+
+`crates/engine/tests/suffix_vocabulary.rs`:
+```rust
+use engine::analyse::analyse;
+use engine::codes::{Code, Severity};
+use engine::config::*;
+use engine::discover::*;
+use engine::group::*;
+use engine::image::{Rgba32F, SourceInfo};
+use engine::overrides::parse_set;
+use engine::policy::*;
+use engine::presets::*;
+use engine::suggest::Confidence;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+const RGB8: SourceInfo = SourceInfo { bit_depth: 8, channels: 3, has_alpha: false, is_float: false };
+const RGBA8: SourceInfo = SourceInfo { bit_depth: 8, channels: 4, has_alpha: true, is_float: false };
+
+fn grey() -> Rgba32F {
+    Rgba32F::new(64, 64, [0.5, 0.5, 0.5, 1.0])
+}
+
+fn flat_normal() -> Rgba32F {
+    Rgba32F::new(64, 64, [0.5, 0.5, 1.0, 1.0])
+}
+
+fn touch(p: &Path) {
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, b"x").unwrap();
+}
+
+/// Resolves `name` under cs as a member of `textures/armor/iron`, whose other members have the suffixes `companions`.
+fn resolve_img(name: &str, companions: &[&str], sets_cli: &[&str], allow: &[Code], img: &Rgba32F, info: &SourceInfo) -> ResolvedJob {
+    let reg = PresetRegistry::builtin().unwrap();
+    let overrides: Vec<_> = sets_cli.iter().map(|s| parse_set(s).unwrap()).collect();
+    let allow: BTreeSet<Code> = allow.iter().copied().collect();
+    let ctx = ResolveCtx { target: Target::Cs, registry: &reg, preset: "cs-quality", user_config: None, project_config: None, overrides: &overrides, accept: AcceptSuggestions::High, allow: &allow };
+    let stem = Path::new(name).file_stem().unwrap().to_string_lossy().into_owned();
+    let split = split_suffix_with(&stem, reg.alias_table());
+    let f = InputFile {
+        path: PathBuf::from(name),
+        rel: PathBuf::from(name),
+        game_path: format!("textures/armor/{}", name.to_ascii_lowercase()),
+        output: PathBuf::from(name).with_extension("dds"),
+        kind: InputKind::Image,
+    };
+    let mut suffixes: BTreeSet<String> = companions.iter().map(|s| s.to_string()).collect();
+    suffixes.extend(split.suffix.clone());
+    let set = TextureSet { key: "textures/armor/iron".into(), members: vec![0], suffixes };
+    let a = analyse(img, info);
+    resolve_file(&ctx, &FileFacts { input: &f, suffix: split.suffix.as_deref(), alias: split.alias.as_deref(), set: &set, analysis: &a, info })
+}
+
+#[test]
+fn vocabulary_splits_to_skyrim_roles() {
+    let none = BTreeMap::new();
+    let s = |stem: &str| {
+        let x = split_suffix_with(stem, &none);
+        (x.base, x.suffix, x.alias)
+    };
+    for stem in ["iron_colormap", "iron_basecolor", "iron_Base_Color", "iron_albedo", "iron_diffuse", "iron_color", "iron_col"] {
+        assert_eq!(s(stem), ("iron".into(), None, None), "{stem}");
+        assert_eq!(vocab_of(stem).unwrap().role, VocabRole::Colour, "{stem}");
+    }
+    for stem in ["iron_normal", "iron_NRM", "iron_normalgl", "iron_normaldx"] {
+        assert_eq!(s(stem), ("iron".into(), Some("n".into()), None), "{stem}");
+    }
+    assert_eq!(vocab_of("iron_normal").unwrap().role, VocabRole::Normal(None));
+    assert_eq!(vocab_of("iron_NormalGL").unwrap().role, VocabRole::Normal(Some(GreenConvention::Opengl)));
+    assert_eq!(vocab_of("iron_normaldx").unwrap().role, VocabRole::Normal(Some(GreenConvention::Directx)));
+    for stem in ["iron_emissive", "iron_emission"] {
+        assert_eq!(s(stem).1.as_deref(), Some("g"), "{stem}");
+    }
+    for (stem, role) in [
+        ("iron_roughness", "roughness"), ("iron_rough", "roughness"),
+        ("iron_metallic", "metallic"), ("iron_metalness", "metallic"), ("iron_metal", "metallic"),
+        ("iron_ao", "ao"), ("iron_ambientocclusion", "ao"), ("iron_occlusion", "ao"),
+        ("iron_specular", "specular"), ("iron_spec", "specular"),
+        ("iron_glossiness", "glossiness"), ("iron_gloss", "glossiness"),
+        ("iron_height", "height"), ("iron_displacement", "height"), ("iron_disp", "height"),
+        ("iron_opacity", "opacity"), ("iron_fuzz", "fuzz"), ("iron_sheen", "fuzz"),
+    ] {
+        assert_eq!(s(stem), ("iron".into(), Some(role.into()), None), "{stem}");
+        assert!(matches!(vocab_of(stem).unwrap().role, VocabRole::PackingInput(r) if r.id() == role), "{stem}");
+    }
+    // Skyrim suffixes keep their meaning next to the exporter terms
+    for (skyrim, exporter, role) in [
+        ("iron_s", "iron_spec", "specular"),
+        ("iron_p", "iron_height", "height"),
+        ("iron_m", "iron_metal", "metallic"),
+        ("iron_g", "iron_gloss", "glossiness"),
+        ("iron_f", "iron_fuzz", "fuzz"),
+    ] {
+        assert_eq!(s(skyrim).1, Some(skyrim[5..].to_string()), "{skyrim}");
+        assert!(vocab_of(skyrim).is_none(), "{skyrim}");
+        assert_eq!(s(exporter).1.as_deref(), Some(role), "{exporter}");
+    }
+    // `_d` stays a §6.1 suffix; a stem that is only a term is left whole; split_suffix and SUFFIXES are unchanged
+    assert_eq!(s("iron_d"), ("iron".into(), Some("d".into()), None));
+    assert_eq!(s("_normal"), ("_normal".into(), None, None));
+    assert_eq!(split_suffix("iron_basecolor"), ("iron_basecolor".into(), None));
+    assert_eq!(SUFFIXES.len(), 19);
+    // longest first, so `_base_color` is one term
+    assert_eq!(VOCABULARY.len(), 31);
+    assert!(VOCABULARY.windows(2).all(|w| w[0].term.len() >= w[1].term.len()));
+    assert_eq!(vocab_of("iron_base_color").unwrap().term, "base_color");
+}
+
+#[test]
+fn outputs_use_skyrim_names_and_collisions_are_duplicates() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    for f in [
+        "iron_basecolor.png", "iron_normalgl.png", "iron_emissive.png", "iron_roughness.png", "iron_AO.png",
+        "wood_d.png", "rock.png", "rock_albedo.tga", "rock_n.png", "rock_normal.png",
+    ] {
+        touch(&src.join(f));
+    }
+    let out = d.path().join("out");
+    let mut files = discover(&[src], &out, false).unwrap();
+    // no preset aliases loaded: the vocabulary still applies
+    canonicalise_outputs(&mut files, &BTreeMap::new());
+    let output_of = |name: &str| files.iter().find(|f| f.rel.as_path() == Path::new(name)).unwrap().output.clone();
+    assert_eq!(output_of("iron_basecolor.png"), out.join("iron.dds"));
+    assert_eq!(output_of("iron_normalgl.png"), out.join("iron_n.dds"));
+    assert_eq!(output_of("iron_emissive.png"), out.join("iron_g.dds"));
+    // raw maps keep their name (never written on their own); `_d` keeps its stem
+    assert_eq!(output_of("iron_roughness.png"), out.join("iron_roughness.dds"));
+    assert_eq!(output_of("wood_d.png"), out.join("wood_d.dds"));
+    let (sets, dups) = group_sets(&files);
+    let iron = sets.iter().find(|s| s.key.ends_with("/iron")).unwrap();
+    assert_eq!(iron.members.len(), 5);
+    assert_eq!(iron.suffixes, BTreeSet::from(["n", "g", "roughness", "ao"].map(String::from)));
+    // rock.png + rock_albedo.tga → rock.dds; rock_n.png + rock_normal.png → rock_n.dds
+    let mut groups: Vec<BTreeSet<String>> = dups.iter().map(|g| g.iter().map(|&i| files[i].rel.to_string_lossy().into_owned()).collect()).collect();
+    groups.sort();
+    assert_eq!(
+        groups,
+        vec![
+            BTreeSet::from(["rock.png".to_string(), "rock_albedo.tga".to_string()]),
+            BTreeSet::from(["rock_n.png".to_string(), "rock_normal.png".to_string()]),
+        ]
+    );
+}
+
+#[test]
+fn colour_terms_and_d_are_high_confidence_but_alpha_meaning_is_never_assumed() {
+    let j = resolve_img("iron_colormap.png", &[], &[], &[], &grey(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!((j.profile.subtype, j.suggestions[0].confidence), (Subtype::Diffuse, Confidence::High));
+    assert!(j.suggestions[0].reason.starts_with("exporter suffix _colormap (colour); "), "{}", j.suggestions[0].reason);
+    let j = resolve_img("iron_d.png", &[], &[], &[], &grey(), &RGB8);
+    assert_eq!((j.profile.subtype, j.suggestions[0].confidence, j.status.clone()), (Subtype::Diffuse, Confidence::High, JobStatus::Ready));
+    // a bare stem stays medium
+    let j = resolve_img("iron.png", &[], &[], &[], &grey(), &RGB8);
+    assert_eq!(j.suggestions[0].confidence, Confidence::Medium);
+    assert!(matches!(j.status, JobStatus::Unresolved { .. }), "{:?}", j.status);
+    // the set still picks the sub-type: a raw roughness companion makes the cs set PBR
+    let j = resolve_img("iron_basecolor.png", &["roughness"], &[], &[], &grey(), &RGB8);
+    assert_eq!((j.profile.subtype, j.suggestions[0].confidence), (Subtype::PbrAlbedo, Confidence::High));
+    // varying alpha: the colour role is certain, the alpha meaning is not
+    let mut img = grey();
+    for y in 0..64 {
+        for x in 0..64 {
+            img.at_mut(x, y)[3] = x as f32 / 63.0;
+        }
+    }
+    let j = resolve_img("iron_albedo.png", &[], &[], &[], &img, &RGBA8);
+    assert_eq!(j.suggestions[0].confidence, Confidence::High);
+    match &j.status {
+        JobStatus::Unresolved { reasons } => assert!(reasons.iter().any(|r| r.contains("alpha meaning is unconfirmed")), "{reasons:?}"),
+        s => panic!("{s:?}"),
+    }
+}
+
+#[test]
+fn plain_normal_stays_unresolved_until_the_green_convention_is_stated() {
+    let green_reason = |j: &ResolvedJob| matches!(&j.status, JobStatus::Unresolved { reasons } if reasons.iter().any(|r| r.contains("green convention")));
+    for name in ["iron_normal.png", "iron_nrm.png"] {
+        let j = resolve_img(name, &[], &[], &[], &flat_normal(), &RGB8);
+        assert_eq!((j.profile.subtype, j.suggestions[0].confidence), (Subtype::Normal, Confidence::High));
+        assert_eq!(j.profile.channels.green_convention, None);
+        assert!(green_reason(&j), "{name}: {:?}", j.status);
+        // not a suggestion: --allow SUG-LOW-CONFIDENCE does not settle it
+        let j = resolve_img(name, &[], &[], &[Code::SugLowConfidence], &flat_normal(), &RGB8);
+        assert!(green_reason(&j), "{name}: {:?}", j.status);
+    }
+    let j = resolve_img("iron_normal.png", &[], &["channels.green_convention=directx"], &[], &flat_normal(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!((j.profile.channels.green_convention, j.profile.channels.flip_green), (Some(GreenConvention::Directx), false));
+    assert_eq!(j.provenance["channels.green_convention"], Provenance::User);
+    let j = resolve_img("iron_normal.png", &[], &["file:iron_normal.png.channels.green_convention=opengl"], &[], &flat_normal(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert!(j.profile.channels.flip_green);
+    assert_eq!(j.provenance["channels.flip_green"], Provenance::User);
+    // Skyrim's own _n is DirectX by definition
+    let j = resolve_img("iron_n.png", &[], &[], &[], &flat_normal(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert!(!j.profile.channels.flip_green);
+}
+
+#[test]
+fn normalgl_flips_to_directx_and_normaldx_does_not() {
+    let j = resolve_img("iron_normalgl.png", &[], &[], &[], &flat_normal(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!((j.profile.channels.green_convention, j.profile.channels.flip_green), (Some(GreenConvention::Opengl), true));
+    assert_eq!(j.provenance["channels.green_convention"], Provenance::Suffix("normalgl".into()));
+    assert_eq!(j.provenance["channels.flip_green"].to_string(), "suffix:normalgl");
+    assert_eq!("suffix:normalgl".parse::<Provenance>().unwrap(), Provenance::Suffix("normalgl".into()));
+    let j = resolve_img("iron_normaldx.png", &[], &[], &[], &flat_normal(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!((j.profile.channels.green_convention, j.profile.channels.flip_green), (Some(GreenConvention::Directx), false));
+    // --set beats the suffix
+    let j = resolve_img("iron_normalgl.png", &[], &["channels.green_convention=directx"], &[], &flat_normal(), &RGB8);
+    assert_eq!((j.profile.channels.flip_green, j.provenance["channels.green_convention"].clone()), (false, Provenance::User));
+    // msn ignores the convention
+    let j = resolve_img("iron_normalgl.png", &[], &["subtype=msn"], &[], &flat_normal(), &RGB8);
+    assert_eq!((j.profile.subtype, j.profile.channels.green_convention, j.profile.channels.flip_green), (Subtype::Msn, None, false));
+}
+
+#[test]
+fn raw_maps_are_packing_inputs_not_errors() {
+    for (name, role) in [
+        ("iron_roughness.png", RawMap::Roughness),
+        ("iron_spec.png", RawMap::Specular),
+        ("iron_height.png", RawMap::Height),
+        ("iron_metal.png", RawMap::Metallic),
+        ("iron_opacity.png", RawMap::Opacity),
+    ] {
+        let j = resolve_img(name, &[], &[], &[], &grey(), &RGB8);
+        assert_eq!(j.status, JobStatus::PackingInput { role }, "{name}");
+        assert_eq!(j.warnings.len(), 1, "{name}");
+        assert_eq!((j.warnings[0].code, j.warnings[0].severity), (Code::InPackingInput, Severity::Warning));
+        assert!(j.suggestions.is_empty());
+    }
+    let j = resolve_img("iron_roughness.png", &[], &[], &[], &grey(), &RGB8);
+    assert_eq!(serde_json::to_value(&j.status).unwrap(), serde_json::json!({ "state": "packing_input", "role": "roughness" }));
+    // the Skyrim suffixes next to them resolve as before
+    assert_eq!(resolve_img("iron_p.png", &[], &[], &[], &grey(), &RGB8).profile.subtype, Subtype::Height);
+    assert_eq!(resolve_img("iron_m.png", &[], &[], &[], &grey(), &RGB8).profile.subtype, Subtype::Envmask);
+    assert_eq!(resolve_img("iron_s.png", &[], &[], &[], &grey(), &RGB8).profile.subtype, Subtype::SubsurfaceTint);
+    // a sub-type named by --set makes a raw map an ordinary file
+    let j = resolve_img("iron_height.png", &[], &["file:iron_height.png.subtype=height"], &[], &grey(), &RGB8);
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(j.profile.subtype, Subtype::Height);
+}
+
+#[test]
+fn aliases_may_not_shadow_the_vocabulary() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    for bad in ["normal = \"n\"", "nrm = \"n\"", "roughness = \"rmaos\"", "basecolor = \"d\"", "spec = \"s\""] {
+        let toml = format!("schema_version = 1\nid = \"bad\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[suffix_aliases]\n{bad}\n");
+        let e = r.add_toml(&toml);
+        assert!(matches!(e, Err(PresetError::Alias(_))), "{bad}");
+        assert!(e.unwrap_err().to_string().contains("exporter vocabulary"), "{bad}");
+        assert!(r.get("bad").is_none(), "{bad}");
+    }
+    assert!(is_vocabulary("normalgl") && !is_vocabulary("n") && !is_vocabulary("rmaosultrahigh"));
+}
+```
+
+Add to the `tests` module of `suggest.rs`:
+```rust
+    #[test]
+    fn d_is_high_and_raw_packing_inputs_mark_a_cs_set_pbr() {
+        let none = BTreeSet::new();
+        let d = suggest(&ctx(Target::Cs, Some("d"), "textures/a/x_d.png", &none, AlphaContent::None))[0].clone();
+        assert_eq!((d.subtype, d.confidence), (Subtype::Diffuse, Confidence::High));
+        let sky = suggest(&ctx(Target::Cs, Some("d"), "textures/sky/x_d.png", &none, AlphaContent::None))[0].clone();
+        assert_eq!((sky.subtype, sky.confidence), (Subtype::UiSky, Confidence::High));
+        for (raw, pbr) in [
+            ("roughness", true), ("glossiness", true), ("metallic", true), ("ao", true),
+            ("specular", false), ("fuzz", false), ("height", false), ("opacity", false),
+        ] {
+            let set = set_of(&[raw]);
+            assert_eq!(is_pbr_set(&ctx(Target::Cs, None, "textures/a/x.png", &set, AlphaContent::None)), pbr, "{raw}");
+            assert!(!is_pbr_set(&ctx(Target::Cpm, None, "textures/a/x.png", &set, AlphaContent::None)), "{raw}");
+        }
+        // a raw packing role gets no sub-type suggestion
+        assert!(suggest(&ctx(Target::Cs, Some("roughness"), "textures/a/x_roughness.png", &none, AlphaContent::None)).is_empty());
+    }
+
+    #[test]
+    fn colour_vocabulary_raises_the_colour_member_only() {
+        let none = BTreeSet::new();
+        let mut sg = suggest(&ctx(Target::Cs, None, "textures/a/x_basecolor.png", &none, AlphaContent::None));
+        apply_vocabulary(&mut sg, crate::group::vocab_of("x_basecolor").unwrap());
+        assert_eq!((sg[0].subtype, sg[0].confidence), (Subtype::Diffuse, Confidence::High));
+        assert!(sg[0].reason.starts_with("exporter suffix _basecolor (colour); "), "{}", sg[0].reason);
+        // a float source under sky/ may be an HDRI: stays medium
+        let mut f = ctx(Target::Cs, None, "textures/sky/x_albedo.exr", &none, AlphaContent::None);
+        f.is_float = true;
+        let mut sg = suggest(&f);
+        apply_vocabulary(&mut sg, crate::group::vocab_of("x_albedo").unwrap());
+        assert_eq!((sg[0].subtype, sg[0].confidence), (Subtype::HdrSky, Confidence::Medium));
+        // normal terms only prefix the reason
+        let mut sg = suggest(&ctx(Target::Cs, Some("n"), "textures/a/x_normalgl.png", &none, AlphaContent::None));
+        apply_vocabulary(&mut sg, crate::group::vocab_of("x_normalgl").unwrap());
+        assert_eq!((sg[0].subtype, sg[0].confidence), (Subtype::Normal, Confidence::High));
+        assert!(sg[0].reason.starts_with("exporter suffix _normalgl (normal); "));
+    }
+```
+
+In `codes.rs` tests, change `assert_eq!(Code::ALL.len(), 47);` to `assert_eq!(Code::ALL.len(), 48);` and add to `severities_follow_spec_section_10`:
+```rust
+        assert_eq!(Code::InPackingInput.severity(), Severity::Warning);
+        assert_eq!(Code::parse("IN-PACKING-INPUT"), Some(Code::InPackingInput));
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cargo test -p engine --test suffix_vocabulary`
+Expected: FAIL to compile (`vocab_of`, `VocabRole`, `GreenConvention`, `RawMap`, `JobStatus::PackingInput`, `Provenance::Suffix` … not found).
+
+- [ ] **Step 3: Configuration types (`config.rs`), settable field (`overrides.rs`), code (`codes.rs`)**
+
+In `config.rs`, after the `SearchRadius` line:
+```rust
+cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
+cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz });
+
+impl RawMap {
+    pub const ALL: [RawMap; 8] = {
+        use RawMap::*;
+        [Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz]
+    };
+
+    /// The role id a raw map counts as after Discover (spec §4.4): `roughness`, `ao`, …
+    pub fn id(self) -> String {
+        serde_json::to_value(self).unwrap().as_str().unwrap().to_owned()
+    }
+
+    /// Spec §4.3 item 1, §6.4: an input that starts the cs `_rmaos`/`_rfaos` recipe, so its set is PBR.
+    pub fn starts_rmaos(self) -> bool {
+        matches!(self, RawMap::Roughness | RawMap::Glossiness | RawMap::Metallic | RawMap::Ao)
+    }
+}
+```
+In `ChannelSpec`, after `grayscale_source`:
+```rust
+    /// Green (Y) convention of a normal source (spec §3.2, §4.4, DECISIONS Note H); None = unstated.
+    /// `opengl` makes Resolve set `flip_green`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green_convention: Option<GreenConvention>,
+```
+In `overrides.rs` `FIELD_PATHS`, after `"channels.flip_green",` add `"channels.green_convention",`.
+
+In `codes.rs`, after `InDdsSkipped`:
+```rust
+    InPackingInput = "IN-PACKING-INPUT" => Warning,
+```
+
+- [ ] **Step 4: Vocabulary and split (`group.rs`), output names (`discover.rs`)**
+
+In `group.rs`, add `use crate::config::{GreenConvention, RawMap};` and, after `split_suffix`:
+```rust
+/// What an exporter suffix stands for (spec §4.4, DECISIONS Note H).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VocabRole {
+    /// The colour member (no suffix): written `<base>.dds`, high confidence for the colour role.
+    Colour,
+    /// `_n`; `Some` when the term states the green convention (`_normalgl`, `_normaldx`).
+    Normal(Option<GreenConvention>),
+    /// `_g` (`glow` or `pbr_emissive`).
+    Emissive,
+    /// A raw single-channel map for channel packing (spec §6.4); never written on its own.
+    PackingInput(RawMap),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Vocab {
+    /// Lower-case, without the leading '_'.
+    pub term: &'static str,
+    pub role: VocabRole,
+}
+
+impl Vocab {
+    /// The canonical suffix the file counts as after Discover: none for colour, `n`, `g`, or the packing role id.
+    pub fn canonical(&self) -> Option<String> {
+        match self.role {
+            VocabRole::Colour => None,
+            VocabRole::Normal(_) => Some("n".into()),
+            VocabRole::Emissive => Some("g".into()),
+            VocabRole::PackingInput(r) => Some(r.id()),
+        }
+    }
+}
+
+const fn term(term: &'static str, role: VocabRole) -> Vocab {
+    Vocab { term, role }
+}
+
+/// Spec §4.4 exporter vocabulary, longest term first so `_base_color` wins over `_color`. None of these is a
+/// §6.1 suffix, and none ends in `_<§6.1 suffix>`, so a stem has at most one reading.
+pub static VOCABULARY: [Vocab; 31] = {
+    use GreenConvention::*;
+    use RawMap::*;
+    use VocabRole::*;
+    [
+        term("ambientocclusion", PackingInput(Ao)),
+        term("displacement", PackingInput(Height)),
+        term("base_color", Colour),
+        term("glossiness", PackingInput(Glossiness)),
+        term("roughness", PackingInput(Roughness)),
+        term("metalness", PackingInput(Metallic)),
+        term("basecolor", Colour),
+        term("occlusion", PackingInput(Ao)),
+        term("normalgl", Normal(Some(Opengl))),
+        term("normaldx", Normal(Some(Directx))),
+        term("colormap", Colour),
+        term("metallic", PackingInput(Metallic)),
+        term("specular", PackingInput(Specular)),
+        term("emissive", Emissive),
+        term("emission", Emissive),
+        term("diffuse", Colour),
+        term("opacity", PackingInput(Opacity)),
+        term("albedo", Colour),
+        term("normal", Normal(None)),
+        term("height", PackingInput(Height)),
+        term("color", Colour),
+        term("rough", PackingInput(Roughness)),
+        term("metal", PackingInput(Metallic)),
+        term("gloss", PackingInput(Glossiness)),
+        term("sheen", PackingInput(Fuzz)),
+        term("spec", PackingInput(Specular)),
+        term("disp", PackingInput(Height)),
+        term("fuzz", PackingInput(Fuzz)),
+        term("nrm", Normal(None)),
+        term("col", Colour),
+        term("ao", PackingInput(Ao)),
+    ]
+};
+
+/// The vocabulary term a stem ends in (case-insensitive) and the base before it. A stem that is only a term
+/// (`_normal`) is left alone, as with §6.1 suffixes.
+pub fn split_vocab(stem: &str) -> Option<(String, &'static Vocab)> {
+    let lower = stem.to_ascii_lowercase();
+    VOCABULARY.iter().find_map(|v| {
+        let tail = format!("_{}", v.term);
+        // The tail is ASCII, so the cut falls on a char boundary even in non-ASCII stems.
+        (lower.ends_with(&tail) && lower.len() > tail.len()).then(|| (stem[..stem.len() - tail.len()].to_string(), v))
+    })
+}
+
+pub fn vocab_of(stem: &str) -> Option<&'static Vocab> {
+    split_vocab(stem).map(|(_, v)| v)
+}
+
+/// Whether `term` (lower-case, no '_') is a vocabulary term; preset aliases may not be one (spec §3.7).
+pub fn is_vocabulary(term: &str) -> bool {
+    VOCABULARY.iter().any(|v| v.term == term)
+}
+```
+In `split_suffix_with`, between the alias block and the `split_suffix` fallback, add:
+```rust
+    // Spec §4.4: exporter vocabulary after aliases, before the §6.1 list.
+    if let Some((base, v)) = split_vocab(stem) {
+        return SuffixSplit {
+            base,
+            suffix: v.canonical(),
+            alias: None,
+        };
+    }
+```
+and extend its doc comment: "…before the vocabulary (§4.4) and the §6.1 list. Aliases contain no '_' and are never a §6.1 suffix or a vocabulary term, so a match is exact and unambiguous."
+
+In `discover.rs`, replace `canonicalise_outputs` (signature unchanged; the early return for an empty alias table goes, because the vocabulary applies without aliases):
+```rust
+/// Spec §3.7, §4.4: an input whose stem ends in a preset suffix alias or an exporter vocabulary term is
+/// written under its Skyrim name: `iron_rmaosultrahigh.png` → `iron_rmaos.dds`, `iron_normalgl.png` →
+/// `iron_n.dds`, `iron_basecolor.png` → `iron.dds`. Raw packing inputs keep their name (they are never
+/// written on their own). Only `output` changes; `rel` and `game_path` keep the source name, so rule globs
+/// match what is on disk. Run before grouping.
+pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>) {
+    use crate::group::{split_suffix_with, vocab_of, VocabRole};
+    for f in files {
+        let stem = f.rel.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let split = split_suffix_with(&stem, aliases);
+        let suffixed = || split.suffix.as_ref().map(|c| format!("{}_{c}.dds", split.base));
+        let name = match (&split.alias, vocab_of(&stem)) {
+            (Some(_), _) => suffixed(),
+            (None, Some(v)) => match v.role {
+                VocabRole::PackingInput(_) => None,
+                VocabRole::Colour => Some(format!("{}.dds", split.base)),
+                VocabRole::Normal(_) | VocabRole::Emissive => suffixed(),
+            },
+            (None, None) => None,
+        };
+        if let Some(n) = name {
+            f.output.set_file_name(n);
+        }
+    }
+}
+```
+Run: `cargo test -p engine --test discover_group --test suffix_aliases` → still pass.
+
+- [ ] **Step 5: Suggestions (`suggest.rs`) and alias validation and provenance (`presets.rs`)**
+
+In `suggest.rs`, change the imports to `use crate::config::{AlphaPolicy, RawMap, Subtype, Target};` plus `use crate::group::{Vocab, VocabRole};`. Replace `is_pbr_set`:
+```rust
+/// Spec §4.3 rule 1: under cs, a set is PBR if its path has a `pbr` component, it has _rmaos/_rfaos/_cnr/_f, or it
+/// has a raw packing input that starts the _rmaos/_rfaos recipe (§4.4, §6.4).
+pub fn is_pbr_set(c: &SuggestContext) -> bool {
+    c.target == Target::Cs
+        && (has_component(c.game_path, "pbr")
+            || ["rmaos", "rfaos", "cnr", "f"].iter().any(|s| c.set_suffixes.contains(*s))
+            || RawMap::ALL.iter().any(|r| r.starts_rmaos() && c.set_suffixes.contains(&r.id())))
+}
+```
+In `suggest`, add `let colour = if c.suffix == Some("d") { High } else { Medium };` after `ui_or_sky`, and use it in three colour arms (the landscape arm is already high; `hdr_sky` stays medium):
+```rust
+        Some("d") | None if ui_or_sky => vec![s(UiSky, colour, "colour under interface/ or sky/")],
+        Some("d") | None if pbr => vec![s(PbrAlbedo, colour, "colour member of a PBR set")],
+        Some("d") | None => vec![s(Diffuse, colour, "colour member, non-PBR set")],
+```
+Add after `suggest`:
+```rust
+/// Spec §4.3 item 7, §4.4 (DECISIONS Note H): an exporter vocabulary term declares the file's role. Every reason
+/// is prefixed `exporter suffix _<term> (<role>)`; a colour term raises a colour-member top suggestion to high
+/// confidence (not `hdr_sky`: a float source under sky/ may be an HDRI). Alpha meaning is untouched.
+pub fn apply_vocabulary(suggestions: &mut [Suggestion], v: &Vocab) {
+    let role = match v.role {
+        VocabRole::Colour => "colour",
+        VocabRole::Normal(_) => "normal",
+        VocabRole::Emissive => "emissive",
+        VocabRole::PackingInput(_) => "packing input",
+    };
+    for s in suggestions.iter_mut() {
+        s.reason = format!("exporter suffix _{} ({role}); {}", v.term, s.reason);
+    }
+    if v.role == VocabRole::Colour {
+        if let Some(top) = suggestions.first_mut().filter(|t| {
+            matches!(t.subtype, Subtype::Diffuse | Subtype::PbrAlbedo | Subtype::LandscapeDiffuse | Subtype::UiSky)
+        }) {
+            top.confidence = Confidence::High;
+        }
+    }
+}
+```
+In `presets.rs`, add the variant `Suffix(String)` to `Provenance` (after `Fallback`, doc: "A fact stated by an exporter vocabulary term, e.g. `_normalgl` (spec §4.4)"), the `Display` arm `Provenance::Suffix(t) => write!(f, "suffix:{t}"),` and, in `FromStr`, before the `match`:
+```rust
+        if let Some(t) = s.strip_prefix("suffix:") {
+            return Ok(Provenance::Suffix(t.to_string()));
+        }
+```
+In `check_aliases`, after the `SUFFIXES.contains(&alias.as_str())` check:
+```rust
+            if crate::group::is_vocabulary(alias) {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' is an exporter vocabulary term (spec §4.4)"
+                )));
+            }
+```
+Run: `cargo test -p engine suggest` → the new unit tests pass; `suffix_rules`, `diffuse_is_never_high_confidence` (bare stems only) and the others are unchanged.
+
+- [ ] **Step 6: Resolve (`policy.rs`)**
+
+Change the group import to `use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};`. Add:
+```rust
+/// The exporter vocabulary term the file name ends in (spec §4.4), if any. Aliases are matched first and never
+/// equal a term, so an aliased file has none.
+pub fn vocab_for(f: &FileFacts) -> Option<&'static Vocab> {
+    if f.alias.is_some() {
+        return None;
+    }
+    vocab_of(&f.input.rel.file_stem().unwrap_or_default().to_string_lossy())
+}
+
+/// Sub-types that read `channels.green_convention` (spec §3.2): every Normal sub-type except `msn`.
+fn takes_green(st: Subtype) -> bool {
+    st.category() == Category::Normal && st != Subtype::Msn
+}
+```
+In `decide_subtype`, right after the alias block (before the `--set subtype` lookup):
+```rust
+    if let Some(v) = vocab_for(f) {
+        apply_vocabulary(&mut suggestions, v);
+    }
+```
+In `layered_profile`, between the analysis-derived alpha block and the `--set` loop:
+```rust
+    // Spec §4.4: `_normalgl`/`_normaldx` state the green convention, a fact at the analysis position (--set wins).
+    if let Some(Vocab { term, role: VocabRole::Normal(Some(g)) }) = vocab_for(f) {
+        if takes_green(st) {
+            let value = serde_json::to_value(g).expect("GreenConvention serialises");
+            apply(
+                &mut doc,
+                &mut prov,
+                &mut sources,
+                &to_patch("channels.green_convention", &value),
+                Provenance::Suffix(term.to_string()),
+                GENERIC,
+            );
+        }
+    }
+```
+and after `backend_follows_format(&mut profile, &mut prov, &sources);`:
+```rust
+    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
+    if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
+        profile.channels.flip_green = true;
+        if let Some(src) = prov.get("channels.green_convention").cloned() {
+            prov.insert("channels.flip_green".into(), src);
+        }
+    }
+```
+Add the status variant to `JobStatus` (after `Unresolved`):
+```rust
+    /// A raw single-channel map (spec §4.4): a channel-packing input (§6.4, milestone M2.5), not converted on
+    /// its own and not an error.
+    PackingInput {
+        role: RawMap,
+    },
+```
+Add:
+```rust
+/// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
+/// placeholder and is never used. Milestone M2.5 consumes these files in packing recipes.
+fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) -> ResolvedJob {
+    let profile = ctx
+        .registry
+        .profile(BASE_ID, ctx.target, Subtype::GenericData)
+        .expect("sdc-base profile is valid");
+    let msg = format!(
+        "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
+        role.id()
+    );
+    ResolvedJob {
+        input: f.input.path.clone(),
+        output: f.input.output.clone(),
+        game_path: f.input.game_path.clone(),
+        set_key: f.set.key.clone(),
+        profile,
+        provenance: BTreeMap::new(),
+        suggestions: vec![],
+        warnings: vec![Warning::new(Code::InPackingInput, msg).with_data(json!({ "role": role, "term": term }))],
+        status: JobStatus::PackingInput { role },
+        suffix_alias: None,
+    }
+}
+```
+In `resolve_file`, right after `let d = decide_subtype(ctx, f);`:
+```rust
+    // Spec §4.4: a raw map is a packing input unless a rule or --set names its sub-type.
+    if let Some(Vocab { term, role: VocabRole::PackingInput(role) }) = vocab_for(f) {
+        if !matches!(d.provenance, Provenance::User | Provenance::Rule(_)) {
+            return packing_input_job(ctx, f, term, *role);
+        }
+    }
+```
+After the "alpha meaning is unconfirmed" block:
+```rust
+    // Spec §4.4 (DECISIONS Note H): a plain `_normal`/`_nrm` has no default green convention. It is not a suggestion,
+    // so neither --accept-suggestions high nor --allow SUG-LOW-CONFIDENCE settles it.
+    let mut green_unstated = false;
+    if let Some(Vocab { term, role: VocabRole::Normal(None) }) = vocab_for(f) {
+        if takes_green(profile.subtype) && profile.channels.green_convention.is_none() {
+            green_unstated = true;
+            reasons.push(format!(
+                "green convention of _{term} is unstated: set channels.green_convention=opengl or directx (preset, config, rule or --set)"
+            ));
+        }
+    }
+```
+and change the status condition to:
+```rust
+    } else if (!reasons.is_empty() && !ctx.allow.contains(&Code::SugLowConfidence)) || green_unstated {
+        JobStatus::Unresolved { reasons }
+```
+
+- [ ] **Step 7: Run the tests**
+
+Run: `cargo test -p engine --test suffix_vocabulary`
+Expected: 7 passed.
+Run: `cargo test -p engine` and `cargo clippy -p engine --all-targets -- -D warnings`
+Expected: all pass (codes catalogue 48; Tasks 21, 24–26a tests unchanged); no clippy warnings.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add crates/engine
+git commit -m "feat(engine): industry suffix vocabulary, green convention and raw maps as packing inputs (Note H)"
+```
+
+---
+
 ### Task 28: Preprocess (spec §5.4)
 
 **Files:**
@@ -6355,7 +7077,7 @@ git commit -m "feat(engine): push-pull RGB dilation under zero alpha"
   - `pub fn srgb_to_linear(v: f32) -> f32`; `pub fn linear_to_srgb(v: f32) -> f32` (exact piecewise sRGB curve, not a 2.2 power)
   - `pub fn preprocess(img: Rgba32F, p: &Profile) -> Work`
 
-Order (spec §5.4): (1) `remove` drops alpha (A := 1, `alpha_present = false`); (2) swizzle, then Grayscale takes R (or luma) into R=G=B; (3) normals (never `msn`): `*2 − 1`, optional green flip, optional Z rebuild `z = √(1 − x² − y²)`, clamp z ≥ 0; `msn` and `flow` decode `*2 − 1` only; (4) dilation for cutout/blend/cutout_blend; (5) `srgb` content → linear light (RGB only). Resize (step 6) is milestone M6; NPOT is blocked by `DIM-NPOT` before this stage.
+Order (spec §5.4): (1) `remove` drops alpha (A := 1, `alpha_present = false`); (2) swizzle, then Grayscale takes R (or luma) into R=G=B; (3) normals (never `msn`): `*2 − 1`, optional green flip (`channels.flip_green`; from Task 27a Resolve also sets it for `channels.green_convention = opengl`), optional Z rebuild `z = √(1 − x² − y²)`, clamp z ≥ 0; `msn` and `flow` decode `*2 − 1` only; (4) dilation for cutout/blend/cutout_blend; (5) `srgb` content → linear light (RGB only). Resize (step 6) is milestone M6; NPOT is blocked by `DIM-NPOT` before this stage.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -8693,7 +9415,7 @@ git commit -m "feat(engine): JSON Lines events with sinks and the batch manifest
   - `pipeline::FileError { Cancelled, Failed(Stage, String) }`; `pipeline::FileOutcome { pub output: PathBuf, pub report: ValidationReport, pub record: ManifestRecord }`; `pipeline::process_file(job: &ResolvedJob, req: &BatchRequest, preset: &PresetRef, cancel: &CancelToken, rep: &Reporter) -> Result<FileOutcome, FileError>`
   - `sysmem::total_ram() -> u64`
 
-Behaviour (spec §5.9, §8): `plan` validates the preset and every `--set` value up front (bad ones → `Usage`), loads configs (`Usage` on parse errors; the project config defaults to `sdc.toml` in the first input folder), discovers (`Usage` if an input does not exist), groups, skips `IN-DUPLICATE` pairs and DDS inputs (`IN-DDS-SKIPPED`), loads and analyses each image in parallel (load errors become `FailedFile` at `Load`, with `DIM-TOO-LARGE` or `IN-DECODE`), resolves, and emits `batch_started`, `file_discovered`, `set_resolved`, `file_planned` and every warning. `run` stops after reporting when `dry_run`; otherwise it initialises the encoders with the batch BC1 model (`Fatal` on mismatch), applies `on_existing` against the manifest (`if-changed`: re-encode when source hash, profile hash or engine version differ; an existing output with no record is kept with `OUT-UNKNOWN-EXISTING`), admits files by estimated bytes (`w·h·16·1.34·3`) against the memory budget, processes them on a rayon pool of `jobs` threads under `catch_unwind` (admission happens on the calling thread via `ThreadPool::in_place_scope`, never inside a pool thread, to avoid budget deadlocks with nested band parallelism), checks cancellation between bands and before each file, writes the DDS atomically, re-reads and validates it, appends a manifest record (and a `<name>.dds.json` sidecar with `--sidecar`), and emits `file_done`/`file_skipped`/`file_failed` and `batch_done`.
+Behaviour (spec §5.9, §8): `plan` validates the preset and every `--set` value up front (bad ones → `Usage`), loads configs (`Usage` on parse errors; the project config defaults to `sdc.toml` in the first input folder), discovers (`Usage` if an input does not exist), groups, skips `IN-DUPLICATE` pairs and DDS inputs (`IN-DDS-SKIPPED`), loads and analyses each image in parallel (load errors become `FailedFile` at `Load`, with `DIM-TOO-LARGE` or `IN-DECODE`), resolves, and emits `batch_started`, `file_discovered`, `set_resolved`, `file_planned` and every warning. `run` stops after reporting when `dry_run`; otherwise it initialises the encoders with the batch BC1 model (`Fatal` on mismatch), applies `on_existing` against the manifest (`if-changed`: re-encode when source hash, profile hash or engine version differ; an existing output with no record is kept with `OUT-UNKNOWN-EXISTING`), admits files by estimated bytes (`w·h·16·1.34·3`) against the memory budget, processes them on a rayon pool of `jobs` threads under `catch_unwind` (admission happens on the calling thread via `ThreadPool::in_place_scope`, never inside a pool thread, to avoid budget deadlocks with nested band parallelism), checks cancellation between bands and before each file, writes the DDS atomically, re-reads and validates it, appends a manifest record (and a `<name>.dds.json` sidecar with `--sidecar`), and emits `file_done`/`file_skipped`/`file_failed` and `batch_done`. A job with `JobStatus::PackingInput` (Task 27a) is reported as `file_skipped` with `IN-PACKING-INPUT` but not counted in `BatchSummary::skipped`, so it does not make the batch partial.
 
 Suffix aliases (Task 26a, spec §3.7): `plan` checks every alias preset's chain for every sub-type up front (usage error otherwise), canonicalises output names right after `discover` (so `file_discovered` shows the canonical output and alias/canonical collisions become `IN-DUPLICATE`), groups with `group_sets_with`, passes the canonical suffix and the alias to `FileFacts`, and `run` writes the alias preset's id, version and SHA-256 into the manifest `PresetRef` of an aliased file.
 
@@ -9303,6 +10025,11 @@ impl Engine {
             match &job.status {
                 JobStatus::Ready => ready.push(job),
                 JobStatus::Unresolved { reasons } => skip(&job.input, Some(Code::SugLowConfidence), reasons.join("; "), &mut summary),
+                // Spec §4.4 (Task 27a): a raw packing input is reported but does not make the batch partial (exit 1).
+                JobStatus::PackingInput { role } => rep.emit(None, Some(&job.input), EventKind::FileSkipped {
+                    code: Some(Code::InPackingInput),
+                    reason: format!("raw {} map: channel-packing input (milestone M2.5), not converted on its own", role.id()),
+                }),
                 JobStatus::Blocked { codes } | JobStatus::Error { codes } => {
                     skip(&job.input, codes.first().copied(), format!("blocked by {codes:?}; use --allow for blocking codes"), &mut summary)
                 }
@@ -11008,7 +11735,7 @@ Append to `docs/DECISIONS.md`:
 - `sdc-bench --gates`: PASS (report target/bench/mvp-gates.txt).
 - Header spot check with nvddsinfo/texconv: <ok / issues>.
 - Real folder <name>: <n> inputs, <c> converted, <s> skipped (top reasons: …), <f> failed; validation: <ok / codes>.
-- Ready for owner review; next milestones: M3 GUI, M4 variance bake, M5 NVTT, M6 presets/inputs, M7 CI, M8 packaging.
+- Ready for owner review; next milestones: M2.5 channel packing, M3 GUI, M4 variance bake, M5 NVTT, M6 presets/inputs, M7 CI, M8 packaging.
 ```
 ```bash
 git add crates/bench docs/DECISIONS.md
@@ -11109,10 +11836,26 @@ git commit -m "docs: in-game spike checklist (S1, S2, S6, S8) and asset generato
 
 Each milestone gets its own `writing-plans` document when its entry criteria are met.
 
+### M2.5 — Channel packing (spec §6.4, DECISIONS Note H)
+
+Owner timing: its own milestone **right after the CLI MVP**, before the GUI. It will be expanded into its own `writing-plans` document; this section fixes its scope.
+
+- **Entry:** Phase 2 exit (Task 45); Task 27a in place (raw maps are discovered, grouped under their role id and resolved as `JobStatus::PackingInput` with `IN-PACKING-INPUT`).
+- **Scope:**
+  - New module `crates/engine/src/pack.rs`: per set and target, builds the recipes of spec §6.4 (`cs` `_rmaos` / `_rfaos` / `_p`; `cpm` complex `_m`; `vanilla` `_m` env mask only when a metallic or specular source exists) from the set's raw inputs; triggers (roughness or gloss, or — owner rule — AO or metallic, so missing roughness never blocks); per-channel source or neutral default (AO 1, metallic 0, specular A 1 = TruePBR default, roughness `packing.roughness_default` 0.5 **[Open]**, env mask from metallic else specular, `cpm` `_m` height 0.5 **[Open]**); gloss ↔ roughness = 1 − x in both directions; R (or luma) of each source, source alpha ignored; equal dimensions required; float32 throughout so 16-bit sources keep precision.
+  - Virtual jobs with several sources: the packed image is assembled after Load and enters the normal pipeline at Preprocess with the packed sub-type's profile (mips per that sub-type, encode, write, validate, §10 checks). `ResolvedJob.input: PathBuf` gains a multi-source form (e.g. `sources: Vec<PackSource { path, channel, op }>` with `input` = the first source) so `FileFacts`, rule globs (matched against the packed output's name) and `--set file:` scopes work; `Engine::plan` runs `pack` between Group and Resolve.
+  - Policy: new profile fields `packing.enabled` (default `true`), `packing.roughness_default` (0.5), `packing.prefer` (`prepacked` / `raw`) in `config.rs`, `sdc-base.toml`, `FIELD_PATHS` and the schema; raw maps stay `PackingInput` when packing is off; a raw map whose sub-type a rule or `--set` names is an ordinary file and leaves every recipe.
+  - Conflicts: a pre-packed source of the same output (`iron_rmaos.png` + `iron_roughness.png`, `iron_p.png` + `iron_height.png`, `iron_m.png` + raw maps under `cpm`/`vanilla`) → recipe status `conflict`, `PACK-CONFLICT`; the pre-packed file wins by default (`packing.prefer = prepacked`).
+  - Codes (catalogue 48 → 52): `PACK-DEFAULTED` (warning, names output and channel), `PACK-SIZE-MISMATCH` (error, lists every source and size), `PACK-CONFLICT` (warning), `PACK-UNUSED-INPUT` (warning: e.g. metallic next to a fuzz source, fuzz under `cpm`, opacity, specular-only sets).
+  - Events and manifest: `set_resolved` lists recipes (output, sub-type, per-channel source or `default:<v>`, status); `file_planned` carries all sources; the manifest record lists every source with its SHA-256 and per-channel provenance; `if-changed` re-encodes when any source changes.
+  - CLI: `sdc inspect` prints each set's recipes and defaulted channels; `convert --dry-run` shows the virtual jobs; Task 37's `PackingInput` arm stays for `packing.enabled = false`.
+  - Interplay: a packed `_rmaos`/`_rfaos` is a roughness member for M4's variance bake; under `cs` it makes the set PBR (already true from Task 27a's `is_pbr_set`).
+- **Exit:** golden cases per recipe and target — `cs` roughness + metallic + AO + specular → `_rmaos` equal to a reference packing of the sources (bit-exact before encode, decoded within the format's per-mip floor); AO-only set → `_rmaos` with roughness 0.5, metallic 0, specular 1 and one `PACK-DEFAULTED` per defaulted channel; fuzz set → `_rfaos`; height → `_p` BC4; gloss-only `cs` set → roughness = 1 − gloss; `cpm` → complex `_m` whose smallest-mip alpha stays below the complex-detection limit; `vanilla` metallic → `_m` envmask, height-only `vanilla` set → `PACK-UNUSED-INPUT`; size mismatch → `PACK-SIZE-MISMATCH` naming both files; pre-packed conflict → `PACK-CONFLICT` and the pre-packed output; 16-bit sources keep > 8-bit precision into the encoder input; manifest lists all sources. Open items §14 #16–#21 answered by the owner or carried with their shipped defaults.
+
 ### M3 — GUI (`sdc-gui`, project-plan Phase 4)
 
 - **Scope:** spec §9: source list grouped by set with confidence badges and blocking highlights; settings panel with the two labelled colour fields; preset inspector with provenance and diff; advanced panel; GPU preview (wgpu `TEXTURE_COMPRESSION_BC`, sources as RGBA16F, mip slider, channel isolation, split/diff heatmap, smallest-mip alpha, coverage per mip, normal length, BC6H peak readouts); batch progress and report export; engine in-process over the same `EngineEvent` channel; isolated-worker mode (spawns `sdc.exe convert --json`) shipped **off**.
-- **Entry:** Phase 2 exit; event schema stable (`schema/event.schema.json`).
+- **Entry:** Phase 2 exit and M2.5; event schema stable (`schema/event.schema.json`, including M2.5's recipe fields).
 - **Exit:** usability pass with modders; preview max 8192 by default, 16384 as a setting, smaller-mip fallback when the adapter lacks 16384 (open item §14 #13); crash rate from Phases 3–4 recorded for the isolated-worker decision (DECISIONS #18).
 - **Known constraint to design for:** `rgbcx::init` is process-global (Task 4 `InitError::ModelMismatch`), so a GUI that changes the BC1 decoder model between batches must restart its encoder process or use the isolated worker.
 
@@ -11154,6 +11897,6 @@ Spec §13 future extensions (PGPatcher PBR JSON generator, RDO, reserved-header 
 
 # Self-review notes (writing-plans checklist)
 
-**Spec coverage (Phases 0–2):** §1 inputs PNG/TGA/TIFF 8/16 (Task 22; others M6), outputs BC1/3/4/5/6H/7 (Tasks 5–7, 32–33), mirror tree + manifest (Tasks 21, 36–37); §2 workspace, static CRT, no ISPC at build (Tasks 2–4), CI (M7); §3.1–3.2 config model (Task 19), §3.3 alpha policies + exact opaque (Tasks 13–14, 27–30, 32, 35), §3.4 colour fields (Tasks 19, 26, 28, 31), §3.5 presets (Task 20; Compact/Fast preview M6), §3.7 preset suffix aliases (Task 26a; surfaced in Tasks 37, 39–43), §3.6 manifest/sidecar (Task 36–37); §4 sub-type tables (Task 20), availability (Task 26), suggestions (Task 24); §5 stages (Tasks 21–37); §6 grouping (Task 21), bake (M4); §7 vendoring, licences, threading, effort levels (Tasks 3–7, 32), NVTT (S7 Task 16, M5), scalar fallback (S4 Task 15); §8 CLI verbs/options/exit codes/edge cases (Tasks 40–44); `presets diff/export/validate` (M6); §9 GUI (M3); §10 codes (Task 18; triggers in Tasks 26, 35, 37); §11.1 golden (Task 39), §11.2 gates (Tasks 9–11, 13–14, 38, 45), §11.3–11.5 (M7, Task 45 spot check); §12 spikes (Tasks 9, 12–17, 46).
+**Spec coverage (Phases 0–2):** §1 inputs PNG/TGA/TIFF 8/16 (Task 22; others M6), outputs BC1/3/4/5/6H/7 (Tasks 5–7, 32–33), mirror tree + manifest (Tasks 21, 36–37); §2 workspace, static CRT, no ISPC at build (Tasks 2–4), CI (M7); §3.1–3.2 config model (Task 19), §3.3 alpha policies + exact opaque (Tasks 13–14, 27–30, 32, 35), §3.4 colour fields (Tasks 19, 26, 28, 31), §3.5 presets (Task 20; Compact/Fast preview M6), §3.7 preset suffix aliases (Task 26a; surfaced in Tasks 37, 39–43), §4.4 exporter suffix vocabulary and green convention (Task 27a; `PackingInput` arm in Task 37), §3.6 manifest/sidecar (Task 36–37); §4 sub-type tables (Task 20), availability (Task 26), suggestions (Task 24); §5 stages (Tasks 21–37); §6 grouping (Task 21), bake (M4), channel packing §6.4 (M2.5); §7 vendoring, licences, threading, effort levels (Tasks 3–7, 32), NVTT (S7 Task 16, M5), scalar fallback (S4 Task 15); §8 CLI verbs/options/exit codes/edge cases (Tasks 40–44); `presets diff/export/validate` (M6); §9 GUI (M3); §10 codes (Task 18; triggers in Tasks 26, 35, 37); §11.1 golden (Task 39), §11.2 gates (Tasks 9–11, 13–14, 38, 45), §11.3–11.5 (M7, Task 45 spot check); §12 spikes (Tasks 9, 12–17, 46).
 
-**Decisions this plan makes where the spec is silent** (all called out in the report): `header`/`mips.coverage` gain `auto`; `encoder.rgbcx_level` field; `mips.edge` deferred; codes `VAL-MIP-ERROR` and `CFG-INVALID`; coverage check only on levels ≥ 256 texels; analysis-derived `remove` applies without `--accept-suggestions`; unresolved outranks blocked in job status; up-to-date files do not count as "skipped" for exit code 1; default output root `./sdc-out`; validation PSNR floor 30 dB; status of `_e` suffix = no suggestion; an invalid preset/config/rule value and an unscoped `--set` that is unavailable under the target are usage errors (exit 2) found in `plan`; MVP renormalises `_n` without the M4 variance bake.
+**Decisions this plan makes where the spec is silent** (all called out in the report): `header`/`mips.coverage` gain `auto`; `encoder.rgbcx_level` field; `mips.edge` deferred; codes `VAL-MIP-ERROR` and `CFG-INVALID`; coverage check only on levels ≥ 256 texels; analysis-derived `remove` applies without `--accept-suggestions`; unresolved outranks blocked in job status; up-to-date files do not count as "skipped" for exit code 1; default output root `./sdc-out`; validation PSNR floor 30 dB; status of `_e` suffix = no suggestion; an invalid preset/config/rule value and an unscoped `--set` that is unavailable under the target are usage errors (exit 2) found in `plan`; MVP renormalises `_n` without the M4 variance bake; Task 27a: colour vocabulary written `<base>.dds` while `_d` keeps its stem, raw roughness/gloss/metallic/AO inputs mark a `cs` set PBR before packing exists, raw maps are `PackingInput` (not counted for exit 1), the green convention is not settled by `--allow SUG-LOW-CONFIDENCE`, and Resolve reads the vocabulary term from `FileFacts.input.rel` (no new `FileFacts`/`SuffixSplit`/`SuggestContext` fields).

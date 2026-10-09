@@ -11,7 +11,7 @@
 
 **Tags.** Every substantive statement carries one tag, as in the plan. **[Requirement]**: decided by the owner (plan requirements or `DECISIONS.md`). **[Finding]**: backed by research notes, local benchmarks or a fetched source, cited. **[Proposal]**: a design choice made here. **[Open]**: undecided; the shipped default and the trigger that changes it are stated, and the item is listed in §14.
 
-**Citations.** [PLAN] `F:/ai/dds/reports/Skyrim DDS converter project plan.md`; [D] `F:/ai/dds/converter/docs/DECISIONS.md` (answers [D#n], notes [D-A], [D-B], [D-C], [D-G]); [B1] `reports/BC7 encoder benchmark results.md`; [B2] `reports/BC4 BC5 BC6H and BC7 data benchmark.md`; [MIP] `reports/Mipmap filters and alpha coverage.md`; [SC], [EI], [LF] the notes `skyrim_conventions.md`, `encoder_integration.md`, `language_frameworks.md` in `research_notes/Skyrim DDS converter project plan/`; [TPM] jiayev/TruePBR-Manager (README, `SPEC.md` §3.10, §6–8, `src/core/PBRTextureSet.cpp`, `master` branch, fetched 2026-10-08).
+**Citations.** [PLAN] `F:/ai/dds/reports/Skyrim DDS converter project plan.md`; [D] `F:/ai/dds/converter/docs/DECISIONS.md` (answers [D#n], notes [D-A], [D-B], [D-C], [D-G], [D-H]); [B1] `reports/BC7 encoder benchmark results.md`; [B2] `reports/BC4 BC5 BC6H and BC7 data benchmark.md`; [MIP] `reports/Mipmap filters and alpha coverage.md`; [SC], [EI], [LF] the notes `skyrim_conventions.md`, `encoder_integration.md`, `language_frameworks.md` in `research_notes/Skyrim DDS converter project plan/`; [TPM] jiayev/TruePBR-Manager (README, `SPEC.md` §3.10, §6–8, `src/core/PBRTextureSet.cpp`, `master` branch, fetched 2026-10-08).
 
 **Changes from the plan.** The owner's answers override or extend the plan in seven places. (1) The tool serves texture artists converting source images; it is not a DDS→DDS game-folder fixer. (2) Alpha *Remove* drops the channel before mips [D#8]. Because bc7e can still decode such blocks as 254 [D-A, D-C], the plan's "constrained bc7e" option becomes a per-profile *exact opaque alpha* flag backed by a small bc7e patch, on by default for `_m` only (global default pending S5), with byte-patch and NVTT fallbacks and smallest-mip validation as proof (§3.3, §5.6, §5.8). (3) The ≤128 px BC7 fallback is dropped [D#7]. (4) BC4/BC5 headers, `_SRGB` under vanilla, `_g`/`_f` colour space and BC6H under CS are decided [D#2–5]. (5) Normal mips are renormalised, with a variance bake into roughness when the set has an `_rmaos` or `_rfaos` [D#6, D-B]. (6) `_rfaos` is a real CS map (Roughness, Fuzz, AO, Specular) for advanced skin [D-B]. (7) Windows only [D#12].
 
@@ -29,7 +29,7 @@
 
 **Inputs.** **[Requirement]** Artists' source images: PNG (8/16-bit), TGA, TIFF (8/16-bit, 32-bit float), OpenEXR, Radiance HDR, BMP and JPEG, as single files or folders. DDS input is secondary: read for preview, inspection, validation and, on explicit request, re-encoding [D, scope]. **[Proposal]** The DDS reader accepts BC1–BC7 with legacy (`DXT1`–`DXT5`, `ATI1`, `ATI2`, `BC4U`, `BC5U`) or DX10 headers, the common uncompressed layouts (RGBA8, BGRA8, BGRX8, R8, RG8, RGBA16F, RGBA32F) and cubemaps.
 
-**Outputs.** **[Requirement]** DDS in BC1, BC3, BC4, BC5, BC6H or BC7 for SE/AE, tagged per target; Legendary Edition is out of scope [PLAN §1]. **[Proposal]** The output tree mirrors the input tree under an output root, each output keeps its source stem (`wood01_n.png` → `wood01_n.dds`), and a batch manifest records what was done (§3.6).
+**Outputs.** **[Requirement]** DDS in BC1, BC3, BC4, BC5, BC6H or BC7 for SE/AE, tagged per target; Legendary Edition is out of scope [PLAN §1]. **[Proposal]** The output tree mirrors the input tree under an output root, each output keeps its source stem (`wood01_n.png` → `wood01_n.dds`), and a batch manifest records what was done (§3.6). Two exceptions rename the output to the Skyrim name: a preset suffix alias (§3.7) and an exporter vocabulary suffix (§4.4, e.g. `iron_basecolor.png` → `iron.dds`, `iron_normalgl.png` → `iron_n.dds`). **[Requirement]** Outputs always use Skyrim names [D-H].
 
 **The user decides.** **[Requirement]** Path and suffix inference *proposes* a category, sub-type, preset and defaults; the user always decides category, encoder and settings [D, scope]. **[Finding]** Suffixes are convention only, `_s` has several meanings, and diffuse alpha meaning depends on the mesh's NiAlphaProperty, which the converter cannot see [SC §1]. Low-confidence proposals therefore block conversion until confirmed (§8, §9).
 
@@ -113,6 +113,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `alpha.compare` | `gt` / `ge` | `gt` **[Open]** | Shared by coverage counter and solver |
 | `alpha.exact_opaque` | bool | `true` for `envmask`, `complex_material`; `false` elsewhere (**[Open]** global default) | All-255 source blocks decode to exactly 255 (§3.3) |
 | `channels` | `swizzle`, `flip_green`, `reconstruct_z`, `grayscale_source: r / luma` | Sub-type | Preprocess (§5.4) |
+| `channels.green_convention` | `directx` / `opengl` / unset | Unset; a `_normalgl`/`_normaldx` suffix states it (§4.4) | Green (Y) convention of a normal source. `opengl` makes Resolve set `flip_green = true` (OpenGL → DirectX in Preprocess, §5.4). A plain `_normal`/`_nrm` source stays unresolved until a preset, config, rule or `--set` states it [D-H]. Ignored for `msn` and non-Normal sub-types |
 | `mips.levels` | `full` / `none` / `n` | `full`; `none` for `interface/`, `sky/` | Full chain to 1×1 |
 | `mips.filter` | `box` / `tent` / `mitchell` / `kaiser{width,alpha,stretch}` | `box` | Mitchell and Kaiser for Color only |
 | `mips.edge` | `clamp` / `wrap` | `wrap` | Irrelevant to box at power-of-two [MIP] |
@@ -126,6 +127,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `encoder.bc1_transparent_black` | bool | `false` | rgbcx 3-colour transparent-black mode |
 | `encoder.bc45_search_radius` | `default` / `max` | `default` | `max` = radius 10 |
 | `validation` | Rules and thresholds (§5.8) | Sub-type × target | |
+| `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw` | `true`, 0.5 (**[Open]**), `prepacked` | Packed outputs only (§6.4); arrives with milestone M2.5 |
 | `output` | `path`, `on_existing` | Batch | §8 |
 
 **[Proposal] Batch-level settings.** `bc1_decoder_model` (default `cBC1Ideal`, **[Requirement]** owner 2026-10-08; NVIDIA / AMD / IdealRound4 selectable) is batch-level because `rgbcx::init` sets it as global, non-thread-safe state [EI §1]; a conflicting preset value raises an info event. `jobs`, `mem_budget`, the NVTT path and the preview limit are also batch-level.
@@ -176,9 +178,9 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | Topic | Rule |
 |---|---|
 | Field | `suffix_aliases` in a preset file, a table `alias = "canonical"` (e.g. `[suffix_aliases]` with `rmaosultrahigh = "rmaos"`). Config files (`config.toml`, `sdc.toml`) declare none. Built-in presets declare none; aliases come from user and project presets. |
-| Validity | An alias is lower-case ASCII letters and digits (`[a-z0-9]+`, no `_`) and must not equal a §6.1 suffix; its value must be a §6.1 suffix without the `_`. An alias is unique across all loaded presets. A second preset declaring it, or any invalid entry, is a config error (`CFG-INVALID`, exit 2, §8) and that preset is not loaded. Reloading a preset under the same id replaces its aliases. |
+| Validity | An alias is lower-case ASCII letters and digits (`[a-z0-9]+`, no `_`) and must not equal a §6.1 suffix or an exporter vocabulary term (§4.4); its value must be a §6.1 suffix without the `_` (never a vocabulary term or packing role). An alias is unique across all loaded presets. A second preset declaring it, or any invalid entry, is a config error (`CFG-INVALID`, exit 2, §8) and that preset is not loaded. Reloading a preset under the same id replaces its aliases. |
 | Activation | The aliases of every loaded preset are active, whether or not it is the batch preset. `--preset <file>` loads and selects a preset; `--preset-file <file>` (repeatable) loads one without selecting it (§8). |
-| Matching | The stem segment after the last `_` is looked up, case-insensitively, in the alias table before the §6.1 list is tried; the segment must equal an alias exactly, and a base name must precede the `_`. Because aliases contain no `_` and never equal a §6.1 suffix, a stem has at most one reading. |
+| Matching | The stem segment after the last `_` is looked up, case-insensitively, in the alias table before the exporter vocabulary (§4.4) and the §6.1 list are tried; the segment must equal an alias exactly, and a base name must precede the `_`. Because aliases contain no `_` and never equal a §6.1 suffix or a vocabulary term, a stem has at most one reading. |
 | Grouping and naming | Everywhere after Discover, the file counts as having its canonical suffix: set key, the set's suffix list (PBR detection, `_s` disambiguation, the bake), rule `suffix` and `set_has` matches, and the suggester. The output is `<base>_<canonical>.dds` in the mirrored folder. Rule globs still match the source path and name. |
 | Layering | For an aliased file, the alias preset's inheritance chain is the preset chain in the §3.5/§8 order: `defaults` tables base → child, then `subtypes.<id>` tables base → child, then user config, project config, rule matches (the alias chain's rules are that file's preset rules), analysis facts and `--set`. An alias preset therefore sets `base` to the preset it refines (e.g. `base = "cs-quality"`); a batch preset that is not in its chain does not apply to the file. |
 | Provenance | Fields set by the alias chain carry `preset:<alias preset id>`. The `ResolvedJob` records `suffix_alias = { alias, canonical, preset }`; each suggestion's reason begins `suffix alias _<alias> → _<canonical> (preset <id>)`; the manifest's preset reference (id, version, SHA-256, §3.6) names the alias preset. |
@@ -195,7 +197,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 | Sub-type (category) | Cue | Channels | Content | Alpha default | Mips | Encoder | Warnings |
 |---|---|---|---|---|---|---|---|
-| `diffuse` (Color) | `_d` or no suffix, non-PBR set | RGB, A per mesh | sRGB | `remove` if no/255 alpha; else proposed `cutout{127}`/`blend`, to confirm | Box, linear light (tent/Mitchell/Kaiser optional) | bc7e veryslow; BC1 rgbcx L18 | `SUG-LOW-CONFIDENCE`, `TAG-SRGB-NONPBR` |
+| `diffuse` (Color) | `_d`, a colour vocabulary term (§4.4) or no suffix, non-PBR set | RGB, A per mesh | sRGB | `remove` if no/255 alpha; else proposed `cutout{127}`/`blend`, to confirm | Box, linear light (tent/Mitchell/Kaiser optional) | bc7e veryslow; BC1 rgbcx L18 | `SUG-LOW-CONFIDENCE`, `TAG-SRGB-NONPBR` |
 | `landscape_diffuse` (Color) | `textures/landscape/**` | RGB; **A data**: snow mask (vanilla) or height (CS/CPM) | sRGB RGB, linear A | `data`, `remove` locked | RGB linear light; A separate | bc7e veryslow | `FMT-LANDSCAPE-BC1` [SC §4] |
 | `pbr_albedo` (Color) | No suffix in a PBR set | RGB, A opacity | sRGB | As `diffuse` | As `diffuse` | bc7e veryslow | `TAG-UNORM-PBR` |
 | `pbr_emissive` (Color) | `_g` in a PBR set | RGB emissive | sRGB (8/16-bit) or linear (float) | `remove` | Box, linear float, negatives clamped | ISPC `bc6h_veryslow`; NVTT for strong highlights | `VAL-BC6H-PEAK` |
@@ -256,12 +258,61 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 **[Proposal]** For each file the suggester returns ranked `(subtype, confidence, reason)` entries from the file name, the path (a `textures/` component gives the game-relative path), the texture set (§6) and Analyse results.
 
-1. **PBR sets.** Under `cs`, a set is PBR if its path has a `pbr` component or it contains `_rmaos`, `_rfaos`, `_cnr` or `_f`. Otherwise a no-suffix colour file is `diffuse` (medium confidence).
+1. **PBR sets.** Under `cs`, a set is PBR if its path has a `pbr` component or it contains `_rmaos`, `_rfaos`, `_cnr` or `_f`. **[Proposal]** It is also PBR if it contains a raw packing input that starts the `_rmaos`/`_rfaos` recipe (roughness, glossiness, metallic or AO; §4.4, §6.4), because the packed map will join the set; this applies from Phase 1, before packing exists. Otherwise a no-suffix colour file is `diffuse` (medium confidence). **[Requirement]** `_d` and the colour vocabulary (§4.4) are high confidence for the colour role; the path and set still pick `diffuse`, `pbr_albedo`, `landscape_diffuse` or `ui_sky`, and alpha meaning is never assumed [D-H]. **[Proposal]** An `hdr_sky` reading (float source under `sky/`) stays medium.
 2. **`_s` has four readings** [SC §1], [TPM README]: MSN specular (set has `_msn` → `msn_specular`); TruePBR subsurface and coat colour (both slot TX07 → `pbr_subsurface`); PGPatcher's "Subsurface Tint" (otherwise → `subsurface_tint`, low confidence).
 3. **`_m`** → `complex_material` if alpha is not constant 255, else `envmask`; always `envmask` under `vanilla`.
 4. **`_rfaos`** → `rfaos`, high confidence [D-B]; green is a fuzz mask, not metalness.
 5. Analysis can raise or lower confidence but never overrides an explicit choice; contradictions (an `_n` with constant alpha in a non-PBR set, a `pbr` path with a vanilla `_s`) are reported.
 6. **Suffix aliases** (§3.7) are read as their canonical suffix; an alias match raises the top suggestion to high confidence, except for `_s` [D-G].
+7. **Exporter vocabulary** (§4.4). **[Proposal]** A vocabulary term is read as its Skyrim role: colour terms as the colour member at high confidence (item 1), normal terms as `_n`, emissive terms as `_g`; raw maps get no sub-type suggestion (they are packing inputs). Each suggestion reason begins `exporter suffix _<term> (<role>)`.
+
+### 4.4 Industry suffix vocabulary
+
+**[Requirement]** Common exporter suffixes (Substance Painter/Designer, Quixel, ambientCG, Unreal/Unity) are recognised and read as Skyrim roles. `_d` and `_colormap` (and `_basecolor`, `_base_color`, `_albedo`, `_diffuse`, `_color`, `_col`) can safely be assumed albedo/diffuse: high confidence for the colour role, while the target and the PBR set still pick `diffuse` or `pbr_albedo` and alpha meaning is never assumed. `_normal`, `_nrm`, `_normalgl` and `_normaldx` map to `_n`. Raw single-channel maps are channel-packing inputs (§6.4). Outputs always use Skyrim names. The vocabulary lands in Phase 1; packing is its own milestone after the CLI MVP [D-H].
+
+| Family | Exporter terms | Skyrim role (canonical suffix) | Output | Notes |
+|---|---|---|---|---|
+| Colour | `_colormap`, `_basecolor`, `_base_color`, `_albedo`, `_diffuse`, `_color`, `_col` | Colour member (no suffix) | `<base>.dds` | High confidence for the colour role [Requirement]; sub-type by path and set (§4.3 item 1) |
+| Colour (Skyrim) | `_d` | `_d` (a §6.1 suffix) | `<base>_d.dds` (stem kept, as before) | Raised from medium to high [Requirement] |
+| Normal | `_normal`, `_nrm` | `_n` | `<base>_n.dds` | Green convention unset: `unresolved` until stated (below) [Requirement] |
+| Normal, OpenGL | `_normalgl` | `_n` with `channels.green_convention = opengl` | `<base>_n.dds` | Green flipped to DirectX in Preprocess (§5.4) [Requirement] |
+| Normal, DirectX | `_normaldx` | `_n` with `channels.green_convention = directx` | `<base>_n.dds` | No flip [Requirement] |
+| Emissive | `_emissive`, `_emission` | `_g` (`glow` or `pbr_emissive`) | `<base>_g.dds` | As `_g` [Proposal] |
+| Raw roughness | `_roughness`, `_rough` | Packing input `roughness` | None on its own | §6.4 |
+| Raw metallic | `_metallic`, `_metalness`, `_metal` | Packing input `metallic` | None on its own | §6.4 |
+| Raw AO | `_ao`, `_ambientocclusion`, `_occlusion` | Packing input `ao` | None on its own | §6.4 |
+| Raw specular | `_specular`, `_spec` | Packing input `specular` | None on its own | §6.4 |
+| Raw glossiness | `_glossiness`, `_gloss` | Packing input `glossiness` | None on its own | §6.4 |
+| Raw height | `_height`, `_displacement`, `_disp` | Packing input `height` | None on its own | §6.4 |
+| Raw opacity | `_opacity` | Packing input `opacity` | None on its own | No recipe yet (§6.4, **[Open]**) |
+| Raw fuzz | `_fuzz`, `_sheen` | Packing input `fuzz` | None on its own | §6.4 |
+
+The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `_metal`, `_ambientocclusion`, `_occlusion`, `_spec`, `_gloss`, `_displacement`, `_disp`, `_sheen`), the emissive family and `_opacity` are **[Proposal]**.
+
+**[Proposal]** The details:
+
+| Topic | Rule |
+|---|---|
+| Matching | Order: preset aliases (§3.7), then the vocabulary, then the §6.1 list. A term matches as the whole trailing `_<term>` of the stem, case-insensitively, longest first (`_base_color` before `_color`), with a base name before it. The §6.1 list is unchanged and no term ends in `_<§6.1 suffix>`, so a stem has at most one reading. An alias may not equal a term (§3.7). |
+| Canonical suffix | Everywhere after Discover a vocabulary file counts as its canonical suffix, as an aliased file does (§3.7): colour terms as no suffix (the colour member), normal terms as `n`, emissive terms as `g`. A raw map counts as its role id (`roughness`, `metallic`, `ao`, `specular`, `glossiness`, `height`, `opacity`, `fuzz`), which enters the set's suffix list, so rule `suffix` and `set_has` matches and PBR detection see it. Rule globs still match the source name. |
+| Output naming | Colour terms are written `<base>.dds`, because Skyrim's colour member carries no suffix (§6.1) and TruePBR's albedo slot is suffix-less too. `_d` is itself a §6.1 suffix and keeps its stem, so `iron_d.png` stays `iron_d.dds`. Normal terms → `<base>_n.dds`, emissive terms → `<base>_g.dds`, in the mirrored folder. Raw maps have no output of their own (§6.4). |
+| Duplicates | Output names are canonicalised before grouping, so `iron.png` + `iron_basecolor.png`, `iron_n.png` + `iron_normal.png` or `iron_g.png` + `iron_emissive.png` collide on one output and are both `IN-DUPLICATE` (§6.1). |
+| Green convention | The suffix-stated value of `_normalgl`/`_normaldx` is a fact layer at the "analysis facts" position of §8 (above presets, configs and rules, below `--set`), with provenance `suffix:<term>`. A plain `_normal`/`_nrm` file is `unresolved` while `channels.green_convention` is unset after layering; neither `--accept-suggestions high` nor `--allow SUG-LOW-CONFIDENCE` settles it, because it is not a suggestion. Analyse's green-convention guess (§5.1) is reported only, never applied. Skyrim's own `_n` is DirectX by definition (§4.1) and needs no statement. `msn` ignores the field. |
+| Raw maps before M2.5 | Until packing exists a raw map resolves to the status `packing_input` (with its role), raises `IN-PACKING-INPUT` (warning) and writes nothing; `inspect` lists it and `convert` reports it as `file_skipped` with that code, but it does not make the batch partial (exit 1, §8). A rule or `--set` that names a sub-type for a raw map makes it an ordinary file written under its source stem (e.g. `--set 'file:**/iron_height.png.subtype=height'` → `iron_height.dds`); it is then not a packing source. |
+
+**[Proposal]** Conflicts with Skyrim suffixes are resolved by keeping every §6.1 meaning:
+
+| Skyrim suffix | Keeps | Exporter term | Reads as |
+|---|---|---|---|
+| `_s` | Its four readings (§4.3 item 2) | `_spec`, `_specular` | Raw specular input (`_rmaos` A; env-mask source for a `cpm`/`vanilla` `_m`) |
+| `_p` | `height` (parallax) | `_height`, `_displacement`, `_disp` | Raw height input (packed into `_p` under `cs`, `_m` A under `cpm`) |
+| `_m`, `_em` | `envmask` / `complex_material` | `_metal`, `_metallic`, `_metalness` | Raw metallic input |
+| `_g` | `glow` / `pbr_emissive` | `_gloss`, `_glossiness` | Raw glossiness input |
+| `_f` | `pbr_fuzz` (RGB fuzz colour, A weight) | `_fuzz`, `_sheen` | Raw single-channel fuzz mask (`_rfaos` G) |
+| `_e` | No suggestion | `_emissive`, `_emission` | `_g` |
+| `_d` | Diffuse colour, stem kept | `_diffuse` | Colour member, written `<base>.dds` |
+
+**[Open]** `_opacity` has no recipe in Note H (proposal for M2.5: the colour member's alpha, with alpha meaning still confirmed by the user). An RGB `_sheen` export may be a sheen colour that belongs in `_f` rather than the `_rfaos` mask; v1 reads it as a mask and `CHAN-NOT-GRAY` reports a coloured source.
 
 ---
 
@@ -276,6 +327,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | `load` | Decodes to float32 RGBA, keeping bit depth, channels, transfer | Per file | `image`, `exr`, DDS reader, `bcdec_rs` | Texture |
 | `analyse` | Statistics (§5.1) | Suggestions, warnings, bake | `load` | Texture |
 | `policy` (Resolve) | Merges preset, rules, suggestions, analysis, overrides into an immutable `ResolvedJob` with per-field provenance | CLI and GUI; dry-run output | `analyse`, presets, set context | **Set** |
+| `pack` (M2.5) | Builds the per-target packing recipes of a set (§6.4) into virtual jobs with several sources | Between Group and Resolve | `group`, `load`, `analyse` | **Set** |
 | `ops` (Preprocess) | Channel and colour operations (§5.4) | Per file | `ResolvedJob` | Texture |
 | `mips` | Float mip chain (§5.5) | Per file | `ops`; for a roughness member, the set's `_n` | Texture (set dependency) |
 | `encode` | Block compression (§5.6) | Per mip and band | `encoders-sys`, NVTT process | Texture |
@@ -292,7 +344,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 ### 5.2 Resolve
 
-**[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `rule:<n>`, `analysis`, `set`, `user`). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run.
+**[Proposal]** One `ResolvedJob` per output: paths, target, category, sub-type, both colour fields, alpha policy and flags, channel operations, mip spec, format, header, encoder, validation rules, each with provenance (`builtin`, `preset:<id>`, `rule:<n>`, `analysis`, `set`, `user`). Low-confidence sub-types and unconfirmed alpha meanings are `unresolved`: the CLI skips them unless a rule or flag decides; the GUI blocks Run. **[Requirement]** A plain `_normal`/`_nrm` source whose green convention is unstated is `unresolved` as well [D-H]. **[Proposal]** A raw packing input resolves to `packing_input` (§4.4) and is not converted on its own; from M2.5 it is consumed by a packing recipe (§6.4).
 
 ### 5.3 Why channel surgery precedes mips
 
@@ -302,7 +354,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 1. **Alpha `remove` drops the channel** [D#8].
 2. Swizzles and channel extraction (Grayscale takes R; luma optional).
-3. Normals (never `msn`): `*2 − 1` decode; optional OpenGL→DirectX green flip; Z rebuild `z = √(1 − x² − y²)` for two-channel sources; clamp z ≥ 0. Mip 0 otherwise stays as authored.
+3. Normals (never `msn`): `*2 − 1` decode; OpenGL→DirectX green flip when `channels.flip_green` is set (**[Proposal]** Resolve sets it, with the provenance of `channels.green_convention`, when that field is `opengl`, §3.2, §4.4); Z rebuild `z = √(1 − x² − y²)` for two-channel sources; clamp z ≥ 0. Mip 0 otherwise stays as authored.
 4. Push-pull RGB dilation under α = 0 for `cutout`, `blend`, `cutout_blend`.
 5. `srgb` content decoded to linear with the exact sRGB curve, not a 2.2 power.
 6. Resize only on request (NPOT policy or size cap), polyphase, in the content's filtering domain.
@@ -383,7 +435,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 ### 6.1 Grouping
 
-**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
+**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
 
 ### 6.2 Variance bake into roughness
 
@@ -409,6 +461,48 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | Roughness member only as DDS | Renormalise only; DDS not re-encoded unless the user opts in (then decoded, `LOSS-REENCODE`) | `SET-COMPANION-DDS` |
 | `_n` absent | Roughness member processed without bake (R still on α = r²) | — |
 | Non-PBR set | Renormalise only; no bake into `_n` alpha or `_m` green | — |
+
+### 6.4 Channel packing
+
+**[Requirement]** Raw single-channel maps (§4.4: roughness, metallic, AO, specular, glossiness, height, fuzz, …) in one texture set are **packed automatically per target**: `cs` `_rmaos`/`_rfaos` + `_p`; `cpm` complex `_m`; `vanilla` `_m` only when a source exists. Raw maps are not written on their own by default; this is overridable per set. Missing channels take neutral defaults plus a warning naming each defaulted channel (AO white, metallic black, specular alpha white = the TruePBR default). Missing roughness does **not** block when an AO or metallic map is found; roughness then takes a neutral default with a warning. Packing is its own milestone right after the CLI MVP (plan M2.5) [D-H].
+
+**Recipes.** Channel layouts are those of §4.1 (`rmaos`, `rfaos` [D-B], `height`, `complex_material`, `envmask`); sources and triggers are **[Proposal]** unless marked.
+
+| Target | Output (sub-type) | R | G | B | A | Runs when |
+|---|---|---|---|---|---|---|
+| `cs` | `<base>_rmaos.dds` (`rmaos`) | roughness, else 1 − glossiness | metallic | AO | specular | A roughness or glossiness source exists, or (owner: roughness missing does not block) an AO or metallic source exists [Requirement]; and no fuzz source |
+| `cs` | `<base>_rfaos.dds` (`rfaos`) | roughness, else 1 − glossiness | fuzz | AO | specular | As `_rmaos`, and a fuzz source exists |
+| `cs` | `<base>_p.dds` (`height`, BC4) | height | — | — | — | A height source exists |
+| `cpm` | `<base>_m.dds` (`complex_material`) | env mask | glossiness, else 1 − roughness | metallic | height | A roughness, glossiness, metallic or height source exists |
+| `vanilla` | `<base>_m.dds` (`envmask`, BC4) | env mask | — | — | — | A metallic or specular source exists [Requirement: only when a source exists] |
+
+**Defaults for a channel without a source.** Each defaulted channel raises `PACK-DEFAULTED` (warning) naming the output and the channel.
+
+| Channel | Default | Tag |
+|---|---|---|
+| AO | 1.0 (white) | [Requirement] |
+| Metallic | 0.0 (black) | [Requirement] |
+| Specular (`_rmaos`/`_rfaos` A) | 1.0 (white), the TruePBR default; with TruePBR's default `specular_level` 0.04 this is F0 0.04 | [Requirement] |
+| Roughness | 0.5, set by the preset field `packing.roughness_default` (glossiness default 1 − that value) | [Proposal]; **[Open]** until the owner confirms 0.5 [D-H] |
+| Env mask (`cpm`/`vanilla` `_m` R) | From the metallic source, else the specular source; 0.0 under `cpm` when neither exists | **[Open]** |
+| Height (`cpm` `_m` A) | 0.5. A white default would make CS read the `_m` as a plain env mask (1×1 alpha ≥ 251/255, §5.8) and ENB as flat; a constant height has no relief | **[Open]** (S8) |
+
+**[Proposal]** Rules:
+
+| Topic | Rule |
+|---|---|
+| Activation and overrides | Recipes run automatically per target when their trigger holds. Packing settings are profile fields of the packed output, resolved like any other field (§8 precedence): `packing.enabled` (default `true`), `packing.roughness_default` (0.5), `packing.prefer` (`prepacked` / `raw`, default `prepacked`). Presets, configs, rules (e.g. `match = { set_has = "roughness" }`), `--set 'subtype:rmaos.packing.enabled=false'` and file-scoped `--set` on the packed output's name override them per set. With `packing.enabled = false` the raw maps stay packing inputs (`IN-PACKING-INPUT`) and nothing is packed. |
+| Raw maps on their own | Never written by default. A rule or `--set` naming a sub-type for a raw map converts it on its own under its source stem (§4.4) and removes it from every recipe. |
+| Sources | Each raw map contributes its R channel (luma with `channels.grayscale_source = luma`); `CHAN-NOT-GRAY` names a source whose R/G/B differ; source alpha is ignored. A raw map that no recipe of the target uses (e.g. fuzz under `cpm`, metallic next to a fuzz source, opacity, height under `vanilla`, a set whose only rmaos-family input is specular) raises `PACK-UNUSED-INPUT` (warning) and is not written. |
+| Gloss ↔ roughness | Converted in both directions per texel in stored values: roughness = 1 − glossiness, glossiness = 1 − roughness. When both sources exist, the target's own quantity is used (roughness for `cs`, glossiness for `cpm`) and the other is reported with `PACK-UNUSED-INPUT`. |
+| Dimensions | All sources of one recipe must have the same width and height; otherwise the recipe fails with `PACK-SIZE-MISMATCH` (error) listing every source file and its size. No resizing in v1. |
+| Precision | Sources load as float32 (§5.1), so 16-bit inputs keep their precision until the encoder; conversions run in float. Bit-depth loss is reported as for any file (`LOSS-BITDEPTH`). |
+| Pipeline | A recipe is a virtual job with several sources. From Preprocess on it is an ordinary job of the packed sub-type: that sub-type's profile, alpha policy, mip rules (an `_rmaos`/`_rfaos` filters R on α = r², and the variance bake of M4 applies to a packed roughness member like any other), encoder, writer, validation and §10 checks (`CHAN-AO-INVERTED`, `CHAN-GLOSS-AS-ROUGH`, `VAL-M-*`, …). |
+| Provenance | Each output channel records its source (`iron_roughness.png:R`, `1 − iron_gloss.png:R`) or `default:<value>`. The manifest record lists every source with its SHA-256 (§3.6), and `if-changed` re-encodes when any source changes. |
+| Pre-packed conflict | If the set already holds a source for the packed output (`iron_rmaos.png` and raw `iron_roughness.png`; `iron_p.png` and `iron_height.png`; `iron_m.png` and raw maps under `cpm`/`vanilla`), the recipe gets the explicit status `conflict` and `PACK-CONFLICT` (warning) names both sides. With `packing.prefer = prepacked` (default: the pre-packed file wins, with the warning) the pre-packed file converts as usual and the recipe's raw inputs are reported unused; with `raw` the recipe runs and the pre-packed file is skipped with `PACK-CONFLICT`. |
+| No source | A recipe whose trigger does not hold does not run; nothing is reported for it. |
+| Reporting | `set_resolved` lists each recipe: output, sub-type, per-channel source or default, status (`run`, `conflict`, `failed`). `sdc inspect` prints the same; `file_planned` carries the virtual job with all its sources. |
+| Set membership | The packed output joins its set under its suffix, so it counts for PBR detection (§4.3 item 1), `set_has` rules and the bake (§6.2). |
 
 ---
 
@@ -472,6 +566,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Output exists | `if-changed` (default) re-encodes when the manifest shows a different source hash, profile hash or engine version; an output with no manifest record is kept (`OUT-UNKNOWN-EXISTING`) unless `overwrite` |
 | Invalid or unreadable input | `file_failed` at Load; batch continues |
 | Same stem, different formats | `IN-DUPLICATE`; both skipped |
+| Raw packing input (§4.4) | Before M2.5: `IN-PACKING-INPUT`, reported as `file_skipped` but not counted for exit 1; from M2.5 consumed by a packing recipe (§6.4) |
 | DDS input in `convert` | Skipped (`IN-DDS-SKIPPED`) unless `--set file:<glob>.reencode=true` (`LOSS-REENCODE`) |
 | Unsupported setting for a file (BC6H under `vanilla`, BC5 on `_n` without `--allow`) | File skipped with its blocking code; exit 1 |
 | Unsupported setting for the whole batch | Exit 2 before work starts |
@@ -552,8 +647,13 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `ENC-NVTT-VERSION` | blocking | Untested NVTT version | Acknowledge |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
 | `IN-DDS-SKIPPED` | info | DDS input not re-encoded by default | Opt in |
+| `IN-PACKING-INPUT` | warning | Raw single-channel map (§4.4) is a channel-packing input, not converted on its own (before M2.5, or with `packing.enabled = false`) | Wait for M2.5, enable packing, or set a sub-type for it |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |
+| `PACK-DEFAULTED` (M2.5) | warning | A packed channel has no source → neutral default (names output and channel) [D-H] | Supply the map or accept |
+| `PACK-SIZE-MISMATCH` (M2.5) | error | Sources of one recipe differ in size (lists every file and size) | Resize the sources |
+| `PACK-CONFLICT` (M2.5) | warning | A pre-packed source and raw maps target one output; pre-packed wins by default | Remove one side or set `packing.prefer` |
+| `PACK-UNUSED-INPUT` (M2.5) | warning | Raw map used by no recipe under the target | Change target, set a sub-type, or remove it |
 
 ---
 
@@ -640,3 +740,9 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | 13 | 16K preview | 8192, 16384 setting, smaller-mip fallback | Adapter limits on target hardware | GUI phase |
 | 14 | Working name | `sdc` | Packaging decision | Owner, Phase 7 |
 | 15 | Code signing and antivirus | Unsigned | False positives in release testing [D#16] | Phase 7 |
+| 16 | Roughness default when a packed `_rmaos`/`_rfaos` has no roughness source | 0.5, preset field `packing.roughness_default` (§6.4) | Owner confirms or picks another value [D-H] | Owner, M2.5 |
+| 17 | Output name of colour vocabulary files | `<base>.dds`; `_d` keeps `<base>_d.dds` (§4.4) | Owner prefers `<base>_d.dds` or another rule | Owner |
+| 18 | Env-mask source of a packed `cpm`/`vanilla` `_m`; `cpm` `_m` height without a source | Metallic, else specular; height 0.5 (§6.4) | Owner rule; S8 in-game check of the constant height | Owner, S8, M2.5 |
+| 19 | Raw maps without a recipe | `_opacity`, specular-only and fuzz-only sets, height under `vanilla`, RGB `_sheen`: reported, not packed (§4.4, §6.4) | Owner names a recipe (e.g. opacity into colour alpha, specular into `_n` alpha) | Owner, M2.5 |
+| 20 | Raw specular scale | Copied unchanged into `_rmaos`/`_rfaos` A | Exporter "specular level" maps (0.5 = F0 0.04) shown to need a remap to TruePBR's A | Owner, M2.5 |
+| 21 | Raw packing inputs and the exit code before M2.5 | Not counted as skipped (exit 1) | Owner wants exit 1 when a set's packed map is missing | Owner |
