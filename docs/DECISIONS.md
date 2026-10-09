@@ -46,6 +46,11 @@ NVTT 0%), because the opaque mode-6 path picks the p-bit for RGB only. Consequen
 - PGPatcher's "≥50% non-white alpha" rule: bc7e's 28% is a per-set average and varies by image — remains **[Open]**.
 - The engine therefore needs: an alpha policy *Remove* (pre-mip channel drop), a stated decoded-alpha guarantee per
   encoder (bc7e ≥254; NVTT 255; BC1 with 3-colour mode off 255), and a post-encode check that decodes the smallest mip.
+- *Correction (2026-10-09, fix batch 41):* bc7e alone does not hold ≥254. On high-entropy opaque RGB (Task 41: 64×64
+  white noise, `exact_opaque` off) it picks BC7 mode 4/5 with a channel rotation and decodes alpha as low as 239. The
+  encode stage therefore applies the lossless rotated-slot fix (rotated channel's endpoints set to all-ones, RGB
+  bit-identical) to **every** BC7 block whose input alpha is 255 throughout, whatever `alpha.exact_opaque` and the
+  alpha policy. The guarantee "bc7e ≥254" holds for bc7e plus this fix; with the flag off only mode 6 can decode 254.
 
 ## Note B — `_rfaos` (owner clarification)
 
@@ -61,7 +66,8 @@ to alpha 254 on 21.0% of pixels, in 4×4 blocks where mode 6 was chosen. Visuali
 
 ## Note D — exact opaque alpha flag
 
-With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e decoded alpha is exactly 255 via the forced p-bit patch; OFF keeps the upstream behaviour (>= 254). Spike S5 measures the RGB cost before widening the default.
+With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e decoded alpha is exactly 255 via the forced p-bit patch; OFF keeps the upstream mode-6 behaviour (>= 254). Spike S5 measures the RGB cost before widening the default.
+The flag controls only the mode-6 p-bit constraint (native patch or byte fallback), the part that costs RGB. The lossless rotated mode 4/5 fix runs on every all-255 block with the flag on or off (fix batch 41, see Note A).
 
 ## Note E — alpha test and coverage (owner, 2026-10-08)
 
@@ -91,7 +97,7 @@ With the per-profile flag `alpha.exact_opaque` ON (default only for `_m`), bc7e 
   The test `s5b_byte_patch_gives_255_everywhere_on_opaque_sets` is `#[ignore]`d with this note; the limit was not loosened.
 - Method: bc7e u5 at mip 0 on rgb_real, rgb_grad, stray_real, stray_grad (alpha forced to 255 = `remove`), then
   `encoders_sys::bc7_fixup::force_opaque_mode6` on every block (mode-6 blocks get alpha endpoints 127 and both p-bits 1).
-- Alpha: **0 texels != 255** on all 18 images (every non-mode-6 block already decodes 255). *Correction (2026-10-09, Task 32 review):* not universal — with perceptual off, opaque noise can pick mode 4 with rotation 1–3, which decodes alpha 239–255; the encode stage now applies a lossless post-encode fix (rotated slot endpoints set to max, RGB bit-identical) in both the native and fallback paths.
+- Alpha: **0 texels != 255** on all 18 images (every non-mode-6 block already decodes 255). *Correction (2026-10-09, Task 32 review):* not universal — with perceptual off, opaque noise can pick mode 4 with rotation 1–3, which decodes alpha 239–255; the encode stage now applies a lossless post-encode fix (rotated slot endpoints set to max, RGB bit-identical) in both the native and fallback paths. *Further correction (fix batch 41):* the fix is unconditional for all-255 blocks, with `exact_opaque` on or off and under any alpha policy (Note A).
 - Mean ΔRGB PSNR vs plain u5: rgb_real **−2.70 dB** (worst Metal049A −7.76), rgb_grad **−8.41 dB** (worst subtle_dark
   −28.15: 84.01 → 55.86), stray_real −1.02 dB, stray_grad −4.90 dB. Smallest loss: Rock064 −0.07 dB.
 - Why: forcing p = 1 moves every p = 0 RGB endpoint up one 8-bit LSB without re-fitting; mode 6 is chosen on 11–99% of
