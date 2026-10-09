@@ -38,3 +38,10 @@ fn bc6h_veryslow_reproduces_51_50_db() {
     let r = gates::bc6h_veryslow(&bench_root()).unwrap();
     assert!(r.pass, "{r}");
 }
+
+#[test]
+fn s5a_alpha_checker_agrees_with_recorded_measurements() {
+    // DECISIONS Note C: bc7e -u6 Bricks104 decodes 254 on 21.0% of pixels; NVTT Production on 0%.
+    let r = gates::alpha_scan(&bench_root()).unwrap();
+    assert!(r.pass, "{r}");
+}

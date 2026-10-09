@@ -102,6 +102,18 @@ pub fn decode_bc7_image(data: &[u8], w: u32, h: u32) -> Vec<[u8; 4]> {
     flat.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()
 }
 
+pub fn decode_bc1_image(data: &[u8], w: u32, h: u32, model: Bc1Model) -> Vec<[u8; 4]> {
+    let flat = scatter::<u8, 64>(w, h, data, 8, |b| {
+        let px = bc1_decode_block(b.try_into().unwrap(), model);
+        let mut o = [0u8; 64];
+        for (i, p) in px.iter().enumerate() {
+            o[i * 4..i * 4 + 4].copy_from_slice(p);
+        }
+        o
+    });
+    flat.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()
+}
+
 pub fn decode_bc6h_image(data: &[u8], w: u32, h: u32) -> Vec<[f32; 3]> {
     let flat = scatter::<f32, 48>(w, h, data, 16, |b| {
         let mut o = [0f32; 48];

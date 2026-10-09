@@ -335,6 +335,89 @@ pub fn bc6h_veryslow(root: &Path) -> Result<GateReport> {
     Ok(r)
 }
 
+fn dds_dims(bytes: &[u8]) -> (u32, u32) {
+    let u = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+    (u(16), u(12)) // (width, height)
+}
+
+/// Bench variants scanned by S5a (all but the last are BC7; the last is BC1).
+const ALPHA_SCAN_VARIANTS: [&str; 6] = [
+    "bc7e_u5",
+    "bc7e_u6",
+    "ispc_slow",
+    "nvtt_production",
+    "cmp_q1.0",
+    "bc1_rgbcx_L18",
+];
+
+/// S5a: decoded alpha at mip 0 for existing bench outputs of the opaque sets (no new encodes).
+pub fn alpha_scan(root: &Path) -> Result<GateReport> {
+    use engine::validate::alpha::alpha_stats;
+    init(Bc1Model::Ideal)?;
+    let mut r = GateReport::new("S5a decoded alpha on bench outputs (opaque sets, mip 0)");
+    let mut seen_bricks = false;
+    for v in ALPHA_SCAN_VARIANTS {
+        for set in OPAQUE_SETS {
+            let dir = root.join("out").join(v).join(set);
+            if !dir.exists() {
+                r.info(format!("{v}/{set}: missing, skipped"));
+                continue;
+            }
+            for src in set_files(root, "images", set, "png")? {
+                let stem = stem(&src);
+                let bytes = std::fs::read(dir.join(format!("{stem}.dds")))?;
+                let (w, h) = dds_dims(&bytes);
+                let payload = ddsraw::payload(&bytes)?;
+                let dec = if v.starts_with("bc1") {
+                    decode_bc1_image(payload, w, h, Bc1Model::Ideal)
+                } else {
+                    decode_bc7_image(payload, w, h)
+                };
+                let s = alpha_stats(&dec);
+                r.info(format!(
+                    "{v}/{set}/{stem}: 254 share {:.2}%, below-254 {}, min {}",
+                    s.share_254() * 100.0,
+                    s.below254,
+                    s.min
+                ));
+                if v == "bc7e_u6" && stem == "Bricks104" {
+                    seen_bricks = true;
+                    r.check(
+                        (s.share_254() * 100.0 - 21.0).abs() <= 0.1,
+                        format!(
+                            "bc7e_u6 Bricks104 254 share {:.2}% (Note C: 21.0%)",
+                            s.share_254() * 100.0
+                        ),
+                    );
+                }
+                if v == "nvtt_production" {
+                    r.check(
+                        s.eq255 == s.pixels,
+                        format!("nvtt_production {set}/{stem} all 255"),
+                    );
+                }
+                if v.starts_with("bc7e") {
+                    r.check(
+                        s.min >= 254,
+                        format!("{v} {set}/{stem} min alpha {} >= 254", s.min),
+                    );
+                }
+            }
+        }
+    }
+    r.check(seen_bricks, "bc7e_u6 Bricks104 was scanned".to_string());
+    // 6 variants x 14 opaque images: 84 info lines; checks counted by expect_count are the non-info lines.
+    let scanned = r.lines.iter().filter(|l| l.contains(": 254 share")).count();
+    r.check(
+        scanned == ALPHA_SCAN_VARIANTS.len() * 14,
+        format!(
+            "scanned {scanned} images == expected {}",
+            ALPHA_SCAN_VARIANTS.len() * 14
+        ),
+    );
+    Ok(r)
+}
+
 pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
     Ok(match name {
         "s3" => vec![
@@ -356,6 +439,7 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
             v
         }
         "bc6h" => vec![bc6h_veryslow(root)?],
+        "alpha-scan" => vec![alpha_scan(root)?],
         other => bail!("unknown gate '{other}'"),
     })
 }
