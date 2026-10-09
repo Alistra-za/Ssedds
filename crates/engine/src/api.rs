@@ -12,11 +12,11 @@ use crate::events::{EventKind, Reporter, Stage};
 use crate::group::{group_sets_with, split_suffix_with, TextureSet};
 use crate::load::{load_image, LoadError};
 use crate::manifest::{
-    output_key, sha256_file, sha256_json, EncoderVersions, Manifest, ManifestEntry, PresetRef,
-    ENGINE_VERSION,
+    bc1_model_id, output_key, sha256_file, sha256_json, EncoderVersions, Manifest, ManifestEntry,
+    PresetRef, ENGINE_VERSION,
 };
 use crate::overrides::{to_patch, Scope, SetOverride};
-use crate::pipeline::{process_file, FileError};
+use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
 use crate::presets::*;
 use crate::suggest::{is_pbr_set, SuggestContext};
@@ -24,7 +24,7 @@ use encoders_sys::Bc1Model;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -36,8 +36,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum OnExisting {
-    /// Re-encode when the manifest shows a different source, profile, engine or encoder; keep an output that has
-    /// no manifest record (`OUT-UNKNOWN-EXISTING`).
+    /// Re-encode when the manifest shows a different source, profile, engine, encoder or (BC1/BC3) BC1 decoder
+    /// model, or a failed validation; keep an output that has no manifest record (`OUT-UNKNOWN-EXISTING`).
     #[default]
     IfChanged,
     Skip,
@@ -103,6 +103,8 @@ impl BatchRequest {
 #[derive(Debug, Clone)]
 pub struct SkippedFile {
     pub path: PathBuf,
+    /// The key of the texture set the file belongs to.
+    pub set: Option<String>,
     pub code: Option<Code>,
     pub reason: String,
 }
@@ -211,23 +213,43 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Memory admission (spec §5.9). Only the scheduling thread acquires; workers release.
+///
+/// Besides bytes, admission caps the files admitted and not yet finished at `max_files` (the pool size). A pool
+/// worker waiting inside one file's band-parallel encode may pick up another admitted file from rayon's queue and
+/// run it on the same stack; the cap bounds that nesting by the thread count (review M1).
 struct Budget {
     limit: u64,
-    used: Mutex<u64>,
+    max_files: usize,
+    /// (bytes, files) admitted and not yet released.
+    used: Mutex<(u64, usize)>,
     cv: Condvar,
 }
 
 impl Budget {
-    /// Waits until `n` more bytes fit. A file larger than the whole budget is admitted alone.
+    fn new(limit: u64, max_files: usize) -> Self {
+        Budget {
+            limit,
+            max_files: max_files.max(1),
+            used: Mutex::new((0, 0)),
+            cv: Condvar::new(),
+        }
+    }
+    /// Waits until `n` more bytes fit and fewer than `max_files` files are in flight. A file larger than the
+    /// whole budget is admitted alone.
     fn acquire(&self, n: u64) {
         let mut used = lock(&self.used);
-        while *used > 0 && used.saturating_add(n) > self.limit {
+        while used.1 >= self.max_files || (used.0 > 0 && used.0.saturating_add(n) > self.limit) {
             used = self.cv.wait(used).unwrap_or_else(|e| e.into_inner());
         }
-        *used += n;
+        used.0 += n;
+        used.1 += 1;
     }
     fn release(&self, n: u64) {
-        *lock(&self.used) -= n;
+        {
+            let mut used = lock(&self.used);
+            used.0 -= n;
+            used.1 -= 1;
+        }
         self.cv.notify_all();
     }
 }
@@ -302,9 +324,21 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
 
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source,
 /// profile, engine version and encoders, a comparable record (known schema, encoders and preset present) and a
-/// passing validation, so a failed output is re-encoded and reported again rather than counted as up to date.
-fn is_up_to_date(e: &ManifestEntry, job: &ResolvedJob, encoders: &EncoderVersions) -> bool {
+/// passing validation, so a failed output is re-encoded and reported again rather than counted as up to date
+/// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
+/// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
+fn is_up_to_date(
+    e: &ManifestEntry,
+    job: &ResolvedJob,
+    encoders: &EncoderVersions,
+    bc1_model: Bc1Model,
+) -> bool {
     if e.is_newer_schema() || e.preset.is_none() || e.encoders.as_ref() != Some(encoders) {
+        return false;
+    }
+    if matches!(job.profile.format, Format::Bc1 | Format::Bc3)
+        && e.bc1_model.as_deref() != Some(bc1_model_id(bc1_model))
+    {
         return false;
     }
     let passed = e
@@ -417,11 +451,16 @@ impl Engine {
             );
         }
         let (sets, dups) = group_sets_with(&files, registry.alias_table());
+        let set_of: BTreeMap<usize, &str> = sets
+            .iter()
+            .flat_map(|s| s.members.iter().map(|&i| (i, s.key.as_str())))
+            .collect();
         let dup_idx: BTreeSet<usize> = dups.iter().flatten().copied().collect();
         let mut skipped: Vec<SkippedFile> = dup_idx
             .iter()
             .map(|&i| SkippedFile {
                 path: files[i].path.clone(),
+                set: set_of.get(&i).map(|k| k.to_string()),
                 code: Some(Code::InDuplicate),
                 reason: "two inputs map to one output; exclude one".into(),
             })
@@ -435,6 +474,7 @@ impl Engine {
                 if files[i].kind == InputKind::Dds {
                     skipped.push(SkippedFile {
                         path: files[i].path.clone(),
+                        set: Some(set.key.clone()),
                         code: Some(Code::InDdsSkipped),
                         reason: "DDS inputs are not re-encoded by default".into(),
                     });
@@ -574,12 +614,23 @@ impl Engine {
             failed: plan.failed.len() as u32,
             ..Default::default()
         };
-        let skip = |path: &Path, code: Option<Code>, reason: String, s: &mut BatchSummary| {
-            rep.emit(None, Some(path), EventKind::FileSkipped { code, reason });
+        // Every skip carries the file's set key (review M9).
+        let skip = |set: Option<&str>,
+                    path: &Path,
+                    code: Option<Code>,
+                    reason: String,
+                    s: &mut BatchSummary| {
+            rep.emit(set, Some(path), EventKind::FileSkipped { code, reason });
             s.skipped += 1;
         };
         for s in &plan.skipped {
-            skip(&s.path, s.code, s.reason.clone(), &mut summary);
+            skip(
+                s.set.as_deref(),
+                &s.path,
+                s.code,
+                s.reason.clone(),
+                &mut summary,
+            );
         }
         for f in &plan.failed {
             rep.emit(
@@ -596,9 +647,13 @@ impl Engine {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
             match &job.status {
                 JobStatus::Ready => ready.push(job),
-                JobStatus::Unresolved { reasons } => {
-                    skip(&job.input, Some(unresolved_code(job)), reasons.join("; "), &mut summary)
-                }
+                JobStatus::Unresolved { reasons } => skip(
+                    set,
+                    &job.input,
+                    Some(unresolved_code(job)),
+                    reasons.join("; "),
+                    &mut summary,
+                ),
                 // Spec §4.4/§8 (Task 27a): a raw packing input is reported but does not make the batch partial.
                 JobStatus::PackingInput { role } => rep.emit(
                     set,
@@ -612,6 +667,7 @@ impl Engine {
                     },
                 ),
                 JobStatus::Blocked { codes } => skip(
+                    set,
                     &job.input,
                     codes.first().copied(),
                     format!(
@@ -660,6 +716,7 @@ impl Engine {
                     OnExisting::Overwrite => {}
                     OnExisting::Skip => {
                         skip(
+                            Some(&job.set_key),
                             &job.input,
                             None,
                             "output exists (--on-existing skip)".into(),
@@ -682,6 +739,7 @@ impl Engine {
                                 )),
                             );
                                 skip(
+                                    Some(&job.set_key),
                                     &job.input,
                                     Some(Code::OutUnknownExisting),
                                     "existing output without a manifest record".into(),
@@ -689,7 +747,7 @@ impl Engine {
                                 );
                                 continue;
                             }
-                            Some(e) if is_up_to_date(e, job, &encoders) => {
+                            Some(e) if is_up_to_date(e, job, &encoders, req.bc1_model) => {
                                 summary.up_to_date += 1;
                                 rep.emit(
                                     Some(&job.set_key),
@@ -737,12 +795,8 @@ impl Engine {
         } else {
             crate::sysmem::total_ram() / 2
         };
-        let budget = Budget {
-            limit,
-            used: Mutex::new(0),
-            cv: Condvar::new(),
-        };
         let pool = thread_pool(req.jobs)?;
+        let budget = Budget::new(limit, pool.current_num_threads());
         let state = Mutex::new(summary);
         // Admission runs on the calling thread (outside the pool) and only spawns admitted files, so no pool thread
         // ever blocks on the budget. A pool thread blocked in `acquire` while its nested band-parallel encode stole
@@ -779,7 +833,9 @@ impl Engine {
     }
 }
 
-/// Convert one admitted file under `catch_unwind` and record its outcome.
+/// Convert one admitted file under `catch_unwind` and report its outcome. A file that fails or panics after its
+/// output was written (sidecar write or manifest append) has that output removed, best effort, so no output is
+/// left on disk without a record (review I1). A panic is reported at the last stage the file entered (review M10).
 fn run_one(
     job: &ResolvedJob,
     req: &BatchRequest,
@@ -791,23 +847,12 @@ fn run_one(
 ) {
     let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
     rep.emit(set, path, EventKind::FileStarted);
+    let tracker = FileTracker::default();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        process_file(job, req, preset, cancel, rep)
+        process_file(job, req, preset, cancel, rep, manifest, &tracker)
     }));
-    match r {
+    let (stage, error) = match r {
         Ok(Ok(out)) => {
-            if let Err(e) = manifest.append(&out.record) {
-                lock(state).failed += 1;
-                rep.emit(
-                    set,
-                    path,
-                    EventKind::FileFailed {
-                        stage: Stage::Write,
-                        error: format!("manifest {}: {e}", manifest.path().display()),
-                    },
-                );
-                return;
-            }
             for w in &out.report.warnings {
                 rep.emit(set, path, EventKind::Warning(w.clone()));
             }
@@ -826,29 +871,30 @@ fn run_one(
                     validation: out.report.summary,
                 },
             );
+            return;
         }
-        Ok(Err(FileError::Cancelled)) => lock(state).cancelled.push(job.input.clone()),
-        Ok(Err(FileError::Failed(stage, error))) => {
-            lock(state).failed += 1;
-            rep.emit(set, path, EventKind::FileFailed { stage, error });
+        Ok(Err(FileError::Cancelled)) => {
+            lock(state).cancelled.push(job.input.clone());
+            return;
         }
+        Ok(Err(FileError::Failed(stage, error))) => (stage, error),
         Err(panic) => {
             let msg = panic
                 .downcast_ref::<&str>()
                 .map(|s| s.to_string())
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "panic".into());
-            lock(state).failed += 1;
-            rep.emit(
-                set,
-                path,
-                EventKind::FileFailed {
-                    stage: Stage::Compress,
-                    error: format!("internal error: {msg}"),
-                },
-            );
+            (tracker.stage.get(), format!("internal error: {msg}"))
+        }
+    };
+    if tracker.written.get() {
+        let _ = std::fs::remove_file(&job.output);
+        if req.sidecar {
+            let _ = std::fs::remove_file(job.output.with_extension("dds.json"));
         }
     }
+    lock(state).failed += 1;
+    rep.emit(set, path, EventKind::FileFailed { stage, error });
 }
 
 /// Spec §8: an invalid preset, config, rule or `--set` value, or a setting unavailable for the whole batch, is an
@@ -999,18 +1045,127 @@ mod tests {
 
     #[test]
     fn budget_admits_an_oversized_file_alone_and_releases() {
-        let b = Budget {
-            limit: 10,
-            used: Mutex::new(0),
-            cv: Condvar::new(),
-        };
+        let b = Budget::new(10, 8);
         b.acquire(100);
-        assert_eq!(*lock(&b.used), 100);
+        assert_eq!(*lock(&b.used), (100, 1));
         drop(Admitted(&b, 100));
-        assert_eq!(*lock(&b.used), 0);
+        assert_eq!(*lock(&b.used), (0, 0));
         b.acquire(4);
         b.acquire(6);
-        assert_eq!(*lock(&b.used), 10);
+        assert_eq!(*lock(&b.used), (10, 2));
+    }
+
+    /// Carry 13, review M2/I2 and ruling O2: only a comparable, matching, passing record is up to date.
+    #[test]
+    fn up_to_date_needs_a_comparable_matching_passing_record() {
+        use crate::manifest::MANIFEST_SCHEMA;
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("rock.png");
+        std::fs::write(&src, b"source bytes").unwrap();
+        let reg = PresetRegistry::builtin().unwrap();
+        let mut job = ResolvedJob {
+            input: src.clone(),
+            output: d.path().join("rock.dds"),
+            game_path: "rock".into(),
+            set_key: "x/rock".into(),
+            profile: reg.base_profile(Target::Cs, Subtype::Diffuse),
+            provenance: Default::default(),
+            suggestions: vec![],
+            warnings: vec![],
+            status: JobStatus::Ready,
+            suffix_alias: None,
+        };
+        let enc = EncoderVersions::current();
+        let entry_for = |job: &ResolvedJob| ManifestEntry {
+            schema: MANIFEST_SCHEMA,
+            output: "rock.dds".into(),
+            source_sha256: sha256_file(&src).unwrap(),
+            sources: vec![],
+            profile_sha256: sha256_json(&job.profile).unwrap(),
+            engine_version: ENGINE_VERSION.into(),
+            encoders: Some(enc.clone()),
+            preset: PresetRef::for_preset(&reg, "cs-quality", None),
+            bc1_model: Some("ideal".into()),
+            raw: serde_json::json!({ "validation": { "passed": true } }),
+        };
+        let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| is_up_to_date(e, job, &enc, m);
+        let good = entry_for(&job);
+        assert_eq!(job.profile.format, Format::Bc7);
+        assert!(up(&good, &job, Bc1Model::Ideal));
+        let with = |f: &dyn Fn(&mut ManifestEntry)| {
+            let mut e = good.clone();
+            f(&mut e);
+            e
+        };
+        let not_up: [(&str, ManifestEntry); 10] = [
+            ("no encoders", with(&|e| e.encoders = None)),
+            (
+                "other encoders",
+                with(&|e| e.encoders.as_mut().unwrap().ispc = "1.0.0".into()),
+            ),
+            ("no preset", with(&|e| e.preset = None)),
+            ("newer schema", with(&|e| e.schema = MANIFEST_SCHEMA + 1)),
+            (
+                "validation failed",
+                with(&|e| e.raw = serde_json::json!({ "validation": { "passed": false } })),
+            ),
+            ("no validation", with(&|e| e.raw = serde_json::json!({}))),
+            (
+                "other profile",
+                with(&|e| e.profile_sha256 = "0".repeat(64)),
+            ),
+            ("other source", with(&|e| e.source_sha256 = "0".repeat(64))),
+            ("other engine", with(&|e| e.engine_version = "0.0.0".into())),
+            (
+                "several sources",
+                with(&|e| {
+                    e.sources = vec![crate::manifest::SourceRef {
+                        path: "a.png".into(),
+                        sha256: "0".repeat(64),
+                    }]
+                }),
+            ),
+        ];
+        for (what, e) in &not_up {
+            assert!(!up(e, &job, Bc1Model::Ideal), "{what}");
+        }
+        // The BC1 model only matters for formats rgbcx encodes against it.
+        assert!(up(&with(&|e| e.bc1_model = None), &job, Bc1Model::Nvidia));
+        for format in [Format::Bc1, Format::Bc3] {
+            job.profile.format = format;
+            let e = entry_for(&job);
+            assert!(up(&e, &job, Bc1Model::Ideal), "{format:?}");
+            assert!(!up(&e, &job, Bc1Model::Nvidia), "{format:?} other model");
+            let mut old = e.clone();
+            old.bc1_model = None;
+            assert!(
+                !up(&old, &job, Bc1Model::Ideal),
+                "{format:?} unrecorded model"
+            );
+        }
+    }
+
+    /// M1: with bytes to spare, the file cap alone holds the next admission until a file finishes.
+    #[test]
+    fn budget_caps_unfinished_files() {
+        let b = Budget::new(u64::MAX, 2);
+        b.acquire(1);
+        b.acquire(1);
+        let admitted = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                b.acquire(1);
+                admitted.store(true, Ordering::SeqCst);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(
+                !admitted.load(Ordering::SeqCst),
+                "third file admitted past the cap"
+            );
+            b.release(1);
+        });
+        assert!(admitted.load(Ordering::SeqCst));
+        assert_eq!(*lock(&b.used), (2, 2));
     }
 
     #[test]

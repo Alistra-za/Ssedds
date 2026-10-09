@@ -200,11 +200,23 @@ fn duplicates_and_dds_inputs_are_skipped_with_codes() {
     assert!(codes.contains(&Some(Code::InDdsSkipped)));
 }
 
-/// Same inputs with one worker and with every core: byte-identical outputs.
+/// A 512x512 tangent-space normal (`_n`, BC5 under `cs`): 128 block rows, so the encode bands really run in
+/// parallel.
+fn big_normal(dir: &Path) {
+    ImageBuffer::from_fn(512, 512, |x, y| {
+        let (u, v) = ((x % 64) as f32 / 63.0 - 0.5, (y % 48) as f32 / 47.0 - 0.5);
+        Rgb([(128.0 + 100.0 * u) as u8, (128.0 + 100.0 * v) as u8, 230])
+    })
+    .save(dir.join("textures/armor/plate_n.png"))
+    .unwrap();
+}
+
+/// Same inputs with one worker and with every core: byte-identical outputs, all validated.
 #[test]
 fn output_bytes_do_not_depend_on_the_thread_count() {
     let d = tempfile::tempdir().unwrap();
     fixtures(d.path());
+    big_normal(d.path());
     let mut req = request(d.path());
     req.overrides
         .push(parse_set("file:**/leaf.png.alpha.policy=cutout").unwrap());
@@ -212,11 +224,13 @@ fn output_bytes_do_not_depend_on_the_thread_count() {
         let mut r = req.clone();
         r.jobs = jobs;
         r.output_root = d.path().join(format!("out{jobs}"));
-        let (s, _) = run(r);
-        assert_eq!(s.converted, 3);
+        let (s, ev) = run(r);
+        assert_eq!(s.converted, 4, "{ev:#?}");
+        assert_eq!(s.validation_failed, 0, "{ev:#?}");
+        assert_eq!(s.exit_code(), 0, "{s:?}");
         files_with_ext(&d.path().join(format!("out{jobs}")), "dds")
     });
-    assert_eq!(outs[0].len(), 3);
+    assert_eq!(outs[0].len(), 4);
     for (a, b) in outs[0].iter().zip(&outs[1]) {
         assert_eq!(a.file_name(), b.file_name());
         assert_eq!(
@@ -227,6 +241,25 @@ fn output_bytes_do_not_depend_on_the_thread_count() {
     }
 }
 
+/// The most files between `file_started` and their `file_done`/`file_failed` at any point of the event stream.
+fn peak_in_flight(ev: &[EngineEvent]) -> usize {
+    let mut open = std::collections::BTreeSet::new();
+    let mut peak = 0;
+    for e in ev {
+        match &e.kind {
+            EventKind::FileStarted => {
+                open.insert(e.path.clone());
+                peak = peak.max(open.len());
+            }
+            EventKind::FileDone { .. } | EventKind::FileFailed { .. } => {
+                open.remove(&e.path);
+            }
+            _ => {}
+        }
+    }
+    peak
+}
+
 /// A budget smaller than one file admits files one at a time and still finishes.
 #[test]
 fn tiny_memory_budget_still_converts_everything() {
@@ -235,8 +268,174 @@ fn tiny_memory_budget_still_converts_everything() {
     let mut req = request(d.path());
     req.mem_budget = 1;
     req.jobs = 4;
-    let (s, _) = run(req);
+    let (s, ev) = run(req);
     assert_eq!((s.converted, s.failed), (2, 0));
+    assert_eq!(peak_in_flight(&ev), 1);
+}
+
+/// M1: a worker waiting inside a file's band-parallel encode may pick up another admitted file, so admission also
+/// caps unfinished files at the pool size; nesting can then never go deeper than the thread count.
+#[test]
+fn files_in_flight_never_exceed_the_worker_count() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    big_normal(d.path());
+    let t = d.path().join("textures/armor");
+    for i in 0..12 {
+        ImageBuffer::from_fn(128, 128, |x, y| {
+            Rgb([(x * 2) as u8, (y * 2) as u8, (i * 20) as u8])
+        })
+        .save(t.join(format!("cloth{i}_n.png")))
+        .unwrap();
+    }
+    let mut req = request(d.path());
+    req.jobs = 2;
+    let (s, ev) = run(req);
+    assert_eq!((s.converted, s.failed), (15, 0), "{ev:#?}");
+    assert!(peak_in_flight(&ev) <= 2, "peak {}", peak_in_flight(&ev));
+}
+
+/// I1: a failure after the DDS is written (here the manifest append) removes the output and fails the file, so
+/// the next run does not keep an unrecorded output as OUT-UNKNOWN-EXISTING.
+#[test]
+fn a_failed_manifest_append_removes_the_output() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let manifest = Manifest::at(&d.path().join("out"));
+    std::fs::create_dir_all(manifest.path().parent().unwrap()).unwrap();
+    std::fs::write(manifest.path(), b"").unwrap();
+    let set_readonly = |ro: bool| {
+        let mut perm = std::fs::metadata(manifest.path()).unwrap().permissions();
+        perm.set_readonly(ro);
+        std::fs::set_permissions(manifest.path(), perm).unwrap();
+    };
+    set_readonly(true);
+    let (s, ev) = run(request(d.path()));
+    set_readonly(false);
+    assert_eq!((s.converted, s.failed), (0, 2), "{ev:#?}");
+    assert_eq!(s.exit_code(), 1);
+    assert!(
+        files_with_ext(&d.path().join("out"), "dds").is_empty(),
+        "{:?}",
+        files_with_ext(&d.path().join("out"), "dds")
+    );
+    assert_eq!(kinds(&ev, "file_done"), 0);
+    let failed: Vec<_> = ev
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FileFailed { stage, error } => Some((*stage, error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failed.len(), 2);
+    assert!(
+        failed
+            .iter()
+            .all(|(st, err)| *st == Stage::Write && err.contains("manifest")),
+        "{failed:?}"
+    );
+
+    // The rerun converts both instead of keeping unrecorded outputs.
+    let (s, _) = run(request(d.path()));
+    assert_eq!((s.converted, s.failed), (2, 0));
+}
+
+/// I2: every record carries the batch BC1 decoder model.
+#[test]
+fn records_carry_the_bc1_model() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let mut req = request(d.path());
+    req.overrides
+        .push(parse_set("file:**/iron.png.format=bc1").unwrap());
+    let (s, ev) = run(req);
+    assert_eq!(s.converted, 2, "{ev:#?}");
+    let m = Manifest::at(&d.path().join("out")).load().unwrap();
+    for key in ["armor/iron.dds", "armor/iron_n.dds"] {
+        assert_eq!(m[key].raw["bc1_model"], "ideal", "{key}");
+    }
+    assert_eq!(m["armor/iron.dds"].raw["profile"]["format"], "bc1");
+}
+
+/// Spec §10: an error-severity resolve code fails the file at Resolve (not a skip).
+#[test]
+fn a_resolve_error_fails_the_file_at_resolve() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let mut req = request(d.path());
+    req.overrides
+        .push(parse_set("file:**/iron_n.png.encoder.perceptual=true").unwrap());
+    let (s, ev) = run(req);
+    assert_eq!((s.converted, s.failed, s.skipped), (1, 1, 1), "{ev:#?}");
+    assert_eq!(s.exit_code(), 1);
+    let e = ev
+        .iter()
+        .find(|e| matches!(e.kind, EventKind::FileFailed { .. }))
+        .unwrap();
+    assert!(e.path.as_deref().unwrap().ends_with("iron_n.png"));
+    assert!(e.set.is_some());
+    match &e.kind {
+        EventKind::FileFailed { stage, error } => {
+            assert_eq!(*stage, Stage::Resolve);
+            assert!(error.contains("FMT-PERCEPTUAL-DATA"), "{error}");
+        }
+        _ => unreachable!(),
+    }
+    assert!(!d.path().join("out/armor/iron_n.dds").exists());
+}
+
+/// `--on-existing skip` keeps an existing output untouched and reports it as skipped, with its set (M9).
+#[test]
+fn on_existing_skip_keeps_existing_outputs() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let out = d.path().join("out/armor");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("iron.dds"), b"keep me").unwrap();
+    let mut req = request(d.path());
+    req.on_existing = OnExisting::Skip;
+    let (s, ev) = run(req);
+    assert_eq!((s.converted, s.skipped), (1, 2), "{ev:#?}");
+    assert_eq!(s.exit_code(), 1);
+    assert_eq!(std::fs::read(out.join("iron.dds")).unwrap(), b"keep me");
+    let skipped: Vec<_> = ev.iter().filter(|e| kind(e) == "file_skipped").collect();
+    assert_eq!(skipped.len(), 2);
+    for e in skipped {
+        assert!(
+            e.set
+                .as_deref()
+                .is_some_and(|s| s.ends_with("/iron") || s.ends_with("/leaf")),
+            "{e:?}"
+        );
+    }
+}
+
+/// M9: every skip event carries the set key of its file.
+#[test]
+fn skip_events_carry_the_set_key() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let t = d.path().join("textures/armor");
+    ImageBuffer::from_fn(4, 4, |_, _| Rgb([1u8, 2, 3]))
+        .save(t.join("iron_n.tga"))
+        .unwrap();
+    std::fs::write(t.join("old.dds"), b"DDS ").unwrap();
+    let out = d.path().join("out/armor");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("iron.dds"), b"not ours").unwrap();
+    let (_, ev) = run(request(d.path()));
+    let skipped: Vec<_> = ev.iter().filter(|e| kind(e) == "file_skipped").collect();
+    // iron_n.png + iron_n.tga (IN-DUPLICATE), old.dds, leaf.png (unresolved), iron.png (OUT-UNKNOWN-EXISTING)
+    assert_eq!(skipped.len(), 5, "{skipped:#?}");
+    for e in &skipped {
+        assert!(e.set.is_some(), "{e:?}");
+    }
+    let unknown: Vec<_> = ev
+        .iter()
+        .filter(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutUnknownExisting))
+        .collect();
+    assert_eq!(unknown.len(), 1);
+    assert!(unknown[0].set.is_some());
 }
 
 #[test]
@@ -434,10 +633,14 @@ fn a_panicking_file_fails_alone() {
         .push(parse_set("file:**/boom_panic_hook.png.subtype=diffuse").unwrap());
     let (s, ev) = run(req);
     assert_eq!((s.converted, s.failed), (2, 1), "{ev:#?}");
-    assert!(ev.iter().any(|e| matches!(
-        &e.kind,
-        EventKind::FileFailed { error, .. } if error.contains("test hook")
-    )));
+    // M10: the stage is the one the file had entered when it panicked (the hook fires before loading).
+    assert!(
+        ev.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::FileFailed { error, stage: Stage::Load } if error.contains("test hook")
+        )),
+        "{ev:#?}"
+    );
 }
 
 #[test]

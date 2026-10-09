@@ -135,6 +135,21 @@ pub struct ManifestRecord {
     /// The canonical key from [`output_key`].
     pub output: String,
     pub validation: ValidationSummary,
+    /// The batch BC1 decoder model ([`bc1_model_id`]) that rgbcx encoded the BC1 colour blocks against (BC1 and
+    /// BC3) and that validation decoded BC1 with. `None` in records written before the field existed.
+    #[serde(default)]
+    pub bc1_model: Option<String>,
+}
+
+/// The stable id of a BC1 decoder model, as `--bc1-decoder` spells it (spec §8).
+pub fn bc1_model_id(m: encoders_sys::Bc1Model) -> &'static str {
+    use encoders_sys::Bc1Model::*;
+    match m {
+        Ideal => "ideal",
+        IdealRound4 => "ideal-round4",
+        Nvidia => "nvidia",
+        Amd => "amd",
+    }
 }
 
 /// What the up-to-date check needs from a stored record, read tolerantly: a field added to or removed from
@@ -151,6 +166,7 @@ pub struct ManifestEntry {
     pub engine_version: String,
     pub encoders: Option<EncoderVersions>,
     pub preset: Option<PresetRef>,
+    pub bc1_model: Option<String>,
     pub raw: serde_json::Value,
 }
 
@@ -184,6 +200,7 @@ impl ManifestEntry {
             engine_version: text("engine_version"),
             encoders: lenient(&raw, "encoders"),
             preset: lenient(&raw, "preset"),
+            bc1_model: lenient(&raw, "bc1_model"),
             raw,
         })
     }

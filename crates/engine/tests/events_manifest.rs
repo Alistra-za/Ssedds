@@ -27,6 +27,7 @@ fn record(
         sources: vec![],
         output: output.into(),
         validation: Default::default(),
+        bc1_model: Some("ideal".into()),
     }
 }
 

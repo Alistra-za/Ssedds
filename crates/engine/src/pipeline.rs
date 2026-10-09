@@ -1,5 +1,6 @@
 //! One `ResolvedJob` end to end (spec §5, carry order of Task 31):
-//! load → preprocess → mips → coverage → quantise → encode → DDS bytes → atomic write → re-read and validate.
+//! load → preprocess → mips → coverage → quantise → encode → DDS bytes → validate the bytes → atomic write →
+//! sidecar → manifest record.
 //!
 //! The caller (`api::Engine::run`) has initialised the encoders with the batch BC1 model, admitted the file
 //! against the memory budget and runs this on its rayon pool under `catch_unwind`; the encode stage's band
@@ -15,14 +16,15 @@ use crate::events::{EventKind, Reporter, Stage};
 use crate::image::Rgba32F;
 use crate::load::load_image;
 use crate::manifest::{
-    dispatched_isa, engine_commit, now_rfc3339, output_key, sha256_file, sha256_json,
-    EncoderVersions, ManifestRecord, PresetRef, ENGINE_VERSION, MANIFEST_SCHEMA,
+    bc1_model_id, dispatched_isa, engine_commit, now_rfc3339, output_key, sha256_file, sha256_json,
+    EncoderVersions, Manifest, ManifestRecord, PresetRef, ENGINE_VERSION, MANIFEST_SCHEMA,
 };
 use crate::mips::build_chain;
 use crate::ops::preprocess;
 use crate::policy::ResolvedJob;
 use crate::quantize::{to_encoder_input, EncoderInput};
 use crate::validate::{validate, ValidationInput, ValidationReport};
+use std::cell::Cell;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +39,23 @@ pub struct FileOutcome {
     pub output: PathBuf,
     pub report: ValidationReport,
     pub record: ManifestRecord,
+}
+
+/// What the caller needs when `process_file` fails or panics: the last stage the file entered (the stage a panic
+/// is reported at) and whether its output has been written (so the caller removes it; see `process_file`).
+#[derive(Debug)]
+pub struct FileTracker {
+    pub stage: Cell<Stage>,
+    pub written: Cell<bool>,
+}
+
+impl Default for FileTracker {
+    fn default() -> Self {
+        FileTracker {
+            stage: Cell::new(Stage::Load),
+            written: Cell::new(false),
+        }
+    }
 }
 
 fn fail(stage: Stage) -> impl Fn(String) -> FileError {
@@ -69,16 +88,23 @@ fn source_peak(level: &Rgba32F, p: &Profile) -> Option<f32> {
     })
 }
 
-/// Convert one file. Cancellation is checked between stages and between encode bands; once the DDS has been
-/// written the file is finished (validated and recorded) rather than reported as cancelled, so a cancelled file
-/// never leaves an output behind and a written output always gets its record.
+/// Convert one file and append its manifest record. Cancellation is checked between stages and between encode
+/// bands, last just before the write, so a cancelled file never leaves an output behind. Everything that can fail
+/// before the output exists (validation of the in-memory DDS bytes, the profile hash, the record and sidecar text)
+/// runs before the write; only the sidecar write and the manifest append come after it. When one of those fails,
+/// or anything panics, `tracker.written` tells the caller to remove the output, so an output on disk always has
+/// its record. A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
 pub fn process_file(
     job: &ResolvedJob,
     req: &BatchRequest,
     preset: &PresetRef,
     cancel: &CancelToken,
     rep: &Reporter,
+    manifest: &Manifest,
+    tracker: &FileTracker,
 ) -> Result<FileOutcome, FileError> {
+    let enter = |st: Stage| tracker.stage.set(st);
+    enter(Stage::Load);
     // Test hook (Task 44): panic on the named input file to prove per-file panic isolation.
     if std::env::var_os("SDC_TEST_PANIC_ON")
         .is_some_and(|v| job.input.file_name() == Some(v.as_os_str()))
@@ -100,6 +126,7 @@ pub fn process_file(
     let (img, _) = load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
     stop()?;
 
+    enter(Stage::Preprocess);
     let work = preprocess(img, p);
     if work.nonfinite_samples > 0 {
         rep.emit(
@@ -119,6 +146,7 @@ pub fn process_file(
     }
     stop()?;
 
+    enter(Stage::Mipmaps);
     let mut chain = build_chain(&work, p);
     let alpha_present = work.alpha_present;
     // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
@@ -139,6 +167,7 @@ pub fn process_file(
     drop(work);
     stop()?;
 
+    enter(Stage::Compress);
     let ectx = EncodeCtx {
         cancel: Some(cancel.flag()),
     };
@@ -157,6 +186,7 @@ pub fn process_file(
         );
     }
 
+    enter(Stage::Write);
     let srgb = p.srgb_tag();
     let desc = DdsDesc {
         width,
@@ -167,13 +197,11 @@ pub fn process_file(
     };
     let bytes = dds_bytes(&desc, &levels).map_err(|e| fail(Stage::Write)(e.to_string()))?;
     drop(levels);
-    stop()?;
-    write_atomic(&job.output, &bytes).map_err(|e| fail(Stage::Write)(e.to_string()))?;
-    drop(bytes);
 
-    let written = std::fs::read(&job.output).map_err(|e| fail(Stage::Validate)(e.to_string()))?;
+    // Validate the exact bytes about to be written: `validate` parses them with the engine's DDS reader (spec §5.8).
+    enter(Stage::Validate);
     let report = validate(&ValidationInput {
-        bytes: &written,
+        bytes: &bytes,
         profile: p,
         encoder_input: Some(&inputs),
         base_coverage,
@@ -181,6 +209,8 @@ pub fn process_file(
         bc1_model: req.bc1_model,
         expected_levels: Some(total),
     });
+    drop(inputs);
+    enter(Stage::Write);
     let record = ManifestRecord {
         schema: MANIFEST_SCHEMA,
         ts: now_rfc3339(),
@@ -197,13 +227,25 @@ pub fn process_file(
         sources: vec![],
         output: output_key(&req.output_root, &job.output),
         validation: report.summary.clone(),
+        bc1_model: Some(bc1_model_id(req.bc1_model).into()),
     };
-    if req.sidecar {
-        let side = job.output.with_extension("dds.json");
-        let text =
-            serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
-        write_atomic(&side, text.as_bytes()).map_err(|e| fail(Stage::Write)(e.to_string()))?;
+    let sidecar = req
+        .sidecar
+        .then(|| serde_json::to_string_pretty(&record))
+        .transpose()
+        .map_err(|e| fail(Stage::Write)(e.to_string()))?;
+    stop()?;
+
+    write_atomic(&job.output, &bytes).map_err(|e| fail(Stage::Write)(e.to_string()))?;
+    tracker.written.set(true);
+    drop(bytes);
+    if let Some(text) = sidecar {
+        write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
+            .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
     }
+    manifest
+        .append(&record)
+        .map_err(|e| fail(Stage::Write)(format!("manifest {}: {e}", manifest.path().display())))?;
     Ok(FileOutcome {
         output: job.output.clone(),
         report,

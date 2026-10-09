@@ -118,7 +118,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `mips.filter` | `box` / `tent` / `mitchell` / `kaiser{width,alpha,stretch}` | `box` | Mitchell and Kaiser for Color only |
 | `mips.edge` | `clamp` / `wrap` | `wrap` | Irrelevant to box at power-of-two [MIP] |
 | `mips.normal` | `renormalize` / `renormalize_bake` | `renormalize`; set job may upgrade (§6) | Normal category |
-| `mips.coverage` | bool, **per texture** | `true` for `cutout` and `cutout_blend`; switchable per image [Requirement] | §5.5 |
+| `mips.coverage` | bool, **per texture** | `true` for `cutout` and `cutout_blend`; switchable per image [Requirement] | §5.5. Applies only to `cutout` and `cutout_blend`: on `blend`, `data` or `remove` the field is a no-op even when set on, because blended alpha keeps box-averaged opacity (§5.5) |
 | `format` | `bc1`/`bc3`/`bc4`/`bc5`/`bc6h_uf16`/`bc7` | Sub-type × target | Always unsigned |
 | `header` | `dx10` / `legacy` | `legacy` for BC1/BC3 UNORM, else `dx10` | BC4/BC5 legacy = `BC4U`/`BC5U`; `ATI1`/`ATI2` never written [D#2] |
 | `encoder.backend` | `bc7e` / `rgbcx` / `ispc_bc6h` / `nvtt` | Format | §7 |
@@ -167,7 +167,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 ### 3.6 Reproducibility
 
-**[Requirement]** Preset hash and encoder versions go to a sidecar; a reserved-header hash is deferred [D#15]. **[Proposal]** Each output gets a sidecar record: engine version and commit; encoder names, vendored commits (bc7enc_rdo `b943862`, ISPC TC `79ddbc9`), the bc7e patch id and ISPC 1.31.0; the ISA the ISPC dispatcher selected; preset id, version and SHA-256 of its canonical form; the resolved profile with provenance; the source SHA-256; validation results. By default records go to one batch manifest, `<output_root>/_sdc/manifest.jsonl`, which keeps mod folders clean; a per-file `<name>.dds.json` is optional. Reserved header fields stay zero. **[Finding]** ISPC multi-target dispatch can change bits across CPUs [LF §9]. **[Proposal]** Guarantee: same input, preset, build and dispatched ISA give byte-identical output, enforced in CI with `pinned-isa` (§2).
+**[Requirement]** Preset hash and encoder versions go to a sidecar; a reserved-header hash is deferred [D#15]. **[Proposal]** Each output gets a sidecar record: engine version and commit; encoder names, vendored commits (bc7enc_rdo `b943862`, ISPC TC `79ddbc9`), the bc7e patch id and ISPC 1.31.0; the ISA the ISPC dispatcher selected; preset id, version and SHA-256 of its canonical form; the resolved profile with provenance; the source SHA-256; the batch BC1 decoder model; validation results. By default records go to one batch manifest, `<output_root>/_sdc/manifest.jsonl`, which keeps mod folders clean; a per-file `<name>.dds.json` is optional. Reserved header fields stay zero. **[Finding]** ISPC multi-target dispatch can change bits across CPUs [LF §9]. **[Proposal]** Guarantee: same input, preset, build and dispatched ISA give byte-identical output, enforced in CI with `pinned-isa` (§2).
 
 ### 3.7 Preset suffix aliases
 
@@ -563,7 +563,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 | Edge case | Behaviour |
 |---|---|
-| Output exists | `if-changed` (default) re-encodes when the manifest shows a different source hash, profile hash or engine version; an output with no manifest record is kept (`OUT-UNKNOWN-EXISTING`) unless `overwrite` |
+| Output exists | `if-changed` (default) re-encodes when the manifest shows a different source hash, profile hash, engine version or encoder versions, a BC1 decoder model other than the batch's (BC1 and BC3 outputs, whose colour blocks rgbcx encodes against it), or a record whose validation did not pass (a failed output is re-encoded and reported again, never counted up to date); a record it cannot compare (newer schema, missing encoders or preset) also re-encodes. An output with no manifest record is kept (`OUT-UNKNOWN-EXISTING`) unless `overwrite`; the engine never leaves its own output without a record (a failure after the write removes the output) |
 | Invalid or unreadable input | `file_failed` at Load; batch continues |
 | Same stem, different formats | `IN-DUPLICATE`; both skipped |
 | Raw packing input (§4.4) | Before M2.5: `IN-PACKING-INPUT`, reported as `file_skipped` but not counted for exit 1; from M2.5 consumed by a packing recipe (§6.4) |

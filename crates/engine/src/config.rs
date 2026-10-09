@@ -190,6 +190,9 @@ pub struct MipSpec {
     pub levels: MipLevels,
     pub filter: MipFilter,
     pub normal: NormalMips,
+    /// Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and
+    /// `cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,
+    /// `data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity.
     pub coverage: CoverageMode,
 }
 
@@ -231,16 +234,15 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Coverage preservation: `auto` = on for cutout and cutout_blend (DECISIONS Note E).
+    /// Coverage preservation: on for `cutout` and `cutout_blend` unless `mips.coverage = off` (DECISIONS Note E).
+    /// Never on for other policies, even with `mips.coverage = on` (spec §5.5: blended alpha keeps box-averaged
+    /// opacity).
     pub fn coverage_enabled(&self) -> bool {
-        match self.mips.coverage {
-            CoverageMode::On => true,
-            CoverageMode::Off => false,
-            CoverageMode::Auto => matches!(
+        self.mips.coverage != CoverageMode::Off
+            && matches!(
                 self.alpha.policy,
                 AlphaPolicy::Cutout | AlphaPolicy::CutoutBlend
-            ),
-        }
+            )
     }
     pub fn alpha_weighted_mips(&self) -> bool {
         matches!(
@@ -323,6 +325,30 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 25);
+    }
+
+    /// M6: coverage preservation only ever applies to alpha-tested policies; `on` cannot force it onto blended
+    /// or data alpha (spec §5.5: blended alpha keeps box-averaged opacity).
+    #[test]
+    fn coverage_applies_only_to_cutout_policies() {
+        let reg = crate::presets::PresetRegistry::builtin().unwrap();
+        let mut p = reg.base_profile(Target::Cs, Subtype::Diffuse);
+        for (mode, policy, want) in [
+            (CoverageMode::On, AlphaPolicy::Blend, false),
+            (CoverageMode::On, AlphaPolicy::Data, false),
+            (CoverageMode::On, AlphaPolicy::Remove, false),
+            (CoverageMode::On, AlphaPolicy::Cutout, true),
+            (CoverageMode::On, AlphaPolicy::CutoutBlend, true),
+            (CoverageMode::Auto, AlphaPolicy::Cutout, true),
+            (CoverageMode::Auto, AlphaPolicy::CutoutBlend, true),
+            (CoverageMode::Auto, AlphaPolicy::Blend, false),
+            (CoverageMode::Off, AlphaPolicy::Cutout, false),
+            (CoverageMode::Off, AlphaPolicy::CutoutBlend, false),
+        ] {
+            p.mips.coverage = mode;
+            p.alpha.policy = policy;
+            assert_eq!(p.coverage_enabled(), want, "{mode:?} {policy:?}");
+        }
     }
 
     #[test]
