@@ -583,6 +583,57 @@ fn validate_does_not_judge_formats_sdc_never_writes_but_still_checks_their_heade
     assert_eq!(v["warnings"][0]["code"], "VAL-HEADER", "{v}");
 }
 
+/// A legacy 4x4 RGBA8 file with `DDSD_PITCH` and a row pitch of `pitch` bytes.
+fn rgba8_file(dir: &Path, name: &str, pitch: u32) -> PathBuf {
+    let mut b = vec![0u8; 128 + 64];
+    let put = |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    b[0..4].copy_from_slice(b"DDS ");
+    put(&mut b, 4, 124);
+    put(&mut b, 8, 0x100F); // CAPS | HEIGHT | WIDTH | PITCH | PIXELFORMAT
+    put(&mut b, 12, 4);
+    put(&mut b, 16, 4);
+    put(&mut b, 20, pitch);
+    put(&mut b, 76, 32);
+    put(&mut b, 80, 0x41); // DDPF_RGB | DDPF_ALPHAPIXELS
+    put(&mut b, 88, 32);
+    for (i, m) in [0xff, 0xff00, 0xff_0000, 0xff00_0000]
+        .into_iter()
+        .enumerate()
+    {
+        put(&mut b, 92 + i * 4, m);
+    }
+    put(&mut b, 108, 0x1000); // TEXTURE
+    let p = dir.join(name);
+    std::fs::write(&p, b).unwrap();
+    p
+}
+
+/// Codex-B I2 / Note J: a clean uncompressed header (PITCH and a row pitch) is "not judged", exit 0; a wrong
+/// pitch is a header failure.
+#[test]
+fn validate_does_not_judge_a_clean_uncompressed_file() {
+    let d = tempfile::tempdir().unwrap();
+    let good = rgba8_file(d.path(), "ui_d.dds", 16);
+    let o = validate(&["--json"], &good);
+    assert_eq!(code(&o), 0, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["judged"], false, "{v}");
+    assert_eq!(v["passed"], true, "{v}");
+    assert!(
+        v["note"]
+            .as_str()
+            .unwrap()
+            .contains("not judged: format not produced by sdc"),
+        "{v}"
+    );
+
+    let bad = rgba8_file(d.path(), "ui2_d.dds", 64);
+    let o = validate(&["--json"], &bad);
+    assert_eq!(code(&o), 4, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["warnings"][0]["code"], "VAL-HEADER", "{v}");
+}
+
 #[test]
 fn validate_falls_back_when_the_inferred_subtype_is_unavailable_but_not_an_explicit_one() {
     let d = tempfile::tempdir().unwrap();

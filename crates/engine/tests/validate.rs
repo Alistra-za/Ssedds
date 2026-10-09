@@ -382,6 +382,39 @@ fn encoder_input_mismatch_is_a_caller_labelled_header_error() {
     }
 }
 
+/// Codex-B M1: the texel-count check covers HDR inputs too. A 4x4 BC6H file with a short (empty) or long HDR
+/// encoder input is a caller-labelled `VAL-HEADER` error; the matching 16-texel input passes.
+#[test]
+fn hdr_encoder_input_texel_count_mismatch_is_a_header_error() {
+    let p = profile(Subtype::PbrEmissive);
+    assert_eq!(p.format, Format::Bc6hUf16);
+    let one = EncoderInput::Hdr(vec![[0x3C00; 4]; 16]);
+    let enc = encode_level(&one, 4, 4, &p, &EncodeCtx::default())
+        .ok()
+        .unwrap();
+    let b = wrap(&p, 4, 4, &[enc]);
+    let ok = run(&b, &p, Some(std::slice::from_ref(&one)), None, Some(1));
+    assert!(ok.summary.passed, "{:?}", ok.warnings);
+    assert!(!codes(&ok).contains(&Code::ValHeader), "{:?}", ok.warnings);
+    for (what, n) in [("short", 0), ("long", 32)] {
+        let input = [EncoderInput::Hdr(vec![[0x3C00; 4]; n])];
+        let r = run(&b, &p, Some(&input), None, Some(1));
+        assert!(!r.summary.passed, "{what}: {:?}", r.warnings);
+        let w = r
+            .warnings
+            .iter()
+            .find(|w| w.code == Code::ValHeader)
+            .unwrap_or_else(|| panic!("{what}: {:?}", r.warnings));
+        assert!(
+            w.message.contains(&format!(
+                "caller supplied encoder_input does not match the file: mip 0 has {n} texels, the decoded level 16"
+            )),
+            "{what}: {}",
+            w.message
+        );
+    }
+}
+
 #[test]
 fn bc1_is_opaque_with_the_rgbcx_model_and_transparent_texels_are_errors() {
     encoders_sys::init(Bc1Model::Ideal).unwrap();

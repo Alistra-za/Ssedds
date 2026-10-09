@@ -8,9 +8,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub const DDSD_CAPS: u32 = 0x1;
 pub const DDSD_HEIGHT: u32 = 0x2;
 pub const DDSD_WIDTH: u32 = 0x4;
+/// The pitch field holds the row pitch of an uncompressed format.
+pub const DDSD_PITCH: u32 = 0x8;
 pub const DDSD_PIXELFORMAT: u32 = 0x1000;
 pub const DDSD_MIPMAPCOUNT: u32 = 0x2_0000;
 pub const DDSD_LINEARSIZE: u32 = 0x8_0000;
+/// `dwDepth` is valid: a volume texture when it is above 1.
+pub const DDSD_DEPTH: u32 = 0x80_0000;
 pub const DDPF_FOURCC: u32 = 0x4;
 /// Non-standard flag some tools set for normal maps. Defined so tests and the reader can assert it is absent;
 /// the writer never sets it (spec §5.7).
@@ -405,6 +409,7 @@ pub struct DdsFile {
     pub pf_flags: u32,
     pub caps: u32,
     pub caps2: u32,
+    /// The pitch / linear-size field: the row pitch for an uncompressed format, the mip-0 size for a compressed one.
     pub linear_size: u32,
     /// Any of `reserved1[11]`, `caps3`, `caps4`, `reserved2` is non-zero.
     pub reserved_nonzero: bool,
@@ -416,6 +421,7 @@ pub struct DdsFile {
 const MAGIC_AND_HEADER: usize = 128;
 const DX10_END: usize = 148;
 const DDSCAPS2_CUBEMAP: u32 = 0x200;
+const DDSCAPS2_VOLUME: u32 = 0x20_0000;
 const DX10_MISC_CUBEMAP: u32 = 0x4;
 
 fn from_dxgi(d: u32) -> Option<DdsPixelFormat> {
@@ -450,8 +456,10 @@ fn from_dxgi(d: u32) -> Option<DdsPixelFormat> {
 /// Never panics and never allocates from a header field: the level table has at most 32 entries (clamped to the
 /// full chain for the dimensions) and the only large allocation is the copy of `bytes` itself. Sizes use checked
 /// arithmetic and are compared with the bytes actually present, so an absurd dimension reports `Truncated`.
-/// Zero dimensions, a wrong header size and unknown FourCC / DXGI values report `Unsupported`. Cubemaps count
-/// six faces and DX10 arrays `array_size` slices when checking the length.
+/// Zero dimensions, a wrong header size, unknown FourCC / DXGI values and a legacy volume declaration
+/// (`DDSD_DEPTH` with a depth above 1, or `DDSCAPS2_VOLUME`) report `Unsupported`; the volume check comes before
+/// the length check, so a volume missing depth slices is unsupported too. Cubemaps count six faces and DX10
+/// arrays `array_size` slices when checking the length.
 pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
     if bytes.len() < 4 || &bytes[..4] != b"DDS " {
         return Err(DdsError::NotDds);
@@ -480,6 +488,10 @@ pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
     let (pf_flags, fourcc) = (u(80), [bytes[84], bytes[85], bytes[86], bytes[87]]);
     let (bits, rm, gm, bm, am) = (u(88), u(92), u(96), u(100), u(104));
     let (caps, caps2) = (u(108), u(112));
+    // This pipeline is 2D only: a declared volume is rejected rather than read as its first slice.
+    if (flags & DDSD_DEPTH != 0 && u(24) > 1) || caps2 & DDSCAPS2_VOLUME != 0 {
+        return Err(DdsError::Unsupported("volume texture".into()));
+    }
     let mut off = MAGIC_AND_HEADER;
     let mut dx10 = None;
     use DdsPixelFormat::*;
@@ -575,13 +587,21 @@ pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
 }
 
 /// Spec §5.7 rules for a written 2D file. Returns one message per violation; empty means the header is as the
-/// writer would have produced it.
+/// writer would have produced it. A compressed format carries `DDSD_LINEARSIZE` and the mip-0 surface size; an
+/// uncompressed one (which sdc never writes, but whose header is still checked) carries `DDSD_PITCH` and the row
+/// pitch (Codex-B I2).
 pub fn check_header(f: &DdsFile) -> Vec<String> {
     let mut v = vec![];
-    let need = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_LINEARSIZE;
+    let compressed = f.format.block_bytes().is_some();
+    let (size_flag, size_name) = if compressed {
+        (DDSD_LINEARSIZE, "LINEARSIZE")
+    } else {
+        (DDSD_PITCH, "PITCH")
+    };
+    let need = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | size_flag;
     if f.flags & need != need {
         v.push(format!(
-            "flags {:#x} lack CAPS|HEIGHT|WIDTH|PIXELFORMAT|LINEARSIZE",
+            "flags {:#x} lack CAPS|HEIGHT|WIDTH|PIXELFORMAT|{size_name}",
             f.flags
         ));
     }
@@ -603,12 +623,19 @@ pub fn check_header(f: &DdsFile) -> Vec<String> {
             f.mip_count, full, f.width, f.height
         ));
     }
-    let size0 = f.format.level_size(f.width, f.height);
-    if f.linear_size as usize != size0 {
-        v.push(format!(
-            "linear size {} != mip 0 size {size0}",
-            f.linear_size
-        ));
+    if compressed {
+        let size0 = f.format.level_size(f.width, f.height);
+        if f.linear_size as usize != size0 {
+            v.push(format!(
+                "linear size {} != mip 0 size {size0}",
+                f.linear_size
+            ));
+        }
+    } else {
+        let row = f.format.level_size(f.width, 1);
+        if f.linear_size as usize != row {
+            v.push(format!("pitch {} != row pitch {row}", f.linear_size));
+        }
     }
     if f.pf_flags & DDPF_NORMAL != 0 {
         v.push("DDPF_NORMAL set (non-standard)".into());

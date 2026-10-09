@@ -1083,3 +1083,79 @@ fn decode_rejects_short_data_and_survives_arbitrary_blocks() {
         }
     }
 }
+
+/// Codex-B I2: an uncompressed DDS declares `DDSD_PITCH` and a row pitch (bytes per row), not `DDSD_LINEARSIZE`
+/// and the surface size.
+#[test]
+fn uncompressed_header_uses_the_row_pitch() {
+    let base = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT;
+    // DDPF_RGB | DDPF_ALPHAPIXELS, 32 bits, RGBA masks: legacy RGBA8.
+    let rgba8 = (0x41, [0; 4], 32, [0xff, 0xff00, 0xff_0000, 0xff00_0000]);
+    let mut good = raw_file((4, 4, 1), rgba8, 0, None, &[0; 64]);
+    put(&mut good, 8, base | DDSD_PITCH);
+    put(&mut good, 20, 16);
+    let f = read_dds(&good).unwrap();
+    assert_eq!(f.format, DdsPixelFormat::Rgba8 { srgb: false });
+    assert!(check_header(&f).is_empty(), "{:?}", check_header(&f));
+
+    // A pitch that is not one row: here the whole surface, as a compressed header would carry.
+    let mut b = good.clone();
+    put(&mut b, 20, 64);
+    let v = check_header(&read_dds(&b).unwrap());
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(v[0].contains("pitch 64 != row pitch 16"), "{v:?}");
+
+    // LINEARSIZE instead of PITCH.
+    let mut b = good.clone();
+    put(&mut b, 8, base | DDSD_LINEARSIZE);
+    let v = check_header(&read_dds(&b).unwrap());
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(v[0].contains("PITCH"), "{v:?}");
+
+    // Row pitch is width x bytes per pixel, also for an odd width: R8 3x2 has pitch 3.
+    let r8 = (0x2_0000, [0; 4], 8, [0xff, 0, 0, 0]);
+    let mut b = raw_file((3, 2, 1), r8, 0, None, &[0; 6]);
+    put(&mut b, 8, base | DDSD_PITCH);
+    put(&mut b, 20, 3);
+    let f = read_dds(&b).unwrap();
+    assert_eq!(f.format, DdsPixelFormat::R8);
+    assert!(check_header(&f).is_empty(), "{:?}", check_header(&f));
+}
+
+/// Codex-B I3: a legacy volume declaration (`DDSD_DEPTH` with depth > 1, or `DDSCAPS2_VOLUME`) is not a 2D
+/// texture. It is rejected as unsupported, whether or not every depth slice is present, instead of being read as
+/// its first slice.
+#[test]
+fn legacy_volume_textures_are_unsupported() {
+    const VOLUME: u32 = 0x20_0000; // DDSCAPS2_VOLUME
+    let block = [0u8; 8]; // one 4x4 BC1 block
+    let volume = |depth_flag: bool, depth: u32, caps2: u32, data: &[u8]| {
+        let mut b = raw_file((4, 4, 1), (0x4, *b"DXT1", 0, [0; 4]), caps2, None, data);
+        let flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_LINEARSIZE;
+        put(
+            &mut b,
+            8,
+            if depth_flag {
+                flags | DDSD_DEPTH
+            } else {
+                flags
+            },
+        );
+        put(&mut b, 20, 8);
+        put(&mut b, 24, depth);
+        put(&mut b, 108, DDSCAPS_TEXTURE | DDSCAPS_COMPLEX);
+        b
+    };
+    let unsupported =
+        |b: &[u8]| matches!(read_dds(b), Err(DdsError::Unsupported(s)) if s == "volume texture");
+    // The review's case: depth 2 declared, only the first slice present (truncated depth payload).
+    assert!(unsupported(&volume(true, 2, VOLUME, &block)));
+    // Every slice present: still a volume.
+    assert!(unsupported(&volume(true, 2, VOLUME, &block.repeat(2))));
+    // Either declaration alone.
+    assert!(unsupported(&volume(true, 2, 0, &block.repeat(2))));
+    assert!(unsupported(&volume(false, 0, VOLUME, &block)));
+    // A depth of 1 is a plain 2D texture.
+    let f = read_dds(&volume(true, 1, 0, &block)).unwrap();
+    assert_eq!(f.levels, vec![(4, 4, 0..8)]);
+}

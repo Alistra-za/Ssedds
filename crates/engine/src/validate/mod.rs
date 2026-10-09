@@ -168,9 +168,10 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             _ => vec![0, 1, 2],
         };
         for (l, ((lw, lh, d), e)) in decoded.iter().zip(enc).enumerate() {
-            let (d, e) = match (d, e) {
-                (Decoded::Ldr(d), EncoderInput::Ldr(e)) => (d, e),
-                (Decoded::Hdr(_), EncoderInput::Hdr(_)) => continue,
+            // Texel counts are checked for both kinds (Codex-B M1); only LDR levels get the metrics below.
+            let (dn, en) = match (d, e) {
+                (Decoded::Ldr(d), EncoderInput::Ldr(e)) => (d.len(), e.len()),
+                (Decoded::Hdr(d), EncoderInput::Hdr(e)) => (d.len(), e.len()),
                 _ => {
                     w.push(Warning::new(
                         Code::ValHeader,
@@ -181,15 +182,16 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                     continue;
                 }
             };
-            if d.len() != e.len() {
+            if dn != en {
                 let msg = format!(
-                    "caller supplied encoder_input does not match the file: mip {l} has {} texels, the decoded level {}",
-                    e.len(),
-                    d.len()
+                    "caller supplied encoder_input does not match the file: mip {l} has {en} texels, the decoded level {dn}"
                 );
                 w.push(Warning::new(Code::ValHeader, msg));
                 continue;
             }
+            let (Decoded::Ldr(d), EncoderInput::Ldr(e)) = (d, e) else {
+                continue;
+            };
             let q = psnr(e, d, &ch);
             s.min_mip_psnr_db = Some(s.min_mip_psnr_db.map_or(q, |m| m.min(q)));
             if q < v.min_mip_psnr_db {
