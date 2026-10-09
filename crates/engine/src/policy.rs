@@ -7,7 +7,7 @@ use crate::analyse::Analysis;
 use crate::codes::{Code, Severity, Warning};
 use crate::config::*;
 use crate::discover::InputFile;
-use crate::group::TextureSet;
+use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};
 use crate::image::SourceInfo;
 use crate::overrides::{to_patch, Scope, SetOverride};
 pub use crate::presets::Provenance;
@@ -99,6 +99,26 @@ fn preset_chain<'a>(
         Some((_, _, p)) => ctx.registry.alias_chain(p, ctx.target),
         None => ctx.registry.chain(ctx.preset),
     }
+}
+
+/// The exporter vocabulary term the file name ends in (spec §4.4), if any. Aliases are matched first and never
+/// equal a term, so an aliased file has none.
+pub fn vocab_for(f: &FileFacts) -> Option<&'static Vocab> {
+    if f.alias.is_some() {
+        return None;
+    }
+    vocab_of(
+        &f.input
+            .rel
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy(),
+    )
+}
+
+/// Sub-types that read `channels.green_convention` (spec §3.2): every Normal sub-type except `msn`.
+fn takes_green(st: Subtype) -> bool {
+    st.category() == Category::Normal && st != Subtype::Msn
 }
 
 /// Case-insensitive glob over the game path or the input-relative path. A glob without '/' also matches the
@@ -199,6 +219,9 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
                 top.confidence = Confidence::High;
             }
         }
+    }
+    if let Some(v) = vocab_for(f) {
+        apply_vocabulary(&mut suggestions, v);
     }
     // --set subtype (unscoped or file-scoped): the highest-precedence one wins
     let set_subtype = ranked_overrides(ctx)
@@ -391,6 +414,24 @@ pub fn layered_profile(
             );
         }
     }
+    // Spec §4.4: `_normalgl`/`_normaldx` state the green convention, a fact at the analysis position (--set wins).
+    if let Some(Vocab {
+        term,
+        role: VocabRole::Normal(Some(g)),
+    }) = vocab_for(f)
+    {
+        if takes_green(st) {
+            let value = serde_json::to_value(g).expect("GreenConvention serialises");
+            apply(
+                &mut doc,
+                &mut prov,
+                &mut sources,
+                &to_patch("channels.green_convention", &value),
+                Provenance::Suffix(term.to_string()),
+                GENERIC,
+            );
+        }
+    }
     for o in ranked_overrides(ctx)
         .into_iter()
         .filter(|o| o.field != "subtype")
@@ -413,6 +454,13 @@ pub fn layered_profile(
     }
     let mut profile = finish_profile(doc, ctx.target, st)?;
     backend_follows_format(&mut profile, &mut prov, &sources);
+    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
+    if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
+        profile.channels.flip_green = true;
+        if let Some(src) = prov.get("channels.green_convention").cloned() {
+            prov.insert("channels.flip_green".into(), src);
+        }
+    }
     Ok((profile, prov))
 }
 
@@ -497,6 +545,11 @@ pub enum JobStatus {
     /// A sub-type or alpha meaning still needs a decision (rule, flag or accepted high-confidence suggestion).
     Unresolved {
         reasons: Vec<String>,
+    },
+    /// A raw single-channel map (spec §4.4): a channel-packing input (§6.4, milestone M2.5), not converted on
+    /// its own and not an error.
+    PackingInput {
+        role: RawMap,
     },
     /// Blocking codes not acknowledged with `--allow`.
     Blocked {
@@ -808,10 +861,46 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
     v
 }
 
+/// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
+/// placeholder and is never used. Milestone M2.5 consumes these files in packing recipes.
+fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) -> ResolvedJob {
+    let profile = ctx
+        .registry
+        .profile(BASE_ID, ctx.target, Subtype::GenericData)
+        .expect("sdc-base profile is valid");
+    let msg = format!(
+        "_{term} is a raw {} map: a channel-packing input (spec §6.4), not converted on its own; set a sub-type for it to convert it alone",
+        role.id()
+    );
+    ResolvedJob {
+        input: f.input.path.clone(),
+        output: f.input.output.clone(),
+        game_path: f.input.game_path.clone(),
+        set_key: f.set.key.clone(),
+        profile,
+        provenance: BTreeMap::new(),
+        suggestions: vec![],
+        warnings: vec![Warning::new(Code::InPackingInput, msg)
+            .with_data(json!({ "role": role, "term": term }))],
+        status: JobStatus::PackingInput { role },
+        suffix_alias: None,
+    }
+}
+
 /// Resolve one file: sub-type decision, layered profile, §10 checks and status (spec §5.2).
 pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
     let suffix_alias = alias_use(ctx, f);
     let d = decide_subtype(ctx, f);
+    // Spec §4.4: a raw map is a packing input unless a rule or --set names its sub-type.
+    if let Some(Vocab {
+        term,
+        role: VocabRole::PackingInput(role),
+    }) = vocab_for(f)
+    {
+        if !matches!(d.provenance, Provenance::User | Provenance::Rule(_)) {
+            return packing_input_job(ctx, f, term, *role);
+        }
+    }
     let mut reasons = vec![];
     if !d.decided {
         reasons.push(match d.suggestions.first() {
@@ -888,6 +977,21 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             hint.unwrap_or_default()
         ));
     }
+    // Spec §4.4 (DECISIONS Note H): a plain `_normal`/`_nrm` has no default green convention. It is not a suggestion,
+    // so neither --accept-suggestions high nor --allow SUG-LOW-CONFIDENCE settles it.
+    let mut green_unstated = false;
+    if let Some(Vocab {
+        term,
+        role: VocabRole::Normal(None),
+    }) = vocab_for(f)
+    {
+        if takes_green(profile.subtype) && profile.channels.green_convention.is_none() {
+            green_unstated = true;
+            reasons.push(format!(
+                "green convention of _{term} is unstated: set channels.green_convention=opengl or directx (preset, config, rule or --set)"
+            ));
+        }
+    }
     let mut warnings: Vec<Warning> = fallback_note.into_iter().collect();
     warnings.extend(check_profile(&profile, f));
     if !reasons.is_empty() {
@@ -912,7 +1016,9 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
     // triggers LOSS-ALPHA-DATA against the default `remove`), then blocking codes.
     let status = if !errors.is_empty() {
         JobStatus::Error { codes: errors }
-    } else if !reasons.is_empty() && !ctx.allow.contains(&Code::SugLowConfidence) {
+    } else if (!reasons.is_empty() && !ctx.allow.contains(&Code::SugLowConfidence))
+        || green_unstated
+    {
         JobStatus::Unresolved { reasons }
     } else if !blocking.is_empty() {
         JobStatus::Blocked { codes: blocking }

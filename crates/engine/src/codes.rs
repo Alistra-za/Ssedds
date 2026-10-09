@@ -75,6 +75,7 @@ codes! {
     EncNvttVersion = "ENC-NVTT-VERSION" => Blocking,
     InDuplicate = "IN-DUPLICATE" => Blocking,
     InDdsSkipped = "IN-DDS-SKIPPED" => Info,
+    InPackingInput = "IN-PACKING-INPUT" => Warning,
     InDecode = "IN-DECODE" => Error,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
 }
@@ -126,6 +127,8 @@ mod tests {
         assert_eq!(Code::ValCoverage.severity(), Severity::Warning);
         assert_eq!(Code::ValMipError.severity(), Severity::Warning);
         assert_eq!(Code::CfgInvalid.severity(), Severity::Error);
+        assert_eq!(Code::InPackingInput.severity(), Severity::Warning);
+        assert_eq!(Code::parse("IN-PACKING-INPUT"), Some(Code::InPackingInput));
     }
 
     #[test]
@@ -137,7 +140,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 47);
+        assert_eq!(Code::ALL.len(), 48);
     }
 
     #[test]

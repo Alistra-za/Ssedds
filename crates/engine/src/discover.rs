@@ -126,13 +126,13 @@ pub fn discover(
     Ok(files)
 }
 
-/// Spec §3.7: an input whose stem ends in a preset suffix alias is written under its canonical
-/// suffix (`iron_rmaosultrahigh.png` → `iron_rmaos.dds`). Only `output` changes; `rel` and
-/// `game_path` keep the source name, so rule globs match what is on disk. Run before grouping.
+/// Spec §3.7, §4.4: an input whose stem ends in a preset suffix alias or an exporter vocabulary term is
+/// written under its Skyrim name: `iron_rmaosultrahigh.png` → `iron_rmaos.dds`, `iron_normalgl.png` →
+/// `iron_n.dds`, `iron_basecolor.png` → `iron.dds`. Raw packing inputs keep their name (they are never
+/// written on their own). Only `output` changes; `rel` and `game_path` keep the source name, so rule globs
+/// match what is on disk. Run before grouping.
 pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, String>) {
-    if aliases.is_empty() {
-        return;
-    }
+    use crate::group::{split_suffix_with, vocab_of, VocabRole};
     for f in files {
         let stem = f
             .rel
@@ -140,10 +140,24 @@ pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, 
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        let split = crate::group::split_suffix_with(&stem, aliases);
-        if let (Some(_), Some(canonical)) = (&split.alias, &split.suffix) {
-            f.output
-                .set_file_name(format!("{}_{canonical}.dds", split.base));
+        let split = split_suffix_with(&stem, aliases);
+        let suffixed = || {
+            split
+                .suffix
+                .as_ref()
+                .map(|c| format!("{}_{c}.dds", split.base))
+        };
+        let name = match (&split.alias, vocab_of(&stem)) {
+            (Some(_), _) => suffixed(),
+            (None, Some(v)) => match v.role {
+                VocabRole::PackingInput(_) => None,
+                VocabRole::Colour => Some(format!("{}.dds", split.base)),
+                VocabRole::Normal(_) | VocabRole::Emissive => suffixed(),
+            },
+            (None, None) => None,
+        };
+        if let Some(n) = name {
+            f.output.set_file_name(n);
         }
     }
 }

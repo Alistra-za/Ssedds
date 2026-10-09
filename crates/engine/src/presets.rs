@@ -132,7 +132,7 @@ impl ConfigFile {
 /// Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.
 ///
 /// Serialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the
-/// `<source>#<n>` part), and the snake_case variant name for the rest.
+/// `<source>#<n>` part), `suffix:<term>`, and the snake_case variant name for the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[schemars(with = "String")]
 pub enum Provenance {
@@ -142,6 +142,9 @@ pub enum Provenance {
     ProjectConfig,
     Rule(String),
     Analysis,
+    /// A fact stated by an exporter vocabulary term, e.g. `_normalgl` (spec §4.4); applied at the analysis
+    /// position. Shown as `suffix:<term>`.
+    Suffix(String),
     Suggestion,
     Set,
     User,
@@ -158,6 +161,7 @@ impl fmt::Display for Provenance {
             Provenance::ProjectConfig => f.write_str("project_config"),
             Provenance::Rule(src) => write!(f, "rule:{src}"),
             Provenance::Analysis => f.write_str("analysis"),
+            Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::Set => f.write_str("set"),
             Provenance::User => f.write_str("user"),
@@ -174,6 +178,9 @@ impl std::str::FromStr for Provenance {
         }
         if let Some(src) = s.strip_prefix("rule:") {
             return Ok(Provenance::Rule(src.to_string()));
+        }
+        if let Some(t) = s.strip_prefix("suffix:") {
+            return Ok(Provenance::Suffix(t.to_string()));
         }
         Ok(match s {
             "builtin" => Provenance::Builtin,
@@ -270,8 +277,8 @@ impl PresetRegistry {
         Ok(id)
     }
 
-    /// Spec §3.7: an alias is `[a-z0-9]+`, is not a §6.1 suffix, maps to a §6.1 suffix and is unique across
-    /// loaded presets.
+    /// Spec §3.7: an alias is `[a-z0-9]+`, is neither a §6.1 suffix nor an exporter vocabulary term (§4.4),
+    /// maps to a §6.1 suffix and is unique across loaded presets.
     fn check_aliases(&self, p: &PresetFile) -> Result<(), PresetError> {
         let bad = |m: String| PresetError::Alias(format!("CFG-INVALID: preset '{}': {m}", p.id));
         for (alias, canonical) in &p.suffix_aliases {
@@ -287,6 +294,11 @@ impl PresetRegistry {
             if SUFFIXES.contains(&alias.as_str()) {
                 return Err(bad(format!(
                     "suffix alias '{alias}' is a canonical suffix (spec §6.1)"
+                )));
+            }
+            if crate::group::is_vocabulary(alias) {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' is an exporter vocabulary term (spec §4.4)"
                 )));
             }
             if !SUFFIXES.contains(&canonical.as_str()) {

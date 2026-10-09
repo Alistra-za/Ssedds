@@ -1,4 +1,5 @@
 //! Texture-set grouping (spec §6.1): inputs sharing an output directory and a base name.
+use crate::config::{GreenConvention, RawMap};
 use crate::discover::InputFile;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,6 +26,105 @@ pub fn split_suffix(stem: &str) -> (String, Option<String>) {
     (stem.to_string(), None)
 }
 
+/// What an exporter suffix stands for (spec §4.4, DECISIONS Note H).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VocabRole {
+    /// The colour member (no suffix): written `<base>.dds`, high confidence for the colour role.
+    Colour,
+    /// `_n`; `Some` when the term states the green convention (`_normalgl`, `_normaldx`).
+    Normal(Option<GreenConvention>),
+    /// `_g` (`glow` or `pbr_emissive`).
+    Emissive,
+    /// A raw single-channel map for channel packing (spec §6.4); never written on its own.
+    PackingInput(RawMap),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Vocab {
+    /// Lower-case, without the leading '_'.
+    pub term: &'static str,
+    pub role: VocabRole,
+}
+
+impl Vocab {
+    /// The canonical suffix the file counts as after Discover: none for colour, `n`, `g`, or the packing role id.
+    pub fn canonical(&self) -> Option<String> {
+        match self.role {
+            VocabRole::Colour => None,
+            VocabRole::Normal(_) => Some("n".into()),
+            VocabRole::Emissive => Some("g".into()),
+            VocabRole::PackingInput(r) => Some(r.id()),
+        }
+    }
+}
+
+const fn term(term: &'static str, role: VocabRole) -> Vocab {
+    Vocab { term, role }
+}
+
+/// Spec §4.4 exporter vocabulary, longest term first so `_base_color` wins over `_color`. None of these is a
+/// §6.1 suffix, and none ends in `_<§6.1 suffix>`, so a stem has at most one reading.
+pub static VOCABULARY: [Vocab; 31] = {
+    use GreenConvention::*;
+    use RawMap::*;
+    use VocabRole::*;
+    [
+        term("ambientocclusion", PackingInput(Ao)),
+        term("displacement", PackingInput(Height)),
+        term("base_color", Colour),
+        term("glossiness", PackingInput(Glossiness)),
+        term("roughness", PackingInput(Roughness)),
+        term("metalness", PackingInput(Metallic)),
+        term("basecolor", Colour),
+        term("occlusion", PackingInput(Ao)),
+        term("normalgl", Normal(Some(Opengl))),
+        term("normaldx", Normal(Some(Directx))),
+        term("colormap", Colour),
+        term("metallic", PackingInput(Metallic)),
+        term("specular", PackingInput(Specular)),
+        term("emissive", Emissive),
+        term("emission", Emissive),
+        term("diffuse", Colour),
+        term("opacity", PackingInput(Opacity)),
+        term("albedo", Colour),
+        term("normal", Normal(None)),
+        term("height", PackingInput(Height)),
+        term("color", Colour),
+        term("rough", PackingInput(Roughness)),
+        term("metal", PackingInput(Metallic)),
+        term("gloss", PackingInput(Glossiness)),
+        term("sheen", PackingInput(Fuzz)),
+        term("spec", PackingInput(Specular)),
+        term("disp", PackingInput(Height)),
+        term("fuzz", PackingInput(Fuzz)),
+        term("nrm", Normal(None)),
+        term("col", Colour),
+        term("ao", PackingInput(Ao)),
+    ]
+};
+
+/// The vocabulary term a stem ends in (case-insensitive) and the base before it. A stem that is only a term
+/// (`_normal`) is left alone, as with §6.1 suffixes.
+pub fn split_vocab(stem: &str) -> Option<(String, &'static Vocab)> {
+    let lower = stem.to_ascii_lowercase();
+    VOCABULARY.iter().find_map(|v| {
+        let tail = format!("_{}", v.term);
+        // The tail is ASCII, so the cut falls on a char boundary even in non-ASCII stems.
+        (lower.ends_with(&tail) && lower.len() > tail.len())
+            .then(|| (stem[..stem.len() - tail.len()].to_string(), v))
+    })
+}
+
+/// The vocabulary entry a stem ends in, if any (`split_vocab` without the base).
+pub fn vocab_of(stem: &str) -> Option<&'static Vocab> {
+    split_vocab(stem).map(|(_, v)| v)
+}
+
+/// Whether `term` (lower-case, no '_') is a vocabulary term; preset aliases may not be one (spec §3.7).
+pub fn is_vocabulary(term: &str) -> bool {
+    VOCABULARY.iter().any(|v| v.term == term)
+}
+
 /// Result of `split_suffix_with`: `suffix` is canonical (an alias's target), `alias` the alias matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuffixSplit {
@@ -34,8 +134,9 @@ pub struct SuffixSplit {
 }
 
 /// `split_suffix` with preset suffix aliases (spec §3.7, DECISIONS Note G). The stem segment after the
-/// last '_' is looked up (lower-case) in `aliases` (alias → canonical) before the §6.1 list. Aliases
-/// contain no '_' and are never a §6.1 suffix, so a match is exact and unambiguous.
+/// last '_' is looked up (lower-case) in `aliases` (alias → canonical) before the vocabulary (§4.4) and
+/// the §6.1 list. Aliases contain no '_' and are never a §6.1 suffix or a vocabulary term, so a match is
+/// exact and unambiguous. A vocabulary term splits to its canonical suffix (`Vocab::canonical`).
 pub fn split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> SuffixSplit {
     if let Some((base, tail)) = stem.rsplit_once('_') {
         let tail = tail.to_ascii_lowercase();
@@ -46,6 +147,14 @@ pub fn split_suffix_with(stem: &str, aliases: &BTreeMap<String, String>) -> Suff
                 alias: Some(tail),
             };
         }
+    }
+    // Spec §4.4: exporter vocabulary after aliases, before the §6.1 list.
+    if let Some((base, v)) = split_vocab(stem) {
+        return SuffixSplit {
+            base,
+            suffix: v.canonical(),
+            alias: None,
+        };
     }
     let (base, suffix) = split_suffix(stem);
     SuffixSplit {

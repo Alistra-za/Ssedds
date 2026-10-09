@@ -27,6 +27,7 @@ pub const FIELD_PATHS: &[&str] = &[
     "alpha.exact_opaque",
     "channels.swizzle",
     "channels.flip_green",
+    "channels.green_convention",
     "channels.reconstruct_z",
     "channels.grayscale_source",
     "mips.levels",

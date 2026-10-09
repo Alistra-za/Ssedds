@@ -32,6 +32,34 @@ cfg_enum!(HeaderForm, "lowercase" { Auto, Dx10, Legacy });
 cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt });
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest });
 cfg_enum!(SearchRadius, "lowercase" { Default, Max });
+cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
+cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz });
+
+impl RawMap {
+    pub const ALL: [RawMap; 8] = {
+        use RawMap::*;
+        [
+            Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz,
+        ]
+    };
+
+    /// The role id a raw map counts as after Discover (spec §4.4): `roughness`, `ao`, …
+    pub fn id(self) -> String {
+        serde_json::to_value(self)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// Spec §4.3 item 1, §6.4: an input that starts the cs `_rmaos`/`_rfaos` recipe, so its set is PBR.
+    pub fn starts_rmaos(self) -> bool {
+        matches!(
+            self,
+            RawMap::Roughness | RawMap::Glossiness | RawMap::Metallic | RawMap::Ao
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -150,6 +178,10 @@ pub struct ChannelSpec {
     pub flip_green: bool,
     pub reconstruct_z: bool,
     pub grayscale_source: GraySource,
+    /// Green (Y) convention of a normal source (spec §3.2, §4.4, DECISIONS Note H); None = unstated.
+    /// `opengl` makes Resolve set `flip_green`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green_convention: Option<GreenConvention>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
