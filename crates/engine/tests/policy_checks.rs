@@ -136,11 +136,17 @@ fn pbr_albedo_unavailable_under_vanilla_and_srgb_is_an_error_there() {
         &["subtype=pbr_albedo"],
         &[],
     );
-    assert!(matches!(
+    // Fix batch 39 item 2: the unavailable sub-type is the root cause; the inherited `_SRGB` tag of its profile is
+    // a cascade, so TAG-SRGB-VANILLA does not fire and the file is blocked, not failed.
+    assert_eq!(
         j.status,
-        JobStatus::Error { .. } | JobStatus::Blocked { .. }
-    ));
-    assert!(codes(&j).contains(&Code::CfgUnavailable));
+        JobStatus::Blocked {
+            codes: vec![Code::CfgUnavailable]
+        },
+        "{:?}",
+        j.warnings
+    );
+    assert_eq!(codes(&j), vec![Code::CfgUnavailable]);
     let j = run(
         Target::Vanilla,
         "textures/a/x.png",
@@ -414,8 +420,8 @@ fn srgb_and_bc6h_are_gated_by_target() {
             codes: vec![Code::TagSrgbVanilla]
         }
     );
-    // pbr_emissive under cpm: unavailable sub-type (blocking) and inherited BC6H outside cs (error), one code
-    // in the status
+    // pbr_emissive under cpm: the unavailable sub-type is the only report; its inherited BC6H is a cascade
+    // (fix batch 39 item 2), so the file is blocked by one CFG-UNAVAILABLE, not failed.
     let j = run(
         Target::Cpm,
         "textures/a/x_g.png",
@@ -427,19 +433,13 @@ fn srgb_and_bc6h_are_gated_by_target() {
     );
     assert_eq!(
         j.status,
-        JobStatus::Error {
+        JobStatus::Blocked {
             codes: vec![Code::CfgUnavailable]
         },
         "{:?}",
         j.warnings
     );
-    assert_eq!(
-        codes(&j)
-            .iter()
-            .filter(|c| **c == Code::CfgUnavailable)
-            .count(),
-        2
-    );
+    assert_eq!(codes(&j), vec![Code::CfgUnavailable]);
     // BC6H on an available sub-type outside cs
     let j = run(
         Target::Vanilla,
@@ -458,7 +458,8 @@ fn srgb_and_bc6h_are_gated_by_target() {
         "{:?}",
         j.warnings
     );
-    // the inherited srgb tag of pbr_subsurface under vanilla is an error, not a silent write
+    // pbr_subsurface under vanilla is blocked as unavailable, never a silent write; its inherited `_SRGB` tag is a
+    // cascade and raises no TAG-SRGB-VANILLA (fix batch 39 item 2)
     let j = run(
         Target::Vanilla,
         "textures/a/x_s.png",
@@ -468,12 +469,96 @@ fn srgb_and_bc6h_are_gated_by_target() {
         &["subtype=pbr_subsurface"],
         &[],
     );
+    assert_eq!(
+        j.status,
+        JobStatus::Blocked {
+            codes: vec![Code::CfgUnavailable]
+        },
+        "{:?}",
+        j.warnings
+    );
+    assert_eq!(codes(&j), vec![Code::CfgUnavailable]);
+}
+
+/// Fix batch 39 item 2: an unavailable sub-type reports CFG-UNAVAILABLE only. The checks of its profile (format,
+/// tag, alpha, dimensions, alpha meaning) would be a cascade, so none of them fire and the job is blocked.
+#[test]
+fn unavailable_subtype_reports_cfg_unavailable_only() {
+    // varying alpha, non-power-of-two: LOSS-ALPHA-DATA, DIM-NPOT and the unconfirmed alpha meaning of
+    // pbr_albedo would all fire on an available profile
+    let mut img = Rgba32F::new(60, 64, [0.5, 0.4, 0.3, 1.0]);
+    for (i, p) in img.px.iter_mut().enumerate() {
+        p[3] = (i % 7) as f32 / 6.0;
+    }
+    for (target, st) in [
+        (Target::Vanilla, "pbr_albedo"),
+        (Target::Cpm, "pbr_albedo"),
+        (Target::Vanilla, "pbr_emissive"),
+        (Target::Vanilla, "pbr_fuzz"),
+        (Target::Vanilla, "rmaos"),
+        (Target::Cpm, "flow"),
+        (Target::Vanilla, "hdr_sky"),
+    ] {
+        let set = format!("subtype={st}");
+        let j = run(
+            target,
+            "textures/a/x.png",
+            None,
+            &[],
+            img.clone(),
+            &[set.as_str()],
+            &[],
+        );
+        assert_eq!(
+            (codes(&j), j.status.clone()),
+            (
+                vec![Code::CfgUnavailable],
+                JobStatus::Blocked {
+                    codes: vec![Code::CfgUnavailable]
+                }
+            ),
+            "{st} under {target:?}: {:?}",
+            j.warnings
+        );
+    }
+    // a sub-type without a fallback stays blocked by CFG-UNAVAILABLE alone, even with --allow
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x_rmaos.png",
+        Some("rmaos"),
+        &["rmaos"],
+        img.clone(),
+        &[],
+        &[Code::CfgUnavailable, Code::LossAlphaData, Code::DimNpot],
+    );
+    assert_eq!(codes(&j), vec![Code::CfgUnavailable], "{:?}", j.warnings);
+    assert_eq!(
+        j.status,
+        JobStatus::Blocked {
+            codes: vec![Code::CfgUnavailable]
+        }
+    );
+    // with --allow the fallback re-resolves and its own checks run normally
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x.png",
+        None,
+        &[],
+        img,
+        &["subtype=pbr_albedo"],
+        &[Code::CfgUnavailable],
+    );
+    assert_eq!(j.profile.subtype, Subtype::Diffuse);
+    let c = codes(&j);
     assert!(
-        matches!(&j.status, JobStatus::Error { codes } if codes.contains(&Code::TagSrgbVanilla)),
+        c.contains(&Code::DimNpot) && c.contains(&Code::SugLowConfidence),
+        "{c:?}"
+    );
+    assert!(
+        matches!(j.status, JobStatus::Unresolved { .. }),
         "{:?}",
         j.status
     );
-    assert!(codes(&j).contains(&Code::CfgUnavailable));
 }
 
 /// Carry 3: BC1 is opaque only, whatever the alpha policy; `has_alpha()` is not relied on.

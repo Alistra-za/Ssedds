@@ -624,11 +624,12 @@ fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
 }
 
 /// The §10 checks that Resolve can make from the profile, the file's path and its analysis.
+///
+/// A sub-type unavailable under the target (spec §3.1, §4.2) reports CFG-UNAVAILABLE only: that profile is never
+/// written, so its format, tag, alpha and dimension checks would be a cascade of the one root cause.
 pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
     use Code::*;
     let a = f.analysis;
-    let mut w = vec![];
-    let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     let st = p.subtype;
     if let Availability::Unavailable { fallback } = availability(p.target, st) {
         let fix = match fallback {
@@ -638,11 +639,13 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             ),
             None => "no fallback; change the sub-type or the target".to_string(),
         };
-        add(
+        return vec![Warning::new(
             CfgUnavailable,
             format!("{} is unavailable under {:?}; {fix}", st.id(), p.target),
-        );
+        )];
     }
+    let mut w = vec![];
+    let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     // BC6H outside cs cannot be acknowledged: an error, added after the other checks.
     let bc6h_outside_cs = p.format == Format::Bc6hUf16 && p.target != Target::Cs;
     if !(5..=200).contains(&p.alpha.threshold) {
@@ -990,9 +993,13 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
     // The category follows the sub-type.
     provenance.insert("subtype".into(), subtype_prov.clone());
     provenance.insert("category".into(), subtype_prov);
+    // An unavailable sub-type is blocked by CFG-UNAVAILABLE alone (`check_profile`); the alpha meaning and green
+    // convention of a profile that is never written are not asked for.
+    let available = availability(profile.target, profile.subtype) == Availability::Available;
     // Spec §3.3/§5.2: a mesh-dependent alpha meaning is unconfirmed unless an explicit layer (a user or project
     // preset, a config, a rule or --set) chose the policy; built-in defaults do not count.
-    if profile.subtype.alpha_from_mesh()
+    if available
+        && profile.subtype.alpha_from_mesh()
         && f.analysis.alpha == AlphaContent::Varying
         && !alpha_policy_explicit(ctx, &provenance)
     {
@@ -1011,7 +1018,8 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         role: VocabRole::Normal(None),
     }) = vocab_for(f)
     {
-        if takes_green(profile.subtype) && profile.channels.green_convention.is_none() {
+        if available && takes_green(profile.subtype) && profile.channels.green_convention.is_none()
+        {
             green_reason = Some(format!(
                 "green convention of _{term} is unstated: pass --set 'file:{}.channels.green_convention=opengl|directx' (or set channels.green_convention in a preset, config or rule)",
                 f.input

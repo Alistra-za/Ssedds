@@ -175,25 +175,16 @@ fn cs_pbr_albedo_is_srgb_and_vanilla_refuses_it() {
         &["file:**/iron.png.subtype=pbr_albedo"],
         &[],
     );
+    // Spec §4.2/§10: CFG-UNAVAILABLE is blocking and the root cause; the inherited `_SRGB` tag is not reported
+    // (no TAG-SRGB-VANILLA cascade), so the file is blocked (skipped), not failed, and nothing is written.
     assert_eq!(
         (o.summary.converted, o.summary.skipped, o.summary.failed),
-        (0, 0, 1),
+        (0, 1, 0),
         "{:?}",
         warnings(&o)
     );
     assert_eq!(o.summary.exit_code(), 1);
-    assert!(
-        warnings(&o).contains(&Code::CfgUnavailable)
-            && warnings(&o).contains(&Code::TagSrgbVanilla)
-    );
-    // TAG-SRGB-VANILLA is error severity: the file fails at Resolve and nothing is written.
-    assert!(o.events.iter().any(|e| matches!(
-        &e.kind,
-        EventKind::FileFailed {
-            stage: Stage::Resolve,
-            ..
-        }
-    )));
+    assert_eq!(warnings(&o), vec![Code::CfgUnavailable]);
     assert!(!d.path().join("out/textures/pbr/iron.dds").exists());
 }
 
