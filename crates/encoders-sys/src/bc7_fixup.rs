@@ -13,3 +13,31 @@ pub fn force_opaque_mode6(block: &mut [u8; 16]) -> bool {
     *block = v.to_le_bytes();
     true
 }
+
+/// If `block` is BC7 mode 4 or 5 with rotation 1-3, set both endpoints of the colour channel that
+/// decodes as alpha to all-ones, so alpha decodes to 255. Lossless for RGB: the decoder swaps that
+/// channel with the stored alpha field after decoding, so no output RGB value reads the patched bits.
+/// Equal endpoints interpolate to a constant, so the indices and the mode-4 index-selection bit do
+/// not matter. Returns true if the block is one of those modes (the patch is then applied).
+///
+/// Layout (bit 0 = LSB of byte 0): mode bits (mode 4: `10000`, bits 0-4; mode 5: `100000`, bits 0-5),
+/// rotation (2 bits), mode 4 only: index-selection bit, then one subset of endpoints in the order
+/// R0 R1 G0 G1 B0 B1 A0 A1 from bit 8 (colour 5 bits / alpha 6 in mode 4, colour 7 / alpha 8 in
+/// mode 5; no p-bits). Rotation r swaps alpha with channel r-1 (1 = R, 2 = G, 3 = B).
+pub fn force_opaque_rotated(block: &mut [u8; 16]) -> bool {
+    let mut v = u128::from_le_bytes(*block);
+    let (rot, bits) = if block[0] & 0x1f == 0x10 {
+        ((v >> 5) & 3, 5)
+    } else if block[0] & 0x3f == 0x20 {
+        ((v >> 6) & 3, 7)
+    } else {
+        return false;
+    };
+    if rot == 0 {
+        return false;
+    }
+    let pair_bits = 2 * bits;
+    v |= ((1u128 << pair_bits) - 1) << (8 + pair_bits * (rot as u32 - 1));
+    *block = v.to_le_bytes();
+    true
+}

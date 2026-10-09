@@ -1,4 +1,7 @@
-use encoders_sys::bc7_fixup::force_opaque_mode6;
+use encoders_sys::bc7_fixup::{force_opaque_mode6, force_opaque_rotated};
+use encoders_sys::{
+    bc7e_compress_blocks, gather_blocks, Bc7Level, Bc7Params, BC7E_EXACT_OPAQUE_NATIVE,
+};
 
 fn mode6_block(rgb: u128, alpha: u128, p0: u128, p1: u128) -> [u8; 16] {
     let mut v: u128 = 1 << 6; // mode 6
@@ -107,4 +110,187 @@ fn random_mode6_blocks_decode_opaque_with_rgb_within_one_lsb() {
             }
         }
     }
+}
+
+/// Mode 4: mode bits 0-4 (`10000`), rotation 5-6, index selection 7, then R0 R1 G0 G1 B0 B1 (5 bits each,
+/// from bit 8) and A0 A1 (6 bits each, from 38). Mode 5: mode bits 0-5 (`100000`), rotation 6-7, then R0..B1
+/// (7 bits each, from 8) and A0 A1 (8 bits each, from 50). Returns (header bits 0-7, colour bits, alpha bits).
+fn header(mode: u32, rot: u128, isel: u128) -> (u128, u32, u32) {
+    match mode {
+        4 => (1 << 4 | rot << 5 | isel << 7, 5, 6),
+        5 => (1 << 5 | rot << 6, 7, 8),
+        _ => unreachable!(),
+    }
+}
+
+/// Bits `force_opaque_rotated` may set: both endpoints of colour channel `rot - 1`.
+fn rotated_mask(mode: u32, rot: u128) -> u128 {
+    let pair = if mode == 4 { 10 } else { 14 };
+    ((1u128 << pair) - 1) << (8 + pair * (rot as u32 - 1))
+}
+
+/// All indices 0, so every texel decodes endpoint 0: checks the layout above and the rotation swap against bcdec_rs.
+#[test]
+fn mode4_mode5_layout_and_rotation_agree_with_independent_decoder() {
+    let expand = |x: u128, bits: u32| ((x << (8 - bits)) | (x >> (2 * bits - 8))) as u8;
+    for (mode, isel) in [(4, 0), (4, 1), (5, 0)] {
+        for rot in 0..4u128 {
+            let (mut v, cb, ab) = header(mode, rot, isel);
+            let (rgb0, a0) = ([3u128, 9, 17], 21u128);
+            for (c, e) in rgb0.iter().enumerate() {
+                v |= e << (8 + 2 * cb * c as u32); // endpoint 0 of channel c; endpoint 1 stays 0
+            }
+            v |= a0 << (8 + 6 * cb);
+            let d = decode(&v.to_le_bytes());
+            let mut want = [
+                expand(rgb0[0], cb),
+                expand(rgb0[1], cb),
+                expand(rgb0[2], cb),
+                expand(a0, ab),
+            ];
+            if rot != 0 {
+                want.swap(rot as usize - 1, 3);
+            }
+            for i in 0..16 {
+                assert_eq!(texel(&d, i), want, "mode {mode} isel {isel} rot {rot}");
+            }
+        }
+    }
+}
+
+/// Hand-built blocks per mode, rotation and (mode 4) index selection. The rotated colour channel holds
+/// endpoints 0 and 13, so every texel decodes alpha < 255 before the fix and 255 after; RGB is unchanged.
+#[test]
+fn rotated_mode4_mode5_blocks_decode_opaque_with_rgb_unchanged() {
+    for (mode, isel) in [(4, 0), (4, 1), (5, 0)] {
+        for rot in 1..4u128 {
+            let (mut v, cb, ab) = header(mode, rot, isel);
+            for c in 0..3u32 {
+                let (e0, e1) = if c as u128 == rot - 1 {
+                    (0u128, 13u128)
+                } else {
+                    (4 + 5 * c as u128, 30 - 3 * c as u128)
+                };
+                v |= e0 << (8 + 2 * cb * c) | e1 << (8 + 2 * cb * c + cb);
+            }
+            v |= 7 << (8 + 6 * cb) | 40 << (8 + 6 * cb + ab); // stored alpha = the swapped colour channel
+            v |= 0x5A5A_5A5A_5A5A_5A5A_5A5Au128 << (8 + 6 * cb + 2 * ab); // mixed indices
+            let mut b = v.to_le_bytes();
+            let before = decode(&b);
+            assert!(
+                before.chunks(4).all(|t| t[3] < 255),
+                "mode {mode} rot {rot}: must start non-opaque"
+            );
+            assert!(force_opaque_rotated(&mut b));
+            let after = decode(&b);
+            for (p, q) in before.chunks(4).zip(after.chunks(4)) {
+                assert_eq!(q[3], 255, "mode {mode} isel {isel} rot {rot}");
+                assert_eq!(
+                    p[..3],
+                    q[..3],
+                    "mode {mode} isel {isel} rot {rot}: RGB changed"
+                );
+            }
+            assert_eq!(
+                u128::from_le_bytes(b),
+                v | rotated_mask(mode, rot),
+                "only the rotated endpoints may change"
+            );
+        }
+    }
+}
+
+fn xorshift(mut s: u64) -> impl FnMut() -> u64 {
+    move || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        s
+    }
+}
+
+#[test]
+fn rotated_fix_leaves_rotation_0_and_other_modes_alone() {
+    let mut next = xorshift(0x2545_F491_4F6C_DD1D);
+    for mode in 0..8u32 {
+        for _ in 0..200 {
+            let r = (next() as u128) << 64 | next() as u128;
+            // Mode bits: `1 << mode` in the low mode+1 bits; modes 4 and 5 get rotation 0.
+            let mut v = (r & !((1u128 << (mode + 1)) - 1)) | 1 << mode;
+            match mode {
+                4 => v &= !(3 << 5),
+                5 => v &= !(3 << 6),
+                _ => {}
+            }
+            let mut b = v.to_le_bytes();
+            assert!(!force_opaque_rotated(&mut b), "mode {mode}");
+            assert_eq!(u128::from_le_bytes(b), v, "mode {mode}");
+        }
+    }
+    let mut reserved = [0u8; 16]; // no mode bit set
+    assert!(!force_opaque_rotated(&mut reserved));
+    assert_eq!(reserved, [0u8; 16]);
+}
+
+/// Random rotated mode 4/5 blocks: alpha decodes 255 everywhere, RGB is bit-identical, and only the
+/// rotated channel's endpoint bits are set.
+#[test]
+fn random_rotated_blocks_decode_opaque_with_rgb_unchanged() {
+    let mut next = xorshift(0x9E37_79B9_7F4A_7C15);
+    for i in 0..20_000u32 {
+        let r = (next() as u128) << 64 | next() as u128;
+        let (mode, rot) = (4 + i % 2, 1 + (i / 2 % 3) as u128);
+        let (h, _, _) = header(mode, rot, (r >> 7) & 1);
+        let v = (r & !0xff) | h; // both headers fill bits 0-7
+        let mut b = v.to_le_bytes();
+        let before = decode(&b);
+        assert!(force_opaque_rotated(&mut b));
+        assert_eq!(u128::from_le_bytes(b), v | rotated_mask(mode, rot));
+        let after = decode(&b);
+        for (p, q) in before.chunks(4).zip(after.chunks(4)) {
+            assert_eq!(q[3], 255, "block {v:#034x}");
+            assert_eq!(p[..3], q[..3], "block {v:#034x}");
+        }
+    }
+}
+
+/// The review's probe: bc7e (perceptual off, exact-opaque flag as built) on opaque noise emits rotated mode
+/// 4/5 blocks whose alpha decodes below 255; the fix makes every texel 255 with RGB bit-identical.
+#[test]
+fn bc7e_opaque_noise_rotated_blocks_fixed_losslessly() {
+    let mut next = xorshift(0x1234_5678_9ABC_DEF1);
+    let px: Vec<[u8; 4]> = (0..128 * 128)
+        .map(|_| {
+            let s = next();
+            [s as u8, (s >> 8) as u8, (s >> 16) as u8, 255]
+        })
+        .collect();
+    let blocks = gather_blocks(&px, 128, 128);
+    let mut out = vec![0u8; blocks.len()];
+    let params = Bc7Params {
+        level: Bc7Level::Veryslow,
+        perceptual: false,
+        exact_opaque: BC7E_EXACT_OPAQUE_NATIVE,
+    };
+    for (o, b) in out.chunks_mut(64 * 16).zip(blocks.chunks(64 * 16)) {
+        bc7e_compress_blocks(b, o, params);
+    }
+    let mut needed = 0;
+    for blk in out.chunks(16) {
+        let orig: [u8; 16] = blk.try_into().unwrap();
+        let mut b = orig;
+        if !force_opaque_rotated(&mut b) {
+            continue;
+        }
+        let (before, after) = (decode(&orig), decode(&b));
+        needed += before.chunks(4).any(|t| t[3] != 255) as usize;
+        for (p, q) in before.chunks(4).zip(after.chunks(4)) {
+            assert_eq!(q[3], 255);
+            assert_eq!(p[..3], q[..3]);
+        }
+    }
+    assert!(
+        needed > 0,
+        "no rotated mode 4/5 block decoded alpha below 255"
+    );
 }

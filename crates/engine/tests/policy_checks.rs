@@ -219,6 +219,33 @@ fn threshold_range_and_npot() {
 }
 
 #[test]
+fn rgbcx_level_above_max_is_cfg_invalid() {
+    let job = |level: u32| {
+        run(
+            Target::Cs,
+            "textures/a/x.png",
+            None,
+            &[],
+            opaque(),
+            &[
+                "subtype=diffuse",
+                "format=bc1",
+                &format!("encoder.rgbcx_level={level}"),
+            ],
+            &[],
+        )
+    };
+    let j = job(encoders_sys::RGBCX_MAX_LEVEL + 1);
+    assert!(codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+    assert!(j
+        .warnings
+        .iter()
+        .any(|w| w.message.contains("encoder.rgbcx_level")));
+    let j = job(encoders_sys::RGBCX_MAX_LEVEL);
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+}
+
+#[test]
 fn availability_table() {
     assert_eq!(
         availability(Target::Cpm, Subtype::PbrNormal),

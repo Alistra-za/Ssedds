@@ -650,6 +650,17 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             format!("alpha.threshold {} outside 5..=200", p.alpha.threshold),
         );
     }
+    // Checked for every format: an out-of-range level would trip rgbcx's assert inside an encode task.
+    if p.encoder.rgbcx_level > encoders_sys::RGBCX_MAX_LEVEL {
+        add(
+            CfgInvalid,
+            format!(
+                "encoder.rgbcx_level {} outside 0..={}",
+                p.encoder.rgbcx_level,
+                encoders_sys::RGBCX_MAX_LEVEL
+            ),
+        );
+    }
     if !backend_fits(p.encoder.backend, p.format) {
         add(
             CfgInvalid,

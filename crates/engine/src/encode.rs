@@ -4,9 +4,10 @@
 //! texels, so the bytes do not depend on the rayon thread count or on band scheduling.
 use crate::config::*;
 use crate::quantize::EncoderInput;
-use encoders_sys::bc7_fixup::force_opaque_mode6;
+use encoders_sys::bc7_fixup::{force_opaque_mode6, force_opaque_rotated};
 use encoders_sys::*;
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -55,8 +56,9 @@ pub fn radius(r: SearchRadius) -> u32 {
 }
 
 /// Encode one band (one block row) of an LDR image. `b` holds 16 texels per block (see
-/// `gather_blocks`), `o` the matching output bytes. `native` selects the bc7e exact-opaque flag;
-/// when `p.alpha.exact_opaque` is set without it, mode-6 blocks of fully opaque input are patched.
+/// `gather_blocks`), `o` the matching output bytes. With `p.alpha.exact_opaque`, every block whose
+/// input alpha is 255 throughout gets exact opaque alpha: `native` selects the bc7e flag for mode 6
+/// (else the mode-6 byte patch), and rotated mode 4/5 blocks are patched in both cases.
 fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
     let e = &p.encoder;
     match p.format {
@@ -72,10 +74,16 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
             {
                 bc7e_compress_blocks(bc, oc, params);
             }
-            if p.alpha.exact_opaque && !native {
+            if p.alpha.exact_opaque {
                 for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
                     if src.iter().all(|t| t[3] == 255) {
-                        force_opaque_mode6(blk.try_into().unwrap());
+                        let blk: &mut [u8; 16] = blk.try_into().unwrap();
+                        if !native {
+                            force_opaque_mode6(blk);
+                        }
+                        // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native
+                        // flag nor the mode-6 patch covers them. Lossless for RGB.
+                        force_opaque_rotated(blk);
                     }
                 }
             }
@@ -112,7 +120,8 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
 }
 
 /// Pad a row-major half image to a multiple of 4 in both directions by edge replication.
-fn pad_hdr(px: &[[u16; 4]], w: u32, h: u32) -> (Vec<[u16; 4]>, u32, u32) {
+/// Borrows `px` when both dimensions are already multiples of 4.
+fn pad_hdr(px: &[[u16; 4]], w: u32, h: u32) -> (Cow<'_, [[u16; 4]]>, u32, u32) {
     assert!(w > 0 && h > 0, "empty image");
     assert_eq!(
         px.len(),
@@ -120,13 +129,16 @@ fn pad_hdr(px: &[[u16; 4]], w: u32, h: u32) -> (Vec<[u16; 4]>, u32, u32) {
         "pixel count does not match width*height"
     );
     let (pw, ph) = (w.div_ceil(4) * 4, h.div_ceil(4) * 4);
+    if (pw, ph) == (w, h) {
+        return (Cow::Borrowed(px), w, h);
+    }
     let mut out = Vec::with_capacity(pw as usize * ph as usize);
     for y in 0..ph {
         for x in 0..pw {
             out.push(px[(y.min(h - 1) as usize) * w as usize + x.min(w - 1) as usize]);
         }
     }
-    (out, pw, ph)
+    (Cow::Owned(out), pw, ph)
 }
 
 /// Compress one `w` x `h` level to `p.format`: blocks in raster order,
@@ -135,6 +147,8 @@ fn pad_hdr(px: &[[u16; 4]], w: u32, h: u32) -> (Vec<[u16; 4]>, u32, u32) {
 /// for LDR, `pad_hdr` for BC6H). Cancellation is checked before each band and once more at the end.
 ///
 /// Panics if `input` does not match `p.format` (HDR input exactly for BC6H) or `w * h` pixels.
+/// Both are programmer-error invariants, not user-reachable: `quantize::to_encoder_input` yields
+/// HDR input iff the format is BC6H, and the level's pixel count comes from the mip chain.
 pub fn encode_level(
     input: &EncoderInput,
     w: u32,
@@ -147,12 +161,33 @@ pub fn encode_level(
             .as_ref()
             .is_some_and(|c| c.load(Ordering::Relaxed))
     };
+    encode_level_with(input, w, h, p, &cancelled)
+}
+
+/// `encode_level` with the cancellation probe as a closure (called before each band and at the end).
+fn encode_level_with(
+    input: &EncoderInput,
+    w: u32,
+    h: u32,
+    p: &Profile,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Vec<u8>, Cancelled> {
     assert_eq!(
         matches!(input, EncoderInput::Hdr(_)),
         p.format == Format::Bc6hUf16,
         "encoder input kind does not match format {:?}",
         p.format
     );
+    // Set when any band is skipped, so its zero-filled output can never be returned, whatever the
+    // probe reads at the end (a shared flag may be cleared by another holder).
+    let skipped = AtomicBool::new(false);
+    let go = || {
+        let stop = cancelled();
+        if stop {
+            skipped.store(true, Ordering::Relaxed);
+        }
+        !stop
+    };
     let out = match input {
         EncoderInput::Ldr(px) => {
             let blocks = gather_blocks(px, w, h);
@@ -161,7 +196,7 @@ pub fn encode_level(
             out.par_chunks_mut(bw * bs)
                 .zip(blocks.par_chunks(bw * BLOCK_TEXELS))
                 .for_each(|(o, b)| {
-                    if !cancelled() {
+                    if go() {
                         encode_band(b, o, p, BC7E_EXACT_OPAQUE_NATIVE);
                     }
                 });
@@ -174,14 +209,14 @@ pub fn encode_level(
             out.par_chunks_mut((pw / 4 * 16) as usize)
                 .zip(padded.par_chunks((pw * 4) as usize))
                 .for_each(|(o, rows)| {
-                    if !cancelled() {
+                    if go() {
                         bc6h_compress_rows(rows, pw, 4, o, level);
                     }
                 });
             out
         }
     };
-    if cancelled() {
+    if skipped.load(Ordering::Relaxed) || cancelled() {
         Err(Cancelled)
     } else {
         Ok(out)
@@ -236,6 +271,45 @@ mod tests {
         );
         assert!(plain.chunks(16).map(alpha_bad).sum::<usize>() > 0);
         assert_eq!(fixed.chunks(16).map(alpha_bad).sum::<usize>(), 0);
+    }
+
+    /// A band skipped by cancellation must fail the level even if the probe reads false again
+    /// afterwards (e.g. a shared flag reset by another holder).
+    #[test]
+    fn skipped_band_fails_even_if_cancel_flag_clears() {
+        use std::sync::atomic::AtomicUsize;
+        let px: Vec<[u8; 4]> = (0..16 * 16u32).map(|i| [i as u8, 7, 9, 255]).collect();
+        let input = EncoderInput::Ldr(px);
+        for fmt in [Format::Bc7, Format::Bc1] {
+            let mut p = bc7_exact_profile();
+            p.format = fmt;
+            let calls = AtomicUsize::new(0);
+            let first_only = || calls.fetch_add(1, Ordering::Relaxed) == 0;
+            assert_eq!(
+                encode_level_with(&input, 16, 16, &p, &first_only),
+                Err(Cancelled),
+                "{fmt:?}"
+            );
+        }
+        let calls = AtomicUsize::new(0);
+        let first_only = || calls.fetch_add(1, Ordering::Relaxed) == 0;
+        let hdr = EncoderInput::Hdr(vec![[0x3C00; 4]; 8 * 8]);
+        let mut p = bc7_exact_profile();
+        p.format = Format::Bc6hUf16;
+        assert_eq!(
+            encode_level_with(&hdr, 8, 8, &p, &first_only),
+            Err(Cancelled)
+        );
+    }
+
+    #[test]
+    fn pad_hdr_borrows_unless_padding_is_needed() {
+        let px = vec![[0x3C00u16; 4]; 8 * 4];
+        assert!(matches!(pad_hdr(&px, 8, 4), (Cow::Borrowed(_), 8, 4)));
+        let px = vec![[0x3C00u16; 4]; 6 * 5];
+        let (padded, pw, ph) = pad_hdr(&px, 6, 5);
+        assert!(matches!(padded, Cow::Owned(_)));
+        assert_eq!((padded.len(), pw, ph), (8 * 8, 8, 8));
     }
 
     #[test]
