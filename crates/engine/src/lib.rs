@@ -5,6 +5,7 @@ pub mod config;
 pub mod coverage;
 pub mod dilate;
 pub mod discover;
+pub mod encode;
 pub mod group;
 pub mod image;
 pub mod load;
