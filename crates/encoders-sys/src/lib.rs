@@ -1,8 +1,10 @@
 //! Safe wrappers over the vendored BC encoders (bc7e, rgbcx, ISPC TC).
 mod bc7;
 mod ffi;
+mod rgbcx;
 
 pub use bc7::{bc7e_compress_blocks, Bc7Level, Bc7Params, BC7E_EXACT_OPAQUE_NATIVE};
+pub use rgbcx::*;
 
 use std::sync::OnceLock;
 
