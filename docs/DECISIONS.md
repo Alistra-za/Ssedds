@@ -193,3 +193,10 @@ Owner answer to the Task 37 review question O1: files skipped on purpose do not 
 - **Covers:** existing `.dds` inputs next to sources (IN-DDS-SKIPPED), outputs skipped by an explicit `--on-existing skip`, and raw packing inputs (IN-PACKING-INPUT, already exempt).
 - **Still exit 1:** unresolved and blocked files, unknown existing outputs (OUT-UNKNOWN-EXISTING), and failures.
 - **Reporting:** intentional skips are still reported as `file_skipped` events and counted in the summary.
+
+## Note J — result verbs print to stdout (controller ruling, 2026-10-09, Task 42 review)
+
+The verbs whose report *is* the result print their human report on **stdout**: `inspect`, `validate`, `presets` and `encoders`.
+`convert` prints its progress log on **stderr**. With `--json`, stdout carries only JSON Lines for every verb.
+`validate` infers the alpha policy from the file: mip-0 alpha ≥ 254 everywhere → `remove`; otherwise the sub-type's alpha-keeping default, or `data`. `--alpha-policy` overrides it.
+A DDS in a format sdc never writes (BC2, uncompressed, signed) gets header checks only; a clean header gives "not judged", exit 0.
