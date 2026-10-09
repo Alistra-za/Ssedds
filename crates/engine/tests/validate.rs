@@ -357,12 +357,15 @@ fn encoder_input_texel_count_mismatch() -> ValidationReport {
     run(&b, &p, Some(&short), None, None)
 }
 
-#[cfg(not(debug_assertions))]
 #[test]
 fn encoder_input_mismatch_is_a_caller_labelled_header_error() {
+    let p = profile(Subtype::Diffuse);
+    let (b, _) = dds(&p, &[flat(8, [10, 10, 10, 255])]);
+    let hdr = [EncoderInput::Hdr(vec![[0x3C00; 4]; 64])];
     for r in [
         encoder_input_level_count_mismatch(),
         encoder_input_texel_count_mismatch(),
+        run(&b, &p, Some(&hdr), None, None),
     ] {
         assert!(!r.summary.passed);
         let w = r
@@ -377,22 +380,6 @@ fn encoder_input_mismatch_is_a_caller_labelled_header_error() {
             w.message
         );
     }
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "caller supplied encoder_input does not match the file: 1 levels")]
-fn encoder_input_level_count_mismatch_asserts_in_debug() {
-    encoder_input_level_count_mismatch();
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(
-    expected = "caller supplied encoder_input does not match the file: mip 0 has 10 texels"
-)]
-fn encoder_input_texel_count_mismatch_asserts_in_debug() {
-    encoder_input_texel_count_mismatch();
 }
 
 #[test]

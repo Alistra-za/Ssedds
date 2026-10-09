@@ -97,7 +97,7 @@ fn finish(mut summary: ValidationSummary, warnings: Vec<Warning>) -> ValidationR
 ///   BC1, BC3 and BC7 only; BC1 and BC3 store 255 exactly.
 ///
 /// `encoder_input` is a contract with the caller: its level count and per-level texel counts must match the
-/// file. A mismatch is a caller bug; it is reported as `VAL-HEADER` and trips a `debug_assert!`.
+/// file. A mismatch (level count, texel count, or LDR/HDR kind) is a caller bug; it is reported as `VAL-HEADER`.
 pub fn validate(inp: &ValidationInput) -> ValidationReport {
     let p = inp.profile;
     let v = &p.validation;
@@ -158,7 +158,6 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                 enc.len(),
                 decoded.len()
             );
-            debug_assert!(false, "{msg}");
             w.push(Warning::new(Code::ValHeader, msg));
         }
         let ch: Vec<usize> = match p.format {
@@ -169,8 +168,18 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             _ => vec![0, 1, 2],
         };
         for (l, ((lw, lh, d), e)) in decoded.iter().zip(enc).enumerate() {
-            let (Decoded::Ldr(d), EncoderInput::Ldr(e)) = (d, e) else {
-                continue;
+            let (d, e) = match (d, e) {
+                (Decoded::Ldr(d), EncoderInput::Ldr(e)) => (d, e),
+                (Decoded::Hdr(_), EncoderInput::Hdr(_)) => continue,
+                _ => {
+                    w.push(Warning::new(
+                        Code::ValHeader,
+                        format!(
+                            "caller supplied encoder_input does not match the file: mip {l} LDR/HDR kind differs"
+                        ),
+                    ));
+                    continue;
+                }
             };
             if d.len() != e.len() {
                 let msg = format!(
@@ -178,7 +187,6 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                     e.len(),
                     d.len()
                 );
-                debug_assert!(false, "{msg}");
                 w.push(Warning::new(Code::ValHeader, msg));
                 continue;
             }
