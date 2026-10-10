@@ -382,9 +382,25 @@ fn current_source_hashes(job: &ResolvedJob) -> Option<Vec<String>> {
     }
 }
 
+/// A packed job's channel provenance (`pack.r` … `pack.a`) matches the record's: which source feeds which channel,
+/// and whether it is stored inverted. Source file names only, so another spelling of the same paths still matches.
+/// Ordinary jobs have none.
+fn pack_provenance_matches(e: &ManifestEntry, job: &ResolvedJob) -> bool {
+    ["pack.r", "pack.g", "pack.b", "pack.a"].iter().all(|k| {
+        let now = job.provenance.get(*k).map(ToString::to_string);
+        let then = e
+            .raw
+            .get("provenance")
+            .and_then(|p| p.get(*k))
+            .and_then(Value::as_str);
+        now.as_deref() == then
+    })
+}
+
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
-/// (the bytes of every source, for a packed output), profile, engine version and encoders, a comparable record (known schema, encoders and preset present) and a
-/// passing validation, so a failed output is re-encoded and reported again rather than counted as up to date
+/// (the bytes of every source and the channel each feeds, for a packed output), profile, engine version and
+/// encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
+/// failed output is re-encoded and reported again rather than counted as up to date
 /// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
 /// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
 fn is_up_to_date(
@@ -411,6 +427,7 @@ fn is_up_to_date(
         && e.engine_version == ENGINE_VERSION
         && current_source_hashes(job)
             .is_some_and(|h| h.iter().eq(e.sources.iter().map(|r| &r.sha256)))
+        && pack_provenance_matches(e, job)
         && sha256_json(&job.profile).is_ok_and(|h| h == e.profile_sha256)
         && sha256_file(&job.input).is_ok_and(|h| h == e.source_sha256)
 }

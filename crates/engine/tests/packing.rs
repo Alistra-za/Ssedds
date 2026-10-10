@@ -427,3 +427,21 @@ fn if_changed_follows_every_source() {
     let s = run();
     assert_eq!((s.converted, s.up_to_date), (1, 0));
 }
+
+/// Spec §6.4 "Provenance", final review Minor 1: a source renamed to another role keeps its bytes and its place in
+/// R, but R is now stored inverted (roughness -> glossiness), so the stale output is re-encoded.
+#[test]
+fn if_changed_follows_a_source_renamed_to_another_role() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", |x, _| x as u8 * 4);
+    let run = || convert_with(d.path(), Target::Cs, &[], OnExisting::IfChanged).summary;
+    assert_eq!(run().converted, 1);
+    let s = run();
+    assert_eq!((s.converted, s.up_to_date), (0, 1));
+    let a = d.path().join("in/textures/a");
+    std::fs::rename(a.join("iron_roughness.png"), a.join("iron_glossiness.png")).unwrap();
+    let s = run();
+    assert_eq!((s.converted, s.up_to_date), (1, 0));
+    let s = run();
+    assert_eq!((s.converted, s.up_to_date), (0, 1));
+}
