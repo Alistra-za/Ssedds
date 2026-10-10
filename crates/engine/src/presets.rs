@@ -153,6 +153,15 @@ pub enum Provenance {
     User,
     /// The sub-type was replaced by its spec §4.2 fallback, accepted with `--allow CFG-UNAVAILABLE`.
     Fallback,
+    /// A packed channel read from a raw source (spec §6.4, DECISIONS Note M12): `source:<file>:R`,
+    /// `source:<file>:luma`, `source:1-<file>:R` when stored inverted.
+    Source(String),
+    /// A packed channel without a source, at its neutral default: `default:<value>`.
+    Default(String),
+    /// A packed channel without a source, at the user's fill value: `fill:<code written>`.
+    Fill(String),
+    /// The sub-type of a packed output, set by its recipe: `recipe:<kind>`.
+    Recipe(String),
 }
 
 impl fmt::Display for Provenance {
@@ -169,6 +178,10 @@ impl fmt::Display for Provenance {
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::User => f.write_str("user"),
             Provenance::Fallback => f.write_str("fallback"),
+            Provenance::Source(s) => write!(f, "source:{s}"),
+            Provenance::Default(v) => write!(f, "default:{v}"),
+            Provenance::Fill(v) => write!(f, "fill:{v}"),
+            Provenance::Recipe(k) => write!(f, "recipe:{k}"),
         }
     }
 }
@@ -187,6 +200,18 @@ impl std::str::FromStr for Provenance {
         }
         if let Some(t) = s.strip_prefix("suffix:") {
             return Ok(Provenance::Suffix(t.to_string()));
+        }
+        if let Some(s) = s.strip_prefix("source:") {
+            return Ok(Provenance::Source(s.to_string()));
+        }
+        if let Some(v) = s.strip_prefix("default:") {
+            return Ok(Provenance::Default(v.to_string()));
+        }
+        if let Some(v) = s.strip_prefix("fill:") {
+            return Ok(Provenance::Fill(v.to_string()));
+        }
+        if let Some(k) = s.strip_prefix("recipe:") {
+            return Ok(Provenance::Recipe(k.to_string()));
         }
         Ok(match s {
             "builtin" => Provenance::Builtin,

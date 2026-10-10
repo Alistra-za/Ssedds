@@ -1,3 +1,4 @@
+use engine::codes::{Code, Severity};
 use engine::config::*;
 use engine::overrides::to_patch;
 use engine::presets::*;
@@ -332,5 +333,42 @@ fn a_fill_is_an_8_bit_code_per_raw_map_role() {
             finish_profile(d, Target::Cs, Subtype::Rmaos).is_err(),
             "{bad}"
         );
+    }
+}
+
+/// DECISIONS Note M12: packing provenance round-trips and ranks above every existing source, so
+/// `float_source_is_linear`'s `>= Suffix` comparison never sees it below a suffix fact.
+#[test]
+fn packing_provenance_round_trips_and_ranks_last() {
+    for (p, s) in [
+        (
+            Provenance::Source("iron_roughness.png:R".into()),
+            "source:iron_roughness.png:R",
+        ),
+        (
+            Provenance::Source("1-iron_gloss.png:R".into()),
+            "source:1-iron_gloss.png:R",
+        ),
+        (Provenance::Default("0.5".into()), "default:0.5"),
+        (Provenance::Fill("255".into()), "fill:255"),
+        (Provenance::Recipe("rmaos".into()), "recipe:rmaos"),
+    ] {
+        assert_eq!(p.to_string(), s);
+        assert_eq!(s.parse::<Provenance>().unwrap(), p);
+        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!(s));
+        assert!(p > Provenance::Fallback && p > Provenance::Suffix(String::new()));
+    }
+}
+
+#[test]
+fn pack_codes_are_in_the_catalogue() {
+    for (s, sev) in [
+        ("PACK-DEFAULTED", Severity::Warning),
+        ("PACK-SIZE-MISMATCH", Severity::Error),
+        ("PACK-CONFLICT", Severity::Warning),
+        ("PACK-UNUSED-INPUT", Severity::Warning),
+    ] {
+        let c = Code::parse(s).unwrap();
+        assert_eq!((c.as_str(), c.severity()), (s, sev));
     }
 }

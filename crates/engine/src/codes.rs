@@ -1,7 +1,8 @@
 //! Warning and error codes (spec §10). Codes added by this plan beyond the spec's original catalogue: VAL-MIP-ERROR
 //! (§5.8 per-mip error warning), CFG-INVALID (a field value outside its allowed range or an encoder/format
 //! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (a float
-//! source written to an LDR format, an interim guard until the M6 source-transfer split).
+//! source written to an LDR format, an interim guard until the M6 source-transfer split) and the four `PACK-*`
+//! codes of channel packing (spec §6.4, plan M2.5).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +83,10 @@ codes! {
     InNonfinite = "IN-NONFINITE" => Warning,
     InFloatLdr = "IN-FLOAT-LDR" => Blocking,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
+    PackDefaulted = "PACK-DEFAULTED" => Warning,
+    PackSizeMismatch = "PACK-SIZE-MISMATCH" => Error,
+    PackConflict = "PACK-CONFLICT" => Warning,
+    PackUnusedInput = "PACK-UNUSED-INPUT" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -144,6 +149,6 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 52);
+        assert_eq!(Code::ALL.len(), 56);
     }
 }

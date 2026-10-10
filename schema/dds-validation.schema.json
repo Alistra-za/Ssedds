@@ -102,7 +102,11 @@
         "IN-DECODE",
         "IN-NONFINITE",
         "IN-FLOAT-LDR",
-        "OUT-UNKNOWN-EXISTING"
+        "OUT-UNKNOWN-EXISTING",
+        "PACK-DEFAULTED",
+        "PACK-SIZE-MISMATCH",
+        "PACK-CONFLICT",
+        "PACK-UNUSED-INPUT"
       ],
       "type": "string"
     },
