@@ -198,6 +198,69 @@ fn packing_can_be_turned_off_per_output() {
     }
 }
 
+/// Note M4 (review risk c): raw maps of a disabled recipe stay `IN-PACKING-INPUT`; they are reported but do not
+/// count as skipped, so the batch is not partial.
+#[test]
+fn a_disabled_recipe_is_not_a_partial_batch() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", 64, |x, _| x as u8 * 4);
+    put(d.path(), "iron_ao.png", 64, |_, y| y as u8 * 4);
+    let (p, _) = plan(d.path(), Target::Cs, &["packing.enabled=false"]);
+    assert_eq!(p.jobs.len(), 2, "{:?}", p.jobs);
+    let (s, ev) = dry_run(p);
+    assert_eq!(
+        (s.skipped, s.skipped_intentional, s.failed, s.exit_code()),
+        (0, 0, 0, 0)
+    );
+    let raw_skips = ev
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EventKind::FileSkipped {
+                    code: Some(Code::InPackingInput),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(raw_skips, 2);
+}
+
+/// Note M11, ruling W7: a recipe whose sources were planned but whose pass-2 Load the cancel pre-empted has no
+/// job, so its report says `failed`/"cancelled", not `run`. One worker thread makes the timing deterministic: the
+/// budget admits one file at a time, so `iron_roughness.png` has finished its pass-1 Load before `x.png` is
+/// admitted, and the hook cancels just before `zz_cancel_hook.png` (the last file) would load.
+#[test]
+fn a_recipe_cancelled_before_pass_2_is_reported_failed() {
+    struct Hook;
+    impl Drop for Hook {
+        fn drop(&mut self) {
+            std::env::remove_var("SDC_TEST_CANCEL_ON");
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", 64, |x, _| x as u8 * 4);
+    put(d.path(), "x.png", 16, |_, _| 128);
+    put(d.path(), "zz_cancel_hook.png", 16, |_, _| 128);
+    std::env::set_var("SDC_TEST_CANCEL_ON", "zz_cancel_hook.png");
+    let _hook = Hook;
+    let mut req = request(d.path(), Target::Cs, &[]);
+    req.jobs = 1;
+    let (p, ev) = plan_of(req);
+    assert!(
+        p.cancelled
+            .iter()
+            .any(|c| c.ends_with("iron_roughness.png")),
+        "{:?}",
+        p.cancelled
+    );
+    assert!(!p.jobs.iter().any(|j| j.pack.is_some()), "{:?}", p.jobs);
+    let r = &recipes(&ev)[0];
+    assert_eq!(r.status, RecipeStatus::Failed);
+    assert_eq!(r.reason.as_deref(), Some("cancelled"));
+}
+
 fn prepacked(dir: &Path) {
     let p = dir.join("in/textures/a/iron_rmaos.png");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -311,6 +374,9 @@ fn sources_of_different_sizes_fail_the_recipe() {
             codes: vec![Code::PackSizeMismatch]
         }
     );
+    // Like every job of the batch (ruling W1), and with the recipe as its sub-type's origin.
+    assert_eq!(j.provenance["target"], Provenance::User);
+    assert_eq!(j.provenance["subtype"], Provenance::Recipe("rmaos".into()));
     let m = &j.warnings[0].message;
     assert!(
         m.contains("iron_roughness.png 64x64") && m.contains("iron_ao.png 32x32"),

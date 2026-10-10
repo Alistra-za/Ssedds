@@ -9,7 +9,7 @@ use super::{
 use crate::analyse::{analyse, Analysis};
 use crate::api::SkippedFile;
 use crate::codes::{Code, Warning};
-use crate::config::{GraySource, PackPrefer, RawMap, Subtype};
+use crate::config::{GraySource, PackPrefer, RawMap};
 use crate::discover::{InputFile, InputKind};
 use crate::events::{RecipeReport, RecipeStatus};
 use crate::group::{split_suffix_with, split_vocab, TextureSet, VocabRole};
@@ -96,6 +96,23 @@ pub struct PackPlan {
     pub reports: BTreeMap<String, Vec<RecipeReport>>,
 }
 
+/// Marks the report of `c` `Failed` with `reason`: pass 2 could not plan it (a load or assembly failure, a panic, or
+/// a cancel before its sources were loaded; DECISIONS Note M11), so `set_resolved` must not say it runs.
+pub fn fail_report(
+    reports: &mut BTreeMap<String, Vec<RecipeReport>>,
+    c: &Candidate,
+    reason: String,
+) {
+    let output = slash(&c.virtual_input.output);
+    if let Some(r) = reports
+        .get_mut(&c.set_key)
+        .and_then(|v| v.iter_mut().find(|r| r.output == output))
+    {
+        r.status = RecipeStatus::Failed;
+        r.reason = Some(reason);
+    }
+}
+
 /// The analysis pass 1 resolves a packed profile with: the packed image does not exist yet (DECISIONS Note M6).
 fn placeholder() -> (Analysis, SourceInfo) {
     let info = SourceInfo {
@@ -148,12 +165,14 @@ fn prepacked_member<'a>(
     })
 }
 
-/// A recipe whose sources differ in size (spec §6.4 "Dimensions"): an error job, so `run` fails it.
+/// A recipe whose sources differ in size (spec §6.4 "Dimensions"): an error job, so `run` fails it. Its sub-type
+/// and category come from the recipe (`recipe:<kind>`), as for a recipe job that runs; the caller adds
+/// `provenance["target"]`, as for every job.
 fn size_mismatch_job(
     ctx: &ResolveCtx,
     vin: &InputFile,
     set: &TextureSet,
-    st: Subtype,
+    kind: RecipeKind,
     found: &[(PathBuf, u32, u32)],
 ) -> ResolvedJob {
     let text = sizes(found);
@@ -161,13 +180,17 @@ fn size_mismatch_job(
         .iter()
         .map(|(p, w, h)| json!({ "path": slash(p), "width": w, "height": h }))
         .collect();
+    let recipe = Provenance::Recipe(kind.id().into());
     ResolvedJob {
         input: vin.path.clone(),
         output: vin.output.clone(),
         game_path: vin.game_path.clone(),
         set_key: set.key.clone(),
-        profile: ctx.registry.base_profile(ctx.target, st),
-        provenance: BTreeMap::new(),
+        profile: ctx.registry.base_profile(ctx.target, kind.subtype()),
+        provenance: BTreeMap::from([
+            ("subtype".to_string(), recipe.clone()),
+            ("category".to_string(), recipe),
+        ]),
         suggestions: vec![],
         warnings: vec![Warning::new(
             Code::PackSizeMismatch,
@@ -366,7 +389,7 @@ pub fn plan_packing(
                     None => "sources differ in size".into(),
                 });
                 reports.push(report);
-                jobs.push(size_mismatch_job(ctx, &vin, set, st, &found));
+                jobs.push(size_mismatch_job(ctx, &vin, set, recipe.kind, &found));
                 continue;
             }
             reports.push(report);

@@ -9,7 +9,6 @@ use crate::analyse::analyse;
 use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
-use crate::events::RecipeStatus;
 use crate::events::{EventKind, Reporter, Stage};
 use crate::group::{group_sets_with, split_suffix_with, TextureSet};
 use crate::load::{load_image, LoadError};
@@ -732,6 +731,13 @@ impl Engine {
             &cancelled,
             &mut skipped,
         );
+        // Pass 1 may add a recipe job it fails at once (sources of different sizes); like every job it records the
+        // target's origin (`BatchRequest::target`, ruling W1).
+        for j in &mut jobs {
+            j.provenance
+                .entry("target".into())
+                .or_insert_with(|| target_src.clone());
+        }
         // This admission/spawn/`catch_unwind`/slot block mirrors the pass-1 block above (`resolve_one` and its
         // loop) on purpose: the two differ in the work item, the stage they start at and what they return, so one
         // helper would need as many parameters as it saves lines.
@@ -782,6 +788,8 @@ impl Engine {
         for (c, slot) in packed.candidates.iter().zip(pack_slots) {
             let path = c.job.sources[0].path.clone();
             let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
+                // Cancelled before its sources were loaded: the recipe has no job (Note M11, ruling W7).
+                pack::plan::fail_report(&mut packed.reports, c, "cancelled".into());
                 cancelled.push(path);
                 continue;
             };
@@ -808,15 +816,7 @@ impl Engine {
                         PlanFailure::Pack(e) => (Stage::Load, e),
                         PlanFailure::Panic(stage, e) => (stage, e),
                     };
-                    let output = slash(&c.virtual_input.output);
-                    if let Some(report) = packed
-                        .reports
-                        .get_mut(&c.set_key)
-                        .and_then(|v| v.iter_mut().find(|r| r.output == output))
-                    {
-                        report.status = RecipeStatus::Failed;
-                        report.reason = Some(error.clone());
-                    }
+                    pack::plan::fail_report(&mut packed.reports, c, error.clone());
                     failed.push(FailedFile { path, stage, error });
                 }
             }
