@@ -21,6 +21,7 @@ use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
 use crate::presets::*;
+use crate::session::{pack_key, AnalysisCache, PackEntry};
 use crate::suggest::{is_pbr_set, SuggestContext};
 use encoders_sys::Bc1Model;
 use serde::{Deserialize, Serialize};
@@ -580,6 +581,18 @@ impl Engine {
         rep: &Reporter,
         cancel: &CancelToken,
     ) -> Result<Plan, EngineError> {
+        self.plan_cached(req, rep, cancel, &AnalysisCache::default())
+    }
+
+    /// [`Engine::plan`] reusing `cache`: a file whose size and modification time are unchanged is not reloaded, and
+    /// neither is a packed image whose recipe and sources are unchanged (M3a spec §4.4).
+    pub fn plan_cached(
+        &self,
+        req: BatchRequest,
+        rep: &Reporter,
+        cancel: &CancelToken,
+        cache: &AnalysisCache,
+    ) -> Result<Plan, EngineError> {
         let Setup {
             registry,
             user_config,
@@ -709,11 +722,24 @@ impl Engine {
             enter(Stage::Load);
             // Taken before the read, so a change made while it is loaded is seen as a change too.
             let source = SourceStamp::of(&f.path);
-            let (img, info) = load_image(&f.path)?;
-            enter(Stage::Analyse);
-            let a = analyse(&img, &info);
-            drop(img);
-            drop(admitted);
+            let (a, info) = match source.and_then(|s| cache.file(&f.path, s)) {
+                Some(hit) => {
+                    drop(admitted);
+                    hit
+                }
+                None => {
+                    let (img, info) = load_image(&f.path)?;
+                    cache.count_loads(1);
+                    enter(Stage::Analyse);
+                    let a = analyse(&img, &info);
+                    if let Some(s) = source {
+                        cache.put_file(&f.path, s, a.clone(), info, cache.make_thumb(&img, &info));
+                    }
+                    drop(img);
+                    drop(admitted);
+                    (a, info)
+                }
+            };
             enter(Stage::Resolve);
             let stem = f
                 .rel
@@ -845,23 +871,51 @@ impl Engine {
                     }
                     let stage = Cell::new(Stage::Load);
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // `load_image` enforces MAX_DIM per source, so DIM-TOO-LARGE needs nothing in `check_sizes`.
-                        let asm =
-                            pack::assemble::assemble(&c.job, c.job.gray).map_err(|e| match e {
-                                pack::assemble::PackError::Load(e) => PlanFailure::Load(e),
-                                e => PlanFailure::Pack(e.to_string()),
-                            })?;
-                        stage.set(Stage::Analyse);
-                        let a = analyse(&asm.image, &asm.info);
-                        let (info, non_gray) = (asm.info, asm.non_gray);
-                        drop(asm.image);
-                        drop(admitted);
+                        // The key includes every source's stamp, so an edited source misses the cache.
+                        let key = pack_key(&c.job);
+                        let entry =
+                            match cache.pack(&key) {
+                                Some(e) => {
+                                    drop(admitted);
+                                    e
+                                }
+                                None => {
+                                    // `load_image` enforces MAX_DIM per source, so DIM-TOO-LARGE needs nothing in
+                                    // `check_sizes`.
+                                    let asm = pack::assemble::assemble(&c.job, c.job.gray)
+                                        .map_err(|e| match e {
+                                            pack::assemble::PackError::Load(e) => {
+                                                PlanFailure::Load(e)
+                                            }
+                                            e => PlanFailure::Pack(e.to_string()),
+                                        })?;
+                                    cache.count_loads(c.job.sources.len() as u64);
+                                    stage.set(Stage::Analyse);
+                                    let e = PackEntry {
+                                        analysis: analyse(&asm.image, &asm.info),
+                                        info: asm.info,
+                                        non_gray: asm.non_gray,
+                                        thumb: cache.make_thumb(&asm.image, &asm.info),
+                                    };
+                                    drop(asm.image);
+                                    drop(admitted);
+                                    cache.put_pack(key, e.clone());
+                                    e
+                                }
+                            };
                         stage.set(Stage::Resolve);
                         let set = sets
                             .iter()
                             .find(|s| s.key == c.set_key)
                             .expect("a candidate's set is planned");
-                        Ok(pack::plan::finish_recipe(ctx, c, set, &a, &info, &non_gray))
+                        Ok(pack::plan::finish_recipe(
+                            ctx,
+                            c,
+                            set,
+                            &entry.analysis,
+                            &entry.info,
+                            &entry.non_gray,
+                        ))
                     }));
                     *lock(slot) = Some(r.unwrap_or_else(|panic| {
                         Err(PlanFailure::Panic(
