@@ -216,6 +216,24 @@ Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS c
 - **Override:** an explicit `alpha.policy` still wins.
 - **Why 251:** it matches Community Shaders' 251 opacity gate (Note A).
 
+## Note M — channel packing decisions (M2.5 plan, 2026-10-09)
+
+Defaults for spec §14 #18–#22 and the M2.5 design choices; confirmed by the owner at plan review.
+
+- **M1 (#18) Env mask:** a packed `cpm`/`vanilla` `_m` R is the metallic source, else the specular source. Under `cpm` with neither it is `packing.fill.metallic`, else `packing.fill.specular`, else 0. The `cpm` `_m` height default is 0.5 (128 < 251, Spike S8).
+- **M2 (#19) Raw maps without a recipe** (`_opacity`, specular-only and fuzz-only `cs` sets, height under `vanilla`, AO and fuzz under `cpm`, …) raise `PACK-UNUSED-INPUT` and are not written.
+- **M3 (#20) Specular** is copied unchanged into `_rmaos`/`_rfaos` A.
+- **M4 (#21) Exit code:** raw inputs reported `IN-PACKING-INPUT` or `PACK-UNUSED-INPUT` do not make the batch exit 1.
+- **M5 (#22) Fill values:** field `packing.fill.<role>` (one per §4.4 raw-map role: `roughness`, `metallic`, `ao`, `specular`, `glossiness`, `height`, `opacity`, `fuzz`), an 8-bit code 0–255. CLI `--fill <role>=<0..255>` is an unscoped `--set packing.fill.<role>=<v>` added after every `--set`, so it beats an unscoped `--set` of the same field and loses to sub-type- and file-scoped ones. A roughness fill is used for a glossiness channel as `255 − v` and back. A filled channel has provenance `fill:<code written>` and raises **no** `PACK-DEFAULTED` (the user chose it). The GUI slider lands with M3's settings panel.
+- **M6 Two-pass resolve:** `packing.*` of a packed output is read from its profile resolved with a placeholder analysis (the packed image does not exist yet); the real packed image is then assembled, analysed and resolved again for everything else. A rule that matches on `alpha` therefore cannot change `packing.*`. The same holds for `channels.grayscale_source`: the value of that first profile is stored in `PackJob::gray` and used by the plan-time assembly, the provenance, the report and the pipeline's assembly, so the written image is the analysed one even when the final profile's value differs.
+- **M7 Set membership:** the packed suffix (`rmaos`, `rfaos`, `p`, `m`) is added to the set's suffixes before any member resolves, predicted from the raw roles present, so `set_has` rules and PBR detection see it. It is predicted even when `packing.enabled = false` turns that recipe off.
+- **M8 Job identity:** a packed job's `input` is its first source in R, G, B, A order; the raw jobs a recipe consumes leave `Plan::jobs`. A raw map feeds at most one recipe per target, so no two jobs share an `input`.
+- **M9 Pre-packed conflict** is keyed on an image member whose canonical suffix equals the recipe's suffix (`rmaos`, `rfaos`, `p` under `cs`; `m` under `cpm`/`vanilla`). DDS members are never written, so they never conflict. With `packing.prefer = raw` the replaced file is skipped with `PACK-CONFLICT` and counts as an intentional skip (Note I). Exception (never write neither): when the recipe's sources differ in size, the sizes are checked first, the pre-packed file stays a job (no skip, no `PACK-CONFLICT`) and the recipe fails with `PACK-SIZE-MISMATCH`.
+- **M10 Profile hash:** `packing` joins every `Profile`, so every output's `profile_sha256` changes once and `--on-existing if-changed` re-encodes every existing output on the first M2.5 run.
+- **M11 Failed source:** a recipe with a source that failed to load is `failed` in `set_resolved` and has no job; the batch already exits 1 through that source's `file_failed`. A recipe with a source whose Load was cancelled is `failed` too, reason "cancelled" (the batch exits 1 through `cancelled`).
+- **M12 Provenance:** the recipe's sub-type is `recipe:<kind>`; each packed channel is recorded under `pack.r`, `pack.g`, `pack.b`, `pack.a` as `source:<file>:R` (`source:<file>:luma` with `channels.grayscale_source = luma`, `source:1-<file>:R` when inverted), `default:<value>` or `fill:<code>`.
+- **M13 Duplicate roles:** with two raw maps of one role in a set, the first by path is used and the others are `PACK-UNUSED-INPUT`.
+
 ## Phase 2 exit — CLI MVP (2026-10-09)
 
 - `sdc-bench --gates`: PASS, exit 0, 13/13 gate reports (target/bench/mvp-gates.txt). Exact opaque gates alpha == 255 and flag-off bit-identity; ΔRGB is info (S5).

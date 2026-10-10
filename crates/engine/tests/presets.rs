@@ -1,4 +1,5 @@
 use engine::config::*;
+use engine::overrides::to_patch;
 use engine::presets::*;
 use serde_json::json;
 
@@ -281,4 +282,55 @@ version = \"1\"
         .starts_with("CFG-INVALID"));
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(r.get(BASE_ID), Some(&before));
+}
+
+/// M2.5 (spec §6.4): packing settings are profile fields with the neutral defaults of the base preset.
+#[test]
+fn packing_fields_default_from_the_base_preset() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let p = reg
+        .profile("cs-quality", Target::Cs, Subtype::Rmaos)
+        .unwrap();
+    assert_eq!(
+        p.packing,
+        PackingSpec {
+            enabled: true,
+            roughness_default: 0.5,
+            prefer: PackPrefer::Prepacked,
+            fill: FillSpec::default(),
+        }
+    );
+    // Unset fills are left out of the JSON, so `profile_sha256` moves only when a fill is set.
+    let v = serde_json::to_value(&p).unwrap();
+    assert_eq!(v["packing"]["fill"], serde_json::json!({}));
+}
+
+/// DECISIONS Note M5: a fill is an 8-bit code per raw-map role.
+#[test]
+fn a_fill_is_an_8_bit_code_per_raw_map_role() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let mut doc = serde_json::to_value(
+        reg.profile("cs-quality", Target::Cs, Subtype::Rmaos)
+            .unwrap(),
+    )
+    .unwrap();
+    merge_json(
+        &mut doc,
+        &to_patch("packing.fill.metallic", &serde_json::json!(255)),
+    );
+    let p = finish_profile(doc.clone(), Target::Cs, Subtype::Rmaos).unwrap();
+    assert_eq!(p.packing.fill.get(RawMap::Metallic), Some(255));
+    assert_eq!(p.packing.fill.get(RawMap::Ao), None);
+    for bad in [
+        serde_json::json!(256),
+        serde_json::json!(-1),
+        serde_json::json!(0.5),
+    ] {
+        let mut d = doc.clone();
+        merge_json(&mut d, &to_patch("packing.fill.ao", &bad));
+        assert!(
+            finish_profile(d, Target::Cs, Subtype::Rmaos).is_err(),
+            "{bad}"
+        );
+    }
 }

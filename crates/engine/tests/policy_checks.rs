@@ -1721,3 +1721,35 @@ fn near_opaque_diffuse_alpha_is_not_an_unconfirmed_meaning() {
         j.status
     );
 }
+
+/// M2.5: `packing.roughness_default` must lie in 0..=1 on the sub-types whose recipe reads it.
+#[test]
+fn roughness_default_outside_0_1_is_cfg_invalid() {
+    let img = Rgba32F::new(64, 64, [0.5, 0.5, 0.5, 1.0]);
+    let rmaos = |v: &str| {
+        let set = format!("packing.roughness_default={v}");
+        run(
+            Target::Cs,
+            "textures/a/x_rmaos.png",
+            Some("rmaos"),
+            &["rmaos"],
+            img.clone(),
+            &[set.as_str()],
+            &[],
+        )
+    };
+    assert!(codes(&rmaos("1.5")).contains(&Code::CfgInvalid));
+    assert!(codes(&rmaos("-0.1")).contains(&Code::CfgInvalid));
+    assert!(!codes(&rmaos("1.0")).contains(&Code::CfgInvalid));
+    // A diffuse never reads it.
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        img,
+        &["packing.roughness_default=1.5", "subtype=diffuse"],
+        &[],
+    );
+    assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+}

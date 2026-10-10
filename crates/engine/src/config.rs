@@ -61,6 +61,60 @@ impl RawMap {
     }
 }
 
+cfg_enum!(PackPrefer, "lowercase" { Prepacked, Raw });
+
+/// Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit
+/// code per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FillSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ao: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glossiness: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuzz: Option<u8>,
+}
+
+impl FillSpec {
+    pub fn get(&self, role: RawMap) -> Option<u8> {
+        match role {
+            RawMap::Roughness => self.roughness,
+            RawMap::Metallic => self.metallic,
+            RawMap::Ao => self.ao,
+            RawMap::Specular => self.specular,
+            RawMap::Glossiness => self.glossiness,
+            RawMap::Height => self.height,
+            RawMap::Opacity => self.opacity,
+            RawMap::Fuzz => self.fuzz,
+        }
+    }
+}
+
+/// Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PackingSpec {
+    /// Pack this output's recipe; `false` leaves its raw maps as packing inputs (`IN-PACKING-INPUT`).
+    pub enabled: bool,
+    /// Neutral roughness (0..=1) for a channel without a roughness or glossiness source.
+    pub roughness_default: f64,
+    /// Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`).
+    pub prefer: PackPrefer,
+    #[serde(default)]
+    pub fill: FillSpec,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MipLevels {
@@ -231,6 +285,7 @@ pub struct Profile {
     pub header: HeaderForm,
     pub encoder: EncoderSpec,
     pub validation: ValidationSpec,
+    pub packing: PackingSpec,
 }
 
 impl Profile {

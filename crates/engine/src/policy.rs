@@ -703,6 +703,20 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             format!("alpha.threshold {} outside 5..=200", p.alpha.threshold),
         );
     }
+    // M2.5 (spec §6.4): the neutral roughness (0..=1) of the sub-types whose recipe reads it: `_rmaos`/`_rfaos` and
+    // `cpm` `_m`. The check also fires for a pre-packed file of that sub-type, which never reads the value; that is
+    // harmless (the value is a profile-wide setting, so a bad one is worth flagging wherever it shows up).
+    if (st.is_roughness_member() || st == Subtype::ComplexMaterial)
+        && !(0.0..=1.0).contains(&p.packing.roughness_default)
+    {
+        add(
+            CfgInvalid,
+            format!(
+                "packing.roughness_default {} outside 0..=1",
+                p.packing.roughness_default
+            ),
+        );
+    }
     // Only where rgbcx is the resolved backend (BC1/BC3/BC4/BC5): an out-of-range level would trip rgbcx's
     // assert inside an encode task, and no other backend reads the field.
     if p.encoder.backend == Backend::Rgbcx && p.encoder.rgbcx_level > encoders_sys::RGBCX_MAX_LEVEL

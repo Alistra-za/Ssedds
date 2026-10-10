@@ -187,6 +187,85 @@
       ],
       "type": "object"
     },
+    "FillSpec": {
+      "additionalProperties": false,
+      "description": "Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit\ncode per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.",
+      "properties": {
+        "ao": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fuzz": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "glossiness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metallic": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "opacity": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "roughness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "specular": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Format": {
       "enum": [
         "bc1",
@@ -276,6 +355,42 @@
         "renormalize_bake"
       ],
       "type": "string"
+    },
+    "PackPrefer": {
+      "enum": [
+        "prepacked",
+        "raw"
+      ],
+      "type": "string"
+    },
+    "PackingSpec": {
+      "additionalProperties": false,
+      "description": "Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.",
+      "properties": {
+        "enabled": {
+          "description": "Pack this output's recipe; `false` leaves its raw maps as packing inputs (`IN-PACKING-INPUT`).",
+          "type": "boolean"
+        },
+        "fill": {
+          "$ref": "#/$defs/FillSpec",
+          "default": {}
+        },
+        "prefer": {
+          "$ref": "#/$defs/PackPrefer",
+          "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "roughness_default": {
+          "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "roughness_default",
+        "prefer"
+      ],
+      "type": "object"
     },
     "SearchRadius": {
       "enum": [
@@ -385,6 +500,9 @@
     "mips": {
       "$ref": "#/$defs/MipSpec"
     },
+    "packing": {
+      "$ref": "#/$defs/PackingSpec"
+    },
     "subtype": {
       "$ref": "#/$defs/Subtype"
     },
@@ -406,7 +524,8 @@
     "format",
     "header",
     "encoder",
-    "validation"
+    "validation",
+    "packing"
   ],
   "title": "Profile",
   "type": "object"

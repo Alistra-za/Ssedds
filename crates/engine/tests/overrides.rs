@@ -39,3 +39,29 @@ fn subtype_values_are_checked() {
     // a sub-type-scoped sub-type is meaningless
     assert!(parse_set("subtype:normal.subtype=msn").is_err());
 }
+
+/// M2.5: every packing field is settable, unscoped, per sub-type and per (packed) file name.
+#[test]
+fn packing_fields_are_settable() {
+    for s in [
+        "packing.enabled=false",
+        "packing.roughness_default=0.6",
+        "packing.prefer=raw",
+        "packing.fill.metallic=255",
+        "subtype:rmaos.packing.fill.ao=200",
+        "file:**/iron_rmaos.png.packing.fill.specular=128",
+    ] {
+        assert!(parse_set(s).is_ok(), "{s}");
+    }
+    let o = parse_set("file:**/iron_rmaos.png.packing.fill.specular=128").unwrap();
+    assert_eq!(
+        (o.scope, o.field.as_str(), o.value),
+        (
+            Scope::File("**/iron_rmaos.png".into()),
+            "packing.fill.specular",
+            json!(128)
+        )
+    );
+    // Role ids only, not exporter terms.
+    assert!(parse_set("packing.fill.metal=1").is_err());
+}

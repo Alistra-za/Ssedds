@@ -47,6 +47,17 @@ pub const FIELD_PATHS: &[&str] = &[
     "validation.complex_m_warn_alpha",
     "validation.bc6h_min_peak_ratio",
     "validation.pgpatcher_non_white_share",
+    "packing.enabled",
+    "packing.roughness_default",
+    "packing.prefer",
+    "packing.fill.roughness",
+    "packing.fill.metallic",
+    "packing.fill.ao",
+    "packing.fill.specular",
+    "packing.fill.glossiness",
+    "packing.fill.height",
+    "packing.fill.opacity",
+    "packing.fill.fuzz",
 ];
 
 /// A TOML literal (`100`, `true`, `"x"`) keeps its type; anything else (`bc1`, `none`) is a string.

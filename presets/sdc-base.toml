@@ -13,6 +13,7 @@ format = "bc7"
 header = "auto"
 encoder = { backend = "bc7e", effort = "veryslow", rgbcx_level = 18, perceptual = false, bc1_transparent_black = false, bc45_search_radius = "default" }
 validation = { min_mip_psnr_db = 30.0, coverage_tolerance_pts = 2.0, complex_m_warn_alpha = 247, bc6h_min_peak_ratio = 0.8, pgpatcher_non_white_share = 0.5 }
+packing = { enabled = true, roughness_default = 0.5, prefer = "prepacked" }
 
 [subtypes.diffuse]
 color = { content = "srgb", tag = "unorm" }
