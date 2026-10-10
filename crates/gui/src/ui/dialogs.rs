@@ -1,0 +1,83 @@
+//! Modal dialogs for `model.dialog` (M3a spec §2.1). `ProceedAnyway` is drawn by the export task.
+use crate::model::{AppModel, Dialog};
+use eframe::egui;
+
+pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
+    let Some(dialog) = model.dialog.clone() else {
+        return;
+    };
+    match dialog {
+        Dialog::CloseUnsaved => close_unsaved(ctx, model),
+        Dialog::ExternalChange => external_change(ctx, model),
+        Dialog::Error(msg) => error(ctx, model, &msg),
+        Dialog::ProceedAnyway(_) => {}
+    }
+}
+
+fn modal(ctx: &egui::Context, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Modal::new(egui::Id::new(id)).show(ctx, |ui| {
+        ui.set_max_width(420.0);
+        add(ui);
+    });
+}
+
+fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
+    let (mut save, mut discard, mut cancel) = (false, false, false);
+    modal(ctx, "close-unsaved", |ui| {
+        ui.heading("Unsaved changes");
+        ui.label("sdc.toml has changes that are not saved.");
+        ui.horizontal(|ui| {
+            save = ui.button("Save").clicked();
+            discard = ui.button("Discard").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if save {
+        model.dialog = None;
+        // A failed save raises its own dialog (changed on disk, or an error) and the window stays open.
+        if model.save().is_ok() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    } else if discard {
+        model.dialog = None;
+        // Dropping the edits makes the close request pass `request_close`.
+        if let Some(p) = model.project.as_mut() {
+            p.reload();
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    } else if cancel {
+        model.dialog = None;
+    }
+}
+
+fn external_change(ctx: &egui::Context, model: &mut AppModel) {
+    let (mut reload, mut overwrite, mut cancel) = (false, false, false);
+    modal(ctx, "external-change", |ui| {
+        ui.heading("sdc.toml changed on disk");
+        ui.label("Another program changed the file after it was opened.");
+        ui.horizontal(|ui| {
+            reload = ui.button("Reload").clicked();
+            overwrite = ui.button("Overwrite").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if reload {
+        model.resolve_external_change(false);
+    } else if overwrite {
+        model.resolve_external_change(true);
+    } else if cancel {
+        model.dialog = None;
+    }
+}
+
+fn error(ctx: &egui::Context, model: &mut AppModel, msg: &str) {
+    let mut ok = false;
+    modal(ctx, "error", |ui| {
+        ui.heading("Error");
+        ui.label(msg);
+        ok = ui.button("OK").clicked();
+    });
+    if ok {
+        model.dialog = None;
+    }
+}

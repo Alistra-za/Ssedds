@@ -57,9 +57,7 @@ fn main() -> eframe::Result {
                     .show();
                 return Err(e.into());
             }
-            Ok(Box::new(SdcApp {
-                model: build_model(),
-            }))
+            Ok(Box::new(SdcApp::new(build_model())))
         }),
     )
 }

@@ -234,12 +234,8 @@ impl AppModel {
         self.items = view.items;
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
-        self.status_line = format!(
-            "{} textures, {} sets, {} need a decision",
-            self.items.len(),
-            self.sets.len(),
-            self.undecided()
-        );
+        // The count of textures that need a decision is shown (amber) in the Textures column header.
+        self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // Keep the selection when its item or set still exists; else nothing.
         let gone = match &self.selection {
             Selection::Item(k) => self.item(k).is_none(),
