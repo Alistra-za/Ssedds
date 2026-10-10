@@ -1,11 +1,12 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
+pub mod export;
 pub mod fields;
 pub mod items;
 pub mod preview;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
-use crate::worker::{spawn_plan, WorkerMsg};
+use crate::worker::{spawn_export, spawn_plan, WorkerMsg};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, RawMap, Subtype, Target};
@@ -71,6 +72,7 @@ pub struct AppModel {
     pub banner: Option<String>,
     pub dialog: Option<Dialog>,
     pub expanded: Option<String>,
+    pub export: export::ExportModel,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -110,6 +112,7 @@ impl AppModel {
             banner: None,
             dialog: None,
             expanded: None,
+            export: export::ExportModel::default(),
             generation: 0,
             planning: None,
             tx,
@@ -187,7 +190,7 @@ impl AppModel {
     }
 
     pub fn busy(&self) -> bool {
-        self.planning.is_some()
+        self.planning.is_some() || self.export.running.is_some()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -218,8 +221,10 @@ impl AppModel {
             }
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::Panicked { what, message } => {
-                if what == "plan" {
-                    self.planning = None;
+                match what {
+                    "plan" => self.planning = None,
+                    "export" => self.export.running = None,
+                    _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
                     "internal error in {what}: {message}"
@@ -229,8 +234,82 @@ impl AppModel {
         }
     }
 
-    /// Messages later tasks handle (export, preview).
-    fn handle_more(&mut self, _msg: WorkerMsg) {}
+    /// Messages the export handles; the preview's arrive with a later task.
+    fn handle_more(&mut self, msg: WorkerMsg) {
+        match msg {
+            WorkerMsg::Event(e) => self.export.on_event(e),
+            WorkerMsg::ExportDone(result) => {
+                self.export.running = None;
+                match result {
+                    Ok(summary) => self.export.summary = Some(summary),
+                    Err(e) => {
+                        self.export.error = Some(e.clone());
+                        self.dialog = Some(Dialog::Error(e));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Export the folder; first the checks that need an answer (M3a spec §2.5).
+    pub fn export_clicked(&mut self) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        if let Some(problem) = export::export_folder_problem(&root, &self.export_root()) {
+            self.dialog = Some(Dialog::Error(problem));
+            return;
+        }
+        let n = self.undecided();
+        if n > 0 {
+            self.dialog = Some(Dialog::ProceedAnyway(n));
+            return;
+        }
+        self.start_export();
+    }
+
+    /// DECISIONS N3: undecided textures are skipped, never decided here.
+    pub fn proceed_anyway(&mut self) {
+        self.dialog = None;
+        self.start_export();
+    }
+
+    /// Save first (the CLI command and the next session read `sdc.toml`), then run the export on a worker.
+    fn start_export(&mut self) {
+        if self.export.running.is_some() || self.save().is_err() {
+            return;
+        }
+        let (Some(session), Some(mut req)) = (self.session.clone(), self.request()) else {
+            return;
+        };
+        req.on_existing = engine::api::OnExisting::IfChanged;
+        self.export = export::ExportModel {
+            open: true,
+            ..Default::default()
+        };
+        let cancel = CancelToken::default();
+        self.export.running = Some(cancel.clone());
+        spawn_export(self.tx.clone(), session, req, cancel);
+    }
+
+    pub fn cancel_export(&mut self) {
+        if let Some(c) = &self.export.running {
+            c.cancel();
+        }
+    }
+
+    /// Select the texture whose output is `job_key`; the centre keeps showing whatever it shows.
+    pub fn select_job(&mut self, job_key: &str) {
+        if let Some(k) = self
+            .items
+            .iter()
+            .find(|i| i.job_key == job_key)
+            .map(|i| i.key.clone())
+        {
+            self.select_item(&k);
+        }
+    }
 
     fn apply_plan(&mut self, view: PlanView) {
         self.target = view.target;

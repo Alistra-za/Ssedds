@@ -1,6 +1,7 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
 pub mod columns;
 pub mod dialogs;
+pub mod drawer;
 pub mod header;
 pub mod set_view;
 pub mod settings_panel;
@@ -14,6 +15,7 @@ use std::cell::RefCell;
 #[derive(Default)]
 pub struct State {
     pub thumbs: thumbs::ThumbCache,
+    pub drawer: drawer::DrawerState,
 }
 
 thread_local! {
@@ -54,6 +56,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
             columns::sets(ui, model, &mut state.thumbs);
         },
     );
+    drawer::draw(ui, model, &mut state.drawer);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
     dialogs::draw(ui.ctx(), model);
 }

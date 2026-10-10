@@ -58,8 +58,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                 model.save_settings();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Not wired yet: exporting arrives with the export task.
-                ui.add_enabled(false, egui::Button::new("Export"));
+                let can_export = model.root.is_some() && model.export.running.is_none();
+                if ui
+                    .add_enabled(can_export, egui::Button::new("Export"))
+                    .clicked()
+                {
+                    model.export_clicked();
+                }
                 if ui
                     .add_enabled(model.is_dirty(), egui::Button::new("Save"))
                     .clicked()

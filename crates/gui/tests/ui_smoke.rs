@@ -363,3 +363,40 @@ fn a_locked_field_is_disabled_and_says_why() {
     h.run();
     h.get_by_label("_SRGB is only written under cs");
 }
+
+#[test]
+fn export_asks_about_undecided_textures_then_the_drawer_reports() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened(d.path()));
+    h.run();
+    press(&mut h, "Export");
+    h.get_by_label_contains("still need a decision");
+    h.get_by_label_contains("nothing is decided for you");
+    // Cancel closes the question and starts nothing.
+    press(&mut h, "Cancel");
+    assert!(h.state().dialog.is_none());
+    assert!(!h.state().export.open);
+    press(&mut h, "Export");
+    press(&mut h, "Proceed anyway");
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
+    h.run();
+    for label in [
+        "Files",
+        "Warnings",
+        "Save report…",
+        "Copy CLI command",
+        "Close",
+    ] {
+        h.get_by_label(label);
+    }
+    h.get_by_label_contains("converted, ");
+    assert!(
+        h.query_all_by_label_contains("skipped: needs decision")
+            .count()
+            >= 1
+    );
+    press(&mut h, "Warnings");
+    press(&mut h, "Close");
+    assert!(!h.state().export.open);
+    assert!(h.query_by_label("Copy CLI command").is_none());
+}

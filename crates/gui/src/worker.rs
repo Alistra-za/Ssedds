@@ -89,6 +89,26 @@ pub fn spawn_guarded(
         .expect("spawn a worker thread");
 }
 
+/// Plan (through the session's cache) and run, streaming every event into the channel, then send `ExportDone`.
+pub fn spawn_export(
+    tx: Sender<WorkerMsg>,
+    session: Arc<Session>,
+    req: BatchRequest,
+    cancel: CancelToken,
+) {
+    spawn_guarded(tx, "export", move |tx| {
+        let rep = Reporter::new(
+            Arc::new(ChannelSink(tx.clone())),
+            engine::events::new_batch_id(),
+        );
+        let result = session
+            .plan(req, &rep, &cancel)
+            .and_then(|plan| session.run(plan, &rep, &cancel))
+            .map_err(|e| e.to_string());
+        let _ = tx.send(WorkerMsg::ExportDone(result));
+    });
+}
+
 pub fn spawn_plan(
     tx: Sender<WorkerMsg>,
     session: Arc<Session>,

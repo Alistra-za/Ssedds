@@ -1,4 +1,4 @@
-//! Modal dialogs for `model.dialog` (M3a spec §2.1). `ProceedAnyway` is drawn by the export task.
+//! Modal dialogs for `model.dialog` (M3a spec §2.1).
 use crate::model::{AppModel, Dialog};
 use eframe::egui;
 
@@ -11,7 +11,28 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::OpenUnsaved(root) => open_unsaved(ctx, model, root),
         Dialog::ExternalChange => external_change(ctx, model),
         Dialog::Error(msg) => error(ctx, model, &msg),
-        Dialog::ProceedAnyway(_) => {}
+        Dialog::ProceedAnyway(n) => proceed_anyway(ctx, model, n),
+    }
+}
+
+fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, n: usize) {
+    let (mut proceed, mut cancel) = (false, false);
+    modal(ctx, "proceed-anyway", |ui| {
+        ui.heading("Undecided textures");
+        ui.label(format!("{n} textures still need a decision."));
+        ui.label(
+            "Proceed anyway exports the decided textures and skips these; nothing is decided for you.",
+        );
+        ui.horizontal(|ui| {
+            proceed = ui.button("Proceed anyway").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if proceed {
+        model.proceed_anyway();
+    } else if cancel {
+        // The undecided textures stay highlighted in the Textures column.
+        model.dialog = None;
     }
 }
 
