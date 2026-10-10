@@ -219,6 +219,28 @@ fn print_event(ev: &EngineEvent) {
             code.map(|c| format!("{} ", c.as_str())).unwrap_or_default()
         ),
         EventKind::FileFailed { error, .. } => println!("{path}\n  cannot be read: {error}"),
+        EventKind::SetResolved { recipes, .. } if !recipes.is_empty() => {
+            println!("set {}", ev.set.as_deref().unwrap_or(""));
+            for r in recipes {
+                let status = serde_json::to_value(r.status)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default();
+                let reason = r
+                    .reason
+                    .as_deref()
+                    .map(|x| format!(": {x}"))
+                    .unwrap_or_default();
+                println!("  pack {} ({}) {status}{reason}", r.output, r.subtype.id());
+                let channels: Vec<String> = ["R", "G", "B", "A"]
+                    .iter()
+                    .zip(&r.channels)
+                    .filter(|(_, p)| !p.is_empty())
+                    .map(|(c, p)| format!("{c} {p}"))
+                    .collect();
+                println!("    {}", channels.join("  "));
+            }
+        }
         _ => {}
     }
 }

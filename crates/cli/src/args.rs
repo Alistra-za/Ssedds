@@ -3,8 +3,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use encoders_sys::Bc1Model;
 use engine::api::{BatchRequest, OnExisting};
 use engine::codes::Code;
-use engine::config::Target;
-use engine::overrides::parse_set;
+use engine::config::{RawMap, Target};
+use engine::overrides::{parse_set, SetOverride};
 use engine::policy::AcceptSuggestions;
 use engine::presets::PresetRegistry;
 use engine::schemas::SchemaKind;
@@ -115,6 +115,10 @@ pub struct BatchArgs {
     /// Field override: field=value, subtype:<id>.field=value, file:<glob>.field=value.
     #[arg(long = "set")]
     pub set: Vec<String>,
+    /// Fill value for a packed channel without a source map: <role>=<0..255>, e.g. metallic=255 (repeatable). Same
+    /// as `--set packing.fill.<role>=<value>`, applied after every `--set`.
+    #[arg(long = "fill", value_name = "ROLE=VALUE")]
+    pub fill: Vec<String>,
     #[arg(long, value_enum, default_value = "none")]
     pub accept_suggestions: AcceptArg,
     /// Acknowledge a blocking warning code (repeatable).
@@ -277,6 +281,26 @@ pub fn parse_bytes(s: &str) -> Result<u64, String> {
     }
 }
 
+/// `--fill <role>=<0..255>` (spec §6.4, DECISIONS Note M5): an unscoped `packing.fill.<role>` override.
+pub fn parse_fill(s: &str) -> Result<SetOverride, String> {
+    let (role, value) = s
+        .split_once('=')
+        .ok_or_else(|| format!("--fill '{s}': expected <role>=<0..255>"))?;
+    let role = role.trim().to_ascii_lowercase();
+    if !RawMap::ALL.iter().any(|r| r.id() == role) {
+        let roles: Vec<String> = RawMap::ALL.iter().map(|r| r.id()).collect();
+        return Err(format!(
+            "--fill '{s}': unknown role '{role}' (one of {})",
+            roles.join(", ")
+        ));
+    }
+    let code: u8 = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("--fill '{s}': the value must be a whole number 0..255"))?;
+    parse_set(&format!("packing.fill.{role}={code}"))
+}
+
 /// Translate the shared batch flags into a `BatchRequest`. Errors are usage or configuration errors (exit 2).
 pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, String> {
     // `BatchRequest::new` takes a target; `--target` is optional, so reset it to "not given".
@@ -305,6 +329,10 @@ pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, Str
         .iter()
         .map(|s| parse_set(s))
         .collect::<Result<_, _>>()?;
+    // DECISIONS Note M5: fills rank after every --set (the same precedence group as an unscoped --set, later).
+    for f in &b.fill {
+        r.overrides.push(parse_fill(f)?);
+    }
     r.allow = b
         .allow
         .iter()
@@ -321,6 +349,15 @@ pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fill_is_an_unscoped_packing_override() {
+        let o = parse_fill("Metallic=255").unwrap();
+        assert_eq!(o.field, "packing.fill.metallic");
+        assert_eq!(o.value, serde_json::json!(255));
+        assert!(parse_fill("metal=1").unwrap_err().contains("unknown role"));
+        assert!(parse_fill("ao=300").unwrap_err().contains("0..255"));
+    }
 
     #[test]
     fn parse_bytes_units() {

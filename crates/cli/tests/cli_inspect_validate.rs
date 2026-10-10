@@ -1,4 +1,4 @@
-use image::{ImageBuffer, Rgb};
+use image::{ImageBuffer, Luma, Rgb};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -808,4 +808,22 @@ fn validate_infers_varying_alpha_below_the_note_l_cutoff() {
         let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
         assert_eq!(v["subtype"], want, "{name}: {v}");
     }
+}
+
+#[test]
+fn inspect_prints_the_packing_recipes_of_a_set() {
+    let d = tempfile::tempdir().unwrap();
+    ImageBuffer::from_fn(16, 16, |x, _| Luma([x as u8 * 16]))
+        .save(d.path().join("iron_roughness.png"))
+        .unwrap();
+    let o = sdc().arg("inspect").arg(d.path()).output().unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("pack iron_rmaos.dds (rmaos) run"), "{out}");
+    assert!(
+        out.contains("R source:iron_roughness.png:R")
+            && out.contains("G default:0")
+            && out.contains("A default:1"),
+        "{out}"
+    );
 }

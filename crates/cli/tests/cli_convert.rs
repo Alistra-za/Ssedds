@@ -1070,3 +1070,65 @@ fn bc1_transparent_black_is_a_file_error_not_a_validation_failure() {
     );
     assert!(!fx.dds("textures/a/a.dds").exists());
 }
+
+/// DECISIONS Note M5: `--fill` writes a packed channel that has no source; it is provenance `fill:<v>` and not a
+/// defaulted channel.
+#[test]
+fn fill_sets_a_packed_channel_without_a_source() {
+    let fx = Fx::new();
+    fx.rgb("tile_ao.png");
+    let o = fx.convert(&["--fill", "metallic=255"]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let job = &planned(&o)["tile_ao.png"];
+    assert_eq!(job["provenance"]["pack.g"], "fill:255");
+    assert_eq!(job["profile"]["packing"]["fill"]["metallic"], 255);
+    assert_eq!(
+        job["pack"]["channels"][1],
+        serde_json::json!({ "from": "fill", "role": "metallic", "code": 255 })
+    );
+    let defaulted: Vec<String> = events(&o)
+        .iter()
+        .filter(|e| e["kind"] == "warning" && e["code"] == "PACK-DEFAULTED")
+        .map(|e| e["data"]["channel"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(defaulted, ["R", "A"]);
+    assert!(fx.dds("textures/a/tile_rmaos.dds").exists());
+}
+
+#[test]
+fn fill_rejects_unknown_roles_and_bad_values() {
+    let fx = Fx::new();
+    fx.rgb("tile_ao.png");
+    for (arg, needle) in [
+        ("metalic=1", "unknown role"),
+        ("metallic=256", "0..255"),
+        ("metallic=-1", "0..255"),
+        ("metallic", "expected <role>=<0..255>"),
+    ] {
+        let o = fx.convert(&["--fill", arg]);
+        assert_eq!(code(&o), 2, "{arg}");
+        assert!(
+            text(&o.stderr).contains(needle),
+            "{arg}: {}",
+            text(&o.stderr)
+        );
+    }
+}
+
+/// DECISIONS Note M5: `--fill` ranks after every `--set`, so it beats an unscoped `--set` of the same field.
+#[test]
+fn fill_beats_an_unscoped_set_of_the_same_field() {
+    let fx = Fx::new();
+    fx.rgb("tile_ao.png");
+    let o = fx.convert(&[
+        "--fill",
+        "metallic=200",
+        "--set",
+        "packing.fill.metallic=10",
+    ]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(
+        planned(&o)["tile_ao.png"]["provenance"]["pack.g"],
+        "fill:200"
+    );
+}
