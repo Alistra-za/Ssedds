@@ -254,6 +254,19 @@ Whole-branch review of `feat/phase0-2` (59cf60c): 0 Critical, 8 Important, 16 Mi
 - Owner note: the crash reports that blamed small textures were most likely misattributed.
 - Consequence: no small-texture fallback (DECISIONS #7 stands).
 
+## Spike S6 — plain `_m` with the exact-opaque flag off (2026-10-09)
+
+- Result: **7 of 28 files at 40% or more**, so `ALPHA-EXACT-OFF-M` is now **blocking** (spec §14 #9). Owner OK on 2026-10-09.
+- Method: done offline, without loading the game. Sources were 28 real plain `_m` from 28 of the owner's mods, decoded read-only to PNG (`out/s6-src/SOURCES.txt`). They were converted as BC7 with `alpha.policy=remove` and `alpha.exact_opaque=false`, and the decoded mip-0 alpha was measured.
+- Share of alpha ≠ 255 per file: from 1.57% to 57.95%, about 27% on average. The worst are `frozenmarshice_m` 57.95%, `hair_acc_m` 57.19% and `Dibella_m` 51.02%. Per-file list: `out/s6-results.txt`.
+- Consequence: turning the flag off on a BC7 `_m` now needs `--allow ALPHA-EXACT-OFF-M`. The flag is on by default for `_m`, so default runs are unaffected. BC4 and BC3 `_m` never raise the code.
+
+## Coverage remap — owner keeps the curve (2026-10-09)
+
+- RULINGS #50: the mip coverage step keeps the monotone piecewise-linear remap (0 → 0, a → T, 1 → 1), not Castaño's uniform t/a scale.
+- The owner decided after viewing `F:/ai/dds/coverage-compare` (synthetic and real 4096² sources, mips 1024 and 128).
+- Spec §5.5 marks it decided.
+
 ## Spike S8 — CS complex-material gate, read from the shader (2026-10-09)
 
 - Result: **the 251/255 gate is exact**. Evidence comes from the shader, not from looking at parallax, which can't be judged on a flat test map.
@@ -284,7 +297,7 @@ Whole-branch review of `feat/phase0-2` (59cf60c): 0 Critical, 8 Important, 16 Mi
 ## Owner checks pending
 
 Open owner confirmations after Phase 2. None blocks the merge; each has a shipped default.
-1. **Coverage remap shape (Task 30).** The mip coverage step uses a monotone piecewise-linear remap (0 → 0, a → T, 1 → 1) instead of Castaño's uniform scale by t/a, so the opaque interior of a `cutout_blend` texture stays opaque. Coverage is the same; the alpha gradient at the edges differs from the spec §5.5 wording (now documented there). Cost if wrong: a different edge gradient shape.
+1. **Coverage remap shape (Task 30).** **Closed:** the owner keeps the curve (Coverage remap entry above).
 2. **Colour-term output names (spec §14 #17).** Exporter colour terms (`_basecolor`, `_albedo`, …) are written `<base>.dds`; `_d` keeps `<base>_d.dds`.
 3. **`_normalgl` / `_normaldx` precedence.** They state the green convention as a fact that beats presets, configs and rules but not `--set`.
 4. **Plain `_normal` / `_nrm`.** It stays unresolved, even with `--accept-suggestions high` or `--allow`, until a preset, config, rule or `--set` states `opengl` or `directx`.
@@ -295,5 +308,5 @@ Open owner confirmations after Phase 2. None blocks the merge; each has a shippe
 9. **In-game spikes (Task 46).** Pack: `target/spike-src` (regenerate with `cargo run --release -p sdc-bench -- gen-spike-assets --out target/spike-src`); steps: `docs/spikes/in-game-checklist.md`.
    - S1: closed by the owner's answer (Spike S1 above).
    - S2: **passed** (Spike S2 above).
-   - S6 (open): how many real plain `_m` files stored as BC7 with alpha cross PGPatcher's 50% non-white rule with the flag off; a file at 40% or more makes `ALPHA-EXACT-OFF-M` blocking (spec §14 #9). Offline: 7 of 28 real `_m` are at 40% or more (max 57.95%, `out/s6-results.txt`); waiting for the owner's OK to make the code blocking.
+   - S6: **closed**; `ALPHA-EXACT-OFF-M` is blocking (Spike S6 above).
    - S8: **closed** (Spike S8 above).

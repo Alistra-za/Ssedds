@@ -770,7 +770,22 @@ fn exact_opaque_m_decodes_alpha_255_at_every_mip() {
     let mut off = sets.to_vec();
     off.push("file:**/iron_m.png.alpha.exact_opaque=false");
     off.push("file:**/rock_m.png.alpha.exact_opaque=false");
+    // Spike S6 (owner, 2026-10-09): turning the flag off on a BC7 `_m` is blocking; nothing is written.
     let o = convert(d.path(), Target::Cs, &off, &[]);
+    assert_eq!(
+        (
+            o.summary.converted,
+            o.summary.skipped,
+            o.summary.exit_code()
+        ),
+        (0, 2, 1),
+        "{:?}",
+        warnings(&o)
+    );
+    for src in ["iron_m.png", "rock_m.png"] {
+        assert_eq!(skip_code(&o, src), Some(Code::AlphaExactOffM));
+    }
+    let o = convert(d.path(), Target::Cs, &off, &[Code::AlphaExactOffM]);
     assert_eq!(o.summary.converted, 2, "{:?}", warnings(&o));
     for (src, rel) in [
         ("iron_m.png", "textures/a/iron_m.dds"),

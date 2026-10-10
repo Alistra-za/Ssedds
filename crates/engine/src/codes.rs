@@ -43,7 +43,7 @@ codes! {
     FmtLandscapeBc1 = "FMT-LANDSCAPE-BC1" => Blocking,
     FmtBc1Alpha = "FMT-BC1-ALPHA" => Blocking,
     FmtPerceptualData = "FMT-PERCEPTUAL-DATA" => Error,
-    AlphaExactOffM = "ALPHA-EXACT-OFF-M" => Warning,
+    AlphaExactOffM = "ALPHA-EXACT-OFF-M" => Blocking,
     Alpha254 = "ALPHA-254" => Info,
     AlphaNearOpaque = "ALPHA-NEAR-OPAQUE" => Info,
     TagSrgbVanilla = "TAG-SRGB-VANILLA" => Error,
