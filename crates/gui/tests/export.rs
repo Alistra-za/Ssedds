@@ -267,3 +267,20 @@ fn the_report_is_written_as_json_lines_or_markdown_by_extension() {
         m.export.to_markdown()
     );
 }
+
+#[test]
+fn the_copied_cli_command_uses_the_sessions_decoder_not_the_pending_setting() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    // The shared test session runs the ideal model; the setting changes for the next launch only.
+    m.set_bc1_choice(Bc1Choice::Nvidia);
+    assert!(m.restart_needed);
+    assert_eq!(m.session_bc1(), Bc1Choice::Ideal);
+    let c = cli_command(
+        m.root.as_ref().unwrap(),
+        &m.export_root(),
+        m.session_bc1(),
+        m.settings.jobs,
+    );
+    assert!(c.contains("--bc1-decoder ideal"), "{c}");
+}

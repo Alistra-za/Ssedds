@@ -1,5 +1,5 @@
 //! The centre panel for a selected set (M3a spec §2.4): its members, its recipes and their channel sources, and the
-//! warnings of its members. Drawing only; a click selects a member through the model.
+//! warnings of its members. Drawing only; a click selects a member and a double click expands it, through the model.
 use super::columns::{border_of, export_prefix, set_label, status_text};
 use super::thumbs::ThumbCache;
 use crate::model::fields::channel_text;
@@ -8,6 +8,8 @@ use eframe::egui;
 use engine::events::RecipeReport;
 
 const THUMB: f32 = 64.0;
+/// Seconds a single click waits for its second click (a little over egui's double-click delay).
+const DOUBLE_CLICK_WAIT: f64 = 0.35;
 
 fn recipe(ui: &mut egui::Ui, r: &RecipeReport) {
     let (word, color) = status_text(r.status);
@@ -35,6 +37,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, thumbs: &mut Thu
     ui.heading(set_label(&export_prefix(model), key));
     ui.add_space(4.0);
     let mut clicked = None;
+    let mut expand = None;
     ui.horizontal_wrapped(|ui| {
         for mk in &set.members {
             let Some(item) = model.item(mk) else { continue };
@@ -63,7 +66,11 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, thumbs: &mut Thu
                     );
                 }
                 ui.add(egui::Label::new(egui::RichText::new(&item.name).small()).truncate());
-                if resp.on_hover_text(&item.key).clicked() {
+                let resp = resp.on_hover_text(&item.key);
+                // A double click expands the member (M3a spec §2.4); a single click selects it.
+                if resp.double_clicked() {
+                    expand = Some(mk.clone());
+                } else if resp.clicked() {
                     clicked = Some(mk.clone());
                 }
             });
@@ -90,7 +97,37 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, thumbs: &mut Thu
             ui.label(egui::RichText::new(format!("{}: {}", w.code.as_str(), w.message)).small());
         }
     }
+    select_or_expand(ui, model, clicked, expand);
+}
+
+/// A click selects a member, which replaces this view by the member's settings, so the second click of a double
+/// click would land on something else. The selection therefore waits out the double-click delay; a double click
+/// meanwhile expands the member instead.
+fn select_or_expand(
+    ui: &egui::Ui,
+    model: &mut AppModel,
+    clicked: Option<String>,
+    expand: Option<String>,
+) {
+    let id = egui::Id::new("set-view-pending-select");
+    let now = ui.input(|i| i.time);
+    if let Some(k) = expand {
+        ui.data_mut(|d| d.remove::<(String, f64)>(id));
+        model.expand(&k);
+        return;
+    }
     if let Some(k) = clicked {
+        ui.data_mut(|d| d.insert_temp(id, (k, now)));
+    }
+    let Some((k, at)) = ui.data(|d| d.get_temp::<(String, f64)>(id)) else {
+        return;
+    };
+    let left = DOUBLE_CLICK_WAIT - (now - at);
+    if left <= 0.0 {
+        ui.data_mut(|d| d.remove::<(String, f64)>(id));
         model.select_item(&k);
+    } else {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(left));
     }
 }

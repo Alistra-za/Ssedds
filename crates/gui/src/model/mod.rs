@@ -680,6 +680,16 @@ impl AppModel {
             .is_some_and(|s| s.bc1_model() != c.model());
     }
 
+    /// The BC1 decoder the session runs with. The setting may differ (it applies after a restart), so anything that
+    /// must match what the engine did here (the CLI command) reads this.
+    pub fn session_bc1(&self) -> crate::settings::Bc1Choice {
+        self.session
+            .as_ref()
+            .map_or(self.settings.bc1_decoder, |s| {
+                crate::settings::Bc1Choice::from_model(s.bc1_model())
+            })
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.project.as_ref().is_some_and(ProjectDoc::is_dirty)
     }

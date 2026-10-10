@@ -58,7 +58,10 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                 model.save_settings();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let can_export = model.root.is_some() && model.export.running.is_none();
+                // Not while `sdc.toml` is ignored (M3a spec §7.4): an export would not be the project's settings.
+                let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
+                let can_export =
+                    model.root.is_some() && model.export.running.is_none() && !read_only;
                 if ui
                     .add_enabled(can_export, egui::Button::new("Export"))
                     .clicked()
@@ -114,9 +117,11 @@ fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
-    let shown = match &model.settings.export_folder {
-        Some(p) => p.display().to_string(),
-        None => "not set".to_string(),
+    // The folder an export would write to: the setting, else `<root>/sdc-out`.
+    let shown = if model.settings.export_folder.is_some() || model.root.is_some() {
+        model.export_root().display().to_string()
+    } else {
+        "not set".to_string()
     };
     if ui
         .button(format!("Export folder: {shown}"))

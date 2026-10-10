@@ -107,7 +107,7 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel) {
             let cmd = cli_command(
                 root,
                 &model.export_root(),
-                model.settings.bc1_decoder,
+                model.session_bc1(),
                 model.settings.jobs,
             );
             ui.ctx().copy_text(cmd);

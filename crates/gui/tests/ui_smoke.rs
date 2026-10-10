@@ -593,3 +593,137 @@ fn closing_during_an_export_asks_and_keep_running_leaves_it_alone() {
     settle(&mut h);
     assert!(h.state_mut().take_close_ready());
 }
+
+#[test]
+fn the_header_shows_the_effective_export_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let mut model = AppModel::new(GuiSettings::default(), None, session());
+    model.open_folder(root.clone());
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    let want = format!("Export folder: {}", root.join("sdc-out").display());
+    h.get_by_label(&want);
+    assert!(h.query_by_label_contains("not set").is_none());
+}
+
+#[test]
+fn export_is_disabled_while_sdc_toml_is_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    std::fs::write(root.join("sdc.toml"), "target = [\n").unwrap();
+    let settings = GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..GuiSettings::default()
+    };
+    let mut model = AppModel::new(settings, None, session());
+    model.open_folder(root);
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    assert!(h.get_by_label("Export").accesskit_node().is_disabled());
+    // A healthy folder has it enabled.
+    let d2 = tempfile::tempdir().unwrap();
+    let mut h = harness(opened(d2.path()));
+    h.run();
+    assert!(!h.get_by_label("Export").accesskit_node().is_disabled());
+}
+
+#[test]
+fn a_double_click_on_a_set_member_expands_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    let key = model
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("rock01"))
+        .unwrap()
+        .key
+        .clone();
+    model.select_set(&key);
+    // Two clicks must land within egui's double-click delay: shorten the simulated frame.
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .with_step_dt(0.02)
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    // The member name sits under its thumbnail; the same name is also a tile in the Textures column to the left.
+    let label = h
+        .query_all_by_label_contains("rock01_normal.png")
+        .map(|n| n.rect())
+        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the member in the set view");
+    let at = label.center() - eframe::egui::vec2(0.0, 30.0);
+    h.hover_at(at);
+    h.run();
+    assert!(h.state().expanded.is_none());
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(eframe::egui::Event::PointerButton {
+                pos: at,
+                button: eframe::egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+        }
+    }
+    h.run();
+    assert_eq!(
+        h.state().expanded.as_deref(),
+        Some("landscape/rock01_normal.png")
+    );
+}
+
+#[test]
+fn a_single_click_on_a_set_member_selects_it_after_the_double_click_delay() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    let key = model
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("rock01"))
+        .unwrap()
+        .key
+        .clone();
+    model.select_set(&key);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .with_step_dt(0.02)
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let label = h
+        .query_all_by_label_contains("rock01_normal.png")
+        .map(|n| n.rect())
+        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the member in the set view");
+    let at = label.center() - eframe::egui::vec2(0.0, 30.0);
+    h.hover_at(at);
+    h.run();
+    for pressed in [true, false] {
+        h.event(eframe::egui::Event::PointerButton {
+            pos: at,
+            button: eframe::egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        });
+    }
+    h.step();
+    assert_eq!(h.state().selection, Selection::Set(key), "not yet");
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(
+        h.state().selection,
+        Selection::Item("landscape/rock01_normal.png".into())
+    );
+    assert!(h.state().expanded.is_none());
+}
