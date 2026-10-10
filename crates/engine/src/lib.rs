@@ -17,6 +17,7 @@ pub mod manifest;
 pub mod mips;
 pub mod ops;
 pub mod overrides;
+pub mod pack;
 pub mod pipeline;
 pub mod policy;
 pub mod presets;
