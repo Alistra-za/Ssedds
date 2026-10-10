@@ -641,6 +641,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `TAG-SRGB-LOD` | blocking | `_SRGB` under `lod/` → LOD shaders reject sRGB [SC §4] | UNORM |
 | `TAG-CONTENT-MISMATCH` | warning | Linear content with `_SRGB` tag, or colour sub-type with linear content | Check both fields |
 | `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |
+| `CFG-FILE-UNMATCHED` | info | A `[files]` key in `sdc.toml` matches no file (M3a, DECISIONS N2); the key stays in the file | Fix the key or remove the entry |
 | `CFG-UNAVAILABLE` | blocking | Sub-type or format unavailable under the target (BC6H outside `cs`, `flow` under `vanilla`) | Accept fallback or change target |
 | `DIM-NPOT` | blocking | Non-power-of-two dimension [SC §5] | Resize policy, e.g. `--set resize=pot-down` (M6) |
 | `DIM-SMALL` | blocking | Base dimension < 4 px [SC §5] | Resize or acknowledge |

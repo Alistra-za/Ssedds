@@ -192,6 +192,7 @@ fn provenance_serialises_as_spec_strings() {
             "analysis:float-source",
         ),
         (Provenance::Suggestion, "suggestion"),
+        (Provenance::ProjectFile, "project_file"),
         (Provenance::User, "user"),
         (Provenance::Fallback, "fallback"),
     ];
@@ -201,7 +202,10 @@ fn provenance_serialises_as_spec_strings() {
     }
     assert!(serde_json::from_value::<Provenance>(json!("bogus")).is_err());
     assert!(Provenance::Builtin < Provenance::Preset("a".into()));
-    assert!(Provenance::Suggestion < Provenance::User);
+    assert!(
+        Provenance::Suggestion < Provenance::ProjectFile
+            && Provenance::ProjectFile < Provenance::User
+    );
     // Spec §5.2's `set` (set-level decisions, milestone M4) is not a value yet (final review m5).
     assert!(serde_json::from_value::<Provenance>(json!("set")).is_err());
 }

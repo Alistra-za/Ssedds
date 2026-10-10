@@ -64,6 +64,7 @@
         "TAG-CONTENT-MISMATCH",
         "CFG-UNAVAILABLE",
         "CFG-INVALID",
+        "CFG-FILE-UNMATCHED",
         "DIM-NPOT",
         "DIM-SMALL",
         "DIM-FLOW-SMALL",

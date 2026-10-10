@@ -16,7 +16,7 @@ use crate::manifest::{
     bc1_model_id, output_key, sha256_file, sha256_json, EncoderVersions, Manifest, ManifestEntry,
     PresetRef, ENGINE_VERSION,
 };
-use crate::overrides::{to_patch, FileScopes, Scope, SetOverride};
+use crate::overrides::{path_key_matches, project_rel, to_patch, FileScopes, Scope, SetOverride};
 use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
@@ -63,6 +63,9 @@ pub struct BatchRequest {
     pub user_config: Option<PathBuf>,
     /// Project config; defaults to `sdc.toml` in the first input folder when that exists.
     pub project_config: Option<PathBuf>,
+    /// The project config as edited in memory (DECISIONS N4). When `Some`, it is used instead of
+    /// `project_config` or the first input folder's `sdc.toml`, and `[files]` keys are relative to the first input.
+    pub project_config_inline: Option<ConfigFile>,
     pub overrides: Vec<SetOverride>,
     pub accept: AcceptSuggestions,
     pub allow: BTreeSet<Code>,
@@ -91,6 +94,7 @@ impl BatchRequest {
             preset_files: vec![],
             user_config: None,
             project_config: None,
+            project_config_inline: None,
             overrides: vec![],
             accept: AcceptSuggestions::None,
             allow: BTreeSet::new(),
@@ -440,6 +444,18 @@ pub struct Engine {
     registry: PresetRegistry,
 }
 
+/// The folder `[files]` keys are relative to (DECISIONS N2, N4).
+pub fn project_root(req: &BatchRequest) -> Option<PathBuf> {
+    let first_dir = || req.inputs.first().filter(|p| p.is_dir()).cloned();
+    if req.project_config_inline.is_some() {
+        return first_dir();
+    }
+    match &req.project_config {
+        Some(p) => p.parent().map(Path::to_path_buf),
+        None => first_dir().filter(|d| d.join("sdc.toml").exists()),
+    }
+}
+
 /// What [`Engine::preflight`]'s checks resolve, kept for planning.
 struct Setup {
     registry: PresetRegistry,
@@ -474,25 +490,36 @@ impl Engine {
         for f in &req.preset_files {
             registry.add_file(f).map_err(config_err)?;
         }
-        let user_config = req
-            .user_config
-            .as_deref()
-            .filter(|p| p.exists())
+        let user_path = req.user_config.as_deref().filter(|p| p.exists());
+        let user_config = user_path
             .map(ConfigFile::load)
             .transpose()
             .map_err(config_err)?;
-        let project_path = req.project_config.clone().or_else(|| {
-            req.inputs
-                .first()
-                .filter(|p| p.is_dir())
-                .map(|p| p.join("sdc.toml"))
-                .filter(|p| p.exists())
-        });
-        let project_config = project_path
-            .as_deref()
-            .map(ConfigFile::load)
-            .transpose()
-            .map_err(config_err)?;
+        if let (Some(p), Some(c)) = (user_path, &user_config) {
+            if !c.files.is_empty() {
+                return Err(EngineError::Config(format!(
+                    "[files] is only valid in a project sdc.toml, not in {}",
+                    p.display()
+                )));
+            }
+        }
+        let project_config = match &req.project_config_inline {
+            Some(c) => Some(c.clone()),
+            None => {
+                let project_path = req.project_config.clone().or_else(|| {
+                    req.inputs
+                        .first()
+                        .filter(|p| p.is_dir())
+                        .map(|p| p.join("sdc.toml"))
+                        .filter(|p| p.exists())
+                });
+                project_path
+                    .as_deref()
+                    .map(ConfigFile::load)
+                    .transpose()
+                    .map_err(config_err)?
+            }
+        };
 
         // Target and preset. An explicitly chosen preset may state the target; otherwise the target picks the
         // default preset.
@@ -624,11 +651,20 @@ impl Engine {
             }
         }
 
-        // Task 3 replaces this with the project-root `[files]` layer from `sdc.toml`.
+        let (file_overrides, mut file_allow) = match &project_config {
+            Some(c) => c.file_entries().map_err(config_err)?,
+            None => (vec![], BTreeMap::new()),
+        };
+        for (k, codes) in &req.file_allow {
+            file_allow
+                .entry(k.clone())
+                .or_default()
+                .extend(codes.iter().copied());
+        }
         let file_scopes = FileScopes {
-            root: req.inputs.first().filter(|p| p.is_dir()).cloned(),
-            overrides: vec![],
-            allow: req.file_allow.clone(),
+            root: project_root(&req).or_else(|| req.inputs.first().filter(|p| p.is_dir()).cloned()),
+            overrides: file_overrides,
+            allow: file_allow,
         };
         let ctx = ResolveCtx {
             target,
@@ -850,6 +886,63 @@ impl Engine {
             }
         }
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
+        // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
+        let mut rels: Vec<String> = vec![];
+        if let Some(root) = &file_scopes.root {
+            let rel_of_path = |p: &Path| -> Option<String> {
+                let f = InputFile {
+                    path: p.to_path_buf(),
+                    rel: PathBuf::from(p.file_name()?),
+                    game_path: String::new(),
+                    output: PathBuf::new(),
+                    kind: InputKind::Image,
+                };
+                project_rel(root, &f)
+            };
+            for j in &jobs {
+                match &j.pack {
+                    // A packed output: the folder of its first source plus the output's stem (the virtual stem,
+                    // e.g. `rock01_rmaos`), compared with the extension-less key. Its raw sources count too.
+                    Some(pk) => {
+                        let stem = j
+                            .output
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned());
+                        if let (Some(r), Some(stem)) = (rel_of_path(&j.input), stem) {
+                            let dir = r
+                                .rsplit_once('/')
+                                .map_or(String::new(), |(d, _)| format!("{d}/"));
+                            rels.push(format!("{dir}{stem}"));
+                        }
+                        rels.extend(pk.sources.iter().filter_map(|s| rel_of_path(&s.path)));
+                    }
+                    None => rels.extend(rel_of_path(&j.input)),
+                }
+            }
+            rels.extend(skipped.iter().filter_map(|s| rel_of_path(&s.path)));
+            rels.extend(failed.iter().filter_map(|f| rel_of_path(&f.path)));
+            rels.extend(cancelled.iter().filter_map(|p| rel_of_path(p)));
+        }
+        let mut keys: BTreeSet<&String> = file_scopes.allow.keys().collect();
+        keys.extend(file_scopes.overrides.iter().filter_map(|o| match &o.scope {
+            Scope::Path(k) => Some(k),
+            _ => None,
+        }));
+        for key in keys {
+            if !rels.iter().any(|r| path_key_matches(key, r)) {
+                rep.emit(
+                    None,
+                    None,
+                    EventKind::Warning(
+                        Warning::new(
+                            Code::CfgFileUnmatched,
+                            format!("[files] entry '{key}' matches no file"),
+                        )
+                        .with_data(serde_json::json!({ "key": key })),
+                    ),
+                );
+            }
+        }
         for set in &sets {
             let Some(&first) = set
                 .members
@@ -1290,6 +1383,21 @@ fn check_up_front(
         serde_json::from_value::<Subtype>(o.value.clone())
             .map_err(|_| usage(format!("--set subtype: unknown sub-type {}", o.value)))?;
     }
+    // DECISIONS N2: the project config's `[files]` entries are held to the same checks, as config errors.
+    let mut file_overrides = vec![];
+    for c in configs {
+        file_overrides.extend(c.file_entries().map_err(config_err)?.0);
+    }
+    for o in file_overrides.iter().filter(|o| o.field == "subtype") {
+        if let Scope::Path(key) = &o.scope {
+            serde_json::from_value::<Subtype>(o.value.clone()).map_err(|_| {
+                EngineError::Config(format!(
+                    "[files.\"{key}\"] subtype: unknown sub-type {}",
+                    o.value
+                ))
+            })?;
+        }
+    }
     let alias_presets: BTreeSet<&str> = registry
         .alias_table()
         .keys()
@@ -1350,6 +1458,14 @@ fn check_up_front(
             merge_json(&mut d, &to_patch(&o.field, &o.value));
             finish_profile(d, target, st)
                 .map_err(|e| usage(format!("--set {}={}: {e}", o.field, o.value)))?;
+        }
+        for o in file_overrides.iter().filter(|o| o.field != "subtype") {
+            let Scope::Path(key) = &o.scope else { continue };
+            let mut d = doc.clone();
+            merge_json(&mut d, &to_patch(&o.field, &o.value));
+            finish_profile(d, target, st).map_err(|e| {
+                EngineError::Config(format!("[files.\"{key}\"] {}={}: {e}", o.field, o.value))
+            })?;
         }
         for (pid, c) in &alias_chains {
             let doc = doc_of(c, st);

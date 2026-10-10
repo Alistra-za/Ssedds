@@ -1,4 +1,5 @@
 //! `--set` overrides (spec §8): `field=value`, `subtype:<id>.field=value`, `file:<glob>.field=value`.
+//! `Scope::Path` is never parsed from `--set`; it comes only from `sdc.toml`'s `[files]` table.
 use crate::codes::Code;
 use crate::config::Subtype;
 use crate::discover::InputFile;

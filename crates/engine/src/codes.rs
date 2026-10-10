@@ -2,7 +2,8 @@
 //! (§5.8 per-mip error warning), CFG-INVALID (a field value outside its allowed range or an encoder/format
 //! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (a float
 //! source written to an LDR format, an interim guard until the M6 source-transfer split) and the four `PACK-*`
-//! codes of channel packing (spec §6.4, plan M2.5).
+//! codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a `[files]` key of `sdc.toml` that
+//! matches no file, M3a).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +55,7 @@ codes! {
     TagContentMismatch = "TAG-CONTENT-MISMATCH" => Warning,
     CfgUnavailable = "CFG-UNAVAILABLE" => Blocking,
     CfgInvalid = "CFG-INVALID" => Error,
+    CfgFileUnmatched = "CFG-FILE-UNMATCHED" => Info,
     DimNpot = "DIM-NPOT" => Blocking,
     DimSmall = "DIM-SMALL" => Blocking,
     DimFlowSmall = "DIM-FLOW-SMALL" => Warning,
@@ -149,6 +151,6 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 56);
+        assert_eq!(Code::ALL.len(), 57);
     }
 }

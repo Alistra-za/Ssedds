@@ -1,5 +1,12 @@
 {
   "$defs": {
+    "AlphaCompare": {
+      "enum": [
+        "gt",
+        "ge"
+      ],
+      "type": "string"
+    },
     "AlphaContent": {
       "enum": [
         "none",
@@ -8,6 +15,776 @@
       ],
       "type": "string"
     },
+    "AlphaPolicy": {
+      "enum": [
+        "remove",
+        "cutout",
+        "blend",
+        "cutout_blend",
+        "data"
+      ],
+      "type": "string"
+    },
+    "AlphaSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "compare": {
+          "$ref": "#/$defs/AlphaCompare"
+        },
+        "exact_opaque": {
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "#/$defs/AlphaPolicy"
+        },
+        "threshold": {
+          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy",
+        "threshold",
+        "compare",
+        "exact_opaque"
+      ],
+      "type": "object"
+    },
+    "Backend": {
+      "enum": [
+        "bc7e",
+        "rgbcx",
+        "ispc_bc6h",
+        "nvtt"
+      ],
+      "type": "string"
+    },
+    "Category": {
+      "enum": [
+        "color",
+        "normal",
+        "mixed_packed",
+        "grayscale",
+        "hdr"
+      ],
+      "type": "string"
+    },
+    "ChannelSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "flip_green": {
+          "type": "boolean"
+        },
+        "grayscale_source": {
+          "$ref": "#/$defs/GraySource"
+        },
+        "green_convention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GreenConvention"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Green (Y) convention of a normal source (spec §3.2, §4.4, DECISIONS Note H); None = unstated.\n`opengl` makes Resolve set `flip_green`."
+        },
+        "reconstruct_z": {
+          "type": "boolean"
+        },
+        "swizzle": {
+          "default": null,
+          "description": "Four characters from r, g, b, a, 0, 1 (e.g. \"bgra\", \"rrr1\"); None = identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "flip_green",
+        "reconstruct_z",
+        "grayscale_source"
+      ],
+      "type": "object"
+    },
+    "ColorContent": {
+      "enum": [
+        "srgb",
+        "linear"
+      ],
+      "type": "string"
+    },
+    "ColorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/ColorContent"
+        },
+        "tag": {
+          "$ref": "#/$defs/ColorTag"
+        }
+      },
+      "required": [
+        "content",
+        "tag"
+      ],
+      "type": "object"
+    },
+    "ColorTag": {
+      "enum": [
+        "srgb",
+        "unorm",
+        "n/a"
+      ],
+      "type": "string"
+    },
+    "CoverageMode": {
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "type": "string"
+    },
+    "Effort": {
+      "enum": [
+        "ultrafast",
+        "veryfast",
+        "fast",
+        "basic",
+        "veryslow",
+        "slowest"
+      ],
+      "type": "string"
+    },
+    "EncoderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Backend"
+        },
+        "bc1_transparent_black": {
+          "type": "boolean"
+        },
+        "bc45_search_radius": {
+          "$ref": "#/$defs/SearchRadius"
+        },
+        "effort": {
+          "$ref": "#/$defs/Effort"
+        },
+        "perceptual": {
+          "type": "boolean"
+        },
+        "rgbcx_level": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend",
+        "effort",
+        "rgbcx_level",
+        "perceptual",
+        "bc1_transparent_black",
+        "bc45_search_radius"
+      ],
+      "type": "object"
+    },
+    "FileEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "description": "Codes acknowledged for this file only, e.g. [\"DIM-NPOT\"].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "alpha": {
+          "$ref": "#/$defs/PartialAlphaSpec"
+        },
+        "channels": {
+          "$ref": "#/$defs/PartialChannelSpec"
+        },
+        "color": {
+          "$ref": "#/$defs/PartialColorSpec"
+        },
+        "encoder": {
+          "$ref": "#/$defs/PartialEncoderSpec"
+        },
+        "format": {
+          "$ref": "#/$defs/Format"
+        },
+        "header": {
+          "$ref": "#/$defs/HeaderForm"
+        },
+        "mips": {
+          "$ref": "#/$defs/PartialMipSpec"
+        },
+        "packing": {
+          "$ref": "#/$defs/PartialPackingSpec"
+        },
+        "subtype": {
+          "$ref": "#/$defs/Subtype"
+        },
+        "validation": {
+          "$ref": "#/$defs/PartialValidationSpec"
+        }
+      },
+      "type": "object"
+    },
+    "FillSpec": {
+      "additionalProperties": false,
+      "description": "Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit\ncode per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.",
+      "properties": {
+        "ao": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fuzz": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "glossiness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metallic": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "opacity": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "roughness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "specular": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Format": {
+      "enum": [
+        "bc1",
+        "bc3",
+        "bc4",
+        "bc5",
+        "bc6h_uf16",
+        "bc7"
+      ],
+      "type": "string"
+    },
+    "GraySource": {
+      "enum": [
+        "r",
+        "luma"
+      ],
+      "type": "string"
+    },
+    "GreenConvention": {
+      "enum": [
+        "directx",
+        "opengl"
+      ],
+      "type": "string"
+    },
+    "HeaderForm": {
+      "enum": [
+        "auto",
+        "dx10",
+        "legacy"
+      ],
+      "type": "string"
+    },
+    "MipFilter": {
+      "enum": [
+        "box"
+      ],
+      "type": "string"
+    },
+    "MipKeyword": {
+      "enum": [
+        "full",
+        "none"
+      ],
+      "type": "string"
+    },
+    "MipLevels": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MipKeyword"
+        },
+        {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "MipSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/CoverageMode",
+          "description": "Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and\n`cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,\n`data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity."
+        },
+        "filter": {
+          "$ref": "#/$defs/MipFilter"
+        },
+        "levels": {
+          "$ref": "#/$defs/MipLevels"
+        },
+        "normal": {
+          "$ref": "#/$defs/NormalMips"
+        }
+      },
+      "required": [
+        "levels",
+        "filter",
+        "normal",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "NormalMips": {
+      "enum": [
+        "renormalize",
+        "renormalize_bake"
+      ],
+      "type": "string"
+    },
+    "PackPrefer": {
+      "enum": [
+        "prepacked",
+        "raw"
+      ],
+      "type": "string"
+    },
+    "PackingSpec": {
+      "additionalProperties": false,
+      "description": "Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.",
+      "properties": {
+        "enabled": {
+          "description": "Pack this output's recipe; `false` leaves its raw maps as packing inputs (`IN-PACKING-INPUT`).",
+          "type": "boolean"
+        },
+        "fill": {
+          "$ref": "#/$defs/FillSpec",
+          "default": {}
+        },
+        "prefer": {
+          "$ref": "#/$defs/PackPrefer",
+          "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "roughness_default": {
+          "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "roughness_default",
+        "prefer"
+      ],
+      "type": "object"
+    },
+    "PartialAlphaSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "compare": {
+          "$ref": "#/$defs/AlphaCompare"
+        },
+        "exact_opaque": {
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "#/$defs/AlphaPolicy"
+        },
+        "threshold": {
+          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "PartialChannelSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "flip_green": {
+          "type": "boolean"
+        },
+        "grayscale_source": {
+          "$ref": "#/$defs/GraySource"
+        },
+        "green_convention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GreenConvention"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Green (Y) convention of a normal source (spec §3.2, §4.4, DECISIONS Note H); None = unstated.\n`opengl` makes Resolve set `flip_green`."
+        },
+        "reconstruct_z": {
+          "type": "boolean"
+        },
+        "swizzle": {
+          "default": null,
+          "description": "Four characters from r, g, b, a, 0, 1 (e.g. \"bgra\", \"rrr1\"); None = identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PartialColorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/ColorContent"
+        },
+        "tag": {
+          "$ref": "#/$defs/ColorTag"
+        }
+      },
+      "type": "object"
+    },
+    "PartialEncoderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Backend"
+        },
+        "bc1_transparent_black": {
+          "type": "boolean"
+        },
+        "bc45_search_radius": {
+          "$ref": "#/$defs/SearchRadius"
+        },
+        "effort": {
+          "$ref": "#/$defs/Effort"
+        },
+        "perceptual": {
+          "type": "boolean"
+        },
+        "rgbcx_level": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "PartialFillSpec": {
+      "additionalProperties": false,
+      "description": "Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit\ncode per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.",
+      "properties": {
+        "ao": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fuzz": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "glossiness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metallic": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "opacity": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "roughness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "specular": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PartialMipSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/CoverageMode",
+          "description": "Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and\n`cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,\n`data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity."
+        },
+        "filter": {
+          "$ref": "#/$defs/MipFilter"
+        },
+        "levels": {
+          "$ref": "#/$defs/MipLevels"
+        },
+        "normal": {
+          "$ref": "#/$defs/NormalMips"
+        }
+      },
+      "type": "object"
+    },
+    "PartialPackingSpec": {
+      "additionalProperties": false,
+      "description": "Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.",
+      "properties": {
+        "enabled": {
+          "description": "Pack this output's recipe; `false` leaves its raw maps as packing inputs (`IN-PACKING-INPUT`).",
+          "type": "boolean"
+        },
+        "fill": {
+          "$ref": "#/$defs/PartialFillSpec",
+          "default": {}
+        },
+        "prefer": {
+          "$ref": "#/$defs/PackPrefer",
+          "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "roughness_default": {
+          "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "PartialProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "$ref": "#/$defs/PartialAlphaSpec"
+        },
+        "category": {
+          "$ref": "#/$defs/Category"
+        },
+        "channels": {
+          "$ref": "#/$defs/PartialChannelSpec"
+        },
+        "color": {
+          "$ref": "#/$defs/PartialColorSpec"
+        },
+        "encoder": {
+          "$ref": "#/$defs/PartialEncoderSpec"
+        },
+        "format": {
+          "$ref": "#/$defs/Format"
+        },
+        "header": {
+          "$ref": "#/$defs/HeaderForm"
+        },
+        "mips": {
+          "$ref": "#/$defs/PartialMipSpec"
+        },
+        "packing": {
+          "$ref": "#/$defs/PartialPackingSpec"
+        },
+        "subtype": {
+          "$ref": "#/$defs/Subtype"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "validation": {
+          "$ref": "#/$defs/PartialValidationSpec"
+        }
+      },
+      "type": "object"
+    },
+    "PartialValidationSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "bc6h_min_peak_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "complex_m_warn_alpha": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "coverage_tolerance_pts": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_mip_psnr_db": {
+          "format": "double",
+          "type": "number"
+        },
+        "pgpatcher_non_white_share": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Profile": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "$ref": "#/$defs/AlphaSpec"
+        },
+        "category": {
+          "$ref": "#/$defs/Category"
+        },
+        "channels": {
+          "$ref": "#/$defs/ChannelSpec"
+        },
+        "color": {
+          "$ref": "#/$defs/ColorSpec"
+        },
+        "encoder": {
+          "$ref": "#/$defs/EncoderSpec"
+        },
+        "format": {
+          "$ref": "#/$defs/Format"
+        },
+        "header": {
+          "$ref": "#/$defs/HeaderForm"
+        },
+        "mips": {
+          "$ref": "#/$defs/MipSpec"
+        },
+        "packing": {
+          "$ref": "#/$defs/PackingSpec"
+        },
+        "subtype": {
+          "$ref": "#/$defs/Subtype"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationSpec"
+        }
+      },
+      "required": [
+        "target",
+        "category",
+        "subtype",
+        "color",
+        "alpha",
+        "channels",
+        "mips",
+        "format",
+        "header",
+        "encoder",
+        "validation",
+        "packing"
+      ],
+      "type": "object"
+    },
     "Rule": {
       "additionalProperties": false,
       "properties": {
@@ -15,6 +792,7 @@
           "$ref": "#/$defs/RuleMatch"
         },
         "overrides": {
+          "$ref": "#/$defs/PartialProfile",
           "default": null
         },
         "subtype": {
@@ -75,6 +853,13 @@
       },
       "type": "object"
     },
+    "SearchRadius": {
+      "enum": [
+        "default",
+        "max"
+      ],
+      "type": "string"
+    },
     "Subtype": {
       "enum": [
         "diffuse",
@@ -112,6 +897,41 @@
         "vanilla"
       ],
       "type": "string"
+    },
+    "ValidationSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "bc6h_min_peak_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "complex_m_warn_alpha": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "coverage_tolerance_pts": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_mip_psnr_db": {
+          "format": "double",
+          "type": "number"
+        },
+        "pgpatcher_non_white_share": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min_mip_psnr_db",
+        "coverage_tolerance_pts",
+        "complex_m_warn_alpha",
+        "bc6h_min_peak_ratio",
+        "pgpatcher_non_white_share"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -119,7 +939,15 @@
   "description": "User config (%APPDATA%\\sdc\\config.toml) and project config (sdc.toml / --config).",
   "properties": {
     "defaults": {
+      "$ref": "#/$defs/PartialProfile",
       "default": null
+    },
+    "files": {
+      "additionalProperties": {
+        "$ref": "#/$defs/FileEntry"
+      },
+      "description": "Per-file edits (DECISIONS N2): key relative to the folder holding this `sdc.toml` → partial profile, plus\n`allow = [codes]`. Only a project config may hold it.",
+      "type": "object"
     },
     "preset": {
       "default": null,
@@ -139,31 +967,81 @@
       "additionalProperties": false,
       "default": {},
       "properties": {
-        "backlight_tint": true,
-        "coat_normal": true,
-        "complex_material": true,
-        "diffuse": true,
-        "envmask": true,
-        "flow": true,
-        "generic_data": true,
-        "generic_two_channel": true,
-        "glow": true,
-        "hdr_sky": true,
-        "height": true,
-        "landscape_diffuse": true,
-        "landscape_normal": true,
-        "msn": true,
-        "msn_specular": true,
-        "normal": true,
-        "pbr_albedo": true,
-        "pbr_emissive": true,
-        "pbr_fuzz": true,
-        "pbr_normal": true,
-        "pbr_subsurface": true,
-        "rfaos": true,
-        "rmaos": true,
-        "subsurface_tint": true,
-        "ui_sky": true
+        "backlight_tint": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "coat_normal": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "complex_material": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "diffuse": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "envmask": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "flow": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "generic_data": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "generic_two_channel": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "glow": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "hdr_sky": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "height": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "landscape_diffuse": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "landscape_normal": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "msn": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "msn_specular": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "normal": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "pbr_albedo": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "pbr_emissive": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "pbr_fuzz": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "pbr_normal": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "pbr_subsurface": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "rfaos": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "rmaos": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "subsurface_tint": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "ui_sky": {
+          "$ref": "#/$defs/PartialProfile"
+        }
       },
       "type": "object"
     },

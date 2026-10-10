@@ -1,11 +1,13 @@
 //! Presets (spec §3.5): versioned bundles of profile defaults plus ordered rules, with single inheritance.
+use crate::codes::Code;
 use crate::config::*;
 use crate::group::SUFFIXES;
+use crate::overrides::{Scope, SetOverride};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -78,6 +80,7 @@ pub struct Rule {
     #[serde(default)]
     pub subtype: Option<Subtype>,
     #[serde(default)]
+    #[schemars(schema_with = "crate::schemas::partial_profile_schema")]
     pub overrides: Value,
 }
 
@@ -96,8 +99,10 @@ pub struct PresetFile {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
+    #[schemars(schema_with = "crate::schemas::partial_profile_schema")]
     pub defaults: Value,
     #[serde(default)]
+    #[schemars(schema_with = "crate::schemas::subtypes_schema")]
     pub subtypes: BTreeMap<Subtype, Value>,
     #[serde(default)]
     pub rules: Vec<Rule>,
@@ -114,19 +119,71 @@ pub struct ConfigFile {
     pub preset: Option<String>,
     #[serde(default)]
     pub target: Option<Target>,
+    #[schemars(schema_with = "crate::schemas::partial_profile_schema")]
     #[serde(default)]
     pub defaults: Value,
+    #[schemars(schema_with = "crate::schemas::subtypes_schema")]
     #[serde(default)]
     pub subtypes: BTreeMap<Subtype, Value>,
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// Per-file edits (DECISIONS N2): key relative to the folder holding this `sdc.toml` → partial profile, plus
+    /// `allow = [codes]`. Only a project config may hold it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(schema_with = "crate::schemas::files_table_schema")]
+    pub files: BTreeMap<String, Value>,
 }
+
+/// What `ConfigFile::file_entries` returns: the `[files]` overrides and the per-file `allow` codes by key.
+pub type FileEntries = (Vec<SetOverride>, BTreeMap<String, BTreeSet<Code>>);
 
 impl ConfigFile {
     pub fn load(path: &Path) -> Result<ConfigFile, PresetError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))?;
         toml::from_str(&text).map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))
+    }
+
+    /// The `[files]` table as `Scope::Path` overrides (key order, then leaf order) and per-file `allow` codes.
+    pub fn file_entries(&self) -> Result<FileEntries, PresetError> {
+        let mut overrides = vec![];
+        let mut allow = BTreeMap::new();
+        for (key, entry) in &self.files {
+            let bad = |m: String| PresetError::Parse(format!("[files.\"{key}\"]: {m}"));
+            let mut entry = entry.clone();
+            let obj = entry
+                .as_object_mut()
+                .ok_or_else(|| bad("expected a table".into()))?;
+            if let Some(a) = obj.remove("allow") {
+                let list = a
+                    .as_array()
+                    .ok_or_else(|| bad("allow must be a list of codes".into()))?;
+                let mut codes = BTreeSet::new();
+                for c in list {
+                    let s = c.as_str().unwrap_or_default();
+                    codes.insert(Code::parse(s).ok_or_else(|| bad(format!("unknown code '{s}'")))?);
+                }
+                allow.insert(key.clone(), codes);
+            }
+            let mut paths = vec![];
+            leaf_paths(&entry, "", &mut paths);
+            for field in paths {
+                if !crate::overrides::FIELD_PATHS.contains(&field.as_str()) {
+                    return Err(bad(format!("unknown field '{field}'")));
+                }
+                let value = field
+                    .split('.')
+                    .try_fold(&entry, |v, part| v.get(part))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                overrides.push(SetOverride {
+                    scope: Scope::Path(key.clone()),
+                    field,
+                    value,
+                });
+            }
+        }
+        Ok((overrides, allow))
     }
 }
 
@@ -151,6 +208,9 @@ pub enum Provenance {
     /// position. Shown as `suffix:<term>`.
     Suffix(String),
     Suggestion,
+    /// A value from the project config's `[files]` table (DECISIONS N2): applied after analysis facts, before the
+    /// command line. Shown as `project_file`.
+    ProjectFile,
     User,
     /// The sub-type was replaced by its spec §4.2 fallback, accepted with `--allow CFG-UNAVAILABLE`.
     Fallback,
@@ -177,6 +237,7 @@ impl fmt::Display for Provenance {
             Provenance::AnalysisFact(t) => write!(f, "analysis:{t}"),
             Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
+            Provenance::ProjectFile => f.write_str("project_file"),
             Provenance::User => f.write_str("user"),
             Provenance::Fallback => f.write_str("fallback"),
             Provenance::Source(s) => write!(f, "source:{s}"),
@@ -220,6 +281,7 @@ impl std::str::FromStr for Provenance {
             "project_config" => Provenance::ProjectConfig,
             "analysis" => Provenance::Analysis,
             "suggestion" => Provenance::Suggestion,
+            "project_file" => Provenance::ProjectFile,
             "user" => Provenance::User,
             "fallback" => Provenance::Fallback,
             other => return Err(format!("unknown provenance '{other}'")),

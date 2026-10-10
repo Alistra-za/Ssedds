@@ -1,8 +1,9 @@
 //! Resolve (spec §5.2): merge preset, config, rules, analysis and overrides into an immutable ResolvedJob.
 //!
 //! Precedence (spec §8, lowest first): built-in (`sdc-base`) → preset chain → user config → project config →
-//! rule matches (first match per source, sources in the same order) → analysis facts → `--set` (unscoped, then
-//! sub-type-scoped, then file-scoped, each in command-line order).
+//! rule matches (first match per source, sources in the same order) → analysis facts → the project config's
+//! `[files]` entries (DECISIONS N2) → `--set` (unscoped, then sub-type-scoped, then file-scoped, each in
+//! command-line order).
 use crate::analyse::Analysis;
 use crate::codes::{Code, Severity, Warning};
 use crate::config::*;
@@ -186,13 +187,18 @@ fn first_match<'a>(
 
 /// Whether `code` is acknowledged for this file: batch-wide `--allow`, or the file's own `allow`.
 pub fn allowed(ctx: &ResolveCtx, f: &FileFacts, code: Code) -> bool {
-    ctx.allow.contains(&code)
-        || ctx.files.rel_of(f.input).is_some_and(|rel| {
-            ctx.files
-                .allow
-                .iter()
-                .any(|(k, codes)| codes.contains(&code) && path_key_matches(k, &rel))
-        })
+    if ctx.allow.contains(&code) {
+        return true;
+    }
+    if ctx.files.allow.is_empty() {
+        return false;
+    }
+    ctx.files.rel_of(f.input).is_some_and(|rel| {
+        ctx.files
+            .allow
+            .iter()
+            .any(|(k, codes)| codes.contains(&code) && path_key_matches(k, &rel))
+    })
 }
 
 fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &FileFacts) -> bool {
@@ -204,6 +210,14 @@ fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &
             .files
             .rel_of(f.input)
             .is_some_and(|rel| path_key_matches(k, &rel)),
+    }
+}
+
+/// A `[files]` entry is `project_file`; a command-line `--set` is `user`.
+fn override_provenance(o: &SetOverride) -> Provenance {
+    match o.scope {
+        Scope::Path(_) => Provenance::ProjectFile,
+        _ => Provenance::User,
     }
 }
 
@@ -258,7 +272,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         if let Ok(st) = serde_json::from_value::<Subtype>(o.value.clone()) {
             return SubtypeDecision {
                 subtype: st,
-                provenance: Provenance::User,
+                provenance: override_provenance(o),
                 decided: true,
                 suggestions,
             };
@@ -492,7 +506,7 @@ fn layered_profile_with(
                 &mut prov,
                 &mut sources,
                 &to_patch(&o.field, &o.value),
-                Provenance::User,
+                override_provenance(o),
                 reach,
             );
         }
@@ -1089,7 +1103,10 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         role: VocabRole::PackingInput(role),
     }) = vocab_for(f)
     {
-        if !matches!(d.provenance, Provenance::User | Provenance::Rule(_)) {
+        if !matches!(
+            d.provenance,
+            Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
+        ) {
             return packing_input_job(ctx, f, term, *role);
         }
     }
