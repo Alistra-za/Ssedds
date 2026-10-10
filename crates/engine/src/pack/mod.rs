@@ -379,7 +379,7 @@ fn fill_for(slot: Slot, p: &PackingSpec) -> Option<ChannelSource> {
 fn default_for(slot: Slot, p: &PackingSpec) -> f32 {
     match slot {
         Slot::Roughness => p.roughness_default as f32,
-        Slot::Glossiness => 1.0 - p.roughness_default as f32,
+        Slot::Glossiness => (1.0 - p.roughness_default) as f32,
         Slot::Metallic | Slot::EnvMask => 0.0,
         Slot::Ao | Slot::Specular => 1.0,
         Slot::Height => 0.5,

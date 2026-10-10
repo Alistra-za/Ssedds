@@ -271,7 +271,7 @@ fn missing_channels_take_neutral_defaults_or_fills() {
             code: 204
         }
     );
-    // cpm: glossiness default is 1 - roughness_default; env mask and height defaults (Note M1).
+    // cpm with a roughness source: G is that source inverted, so only env mask and height take defaults (Note M1).
     let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_rough.png", Roughness)]));
     let (ch, _) = resolve_channels(&r[0], &packing());
     assert_eq!(ch[0], ChannelSource::Default { value: 0.0 });
@@ -286,6 +286,55 @@ fn missing_channels_take_neutral_defaults_or_fills() {
             code: 40
         }
     );
+}
+
+/// Spec §6.4 defaults table: glossiness defaults to 1 - roughness_default; provenance shows the exact decimal.
+#[test]
+fn glossiness_default_is_one_minus_roughness_default() {
+    let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_height.png", Height)]));
+    let mut p = packing();
+    p.roughness_default = 0.6;
+    let (ch, defaulted) = resolve_channels(&r[0], &p);
+    assert_eq!(ch[1], ChannelSource::Default { value: 0.4 });
+    assert_eq!(
+        ch[1].provenance(GraySource::R),
+        Some(Provenance::Default("0.4".into()))
+    );
+    assert!(defaulted.contains(&(1, Slot::Glossiness)), "{defaulted:?}");
+}
+
+/// DECISIONS Note M5: a roughness fill feeds a glossiness channel inverted (255 - v).
+#[test]
+fn roughness_fill_feeds_a_glossiness_channel_inverted() {
+    let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_height.png", Height)]));
+    let mut p = packing();
+    p.fill.roughness = Some(51);
+    let (ch, defaulted) = resolve_channels(&r[0], &p);
+    assert_eq!(
+        ch[1],
+        ChannelSource::Fill {
+            role: Roughness,
+            code: 204
+        }
+    );
+    assert_eq!(
+        ch[1].provenance(GraySource::R),
+        Some(Provenance::Fill("204".into()))
+    );
+    assert!(!defaulted.iter().any(|(i, _)| *i == 1), "{defaulted:?}");
+}
+
+/// Spec §6.4 defaults table: AO defaults to 1.0 (no occlusion).
+#[test]
+fn ao_default_is_one() {
+    let (r, _) = recipes_for(Target::Cs, &raw(&[("iron_metal.png", Metallic)]));
+    let (ch, defaulted) = resolve_channels(&r[0], &packing());
+    assert_eq!(ch[2], ChannelSource::Default { value: 1.0 });
+    assert_eq!(
+        ch[2].provenance(GraySource::R),
+        Some(Provenance::Default("1".into()))
+    );
+    assert!(defaulted.contains(&(2, Slot::Ao)), "{defaulted:?}");
 }
 
 /// DECISIONS Note M12.
