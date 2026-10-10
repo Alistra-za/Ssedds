@@ -569,8 +569,9 @@ pub enum JobStatus {
     Unresolved {
         reasons: Vec<String>,
     },
-    /// A raw single-channel map (spec §4.4): a channel-packing input (§6.4, milestone M2.5), not converted on
-    /// its own and not an error.
+    /// A raw single-channel map (spec §4.4): a channel-packing input (§6.4), not converted on its own and not an
+    /// error; a raw map waiting for `pack::plan::plan_packing`, which consumes it into a recipe or re-tags it
+    /// `PACK-UNUSED-INPUT`.
     PackingInput {
         role: RawMap,
     },
@@ -1013,7 +1014,8 @@ fn codes_at(warnings: &[Warning], sev: Severity) -> Vec<Code> {
 }
 
 /// Spec §4.4: the job of a raw packing input. Nothing is written; the profile is the built-in `generic_data`
-/// placeholder and is never used. Milestone M2.5 consumes these files in packing recipes.
+/// placeholder and is never used. It is a raw map waiting for `pack::plan::plan_packing`, which consumes it into a
+/// recipe or re-tags it `PACK-UNUSED-INPUT`.
 fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) -> ResolvedJob {
     let profile = ctx.registry.base_profile(ctx.target, Subtype::GenericData);
     let msg = format!(
@@ -1039,7 +1041,6 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
 
 /// Resolve one file: sub-type decision, layered profile, §10 checks and status (spec §5.2).
 pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
-    let suffix_alias = alias_use(ctx, f);
     let d = decide_subtype(ctx, f);
     // Spec §4.4: a raw map is a packing input unless a rule or --set names its sub-type.
     if let Some(Vocab {
@@ -1051,6 +1052,13 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             return packing_input_job(ctx, f, term, *role);
         }
     }
+    resolve_decided(ctx, f, d)
+}
+
+/// Resolve a file whose sub-type is decided, by `decide_subtype` or by a packing recipe (spec §6.4): layered
+/// profile, §10 checks and status.
+pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> ResolvedJob {
+    let suffix_alias = alias_use(ctx, f);
     let mut reasons = vec![];
     if !d.decided {
         reasons.push(match d.suggestions.first() {

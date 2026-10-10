@@ -2,6 +2,7 @@
 //! set become packed outputs per target. This file is pure (which recipes run, what each channel holds);
 //! `assemble` builds the image and `plan` wires both into `Engine::plan`.
 pub mod assemble;
+pub mod plan;
 
 use crate::config::{GraySource, PackingSpec, RawMap, Subtype, Target};
 use crate::policy::SourceStamp;

@@ -1,5 +1,6 @@
 //! Engine events (spec §5.9). The CLI writes them as JSON Lines; the GUI receives the same values.
 use crate::codes::Code;
+use crate::config::Subtype;
 use crate::config::Target;
 use crate::validate::ValidationSummary;
 use schemars::JsonSchema;
@@ -26,6 +27,32 @@ pub enum Stage {
     Validate,
 }
 
+/// What became of one channel-packing recipe of a set (spec §6.4 "Reporting").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecipeStatus {
+    /// Planned as a job.
+    Run,
+    /// The set already holds this output as a file (`PACK-CONFLICT`); `reason` says which side is used.
+    Conflict,
+    /// A source could not be read or the sources differ in size.
+    Failed,
+    /// `packing.enabled = false`: the raw maps stay packing inputs.
+    Disabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RecipeReport {
+    /// The packed output, '/'-separated.
+    pub output: String,
+    pub subtype: Subtype,
+    /// Provenance of R, G, B and A (`source:…`, `default:…`, `fill:…`); empty for a mirrored or opaque channel.
+    pub channels: Vec<String>,
+    pub status: RecipeStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
@@ -41,6 +68,9 @@ pub enum EventKind {
         members: Vec<String>,
         pbr: bool,
         bake: bool,
+        /// The set's channel-packing recipes (spec §6.4); absent when it packs nothing.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        recipes: Vec<RecipeReport>,
     },
     FilePlanned {
         job: serde_json::Value,
@@ -69,8 +99,8 @@ pub enum EventKind {
         up_to_date: u32,
         /// Every `file_skipped` that is not up to date and not a packing input.
         skipped: u32,
-        /// Of `skipped`, those skipped on purpose (`IN-DDS-SKIPPED`, `--on-existing skip`); they do not make
-        /// the batch exit 1 (DECISIONS Note I). Absent in older streams.
+        /// Of `skipped`, those skipped on purpose (`IN-DDS-SKIPPED`, `PACK-CONFLICT`, `--on-existing skip`); they
+        /// do not make the batch exit 1 (DECISIONS Notes I and M9). Absent in older streams.
         #[serde(default)]
         skipped_intentional: u32,
         failed: u32,

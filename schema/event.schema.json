@@ -100,6 +100,65 @@
       ],
       "type": "string"
     },
+    "RecipeReport": {
+      "properties": {
+        "channels": {
+          "description": "Provenance of R, G, B and A (`source:…`, `default:…`, `fill:…`); empty for a mirrored or opaque channel.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "output": {
+          "description": "The packed output, '/'-separated.",
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RecipeStatus"
+        },
+        "subtype": {
+          "$ref": "#/$defs/Subtype"
+        }
+      },
+      "required": [
+        "output",
+        "subtype",
+        "channels",
+        "status"
+      ],
+      "type": "object"
+    },
+    "RecipeStatus": {
+      "description": "What became of one channel-packing recipe of a set (spec §6.4 \"Reporting\").",
+      "oneOf": [
+        {
+          "const": "run",
+          "description": "Planned as a job.",
+          "type": "string"
+        },
+        {
+          "const": "conflict",
+          "description": "The set already holds this output as a file (`PACK-CONFLICT`); `reason` says which side is used.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "A source could not be read or the sources differ in size.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "`packing.enabled = false`: the raw maps stay packing inputs.",
+          "type": "string"
+        }
+      ]
+    },
     "Severity": {
       "enum": [
         "info",
@@ -121,6 +180,36 @@
         "compress",
         "write",
         "validate"
+      ],
+      "type": "string"
+    },
+    "Subtype": {
+      "enum": [
+        "diffuse",
+        "landscape_diffuse",
+        "pbr_albedo",
+        "pbr_emissive",
+        "glow",
+        "pbr_subsurface",
+        "pbr_fuzz",
+        "subsurface_tint",
+        "backlight_tint",
+        "ui_sky",
+        "normal",
+        "landscape_normal",
+        "pbr_normal",
+        "msn",
+        "coat_normal",
+        "envmask",
+        "complex_material",
+        "rmaos",
+        "rfaos",
+        "flow",
+        "height",
+        "msn_specular",
+        "generic_two_channel",
+        "generic_data",
+        "hdr_sky"
       ],
       "type": "string"
     },
@@ -266,6 +355,13 @@
         },
         "pbr": {
           "type": "boolean"
+        },
+        "recipes": {
+          "description": "The set's channel-packing recipes (spec §6.4); absent when it packs nothing.",
+          "items": {
+            "$ref": "#/$defs/RecipeReport"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -439,7 +535,7 @@
         },
         "skipped_intentional": {
           "default": 0,
-          "description": "Of `skipped`, those skipped on purpose (`IN-DDS-SKIPPED`, `--on-existing skip`); they do not make\nthe batch exit 1 (DECISIONS Note I). Absent in older streams.",
+          "description": "Of `skipped`, those skipped on purpose (`IN-DDS-SKIPPED`, `PACK-CONFLICT`, `--on-existing skip`); they\ndo not make the batch exit 1 (DECISIONS Notes I and M9). Absent in older streams.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"

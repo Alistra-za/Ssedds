@@ -9,6 +9,7 @@ use crate::analyse::analyse;
 use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
+use crate::events::RecipeStatus;
 use crate::events::{EventKind, Reporter, Stage};
 use crate::group::{group_sets_with, split_suffix_with, TextureSet};
 use crate::load::{load_image, LoadError};
@@ -17,6 +18,7 @@ use crate::manifest::{
     PresetRef, ENGINE_VERSION,
 };
 use crate::overrides::{to_patch, Scope, SetOverride};
+use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
 use crate::presets::*;
@@ -121,6 +123,17 @@ pub struct FailedFile {
 enum PlanFailure {
     Load(LoadError),
     Panic(Stage, String),
+    /// Assembling a packed image failed other than by a load error (spec §6.4): a source changed size after
+    /// pass 1. A load error of a source is a `PlanFailure::Load`, handled like a pass-1 load failure.
+    Pack(String),
+}
+
+/// The §10 code of a load failure.
+fn load_code(e: &LoadError) -> Code {
+    match e {
+        LoadError::TooLarge { .. } => Code::DimTooLarge,
+        LoadError::Decode { .. } => Code::InDecode,
+    }
 }
 
 pub struct Plan {
@@ -129,8 +142,11 @@ pub struct Plan {
     pub preset_id: String,
     /// The batch target as resolved from `request.target`, the configs or the preset.
     pub target: Target,
+    /// Every resolved file, plus one job per packed output (spec §6.4); raw maps consumed by a recipe are not
+    /// listed.
     pub jobs: Vec<ResolvedJob>,
-    /// Files reported before Resolve: `IN-DUPLICATE` and `IN-DDS-SKIPPED`.
+    /// Files reported before Resolve: `IN-DUPLICATE` and `IN-DDS-SKIPPED`, and `PACK-CONFLICT` (a pre-packed file
+    /// replaced under `packing.prefer = raw`).
     pub skipped: Vec<SkippedFile>,
     /// Files that could not be loaded (`DIM-TOO-LARGE`, `IN-DECODE`), or that panicked while planning (at the
     /// stage they had entered: Load, Analyse or Resolve).
@@ -149,8 +165,9 @@ pub struct BatchSummary {
     pub up_to_date: u32,
     /// Every `file_skipped` except up-to-date files and raw packing inputs.
     pub skipped: u32,
-    /// Of `skipped`, those skipped on purpose: `IN-DDS-SKIPPED` inputs and outputs kept by an explicit
-    /// `--on-existing skip`. They do not make the batch partial (DECISIONS Note I).
+    /// Of `skipped`, those skipped on purpose: `IN-DDS-SKIPPED` inputs, `PACK-CONFLICT` pre-packed files replaced
+    /// under `packing.prefer = raw` and outputs kept by an explicit `--on-existing skip`. They do not make the
+    /// batch partial (DECISIONS Notes I and M9).
     pub skipped_intentional: u32,
     pub failed: u32,
     /// Written outputs whose validation reported an error (`passed = false`); also counted in `converted`.
@@ -542,7 +559,18 @@ impl Engine {
                 },
             );
         }
-        let (sets, dups) = group_sets_with(&files, registry.alias_table());
+        let (mut sets, dups) = group_sets_with(&files, registry.alias_table());
+        // Spec §6.4 "Set membership", DECISIONS Note M7: a recipe's output joins its set before anything resolves.
+        for set in &mut sets {
+            let roles: BTreeSet<RawMap> = set
+                .members
+                .iter()
+                .filter_map(|&i| pack::plan::raw_role(&files[i]))
+                .collect();
+            for s in pack::predicted_suffixes(target, &roles) {
+                set.suffixes.insert(s.to_string());
+            }
+        }
         let set_of: BTreeMap<usize, &str> = sets
             .iter()
             .flat_map(|s| s.members.iter().map(|&i| (i, s.key.as_str())))
@@ -662,7 +690,6 @@ impl Engine {
                 });
             }
         });
-        let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
 
         let mut jobs = vec![];
         let mut failed = vec![];
@@ -676,14 +703,10 @@ impl Engine {
             match r {
                 Ok(job) => jobs.push(job),
                 Err(PlanFailure::Load(e)) => {
-                    let code = match e {
-                        LoadError::TooLarge { .. } => Code::DimTooLarge,
-                        LoadError::Decode { .. } => Code::InDecode,
-                    };
                     rep.emit(
                         None,
                         Some(&path),
-                        EventKind::Warning(Warning::new(code, e.to_string())),
+                        EventKind::Warning(Warning::new(load_code(&e), e.to_string())),
                     );
                     failed.push(FailedFile {
                         path,
@@ -694,8 +717,111 @@ impl Engine {
                 Err(PlanFailure::Panic(stage, error)) => {
                     failed.push(FailedFile { path, stage, error })
                 }
+                Err(PlanFailure::Pack(_)) => unreachable!("pass 1 never assembles"),
             }
         }
+        // Spec §6.4 (M2.5): channel packing. Pass 1 decides the recipes; pass 2 assembles, analyses and resolves
+        // each under the same memory admission and panic isolation as the files above.
+        let failed_paths: Vec<PathBuf> = failed.iter().map(|f| f.path.clone()).collect();
+        let mut packed = pack::plan::plan_packing(
+            &ctx,
+            &sets,
+            &files,
+            &mut jobs,
+            &failed_paths,
+            &cancelled,
+            &mut skipped,
+        );
+        // This admission/spawn/`catch_unwind`/slot block mirrors the pass-1 block above (`resolve_one` and its
+        // loop) on purpose: the two differ in the work item, the stage they start at and what they return, so one
+        // helper would need as many parameters as it saves lines.
+        let pack_slots: Vec<Mutex<Option<Result<ResolvedJob, PlanFailure>>>> =
+            packed.candidates.iter().map(|_| Mutex::new(None)).collect();
+        pool.in_place_scope(|scope| {
+            for (c, slot) in packed.candidates.iter().zip(&pack_slots) {
+                if cancel.is_cancelled() {
+                    continue;
+                }
+                let est = estimated_bytes(&c.job.sources[0].path);
+                budget.acquire(est);
+                let admitted = Admitted(&budget, est);
+                let (ctx, sets) = (&ctx, &sets);
+                scope.spawn(move |_| {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+                    let stage = Cell::new(Stage::Load);
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // `load_image` enforces MAX_DIM per source, so DIM-TOO-LARGE needs nothing in `check_sizes`.
+                        let asm =
+                            pack::assemble::assemble(&c.job, c.job.gray).map_err(|e| match e {
+                                pack::assemble::PackError::Load(e) => PlanFailure::Load(e),
+                                e => PlanFailure::Pack(e.to_string()),
+                            })?;
+                        stage.set(Stage::Analyse);
+                        let a = analyse(&asm.image, &asm.info);
+                        let (info, non_gray) = (asm.info, asm.non_gray);
+                        drop(asm.image);
+                        drop(admitted);
+                        stage.set(Stage::Resolve);
+                        let set = sets
+                            .iter()
+                            .find(|s| s.key == c.set_key)
+                            .expect("a candidate's set is planned");
+                        Ok(pack::plan::finish_recipe(ctx, c, set, &a, &info, &non_gray))
+                    }));
+                    *lock(slot) = Some(r.unwrap_or_else(|panic| {
+                        Err(PlanFailure::Panic(
+                            stage.get(),
+                            format!("internal error: {}", panic_message(&*panic)),
+                        ))
+                    }));
+                });
+            }
+        });
+        for (c, slot) in packed.candidates.iter().zip(pack_slots) {
+            let path = c.job.sources[0].path.clone();
+            let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
+                cancelled.push(path);
+                continue;
+            };
+            match r {
+                Ok(mut job) => {
+                    // As `resolve_one` does for every other job; `finish_recipe` cannot (it has no `target_src`).
+                    job.provenance.insert("target".into(), target_src.clone());
+                    jobs.push(job);
+                }
+                Err(f) => {
+                    let (stage, error) = match f {
+                        PlanFailure::Load(e) => {
+                            // The same §10 warning as a pass-1 load failure, so a JSON consumer sees the code;
+                            // it names the source that failed, the `file_failed` below names the recipe's input.
+                            let (LoadError::TooLarge { path: bad, .. }
+                            | LoadError::Decode { path: bad, .. }) = &e;
+                            rep.emit(
+                                None,
+                                Some(bad),
+                                EventKind::Warning(Warning::new(load_code(&e), e.to_string())),
+                            );
+                            (Stage::Load, e.to_string())
+                        }
+                        PlanFailure::Pack(e) => (Stage::Load, e),
+                        PlanFailure::Panic(stage, e) => (stage, e),
+                    };
+                    let output = slash(&c.virtual_input.output);
+                    if let Some(report) = packed
+                        .reports
+                        .get_mut(&c.set_key)
+                        .and_then(|v| v.iter_mut().find(|r| r.output == output))
+                    {
+                        report.status = RecipeStatus::Failed;
+                        report.reason = Some(error.clone());
+                    }
+                    failed.push(FailedFile { path, stage, error });
+                }
+            }
+        }
+        let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         for set in &sets {
             let Some(&first) = set
                 .members
@@ -721,6 +847,7 @@ impl Engine {
                     pbr,
                     // The variance bake arrives with milestone M4.
                     bake: false,
+                    recipes: packed.reports.remove(&set.key).unwrap_or_default(),
                 },
             );
         }
@@ -786,8 +913,9 @@ impl Engine {
                 s.reason.clone(),
                 &mut summary,
             );
-            // IN-DUPLICATE is a conflict the user must resolve; IN-DDS-SKIPPED is deliberate (Note I).
-            if s.code == Some(Code::InDdsSkipped) {
+            // IN-DUPLICATE is a conflict the user must resolve; IN-DDS-SKIPPED (Note I) and a pre-packed file
+            // replaced under `packing.prefer = raw` (Note M9) are deliberate.
+            if matches!(s.code, Some(Code::InDdsSkipped | Code::PackConflict)) {
                 summary.skipped_intentional += 1;
             }
         }
@@ -813,25 +941,36 @@ impl Engine {
                     reasons.join("; "),
                     &mut summary,
                 ),
-                // Spec §4.4/§8 (Task 27a): a raw packing input is reported but does not make the batch partial.
-                JobStatus::PackingInput { role } => rep.emit(
-                    set,
-                    path,
-                    EventKind::FileSkipped {
-                        code: Some(Code::InPackingInput),
-                        reason: format!(
-                            "raw {} map: a channel-packing input (milestone M2.5), not converted on its own",
-                            role.id()
-                        ),
-                    },
-                ),
+                // Spec §4.4/§6.4 (DECISIONS Note M4): a raw map that is not packed is reported, with its
+                // IN-PACKING-INPUT or PACK-UNUSED-INPUT warning, but does not make the batch partial.
+                JobStatus::PackingInput { role } => {
+                    let w = job
+                        .warnings
+                        .iter()
+                        .find(|w| matches!(w.code, Code::InPackingInput | Code::PackUnusedInput));
+                    rep.emit(
+                        set,
+                        path,
+                        EventKind::FileSkipped {
+                            code: Some(w.map_or(Code::InPackingInput, |w| w.code)),
+                            reason: w.map_or_else(
+                                || format!("raw {} map, not converted on its own", role.id()),
+                                |w| w.message.clone(),
+                            ),
+                        },
+                    )
+                }
                 JobStatus::Blocked { codes } => skip(
                     set,
                     &job.input,
                     codes.first().copied(),
                     format!(
                         "blocked by {}; acknowledge with --allow <code> or change the setting",
-                        codes.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+                        codes
+                            .iter()
+                            .map(|c| c.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                     &mut summary,
                 ),
@@ -845,7 +984,11 @@ impl Engine {
                             stage: Stage::Resolve,
                             error: format!(
                                 "resolve error: {}",
-                                codes.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+                                codes
+                                    .iter()
+                                    .map(|c| c.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
                             ),
                         },
                     );

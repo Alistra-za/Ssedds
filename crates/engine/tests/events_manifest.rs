@@ -115,6 +115,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
             members: vec!["a_d.png".into()],
             pbr: true,
             bake: false,
+            recipes: vec![],
         },
         EventKind::FilePlanned {
             job: serde_json::json!({"format": "bc7"}),

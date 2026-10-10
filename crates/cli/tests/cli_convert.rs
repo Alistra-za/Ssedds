@@ -854,15 +854,18 @@ fn intentional_skips_exit_0_and_unintended_ones_exit_1() {
 }
 
 #[test]
-fn raw_packing_inputs_are_reported_but_not_a_failure() {
+fn raw_maps_pack_and_unused_ones_are_not_a_failure() {
     let fx = Fx::new();
     fx.normal("wall_n.png");
     fx.rgb("tile_roughness.png");
+    fx.rgb("tile_opacity.png");
     let o = fx.convert(&["--accept-suggestions", "high"]);
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
-    assert!(skips(&o).contains(&("tile_roughness.png".into(), Some("IN-PACKING-INPUT".into()))));
     assert!(fx.dds("textures/a/wall_n.dds").exists());
+    assert!(fx.dds("textures/a/tile_rmaos.dds").exists());
+    assert!(skips(&o).contains(&("tile_opacity.png".into(), Some("PACK-UNUSED-INPUT".into()))));
     assert!(!fx.dds("textures/a/tile_roughness.dds").exists());
+    assert!(!fx.dds("textures/a/tile_opacity.dds").exists());
 }
 
 #[test]

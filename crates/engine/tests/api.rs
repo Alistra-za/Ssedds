@@ -524,22 +524,26 @@ fn changed_source_is_reencoded_and_sidecar_is_written() {
     assert_eq!(Manifest::at(&d.path().join("out")).load().unwrap().len(), 2);
 }
 
-/// Spec §4.4: a raw packing input is reported as skipped but does not make the batch partial.
+/// Spec §6.4 (M2.5): a lone raw roughness map packs into `_rmaos`; a raw map no recipe uses is reported but does
+/// not make the batch partial (DECISIONS Note M4).
 #[test]
-fn packing_inputs_are_reported_but_do_not_count_as_skipped() {
+fn raw_maps_pack_and_unused_ones_do_not_count_as_skipped() {
     let d = tempfile::tempdir().unwrap();
     fixtures(d.path());
     std::fs::remove_file(d.path().join("textures/armor/leaf.png")).unwrap();
-    ImageBuffer::from_fn(64, 64, |x, _| Rgb([x as u8, x as u8, x as u8]))
-        .save(d.path().join("textures/armor/stone_roughness.png"))
-        .unwrap();
+    for name in ["stone_roughness.png", "stone_opacity.png"] {
+        ImageBuffer::from_fn(64, 64, |x, _| Rgb([x as u8, x as u8, x as u8]))
+            .save(d.path().join("textures/armor").join(name))
+            .unwrap();
+    }
     let (s, ev) = run(request(d.path()));
-    assert_eq!((s.converted, s.skipped), (2, 0), "{ev:#?}");
+    assert_eq!((s.converted, s.skipped), (3, 0), "{ev:#?}");
     assert_eq!(s.exit_code(), 0);
+    assert!(d.path().join("out/armor/stone_rmaos.dds").exists());
     assert!(ev.iter().any(|e| matches!(
         e.kind,
         EventKind::FileSkipped {
-            code: Some(Code::InPackingInput),
+            code: Some(Code::PackUnusedInput),
             ..
         }
     )));
