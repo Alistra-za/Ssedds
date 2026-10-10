@@ -346,3 +346,28 @@ fn the_wgpu_setup_asks_for_bc_and_the_adapters_limits() {
     );
     assert_eq!(d.required_limits, adapter.limits());
 }
+
+#[test]
+fn a_bc_chain_down_to_one_texel_uploads_every_mip() {
+    let Some(rs) = render_state() else { return };
+    let mut r = PreviewRenderer::new(&rs);
+    if !r.supports_bc() {
+        return;
+    }
+    // 8x8 down to 1x1: the 2x2 and 1x1 mips are each written as a whole 4x4 block.
+    let dims = vec![(8, 8), (4, 4), (2, 2), (1, 1)];
+    let mut out = encoded(Format::Bc4, 8, 8, &BC4_128, [0.0; 4]);
+    out.result.levels = dims
+        .iter()
+        .map(|&(w, h)| BC4_128.repeat((w as usize).div_ceil(4) * (h as usize).div_ceil(4)))
+        .collect();
+    out.result.source.dims = dims;
+    assert_eq!(r.set_encoded(&rs, &out), UploadPath::Bc);
+    for mip in [0.0, 1.0, 2.0, 3.0] {
+        let p = Params { mip, ..params() };
+        near(
+            draw(&rs, &r, Slot::Encoded, p)[MIDDLE],
+            [128, 128, 128, 255],
+        );
+    }
+}
