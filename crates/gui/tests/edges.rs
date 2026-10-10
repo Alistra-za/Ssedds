@@ -330,13 +330,14 @@ fn opening_during_an_export_asks_and_opens_after_it_was_cancelled() {
 }
 
 #[test]
-fn an_export_that_ends_by_itself_answers_the_dialog() {
+fn an_export_that_ends_by_itself_drops_the_question_and_keeps_the_window() {
     let d = tempfile::tempdir().unwrap();
     let mut m = exporting(d.path());
     assert!(!m.request_close());
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert_eq!(m.dialog, None);
-    assert!(m.take_close_ready());
+    assert!(!m.take_close_ready(), "an unanswered question is not a yes");
+    assert!(m.export.summary.is_some(), "the report is there to read");
 }
 
 #[test]
@@ -400,4 +401,20 @@ fn a_drop_with_unsaved_edits_asks_first() {
     let other = mod_folder(od.path());
     assert!(!m.dropped(std::slice::from_ref(&other)));
     assert_eq!(m.dialog, Some(Dialog::OpenUnsaved(other)));
+}
+
+#[test]
+fn a_user_config_the_engine_rejects_is_not_blamed_on_sdc_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let user = d.path().join("config.toml");
+    std::fs::write(&user, "[defaults]\nalpha.threshold = 1000\n").unwrap();
+    std::fs::write(root.join("sdc.toml"), "# fine\n").unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.user_config = Some(user);
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(matches!(m.dialog, Some(Dialog::Error(ref e)) if e.contains("1000")));
+    assert_eq!(m.banner, None, "sdc.toml is not the culprit");
+    assert!(!m.project.as_ref().unwrap().read_only());
 }

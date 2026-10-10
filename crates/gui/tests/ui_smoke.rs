@@ -727,3 +727,53 @@ fn a_single_click_on_a_set_member_selects_it_after_the_double_click_delay() {
     );
     assert!(h.state().expanded.is_none());
 }
+
+#[test]
+fn a_stale_pending_member_click_does_not_replace_a_set_opened_later() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    let key = model
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("rock01"))
+        .unwrap()
+        .key
+        .clone();
+    model.select_set(&key);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .with_step_dt(0.02)
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let label = h
+        .query_all_by_label_contains("rock01_normal.png")
+        .map(|n| n.rect())
+        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the member in the set view");
+    let at = label.center() - eframe::egui::vec2(0.0, 30.0);
+    h.hover_at(at);
+    h.run();
+    for pressed in [true, false] {
+        h.event(eframe::egui::Event::PointerButton {
+            pos: at,
+            button: eframe::egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        });
+    }
+    h.step();
+    // Something else is selected before the wait is over: the set view is no longer drawn.
+    h.state_mut().select_item("landscape/leaf.png");
+    for _ in 0..120 {
+        h.step();
+    }
+    h.state_mut().select_set(&key);
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(h.state().selection, Selection::Set(key));
+}

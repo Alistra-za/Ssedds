@@ -10,6 +10,8 @@ use engine::events::RecipeReport;
 const THUMB: f32 = 64.0;
 /// Seconds a single click waits for its second click (a little over egui's double-click delay).
 const DOUBLE_CLICK_WAIT: f64 = 0.35;
+/// Seconds past the wait after which a pending click is stale (the view was not drawn when it came due).
+const STALE_AFTER: f64 = 1.0;
 
 fn recipe(ui: &mut egui::Ui, r: &RecipeReport) {
     let (word, color) = status_text(r.status);
@@ -125,7 +127,10 @@ fn select_or_expand(
     let left = DOUBLE_CLICK_WAIT - (now - at);
     if left <= 0.0 {
         ui.data_mut(|d| d.remove::<(String, f64)>(id));
-        model.select_item(&k);
+        // A click left pending while this view was not drawn (another selection took over) is stale: drop it.
+        if -left < STALE_AFTER {
+            model.select_item(&k);
+        }
     } else {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_secs_f64(left));

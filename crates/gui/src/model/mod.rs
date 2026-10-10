@@ -102,6 +102,8 @@ pub struct AppModel {
     export_after_plan: bool,
     /// The user chose to cancel the running export and then close or open: done when the export has ended.
     after_export: Option<AfterExport>,
+    /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
+    ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
     close_ready: bool,
     generation: u64,
@@ -152,6 +154,7 @@ impl AppModel {
             gpu_available: true,
             export_after_plan: false,
             after_export: None,
+            ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
             generation: 0,
@@ -165,6 +168,7 @@ impl AppModel {
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
         let same_folder = self.root.as_ref() == Some(&root);
+        self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
         self.banner = project.error().map(read_only_banner);
         self.project = Some(project);
@@ -302,8 +306,17 @@ impl AppModel {
             if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
                 p.set_error(&f.message);
                 self.banner = p.error().map(read_only_banner);
+                self.ignored_by_plan = true;
                 self.replan();
                 return;
+            }
+            // The plan without `sdc.toml` failed too: the config is not the project's (the user config, say).
+            // Put the project back as the file has it, and raise the error.
+            if std::mem::take(&mut self.ignored_by_plan) {
+                if let Some(p) = self.project.as_mut() {
+                    p.reload();
+                    self.banner = p.error().map(read_only_banner);
+                }
             }
         }
         self.status_line = format!("Planning failed: {}", f.message);
@@ -444,15 +457,15 @@ impl AppModel {
     }
 
     /// The export ended: do what was asked while it ran (close, or open another folder). True when there was
-    /// something to do. A `Dialog::ExportRunning` still on screen is answered by the export ending on its own.
+    /// something to do (only an answered question counts).
     fn run_after_export(&mut self) -> bool {
-        let action = match self.dialog.clone() {
-            Some(Dialog::ExportRunning(a)) => {
-                self.dialog = None;
-                Some(a)
-            }
-            _ => self.after_export.take(),
-        };
+        // A question still unanswered when the export ends by itself is dropped, not assumed to be a yes: the window
+        // stays, and the user sees the report.
+        if matches!(self.dialog, Some(Dialog::ExportRunning(_))) {
+            self.dialog = None;
+            return false;
+        }
+        let action = self.after_export.take();
         match action {
             None => false,
             Some(AfterExport::Close) => {
@@ -718,6 +731,7 @@ impl AppModel {
             }
         } else {
             p.reload();
+            self.ignored_by_plan = false;
             self.banner = p.error().map(str::to_string);
             self.replan();
         }
