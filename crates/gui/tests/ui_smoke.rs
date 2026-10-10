@@ -400,3 +400,139 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     assert!(!h.state().export.open);
     assert!(h.query_by_label("Copy CLI command").is_none());
 }
+
+#[test]
+fn the_expanded_preview_offers_encode_now_and_collapses_on_escape() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    h.get_by_label_contains("Not encoded");
+    // The toolbar's button and the one on the empty encoded side.
+    assert_eq!(h.query_all_by_label("Encode now").count(), 2);
+    h.get_by_label("Live encode");
+    h.get_by_label_contains("mip 0");
+    h.key_press(eframe::egui::Key::Escape);
+    h.run();
+    assert!(h.state().expanded.is_none());
+}
+
+#[test]
+fn encode_now_in_the_preview_encodes_and_shows_the_readouts() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    h.query_all_by_label("Encode now").next().unwrap().hover();
+    h.run();
+    h.query_all_by_label("Encode now").next().unwrap().click();
+    h.run();
+    settle(&mut h);
+    assert!(h.query_by_label_contains("Not encoded").is_none());
+    h.get_by_label("Minimum mip PSNR");
+    // Step to another mip with the slider's keyboard control: the label follows.
+    h.state_mut().view.mip = 2;
+    h.run();
+    h.get_by_label_contains("mip 2 (16×16)");
+}
+
+#[test]
+fn the_preview_toolbar_changes_the_view() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    press(&mut h, "G");
+    assert_eq!(h.state().view.channel, sdc_gui::model::view::Channel::G);
+    press(&mut h, "Split");
+    assert_eq!(h.state().view.layout, sdc_gui::model::view::Layout::Split);
+    press(&mut h, "UNORM");
+    assert!(h.state().view.view_linear);
+    press(&mut h, "Live encode");
+    assert!(h.state().preview.live);
+}
+
+#[test]
+fn a_double_click_in_a_viewport_collapses_the_preview() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    // Two clicks must land within egui's double-click delay: shorten the simulated frame.
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .with_step_dt(0.02)
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    // A point inside the encoded viewport, below its message.
+    let label = h.get_by_label_contains("Not encoded").rect();
+    let at = label.center() + eframe::egui::vec2(0.0, 100.0);
+    h.hover_at(at);
+    h.run();
+    for _ in 0..2 {
+        h.event(eframe::egui::Event::PointerButton {
+            pos: at,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.event(eframe::egui::Event::PointerButton {
+            pos: at,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+    }
+    h.run();
+    assert!(h.state().expanded.is_none());
+}
+
+#[test]
+fn the_settings_strip_is_compact() {
+    let d = tempfile::tempdir().unwrap();
+    // The full panel names where each value comes from.
+    let mut model = opened(d.path());
+    model.select_item("landscape/rock01_rmaos");
+    let mut h = harness(model);
+    h.run();
+    assert!(h.query_all_by_label_contains("built-in default").count() > 0);
+    // The strip keeps Alpha, Mipmaps and Compression and drops that text.
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    for group in ["Alpha", "Mipmaps", "Compression"] {
+        assert!(h.query_all_by_label_contains(group).count() > 0, "{group}");
+    }
+    assert!(h.query_by_label_contains("Colour").is_none());
+    assert_eq!(h.query_all_by_label_contains("built-in default").count(), 0);
+}
+
+#[test]
+fn an_edit_after_encoding_shows_the_stale_badge() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    model.encode_now();
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    model.set_field(
+        "landscape/rock01_rmaos",
+        "encoder.effort",
+        serde_json::json!("fast"),
+    );
+    let mut h = harness(model);
+    settle(&mut h);
+    h.get_by_label_contains("stale");
+    assert!(h.query_by_label_contains("Not encoded").is_none());
+}

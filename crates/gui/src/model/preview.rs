@@ -10,7 +10,7 @@ use engine::dds::DdsPixelFormat;
 use engine::decode::{decode_level, Decoded};
 use engine::manifest::sha256_json;
 use engine::policy::ResolvedJob;
-use engine::session::{pack_key, PreviewResult, SourcePreview};
+use engine::session::{first_level_within, pack_key, PreviewResult, SourcePreview};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -49,13 +49,27 @@ pub enum EncodedState {
     Failed(String),
 }
 
+impl EncodedState {
+    /// The result on show: the finished one, the stale one, or the previous one while a new one is made.
+    pub fn shown(&self) -> Option<&Arc<PreviewOut>> {
+        match self {
+            EncodedState::Done(r) | EncodedState::Stale(r) => Some(r),
+            EncodedState::Encoding { previous } => previous.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 pub struct PreviewModel {
     /// The item key being previewed (the expanded one).
     pub item: Option<String>,
     pub source: SourceState,
     pub encoded: EncodedState,
     pub live: bool,
+    /// What the preview says about itself, one line per reason (the item's status, the GPU limit, ...).
     pub notice: Option<String>,
+    base_notice: Option<String>,
+    gpu_note: Option<String>,
     /// Set by the first `tick` that sees something scheduled; the debounce counts from there.
     pending_since: Option<Instant>,
     source_pending: bool,
@@ -75,6 +89,8 @@ impl PreviewModel {
             encoded: EncodedState::NotEncoded,
             live,
             notice: None,
+            base_notice: None,
+            gpu_note: None,
             pending_since: None,
             source_pending: false,
             encode_pending: false,
@@ -83,6 +99,20 @@ impl PreviewModel {
             next_token: 0,
             profile_sig: None,
         }
+    }
+
+    fn refresh_notice(&mut self) {
+        let lines: Vec<&str> = [&self.base_notice, &self.gpu_note]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        self.notice = (!lines.is_empty()).then(|| {
+            lines.join(
+                "
+",
+            )
+        });
     }
 
     /// True while a debounced request waits for its time (the UI keeps frames coming).
@@ -123,11 +153,7 @@ impl PreviewModel {
 
     /// The last finished result, kept on screen while a newer one is made.
     fn last_result(&self) -> Option<Arc<PreviewOut>> {
-        match &self.encoded {
-            EncodedState::Done(r) | EncodedState::Stale(r) => Some(r.clone()),
-            EncodedState::Encoding { previous } => previous.clone(),
-            _ => None,
-        }
+        self.encoded.shown().cloned()
     }
 }
 
@@ -255,14 +281,37 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
 }
 
 impl AppModel {
-    /// The size limit in effect: the setting, at most 8192 unless 16384 is allowed (M3a spec §6.5).
-    pub fn preview_limit(&self) -> u32 {
+    /// The size limit the settings give: the setting, at most 8192 unless 16384 is allowed (M3a spec §6.5).
+    fn settings_limit(&self) -> u32 {
         let m = self.settings.preview_max;
         if self.settings.allow_16k_preview {
             m
         } else {
             m.min(8192)
         }
+    }
+
+    /// The size limit in effect: the settings' limit, lowered to what the GPU can hold (M3a spec §6.5).
+    pub fn preview_limit(&self) -> u32 {
+        self.settings_limit().min(self.gpu_max_dim)
+    }
+
+    fn set_base_notice(&mut self, notice: Option<String>) {
+        self.preview.base_notice = notice;
+        self.preview.refresh_notice();
+    }
+
+    /// Say so when the GPU's limit, not the setting, left mips out of a result (`dims` is the whole chain).
+    fn note_gpu_limit(&mut self, dims: &[(u32, u32)], first_level: usize) {
+        let wanted = self.settings_limit();
+        let lowered = self.gpu_max_dim < wanted && first_level > first_level_within(dims, wanted);
+        self.preview.gpu_note = lowered.then(|| {
+            format!(
+                "This GPU shows at most {} px: previewing from the first mip that fits",
+                self.gpu_max_dim
+            )
+        });
+        self.preview.refresh_notice();
     }
 
     fn expanded_item(&self) -> Option<&TextureItem> {
@@ -279,7 +328,7 @@ impl AppModel {
         match classify(item) {
             Previewable::Blocked(why) => {
                 self.preview.source = SourceState::Failed(why.to_string());
-                self.preview.notice = Some(why.to_string());
+                self.set_base_notice(Some(why.to_string()));
             }
             Previewable::Dds => {
                 let path = item.input.clone();
@@ -288,11 +337,12 @@ impl AppModel {
                     dims: vec![],
                     levels: vec![],
                 }));
-                self.preview.notice = Some(DDS_NO_SOURCE.to_string());
+                self.set_base_notice(Some(DDS_NO_SOURCE.to_string()));
                 self.start_dds(path);
             }
             Previewable::Job(job) => {
-                self.preview.notice = status_notice(item);
+                let notice = status_notice(item);
+                self.set_base_notice(notice);
                 self.preview.profile_sig = Some(signature(&job));
                 self.start_source();
                 if self.preview.live {
@@ -323,16 +373,16 @@ impl AppModel {
                 if self.preview.profile_sig.is_some() {
                     self.preview_open(&key);
                 } else {
-                    self.preview.notice = Some(why.to_string());
+                    self.set_base_notice(Some(why.to_string()));
                 }
             }
             Previewable::Job(job) => {
                 let sig = signature(&job);
                 match self.preview.profile_sig.clone() {
                     None => self.preview_open(&key),
-                    Some(old) if old == sig => self.preview.notice = notice,
+                    Some(old) if old == sig => self.set_base_notice(notice),
                     Some(_) => {
-                        self.preview.notice = notice;
+                        self.set_base_notice(notice);
                         self.preview.profile_sig = Some(sig);
                         let last = self.preview.last_result();
                         self.preview.cancel_encode();
@@ -386,7 +436,7 @@ impl AppModel {
             return;
         }
         if self.export.running.is_some() {
-            self.preview.notice = Some(WAITS_FOR_EXPORT.to_string());
+            self.set_base_notice(Some(WAITS_FOR_EXPORT.to_string()));
             return;
         }
         self.preview.encode_pending = false;
@@ -459,6 +509,9 @@ impl AppModel {
             return;
         }
         self.preview.inflight_source = None;
+        if let Ok(s) = &result {
+            self.note_gpu_limit(&s.dims, s.first_level);
+        }
         self.preview.source = match result {
             Ok(s) => SourceState::Ready(s),
             Err(e) => SourceState::Failed(e),
@@ -470,6 +523,9 @@ impl AppModel {
             return;
         }
         self.preview.inflight_encode = None;
+        if let Ok(r) = &result {
+            self.note_gpu_limit(&r.result.source.dims, r.result.source.first_level);
+        }
         self.preview.encoded = match result {
             Ok(r) => EncodedState::Done(r),
             Err(e) => EncodedState::Failed(e),

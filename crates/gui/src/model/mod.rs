@@ -3,6 +3,7 @@ pub mod export;
 pub mod fields;
 pub mod items;
 pub mod preview;
+pub mod view;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
@@ -74,6 +75,9 @@ pub struct AppModel {
     pub expanded: Option<String>,
     pub export: export::ExportModel,
     pub preview: preview::PreviewModel,
+    pub view: view::ViewState,
+    /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
+    pub gpu_max_dim: u32,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -116,6 +120,8 @@ impl AppModel {
             expanded: None,
             export: export::ExportModel::default(),
             preview,
+            view: view::ViewState::default(),
+            gpu_max_dim: 16384,
             generation: 0,
             planning: None,
             tx,
@@ -418,6 +424,7 @@ impl AppModel {
     pub fn expand(&mut self, key: &str) {
         self.select_item(key);
         self.expanded = Some(key.to_string());
+        self.view.mip = 0;
         self.preview_open(key);
     }
 

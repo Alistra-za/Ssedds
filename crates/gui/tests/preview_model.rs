@@ -190,3 +190,39 @@ fn live_encode_is_saved_and_encodes_on_expand() {
     settle(&mut m);
     assert!(matches!(m.preview.encoded, EncodedState::Done(_)));
 }
+
+#[test]
+fn the_gpu_limit_lowers_the_preview_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.gpu_max_dim = 32;
+    assert_eq!(m.settings.preview_max, 4096);
+    assert_eq!(m.preview_limit(), 32);
+    m.expand("landscape/rock01_rmaos");
+    settle(&mut m);
+    let SourceState::Ready(src) = &m.preview.source else {
+        panic!("no source")
+    };
+    assert_eq!(src.first_level, 1, "64 px does not fit 32 px");
+    assert_eq!(
+        m.preview.notice.as_deref(),
+        Some("This GPU shows at most 32 px: previewing from the first mip that fits")
+    );
+    m.encode_now();
+    settle(&mut m);
+    let EncodedState::Done(out) = &m.preview.encoded else {
+        panic!("not done")
+    };
+    assert_eq!(out.result.source.first_level, 1);
+}
+
+#[test]
+fn a_gpu_limit_that_changes_nothing_adds_no_notice() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.gpu_max_dim = 1024;
+    m.settings.preview_max = 2048;
+    m.expand("landscape/rock01_rmaos");
+    settle(&mut m);
+    assert!(m.preview.notice.is_none(), "{:?}", m.preview.notice);
+}

@@ -1,13 +1,35 @@
 //! The eframe application: owns the model, draws it each frame.
+use crate::model::preview::{PreviewOut, SourceState};
+use crate::model::view::{self, Channel};
 use crate::model::AppModel;
-use crate::render::PreviewRenderer;
+use crate::render::{PreviewRenderer, Slot};
 use eframe::{egui, egui_wgpu};
+use engine::session::SourcePreview;
+use std::sync::Arc;
+
+/// The model values currently on the GPU. A texture is uploaded again only when its `Arc` (or the mip and channel
+/// of a heatmap) changes.
+#[derive(Default)]
+struct Uploaded {
+    source: Option<Arc<SourcePreview>>,
+    encoded: Option<Arc<PreviewOut>>,
+    heatmap: Option<(Arc<PreviewOut>, usize, Channel)>,
+}
+
+fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
 
 pub struct SdcApp {
     pub model: AppModel,
     pub state: crate::ui::State,
     /// The GPU state, `None` when eframe found no usable adapter (the preview is then off).
     pub render_state: Option<egui_wgpu::RenderState>,
+    uploaded: Uploaded,
     was_focused: bool,
 }
 
@@ -17,6 +39,7 @@ impl SdcApp {
             model,
             state: crate::ui::State::default(),
             render_state: None,
+            uploaded: Uploaded::default(),
             was_focused: true,
         }
     }
@@ -26,10 +49,83 @@ impl SdcApp {
     pub fn with_render_state(mut self, rs: Option<&egui_wgpu::RenderState>) -> SdcApp {
         if let Some(rs) = rs {
             let renderer = PreviewRenderer::new(rs);
+            self.model.gpu_max_dim = renderer.max_dim();
             rs.renderer.write().callback_resources.insert(renderer);
+            self.state.gpu.renderer = true;
             self.render_state = Some(rs.clone());
         }
         self
+    }
+
+    /// Puts what the model shows on the GPU, when it changed since the last frame.
+    fn sync_renderer(&mut self) {
+        let Some(rs) = self.render_state.clone() else {
+            return;
+        };
+        let expanded = self.model.expanded.is_some();
+        let want_source = match &self.model.preview.source {
+            SourceState::Ready(s) if expanded => Some(s.clone()),
+            _ => None,
+        };
+        let want_encoded = self
+            .model
+            .preview
+            .encoded
+            .shown()
+            .filter(|_| expanded)
+            .cloned();
+        let (mip, channel) = (self.model.view.mip, self.model.view.channel);
+        let want_heatmap = want_encoded
+            .clone()
+            .filter(|_| self.model.view.heatmap)
+            .map(|o| (o, mip, channel));
+
+        let mut resources = rs.renderer.write();
+        let Some(renderer) = resources.callback_resources.get_mut::<PreviewRenderer>() else {
+            return;
+        };
+        let gpu = &mut self.state.gpu;
+        if !same(&self.uploaded.source, &want_source) {
+            gpu.source = match &want_source {
+                Some(s) => renderer.set_source(&rs, s),
+                None => {
+                    renderer.clear(Slot::Source);
+                    false
+                }
+            };
+            self.uploaded.source = want_source;
+        }
+        if !same(&self.uploaded.encoded, &want_encoded) {
+            gpu.encoded = match &want_encoded {
+                Some(o) => Some(renderer.set_encoded(&rs, o)),
+                None => {
+                    renderer.clear(Slot::Encoded);
+                    None
+                }
+            };
+            self.uploaded.encoded = want_encoded;
+        }
+        let heatmap_unchanged = match (&self.uploaded.heatmap, &want_heatmap) {
+            (Some((a, m, c)), Some((b, n, d))) => Arc::ptr_eq(a, b) && m == n && c == d,
+            (None, None) => true,
+            _ => false,
+        };
+        if !heatmap_unchanged {
+            gpu.heatmap = match &want_heatmap {
+                Some((o, mip, channel)) => match view::heatmap_of(o, *mip, *channel) {
+                    Some((w, h, rgba)) => renderer.set_heatmap(&rs, w, h, &rgba),
+                    None => {
+                        renderer.clear(Slot::Heatmap);
+                        false
+                    }
+                },
+                None => {
+                    renderer.clear(Slot::Heatmap);
+                    false
+                }
+            };
+            self.uploaded.heatmap = want_heatmap;
+        }
     }
 
     /// The window regained focus: the place to look for source files that changed meanwhile.
@@ -57,6 +153,8 @@ impl eframe::App for SdcApp {
         }
         self.was_focused = focused;
 
+        // Upload before drawing: the paint callbacks run after this frame's UI and read what is on the GPU.
+        self.sync_renderer();
         crate::ui::draw_with(ui, &mut self.model, &mut self.state);
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.

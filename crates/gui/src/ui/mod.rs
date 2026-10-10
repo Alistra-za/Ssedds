@@ -3,6 +3,7 @@ pub mod columns;
 pub mod dialogs;
 pub mod drawer;
 pub mod header;
+pub mod preview;
 pub mod set_view;
 pub mod settings_panel;
 pub mod thumbs;
@@ -16,6 +17,9 @@ use std::cell::RefCell;
 pub struct State {
     pub thumbs: thumbs::ThumbCache,
     pub drawer: drawer::DrawerState,
+    pub preview: preview::PreviewUi,
+    /// What is on the GPU; set by the app, empty in tests.
+    pub gpu: preview::GpuStatus,
 }
 
 thread_local! {
@@ -68,10 +72,11 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         return;
     }
     if model.expanded.is_some() {
-        // The preview arrives with Task 17.
-        ui.label("Preview");
+        preview::draw(ui, model, &mut state.preview, &state.gpu);
         return;
     }
+    // A texture expanded again starts fitted.
+    state.preview = preview::PreviewUi::default();
     let selection = model.selection.clone();
     match selection {
         Selection::Item(key) => {
