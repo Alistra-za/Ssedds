@@ -1,6 +1,8 @@
 //! Channel packing (spec §6.4, DECISIONS Notes H and M, plan M2.5): the raw single-channel maps of one texture
 //! set become packed outputs per target. This file is pure (which recipes run, what each channel holds);
 //! `assemble` builds the image and `plan` wires both into `Engine::plan`.
+pub mod assemble;
+
 use crate::config::{GraySource, PackingSpec, RawMap, Subtype, Target};
 use crate::policy::SourceStamp;
 use crate::presets::Provenance;
