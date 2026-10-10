@@ -91,7 +91,9 @@ fn planned(o: &Out, suffix: &str) -> serde_json::Value {
     o.events
         .iter()
         .find_map(|e| match &e.kind {
-            EventKind::FilePlanned { job } if is_of(e, suffix) => Some(job.clone()),
+            EventKind::FilePlanned { job } if is_of(e, suffix) => {
+                Some(serde_json::to_value(&**job).unwrap())
+            }
             _ => None,
         })
         .unwrap_or_else(|| panic!("no file_planned for {suffix}"))

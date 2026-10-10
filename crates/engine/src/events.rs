@@ -2,6 +2,7 @@
 use crate::codes::Code;
 use crate::config::Subtype;
 use crate::config::Target;
+use crate::policy::ResolvedJob;
 use crate::validate::ValidationSummary;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub const EVENT_SCHEMA: u32 = 1;
+pub const EVENT_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -73,7 +74,7 @@ pub enum EventKind {
         recipes: Vec<RecipeReport>,
     },
     FilePlanned {
-        job: serde_json::Value,
+        job: Box<ResolvedJob>,
     },
     FileStarted,
     Progress {

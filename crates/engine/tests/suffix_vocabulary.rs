@@ -305,7 +305,7 @@ fn colour_terms_and_d_are_high_confidence_but_alpha_meaning_is_never_assumed() {
     let j = resolve_img("iron_albedo.png", &[], &[], &[], &img, &RGBA8);
     assert_eq!(j.suggestions[0].confidence, Confidence::High);
     match &j.status {
-        JobStatus::Unresolved { reasons } => assert!(
+        JobStatus::Unresolved { reasons, .. } => assert!(
             reasons
                 .iter()
                 .any(|r| r.contains("alpha meaning is unconfirmed")),
@@ -317,7 +317,7 @@ fn colour_terms_and_d_are_high_confidence_but_alpha_meaning_is_never_assumed() {
 
 #[test]
 fn plain_normal_stays_unresolved_until_the_green_convention_is_stated() {
-    let green_reason = |j: &ResolvedJob| matches!(&j.status, JobStatus::Unresolved { reasons } if reasons.iter().any(|r| r.contains("green convention")));
+    let green_reason = |j: &ResolvedJob| matches!(&j.status, JobStatus::Unresolved { reasons, .. } if reasons.iter().any(|r| r.contains("green convention")));
     for name in ["iron_normal.png", "iron_nrm.png"] {
         let j = resolve_img(name, &[], &[], &[], &flat_normal(), &RGB8);
         assert_eq!(
@@ -525,7 +525,7 @@ fn unstated_green_convention_is_in_green_unstated_and_not_allowable() {
     ] {
         let j = resolve_img("iron_normal.png", &[], &[], &allow, &flat_normal(), &RGB8);
         let reasons = match &j.status {
-            JobStatus::Unresolved { reasons } => reasons,
+            JobStatus::Unresolved { reasons, .. } => reasons,
             s => panic!("{allow:?}: {s:?}"),
         };
         let w = j

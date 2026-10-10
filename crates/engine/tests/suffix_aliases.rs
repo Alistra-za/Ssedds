@@ -400,7 +400,7 @@ fn alias_preset_alpha_policy_is_explicit() {
         }
     }
     let unconfirmed = |j: &ResolvedJob| match &j.status {
-        JobStatus::Unresolved { reasons } => reasons
+        JobStatus::Unresolved { reasons, .. } => reasons
             .iter()
             .any(|r| r.contains("alpha meaning is unconfirmed")),
         _ => false,

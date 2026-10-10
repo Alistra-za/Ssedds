@@ -16,7 +16,7 @@ use engine::events::{
     new_batch_id, EngineEvent, EventKind, EventSink, JsonLinesSink, Reporter, VecSink,
 };
 use engine::group::split_suffix_with;
-use engine::policy::{availability, Availability};
+use engine::policy::{availability, Availability, JobStatus, ResolvedJob};
 use engine::presets::{default_preset_for, AlphaContent};
 use engine::reports::{
     DdsHeaderInfo, DdsInfo, DdsInfoKind, DdsMipInfo, DdsUnreadable, DdsValidation,
@@ -168,43 +168,49 @@ fn print_dds_info(v: &Value) {
     }
 }
 
-fn s(v: &Value) -> &str {
-    v.as_str().unwrap_or("-")
+/// The serde string form of an enum value (`"bc7"`, `"high"`), as the JSON events carry it.
+macro_rules! tag {
+    ($v:expr) => {
+        match serde_json::to_value($v) {
+            Ok(Value::String(t)) => t,
+            _ => "-".to_string(),
+        }
+    };
 }
 
-fn print_planned(job: &Value) {
-    println!("{}", s(&job["input"]));
-    match job["suggestions"].get(0) {
+fn print_planned(job: &ResolvedJob) {
+    println!("{}", job.input.display());
+    match job.suggestions.first() {
         Some(g) => println!(
             "  suggested {} ({} confidence: {})",
-            s(&g["subtype"]),
-            s(&g["confidence"]),
-            s(&g["reason"])
+            g.subtype.id(),
+            tag!(&g.confidence),
+            g.reason
         ),
         None => println!("  no suggestion"),
     }
     println!(
         "  sub-type {}  format {}  tag {}  alpha {}  output {}",
-        s(&job["profile"]["subtype"]),
-        s(&job["profile"]["format"]),
-        s(&job["profile"]["color"]["tag"]),
-        s(&job["profile"]["alpha"]["policy"]),
-        s(&job["output"])
+        job.profile.subtype.id(),
+        tag!(&job.profile.format),
+        tag!(&job.profile.color.tag),
+        tag!(&job.profile.alpha.policy),
+        job.output.display()
     );
-    let status = &job["status"];
-    let detail: Vec<&str> = ["codes", "reasons"]
-        .iter()
-        .flat_map(|k| status[k].as_array().into_iter().flatten())
-        .filter_map(Value::as_str)
-        .collect();
-    println!("  status {} {}", s(&status["state"]), detail.join("; "));
-    for w in job["warnings"].as_array().into_iter().flatten() {
-        println!(
-            "  {} {} {}",
-            s(&w["severity"]),
-            s(&w["code"]),
-            s(&w["message"])
-        );
+    let detail: Vec<String> = match &job.status {
+        JobStatus::Unresolved { reasons, .. } => reasons.clone(),
+        JobStatus::Blocked { codes } | JobStatus::Error { codes } => {
+            codes.iter().map(|c| c.as_str().to_string()).collect()
+        }
+        JobStatus::Ready | JobStatus::PackingInput { .. } => vec![],
+    };
+    let state = serde_json::to_value(&job.status)
+        .ok()
+        .and_then(|v| v["state"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| "-".into());
+    println!("  status {state} {}", detail.join("; "));
+    for w in &job.warnings {
+        println!("  {} {} {}", tag!(&w.severity), w.code.as_str(), w.message);
     }
 }
 

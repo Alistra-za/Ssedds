@@ -801,7 +801,7 @@ fn preset_alpha_policy_counts_as_explicit() {
     );
     let j = resolve_file(&ctx("cs-quality"), &facts);
     match &j.status {
-        JobStatus::Unresolved { reasons } => assert!(
+        JobStatus::Unresolved { reasons, .. } => assert!(
             reasons[0].contains("alpha meaning is unconfirmed"),
             "{reasons:?}"
         ),
@@ -1197,7 +1197,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
             };
             let j = resolve_in(&ctx, "a/x.png", None, &img);
             match &j.status {
-                JobStatus::Unresolved { reasons } => assert!(
+                JobStatus::Unresolved { reasons, .. } => assert!(
                     reasons
                         .iter()
                         .any(|r| r.contains("alpha meaning is unconfirmed")),

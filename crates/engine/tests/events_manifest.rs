@@ -2,6 +2,7 @@ use engine::codes::{Code, Warning};
 use engine::config::*;
 use engine::events::*;
 use engine::manifest::*;
+use engine::policy::{JobStatus, ResolvedJob};
 use engine::presets::PresetRegistry;
 use std::sync::Arc;
 
@@ -65,7 +66,7 @@ fn events_serialise_as_flat_json_lines_with_seq() {
     assert!(
         line.contains("\"kind\":\"warning\"")
             && line.contains("\"code\":\"DIM-NPOT\"")
-            && line.contains("\"schema\":1"),
+            && line.contains("\"schema\":2"),
         "{line}"
     );
     assert!(line.contains("\"path\":\"a/x.png\""));
@@ -118,7 +119,20 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
             recipes: vec![],
         },
         EventKind::FilePlanned {
-            job: serde_json::json!({"format": "bc7"}),
+            job: Box::new(ResolvedJob {
+                input: "a_d.png".into(),
+                output: "a_d.dds".into(),
+                game_path: "textures/a_d.dds".into(),
+                set_key: "a".into(),
+                profile: cs_quality().0,
+                provenance: Default::default(),
+                suggestions: vec![],
+                warnings: vec![],
+                status: JobStatus::Ready,
+                suffix_alias: None,
+                source: None,
+                pack: None,
+            }),
         },
         EventKind::Progress {
             stage: Stage::Compress,
@@ -502,7 +516,7 @@ fn unit_and_newtype_events_have_an_exact_json_layout() {
     };
     assert_eq!(
         serde_json::to_string(&ev(EventKind::FileStarted)).unwrap(),
-        r#"{"schema":1,"seq":7,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","kind":"file_started"}"#
+        r#"{"schema":2,"seq":7,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","kind":"file_started"}"#
     );
     let mut w = ev(EventKind::Warning(Warning::new(Code::DimNpot, "npot")));
     w.set = Some("s".into());
@@ -511,7 +525,7 @@ fn unit_and_newtype_events_have_an_exact_json_layout() {
     assert_eq!(
         serde_json::to_string(&w).unwrap(),
         format!(
-            r#"{{"schema":1,"seq":7,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","set":"s","path":"a/x.png","kind":"warning","code":"DIM-NPOT","severity":{sev},"message":"npot","data":null}}"#
+            r#"{{"schema":2,"seq":7,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","set":"s","path":"a/x.png","kind":"warning","code":"DIM-NPOT","severity":{sev},"message":"npot","data":null}}"#
         )
     );
 }

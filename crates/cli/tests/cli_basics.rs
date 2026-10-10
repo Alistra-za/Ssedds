@@ -91,7 +91,7 @@ fn json_mode_puts_only_json_lines_on_stdout() {
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
     let ev = events(&o.stdout);
     assert!(ev.len() >= 4);
-    assert!(ev.iter().all(|v| v["schema"] == 1));
+    assert!(ev.iter().all(|v| v["schema"] == 2));
     assert_eq!(ev.last().unwrap()["kind"], "batch_done");
     assert_eq!(ev[0]["kind"], "batch_started");
     // The human log is on stderr, never mixed into stdout.

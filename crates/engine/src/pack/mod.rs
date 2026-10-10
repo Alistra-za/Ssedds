@@ -8,11 +8,13 @@ use crate::config::{GraySource, PackingSpec, RawMap, Subtype, Target};
 use crate::policy::SourceStamp;
 use crate::presets::Provenance;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RecipeKind {
     /// `cs` `<base>_rmaos.dds`: roughness, metallic, AO, specular.
@@ -60,7 +62,7 @@ impl RecipeKind {
 }
 
 /// The quantity a channel holds when no source map provides it (spec §6.4 defaults table).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Slot {
     Roughness,
@@ -314,7 +316,7 @@ pub fn predicted_suffixes(target: Target, roles: &BTreeSet<RawMap>) -> Vec<&'sta
 }
 
 /// What a packed channel holds; serialised in `file_planned` (`job.pack.channels`) and the manifest.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "from", rename_all = "snake_case")]
 pub enum ChannelSource {
     /// R (or luma) of a raw source; `invert` stores 1 − x.
@@ -412,7 +414,7 @@ pub fn resolve_channels(r: &Recipe, p: &PackingSpec) -> ([ChannelSource; 4], Vec
 }
 
 /// One source of a packed job and its size and modification time when planning read it (final review I7).
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PackSource {
     pub path: PathBuf,
     pub role: RawMap,
@@ -421,7 +423,7 @@ pub struct PackSource {
 }
 
 /// How a packed output is built (`ResolvedJob::pack`). `sources[0].path` is the job's `input` (Note M8).
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PackJob {
     pub kind: RecipeKind,
     /// R, G, B, A.

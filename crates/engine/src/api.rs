@@ -978,7 +978,7 @@ impl Engine {
                 Some(&job.set_key),
                 Some(&job.input),
                 EventKind::FilePlanned {
-                    job: serde_json::to_value(job).unwrap_or_default(),
+                    job: Box::new(job.clone()),
                 },
             );
             for w in &job.warnings {
@@ -1056,7 +1056,7 @@ impl Engine {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
             match &job.status {
                 JobStatus::Ready => ready.push(job),
-                JobStatus::Unresolved { reasons } => skip(
+                JobStatus::Unresolved { reasons, .. } => skip(
                     set,
                     &job.input,
                     Some(unresolved_code(job)),

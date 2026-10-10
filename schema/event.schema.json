@@ -1,5 +1,70 @@
 {
   "$defs": {
+    "AliasUse": {
+      "description": "A suffix alias in use for one file (spec §3.7, DECISIONS Note G).",
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "canonical": {
+          "type": "string"
+        },
+        "preset": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias",
+        "canonical",
+        "preset"
+      ],
+      "type": "object"
+    },
+    "AlphaCompare": {
+      "enum": [
+        "gt",
+        "ge"
+      ],
+      "type": "string"
+    },
+    "AlphaPolicy": {
+      "enum": [
+        "remove",
+        "cutout",
+        "blend",
+        "cutout_blend",
+        "data"
+      ],
+      "type": "string"
+    },
+    "AlphaSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "compare": {
+          "$ref": "#/$defs/AlphaCompare"
+        },
+        "exact_opaque": {
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "#/$defs/AlphaPolicy"
+        },
+        "threshold": {
+          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy",
+        "threshold",
+        "compare",
+        "exact_opaque"
+      ],
+      "type": "object"
+    },
     "AlphaStats": {
       "description": "Counts of decoded alpha values over one image.",
       "properties": {
@@ -36,6 +101,162 @@
         "eq254",
         "below254",
         "min"
+      ],
+      "type": "object"
+    },
+    "Backend": {
+      "enum": [
+        "bc7e",
+        "rgbcx",
+        "ispc_bc6h",
+        "nvtt"
+      ],
+      "type": "string"
+    },
+    "Category": {
+      "enum": [
+        "color",
+        "normal",
+        "mixed_packed",
+        "grayscale",
+        "hdr"
+      ],
+      "type": "string"
+    },
+    "ChannelSource": {
+      "description": "What a packed channel holds; serialised in `file_planned` (`job.pack.channels`) and the manifest.",
+      "oneOf": [
+        {
+          "description": "R (or luma) of a raw source; `invert` stores 1 − x.",
+          "properties": {
+            "from": {
+              "const": "source",
+              "type": "string"
+            },
+            "invert": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/RawMap"
+            }
+          },
+          "required": [
+            "from",
+            "path",
+            "role",
+            "invert"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A user fill (`packing.fill.<role>`); `code` is the 8-bit value written (255 − fill when inverted).",
+          "properties": {
+            "code": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "from": {
+              "const": "fill",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/RawMap"
+            }
+          },
+          "required": [
+            "from",
+            "role",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The neutral default of spec §6.4, 0..=1.",
+          "properties": {
+            "from": {
+              "const": "default",
+              "type": "string"
+            },
+            "value": {
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "from",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A copy of R.",
+          "properties": {
+            "from": {
+              "const": "mirror_r",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "1.0.",
+          "properties": {
+            "from": {
+              "const": "opaque",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ChannelSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "flip_green": {
+          "type": "boolean"
+        },
+        "grayscale_source": {
+          "$ref": "#/$defs/GraySource"
+        },
+        "green_convention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GreenConvention"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Green (Y) convention of a normal source (spec §3.2, §4.4, DECISIONS Note H); None = unstated.\n`opengl` makes Resolve set `flip_green`."
+        },
+        "reconstruct_z": {
+          "type": "boolean"
+        },
+        "swizzle": {
+          "default": null,
+          "description": "Four characters from r, g, b, a, 0, 1 (e.g. \"bgra\", \"rrr1\"); None = identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "flip_green",
+        "reconstruct_z",
+        "grayscale_source"
       ],
       "type": "object"
     },
@@ -101,6 +322,586 @@
       ],
       "type": "string"
     },
+    "ColorContent": {
+      "enum": [
+        "srgb",
+        "linear"
+      ],
+      "type": "string"
+    },
+    "ColorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/ColorContent"
+        },
+        "tag": {
+          "$ref": "#/$defs/ColorTag"
+        }
+      },
+      "required": [
+        "content",
+        "tag"
+      ],
+      "type": "object"
+    },
+    "ColorTag": {
+      "enum": [
+        "srgb",
+        "unorm",
+        "n/a"
+      ],
+      "type": "string"
+    },
+    "Confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "CoverageMode": {
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "type": "string"
+    },
+    "Effort": {
+      "enum": [
+        "ultrafast",
+        "veryfast",
+        "fast",
+        "basic",
+        "veryslow",
+        "slowest"
+      ],
+      "type": "string"
+    },
+    "EncoderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Backend"
+        },
+        "bc1_transparent_black": {
+          "type": "boolean"
+        },
+        "bc45_search_radius": {
+          "$ref": "#/$defs/SearchRadius"
+        },
+        "effort": {
+          "$ref": "#/$defs/Effort"
+        },
+        "perceptual": {
+          "type": "boolean"
+        },
+        "rgbcx_level": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend",
+        "effort",
+        "rgbcx_level",
+        "perceptual",
+        "bc1_transparent_black",
+        "bc45_search_radius"
+      ],
+      "type": "object"
+    },
+    "FillSpec": {
+      "additionalProperties": false,
+      "description": "Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit\ncode per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.",
+      "properties": {
+        "ao": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fuzz": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "glossiness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "metallic": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "opacity": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "roughness": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "specular": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Format": {
+      "enum": [
+        "bc1",
+        "bc3",
+        "bc4",
+        "bc5",
+        "bc6h_uf16",
+        "bc7"
+      ],
+      "type": "string"
+    },
+    "GraySource": {
+      "enum": [
+        "r",
+        "luma"
+      ],
+      "type": "string"
+    },
+    "GreenConvention": {
+      "enum": [
+        "directx",
+        "opengl"
+      ],
+      "type": "string"
+    },
+    "HeaderForm": {
+      "enum": [
+        "auto",
+        "dx10",
+        "legacy"
+      ],
+      "type": "string"
+    },
+    "JobStatus": {
+      "description": "What happens to a file (spec §5.2, §10). Serialises as `{\"state\": \"ready\"}`,\n`{\"state\": \"blocked\", \"codes\": [...]}` and so on.",
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A sub-type or alpha meaning still needs a decision (rule, flag or accepted high-confidence suggestion).",
+          "properties": {
+            "needs": {
+              "default": [],
+              "description": "What each reason is waiting for, so a GUI can offer the right control.",
+              "items": {
+                "$ref": "#/$defs/Need"
+              },
+              "type": "array"
+            },
+            "reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "state": {
+              "const": "unresolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reasons"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A raw single-channel map (spec §4.4): a channel-packing input (§6.4), not converted on its own and not an\nerror; a raw map waiting for `pack::plan::plan_packing`, which consumes it into a recipe or re-tags it\n`PACK-UNUSED-INPUT`.",
+          "properties": {
+            "role": {
+              "$ref": "#/$defs/RawMap"
+            },
+            "state": {
+              "const": "packing_input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "role"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Blocking codes not acknowledged with `--allow`.",
+          "properties": {
+            "codes": {
+              "items": {
+                "$ref": "#/$defs/Code"
+              },
+              "type": "array"
+            },
+            "state": {
+              "const": "blocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "codes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "codes": {
+              "items": {
+                "$ref": "#/$defs/Code"
+              },
+              "type": "array"
+            },
+            "state": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "codes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MipFilter": {
+      "enum": [
+        "box"
+      ],
+      "type": "string"
+    },
+    "MipKeyword": {
+      "enum": [
+        "full",
+        "none"
+      ],
+      "type": "string"
+    },
+    "MipLevels": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MipKeyword"
+        },
+        {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "MipSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/CoverageMode",
+          "description": "Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and\n`cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,\n`data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity."
+        },
+        "filter": {
+          "$ref": "#/$defs/MipFilter"
+        },
+        "levels": {
+          "$ref": "#/$defs/MipLevels"
+        },
+        "normal": {
+          "$ref": "#/$defs/NormalMips"
+        }
+      },
+      "required": [
+        "levels",
+        "filter",
+        "normal",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "Need": {
+      "description": "What an unresolved job is waiting for (DECISIONS N9), so a GUI can offer the right control.",
+      "oneOf": [
+        {
+          "const": "subtype",
+          "description": "The sub-type is a suggestion nobody confirmed.",
+          "type": "string"
+        },
+        {
+          "const": "alpha_meaning",
+          "description": "The alpha meaning (policy) depends on the mesh and nobody chose it.",
+          "type": "string"
+        },
+        {
+          "const": "green_convention",
+          "description": "A plain `_normal`/`_nrm` source with no stated green convention.",
+          "type": "string"
+        }
+      ]
+    },
+    "NormalMips": {
+      "enum": [
+        "renormalize",
+        "renormalize_bake"
+      ],
+      "type": "string"
+    },
+    "PackJob": {
+      "description": "How a packed output is built (`ResolvedJob::pack`). `sources[0].path` is the job's `input` (Note M8).",
+      "properties": {
+        "channels": {
+          "description": "R, G, B, A.",
+          "items": {
+            "$ref": "#/$defs/ChannelSource"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "gray": {
+          "$ref": "#/$defs/GraySource",
+          "description": "The `channels.grayscale_source` this recipe was planned with (provenance, analysis and report all use it).\nThe pipeline assembles with this value, not with the final profile's, so the written image is the one that\nwas analysed (DECISIONS Note M6). Serialised, so it shows in `file_planned` and the manifest."
+        },
+        "kind": {
+          "$ref": "#/$defs/RecipeKind"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/PackSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "channels",
+        "gray",
+        "sources"
+      ],
+      "type": "object"
+    },
+    "PackPrefer": {
+      "enum": [
+        "prepacked",
+        "raw"
+      ],
+      "type": "string"
+    },
+    "PackSource": {
+      "description": "One source of a packed job and its size and modification time when planning read it (final review I7).",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/RawMap"
+        },
+        "stamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceStamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "role"
+      ],
+      "type": "object"
+    },
+    "PackingSpec": {
+      "additionalProperties": false,
+      "description": "Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.",
+      "properties": {
+        "enabled": {
+          "description": "Pack this output's recipe; `false` leaves its raw maps as packing inputs (`IN-PACKING-INPUT`).",
+          "type": "boolean"
+        },
+        "fill": {
+          "$ref": "#/$defs/FillSpec",
+          "default": {}
+        },
+        "prefer": {
+          "$ref": "#/$defs/PackPrefer",
+          "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "roughness_default": {
+          "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "roughness_default",
+        "prefer"
+      ],
+      "type": "object"
+    },
+    "Profile": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "$ref": "#/$defs/AlphaSpec"
+        },
+        "category": {
+          "$ref": "#/$defs/Category"
+        },
+        "channels": {
+          "$ref": "#/$defs/ChannelSpec"
+        },
+        "color": {
+          "$ref": "#/$defs/ColorSpec"
+        },
+        "encoder": {
+          "$ref": "#/$defs/EncoderSpec"
+        },
+        "format": {
+          "$ref": "#/$defs/Format"
+        },
+        "header": {
+          "$ref": "#/$defs/HeaderForm"
+        },
+        "mips": {
+          "$ref": "#/$defs/MipSpec"
+        },
+        "packing": {
+          "$ref": "#/$defs/PackingSpec"
+        },
+        "subtype": {
+          "$ref": "#/$defs/Subtype"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationSpec"
+        }
+      },
+      "required": [
+        "target",
+        "category",
+        "subtype",
+        "color",
+        "alpha",
+        "channels",
+        "mips",
+        "format",
+        "header",
+        "encoder",
+        "validation",
+        "packing"
+      ],
+      "type": "object"
+    },
+    "Provenance": {
+      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,\n`recipe:<kind>`, and the snake_case variant name for the rest.",
+      "type": "string"
+    },
+    "RawMap": {
+      "enum": [
+        "roughness",
+        "metallic",
+        "ao",
+        "specular",
+        "glossiness",
+        "height",
+        "opacity",
+        "fuzz"
+      ],
+      "type": "string"
+    },
+    "RecipeKind": {
+      "oneOf": [
+        {
+          "const": "rmaos",
+          "description": "`cs` `<base>_rmaos.dds`: roughness, metallic, AO, specular.",
+          "type": "string"
+        },
+        {
+          "const": "rfaos",
+          "description": "`cs` `<base>_rfaos.dds`: roughness, fuzz, AO, specular.",
+          "type": "string"
+        },
+        {
+          "const": "parallax",
+          "description": "`cs` `<base>_p.dds`: height (BC4).",
+          "type": "string"
+        },
+        {
+          "const": "cpm_m",
+          "description": "`cpm` complex `<base>_m.dds`: env mask, glossiness, metallic, height.",
+          "type": "string"
+        },
+        {
+          "const": "vanilla_m",
+          "description": "`vanilla` env-mask `<base>_m.dds` (BC4).",
+          "type": "string"
+        }
+      ]
+    },
     "RecipeReport": {
       "properties": {
         "channels": {
@@ -160,6 +961,99 @@
         }
       ]
     },
+    "ResolvedJob": {
+      "properties": {
+        "game_path": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "pack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a packed output is built from its raw sources (spec §6.4); `None` for an ordinary file. For a packed\njob `input` is `pack.sources[0].path` (DECISIONS Note M8)."
+        },
+        "profile": {
+          "$ref": "#/$defs/Profile"
+        },
+        "provenance": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "description": "Dotted field path → where its value came from; includes `subtype`, `category` and `target`.",
+          "type": "object"
+        },
+        "set_key": {
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceStamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The source's size and modification time when `Engine::plan` read it (final review I7). `run` converts the\nfile only while they still match; `None` (a job not made by `plan`) is not checked."
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus"
+        },
+        "suffix_alias": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AliasUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The suffix alias this file matched (spec §3.7); its preset chain resolved the profile."
+        },
+        "suggestions": {
+          "items": {
+            "$ref": "#/$defs/Suggestion"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "game_path",
+        "set_key",
+        "profile",
+        "provenance",
+        "suggestions",
+        "warnings",
+        "status"
+      ],
+      "type": "object"
+    },
+    "SearchRadius": {
+      "enum": [
+        "default",
+        "max"
+      ],
+      "type": "string"
+    },
     "Severity": {
       "enum": [
         "info",
@@ -168,6 +1062,27 @@
         "error"
       ],
       "type": "string"
+    },
+    "SourceStamp": {
+      "description": "A source file's size and modification time, to tell whether it changed between planning and conversion.",
+      "properties": {
+        "mtime_ns": {
+          "description": "Nanoseconds since the Unix epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "size",
+        "mtime_ns"
+      ],
+      "type": "object"
     },
     "Stage": {
       "enum": [
@@ -214,6 +1129,25 @@
       ],
       "type": "string"
     },
+    "Suggestion": {
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "subtype": {
+          "$ref": "#/$defs/Subtype"
+        }
+      },
+      "required": [
+        "subtype",
+        "confidence",
+        "reason"
+      ],
+      "type": "object"
+    },
     "Target": {
       "enum": [
         "cs",
@@ -221,6 +1155,41 @@
         "vanilla"
       ],
       "type": "string"
+    },
+    "ValidationSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "bc6h_min_peak_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "complex_m_warn_alpha": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "coverage_tolerance_pts": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_mip_psnr_db": {
+          "format": "double",
+          "type": "number"
+        },
+        "pgpatcher_non_white_share": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min_mip_psnr_db",
+        "coverage_tolerance_pts",
+        "complex_m_warn_alpha",
+        "bc6h_min_peak_ratio",
+        "pgpatcher_non_white_share"
+      ],
+      "type": "object"
     },
     "ValidationSummary": {
       "properties": {
@@ -375,7 +1344,9 @@
     },
     {
       "properties": {
-        "job": true,
+        "job": {
+          "$ref": "#/$defs/ResolvedJob"
+        },
         "kind": {
           "const": "file_planned",
           "type": "string"

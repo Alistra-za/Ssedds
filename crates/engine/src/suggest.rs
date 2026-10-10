@@ -16,7 +16,7 @@ pub enum Confidence {
     High,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Suggestion {
     pub subtype: Subtype,
     pub confidence: Confidence,

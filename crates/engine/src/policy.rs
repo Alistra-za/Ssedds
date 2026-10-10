@@ -66,7 +66,9 @@ pub struct SubtypeDecision {
 }
 
 /// A suffix alias in use for one file (spec §3.7, DECISIONS Note G).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct AliasUse {
     pub alias: String,
     pub canonical: String,
@@ -614,15 +616,34 @@ pub fn availability(t: Target, s: Subtype) -> Availability {
     }
 }
 
+/// What an unresolved job is waiting for (DECISIONS N9), so a GUI can offer the right control.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Need {
+    /// The sub-type is a suggestion nobody confirmed.
+    Subtype,
+    /// The alpha meaning (policy) depends on the mesh and nobody chose it.
+    AlphaMeaning,
+    /// A plain `_normal`/`_nrm` source with no stated green convention.
+    GreenConvention,
+}
+
 /// What happens to a file (spec §5.2, §10). Serialises as `{"state": "ready"}`,
 /// `{"state": "blocked", "codes": [...]}` and so on.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum JobStatus {
     Ready,
     /// A sub-type or alpha meaning still needs a decision (rule, flag or accepted high-confidence suggestion).
     Unresolved {
         reasons: Vec<String>,
+        /// What each reason is waiting for, so a GUI can offer the right control.
+        #[serde(default)]
+        needs: Vec<Need>,
     },
     /// A raw single-channel map (spec §4.4): a channel-packing input (§6.4), not converted on its own and not an
     /// error; a raw map waiting for `pack::plan::plan_packing`, which consumes it into a recipe or re-tags it
@@ -639,7 +660,7 @@ pub enum JobStatus {
     },
 }
 
-#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ResolvedJob {
     pub input: PathBuf,
     pub output: PathBuf,
@@ -1118,7 +1139,9 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
 pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> ResolvedJob {
     let suffix_alias = alias_use(ctx, f);
     let mut reasons = vec![];
+    let mut needs = vec![];
     if !d.decided {
+        needs.push(Need::Subtype);
         reasons.push(match d.suggestions.first() {
             Some(s) => format!(
                 "sub-type '{}' is a {:?}-confidence suggestion ({})",
@@ -1191,6 +1214,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     {
         let hint = suggest_alpha(profile.subtype, f.analysis.alpha, near_binary(f.analysis))
             .map(|(p, _, why)| format!("{p:?}: {why}"));
+        needs.push(Need::AlphaMeaning);
         reasons.push(format!(
             "alpha meaning is unconfirmed (proposal {})",
             hint.unwrap_or_default()
@@ -1227,6 +1251,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     if let Some(r) = &green_reason {
         warnings.push(Warning::new(Code::InGreenUnstated, r.clone()));
         // Reported next to the other reasons.
+        needs.push(Need::GreenConvention);
         reasons.push(r.clone());
     }
     // `--allow` turns a blocking code into a warning. CFG-UNAVAILABLE is acknowledged only by accepting a
@@ -1249,7 +1274,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     } else if (!reasons.is_empty() && !allowed(ctx, f, Code::SugLowConfidence))
         || green_reason.is_some()
     {
-        JobStatus::Unresolved { reasons }
+        JobStatus::Unresolved { reasons, needs }
     } else if !blocking.is_empty() {
         JobStatus::Blocked { codes: blocking }
     } else {
