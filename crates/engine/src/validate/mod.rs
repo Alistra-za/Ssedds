@@ -24,6 +24,45 @@ const COVERAGE_MIN_TEXELS: u32 = 256;
 /// `(0.52 - 0.5) * 100.0` is 2.0000000000000018.
 const COVERAGE_EPS: f64 = 1e-9;
 
+/// CS's complex-material gate, in 8-bit codes: smallest-mip alpha below 251/255 (spike S8).
+const CS_COMPLEX_GATE: f64 = 251.0;
+
+/// Community Shaders' complex-material decision, as read from its Lighting pixel shader in a RenderDoc
+/// capture (spike S8, DECISIONS): it samples the `_m` at LOD 15 (the smallest mip) and
+/// - `grey`: every pair of R, G, B differs by less than 4/255;
+/// - `black`: R, G and B are all below 4/255 and 4/255 < alpha < 251/255 (a height-only `_m`);
+/// - complex: not (`grey` and not `black`), and alpha below 251/255.
+///
+/// A smallest mip of more than one texel (non-square textures) is averaged, which is what a bilinear sample at
+/// its centre reads.
+struct CsComplexGate {
+    rgb: [f64; 3],
+    alpha: f64,
+    grey: bool,
+    black: bool,
+}
+
+impl CsComplexGate {
+    fn of(px: &[[u8; 4]]) -> Self {
+        let n = px.len().max(1) as f64;
+        let mean = |c: usize| px.iter().map(|q| f64::from(q[c])).sum::<f64>() / n;
+        let (rgb, alpha) = ([mean(0), mean(1), mean(2)], mean(3));
+        let [r, g, b] = rgb;
+        let grey = (r - g).abs() < 4.0 && (g - b).abs() < 4.0 && (r - b).abs() < 4.0;
+        let black = rgb.iter().all(|&c| c < 4.0) && alpha > 4.0 && alpha < CS_COMPLEX_GATE;
+        CsComplexGate {
+            rgb,
+            alpha,
+            grey,
+            black,
+        }
+    }
+
+    fn complex(&self) -> bool {
+        !(self.grey && !self.black) && self.alpha < CS_COMPLEX_GATE
+    }
+}
+
 pub struct ValidationInput<'a> {
     pub bytes: &'a [u8],
     pub profile: &'a Profile,
@@ -88,7 +127,8 @@ fn finish(mut summary: ValidationSummary, warnings: Vec<Warning>) -> ValidationR
 /// when no warning has `Error` severity.
 ///
 /// Gating on the stored alpha (`alpha.policy != remove`):
-/// - `VAL-M-GRAYSCALE` reads RGB only, so it runs for every complex `_m`, with or without stored alpha.
+/// - `VAL-M-GRAYSCALE` runs for every complex `_m`, with or without stored alpha: it applies CS's smallest-mip
+///   grey rule ([`CsComplexGate`]), whose black exception reads the decoded alpha (255 when removed).
 /// - `VAL-M-COMPLEX-MARGIN` and `VAL-M-HEIGHT-CLIP` measure the stored alpha and are skipped under `remove`
 ///   (they would only see the synthesised 255). A complex `_m` whose alpha is removed is Resolve's finding
 ///   (`LOSS-ALPHA-DATA` for a varying source, a violation for a flat one), not a Validate one.
@@ -298,36 +338,48 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         }
 
         if p.subtype == Subtype::ComplexMaterial {
-            if let Some((_, _, px)) = ldr.last().filter(|_| alpha_present) {
-                let a = px.iter().map(|q| q[3]).max().unwrap_or(0);
-                if a >= v.complex_m_warn_alpha {
-                    w.push(Warning::new(
-                        Code::ValMComplexMargin,
+            if let Some((_, _, px)) = ldr.last() {
+                let gate = CsComplexGate::of(px);
+                if gate.grey && !gate.black {
+                    let [r, g, b] = gate.rgb.map(|c| c.round());
+                    w.push(
+                        Warning::new(
+                            Code::ValMGrayscale,
+                            format!(
+                                "smallest-mip RGB ({r}, {g}, {b}) is grey and not black: CS reads this _m as a plain \
+                                 env mask, not a complex material"
+                            ),
+                        )
+                        .with_data(json!({"smallest_rgb": gate.rgb})),
+                    );
+                }
+                if alpha_present && gate.alpha >= f64::from(v.complex_m_warn_alpha) {
+                    // An averaged non-square smallest mip can be fractional: keep one decimal there.
+                    let a = if gate.alpha.fract() == 0.0 {
+                        format!("{}", gate.alpha)
+                    } else {
+                        format!("{:.1}", gate.alpha)
+                    };
+                    let message = if gate.alpha < CS_COMPLEX_GATE {
+                        let below = (CS_COMPLEX_GATE - gate.alpha).ceil();
+                        let s = if below == 1.0 { "" } else { "s" };
                         format!(
-                            "smallest-mip alpha {a}/255 is within the 4-code margin of CS's 251/255 complex gate"
-                        ),
+                            "smallest-mip alpha {a}/255 is {below} code{s} below CS's 251/255 complex gate; mip or \
+                             encode drift can switch complex material off"
+                        )
+                    } else {
+                        format!(
+                            "smallest-mip alpha {a}/255 is at or above CS's 251/255 complex gate: CS reads this _m as \
+                             a plain env mask (complex material and parallax off)"
+                        )
+                    };
+                    w.push(Warning::new(Code::ValMComplexMargin, message).with_data(
+                        json!({"smallest_alpha": gate.alpha, "complex": gate.complex()}),
                     ));
                 }
             }
             if let Some((_, _, px)) = ldr.first() {
                 let n = px.len().max(1) as f64;
-                // Same definition as Analyse (`analyse.rs`): the whole R/G/B spread within 4 codes.
-                let gray = px
-                    .iter()
-                    .filter(|q| q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]) <= 4)
-                    .count() as f64
-                    / n;
-                let mean = px
-                    .iter()
-                    .map(|q| (q[0] as f64 + q[1] as f64 + q[2] as f64) / 3.0)
-                    .sum::<f64>()
-                    / n;
-                if gray > 0.95 && mean > 25.0 {
-                    w.push(Warning::new(
-                        Code::ValMGrayscale,
-                        "complex _m with R≈G≈B: CS rejects it",
-                    ));
-                }
                 let clip = px.iter().filter(|q| q[3] <= 4 || q[3] >= 251).count() as f64 / n;
                 if alpha_present && clip > 0.25 {
                     w.push(Warning::new(

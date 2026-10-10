@@ -241,6 +241,46 @@ Whole-branch review of `feat/phase0-2` (59cf60c): 0 Critical, 8 Important, 16 Mi
 - **Docs:** I2 the fill-value requirement (Note H, last bullet) is now in spec §3.2, §6.4, §14 #16/#22 and the M2.5 scope; I3 carried items and deferred minors live in the plan, per milestone; I8 the spec is re-synced with the code and these notes.
 - **Deferred to M3 entry (one `EVENT_SCHEMA` bump):** I5 per-file event identity, typed `file_planned.job` and a skip kind; I6 per-file allow and an exact-path scope. Cost if wrong: one schema bump at M3.
 
+## Spike S1 — not run; owner answer (2026-10-09)
+
+- The owner skipped the in-game check: PBR `_f` and `_g` are sRGB only, with BC6H as the option for an emissive `_g`.
+- The shipped defaults already match (`_g` and `_f` = `BC7_UNORM_SRGB`, BC6H by override). Nothing changes.
+
+## Spike S2 — small BC7 textures do not crash (2026-10-09)
+
+- Result: **PASS** (criterion: no crash in about 10 minutes).
+- Owner test: in the anssestudio mod (`mods/s2/textures`), 66 textures were replaced by s2 outputs: 16–128 px BC7 with full chains, 17 at 16, 17 at 32, 16 at 64, 16 at 128. Seven `_n` maps were re-encoded smaller (16–64 px BC7). `_e` cubemaps and one cubemap without the suffix were kept. Mapping: `out/s2-swap/mapping.txt` (git-ignored).
+- The Studio cell with those textures also loaded and rendered during the S8 session with no crash.
+- Owner note: the crash reports that blamed small textures were most likely misattributed.
+- Consequence: no small-texture fallback (DECISIONS #7 stands).
+
+## Spike S8 — CS complex-material gate, read from the shader (2026-10-09)
+
+- Result: **the 251/255 gate is exact**. Evidence comes from the shader, not from looking at parallax, which can't be judged on a flat test map.
+- Method:
+  - One frame captured in game with Community Shaders' RenderDoc feature (RenderDoc 1.43; replayed with portable RenderDoc, which auto-updated to 1.46).
+  - Scene: `DLC1VampireCastleGuildhall`. The Comfy Coffins `SCoffin01` uses `_m` = s8 `heightmask_m`, with a Dragonborn septim pile (`_m` = s8 `m_250_m`) on top. Both were placed with `player.placeatme` through DevBench.
+  - Scripts: `F:/ai/dds/tools/rdc-scripts/s8_stage1.py` and `s8_stage2.py`. Output and the full DXBC: `F:/ai/dds/tools/rdc-out/`. Write-up: `out/s8-renderdoc.md`.
+- CS settings at both draws: `EnableComplexMaterial` 1, `EnableParallax` 1, `EnableParallaxWarpingFix` 1.
+- The decision in the CS Lighting pixel shader:
+  - It samples `TexEnvMask` at LOD 15, i.e. the smallest mip.
+  - `grey` = every pair of R, G, B differs by less than 4/255.
+  - `black` = R, G and B all below 4/255, and 4/255 < alpha < 251/255.
+  - complex = not (`grey` and not `black`), and alpha < 251/255 (0.984314).
+  - Parallax then runs only on texels whose full-resolution alpha is in (4/255, 251/255).
+- Decoded smallest mips in the capture:
+  - `m_250_m`: (80, 160, 40, 250) at every level → complex on.
+  - `heightmask_m`: (0, 0, 0, 126) → complex on, through the black exception.
+- For the s8 set (RGB 80/160/40, not grey): 245, 248 and 250 → on; 252 and 255 → off. Finn's Lute (`m_252_m`) was placed but not drawn in the captured frame.
+- Consequences:
+  - §14 #7 is closed: `complex_m_warn_alpha` stays 247 (4 codes of headroom below the gate).
+  - `VAL-M-COMPLEX-MARGIN` now says how many codes below the gate the file is, or that complex is off at 251 and above. Its data carries `smallest_alpha` and `complex`.
+  - `VAL-M-GRAYSCALE` now applies the shader's rule to the smallest mip. Before, it tested mip 0 for over 95% of texels with spread ≤ 4 and a mean above 25. As a result:
+    - a dark grey such as (10, 10, 10) is now flagged;
+    - only RGB below 4 with a height in range is exempt;
+    - a coloured base that averages to grey at 1×1 is flagged.
+  - The cpm `_m` constant height 0.5 (128) is below the gate. The M2.5 packer must still keep the packed RGB from being grey at the smallest mip, for example a constant-filled env mask. `VAL-M-GRAYSCALE` catches it.
+
 ## Owner checks pending
 
 Open owner confirmations after Phase 2. None blocks the merge; each has a shipped default.
@@ -252,8 +292,8 @@ Open owner confirmations after Phase 2. None blocks the merge; each has a shippe
 6. **`_d` aliases stay High.** A preset alias to `d` raises the colour reading to High confidence (Task 26a ruling); the owner can ask to add `d` to the `_s` exception.
 7. **Open packing questions for M2.5 (spec §14 #18–#21):** the env-mask source of a packed `cpm`/`vanilla` `_m` and the constant height of a `cpm` `_m`; raw maps without a recipe (`_opacity`, specular-only and fuzz-only sets, RGB `_sheen`); the scale of a raw specular map; whether a set missing its packed map should exit 1.
 8. **Interim `IN-FLOAT-LDR` block.** Until the M6 transfer split, a 32-bit float source written to anything but BC6H needs `--allow IN-FLOAT-LDR`. Cost if wrong: float albedo TIFFs need the flag.
-9. **In-game spikes (Task 46, results pending).** Pack: `target/spike-src` (regenerate with `cargo run --release -p sdc-bench -- gen-spike-assets --out target/spike-src`); steps: `docs/spikes/in-game-checklist.md`. Append the results here.
-   - S1: BC6H `_g` and `_SRGB` `_g`/`_f` render under Community Shaders (LL on and off), and `_SRGB` `_f` matches the reference.
-   - S2: 200 small BC7 textures (16–128 px, full chains) run 10 minutes without a crash; otherwise a small-texture fallback returns (DECISIONS #7).
-   - S6: how many real plain `_m` files stored as BC7 with alpha cross PGPatcher's 50% non-white rule with the flag off; a file at 40% or more makes `ALPHA-EXACT-OFF-M` blocking (spec §14 #9).
-   - S8: where CS complex detection flips for a decoded 1×1 `_m` alpha of 245, 248, 250, 252 and 255; sets the complex-margin (`validation.complex_m_warn_alpha`, spec §14 #7) and the cpm `_m` height default.
+9. **In-game spikes (Task 46).** Pack: `target/spike-src` (regenerate with `cargo run --release -p sdc-bench -- gen-spike-assets --out target/spike-src`); steps: `docs/spikes/in-game-checklist.md`.
+   - S1: closed by the owner's answer (Spike S1 above).
+   - S2: **passed** (Spike S2 above).
+   - S6 (open): how many real plain `_m` files stored as BC7 with alpha cross PGPatcher's 50% non-white rule with the flag off; a file at 40% or more makes `ALPHA-EXACT-OFF-M` blocking (spec §14 #9). Offline: 7 of 28 real `_m` are at 40% or more (max 57.95%, `out/s6-results.txt`); waiting for the owner's OK to make the code blocking.
+   - S8: **closed** (Spike S8 above).

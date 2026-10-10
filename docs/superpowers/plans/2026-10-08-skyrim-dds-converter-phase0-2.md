@@ -11857,6 +11857,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. It 
   - The plan/run source-drift check (size and mtime recorded in `ResolvedJob`, final review I7) must cover every source of a virtual job, not only `input`.
   - Test that a raw map whose sub-type a rule or `--set` names leaves every recipe and converts under its source stem (Task 27a minor).
   - `Provenance` has no `default:`/`fill:` variant yet; extend the provenance vocabulary and the schemas together (spec §5.2, §6.4).
+  - Spike S8 (DECISIONS): a packed `cpm` `_m` is complex in CS only if its smallest-mip RGB is not grey (some pair of channels ≥ 4/255 apart) or is black, and its alpha is below 251/255. A constant or grey env-mask fill can make the RGB grey; add a golden case where `VAL-M-GRAYSCALE` fires for that, and one where the default recipe keeps the `_m` complex.
 
 ### M3 — GUI (`sdc-gui`, project-plan Phase 4)
 

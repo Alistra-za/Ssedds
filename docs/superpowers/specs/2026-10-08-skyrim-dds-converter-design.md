@@ -415,7 +415,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 |---|---|---|
 | Header | §5.7 rules | Error |
 | Per-mip error | Channel PSNR against the encoder input (the quantised pre-encode chain), floor `validation.min_mip_psnr_db` = 30 dB (`VAL-MIP-ERROR`); the angular error for normals arrives with the per-mip metrics of M7 (§11.3) | Warning below threshold |
-| **Smallest-mip alpha** | **Decode the smallest mip (and every level) and check alpha**: `remove` → ≥ the encoder guarantee below; with `exact_opaque`, exactly 255 on every all-255 source block; `cutout` → coverage within 2 points of mip 0, checked on levels of 256 texels or more (a single flipped texel moves smaller levels by more than the tolerance); `complex_material` → 1×1 alpha < 251/255 with a 4-code-value margin (**[Open]**, S8) | Per rule |
+| **Smallest-mip alpha** | **Decode the smallest mip (and every level) and check alpha**: `remove` → ≥ the encoder guarantee below; with `exact_opaque`, exactly 255 on every all-255 source block; `cutout` → coverage within 2 points of mip 0, checked on levels of 256 texels or more (a single flipped texel moves smaller levels by more than the tolerance); `complex_material` → CS's smallest-mip rule (S8, read from the shader): complex when the RGB is not grey (some pair of channels ≥ 4/255 apart) or is black (all channels < 4/255 with 4/255 < alpha < 251/255), and alpha < 251/255; warn from 247/255 (a 4-code margin) and say "off" from 251/255 (**[Decided]**, S8) | Per rule |
 | PGPatcher count | `_m` outputs storing alpha: base-mip share of α ≠ 255 vs the ≥ 50% rule | Warning |
 | BC6H peak | Decoded ÷ source peak ≥ 0.8 (**[Open]**) | Warning |
 
@@ -492,7 +492,7 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | Specular (`_rmaos`/`_rfaos` A) | 1.0 (white), the TruePBR default; with TruePBR's default `specular_level` 0.04 this is F0 0.04 | [Requirement] |
 | Roughness | 0.5, set by the preset field `packing.roughness_default` (glossiness default 1 − that value) | [Requirement] 0.5 confirmed by the owner 2026-10-09 [D-H] |
 | Env mask (`cpm`/`vanilla` `_m` R) | From the metallic source, else the specular source; 0.0 under `cpm` when neither exists | **[Open]** |
-| Height (`cpm` `_m` A) | 0.5. A white default would make CS read the `_m` as a plain env mask (1×1 alpha ≥ 251/255, §5.8) and ENB as flat; a constant height has no relief | **[Open]** (S8) |
+| Height (`cpm` `_m` A) | 0.5. A white default would make CS read the `_m` as a plain env mask (1×1 alpha ≥ 251/255, §5.8) and ENB as flat; a constant height has no relief. 128/255 is below CS's 251/255 gate (S8); the packed RGB must also not be grey at the smallest mip (§5.8) | **[Decided]** (S8) |
 
 **[Proposal]** Fill values: a fill takes the place of the table default for a channel that has no source map and is never applied to a channel that has one. The field is `packing.fill.<role>` (a §4.4 raw-map role id such as `metallic`) holding an 8-bit code 0–255, and `--fill <role>=<0..255>` sets it for the whole batch like an unscoped `--set`; the GUI offers one slider per role in the global settings. A fill for a role that no recipe of the target packs has no effect. `packing.roughness_default` remains the preset-level neutral default for roughness, and a roughness fill wins over it. The field path, the CLI spelling and the unit are the M2.5 plan's to finalise (§14 #22).
 
@@ -650,8 +650,8 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `SUG-CONTRADICTION` | warning | Content contradicts suffix | Confirm or change |
 | `VAL-ALPHA-GUARANTEE` | error | Decoded alpha below guarantee, or ≠ 255 on an all-255 block with the flag on | Report bug; the shipped mechanism is chosen by the §11.2 gate |
 | `VAL-COVERAGE` | warning | Cutout coverage drift > 2 points, checked on levels of 256 texels or more (§5.8) | Adjust threshold |
-| `VAL-M-COMPLEX-MARGIN` | warning | Complex `_m` 1×1 alpha ≥ 247/255 → CS detection may flip [SC §4] | Adjust height range |
-| `VAL-M-GRAYSCALE` | warning | Complex `_m` with R ≈ G ≈ B, not near black → CS rejects [SC §4] | Check channels |
+| `VAL-M-COMPLEX-MARGIN` | warning | Complex `_m` smallest-mip alpha ≥ 247/255: within the margin below CS's 251/255 gate, or at/above it (complex off); data `smallest_alpha`, `complex` [S8] | Adjust height range |
+| `VAL-M-GRAYSCALE` | warning | Complex `_m` whose smallest mip is grey (channels < 4/255 apart) and not black-with-height → CS reads it as a plain env mask [S8] | Check channels |
 | `VAL-M-HEIGHT-CLIP` | warning | Large `_m` alpha areas ≤ 4/255 or ≥ 251/255 → no parallax (CS), flat (ENB) | Remap height |
 | `VAL-PGPATCHER-50` | warning | Alpha-carrying plain `_m` has ≥ 50% non-white → PGPatcher treats as complex | BC4 or flag on |
 | `VAL-BC6H-PEAK` | warning | BC6H peak ratio < 0.8 [B2 §6] | Try NVTT Production |
@@ -709,7 +709,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 ## 12. Phase 0 spikes
 
-**[Proposal]** Each spike takes at most one day; results go into `docs/DECISIONS.md`. **[Finding]** Status after Phase 2: S3 passed; S4 not adopted; S5 passed its alpha and bit-identity gates but missed the 0.05 dB RGB limit (the mechanism ships, scoped to `_m`); S7 passed. S1, S2, S6 and S8 need the game; the asset pack and checklist are in `docs/spikes/in-game-checklist.md` and the owner's results are pending.
+**[Proposal]** Each spike takes at most one day; results go into `docs/DECISIONS.md`. **[Finding]** Status after Phase 2: S3 passed; S4 not adopted; S5 passed its alpha and bit-identity gates but missed the 0.05 dB RGB limit (the mechanism ships, scoped to `_m`); S7 passed. After the in-game round: S1 closed by the owner's answer (PBR `_f`/`_g` sRGB, BC6H for an emissive `_g`); S2 passed (no crash); S8 closed from a RenderDoc read of the CS shader (gate exactly 251/255, plus a smallest-mip grey rule). S6 waits for the owner's OK on the offline result. The asset pack and checklist are in `docs/spikes/in-game-checklist.md`.
 
 | Spike | Question | Method | Pass criterion | Priority |
 |---|---|---|---|---|
@@ -748,7 +748,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | 4 | Variance-bake clamp *t* | 0.25 (Unity HDRP value, owner-approved) | Over-rough distance or residual shimmer in spot checks → retune per preset | Phase 6 |
 | 5 | Exact opaque alpha, global default | Decided: on for `_m` / env masks only, off elsewhere (owner, Phase 0 exit; S5 cost −0.515 dB `rgb_real`, −1.020 dB `rgb_grad` exceeds 0.05 dB) | — | Closed |
 | 6 | Exact-opaque mechanism | Decided: native patch 0001 (alpha == 255 on 18/18 images, flag off bit-identical on 39/39 on the host ISA); byte patch last resort, NVTT second fallback (M5) | — | Closed |
-| 7 | Complex `_m` 1×1 margin | 4 code values below 251/255 | S8 boundary | S8 |
+| 7 | Complex `_m` 1×1 margin | 4 code values below 251/255 (`complex_m_warn_alpha` 247); **closed by S8**: the gate is exactly `alpha < 251/255` | S8 boundary | S8 |
 | 8 | BC6H peak threshold | Warn below 0.8 | Spot checks of highlight-heavy BC6H | Phase 6 |
 | 9 | Turning `exact_opaque` off for an `_m` | Warning (`ALPHA-EXACT-OFF-M`) | S6 finds a file ≥ 40% → blocking | S6 |
 | 10 | NVTT per-mip feeding | Decided: one `-nomips` process per level, always `-nocuda` (S7 passed) | — | Closed |
@@ -759,7 +759,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | 15 | Code signing and antivirus | Unsigned | False positives in release testing [D#16] | Phase 7 |
 | 16 | Roughness default when a packed `_rmaos`/`_rfaos` has no roughness source | Decided: 0.5, preset field `packing.roughness_default`, confirmed by the owner 2026-10-09; per-channel global fill values override it (§3.2, §6.4) [D-H] | — | Closed |
 | 17 | Output name of colour vocabulary files | `<base>.dds`; `_d` keeps `<base>_d.dds` (§4.4) | Owner prefers `<base>_d.dds` or another rule | Owner |
-| 18 | Env-mask source of a packed `cpm`/`vanilla` `_m`; `cpm` `_m` height without a source | Metallic, else specular; height 0.5 (§6.4) | Owner rule; S8 in-game check of the constant height | Owner, S8, M2.5 |
+| 18 | Env-mask source of a packed `cpm`/`vanilla` `_m`; `cpm` `_m` height without a source | Metallic, else specular; height 0.5 (§6.4) | Owner rule; the constant height passed S8 (128 < 251; RGB must not be grey) | Owner, M2.5 |
 | 19 | Raw maps without a recipe | `_opacity`, specular-only and fuzz-only sets, height under `vanilla`, RGB `_sheen`: reported, not packed (§4.4, §6.4) | Owner names a recipe (e.g. opacity into colour alpha, specular into `_n` alpha) | Owner, M2.5 |
 | 20 | Raw specular scale | Copied unchanged into `_rmaos`/`_rfaos` A | Exporter "specular level" maps (0.5 = F0 0.04) shown to need a remap to TruePBR's A | Owner, M2.5 |
 | 21 | Raw packing inputs and the exit code before M2.5 | Not counted as skipped (exit 1) | Owner wants exit 1 when a set's packed map is missing | Owner |

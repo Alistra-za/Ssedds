@@ -452,12 +452,81 @@ fn complex_m_grayscale_and_height_clip() {
     let c = codes(&r);
     assert!(c.contains(&Code::ValMGrayscale), "{:?}", r.warnings);
     assert!(c.contains(&Code::ValMHeightClip), "{:?}", r.warnings);
-    // Near-black grey with mid-range height trips neither.
-    let px: Vec<[u8; 4]> = (0..64).map(|i| [10, 10, 10, 100 + i as u8]).collect();
+    // Black RGB (every channel below 4) with mid-range height is CS's height-only exception: neither fires.
+    let px: Vec<[u8; 4]> = (0..64).map(|i| [2, 2, 2, 100 + i as u8]).collect();
     let (b, inputs) = dds(&p, &[(8, 8, px)]);
     let r = run(&b, &p, Some(&inputs), None, Some(1));
     assert!(!codes(&r).contains(&Code::ValMGrayscale));
     assert!(!codes(&r).contains(&Code::ValMHeightClip));
+}
+
+/// Spike S8 (RenderDoc read of the CS Lighting shader): the black exception needs every channel below 4/255.
+/// A dark grey of 10 is still grey, so CS reads the `_m` as a plain env mask.
+#[test]
+fn complex_m_dark_gray_above_the_black_exception_is_rejected() {
+    let p = profile(Subtype::ComplexMaterial);
+    let (b, inputs) = complex_m_file(&p, [10, 10, 10]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(codes(&r).contains(&Code::ValMGrayscale), "{:?}", r.warnings);
+    let (b, inputs) = complex_m_file(&p, [3, 3, 3]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(
+        !codes(&r).contains(&Code::ValMGrayscale),
+        "{:?}",
+        r.warnings
+    );
+}
+
+/// The black exception also needs the height inside CS's (4, 251) window: black RGB with alpha 255 is a
+/// grey env mask to CS.
+#[test]
+fn complex_m_black_rgb_without_height_is_rejected() {
+    let p = profile(Subtype::ComplexMaterial);
+    let (b, inputs) = dds(&p, &[flat(8, [0, 0, 0, 255])]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(codes(&r).contains(&Code::ValMGrayscale), "{:?}", r.warnings);
+}
+
+/// CS tests the grey rule on the smallest mip only: a coloured base that averages to grey at 1x1 is rejected,
+/// a grey base whose smallest mip is coloured is not.
+#[test]
+fn complex_m_grayscale_reads_the_smallest_mip() {
+    let p = profile(Subtype::ComplexMaterial);
+    let checker: Vec<[u8; 4]> = (0..64)
+        .map(|i| {
+            if i % 2 == 0 {
+                [200, 0, 100, 128]
+            } else {
+                [0, 200, 100, 128]
+            }
+        })
+        .collect();
+    let (b, inputs) = dds(
+        &p,
+        &[
+            (8, 8, checker),
+            flat(4, [100, 100, 100, 128]),
+            flat(2, [100, 100, 100, 128]),
+            flat(1, [100, 100, 100, 128]),
+        ],
+    );
+    let r = run(&b, &p, Some(&inputs), None, Some(4));
+    assert!(codes(&r).contains(&Code::ValMGrayscale), "{:?}", r.warnings);
+    let (b, inputs) = dds(
+        &p,
+        &[
+            flat(8, [100, 100, 100, 128]),
+            flat(4, [100, 100, 100, 128]),
+            flat(2, [100, 100, 100, 128]),
+            flat(1, [80, 160, 40, 128]),
+        ],
+    );
+    let r = run(&b, &p, Some(&inputs), None, Some(4));
+    assert!(
+        !codes(&r).contains(&Code::ValMGrayscale),
+        "{:?}",
+        r.warnings
+    );
 }
 
 /// Complex `_m` file whose texels all have colour `rgb` and a mid-range height.
@@ -468,15 +537,15 @@ fn complex_m_file(p: &Profile, rgb: [u8; 3]) -> (Vec<u8>, Vec<EncoderInput>) {
     dds(p, &[(8, 8, px)])
 }
 
-/// The same R/G/B spread as Analyse (`max - min <= 4`): (100,102,104) is gray, (100,104,108) is not even
-/// though each neighbouring pair is within 4.
+/// CS's tolerance (spike S8): every pair of channels differs by less than 4/255. (100,102,103) is grey,
+/// (100,102,104) is not: R and B differ by exactly 4.
 #[test]
-fn complex_m_grayscale_uses_the_whole_channel_spread() {
+fn complex_m_grayscale_uses_the_cs_channel_tolerance() {
     let p = profile(Subtype::ComplexMaterial);
-    let (b, inputs) = complex_m_file(&p, [100, 102, 104]);
+    let (b, inputs) = complex_m_file(&p, [100, 102, 103]);
     let r = run(&b, &p, Some(&inputs), None, Some(1));
     assert!(codes(&r).contains(&Code::ValMGrayscale), "{:?}", r.warnings);
-    let (b, inputs) = complex_m_file(&p, [100, 104, 108]);
+    let (b, inputs) = complex_m_file(&p, [100, 102, 104]);
     let r = run(&b, &p, Some(&inputs), None, Some(1));
     assert!(
         !codes(&r).contains(&Code::ValMGrayscale),
@@ -517,6 +586,30 @@ fn complex_m_margin_boundary() {
         "{:?}",
         r.warnings
     );
+}
+
+/// Spike S8: CS's gate is `smallest-mip alpha < 251/255`, so 250 is still complex (a margin warning) and 251
+/// is a plain env mask (the same code, reported as off). The RGB is the S8 colour, so the grey rule stays out.
+#[test]
+fn complex_m_gate_is_off_from_251() {
+    let p = profile(Subtype::ComplexMaterial);
+    let margin = |alpha: u8| {
+        let (b, inputs) = dds(&p, &[flat(4, [80, 160, 40, alpha])]);
+        let r = run(&b, &p, Some(&inputs), None, Some(1));
+        assert_eq!(r.summary.alpha[0].min, alpha, "fixture must decode exactly");
+        r.warnings
+            .into_iter()
+            .find(|w| w.code == Code::ValMComplexMargin)
+            .unwrap_or_else(|| panic!("no margin warning at {alpha}"))
+    };
+    let w = margin(250);
+    assert_eq!(w.data["complex"], true, "{w:?}");
+    assert!(w.message.contains("1 code below"), "{}", w.message);
+    for alpha in [251, 252, 255] {
+        let w = margin(alpha);
+        assert_eq!(w.data["complex"], false, "{w:?}");
+        assert!(w.message.contains("plain env mask"), "{}", w.message);
+    }
 }
 
 /// `pgpatcher_non_white_share` (0.5) is inclusive: 8 of 16 blocks with alpha 100 warn, 7 of 16 do not.
