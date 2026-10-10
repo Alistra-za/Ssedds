@@ -3,5 +3,6 @@
 pub mod app;
 pub mod fonts;
 pub mod model;
+pub mod project;
 pub mod settings;
 pub mod ui;
