@@ -3053,6 +3053,7 @@ dependencies = [
  "engine",
  "image",
  "schemars",
+ "sdc-gui",
  "serde_json",
  "tempfile",
 ]

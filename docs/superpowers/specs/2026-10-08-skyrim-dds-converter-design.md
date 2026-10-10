@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-10-08 |
-| Status | Approved direction. Phases 0–2 (spikes S3–S7, engine, CLI MVP) are built on `feat/phase0-2` and reviewed; milestone M2.5 (channel packing, §6.4) is built on `feat/m2.5-packing`. Re-synced with the code and DECISIONS at the final review, 2026-10-09 |
+| Status | Approved direction. Phases 0–2 (spikes S3–S7, engine, CLI MVP) are built on `feat/phase0-2` and reviewed; milestone M2.5 (channel packing, §6.4) is built on `feat/m2.5-packing`. M3a (converter GUI) built on `feat/m3a-gui`; its design is `2026-10-10-sdc-m3a-converter-gui-design.md`. Re-synced with the code and DECISIONS at the final review, 2026-10-09 |
 | Project licence | GPL-3.0-or-later |
 | Platform | Windows x64 only |
 | Working name | `sdc` (Skyrim DDS Converter): `sdc.exe` (CLI) and `sdc-gui.exe` (GUI); final name decided at packaging (§14) |

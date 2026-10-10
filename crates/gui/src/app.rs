@@ -53,6 +53,8 @@ impl SdcApp {
             rs.renderer.write().callback_resources.insert(renderer);
             self.state.gpu.renderer = true;
             self.render_state = Some(rs.clone());
+        } else {
+            self.model.gpu_available = false;
         }
         self
     }
@@ -130,7 +132,7 @@ impl SdcApp {
 
     /// The window regained focus: the place to look for source files that changed meanwhile.
     fn focus_regained(&mut self) {
-        // `AppModel::check_sources` arrives with the source-change task; nothing to do until then.
+        self.model.check_sources();
     }
 }
 
@@ -147,7 +149,7 @@ impl eframe::App for SdcApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.model.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        let focused = ctx.input(|i| i.focused);
         if focused && !self.was_focused {
             self.focus_regained();
         }

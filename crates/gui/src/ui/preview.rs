@@ -2,6 +2,7 @@
 //! viewport cut by a divider), the notes and readouts under them, and the compact settings strip beside them.
 //! All state lives in the model (`AppModel::view`, `AppModel::preview`); this file maps input to model calls.
 use crate::model::items::ItemKind;
+use crate::model::preview::NO_GPU;
 use crate::model::preview::{EncodedState, PreviewOut, SourceState};
 use crate::model::view::{readouts, skipped_note, Channel, Layout, ViewState};
 use crate::model::AppModel;
@@ -237,6 +238,9 @@ fn encode_button(ui: &mut egui::Ui, model: &AppModel) -> bool {
 }
 
 fn can_encode(model: &AppModel) -> bool {
+    if !model.gpu_available {
+        return false;
+    }
     let encoding = matches!(model.preview.encoded, EncodedState::Encoding { .. });
     let job = model
         .expanded
@@ -482,6 +486,11 @@ fn draw_encoded_pane(
         Some(UploadPath::Bc | UploadPath::CpuDecoded(_))
     );
     let mut text = text;
+    let mut offer_encode = offer_encode;
+    if !model.gpu_available {
+        text = Some(NO_GPU.to_string());
+        offer_encode = false;
+    }
     if text.is_none() && info.shown.is_some() {
         if !gpu.renderer {
             text = Some("No GPU preview".to_string());

@@ -75,7 +75,7 @@ pub enum SkipKind {
     UnknownExisting,
     /// `PACK-CONFLICT`: a pre-packed file replaced under `packing.prefer = raw`.
     PackConflict,
-    /// A raw map consumed by a recipe; `job` names the packed output.
+    /// A raw map consumed by a recipe; the event's `job_key` names the packed output.
     PackedSource,
 }
 

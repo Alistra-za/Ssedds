@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-10-10 |
-| Status | Design approved by the owner in conversation, section by section (2026-10-10). Written spec awaiting owner review |
+| Status | Design approved by the owner in conversation, section by section (2026-10-10). Written spec awaiting owner review. Built on `feat/m3a-gui` (plan `docs/superpowers/plans/2026-10-10-sdc-m3a-converter-gui.md`) |
 | Milestone | M3a, the first of three GUI parts (M3a → M3b → M3c, owner 2026-10-10) |
 | Supersedes | Spec `2026-10-08-skyrim-dds-converter-design.md` §9 for everything M3a builds; §9 stays the reference for what M3a leaves out |
 | Inputs | `F:/ai/dds/gui reference/Rough.jpg` (owner layout), `v1 instruction.txt`, `v1-gap-review.md`; plan `2026-10-08-skyrim-dds-converter-phase0-2.md` M3 carried items and "Carried from M2.5" |
@@ -116,9 +116,9 @@ These are engine tasks at the start of the M3a plan. They consume the plan's M3 
 
 **[Proposal]** One `EVENT_SCHEMA` bump (plan M3 carried I5, an M3 entry condition):
 
-- every per-file event carries a stable job key (`manifest::output_key`), so the GUI can tie an event to its thumbnail;
+- every per-file event carries a stable job key (`manifest::output_key`; the JSON field is `job_key`), so the GUI can tie an event to its thumbnail;
 - `file_planned.job` is typed (`ResolvedJob` derives `Deserialize`, and its schema is embedded so the drift test sees it);
-- skips carry an enum kind: `up_to_date`, `on_existing_skip`, `unresolved`, `blocked`, `duplicate`, `dds_input`, `packing_input`, `unknown_existing`. The textures skipped by "Proceed anyway" (§2.6) are `unresolved` or `blocked`; the GUI labels both "skipped: needs decision", so no new kind is needed;
+- skips carry an enum kind (the JSON field of `file_skipped` is `skip`): `up_to_date`, `on_existing_skip`, `unresolved`, `blocked`, `duplicate`, `dds_input`, `packing_input`, `unknown_existing`, and the two the M2.5 pack events need, `pack_conflict` and `packed_source` (10 kinds, DECISIONS N5). The textures skipped by "Proceed anyway" (§2.6) are `unresolved` or `blocked`; the GUI labels both "skipped: needs decision", so no new kind is needed for them;
 - from "Carried from M2.5": every pack source gets its own terminal event, and `SourceRef` records each pack source's role and invert flag. That record replaces the `pack.*` provenance comparison in `is_up_to_date`.
 
 The committed schemas are regenerated.

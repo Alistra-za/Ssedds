@@ -1114,7 +1114,7 @@
         },
         {
           "const": "packed_source",
-          "description": "A raw map consumed by a recipe; `job` names the packed output.",
+          "description": "A raw map consumed by a recipe; the event's `job_key` names the packed output.",
           "type": "string"
         }
       ]

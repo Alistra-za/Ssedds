@@ -6,7 +6,7 @@ use engine::discover::{InputFile, InputKind};
 use engine::events::{EngineEvent, EventKind, RecipeReport};
 use engine::manifest::output_key;
 use engine::overrides::project_rel;
-use engine::policy::{JobStatus, Need, ResolvedJob};
+use engine::policy::{JobStatus, Need, ResolvedJob, SourceStamp};
 use engine::session::{Session, Thumbnail};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -55,6 +55,9 @@ pub struct TextureItem {
     pub warnings: Vec<Warning>,
     pub thumb: Option<Thumbnail>,
     pub changed_on_disk: bool,
+    /// The file's stamp when it was listed. Only DDS inputs carry one: the engine plans no job for them, so
+    /// nothing else records what they looked like; an item with a job is checked against the job's stamps.
+    pub stamp: Option<SourceStamp>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +180,7 @@ impl PlanView {
                 job: Some(job.clone()),
                 status,
                 changed_on_disk: false,
+                stamp: None,
             });
             if let Some(pk) = &job.pack {
                 for s in &pk.sources {
@@ -193,6 +197,7 @@ impl PlanView {
                         warnings: vec![],
                         thumb: session.cache().thumbnail_of(&s.path),
                         changed_on_disk: false,
+                        stamp: None,
                     });
                 }
             }
@@ -212,6 +217,7 @@ impl PlanView {
                 warnings: vec![],
                 thumb: None,
                 changed_on_disk: false,
+                stamp: if dds { SourceStamp::of(&s.path) } else { None },
             });
         }
         for f in &plan.failed {
@@ -228,6 +234,7 @@ impl PlanView {
                 warnings: vec![],
                 thumb: None,
                 changed_on_disk: false,
+                stamp: None,
             });
         }
         // De-duplicate by key (a raw source can feed two recipes): keep the first.

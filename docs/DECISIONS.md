@@ -242,11 +242,13 @@ The owner split M3 into M3a (converter GUI), M3b (set editor and PGPatcher JSON)
 - **N2 `[files]` in `sdc.toml`** (owner): per-texture GUI edits are saved as `[files."<path relative to sdc.toml>"]` entries (any profile field plus `allow = [codes]`). They are their own layer: above preset and config rules and analysis facts, below command-line `--set`. A key matches a file when `rel == key` or `rel` without its last extension `== key`, case-insensitively; packed outputs are keyed without extension. Provenance `project_file`. Only the project config may hold `[files]`.
 - **N3 Proceed anyway** (owner): exporting with undecided textures asks "Proceed anyway / Cancel"; proceeding skips the undecided textures and never decides for the user.
 - **N4 In-memory project config** (plan): `BatchRequest::project_config_inline` lets the GUI re-resolve unsaved edits; Export saves `sdc.toml` first, so `sdc convert <folder>` reproduces the last export.
-- **N5 Skip kinds** (plan): `file_skipped.kind` is one of `up_to_date`, `on_existing_skip`, `unresolved`, `blocked`, `duplicate`, `dds_input`, `packing_input`, `unknown_existing`, `pack_conflict`, `packed_source`.
-- **N6 Job key** (plan): every per-file event carries `job`, the output path relative to the output root (`manifest::output_key`).
+- **N5 Skip kinds** (plan): the skip kind of a `file_skipped` event is one of `up_to_date`, `on_existing_skip`, `unresolved`, `blocked`, `duplicate`, `dds_input`, `packing_input`, `unknown_existing`, `pack_conflict`, `packed_source`. In the JSON events the field is named `skip` (Rust: `FileSkipped::kind`).
+- **N6 Job key** (plan): every per-file event carries the job key, the output path relative to the output root (`manifest::output_key`). In the JSON events the field is named `job_key` (Rust: `EngineEvent::job`).
 - **N7 Manifest sources record role and invert** (plan, M2.5 carry): replaces the `pack.*` provenance comparison in `if-changed`; schema-1 records re-encode once.
 - **N8 Preview API** (plan): `Session::preview(&ResolvedJob, max_size, &CancelToken)`.
 - **N9 Typed unresolved needs** (plan): `JobStatus::Unresolved.needs` lists `subtype`, `alpha_meaning` and `green_convention`.
+- **N10 No bundled fonts** (licence ruling): sdc-gui ships no fonts. eframe is built without `default_fonts` and the GUI loads Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at run time, because egui's bundled fonts are OFL-1.1/UFL-1.0.
+- **N11 DDS formats without an engine `Format`** (plan): a DDS input in a format the engine has no `Format` for (uncompressed, BC2, signed BC6H) shows "cannot be previewed" in M3a.
 
 ## Phase 2 exit — CLI MVP (2026-10-09)
 

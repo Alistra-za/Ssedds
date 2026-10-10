@@ -1,5 +1,5 @@
 mod support;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::{AppModel, Selection};
 use sdc_gui::settings::GuiSettings;
@@ -535,4 +535,38 @@ fn an_edit_after_encoding_shows_the_stale_badge() {
     settle(&mut h);
     h.get_by_label_contains("stale");
     assert!(h.query_by_label_contains("Not encoded").is_none());
+}
+
+#[test]
+fn a_changed_source_offers_reload_which_plans_again() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    let p = model.root.clone().unwrap().join("landscape/rock01.png");
+    image::ImageBuffer::from_fn(32, 32, |_, _| image::Rgb([9u8, 9, 9]))
+        .save(&p)
+        .unwrap();
+    assert_eq!(model.check_sources(), 1);
+    let mut h = harness(model);
+    h.run();
+    h.get_by_label_contains("1 changed on disk");
+    press(&mut h, "Reload");
+    settle(&mut h);
+    assert!(h.query_by_label_contains("changed on disk").is_none());
+}
+
+#[test]
+fn without_a_gpu_the_preview_says_so_and_cannot_encode() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.gpu_available = false;
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    h.get_all_by_label_contains("No usable GPU: the preview is off; everything else works")
+        .next()
+        .unwrap();
+    // The toolbar's button stays, disabled; the pane offers none.
+    assert_eq!(h.query_all_by_label("Encode now").count(), 1);
+    assert!(h.get_by_label("Encode now").accesskit_node().is_disabled());
 }

@@ -9,7 +9,7 @@ use engine::config::Format;
 use engine::dds::DdsPixelFormat;
 use engine::decode::{decode_level, Decoded};
 use engine::manifest::sha256_json;
-use engine::policy::ResolvedJob;
+use engine::policy::{ResolvedJob, SourceStamp};
 use engine::session::{first_level_within, pack_key, PreviewResult, SourcePreview};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,6 +22,8 @@ const ERRORED: &str = "This texture has an error; fix its settings to preview it
 const SUGGESTED: &str = "Preview of the suggested settings";
 const DDS_NO_SOURCE: &str = "DDS input: no source image";
 const WAITS_FOR_EXPORT: &str = "Preview encoding waits for the export to finish";
+/// What the viewports say when eframe found no usable GPU adapter (M3a spec §7).
+pub const NO_GPU: &str = "No usable GPU: the preview is off; everything else works";
 
 #[derive(Debug)]
 pub struct PreviewOut {
@@ -79,6 +81,8 @@ pub struct PreviewModel {
     next_token: u64,
     /// Everything that shapes the job's output; a change makes a finished result stale.
     profile_sig: Option<String>,
+    /// The stamp of the DDS input the preview was made from; a plan that finds another one reads the file again.
+    dds_stamp: Option<SourceStamp>,
 }
 
 impl PreviewModel {
@@ -98,6 +102,7 @@ impl PreviewModel {
             inflight_encode: None,
             next_token: 0,
             profile_sig: None,
+            dds_stamp: None,
         }
     }
 
@@ -193,7 +198,7 @@ fn signature(job: &ResolvedJob) -> String {
     let p = sha256_json(&job.profile).unwrap_or_default();
     match &job.pack {
         Some(pk) => format!("{p}:{}", pack_key(pk)),
-        None => p,
+        None => format!("{p}:{:?}", job.source),
     }
 }
 
@@ -325,6 +330,11 @@ impl AppModel {
         let Some(item) = self.item(key) else {
             return;
         };
+        if !self.gpu_available && !matches!(classify(item), Previewable::Blocked(_)) {
+            self.preview.source = SourceState::Failed(NO_GPU.to_string());
+            self.set_base_notice(Some(NO_GPU.to_string()));
+            return;
+        }
         match classify(item) {
             Previewable::Blocked(why) => {
                 self.preview.source = SourceState::Failed(why.to_string());
@@ -332,6 +342,7 @@ impl AppModel {
             }
             Previewable::Dds => {
                 let path = item.input.clone();
+                self.preview.dds_stamp = item.stamp;
                 self.preview.source = SourceState::Ready(Arc::new(SourcePreview {
                     first_level: 0,
                     dims: vec![],
@@ -368,7 +379,11 @@ impl AppModel {
         };
         let notice = status_notice(item);
         match classify(item) {
-            Previewable::Dds => {}
+            Previewable::Dds => {
+                if item.stamp != self.preview.dds_stamp {
+                    self.preview_open(&key);
+                }
+            }
             Previewable::Blocked(why) => {
                 if self.preview.profile_sig.is_some() {
                     self.preview_open(&key);
@@ -479,6 +494,10 @@ impl AppModel {
         if !matches!(classify(item), Previewable::Job(_)) {
             return;
         }
+        if !self.gpu_available {
+            self.set_base_notice(Some(NO_GPU.to_string()));
+            return;
+        }
         if self.export.running.is_some() {
             self.set_base_notice(Some(WAITS_FOR_EXPORT.to_string()));
             return;
@@ -508,6 +527,9 @@ impl AppModel {
     }
 
     fn start_source(&mut self) {
+        if !self.gpu_available {
+            return;
+        }
         let Some(Previewable::Job(job)) = self.expanded_item().map(classify) else {
             return;
         };
@@ -522,6 +544,9 @@ impl AppModel {
     }
 
     fn start_encode(&mut self) {
+        if !self.gpu_available {
+            return;
+        }
         let Some(Previewable::Job(job)) = self.expanded_item().map(classify) else {
             return;
         };
@@ -538,6 +563,9 @@ impl AppModel {
     }
 
     fn start_dds(&mut self, path: std::path::PathBuf) {
+        if !self.gpu_available {
+            return;
+        }
         let Some(session) = self.session.clone() else {
             return;
         };

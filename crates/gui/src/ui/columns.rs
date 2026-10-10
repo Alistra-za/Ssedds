@@ -158,6 +158,15 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
             ui.colored_label(AMBER, format!("{n} need a decision"));
         }
     });
+    let changed = model.items.iter().filter(|i| i.changed_on_disk).count();
+    if changed > 0 {
+        ui.horizontal(|ui| {
+            ui.colored_label(AMBER, format!("{changed} changed on disk"));
+            if ui.button("Reload").clicked() {
+                model.reload_changed();
+            }
+        });
+    }
     ui.horizontal_wrapped(|ui| {
         ui.toggle_value(&mut model.filter.needs_decision, "Needs decision");
         ui.toggle_value(&mut model.filter.warnings, "Has warnings");

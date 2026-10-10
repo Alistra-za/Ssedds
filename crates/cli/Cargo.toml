@@ -29,3 +29,4 @@ test-hooks = ["engine/test-hooks"]
 engine = { workspace = true, features = ["test-hooks"] }
 image.workspace = true
 serde_json.workspace = true
+sdc-gui = { path = "../gui" }

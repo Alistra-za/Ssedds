@@ -11878,6 +11878,13 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
   - The per-file stage column of spec §9 needs per-stage events (m15, listed under M7; pull it forward if the column ships in M3).
   - `BatchRequest` is an open `pub` struct that M2.5, M5 and M6 extend: document `BatchRequest::new` plus field mutation as the contract. `EngineError` is three string variants, so the GUI cannot point at the offending config field.
   - `manifest::append` does not normalise `output`; callers must pass `output_key` (Task 36 minor), which matters once the GUI is a second caller.
+- **Consumed by M3a** (built on `feat/m3a-gui`, 2026-10-10; plan `docs/superpowers/plans/2026-10-10-sdc-m3a-converter-gui.md`):
+  - Partial-Profile schema (Task 3); the I5 event-schema bump with job key, typed `file_planned.job` and skip kind (Tasks 4–5); I6 per-file allow and exact-path scope (Tasks 2–3).
+  - `CancelToken` per batch, plan and run (Tasks 11–15); `Analysis` kept for re-resolving (the session cache, Task 7); the GUI sink only pushes into a channel (Task 11).
+  - `manifest::append` as a second caller: unchanged, because the GUI calls `run`, which appends with `output_key`.
+  - From "Carried from M2.5": the event-identity items (Task 5: pack-source terminal events, job key), `SourceRef` roles and invert (Task 6) and the `file:` scope on packed outputs (Task 2's key rule: the folder of the first source plus the virtual name).
+  - The BC1 decoder model is read once at launch; a change in the GUI shows "restart sdc-gui to apply".
+- **Still open after M3a** (unchanged): the isolated-worker mode (M3a ships in-process only; DECISIONS #18 decided after the owner's usability pass); per-stage progress events and the per-file stage column (m15, M7); set membership editing and PGPatcher JSON (M3b); texture edits (M3c); documenting `BatchRequest::new` plus field mutation as the contract and a structured `EngineError`; the non-event "Carried from M2.5" items below (wording, code shape, rare paths, unspecified behaviour, test gaps).
 - **Carried from M2.5** (final review of `feat/m2.5-packing`, SDD ledger):
   - **Event identity (I5):**
     - Only `sources[0]` of a packed job emits `file_planned`. A healthy raw source consumed by a recipe, including a failed or cancelled one, gets no per-file terminal event.

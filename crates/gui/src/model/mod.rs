@@ -12,7 +12,7 @@ use crate::worker::{spawn_export, spawn_plan, WorkerMsg};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, RawMap, Subtype, Target};
-use engine::policy::AcceptSuggestions;
+use engine::policy::{AcceptSuggestions, SourceStamp};
 use engine::presets::ConfigFile;
 use engine::session::Session;
 use items::*;
@@ -81,8 +81,12 @@ pub struct AppModel {
     pub view: view::ViewState,
     /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
     pub gpu_max_dim: u32,
+    /// False when eframe found no usable GPU adapter: the preview is off, everything else works (M3a spec §7).
+    pub gpu_available: bool,
     /// The BC1 decoder choice differs from the session's model, which is fixed at launch (M3a spec §4.6).
     pub restart_needed: bool,
+    /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
+    export_after_plan: bool,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -128,6 +132,8 @@ impl AppModel {
             preview,
             view: view::ViewState::default(),
             gpu_max_dim: 16384,
+            gpu_available: true,
+            export_after_plan: false,
             restart_needed: false,
             generation: 0,
             planning: None,
@@ -232,6 +238,7 @@ impl AppModel {
                     Ok(view) => self.apply_plan(view),
                     Err(e) => {
                         self.status_line = format!("Planning failed: {e}");
+                        self.export_after_plan = false;
                         self.dialog = Some(Dialog::Error(e));
                     }
                 }
@@ -239,7 +246,10 @@ impl AppModel {
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    "plan" => self.planning = None,
+                    "plan" => {
+                        self.planning = None;
+                        self.export_after_plan = false;
+                    }
                     "export" => self.export.running = None,
                     "preview" => self.preview_panicked(&message),
                     _ => {}
@@ -272,8 +282,22 @@ impl AppModel {
         }
     }
 
-    /// Export the folder; first the checks that need an answer (M3a spec §2.5).
+    /// Export the folder; first the checks that need an answer (M3a spec §2.5). Sources that changed since the plan
+    /// are flagged and the plan is made again first, so the export starts from fresh plans (M3a spec §7).
     pub fn export_clicked(&mut self) {
+        if self.root.is_none() {
+            return;
+        }
+        if self.check_sources() > 0 && self.session.is_some() {
+            self.export_after_plan = true;
+            self.replan();
+            return;
+        }
+        self.export_checks();
+    }
+
+    /// The export folder and undecided-texture checks, then the export itself.
+    fn export_checks(&mut self) {
         let Some(root) = self.root.clone() else {
             return;
         };
@@ -287,6 +311,51 @@ impl AppModel {
             return;
         }
         self.start_export();
+    }
+
+    /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
+    /// taken when it was listed). A packed output is checked against each of its sources, and a raw source feeding
+    /// one is flagged with it. Returns the number of items flagged.
+    pub fn check_sources(&mut self) -> usize {
+        let mut changed_paths: std::collections::HashSet<PathBuf> = Default::default();
+        for item in &self.items {
+            let Some(job) = &item.job else {
+                continue;
+            };
+            let stamps: Vec<(&std::path::Path, Option<SourceStamp>)> = match &job.pack {
+                Some(pk) => pk
+                    .sources
+                    .iter()
+                    .map(|s| (s.path.as_path(), s.stamp))
+                    .collect(),
+                None => vec![(job.input.as_path(), job.source)],
+            };
+            for (path, planned) in stamps {
+                if planned.is_some_and(|p| SourceStamp::of(path) != Some(p)) {
+                    changed_paths.insert(path.to_path_buf());
+                }
+            }
+        }
+        let mut n = 0;
+        for item in &mut self.items {
+            let dds_changed = item
+                .stamp
+                .is_some_and(|s| SourceStamp::of(&item.input) != Some(s));
+            item.changed_on_disk = dds_changed
+                || changed_paths.contains(&item.input)
+                || item.job.as_ref().is_some_and(|j| {
+                    j.pack.as_ref().is_some_and(|pk| {
+                        pk.sources.iter().any(|s| changed_paths.contains(&s.path))
+                    })
+                });
+            n += usize::from(item.changed_on_disk);
+        }
+        n
+    }
+
+    /// Plan again after sources changed on disk; the session cache reloads only the changed files.
+    pub fn reload_changed(&mut self) {
+        self.replan();
     }
 
     /// DECISIONS N3: undecided textures are skipped, never decided here.
@@ -371,6 +440,9 @@ impl AppModel {
             } else {
                 self.preview_after_plan();
             }
+        }
+        if std::mem::take(&mut self.export_after_plan) {
+            self.export_checks();
         }
     }
 
