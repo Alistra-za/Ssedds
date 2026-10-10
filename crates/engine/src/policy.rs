@@ -1141,7 +1141,9 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     let mut reasons = vec![];
     let mut needs = vec![];
     if !d.decided {
-        needs.push(Need::Subtype);
+        if !allowed(ctx, f, Code::SugLowConfidence) {
+            needs.push(Need::Subtype);
+        }
         reasons.push(match d.suggestions.first() {
             Some(s) => format!(
                 "sub-type '{}' is a {:?}-confidence suggestion ({})",
@@ -1214,7 +1216,9 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     {
         let hint = suggest_alpha(profile.subtype, f.analysis.alpha, near_binary(f.analysis))
             .map(|(p, _, why)| format!("{p:?}: {why}"));
-        needs.push(Need::AlphaMeaning);
+        if !allowed(ctx, f, Code::SugLowConfidence) {
+            needs.push(Need::AlphaMeaning);
+        }
         reasons.push(format!(
             "alpha meaning is unconfirmed (proposal {})",
             hint.unwrap_or_default()

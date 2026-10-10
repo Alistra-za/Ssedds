@@ -83,3 +83,21 @@ fn unresolved_jobs_name_what_they_need() {
     let ev = events(d.path(), &["file:leaf.png.subtype=diffuse"]);
     assert_eq!(needs(&planned(&ev, "leaf.png")), vec![Need::AlphaMeaning]);
 }
+
+#[test]
+fn allowing_low_confidence_suggestions_leaves_only_the_green_convention_as_a_need() {
+    let d = tempfile::tempdir().unwrap();
+    fixture(d.path());
+    let mut req = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+    req.allow.insert(engine::codes::Code::SugLowConfidence);
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "t");
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    let ev = sink.take();
+    let j = planned(&ev, "foo_normal.png");
+    assert!(matches!(j.status, JobStatus::Unresolved { .. }));
+    assert_eq!(needs(&j), vec![Need::GreenConvention]);
+}
