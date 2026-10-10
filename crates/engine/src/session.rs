@@ -3,16 +3,22 @@
 //! changed.
 use crate::analyse::{code8, Analysis};
 use crate::api::{BatchRequest, BatchSummary, CancelToken, Engine, EngineError, Plan};
-use crate::events::Reporter;
+use crate::codes::Warning;
+use crate::config::{Category, Format};
+use crate::dds::{dds_bytes, read_dds, resolve_header, DdsDesc};
+use crate::decode::{decode_level, Decoded};
+use crate::events::{NullSink, Reporter, Stage};
 use crate::image::{Rgba32F, SourceInfo};
 use crate::manifest::sha256_json;
 use crate::pack::PackJob;
+use crate::pipeline::{encode_levels, prepare, FileError, FileTracker, Keep};
 use crate::policy::{ResolvedJob, SourceStamp};
+use crate::validate::{validate, ValidationInput, ValidationSummary};
 use encoders_sys::Bc1Model;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Largest side of a thumbnail.
 pub const THUMB_MAX: u32 = 256;
@@ -214,6 +220,163 @@ impl Session {
     pub fn thumbnail(&self, job: &ResolvedJob) -> Option<Thumbnail> {
         self.cache.thumbnail(job)
     }
+
+    /// The source side of the preview (M3a spec §6.2): the chain the encoder would receive, from the first mip
+    /// within `max_size`. Nothing is encoded or written.
+    pub fn preview_source(
+        &self,
+        job: &ResolvedJob,
+        max_size: u32,
+        cancel: &CancelToken,
+    ) -> Result<SourcePreview, FileError> {
+        let rep = Reporter::new(Arc::new(NullSink), "preview");
+        let prep = prepare(
+            job,
+            cancel,
+            &rep,
+            "",
+            &FileTracker::default(),
+            Keep::SourceOnly { max_size },
+        )?;
+        Ok(SourcePreview {
+            first_level: prep.first_level,
+            dims: prep.dims,
+            levels: prep.chain,
+        })
+    }
+
+    /// Source and encoded sides (M3a spec §4.5): every mip within `max_size`, byte-identical to the same mips of
+    /// the DDS `run` writes, with the validation readouts of those mips (mip indices in the readouts count from
+    /// the first mip kept). Nothing is written.
+    pub fn preview(
+        &self,
+        job: &ResolvedJob,
+        max_size: u32,
+        cancel: &CancelToken,
+    ) -> Result<PreviewResult, FileError> {
+        let rep = Reporter::new(Arc::new(NullSink), "preview");
+        let p = &job.profile;
+        let prep = prepare(
+            job,
+            cancel,
+            &rep,
+            "",
+            &FileTracker::default(),
+            Keep::Preview { max_size },
+        )?;
+        let levels = encode_levels(&prep, p, cancel, &rep, "", None, None)?;
+        let srgb = p.srgb_tag();
+        let (width, height) = prep.dims[prep.first_level];
+        let desc = DdsDesc {
+            width,
+            height,
+            format: p.format,
+            srgb,
+            header: resolve_header(p.format, srgb, p.header),
+        };
+        let bytes = dds_bytes(&desc, &levels)
+            .map_err(|e| FileError::Failed(Stage::Write, e.to_string()))?;
+        let report = validate(&ValidationInput {
+            bytes: &bytes,
+            profile: p,
+            encoder_input: Some(&prep.inputs),
+            base_coverage: prep.base_coverage,
+            source_peak: prep.source_peak,
+            bc1_model: self.bc1_model,
+            expected_levels: Some(levels.len() as u32),
+        });
+        let normal_len = if p.subtype.category() == Category::Normal {
+            normal_lengths(&bytes, self.bc1_model)
+        } else {
+            vec![]
+        };
+        Ok(PreviewResult {
+            source: SourcePreview {
+                first_level: prep.first_level,
+                dims: prep.dims,
+                levels: prep.chain,
+            },
+            format: p.format,
+            srgb,
+            levels,
+            validation: report.summary,
+            warnings: report.warnings,
+            normal_len,
+        })
+    }
+}
+
+/// The first mip whose larger side is at most `max_size`; the last mip when none is (M3a spec §6.5).
+pub fn first_level_within(dims: &[(u32, u32)], max_size: u32) -> usize {
+    dims.iter()
+        .position(|&(w, h)| w.max(h) <= max_size)
+        .unwrap_or(dims.len().saturating_sub(1))
+}
+
+/// The source side of a preview: `dims` of every mip, `levels` from `first_level` on (the chain after Preprocess,
+/// Mipmaps and coverage, the values the encoder receives).
+#[derive(Debug, Clone)]
+pub struct SourcePreview {
+    pub first_level: usize,
+    pub dims: Vec<(u32, u32)>,
+    pub levels: Vec<Rgba32F>,
+}
+
+/// How far a decoded normal map's vectors are from unit length, for one mip.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct NormalLenStats {
+    pub mean_err: f64,
+    pub max_err: f64,
+}
+
+/// `levels[i]` is mip `source.first_level + i`'s block data.
+#[derive(Debug, Clone)]
+pub struct PreviewResult {
+    pub source: SourcePreview,
+    pub format: Format,
+    pub srgb: bool,
+    pub levels: Vec<Vec<u8>>,
+    pub validation: ValidationSummary,
+    pub warnings: Vec<Warning>,
+    pub normal_len: Vec<NormalLenStats>,
+}
+
+/// Per mip: decode with the engine's decoder and measure |length - 1| of RGB read as `2v - 1` (for BC5, whose blue
+/// is reconstructed, the excess `max(0, x^2 + y^2 - 1)`).
+fn normal_lengths(dds_bytes: &[u8], bc1_model: Bc1Model) -> Vec<NormalLenStats> {
+    let Ok(f) = read_dds(dds_bytes) else {
+        return vec![];
+    };
+    let bc5 = matches!(f.format.as_format(), Some((Format::Bc5, _)));
+    f.levels
+        .iter()
+        .filter_map(|(w, h, r)| {
+            decode_level(f.format, *w, *h, &f.data[r.clone()], Some(bc1_model)).ok()
+        })
+        .map(|d| {
+            let Decoded::Ldr(px) = d else {
+                return NormalLenStats {
+                    mean_err: 0.0,
+                    max_err: 0.0,
+                };
+            };
+            let (mut sum, mut max) = (0f64, 0f64);
+            for q in &px {
+                let v = |i: usize| q[i] as f64 / 255.0 * 2.0 - 1.0;
+                let e = if bc5 {
+                    (v(0) * v(0) + v(1) * v(1) - 1.0).max(0.0)
+                } else {
+                    ((v(0) * v(0) + v(1) * v(1) + v(2) * v(2)).sqrt() - 1.0).abs()
+                };
+                sum += e;
+                max = max.max(e);
+            }
+            NormalLenStats {
+                mean_err: sum / px.len().max(1) as f64,
+                max_err: max,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -26,6 +26,7 @@ use crate::pack::assemble::assemble;
 use crate::pack::invert_of;
 use crate::policy::{ResolvedJob, SourceStamp};
 use crate::quantize::{to_encoder_input, EncoderInput};
+use crate::session::first_level_within;
 use crate::validate::{validate, ValidationInput, ValidationReport};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,211 @@ fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationR
     }
 }
 
+/// What `prepare` keeps of the chain (M3a spec §6.5). `Encode` is the export: every mip is quantised, none of the
+/// float chain is kept. `Preview` and `SourceOnly` start at the first mip within `max_size`; `SourceOnly` stops
+/// before quantising.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Keep {
+    Encode,
+    Preview { max_size: u32 },
+    SourceOnly { max_size: u32 },
+}
+
+/// The stages up to quantise. `chain` and `inputs` start at mip `first_level`; `dims` covers every mip. `chain` is
+/// empty for `Keep::Encode`, `inputs` for `Keep::SourceOnly`.
+pub(crate) struct Prepared {
+    pub first_level: usize,
+    pub dims: Vec<(u32, u32)>,
+    pub chain: Vec<Rgba32F>,
+    pub inputs: Vec<EncoderInput>,
+    pub base_coverage: Option<f64>,
+    pub source_peak: Option<f32>,
+}
+
+/// Source stamps (final review I7): the plan's decisions (alpha policy, sub-type facts, ...) hold only for the
+/// file it analysed; a packed job checks every source.
+fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
+    let stamps: Vec<(&Path, Option<SourceStamp>)> = match &job.pack {
+        Some(pk) => pk
+            .sources
+            .iter()
+            .map(|s| (s.path.as_path(), s.stamp))
+            .collect(),
+        None => vec![(job.input.as_path(), job.source)],
+    };
+    for (src, planned) in stamps {
+        if let Some(planned) = planned {
+            if SourceStamp::of(src) != Some(planned) {
+                let what = if job.pack.is_some() {
+                    format!("{}: ", src.display())
+                } else {
+                    String::new()
+                };
+                return Err(fail(Stage::Load)(format!(
+                    "{what}source changed since planning; re-run"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Stamp check → load → preprocess → mips → coverage → quantise, shared by the export and the GUI preview.
+/// `job_key` labels the `IN-NONFINITE` event ("" for a preview, which has no output key).
+pub(crate) fn prepare(
+    job: &ResolvedJob,
+    cancel: &CancelToken,
+    rep: &Reporter,
+    job_key: &str,
+    tracker: &FileTracker,
+    keep: Keep,
+) -> Result<Prepared, FileError> {
+    prepare_then(job, cancel, rep, job_key, tracker, keep, || Ok(())).map(|(prep, ())| prep)
+}
+
+/// `prepare`, running `after_stamps` once the stamp check has passed and before anything is decoded (the export
+/// hashes its sources there, so a source that cannot be hashed still fails before it is loaded).
+fn prepare_then<T>(
+    job: &ResolvedJob,
+    cancel: &CancelToken,
+    rep: &Reporter,
+    job_key: &str,
+    tracker: &FileTracker,
+    keep: Keep,
+    after_stamps: impl FnOnce() -> Result<T, FileError>,
+) -> Result<(Prepared, T), FileError> {
+    let enter = |st: Stage| tracker.stage.set(st);
+    let p = &job.profile;
+    let stop = || {
+        if cancel.is_cancelled() {
+            Err(FileError::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    enter(Stage::Load);
+    check_stamps(job)?;
+    let extra = after_stamps()?;
+    let img = match &job.pack {
+        Some(pk) => {
+            // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
+            assemble(pk, pk.gray)
+                .map_err(|e| fail(Stage::Load)(e.to_string()))?
+                .image
+        }
+        None => {
+            load_image(&job.input)
+                .map_err(|e| fail(Stage::Load)(e.to_string()))?
+                .0
+        }
+    };
+    stop()?;
+
+    enter(Stage::Preprocess);
+    let work = preprocess(img, p);
+    if work.nonfinite_samples > 0 {
+        rep.emit_job(
+            Some(job_key),
+            Some(job.set_key.as_str()),
+            Some(job.input.as_path()),
+            EventKind::Warning(
+                Warning::new(
+                    Code::InNonfinite,
+                    format!(
+                        "{} NaN or infinite source samples were replaced before processing",
+                        work.nonfinite_samples
+                    ),
+                )
+                .with_data(serde_json::json!({ "samples": work.nonfinite_samples })),
+            ),
+        );
+    }
+    stop()?;
+
+    enter(Stage::Mipmaps);
+    let mut chain = build_chain(&work, p);
+    let alpha_present = work.alpha_present;
+    // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
+    // only alpha channel.
+    let base_coverage = base_coverage(&chain[0], p, alpha_present);
+    if base_coverage.is_some() {
+        preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
+    }
+    let source_peak = source_peak(&chain[0], p);
+    let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();
+    let first_level = match keep {
+        Keep::Encode => 0,
+        Keep::Preview { max_size } | Keep::SourceOnly { max_size } => {
+            first_level_within(&dims, max_size)
+        }
+    };
+    // Quantise clamps mip 0 (Task 31). These exact levels are encoded and handed to Validate (Task 35).
+    let inputs: Vec<EncoderInput> = match keep {
+        Keep::SourceOnly { .. } => vec![],
+        _ => chain[first_level..]
+            .iter()
+            .map(|l| to_encoder_input(l, &work, p))
+            .collect(),
+    };
+    let chain = match keep {
+        Keep::Encode => {
+            drop(chain);
+            vec![]
+        }
+        _ => chain.split_off(first_level),
+    };
+    drop(work);
+    stop()?;
+    Ok((
+        Prepared {
+            first_level,
+            dims,
+            chain,
+            inputs,
+            base_coverage,
+            source_peak,
+        },
+        extra,
+    ))
+}
+
+/// Encode `prep.inputs[i]` at `prep.dims[prep.first_level + i]`, emitting a `Compress` progress event per mip
+/// (`done` 1..=n, carrying `job_key`).
+pub(crate) fn encode_levels(
+    prep: &Prepared,
+    p: &Profile,
+    cancel: &CancelToken,
+    rep: &Reporter,
+    job_key: &str,
+    set: Option<&str>,
+    path: Option<&Path>,
+) -> Result<Vec<Vec<u8>>, FileError> {
+    let ectx = EncodeCtx {
+        cancel: Some(cancel.flag()),
+    };
+    let total = prep.inputs.len() as u32;
+    let mut levels = Vec::with_capacity(prep.inputs.len());
+    for (i, (inp, &(w, h))) in prep
+        .inputs
+        .iter()
+        .zip(&prep.dims[prep.first_level..])
+        .enumerate()
+    {
+        levels.push(encode_level(inp, w, h, p, &ectx).map_err(|_| FileError::Cancelled)?);
+        rep.emit_job(
+            Some(job_key),
+            set,
+            path,
+            EventKind::Progress {
+                stage: Stage::Compress,
+                done: i as u32 + 1,
+                total,
+            },
+        );
+    }
+    Ok(levels)
+}
+
 /// Convert one file and append its manifest record. Cancellation is checked between stages and between encode
 /// bands, last just before the write, so a cancelled file never leaves an output behind. Everything that can fail
 /// before the output exists (validation of the in-memory DDS bytes, the profile hash, the record and sidecar text)
@@ -145,117 +351,29 @@ pub fn process_file(
         }
     };
 
-    // Final review I7: the plan's decisions (alpha policy, sub-type facts, ...) hold only for the file it analysed;
-    // a packed job checks every source.
-    let stamps: Vec<(&Path, Option<SourceStamp>)> = match &job.pack {
-        Some(pk) => pk
-            .sources
-            .iter()
-            .map(|s| (s.path.as_path(), s.stamp))
-            .collect(),
-        None => vec![(job.input.as_path(), job.source)],
-    };
-    for (src, planned) in stamps {
-        if let Some(planned) = planned {
-            if SourceStamp::of(src) != Some(planned) {
-                let what = if job.pack.is_some() {
-                    format!("{}: ", src.display())
-                } else {
-                    String::new()
-                };
-                return Err(fail(Stage::Load)(format!(
-                    "{what}source changed since planning; re-run"
-                )));
-            }
-        }
-    }
-    let source_sha256 = sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
-    // Spec §6.4 "Provenance": a packed output records every source (its first source is `job.input`, Note M8).
-    let sources: Vec<SourceRef> = match &job.pack {
-        Some(pk) => pk
-            .sources
-            .iter()
-            .map(|s| SourceRef::of_pack(&s.path, s.role, invert_of(pk, &s.path)))
-            .collect::<std::io::Result<_>>()
-            .map_err(|e| fail(Stage::Load)(e.to_string()))?,
-        None => vec![],
-    };
-    let img = match &job.pack {
-        Some(pk) => {
-            // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
-            assemble(pk, pk.gray)
-                .map_err(|e| fail(Stage::Load)(e.to_string()))?
-                .image
-        }
-        None => {
-            load_image(&job.input)
-                .map_err(|e| fail(Stage::Load)(e.to_string()))?
-                .0
-        }
-    };
-    stop()?;
-
-    enter(Stage::Preprocess);
-    let work = preprocess(img, p);
-    if work.nonfinite_samples > 0 {
-        rep.emit_job(
-            Some(&key),
-            set,
-            path,
-            EventKind::Warning(
-                Warning::new(
-                    Code::InNonfinite,
-                    format!(
-                        "{} NaN or infinite source samples were replaced before processing",
-                        work.nonfinite_samples
-                    ),
-                )
-                .with_data(serde_json::json!({ "samples": work.nonfinite_samples })),
-            ),
-        );
-    }
-    stop()?;
-
-    enter(Stage::Mipmaps);
-    let mut chain = build_chain(&work, p);
-    let alpha_present = work.alpha_present;
-    // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
-    // only alpha channel.
-    let base_coverage = base_coverage(&chain[0], p, alpha_present);
-    if base_coverage.is_some() {
-        preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
-    }
-    let source_peak = source_peak(&chain[0], p);
-    let (width, height) = (chain[0].width, chain[0].height);
-    let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();
-    // Quantise clamps mip 0 (Task 31). These exact levels are encoded and handed to Validate (Task 35).
-    let inputs: Vec<EncoderInput> = chain
-        .iter()
-        .map(|l| to_encoder_input(l, &work, p))
-        .collect();
-    drop(chain);
-    drop(work);
-    stop()?;
+    // The hashes sit between the stamp check and the load, as they always have: a source that cannot be hashed
+    // fails here, before it is decoded.
+    let (prep, (source_sha256, sources)) =
+        prepare_then(job, cancel, rep, &key, tracker, Keep::Encode, || {
+            let source_sha256 =
+                sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
+            // Spec §6.4 "Provenance": a packed output records every source (its first source is `job.input`, Note M8).
+            let sources: Vec<SourceRef> = match &job.pack {
+                Some(pk) => pk
+                    .sources
+                    .iter()
+                    .map(|s| SourceRef::of_pack(&s.path, s.role, invert_of(pk, &s.path)))
+                    .collect::<std::io::Result<_>>()
+                    .map_err(|e| fail(Stage::Load)(e.to_string()))?,
+                None => vec![],
+            };
+            Ok((source_sha256, sources))
+        })?;
+    let (width, height) = prep.dims[0];
 
     enter(Stage::Compress);
-    let ectx = EncodeCtx {
-        cancel: Some(cancel.flag()),
-    };
-    let total = inputs.len() as u32;
-    let mut levels = Vec::with_capacity(inputs.len());
-    for (i, (inp, &(w, h))) in inputs.iter().zip(&dims).enumerate() {
-        levels.push(encode_level(inp, w, h, p, &ectx).map_err(|_| FileError::Cancelled)?);
-        rep.emit_job(
-            Some(&key),
-            set,
-            path,
-            EventKind::Progress {
-                stage: Stage::Compress,
-                done: i as u32 + 1,
-                total,
-            },
-        );
-    }
+    let levels = encode_levels(&prep, p, cancel, rep, &key, set, path)?;
+    let total = prep.inputs.len() as u32;
 
     enter(Stage::Write);
     let srgb = p.srgb_tag();
@@ -276,13 +394,13 @@ pub fn process_file(
     let mut report = validate(&ValidationInput {
         bytes: &bytes,
         profile: p,
-        encoder_input: Some(&inputs),
-        base_coverage,
-        source_peak,
+        encoder_input: Some(&prep.inputs),
+        base_coverage: prep.base_coverage,
+        source_peak: prep.source_peak,
         bc1_model: req.bc1_model,
         expected_levels: Some(total),
     });
-    drop(inputs);
+    drop(prep);
     #[cfg(feature = "test-hooks")]
     force_validation_failure_for_test(job, &mut report);
     enter(Stage::Write);
