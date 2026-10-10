@@ -44,7 +44,16 @@ pub enum Dialog {
     CloseUnsaved,
     /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
     OpenUnsaved(PathBuf),
+    /// An export is running; closing or opening would have to cancel it first (M3a spec §2.6).
+    ExportRunning(AfterExport),
     Error(String),
+}
+
+/// What was asked while an export ran: it happens when the export has ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AfterExport {
+    Close,
+    Open(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +100,10 @@ pub struct AppModel {
     pub restart_needed: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
+    /// The user chose to cancel the running export and then close or open: done when the export has ended.
+    after_export: Option<AfterExport>,
+    /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
+    close_ready: bool,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -138,6 +151,8 @@ impl AppModel {
             gpu_max_dim: 16384,
             gpu_available: true,
             export_after_plan: false,
+            after_export: None,
+            close_ready: false,
             restart_needed: false,
             generation: 0,
             planning: None,
@@ -149,6 +164,7 @@ impl AppModel {
     pub fn open_folder(&mut self, root: PathBuf) {
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
+        let same_folder = self.root.as_ref() == Some(&root);
         let project = ProjectDoc::open(&root);
         self.banner = project.error().map(read_only_banner);
         self.project = Some(project);
@@ -161,6 +177,10 @@ impl AppModel {
         self.selection = Selection::None;
         self.expanded = None;
         self.preview_close();
+        // The drawer shows the folder it ran on; another folder starts with an empty one.
+        if !same_folder && self.export.running.is_none() {
+            self.export = export::ExportModel::default();
+        }
         self.replan();
     }
 
@@ -214,6 +234,11 @@ impl AppModel {
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
 
+    /// A sender into the model's own channel (tests inject worker messages with it).
+    pub fn sender(&self) -> Sender<WorkerMsg> {
+        self.tx.clone()
+    }
+
     pub fn busy(&self) -> bool {
         self.planning.is_some() || self.export.running.is_some() || self.preview.working()
     }
@@ -248,7 +273,10 @@ impl AppModel {
                         self.planning = None;
                         self.export_after_plan = false;
                     }
-                    "export" => self.export.running = None,
+                    "export" => {
+                        self.export.running = None;
+                        self.run_after_export();
+                    }
                     "preview" => self.preview_panicked(&message),
                     _ => {}
                 }
@@ -288,10 +316,17 @@ impl AppModel {
             WorkerMsg::Event(e) => self.export.on_event(e),
             WorkerMsg::ExportDone(result) => {
                 self.export.running = None;
+                let mut failure = None;
                 match result {
                     Ok(summary) => self.export.summary = Some(summary),
                     Err(e) => {
                         self.export.error = Some(e.clone());
+                        failure = Some(e);
+                    }
+                }
+                // A user who cancelled the export to leave does not need its error as a dialog.
+                if !self.run_after_export() {
+                    if let Some(e) = failure {
                         self.dialog = Some(Dialog::Error(e));
                     }
                 }
@@ -406,6 +441,50 @@ impl AppModel {
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
         spawn_export(self.tx.clone(), session, req, cancel);
+    }
+
+    /// The export ended: do what was asked while it ran (close, or open another folder). True when there was
+    /// something to do. A `Dialog::ExportRunning` still on screen is answered by the export ending on its own.
+    fn run_after_export(&mut self) -> bool {
+        let action = match self.dialog.clone() {
+            Some(Dialog::ExportRunning(a)) => {
+                self.dialog = None;
+                Some(a)
+            }
+            _ => self.after_export.take(),
+        };
+        match action {
+            None => false,
+            Some(AfterExport::Close) => {
+                self.close_ready = true;
+                true
+            }
+            Some(AfterExport::Open(root)) => {
+                self.request_open(root);
+                true
+            }
+        }
+    }
+
+    /// True once, when the window may close because the export that was in its way has ended. The window then asks
+    /// `request_close` again (unsaved edits still ask).
+    pub fn take_close_ready(&mut self) -> bool {
+        std::mem::take(&mut self.close_ready)
+    }
+
+    /// The answer to `Dialog::ExportRunning`: cancel the export and do `action` when it has ended, or keep it running.
+    pub fn resolve_export_running(&mut self, action: AfterExport, cancel_and_continue: bool) {
+        self.dialog = None;
+        if !cancel_and_continue {
+            return;
+        }
+        self.after_export = Some(action);
+        if self.export.running.is_some() {
+            self.cancel_export();
+        } else {
+            // It ended while the dialog was up.
+            self.run_after_export();
+        }
     }
 
     pub fn cancel_export(&mut self) {
@@ -636,7 +715,10 @@ impl AppModel {
 
     /// Open `root`, or ask first when unsaved edits would be lost. True when the folder was opened.
     pub fn request_open(&mut self, root: PathBuf) -> bool {
-        if self.is_dirty() {
+        if self.export.running.is_some() {
+            self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
+            false
+        } else if self.is_dirty() {
             self.dialog = Some(Dialog::OpenUnsaved(root));
             false
         } else {
@@ -659,7 +741,10 @@ impl AppModel {
     }
 
     pub fn request_close(&mut self) -> bool {
-        if self.is_dirty() {
+        if self.export.running.is_some() {
+            self.dialog = Some(Dialog::ExportRunning(AfterExport::Close));
+            false
+        } else if self.is_dirty() {
             self.dialog = Some(Dialog::CloseUnsaved);
             false
         } else {

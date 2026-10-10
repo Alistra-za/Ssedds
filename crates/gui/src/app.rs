@@ -149,6 +149,10 @@ impl eframe::App for SdcApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.model.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
+        // The export that was in the way of a close has ended; close again (unsaved edits still ask).
+        if self.model.take_close_ready() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         let focused = ctx.input(|i| i.focused);
         if focused && !self.was_focused {
             self.focus_regained();

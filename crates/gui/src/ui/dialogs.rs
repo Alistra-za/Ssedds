@@ -1,5 +1,5 @@
 //! Modal dialogs for `model.dialog` (M3a spec §2.1).
-use crate::model::{AppModel, Dialog};
+use crate::model::{AfterExport, AppModel, Dialog};
 use eframe::egui;
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
@@ -9,6 +9,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     match dialog {
         Dialog::CloseUnsaved => close_unsaved(ctx, model),
         Dialog::OpenUnsaved(root) => open_unsaved(ctx, model, root),
+        Dialog::ExportRunning(action) => export_running(ctx, model, action),
         Dialog::ExternalChange => external_change(ctx, model),
         Dialog::Error(msg) => error(ctx, model, &msg),
         Dialog::ProceedAnyway(n) => proceed_anyway(ctx, model, n),
@@ -123,5 +124,25 @@ fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::Path
         model.resolve_open_unsaved(root, false);
     } else if cancel {
         model.dialog = None;
+    }
+}
+
+fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport) {
+    let (mut cancel_export, mut keep) = (false, false);
+    modal(ctx, "export-running", |ui| {
+        ui.heading("An export is running");
+        ui.label(match &action {
+            AfterExport::Close => "Cancel it and close?",
+            AfterExport::Open(_) => "Cancel it and open the other folder?",
+        });
+        ui.horizontal(|ui| {
+            cancel_export = ui.button("Cancel export and continue").clicked();
+            keep = ui.button("Keep running").clicked();
+        });
+    });
+    if cancel_export {
+        model.resolve_export_running(action, true);
+    } else if keep {
+        model.resolve_export_running(action, false);
     }
 }

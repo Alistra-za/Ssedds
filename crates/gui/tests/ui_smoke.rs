@@ -570,3 +570,26 @@ fn without_a_gpu_the_preview_says_so_and_cannot_encode() {
     assert_eq!(h.query_all_by_label("Encode now").count(), 1);
     assert!(h.get_by_label("Encode now").accesskit_node().is_disabled());
 }
+
+#[test]
+fn closing_during_an_export_asks_and_keep_running_leaves_it_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.export_clicked();
+    model.proceed_anyway();
+    assert!(!model.request_close());
+    let mut h = harness(model);
+    h.run();
+    h.get_by_label_contains("An export is running");
+    h.get_by_label("Cancel export and continue");
+    press(&mut h, "Keep running");
+    assert!(h.state().dialog.is_none());
+    assert!(!h.state().export.running.as_ref().unwrap().is_cancelled());
+    // Asking again and cancelling sets the token.
+    assert!(!h.state_mut().request_close());
+    h.run();
+    press(&mut h, "Cancel export and continue");
+    assert!(h.state().export.running.as_ref().unwrap().is_cancelled());
+    settle(&mut h);
+    assert!(h.state_mut().take_close_ready());
+}

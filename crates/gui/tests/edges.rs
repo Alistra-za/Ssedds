@@ -1,8 +1,9 @@
 //! Edge cases (M3a spec §7): a source changed on disk, a worker panic, and no usable GPU.
 mod support;
+use engine::api::CancelToken;
 use engine::config::Subtype;
 use image::{ImageBuffer, Rgb};
-use sdc_gui::model::{Answer, AppModel, Dialog};
+use sdc_gui::model::{AfterExport, Answer, AppModel, Dialog};
 use sdc_gui::settings::GuiSettings;
 use sdc_gui::worker::*;
 use std::time::Duration;
@@ -270,4 +271,90 @@ fn an_unknown_sub_type_in_a_files_entry_makes_the_project_read_only() {
         "[files.\"landscape/rock01.png\"]\nsubtype = \"nonsense\"\n",
         "nonsense",
     );
+}
+
+/// A model whose export has been started but not polled, so it is still running.
+fn exporting(d: &std::path::Path) -> AppModel {
+    let mut m = opened(d);
+    m.export_clicked();
+    m.proceed_anyway();
+    assert!(m.export.running.is_some());
+    m
+}
+
+#[test]
+fn closing_during_an_export_asks_and_closes_after_it_was_cancelled() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = exporting(d.path());
+    assert!(!m.request_close());
+    assert_eq!(m.dialog, Some(Dialog::ExportRunning(AfterExport::Close)));
+    // Keep running: nothing is cancelled.
+    m.resolve_export_running(AfterExport::Close, false);
+    assert_eq!(m.dialog, None);
+    assert!(!m.export.running.as_ref().unwrap().is_cancelled());
+    assert!(!m.take_close_ready());
+    // Cancel and close: the token is set, and the window may close once the export has ended.
+    assert!(!m.request_close());
+    m.resolve_export_running(AfterExport::Close, true);
+    assert!(m.export.running.as_ref().unwrap().is_cancelled());
+    assert!(!m.take_close_ready(), "not before the export has ended");
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(m.take_close_ready());
+    assert!(!m.take_close_ready(), "once");
+    assert!(m.request_close());
+}
+
+#[test]
+fn opening_during_an_export_asks_and_opens_after_it_was_cancelled() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = exporting(d.path());
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = mod_folder(other_dir.path());
+    assert!(!m.request_open(other.clone()));
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::ExportRunning(AfterExport::Open(other.clone())))
+    );
+    m.resolve_export_running(AfterExport::Open(other.clone()), true);
+    assert!(m.export.running.as_ref().unwrap().is_cancelled());
+    assert_ne!(
+        m.root,
+        Some(other.clone()),
+        "not before the export has ended"
+    );
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert_eq!(m.root, Some(other));
+    assert_eq!(m.dialog, None);
+    // The drawer belongs to the folder it ran on.
+    assert!(m.export.rows.is_empty() && m.export.summary.is_none() && m.export.events.is_empty());
+}
+
+#[test]
+fn an_export_that_ends_by_itself_answers_the_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = exporting(d.path());
+    assert!(!m.request_close());
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert_eq!(m.dialog, None);
+    assert!(m.take_close_ready());
+}
+
+#[test]
+fn a_worker_panic_in_the_export_still_lets_the_pending_close_happen() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.export.running = Some(CancelToken::default());
+    assert!(!m.request_close());
+    m.resolve_export_running(AfterExport::Close, true);
+    assert!(m.export.running.as_ref().unwrap().is_cancelled());
+    // The export worker dies instead of reporting.
+    m.sender()
+        .send(WorkerMsg::Panicked {
+            what: "export",
+            message: "boom".into(),
+        })
+        .unwrap();
+    m.poll();
+    assert!(m.export.running.is_none());
+    assert!(m.take_close_ready());
+    assert!(matches!(m.dialog, Some(Dialog::Error(_))));
 }
