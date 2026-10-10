@@ -31,6 +31,15 @@ impl Bc1Choice {
             Bc1Choice::Amd => Bc1Model::Amd,
         }
     }
+    /// The choice that selects `model`.
+    pub fn from_model(model: Bc1Model) -> Bc1Choice {
+        match model {
+            Bc1Model::Ideal => Bc1Choice::Ideal,
+            Bc1Model::IdealRound4 => Bc1Choice::IdealRound4,
+            Bc1Model::Nvidia => Bc1Choice::Nvidia,
+            Bc1Model::Amd => Bc1Choice::Amd,
+        }
+    }
     /// The `sdc convert --bc1-decoder` value.
     pub fn cli(self) -> &'static str {
         match self {
@@ -94,8 +103,14 @@ impl GuiSettings {
                 GuiSettings::default(),
                 Some(format!("{}: {e}", path.display())),
             ),
-            Ok(text) => match toml::from_str(&text) {
-                Ok(s) => (s, None),
+            Ok(text) => match toml::from_str::<GuiSettings>(&text) {
+                Ok(mut s) => {
+                    // The settings panel offers only these sizes; a hand-edited value becomes the default.
+                    if !PREVIEW_SIZES.contains(&s.preview_max) {
+                        s.preview_max = GuiSettings::default().preview_max;
+                    }
+                    (s, None)
+                }
                 Err(e) => (
                     GuiSettings::default(),
                     Some(format!("{}: {e}", path.display())),
@@ -103,12 +118,22 @@ impl GuiSettings {
             },
         }
     }
+    /// Write the file atomically (a temporary file, then rename). A file that exists but cannot be parsed (the user's
+    /// hand edit that `load` reported) is kept as `gui.toml.bad` first, so the first save does not destroy it.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        let unreadable = std::fs::read_to_string(path)
+            .is_ok_and(|text| toml::from_str::<GuiSettings>(&text).is_err());
+        if unreadable {
+            let kept = path.with_extension("toml.bad");
+            let _ = std::fs::remove_file(&kept);
+            std::fs::rename(path, kept)?;
+        }
         let text = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, text)
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path))
     }
     pub fn push_recent(&mut self, p: PathBuf) {
         self.recent.retain(|r| r != &p);
