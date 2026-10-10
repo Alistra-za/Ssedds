@@ -405,19 +405,16 @@ fn current_source_hashes(job: &ResolvedJob) -> Option<Vec<String>> {
     }
 }
 
-/// A packed job's channel provenance (`pack.r` … `pack.a`) matches the record's: which source feeds which channel,
-/// and whether it is stored inverted. Source file names only, so another spelling of the same paths still matches.
-/// Ordinary jobs have none.
-fn pack_provenance_matches(e: &ManifestEntry, job: &ResolvedJob) -> bool {
-    ["pack.r", "pack.g", "pack.b", "pack.a"].iter().all(|k| {
-        let now = job.provenance.get(*k).map(ToString::to_string);
-        let then = e
-            .raw
-            .get("provenance")
-            .and_then(|p| p.get(*k))
-            .and_then(Value::as_str);
-        now.as_deref() == then
-    })
+/// A packed job's sources fill the same roles, inverted the same way, as the record's (DECISIONS N7). A schema-1
+/// record has no roles, so it never matches and the output re-encodes once. Ordinary jobs always match.
+fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
+    match &job.pack {
+        None => true,
+        Some(pk) => e.sources.iter().map(|r| (r.role, r.invert)).eq(pk
+            .sources
+            .iter()
+            .map(|s| (Some(s.role), pack::invert_of(pk, &s.path)))),
+    }
 }
 
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
@@ -450,7 +447,7 @@ fn is_up_to_date(
         && e.engine_version == ENGINE_VERSION
         && current_source_hashes(job)
             .is_some_and(|h| h.iter().eq(e.sources.iter().map(|r| &r.sha256)))
-        && pack_provenance_matches(e, job)
+        && pack_roles_match(e, job)
         && sha256_json(&job.profile).is_ok_and(|h| h == e.profile_sha256)
         && sha256_file(&job.input).is_ok_and(|h| h == e.source_sha256)
 }
@@ -1697,6 +1694,8 @@ mod tests {
                     e.sources = vec![crate::manifest::SourceRef {
                         path: "a.png".into(),
                         sha256: "0".repeat(64),
+                        role: None,
+                        invert: false,
                     }]
                 }),
             ),

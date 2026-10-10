@@ -23,6 +23,7 @@ use crate::manifest::{
 use crate::mips::build_chain;
 use crate::ops::preprocess;
 use crate::pack::assemble::assemble;
+use crate::pack::invert_of;
 use crate::policy::{ResolvedJob, SourceStamp};
 use crate::quantize::{to_encoder_input, EncoderInput};
 use crate::validate::{validate, ValidationInput, ValidationReport};
@@ -174,7 +175,7 @@ pub fn process_file(
         Some(pk) => pk
             .sources
             .iter()
-            .map(|s| SourceRef::of(&s.path))
+            .map(|s| SourceRef::of_pack(&s.path, s.role, invert_of(pk, &s.path)))
             .collect::<std::io::Result<_>>()
             .map_err(|e| fail(Stage::Load)(e.to_string()))?,
         None => vec![],

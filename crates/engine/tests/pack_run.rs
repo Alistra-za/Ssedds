@@ -179,3 +179,42 @@ fn a_source_changed_after_planning_fails_the_packed_job() {
     );
     assert!(!d.path().join("out/iron_rmaos.dds").exists());
 }
+
+/// DECISIONS N7: a schema-1 record has no source roles, so its packed output re-encodes once, then is up to date.
+#[test]
+fn a_schema_1_record_re_encodes_its_packed_output_once() {
+    let d = tempfile::tempdir().unwrap();
+    gray(d.path(), "iron_roughness.png", 64, |x, _| x as u8 * 3);
+    gray(d.path(), "iron_ao.png", 64, |_, y| 255 - y as u8);
+    let run = || {
+        let req = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+        let rep = Reporter::new(Arc::new(NullSink), "t");
+        let e = Engine::new().unwrap();
+        let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
+        e.run(plan, &rep, &CancelToken::default()).unwrap()
+    };
+    assert_eq!(run().converted, 1);
+    let path = Manifest::at(&d.path().join("out")).path().to_path_buf();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let last: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert_eq!(last["sources"][0]["role"], "roughness");
+    assert_eq!(last["sources"][1]["role"], "ao");
+    // Rewrite every record as schema 1 without roles.
+    let mut out = String::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let mut v: serde_json::Value = serde_json::from_str(line).unwrap();
+        v["schema"] = 1.into();
+        for s in v["sources"].as_array_mut().unwrap() {
+            let s = s.as_object_mut().unwrap();
+            s.remove("role");
+            s.remove("invert");
+        }
+        out.push_str(&serde_json::to_string(&v).unwrap());
+        out.push('\n');
+    }
+    std::fs::write(&path, out).unwrap();
+    let s = run();
+    assert_eq!((s.converted, s.up_to_date), (1, 0));
+    let s = run();
+    assert_eq!((s.converted, s.up_to_date), (0, 1));
+}

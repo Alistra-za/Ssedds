@@ -543,6 +543,19 @@
       "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,\n`recipe:<kind>`, and the snake_case variant name for the rest.",
       "type": "string"
     },
+    "RawMap": {
+      "enum": [
+        "roughness",
+        "metallic",
+        "ao",
+        "specular",
+        "glossiness",
+        "height",
+        "opacity",
+        "fuzz"
+      ],
+      "type": "string"
+    },
     "SearchRadius": {
       "enum": [
         "default",
@@ -553,8 +566,23 @@
     "SourceRef": {
       "description": "One source file of a record: its path and SHA-256. A recipe built from several sources (`_rmaos`, `_p`) lists\nthem all so `if-changed` can re-encode when any of them changes.",
       "properties": {
+        "invert": {
+          "description": "The source is stored inverted (a gloss map in a roughness channel).",
+          "type": "boolean"
+        },
         "path": {
           "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawMap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The raw-map role this source fills in a packed output (DECISIONS N7). Absent in schema-1 records."
         },
         "sha256": {
           "type": "string"

@@ -434,3 +434,10 @@ pub struct PackJob {
     pub gray: GraySource,
     pub sources: Vec<PackSource>,
 }
+
+/// Whether the channel `path` feeds is stored inverted (DECISIONS N7).
+pub fn invert_of(pk: &PackJob, path: &Path) -> bool {
+    pk.channels
+        .iter()
+        .any(|c| matches!(c, ChannelSource::Source { path: p, invert: true, .. } if p == path))
+}

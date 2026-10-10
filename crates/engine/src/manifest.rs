@@ -1,5 +1,5 @@
 //! Batch manifest (spec §3.6): one JSON Lines file per output root, last record per output wins.
-use crate::config::Profile;
+use crate::config::{Profile, RawMap};
 use crate::presets::{PresetFile, PresetRegistry, Provenance};
 use crate::validate::ValidationSummary;
 use schemars::JsonSchema;
@@ -16,7 +16,7 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The `schema` written into every [`ManifestRecord`]. `load` keeps records of a newer schema as raw entries
 /// (see [`ManifestEntry::is_newer_schema`]) instead of interpreting them.
-pub const MANIFEST_SCHEMA: u32 = 1;
+pub const MANIFEST_SCHEMA: u32 = 2;
 
 /// The vendored bc7e patch as built into `encoders-sys`; hashed for the manifest (it is the only change to a
 /// vendored encoder). `vendor/**` is `-text` in `.gitattributes`, so the bytes do not depend on the checkout.
@@ -113,14 +113,31 @@ impl PresetRef {
 pub struct SourceRef {
     pub path: String,
     pub sha256: String,
+    /// The raw-map role this source fills in a packed output (DECISIONS N7). Absent in schema-1 records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<RawMap>,
+    /// The source is stored inverted (a gloss map in a roughness channel).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
 }
 
 impl SourceRef {
-    /// `path` ('/'-separated, as the record's `source`) and its SHA-256.
+    /// `path` ('/'-separated, as the record's `source`) and its SHA-256; no role.
     pub fn of(path: &Path) -> io::Result<SourceRef> {
         Ok(SourceRef {
             path: path.to_string_lossy().replace('\\', "/"),
             sha256: sha256_file(path)?,
+            role: None,
+            invert: false,
+        })
+    }
+
+    /// A packed output's source with the role it fills (DECISIONS N7).
+    pub fn of_pack(path: &Path, role: RawMap, invert: bool) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            role: Some(role),
+            invert,
+            ..SourceRef::of(path)?
         })
     }
 }

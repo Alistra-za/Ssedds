@@ -489,10 +489,14 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
         SourceRef {
             path: "in/x_r.png".into(),
             sha256: "11".into(),
+            role: Some(RawMap::Roughness),
+            invert: true,
         },
         SourceRef {
             path: "in/x_m.png".into(),
             sha256: "22".into(),
+            role: None,
+            invert: false,
         },
     ];
     m.append(&r).unwrap();
