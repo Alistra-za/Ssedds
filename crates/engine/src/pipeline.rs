@@ -135,6 +135,7 @@ pub fn process_file(
     let p = &job.profile;
     let set = Some(job.set_key.as_str());
     let path = Some(job.input.as_path());
+    let key = output_key(&req.output_root, &job.output);
     let stop = || {
         if cancel.is_cancelled() {
             Err(FileError::Cancelled)
@@ -196,7 +197,8 @@ pub fn process_file(
     enter(Stage::Preprocess);
     let work = preprocess(img, p);
     if work.nonfinite_samples > 0 {
-        rep.emit(
+        rep.emit_job(
+            Some(&key),
             set,
             path,
             EventKind::Warning(
@@ -242,7 +244,8 @@ pub fn process_file(
     let mut levels = Vec::with_capacity(inputs.len());
     for (i, (inp, &(w, h))) in inputs.iter().zip(&dims).enumerate() {
         levels.push(encode_level(inp, w, h, p, &ectx).map_err(|_| FileError::Cancelled)?);
-        rep.emit(
+        rep.emit_job(
+            Some(&key),
             set,
             path,
             EventKind::Progress {

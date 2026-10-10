@@ -1,6 +1,6 @@
 //! Concise human log on stderr (spec §8: human output on stderr; `--json` keeps stdout for JSON Lines only).
 use engine::codes::Severity;
-use engine::events::{EngineEvent, EventKind, EventSink};
+use engine::events::{EngineEvent, EventKind, EventSink, SkipKind};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -30,7 +30,12 @@ impl EventSink for HumanSink {
                     "  [VALIDATION FAILED]"
                 }
             )),
-            EventKind::FileSkipped { code, reason } => Some(format!(
+            // A raw map consumed by a recipe is reported by its packed output; the log stays as it was.
+            EventKind::FileSkipped {
+                kind: SkipKind::PackedSource,
+                ..
+            } => None,
+            EventKind::FileSkipped { code, reason, .. } => Some(format!(
                 "skip  {path}: {}{reason}",
                 code.map(|c| format!("{} ", c.as_str())).unwrap_or_default()
             )),

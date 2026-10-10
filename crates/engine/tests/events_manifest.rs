@@ -144,6 +144,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
             validation: Default::default(),
         },
         EventKind::FileSkipped {
+            kind: SkipKind::Duplicate,
             code: Some(Code::DimNpot),
             reason: "r".into(),
         },
@@ -512,6 +513,7 @@ fn unit_and_newtype_events_have_an_exact_json_layout() {
         batch: "b1".into(),
         set: None,
         path: None,
+        job: None,
         kind,
     };
     assert_eq!(
@@ -534,4 +536,28 @@ fn unit_and_newtype_events_have_an_exact_json_layout() {
 fn batch_ids_are_unique_within_a_process() {
     let ids: std::collections::HashSet<String> = (0..1000).map(|_| new_batch_id()).collect();
     assert_eq!(ids.len(), 1000);
+}
+
+#[test]
+fn a_job_key_and_a_skip_kind_have_an_exact_json_layout() {
+    let ev = EngineEvent {
+        schema: EVENT_SCHEMA,
+        seq: 1,
+        ts: "2026-10-09T12:34:56.789Z".into(),
+        batch: "b1".into(),
+        set: None,
+        path: Some("in/a_ao.png".into()),
+        job: Some("a_rmaos.dds".into()),
+        kind: EventKind::FileSkipped {
+            kind: SkipKind::PackedSource,
+            code: None,
+            reason: "packed into a_rmaos.dds".into(),
+        },
+    };
+    let text = serde_json::to_string(&ev).unwrap();
+    assert_eq!(
+        text,
+        r#"{"schema":2,"seq":1,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","path":"in/a_ao.png","job_key":"a_rmaos.dds","kind":"file_skipped","skip":"packed_source","code":null,"reason":"packed into a_rmaos.dds"}"#
+    );
+    assert_eq!(serde_json::from_str::<EngineEvent>(&text).unwrap(), ev);
 }

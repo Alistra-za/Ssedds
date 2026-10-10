@@ -331,6 +331,7 @@ pub fn plan_packing(
             };
             let mut kept = None;
             if let Some(pre) = prepacked_member(ctx, set, files, jobs, recipe.kind) {
+                let pre_output = pre.output.clone();
                 let pre = pre.path.clone();
                 report.status = RecipeStatus::Conflict;
                 if packing.prefer == PackPrefer::Prepacked {
@@ -370,6 +371,7 @@ pub fn plan_packing(
                     jobs.retain(|j| j.input != pre);
                     skipped.push(SkippedFile {
                         path: pre.clone(),
+                        output: pre_output,
                         set: Some(set.key.clone()),
                         code: Some(Code::PackConflict),
                         reason: format!(

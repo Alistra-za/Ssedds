@@ -54,6 +54,31 @@ pub struct RecipeReport {
     pub reason: Option<String>,
 }
 
+/// Why a file produced no output in this batch (DECISIONS N5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipKind {
+    UpToDate,
+    /// `--on-existing skip` kept an existing output.
+    OnExistingSkip,
+    /// A sub-type, alpha meaning or green convention still needs a decision.
+    Unresolved,
+    /// A blocking code was not acknowledged.
+    Blocked,
+    /// `IN-DUPLICATE`: two inputs map to one output.
+    Duplicate,
+    /// `IN-DDS-SKIPPED`.
+    DdsInput,
+    /// A raw map not packed (`IN-PACKING-INPUT`, `PACK-UNUSED-INPUT`).
+    PackingInput,
+    /// `OUT-UNKNOWN-EXISTING`.
+    UnknownExisting,
+    /// `PACK-CONFLICT`: a pre-packed file replaced under `packing.prefer = raw`.
+    PackConflict,
+    /// A raw map consumed by a recipe; `job` names the packed output.
+    PackedSource,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
@@ -88,6 +113,9 @@ pub enum EventKind {
         validation: ValidationSummary,
     },
     FileSkipped {
+        /// Serialised as `skip`: `kind` is the event tag.
+        #[serde(rename = "skip")]
+        kind: SkipKind,
         code: Option<Code>,
         reason: String,
     },
@@ -121,6 +149,10 @@ pub struct EngineEvent {
     pub set: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The job this event belongs to: its output path relative to the output root (DECISIONS N6). Absent on
+    /// batch-level events. Serialised as `job_key`: `file_planned` already carries its `job` object.
+    #[serde(default, rename = "job_key", skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
     #[serde(flatten)]
     pub kind: EventKind,
 }
@@ -194,6 +226,17 @@ impl Reporter {
     }
 
     pub fn emit(&self, set: Option<&str>, path: Option<&Path>, kind: EventKind) {
+        self.emit_job(None, set, path, kind);
+    }
+
+    /// Emit an event that belongs to the job whose output key (relative to the output root) is `job`.
+    pub fn emit_job(
+        &self,
+        job: Option<&str>,
+        set: Option<&str>,
+        path: Option<&Path>,
+        kind: EventKind,
+    ) {
         let _order = self.order.lock().unwrap_or_else(|e| e.into_inner());
         let ev = EngineEvent {
             schema: EVENT_SCHEMA,
@@ -202,6 +245,7 @@ impl Reporter {
             batch: self.batch.clone(),
             set: set.map(str::to_string),
             path: path.map(|p| p.to_string_lossy().replace('\\', "/")),
+            job: job.map(str::to_string),
             kind,
         };
         self.sink.emit(&ev);

@@ -1063,6 +1063,62 @@
       ],
       "type": "string"
     },
+    "SkipKind": {
+      "description": "Why a file produced no output in this batch (DECISIONS N5).",
+      "oneOf": [
+        {
+          "enum": [
+            "up_to_date"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "on_existing_skip",
+          "description": "`--on-existing skip` kept an existing output.",
+          "type": "string"
+        },
+        {
+          "const": "unresolved",
+          "description": "A sub-type, alpha meaning or green convention still needs a decision.",
+          "type": "string"
+        },
+        {
+          "const": "blocked",
+          "description": "A blocking code was not acknowledged.",
+          "type": "string"
+        },
+        {
+          "const": "duplicate",
+          "description": "`IN-DUPLICATE`: two inputs map to one output.",
+          "type": "string"
+        },
+        {
+          "const": "dds_input",
+          "description": "`IN-DDS-SKIPPED`.",
+          "type": "string"
+        },
+        {
+          "const": "packing_input",
+          "description": "A raw map not packed (`IN-PACKING-INPUT`, `PACK-UNUSED-INPUT`).",
+          "type": "string"
+        },
+        {
+          "const": "unknown_existing",
+          "description": "`OUT-UNKNOWN-EXISTING`.",
+          "type": "string"
+        },
+        {
+          "const": "pack_conflict",
+          "description": "`PACK-CONFLICT`: a pre-packed file replaced under `packing.prefer = raw`.",
+          "type": "string"
+        },
+        {
+          "const": "packed_source",
+          "description": "A raw map consumed by a recipe; `job` names the packed output.",
+          "type": "string"
+        }
+      ]
+    },
     "SourceStamp": {
       "description": "A source file's size and modification time, to tell whether it changed between planning and conversion.",
       "properties": {
@@ -1449,10 +1505,15 @@
         },
         "reason": {
           "type": "string"
+        },
+        "skip": {
+          "$ref": "#/$defs/SkipKind",
+          "description": "Serialised as `skip`: `kind` is the event tag."
         }
       },
       "required": [
         "kind",
+        "skip",
         "reason"
       ],
       "type": "object"
@@ -1538,6 +1599,13 @@
   "properties": {
     "batch": {
       "type": "string"
+    },
+    "job_key": {
+      "description": "The job this event belongs to: its output path relative to the output root (DECISIONS N6). Absent on\nbatch-level events. Serialised as `job_key`: `file_planned` already carries its `job` object.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "path": {
       "type": [

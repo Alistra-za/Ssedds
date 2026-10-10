@@ -9,7 +9,7 @@ use crate::analyse::analyse;
 use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
-use crate::events::{EventKind, Reporter, Stage};
+use crate::events::{EventKind, Reporter, SkipKind, Stage};
 use crate::group::{group_sets_with, split_suffix_with, TextureSet};
 use crate::load::{load_image, LoadError};
 use crate::manifest::{
@@ -113,15 +113,30 @@ impl BatchRequest {
 #[derive(Debug, Clone)]
 pub struct SkippedFile {
     pub path: PathBuf,
+    /// The output the file would have written (its job key is this relative to the output root).
+    pub output: PathBuf,
     /// The key of the texture set the file belongs to.
     pub set: Option<String>,
     pub code: Option<Code>,
     pub reason: String,
 }
 
+impl SkippedFile {
+    /// What the skip means for a consumer of events: `IN-DDS-SKIPPED`, `PACK-CONFLICT`, else `IN-DUPLICATE`.
+    pub fn kind(&self) -> SkipKind {
+        match self.code {
+            Some(Code::InDdsSkipped) => SkipKind::DdsInput,
+            Some(Code::PackConflict) => SkipKind::PackConflict,
+            _ => SkipKind::Duplicate,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FailedFile {
     pub path: PathBuf,
+    /// The output the file would have written.
+    pub output: PathBuf,
     pub stage: Stage,
     pub error: String,
 }
@@ -598,8 +613,10 @@ impl Engine {
                 inputs: files.len(),
             },
         );
+        let key = |out: &Path| output_key(&req.output_root, out);
         for f in &files {
-            rep.emit(
+            rep.emit_job(
+                Some(&key(&f.output)),
                 None,
                 Some(&f.path),
                 EventKind::FileDiscovered {
@@ -628,6 +645,7 @@ impl Engine {
             .iter()
             .map(|&i| SkippedFile {
                 path: files[i].path.clone(),
+                output: files[i].output.clone(),
                 set: set_of.get(&i).map(|k| k.to_string()),
                 code: Some(Code::InDuplicate),
                 reason: "two inputs map to one output; exclude one".into(),
@@ -642,6 +660,7 @@ impl Engine {
                 if files[i].kind == InputKind::Dds {
                     skipped.push(SkippedFile {
                         path: files[i].path.clone(),
+                        output: files[i].output.clone(),
                         set: Some(set.key.clone()),
                         code: Some(Code::InDdsSkipped),
                         reason: "DDS inputs are not re-encoded by default".into(),
@@ -764,23 +783,29 @@ impl Engine {
                 continue;
             };
             let path = item.1.path.clone();
+            let output = item.1.output.clone();
             match r {
                 Ok(job) => jobs.push(job),
                 Err(PlanFailure::Load(e)) => {
-                    rep.emit(
+                    rep.emit_job(
+                        Some(&key(&output)),
                         None,
                         Some(&path),
                         EventKind::Warning(Warning::new(load_code(&e), e.to_string())),
                     );
                     failed.push(FailedFile {
                         path,
+                        output,
                         stage: Stage::Load,
                         error: e.to_string(),
                     });
                 }
-                Err(PlanFailure::Panic(stage, error)) => {
-                    failed.push(FailedFile { path, stage, error })
-                }
+                Err(PlanFailure::Panic(stage, error)) => failed.push(FailedFile {
+                    path,
+                    output,
+                    stage,
+                    error,
+                }),
                 Err(PlanFailure::Pack(_)) => unreachable!("pass 1 never assembles"),
             }
         }
@@ -852,6 +877,7 @@ impl Engine {
         });
         for (c, slot) in packed.candidates.iter().zip(pack_slots) {
             let path = c.job.sources[0].path.clone();
+            let output = c.virtual_input.output.clone();
             let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
                 // Cancelled before its sources were loaded: the recipe has no job (Note M11, ruling W7).
                 pack::plan::fail_report(&mut packed.reports, c, "cancelled".into());
@@ -871,7 +897,8 @@ impl Engine {
                             // it names the source that failed, the `file_failed` below names the recipe's input.
                             let (LoadError::TooLarge { path: bad, .. }
                             | LoadError::Decode { path: bad, .. }) = &e;
-                            rep.emit(
+                            rep.emit_job(
+                                Some(&key(&output)),
                                 None,
                                 Some(bad),
                                 EventKind::Warning(Warning::new(load_code(&e), e.to_string())),
@@ -882,7 +909,12 @@ impl Engine {
                         PlanFailure::Panic(stage, e) => (stage, e),
                     };
                     pack::plan::fail_report(&mut packed.reports, c, error.clone());
-                    failed.push(FailedFile { path, stage, error });
+                    failed.push(FailedFile {
+                        path,
+                        output,
+                        stage,
+                        error,
+                    });
                 }
             }
         }
@@ -974,7 +1006,8 @@ impl Engine {
             );
         }
         for job in &jobs {
-            rep.emit(
+            rep.emit_job(
+                Some(&key(&job.output)),
                 Some(&job.set_key),
                 Some(&job.input),
                 EventKind::FilePlanned {
@@ -982,7 +1015,8 @@ impl Engine {
                 },
             );
             for w in &job.warnings {
-                rep.emit(
+                rep.emit_job(
+                    Some(&key(&job.output)),
                     Some(&job.set_key),
                     Some(&job.input),
                     EventKind::Warning(w.clone()),
@@ -1019,18 +1053,28 @@ impl Engine {
             ..Default::default()
         };
         // Every skip carries the file's set key (review M9).
-        let skip = |set: Option<&str>,
+        let key = |out: &Path| output_key(&req.output_root, out);
+        let skip = |output: &Path,
+                    set: Option<&str>,
                     path: &Path,
+                    kind: SkipKind,
                     code: Option<Code>,
                     reason: String,
                     s: &mut BatchSummary| {
-            rep.emit(set, Some(path), EventKind::FileSkipped { code, reason });
+            rep.emit_job(
+                Some(&key(output)),
+                set,
+                Some(path),
+                EventKind::FileSkipped { kind, code, reason },
+            );
             s.skipped += 1;
         };
         for s in &plan.skipped {
             skip(
+                &s.output,
                 s.set.as_deref(),
                 &s.path,
+                s.kind(),
                 s.code,
                 s.reason.clone(),
                 &mut summary,
@@ -1042,7 +1086,8 @@ impl Engine {
             }
         }
         for f in &plan.failed {
-            rep.emit(
+            rep.emit_job(
+                Some(&key(&f.output)),
                 None,
                 Some(&f.path),
                 EventKind::FileFailed {
@@ -1054,11 +1099,28 @@ impl Engine {
         let mut ready = vec![];
         for job in &plan.jobs {
             let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
+            // A raw map consumed by a recipe has no job of its own: its terminal event names the packed output.
+            if let Some(pk) = &job.pack {
+                for s in &pk.sources {
+                    rep.emit_job(
+                        Some(&key(&job.output)),
+                        set,
+                        Some(&s.path),
+                        EventKind::FileSkipped {
+                            kind: SkipKind::PackedSource,
+                            code: None,
+                            reason: format!("packed into {}", slash(&job.output)),
+                        },
+                    );
+                }
+            }
             match &job.status {
                 JobStatus::Ready => ready.push(job),
                 JobStatus::Unresolved { reasons, .. } => skip(
+                    &job.output,
                     set,
                     &job.input,
+                    SkipKind::Unresolved,
                     Some(unresolved_code(job)),
                     reasons.join("; "),
                     &mut summary,
@@ -1070,10 +1132,12 @@ impl Engine {
                         .warnings
                         .iter()
                         .find(|w| matches!(w.code, Code::InPackingInput | Code::PackUnusedInput));
-                    rep.emit(
+                    rep.emit_job(
+                        Some(&key(&job.output)),
                         set,
                         path,
                         EventKind::FileSkipped {
+                            kind: SkipKind::PackingInput,
                             code: Some(w.map_or(Code::InPackingInput, |w| w.code)),
                             reason: w.map_or_else(
                                 || format!("raw {} map, not converted on its own", role.id()),
@@ -1083,8 +1147,10 @@ impl Engine {
                     )
                 }
                 JobStatus::Blocked { codes } => skip(
+                    &job.output,
                     set,
                     &job.input,
+                    SkipKind::Blocked,
                     codes.first().copied(),
                     format!(
                         "blocked by {}; acknowledge with --allow <code> or change the setting",
@@ -1099,7 +1165,8 @@ impl Engine {
                 // Spec §10: an error-severity code fails the file.
                 JobStatus::Error { codes } => {
                     summary.failed += 1;
-                    rep.emit(
+                    rep.emit_job(
+                        Some(&key(&job.output)),
                         set,
                         path,
                         EventKind::FileFailed {
@@ -1150,8 +1217,10 @@ impl Engine {
                     OnExisting::Overwrite => {}
                     OnExisting::Skip => {
                         skip(
+                            &job.output,
                             Some(&job.set_key),
                             &job.input,
+                            SkipKind::OnExistingSkip,
                             None,
                             "output exists (--on-existing skip)".into(),
                             &mut summary,
@@ -1162,7 +1231,8 @@ impl Engine {
                     OnExisting::IfChanged => {
                         match existing.get(&output_key(&req.output_root, &job.output)) {
                             None => {
-                                rep.emit(
+                                rep.emit_job(
+                                Some(&key(&job.output)),
                                 Some(&job.set_key),
                                 Some(&job.input),
                                 EventKind::Warning(Warning::new(
@@ -1174,8 +1244,10 @@ impl Engine {
                                 )),
                             );
                                 skip(
+                                    &job.output,
                                     Some(&job.set_key),
                                     &job.input,
+                                    SkipKind::UnknownExisting,
                                     Some(Code::OutUnknownExisting),
                                     "existing output without a manifest record".into(),
                                     &mut summary,
@@ -1184,10 +1256,12 @@ impl Engine {
                             }
                             Some(e) if is_up_to_date(e, job, &encoders, req.bc1_model) => {
                                 summary.up_to_date += 1;
-                                rep.emit(
+                                rep.emit_job(
+                                    Some(&key(&job.output)),
                                     Some(&job.set_key),
                                     Some(&job.input),
                                     EventKind::FileSkipped {
+                                        kind: SkipKind::UpToDate,
                                         code: None,
                                         reason: "up to date".into(),
                                     },
@@ -1212,7 +1286,8 @@ impl Engine {
                 Some(p) => todo.push((job, p)),
                 None => {
                     summary.failed += 1;
-                    rep.emit(
+                    rep.emit_job(
+                        Some(&key(&job.output)),
                         Some(&job.set_key),
                         Some(&job.input),
                         EventKind::FileFailed {
@@ -1276,7 +1351,9 @@ fn run_one(
     state: &Mutex<BatchSummary>,
 ) {
     let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
-    rep.emit(set, path, EventKind::FileStarted);
+    let key = output_key(&req.output_root, &job.output);
+    let emit = |kind: EventKind| rep.emit_job(Some(&key), set, path, kind);
+    emit(EventKind::FileStarted);
     let tracker = FileTracker::default();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         process_file(job, req, preset, cancel, rep, manifest, &tracker)
@@ -1284,7 +1361,7 @@ fn run_one(
     let (stage, error) = match r {
         Ok(Ok(out)) => {
             for w in &out.report.warnings {
-                rep.emit(set, path, EventKind::Warning(w.clone()));
+                emit(EventKind::Warning(w.clone()));
             }
             {
                 let mut s = lock(state);
@@ -1293,14 +1370,10 @@ fn run_one(
                     s.validation_failed += 1;
                 }
             }
-            rep.emit(
-                set,
-                path,
-                EventKind::FileDone {
-                    output: slash(&out.output),
-                    validation: out.report.summary,
-                },
-            );
+            emit(EventKind::FileDone {
+                output: slash(&out.output),
+                validation: out.report.summary,
+            });
             return;
         }
         Ok(Err(FileError::Cancelled)) => {
@@ -1320,7 +1393,7 @@ fn run_one(
         }
     }
     lock(state).failed += 1;
-    rep.emit(set, path, EventKind::FileFailed { stage, error });
+    emit(EventKind::FileFailed { stage, error });
 }
 
 /// The text of a caught panic's payload (`panic!` with a literal or a formatted message), or `panic`.

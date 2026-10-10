@@ -13,9 +13,10 @@ use engine::dds::{check_header, read_dds, DdsFile, DdsPixelFormat};
 use engine::decode::{decode_level, Decoded};
 use engine::discover::{discover, game_path, InputKind};
 use engine::events::{
-    new_batch_id, EngineEvent, EventKind, EventSink, JsonLinesSink, Reporter, VecSink,
+    new_batch_id, EngineEvent, EventKind, EventSink, JsonLinesSink, Reporter, SkipKind, VecSink,
 };
 use engine::group::split_suffix_with;
+use engine::manifest::output_key;
 use engine::policy::{availability, Availability, JobStatus, ResolvedJob};
 use engine::presets::{default_preset_for, AlphaContent};
 use engine::reports::{
@@ -220,7 +221,11 @@ fn print_event(ev: &EngineEvent) {
     let path = ev.path.as_deref().unwrap_or("");
     match &ev.kind {
         EventKind::FilePlanned { job } => print_planned(job),
-        EventKind::FileSkipped { code, reason } => println!(
+        EventKind::FileSkipped {
+            kind: SkipKind::PackedSource,
+            ..
+        } => {}
+        EventKind::FileSkipped { code, reason, .. } => println!(
             "{path}\n  skipped {}{reason}",
             code.map(|c| format!("{} ", c.as_str())).unwrap_or_default()
         ),
@@ -368,17 +373,20 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         .iter()
         .filter(|sk| sk.code != Some(Code::InDdsSkipped))
     {
-        rep.emit(
+        rep.emit_job(
+            Some(&output_key(&plan.request.output_root, &sk.output)),
             sk.set.as_deref(),
             Some(&sk.path),
             EventKind::FileSkipped {
+                kind: sk.kind(),
                 code: sk.code,
                 reason: sk.reason.clone(),
             },
         );
     }
     for f in &plan.failed {
-        rep.emit(
+        rep.emit_job(
+            Some(&output_key(&plan.request.output_root, &f.output)),
             None,
             Some(&f.path),
             EventKind::FileFailed {
