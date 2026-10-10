@@ -130,18 +130,93 @@ fn changing_the_preview_limit_restarts_the_expanded_preview() {
         panic!("no source")
     };
     assert!(!Arc::ptr_eq(&before, after), "the source was read again");
+}
 
-    // Live encode re-encodes after a further change, including the 16k toggle.
-    m.set_live(true);
+/// Turning 16384 off while it is the limit is the toggle path that changes the effective limit; a change that
+/// leaves the limit as it was leaves a finished result alone.
+#[test]
+fn the_16k_toggle_restarts_only_when_the_effective_limit_changes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
     m.set_allow_16k_preview(true);
     m.set_preview_max(16384);
-    let t1 = Instant::now();
-    m.tick(t1);
-    m.tick(t1 + sdc_gui::model::preview::DEBOUNCE);
-    assert!(matches!(
-        m.preview.encoded,
-        EncodedState::Encoding { .. } | EncodedState::Done(_)
-    ));
+    m.expand("landscape/rock01_rmaos");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.encode_now();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let SourceState::Ready(before) = m.preview.source.clone() else {
+        panic!("no source")
+    };
+    assert!(matches!(m.preview.encoded, EncodedState::Done(_)));
+
+    // No-ops: the same size again, and the box ticked again.
+    m.set_preview_max(16384);
+    m.set_allow_16k_preview(true);
+    assert!(matches!(m.preview.encoded, EncodedState::Done(_)));
+    assert!(!m.preview.scheduled(), "nothing was scheduled");
+
+    m.set_allow_16k_preview(false);
+    assert_eq!(m.settings.preview_max, 8192);
+    assert!(
+        matches!(m.preview.encoded, EncodedState::Stale(_)),
+        "the result was made under the 16384 limit"
+    );
+    let t0 = Instant::now();
+    m.tick(t0);
+    m.tick(t0 + sdc_gui::model::preview::DEBOUNCE);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let SourceState::Ready(after) = &m.preview.source else {
+        panic!("no source")
+    };
+    assert!(!Arc::ptr_eq(&before, after), "the source was read again");
+}
+
+/// A DDS input has no source side: its stored mips are read again under the new limit.
+#[test]
+fn changing_the_preview_limit_reopens_an_expanded_dds() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    m.proceed_anyway();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    let dds = walk(&d.path().join("export"))
+        .into_iter()
+        .find(|p| p.extension().is_some_and(|e| e == "dds"))
+        .expect("the export wrote a .dds");
+    std::fs::copy(&dds, d.path().join("textures/landscape/stored.dds")).unwrap();
+    m.open_folder(d.path().join("textures"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.expand("landscape/stored.dds");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let EncodedState::Done(before) = m.preview.encoded.clone() else {
+        panic!("not done: {:?}", m.preview.encoded)
+    };
+
+    m.set_preview_max(4096);
+    assert!(
+        matches!(&m.preview.encoded, EncodedState::Done(o) if Arc::ptr_eq(o, &before)),
+        "an unchanged limit leaves the result alone"
+    );
+    m.set_preview_max(2048);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let EncodedState::Done(after) = &m.preview.encoded else {
+        panic!("not done: {:?}", m.preview.encoded)
+    };
+    assert!(!Arc::ptr_eq(&before, after), "the DDS was read again");
+    assert!(!after.result.levels.is_empty());
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
 
 fn harness(model: AppModel) -> Harness<'static, AppModel> {
