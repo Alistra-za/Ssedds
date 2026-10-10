@@ -73,6 +73,7 @@ pub struct AppModel {
     pub dialog: Option<Dialog>,
     pub expanded: Option<String>,
     pub export: export::ExportModel,
+    pub preview: preview::PreviewModel,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -94,6 +95,7 @@ impl AppModel {
     /// A model with no session: it draws, it never plans.
     pub fn placeholder(settings: GuiSettings) -> AppModel {
         let (tx, rx) = channel();
+        let preview = preview::PreviewModel::new(settings.live_encode);
         AppModel {
             settings,
             settings_path: None,
@@ -113,6 +115,7 @@ impl AppModel {
             dialog: None,
             expanded: None,
             export: export::ExportModel::default(),
+            preview,
             generation: 0,
             planning: None,
             tx,
@@ -136,6 +139,7 @@ impl AppModel {
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.expanded = None;
+        self.preview_close();
         self.replan();
     }
 
@@ -190,7 +194,7 @@ impl AppModel {
     }
 
     pub fn busy(&self) -> bool {
-        self.planning.is_some() || self.export.running.is_some()
+        self.planning.is_some() || self.export.running.is_some() || self.preview.working()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -224,6 +228,7 @@ impl AppModel {
                 match what {
                     "plan" => self.planning = None,
                     "export" => self.export.running = None,
+                    "preview" => self.preview_panicked(&message),
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -234,7 +239,7 @@ impl AppModel {
         }
     }
 
-    /// Messages the export handles; the preview's arrive with a later task.
+    /// Messages the export and the preview handle.
     fn handle_more(&mut self, msg: WorkerMsg) {
         match msg {
             WorkerMsg::Event(e) => self.export.on_event(e),
@@ -248,6 +253,8 @@ impl AppModel {
                     }
                 }
             }
+            WorkerMsg::Source { token, result } => self.on_source(token, result),
+            WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
             _ => {}
         }
     }
@@ -312,6 +319,15 @@ impl AppModel {
     }
 
     fn apply_plan(&mut self, view: PlanView) {
+        // Look the expanded item's set up before the items are replaced: if the item vanishes, its set is the
+        // fallback selection (Review Focus 1).
+        let expanded_set = self
+            .expanded
+            .as_deref()
+            .and_then(|k| self.item(k))
+            .and_then(|i| i.set_key.clone());
+        let selected_expanded = self.expanded.is_some()
+            && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
         self.sets = view.sets;
@@ -330,6 +346,16 @@ impl AppModel {
         if let Some(k) = self.expanded.clone() {
             if self.item(&k).is_none() {
                 self.expanded = None;
+                self.preview_close();
+                if selected_expanded {
+                    if let Some(set) =
+                        expanded_set.filter(|s| self.sets.iter().any(|x| &x.key == s))
+                    {
+                        self.selection = Selection::Set(set);
+                    }
+                }
+            } else {
+                self.preview_after_plan();
             }
         }
     }
@@ -392,10 +418,12 @@ impl AppModel {
     pub fn expand(&mut self, key: &str) {
         self.select_item(key);
         self.expanded = Some(key.to_string());
+        self.preview_open(key);
     }
 
     pub fn collapse(&mut self) {
         self.expanded = None;
+        self.preview_close();
     }
 
     fn edit(&mut self, f: impl FnOnce(&mut ProjectDoc)) {

@@ -27,6 +27,7 @@ impl eframe::App for SdcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.model.poll();
+        self.model.tick(std::time::Instant::now());
 
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
             // A failed save raises its own dialog.
@@ -46,6 +47,9 @@ impl eframe::App for SdcApp {
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
         if self.model.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        if self.model.preview.scheduled() {
+            ctx.request_repaint_after(crate::model::preview::DEBOUNCE);
         }
     }
 }

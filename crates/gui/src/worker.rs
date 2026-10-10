@@ -1,9 +1,11 @@
 //! Engine work off the UI thread (M3a spec §3): every call runs on its own thread with a fresh `CancelToken`,
 //! catches panics at the thread boundary (spec §7.6) and reports through one channel the UI drains each frame.
 use crate::model::items::PlanView;
-use crate::model::preview::PreviewOut;
+use crate::model::preview::{dds_preview, decode_levels, PreviewOut};
+use encoders_sys::Bc1Model;
 use engine::api::{BatchRequest, BatchSummary, CancelToken};
 use engine::events::{EngineEvent, EventKind, EventSink, Reporter, VecSink};
+use engine::policy::ResolvedJob;
 use engine::session::{Session, SourcePreview};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -130,5 +132,55 @@ pub fn spawn_plan(
             .map(|plan| PlanView::build(&plan, &events.take(), &session, &root))
             .map_err(|e| e.to_string());
         let _ = tx.send(WorkerMsg::Planned { generation, result });
+    });
+}
+
+/// The source side of the preview: the chain the encoder would receive (nothing is encoded).
+pub fn spawn_source(
+    tx: Sender<WorkerMsg>,
+    session: Arc<Session>,
+    job: ResolvedJob,
+    max: u32,
+    cancel: CancelToken,
+    token: u64,
+) {
+    spawn_guarded(tx, "preview", move |tx| {
+        let result = session
+            .preview_source(&job, max, &cancel)
+            .map(Arc::new)
+            .map_err(|e| format!("{e:?}"));
+        let _ = tx.send(WorkerMsg::Source { token, result });
+    });
+}
+
+/// Both sides: encode every mip within `max` and decode them again for the heatmap and the fallback path.
+pub fn spawn_encode(
+    tx: Sender<WorkerMsg>,
+    session: Arc<Session>,
+    job: ResolvedJob,
+    max: u32,
+    cancel: CancelToken,
+    token: u64,
+) {
+    spawn_guarded(tx, "preview", move |tx| {
+        let bc1 = session.bc1_model();
+        let result = session
+            .preview(&job, max, &cancel)
+            .map(|r| {
+                Arc::new(PreviewOut {
+                    decoded: decode_levels(&r, bc1),
+                    result: r,
+                })
+            })
+            .map_err(|e| format!("{e:?}"));
+        let _ = tx.send(WorkerMsg::Encoded { token, result });
+    });
+}
+
+/// A DDS input shows only its own bytes: read the file, keep the mips within `max`, decode them.
+pub fn spawn_dds(tx: Sender<WorkerMsg>, path: PathBuf, max: u32, bc1: Bc1Model, token: u64) {
+    spawn_guarded(tx, "preview", move |tx| {
+        let result = dds_preview(&path, max, bc1).map(Arc::new);
+        let _ = tx.send(WorkerMsg::Encoded { token, result });
     });
 }
