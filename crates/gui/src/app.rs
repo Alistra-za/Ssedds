@@ -153,6 +153,17 @@ impl eframe::App for SdcApp {
         if self.model.take_close_ready() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        // Folders (or files, which stand for their folder) dropped on the window open like Open folder (spec §5.1).
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            self.model.dropped(&dropped);
+        }
         let focused = ctx.input(|i| i.focused);
         if focused && !self.was_focused {
             self.focus_regained();

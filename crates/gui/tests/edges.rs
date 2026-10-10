@@ -358,3 +358,46 @@ fn a_worker_panic_in_the_export_still_lets_the_pending_close_happen() {
     assert!(m.take_close_ready());
     assert!(matches!(m.dialog, Some(Dialog::Error(_))));
 }
+
+#[test]
+fn a_dropped_folder_opens_and_a_dropped_file_opens_its_parent() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let file = root.join("landscape/rock01.png");
+    assert_eq!(AppModel::drop_folder(&root), Some(root.clone()));
+    assert_eq!(AppModel::drop_folder(&file), Some(root.join("landscape")));
+    assert_eq!(AppModel::drop_folder(&root.join("nope.png")), None);
+
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    // A path that names nothing is skipped; the first usable one opens.
+    assert!(m.dropped(&[root.join("nope.png"), file.clone()]));
+    assert_eq!(m.root, Some(root.join("landscape")));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(!m.dropped(&[root.join("nope.png")]));
+    assert_eq!(m.root, Some(root.join("landscape")));
+}
+
+#[test]
+fn a_drop_during_an_export_asks_first() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = exporting(d.path());
+    let od = tempfile::tempdir().unwrap();
+    let other = mod_folder(od.path());
+    assert!(!m.dropped(std::slice::from_ref(&other)));
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::ExportRunning(AfterExport::Open(other)))
+    );
+}
+
+#[test]
+fn a_drop_with_unsaved_edits_asks_first() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(engine::config::Target::Vanilla);
+    assert!(m.is_dirty());
+    let od = tempfile::tempdir().unwrap();
+    let other = mod_folder(od.path());
+    assert!(!m.dropped(std::slice::from_ref(&other)));
+    assert_eq!(m.dialog, Some(Dialog::OpenUnsaved(other)));
+}

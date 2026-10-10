@@ -737,6 +737,28 @@ impl AppModel {
         }
     }
 
+    /// The folder a dropped path stands for: a folder is itself, a file is the folder holding it (M3a spec §5.1).
+    pub fn drop_folder(path: &std::path::Path) -> Option<PathBuf> {
+        if path.is_dir() {
+            Some(path.to_path_buf())
+        } else if path.is_file() {
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(PathBuf::from)
+        } else {
+            None
+        }
+    }
+
+    /// Files or folders dropped on the window: the first one that names a folder is opened through `request_open`,
+    /// so unsaved edits and a running export still ask. True when a folder was opened.
+    pub fn dropped(&mut self, paths: &[PathBuf]) -> bool {
+        match paths.iter().find_map(|p| Self::drop_folder(p)) {
+            Some(root) => self.request_open(root),
+            None => false,
+        }
+    }
+
     /// The answer to `Dialog::OpenUnsaved`: save (opening only if that succeeded) or drop the edits, then open.
     pub fn resolve_open_unsaved(&mut self, root: PathBuf, save: bool) {
         self.dialog = None;
