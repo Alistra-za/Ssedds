@@ -133,7 +133,8 @@ impl ConfigFile {
 /// Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.
 ///
 /// Serialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the
-/// `<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, and the snake_case variant name for the rest.
+/// `<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,
+/// `recipe:<kind>`, and the snake_case variant name for the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[schemars(with = "String")]
 pub enum Provenance {
