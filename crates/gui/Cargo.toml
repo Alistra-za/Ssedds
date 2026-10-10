@@ -1,0 +1,34 @@
+[package]
+name = "sdc-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# eframe 0.36.2's floor.
+rust-version = "1.95"
+
+[lib]
+name = "sdc_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sdc-gui"
+path = "src/main.rs"
+
+[dependencies]
+engine.workspace = true
+encoders-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+half.workspace = true
+anyhow.workspace = true
+# Default features minus default_fonts (system fonts are loaded at run time, see fonts.rs). wgpu is used only through eframe::egui_wgpu::wgpu.
+eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "links", "wgpu", "x11", "wayland"] }
+rfd = "=0.17.2"
+toml_edit = "0.25"
+
+[dev-dependencies]
+egui_kittest = "=0.36.2"
+tempfile.workspace = true
+image.workspace = true

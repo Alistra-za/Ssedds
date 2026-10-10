@@ -10,3 +10,5 @@ sdc is GPL-3.0-or-later. It statically links:
 
 ISPC objects were compiled with Intel ISPC 1.31.0 (BSD-3-Clause compiler; the objects carry the source files' licences).
 NVIDIA Texture Tools is never redistributed or linked; sdc can call a user-installed nvcompress.exe as a separate process.
+- **egui / eframe / egui-wgpu / egui_kittest** (0.36.2), **wgpu**, **rfd** (0.17), **toml_edit** (0.25): MIT or Apache-2.0 — the GUI (sdc-gui.exe) only.
+sdc-gui uses the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at run time and ships no fonts.
