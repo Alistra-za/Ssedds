@@ -4,6 +4,7 @@ pub mod app;
 pub mod fonts;
 pub mod model;
 pub mod project;
+pub mod render;
 pub mod settings;
 pub mod ui;
 pub mod worker;

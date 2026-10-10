@@ -2,7 +2,7 @@
 //! `sdc-gui.exe`.
 use engine::session::Session;
 use sdc_gui::model::{AppModel, Dialog};
-use sdc_gui::{app::SdcApp, fonts, settings};
+use sdc_gui::{app::SdcApp, fonts, render, settings};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -39,6 +39,8 @@ fn build_model() -> AppModel {
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
+        // BC texture compression and the adapter's own limits, for the preview textures.
+        wgpu_options: render::wgpu_configuration(),
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("sdc")
             .with_inner_size([1400.0, 900.0]),
@@ -57,7 +59,9 @@ fn main() -> eframe::Result {
                     .show();
                 return Err(e.into());
             }
-            Ok(Box::new(SdcApp::new(build_model())))
+            // No render state means no usable adapter: the app still starts, without a preview.
+            let app = SdcApp::new(build_model()).with_render_state(cc.wgpu_render_state.as_ref());
+            Ok(Box::new(app))
         }),
     )
 }

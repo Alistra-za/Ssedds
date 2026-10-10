@@ -1,10 +1,13 @@
 //! The eframe application: owns the model, draws it each frame.
 use crate::model::AppModel;
-use eframe::egui;
+use crate::render::PreviewRenderer;
+use eframe::{egui, egui_wgpu};
 
 pub struct SdcApp {
     pub model: AppModel,
     pub state: crate::ui::State,
+    /// The GPU state, `None` when eframe found no usable adapter (the preview is then off).
+    pub render_state: Option<egui_wgpu::RenderState>,
     was_focused: bool,
 }
 
@@ -13,8 +16,20 @@ impl SdcApp {
         SdcApp {
             model,
             state: crate::ui::State::default(),
+            render_state: None,
             was_focused: true,
         }
+    }
+
+    /// Creates the preview renderer in egui_wgpu's callback resources. Without a render state (no usable adapter) the
+    /// app runs without a preview.
+    pub fn with_render_state(mut self, rs: Option<&egui_wgpu::RenderState>) -> SdcApp {
+        if let Some(rs) = rs {
+            let renderer = PreviewRenderer::new(rs);
+            rs.renderer.write().callback_resources.insert(renderer);
+            self.render_state = Some(rs.clone());
+        }
+        self
     }
 
     /// The window regained focus: the place to look for source files that changed meanwhile.
