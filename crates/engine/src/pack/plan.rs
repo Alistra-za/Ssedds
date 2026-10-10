@@ -15,8 +15,8 @@ use crate::events::{RecipeReport, RecipeStatus};
 use crate::group::{split_suffix_with, split_vocab, TextureSet, VocabRole};
 use crate::image::{Rgba32F, SourceInfo};
 use crate::policy::{
-    layered_profile, resolve_decided, FileFacts, JobStatus, ResolveCtx, ResolvedJob, SourceStamp,
-    SubtypeDecision,
+    layered_profile_placeholder, resolve_decided, FileFacts, JobStatus, ResolveCtx, ResolvedJob,
+    SourceStamp, SubtypeDecision,
 };
 use crate::presets::Provenance;
 use serde_json::json;
@@ -114,6 +114,7 @@ pub fn fail_report(
 }
 
 /// The analysis pass 1 resolves a packed profile with: the packed image does not exist yet (DECISIONS Note M6).
+/// Pass 1 ignores rules that match on `alpha` (`layered_profile_placeholder`), so its alpha never decides anything.
 fn placeholder() -> (Analysis, SourceInfo) {
     let info = SourceInfo {
         bit_depth: 8,
@@ -269,7 +270,7 @@ pub fn plan_packing(
                 analysis: &pa,
                 info: &pinfo,
             };
-            let profile = layered_profile(ctx, &facts, st)
+            let profile = layered_profile_placeholder(ctx, &facts, st)
                 .map(|(p, _)| p)
                 .unwrap_or_else(|_| ctx.registry.base_profile(ctx.target, st));
             let (packing, gray) = (profile.packing, profile.channels.grayscale_source);

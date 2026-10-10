@@ -465,3 +465,39 @@ fn file_planned_paths_stay_unique() {
         assert!(!planned.contains(&sp), "{sp} is both skipped and planned");
     }
 }
+
+/// DECISIONS Note M6: pass 1 has no packed image, so a rule that matches on `alpha` cannot change `packing.*`,
+/// whatever its value. Pass 2 still applies it to the real packed image for the other fields.
+#[test]
+fn alpha_rules_cannot_change_the_recipe() {
+    for alpha in ["varying", "none", "constant255"] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "iron_roughness.png", 64, |x, _| x as u8 * 4);
+        let cfg = d.path().join("sdc.toml");
+        std::fs::write(
+            &cfg,
+            format!(
+                "[[rules]]\nmatch = {{ alpha = \"{alpha}\" }}\noverrides = {{ packing = {{ enabled = false }}, channels = {{ grayscale_source = \"luma\" }}, mips = {{ levels = 3 }} }}\n"
+            ),
+        )
+        .unwrap();
+        let mut req = request(d.path(), Target::Cs, &[]);
+        req.project_config = Some(cfg);
+        let (p, ev) = plan_of(req);
+        let j = job(&p, "iron_roughness.png");
+        let pk = j.pack.as_ref().unwrap_or_else(|| panic!("{alpha}: {j:?}"));
+        assert_eq!(recipes(&ev)[0].status, RecipeStatus::Run, "{alpha}");
+        assert_eq!(
+            pk.gray,
+            GraySource::R,
+            "{alpha}: grayscale_source stays frozen from pass 1"
+        );
+        // The packed roughness-only image has a defaulted (constant 255) alpha: only that rule applies in pass 2.
+        let expected = if alpha == "constant255" {
+            MipLevels::Count(3)
+        } else {
+            MipLevels::Keyword(MipKeyword::Full)
+        };
+        assert_eq!(j.profile.mips.levels, expected, "{alpha}");
+    }
+}

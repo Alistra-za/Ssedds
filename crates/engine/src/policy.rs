@@ -172,11 +172,14 @@ fn rule_sources<'a>(ctx: &ResolveCtx<'a>, chain: &[&'a PresetFile]) -> Vec<(Stri
     v
 }
 
-fn first_match<'a>(rules: &'a [Rule], f: &FileFacts) -> Option<(usize, &'a Rule)> {
-    rules
-        .iter()
-        .enumerate()
-        .find(|(_, r)| rule_matches(&r.matcher, f))
+fn first_match<'a>(
+    rules: &'a [Rule],
+    f: &FileFacts,
+    ignore_alpha_rules: bool,
+) -> Option<(usize, &'a Rule)> {
+    rules.iter().enumerate().find(|(_, r)| {
+        !(ignore_alpha_rules && r.matcher.alpha.is_some()) && rule_matches(&r.matcher, f)
+    })
 }
 
 fn override_applies(o: &SetOverride, st: Option<Subtype>, f: &FileFacts) -> bool {
@@ -244,7 +247,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     }
     // rules: highest-precedence source with a matching rule that names a sub-type
     for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
-        if let Some((i, r)) = first_match(rules, f) {
+        if let Some((i, r)) = first_match(rules, f, false) {
             if let Some(st) = r.subtype {
                 return SubtypeDecision {
                     subtype: st,
@@ -360,6 +363,25 @@ pub fn layered_profile(
     f: &FileFacts,
     st: Subtype,
 ) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
+    layered_profile_with(ctx, f, st, false)
+}
+
+/// `layered_profile` for a packed output whose image does not exist yet (DECISIONS Note M6): `f.analysis` is a
+/// placeholder, so rules that match on `alpha` (whatever the value) are ignored.
+pub fn layered_profile_placeholder(
+    ctx: &ResolveCtx,
+    f: &FileFacts,
+    st: Subtype,
+) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
+    layered_profile_with(ctx, f, st, true)
+}
+
+fn layered_profile_with(
+    ctx: &ResolveCtx,
+    f: &FileFacts,
+    st: Subtype,
+    ignore_alpha_rules: bool,
+) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
     // The alias preset's chain for an aliased file (spec §3.7), else the batch preset's.
     let chain = preset_chain(ctx, f)?;
     let mut doc = Value::Object(Map::new());
@@ -392,7 +414,7 @@ pub fn layered_profile(
         }
     }
     for (src, rules) in rule_sources(ctx, &chain) {
-        if let Some((i, r)) = first_match(rules, f) {
+        if let Some((i, r)) = first_match(rules, f, ignore_alpha_rules) {
             apply(
                 &mut doc,
                 &mut prov,
