@@ -5,7 +5,7 @@ use engine::config::Target;
 use engine::dds::read_dds;
 use engine::events::*;
 use engine::overrides::parse_set;
-use engine::policy::{JobStatus, ResolvedJob};
+use engine::policy::{AcceptSuggestions, JobStatus, ResolvedJob};
 use engine::session::*;
 use image::{ImageBuffer, Luma, Rgb, Rgba};
 use std::path::Path;
@@ -135,4 +135,67 @@ fn first_level_within_picks_the_first_mip_that_fits() {
     assert_eq!(first_level_within(&dims, 4096), 1);
     assert_eq!(first_level_within(&dims, 16384), 0);
     assert_eq!(first_level_within(&dims, 0), 3);
+}
+
+/// A float emissive with one very bright texel: its mip 0 peak is far above the peak of any smaller mip.
+fn bright_spot_job(dir: &Path) -> (Session, ResolvedJob) {
+    let p = dir.join("in/textures/pbr/lamp_g.tif");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgb32F(ImageBuffer::from_fn(64, 64, |x, y| {
+        let v = if (x, y) == (31, 31) { 100.0 } else { 0.5 };
+        Rgb([v, v, v])
+    }))
+    .save(p)
+    .unwrap();
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    let rep = Reporter::new(Arc::new(NullSink), "t");
+    let mut req = request(dir, &[]);
+    req.recursive = true;
+    req.accept = AcceptSuggestions::High;
+    let plan = s.plan(req, &rep, &CancelToken::default()).unwrap();
+    assert_eq!(plan.jobs.len(), 1, "{:?} {:?}", plan.failed, plan.skipped);
+    let job = plan.jobs[0].clone();
+    assert_eq!(job.status, JobStatus::Ready, "{:?}", job.status);
+    (s, job)
+}
+
+#[test]
+fn a_bc6h_preview_from_a_smaller_mip_measures_the_peak_of_that_mip() {
+    let d = tempfile::tempdir().unwrap();
+    let (s, job) = bright_spot_job(d.path());
+    let p = s.preview(&job, 16, &CancelToken::default()).unwrap();
+    assert_eq!(p.format, engine::config::Format::Bc6hUf16);
+    assert_eq!(p.source.first_level, 2);
+    // The peak the check compares with is the first kept mip's, not mip 0's (100).
+    let ratio = p.validation.bc6h_peak_ratio.unwrap();
+    assert!((0.8..1.25).contains(&ratio), "peak ratio {ratio}");
+    assert!(
+        p.warnings
+            .iter()
+            .all(|w| w.code != engine::codes::Code::ValBc6hPeak),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn normal_len_has_one_entry_per_encoded_level() {
+    let d = tempfile::tempdir().unwrap();
+    let sets = fixture(d.path());
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    let rep = Reporter::new(Arc::new(NullSink), "t");
+    let plan = s
+        .plan(request(d.path(), &sets), &rep, &CancelToken::default())
+        .unwrap();
+    let job = plan
+        .jobs
+        .iter()
+        .find(|j| j.input.ends_with("rock_n.png"))
+        .unwrap();
+    for (max, first) in [(4096, 0), (16, 2)] {
+        let p = s.preview(job, max, &CancelToken::default()).unwrap();
+        assert_eq!(p.source.first_level, first);
+        assert!(!p.levels.is_empty());
+        assert_eq!(p.normal_len.len(), p.levels.len());
+    }
 }

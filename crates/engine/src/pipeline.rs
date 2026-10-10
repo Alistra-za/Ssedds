@@ -239,7 +239,6 @@ fn prepare_then<T>(
     if base_coverage.is_some() {
         preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
     }
-    let source_peak = source_peak(&chain[0], p);
     let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();
     let first_level = match keep {
         Keep::Encode => 0,
@@ -247,6 +246,9 @@ fn prepare_then<T>(
             first_level_within(&dims, max_size)
         }
     };
+    // The BC6H peak check compares the first decoded level with this peak, so it is measured on the first level kept
+    // (mip 0 for an export). `base_coverage` stays mip 0's: coverage is compared with the base on every level.
+    let source_peak = source_peak(&chain[first_level], p);
     // Quantise clamps mip 0 (Task 31). These exact levels are encoded and handed to Validate (Task 35).
     let inputs: Vec<EncoderInput> = match keep {
         Keep::SourceOnly { .. } => vec![],

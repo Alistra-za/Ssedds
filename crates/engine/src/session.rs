@@ -247,7 +247,8 @@ impl Session {
 
     /// Source and encoded sides (M3a spec §4.5): every mip within `max_size`, byte-identical to the same mips of
     /// the DDS `run` writes, with the validation readouts of those mips (mip indices in the readouts count from
-    /// the first mip kept). Nothing is written.
+    /// the first mip kept; the checks that look at "mip 0" alpha or the BC6H peak read the first mip kept, with the
+    /// peak measured on that same mip, so they describe the preview, not the export's mip 0). Nothing is written.
     pub fn preview(
         &self,
         job: &ResolvedJob,
@@ -286,7 +287,7 @@ impl Session {
             expected_levels: Some(levels.len() as u32),
         });
         let normal_len = if p.subtype.category() == Category::Normal {
-            normal_lengths(&bytes, self.bc1_model)
+            normal_lengths(&bytes, levels.len(), self.bc1_model)
         } else {
             vec![]
         };
@@ -322,7 +323,8 @@ pub struct SourcePreview {
     pub levels: Vec<Rgba32F>,
 }
 
-/// How far a decoded normal map's vectors are from unit length, for one mip.
+/// How far a decoded normal map's vectors are from unit length, for one mip. Both fields are NaN for a mip that
+/// could not be decoded, so `PreviewResult::normal_len` always has one entry per encoded level.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct NormalLenStats {
     pub mean_err: f64,
@@ -343,22 +345,21 @@ pub struct PreviewResult {
 
 /// Per mip: decode with the engine's decoder and measure |length - 1| of RGB read as `2v - 1` (for BC5, whose blue
 /// is reconstructed, the excess `max(0, x^2 + y^2 - 1)`).
-fn normal_lengths(dds_bytes: &[u8], bc1_model: Bc1Model) -> Vec<NormalLenStats> {
+fn normal_lengths(dds_bytes: &[u8], levels: usize, bc1_model: Bc1Model) -> Vec<NormalLenStats> {
+    let unmeasured = NormalLenStats {
+        mean_err: f64::NAN,
+        max_err: f64::NAN,
+    };
     let Ok(f) = read_dds(dds_bytes) else {
-        return vec![];
+        return vec![unmeasured; levels];
     };
     let bc5 = matches!(f.format.as_format(), Some((Format::Bc5, _)));
     f.levels
         .iter()
-        .filter_map(|(w, h, r)| {
-            decode_level(f.format, *w, *h, &f.data[r.clone()], Some(bc1_model)).ok()
-        })
+        .map(|(w, h, r)| decode_level(f.format, *w, *h, &f.data[r.clone()], Some(bc1_model)))
         .map(|d| {
-            let Decoded::Ldr(px) = d else {
-                return NormalLenStats {
-                    mean_err: 0.0,
-                    max_err: 0.0,
-                };
+            let Ok(Decoded::Ldr(px)) = d else {
+                return unmeasured;
             };
             let (mut sum, mut max) = (0f64, 0f64);
             for q in &px {
