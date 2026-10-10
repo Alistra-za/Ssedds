@@ -2,9 +2,11 @@
 pub mod columns;
 pub mod dialogs;
 pub mod header;
+pub mod set_view;
+pub mod settings_panel;
 pub mod thumbs;
 
-use crate::model::AppModel;
+use crate::model::{AppModel, Selection};
 use eframe::egui;
 use std::cell::RefCell;
 
@@ -52,12 +54,37 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
             columns::sets(ui, model, &mut state.thumbs);
         },
     );
-    egui::CentralPanel::default().show(ui, |ui| {
-        if model.root.is_none() {
-            ui.centered_and_justified(|ui| ui.label("Open a folder of source textures to begin."));
-        }
-    });
+    egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
     dialogs::draw(ui.ctx(), model);
+}
+
+/// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
+fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
+    if model.root.is_none() {
+        ui.centered_and_justified(|ui| ui.label("Open a folder of source textures to begin."));
+        return;
+    }
+    if model.expanded.is_some() {
+        // The preview arrives with Task 17.
+        ui.label("Preview");
+        return;
+    }
+    let selection = model.selection.clone();
+    match selection {
+        Selection::Item(key) => {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
+        }
+        Selection::Set(key) => {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| set_view::draw(ui, model, &key, &mut state.thumbs));
+        }
+        Selection::None => {
+            ui.centered_and_justified(|ui| ui.label("Select a texture or a set."));
+        }
+    }
 }
 
 /// A resizable column, or a thin named strip when the columns are collapsed. The strip has its own id: egui keeps a panel's size per id, and the strip's 24 px must not become the column's width.

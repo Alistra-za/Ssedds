@@ -6,8 +6,8 @@ use eframe::egui;
 use engine::events::RecipeStatus;
 use std::collections::HashMap;
 
-const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
-const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
+pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
+pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
 /// Width of a collapsed column.
 pub const STRIP_WIDTH: f32 = 24.0;
 const TILE: f32 = 96.0;
@@ -52,7 +52,7 @@ fn tile_height(ui: &egui::Ui) -> f32 {
         + 2.0 * (TILE_MARGIN + TILE_STROKE)
 }
 
-fn border_of(ui: &egui::Ui, status: &ItemStatus) -> egui::Color32 {
+pub(super) fn border_of(ui: &egui::Ui, status: &ItemStatus) -> egui::Color32 {
     match status {
         ItemStatus::NeedsDecision => AMBER,
         ItemStatus::Failed(_) | ItemStatus::Error(_) => RED,
@@ -193,7 +193,7 @@ enum Click {
     Expand(String),
 }
 
-fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color32>) {
+pub(super) fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color32>) {
     match s {
         RecipeStatus::Run => ("run", None),
         RecipeStatus::Conflict => ("conflict", Some(AMBER)),
@@ -202,7 +202,7 @@ fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color32>) {
     }
 }
 
-fn member(
+pub(super) fn member(
     ui: &mut egui::Ui,
     item: &TextureItem,
     selected: bool,
@@ -237,8 +237,20 @@ fn member(
     response.on_hover_text(&item.name)
 }
 
+/// The export folder as a prefix of set keys: `<export folder>/`.
+pub fn export_prefix(model: &AppModel) -> String {
+    format!(
+        "{}/",
+        model
+            .export_root()
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+    )
+}
+
 /// A set key is the output path without extension; the export folder in front of it is noise.
-fn set_label(export_root: &str, key: &str) -> String {
+pub fn set_label(export_root: &str, key: &str) -> String {
     let k = key.replace('\\', "/");
     if k.len() > export_root.len()
         && k.is_char_boundary(export_root.len())
@@ -259,14 +271,7 @@ pub fn sets(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
         }
         return;
     }
-    let export_root = format!(
-        "{}/",
-        model
-            .export_root()
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-    );
+    let export_root = export_prefix(model);
     let mut click = None;
     {
         let by_key: HashMap<&str, &TextureItem> =

@@ -1,0 +1,531 @@
+//! The centre panel for a selected texture (M3a spec §2.4): the decisions it still needs, then its settings by group,
+//! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
+use super::columns::{AMBER, RED};
+use crate::model::fields::{
+    channel_text, field_views, format_label, format_options, group_of, provenance_text, FieldView,
+};
+use crate::model::items::{Decision, ItemKind, ItemStatus};
+use crate::model::{Answer, AppModel};
+use eframe::egui;
+use engine::codes::{Code, Warning};
+use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
+use engine::policy::{availability, Availability, ResolvedJob};
+use serde_json::{json, Value};
+
+/// What a control asks of the model; applied once the drawing is over.
+enum Action {
+    Set(&'static str, Value),
+    Clear(&'static str),
+    Decide(Answer),
+    Select(String),
+}
+
+/// The groups the compact strip keeps (Task 17's preview).
+const COMPACT_GROUPS: [&str; 3] = ["Alpha", "Mipmaps", "Compression"];
+const GROUPS: [&str; 5] = ["Type", "Colour", "Alpha", "Mipmaps", "Compression"];
+/// A 4096 px side has 13 mip levels.
+const MAX_LEVELS: u32 = 13;
+
+/// An enum's options as (JSON value, label).
+type Options = Vec<(Value, String)>;
+
+fn opt(v: Value, label: &str) -> (Value, String) {
+    (v, label.to_string())
+}
+
+fn subtype_label(st: Subtype) -> String {
+    st.id().replace('_', " ")
+}
+
+fn alpha_options() -> Options {
+    vec![
+        (json!(AlphaPolicy::Remove), "Remove".into()),
+        (json!(AlphaPolicy::Cutout), "Cutout".into()),
+        (json!(AlphaPolicy::Blend), "Blend".into()),
+        (json!(AlphaPolicy::CutoutBlend), "Cutout + Blend".into()),
+        (json!(AlphaPolicy::Data), "Data".into()),
+    ]
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
+/// Options for the fields that pick from a list; `None` for the checkboxes and the slider.
+fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options> {
+    let p = &job.profile;
+    Some(match field {
+        "subtype" => Subtype::ALL
+            .into_iter()
+            .filter(|s| {
+                *s == p.subtype || matches!(availability(target, *s), Availability::Available)
+            })
+            .map(|s| (json!(s), subtype_label(s)))
+            .collect(),
+        "color.content" => vec![
+            opt(json!("srgb"), "sRGB-encoded colour"),
+            opt(json!("linear"), "Linear data"),
+        ],
+        "color.tag" => vec![
+            opt(json!("srgb"), "_SRGB"),
+            opt(json!("unorm"), "UNORM (linear)"),
+        ],
+        "alpha.policy" => alpha_options(),
+        "alpha.compare" => vec![
+            opt(json!("gt"), "Greater than"),
+            opt(json!("ge"), "Greater than or equal"),
+        ],
+        "mips.levels" => {
+            let mut v = vec![
+                opt(json!("full"), "Full chain"),
+                opt(json!("none"), "None (base level only)"),
+            ];
+            v.extend((2..=MAX_LEVELS).map(|n| (json!(n), format!("{n} levels"))));
+            v
+        }
+        "mips.normal" => vec![
+            opt(json!("renormalize"), "Renormalise"),
+            opt(json!("renormalize_bake"), "Renormalise and bake"),
+        ],
+        "mips.coverage" => vec![
+            opt(json!("auto"), "Auto"),
+            opt(json!("on"), "On"),
+            opt(json!("off"), "Off"),
+        ],
+        "format" => format_options(target)
+            .into_iter()
+            .map(|f| (json!(f), format_label(f, p.color.tag)))
+            .collect(),
+        "encoder.effort" => [
+            "ultrafast",
+            "veryfast",
+            "fast",
+            "basic",
+            "veryslow",
+            "slowest",
+        ]
+        .into_iter()
+        .map(|e| opt(json!(e), &capitalised(e)))
+        .collect(),
+        _ => return None,
+    })
+}
+
+fn display_value(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// A combo over `options`; the new value when one is picked.
+fn combo(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    current: &Value,
+    options: &Options,
+) -> (Option<Value>, egui::Response) {
+    let shown = options
+        .iter()
+        .find(|(v, _)| v == current)
+        .map_or_else(|| display_value(current), |(_, l)| l.clone());
+    let mut picked = None;
+    let r = egui::ComboBox::from_id_salt(id)
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            for (v, label) in options {
+                if ui.selectable_label(v == current, label).clicked() {
+                    picked = Some(v.clone());
+                }
+            }
+        })
+        .response;
+    (picked.filter(|v| v != current), r)
+}
+
+/// The threshold slider keeps its value locally while it is dragged and commits on release: every commit is a full
+/// re-plan. `committed` marks a value already sent, shown until the new plan lands.
+#[derive(Clone, Copy)]
+struct Pending {
+    value: u8,
+    committed: bool,
+}
+
+fn threshold(
+    ui: &mut egui::Ui,
+    model_busy: bool,
+    key: &str,
+    current: u8,
+) -> (Option<Value>, egui::Response) {
+    let id = egui::Id::new(("threshold", key));
+    let mut pending: Option<Pending> = ui.data(|d| d.get_temp(id));
+    if let Some(p) = pending {
+        if p.value == current || (p.committed && !model_busy) {
+            pending = None;
+        }
+    }
+    let mut value = pending.map_or(current, |p| p.value);
+    let r = ui.add(egui::Slider::new(&mut value, 5..=200));
+    if r.changed() {
+        pending = Some(Pending {
+            value,
+            committed: false,
+        });
+    }
+    let released = r.drag_stopped()
+        || r.lost_focus()
+        || r.clicked()
+        || (r.changed() && !r.dragged() && !r.is_pointer_button_down_on());
+    let mut out = None;
+    if released {
+        if let Some(Pending {
+            value,
+            committed: false,
+        }) = pending
+        {
+            if value != current {
+                out = Some(json!(value));
+                pending = Some(Pending {
+                    value,
+                    committed: true,
+                });
+            }
+        }
+    }
+    ui.data_mut(|d| match pending {
+        Some(p) => {
+            d.insert_temp(id, p);
+        }
+        None => {
+            d.remove::<Pending>(id);
+        }
+    });
+    (out, r)
+}
+
+fn editor(
+    ui: &mut egui::Ui,
+    key: &str,
+    target: Target,
+    job: &ResolvedJob,
+    busy: bool,
+    f: &FieldView,
+) -> (Option<Value>, egui::Response) {
+    match f.field {
+        "alpha.threshold" => {
+            let cur = f.value.as_u64().unwrap_or(128).clamp(5, 200) as u8;
+            threshold(ui, busy, key, cur)
+        }
+        "alpha.exact_opaque" | "encoder.perceptual" => {
+            let mut b = f.value.as_bool().unwrap_or(false);
+            let r = ui.checkbox(&mut b, "");
+            (r.changed().then(|| json!(b)), r)
+        }
+        field => {
+            let options = options_of(field, target, job).unwrap_or_default();
+            combo(ui, egui::Id::new((key, field)), &f.value, &options)
+        }
+    }
+}
+
+/// Everything a group's rows need besides the group name.
+struct Ctx<'a> {
+    key: &'a str,
+    job: &'a ResolvedJob,
+    target: Target,
+    busy: bool,
+    compact: bool,
+}
+
+fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Action>) {
+    egui::CollapsingHeader::new(name)
+        .default_open(true)
+        .show(ui, |ui| {
+            egui::Grid::new((cx.key, name))
+                .num_columns(4)
+                .show(ui, |ui| {
+                    for f in field_views(cx.target, cx.job)
+                        .into_iter()
+                        .filter(|f| group_of(f.field) == name)
+                    {
+                        ui.label(f.label);
+                        let (set, r) = ui
+                            .scope(|ui| {
+                                if f.lock.is_some() {
+                                    ui.disable();
+                                }
+                                editor(ui, cx.key, cx.target, cx.job, cx.busy, &f)
+                            })
+                            .inner;
+                        if let Some(reason) = f.lock {
+                            r.on_disabled_hover_text(reason);
+                        }
+                        if let Some(v) = set {
+                            actions.push(Action::Set(f.field, v));
+                        }
+                        if cx.compact {
+                            ui.label("");
+                        } else if let Some(reason) = f.lock {
+                            ui.label(egui::RichText::new(reason).small().weak());
+                        } else {
+                            ui.label(
+                                egui::RichText::new(provenance_text(&f.provenance))
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                        if f.edited
+                            && ui
+                                .small_button("↺")
+                                .on_hover_text("Use the inherited value")
+                                .clicked()
+                        {
+                            actions.push(Action::Clear(f.field));
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+}
+
+fn message_of(warnings: &[Warning], code: Code) -> Option<&str> {
+    warnings
+        .iter()
+        .find(|w| w.code == code)
+        .map(|w| w.message.as_str())
+}
+
+/// The amber "Needs a decision" box: one control per decision, each writing an explicit answer.
+fn decision_box(
+    ui: &mut egui::Ui,
+    cx: &Ctx,
+    decisions: &[Decision],
+    warnings: &[Warning],
+    actions: &mut Vec<Action>,
+) {
+    egui::Frame::new()
+        .stroke(egui::Stroke::new(2.0, AMBER))
+        .corner_radius(4.0)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.colored_label(AMBER, egui::RichText::new("Needs a decision").strong());
+            for d in decisions {
+                match d {
+                    Decision::Subtype { suggested } => {
+                        subtype_decision(ui, cx, *suggested, actions)
+                    }
+                    Decision::AlphaMeaning => {
+                        if let Some(m) = message_of(warnings, Code::SugLowConfidence) {
+                            ui.label(m);
+                        }
+                        ui.label("What does the alpha channel mean?");
+                        ui.horizontal_wrapped(|ui| {
+                            for (policy, label) in alpha_options()
+                                .into_iter()
+                                .filter_map(|(v, l)| Some((serde_json::from_value(v).ok()?, l)))
+                            {
+                                if ui.button(label).clicked() {
+                                    actions.push(Action::Decide(Answer::Alpha(policy)));
+                                }
+                            }
+                        });
+                    }
+                    Decision::GreenConvention => {
+                        match message_of(warnings, Code::InGreenUnstated) {
+                            Some(m) => ui.label(m),
+                            None => {
+                                ui.label("Which way does this normal map's green channel point?")
+                            }
+                        };
+                        ui.horizontal(|ui| {
+                            if ui.button("OpenGL").clicked() {
+                                actions
+                                    .push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
+                            }
+                            if ui.button("DirectX").clicked() {
+                                actions
+                                    .push(Action::Decide(Answer::Green(GreenConvention::Directx)));
+                            }
+                        });
+                    }
+                    Decision::Acknowledge(code) => {
+                        ui.label(egui::RichText::new(code.as_str()).strong());
+                        if let Some(m) = message_of(warnings, *code) {
+                            ui.label(m);
+                        }
+                        if ui.button("Acknowledge for this texture").clicked() {
+                            actions.push(Action::Decide(Answer::Acknowledge(*code)));
+                        }
+                    }
+                }
+                ui.add_space(4.0);
+            }
+        });
+    ui.add_space(6.0);
+}
+
+/// A combo of the sub-types available under the target, the suggestion preselected, and a Confirm button.
+fn subtype_decision(
+    ui: &mut egui::Ui,
+    cx: &Ctx,
+    suggested: Option<Subtype>,
+    actions: &mut Vec<Action>,
+) {
+    ui.label("What kind of texture is this?");
+    let id = egui::Id::new(("confirm-subtype", cx.key));
+    let mut chosen: Subtype = ui
+        .data(|d| d.get_temp(id))
+        .unwrap_or_else(|| suggested.unwrap_or(cx.job.profile.subtype));
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(subtype_label(chosen))
+            .show_ui(ui, |ui| {
+                for st in Subtype::ALL
+                    .into_iter()
+                    .filter(|s| matches!(availability(cx.target, *s), Availability::Available))
+                {
+                    ui.selectable_value(&mut chosen, st, subtype_label(st));
+                }
+            });
+        if ui.button("Confirm").clicked() {
+            actions.push(Action::Decide(Answer::Subtype(chosen)));
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, chosen));
+}
+
+/// One line per packed channel, from the job's `pack.r` … `pack.a` provenance.
+fn channels(ui: &mut egui::Ui, job: &ResolvedJob) {
+    ui.label(egui::RichText::new("Channels").strong());
+    for (ch, name) in [("r", "R"), ("g", "G"), ("b", "B"), ("a", "A")] {
+        if let Some(p) = job.provenance.get(&format!("pack.{ch}")) {
+            ui.label(format!("{name}: {}", channel_text(&p.to_string())));
+        }
+    }
+    ui.add_space(6.0);
+}
+
+fn error_text(codes: &[Code]) -> String {
+    format!(
+        "Error: {}",
+        codes
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Warnings the decision box does not already show.
+fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
+    let rest: Vec<&Warning> = warnings
+        .iter()
+        .filter(|w| !matches!(w.code, Code::SugLowConfidence | Code::InGreenUnstated))
+        .collect();
+    if rest.is_empty() {
+        return;
+    }
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Warnings").strong());
+    for w in rest {
+        ui.label(egui::RichText::new(format!("{}: {}", w.code.as_str(), w.message)).small());
+    }
+}
+
+/// Draw texture `key`'s settings. `compact` (the preview's strip) keeps the decision box and the Alpha, Mipmaps and
+/// Compression groups, without provenance text.
+pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
+    let Some(item) = model.item(key) else {
+        ui.weak("This texture is no longer in the plan.");
+        return;
+    };
+    let (name, job_key, kind, status) = (
+        item.name.clone(),
+        item.job_key.clone(),
+        item.kind,
+        item.status.clone(),
+    );
+    let (decisions, warnings, job) = (
+        item.decisions.clone(),
+        item.warnings.clone(),
+        item.job.clone(),
+    );
+    let packed_output = match &status {
+        ItemStatus::PackedInto(j) => model
+            .items
+            .iter()
+            .find(|i| i.kind == ItemKind::Packed && &i.job_key == j)
+            .map(|i| i.key.clone()),
+        _ => None,
+    };
+    let (target, busy) = (model.target, model.busy());
+    let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
+    let mut actions = vec![];
+    if !compact {
+        ui.heading(&name);
+        ui.weak(if job_key.is_empty() { key } else { &job_key });
+        ui.add_space(4.0);
+    }
+    ui.add_enabled_ui(!read_only, |ui| match &job {
+        None => {
+            match &status {
+                ItemStatus::Skipped(r) => ui.label(format!("Skipped: {r}")),
+                ItemStatus::Failed(e) => ui.label(format!("Failed: {e}")),
+                ItemStatus::PackedInto(j) => ui.label(format!("This map is packed into {j}.")),
+                ItemStatus::Error(c) => ui.label(error_text(c)),
+                ItemStatus::NeedsDecision | ItemStatus::Ready => ui.label(""),
+            };
+            if kind == ItemKind::Dds {
+                ui.label("Already a DDS file; it is not converted.");
+            }
+            if let Some(out) = packed_output {
+                if ui.button("Show packed output").clicked() {
+                    actions.push(Action::Select(out));
+                }
+            }
+        }
+        Some(job) => {
+            let cx = Ctx {
+                key,
+                job,
+                target,
+                busy,
+                compact,
+            };
+            match &status {
+                ItemStatus::Skipped(r) => {
+                    ui.label(format!("Skipped: {r}"));
+                }
+                ItemStatus::Error(c) => {
+                    ui.colored_label(RED, error_text(c));
+                }
+                _ => {}
+            }
+            if !decisions.is_empty() {
+                decision_box(ui, &cx, &decisions, &warnings, &mut actions);
+            }
+            if kind == ItemKind::Packed && !compact {
+                channels(ui, job);
+            }
+            let shown: &[&str] = if compact { &COMPACT_GROUPS } else { &GROUPS };
+            for g in shown {
+                group(ui, g, &cx, &mut actions);
+            }
+            if !compact {
+                other_warnings(ui, &warnings);
+            }
+        }
+    });
+    for a in actions {
+        match a {
+            Action::Set(f, v) => model.set_field(key, f, v),
+            Action::Clear(f) => model.clear_field(key, f),
+            Action::Decide(a) => model.decide(key, a),
+            Action::Select(k) => model.select_item(&k),
+        }
+    }
+}
