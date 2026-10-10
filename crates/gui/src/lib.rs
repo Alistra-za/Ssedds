@@ -6,3 +6,4 @@ pub mod model;
 pub mod project;
 pub mod settings;
 pub mod ui;
+pub mod worker;

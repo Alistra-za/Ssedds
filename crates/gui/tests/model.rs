@@ -1,0 +1,221 @@
+mod support;
+use engine::codes::Code;
+use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
+use sdc_gui::model::items::*;
+use sdc_gui::model::*;
+use std::time::Duration;
+use support::*;
+
+fn status(m: &AppModel, key: &str) -> ItemStatus {
+    m.item(key)
+        .unwrap_or_else(|| panic!("no item {key}"))
+        .status
+        .clone()
+}
+
+#[test]
+fn opening_a_folder_lists_items_sets_and_decisions() {
+    let d = tempfile::tempdir().unwrap();
+    let m = opened(d.path());
+    let keys: Vec<&str> = m.items.iter().map(|i| i.key.as_str()).collect();
+    for k in [
+        "landscape/rock01.png",
+        "landscape/leaf.png",
+        "landscape/rock01_normal.png",
+        "landscape/odd.png",
+        "landscape/rock01_rmaos",
+        "landscape/rock01_roughness.png",
+        "landscape/rock01_ao.png",
+    ] {
+        assert!(keys.contains(&k), "missing {k} in {keys:?}");
+    }
+    assert!(
+        matches!(status(&m, "landscape/rock01_roughness.png"), ItemStatus::PackedInto(j) if j == "landscape/rock01_rmaos.dds")
+    );
+    let leaf = m.item("landscape/leaf.png").unwrap();
+    assert!(leaf
+        .decisions
+        .iter()
+        .any(|d| matches!(d, Decision::Subtype { .. })));
+    let n = m.item("landscape/rock01_normal.png").unwrap();
+    assert!(n.decisions.contains(&Decision::GreenConvention));
+    assert!(n.thumb.is_some());
+    assert!(m.undecided() >= 3);
+    let set = m.sets.iter().find(|s| s.key.ends_with("rock01")).unwrap();
+    assert!(set
+        .recipes
+        .iter()
+        .any(|r| r.output.ends_with("rock01_rmaos.dds")));
+    assert_eq!(m.target, Target::Cs);
+}
+
+#[test]
+fn decisions_re_resolve_before_saving_and_save_writes_them() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
+    m.decide("landscape/odd.png", Answer::Subtype(Subtype::Diffuse));
+    m.decide("landscape/odd.png", Answer::Acknowledge(Code::DimNpot));
+    m.decide("landscape/leaf.png", Answer::Subtype(Subtype::Diffuse));
+    m.decide("landscape/leaf.png", Answer::Alpha(AlphaPolicy::Cutout));
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Subtype(Subtype::Normal),
+    );
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Green(GreenConvention::Directx),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    for k in [
+        "landscape/rock01.png",
+        "landscape/odd.png",
+        "landscape/leaf.png",
+        "landscape/rock01_normal.png",
+    ] {
+        assert_eq!(status(&m, k), ItemStatus::Ready, "{k}");
+    }
+    let toml_path = m.root.clone().unwrap().join("sdc.toml");
+    assert!(!toml_path.exists(), "nothing is written before a save");
+    assert!(m.project.as_ref().unwrap().is_dirty());
+    m.save().unwrap();
+    let text = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(text.contains("landscape/odd.png") && text.contains("DIM-NPOT"));
+    assert!(text.contains("green_convention"));
+}
+
+#[test]
+fn filters_search_and_selection_survive_a_replan() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.filter.needs_decision = true;
+    let shown: Vec<String> = m
+        .visible_items()
+        .iter()
+        .map(|&i| m.items[i].key.clone())
+        .collect();
+    assert!(shown.contains(&"landscape/leaf.png".to_string()));
+    assert!(!shown.contains(&"landscape/rock01_roughness.png".to_string()));
+    m.filter.needs_decision = false;
+    m.search = "LEAF".into();
+    assert_eq!(m.visible_items().len(), 1);
+    m.search.clear();
+    m.select_item("landscape/leaf.png");
+    m.set_field(
+        "landscape/leaf.png",
+        "alpha.threshold",
+        serde_json::json!(90),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.selection, Selection::Item("landscape/leaf.png".into()));
+    let job = m.item("landscape/leaf.png").unwrap().job.as_ref().unwrap();
+    assert_eq!(job.profile.alpha.threshold, 90);
+    assert_eq!(
+        job.provenance["alpha.threshold"].to_string(),
+        "project_file"
+    );
+    m.clear_field("landscape/leaf.png", "alpha.threshold");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_ne!(
+        m.item("landscape/leaf.png")
+            .unwrap()
+            .job
+            .as_ref()
+            .unwrap()
+            .profile
+            .alpha
+            .threshold,
+        90
+    );
+}
+
+#[test]
+fn the_mode_changes_target_and_recipes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Cpm);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.target, Target::Cpm);
+    assert!(m.item("landscape/rock01_rmaos").is_none());
+    assert!(m.item("landscape/rock01_m").is_some());
+}
+
+#[test]
+fn an_invalid_sdc_toml_opens_read_only() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    std::fs::write(root.join("sdc.toml"), "target = [\n").unwrap();
+    let mut m = sdc_gui::model::AppModel::new(Default::default(), None, session());
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.banner.as_deref().unwrap().contains("sdc.toml"));
+    assert!(
+        !m.items.is_empty(),
+        "the folder still plans without sdc.toml"
+    );
+    m.set_field(
+        "landscape/leaf.png",
+        "alpha.threshold",
+        serde_json::json!(90),
+    );
+    assert!(!m.project.as_ref().unwrap().is_dirty());
+    assert_eq!(
+        std::fs::read_to_string(root.join("sdc.toml")).unwrap(),
+        "target = [\n"
+    );
+}
+
+#[test]
+fn closing_with_unsaved_edits_asks_first() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert!(m.request_close());
+    m.set_target(Target::Vanilla);
+    assert!(!m.request_close());
+    assert_eq!(m.dialog, Some(Dialog::CloseUnsaved));
+}
+
+#[test]
+fn an_external_edit_is_not_overwritten_silently() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    let p = m.root.clone().unwrap().join("sdc.toml");
+    std::fs::write(&p, "# written by hand meanwhile\n").unwrap();
+    assert!(m.save().is_err());
+    assert_eq!(m.dialog, Some(Dialog::ExternalChange));
+    m.resolve_external_change(false);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(
+        std::fs::read_to_string(&p).unwrap(),
+        "# written by hand meanwhile\n"
+    );
+    assert_eq!(m.target, Target::Cs);
+}
+
+#[test]
+fn sets_list_their_members_and_unmatched_file_keys_are_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let set = m.sets.iter().find(|s| s.key.ends_with("rock01")).unwrap();
+    assert!(set.pbr);
+    for k in [
+        "landscape/rock01.png",
+        "landscape/rock01_rmaos",
+        "landscape/rock01_ao.png",
+    ] {
+        assert!(
+            set.members.iter().any(|x| x == k),
+            "{k} missing from {:?}",
+            set.members
+        );
+    }
+    assert!(m.unmatched_keys.is_empty());
+    m.set_field(
+        "landscape/gone.png",
+        "alpha.threshold",
+        serde_json::json!(10),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.unmatched_keys, vec!["landscape/gone.png".to_string()]);
+}
