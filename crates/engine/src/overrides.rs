@@ -37,11 +37,26 @@ pub fn path_key_matches(key: &str, rel: &str) -> bool {
     }
 }
 
+/// `p` as an absolute path (the current directory for an empty or relative one); `p` itself when that fails.
+pub(crate) fn absolute_or_same(p: &Path) -> PathBuf {
+    let p = if p.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        p
+    };
+    std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
 /// `input`'s path relative to `root`, '/'-separated: the folder of `input.path` relative to `root`, then the file
 /// name of `input.rel` (for a packed output, its virtual name). `None` when `input` is not under `root`.
 pub fn project_rel(root: &Path, input: &InputFile) -> Option<String> {
     let lower = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
-    let dir = input.path.parent()?;
+    // One path form: a relative root or input (e.g. `--config sdc.toml`) is resolved against the current directory.
+    let (root, dir) = (
+        absolute_or_same(root),
+        absolute_or_same(input.path.parent()?),
+    );
+    let (root, dir) = (root.as_path(), dir.as_path());
     let (root_s, dir_s) = (lower(root), lower(dir));
     let root_s = root_s.trim_end_matches('/');
     let rest = if dir_s == root_s {

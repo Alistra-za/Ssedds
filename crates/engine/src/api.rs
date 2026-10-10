@@ -451,7 +451,8 @@ pub fn project_root(req: &BatchRequest) -> Option<PathBuf> {
         return first_dir();
     }
     match &req.project_config {
-        Some(p) => p.parent().map(Path::to_path_buf),
+        // `--config sdc.toml` has an empty parent: that is the current directory.
+        Some(p) => p.parent().map(crate::overrides::absolute_or_same),
         None => first_dir().filter(|d| d.join("sdc.toml").exists()),
     }
 }

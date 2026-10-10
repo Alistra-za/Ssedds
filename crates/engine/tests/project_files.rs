@@ -2,12 +2,14 @@
 use engine::api::*;
 use engine::codes::Code;
 use engine::config::Target;
+use engine::discover::{InputFile, InputKind};
 use engine::events::*;
 use engine::overrides::parse_set;
+use engine::overrides::project_rel;
 use engine::policy::{JobStatus, ResolvedJob};
 use engine::presets::ConfigFile;
 use image::{ImageBuffer, Luma, Rgb};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -216,4 +218,43 @@ fn project_root_follows_the_config_source() {
         Target::Cs,
     );
     assert_eq!(project_root(&r), None);
+}
+
+#[test]
+fn a_relative_config_path_roots_at_the_current_directory() {
+    let cwd = std::path::absolute(".").unwrap();
+    let mut r = BatchRequest::new(
+        vec![PathBuf::from("textures")],
+        PathBuf::from("out"),
+        Target::Cs,
+    );
+    r.project_config = Some(PathBuf::from("sdc.toml"));
+    assert_eq!(project_root(&r), Some(cwd.clone()));
+    r.project_config = Some(PathBuf::from("proj/sdc.toml"));
+    assert_eq!(project_root(&r), Some(cwd.join("proj")));
+}
+
+#[test]
+fn project_rel_resolves_a_relative_input_against_an_absolute_root() {
+    let cwd = std::path::absolute(".").unwrap();
+    let input = |p: &str| InputFile {
+        path: PathBuf::from(p),
+        rel: PathBuf::from(Path::new(p).file_name().unwrap()),
+        game_path: String::new(),
+        output: PathBuf::new(),
+        kind: InputKind::Image,
+    };
+    let rel = |root: &Path, p: &str| project_rel(root, &input(p));
+    assert_eq!(
+        rel(&cwd, "landscape/rock01_n.png").as_deref(),
+        Some("landscape/rock01_n.png")
+    );
+    assert_eq!(rel(&cwd, "rock.png").as_deref(), Some("rock.png"));
+    // A relative root works the same way, and an input outside the root is not under it.
+    assert_eq!(rel(Path::new("."), "a/b.png").as_deref(), Some("a/b.png"));
+    assert_eq!(rel(&cwd.join("proj"), "landscape/rock01_n.png"), None);
+    assert_eq!(
+        rel(&cwd.join("proj"), "proj/x/y.png").as_deref(),
+        Some("x/y.png")
+    );
 }
