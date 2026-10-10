@@ -2,7 +2,8 @@
 mod support;
 use engine::config::Subtype;
 use image::{ImageBuffer, Rgb};
-use sdc_gui::model::{Answer, Dialog};
+use sdc_gui::model::{Answer, AppModel, Dialog};
+use sdc_gui::settings::GuiSettings;
 use sdc_gui::worker::*;
 use std::time::Duration;
 use support::*;
@@ -161,4 +162,112 @@ fn opening_another_folder_cancels_an_export_waiting_for_a_plan() {
     assert!(m.export.running.is_none());
     assert!(m.export.summary.is_none());
     assert_eq!(m.dialog, None);
+}
+
+#[test]
+fn export_during_a_plan_waits_for_it_and_then_asks_about_undecided_textures() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let settings = GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..GuiSettings::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.open_folder(root);
+    // The plan has not landed: the item list is still empty, so a count of it would say "nothing to decide".
+    m.export_clicked();
+    assert!(m.export.running.is_none(), "nothing starts before the plan");
+    assert_eq!(m.dialog, None);
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(m.export.running.is_none());
+    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided())));
+    assert!(m.undecided() > 0);
+}
+
+/// Open a mod folder whose `sdc.toml` is `text`.
+fn opened_with_toml(d: &std::path::Path, text: &str) -> AppModel {
+    let root = mod_folder(d);
+    std::fs::write(root.join("sdc.toml"), text).unwrap();
+    let settings = GuiSettings {
+        export_folder: Some(d.join("export")),
+        ..GuiSettings::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.open_folder(root);
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
+    m
+}
+
+/// Spec §7.4: a config the engine rejects is ignored (the folder still plans), the banner says why, the GUI is
+/// read-only and the file is untouched; fixing the file and reloading brings the edits back.
+fn assert_rejected_then_fixed(bad: &str, expect_in_banner: &str) {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened_with_toml(d.path(), bad);
+    let toml = m.root.clone().unwrap().join("sdc.toml");
+    assert_eq!(m.dialog, None, "no modal loop");
+    assert!(
+        !m.items.is_empty(),
+        "the folder is planned without sdc.toml"
+    );
+    let banner = m.banner.clone().expect("a banner");
+    assert!(
+        banner.contains(expect_in_banner) && banner.contains("sdc.toml"),
+        "{banner}"
+    );
+    assert!(m.project.as_ref().unwrap().read_only());
+    m.set_field(
+        "landscape/rock01.png",
+        "alpha.threshold",
+        serde_json::json!(90),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(!m.is_dirty(), "edits are refused");
+    assert_eq!(std::fs::read_to_string(&toml).unwrap(), bad);
+
+    std::fs::write(&toml, "# fixed\n").unwrap();
+    m.resolve_external_change(false);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.banner, None);
+    assert_eq!(m.dialog, None);
+    assert!(!m.project.as_ref().unwrap().read_only());
+    m.set_field(
+        "landscape/rock01.png",
+        "alpha.threshold",
+        serde_json::json!(90),
+    );
+    assert!(m.is_dirty(), "editable again");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.dialog, None);
+}
+
+#[test]
+fn an_unknown_field_in_a_files_entry_makes_the_project_read_only() {
+    assert_rejected_then_fixed(
+        "[files.\"landscape/rock01.png\"]\nbogus_field = 1\n",
+        "bogus_field",
+    );
+}
+
+#[test]
+fn an_unknown_allow_code_in_a_files_entry_makes_the_project_read_only() {
+    assert_rejected_then_fixed(
+        "[files.\"landscape/rock01.png\"]\nallow = [\"NO-SUCH-CODE\"]\n",
+        "NO-SUCH-CODE",
+    );
+}
+
+#[test]
+fn an_out_of_range_default_makes_the_project_read_only() {
+    assert_rejected_then_fixed("[defaults]\nalpha.threshold = 1000\n", "1000");
+}
+
+#[test]
+fn an_unknown_sub_type_in_a_files_entry_makes_the_project_read_only() {
+    assert_rejected_then_fixed(
+        "[files.\"landscape/rock01.png\"]\nsubtype = \"nonsense\"\n",
+        "nonsense",
+    );
 }

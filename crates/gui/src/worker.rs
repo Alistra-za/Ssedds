@@ -3,13 +3,21 @@
 use crate::model::items::PlanView;
 use crate::model::preview::{dds_preview, decode_levels, PreviewOut};
 use encoders_sys::Bc1Model;
-use engine::api::{BatchRequest, BatchSummary, CancelToken};
+use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError};
 use engine::events::{EngineEvent, EventKind, EventSink, Reporter, VecSink};
 use engine::policy::ResolvedJob;
 use engine::session::{Session, SourcePreview};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+/// Why a plan failed; `config` is true for an invalid preset or config file (`EngineError::Config`), which the
+/// model answers by ignoring `sdc.toml` (M3a spec §7.4).
+#[derive(Debug, Clone)]
+pub struct PlanFailure {
+    pub message: String,
+    pub config: bool,
+}
 
 pub enum WorkerMsg {
     /// Planning discovered `total` files (the status line reads "Analysing {total} files…").
@@ -19,7 +27,7 @@ pub enum WorkerMsg {
     },
     Planned {
         generation: u64,
-        result: Result<PlanView, String>,
+        result: Result<PlanView, PlanFailure>,
     },
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
@@ -130,7 +138,10 @@ pub fn spawn_plan(
         let result = session
             .plan(req, &rep, &cancel)
             .map(|plan| PlanView::build(&plan, &events.take(), &session, &root))
-            .map_err(|e| e.to_string());
+            .map_err(|e| PlanFailure {
+                config: matches!(e, EngineError::Config(_)),
+                message: e.to_string(),
+            });
         let _ = tx.send(WorkerMsg::Planned { generation, result });
     });
 }

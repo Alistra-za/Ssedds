@@ -135,14 +135,25 @@ impl ProjectDoc {
             Ok(text) => match text.parse::<DocumentMut>() {
                 Ok(doc) => {
                     self.doc = doc;
-                    if let Err(e) = self.config() {
-                        self.error = Some(format!("{}: {e}", self.path.display()));
-                        self.doc = DocumentMut::new();
+                    // The engine's own up-front checks on `[files]` (unknown field or code) are parse errors too.
+                    let checked = self
+                        .config()
+                        .and_then(|c| c.file_entries().map(|_| ()).map_err(|e| e.to_string()));
+                    if let Err(e) = checked {
+                        self.set_error(&e);
                     }
                 }
                 Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
             },
         }
+    }
+
+    /// Mark the file unusable (M3a spec §7.4): read-only with `message`, its contents and unsaved edits dropped. Used
+    /// when the engine rejects a config that parsed; `reload` clears it.
+    pub fn set_error(&mut self, message: &str) {
+        self.error = Some(format!("{}: {message}", self.path.display()));
+        self.doc = DocumentMut::new();
+        self.dirty = false;
     }
 
     pub fn path(&self) -> &Path {

@@ -8,7 +8,7 @@ pub mod view;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
-use crate::worker::{spawn_export, spawn_plan, WorkerMsg};
+use crate::worker::{spawn_export, spawn_plan, PlanFailure, WorkerMsg};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, RawMap, Subtype, Target};
@@ -53,6 +53,10 @@ pub enum Answer {
     Alpha(AlphaPolicy),
     Green(GreenConvention),
     Acknowledge(Code),
+}
+
+fn read_only_banner(error: &str) -> String {
+    format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
 pub struct AppModel {
@@ -146,11 +150,7 @@ impl AppModel {
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
         let project = ProjectDoc::open(&root);
-        self.banner = project.error().map(|e| {
-            format!(
-                "{e} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded"
-            )
-        });
+        self.banner = project.error().map(read_only_banner);
         self.project = Some(project);
         self.settings.push_recent(root.clone());
         self.save_settings();
@@ -238,11 +238,7 @@ impl AppModel {
                 self.planning = None;
                 match result {
                     Ok(view) => self.apply_plan(view),
-                    Err(e) => {
-                        self.status_line = format!("Planning failed: {e}");
-                        self.export_after_plan = false;
-                        self.dialog = Some(Dialog::Error(e));
-                    }
+                    Err(f) => self.plan_failed(f),
                 }
             }
             WorkerMsg::Planned { .. } => {}
@@ -262,6 +258,28 @@ impl AppModel {
             }
             other => self.handle_more(other),
         }
+    }
+
+    /// A plan failed. When the engine rejected the project config that parsed fine (an unknown field or code, an
+    /// out-of-range value), ignore `sdc.toml` as for a parse error (spec §7.4): read-only, banner, and plan the
+    /// folder again without it. Any other failure (or a config error with `sdc.toml` already ignored) is a dialog.
+    fn plan_failed(&mut self, f: PlanFailure) {
+        self.export_after_plan = false;
+        // An error naming the user config is not the project's fault; ignoring `sdc.toml` would not help.
+        let from_user_config = self
+            .user_config
+            .as_ref()
+            .is_some_and(|p| f.message.contains(&p.display().to_string()));
+        if f.config && !from_user_config {
+            if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
+                p.set_error(&f.message);
+                self.banner = p.error().map(read_only_banner);
+                self.replan();
+                return;
+            }
+        }
+        self.status_line = format!("Planning failed: {}", f.message);
+        self.dialog = Some(Dialog::Error(f.message));
     }
 
     /// Messages the export and the preview handle.
@@ -288,6 +306,12 @@ impl AppModel {
     /// are flagged and the plan is made again first, so the export starts from fresh plans (M3a spec §7).
     pub fn export_clicked(&mut self) {
         if self.root.is_none() {
+            return;
+        }
+        // A plan is in flight (just opened, or an edit): the items on screen are the previous plan's, so the checks
+        // wait for the plan that lands (spec §2.6: the button is never silently disabled).
+        if self.planning.is_some() {
+            self.export_after_plan = true;
             return;
         }
         if self.check_sources() > 0 && self.session.is_some() {
