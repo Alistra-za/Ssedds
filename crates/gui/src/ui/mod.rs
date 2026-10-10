@@ -30,12 +30,28 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         .show(ui, |ui| {
             ui.toggle_value(&mut model.settings.advanced_open, "Advanced");
         });
-    column_panel(ui, "textures", "Textures", 380.0, model, |ui, model| {
-        columns::textures(ui, model, &mut state.thumbs);
-    });
-    column_panel(ui, "sets", "Sets", 260.0, model, |ui, model| {
-        columns::sets(ui, model, &mut state.thumbs);
-    });
+    column_panel(
+        ui,
+        "textures",
+        "textures-strip",
+        "Textures",
+        380.0,
+        model,
+        |ui, model| {
+            columns::textures(ui, model, &mut state.thumbs);
+        },
+    );
+    column_panel(
+        ui,
+        "sets",
+        "sets-strip",
+        "Sets",
+        260.0,
+        model,
+        |ui, model| {
+            columns::sets(ui, model, &mut state.thumbs);
+        },
+    );
     egui::CentralPanel::default().show(ui, |ui| {
         if model.root.is_none() {
             ui.centered_and_justified(|ui| ui.label("Open a folder of source textures to begin."));
@@ -44,17 +60,18 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     dialogs::draw(ui.ctx(), model);
 }
 
-/// A resizable column, or a thin named strip when the columns are collapsed.
+/// A resizable column, or a thin named strip when the columns are collapsed. The strip has its own id: egui keeps a panel's size per id, and the strip's 24 px must not become the column's width.
 fn column_panel(
     ui: &mut egui::Ui,
     id: &'static str,
+    strip_id: &'static str,
     name: &str,
     width: f32,
     model: &mut AppModel,
     content: impl FnOnce(&mut egui::Ui, &mut AppModel),
 ) {
     if model.settings.columns_collapsed {
-        egui::Panel::left(id)
+        egui::Panel::left(strip_id)
             .resizable(false)
             .exact_size(columns::STRIP_WIDTH)
             .frame(egui::Frame::new())

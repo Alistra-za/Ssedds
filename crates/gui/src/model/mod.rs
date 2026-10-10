@@ -38,6 +38,8 @@ pub enum Dialog {
     ProceedAnyway(usize),
     ExternalChange,
     CloseUnsaved,
+    /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
+    OpenUnsaved(PathBuf),
     Error(String),
 }
 
@@ -393,6 +395,30 @@ impl AppModel {
             self.banner = p.error().map(str::to_string);
             self.replan();
         }
+    }
+
+    /// Open `root`, or ask first when unsaved edits would be lost. True when the folder was opened.
+    pub fn request_open(&mut self, root: PathBuf) -> bool {
+        if self.is_dirty() {
+            self.dialog = Some(Dialog::OpenUnsaved(root));
+            false
+        } else {
+            self.open_folder(root);
+            true
+        }
+    }
+
+    /// The answer to `Dialog::OpenUnsaved`: save (opening only if that succeeded) or drop the edits, then open.
+    pub fn resolve_open_unsaved(&mut self, root: PathBuf, save: bool) {
+        self.dialog = None;
+        if save {
+            if self.save().is_err() {
+                return;
+            }
+        } else if let Some(p) = self.project.as_mut() {
+            p.reload();
+        }
+        self.open_folder(root);
     }
 
     pub fn request_close(&mut self) -> bool {

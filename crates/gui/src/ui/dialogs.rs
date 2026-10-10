@@ -8,6 +8,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     };
     match dialog {
         Dialog::CloseUnsaved => close_unsaved(ctx, model),
+        Dialog::OpenUnsaved(root) => open_unsaved(ctx, model, root),
         Dialog::ExternalChange => external_change(ctx, model),
         Dialog::Error(msg) => error(ctx, model, &msg),
         Dialog::ProceedAnyway(_) => {}
@@ -78,6 +79,28 @@ fn error(ctx: &egui::Context, model: &mut AppModel, msg: &str) {
         ok = ui.button("OK").clicked();
     });
     if ok {
+        model.dialog = None;
+    }
+}
+
+fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::PathBuf) {
+    let (mut save, mut discard, mut cancel) = (false, false, false);
+    modal(ctx, "open-unsaved", |ui| {
+        ui.heading("Unsaved changes");
+        ui.label(
+            "sdc.toml has changes that are not saved. Opening another folder would lose them.",
+        );
+        ui.horizontal(|ui| {
+            save = ui.button("Save").clicked();
+            discard = ui.button("Discard").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if save {
+        model.resolve_open_unsaved(root, true);
+    } else if discard {
+        model.resolve_open_unsaved(root, false);
+    } else if cancel {
         model.dialog = None;
     }
 }

@@ -46,7 +46,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.horizontal(|ui| {
             if ui.button("Open folder…").clicked() {
                 if let Some(p) = pick_folder() {
-                    model.open_folder(p);
+                    model.request_open(p);
                 }
             }
             recent_menu(ui, model);
@@ -87,7 +87,7 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
         });
     });
     if let Some(p) = open {
-        model.open_folder(p);
+        model.request_open(p);
     }
 }
 

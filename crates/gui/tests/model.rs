@@ -219,3 +219,44 @@ fn sets_list_their_members_and_unmatched_file_keys_are_reported() {
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(m.unmatched_keys, vec!["landscape/gone.png".to_string()]);
 }
+
+#[test]
+fn opening_another_folder_with_unsaved_edits_asks_first() {
+    let d = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let other_root = mod_folder(other.path());
+    let mut m = opened(d.path());
+    let first = m.root.clone();
+    // Clean: opens straight away.
+    assert!(m.request_open(other_root.clone()));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.root, Some(other_root.clone()));
+
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    assert!(!m.request_open(other_root.clone()));
+    assert_eq!(m.dialog, Some(Dialog::OpenUnsaved(other_root.clone())));
+    assert_eq!(m.root, first);
+    assert!(m.is_dirty());
+
+    m.resolve_open_unsaved(other_root.clone(), false);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.root, Some(other_root));
+    assert!(m.dialog.is_none());
+    assert!(!m.is_dirty());
+}
+
+#[test]
+fn saving_before_opening_writes_the_edit_first() {
+    let d = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let other_root = mod_folder(other.path());
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    let toml = m.root.clone().unwrap().join("sdc.toml");
+    assert!(!m.request_open(other_root.clone()));
+    m.resolve_open_unsaved(other_root.clone(), true);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.root, Some(other_root));
+    assert!(std::fs::read_to_string(toml).unwrap().contains("vanilla"));
+}

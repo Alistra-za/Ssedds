@@ -102,3 +102,22 @@ fn closing_with_unsaved_edits_asks_and_discard_drops_them() {
     assert!(!h.state().is_dirty());
     assert!(h.state().dialog.is_none());
 }
+
+#[test]
+fn the_columns_keep_their_width_through_a_collapse_and_expand() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(opened(d.path()));
+    h.run();
+    // The Sets column starts where the Textures column ends.
+    let before = h.get_by_label("Sets").rect().min.x;
+    assert!(before > 300.0, "Sets starts at {before}");
+    h.state_mut().settings.columns_collapsed = true;
+    h.run();
+    assert!(h
+        .query_by_label("Sets")
+        .is_some_and(|n| n.rect().width() < 30.0));
+    h.state_mut().settings.columns_collapsed = false;
+    h.run();
+    let after = h.get_by_label("Sets").rect().min.x;
+    assert!(after > 300.0, "Sets starts at {after} after expanding");
+}
