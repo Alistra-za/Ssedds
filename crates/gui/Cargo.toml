@@ -24,7 +24,7 @@ toml.workspace = true
 half.workspace = true
 anyhow.workspace = true
 # Default features minus default_fonts (system fonts are loaded at run time, see fonts.rs). wgpu is used only through eframe::egui_wgpu::wgpu.
-eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "links", "wgpu", "x11", "wayland"] }
+eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "links", "wgpu"] }
 rfd = "=0.17.2"
 toml_edit = "0.25"
 

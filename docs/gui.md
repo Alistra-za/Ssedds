@@ -4,7 +4,7 @@
 
 ## Opening a folder
 
-Choose **Open folder…** (or pick one from **Recent**). The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written to your textures. If the folder holds an `sdc.toml`, it is loaded; if that file cannot be parsed, a banner says so and the GUI stays read-only until you fix the file and press **Reload** in the banner.
+Choose **Open folder…** (pick one from **Recent**, or drag a folder onto the window; a dropped file opens the folder that holds it). The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written to your textures. If the folder holds an `sdc.toml`, it is loaded; if that file cannot be parsed, or the engine rejects it (an unknown field or `allow` code in a `[files]` entry, an unknown sub-type, a value out of range), the folder is planned without it, a banner shows the error, and the GUI stays read-only (editing and **Export** are off, and the file is never written) until you fix the file and press **Reload** in the banner.
 
 The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `sdc.toml` as `target`.
 
@@ -24,7 +24,7 @@ The GUI never decides for you. A texture that needs an answer has an **amber bor
 
 Any field in the centre column can be changed. Changes go into `sdc.toml` as `[files."<path>"]` entries, keyed by the file's path relative to the folder holding `sdc.toml` (packed outputs without an extension, for example `landscape/rock01_rmaos`). The GUI writes only `target`, the `[files.*]` tables and `defaults.packing.fill.*`; comments, ordering, rules and every other table in your `sdc.toml` are left byte for byte as they were.
 
-An edited file is marked **●** until you save with **Save** or **Ctrl+S**. Export saves first. If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it or overwrite it. Closing the window or opening another folder with unsaved edits asks first.
+An edited file is marked **●** until you save with **Save** or **Ctrl+S**. Export saves first. If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it or overwrite it. Closing the window or opening another folder with unsaved edits asks first. So does closing or opening a folder while an export is running: the dialog offers **Cancel export and continue** (the export stops, then the window closes or the folder opens) or **Keep running**.
 
 Per-texture `[files]` entries sit above preset and config rules and analysis, and below any `--set` on the command line, so `sdc convert <folder>` honours them.
 

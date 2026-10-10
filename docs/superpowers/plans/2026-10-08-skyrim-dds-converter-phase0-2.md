@@ -11879,7 +11879,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
   - `BatchRequest` is an open `pub` struct that M2.5, M5 and M6 extend: document `BatchRequest::new` plus field mutation as the contract. `EngineError` is three string variants, so the GUI cannot point at the offending config field.
   - `manifest::append` does not normalise `output`; callers must pass `output_key` (Task 36 minor), which matters once the GUI is a second caller.
 - **Consumed by M3a** (built on `feat/m3a-gui`, 2026-10-10; plan `docs/superpowers/plans/2026-10-10-sdc-m3a-converter-gui.md`):
-  - Partial-Profile schema (Task 3); the I5 event-schema bump with job key, typed `file_planned.job` and skip kind (Tasks 4–5); I6 per-file allow and exact-path scope (Tasks 2–3).
+  - Partial-Profile schema (Task 3), except that its "threshold range 5–200 / mip count ≥ 1" sub-item is still open; the I5 event-schema bump with job key, typed `file_planned.job` and skip kind (Tasks 4–5); I6 per-file allow and exact-path scope (Tasks 2–3).
   - `CancelToken` per batch, plan and run (Tasks 11–15); `Analysis` kept for re-resolving (the session cache, Task 7); the GUI sink only pushes into a channel (Task 11).
   - `manifest::append` as a second caller: unchanged, because the GUI calls `run`, which appends with `output_key`.
   - From "Carried from M2.5": the event-identity items (Task 5: pack-source terminal events, job key), `SourceRef` roles and invert (Task 6) and the `file:` scope on packed outputs (Task 2's key rule: the folder of the first source plus the virtual name).

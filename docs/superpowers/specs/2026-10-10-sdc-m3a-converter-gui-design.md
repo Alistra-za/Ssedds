@@ -125,7 +125,7 @@ The committed schemas are regenerated.
 
 ### 4.4 Session cache
 
-**[Finding]** `Plan` keeps resolved jobs but not the decoded images or `Analysis`, and `run` consumes it (`Plan` is not `Clone`), so every Mode change or edit would reload every image (plan M3 carried item). **[Proposal]** `engine::session::Session` keeps, for every file, its `Analysis`, its header and its identity (path, size, mtime). Re-resolving needs only these, so a Mode change or an edit re-resolves with **no reload**. Decoded pixels are held in an LRU bounded by the memory budget and decoded again on demand (preview, packing pass 2, Export). A file whose size or mtime changed is reloaded and re-analysed. This replaces the carried option "keep `Analysis` in `Plan`".
+**[Finding]** `Plan` keeps resolved jobs but not the decoded images or `Analysis`, and `run` consumes it (`Plan` is not `Clone`), so every Mode change or edit would reload every image (plan M3 carried item). **[Proposal]** `engine::session::Session` keeps, for every file, its `Analysis`, its header and its identity (path, size, mtime). Re-resolving needs only these, so a Mode change or an edit re-resolves with **no reload**. Decoded pixels are held in an LRU bounded by the memory budget and decoded again on demand (preview, packing pass 2, Export). A file whose size or mtime changed is reloaded and re-analysed. This replaces the carried option "keep `Analysis` in `Plan`". **[Finding, M3a]** The decoded-pixel LRU is not built in M3a: the preview decodes from disk each time it needs the pixels, and only the analyses are cached.
 
 ### 4.5 `Session::preview`
 
