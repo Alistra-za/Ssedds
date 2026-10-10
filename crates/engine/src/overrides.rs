@@ -1,13 +1,95 @@
 //! `--set` overrides (spec §8): `field=value`, `subtype:<id>.field=value`, `file:<glob>.field=value`.
+use crate::codes::Code;
 use crate::config::Subtype;
+use crate::discover::InputFile;
 use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
     All,
     Subtype(Subtype),
     File(String),
+    /// A `[files]` key (DECISIONS N2): '/'-separated, relative to the project root, matched by `path_key_matches`.
+    Path(String),
 }
+
+/// Whether a `[files]` key names the file at project-relative path `rel` (DECISIONS N2): case-insensitively,
+/// `rel == key`, or `rel` without the last extension of its file name `== key` (a packed output's key).
+pub fn path_key_matches(key: &str, rel: &str) -> bool {
+    let (k, r) = (key.to_lowercase(), rel.to_lowercase());
+    if r == k {
+        return true;
+    }
+    let (dir, name) = r.rsplit_once('/').unwrap_or(("", r.as_str()));
+    match name.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => {
+            let without = if dir.is_empty() {
+                stem.to_string()
+            } else {
+                format!("{dir}/{stem}")
+            };
+            without == k
+        }
+        _ => false,
+    }
+}
+
+/// `input`'s path relative to `root`, '/'-separated: the folder of `input.path` relative to `root`, then the file
+/// name of `input.rel` (for a packed output, its virtual name). `None` when `input` is not under `root`.
+pub fn project_rel(root: &Path, input: &InputFile) -> Option<String> {
+    let lower = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
+    let dir = input.path.parent()?;
+    let (root_s, dir_s) = (lower(root), lower(dir));
+    let root_s = root_s.trim_end_matches('/');
+    let rest = if dir_s == root_s {
+        ""
+    } else {
+        dir_s.strip_prefix(&format!("{root_s}/"))?
+    };
+    let dir_orig = dir.to_string_lossy().replace('\\', "/");
+    // Keep the original case of the folder part, by taking the same number of bytes from the original string.
+    // Lower-casing can change the byte length (non-ASCII): then fall back to the lower-cased part.
+    let rest_orig = if dir_orig.len() == dir_s.len() {
+        dir_orig.get(dir_orig.len() - rest.len()..).unwrap_or(rest)
+    } else {
+        rest
+    };
+    let name = input.rel.file_name()?.to_string_lossy();
+    Some(if rest_orig.is_empty() {
+        name.into_owned()
+    } else {
+        format!("{rest_orig}/{name}")
+    })
+}
+
+/// The `[files]` layer (DECISIONS N2) and the per-file acknowledgements, resolved against one project root.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FileScopes {
+    /// The folder `[files]` keys are relative to; `None` disables the layer.
+    pub root: Option<PathBuf>,
+    /// `[files]` field values, every one `Scope::Path`, in key order then field order.
+    pub overrides: Vec<SetOverride>,
+    /// Key → codes acknowledged for that file only.
+    pub allow: BTreeMap<String, BTreeSet<Code>>,
+}
+
+impl FileScopes {
+    pub const NONE: FileScopes = FileScopes {
+        root: None,
+        overrides: Vec::new(),
+        allow: BTreeMap::new(),
+    };
+
+    /// The project-relative path of `input` when the layer is active.
+    pub fn rel_of(&self, input: &InputFile) -> Option<String> {
+        project_rel(self.root.as_deref()?, input)
+    }
+}
+
+/// For `ResolveCtx` literals that have no `[files]` layer (tests, `inspect` on a single file).
+pub static NO_FILE_SCOPES: FileScopes = FileScopes::NONE;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetOverride {

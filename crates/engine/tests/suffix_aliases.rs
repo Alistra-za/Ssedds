@@ -3,7 +3,7 @@ use engine::config::*;
 use engine::discover::*;
 use engine::group::*;
 use engine::image::{Rgba32F, SourceInfo};
-use engine::overrides::parse_set;
+use engine::overrides::{parse_set, NO_FILE_SCOPES};
 use engine::policy::*;
 use engine::presets::*;
 use engine::suggest::Confidence;
@@ -101,6 +101,7 @@ fn resolve_img(
         overrides: &overrides,
         accept,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let stem = Path::new(name)
         .file_stem()
@@ -483,6 +484,7 @@ fn accepted_fallback_keeps_the_alias_preset() {
         overrides: &overrides,
         accept: AcceptSuggestions::High,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let split = split_suffix_with("iron_normalhq", reg.alias_table());
     let f = InputFile {

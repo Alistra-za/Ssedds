@@ -4,7 +4,7 @@ use engine::config::*;
 use engine::discover::{InputFile, InputKind};
 use engine::group::TextureSet;
 use engine::image::{Rgba32F, SourceInfo};
-use engine::overrides::parse_set;
+use engine::overrides::{parse_set, NO_FILE_SCOPES};
 use engine::policy::*;
 use engine::presets::*;
 use std::collections::BTreeSet;
@@ -38,6 +38,7 @@ fn run(
         overrides: &overrides,
         accept: AcceptSuggestions::High,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let name = game.rsplit('/').next().unwrap();
     let f = InputFile {
@@ -304,6 +305,7 @@ fn run_with(
         overrides: &overrides,
         accept: AcceptSuggestions::High,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let f = InputFile {
         path: rel.into(),
@@ -788,6 +790,7 @@ fn preset_alpha_policy_counts_as_explicit() {
         overrides: &overrides,
         accept: AcceptSuggestions::None,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let j = resolve_file(&ctx("mine"), &facts);
     assert_eq!(
@@ -1041,6 +1044,7 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
         overrides: &overrides,
         accept: AcceptSuggestions::High,
         allow: &allow_set,
+        files: &NO_FILE_SCOPES,
     };
     let j = resolve_in(&ctx, "a/x_m.png", Some("m"), &m);
     assert_eq!(
@@ -1114,6 +1118,7 @@ fn table_backends_follow_more_specific_formats() {
         overrides: &o_env,
         accept: AcceptSuggestions::High,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let j = resolve_in(&c, "a/x_m.png", Some("m"), &opaque());
     assert_eq!(
@@ -1188,6 +1193,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
                 overrides: &overrides,
                 accept: AcceptSuggestions::High,
                 allow: &allow,
+                files: &NO_FILE_SCOPES,
             };
             let j = resolve_in(&ctx, "a/x.png", None, &img);
             match &j.status {
@@ -1215,6 +1221,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
         overrides: &overrides,
         accept: AcceptSuggestions::High,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let j = resolve_in(&ctx, "a/x.png", None, &img);
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);

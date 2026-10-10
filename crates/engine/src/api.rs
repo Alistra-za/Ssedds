@@ -16,7 +16,7 @@ use crate::manifest::{
     bc1_model_id, output_key, sha256_file, sha256_json, EncoderVersions, Manifest, ManifestEntry,
     PresetRef, ENGINE_VERSION,
 };
-use crate::overrides::{to_patch, Scope, SetOverride};
+use crate::overrides::{to_patch, FileScopes, Scope, SetOverride};
 use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
@@ -66,6 +66,9 @@ pub struct BatchRequest {
     pub overrides: Vec<SetOverride>,
     pub accept: AcceptSuggestions,
     pub allow: BTreeSet<Code>,
+    /// Per-file acknowledgements (DECISIONS N2): `[files]` key → codes. Merged with the project config's
+    /// `[files.*].allow` (Task 3).
+    pub file_allow: BTreeMap<String, BTreeSet<Code>>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -91,6 +94,7 @@ impl BatchRequest {
             overrides: vec![],
             accept: AcceptSuggestions::None,
             allow: BTreeSet::new(),
+            file_allow: BTreeMap::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -620,6 +624,12 @@ impl Engine {
             }
         }
 
+        // Task 3 replaces this with the project-root `[files]` layer from `sdc.toml`.
+        let file_scopes = FileScopes {
+            root: req.inputs.first().filter(|p| p.is_dir()).cloned(),
+            overrides: vec![],
+            allow: req.file_allow.clone(),
+        };
         let ctx = ResolveCtx {
             target,
             registry: &registry,
@@ -629,6 +639,7 @@ impl Engine {
             overrides: &req.overrides,
             accept: req.accept,
             allow: &req.allow,
+            files: &file_scopes,
         };
         // Load and Analyse in parallel under the same memory admission as `run` (spec §5.9, Codex-B I1): the calling
         // thread admits each file's estimated bytes before spawning it, and the bytes are released as soon as its

@@ -1,6 +1,8 @@
 use engine::config::Subtype;
+use engine::discover::{InputFile, InputKind};
 use engine::overrides::*;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn parses_scopes_and_typed_values() {
@@ -64,4 +66,73 @@ fn packing_fields_are_settable() {
     );
     // Role ids only, not exporter terms.
     assert!(parse_set("packing.fill.metal=1").is_err());
+}
+
+#[test]
+fn path_keys_match_exactly_or_without_the_last_extension() {
+    assert!(path_key_matches(
+        "landscape/rock01_n.png",
+        "landscape/rock01_n.png"
+    ));
+    assert!(path_key_matches(
+        "Landscape/Rock01_N.PNG",
+        "landscape/rock01_n.png"
+    ));
+    // A packed output is keyed without extension; its virtual name takes its first source's extension.
+    assert!(path_key_matches(
+        "landscape/rock01_rmaos",
+        "landscape/rock01_rmaos.tga"
+    ));
+    // Glob syntax is literal.
+    assert!(path_key_matches("a/[old]{1}*.png", "a/[old]{1}*.png"));
+    assert!(!path_key_matches("a/[old]{1}*.png", "a/o1x.png"));
+    // No basename matching across folders.
+    assert!(!path_key_matches("rock01_n.png", "landscape/rock01_n.png"));
+    assert!(!path_key_matches(
+        "landscape/rock01_n.png",
+        "other/landscape/rock01_n.png"
+    ));
+    // Only the last extension is dropped, and only from the file.
+    assert!(path_key_matches("a/rock.01_rmaos", "a/rock.01_rmaos.png"));
+    assert!(!path_key_matches("a/rock", "a/rock.01_rmaos.png"));
+}
+
+#[test]
+fn project_rel_uses_the_virtual_file_name() {
+    let root = Path::new("C:/mod/textures");
+    let real = InputFile {
+        path: PathBuf::from("C:/mod/textures/landscape/rock01_roughness.png"),
+        rel: PathBuf::from("landscape/rock01_roughness.png"),
+        game_path: "textures/landscape/rock01_roughness.png".into(),
+        output: PathBuf::from("C:/out/landscape/rock01_roughness.dds"),
+        kind: InputKind::Image,
+    };
+    assert_eq!(
+        project_rel(root, &real).as_deref(),
+        Some("landscape/rock01_roughness.png")
+    );
+    let virt = InputFile {
+        rel: PathBuf::from("landscape/rock01_rmaos.png"),
+        ..real.clone()
+    };
+    assert_eq!(
+        project_rel(root, &virt).as_deref(),
+        Some("landscape/rock01_rmaos.png")
+    );
+    assert_eq!(project_rel(Path::new("D:/elsewhere"), &real), None);
+}
+
+#[test]
+fn project_rel_keeps_the_folder_case_and_ignores_the_root_case() {
+    let input = InputFile {
+        path: PathBuf::from(r"C:\Mod\Textures\Landscape\Rock01_N.png"),
+        rel: PathBuf::from(r"Landscape\Rock01_N.png"),
+        game_path: "textures/landscape/rock01_n.png".into(),
+        output: PathBuf::from("C:/out/Landscape/Rock01_N.dds"),
+        kind: InputKind::Image,
+    };
+    assert_eq!(
+        project_rel(Path::new("c:/mod/textures"), &input).as_deref(),
+        Some("Landscape/Rock01_N.png")
+    );
 }

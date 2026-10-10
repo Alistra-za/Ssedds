@@ -3,7 +3,7 @@ use engine::config::*;
 use engine::discover::{InputFile, InputKind};
 use engine::group::TextureSet;
 use engine::image::{Rgba32F, SourceInfo};
-use engine::overrides::parse_set;
+use engine::overrides::{parse_set, NO_FILE_SCOPES};
 use engine::policy::*;
 use engine::presets::*;
 use std::collections::BTreeSet;
@@ -50,6 +50,7 @@ fn explicit_set_decides_subtype_and_beats_presets() {
         overrides: &overrides,
         accept: AcceptSuggestions::None,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let img = Rgba32F::new(4, 4, [0.5, 0.5, 1.0, 0.5]);
     let a = analyse(&img, &RGBA8);
@@ -111,6 +112,7 @@ fn suggestions_decide_only_when_high_and_accepted() {
             overrides: &[],
             accept,
             allow: &allow,
+            files: &NO_FILE_SCOPES,
         };
         let d = decide_subtype(&ctx, &facts);
         assert_eq!((d.subtype, d.decided), (Subtype::Rmaos, decided));
@@ -125,6 +127,7 @@ fn suggestions_decide_only_when_high_and_accepted() {
         overrides: &[],
         accept: AcceptSuggestions::High,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let (p, prov) = layered_profile(&ctx, &facts, Subtype::Rmaos).unwrap();
     assert_eq!(
@@ -150,6 +153,7 @@ fn rules_and_project_config_layer_in_order() {
         overrides: &[],
         accept: AcceptSuggestions::None,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let img = Rgba32F::new(4, 4, [0.5, 0.5, 0.5, 1.0]);
     let a = analyse(&img, &RGB8);
@@ -221,6 +225,7 @@ fn set_scopes_rank_above_command_line_order() {
         overrides: &overrides,
         accept: AcceptSuggestions::None,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let d = decide_subtype(&ctx, &facts);
     assert_eq!((d.subtype, d.decided), (Subtype::Normal, true));
@@ -275,6 +280,7 @@ fn content_of(
         overrides: &overrides,
         accept: AcceptSuggestions::None,
         allow: &allow,
+        files: &NO_FILE_SCOPES,
     };
     let img = Rgba32F::new(4, 4, [4.0, 2.0, 0.5, 1.0]);
     let a = analyse(&img, info);

@@ -10,7 +10,7 @@ use crate::dds::{resolve_header, ResolvedHeader};
 use crate::discover::InputFile;
 use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};
 use crate::image::SourceInfo;
-use crate::overrides::{to_patch, Scope, SetOverride};
+use crate::overrides::{path_key_matches, to_patch, FileScopes, Scope, SetOverride};
 pub use crate::presets::Provenance;
 use crate::presets::*;
 use crate::suggest::*;
@@ -39,6 +39,8 @@ pub struct ResolveCtx<'a> {
     pub accept: AcceptSuggestions,
     /// Codes allowed with `--allow`.
     pub allow: &'a BTreeSet<Code>,
+    /// The `[files]` layer and per-file acknowledgements (DECISIONS N2).
+    pub files: &'a FileScopes,
 }
 
 pub struct FileFacts<'a> {
@@ -182,24 +184,41 @@ fn first_match<'a>(
     })
 }
 
-fn override_applies(o: &SetOverride, st: Option<Subtype>, f: &FileFacts) -> bool {
+/// Whether `code` is acknowledged for this file: batch-wide `--allow`, or the file's own `allow`.
+pub fn allowed(ctx: &ResolveCtx, f: &FileFacts, code: Code) -> bool {
+    ctx.allow.contains(&code)
+        || ctx.files.rel_of(f.input).is_some_and(|rel| {
+            ctx.files
+                .allow
+                .iter()
+                .any(|(k, codes)| codes.contains(&code) && path_key_matches(k, &rel))
+        })
+}
+
+fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &FileFacts) -> bool {
     match &o.scope {
         Scope::All => true,
         Scope::Subtype(s) => Some(*s) == st,
         Scope::File(g) => glob_match(g, f),
+        Scope::Path(k) => ctx
+            .files
+            .rel_of(f.input)
+            .is_some_and(|rel| path_key_matches(k, &rel)),
     }
 }
 
-/// `--set` overrides, lowest precedence first: unscoped, then sub-type-scoped, then file-scoped, each group in
-/// command-line order (the sort is stable).
+/// Overrides, lowest precedence first: the `[files]` layer, then the command line (unscoped, sub-type, file glob,
+/// path), each group in its own order (the sort is stable). DECISIONS N2: the command line always wins.
 fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
-    let mut v: Vec<&SetOverride> = ctx.overrides.iter().collect();
-    v.sort_by_key(|o| match o.scope {
+    let rank = |o: &SetOverride| match o.scope {
         Scope::All => 0,
         Scope::Subtype(_) => 1,
         Scope::File(_) => 2,
-    });
-    v
+        Scope::Path(_) => 3,
+    };
+    let mut cli: Vec<&SetOverride> = ctx.overrides.iter().collect();
+    cli.sort_by_key(|o| rank(o));
+    ctx.files.overrides.iter().chain(cli).collect()
 }
 
 pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
@@ -234,7 +253,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     let set_subtype = ranked_overrides(ctx)
         .into_iter()
         .rev()
-        .find(|o| o.field == "subtype" && override_applies(o, None, f));
+        .find(|o| o.field == "subtype" && override_applies(ctx, o, None, f));
     if let Some(o) = set_subtype {
         if let Ok(st) = serde_json::from_value::<Subtype>(o.value.clone()) {
             return SubtypeDecision {
@@ -462,11 +481,11 @@ fn layered_profile_with(
         .into_iter()
         .filter(|o| o.field != "subtype")
     {
-        if override_applies(o, Some(st), f) {
+        if override_applies(ctx, o, Some(st), f) {
             let reach = match o.scope {
                 Scope::All => GENERIC,
                 Scope::Subtype(_) => SUBTYPE_SET,
-                Scope::File(_) => FILE,
+                Scope::File(_) | Scope::Path(_) => FILE,
             };
             apply(
                 &mut doc,
@@ -1098,7 +1117,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     let mut subtype = d.subtype;
     let mut subtype_prov = d.provenance.clone();
     let mut fallback_note = None;
-    if ctx.allow.contains(&Code::CfgUnavailable) {
+    if allowed(ctx, f, Code::CfgUnavailable) {
         if let Availability::Unavailable { fallback: Some(fb) } = availability(ctx.target, subtype)
         {
             let msg = format!(
@@ -1199,7 +1218,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         if w.severity == Severity::Blocking
             && w.code != Code::CfgUnavailable
             && w.code != Code::InGreenUnstated
-            && ctx.allow.contains(&w.code)
+            && allowed(ctx, f, w.code)
         {
             w.severity = Severity::Warning;
         }
@@ -1210,7 +1229,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     // triggers LOSS-ALPHA-DATA against the default `remove`), then blocking codes.
     let status = if !errors.is_empty() {
         JobStatus::Error { codes: errors }
-    } else if (!reasons.is_empty() && !ctx.allow.contains(&Code::SugLowConfidence))
+    } else if (!reasons.is_empty() && !allowed(ctx, f, Code::SugLowConfidence))
         || green_reason.is_some()
     {
         JobStatus::Unresolved { reasons }
