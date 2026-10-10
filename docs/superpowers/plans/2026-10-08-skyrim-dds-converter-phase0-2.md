@@ -11878,6 +11878,25 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
   - The per-file stage column of spec §9 needs per-stage events (m15, listed under M7; pull it forward if the column ships in M3).
   - `BatchRequest` is an open `pub` struct that M2.5, M5 and M6 extend: document `BatchRequest::new` plus field mutation as the contract. `EngineError` is three string variants, so the GUI cannot point at the offending config field.
   - `manifest::append` does not normalise `output`; callers must pass `output_key` (Task 36 minor), which matters once the GUI is a second caller.
+- **Carried from M2.5** (final review of `feat/m2.5-packing`, SDD ledger):
+  - **Event identity (I5):**
+    - Only `sources[0]` of a packed job emits `file_planned`. A healthy raw source consumed by a recipe, including a failed or cancelled one, gets no per-file terminal event.
+    - At the I5 bump, record each pack source's role and invert flag in `SourceRef`. This structurally replaces the `pack.*` provenance comparison that `is_up_to_date` now does.
+  - **File scope on packed outputs:** the packed output's virtual input name takes the first source's extension (`pack/plan.rs`). So `--set 'file:**/iron_rmaos.png.…'` misses when the roughness source is `.tga`. Either match `file:` scopes on the stem for virtual inputs, or document `iron_rmaos.*`.
+  - **Wording:** the duplicate-role reason says "another … source is used: <first>" even when the first map is itself unused, as with two `_opacity` maps. Reword it to "comes first".
+  - **Code shape:**
+    - `assemble(job, gray)` takes `gray` separately from `job.gray`; read `job.gray` inside instead.
+    - Raw maps are decoded three times (pass-1 Load/Analyse, pass-2 assembly, run). Pass 1 could check headers and decode without `analyse`.
+  - **Rare paths:**
+    - A pass-2 `PlanFailure::Pack`, from a source resized between passes, emits no coded warning, and under `prefer = raw` writes neither file.
+    - A pre-packed file that failed to load lets the recipe run under `prefer = prepacked`. This is defensible; add one sentence to Note M9.
+  - **Unspecified:**
+    - A pre-packed `_rmaos` next to raw maps that include fuzz writes both `_rmaos` and `_rfaos`; precedence between recipes is not specified.
+    - A recipe output can overwrite a DDS input of the same name when `--output` is the input folder.
+  - **Test gaps:**
+    - `FillSpec::get`: only 2 of 8 roles are tested, and NaN `roughness_default` is untested.
+    - The post-decode size mismatch lists only two files.
+    - No test for: `inspect --fill`, fill losing to a scoped `--set`, a `cpm` set without height, a pass-2 panic or Load failure.
 
 ### M4 — Texture-set variance bake (spec §6.2–6.3)
 
