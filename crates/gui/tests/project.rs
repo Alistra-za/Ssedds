@@ -138,3 +138,96 @@ fn clearing_a_fill_leaves_no_empty_defaults_header() {
     let text = std::fs::read_to_string(d.path().join("sdc.toml")).unwrap();
     assert!(!text.contains("[defaults]"), "{text}");
 }
+
+#[test]
+fn an_inline_files_table_is_edited_not_a_panic() {
+    let (d, mut doc) = doc_with("files = { \"a.png\" = { format = \"bc7\" } }\n");
+    doc.set_file_value("a.png", "alpha.policy", &json!("blend"));
+    doc.set_file_value("b.png", "format", &json!("bc1"));
+    assert_eq!(doc.file_value("a.png", "format"), Some(json!("bc7")));
+    assert_eq!(
+        doc.file_value("a.png", "alpha.policy"),
+        Some(json!("blend"))
+    );
+    doc.save(false).unwrap();
+    let cfg = ProjectDoc::open(d.path()).config().unwrap();
+    assert_eq!(cfg.files["a.png"]["alpha"]["policy"], "blend");
+    assert_eq!(cfg.files["b.png"]["format"], "bc1");
+    doc.clear_file_value("a.png", "alpha.policy");
+    doc.clear_file_value("a.png", "format");
+    assert_eq!(doc.file_keys(), vec!["b.png".to_string()]);
+    doc.remove_file_entry("b.png");
+    assert!(doc.file_keys().is_empty());
+    assert!(doc.config().unwrap().files.is_empty());
+}
+
+#[test]
+fn an_inline_entry_under_a_files_table_is_edited() {
+    let (_d, mut doc) = doc_with("[files]\n\"a.png\" = { format = \"bc7\" }\n");
+    doc.set_file_value("a.png", "subtype", &json!("diffuse"));
+    doc.set_file_value("c.png", "format", &json!("bc3"));
+    let files = doc.config().unwrap().files;
+    assert_eq!(files["a.png"]["format"], "bc7");
+    assert_eq!(files["a.png"]["subtype"], "diffuse");
+    assert_eq!(files["c.png"]["format"], "bc3");
+    doc.clear_file_value("a.png", "format");
+    doc.remove_file_entry("c.png");
+    let files = doc.config().unwrap().files;
+    assert_eq!(files["a.png"], json!({"subtype": "diffuse"}));
+    assert!(!files.contains_key("c.png"));
+}
+
+#[test]
+fn an_inline_sub_table_is_edited_in_place() {
+    let (_d, mut doc) = doc_with("[files.\"a.png\"]\nalpha = { policy = \"cutout\" }\n");
+    doc.set_file_value("a.png", "alpha.threshold", &json!(90));
+    assert_eq!(doc.file_value("a.png", "alpha.threshold"), Some(json!(90)));
+    assert_eq!(
+        doc.config().unwrap().files["a.png"]["alpha"]["threshold"],
+        90
+    );
+    doc.clear_file_value("a.png", "alpha.policy");
+    assert_eq!(doc.file_value("a.png", "alpha.policy"), None);
+    let alpha = &doc.config().unwrap().files["a.png"]["alpha"];
+    assert_eq!(*alpha, json!({"threshold": 90}));
+    doc.clear_file_value("a.png", "alpha.threshold");
+    assert!(doc.file_keys().is_empty());
+}
+
+#[test]
+fn an_inline_defaults_packing_is_edited_in_place() {
+    let (_d, mut doc) = doc_with("[defaults]\npacking = { fill = { ao = 10 } }\n");
+    assert_eq!(doc.fill(RawMap::Ao), Some(10));
+    doc.set_fill(RawMap::Metallic, Some(255));
+    assert_eq!(doc.fill(RawMap::Metallic), Some(255));
+    assert_eq!(
+        doc.config().unwrap().defaults["packing"]["fill"]["metallic"],
+        255
+    );
+    doc.set_fill(RawMap::Ao, None);
+    assert_eq!(doc.fill(RawMap::Ao), None);
+    let fill = &doc.config().unwrap().defaults["packing"]["fill"];
+    assert_eq!(*fill, json!({"metallic": 255}));
+}
+
+#[test]
+fn a_hand_written_key_is_found_case_insensitively() {
+    let (d, mut doc) = doc_with("[files.\"Landscape/Rock01_N.png\"]\nformat = \"bc7\"\n");
+    assert_eq!(
+        doc.file_value("landscape/rock01_n.png", "format"),
+        Some(json!("bc7"))
+    );
+    doc.set_file_value("landscape/rock01_n.png", "subtype", &json!("normal"));
+    doc.set_allow(
+        "landscape/rock01_n.png",
+        &[Code::FmtBc5Normal].into_iter().collect(),
+    );
+    assert_eq!(doc.file_keys(), vec!["Landscape/Rock01_N.png".to_string()]);
+    assert_eq!(doc.allow("LANDSCAPE/rock01_n.png").len(), 1);
+    doc.save(false).unwrap();
+    let files = ProjectDoc::open(d.path()).config().unwrap().files;
+    assert_eq!(files.len(), 1);
+    assert_eq!(files["Landscape/Rock01_N.png"]["subtype"], "normal");
+    doc.remove_file_entry("landscape/ROCK01_N.png");
+    assert!(doc.file_keys().is_empty());
+}
