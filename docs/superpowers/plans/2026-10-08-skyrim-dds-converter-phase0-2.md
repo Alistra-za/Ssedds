@@ -11838,6 +11838,8 @@ Each milestone gets its own `writing-plans` document when its entry criteria are
 
 ### M2.5 — Channel packing (spec §6.4, DECISIONS Note H)
 
+Expanded into `docs/superpowers/plans/2026-10-09-sdc-m2-5-channel-packing.md` (Tasks 1–9); decisions in DECISIONS Note M.
+
 Owner timing: its own milestone **right after the CLI MVP**, before the GUI. It will be expanded into its own `writing-plans` document; this section fixes its scope.
 
 - **Entry:** Phase 2 exit (Task 45); Task 27a in place (raw maps are discovered, grouped under their role id and resolved as `JobStatus::PackingInput` with `IN-PACKING-INPUT`).

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-10-08 |
-| Status | Approved direction. Phases 0–2 (spikes S3–S7, engine, CLI MVP) are built on `feat/phase0-2` and reviewed; milestone M2.5 (channel packing, §6.4) is next. Re-synced with the code and DECISIONS at the final review, 2026-10-09 |
+| Status | Approved direction. Phases 0–2 (spikes S3–S7, engine, CLI MVP) are built on `feat/phase0-2` and reviewed; milestone M2.5 (channel packing, §6.4) is built on `feat/m2.5-packing`. Re-synced with the code and DECISIONS at the final review, 2026-10-09 |
 | Project licence | GPL-3.0-or-later |
 | Platform | Windows x64 only |
 | Working name | `sdc` (Skyrim DDS Converter): `sdc.exe` (CLI) and `sdc-gui.exe` (GUI); final name decided at packaging (§14) |
@@ -128,7 +128,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `encoder.bc45_search_radius` | `default` / `max` | `default` | `max` = radius 10 |
 | `encoder.rgbcx_level` | 0–18 | 18 | rgbcx quality level for BC1/BC3/BC4/BC5; read only when the backend is rgbcx, where a value above 18 is `CFG-INVALID` |
 | `validation` | `min_mip_psnr_db`, `coverage_tolerance_pts`, `complex_m_warn_alpha`, `bc6h_min_peak_ratio`, `pgpatcher_non_white_share` (§5.8) | 30 dB, 2 points, 247, 0.8, 0.5 | The thresholds behind `VAL-MIP-ERROR`, `VAL-COVERAGE`, `VAL-M-COMPLEX-MARGIN`, `VAL-BC6H-PEAK` and `VAL-PGPATCHER-50` |
-| `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw`, `fill` (per-role values) | `true`, 0.5 (**[Requirement]** confirmed 2026-10-09 [D-H]), `prepacked`, none | Packed outputs only (§6.4); arrives with milestone M2.5. **[Requirement]** The user can set a **global fill value for each packed channel that has no source map** (GUI slider, CLI option), which replaces the neutral default for that channel [D-H]. **[Proposal]** Field `packing.fill.<role>` (a raw-map role id of §4.4, e.g. `metallic`), 8-bit code 0–255; the CLI shorthand is `--fill <role>=<0..255>` (e.g. `--fill metallic=255`), equivalent to an unscoped `--set packing.fill.<role>=…` |
+| `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw`, `fill` (per-role values) | `true`, 0.5 (**[Requirement]** confirmed 2026-10-09 [D-H]), `prepacked`, none | Packed outputs only (§6.4); shipped in M2.5. **[Requirement]** The user can set a **global fill value for each packed channel that has no source map** (GUI slider, CLI option), which replaces the neutral default for that channel [D-H]. **[Decided]** (plan M2.5, DECISIONS Note M5) Field `packing.fill.<role>` (a raw-map role id of §4.4, e.g. `metallic`), 8-bit code 0–255; the CLI shorthand is `--fill <role>=<0..255>` (e.g. `--fill metallic=255`), equivalent to an unscoped `--set packing.fill.<role>=…` |
 | `output` | `path`, `on_existing` | Batch; path `./sdc-out` when no `-o` is given | §8 |
 
 **[Proposal] Batch-level settings.** `bc1_decoder_model` (default `cBC1Ideal`, **[Requirement]** owner 2026-10-08; NVIDIA / AMD / IdealRound4 selectable) is batch-level because `rgbcx::init` sets it as global, non-thread-safe state [EI §1]; a conflicting preset value raises an info event. `jobs`, `mem_budget`, the NVTT path and the preview limit are also batch-level.
@@ -299,7 +299,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 | Output naming | Colour terms are written `<base>.dds`, because Skyrim's colour member carries no suffix (§6.1) and TruePBR's albedo slot is suffix-less too. `_d` is itself a §6.1 suffix and keeps its stem, so `iron_d.png` stays `iron_d.dds`. Normal terms → `<base>_n.dds`, emissive terms → `<base>_g.dds`, in the mirrored folder. Raw maps have no output of their own (§6.4). |
 | Duplicates | Output names are canonicalised before grouping, so `iron.png` + `iron_basecolor.png`, `iron_n.png` + `iron_normal.png` or `iron_g.png` + `iron_emissive.png` collide on one output and are both `IN-DUPLICATE` (§6.1). |
 | Green convention | The suffix-stated value of `_normalgl`/`_normaldx` is a fact layer at the "analysis facts" position of §8 (above presets, configs and rules, below `--set`), with provenance `suffix:<term>`. A plain `_normal`/`_nrm` file is `unresolved` while `channels.green_convention` is unset after layering; neither `--accept-suggestions high` nor `--allow SUG-LOW-CONFIDENCE` settles it, because it is not a suggestion. Analyse's green-convention guess (§5.1) is reported only, never applied. Skyrim's own `_n` is DirectX by definition (§4.1) and needs no statement. `msn` ignores the field. |
-| Raw maps before M2.5 | Until packing exists a raw map resolves to the status `packing_input` (with its role), raises `IN-PACKING-INPUT` (warning) and writes nothing; `inspect` lists it and `convert` reports it as `file_skipped` with that code, but it does not make the batch partial (exit 1, §8). A rule or `--set` that names a sub-type for a raw map makes it an ordinary file written under its source stem (e.g. `--set 'file:**/iron_height.png.subtype=height'` → `iron_height.dds`); it is then not a packing source. |
+| Raw maps not packed | A raw map consumed by a recipe has no job of its own (Note M8). One whose recipe is off (`packing.enabled = false`) stays `packing_input` (with its role) and raises `IN-PACKING-INPUT` (warning); one that no recipe uses is `packing_input` with `PACK-UNUSED-INPUT`. Either writes nothing; `inspect` lists it and `convert` reports it as `file_skipped` with that code, but neither makes the batch partial (exit 1, Note M4, §8). A rule or `--set` that names a sub-type for a raw map makes it an ordinary file written under its source stem (e.g. `--set 'file:**/iron_height.png.subtype=height'` → `iron_height.dds`); it is then not a packing source. |
 
 **[Proposal]** Conflicts with Skyrim suffixes are resolved by keeping every §6.1 meaning:
 
@@ -328,7 +328,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 | `load` | Decodes to float32 RGBA, keeping bit depth, channels, transfer | Per file | `image`, `exr`, DDS reader, `bcdec_rs` | Texture |
 | `analyse` | Statistics (§5.1) | Suggestions, warnings, bake | `load` | Texture |
 | `policy` (Resolve) | Merges preset, rules, suggestions, analysis, overrides into an immutable `ResolvedJob` with per-field provenance | CLI and GUI; dry-run output | `analyse`, presets, set context | **Set** |
-| `pack` (M2.5) | Builds the per-target packing recipes of a set (§6.4) into virtual jobs with several sources | Between Group and Resolve | `group`, `load`, `analyse` | **Set** |
+| `pack` (M2.5) | Builds the per-target packing recipes of a set (§6.4) into virtual jobs with several sources | After Resolve (pass 1, Note M6), then around the packed output's own Resolve (pass 2: assemble, analyse, resolve) | `group`, `load`, `analyse` | **Set** |
 | `ops` (Preprocess) | Channel and colour operations (§5.4) | Per file | `ResolvedJob` | Texture |
 | `mips` | Float mip chain (§5.5) | Per file | `ops`; for a roughness member, the set's `_n` | Texture (set dependency) |
 | `encode` | Block compression (§5.6) | Per mip and band | `encoders-sys`, NVTT process | Texture |
@@ -434,7 +434,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 5.9 Report and scheduler
 
-**[Proposal]** Every stage emits `EngineEvent`s carrying `schema: 1`, `seq`, timestamp, batch id, and set key and path where relevant. Kinds: `batch_started`, `file_discovered`, `set_resolved`, `file_planned` (dry-run `ResolvedJob`), `file_started`, `progress`, `warning` (code, severity, message, data), `file_done`, `file_skipped`, `file_failed`, `batch_done`. The CLI writes them as JSON Lines; the GUI receives the same values over a channel, so CLI stdout is valid GUI input (§9.4). The event schema is published; breaking changes bump `schema`. **[Finding]** An 8K RGBA32F buffer is 1 GiB plus about 33% for mips [LF §5]. **[Proposal]** Files are admitted by estimated bytes against `--mem-budget` (default 50% of RAM); large files use band parallelism; cancellation is checked between bands, since native calls cannot be interrupted [LF §5]; each file runs under `catch_unwind`, in planning as well as in conversion (a panic while loading, analysing or resolving fails that file at that stage). `progress` events are emitted only while compressing today; per-stage events (M7) will feed the GUI's stage column. A `Reporter` holds an ordering lock while delivering each event so `seq` order equals delivery order; a slow sink therefore back-pressures the workers, and a GUI sink should only forward into a channel.
+**[Proposal]** Every stage emits `EngineEvent`s carrying `schema: 1`, `seq`, timestamp, batch id, and set key and path where relevant. Kinds: `batch_started`, `file_discovered`, `set_resolved` (carries `recipes`: output, sub-type, channel provenance, status `run`/`conflict`/`failed`/`disabled`, reason), `file_planned` (dry-run `ResolvedJob`), `file_started`, `progress`, `warning` (code, severity, message, data), `file_done`, `file_skipped`, `file_failed`, `batch_done`. The CLI writes them as JSON Lines; the GUI receives the same values over a channel, so CLI stdout is valid GUI input (§9.4). The event schema is published; breaking changes bump `schema`. **[Finding]** An 8K RGBA32F buffer is 1 GiB plus about 33% for mips [LF §5]. **[Proposal]** Files are admitted by estimated bytes against `--mem-budget` (default 50% of RAM); large files use band parallelism; cancellation is checked between bands, since native calls cannot be interrupted [LF §5]; each file runs under `catch_unwind`, in planning as well as in conversion (a panic while loading, analysing or resolving fails that file at that stage). `progress` events are emitted only while compressing today; per-stage events (M7) will feed the GUI's stage column. A `Reporter` holds an ordering lock while delivering each event so `seq` order equals delivery order; a slow sink therefore back-pressures the workers, and a GUI sink should only forward into a channel.
 
 ---
 
@@ -491,12 +491,12 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | Metallic | 0.0 (black) | [Requirement] |
 | Specular (`_rmaos`/`_rfaos` A) | 1.0 (white), the TruePBR default; with TruePBR's default `specular_level` 0.04 this is F0 0.04 | [Requirement] |
 | Roughness | 0.5, set by the preset field `packing.roughness_default` (glossiness default 1 − that value) | [Requirement] 0.5 confirmed by the owner 2026-10-09 [D-H] |
-| Env mask (`cpm`/`vanilla` `_m` R) | From the metallic source, else the specular source; 0.0 under `cpm` when neither exists | **[Open]** |
+| Env mask (`cpm`/`vanilla` `_m` R) | Metallic, else specular; under `cpm` without either: `fill.metallic`, else `fill.specular`, else 0 | **[Decided]** (Note M1) |
 | Height (`cpm` `_m` A) | 0.5. A white default would make CS read the `_m` as a plain env mask (1×1 alpha ≥ 251/255, §5.8) and ENB as flat; a constant height has no relief. 128/255 is below CS's 251/255 gate (S8); the packed RGB must also not be grey at the smallest mip (§5.8) | **[Decided]** (S8) |
 
-**[Proposal]** Fill values: a fill takes the place of the table default for a channel that has no source map and is never applied to a channel that has one. The field is `packing.fill.<role>` (a §4.4 raw-map role id such as `metallic`) holding an 8-bit code 0–255, and `--fill <role>=<0..255>` sets it for the whole batch like an unscoped `--set`; the GUI offers one slider per role in the global settings. A fill for a role that no recipe of the target packs has no effect. `packing.roughness_default` remains the preset-level neutral default for roughness, and a roughness fill wins over it. The field path, the CLI spelling and the unit are the M2.5 plan's to finalise (§14 #22).
+**[Decided]** (plan M2.5, DECISIONS Note M) Fill values: a fill takes the place of the table default for a channel that has no source map and is never applied to a channel that has one. The field is `packing.fill.<role>` (a §4.4 raw-map role id such as `metallic`) holding an 8-bit code 0–255, and `--fill <role>=<0..255>` sets it for the whole batch like an unscoped `--set`; the GUI offers one slider per role in the global settings. A fill for a role that no recipe of the target packs has no effect. `packing.roughness_default` remains the preset-level neutral default for roughness, and a roughness fill wins over it. A filled channel is recorded as `fill:<code>` and raises no `PACK-DEFAULTED` (Note M5).
 
-**[Proposal]** Rules:
+**[Decided]** (plan M2.5, DECISIONS Note M) Rules:
 
 | Topic | Rule |
 |---|---|
@@ -510,8 +510,10 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | Provenance | Each output channel records its source (`iron_roughness.png:R`, `1 − iron_gloss.png:R`) or `default:<value>` for a neutral default or `fill:<value>` for a user-set fill. The manifest record lists every source with its SHA-256 (§3.6), and `if-changed` re-encodes when any source changes. |
 | Pre-packed conflict | If the set already holds a source for the packed output (`iron_rmaos.png` and raw `iron_roughness.png`; `iron_p.png` and `iron_height.png`; `iron_m.png` and raw maps under `cpm`/`vanilla`), the recipe gets the explicit status `conflict` and `PACK-CONFLICT` (warning) names both sides. With `packing.prefer = prepacked` (default: the pre-packed file wins, with the warning) the pre-packed file converts as usual and the recipe's raw inputs are reported unused; with `raw` the recipe runs and the pre-packed file is skipped with `PACK-CONFLICT`. |
 | No source | A recipe whose trigger does not hold does not run; nothing is reported for it. |
-| Reporting | `set_resolved` lists each recipe: output, sub-type, per-channel source or default, status (`run`, `conflict`, `failed`). `sdc inspect` prints the same; `file_planned` carries the virtual job with all its sources. |
+| Reporting | `set_resolved` lists each recipe: output, sub-type, per-channel source or default, status (`run`, `conflict`, `failed`, `disabled`) and reason. `sdc inspect` prints the same; `file_planned` carries the virtual job with all its sources. |
 | Set membership | The packed output joins its set under its suffix, so it counts for PBR detection (§4.3 item 1), `set_has` rules and the bake (§6.2). |
+| Packing settings | Read from the packed output's profile resolved with a placeholder analysis (Note M6); a rule matching on `alpha` cannot change them. The same profile's `channels.grayscale_source` is the one used to assemble the image (stored in the job at plan time). |
+| Duplicate roles | The first raw map of a role by path is used; others are `PACK-UNUSED-INPUT` (Note M13). |
 
 ---
 
@@ -562,7 +564,7 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | `sdc presets list / show / diff / export / validate / schema` | Inspect, compare, export, check presets; print schemas | `export` only |
 | `sdc encoders` | Built-in encoder versions; NVTT detection | No |
 
-Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; loads a preset, e.g. one declaring suffix aliases, without selecting it, §3.7), `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`, and from M2.5 `--fill <role>=<0..255>` (repeatable, §3.2).
+Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; loads a preset, e.g. one declaring suffix aliases, without selecting it, §3.7), `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`, and `--fill <role>=<0..255>` (repeatable, §3.2), an unscoped `--set packing.fill.<role>` applied after every `--set` (Note M5).
 
 **Batch behaviour.** **[Proposal]** Files are grouped, resolved, then scheduled in parallel under the memory budget. A file converts only when every field is decided by an explicit rule, flag or a high-confidence suggestion accepted with `--accept-suggestions high`; diffuse alpha meaning is never high confidence. Unresolved files are skipped and listed. `--dry-run` stops after Resolve and emits `file_planned` events.
 
@@ -577,7 +579,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Output exists | `if-changed` (default) re-encodes when the manifest shows a different source hash, profile hash, engine version or encoder versions, a BC1 decoder model other than the batch's (BC1 and BC3 outputs, whose colour blocks rgbcx encodes against it), or a record whose validation did not pass (a failed output is re-encoded and reported again, never counted up to date); a record it cannot compare (newer schema, missing encoders or preset) also re-encodes. An output with no manifest record is kept (`OUT-UNKNOWN-EXISTING`) unless `overwrite`; the engine never leaves its own output without a record (a failure after the write removes the output) |
 | Invalid or unreadable input | `file_failed` at Load; batch continues |
 | Same stem, different formats | `IN-DUPLICATE`; both skipped |
-| Raw packing input (§4.4) | Before M2.5: `IN-PACKING-INPUT`, reported as `file_skipped` but not counted for exit 1; from M2.5 consumed by a packing recipe (§6.4) |
+| Raw packing input (§4.4) | Consumed by a packing recipe (§6.4). One whose recipe is off (`IN-PACKING-INPUT`) or that no recipe uses (`PACK-UNUSED-INPUT`) is reported as `file_skipped` but not counted for exit 1 (Note M4) |
 | DDS input in `convert` | Skipped (`IN-DDS-SKIPPED`) unless `--set file:<glob>.reencode=true` (`LOSS-REENCODE`). The opt-in is M6: `reencode` (like `resize`) is not a settable field yet, so today it is a usage error |
 | Unsupported setting for a file (BC6H under `vanilla`, BC5 on `_n` without `--allow`) | File skipped with its blocking code; exit 1 |
 | Unsupported setting for the whole batch | Exit 2 before work starts |
@@ -661,16 +663,16 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `ENC-NVTT-VERSION` (M5) | blocking | Untested NVTT version | Acknowledge |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
 | `IN-DDS-SKIPPED` | info | DDS input not re-encoded by default | Opt in |
-| `IN-PACKING-INPUT` | warning | Raw single-channel map (§4.4) is a channel-packing input, not converted on its own (before M2.5, or with `packing.enabled = false`) | Wait for M2.5, enable packing, or set a sub-type for it |
+| `IN-PACKING-INPUT` | warning | Raw single-channel map (§4.4) is a channel-packing input, not converted on its own (its recipe is off, `packing.enabled = false`) | Enable packing, or set a sub-type for it |
 | `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm` states no green convention (§4.4); never settled by `--accept-suggestions` or `--allow` | `--set 'file:<name>.channels.green_convention=opengl\|directx'` |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `IN-NONFINITE` | warning | Source has NaN or infinite samples; Preprocess replaced them (NaN and −∞ → 0, +∞ → 1, or the half-float maximum for HDR colour) | Fix the source |
 | `IN-FLOAT-LDR` | blocking | 32-bit float source resolved to a format other than BC6H; its transfer is not separated from the output encoding until M6 → "32-bit float source written to <fmt>: transfer handling lands in M6; acknowledge with --allow IN-FLOAT-LDR to convert as stored values" (interim guard, final review I4) | BC6H for HDR content under `cs`, an 8/16-bit source, or `--allow IN-FLOAT-LDR` |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |
-| `PACK-DEFAULTED` (M2.5) | warning | A packed channel has no source → neutral default (names output and channel) [D-H] | Supply the map or accept |
-| `PACK-SIZE-MISMATCH` (M2.5) | error | Sources of one recipe differ in size (lists every file and size) | Resize the sources |
-| `PACK-CONFLICT` (M2.5) | warning | A pre-packed source and raw maps target one output; pre-packed wins by default | Remove one side or set `packing.prefer` |
-| `PACK-UNUSED-INPUT` (M2.5) | warning | Raw map used by no recipe under the target | Change target, set a sub-type, or remove it |
+| `PACK-DEFAULTED` | warning | A packed channel has no source → neutral default (names output and channel) [D-H] | Supply the map or accept |
+| `PACK-SIZE-MISMATCH` | error | Sources of one recipe differ in size (lists every source and its size) | Resize the sources |
+| `PACK-CONFLICT` | warning | A pre-packed source and raw maps target one output; pre-packed wins by default. Also the intentional skip of the pre-packed file under `packing.prefer = raw` (Note M9) | Remove one side or set `packing.prefer` |
+| `PACK-UNUSED-INPUT` | warning | Raw map used by no recipe under the target | Change target, set a sub-type, or remove it |
 
 ---
 
@@ -759,8 +761,8 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | 15 | Code signing and antivirus | Unsigned | False positives in release testing [D#16] | Phase 7 |
 | 16 | Roughness default when a packed `_rmaos`/`_rfaos` has no roughness source | Decided: 0.5, preset field `packing.roughness_default`, confirmed by the owner 2026-10-09; per-channel global fill values override it (§3.2, §6.4) [D-H] | — | Closed |
 | 17 | Output name of colour vocabulary files | `<base>.dds`; `_d` keeps `<base>_d.dds` (§4.4) | Owner prefers `<base>_d.dds` or another rule | Owner |
-| 18 | Env-mask source of a packed `cpm`/`vanilla` `_m`; `cpm` `_m` height without a source | Metallic, else specular; height 0.5 (§6.4) | Owner rule; the constant height passed S8 (128 < 251; RGB must not be grey) | Owner, M2.5 |
-| 19 | Raw maps without a recipe | `_opacity`, specular-only and fuzz-only sets, height under `vanilla`, RGB `_sheen`: reported, not packed (§4.4, §6.4) | Owner names a recipe (e.g. opacity into colour alpha, specular into `_n` alpha) | Owner, M2.5 |
-| 20 | Raw specular scale | Copied unchanged into `_rmaos`/`_rfaos` A | Exporter "specular level" maps (0.5 = F0 0.04) shown to need a remap to TruePBR's A | Owner, M2.5 |
-| 21 | Raw packing inputs and the exit code before M2.5 | Not counted as skipped (exit 1) | Owner wants exit 1 when a set's packed map is missing | Owner |
-| 22 | Global fill values for missing pack maps | Per-role 8-bit codes via `packing.fill.<role>` and `--fill <role>=<0..255>`; provenance `fill:<v>` (§6.4) | M2.5 plan finalises the field path, CLI spelling, GUI control and whether a filled channel is still reported | Owner, M2.5 |
+| 18 | Env-mask source of a packed `cpm`/`vanilla` `_m`; `cpm` `_m` height without a source | Decided: metallic, else specular; height 0.5 (§6.4) | Owner rule; the constant height passed S8 (128 < 251; RGB must not be grey) | Closed (DECISIONS Note M1) |
+| 19 | Raw maps without a recipe | Decided: `_opacity`, specular-only and fuzz-only sets, height under `vanilla`, RGB `_sheen`: reported, not packed (§4.4, §6.4) | Owner names a recipe (e.g. opacity into colour alpha, specular into `_n` alpha) | Closed (DECISIONS Note M2) |
+| 20 | Raw specular scale | Decided: copied unchanged into `_rmaos`/`_rfaos` A | Exporter "specular level" maps (0.5 = F0 0.04) shown to need a remap to TruePBR's A | Closed (DECISIONS Note M3) |
+| 21 | Raw packing inputs and the exit code before M2.5 | Decided: not counted as skipped (exit 1) | Owner wants exit 1 when a set's packed map is missing | Closed (DECISIONS Note M4) |
+| 22 | Global fill values for missing pack maps | Decided: per-role 8-bit codes via `packing.fill.<role>` and `--fill <role>=<0..255>`; provenance `fill:<v>` (§6.4) | M2.5 plan finalises the field path, CLI spelling, GUI control and whether a filled channel is still reported | Closed (DECISIONS Note M5) |
