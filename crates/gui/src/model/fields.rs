@@ -20,6 +20,15 @@ pub const FIELDS: [(&str, &str); 13] = [
     ("encoder.perceptual", "Perceptual"),
 ];
 
+/// The rarely changed fields the Advanced drawer edits (M3a spec §2.5).
+pub const ADVANCED_FIELDS: [(&str, &str); 5] = [
+    ("encoder.perceptual", "Perceptual"),
+    ("encoder.bc1_transparent_black", "BC1 transparent black"),
+    ("encoder.bc45_search_radius", "BC4/BC5 search radius"),
+    ("encoder.rgbcx_level", "rgbcx level"),
+    ("header", "DDS header"),
+];
+
 pub fn group_of(field: &str) -> &'static str {
     match field.split('.').next().unwrap_or("") {
         "subtype" => "Type",
@@ -80,6 +89,13 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
             Some("used only by cutout and cutout + blend")
         }
         "mips.normal" if p.subtype.category() != Category::Normal => Some("normal maps only"),
+        "encoder.bc1_transparent_black" if p.format != Format::Bc1 => Some("BC1 only"),
+        "encoder.bc45_search_radius" if !matches!(p.format, Format::Bc4 | Format::Bc5) => {
+            Some("BC4 and BC5 only")
+        }
+        "encoder.rgbcx_level" if p.encoder.backend != Backend::Rgbcx => {
+            Some("used only by the rgbcx encoder (BC1, BC3, BC4, BC5)")
+        }
         _ => None,
     }
 }
@@ -96,8 +112,21 @@ pub struct FieldView {
 }
 
 pub fn field_views(target: Target, job: &ResolvedJob) -> Vec<FieldView> {
+    views_of(&FIELDS, target, job)
+}
+
+/// The Advanced drawer's fields, with their locks.
+pub fn advanced_field_views(target: Target, job: &ResolvedJob) -> Vec<FieldView> {
+    views_of(&ADVANCED_FIELDS, target, job)
+}
+
+fn views_of(
+    fields: &[(&'static str, &'static str)],
+    target: Target,
+    job: &ResolvedJob,
+) -> Vec<FieldView> {
     let profile = serde_json::to_value(&job.profile).unwrap_or_default();
-    FIELDS
+    fields
         .iter()
         .map(|&(field, label)| {
             let value = profile

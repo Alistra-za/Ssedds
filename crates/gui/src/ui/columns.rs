@@ -19,26 +19,40 @@ const SCROLL_ALLOWANCE: f32 = 18.0;
 
 /// A collapsed column: a thin strip with the column name drawn vertically.
 pub fn strip(ui: &mut egui::Ui, name: &str) {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(STRIP_WIDTH, ui.available_height()),
-        egui::Sense::hover(),
-    );
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), name));
-    let galley = ui.painter().layout_no_wrap(
-        name.to_string(),
-        egui::FontId::proportional(14.0),
-        ui.visuals().text_color(),
-    );
+    strip_sensing(ui, name, egui::Sense::hover());
+}
+
+/// A strip that can be clicked (the collapsed Advanced drawer opens with it).
+pub fn strip_button(ui: &mut egui::Ui, name: &str) -> egui::Response {
+    strip_sensing(ui, name, egui::Sense::click())
+}
+
+fn strip_sensing(ui: &mut egui::Ui, name: &str, sense: egui::Sense) -> egui::Response {
+    let widget = if sense.senses_click() {
+        egui::WidgetType::Button
+    } else {
+        egui::WidgetType::Label
+    };
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(STRIP_WIDTH, ui.available_height()), sense);
+    response.widget_info(|| egui::WidgetInfo::labeled(widget, ui.is_enabled(), name));
+    let color = if response.hovered() && sense.senses_click() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    let galley =
+        ui.painter()
+            .layout_no_wrap(name.to_string(), egui::FontId::proportional(14.0), color);
     // Rotated a quarter turn counter-clockwise: the text runs upward, its top edge on the left.
     let pos = egui::pos2(
         rect.center().x - galley.size().y / 2.0,
         rect.top() + 12.0 + galley.size().x,
     );
     ui.painter().add(
-        egui::epaint::TextShape::new(pos, galley, ui.visuals().text_color())
-            .with_angle(-std::f32::consts::FRAC_PI_2),
+        egui::epaint::TextShape::new(pos, galley, color).with_angle(-std::f32::consts::FRAC_PI_2),
     );
+    response
 }
 
 fn small_line_height(ui: &egui::Ui) -> f32 {

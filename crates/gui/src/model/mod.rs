@@ -1,6 +1,7 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod export;
 pub mod fields;
+pub mod inspector;
 pub mod items;
 pub mod preview;
 pub mod view;
@@ -78,6 +79,8 @@ pub struct AppModel {
     pub view: view::ViewState,
     /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
     pub gpu_max_dim: u32,
+    /// The BC1 decoder choice differs from the session's model, which is fixed at launch (M3a spec §4.6).
+    pub restart_needed: bool,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -122,6 +125,7 @@ impl AppModel {
             preview,
             view: view::ViewState::default(),
             gpu_max_dim: 16384,
+            restart_needed: false,
             generation: 0,
             planning: None,
             tx,
@@ -477,6 +481,31 @@ impl AppModel {
 
     pub fn set_fill(&mut self, role: RawMap, value: Option<u8>) {
         self.edit(move |p| p.set_fill(role, value));
+    }
+
+    /// Remove an unmatched `[files]` entry (one that names no file under the current target) and plan again.
+    pub fn remove_unmatched(&mut self, key: &str) {
+        let k = key.to_string();
+        self.edit(move |p| p.remove_file_entry(&k));
+    }
+
+    /// The BC1 decoder for the next launch. The session's model is fixed, so a difference needs a restart.
+    pub fn set_bc1_choice(&mut self, c: crate::settings::Bc1Choice) {
+        self.settings.bc1_decoder = c;
+        self.save_settings();
+        self.restart_needed = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.bc1_model() != c.model());
+    }
+
+    /// The preset id the batch starts from: the project's `preset`, else the target's default.
+    pub fn batch_preset_id(&self) -> String {
+        self.project
+            .as_ref()
+            .and_then(|p| p.config().ok())
+            .and_then(|c| c.preset)
+            .unwrap_or_else(|| engine::presets::default_preset_for(self.target).to_string())
     }
 
     pub fn is_dirty(&self) -> bool {

@@ -1,4 +1,5 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
+pub mod advanced;
 pub mod columns;
 pub mod dialogs;
 pub mod drawer;
@@ -17,6 +18,7 @@ use std::cell::RefCell;
 pub struct State {
     pub thumbs: thumbs::ThumbCache,
     pub drawer: drawer::DrawerState,
+    pub advanced: advanced::AdvancedState,
     pub preview: preview::PreviewUi,
     /// What is on the GPU; set by the app, empty in tests.
     pub gpu: preview::GpuStatus,
@@ -33,11 +35,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     header::draw(ui, model);
-    egui::Panel::right("advanced")
-        .resizable(false)
-        .show(ui, |ui| {
-            ui.toggle_value(&mut model.settings.advanced_open, "Advanced");
-        });
+    advanced::draw(ui, model, &mut state.advanced);
     column_panel(
         ui,
         "textures",

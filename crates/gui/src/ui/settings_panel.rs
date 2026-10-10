@@ -7,6 +7,7 @@ use crate::model::fields::{
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
 use eframe::egui;
+use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
 use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
 use engine::policy::{availability, Availability, ResolvedJob};
@@ -110,6 +111,17 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
         .into_iter()
         .map(|e| opt(json!(e), &capitalised(e)))
         .collect(),
+        "encoder.bc45_search_radius" => {
+            vec![
+                opt(json!("default"), "Default"),
+                opt(json!("max"), "Maximum"),
+            ]
+        }
+        "header" => vec![
+            opt(json!("auto"), "Auto"),
+            opt(json!("dx10"), "DX10 extended header"),
+            opt(json!("legacy"), "Legacy FourCC"),
+        ],
         _ => return None,
     })
 }
@@ -146,21 +158,23 @@ fn combo(
     (picked.filter(|v| v != current), r)
 }
 
-/// The threshold slider keeps its value locally while it is dragged and commits on release: every commit is a full
-/// re-plan. `committed` marks a value already sent, shown until the new plan lands.
+/// A slider keeps its value locally while it is dragged and commits on release: every commit is a full re-plan.
+/// `committed` marks a value already sent, shown until the new plan lands.
 #[derive(Clone, Copy)]
 struct Pending {
-    value: u8,
+    value: u32,
     committed: bool,
 }
 
-fn threshold(
+/// A slider over `range` that returns a value only when the drag ends (or a click or key press settles it).
+/// `id` keeps the in-progress value between frames.
+pub fn commit_slider(
     ui: &mut egui::Ui,
     model_busy: bool,
-    key: &str,
-    current: u8,
-) -> (Option<Value>, egui::Response) {
-    let id = egui::Id::new(("threshold", key));
+    id: egui::Id,
+    current: u32,
+    range: std::ops::RangeInclusive<u32>,
+) -> (Option<u32>, egui::Response) {
     let mut pending: Option<Pending> = ui.data(|d| d.get_temp(id));
     if let Some(p) = pending {
         if p.value == current || (p.committed && !model_busy) {
@@ -168,7 +182,7 @@ fn threshold(
         }
     }
     let mut value = pending.map_or(current, |p| p.value);
-    let r = ui.add(egui::Slider::new(&mut value, 5..=200));
+    let r = ui.add(egui::Slider::new(&mut value, range));
     if r.changed() {
         pending = Some(Pending {
             value,
@@ -187,7 +201,7 @@ fn threshold(
         }) = pending
         {
             if value != current {
-                out = Some(json!(value));
+                out = Some(value);
                 pending = Some(Pending {
                     value,
                     committed: true,
@@ -206,6 +220,17 @@ fn threshold(
     (out, r)
 }
 
+fn threshold(
+    ui: &mut egui::Ui,
+    model_busy: bool,
+    key: &str,
+    current: u8,
+) -> (Option<Value>, egui::Response) {
+    let id = egui::Id::new(("threshold", key));
+    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 5..=200);
+    (out.map(|v| json!(v)), r)
+}
+
 fn editor(
     ui: &mut egui::Ui,
     key: &str,
@@ -219,10 +244,20 @@ fn editor(
             let cur = f.value.as_u64().unwrap_or(128).clamp(5, 200) as u8;
             threshold(ui, busy, key, cur)
         }
-        "alpha.exact_opaque" | "encoder.perceptual" => {
+        "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
             let mut b = f.value.as_bool().unwrap_or(false);
             let r = ui.checkbox(&mut b, "");
             (r.changed().then(|| json!(b)), r)
+        }
+        "encoder.rgbcx_level" => {
+            let cur = f
+                .value
+                .as_u64()
+                .unwrap_or(0)
+                .min(u64::from(RGBCX_MAX_LEVEL)) as u32;
+            let id = egui::Id::new(("rgbcx-level", key));
+            let (out, r) = commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL);
+            (out.map(|v| json!(v)), r)
         }
         field => {
             let options = options_of(field, target, job).unwrap_or_default();
@@ -240,6 +275,63 @@ struct Ctx<'a> {
     compact: bool,
 }
 
+/// What a field row asks of the model.
+pub enum RowEdit {
+    Set(Value),
+    /// Use the inherited value again.
+    Clear,
+}
+
+/// One grid row of a field: its label, its editor (disabled with the reason when locked), where the value came from
+/// (or the lock's reason), and a reset when the texture's own entry sets it. `compact` leaves the provenance blank.
+pub fn field_row(
+    ui: &mut egui::Ui,
+    key: &str,
+    target: Target,
+    job: &ResolvedJob,
+    busy: bool,
+    compact: bool,
+    f: &FieldView,
+) -> Option<RowEdit> {
+    let mut edit = None;
+    ui.label(f.label);
+    let (set, r) = ui
+        .scope(|ui| {
+            if f.lock.is_some() {
+                ui.disable();
+            }
+            editor(ui, key, target, job, busy, f)
+        })
+        .inner;
+    if let Some(reason) = f.lock {
+        r.on_disabled_hover_text(reason);
+    }
+    if let Some(v) = set {
+        edit = Some(RowEdit::Set(v));
+    }
+    if compact {
+        ui.label("");
+    } else if let Some(reason) = f.lock {
+        ui.label(egui::RichText::new(reason).small().weak());
+    } else {
+        ui.label(
+            egui::RichText::new(provenance_text(&f.provenance))
+                .small()
+                .weak(),
+        );
+    }
+    if f.edited
+        && ui
+            .small_button("↺")
+            .on_hover_text("Use the inherited value")
+            .clicked()
+    {
+        edit = Some(RowEdit::Clear);
+    }
+    ui.end_row();
+    edit
+}
+
 fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Action>) {
     egui::CollapsingHeader::new(name)
         .default_open(true)
@@ -251,41 +343,11 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
                         .into_iter()
                         .filter(|f| group_of(f.field) == name)
                     {
-                        ui.label(f.label);
-                        let (set, r) = ui
-                            .scope(|ui| {
-                                if f.lock.is_some() {
-                                    ui.disable();
-                                }
-                                editor(ui, cx.key, cx.target, cx.job, cx.busy, &f)
-                            })
-                            .inner;
-                        if let Some(reason) = f.lock {
-                            r.on_disabled_hover_text(reason);
+                        match field_row(ui, cx.key, cx.target, cx.job, cx.busy, cx.compact, &f) {
+                            Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
+                            Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
+                            None => {}
                         }
-                        if let Some(v) = set {
-                            actions.push(Action::Set(f.field, v));
-                        }
-                        if cx.compact {
-                            ui.label("");
-                        } else if let Some(reason) = f.lock {
-                            ui.label(egui::RichText::new(reason).small().weak());
-                        } else {
-                            ui.label(
-                                egui::RichText::new(provenance_text(&f.provenance))
-                                    .small()
-                                    .weak(),
-                            );
-                        }
-                        if f.edited
-                            && ui
-                                .small_button("↺")
-                                .on_hover_text("Use the inherited value")
-                                .clicked()
-                        {
-                            actions.push(Action::Clear(f.field));
-                        }
-                        ui.end_row();
                     }
                 });
         });

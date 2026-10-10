@@ -384,22 +384,66 @@ impl AppModel {
                     Some(_) => {
                         self.set_base_notice(notice);
                         self.preview.profile_sig = Some(sig);
-                        let last = self.preview.last_result();
-                        self.preview.cancel_encode();
-                        self.preview.cancel_source();
-                        self.preview.encoded = match last {
-                            Some(r) => EncodedState::Stale(r),
-                            None => EncodedState::NotEncoded,
-                        };
-                        self.preview.source_pending = true;
-                        self.preview.pending_since = None;
-                        if self.preview.live {
-                            self.preview.encode_pending = true;
-                        }
+                        self.restart_job_preview();
                     }
                 }
             }
         }
+    }
+
+    /// The result on show is out of date: keep it as stale, read the source again, and encode again when live.
+    fn restart_job_preview(&mut self) {
+        let last = self.preview.last_result();
+        self.preview.cancel_encode();
+        self.preview.cancel_source();
+        self.preview.encoded = match last {
+            Some(r) => EncodedState::Stale(r),
+            None => EncodedState::NotEncoded,
+        };
+        self.preview.source_pending = true;
+        self.preview.pending_since = None;
+        if self.preview.live {
+            self.preview.encode_pending = true;
+        }
+    }
+
+    /// The size limit changed from `before`: what the expanded texture shows was made under the old one.
+    fn preview_limit_changed(&mut self, before: u32) {
+        if self.preview_limit() == before {
+            return;
+        }
+        let Some(key) = self.expanded.clone() else {
+            return;
+        };
+        match self.item(&key).map(classify) {
+            Some(Previewable::Job(_)) => self.restart_job_preview(),
+            Some(Previewable::Dds) => self.preview_open(&key),
+            _ => {}
+        }
+    }
+
+    /// The preview size limit (M3a spec §6.5); 16384 only with `allow_16k_preview`. Saved.
+    pub fn set_preview_max(&mut self, size: u32) {
+        if (size == 16384 && !self.settings.allow_16k_preview)
+            || !crate::settings::PREVIEW_SIZES.contains(&size)
+        {
+            return;
+        }
+        let before = self.preview_limit();
+        self.settings.preview_max = size;
+        self.save_settings();
+        self.preview_limit_changed(before);
+    }
+
+    /// Allow (or stop allowing) a 16384 px limit. Turning it off lowers a 16384 limit to 8192.
+    pub fn set_allow_16k_preview(&mut self, on: bool) {
+        let before = self.preview_limit();
+        self.settings.allow_16k_preview = on;
+        if !on && self.settings.preview_max > 8192 {
+            self.settings.preview_max = 8192;
+        }
+        self.save_settings();
+        self.preview_limit_changed(before);
     }
 
     /// Start whatever has waited out the debounce. The UI calls this every frame with `Instant::now()`.
