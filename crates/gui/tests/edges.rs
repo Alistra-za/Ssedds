@@ -10,7 +10,16 @@ use support::*;
 #[test]
 fn a_source_changed_on_disk_is_flagged_and_reloads_alone() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
+    // Its own session: the shared one counts the loads of tests running in parallel.
+    let session =
+        std::sync::Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap());
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..Default::default()
+    };
+    let mut m = sdc_gui::model::AppModel::new(settings, None, session);
+    m.open_folder(mod_folder(d.path()));
+    assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(m.check_sources(), 0);
     let loads = m.session.as_ref().unwrap().cache().loads();
     let p = m.root.clone().unwrap().join("landscape/rock01.png");
@@ -134,4 +143,22 @@ fn a_dds_input_changed_on_disk_is_flagged_and_its_preview_read_again() {
     assert!(!m.item("landscape/stored.dds").unwrap().changed_on_disk);
     let second = m.preview.encoded.shown().cloned().unwrap();
     assert_ne!(first.result.levels[0].len(), second.result.levels[0].len());
+}
+
+#[test]
+fn opening_another_folder_cancels_an_export_waiting_for_a_plan() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let p = m.root.clone().unwrap().join("landscape/rock01.png");
+    ImageBuffer::from_fn(32, 32, |_, _| Rgb([9u8, 9, 9]))
+        .save(&p)
+        .unwrap();
+    m.export_clicked();
+    // The export waits for the new plan; the user opens another folder before it arrives.
+    let other = tempfile::tempdir().unwrap();
+    m.open_folder(mod_folder(other.path()));
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(m.export.running.is_none());
+    assert!(m.export.summary.is_none());
+    assert_eq!(m.dialog, None);
 }

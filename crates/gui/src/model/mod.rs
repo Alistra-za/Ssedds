@@ -143,6 +143,8 @@ impl AppModel {
     }
 
     pub fn open_folder(&mut self, root: PathBuf) {
+        // An export waiting for a plan of the previous folder no longer applies.
+        self.export_after_plan = false;
         let project = ProjectDoc::open(&root);
         self.banner = project.error().map(|e| {
             format!(

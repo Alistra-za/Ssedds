@@ -112,6 +112,13 @@ fn a_gui_export_and_sdc_convert_agree() {
         outputs(&d.path().join("gui-out")),
         outputs(&d.path().join("cli-out")),
     );
+    // rock01, leaf, the normal, the 48 px texture and the packed _rmaos.
+    assert_eq!(
+        gui.len(),
+        5,
+        "outputs: {:?}",
+        gui.keys().collect::<Vec<_>>()
+    );
     assert_eq!(
         gui.keys().collect::<Vec<_>>(),
         cli.keys().collect::<Vec<_>>()
