@@ -234,6 +234,20 @@ Defaults for spec §14 #18–#22 and the M2.5 design choices; confirmed by the o
 - **M12 Provenance:** the recipe's sub-type is `recipe:<kind>`; each packed channel is recorded under `pack.r`, `pack.g`, `pack.b`, `pack.a` as `source:<file>:R` (`source:<file>:luma` with `channels.grayscale_source = luma`, `source:1-<file>:R` when inverted), `default:<value>` or `fill:<code>`.
 - **M13 Duplicate roles:** with two raw maps of one role in a set, the first by path is used and the others are `PACK-UNUSED-INPUT`.
 
+## Note N — M3a converter GUI decisions (owner and M3a plan, 2026-10-10)
+
+The owner split M3 into M3a (converter GUI), M3b (set editor and PGPatcher JSON) and M3c (texture edits) and approved the M3a design section by section (spec `docs/superpowers/specs/2026-10-10-sdc-m3a-converter-gui-design.md`).
+
+- **N1 Preview size limit 4096 by default** (owner): replaces the 8192 of #19 for the GUI preview only. Values 1024–16384; 16384 only as an explicit setting. The preview encodes only mips at or below the limit; each is byte-identical to the exported mip.
+- **N2 `[files]` in `sdc.toml`** (owner): per-texture GUI edits are saved as `[files."<path relative to sdc.toml>"]` entries (any profile field plus `allow = [codes]`). They are their own layer: above preset and config rules and analysis facts, below command-line `--set`. A key matches a file when `rel == key` or `rel` without its last extension `== key`, case-insensitively; packed outputs are keyed without extension. Provenance `project_file`. Only the project config may hold `[files]`.
+- **N3 Proceed anyway** (owner): exporting with undecided textures asks "Proceed anyway / Cancel"; proceeding skips the undecided textures and never decides for the user.
+- **N4 In-memory project config** (plan): `BatchRequest::project_config_inline` lets the GUI re-resolve unsaved edits; Export saves `sdc.toml` first, so `sdc convert <folder>` reproduces the last export.
+- **N5 Skip kinds** (plan): `file_skipped.kind` is one of `up_to_date`, `on_existing_skip`, `unresolved`, `blocked`, `duplicate`, `dds_input`, `packing_input`, `unknown_existing`, `pack_conflict`, `packed_source`.
+- **N6 Job key** (plan): every per-file event carries `job`, the output path relative to the output root (`manifest::output_key`).
+- **N7 Manifest sources record role and invert** (plan, M2.5 carry): replaces the `pack.*` provenance comparison in `if-changed`; schema-1 records re-encode once.
+- **N8 Preview API** (plan): `Session::preview(&ResolvedJob, max_size, &CancelToken)`.
+- **N9 Typed unresolved needs** (plan): `JobStatus::Unresolved.needs` lists `subtype`, `alpha_meaning` and `green_convention`.
+
 ## Phase 2 exit — CLI MVP (2026-10-09)
 
 - `sdc-bench --gates`: PASS, exit 0, 13/13 gate reports (target/bench/mvp-gates.txt). Exact opaque gates alpha == 255 and flag-off bit-identity; ΔRGB is info (S5).

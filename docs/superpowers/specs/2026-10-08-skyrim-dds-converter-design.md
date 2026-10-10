@@ -592,6 +592,8 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 ## 9. GUI design
 
+> **M3a supersedes this section** for everything it builds: `docs/superpowers/specs/2026-10-10-sdc-m3a-converter-gui-design.md` (owner, 2026-10-10). The GUI is split into M3a (converter GUI), M3b (set editor and PGPatcher JSON) and M3c (texture edits). The preview default limit there is 4096, not 8192.
+
 **[Proposal]** `sdc-gui` runs the engine in-process through the same API and event type as the CLI.
 
 **Screens and workflow.**
