@@ -602,6 +602,10 @@ pub struct ResolvedJob {
     /// file only while they still match; `None` (a job not made by `plan`) is not checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceStamp>,
+    /// How a packed output is built from its raw sources (spec §6.4); `None` for an ordinary file. For a packed
+    /// job `input` is `pack.sources[0].path` (DECISIONS Note M8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<crate::pack::PackJob>,
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1029,6 +1033,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         status: JobStatus::PackingInput { role },
         suffix_alias: None,
         source: None,
+        pack: None,
     }
 }
 
@@ -1101,6 +1106,7 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
                 },
                 suffix_alias,
                 source: None,
+                pack: None,
             };
         }
     };
@@ -1195,5 +1201,6 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
         status,
         suffix_alias,
         source: None,
+        pack: None,
     }
 }

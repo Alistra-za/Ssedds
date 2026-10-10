@@ -115,6 +115,16 @@ pub struct SourceRef {
     pub sha256: String,
 }
 
+impl SourceRef {
+    /// `path` ('/'-separated, as the record's `source`) and its SHA-256.
+    pub fn of(path: &Path) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            path: path.to_string_lossy().replace('\\', "/"),
+            sha256: sha256_file(path)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestRecord {
     pub schema: u32,

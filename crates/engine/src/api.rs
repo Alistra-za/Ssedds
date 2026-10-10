@@ -353,8 +353,21 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source,
-/// profile, engine version and encoders, a comparable record (known schema, encoders and preset present) and a
+/// The SHA-256 of every pack source now, in source order, or none for an ordinary file. `None` when a source
+/// cannot be hashed (then the output is not up to date).
+fn current_source_hashes(job: &ResolvedJob) -> Option<Vec<String>> {
+    match &job.pack {
+        None => Some(vec![]),
+        Some(pk) => pk
+            .sources
+            .iter()
+            .map(|s| sha256_file(&s.path).ok())
+            .collect(),
+    }
+}
+
+/// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
+/// (the bytes of every source, for a packed output), profile, engine version and encoders, a comparable record (known schema, encoders and preset present) and a
 /// passing validation, so a failed output is re-encoded and reported again rather than counted as up to date
 /// (controller ruling O2). BC1 and BC3 outputs also need the same batch BC1 decoder model: rgbcx encodes their
 /// colour blocks against it (BC3's colour half is a BC1 block), and validation decodes BC1 with it (review I2).
@@ -380,7 +393,8 @@ fn is_up_to_date(
         == Some(true);
     passed
         && e.engine_version == ENGINE_VERSION
-        && e.sources.is_empty()
+        && current_source_hashes(job)
+            .is_some_and(|h| h.iter().eq(e.sources.iter().map(|r| &r.sha256)))
         && sha256_json(&job.profile).is_ok_and(|h| h == e.profile_sha256)
         && sha256_file(&job.input).is_ok_and(|h| h == e.source_sha256)
 }
@@ -1273,6 +1287,7 @@ mod tests {
             status: JobStatus::Ready,
             suffix_alias: None,
             source: None,
+            pack: None,
         };
         let enc = EncoderVersions::current();
         let entry_for = |job: &ResolvedJob| ManifestEntry {

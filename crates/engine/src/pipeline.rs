@@ -17,15 +17,17 @@ use crate::image::Rgba32F;
 use crate::load::load_image;
 use crate::manifest::{
     bc1_model_id, dispatched_isa, engine_commit, now_rfc3339, output_key, sha256_file, sha256_json,
-    EncoderVersions, Manifest, ManifestRecord, PresetRef, ENGINE_VERSION, MANIFEST_SCHEMA,
+    EncoderVersions, Manifest, ManifestRecord, PresetRef, SourceRef, ENGINE_VERSION,
+    MANIFEST_SCHEMA,
 };
 use crate::mips::build_chain;
 use crate::ops::preprocess;
+use crate::pack::assemble::assemble;
 use crate::policy::{ResolvedJob, SourceStamp};
 use crate::quantize::{to_encoder_input, EncoderInput};
 use crate::validate::{validate, ValidationInput, ValidationReport};
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileError {
@@ -141,16 +143,54 @@ pub fn process_file(
         }
     };
 
-    // Final review I7: the plan's decisions (alpha policy, sub-type facts, ...) hold only for the file it analysed.
-    if let Some(planned) = job.source {
-        if SourceStamp::of(&job.input) != Some(planned) {
-            return Err(fail(Stage::Load)(
-                "source changed since planning; re-run".into(),
-            ));
+    // Final review I7: the plan's decisions (alpha policy, sub-type facts, ...) hold only for the file it analysed;
+    // a packed job checks every source.
+    let stamps: Vec<(&Path, Option<SourceStamp>)> = match &job.pack {
+        Some(pk) => pk
+            .sources
+            .iter()
+            .map(|s| (s.path.as_path(), s.stamp))
+            .collect(),
+        None => vec![(job.input.as_path(), job.source)],
+    };
+    for (src, planned) in stamps {
+        if let Some(planned) = planned {
+            if SourceStamp::of(src) != Some(planned) {
+                let what = if job.pack.is_some() {
+                    format!("{}: ", src.display())
+                } else {
+                    String::new()
+                };
+                return Err(fail(Stage::Load)(format!(
+                    "{what}source changed since planning; re-run"
+                )));
+            }
         }
     }
     let source_sha256 = sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
-    let (img, _) = load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
+    // Spec §6.4 "Provenance": a packed output records every source (its first source is `job.input`, Note M8).
+    let sources: Vec<SourceRef> = match &job.pack {
+        Some(pk) => pk
+            .sources
+            .iter()
+            .map(|s| SourceRef::of(&s.path))
+            .collect::<std::io::Result<_>>()
+            .map_err(|e| fail(Stage::Load)(e.to_string()))?,
+        None => vec![],
+    };
+    let img = match &job.pack {
+        Some(pk) => {
+            // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
+            assemble(pk, pk.gray)
+                .map_err(|e| fail(Stage::Load)(e.to_string()))?
+                .image
+        }
+        None => {
+            load_image(&job.input)
+                .map_err(|e| fail(Stage::Load)(e.to_string()))?
+                .0
+        }
+    };
     stop()?;
 
     enter(Stage::Preprocess);
@@ -255,7 +295,7 @@ pub fn process_file(
         provenance: job.provenance.clone(),
         source: job.input.to_string_lossy().replace('\\', "/"),
         source_sha256,
-        sources: vec![],
+        sources,
         output: output_key(&req.output_root, &job.output),
         validation: report.summary.clone(),
         bc1_model: Some(bc1_model_id(req.bc1_model).into()),
