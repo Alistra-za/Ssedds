@@ -69,6 +69,8 @@ pub struct SetItem {
 #[derive(Debug, Clone)]
 pub struct PlanView {
     pub target: Target,
+    /// The preset the batch resolved from (the request, the configs, or the target's default).
+    pub preset_id: String,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched: Vec<String>,
@@ -282,6 +284,7 @@ impl PlanView {
         }
         PlanView {
             target: plan.target,
+            preset_id: plan.preset_id.clone(),
             items,
             sets,
             unmatched,

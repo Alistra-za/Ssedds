@@ -14,6 +14,7 @@ use support::*;
 fn the_inspector_shows_provenance_and_differences_from_the_base() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
+    assert_eq!(m.batch_preset, "cs-quality");
     m.set_field(
         "landscape/leaf.png",
         "alpha.threshold",

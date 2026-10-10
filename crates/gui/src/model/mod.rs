@@ -67,6 +67,8 @@ pub struct AppModel {
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched_keys: Vec<String>,
+    /// The preset id the last plan resolved (empty before the first plan).
+    pub batch_preset: String,
     pub selection: Selection,
     pub filter: Filter,
     pub search: String,
@@ -114,6 +116,7 @@ impl AppModel {
             items: vec![],
             sets: vec![],
             unmatched_keys: vec![],
+            batch_preset: String::new(),
             selection: Selection::None,
             filter: Filter::default(),
             search: String::new(),
@@ -342,6 +345,7 @@ impl AppModel {
         self.items = view.items;
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
+        self.batch_preset = view.preset_id;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // Keep the selection when its item or set still exists; else nothing.
@@ -497,15 +501,6 @@ impl AppModel {
             .session
             .as_ref()
             .is_some_and(|s| s.bc1_model() != c.model());
-    }
-
-    /// The preset id the batch starts from: the project's `preset`, else the target's default.
-    pub fn batch_preset_id(&self) -> String {
-        self.project
-            .as_ref()
-            .and_then(|p| p.config().ok())
-            .and_then(|c| c.preset)
-            .unwrap_or_else(|| engine::presets::default_preset_for(self.target).to_string())
     }
 
     pub fn is_dirty(&self) -> bool {

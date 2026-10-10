@@ -114,7 +114,7 @@ fn section(ui: &mut egui::Ui, name: &str, body: impl FnOnce(&mut egui::Ui)) {
 
 fn inspector(ui: &mut egui::Ui, model: &AppModel, state: &mut AdvancedState) {
     section(ui, "Preset inspector", |ui| {
-        ui.label(format!("Batch preset: {}", model.batch_preset_id()));
+        ui.label(format!("Batch preset: {}", model.batch_preset));
         ui.label(
             egui::RichText::new(
                 "Built-in presets are read-only here. Change a texture in the centre panel.",
