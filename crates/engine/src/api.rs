@@ -21,7 +21,7 @@ use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
 use crate::presets::*;
-use crate::session::{pack_key, AnalysisCache, PackEntry};
+use crate::session::{pack_cache_key, AnalysisCache, PackEntry};
 use crate::suggest::{is_pbr_set, SuggestContext};
 use encoders_sys::Bc1Model;
 use serde::{Deserialize, Serialize};
@@ -871,10 +871,11 @@ impl Engine {
                     }
                     let stage = Cell::new(Stage::Load);
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // The key includes every source's stamp, so an edited source misses the cache.
-                        let key = pack_key(&c.job);
+                        // The key includes every source's stamp, so an edited source misses the cache. A recipe
+                        // without a key (a source with no stamp) is assembled every time and never stored.
+                        let key = pack_cache_key(&c.job);
                         let entry =
-                            match cache.pack(&key) {
+                            match key.as_deref().and_then(|k| cache.pack(k)) {
                                 Some(e) => {
                                     drop(admitted);
                                     e
@@ -899,7 +900,9 @@ impl Engine {
                                     };
                                     drop(asm.image);
                                     drop(admitted);
-                                    cache.put_pack(key, e.clone());
+                                    if let Some(key) = key {
+                                        cache.put_pack(key, e.clone());
+                                    }
                                     e
                                 }
                             };

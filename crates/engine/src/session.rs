@@ -109,9 +109,20 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The cache key of a packed image: everything that shapes it, including each source's stamp.
-pub fn pack_key(pk: &PackJob) -> String {
-    sha256_json(pk).unwrap_or_default()
+/// The key of a packed image: everything that shapes it, including each source's stamp. `None` when the job cannot
+/// be serialised.
+pub fn pack_key(pk: &PackJob) -> Option<String> {
+    sha256_json(pk).ok()
+}
+
+/// The key the pass-2 pack cache uses, or `None` when the image must not be cached: the key is unavailable, or a
+/// source has no stamp (it could not be read when the job was planned), so nothing says when it changed.
+pub fn pack_cache_key(pk: &PackJob) -> Option<String> {
+    pk.sources
+        .iter()
+        .all(|s| s.stamp.is_some())
+        .then(|| pack_key(pk))
+        .flatten()
 }
 
 impl AnalysisCache {
@@ -163,9 +174,10 @@ impl AnalysisCache {
     /// The job's thumbnail: its packed image's for a packed job, else its source's.
     pub fn thumbnail(&self, job: &ResolvedJob) -> Option<Thumbnail> {
         match &job.pack {
-            Some(pk) => lock(&self.packs)
-                .get(&pack_key(pk))
-                .and_then(|e| e.thumb.clone()),
+            Some(pk) => {
+                let key = pack_cache_key(pk)?;
+                lock(&self.packs).get(&key).and_then(|e| e.thumb.clone())
+            }
             None => self.thumbnail_of(&job.input),
         }
     }

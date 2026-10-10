@@ -258,3 +258,36 @@ fn project_rel_resolves_a_relative_input_against_an_absolute_root() {
         Some("x/y.png")
     );
 }
+
+/// DECISIONS N2 / spec §5.3: a config rule < a `[files]` entry < a command-line `--set`, all on one field of one file.
+#[test]
+fn a_rule_loses_to_a_files_entry_which_loses_to_the_command_line() {
+    let rule = "[[rules]]\nmatch = { glob = \"**/rock01_n.png\" }\noverrides = { alpha = { threshold = 80 } }\n";
+    let files = "[files.\"landscape/rock01_n.png\"]\nalpha.threshold = 100\n";
+    let set = || parse_set("file:landscape/rock01_n.png.alpha.threshold=150").unwrap();
+    let threshold = |p: &Plan| {
+        let j = job(p, "landscape/rock01_n.dds");
+        (j.profile.alpha.threshold, prov(j, "alpha.threshold"))
+    };
+
+    // The rule alone.
+    let d = fixture(rule);
+    let (value, source) = threshold(&plan(req(&d)));
+    assert_eq!(value, 80);
+    assert!(source.starts_with("rule:"), "{source}");
+
+    // The rule and a [files] entry: the entry wins.
+    let d = fixture(&format!("{rule}\n{files}"));
+    assert_eq!(threshold(&plan(req(&d))), (100, "project_file".to_string()));
+
+    // All three: the command line wins.
+    let mut r = req(&d);
+    r.overrides = vec![set()];
+    assert_eq!(threshold(&plan(r)), (150, "user".to_string()));
+
+    // The command line over the rule alone, for completeness.
+    let d = fixture(rule);
+    let mut r = req(&d);
+    r.overrides = vec![set()];
+    assert_eq!(threshold(&plan(r)), (150, "user".to_string()));
+}

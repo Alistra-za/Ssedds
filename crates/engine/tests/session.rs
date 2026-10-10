@@ -137,3 +137,26 @@ fn thumbnails_of_float_and_16_bit_sources_are_visible() {
     let t = s.thumbnail(&p.jobs[0]).unwrap();
     assert!((100..=140).contains(&t.rgba[0]), "{:?}", &t.rgba[..4]);
 }
+
+/// A recipe with a source that has no stamp is never cached (nothing says when that source changed), and a
+/// serialisable one is keyed by everything including its stamps.
+#[test]
+fn a_packed_image_with_an_unstamped_source_is_not_cached() {
+    let d = tempfile::tempdir().unwrap();
+    fixture(d.path());
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    let p = plan(&s, req(d.path(), Target::Cs));
+    let pk = p.jobs.iter().find_map(|j| j.pack.clone()).unwrap();
+    assert!(pk.sources.iter().all(|s| s.stamp.is_some()));
+    let key = pack_cache_key(&pk).expect("a stamped recipe is cached");
+    assert_eq!(pack_key(&pk), Some(key));
+    let mut unstamped = pk.clone();
+    unstamped.sources[1].stamp = None;
+    assert_eq!(pack_cache_key(&unstamped), None);
+    assert!(pack_key(&unstamped).is_some(), "the plain key still exists");
+    // Its thumbnail is not looked up either.
+    let mut job = p.jobs.iter().find(|j| j.pack.is_some()).unwrap().clone();
+    assert!(s.thumbnail(&job).is_some());
+    job.pack = Some(unstamped);
+    assert!(s.thumbnail(&job).is_none());
+}

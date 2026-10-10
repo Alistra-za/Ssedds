@@ -197,7 +197,7 @@ fn status_notice(item: &TextureItem) -> Option<String> {
 fn signature(job: &ResolvedJob) -> String {
     let p = sha256_json(&job.profile).unwrap_or_default();
     match &job.pack {
-        Some(pk) => format!("{p}:{}", pack_key(pk)),
+        Some(pk) => format!("{p}:{}", pack_key(pk).unwrap_or_default()),
         None => format!("{p}:{:?}", job.source),
     }
 }
