@@ -285,7 +285,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | Raw specular | `_specular`, `_spec` | Packing input `specular` | None on its own | §6.4 |
 | Raw glossiness | `_glossiness`, `_gloss` | Packing input `glossiness` | None on its own | §6.4 |
 | Raw height | `_height`, `_displacement`, `_disp` | Packing input `height` | None on its own | §6.4 |
-| Raw opacity | `_opacity` | Packing input `opacity` | None on its own | No recipe yet (§6.4, **[Open]**) |
+| Raw opacity | `_opacity` | Packing input `opacity` | None on its own | Reported with `PACK-UNUSED-INPUT`, not written (**[Decided]**, Note M2) |
 | Raw fuzz | `_fuzz`, `_sheen` | Packing input `fuzz` | None on its own | §6.4 |
 
 The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `_metal`, `_ambientocclusion`, `_occlusion`, `_spec`, `_gloss`, `_displacement`, `_disp`, `_sheen`), the emissive family and `_opacity` are **[Proposal]**.
