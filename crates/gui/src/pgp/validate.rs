@@ -46,6 +46,26 @@ fn type_ok(t: &str, v: &Value) -> bool {
     }
 }
 
+/// The errors of the branch that fails least, so a failed anyOf/oneOf still names the path and key that went
+/// wrong instead of only the summary. A branch that is the wrong type for the value (its first error is a type
+/// error at this very path) ranks after every branch that is the right type; ties go to the first branch.
+fn best_branch_errors(root: &Value, branches: &[Value], v: &Value, at: &str) -> Vec<String> {
+    let wrong_type = format!("{at}: expected ");
+    let mut best: Option<(bool, Vec<String>)> = None;
+    for b in branches {
+        let mut e = vec![];
+        check(root, b, v, at, &mut e);
+        let rank = (
+            e.first().is_some_and(|x| x.starts_with(&wrong_type)),
+            e.len(),
+        );
+        if best.as_ref().is_none_or(|(w, x)| rank < (*w, x.len())) {
+            best = Some((rank.0, e));
+        }
+    }
+    best.map(|(_, e)| e).unwrap_or_default()
+}
+
 fn check(root: &Value, s: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {
     let Some(s) = s.as_object() else {
         if s == &Value::Bool(false) {
@@ -120,12 +140,16 @@ fn check(root: &Value, s: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {
     if let Some(any) = s.get("anyOf").and_then(Value::as_array) {
         if !any.iter().any(passes) {
             errs.push(format!("{at}: matches none of anyOf"));
+            errs.extend(best_branch_errors(root, any, v, at));
         }
     }
     if let Some(one) = s.get("oneOf").and_then(Value::as_array) {
         let n = one.iter().filter(|x| passes(x)).count();
         if n != 1 {
             errs.push(format!("{at}: matches {n} of oneOf, needs exactly 1"));
+            if n == 0 {
+                errs.extend(best_branch_errors(root, one, v, at));
+            }
         }
     }
     if let Some(not) = s.get("not") {

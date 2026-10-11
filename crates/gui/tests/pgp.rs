@@ -1,5 +1,6 @@
 use sdc_gui::pgp::schema::*;
 use sdc_gui::pgp::settings::*;
+use sdc_gui::pgp::validate::*;
 use serde_json::{json, Value};
 
 /// The entry keys in the schema file's own order. `serde_json::Map` is a `BTreeMap` here (no `preserve_order`), so
@@ -525,8 +526,6 @@ fn an_entry_switches_a_default_on_only_true_key_off_by_writing_false() {
     assert_eq!(v["parallax"], json!(true));
 }
 
-use sdc_gui::pgp::validate::*;
-
 fn keywords_in(v: &Value, out: &mut std::collections::BTreeSet<String>, under_properties: bool) {
     match v {
         Value::Object(m) => {
@@ -535,7 +534,7 @@ fn keywords_in(v: &Value, out: &mut std::collections::BTreeSet<String>, under_pr
                     out.insert(k.clone());
                 }
                 // `examples` and `default` hold instance data, not schema.
-                if k != "examples" && k != "default" {
+                if under_properties || (k != "examples" && k != "default") {
                     keywords_in(x, out, k == "properties" || k == "definitions");
                 }
             }
@@ -590,4 +589,15 @@ fn written_documents_validate_and_bad_ones_do_not() {
     ] {
         assert!(validate(&bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn failures_name_the_path_and_the_key() {
+    let doc = json!({ "default": {}, "entries": [ { "match_diffuse": "a" }, { "match_diffuse": "b", "nope": 1 } ] });
+    let errs = validate(&doc).unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("entries[1]") && e.contains("nope")),
+        "{errs:?}"
+    );
 }
