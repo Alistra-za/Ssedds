@@ -286,6 +286,7 @@ fn femalebody_1600x900_frame_times() {
         key: 1,
         nif: v3::FileSource::Loose(winner.root.join(BODY)),
         textures,
+        le_mesh: false,
     }));
     let wait = |v: &mut Viewport3d| {
         let t = std::time::Instant::now();
@@ -381,4 +382,123 @@ fn render3d_shaders_round_trip_in_gui_toml() {
         s.save(&p).unwrap();
         assert_eq!(sdc_gui::settings::GuiSettings::load(&p), (s, None));
     }
+}
+
+// ---- fix round 1 ----
+
+fn spec(key: i64, le_mesh: bool) -> v3::MeshSpec {
+    v3::MeshSpec {
+        key,
+        nif: v3::FileSource::Loose(PathBuf::from(format!("C:/nope/{key}.nif"))),
+        textures: Default::default(),
+        le_mesh,
+    }
+}
+
+/// A Render queued when a new Load arrives is dropped by the render thread with no reply: busy must not stick.
+#[test]
+fn a_render_dropped_by_a_new_load_does_not_keep_busy() {
+    let d = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::new(Some(fp(d.path(), "CS", "a")));
+    let cmds = v.attach_test_thread();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Load { id, .. } = cmds.try_recv().unwrap() else {
+        panic!("load first")
+    };
+    v.handle(v3::V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    assert!(v.busy());
+    // The next mesh fails to read: the thread drops the render and answers only the load.
+    v.set_mesh(Some(spec(2, false)));
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Load { id, .. } = cmds.try_recv().unwrap() else {
+        panic!("load")
+    };
+    v.handle(v3::V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            errors: vec!["NIF: unreadable".into()],
+            ..Default::default()
+        },
+        bounds: None,
+    });
+    assert!(!v.busy());
+    // Same with an LE mesh or a cleared selection after a render was sent.
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Load { id, .. } = cmds.try_recv().unwrap() else {
+        panic!("load")
+    };
+    v.handle(v3::V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    v.request_frame(64, 64);
+    assert!(v.busy());
+    v.set_mesh(Some(spec(3, true)));
+    assert!(!v.busy());
+    v.set_mesh(None);
+    assert!(!v.busy());
+}
+
+#[test]
+fn le_mesh_shows_its_text_without_a_load_even_when_cs_is_missing() {
+    let mut v = Viewport3d::with_state(V3State::NotFound);
+    let cmds = v.attach_test_thread();
+    v.set_mesh(Some(spec(7, true)));
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "nothing sent for an LE mesh");
+    assert!(v.report.as_ref().is_some_and(|r| r.le_mesh));
+    assert!(!v.busy());
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label(LE_WARNING);
+    h.get_by_label("Community Shaders not found");
+}
+
+#[test]
+fn a_locate_error_keeps_the_state_and_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::new(Some(fp(d.path(), "CS", "a")));
+    v.on_located(Err("busy file".into()));
+    assert_eq!(v.state, V3State::Ready);
+    assert!(v.notice.as_deref().unwrap().contains("busy file"));
+    assert!(v.shaders.is_some());
+}
+
+/// A locate started before "Choose folder…" must not undo the chosen folder when it answers late.
+#[test]
+fn a_stale_locate_after_choose_folder_is_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("Lighting.hlsl"), "// l").unwrap();
+    let mut v = Viewport3d::with_state(V3State::NotFound);
+    v.locate(None);
+    let stale = v.locate_generation();
+    v.choose_folder(d.path().to_path_buf());
+    let t = std::time::Instant::now();
+    while v.busy() && t.elapsed().as_secs() < 20 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(v.state, V3State::Ready);
+    assert_eq!(v.shaders.as_ref().unwrap().root, d.path());
+    v.handle(v3::V3Reply::Located {
+        generation: stale,
+        result: Ok(None),
+    });
+    assert_eq!(v.state, V3State::Ready, "the late answer is ignored");
+    assert_eq!(v.shaders.as_ref().unwrap().root, d.path());
 }

@@ -833,16 +833,19 @@ impl Store {
             .optional()?)
     }
 
-    /// A NIF copy's (canonical path, origin kind, origin root), for reading its bytes (see
+    /// A NIF copy's (canonical path, origin kind, origin root, LE mesh), for reading its bytes (see
     /// [`Store::texture_location`] for the root).
-    pub fn copy_location(&self, copy_id: i64) -> Result<Option<(String, i32, String)>, ScanError> {
+    pub fn copy_location(
+        &self,
+        copy_id: i64,
+    ) -> Result<Option<(String, i32, String, bool)>, ScanError> {
         Ok(self
             .conn
             .query_row(
-                "SELECT p.p, o.kind, o.root FROM nif_copy c JOIN path p ON p.id = c.path_id
+                "SELECT p.p, o.kind, o.root, c.le_mesh FROM nif_copy c JOIN path p ON p.id = c.path_id
                  JOIN origin o ON o.id = c.origin_id WHERE c.id = ?1",
                 [copy_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?)
     }

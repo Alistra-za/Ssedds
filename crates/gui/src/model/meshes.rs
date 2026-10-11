@@ -727,7 +727,7 @@ fn mesh_spec(
     copy: i64,
     shapes: &[ShapeView],
 ) -> Result<Option<MeshSpec>, ScanError> {
-    let Some((path, kind, root)) = store.copy_location(copy)? else {
+    let Some((path, kind, root, le_mesh)) = store.copy_location(copy)? else {
         return Ok(None);
     };
     let mut textures = HashMap::new();
@@ -743,6 +743,7 @@ fn mesh_spec(
         key: copy,
         nif: FileSource::from_store(kind, &root, &path),
         textures,
+        le_mesh,
     }))
 }
 

@@ -79,6 +79,8 @@ pub struct MeshSpec {
     pub key: i64,
     pub nif: FileSource,
     pub textures: HashMap<String, FileSource>,
+    /// BSVER 83: the panel shows the LE text and nothing is loaded or rendered (00 §6.5).
+    pub le_mesh: bool,
 }
 
 /// A rendered frame: RGBA8, sRGB-encoded for display when Linear Lighting is on.
@@ -176,8 +178,15 @@ pub enum V3Reply {
         id: u64,
         message: String,
     },
-    Located(Result<Option<Fingerprint>, String>),
-    Chosen(Result<Fingerprint, String>),
+    /// A locate answer; `generation` tells a stale one (started before a later locate or "Choose folder…").
+    Located {
+        generation: u64,
+        result: Result<Option<Fingerprint>, String>,
+    },
+    Chosen {
+        generation: u64,
+        result: Result<Fingerprint, String>,
+    },
 }
 
 /// `%LOCALAPPDATA%\sdc\shader-cache`.
@@ -214,6 +223,7 @@ pub struct Viewport3d {
     render_done: u64,
     next_id: u64,
     locating: bool,
+    locate_gen: u64,
     declined: Option<PathBuf>,
     shaders_changed: bool,
     thread: Option<Sender<V3Cmd>>,
@@ -249,6 +259,7 @@ impl Viewport3d {
             render_done: 0,
             next_id: 0,
             locating: false,
+            locate_gen: 0,
             declined: None,
             shaders_changed: false,
             thread: None,
@@ -262,6 +273,19 @@ impl Viewport3d {
         let mut v = Viewport3d::new(None);
         v.state = state;
         v
+    }
+
+    /// The generation of the latest locate or "Choose folder…" (older answers are ignored).
+    pub fn locate_generation(&self) -> u64 {
+        self.locate_gen
+    }
+
+    /// Test seam: stands in for the render thread; the returned receiver gets the commands.
+    #[doc(hidden)]
+    pub fn attach_test_thread(&mut self) -> Receiver<V3Cmd> {
+        let (t, r) = channel();
+        self.thread = Some(t);
+        r
     }
 
     pub fn locating(&self) -> bool {
@@ -291,20 +315,30 @@ impl Viewport3d {
             return;
         }
         self.locating = true;
+        self.locate_gen += 1;
+        let generation = self.locate_gen;
         let saved = self.shaders.clone();
         spawn_guarded(self.tx.clone(), "locate", move |tx| {
-            let r = locate_shaders(target.as_ref(), saved.as_ref());
-            let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Located(r)));
+            let result = locate_shaders(target.as_ref(), saved.as_ref());
+            let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Located {
+                generation,
+                result,
+            }));
         });
     }
 
     /// "Choose folder…": a CS mod folder or its `Shaders` folder.
     pub fn choose_folder(&mut self, folder: PathBuf) {
         self.locating = true;
+        self.locate_gen += 1;
+        let generation = self.locate_gen;
         spawn_guarded(self.tx.clone(), "locate", move |tx| {
-            let r = chosen_root(&folder)
+            let result = chosen_root(&folder)
                 .and_then(|root| locate::fingerprint(&root, None).map_err(|e| e.to_string()));
-            let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Chosen(r)));
+            let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Chosen {
+                generation,
+                result,
+            }));
         });
     }
 
@@ -315,8 +349,9 @@ impl Viewport3d {
         let found = match r {
             Ok(f) => f,
             Err(e) => {
+                // An IO error (MO2 copying files, say) is not "not found": keep the state, say why, retry on focus.
                 self.notice = Some(format!("Looking for Community Shaders failed: {e}"));
-                None
+                return;
             }
         };
         match locate::compare(self.shaders.as_ref(), found.clone()) {
@@ -405,10 +440,16 @@ impl Viewport3d {
             return;
         }
         self.mesh = spec.map(Arc::new);
-        self.need_load = self.mesh.is_some();
+        let le = self.mesh.as_ref().is_some_and(|m| m.le_mesh);
+        self.need_load = self.mesh.is_some() && !le;
         self.loaded = None;
         self.pending_load = None;
-        self.report = None;
+        // Renders in flight are for the old mesh; the thread drops one queued behind a new Load without a reply.
+        self.render_done = self.render_sent;
+        self.report = le.then(|| LoadReport {
+            le_mesh: true,
+            ..Default::default()
+        });
         self.bounds = None;
         self.frame = None;
         self.render_error = None;
@@ -437,6 +478,9 @@ impl Viewport3d {
         if self.state == V3State::NotFound || matches!(self.state, V3State::Error(_)) {
             return;
         }
+        if self.mesh.as_ref().is_some_and(|m| m.le_mesh) {
+            return;
+        }
         if self.mesh.is_none() || w == 0 || h == 0 || !self.ensure_thread() {
             return;
         }
@@ -448,6 +492,8 @@ impl Viewport3d {
             let id = self.id();
             let spec = self.mesh.clone().expect("mesh checked above");
             if thread.send(V3Cmd::Load { id, spec }).is_ok() {
+                // A queued Render is dropped by the thread when this Load reaches it, with no reply.
+                self.render_done = self.render_sent;
                 self.pending_load = Some(id);
                 self.state = V3State::Rendering;
             }
@@ -482,7 +528,7 @@ impl Viewport3d {
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
-                WorkerMsg::Viewport3d(r) => self.on_reply(r),
+                WorkerMsg::Viewport3d(r) => self.handle(r),
                 WorkerMsg::Panicked { what, message } => {
                     if what == "locate" {
                         self.locating = false;
@@ -504,7 +550,8 @@ impl Viewport3d {
         changed
     }
 
-    fn on_reply(&mut self, r: V3Reply) {
+    /// Applies one reply (what `poll` does with each message; public for tests).
+    pub fn handle(&mut self, r: V3Reply) {
         match r {
             V3Reply::Ready { adapter, warp } => self.adapter = Some((adapter, warp)),
             V3Reply::Failed(e) => {
@@ -526,6 +573,10 @@ impl Viewport3d {
                     if self.notice.as_deref() == Some(UPDATED_NOTICE) {
                         self.notice = None;
                     }
+                } else if self.loaded == Some(id) && self.pending_load.is_none() {
+                    // Reloaded after a device rebuild: same mesh, fresh report.
+                    self.report = Some(report);
+                    self.bounds = bounds;
                 }
             }
             V3Reply::Frame { frame, timing } => {
@@ -540,8 +591,13 @@ impl Viewport3d {
                 self.render_done = self.render_done.max(id);
                 self.render_error = Some(message);
             }
-            V3Reply::Located(r) => self.on_located(r),
-            V3Reply::Chosen(r) => self.on_chosen(r),
+            V3Reply::Located { generation, result } if generation == self.locate_gen => {
+                self.on_located(result)
+            }
+            V3Reply::Chosen { generation, result } if generation == self.locate_gen => {
+                self.on_chosen(result)
+            }
+            V3Reply::Located { .. } | V3Reply::Chosen { .. } => {}
         }
     }
 }
@@ -765,8 +821,13 @@ fn render_loop(
                             adapter: r.gpu().adapter.clone(),
                             warp: r.gpu().warp,
                         });
-                        if let Some((_, spec)) = &last {
-                            load(&mut r, spec);
+                        if let Some((lid, spec)) = &last {
+                            let report = load(&mut r, spec);
+                            send(V3Reply::Loaded {
+                                id: *lid,
+                                report,
+                                bounds: r.bounds(),
+                            });
                         }
                         result = r.render(&scene, w, h);
                     }
