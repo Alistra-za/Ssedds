@@ -167,6 +167,25 @@ impl SetsDoc {
         }
     }
 
+    /// Undo/redo: `restore` that keeps the live `last_json_sha256`. The hash records the JSON on disk, which undo
+    /// does not change, so it is outside the undoable state. When only the hash differs, nothing changes (and the
+    /// document is not marked dirty).
+    pub fn restore_keeping_json_sha(&mut self, text: &str) {
+        if self.read_only() || self.text() == text {
+            return;
+        }
+        let (doc, dirty, sha) = (self.doc.clone(), self.dirty, self.last_json_sha256());
+        let old = self.text();
+        self.restore(text);
+        if self.last_json_sha256() != sha {
+            self.set_project("last_json_sha256", sha.map(Value::from));
+        }
+        if self.text() == old {
+            self.doc = doc;
+            self.dirty = dirty;
+        }
+    }
+
     pub fn save(&mut self, force: bool) -> Result<(), SaveError> {
         if self.read_only() {
             return Err(SaveError::ReadOnly);

@@ -889,8 +889,9 @@ impl AppModel {
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
             p.restore(&s.sdc_toml);
         }
-        if let Some(d) = self.sets_doc.as_mut().filter(|d| d.text() != s.project) {
-            d.restore(&s.project);
+        // The JSON hash is not part of a step: export writes it outside history (spec §7.2, final review I2).
+        if let Some(d) = self.sets_doc.as_mut() {
+            d.restore_keeping_json_sha(&s.project);
         }
         self.replan();
     }

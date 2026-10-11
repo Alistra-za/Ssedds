@@ -216,3 +216,55 @@ fn a_plan_rejection_clears_the_history() {
     );
     assert!(!m.can_undo() && !m.can_redo());
 }
+
+fn export_and_wait(m: &mut sdc_gui::model::AppModel) {
+    m.export_clicked();
+    if matches!(m.dialog, Some(sdc_gui::model::Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(m.wait_idle(std::time::Duration::from_secs(120)));
+}
+
+/// Final review I2: the JSON hash records the file on disk, which undo and redo do not change; restoring an older
+/// `sdc-project.toml` text must not bring back an older hash (or none), or the next export asks to overwrite a JSON
+/// sdc wrote itself.
+#[test]
+fn undo_and_redo_after_an_export_keep_the_json_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
+    export_and_wait(&mut m);
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
+    let sha = m.sets_doc.as_ref().unwrap().last_json_sha256();
+    assert!(sha.is_some());
+
+    m.undo();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.sets_doc.as_ref().unwrap().last_json_sha256(), sha);
+    export_and_wait(&mut m);
+    assert!(m.dialog.is_none(), "after undo: {:?}", m.dialog);
+    let sha = m.sets_doc.as_ref().unwrap().last_json_sha256();
+
+    m.redo();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.sets_doc.as_ref().unwrap().last_json_sha256(), sha);
+    export_and_wait(&mut m);
+    assert!(m.dialog.is_none(), "after redo: {:?}", m.dialog);
+}
+
+/// Undoing an `sdc.toml` edit made before an export leaves `sdc-project.toml` alone: only the hash differs from the
+/// step's text, and that is kept, so the sets document stays saved.
+#[test]
+fn undoing_an_sdc_toml_edit_after_an_export_leaves_the_sets_doc_clean() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_field("landscape/rock01.png", "alpha.policy", json!("remove"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    export_and_wait(&mut m);
+    assert!(m.sets_doc.as_ref().unwrap().last_json_sha256().is_some());
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    m.undo();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    assert!(m.sets_doc.as_ref().unwrap().last_json_sha256().is_some());
+}
