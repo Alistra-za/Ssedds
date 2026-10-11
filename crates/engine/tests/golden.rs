@@ -1,15 +1,18 @@
 //! Golden tests (spec §11.1): each case generates its fixtures, runs the full `Engine::plan` + `Engine::run` and
 //! asserts the format, `_SRGB` tag, header form, mip count, alpha-policy outcome and warning codes. Nothing is
 //! committed but this file and no byte hashes are asserted (those belong to the `pinned-isa` CI job).
+use encoders_sys::Bc1Model;
 use engine::api::*;
 use engine::codes::{Code, Severity, Warning};
 use engine::config::Target;
 use engine::dds::{read_dds, DdsFile, DdsPixelFormat, HeaderKind};
 use engine::decode::{decode_level, Decoded};
 use engine::events::*;
+use engine::image::Rgba32F;
 use engine::manifest::Manifest;
 use engine::overrides::parse_set;
 use engine::policy::AcceptSuggestions;
+use engine::session::Session;
 use engine::validate::ValidationSummary;
 use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
 use std::path::Path;
@@ -200,6 +203,114 @@ fn gray_ramp(w: u32) -> DynamicImage {
 /// A flat tangent-space normal (+Z), unit length.
 fn flat_normal(w: u32) -> DynamicImage {
     DynamicImage::ImageRgb8(ImageBuffer::from_fn(w, w, |_, _| Rgb([128, 128, 255])))
+}
+
+/// A unit-length normal map whose direction changes from texel to texel, so every footprint is short.
+fn bumpy_normal(w: u32) -> DynamicImage {
+    DynamicImage::ImageRgb8(ImageBuffer::from_fn(w, w, |x, y| {
+        let nx = 0.6 * (x as f32 * 1.3 + y as f32 * 0.7).sin();
+        let ny = 0.6 * (x as f32 * 0.9 - y as f32 * 1.1).cos();
+        let nz = (1.0 - nx * nx - ny * ny).sqrt();
+        let e = |v: f32| ((v * 0.5 + 0.5) * 255.0).round() as u8;
+        Rgb([e(nx), e(ny), e(nz)])
+    }))
+}
+
+/// A roughness member: R a ramp, G 0, B 200 (AO), A specular 64 + y.
+fn rough_member(w: u32) -> DynamicImage {
+    rgba(w, |x, y| {
+        [(30 + (x * 3 + y * 2) % 190) as u8, 0, 200, (64 + y) as u8]
+    })
+}
+
+/// A normal texel as mip 0 writes it with the cs defaults: decoded as spec §5.4 does (no flip, no Z rebuild,
+/// z >= 0), then renormalised (`mips.normal_base = renormalize`, DECISIONS R1). The bake averages these.
+fn decoded_normal(p: &image::Rgb<u8>) -> [f64; 3] {
+    let d = |c: u8| f64::from(c) / 255.0 * 2.0 - 1.0;
+    let v = [d(p[0]), d(p[1]), d(p[2]).max(0.0)];
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 1e-8 {
+        v.map(|c| c / len)
+    } else {
+        [0.0, 0.0, 1.0]
+    }
+}
+
+/// Spec §6.2 step 2 in f64 (test code only): `min(2v, t²)` for the mean of `normals`.
+fn reference_add(normals: impl Iterator<Item = [f64; 3]>) -> f64 {
+    let t = 0.25f64;
+    let (mut s, mut k) = ([0.0f64; 3], 0.0f64);
+    for n in normals {
+        for c in 0..3 {
+            s[c] += n[c];
+        }
+        k += 1.0;
+    }
+    let l = ((s[0] / k).powi(2) + (s[1] / k).powi(2) + (s[2] / k).powi(2)).sqrt();
+    if l >= 1.0 - 1e-6 {
+        0.0
+    } else if l <= 0.0 {
+        t * t
+    } else {
+        (0.5 * (1.0 - l * l) / (3.0 * l - l * l * l)).min(t * t)
+    }
+}
+
+/// Spec §6.2 in f64 (test code only): the stored R of member texel (x, y) at mip `level`, the `_n` `shift` levels
+/// larger (negative: smaller). `shift` far below zero gives the unbaked value.
+fn reference_roughness(
+    n: &image::RgbImage,
+    r: &image::RgbaImage,
+    level: u32,
+    shift: i32,
+    x: u32,
+    y: u32,
+) -> f64 {
+    let f = 1u32 << level;
+    let mut alpha = 0.0;
+    for j in 0..f {
+        for i in 0..f {
+            let v = f64::from(r.get_pixel(x * f + i, y * f + j)[0]) / 255.0;
+            alpha += v * v;
+        }
+    }
+    alpha /= f64::from(f * f);
+    let m = level as i32 + shift;
+    let add = if m < 1 {
+        0.0
+    } else {
+        let g = 1u32 << m;
+        reference_add((0..g * g).map(|k| decoded_normal(n.get_pixel(x * g + k % g, y * g + k / g))))
+    };
+    if add == 0.0 {
+        alpha.sqrt()
+    } else {
+        (alpha * alpha + add).min(1.0).powf(0.25)
+    }
+}
+
+/// The float chain the encoder receives for the planned job whose input ends with `name`, and that job.
+fn planned_chain(
+    session: &Session,
+    req: BatchRequest,
+    name: &str,
+) -> (engine::policy::ResolvedJob, Vec<Rgba32F>) {
+    let rep = Reporter::new(Arc::new(NullSink), "golden");
+    let plan = Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    let job = plan
+        .jobs
+        .iter()
+        .find(|j| j.input.ends_with(name))
+        .unwrap_or_else(|| panic!("no job for {name}"))
+        .clone();
+    let chain = session
+        .preview_source(&job, 16384, &CancelToken::default())
+        .unwrap();
+    assert_eq!(chain.first_level, 0);
+    (job, chain.levels)
 }
 
 /// A dark opaque ramp tiled in 4x4 blocks: bc7e picks a p-bit-0 endpoint for it, so without `exact_opaque` the
@@ -1025,8 +1136,8 @@ fn rfaos_is_bc7_unorm_with_data_alpha() {
     );
 }
 
-/// Spec §11.1 2:1 sets: a 128 px `_n` with a 64 px roughness member. 2:1 is a power-of-two ratio, so
-/// SET-BAKE-RATIO (§10: ratio not a power of two) must not fire; the MVP renormalises (bake in M4).
+/// Spec §11.1 2:1 sets: a 128 px `_n` with a 64 px roughness member. 2:1 is a power-of-two ratio, so SET-BAKE-RATIO
+/// (§10) does not fire and both sets bake (flat normals, so the roughness is unchanged).
 #[test]
 fn two_to_one_sets_keep_their_own_chains() {
     let d = tempfile::tempdir().unwrap();
@@ -1054,6 +1165,15 @@ fn two_to_one_sets_keep_their_own_chains() {
         "{:?}",
         warnings(&o)
     );
+    for set in ["textures/pbr/iron", "textures/pbr/skin/skin"] {
+        assert!(
+            o.events.iter().any(
+                |e| matches!(&e.kind, EventKind::SetResolved { bake: true, .. })
+                    && e.set.as_deref().is_some_and(|s| s.ends_with(set))
+            ),
+            "{set} bakes"
+        );
+    }
     for (n, member, st) in [
         (
             "textures/pbr/iron_n.dds",
@@ -1676,4 +1796,207 @@ fn near_opaque_normal_alpha_is_removed_with_an_info() {
         vec![Code::AlphaPbrNormalDropped, Code::SetMissingCompanion]
     );
     assert!(!warnings(&o).contains(&Code::AlphaNearOpaque));
+}
+/// Roadmap M4 exit: `_n` + `_rmaos` and `_n` + `_rfaos` at 1:1 and 2:1 (and a half-size `_n`). Every texel of every
+/// level of the roughness chain the encoder receives is within 1/255 of the f64 reference, and the bake widens it.
+#[test]
+fn variance_bake_matches_the_f64_reference() {
+    let session = Session::new(Bc1Model::Ideal).unwrap();
+    for (nw, mw, member, shift) in [
+        (64u32, 64u32, "rmaos", 0i32),
+        (128, 64, "rmaos", 1),
+        (32, 64, "rmaos", -1),
+        // File suffixes: `_rfaos` resolves to the sub-type `skin_rfaos` after the packing-fills plan.
+        (64, 64, "rfaos", 0),
+        (128, 64, "rfaos", 1),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/pbr/iron_n.png", bumpy_normal(nw));
+        let name = format!("iron_{member}.png");
+        put(d.path(), &format!("textures/pbr/{name}"), rough_member(mw));
+        let (job, levels) = planned_chain(&session, request(d.path(), Target::Cs, &[], &[]), &name);
+        assert_eq!(
+            job.bake.as_ref().map(|b| b.shift),
+            Some(shift),
+            "{nw}:{mw} {member}: {:?}",
+            job.warnings
+        );
+        let (n, r) = (bumpy_normal(nw).to_rgb8(), rough_member(mw).to_rgba8());
+        let mut widened = 0;
+        for (level, l) in levels.iter().enumerate() {
+            for y in 0..l.height {
+                for x in 0..l.width {
+                    let want = reference_roughness(&n, &r, level as u32, shift, x, y);
+                    let got = f64::from(l.at(x, y)[0]);
+                    assert!(
+                        (got - want).abs() <= 1.0 / 255.0,
+                        "{nw}:{mw} {member} mip {level} ({x},{y}): {got} vs {want}"
+                    );
+                    let plain = reference_roughness(&n, &r, level as u32, -100, x, y);
+                    if want > plain + 1.0 / 255.0 {
+                        widened += 1;
+                    }
+                }
+            }
+        }
+        assert!(widened > 0, "{nw}:{mw} {member}: nothing widened");
+        // And it converts: both outputs written, the set reports the bake.
+        let o = convert(d.path(), Target::Cs, &[], &[]);
+        assert_eq!(
+            (o.summary.converted, o.summary.exit_code()),
+            (2, 0),
+            "{:?}",
+            warnings(&o)
+        );
+        assert!(o
+            .events
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::SetResolved { bake: true, .. })));
+        assert_dds(
+            &dds(d.path(), &format!("textures/pbr/iron_{member}.dds")),
+            DdsPixelFormat::Bc7 { srgb: false },
+            HeaderKind::Dx10,
+            7,
+        );
+    }
+}
+
+/// Renormalise-only paths are unchanged: a flat `_n` adds no variance, so the roughness chain is bit-identical to the
+/// same job without its bake.
+#[test]
+fn a_flat_normal_leaves_the_roughness_chain_bit_identical() {
+    let session = Session::new(Bc1Model::Ideal).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/pbr/iron_n.png", flat_normal(64));
+    put(d.path(), "textures/pbr/iron_rmaos.png", rough_member(64));
+    let (job, baked) = planned_chain(
+        &session,
+        request(d.path(), Target::Cs, &[], &[]),
+        "iron_rmaos.png",
+    );
+    assert!(job.bake.is_some());
+    let mut plain = job.clone();
+    plain.bake = None;
+    let unbaked = session
+        .preview_source(&plain, 16384, &CancelToken::default())
+        .unwrap()
+        .levels;
+    assert_eq!(baked, unbaked);
+}
+
+/// Spec §6.3: a non-PBR `_n` never bakes; `renormalize_bake` set on it changes nothing.
+#[test]
+fn renormalize_bake_on_a_non_pbr_normal_is_inert() {
+    let session = Session::new(Bc1Model::Ideal).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall_n.png", bumpy_normal(64));
+    let (_, plain) = planned_chain(
+        &session,
+        request(d.path(), Target::Cs, &[], &[]),
+        "wall_n.png",
+    );
+    let (job, set) = planned_chain(
+        &session,
+        request(
+            d.path(),
+            Target::Cs,
+            &["file:**/wall_n.png.mips.normal=renormalize_bake"],
+            &[],
+        ),
+        "wall_n.png",
+    );
+    assert_eq!(job.profile.subtype.id(), "normal");
+    assert_eq!(plain, set);
+}
+
+/// Owner 2026-10-11 (DECISIONS R2), roadmap exit: a `_cnr` widens its own coat roughness (alpha) by the formula, 1:1;
+/// a flat `_cnr` keeps its alpha bit for bit, as with the self-bake off.
+#[test]
+fn cnr_self_bake_matches_the_reference_and_a_flat_coat_keeps_its_alpha() {
+    let session = Session::new(Bc1Model::Ideal).unwrap();
+    let coat_alpha = |x: u32, y: u32| (40 + (x * 3 + y) % 200) as u8;
+    // Bumpy.
+    let d = tempfile::tempdir().unwrap();
+    let bumpy = bumpy_normal(64).to_rgb8();
+    put(
+        d.path(),
+        "textures/pbr/silk_cnr.png",
+        rgba(64, |x, y| {
+            let p = bumpy.get_pixel(x, y);
+            [p[0], p[1], p[2], coat_alpha(x, y)]
+        }),
+    );
+    let (job, levels) = planned_chain(
+        &session,
+        request(d.path(), Target::Cs, &[], &[]),
+        "silk_cnr.png",
+    );
+    assert_eq!(job.profile.subtype.id(), "coat_normal");
+    let mut widened = 0;
+    for (level, l) in levels.iter().enumerate() {
+        let f = 1u32 << level;
+        for y in 0..l.height {
+            for x in 0..l.width {
+                let mut r = 0.0;
+                for j in 0..f {
+                    for i in 0..f {
+                        r += f64::from(coat_alpha(x * f + i, y * f + j)) / 255.0;
+                    }
+                }
+                r /= f64::from(f * f);
+                let add = if level == 0 {
+                    0.0
+                } else {
+                    reference_add(
+                        (0..f * f)
+                            .map(|k| decoded_normal(bumpy.get_pixel(x * f + k % f, y * f + k / f))),
+                    )
+                };
+                let want = if add == 0.0 {
+                    r
+                } else {
+                    (r.powi(4) + add).min(1.0).powf(0.25)
+                };
+                let got = f64::from(l.at(x, y)[3]);
+                assert!(
+                    (got - want).abs() <= 1.0 / 255.0,
+                    "mip {level} ({x},{y}): {got} vs {want}"
+                );
+                if want > r + 1.0 / 255.0 {
+                    widened += 1;
+                }
+            }
+        }
+    }
+    assert!(widened > 0);
+    // Flat: the same alpha as with the self-bake off.
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/pbr/silk_cnr.png",
+        rgba(64, |x, y| [128, 128, 255, coat_alpha(x, y)]),
+    );
+    let (_, on) = planned_chain(
+        &session,
+        request(d.path(), Target::Cs, &[], &[]),
+        "silk_cnr.png",
+    );
+    let (_, off) = planned_chain(
+        &session,
+        request(
+            d.path(),
+            Target::Cs,
+            &["file:**/silk_cnr.png.mips.normal=renormalize"],
+            &[],
+        ),
+        "silk_cnr.png",
+    );
+    for (a, b) in on.iter().zip(&off) {
+        assert!(
+            a.px.iter().zip(&b.px).all(|(p, q)| p[3] == q[3]),
+            "{}x{}",
+            a.width,
+            a.height
+        );
+    }
 }
