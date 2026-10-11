@@ -12036,6 +12036,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - the exact per-shader slot and channel table;
       - what the hair shader assumes for alpha.
 - **Carried items** (final review, SDD ledger):
+  - **GUI filter dropdown (owner, 2026-10-11):** when `MipFilter` gains more than `box`, the "Filter" row in the sdc-gui Mipmaps group (basic panel, M3b polish Task 5) becomes a live dropdown. It must not move to Advanced.
   - Tent, Mitchell and Kaiser mips (mipcheck `RESULTS-2.md` B8):
     - Build each level **directly from mip 0**, with the kernel widened 2^N, and keep float values between levels.
     - Measured: recursion costs 1.5–2.5 dB (tent), 1–1.5 dB (Mitchell) and ≤ 0.5 dB (Kaiser) against a Lanczos-8 reference. 8-bit levels in between add up to 5 codes of drift with Kaiser.

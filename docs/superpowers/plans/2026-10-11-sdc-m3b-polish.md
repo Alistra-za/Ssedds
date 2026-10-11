@@ -168,3 +168,28 @@ Commit: `feat(gui): export lists undecided textures with per-row decide and Acce
 Note that drag feedback can't be tested by kittest. Describe it for the owner's hand check.
 
 Commit: `feat(gui): mip slider stops, preview Close button, pill drag feedback, warning hover, bigger Export (owner)`.
+
+### Task 5: Mipmap and coverage fields in the right place
+
+**Owner (2026-10-11):** "mipmaps do we need a full chain or simply a yes / no, full chain in advanced maybe. Coverage should be under alpha settings no? mipmap filter should be in basic not advanced"
+
+**Rules** (`crates/gui/src/model/fields.rs` `FIELDS`/`ADVANCED_FIELDS`/`group_of`, `crates/gui/src/ui/settings_panel.rs`, `crates/gui/src/ui/advanced.rs`):
+1. **Mipmaps on/off (basic):** a checkbox labelled "Mipmaps".
+   - Ticked writes `mips.levels = "full"`. Unticked writes `"none"`.
+   - When the resolved value is a number N, the box shows ticked with the note "(N levels — see Advanced)".
+   - Clicking it writes `full` or `none`.
+2. **Level count (Advanced drawer):** the existing "Levels" dropdown (Full chain / None / 2…N levels) moves into the Advanced drawer, in a "Mipmaps" section.
+3. **Coverage (Alpha group):** `mips.coverage` moves into the Alpha group, directly under Threshold/Comparison. It shows only for the `cutout` and `cutout_blend` policies, the same visibility rule as Threshold.
+   - Add a `group_of` override for the key `mips.coverage`, so it reports Alpha, not Mipmaps.
+4. **Mip filter (basic):** the engine's `MipFilter` has only `box` in v1 (`config.rs:27`). Show a disabled "Filter: Box" row in the Mipmaps group, with the hover text "More filters (Kaiser, Mitchell, Lanczos) arrive with M6". It becomes a live dropdown when M6 adds variants. M6 carries that item.
+5. **Normal handling** stays in the Mipmaps group (normal maps only, as today).
+6. **Nothing else moves.** The saved TOML keys don't change; this is only where fields are shown.
+   - The `differs_from_base` / "only differences" logic in Advanced must still work for the moved Levels row.
+
+**Tests (kittest + model):**
+- (a) Unticking "Mipmaps" writes `mips.levels = "none"`, and ticking writes `"full"`.
+- (b) "Levels" appears in the Advanced drawer and not in the main panel.
+- (c) "Coverage" appears under the Alpha heading only for a cutout policy.
+- (d) The "Filter: Box" row is present and disabled.
+
+Commit: `feat(gui): Mipmaps on/off in basic, level count in Advanced, coverage under Alpha, filter row (owner)`.
