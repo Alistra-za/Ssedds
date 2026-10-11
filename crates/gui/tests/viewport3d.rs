@@ -299,6 +299,12 @@ fn femalebody_1600x900_frame_times() {
     wait(&mut v);
     println!("report: {:#?}", v.report);
     println!("adapter: {:?}", v.adapter);
+    // Untimed warm-up frames (GPU clocks ramp up).
+    for _ in 0..5 {
+        v.orbit.drag(-3.0, 0.0);
+        v.request_frame(1600, 900);
+        wait(&mut v);
+    }
     let mut times = vec![];
     for i in 0..10 {
         v.orbit.drag(5.0 * (i + 1) as f32, 0.0);
@@ -359,4 +365,20 @@ fn femalebody_1600x900_frame_times() {
     let off = std::env::temp_dir().join("b8_femalebody_features_off.png");
     image::save_buffer(&off, &f.rgba, f.width, f.height, image::ColorType::Rgba8).unwrap();
     println!("wrote {}", off.display());
+}
+
+#[test]
+fn render3d_shaders_round_trip_in_gui_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc/gui.toml");
+    for owner in [Some("CommunityShaders_AIO".to_string()), None] {
+        let mut s = sdc_gui::settings::GuiSettings::default();
+        s.render3d.shaders = Some(Fingerprint {
+            root: d.path().join("CS").join("Shaders"),
+            owner_mod: owner,
+            hash: "ab12".into(),
+        });
+        s.save(&p).unwrap();
+        assert_eq!(sdc_gui::settings::GuiSettings::load(&p), (s, None));
+    }
 }
