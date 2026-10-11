@@ -421,6 +421,20 @@ impl AppModel {
         let Some(root) = self.root.clone() else {
             return;
         };
+        // The plan on screen must be the one for these sets: a plan whose output paths no longer match (the
+        // two-pass planning hit its bound) would write files where the sets do not expect them.
+        if self
+            .last_inputs
+            .as_ref()
+            .is_some_and(|l| *l != sets::engine_inputs(self))
+        {
+            self.dialog = Some(Dialog::Error(
+                "The plan does not match the sets (planning did not settle), so nothing was exported. \
+                 Reload and export again; if this repeats, please report it."
+                    .into(),
+            ));
+            return;
+        }
         if let Some(problem) = export::export_folder_problem(&root, &self.export_root()) {
             self.dialog = Some(Dialog::Error(problem));
             return;

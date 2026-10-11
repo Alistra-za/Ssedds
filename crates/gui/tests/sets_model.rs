@@ -90,6 +90,16 @@ fn vanilla_gets_no_output_paths() {
     m.set_target(engine::config::Target::Vanilla);
     idle(&mut m);
     assert!(engine_inputs(&m).1.is_empty());
+    // The plan went back to the mirrored path.
+    let diffuse = m.items.iter().find(|i| i.name == "rock01.png").unwrap();
+    let out = diffuse
+        .job
+        .as_ref()
+        .unwrap()
+        .output
+        .to_string_lossy()
+        .replace('\\', "/");
+    assert!(out.ends_with("export/landscape/rock01.dds"), "{out}");
 }
 
 #[test]
@@ -105,7 +115,8 @@ fn dropping_a_diffuse_on_a_set_with_one_asks_to_replace() {
             existing: key_of(&m, "rock01.png")
         }
     );
-    m.drop_replace(&leaf, "landscape/rock01");
+    m.drop_replace(&leaf, "landscape/rock01", DropChoice::Move)
+        .unwrap();
     idle(&mut m);
     let v = set_views(&m);
     let rock = view(&v, "landscape/rock01");
@@ -485,8 +496,194 @@ fn a_read_only_project_file_refuses_set_edits_but_sdc_toml_still_edits() {
     assert_eq!(m.drop_new_set(&odd), None);
     assert!(m.rename_set("landscape/rock01", "x/y").is_err());
     assert!(m.remove_member("landscape/rock01", &rough).is_err());
+    assert!(m
+        .drop_replace(&leaf, "landscape/rock01", DropChoice::Move)
+        .is_err());
+    assert!(!m.delete_set("landscape/rock01"));
+    assert!(m
+        .set_slot_command("landscape/rock01", 6, SlotCommand::Clear)
+        .is_err());
+    let order = m.sets_doc.as_ref().unwrap().order();
+    m.reorder_set("landscape/rock01", 3);
+    assert_eq!(m.sets_doc.as_ref().unwrap().order(), order);
     m.set_json_value(Some("landscape/rock01"), "specular_level", Some(json!(0.1)));
     assert!(!m.can_undo(), "no set edit was recorded");
     m.set_target(engine::config::Target::Vanilla);
     assert!(m.can_undo(), "sdc.toml edits still work");
+}
+
+/// rock01 (PBR) plus a created set `landscape/leaf-2` holding leaf.png in its diffuse slot.
+fn with_leaf_set(d: &std::path::Path) -> (sdc_gui::model::AppModel, String) {
+    let mut m = pbr_opened(d);
+    idle(&mut m);
+    let leaf = key_of(&m, "leaf.png");
+    let id = m.drop_new_set(&leaf).unwrap();
+    idle(&mut m);
+    assert!(matches!(
+        view(&set_views(&m), &id).slots.get(&SlotKind::Diffuse),
+        Some(SlotFill::Own { item }) if *item == leaf
+    ));
+    (m, id)
+}
+
+#[test]
+fn sharing_into_a_filled_slot_asks_to_replace() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, id) = with_leaf_set(d.path());
+    let leaf = key_of(&m, "leaf.png");
+    let rock = key_of(&m, "rock01.png");
+    let before = m.sets_doc.as_ref().unwrap().text();
+    assert_eq!(
+        m.drop_choice(&rock, &id, DropChoice::Share),
+        DropOutcome::AskReplace {
+            existing: leaf.clone()
+        }
+    );
+    // Cancel: nothing changed.
+    assert_eq!(m.sets_doc.as_ref().unwrap().text(), before);
+    // Replace: leaf leaves, the slot borrows rock01's diffuse, in one step.
+    m.drop_replace(&rock, &id, DropChoice::Share).unwrap();
+    idle(&mut m);
+    let v = set_views(&m);
+    assert!(matches!(
+        view(&v, &id).slots.get(&SlotKind::Diffuse),
+        Some(SlotFill::Borrowed { from, item }) if from == "landscape/rock01" && *item == rock
+    ));
+    assert!(!view(&v, &id).members.contains(&leaf));
+    m.undo();
+    idle(&mut m);
+    assert_eq!(m.sets_doc.as_ref().unwrap().text(), before);
+}
+
+#[test]
+fn sharing_away_the_only_texture_of_an_automatic_set_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let rock = key_of(&m, "rock01.png");
+    assert!(matches!(
+        m.drop_choice(&rock, "landscape/leaf", DropChoice::Share),
+        DropOutcome::AskReplace { .. }
+    ));
+    assert!(m
+        .drop_replace(&rock, "landscape/leaf", DropChoice::Share)
+        .is_err());
+}
+
+#[test]
+fn duplicating_a_finished_map_into_a_filled_slot_asks_to_replace() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, id) = with_leaf_set(d.path());
+    let leaf = key_of(&m, "leaf.png");
+    let rock = key_of(&m, "rock01.png");
+    let base = id.rsplit('/').next().unwrap().to_string();
+    let copy = m
+        .root
+        .clone()
+        .unwrap()
+        .join(format!("landscape/{base}.png"));
+    assert_eq!(
+        m.drop_choice(&rock, &id, DropChoice::Duplicate),
+        DropOutcome::AskReplace {
+            existing: leaf.clone()
+        }
+    );
+    assert!(!copy.exists(), "cancel copies nothing");
+    m.drop_replace(&rock, &id, DropChoice::Duplicate).unwrap();
+    assert!(copy.exists(), "{copy:?}");
+    idle(&mut m);
+    let members = view(&set_views(&m), &id).members.clone();
+    assert!(
+        members.contains(&format!("landscape/{base}.png")),
+        "{members:?}"
+    );
+    assert!(!members.contains(&leaf));
+    m.undo();
+    assert!(
+        !copy.exists(),
+        "one undo removes the copy and puts leaf back"
+    );
+    idle(&mut m);
+    assert!(view(&set_views(&m), &id).members.contains(&leaf));
+}
+
+#[test]
+fn an_entry_whose_files_are_all_gone_shows_as_missing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_json_value(
+        Some("landscape/rock01"),
+        "specular_level",
+        Some(json!(0.05)),
+    );
+    let root = m.root.clone().unwrap();
+    for f in [
+        "rock01.png",
+        "rock01_normal.png",
+        "rock01_roughness.png",
+        "rock01_ao.png",
+    ] {
+        std::fs::remove_file(root.join("landscape").join(f)).unwrap();
+    }
+    m.reload_changed();
+    idle(&mut m);
+    let v = set_views(&m);
+    let rock = view(&v, "landscape/rock01");
+    assert!(rock.key.is_empty() && rock.members.is_empty());
+    assert!(!rock.missing.is_empty(), "shown as missing");
+    let leaf = key_of(&m, "leaf.png");
+    assert!(matches!(
+        m.drop_on_set(&leaf, "landscape/rock01"),
+        DropOutcome::Refused(_)
+    ));
+}
+
+#[test]
+fn a_borrow_from_a_set_without_that_slot_is_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.edit_docs("t", None, true, |_, s| {
+        s.set_borrow("landscape/leaf", 6, Some("landscape/odd"))
+    });
+    idle(&mut m);
+    let v = set_views(&m);
+    let leaf = view(&v, "landscape/leaf");
+    assert!(
+        leaf.missing
+            .iter()
+            .any(|x| x.contains("slot6") && x.contains("landscape/odd")),
+        "{:?}",
+        leaf.missing
+    );
+    assert!(!leaf.slots.contains_key(&SlotKind::Rmaos));
+}
+
+#[test]
+fn export_refuses_a_plan_that_does_not_match_the_sets() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    // A set change that was not planned (the state the bounded re-planning leaves when it gives up).
+    m.edit_docs("t", None, false, |_, s| s.create_set("x/y"));
+    m.export_clicked();
+    assert!(matches!(m.dialog, Some(sdc_gui::model::Dialog::Error(_))));
+    assert!(m.export.running.is_none(), "nothing was exported");
+}
+
+#[test]
+fn an_entry_left_with_only_its_id_is_not_an_edit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.rename_set("landscape/leaf", "landscape/leafy").unwrap();
+    idle(&mut m);
+    m.rename_set("landscape/leafy", "landscape/leaf").unwrap();
+    idle(&mut m);
+    let leaf = key_of(&m, "leaf.png");
+    assert!(!matches!(
+        m.drop_on_set(&leaf, "landscape/rock01"),
+        DropOutcome::AskChoice { .. }
+    ));
 }

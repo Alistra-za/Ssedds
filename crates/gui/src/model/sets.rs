@@ -5,7 +5,7 @@ use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
 use crate::pgp::prefix::{check_rel_path, derive_match_diffuse, output_rel, prefix_of};
 use crate::pgp::settings::{effective, Settings};
-use crate::sets_doc::SetEntry;
+use crate::sets_doc::{SetEntry, SetsDoc};
 use engine::config::{Subtype, Target};
 use engine::group::{split_suffix, split_vocab, VocabRole};
 use engine::overrides::path_key_matches;
@@ -222,8 +222,9 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
             v
         })
         .collect();
-    // Created sets that have no members yet.
-    for e in entries.iter().filter(|e| e.created) {
+    // Created sets that have no members yet, and entries whose files have all gone (spec §7.1: shown as missing,
+    // never silently dropped).
+    for e in &entries {
         if !views.iter().any(|v| v.id.eq_ignore_ascii_case(&e.id)) {
             views.push(SetView::new(String::new(), e.id.clone(), vec![]));
         }
@@ -247,6 +248,9 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
         };
         v.created = e.created;
         v.settings = e.settings.clone();
+        if v.key.is_empty() && !e.created {
+            v.missing.push(NO_FILES_LEFT.into());
+        }
         for f in e.add.iter().chain(&e.remove) {
             if !m.items.iter().any(|i| path_key_matches(f, &i.key)) {
                 v.missing.push(f.clone());
@@ -271,6 +275,9 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
                         item: item.clone(),
                     },
                 );
+            } else {
+                v.missing
+                    .push(format!("slot{slot} from {from} (it has none)"));
             }
         }
     }
@@ -459,10 +466,25 @@ pub enum SlotCommand {
 const READ_ONLY: &str = "sdc-project.toml is read-only";
 const PACKED_MOVE: &str =
     "a packed map follows its raw maps; move those, or share the finished map";
+/// The `missing` line of an `[[sets]]` entry whose files have all gone.
+const NO_FILES_LEFT: &str = "no texture of this set is left in the folder";
 
 /// Match-related keys change output paths, so editing them re-plans (DECISIONS P7).
 fn replans(key: &str) -> bool {
     key.starts_with("match") || key == "path_contains" || key == "rename"
+}
+
+/// Empty `slot` of set `id` in the document: its own occupant leaves the set, a borrow is dropped. Part of a replace.
+fn clear_slot(s: &mut SetsDoc, id: &str, slot: Option<SlotKind>, existing: &Option<SlotFill>) {
+    match existing {
+        Some(SlotFill::Own { item }) => s.remove_member(id, item),
+        Some(SlotFill::Borrowed { .. }) => {
+            if let Some(n) = slot.map(SlotKind::slot_number) {
+                s.set_borrow(id, n, None);
+            }
+        }
+        _ => {}
+    }
 }
 
 impl AppModel {
@@ -486,19 +508,52 @@ impl AppModel {
         self.item(item).is_some_and(|i| i.kind == ItemKind::Packed)
     }
 
-    /// A set id the engine knows or will know: a set on screen, or the original name of a renamed set (the rename
-    /// applies first in the engine, but another set taking that name would make it fail).
-    fn id_taken(&self, id: &str) -> bool {
-        set_views(self)
-            .iter()
-            .any(|v| v.id.eq_ignore_ascii_case(id))
-            || self.sets_doc.as_ref().is_some_and(|d| {
-                d.entries().iter().any(|e| {
-                    e.renamed_from
-                        .as_deref()
-                        .is_some_and(|f| f.eq_ignore_ascii_case(id))
-                })
-            })
+    /// The set ids the engine knows or will know (lower-case): the sets on screen, and the original names of renamed
+    /// sets (the rename applies first in the engine, but another set taking that name would make it fail).
+    fn taken_ids(&self) -> BTreeSet<String> {
+        let mut ids: BTreeSet<String> = set_views(self)
+            .into_iter()
+            .map(|v| v.id.to_lowercase())
+            .collect();
+        if let Some(d) = &self.sets_doc {
+            ids.extend(
+                d.entries()
+                    .into_iter()
+                    .filter_map(|e| e.renamed_from.map(|f| f.to_lowercase())),
+            );
+        }
+        ids
+    }
+
+    /// The set a texture may be dropped on: it exists and still has files (or is a set the user created).
+    fn drop_target(&self, set: &str) -> Result<SetView, String> {
+        let target = self.view_of(set).ok_or_else(|| format!("no set {set}"))?;
+        if target.key.is_empty() && !target.created {
+            return Err(format!("{}: {NO_FILES_LEFT}", target.id));
+        }
+        Ok(target)
+    }
+
+    /// What fills `slot` of `target` now: `None` when the drop needs no replace. A packed occupant cannot leave (it
+    /// follows its raw maps); a borrow of the same set's output is already there (`None`).
+    fn occupant(
+        &self,
+        target: &SetView,
+        slot: Option<SlotKind>,
+        share_from: Option<&str>,
+    ) -> Result<Option<SlotFill>, String> {
+        match slot.and_then(|s| target.slots.get(&s)).cloned() {
+            Some(SlotFill::Own { item }) if self.is_packed(&item) => Err(format!(
+                "that slot holds a packed map ({item}); move its raw maps out of the set first"
+            )),
+            Some(SlotFill::Borrowed { from, .. })
+                if share_from.is_some_and(|f| f.eq_ignore_ascii_case(&from)) =>
+            {
+                Ok(None)
+            }
+            Some(f @ (SlotFill::Own { .. } | SlotFill::Borrowed { .. })) => Ok(Some(f)),
+            _ => Ok(None),
+        }
     }
 
     /// A texture dropped on set `set` (spec §3.1, §3.3).
@@ -506,8 +561,9 @@ impl AppModel {
         if !self.sets_editable() {
             return DropOutcome::Refused(READ_ONLY.into());
         }
-        let Some(target) = self.view_of(set) else {
-            return DropOutcome::Refused(format!("no set {set}"));
+        let target = match self.drop_target(set) {
+            Ok(t) => t,
+            Err(e) => return DropOutcome::Refused(e),
         };
         let from = self.set_of_item(item);
         if from.as_ref().is_some_and(|f| f.id == target.id) {
@@ -518,12 +574,17 @@ impl AppModel {
         if let Some(why) = incoming.and_then(|s| slot_conflict(&existing, s)) {
             return DropOutcome::Refused(why);
         }
-        // A texture that belongs to a real set (more than itself, or one the user touched) asks what to do.
+        // A texture that belongs to a real set (more than itself, or one the user touched) asks what to do. An entry
+        // holding only its id (left by a rename back) is no edit.
         if let Some(f) = &from {
-            let edited = self
-                .sets_doc
-                .as_ref()
-                .is_some_and(|d| entry_of(&d.entries(), &f.id).is_some());
+            let edited = self.sets_doc.as_ref().is_some_and(|d| {
+                entry_of(&d.entries(), &f.id).is_some_and(|e| {
+                    *e != SetEntry {
+                        id: e.id.clone(),
+                        ..SetEntry::default()
+                    }
+                })
+            });
             if f.members.len() > 1 || edited || f.created {
                 return DropOutcome::AskChoice { from: f.id.clone() };
             }
@@ -531,87 +592,129 @@ impl AppModel {
         self.drop_choice(item, set, DropChoice::Move)
     }
 
-    /// The answer to `AskChoice` (or a plain move). `Move` may still ask to replace an occupied slot.
+    /// The answer to `AskChoice` (or a plain move). Any choice that would put a finished texture into a slot the set
+    /// already fills asks to replace first (spec §3.1); answer that with `drop_replace` and the same choice.
     pub fn drop_choice(&mut self, item: &str, set: &str, choice: DropChoice) -> DropOutcome {
         if !self.sets_editable() {
             return DropOutcome::Refused(READ_ONLY.into());
         }
-        let Some(target) = self.view_of(set) else {
-            return DropOutcome::Refused(format!("no set {set}"));
+        let target = match self.drop_target(set) {
+            Ok(t) => t,
+            Err(e) => return DropOutcome::Refused(e),
         };
         let slot = self.item(item).and_then(slot_of);
-        match choice {
-            DropChoice::Move => {
-                if self.is_packed(item) {
-                    return DropOutcome::Refused(PACKED_MOVE.into());
+        let from = self.set_of_item(item).map(|f| f.id);
+        let share_from = (choice == DropChoice::Share)
+            .then_some(from.as_deref())
+            .flatten();
+        match self.occupant(&target, slot, share_from) {
+            Err(e) => return DropOutcome::Refused(e),
+            Ok(Some(
+                SlotFill::Own { item: existing } | SlotFill::Borrowed { item: existing, .. },
+            )) => {
+                // Checked first so a refusal (a packed map, a raw map to share) is not asked about.
+                if let Err(e) = self.choice_allowed(item, slot, choice) {
+                    return DropOutcome::Refused(e);
                 }
-                match slot.and_then(|s| target.slots.get(&s)).cloned() {
-                    Some(SlotFill::Own { item: existing }) if self.is_packed(&existing) => {
-                        return DropOutcome::Refused(format!(
-                            "that slot holds a packed map ({existing}); move its raw maps out of the set first"
-                        ));
-                    }
-                    Some(
-                        SlotFill::Own { item: existing }
-                        | SlotFill::Borrowed { item: existing, .. },
-                    ) => return DropOutcome::AskReplace { existing },
-                    _ => {}
-                }
-                let (id, it) = (target.id.clone(), item.to_string());
-                self.edit_docs(&format!("Move into {id}"), None, true, move |_, s| {
-                    s.add_member(&id, &it)
-                });
-                DropOutcome::Joined
+                return DropOutcome::AskReplace { existing };
             }
-            DropChoice::Share => {
-                let Some(slot) = slot else {
-                    return DropOutcome::Refused(
-                        "only a finished texture can be shared; duplicate the source to use it in two sets"
-                            .into(),
-                    );
-                };
-                let Some(from) = self.set_of_item(item) else {
-                    return DropOutcome::Refused("the texture is in no set".into());
-                };
-                let (id, n, fid) = (target.id.clone(), slot.slot_number(), from.id.clone());
-                self.edit_docs(&format!("Share into {id}"), None, true, move |_, s| {
-                    s.set_borrow(&id, n, Some(&fid))
-                });
-                DropOutcome::Joined
-            }
-            DropChoice::Duplicate => match self.duplicate_into(item, &target.id) {
-                Ok(()) => DropOutcome::Joined,
-                Err(e) => DropOutcome::Refused(e),
-            },
+            Ok(_) => {}
+        }
+        match self.apply_choice(item, &target, slot, choice, None) {
+            Ok(()) => DropOutcome::Joined,
+            Err(e) => DropOutcome::Refused(e),
         }
     }
 
-    /// The answer to `AskReplace`: the occupant leaves (it becomes a set of its own), `item` moves in. One step.
-    pub fn drop_replace(&mut self, item: &str, set: &str) {
-        if !self.sets_editable() || self.is_packed(item) {
-            return;
+    /// The answer to `AskReplace` for `choice`: the occupant leaves (it becomes a set of its own, or the borrow is
+    /// dropped) and `item` comes in by `choice`, as one step. The reason comes back when it is refused.
+    pub fn drop_replace(
+        &mut self,
+        item: &str,
+        set: &str,
+        choice: DropChoice,
+    ) -> Result<(), String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
         }
-        let Some(target) = self.view_of(set) else {
-            return;
-        };
+        let target = self.drop_target(set)?;
         let slot = self.item(item).and_then(slot_of);
-        let existing = slot.and_then(|s| target.slots.get(&s)).cloned();
-        if matches!(&existing, Some(SlotFill::Own { item: old }) if self.is_packed(old)) {
-            return;
-        }
-        let (id, it) = (target.id.clone(), item.to_string());
-        self.edit_docs(&format!("Replace in {id}"), None, true, move |_, s| {
-            match existing {
-                Some(SlotFill::Own { item: old }) => s.remove_member(&id, &old),
-                Some(SlotFill::Borrowed { .. }) => {
-                    if let Some(n) = slot.map(SlotKind::slot_number) {
-                        s.set_borrow(&id, n, None);
-                    }
-                }
-                _ => {}
+        let from = self.set_of_item(item).map(|f| f.id);
+        let share_from = (choice == DropChoice::Share)
+            .then_some(from.as_deref())
+            .flatten();
+        let existing = self.occupant(&target, slot, share_from)?;
+        self.apply_choice(item, &target, slot, choice, existing)
+    }
+
+    /// Why `choice` cannot bring `item` in, if it cannot (whatever the slot holds).
+    fn choice_allowed(
+        &self,
+        item: &str,
+        slot: Option<SlotKind>,
+        choice: DropChoice,
+    ) -> Result<(), String> {
+        match choice {
+            DropChoice::Move if self.is_packed(item) => Err(PACKED_MOVE.into()),
+            DropChoice::Share if slot.is_none() => Err(
+                "only a finished texture can be shared; duplicate the source to use it in two sets"
+                    .into(),
+            ),
+            DropChoice::Share if self.set_of_item(item).is_none() => {
+                Err("the texture is in no set".into())
             }
-            s.add_member(&id, &it);
-        });
+            DropChoice::Duplicate if self.is_packed(item) => {
+                Err("a packed map cannot be duplicated; duplicate its raw maps".into())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Bring `item` into `target` by `choice`, first emptying the slot of `existing` (a replace). One step.
+    fn apply_choice(
+        &mut self,
+        item: &str,
+        target: &SetView,
+        slot: Option<SlotKind>,
+        choice: DropChoice,
+        existing: Option<SlotFill>,
+    ) -> Result<(), String> {
+        self.choice_allowed(item, slot, choice)?;
+        let id = target.id.clone();
+        match choice {
+            DropChoice::Move => {
+                let it = item.to_string();
+                let label = if existing.is_some() {
+                    "Replace in"
+                } else {
+                    "Move into"
+                };
+                self.edit_docs(&format!("{label} {id}"), None, true, move |_, s| {
+                    clear_slot(s, &id, slot, &existing);
+                    s.add_member(&id, &it);
+                });
+                Ok(())
+            }
+            DropChoice::Share => {
+                // Sharing adds no member: a set whose only texture leaves would vanish from the engine's sets.
+                if matches!(&existing, Some(SlotFill::Own { .. }))
+                    && target.members.len() == 1
+                    && !target.created
+                {
+                    return Err(format!(
+                        "{id} would have no texture of its own left; move another texture in first"
+                    ));
+                }
+                let fid = self.set_of_item(item).map(|f| f.id).unwrap_or_default();
+                let n = slot.map(SlotKind::slot_number).unwrap_or_default();
+                self.edit_docs(&format!("Share into {id}"), None, true, move |_, s| {
+                    clear_slot(s, &id, slot, &existing);
+                    s.set_borrow(&id, n, Some(&fid));
+                });
+                Ok(())
+            }
+            DropChoice::Duplicate => self.duplicate_into(item, &id, slot, existing),
+        }
     }
 
     /// A texture dropped on the empty area: a new set named after its base name (spec §3.1). Returns the new id;
@@ -632,9 +735,10 @@ impl AppModel {
         } else {
             format!("{dir}/{base}")
         };
+        let taken = self.taken_ids();
         let mut id = first.clone();
         let mut n = 2;
-        while self.id_taken(&id) {
+        while taken.contains(&id.to_lowercase()) {
             id = format!("{first}-{n}");
             n += 1;
         }
@@ -646,8 +750,15 @@ impl AppModel {
         Some(id)
     }
 
-    /// Copy `item`'s source next to it under set `set`'s base name and move the copy in (spec §3.4).
-    fn duplicate_into(&mut self, item: &str, set: &str) -> Result<(), String> {
+    /// Copy `item`'s source next to it under set `set`'s base name and move the copy in (spec §3.4); `existing`
+    /// first leaves `slot` (a replace).
+    fn duplicate_into(
+        &mut self,
+        item: &str,
+        set: &str,
+        slot: Option<SlotKind>,
+        existing: Option<SlotFill>,
+    ) -> Result<(), String> {
         if !self.sets_editable() {
             return Err(READ_ONLY.into());
         }
@@ -694,7 +805,8 @@ impl AppModel {
         let id = set.to_string();
         let before = self.sets_doc.as_ref().map(|d| d.text());
         self.edit_docs(&format!("Duplicate into {id}"), None, true, move |_, s| {
-            s.add_member(&id, &key)
+            clear_slot(s, &id, slot, &existing);
+            s.add_member(&id, &key);
         });
         // A changed document means `edit_docs` pushed a new step (no merge key): that step, and only it, carries
         // the file.
@@ -749,7 +861,7 @@ impl AppModel {
                 .and_then(|e| e.renamed_from.as_deref())
                 .is_some_and(|f| f.eq_ignore_ascii_case(&new_id))
         });
-        if !own_original && self.id_taken(&new_id) {
+        if !own_original && self.taken_ids().contains(&new_id.to_lowercase()) {
             return Err(format!("a set {new_id} already exists"));
         }
         let (a, b) = (v.id.clone(), new_id);
