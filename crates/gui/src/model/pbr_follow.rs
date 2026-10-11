@@ -1,12 +1,13 @@
-//! A set's PBR members follow its diffuse (M3b polish, owner): deciding the Diffuse-slot member as `pbr_albedo`
-//! switches the other members whose sub-type is only inferred to their PBR counterparts, and taking the diffuse
-//! back to a vanilla sub-type reverts exactly the members that were switched. Everything is one undo step.
+//! A set's PBR members follow its diffuse (M3b polish, owner): deciding the Diffuse-slot member as `pbr_albedo` (or
+//! `skin_albedo`, final review C1) switches the other members whose sub-type is only inferred to their PBR
+//! counterparts, and taking the diffuse back to a vanilla sub-type reverts exactly the members that were switched.
+//! Everything is one undo step.
 //!
 //! The switched members are recorded in `sdc-project.toml` (`[project] auto_pbr`), because `sdc.toml`'s
 //! `[files]` entries reject unknown keys. While `sdc-project.toml` is read-only (DECISIONS P8) the diffuse still
 //! changes but nothing propagates: there would be no way to find the members again to revert them.
 use super::items::Decision;
-use super::sets::{set_views, SlotFill, SlotKind};
+use super::sets::{is_pbr_diffuse, set_views, SlotFill, SlotKind};
 use super::AppModel;
 use engine::config::Subtype;
 use engine::presets::Provenance;
@@ -19,6 +20,12 @@ fn pbr_counterpart(st: Subtype) -> Option<Subtype> {
         Subtype::Glow => Some(Subtype::PbrEmissive),
         _ => None,
     }
+}
+
+/// A sub-type that keeps a diffuse in PBR: a PBR colour type, or the Advanced skin `skin_albedo` (a PBR set too,
+/// final review C1), so moving between `pbr_albedo` and `skin_albedo` reverts nothing.
+fn pbr_like(st: Subtype) -> bool {
+    st.is_pbr_color() || is_pbr_diffuse(st)
 }
 
 /// What a sub-type edit on the Diffuse-slot member does to the rest of its set.
@@ -85,7 +92,7 @@ impl AppModel {
     /// spelling) or the engine's suggestion, so it leaves PBR only when neither names a PBR colour type.
     fn leaves_pbr(&self, key: &str, new: Option<Subtype>) -> bool {
         if let Some(st) = new {
-            return !st.is_pbr_color();
+            return !pbr_like(st);
         }
         let (Some(p), Some(job)) = (
             self.project.as_ref(),
@@ -97,9 +104,11 @@ impl AppModel {
         let other = p.file_keys().into_iter().any(|k| {
             k != key
                 && engine::overrides::path_key_matches(&k, key)
-                && p.file_value(&k, "subtype") == Some(json!(Subtype::PbrAlbedo))
+                && p.file_value(&k, "subtype")
+                    .and_then(|v| serde_json::from_value::<Subtype>(v).ok())
+                    .is_some_and(is_pbr_diffuse)
         });
-        !other && suggested.is_none_or(|s| !s.is_pbr_color())
+        !other && suggested.is_none_or(|s| !pbr_like(s))
     }
 
     fn follow_of(&self, key: &str, new: Option<Subtype>) -> Follow {
@@ -109,8 +118,8 @@ impl AppModel {
         let was_pbr = item
             .job
             .as_ref()
-            .is_some_and(|j| j.profile.subtype == Subtype::PbrAlbedo);
-        let enters = !was_pbr && new == Some(Subtype::PbrAlbedo);
+            .is_some_and(|j| is_pbr_diffuse(j.profile.subtype));
+        let enters = !was_pbr && new.is_some_and(is_pbr_diffuse);
         let leaves = was_pbr && self.leaves_pbr(key, new);
         if !enters && !leaves {
             return Follow::Nothing;

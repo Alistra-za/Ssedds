@@ -2,7 +2,7 @@
 //! first (set keys are fixed from then on), output paths second, then outputs are compared for duplicates again.
 //! The CLI never sets either.
 use crate::discover::InputFile;
-use crate::group::{split_suffix_with, TextureSet};
+use crate::group::{member_split, TextureSet};
 use crate::overrides::{path_key_matches, project_rel};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -169,14 +169,16 @@ pub fn apply_set_edits(
             });
         }
     }
-    // A touched set's suffixes come from its members, as `group_sets_with` derives them.
+    // A touched set's suffixes come from its members, as `group_sets_with` derives them (a skin `_wet` member that
+    // `join_skin_wet` joined keeps its `wet`).
     for s in sets.iter_mut().filter(|s| touched.contains(&s.key)) {
         s.members.sort_unstable();
-        s.suffixes = s
+        let suffixes = s
             .members
             .iter()
-            .filter_map(|&i| split_suffix_with(&stem_lower(&files[i]), aliases).suffix)
+            .filter_map(|&i| member_split(&stem_lower(&files[i]), s, aliases).suffix)
             .collect();
+        s.suffixes = suffixes;
     }
     sets.retain(|s| !s.members.is_empty());
     sets.sort_by(|a, b| a.key.cmp(&b.key));

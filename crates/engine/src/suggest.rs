@@ -30,6 +30,8 @@ pub struct SuggestContext<'a> {
     pub set_suffixes: &'a BTreeSet<String>,
     pub alpha: AlphaContent,
     pub is_float: bool,
+    /// The set holds or builds an `_rfaos` (`pack::plan::set_is_advanced_skin`): Advanced skin sub-types apply.
+    pub advanced_skin: bool,
 }
 
 fn has_component(path: &str, name: &str) -> bool {
@@ -69,7 +71,19 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
         Some("n") => vec![s(Normal, High, "_n, non-PBR set")],
         Some("msn") => vec![s(Msn, High, "_msn model-space normal")],
         Some("rmaos") => vec![s(Rmaos, High, "_rmaos")],
-        Some("rfaos") => vec![s(Rfaos, High, "_rfaos (CS advanced skin)")],
+        Some("rfaos") => vec![s(SkinRfaos, High, "_rfaos (CS advanced skin)")],
+        Some("sk") if c.advanced_skin => vec![s(
+            SkinSk,
+            High,
+            "_sk in an Advanced skin set (red channel only)",
+        )],
+        // `wet` is a suffix only for the member `join_skin_wet` joined to a cs Advanced skin set (final review I3);
+        // everywhere else `_wet` stays part of the base name.
+        Some("wet") if c.advanced_skin => vec![s(
+            SkinWet,
+            High,
+            "_wet in an Advanced skin set (normal + mask or height)",
+        )],
         Some("cnr") | Some("crn") => {
             vec![s(CoatNormal, High, "_cnr/_crn coat normal + roughness")]
         }
@@ -112,6 +126,13 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
             vec![s(HdrSky, Medium, "float source under sky/")]
         }
         Some("d") | None if ui_or_sky => vec![s(UiSky, colour, "colour under interface/ or sky/")],
+        Some("d") | None if c.advanced_skin => {
+            vec![s(
+                SkinAlbedo,
+                High,
+                "colour member of an Advanced skin set (UNORM)",
+            )]
+        }
         Some("d") | None if pbr => vec![s(PbrAlbedo, colour, "colour member of a PBR set")],
         Some("d") | None => vec![s(Diffuse, colour, "colour member, non-PBR set")],
         Some(_) => vec![],
@@ -199,6 +220,7 @@ mod tests {
             set_suffixes: set,
             alpha,
             is_float: false,
+            advanced_skin: false,
         }
     }
 
@@ -331,7 +353,7 @@ mod tests {
                 AlphaContent::None
             ))
             .subtype,
-            Subtype::Rfaos
+            Subtype::SkinRfaos
         );
         assert_eq!(
             top(&ctx(
@@ -400,7 +422,7 @@ mod tests {
         ))[0];
         assert_eq!(
             (r.subtype, r.confidence),
-            (Subtype::Rfaos, Confidence::High)
+            (Subtype::SkinRfaos, Confidence::High)
         );
         // _rfaos in the set makes the other members PBR, like _rmaos
         assert!(is_pbr_set(&ctx(
@@ -694,7 +716,7 @@ mod tests {
             )
         );
         assert_eq!(
-            suggest_alpha(Subtype::Rfaos, AlphaContent::Constant255, 1.0)
+            suggest_alpha(Subtype::SkinRfaos, AlphaContent::Constant255, 1.0)
                 .unwrap()
                 .0,
             AlphaPolicy::Remove

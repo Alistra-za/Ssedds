@@ -346,7 +346,9 @@ fn pill(
                     ui.label(egui::RichText::new(&v.label).strong());
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if v.pbr && model.target == Target::Cs {
+                    if v.skin && model.target == Target::Cs {
+                        badge(ui, "skin → JSON", None);
+                    } else if v.pbr && model.target == Target::Cs {
                         badge(ui, "PBR → JSON", None);
                     } else {
                         badge(ui, "vanilla set (no JSON)", None);

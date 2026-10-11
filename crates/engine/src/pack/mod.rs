@@ -4,7 +4,7 @@
 pub mod assemble;
 pub mod plan;
 
-use crate::config::{GraySource, PackingSpec, RawMap, Subtype, Target};
+use crate::config::{GraySource, PackRecipe, PackingSpec, RawMap, Subtype, Target};
 use crate::policy::SourceStamp;
 use crate::presets::Provenance;
 use schemars::JsonSchema;
@@ -33,7 +33,7 @@ impl RecipeKind {
     pub fn subtype(self) -> Subtype {
         match self {
             RecipeKind::Rmaos => Subtype::Rmaos,
-            RecipeKind::Rfaos => Subtype::Rfaos,
+            RecipeKind::Rfaos => Subtype::SkinRfaos,
             RecipeKind::Parallax => Subtype::Height,
             RecipeKind::CpmM => Subtype::ComplexMaterial,
             RecipeKind::VanillaM => Subtype::Envmask,
@@ -72,6 +72,8 @@ pub enum Slot {
     Specular,
     EnvMask,
     Height,
+    /// The G channel of `_rfaos` (DECISIONS Note R-fills-1).
+    Fuzz,
 }
 
 impl Slot {
@@ -84,6 +86,7 @@ impl Slot {
             Slot::Specular => "specular",
             Slot::EnvMask => "env_mask",
             Slot::Height => "height",
+            Slot::Fuzz => "fuzz",
         }
     }
 }
@@ -150,14 +153,22 @@ fn file_name(p: &Path) -> String {
 }
 
 /// Why a raw map of `role` takes part in no recipe of `target` (DECISIONS Note M2).
-fn unused_reason(target: Target, role: RawMap, have: &BTreeMap<RawMap, &RawInput>) -> String {
+fn unused_reason(
+    target: Target,
+    recipe: PackRecipe,
+    role: RawMap,
+    have: &BTreeMap<RawMap, &RawInput>,
+) -> String {
     let has = |r: RawMap| have.contains_key(&r);
     match (target, role) {
         (_, RawMap::Opacity) => "no recipe packs opacity yet (spec §14 #19)".into(),
         (Target::Cs, RawMap::Glossiness) if has(RawMap::Roughness) => {
             "roughness is used: the _rmaos/_rfaos R channel is roughness".into()
         }
-        (Target::Cs, RawMap::Metallic) if has(RawMap::Fuzz) => {
+        (Target::Cs, RawMap::Fuzz) if recipe == PackRecipe::Rmaos => {
+            "the set is set to _rmaos (packing.recipe)".into()
+        }
+        (Target::Cs, RawMap::Metallic) if recipe == PackRecipe::Rfaos || has(RawMap::Fuzz) => {
             "_rfaos has no metallic channel".into()
         }
         (Target::Cs, _) => {
@@ -186,8 +197,18 @@ fn unused_reason(target: Target, role: RawMap, have: &BTreeMap<RawMap, &RawInput
     }
 }
 
-/// The recipes of one set under `target` (spec §6.4 recipe table) and the raw maps none of them uses.
+/// The recipes of one set under `target` (spec §6.4 recipe table) and the raw maps none of them uses, with
+/// `packing.recipe = auto`.
 pub fn recipes_for(target: Target, raw: &[RawInput]) -> (Vec<Recipe>, Vec<Unused>) {
+    recipes_for_with(target, raw, PackRecipe::Auto)
+}
+
+/// [`recipes_for`] with the set's `packing.recipe`: it only matters on cs (DECISIONS Note R-fills-1).
+pub fn recipes_for_with(
+    target: Target,
+    raw: &[RawInput],
+    pack_recipe: PackRecipe,
+) -> (Vec<Recipe>, Vec<Unused>) {
     use ChannelNeed::{MirrorR, Missing, Opaque};
     use RawMap::*;
     let mut sorted: Vec<&RawInput> = raw.iter().collect();
@@ -222,13 +243,26 @@ pub fn recipes_for(target: Target, raw: &[RawInput]) -> (Vec<Recipe>, Vec<Unused
     let mut recipes = vec![];
     match target {
         Target::Cs => {
-            if [Roughness, Glossiness, Ao, Metallic].into_iter().any(has) {
+            // `_rfaos` has no metallic channel, so a lone metallic map cannot start a forced `_rfaos`.
+            let triggers: &[RawMap] = if pack_recipe == PackRecipe::Rfaos {
+                &[Roughness, Glossiness, Ao]
+            } else {
+                &[Roughness, Glossiness, Ao, Metallic]
+            };
+            if triggers.iter().copied().any(has) {
                 let rough = src(Roughness, false)
                     .or_else(|| src(Glossiness, true))
                     .unwrap_or(Missing(Slot::Roughness));
                 let ao = src(Ao, false).unwrap_or(Missing(Slot::Ao));
                 let spec = src(Specular, false).unwrap_or(Missing(Slot::Specular));
-                match src(Fuzz, false) {
+                // DECISIONS Note R-fills-1: `auto` is `_rfaos` when a fuzz source exists; `rfaos` always is, with
+                // the G channel filled or defaulted when there is none; `rmaos` never is.
+                let fuzz = match pack_recipe {
+                    PackRecipe::Auto => src(Fuzz, false),
+                    PackRecipe::Rfaos => Some(src(Fuzz, false).unwrap_or(Missing(Slot::Fuzz))),
+                    PackRecipe::Rmaos => None,
+                };
+                match fuzz {
                     Some(fuzz) => recipes.push(Recipe {
                         kind: RecipeKind::Rfaos,
                         channels: [rough, fuzz, ao, spec],
@@ -290,7 +324,7 @@ pub fn recipes_for(target: Target, raw: &[RawInput]) -> (Vec<Recipe>, Vec<Unused
             unused.push(Unused {
                 path: r.path.clone(),
                 role: r.role,
-                reason: unused_reason(target, r.role, &by_role),
+                reason: unused_reason(target, pack_recipe, r.role, &by_role),
             });
         }
     }
@@ -377,6 +411,7 @@ fn fill_for(slot: Slot, p: &PackingSpec) -> Option<ChannelSource> {
         Slot::Specular => direct(RawMap::Specular),
         Slot::EnvMask => direct(RawMap::Metallic).or_else(|| direct(RawMap::Specular)),
         Slot::Height => direct(RawMap::Height),
+        Slot::Fuzz => direct(RawMap::Fuzz),
     }
 }
 
@@ -390,6 +425,8 @@ fn default_for(slot: Slot, p: &PackingSpec) -> f32 {
         // 0: complex material on, parallax off (CS runs parallax only for 4/255 < alpha < 251/255, Spike S8; owner
         // 2026-10-10, amending Note M1's 0.5).
         Slot::Height => 0.0,
+        // 0: no fuzz, for an `_rfaos` built without a fuzz source (Note R-fills-1).
+        Slot::Fuzz => 0.0,
     }
 }
 

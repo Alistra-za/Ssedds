@@ -414,6 +414,15 @@
       ],
       "type": "string"
     },
+    "PackRecipe": {
+      "description": "Which cs recipe a set packs (DECISIONS Note R-fills-1): `auto` = `_rfaos` when a fuzz source exists, else\n`_rmaos`; `rfaos`/`rmaos` force one.",
+      "enum": [
+        "auto",
+        "rmaos",
+        "rfaos"
+      ],
+      "type": "string"
+    },
     "PackingSpec": {
       "additionalProperties": false,
       "description": "Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.",
@@ -429,6 +438,10 @@
         "prefer": {
           "$ref": "#/$defs/PackPrefer",
           "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "recipe": {
+          "$ref": "#/$defs/PackRecipe",
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Set per set at either packed key,\n`[files.\"<folder/base>_rfaos\"]` or `..._rmaos\"]`."
         },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
@@ -651,6 +664,10 @@
           "$ref": "#/$defs/PackPrefer",
           "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
         },
+        "recipe": {
+          "$ref": "#/$defs/PackRecipe",
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Set per set at either packed key,\n`[files.\"<folder/base>_rfaos\"]` or `..._rmaos\"]`."
+        },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
           "format": "double",
@@ -861,6 +878,7 @@
       "type": "string"
     },
     "Subtype": {
+      "description": "A texture sub-type. `rfaos` is a deprecated alias of `skin_rfaos`: it still loads and is written back as `skin_rfaos`.",
       "enum": [
         "diffuse",
         "landscape_diffuse",
@@ -880,13 +898,17 @@
         "envmask",
         "complex_material",
         "rmaos",
-        "rfaos",
+        "skin_rfaos",
         "flow",
         "height",
         "msn_specular",
         "generic_two_channel",
         "generic_data",
-        "hdr_sky"
+        "hdr_sky",
+        "skin_albedo",
+        "skin_sk",
+        "skin_wet",
+        "rfaos"
       ],
       "type": "string"
     },
@@ -1031,9 +1053,27 @@
           "$ref": "#/$defs/PartialProfile"
         },
         "rfaos": {
-          "$ref": "#/$defs/PartialProfile"
+          "allOf": [
+            {
+              "$ref": "#/$defs/PartialProfile"
+            }
+          ],
+          "deprecated": true,
+          "description": "Deprecated alias of skin_rfaos: it still loads and is written back as skin_rfaos."
         },
         "rmaos": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "skin_albedo": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "skin_rfaos": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "skin_sk": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "skin_wet": {
           "$ref": "#/$defs/PartialProfile"
         },
         "subsurface_tint": {
