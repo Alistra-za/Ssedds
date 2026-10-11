@@ -13,6 +13,24 @@ pub struct PathFlags {
     pub non_dds: bool,
 }
 
+impl PathFlags {
+    /// Packed form for storage: 1 empty, 2 rebased, 4 prefixed, 8 non_dds.
+    pub fn bits(&self) -> u8 {
+        self.empty as u8
+            | (self.rebased as u8) << 1
+            | (self.prefixed as u8) << 2
+            | (self.non_dds as u8) << 3
+    }
+    pub fn from_bits(b: u8) -> PathFlags {
+        PathFlags {
+            empty: b & 1 != 0,
+            rebased: b & 2 != 0,
+            prefixed: b & 4 != 0,
+            non_dds: b & 8 != 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TexPath {

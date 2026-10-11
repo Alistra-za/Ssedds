@@ -1,57 +1,71 @@
 //! SQLite scan store (plan 02 §6 with the PGPatcher columns of 05 §5.2). One row per NIF copy and per shape.
 use crate::ScanError;
+use nif::path::{PathFlags, TexPath};
 use nif::scan::{NifScan, Shader};
 use nif::NifError;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
+pub const SCHEMA_VERSION: i64 = 3;
+
 const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
-CREATE TABLE IF NOT EXISTS origin (id INTEGER PRIMARY KEY, kind INTEGER NOT NULL, name TEXT NOT NULL, root TEXT NOT NULL,
-                                   parent_origin INTEGER, priority INTEGER NOT NULL, enabled INTEGER NOT NULL,
-                                   derived_by INTEGER, derived_state INTEGER, UNIQUE(kind, root));
-CREATE TABLE IF NOT EXISTS nif_copy (id INTEGER PRIMARY KEY, path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL,
-                                   size INTEGER, mtime INTEGER, crc32 INTEGER, parse_status INTEGER NOT NULL,
-                                   bsver INTEGER, le_mesh INTEGER NOT NULL DEFAULT 0, is_derived INTEGER NOT NULL DEFAULT 0,
-                                   source_copy_id INTEGER, derive_check INTEGER, problem TEXT,
-                                   UNIQUE(path_id, origin_id));
-CREATE TABLE IF NOT EXISTS shape (copy_id INTEGER NOT NULL, block INTEGER NOT NULL, name TEXT, kind TEXT NOT NULL,
-                                   shader_kind INTEGER NOT NULL, shader_type INTEGER, slsf1 INTEGER, slsf2 INTEGER,
-                                   texset_id INTEGER, alpha_flags INTEGER, alpha_threshold INTEGER, params TEXT,
-                                   PRIMARY KEY(copy_id, block)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS texset (id INTEGER PRIMARY KEY, n INTEGER NOT NULL,
-                                   t0 INTEGER, t1 INTEGER, t2 INTEGER, t3 INTEGER, t4 INTEGER, t5 INTEGER, t6 INTEGER,
-                                   t7 INTEGER, t8 INTEGER, UNIQUE(n, t0, t1, t2, t3, t4, t5, t6, t7, t8));
-CREATE TABLE IF NOT EXISTS tex_use (tex_path_id INTEGER, texset_id INTEGER, slot INTEGER,
-                                   PRIMARY KEY(tex_path_id, texset_id, slot)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS nif_winner     (path_id INTEGER PRIMARY KEY, copy_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS nif_winner_src (path_id INTEGER PRIMARY KEY, copy_id INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS pgp_diff (path_id INTEGER PRIMARY KEY, crc_orig INTEGER NOT NULL, crc_patched INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS nif_copy_origin ON nif_copy(origin_id);
--- SQLite treats NULLs as distinct in UNIQUE, so the texset UNIQUE above never dedups a set with an empty slot.
--- This expression index makes INSERT OR IGNORE dedup sets with empty (NULL) slots too (path ids start at 1).
-CREATE UNIQUE INDEX IF NOT EXISTS texset_key ON texset(n, ifnull(t0,0), ifnull(t1,0), ifnull(t2,0), ifnull(t3,0),
-                                   ifnull(t4,0), ifnull(t5,0), ifnull(t6,0), ifnull(t7,0), ifnull(t8,0));
-CREATE INDEX IF NOT EXISTS shape_texset ON shape(texset_id);
+CREATE TABLE path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
+CREATE TABLE origin (id INTEGER PRIMARY KEY, kind INTEGER NOT NULL, name TEXT NOT NULL, root TEXT NOT NULL,
+                     parent_origin INTEGER, priority INTEGER NOT NULL, enabled INTEGER NOT NULL,
+                     derived_by INTEGER, derived_state INTEGER, UNIQUE(kind, root));
+CREATE TABLE nif_copy (id INTEGER PRIMARY KEY, path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL,
+                     size INTEGER, mtime INTEGER, crc32 INTEGER, parse_status INTEGER NOT NULL,
+                     bsver INTEGER, le_mesh INTEGER NOT NULL DEFAULT 0, is_derived INTEGER NOT NULL DEFAULT 0,
+                     source_copy_id INTEGER, derive_check INTEGER, problem TEXT,
+                     UNIQUE(path_id, origin_id));
+CREATE TABLE shape (copy_id INTEGER NOT NULL, block INTEGER NOT NULL, name TEXT, kind TEXT NOT NULL,
+                     shader_kind INTEGER NOT NULL, shader_type INTEGER, slsf1 INTEGER, slsf2 INTEGER,
+                     texset_id INTEGER, alpha_flags INTEGER, alpha_threshold INTEGER, params TEXT,
+                     skinned INTEGER NOT NULL DEFAULT 0, vertex_desc INTEGER, num_vertices INTEGER,
+                     num_triangles INTEGER,
+                     PRIMARY KEY(copy_id, block)) WITHOUT ROWID;
+-- Raw NIF slot strings and PathFlags bits (1 empty, 2 rebased, 4 prefixed, 8 non_dds) for every slot whose raw
+-- string is not just the canonical path in another case / with backslashes, or whose flags are not default.
+-- Lighting slots are texture-set slots; effect slots are 0 = source, 1 = greyscale.
+CREATE TABLE tex_raw (copy_id INTEGER NOT NULL, block INTEGER NOT NULL, slot INTEGER NOT NULL, raw TEXT NOT NULL,
+                     flags INTEGER NOT NULL, PRIMARY KEY(copy_id, block, slot)) WITHOUT ROWID;
+CREATE TABLE texset (id INTEGER PRIMARY KEY, n INTEGER NOT NULL,
+                     t0 INTEGER, t1 INTEGER, t2 INTEGER, t3 INTEGER, t4 INTEGER, t5 INTEGER, t6 INTEGER,
+                     t7 INTEGER, t8 INTEGER);
+CREATE TABLE tex_use (tex_path_id INTEGER, texset_id INTEGER, slot INTEGER,
+                     PRIMARY KEY(tex_path_id, texset_id, slot)) WITHOUT ROWID;
+CREATE TABLE nif_winner     (path_id INTEGER PRIMARY KEY, copy_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
+CREATE TABLE nif_winner_src (path_id INTEGER PRIMARY KEY, copy_id INTEGER NOT NULL);
+CREATE TABLE pgp_diff (path_id INTEGER PRIMARY KEY, crc_orig INTEGER NOT NULL, crc_patched INTEGER NOT NULL);
+CREATE TABLE tex_copy   (path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER,
+                     PRIMARY KEY(path_id, origin_id)) WITHOUT ROWID;
+CREATE TABLE tex_winner (path_id INTEGER PRIMARY KEY, origin_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
+CREATE INDEX nif_copy_origin ON nif_copy(origin_id);
+-- The texset uniqueness key. SQLite treats NULLs as distinct in UNIQUE, so empty (NULL) slots are folded to 0
+-- (path ids start at 1) and INSERT OR IGNORE dedups sets with empty slots too.
+CREATE UNIQUE INDEX texset_key ON texset(n, ifnull(t0,0), ifnull(t1,0), ifnull(t2,0), ifnull(t3,0),
+                     ifnull(t4,0), ifnull(t5,0), ifnull(t6,0), ifnull(t7,0), ifnull(t8,0));
+CREATE INDEX shape_texset ON shape(texset_id);
 "#;
 
-/// Schema step 1 to 2: texture copies and their game-view winners.
-const TEX_SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS tex_copy   (path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER,
-                                   PRIMARY KEY(path_id, origin_id)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS tex_winner (path_id INTEGER PRIMARY KEY, origin_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
-"#;
+const SHAPE_COLS: &str = "block, name, kind, shader_kind, shader_type, slsf1, slsf2, texset_id, alpha_flags, \
+                          alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles";
 
 const TEMP: &str = r#"
 CREATE TEMP TABLE IF NOT EXISTS pending_derived (pid INTEGER PRIMARY KEY, path_id INTEGER NOT NULL,
-                                   origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER, crc32 INTEGER,
-                                   parse_status INTEGER NOT NULL, bsver INTEGER, le_mesh INTEGER NOT NULL, problem TEXT,
-                                   UNIQUE(path_id, origin_id));
+                     origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER, crc32 INTEGER,
+                     parse_status INTEGER NOT NULL, bsver INTEGER, le_mesh INTEGER NOT NULL, problem TEXT,
+                     UNIQUE(path_id, origin_id));
 CREATE TEMP TABLE IF NOT EXISTS pending_shape (pid INTEGER NOT NULL, block INTEGER NOT NULL, name TEXT, kind TEXT NOT NULL,
-                                   shader_kind INTEGER NOT NULL, shader_type INTEGER, slsf1 INTEGER, slsf2 INTEGER,
-                                   texset_id INTEGER, alpha_flags INTEGER, alpha_threshold INTEGER, params TEXT,
-                                   PRIMARY KEY(pid, block));
+                     shader_kind INTEGER NOT NULL, shader_type INTEGER, slsf1 INTEGER, slsf2 INTEGER,
+                     texset_id INTEGER, alpha_flags INTEGER, alpha_threshold INTEGER, params TEXT,
+                     skinned INTEGER NOT NULL DEFAULT 0, vertex_desc INTEGER, num_vertices INTEGER,
+                     num_triangles INTEGER, PRIMARY KEY(pid, block));
+CREATE TEMP TABLE IF NOT EXISTS pending_tex_raw (pid INTEGER NOT NULL, block INTEGER NOT NULL, slot INTEGER NOT NULL,
+                     raw TEXT NOT NULL, flags INTEGER NOT NULL, PRIMARY KEY(pid, block, slot));
+DELETE FROM pending_tex_raw;
 DELETE FROM pending_shape;
 DELETE FROM pending_derived;
 "#;
@@ -159,12 +173,42 @@ pub struct ShapeView {
     pub shader_type: Option<u32>,
     pub slsf1: Option<u32>,
     pub slsf2: Option<u32>,
-    /// Lighting: texture-set slots (count read from the file). Effect: [source, greyscale]. `None` = empty slot.
+    /// Lighting: texture-set slots (count read from the file, at most 9 stored). Effect: [source, greyscale].
+    /// `None` = empty slot.
     pub textures: Vec<Option<String>>,
+    /// Parallel to `textures`: the raw NIF string and its flags, for slots whose raw string is more than the
+    /// canonical path in another case / with backslashes, or whose flags are not default. `None` otherwise.
+    pub raw: Vec<Option<RawSlot>>,
     pub alpha_flags: Option<u16>,
     pub alpha_threshold: Option<u8>,
     /// `serde_json` of `LightingParams`/`EffectParams`; `{"shader":"<block type>"}` for other shaders.
     pub params: Option<String>,
+    /// The shape has a skin instance.
+    pub skinned: bool,
+    /// BSTriShape family only (`None` for NiTriShape/NiTriStrips/particles).
+    pub vertex_desc: Option<u64>,
+    pub num_vertices: Option<u32>,
+    pub num_triangles: Option<u32>,
+}
+
+/// A texture slot's raw NIF string (Windows-1252 decoded) and the flags of its canonicalisation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawSlot {
+    pub raw: String,
+    pub flags: PathFlags,
+}
+
+/// Slots stored in `texset` (t0..t8). A set with more is truncated and the copy gets a problem.
+pub const MAX_SLOTS: usize = 9;
+
+/// Whether `p` needs a `tex_raw` row: anything beyond "same path, other case / backslashes", or any flag except
+/// a plain empty slot.
+fn keep_raw(p: &TexPath) -> bool {
+    let f = &p.flags;
+    if f.rebased || f.prefixed || f.non_dds {
+        return true;
+    }
+    p.raw.replace('\\', "/").to_ascii_lowercase() != p.norm
 }
 
 /// Outcome of reading and scanning one copy.
@@ -185,7 +229,20 @@ pub enum CopyResult {
 impl From<Result<NifScan, NifError>> for CopyResult {
     fn from(r: Result<NifScan, NifError>) -> Self {
         match r {
-            Ok(s) => CopyResult::Scanned(s),
+            Ok(mut s) => {
+                for r in &s.shapes {
+                    if let Shader::Lighting(_, slots) = &r.shader {
+                        if slots.len() > MAX_SLOTS {
+                            s.problems.push(format!(
+                                "block {}: texture set has {} slots; only the first {MAX_SLOTS} are stored",
+                                r.block,
+                                slots.len()
+                            ));
+                        }
+                    }
+                }
+                CopyResult::Scanned(s)
+            }
             Err(e @ NifError::NotSkyrim { bsver, .. }) => CopyResult::NotSkyrim {
                 bsver,
                 msg: e.to_string(),
@@ -288,8 +345,8 @@ fn path_id(c: &Connection, p: &str) -> rusqlite::Result<i64> {
 }
 
 fn texset_id(c: &Connection, slots: &[Option<i64>]) -> rusqlite::Result<i64> {
-    let n = slots.len().min(9);
-    let mut t = [None::<i64>; 9];
+    let n = slots.len().min(MAX_SLOTS);
+    let mut t = [None::<i64>; MAX_SLOTS];
     t[..n].copy_from_slice(&slots[..n]);
     c.prepare_cached(
         "INSERT OR IGNORE INTO texset(n,t0,t1,t2,t3,t4,t5,t6,t7,t8) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
@@ -317,7 +374,7 @@ fn texset_id(c: &Connection, slots: &[Option<i64>]) -> rusqlite::Result<i64> {
     Ok(id)
 }
 
-fn tex_slots(c: &Connection, paths: &[&nif::path::TexPath]) -> rusqlite::Result<Option<i64>> {
+fn tex_slots(c: &Connection, paths: &[&TexPath]) -> rusqlite::Result<Option<i64>> {
     let mut ids = vec![];
     for p in paths {
         ids.push(if p.flags.empty || p.norm.is_empty() {
@@ -332,32 +389,60 @@ fn tex_slots(c: &Connection, paths: &[&nif::path::TexPath]) -> rusqlite::Result<
     texset_id(c, &ids).map(Some)
 }
 
-/// Writes the shape rows of `scan` into `table` (`shape` keyed by copy id, or `pending_shape` keyed by pid).
-fn write_shapes(c: &Connection, table: &str, key: i64, scan: &NifScan) -> Result<(), ScanError> {
-    let sql =
-        format!("INSERT OR REPLACE INTO {table} VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)");
+/// Shape-family tables: `shape`/`tex_raw` keyed by copy id, or `pending_shape`/`pending_tex_raw` keyed by pid.
+#[derive(Clone, Copy)]
+struct Tables {
+    shape: &'static str,
+    raw: &'static str,
+    key: &'static str,
+}
+const LIVE: Tables = Tables {
+    shape: "shape",
+    raw: "tex_raw",
+    key: "copy_id",
+};
+const PENDING: Tables = Tables {
+    shape: "pending_shape",
+    raw: "pending_tex_raw",
+    key: "pid",
+};
+
+/// Writes the shape rows (and raw slot rows) of `scan` under `key`.
+fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(), ScanError> {
+    let sql = format!(
+        "INSERT OR REPLACE INTO {}({}, {SHAPE_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        t.shape, t.key
+    );
+    let raw_sql = format!(
+        "INSERT OR REPLACE INTO {}({}, block, slot, raw, flags) VALUES (?1,?2,?3,?4,?5)",
+        t.raw, t.key
+    );
     for s in &scan.shapes {
+        let mut slots: Vec<&TexPath> = vec![];
         let (kind, ty, f1, f2, texset, params) = match &s.shader {
             Shader::None => (0, None, None, None, None, None),
-            Shader::Lighting(l, slots) => {
-                let refs: Vec<&nif::path::TexPath> = slots.iter().collect();
+            Shader::Lighting(l, ts) => {
+                slots = ts.iter().take(MAX_SLOTS).collect();
                 (
                     1,
                     Some(l.shader_type),
                     Some(l.slsf1),
                     Some(l.slsf2),
-                    tex_slots(c, &refs)?,
+                    tex_slots(c, &slots)?,
                     Some(serde_json::to_string(&l.params).map_err(json_err)?),
                 )
             }
-            Shader::Effect(e) => (
-                2,
-                None,
-                Some(e.slsf1),
-                Some(e.slsf2),
-                tex_slots(c, &[&e.source, &e.greyscale])?,
-                Some(serde_json::to_string(&e.params).map_err(json_err)?),
-            ),
+            Shader::Effect(e) => {
+                slots = vec![&e.source, &e.greyscale];
+                (
+                    2,
+                    None,
+                    Some(e.slsf1),
+                    Some(e.slsf2),
+                    tex_slots(c, &slots)?,
+                    Some(serde_json::to_string(&e.params).map_err(json_err)?),
+                )
+            }
             Shader::Other { kind } => (
                 3,
                 None,
@@ -367,11 +452,12 @@ fn write_shapes(c: &Connection, table: &str, key: i64, scan: &NifScan) -> Result
                 Some(serde_json::json!({ "shader": kind }).to_string()),
             ),
         };
+        let h = &s.head;
         c.prepare_cached(&sql)?.execute(params![
             key,
             s.block as i64,
-            s.head.name,
-            format!("{:?}", s.head.kind),
+            h.name,
+            format!("{:?}", h.kind),
             kind,
             ty.map(i64::from),
             f1.map(i64::from),
@@ -380,8 +466,31 @@ fn write_shapes(c: &Connection, table: &str, key: i64, scan: &NifScan) -> Result
             s.alpha.map(|a| a.flags as i64),
             s.alpha.map(|a| a.threshold as i64),
             params,
+            h.skinned,
+            h.vertex_desc.map(|v| v as i64),
+            h.num_vertices.map(i64::from),
+            h.num_triangles.map(i64::from),
         ])?;
+        for (slot, p) in slots.iter().enumerate() {
+            if keep_raw(p) {
+                c.prepare_cached(&raw_sql)?.execute(params![
+                    key,
+                    s.block as i64,
+                    slot as i64,
+                    p.raw,
+                    p.flags.bits() as i64
+                ])?;
+            }
+        }
     }
+    Ok(())
+}
+
+fn delete_shapes(c: &Connection, copy_id: i64) -> rusqlite::Result<()> {
+    c.prepare_cached("DELETE FROM shape WHERE copy_id = ?1")?
+        .execute([copy_id])?;
+    c.prepare_cached("DELETE FROM tex_raw WHERE copy_id = ?1")?
+        .execute([copy_id])?;
     Ok(())
 }
 
@@ -416,10 +525,9 @@ fn upsert_copy_row(c: &Connection, it: &ChunkItem) -> Result<i64, ScanError> {
             ],
             |r| r.get(0),
         )?;
-    c.prepare_cached("DELETE FROM shape WHERE copy_id = ?1")?
-        .execute([id])?;
+    delete_shapes(c, id)?;
     if let CopyResult::Scanned(s) = &it.result {
-        write_shapes(c, "shape", id, s)?;
+        write_shapes(c, LIVE, id, s)?;
     }
     Ok(id)
 }
@@ -446,7 +554,7 @@ fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
             |r| r.get(0),
         )?;
     if let CopyResult::Scanned(s) = &it.result {
-        write_shapes(c, "pending_shape", pid, s)?;
+        write_shapes(c, PENDING, pid, s)?;
     }
     Ok(())
 }
@@ -459,18 +567,31 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if v == 0 {
-            conn.execute_batch(SCHEMA)?;
-        }
-        if v < 2 {
-            conn.execute_batch(TEX_SCHEMA)?;
-            conn.pragma_update(None, "user_version", 2)?;
+        if v != SCHEMA_VERSION {
+            // The store is a cache: any other version is dropped and rebuilt.
+            let tx = conn.unchecked_transaction()?;
+            let tables: Vec<String> = {
+                let mut st = tx.prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+                )?;
+                let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+                v
+            };
+            for t in tables {
+                tx.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
+            }
+            tx.execute_batch(SCHEMA)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
         }
         Ok(Store { conn })
     }
 
-    /// Start of a scan: every origin disabled until re-upserted; staging tables created and emptied.
+    /// Start of a scan: staging tables created and emptied; every origin disabled until this run re-upserts it.
+    /// `origin.enabled = 1` therefore means "part of the latest run" and is the filter of every read query.
+    /// Rows of disabled origins stay cached (a disabled mod or a Folder scan in between costs no re-parse).
     pub fn begin_scan(&mut self) -> Result<(), ScanError> {
         self.conn.execute_batch(TEMP)?;
         self.conn.execute("UPDATE origin SET enabled = 0", [])?;
@@ -565,10 +686,19 @@ impl Store {
                  source_copy_id = NULL, derive_check = NULL;
              DELETE FROM shape WHERE copy_id IN (SELECT c.id FROM nif_copy c JOIN pending_derived d
                ON c.path_id = d.path_id AND c.origin_id = d.origin_id);
-             INSERT INTO shape SELECT c.id, s.block, s.name, s.kind, s.shader_kind, s.shader_type, s.slsf1, s.slsf2,
-               s.texset_id, s.alpha_flags, s.alpha_threshold, s.params
+             DELETE FROM tex_raw WHERE copy_id IN (SELECT c.id FROM nif_copy c JOIN pending_derived d
+               ON c.path_id = d.path_id AND c.origin_id = d.origin_id);
+             INSERT INTO shape(copy_id, block, name, kind, shader_kind, shader_type, slsf1, slsf2, texset_id,
+                 alpha_flags, alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles)
+               SELECT c.id, s.block, s.name, s.kind, s.shader_kind, s.shader_type, s.slsf1, s.slsf2, s.texset_id,
+                 s.alpha_flags, s.alpha_threshold, s.params, s.skinned, s.vertex_desc, s.num_vertices, s.num_triangles
                FROM pending_shape s JOIN pending_derived d ON d.pid = s.pid
                JOIN nif_copy c ON c.path_id = d.path_id AND c.origin_id = d.origin_id;
+             INSERT INTO tex_raw(copy_id, block, slot, raw, flags)
+               SELECT c.id, r.block, r.slot, r.raw, r.flags
+               FROM pending_tex_raw r JOIN pending_derived d ON d.pid = r.pid
+               JOIN nif_copy c ON c.path_id = d.path_id AND c.origin_id = d.origin_id;
+             DELETE FROM pending_tex_raw;
              DELETE FROM pending_shape;
              DELETE FROM pending_derived;",
         )?;
@@ -578,8 +708,9 @@ impl Store {
 
     /// Tainted run: drop the staged derived copies and keep the previous rows.
     pub fn discard_pending(&mut self) -> Result<(), ScanError> {
-        self.conn
-            .execute_batch("DELETE FROM pending_shape; DELETE FROM pending_derived;")?;
+        self.conn.execute_batch(
+            "DELETE FROM pending_tex_raw; DELETE FROM pending_shape; DELETE FROM pending_derived;",
+        )?;
         Ok(())
     }
 
@@ -610,8 +741,8 @@ impl Store {
 
     pub fn replace_shapes(&mut self, copy_id: i64, scan: &NifScan) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM shape WHERE copy_id = ?1", [copy_id])?;
-        write_shapes(&tx, "shape", copy_id, scan)?;
+        delete_shapes(&tx, copy_id)?;
+        write_shapes(&tx, LIVE, copy_id, scan)?;
         tx.commit()?;
         Ok(())
     }
@@ -670,11 +801,12 @@ impl Store {
     }
 
     /// The origin supplying the texture the game loads for `norm` (canonical path), or Missing.
-    pub fn resolve_texture(&self, norm: &str) -> TexResolution {
-        self.conn
+    pub fn resolve_texture(&self, norm: &str) -> Result<TexResolution, ScanError> {
+        Ok(self
+            .conn
             .query_row(
                 "SELECT o.name, w.n_copies FROM tex_winner w JOIN path p ON p.id = w.path_id
-                 JOIN origin o ON o.id = w.origin_id WHERE p.p = ?1",
+                 JOIN origin o ON o.id = w.origin_id WHERE p.p = ?1 AND o.enabled = 1",
                 [norm],
                 |r| {
                     Ok(TexResolution::Found {
@@ -683,7 +815,8 @@ impl Store {
                     })
                 },
             )
-            .unwrap_or(TexResolution::Missing)
+            .optional()?
+            .unwrap_or(TexResolution::Missing))
     }
 
     /// Replaces `pgp_diff` with path → (crc32original, crc32patched).
@@ -727,188 +860,215 @@ impl Store {
         Ok(())
     }
 
-    /// Deletes copies (and their shapes) not in `seen`.
+    /// Deletes the copies (with their shape and raw rows) of origins enabled in this run that are not in `seen`.
+    /// Copies of origins outside this run (disabled mods, another source) are kept as cache.
     pub fn delete_unseen(&mut self, seen: &HashSet<i64>) -> Result<usize, ScanError> {
-        let all: Vec<i64> = {
-            let mut st = self.conn.prepare("SELECT id FROM nif_copy")?;
-            let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
-            v
-        };
         let tx = self.conn.transaction()?;
-        let mut n = 0;
-        for id in all.into_iter().filter(|i| !seen.contains(i)) {
-            tx.prepare_cached("DELETE FROM shape WHERE copy_id = ?1")?
-                .execute([id])?;
-            tx.prepare_cached("DELETE FROM nif_copy WHERE id = ?1")?
-                .execute([id])?;
-            n += 1;
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS seen_copy (id INTEGER PRIMARY KEY); DELETE FROM seen_copy;
+             CREATE TEMP TABLE IF NOT EXISTS gone_copy (id INTEGER PRIMARY KEY); DELETE FROM gone_copy;",
+        )?;
+        {
+            let mut ins = tx.prepare("INSERT OR IGNORE INTO seen_copy VALUES (?1)")?;
+            for id in seen {
+                ins.execute([id])?;
+            }
         }
+        let n = tx.execute(
+            "INSERT INTO gone_copy SELECT c.id FROM nif_copy c JOIN origin o ON o.id = c.origin_id
+             WHERE o.enabled = 1 AND c.id NOT IN (SELECT id FROM seen_copy)",
+            [],
+        )?;
+        tx.execute_batch(
+            "DELETE FROM shape WHERE copy_id IN (SELECT id FROM gone_copy);
+             DELETE FROM tex_raw WHERE copy_id IN (SELECT id FROM gone_copy);
+             DELETE FROM nif_copy WHERE id IN (SELECT id FROM gone_copy);
+             DELETE FROM seen_copy; DELETE FROM gone_copy;",
+        )?;
         tx.commit()?;
         Ok(n)
     }
 
-    /// Enabled origins: loose ones and separators by priority (highest first, a separator above its group),
-    /// then BSAs by game rank.
-    pub fn mods(&self) -> Vec<ModRow> {
-        let q = || -> rusqlite::Result<Vec<ModRow>> {
-            let mut st = self.conn.prepare(
-                "SELECT id, name, kind, priority, derived_by IS NOT NULL FROM origin WHERE enabled = 1
-                 ORDER BY kind = 4, priority DESC, kind = 3 DESC, id",
-            )?;
-            let v = st
-                .query_map([], |r| {
-                    Ok(ModRow {
-                        id: r.get(0)?,
+    /// Origins of the latest run: loose ones and separators by priority (highest first, a separator above its
+    /// group), then BSAs by game rank.
+    pub fn mods(&self) -> Result<Vec<ModRow>, ScanError> {
+        let mut st = self.conn.prepare(
+            "SELECT id, name, kind, priority, derived_by IS NOT NULL FROM origin WHERE enabled = 1
+             ORDER BY kind = 4, priority DESC, kind = 3 DESC, id",
+        )?;
+        let v = st
+            .query_map([], |r| {
+                Ok(ModRow {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    kind: r.get(2)?,
+                    priority: r.get(3)?,
+                    derived: r.get(4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// NIF copies of `origin_id`, by path. Empty when the origin is not part of the latest run.
+    pub fn nifs_of(&self, origin_id: i64) -> Result<Vec<NifRow>, ScanError> {
+        let mut st = self.conn.prepare(
+            "SELECT c.id, p.p, c.is_derived, c.derive_check, c.le_mesh, c.problem,
+                    w.copy_id, w.n_copies, wc.is_derived, wc.source_copy_id, wc.derive_check, wo.name,
+                    ws.copy_id, so.name
+             FROM nif_copy c JOIN path p ON p.id = c.path_id
+             JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
+             LEFT JOIN nif_winner w ON w.path_id = c.path_id
+             LEFT JOIN nif_copy wc ON wc.id = w.copy_id
+             LEFT JOIN origin wo ON wo.id = wc.origin_id
+             LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
+             LEFT JOIN nif_copy sc ON sc.id = ws.copy_id
+             LEFT JOIN origin so ON so.id = sc.origin_id
+             WHERE c.origin_id = ?1 ORDER BY p.p",
+        )?;
+        let v = st
+            .query_map([origin_id], |r| {
+                let id: i64 = r.get(0)?;
+                let derived: bool = r.get(2)?;
+                let own_check: Option<i32> = r.get(3)?;
+                let win: Option<i64> = r.get(6)?;
+                let n: Option<i64> = r.get(7)?;
+                let win_derived: Option<bool> = r.get(8)?;
+                let win_source: Option<i64> = r.get(9)?;
+                let win_check: Option<i32> = r.get(10)?;
+                let win_origin: Option<String> = r.get(11)?;
+                let src: Option<i64> = r.get(12)?;
+                let src_origin: Option<String> = r.get(13)?;
+                let wins = win == Some(id);
+                let patched_in_game = !wins && win_derived == Some(true) && win_source == Some(id);
+                let overridden_by = if wins {
+                    None
+                } else if derived {
+                    win_origin
+                } else if src.is_some() && src != Some(id) {
+                    src_origin
+                } else {
+                    None
+                };
+                let check = if derived {
+                    own_check
+                } else if patched_in_game {
+                    win_check
+                } else {
+                    None
+                };
+                Ok(NifRow {
+                    copy_id: id,
+                    path: r.get(1)?,
+                    wins,
+                    overridden_by,
+                    n_copies: n.unwrap_or(0) as u32,
+                    derived,
+                    derive_check: check.and_then(check_name).map(str::to_string),
+                    le_mesh: r.get(4)?,
+                    problem: r.get(5)?,
+                    patched_in_game,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// Shape rows of one copy, by block, with slot paths, raw slot strings and geometry facts.
+    pub fn shapes_of(&self, copy_id: i64) -> Result<Vec<ShapeView>, ScanError> {
+        let mut st = self.conn.prepare(
+            "SELECT s.block, s.name, s.kind, s.shader_kind, s.shader_type, s.slsf1, s.slsf2,
+                    s.alpha_flags, s.alpha_threshold, s.params,
+                    s.skinned, s.vertex_desc, s.num_vertices, s.num_triangles,
+                    t.n, t.t0, t.t1, t.t2, t.t3, t.t4, t.t5, t.t6, t.t7, t.t8
+             FROM shape s LEFT JOIN texset t ON t.id = s.texset_id
+             WHERE s.copy_id = ?1 ORDER BY s.block",
+        )?;
+        const T: usize = 14;
+        let rows: Vec<(ShapeView, Vec<Option<i64>>)> = st
+            .query_map([copy_id], |r| {
+                let n: Option<i64> = r.get(T)?;
+                let mut ids = vec![];
+                for i in 0..n.unwrap_or(0).clamp(0, MAX_SLOTS as i64) as usize {
+                    ids.push(r.get::<_, Option<i64>>(T + 1 + i)?);
+                }
+                Ok((
+                    ShapeView {
+                        block: r.get::<_, i64>(0)? as u32,
                         name: r.get(1)?,
                         kind: r.get(2)?,
-                        priority: r.get(3)?,
-                        derived: r.get(4)?,
-                    })
-                })?
-                .collect();
-            v
-        };
-        q().unwrap_or_default()
-    }
-
-    pub fn nifs_of(&self, origin_id: i64) -> Vec<NifRow> {
-        let q = || -> rusqlite::Result<Vec<NifRow>> {
-            let mut st = self.conn.prepare(
-                "SELECT c.id, p.p, c.is_derived, c.derive_check, c.le_mesh, c.problem,
-                        w.copy_id, w.n_copies, wc.is_derived, wc.source_copy_id, wc.derive_check, wo.name,
-                        ws.copy_id, so.name
-                 FROM nif_copy c JOIN path p ON p.id = c.path_id
-                 LEFT JOIN nif_winner w ON w.path_id = c.path_id
-                 LEFT JOIN nif_copy wc ON wc.id = w.copy_id
-                 LEFT JOIN origin wo ON wo.id = wc.origin_id
-                 LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
-                 LEFT JOIN nif_copy sc ON sc.id = ws.copy_id
-                 LEFT JOIN origin so ON so.id = sc.origin_id
-                 WHERE c.origin_id = ?1 ORDER BY p.p",
-            )?;
-            let v = st
-                .query_map([origin_id], |r| {
-                    let id: i64 = r.get(0)?;
-                    let derived: bool = r.get(2)?;
-                    let own_check: Option<i32> = r.get(3)?;
-                    let win: Option<i64> = r.get(6)?;
-                    let n: Option<i64> = r.get(7)?;
-                    let win_derived: Option<bool> = r.get(8)?;
-                    let win_source: Option<i64> = r.get(9)?;
-                    let win_check: Option<i32> = r.get(10)?;
-                    let win_origin: Option<String> = r.get(11)?;
-                    let src: Option<i64> = r.get(12)?;
-                    let src_origin: Option<String> = r.get(13)?;
-                    let wins = win == Some(id);
-                    let patched_in_game =
-                        !wins && win_derived == Some(true) && win_source == Some(id);
-                    let overridden_by = if wins {
-                        None
-                    } else if derived {
-                        win_origin
-                    } else if src.is_some() && src != Some(id) {
-                        src_origin
-                    } else {
-                        None
-                    };
-                    let check = if derived {
-                        own_check
-                    } else if patched_in_game {
-                        win_check
-                    } else {
-                        None
-                    };
-                    Ok(NifRow {
-                        copy_id: id,
-                        path: r.get(1)?,
-                        wins,
-                        overridden_by,
-                        n_copies: n.unwrap_or(0) as u32,
-                        derived,
-                        derive_check: check.and_then(check_name).map(str::to_string),
-                        le_mesh: r.get(4)?,
-                        problem: r.get(5)?,
-                        patched_in_game,
-                    })
-                })?
-                .collect();
-            v
-        };
-        q().unwrap_or_default()
-    }
-
-    pub fn shapes_of(&self, copy_id: i64) -> Vec<ShapeView> {
-        let q = || -> rusqlite::Result<Vec<ShapeView>> {
-            let mut st = self.conn.prepare(
-                "SELECT s.block, s.name, s.kind, s.shader_kind, s.shader_type, s.slsf1, s.slsf2,
-                        s.alpha_flags, s.alpha_threshold, s.params,
-                        t.n, t.t0, t.t1, t.t2, t.t3, t.t4, t.t5, t.t6, t.t7, t.t8
-                 FROM shape s LEFT JOIN texset t ON t.id = s.texset_id
-                 WHERE s.copy_id = ?1 ORDER BY s.block",
-            )?;
-            let mut pq = self.conn.prepare("SELECT p FROM path WHERE id = ?1")?;
-            let rows: Vec<(ShapeView, Vec<Option<i64>>)> = st
-                .query_map([copy_id], |r| {
-                    let n: Option<i64> = r.get(10)?;
-                    let mut ids = vec![];
-                    for i in 0..n.unwrap_or(0).clamp(0, 9) as usize {
-                        ids.push(r.get::<_, Option<i64>>(11 + i)?);
-                    }
-                    Ok((
-                        ShapeView {
-                            block: r.get::<_, i64>(0)? as u32,
-                            name: r.get(1)?,
-                            kind: r.get(2)?,
-                            shader_kind: r.get(3)?,
-                            shader_type: r.get::<_, Option<i64>>(4)?.map(|x| x as u32),
-                            slsf1: r.get::<_, Option<i64>>(5)?.map(|x| x as u32),
-                            slsf2: r.get::<_, Option<i64>>(6)?.map(|x| x as u32),
-                            textures: vec![],
-                            alpha_flags: r.get::<_, Option<i64>>(7)?.map(|x| x as u16),
-                            alpha_threshold: r.get::<_, Option<i64>>(8)?.map(|x| x as u8),
-                            params: r.get(9)?,
-                        },
-                        ids,
-                    ))
-                })?
-                .collect::<Result<_, _>>()?;
-            let mut out = vec![];
-            for (mut v, ids) in rows {
-                for id in ids {
-                    v.textures.push(match id {
-                        Some(id) => pq.query_row([id], |r| r.get(0)).optional()?,
-                        None => None,
-                    });
-                }
-                out.push(v);
+                        shader_kind: r.get(3)?,
+                        shader_type: r.get::<_, Option<i64>>(4)?.map(|x| x as u32),
+                        slsf1: r.get::<_, Option<i64>>(5)?.map(|x| x as u32),
+                        slsf2: r.get::<_, Option<i64>>(6)?.map(|x| x as u32),
+                        textures: vec![],
+                        raw: vec![],
+                        alpha_flags: r.get::<_, Option<i64>>(7)?.map(|x| x as u16),
+                        alpha_threshold: r.get::<_, Option<i64>>(8)?.map(|x| x as u8),
+                        params: r.get(9)?,
+                        skinned: r.get(10)?,
+                        vertex_desc: r.get::<_, Option<i64>>(11)?.map(|x| x as u64),
+                        num_vertices: r.get::<_, Option<i64>>(12)?.map(|x| x as u32),
+                        num_triangles: r.get::<_, Option<i64>>(13)?.map(|x| x as u32),
+                    },
+                    ids,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut raws: HashMap<(u32, usize), RawSlot> = HashMap::new();
+        {
+            let mut rq = self
+                .conn
+                .prepare("SELECT block, slot, raw, flags FROM tex_raw WHERE copy_id = ?1")?;
+            let it = rq.query_map([copy_id], |r| {
+                Ok((
+                    (r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as usize),
+                    RawSlot {
+                        raw: r.get(2)?,
+                        flags: PathFlags::from_bits(r.get::<_, i64>(3)? as u8),
+                    },
+                ))
+            })?;
+            for x in it {
+                let (k, v) = x?;
+                raws.insert(k, v);
             }
-            Ok(out)
-        };
-        q().unwrap_or_default()
+        }
+        let mut pq = self.conn.prepare("SELECT p FROM path WHERE id = ?1")?;
+        let mut out = vec![];
+        for (mut v, ids) in rows {
+            for (slot, id) in ids.into_iter().enumerate() {
+                v.textures.push(match id {
+                    Some(id) => pq.query_row([id], |r| r.get(0)).optional()?,
+                    None => None,
+                });
+                v.raw.push(raws.remove(&(v.block, slot)));
+            }
+            out.push(v);
+        }
+        Ok(out)
     }
 
-    /// Every (NIF path, slot, shader_kind) whose shapes use texture `norm`, across all copies.
-    /// `shader_kind` (1 lighting, 2 effect) gives the slot its meaning: lighting slots are texture-set slots
-    /// 0-8; effect slots are 0 = source, 1 = greyscale. A texset row is only a path tuple and may be shared by a
-    /// lighting and an effect shape with the same paths; the meaning always comes from the using shape.
-    pub fn users_of_texture(&self, norm: &str) -> Vec<(String, u32, i32)> {
-        let q = || -> rusqlite::Result<Vec<(String, u32, i32)>> {
-            let mut st = self.conn.prepare(
-                "SELECT DISTINCT np.p, tu.slot, s.shader_kind FROM path tp
-                 JOIN tex_use tu ON tu.tex_path_id = tp.id
-                 JOIN shape s ON s.texset_id = tu.texset_id
-                 JOIN nif_copy c ON c.id = s.copy_id
-                 JOIN path np ON np.id = c.path_id
-                 WHERE tp.p = ?1 ORDER BY np.p, tu.slot, s.shader_kind",
-            )?;
-            let v = st
-                .query_map([norm], |r| {
-                    Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get(2)?))
-                })?
-                .collect();
-            v
-        };
-        q().unwrap_or_default()
+    /// Every (NIF path, slot, shader_kind) whose shapes use texture `norm`, across the copies of the latest run's
+    /// origins. `shader_kind` (1 lighting, 2 effect) gives the slot its meaning: lighting slots are texture-set
+    /// slots 0-8; effect slots are 0 = source, 1 = greyscale. A texset row is only a path tuple and may be shared
+    /// by a lighting and an effect shape with the same paths; the meaning always comes from the using shape.
+    pub fn users_of_texture(&self, norm: &str) -> Result<Vec<(String, u32, i32)>, ScanError> {
+        let mut st = self.conn.prepare(
+            "SELECT DISTINCT np.p, tu.slot, s.shader_kind FROM path tp
+             JOIN tex_use tu ON tu.tex_path_id = tp.id
+             JOIN shape s ON s.texset_id = tu.texset_id
+             JOIN nif_copy c ON c.id = s.copy_id
+             JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
+             JOIN path np ON np.id = c.path_id
+             WHERE tp.p = ?1 ORDER BY np.p, tu.slot, s.shader_kind",
+        )?;
+        let v = st
+            .query_map([norm], |r| {
+                Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     /// Raw connection for read-only queries by later tasks and tests.

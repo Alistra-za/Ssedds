@@ -36,6 +36,36 @@ fn valid(h: &Header, r: i32) -> Option<usize> {
     usize::try_from(r).ok().filter(|&i| i < h.sizes.len())
 }
 
+/// A ref that must point at a block of type `want`. -1 is "none"; anything else that is out of range or of
+/// another type is recorded as a problem of block `from` and treated as none.
+fn typed_ref(
+    h: &Header,
+    r: i32,
+    want: &[u8],
+    what: &str,
+    from: usize,
+    problems: &mut Vec<String>,
+) -> Option<usize> {
+    if r == -1 {
+        return None;
+    }
+    match valid(h, r) {
+        None => {
+            problems.push(format!("block {from}: {what} ref {r} out of range"));
+            None
+        }
+        Some(t) if h.kind(t) != want => {
+            problems.push(format!(
+                "block {from}: {what} ref {r} points at {}, not {}",
+                lossy(h.kind(t)),
+                lossy(want)
+            ));
+            None
+        }
+        Some(t) => Some(t),
+    }
+}
+
 pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
     let h = Header::parse(b)?;
     h.check_file_length(b)?;
@@ -66,17 +96,22 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
             (_, Some(s)) => match h.kind(s) {
                 b"BSLightingShaderProperty" => match decode_lighting(&h, b, s) {
                     Ok(l) => {
-                        let slots = match valid(&h, l.texture_set) {
-                            Some(t) if h.kind(t) == b"BSShaderTextureSet" => {
-                                match decode_texture_set(&h, b, t) {
-                                    Ok(ts) => ts.slots,
-                                    Err(e) => {
-                                        out.problems.push(format!("block {t}: {e}"));
-                                        vec![]
-                                    }
+                        let slots = match typed_ref(
+                            &h,
+                            l.texture_set,
+                            b"BSShaderTextureSet",
+                            "texture set",
+                            s,
+                            &mut out.problems,
+                        ) {
+                            Some(t) => match decode_texture_set(&h, b, t) {
+                                Ok(ts) => ts.slots,
+                                Err(e) => {
+                                    out.problems.push(format!("block {t}: {e}"));
+                                    vec![]
                                 }
-                            }
-                            _ => vec![],
+                            },
+                            None => vec![],
                         };
                         Shader::Lighting(l, slots)
                     }
@@ -95,15 +130,21 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
                 other => Shader::Other { kind: lossy(other) },
             },
         };
-        let alpha = valid(&h, head.alpha)
-            .filter(|&a| h.kind(a) == b"NiAlphaProperty")
-            .and_then(|a| match decode_alpha(&h, b, a) {
-                Ok(x) => Some(x),
-                Err(e) => {
-                    out.problems.push(format!("block {a}: {e}"));
-                    None
-                }
-            });
+        let alpha = typed_ref(
+            &h,
+            head.alpha,
+            b"NiAlphaProperty",
+            "alpha",
+            i,
+            &mut out.problems,
+        )
+        .and_then(|a| match decode_alpha(&h, b, a) {
+            Ok(x) => Some(x),
+            Err(e) => {
+                out.problems.push(format!("block {a}: {e}"));
+                None
+            }
+        });
         out.shapes.push(ShapeRow {
             block: i as u32,
             head,

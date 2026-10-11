@@ -44,9 +44,10 @@ impl Instance {
         let text = std::fs::read_to_string(root.join("ModOrganizer.ini"))
             .map_err(|e| ScanError::NoInstance(format!("{}: {e}", root.display())))?;
         let ini = Ini::parse(&text);
+        // A relative base_directory is relative to the instance root, never to the working directory.
         let base = ini
             .get("Settings", "base_directory")
-            .map(PathBuf::from)
+            .map(|b| root.join(b))
             .unwrap_or_else(|| root.to_path_buf());
         let game = ini
             .get("General", "gamePath")

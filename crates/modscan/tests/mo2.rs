@@ -59,3 +59,29 @@ fn bad_profile_is_an_error() {
     let d = instance_fixture("+A\n");
     assert!(Instance::load(d.path(), Some("Nope")).is_err());
 }
+
+#[test]
+fn relative_base_directory_is_joined_to_the_instance_root() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path();
+    let game = r.join("Game");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::create_dir_all(r.join("Base/mods/A")).unwrap();
+    std::fs::create_dir_all(r.join("Base/profiles/P")).unwrap();
+    std::fs::write(r.join("Base/profiles/P/modlist.txt"), "+A\n").unwrap();
+    std::fs::write(
+        r.join("ModOrganizer.ini"),
+        format!(
+            "[General]\ngamePath=@ByteArray({})\nselected_profile=@ByteArray(P)\n[Settings]\nbase_directory=Base\n",
+            game.display().to_string().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    // Run from another working directory: the relative base must not resolve against the cwd.
+    let inst = Instance::load(r, None).unwrap();
+    assert_eq!(inst.mods, r.join("Base").join("mods"));
+    assert_eq!(inst.profiles, r.join("Base").join("profiles"));
+    let (o, missing) = loose_origins(&inst).unwrap();
+    assert!(missing.is_empty());
+    assert!(o.iter().any(|x| x.name == "A"));
+}

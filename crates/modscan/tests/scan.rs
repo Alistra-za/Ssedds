@@ -50,9 +50,9 @@ fn winner_and_source_with_pgpatcher_output() {
     let (store, r) = go(&d, vec![]);
     assert!(!r.tainted);
     assert_eq!(r.pgp.len(), 1);
-    let mods = store.mods();
+    let mods = store.mods().unwrap();
     let a = mods.iter().find(|m| m.name == "A").unwrap();
-    let nifs = store.nifs_of(a.id);
+    let nifs = store.nifs_of(a.id).unwrap();
     assert_eq!(nifs[0].status_label(), "Patched by PGPatcher (in game)");
     assert_eq!(nifs[0].derive_check.as_deref(), Some("match"));
 }
@@ -69,9 +69,14 @@ fn stale_when_source_changed_even_with_older_mtime() {
         Some(br#"{"meshes\\x.nif":{"crc32original":1,"crc32patched":2}}"#),
     );
     let (store, _) = go(&d, vec![]);
-    let a = store.mods().into_iter().find(|m| m.name == "A").unwrap();
+    let a = store
+        .mods()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.name == "A")
+        .unwrap();
     assert_eq!(
-        store.nifs_of(a.id)[0].derive_check.as_deref(),
+        store.nifs_of(a.id).unwrap()[0].derive_check.as_deref(),
         Some("stale_changed")
     );
 }
@@ -116,9 +121,14 @@ fn pgp_started_mid_scan_taints_result() {
     )
     .unwrap();
     assert!(r.tainted);
-    let pgp = store.mods().into_iter().find(|m| m.name == "PGP").unwrap();
+    let pgp = store
+        .mods()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.name == "PGP")
+        .unwrap();
     assert!(
-        store.nifs_of(pgp.id).is_empty(),
+        store.nifs_of(pgp.id).unwrap().is_empty(),
         "derived rows from a tainted run must not be committed"
     );
 }
@@ -169,6 +179,7 @@ fn rescan_reuses_unchanged_copies() {
 fn mod_id(store: &Store, name: &str) -> i64 {
     store
         .mods()
+        .unwrap()
         .into_iter()
         .find(|m| m.name == name)
         .unwrap()
@@ -195,13 +206,13 @@ fn stale_reordered_when_diff_matches_a_deeper_copy() {
         ),
     );
     let (store, _) = go(&d, vec![]);
-    let bn = &store.nifs_of(mod_id(&store, "B"))[0];
+    let bn = &store.nifs_of(mod_id(&store, "B")).unwrap()[0];
     assert!(bn.patched_in_game);
     assert_eq!(bn.derive_check.as_deref(), Some("stale_reordered"));
-    let an = &store.nifs_of(mod_id(&store, "A"))[0];
+    let an = &store.nifs_of(mod_id(&store, "A")).unwrap()[0];
     assert_eq!(an.status_label(), "Overridden");
     assert_eq!(an.overridden_by.as_deref(), Some("B"));
-    let pn = &store.nifs_of(mod_id(&store, "PGP"))[0];
+    let pn = &store.nifs_of(mod_id(&store, "PGP")).unwrap()[0];
     assert!(pn.wins && pn.derived);
     assert_eq!(pn.n_copies, 3);
 }
@@ -219,11 +230,12 @@ fn dups_are_dup_of_and_overwrite_only_derives_listed_paths() {
     assert_eq!(r.pgp[0].state, modscan::store::DerivedState::InOverwrite);
     let ow = store
         .mods()
+        .unwrap()
         .into_iter()
         .find(|m| m.name == "overwrite")
         .unwrap();
     assert!(!ow.derived);
-    let rows = store.nifs_of(ow.id);
+    let rows = store.nifs_of(ow.id).unwrap();
     let dup = rows
         .iter()
         .find(|n| n.path.contains("_pgpatcher_dups"))
@@ -234,6 +246,7 @@ fn dups_are_dup_of_and_overwrite_only_derives_listed_paths() {
     assert!(!y.derived && y.wins);
     let ay = store
         .nifs_of(mod_id(&store, "A"))
+        .unwrap()
         .into_iter()
         .find(|n| n.path == "meshes/y.nif")
         .unwrap();
@@ -244,7 +257,12 @@ fn dups_are_dup_of_and_overwrite_only_derives_listed_paths() {
 fn separators_are_listed_above_their_group() {
     let d = instance_fixture("+B\n-Sep_separator\n+A\n");
     let (store, _) = go(&d, vec![]);
-    let names: Vec<(String, i32)> = store.mods().into_iter().map(|m| (m.name, m.kind)).collect();
+    let names: Vec<(String, i32)> = store
+        .mods()
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.name, m.kind))
+        .collect();
     let pos = |n: &str| names.iter().position(|m| m.0 == n).unwrap();
     assert!(pos("B") < pos("Sep_separator") && pos("Sep_separator") < pos("A"));
     assert_eq!(names[pos("Sep_separator")].1, 3);
@@ -256,8 +274,8 @@ fn shapes_textures_and_texset_dedup() {
     put(d.path(), "mods/A/meshes/x.nif", None);
     put(d.path(), "mods/B/meshes/x.nif", None);
     let (store, _) = go(&d, vec![]);
-    let a = &store.nifs_of(mod_id(&store, "A"))[0];
-    let shapes = store.shapes_of(a.copy_id);
+    let a = &store.nifs_of(mod_id(&store, "A")).unwrap()[0];
+    let shapes = store.shapes_of(a.copy_id).unwrap();
     assert!(!shapes.is_empty());
     let lit = shapes
         .iter()
@@ -274,7 +292,7 @@ fn shapes_textures_and_texset_dedup() {
         .next()
         .expect("a texture slot")
         .clone();
-    let users = store.users_of_texture(&tex);
+    let users = store.users_of_texture(&tex).unwrap();
     assert!(users.iter().any(|(n, _, k)| n == "meshes/x.nif" && *k == 1));
     // Two identical copies share texture sets, including sets with empty slots.
     let sets: i64 = store
@@ -299,7 +317,7 @@ fn removed_files_are_deleted_and_cancel_stops() {
     std::fs::remove_file(d.path().join("mods/A/meshes/y.nif")).unwrap();
     let (store, r) = go(&d, vec![]);
     assert_eq!((r.nifs, r.reused), (1, 1));
-    assert_eq!(store.nifs_of(mod_id(&store, "A")).len(), 1);
+    assert_eq!(store.nifs_of(mod_id(&store, "A")).unwrap().len(), 1);
     put(d.path(), "mods/A/meshes/z.nif", None);
     let inst = Instance::load(d.path(), None).unwrap();
     let mut store = Store::open(&d.path().join("scan.db")).unwrap();
@@ -330,9 +348,9 @@ fn read_failure_is_retried_next_scan() {
     drop(lock);
     let (store, r2) = go(&d, vec![]);
     assert_eq!((r2.parsed, r2.reused, r2.problems.len()), (1, 0, 0));
-    let a = &store.nifs_of(mod_id(&store, "A"))[0];
+    let a = &store.nifs_of(mod_id(&store, "A")).unwrap()[0];
     assert!(a.problem.is_none());
-    assert!(!store.shapes_of(a.copy_id).is_empty());
+    assert!(!store.shapes_of(a.copy_id).unwrap().is_empty());
 }
 
 #[test]
@@ -349,9 +367,9 @@ fn folder_source_scans_one_origin() {
     )
     .unwrap();
     assert_eq!((r.nifs, r.parsed), (1, 1));
-    let m = store.mods();
+    let m = store.mods().unwrap();
     assert_eq!(m.len(), 1);
-    assert_eq!(store.nifs_of(m[0].id)[0].status_label(), "Wins");
+    assert_eq!(store.nifs_of(m[0].id).unwrap()[0].status_label(), "Wins");
 }
 
 /// Owner-instance smoke run (plan step 5). Read-only on the instance; writes only %TEMP%\sdc-scan-smoke.db.
@@ -396,6 +414,8 @@ fn owner_smoke() {
         println!("problem: {p:?}");
     }
     println!("elapsed: {:.1}s", el.as_secs_f64());
+    println!("phase_ms: {:?}", r.phase_ms);
+    println!("notes: {:?}", r.notes);
     let c = store.conn();
     let q = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
     let w = q("SELECT count(*) FROM nif_winner");
@@ -417,5 +437,99 @@ fn owner_smoke() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
+    println!(
+        "bsa origins: {}; tex_raw rows: {}; shapes: {}; tex winners: {}",
+        q("SELECT count(*) FROM origin WHERE kind = 4 AND enabled = 1"),
+        q("SELECT count(*) FROM tex_raw"),
+        q("SELECT count(*) FROM shape"),
+        q("SELECT count(*) FROM tex_winner")
+    );
     println!("derive_check counts (0 match,1 stale_changed,2 stale_reordered,3 unverified,4 unknown,5 dup_of): {checks:?}");
+}
+
+fn folder_run(store: &mut Store, dir: &std::path::Path) -> modscan::scan::Report {
+    run(
+        &Source::Folder(dir.to_path_buf()),
+        store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec![],
+    )
+    .unwrap()
+}
+
+/// I5 (a): a Folder scan between two MO2 scans neither deletes nor re-parses the MO2 cache.
+#[test]
+fn folder_scan_does_not_wipe_mo2_cache() {
+    let d = instance_fixture("+B\n+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/B/meshes/y.nif", None);
+    let (store, r1) = go(&d, vec![]);
+    assert_eq!(r1.parsed, 2);
+    drop(store);
+    let other = tempfile::tempdir().unwrap();
+    put(other.path(), "Loose/meshes/z.nif", None);
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let rf = folder_run(&mut store, &other.path().join("Loose"));
+    assert_eq!(rf.parsed, 1);
+    // the view is the last run: only the folder origin is listed
+    let names: Vec<String> = store.mods().unwrap().into_iter().map(|m| m.name).collect();
+    assert_eq!(names, ["Loose"]);
+    drop(store);
+    let (store, r2) = go(&d, vec![]);
+    assert_eq!((r2.parsed, r2.reused), (0, 2));
+    assert!(store.mods().unwrap().iter().all(|m| m.name != "Loose"));
+    assert_eq!(store.nifs_of(mod_id(&store, "A")).unwrap().len(), 1);
+}
+
+/// I5 (b): a mod disabled in modlist.txt is hidden, and its copies are reused when it is re-enabled.
+#[test]
+fn disabled_mod_is_hidden_and_reused_when_reenabled() {
+    let d = instance_fixture("+B\n+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/B/meshes/x.nif", None);
+    let (store, _) = go(&d, vec![]);
+    let b_id = mod_id(&store, "B");
+    drop(store);
+    let modlist = d.path().join("profiles/Default/modlist.txt");
+    std::fs::write(&modlist, "-B\n+A\n").unwrap();
+    let (store, r) = go(&d, vec![]);
+    assert_eq!((r.nifs, r.parsed, r.reused), (1, 0, 1));
+    assert!(store.mods().unwrap().iter().all(|m| m.name != "B"));
+    assert!(store.nifs_of(b_id).unwrap().is_empty(), "hidden origin");
+    let a = &store.nifs_of(mod_id(&store, "A")).unwrap()[0];
+    assert!(a.wins);
+    drop(store);
+    std::fs::write(&modlist, "+B\n+A\n").unwrap();
+    let (store, r) = go(&d, vec![]);
+    assert_eq!((r.parsed, r.reused), (0, 2));
+    assert!(store.nifs_of(mod_id(&store, "B")).unwrap()[0].wins);
+}
+
+#[test]
+fn report_has_phase_timings() {
+    let d = instance_fixture(
+        "+A
+",
+    );
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let (_, r) = go(&d, vec![]);
+    let names: Vec<&str> = r.phase_ms.iter().map(|p| p.0).collect();
+    assert_eq!(
+        names,
+        ["origins", "walk", "parse", "write", "resolve", "textures"]
+    );
+    // the fixture profile has no INI and the game folder no Skyrim_Default.ini: a note, not a problem
+    assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+}
+
+/// Manual check of the shell Documents lookup (prints the folder; reads nothing in it).
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn documents_dir_resolves() {
+    let d = modscan::win::documents_dir().expect("FOLDERID_Documents");
+    println!("documents: {}", d.display());
+    assert!(d.is_dir());
 }
