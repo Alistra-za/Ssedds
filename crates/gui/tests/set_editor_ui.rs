@@ -625,3 +625,43 @@ fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
     h.get_by_label("Match normal");
     h.get_by_label("Lock diffuse");
 }
+
+/// Final review Minor 2 (parked Task 14): the slot cards' Format and Opaque write `sdc.toml`; while it is read-only
+/// they are disabled and say why on hover (the edit would be dropped silently).
+#[test]
+fn a_read_only_sdc_toml_disables_format_and_opaque_and_explains_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let bad = d.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::write(bad.join("sdc.toml"), "this is = = not toml\n").unwrap();
+    m.project = Some(sdc_gui::project::ProjectDoc::open(&bad));
+    assert!(m.project.as_ref().unwrap().read_only());
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    let combos: Vec<_> = h
+        .query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .filter(|n| {
+            n.accesskit_node()
+                .value()
+                .or(n.accesskit_node().label())
+                .is_some_and(|t| t.contains("BC"))
+        })
+        .collect();
+    assert!(!combos.is_empty(), "the slot cards show a format");
+    assert!(
+        combos.iter().all(|n| n.accesskit_node().is_disabled()),
+        "every format is disabled"
+    );
+    let opaque = h.get_by_label("Opaque");
+    assert!(opaque.accesskit_node().is_disabled());
+    opaque.hover();
+    h.run();
+    h.run();
+    assert!(
+        h.query_by_label_contains("sdc.toml is read-only").is_some(),
+        "the reason shows on hover"
+    );
+}

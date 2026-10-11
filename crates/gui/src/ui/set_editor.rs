@@ -227,7 +227,15 @@ fn card(
             }
             let Some(job) = &i.job else { return };
             let (cur_f, cur_t) = (job.profile.format, job.profile.color.tag);
-            let lock = field_lock(model.target, &job.profile, "format");
+            // Format and Opaque write `sdc.toml`: a read-only one would drop the edit silently.
+            let toml_read_only = model
+                .project
+                .as_ref()
+                .and_then(|p| p.error())
+                .map(|e| format!("sdc.toml is read-only: {e}"));
+            let lock = toml_read_only
+                .clone()
+                .or(field_lock(model.target, &job.profile, "format").map(str::to_string));
             let mut choice = (cur_f, cur_t);
             ui.add_enabled_ui(lock.is_none(), |ui| {
                 egui::ComboBox::from_id_salt(("slot-format", &v.id, slot.label()))
@@ -242,15 +250,19 @@ fn card(
                     });
             })
             .response
-            .on_disabled_hover_text(lock.unwrap_or(""));
+            .on_disabled_hover_text(lock.unwrap_or_default());
             if choice != (cur_f, cur_t) {
                 acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
             }
             if slot == SlotKind::Diffuse {
                 let mut on = model.is_opaque(&i.key);
                 if ui
-                    .checkbox(&mut on, "Opaque")
+                    .add_enabled(
+                        toml_read_only.is_none(),
+                        egui::Checkbox::new(&mut on, "Opaque"),
+                    )
                     .on_hover_text("Strips alpha: the diffuse is fully opaque")
+                    .on_disabled_hover_text(toml_read_only.unwrap_or_default())
                     .changed()
                 {
                     acts.push(Act::Opaque(i.key.clone(), on));
