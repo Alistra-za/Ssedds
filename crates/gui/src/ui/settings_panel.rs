@@ -73,7 +73,7 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
     groups
 }
 
-fn alpha_options() -> Options {
+pub fn alpha_options() -> Options {
     vec![
         (json!(AlphaPolicy::Remove), "Remove".into()),
         (json!(AlphaPolicy::Cutout), "Cutout".into()),

@@ -1,6 +1,9 @@
 //! Modal dialogs for `model.dialog` (M3a spec §2.1).
-use crate::model::{AfterExport, AppModel, Dialog, DocKind};
+use super::settings_panel::alpha_options;
+use crate::model::items::Decision;
+use crate::model::{AfterExport, Answer, AppModel, Dialog, DocKind};
 use eframe::egui;
+use engine::config::{AlphaPolicy, GreenConvention};
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     let Some(dialog) = model.dialog.clone() else {
@@ -81,6 +84,7 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
     let (mut proceed, mut cancel, mut accept_all) = (false, false, false);
     let mut select: Option<String> = None;
     let mut decide: Option<(String, engine::config::Subtype)> = None;
+    let mut answer: Option<(String, Answer)> = None;
     let any_suggestion = keys
         .iter()
         .any(|k| matches!(model.subtype_question(k), Some(Some(_))));
@@ -103,12 +107,12 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
                     let name = item.name.clone();
                     let fallback = item.job.as_ref().map(|j| j.profile.subtype);
                     let question = model.subtype_question(key);
+                    let decisions = item.decisions.clone();
                     ui.horizontal(|ui| {
                         if ui.link(&name).clicked() {
                             select = Some(key.clone());
                         }
                         let Some(suggested) = question else {
-                            ui.weak("decide in the settings panel");
                             return;
                         };
                         let Some(default) = suggested.or(fallback) else {
@@ -138,6 +142,43 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
                             decide = Some((key.clone(), chosen));
                         }
                     });
+                    // The questions that are not a sub-type: a small fixed set of choices each, answered inline.
+                    for d in &decisions {
+                        ui.horizontal_wrapped(|ui| match d {
+                            Decision::AlphaMeaning => {
+                                ui.label("Alpha means:");
+                                for (v, label) in alpha_options() {
+                                    let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v)
+                                    else {
+                                        continue;
+                                    };
+                                    if ui.button(label).clicked() {
+                                        answer = Some((key.clone(), Answer::Alpha(policy)));
+                                    }
+                                }
+                            }
+                            Decision::GreenConvention => {
+                                ui.label("Green channel:");
+                                if ui.button("OpenGL").clicked() {
+                                    answer =
+                                        Some((key.clone(), Answer::Green(GreenConvention::Opengl)));
+                                }
+                                if ui.button("DirectX").clicked() {
+                                    answer = Some((
+                                        key.clone(),
+                                        Answer::Green(GreenConvention::Directx),
+                                    ));
+                                }
+                            }
+                            Decision::Acknowledge(code) => {
+                                ui.label(code.as_str());
+                                if ui.button("Acknowledge for this texture").clicked() {
+                                    answer = Some((key.clone(), Answer::Acknowledge(*code)));
+                                }
+                            }
+                            Decision::Subtype { .. } => {}
+                        });
+                    }
                 }
             });
         ui.horizontal(|ui| {
@@ -151,6 +192,9 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
     });
     if let Some(k) = select {
         model.select_item(&k);
+    }
+    if let Some((k, a)) = answer {
+        model.answer_undecided_row(&k, a);
     }
     if let Some((k, st)) = decide {
         model.decide_undecided_row(&k, st);

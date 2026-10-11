@@ -394,3 +394,24 @@ fn the_confirm_combo_uses_the_grouping() {
     let y = |n: &egui_kittest::Node<'_>| n.accesskit_node().raw_bounds().unwrap().y0;
     assert!(y(&pbr) < y(&colour));
 }
+
+#[test]
+fn accept_all_keeps_the_pbr_follow_for_a_member_decided_on_a_stale_plan() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.export_clicked();
+    assert!(
+        matches!(m.dialog, Some(sdc_gui::model::Dialog::ProceedAnyway(_))),
+        "{:?}",
+        m.dialog
+    );
+    // The row's decision re-plans; Accept all runs before that plan lands, so `N` still shows `normal`.
+    m.decide_undecided_row(DIFFUSE, Subtype::PbrAlbedo);
+    m.accept_all_suggestions();
+    idle(&mut m);
+    assert_eq!(subtype(&m, N), Some(json!("pbr_normal")));
+    assert_eq!(subtype(&m, G), Some(json!("pbr_emissive")));
+    let mut a = auto(&m);
+    a.sort();
+    assert_eq!(a, vec![G.to_string(), N.to_string()]);
+}

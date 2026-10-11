@@ -55,8 +55,6 @@ fn accept_all_decides_the_suggestions_and_the_export_proceeds_on_the_settled_pla
     assert_eq!(listed(&m).len(), m.undecided());
     assert!(m.undecided() >= 2);
     m.accept_all_suggestions();
-    // The last row went: the dialog is gone and the export waits for the plan the decisions started.
-    assert_eq!(m.dialog, None);
     idle(&mut m);
     assert_eq!(m.undecided(), 0);
     let s = m.export.summary.clone().expect("the export ran");
@@ -97,6 +95,7 @@ fn deciding_one_row_removes_only_that_row() {
     m.export_clicked();
     let before = listed(&m);
     m.decide_undecided_row(ROCK, Subtype::Diffuse);
+    idle(&mut m);
     let after = listed(&m);
     assert_eq!(after.len(), before.len() - 1);
     assert!(!after.contains(&ROCK.to_string()));
@@ -153,4 +152,42 @@ fn one_undo_reverts_accept_all() {
     idle(&mut m);
     assert_eq!(m.undecided(), n);
     assert_eq!(m.history.undo.len(), steps);
+}
+
+#[test]
+fn a_pending_continuation_does_not_outlive_the_export_the_user_clicked() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    m.decide_undecided_row(ROCK, Subtype::Diffuse);
+    // "Proceed anyway" waits for the plan in flight; Export is clicked meanwhile and takes over.
+    m.proceed_anyway();
+    m.export_clicked();
+    idle(&mut m);
+    // The clicked export asked again (other textures are undecided); answering it exports once.
+    assert!(matches!(m.dialog, Some(Dialog::ProceedAnyway(_))));
+    m.proceed_anyway();
+    idle(&mut m);
+    assert!(m.export.summary.is_some());
+    // A later, unrelated plan starts nothing.
+    m.export.summary = None;
+    m.set_field(ROCK, "mipmaps.count", serde_json::json!(3));
+    idle(&mut m);
+    assert!(m.export.summary.is_none());
+    assert!(m.export.running.is_none());
+    assert_eq!(m.dialog, None);
+}
+
+#[test]
+fn rows_waiting_on_alpha_are_answered_inline_and_leave_when_decided() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    m.decide_undecided_row(LEAF, Subtype::Diffuse);
+    idle(&mut m);
+    // Its sub-type is decided, but it still waits for its alpha meaning: the row stays.
+    assert!(listed(&m).contains(&LEAF.to_string()));
+    m.answer_undecided_row(LEAF, Answer::Alpha(AlphaPolicy::Cutout));
+    idle(&mut m);
+    assert!(!listed(&m).contains(&LEAF.to_string()));
 }

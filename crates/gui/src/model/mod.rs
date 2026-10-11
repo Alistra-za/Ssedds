@@ -528,19 +528,28 @@ impl AppModel {
         })
     }
 
-    /// One row of the export dialog: decide `key` as `st`. When it was the last row the export continues.
+    /// One row of the export dialog: decide `key` as `st`. The row leaves the list when the plan that follows shows
+    /// the texture decided (it may ask something else next); when none are left the export continues.
     pub fn decide_undecided_row(&mut self, key: &str, st: Subtype) {
         self.decide(key, Answer::Subtype(st));
-        self.drop_rows(&[key.to_string()]);
+        self.refresh_if_settled();
+    }
+
+    /// A row's inline answer that is not a sub-type (alpha meaning, green convention, an acknowledgement). The row
+    /// leaves the list when the plan that follows shows the texture decided.
+    pub fn answer_undecided_row(&mut self, key: &str, answer: Answer) {
+        self.decide(key, answer);
+        self.refresh_if_settled();
     }
 
     /// "Accept all suggestions": decide every listed texture that has a suggestion as that suggestion, as one undo
-    /// step. A texture without a suggestion stays listed and undecided.
+    /// step. A texture without a suggestion stays listed and undecided; alpha, green and acknowledgements are
+    /// never answered here.
     pub fn accept_all_suggestions(&mut self) {
         let Some(Dialog::ProceedAnyway(keys)) = self.dialog.clone() else {
             return;
         };
-        let picks: Vec<(String, Subtype)> = keys
+        let mut picks: Vec<(String, Subtype)> = keys
             .into_iter()
             .filter_map(|k| {
                 let st = self.subtype_question(&k)??;
@@ -550,26 +559,52 @@ impl AppModel {
         if picks.is_empty() {
             return;
         }
+        // PBR colour picks lead: deciding a set's diffuse as `pbr_albedo` switches its inferred members (PBR follow),
+        // so those members must be looked at afterwards, not decided from the plan's older suggestions.
+        picks.sort_by_key(|(_, st)| !st.is_pbr_color());
         // Each decision goes through `decide` (so the PBR follow-on applies); the steps they push fold into one.
         let pushed = self.history.pushed;
         for (k, st) in &picks {
-            self.decide(k, Answer::Subtype(*st));
+            let written = self
+                .project
+                .as_ref()
+                .is_some_and(|p| p.file_value(k, "subtype").is_some());
+            if !written {
+                self.decide(k, Answer::Subtype(*st));
+            }
         }
         let n = self.history.pushed - pushed;
         self.history.fold_last(n, "Accept all suggestions");
-        let done: Vec<String> = picks.into_iter().map(|(k, _)| k).collect();
-        self.drop_rows(&done);
+        self.refresh_if_settled();
     }
 
-    /// Take the decided rows out of the dialog; with none left, close it and continue to the export.
-    fn drop_rows(&mut self, decided: &[String]) {
-        let Some(Dialog::ProceedAnyway(keys)) = self.dialog.as_mut() else {
+    /// No plan in flight, so the items on screen are current: update the dialog's rows now. Otherwise the plan
+    /// that lands does it.
+    fn refresh_if_settled(&mut self) {
+        if self.planning.is_none() {
+            self.refresh_undecided_dialog();
+        }
+    }
+
+    /// A plan landed while the dialog is open: rows whose texture is decided (or gone) leave the list. With none
+    /// left the dialog closes and the export goes on.
+    fn refresh_undecided_dialog(&mut self) {
+        let Some(Dialog::ProceedAnyway(keys)) = self.dialog.as_ref() else {
             return;
         };
-        keys.retain(|k| !decided.contains(k));
-        if keys.is_empty() {
+        let live: Vec<String> = keys
+            .iter()
+            .filter(|k| {
+                self.item(k)
+                    .is_some_and(|i| i.status == ItemStatus::NeedsDecision)
+            })
+            .cloned()
+            .collect();
+        if live.is_empty() {
             self.dialog = None;
             self.continue_export(Continue::Recheck);
+        } else if let Some(Dialog::ProceedAnyway(keys)) = self.dialog.as_mut() {
+            *keys = live;
         }
     }
 
@@ -859,10 +894,18 @@ impl AppModel {
             return;
         }
         self.auto_replans = 0;
-        if std::mem::take(&mut self.export_after_plan) {
+        // Both flags are taken together so a leftover one cannot fire on a later, unrelated plan; the export the
+        // user clicked wins.
+        let (clicked, continued) = (
+            std::mem::take(&mut self.export_after_plan),
+            self.continue_after_plan.take(),
+        );
+        if clicked {
             self.export_checks();
-        } else if let Some(how) = self.continue_after_plan.take() {
+        } else if let Some(how) = continued {
             self.run_continue(how);
+        } else {
+            self.refresh_undecided_dialog();
         }
     }
 
