@@ -1034,14 +1034,12 @@ impl Engine {
             };
             for j in &jobs {
                 match &j.pack {
-                    // A packed output: the folder of its first source plus the output's stem (the virtual stem,
-                    // e.g. `rock01_rmaos`), compared with the extension-less key. Its raw sources count too.
+                    // A packed output: the folder of its first source plus the virtual stem (e.g. `rock01_rmaos`,
+                    // from the first source's name, whatever output path it has), compared with the extension-less
+                    // key. Its raw sources count too.
                     Some(pk) => {
-                        let stem = j
-                            .output
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned());
-                        if let (Some(r), Some(stem)) = (rel_of_path(&j.input), stem) {
+                        let stem = crate::pack::plan::virtual_stem(&j.input, pk.kind);
+                        if let Some(r) = rel_of_path(&j.input) {
                             let dir = r
                                 .rsplit_once('/')
                                 .map_or(String::new(), |(d, _)| format!("{d}/"));

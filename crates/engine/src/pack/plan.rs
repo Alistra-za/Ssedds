@@ -51,18 +51,12 @@ pub fn raw_role(f: &InputFile) -> Option<RawMap> {
 /// the output's name `<base>_<suffix>.<ext>` in `rel` and `game_path` (rule globs and `file:` scopes match it)
 /// and the packed `output` next to the source's.
 pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
-    let stem = first
-        .rel
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let base = split_vocab(&stem).map_or(stem.clone(), |(b, _)| b);
+    let stem = virtual_stem(&first.rel, kind);
     let ext = first
         .rel
         .extension()
         .map_or_else(|| "png".to_string(), |e| e.to_string_lossy().into_owned());
-    let file = format!("{base}_{}.{ext}", kind.suffix());
+    let file = format!("{stem}.{ext}");
     let lower = file.to_lowercase();
     let game_path = match first.game_path.rsplit_once('/') {
         Some((dir, _)) => format!("{dir}/{lower}"),
@@ -72,11 +66,21 @@ pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
         path: first.path.clone(),
         rel: first.rel.with_file_name(&file),
         game_path,
-        output: first
-            .output
-            .with_file_name(format!("{base}_{}.dds", kind.suffix())),
+        output: first.output.with_file_name(format!("{stem}.dds")),
         kind: InputKind::Image,
     }
+}
+
+/// The packed output's stem, from its first source's name: `<base>_<suffix>` (`rock01_roughness` → `rock01_rmaos`).
+/// Its `[files]` key is this stem in the first source's folder, wherever an output path puts the file.
+pub fn virtual_stem(first_source: &Path, kind: RecipeKind) -> String {
+    let stem = first_source
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let base = split_vocab(&stem).map_or(stem.clone(), |(b, _)| b);
+    format!("{base}_{}", kind.suffix())
 }
 
 /// A recipe that passed pass 1: assembled, analysed and resolved in pass 2.

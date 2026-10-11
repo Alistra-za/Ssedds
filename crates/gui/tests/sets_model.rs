@@ -694,3 +694,72 @@ fn the_entry_of_a_set_whose_files_are_gone_can_be_deleted() {
     idle(&mut m);
     assert!(!set_views(&m).iter().any(|s| s.id == "landscape/leaf"));
 }
+
+/// Final review I1: the packed output's `[files]` key follows its first source's name, as the engine scopes it, so a
+/// format chosen on the RMAOS card still applies after a match edit moves the output under another prefix.
+#[test]
+fn a_packed_format_applies_after_a_match_edit() {
+    use engine::config::{ColorTag, Format};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let packed = |m: &sdc_gui::model::AppModel| {
+        m.items
+            .iter()
+            .find(|i| i.name.ends_with("rmaos"))
+            .unwrap()
+            .clone()
+    };
+    let before = packed(&m).key;
+    m.set_json_value(
+        "landscape/rock01",
+        "match_diffuse",
+        Some(json!(r"landscape\stone")),
+    );
+    idle(&mut m);
+    let it = packed(&m);
+    assert!(
+        it.job
+            .as_ref()
+            .unwrap()
+            .output
+            .to_string_lossy()
+            .contains("stone_rmaos"),
+        "the match edit moved the output: {:?}",
+        it.job.as_ref().map(|j| &j.output)
+    );
+    assert_eq!(
+        it.key, before,
+        "the item key does not follow the output path"
+    );
+    let want = if it.job.as_ref().unwrap().profile.format == Format::Bc1 {
+        Format::Bc7
+    } else {
+        Format::Bc1
+    };
+    m.set_format(&it.key, want, ColorTag::Unorm);
+    idle(&mut m);
+    assert_eq!(packed(&m).job.as_ref().unwrap().profile.format, want);
+    assert!(m.unmatched_keys.is_empty(), "{:?}", m.unmatched_keys);
+}
+
+/// Final review I1: a packed `[files]` entry made before a match edit still names the packed output afterwards (the
+/// engine's unmatched-key check uses the same first-source stem), so it is not offered for removal.
+#[test]
+fn a_packed_entry_stays_matched_after_a_match_edit() {
+    use engine::config::{ColorTag, Format};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let key = key_of(&m, "rock01_rmaos");
+    m.set_format(&key, Format::Bc1, ColorTag::Unorm);
+    m.set_json_value(
+        "landscape/rock01",
+        "match_diffuse",
+        Some(json!(r"landscape\stone")),
+    );
+    idle(&mut m);
+    let it = m.items.iter().find(|i| i.key == key).unwrap();
+    assert_eq!(it.job.as_ref().unwrap().profile.format, Format::Bc1);
+    assert!(m.unmatched_keys.is_empty(), "{:?}", m.unmatched_keys);
+}

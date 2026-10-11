@@ -6,6 +6,8 @@ use engine::discover::{InputFile, InputKind};
 use engine::events::{EngineEvent, EventKind, RecipeReport};
 use engine::manifest::output_key;
 use engine::overrides::project_rel;
+use engine::pack::plan::virtual_stem;
+use engine::pack::RecipeKind;
 use engine::policy::{JobStatus, Need, ResolvedJob, SourceStamp};
 use engine::session::{Session, Thumbnail};
 use std::collections::BTreeMap;
@@ -91,16 +93,14 @@ fn key_of(root: &Path, path: &Path) -> String {
     project_rel(root, &f).unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
 }
 
-/// A packed job's key: its first source's folder plus the output stem, without extension.
-fn packed_key(root: &Path, job: &ResolvedJob) -> String {
+/// A packed job's key: its first source's folder plus the virtual stem from the first source's name, without
+/// extension (as the engine scopes `[files]`; an output path does not change it).
+fn packed_key(root: &Path, job: &ResolvedJob, kind: RecipeKind) -> String {
     let src = key_of(root, &job.input);
     let dir = src
         .rsplit_once('/')
         .map_or(String::new(), |(d, _)| format!("{d}/"));
-    format!(
-        "{dir}{}",
-        job.output.file_stem().unwrap_or_default().to_string_lossy()
-    )
+    format!("{dir}{}", virtual_stem(&job.input, kind))
 }
 
 pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
@@ -139,8 +139,8 @@ impl PlanView {
         let mut items = vec![];
         for job in &plan.jobs {
             let packed = job.pack.is_some();
-            let key = if packed {
-                packed_key(root, job)
+            let key = if let Some(pk) = &job.pack {
+                packed_key(root, job, pk.kind)
             } else {
                 key_of(root, &job.input)
             };
