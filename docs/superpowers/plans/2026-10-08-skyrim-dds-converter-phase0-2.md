@@ -11885,6 +11885,16 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
   - From "Carried from M2.5": the event-identity items (Task 5: pack-source terminal events, job key), `SourceRef` roles and invert (Task 6) and the `file:` scope on packed outputs (Task 2's key rule: the folder of the first source plus the virtual name).
   - The BC1 decoder model is read once at launch; a change in the GUI shows "restart sdc-gui to apply".
 - **Still open after M3a** (unchanged): the isolated-worker mode (M3a ships in-process only; DECISIONS #18 decided after the owner's usability pass); per-stage progress events and the per-file stage column (m15, M7); set membership editing and PGPatcher JSON (M3b); texture edits (M3c); documenting `BatchRequest::new` plus field mutation as the contract and a structured `EngineError`; the non-event "Carried from M2.5" items below (wording, code shape, rare paths, unspecified behaviour, test gaps).
+- **Consumed by M3b** (built on `feat/m3b-set-editor`, 2026-10-10; plan `docs/superpowers/plans/2026-10-10-sdc-m3b-set-editor.md`; DECISIONS Note P):
+  - The stale `after_export` fix (Task 1; the M3a "fix first" item under "Carried from M3a" below is done).
+- **Later GUI rounds (M3b-2 and after)** (spec §9):
+  - Import and merge of existing PBR mods.
+  - Landscape EDID JSON.
+  - Rule-table and suffix-alias editors, and the source/mod `_m` switch.
+  - NIF reading.
+  - The `delete` key.
+  - Hex colour paste and a colour picker.
+  - Refining the derived `match_diffuse`.
 - **Carried from M2.5** (final review of `feat/m2.5-packing`, SDD ledger):
   - **Event identity (I5):**
     - Only `sources[0]` of a packed job emits `file_planned`. A healthy raw source consumed by a recipe, including a failed or cancelled one, gets no per-file terminal event.
@@ -11904,8 +11914,8 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
     - `FillSpec::get`: only 2 of 8 roles are tested, and NaN `roughness_default` is untested.
     - The post-decode size mismatch lists only two files.
     - No test for: `inspect --fill`, fill losing to a scoped `--set`, a `cpm` set without height, a pass-2 panic or Load failure.
-- **Carried from M3a** (final review and SDD ledger of `feat/m3a-gui`; fix first in M3b):
-  - **Fix first:** a stale `after_export` survives a second close/open request made while a cancelled export winds down, and can later close the window or switch folder unasked (`crates/gui/src/model/mod.rs` `run_after_export`, `resolve_export_running`, `request_close`/`request_open`; reset it in `open_folder` and on "Keep running").
+- **Carried from M3a** (final review and SDD ledger of `feat/m3a-gui`; the "fix first" item is done in M3b Task 1):
+  - **Fix first (done, M3b Task 1):** a stale `after_export` survives a second close/open request made while a cancelled export winds down, and can later close the window or switch folder unasked (`crates/gui/src/model/mod.rs` `run_after_export`, `resolve_export_running`, `request_close`/`request_open`; reset it in `open_folder` and on "Keep running").
   - **Model and threads:** every edit spawns a full plan (debounce; skip building a cancelled plan's view); `Panicked` carries no generation; `busy()` includes preview work (affects the threshold slider's pending value and the "No textures" hints); `check_sources` and thumbnail hashing run on the UI thread; f32→f16 conversion and GPU upload run on the UI thread (a 16384² upload has no OOM error scope); the analysis/pack cache is unbounded; columns are not re-planned after an export (no "up to date" shown).
   - **Edge behaviour:** `plan_failed`'s user-config fallback drops unsaved edits and can unlock a still-bad `sdc.toml`; an I2 rejection of a GUI edit blames `sdc.toml` (unreachable through bounded controls); the set view's pending click is not keyed by set; the drawer can be closed mid-run with no way to reopen it; Ctrl+S saves while a modal is open; modal Esc/backdrop is ignored; the Subtype combo remembers its first choice; the heatmap toggle persists across textures; the size combo shows 16384 when it is not allowed; a hand-written extension-less `[files]` key and the GUI's key for the same file become two entries.
   - **Previews:** a DDS input with no engine `Format` (uncompressed, BC2, signed BC6H) shows "cannot be previewed" (DECISIONS N11); the debounce is stamped on the next tick; mip-0 alpha checks read the first kept mip in a size-limited preview (documented); no decoded-pixel LRU (spec §4.4 note).
@@ -11919,6 +11929,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
 - **Entry:** Phase 1 mips and scheduler.
 - **Exit:** golden cases `_n` + `_rmaos` and `_n` + `_rfaos` at 1:1 and 2:1 assert roughness widening matches a reference implementation of the formula (f64) within 1/255; renormalise-only paths unchanged.
 - **Carried items:**
+  - Borrowed roughness slots are marked shared (`sdc-project.toml` `borrow.slot6`); M4 must not bake normal variance into a shared roughness and must renormalise only (v1 instruction; M3b spec §3.3).
   - `mips::build_chain` does not read `p.mips.normal` (`RenormalizeBake` degrades to `Renormalize`); M4 must read it (Task 29).
   - The four `SET-*` codes (`SET-MISSING-COMPANION`, `SET-COMPANION-OUTSIDE`, `SET-COMPANION-DDS`, `SET-BAKE-RATIO`) are catalogued but never emitted until this milestone (final review m11).
   - Normal and roughness channels are alpha-weighted if a cutout policy is forced on them; check Validate and the bake path (Task 29 minor).

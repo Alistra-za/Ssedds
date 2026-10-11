@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-10-10 |
-| Status | Design approved by the owner in conversation, section by section (2026-10-10). Written spec awaiting owner review |
+| Status | Owner-approved 2026-10-10. Built on `feat/m3b-set-editor` (plan `docs/superpowers/plans/2026-10-10-sdc-m3b-set-editor.md`); refinements in DECISIONS Note P. |
 | Milestone | M3b, the second of three GUI parts (M3a → M3b → M3c, owner 2026-10-10); the extras deferred from it form a later M3b-2 (§9) |
 | Builds on | M3a, spec `2026-10-10-sdc-m3a-converter-gui-design.md` (merged into `main` at ddf0a3c) |
 | Inputs | `F:/ai/dds/gui reference/v1 instruction.txt`, `Rough.jpg`, `v1-gap-review.md` (with its owner decisions of 2026-10-09), `ref/pbr.schema.json` (PGPatcher `main`, fetched 2026-10-09); plan `2026-10-08-skyrim-dds-converter-phase0-2.md`, "Carried from M3a" |
@@ -71,6 +71,7 @@
    - A file is a member of exactly one set (§3.3).
 2. **`set_outputs: BTreeMap<String, SetOutput>`**, keyed by set key.
    - A `SetOutput { prefix: PathBuf }` gives a set's members the output path `<prefix><canonical suffix>.dds` under the output root, instead of mirroring the source path.
+   - → P1/P2: `output_paths`, no Delete/Order in the engine.
    - The GUI fills it only for PBR sets on the CS target (§6.1).
    - Packed recipe outputs (`_rmaos`, `_rfaos`) follow the same prefix.
    - The duplicate-output check (`IN-DUPLICATE`) runs after prefixes are applied, so two sets that write the same file are caught (§6.3).
@@ -251,6 +252,7 @@
 | `subsurface` | `multilayer` |
 
 - **[Requirement]** A set can't hold both `_f` and `_cnr` (§4.1). They share slot 6 (TX06).
+  - → P6: slot 7 (TX06).
 - **[Finding]** Subsurface `_s` and coat colour share slot 7. The `subsurface` × `multilayer` exclusion covers that clash.
 
 ### 5.5 Match modes and output prefixes
@@ -354,7 +356,7 @@
   last_json_sha256 = "…"
 
   [[sets]]              # in your order; an untouched automatic set has no entry
-  key = "landscape/rock02"
+  key = "landscape/rock02"  # → the file uses `id =` and an explicit `[project] order` (Task 4)
   add = ["stone/rock02_rough.png"]
   remove = []
   borrow = { slot6 = "landscape/rock01" }

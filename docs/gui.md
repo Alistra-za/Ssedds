@@ -1,6 +1,6 @@
-# sdc-gui user guide (M3a)
+# sdc-gui user guide (M3a, M3b)
 
-`sdc-gui.exe` is the graphical front end of the Skyrim DDS converter. It runs the same engine as `sdc convert`, so a folder you decide and export here converts to the same files from the command line. This guide covers M3a, the converter GUI; the set editor (M3b) and texture edits (M3c) come later.
+`sdc-gui.exe` is the graphical front end of the Skyrim DDS converter. It runs the same engine as `sdc convert`, so a folder you decide and export here converts to the same files from the command line. This guide covers the converter GUI (M3a) and the set editor with the PGPatcher JSON (M3b); texture edits (M3c) come later.
 
 ## Opening a folder
 
@@ -47,6 +47,40 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - If a source file changed on disk since it was planned, the textures concerned show "changed on disk" and the Textures column offers **Reload**. Reload plans again, re-reading only the changed files. Export checks first and plans again by itself, so the export uses current files. The GUI also checks whenever its window regains focus.
 - The **drawer** at the bottom opens when Export starts: a *Files* tab with per-file progress (queued, running, done, up to date, skipped, failed) and a *Warnings* tab grouped by code. Click a row to select that texture. **Cancel** stops the batch; **Save report…** writes the report; **Close** hides the drawer.
 - **Copy CLI command** copies the `sdc convert` command that reproduces this export from the command line (same folder, output, BC1 decoder and thread count). Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes.
+
+## Sets and the PGPatcher JSON
+
+The **Sets** column is editable. It changes which textures belong to which material set, and it can write the PGPatcher JSON that tells PGPatcher how to use each PBR set.
+
+### Editing sets
+
+- **Drag a texture** from the Textures column onto a set to move it there, or onto empty space to start a new set. Dropping onto a slot that already holds a texture asks **Replace** or **Cancel**.
+- **Share** lets a set borrow a texture from another set; **Duplicate** copies it into the set. Both ask before replacing a filled slot.
+- **Reorder** sets by dragging the **≡** handle.
+- **Right-click** a set or a member for its menu (move, share, duplicate, rename, delete). Rename opens a dialog. Only a set you created can be deleted; an automatic set would regroup at once. A set whose files are all gone still shows, as missing, so you can delete its entry.
+- **Badges** on a set show what needs attention: a missing file, a borrowed slot, a blocking problem for export.
+- **Ctrl+Z** undoes and **Ctrl+Y** redoes (200 steps).
+
+Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set order, created sets, moves, borrows and the PGPatcher settings, and nothing else. If it cannot be parsed, the sets and the JSON go read-only (a banner says why) while `sdc.toml` editing carries on.
+
+### The set editor
+
+Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter, Height and so on. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card.
+
+### PGPatcher settings
+
+- Features that cannot go together are **greyed**, with the reason on hover: hair excludes multilayer, glint, fuzz, emissive, parallax and subsurface; multilayer excludes subsurface; multilayer, glint and fuzz exclude each other; fuzz and coat normal exclude each other, because they share one slot. A switch that is already on stays enabled so you can turn it off.
+- A feature that is on without its texture blocks export.
+- **Reset** returns a field, or the whole set, to its default.
+- PGPatcher's own `default` block is fixed: you cannot edit defaults. Each entry writes `emissive`, `parallax` and `subsurface` only when on, and omits the three numbers when unset or equal to the fixed value.
+
+### The JSON
+
+After a complete export, **Export** writes `<export>\PBRNIFPatcher\<name>.json`. Only sets that exported fully are written, and the file name must be a single plain file name. If the file already exists and is not the one sdc wrote last time, you are asked before it is overwritten; a byte-identical file is never prompted. With a read-only `sdc-project.toml` the JSON is still written, but the next export asks before overwriting.
+
+### Check by hand
+
+The test harness cannot simulate drags. Reordering sets by dragging the **≡** handle and the drag-and-drop flows (texture onto a set, onto empty space, onto a filled slot) were verified by code review only; try them yourself.
 
 ## Where settings live
 

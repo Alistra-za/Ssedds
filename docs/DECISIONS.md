@@ -255,6 +255,36 @@ The owner split M3 into M3a (converter GUI), M3b (set editor and PGPatcher JSON)
 - **O1 Uncompressed DDS** (owner): sdc writes uncompressed DDS (`rgba8` as B8G8R8A8 UNORM/SRGB, `r8`, `rg8`, `rgba16f`) and reads the uncompressed layouts listed in spec §1 for inspect, validate, re-encode and GUI preview. Scheduled in M6; it ends the M3a limit N11.
 - **O2 HDR check before BC6H on emissive** (owner): `pbr_emissive` defaults to BC6H_UF16 only when the source is float **and** peaks above 1.0. Every other source defaults to BC7_UNORM_SRGB. This overrides spec §4.1 and the DECISIONS #3 default for emissive; BC6H stays available by override. Scheduled in M6, and depends on the float-source transfer split.
 
+## Note P — M3b set editor and PGPatcher JSON decisions (owner and M3b plan, 2026-10-10)
+
+The owner approved the M3b design section by section (spec `docs/superpowers/specs/2026-10-10-sdc-m3b-set-editor-design.md`); the plan refined it as follows.
+
+- **P1 Output paths, not prefixes** (plan): the engine takes `output_paths` (explicit paths per source file or per packed recipe) instead of a per-set prefix. The ownership rule (§3.3) can place a shared output at another set's prefix; explicit paths say that, and the engine stays free of PGPatcher concepts.
+- **P2 Delete and order are GUI-only** (plan): the engine's `SetEdit` has Create, Rename, Move, Remove. Deleting a created set drops its edits (its files regroup automatically); order lives in `sdc-project.toml`.
+- **P3 Only created sets can be deleted** (plan): an automatic set would regroup at once.
+- **P4 Vanilla/CPM borrowed slots are file copies** (plan): copied after the run, listed in the report, not tracked by the manifest.
+- **P5 A PBR set has a `pbr_albedo` diffuse** (plan): the `set_resolved.pbr` flag is path-based and misses user-built sets.
+- **P6 Slots are PGPatcher's 1-based `slotN`** (plan): `_cnr`/`_f` share slot 7 (TX06), `_s` is slot 8.
+- **P7 JSON-only edits do not re-plan** (plan): match, rename, set and `[files]` edits do.
+- **P8 A bad `sdc-project.toml` makes sets and JSON read-only** (plan); `sdc.toml` editing continues.
+- **P9 Undo keeps document snapshots** (plan), 200 steps; Duplicate source records the copy and its SHA-256.
+- **P10 Colours are stored 0–255** (owner: edited as 0–255) and written as 0–1 with 4 decimals; `emissive_color` gets alpha 1.0 (owner).
+- **P11 Borrowed slot paths are written with `textures\`** (plan).
+- **P12 In-tree schema validation** (plan): no new dependency; a test fails if the vendored schema uses a keyword the validator lacks.
+- **P13 Invalid path characters block export** (plan) rather than being rewritten: a changed path is not where PGPatcher looks.
+- **P14 GUI = CLI holds for non-PBR sets only** (owner: the JSON is GUI-only): a PBR set on CS is written under `textures\pbr\` by the GUI alone.
+- **P15 "Not in a set" is a clickable count** in the Textures header (plan), not an automatically switched filter.
+- **P16 The PGPatcher `default` block is fixed** (owner, 2026-10-10): `emissive`, `parallax`, `subsurface` = `false`, `roughness_scale` = 1.0, `specular_level` = 0.04, `displacement_scale` = 1.0, in schema order. Users cannot edit defaults (no Defaults card, no `[defaults]` in `sdc-project.toml`; a hand-written one is ignored). Entries write `emissive`/`parallax`/`subsurface` only as `true`, and omit the three numbers when unset or equal to the fixed value; everything else comes from the set.
+- **P17 Glint and fuzz switches are GUI-only settings keys** (plan, execution ruling): `glint_on` / `fuzz_on`, never written to the JSON. A bool at `glint`/`fuzz` can't coexist with the `glint.*`/`fuzz.*` sub-table in TOML.
+- **P18 A set whose files are all gone still shows, as missing** (owner): its entry can be deleted. This extends P3. A borrow from a set with nothing in that slot is shown as missing too.
+- **P19 Moving, sharing or duplicating onto a filled slot asks "Replace / Cancel"** (owner; spec §3.1). Rename is a dialog, not inline.
+- **P20 Export refuses a plan that doesn't match the current sets** (plan, execution ruling), with an actionable message. The JSON name is a single file name: no separators, no `..`, no reserved Windows device names, no trailing dot or space. It is checked only when there are PBR entries.
+- **P21 Read-only `sdc-project.toml` at export** (plan, execution ruling): the JSON is still written but its SHA-256 is not recorded (a note says so), so the next export asks before overwriting. A byte-identical file on disk is never prompted.
+- **P22 Vanilla/CPM copies are skipped, with a note,** when the owner's output didn't export Done/UpToDate (plan, execution ruling).
+- **P23 Fuzz and coat normal grey each other out** (plan, execution ruling): fuzz is greyed when the set's coat slot (`_cnr`) is filled, and `coat_normal` is greyed when the fuzz slot (`_f`) is filled. A switch that is already on stays enabled so it can be turned off; export blocks the clash.
+- **P24 The packed `cpm` `_m` height default is 0** (owner; Task 3b, Note M1 amended): see M1 above.
+- **Owner, in the design conversation:** `emissive`, `parallax`, `subsurface` are binary and written only as `true` (the fixed default block supplies `false`); `hair` and `multilayer` binary, written only when on; `lock_*`, `vertex_colors`, `zbuffer_write` three-state; mutual exclusion greys (hair excludes multilayer, glint, fuzz, emissive, parallax, subsurface; multilayer excludes subsurface; multilayer/glint/fuzz exclude each other); a set cannot hold both `_cnr` and `_f`; a feature on without its texture blocks export (no lock quick fix); `delete` and hex colour entry are later rounds; Opaque sits on the Diffuse card.
+
 ## Phase 2 exit — CLI MVP (2026-10-09)
 
 - `sdc-bench --gates`: PASS, exit 0, 13/13 gate reports (target/bench/mvp-gates.txt). Exact opaque gates alpha == 255 and flag-off bit-identity; ΔRGB is info (S5).
@@ -331,7 +361,7 @@ Whole-branch review of `feat/phase0-2` (59cf60c): 0 Critical, 8 Important, 16 Mi
     - a dark grey such as (10, 10, 10) is now flagged;
     - only RGB below 4 with a height in range is exempt;
     - a coloured base that averages to grey at 1×1 is flagged.
-  - The cpm `_m` constant height 0.5 (128) is below the gate. The M2.5 packer must still keep the packed RGB from being grey at the smallest mip, for example a constant-filled env mask. `VAL-M-GRAYSCALE` catches it.
+  - The cpm `_m` constant height 0.5 (128) is below the gate. The M2.5 packer must still keep the packed RGB from being grey at the smallest mip, for example a constant-filled env mask. `VAL-M-GRAYSCALE` catches it. (superseded by M1, owner 2026-10-10: 0)
 
 ## Owner checks pending
 
@@ -342,7 +372,7 @@ Open owner confirmations after Phase 2. None blocks the merge; each has a shippe
 4. **Plain `_normal` / `_nrm`.** It stays unresolved, even with `--accept-suggestions high` or `--allow`, until a preset, config, rule or `--set` states `opengl` or `directx`.
 5. **Raw packing maps mark a `cs` set PBR immediately.** A raw roughness, glossiness, metallic or AO map makes the set PBR (spec §4.3 item 1) before channel packing exists in M2.5.
 6. **`_d` aliases stay High.** A preset alias to `d` raises the colour reading to High confidence (Task 26a ruling); the owner can ask to add `d` to the `_s` exception.
-7. **Open packing questions for M2.5 (spec §14 #18–#21):** the env-mask source of a packed `cpm`/`vanilla` `_m` and the constant height of a `cpm` `_m`; raw maps without a recipe (`_opacity`, specular-only and fuzz-only sets, RGB `_sheen`); the scale of a raw specular map; whether a set missing its packed map should exit 1.
+7. **Open packing questions for M2.5 (spec §14 #18–#21):** the env-mask source of a packed `cpm`/`vanilla` `_m` and the constant height of a `cpm` `_m`; raw maps without a recipe (`_opacity`, specular-only and fuzz-only sets, RGB `_sheen`); the scale of a raw specular map; whether a set missing its packed map should exit 1. (superseded by M1, owner 2026-10-10: the cpm `_m` height is 0)
 8. **Interim `IN-FLOAT-LDR` block.** Until the M6 transfer split, a 32-bit float source written to anything but BC6H needs `--allow IN-FLOAT-LDR`. Cost if wrong: float albedo TIFFs need the flag.
 9. **In-game spikes (Task 46).** Pack: `target/spike-src` (regenerate with `cargo run --release -p sdc-bench -- gen-spike-assets --out target/spike-src`); steps: `docs/spikes/in-game-checklist.md`.
    - S1: closed by the owner's answer (Spike S1 above).
