@@ -387,7 +387,9 @@ fn default_for(slot: Slot, p: &PackingSpec) -> f32 {
         Slot::Glossiness => (1.0 - p.roughness_default) as f32,
         Slot::Metallic | Slot::EnvMask => 0.0,
         Slot::Ao | Slot::Specular => 1.0,
-        Slot::Height => 0.5,
+        // 0: complex material on, parallax off (CS runs parallax only for 4/255 < alpha < 251/255, Spike S8; owner
+        // 2026-10-10, amending Note M1's 0.5).
+        Slot::Height => 0.0,
     }
 }
 

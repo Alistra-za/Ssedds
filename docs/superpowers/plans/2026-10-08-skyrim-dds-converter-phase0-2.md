@@ -11986,7 +11986,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
         - alpha 0 keeps complex material on **only if the smallest-mip RGB is not grey** (pairwise differences ≥ 4/255);
         - the black-RGB exception needs 4 < alpha < 251, so a grey or black `_m` at alpha 0 is complex off;
         - `VAL-M-GRAYSCALE` already flags the grey case.
-      - **Proposal, needs the owner's yes:** change the **packed** `cpm` `_m` no-height default (Note M1: 0.5/128) to 0 as well, so both paths agree.
+      - **Done (owner yes, 2026-10-10, M3b branch Task 3b):** the packed no-height default is 0.
       - Keep the exact-opaque option for real env masks.
     - **Env-mask sub-types:** offer or force **BC4**, or uncompressed (Note O1), for a single-channel env mask.
     - **To check first:**

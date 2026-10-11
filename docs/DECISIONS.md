@@ -220,7 +220,7 @@ Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS c
 
 Defaults for spec §14 #18–#22 and the M2.5 design choices; confirmed by the owner at plan review.
 
-- **M1 (#18) Env mask:** a packed `cpm`/`vanilla` `_m` R is the metallic source, else the specular source. Under `cpm` with neither it is `packing.fill.metallic`, else `packing.fill.specular`, else 0. The `cpm` `_m` height default is 0.5 (128 < 251, Spike S8).
+- **M1 (#18) Env mask:** a packed `cpm`/`vanilla` `_m` R is the metallic source, else the specular source. Under `cpm` with neither it is `packing.fill.metallic`, else `packing.fill.specular`, else 0. The `cpm` `_m` height default is 0 (owner 2026-10-10): alpha 0–4 keeps CS complex material on with parallax off; 0.5 ran parallax on a flat height (Spike S8 DXBC).
 - **M2 (#19) Raw maps without a recipe** (`_opacity`, specular-only and fuzz-only `cs` sets, height under `vanilla`, AO and fuzz under `cpm`, …) raise `PACK-UNUSED-INPUT` and are not written.
 - **M3 (#20) Specular** is copied unchanged into `_rmaos`/`_rfaos` A.
 - **M4 (#21) Exit code:** raw inputs reported `IN-PACKING-INPUT` or `PACK-UNUSED-INPUT` do not make the batch exit 1.

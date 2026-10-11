@@ -275,7 +275,7 @@ fn missing_channels_take_neutral_defaults_or_fills() {
     let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_rough.png", Roughness)]));
     let (ch, _) = resolve_channels(&r[0], &packing());
     assert_eq!(ch[0], ChannelSource::Default { value: 0.0 });
-    assert_eq!(ch[3], ChannelSource::Default { value: 0.5 });
+    assert_eq!(ch[3], ChannelSource::Default { value: 0.0 });
     let mut p = packing();
     p.fill.metallic = Some(40);
     let (ch, _) = resolve_channels(&r[0], &p);

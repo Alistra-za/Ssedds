@@ -447,3 +447,30 @@ fn if_changed_follows_a_source_renamed_to_another_role() {
     let s = run();
     assert_eq!((s.converted, s.up_to_date), (0, 1));
 }
+
+/// Task 3b (owner 2026-10-10, amends Note M1): a packed cpm `_m` with no height source gets alpha 0, so CS keeps
+/// complex material on with parallax off; PACK-DEFAULTED still names the height channel.
+#[test]
+fn a_cpm_m_without_a_height_source_gets_alpha_zero() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", r);
+    put(d.path(), "iron_metallic.png", |_, _| 40);
+    let o = convert(d.path(), Target::Cpm, &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert!(defaulted(&o, "iron_metallic.png").contains(&"A".to_string()));
+    let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
+    assert_channel(px, 3, 1, |_, _| 0);
+}
+
+/// An explicit height fill is not the neutral default: it keeps its value.
+#[test]
+fn an_explicit_height_fill_still_applies() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", r);
+    put(d.path(), "iron_metallic.png", |_, _| 40);
+    let o = convert(d.path(), Target::Cpm, &["packing.fill.height=128"]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert!(!defaulted(&o, "iron_metallic.png").contains(&"A".to_string()));
+    let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
+    assert_channel(px, 3, 1, |_, _| 128);
+}

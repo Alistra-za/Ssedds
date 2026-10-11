@@ -381,7 +381,9 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             if let Some((_, _, px)) = ldr.first() {
                 let n = px.len().max(1) as f64;
                 let clip = px.iter().filter(|q| q[3] <= 4 || q[3] >= 251).count() as f64 / n;
-                if alpha_present && clip > 0.25 {
+                // All texels <= 4 is a deliberate "no parallax" _m (the packed default), not a clipped height.
+                let has_height = px.iter().any(|q| q[3] > 4);
+                if alpha_present && has_height && clip > 0.25 {
                     w.push(Warning::new(
                         Code::ValMHeightClip,
                         format!("{:.0}% of height alpha is ≤4 or ≥251", clip * 100.0),

@@ -790,3 +790,28 @@ fn passed_means_no_error_severity_warning() {
     assert!(!r.summary.passed);
     assert!(r.warnings.iter().any(|w| w.severity == Severity::Error));
 }
+
+/// Task 3b: an all-zero height alpha is a deliberate "no parallax" `_m` (the packed default): no
+/// VAL-M-HEIGHT-CLIP. A mixed map still warns.
+#[test]
+fn height_clip_skips_an_all_zero_alpha_but_not_a_mixed_one() {
+    let p = profile(Subtype::ComplexMaterial);
+    let zero: Vec<[u8; 4]> = (0..64).map(|_| [100, 130, 200, 0]).collect();
+    let (b, inputs) = dds(&p, &[(8, 8, zero)]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(
+        !codes(&r).contains(&Code::ValMHeightClip),
+        "{:?}",
+        r.warnings
+    );
+    let mixed: Vec<[u8; 4]> = (0..100)
+        .map(|i| [100, 130, 200, if i < 40 { 0 } else { 128 }])
+        .collect();
+    let (b, inputs) = dds(&p, &[(10, 10, mixed)]);
+    let r = run(&b, &p, Some(&inputs), None, Some(1));
+    assert!(
+        codes(&r).contains(&Code::ValMHeightClip),
+        "{:?}",
+        r.warnings
+    );
+}
