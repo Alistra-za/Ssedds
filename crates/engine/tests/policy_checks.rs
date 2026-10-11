@@ -346,17 +346,9 @@ fn bc6h_and_tag_na_must_agree() {
         g,
         &[],
     );
-    assert_eq!(
-        j.status,
-        JobStatus::Error {
-            codes: vec![Code::CfgInvalid]
-        },
-        "{:?}",
-        j.warnings
-    );
-    assert!(warning(&j, Code::CfgInvalid)
-        .message
-        .contains("set color.tag=srgb for a non-BC6H _g"));
+    // DECISIONS S3: on pbr_emissive the tag follows the format unless a layer set it.
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(j.profile.color.tag, ColorTag::Srgb);
     let j = run(
         Target::Cs,
         "textures/pbr/x_g.png",

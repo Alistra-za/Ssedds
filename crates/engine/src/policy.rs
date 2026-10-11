@@ -529,6 +529,7 @@ fn layered_profile_with(
         profile.category = Category::Grayscale;
     }
     backend_follows_format(&mut profile, &mut prov, &sources);
+    emissive_hdr_choice(ctx, &mut profile, &mut prov, f);
     float_source_is_linear(&mut profile, &mut prov, f);
     // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
     if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
@@ -614,6 +615,89 @@ fn skin_wet_notice(p: &Profile, f: &FileFacts, prov: &BTreeMap<String, Provenanc
         ),
     )
     .with_data(json!({ "form": form, "format": p.format }))
+}
+
+/// DECISIONS O2/S3: a float source with a finite R, G or B above 1.0.
+pub fn is_hdr_source(f: &FileFacts) -> bool {
+    f.info.is_float && f.analysis.channels[..3].iter().any(|c| c.max > 1.0)
+}
+
+/// DECISIONS O2/S3, the fact `analysis:hdr-source`: a `pbr_emissive` whose BC6H format no layer chose explicitly
+/// becomes BC7 unless the source is HDR; then, on every `pbr_emissive`, `color.tag` follows the final format
+/// (`n/a` for BC6H, else `srgb`) unless a layer set it. Runs after every layer, so an explicit `format` or tag from
+/// a user/project preset, config, rule, `[files]` or `--set` is kept.
+fn emissive_hdr_choice(
+    ctx: &ResolveCtx,
+    p: &mut Profile,
+    prov: &mut BTreeMap<String, Provenance>,
+    f: &FileFacts,
+) {
+    if p.subtype != Subtype::PbrEmissive {
+        return;
+    }
+    let fact = || Provenance::AnalysisFact("hdr-source".into());
+    if p.format == Format::Bc6hUf16 && !field_explicit(ctx, prov, "format") && !is_hdr_source(f) {
+        p.format = Format::Bc7;
+        prov.insert("format".into(), fact());
+        if !field_explicit(ctx, prov, "encoder.backend") {
+            p.encoder.backend = default_backend(p.format);
+            prov.insert("encoder.backend".into(), fact());
+        }
+    }
+    if !field_explicit(ctx, prov, "color.tag") {
+        let tag = if p.format == Format::Bc6hUf16 {
+            ColorTag::NotApplicable
+        } else {
+            ColorTag::Srgb
+        };
+        if p.color.tag != tag {
+            p.color.tag = tag;
+            prov.insert("color.tag".into(), fact());
+        }
+    }
+}
+
+/// The `FMT-HDR-SOURCE` notice: why a `pbr_emissive` is or is not BC6H (DECISIONS S3).
+fn hdr_source_notice(
+    ctx: &ResolveCtx,
+    p: &Profile,
+    f: &FileFacts,
+    prov: &BTreeMap<String, Provenance>,
+) -> Warning {
+    let hdr = is_hdr_source(f);
+    let peak = f.info.is_float.then(|| {
+        f.analysis.channels[..3]
+            .iter()
+            .map(|c| c.max)
+            .fold(0.0f32, f32::max)
+    });
+    let source = match peak {
+        Some(v) if hdr => format!("float source, peak {v:.2} > 1.0: HDR"),
+        Some(v) => format!("float source, peak {v:.2} ≤ 1.0: no HDR"),
+        None => format!("{}-bit source, no HDR", f.info.bit_depth),
+    };
+    let by_fact =
+        matches!(prov.get("format"), Some(Provenance::AnalysisFact(x)) if x == "hdr-source");
+    let explicit = !by_fact && field_explicit(ctx, prov, "format");
+    let chosen = match (p.format, p.color.tag) {
+        (Format::Bc6hUf16, _) => "BC6H".to_string(),
+        (fmt, ColorTag::Srgb) => format!("{} sRGB", fmt.id().to_uppercase()),
+        (fmt, _) => format!("{} UNORM", fmt.id().to_uppercase()),
+    };
+    let message = if explicit {
+        let src = prov
+            .get("format")
+            .map_or("builtin".into(), |s| s.to_string());
+        format!(
+            "{source}; format {} from {src} (the HDR check is skipped)",
+            p.format.id()
+        )
+    } else {
+        format!("{source} → {chosen}")
+    };
+    Warning::new(Code::FmtHdrSource, message).with_data(json!({
+        "hdr": hdr, "float": f.info.is_float, "peak": peak, "format": p.format, "explicit": explicit
+    }))
 }
 
 /// Spec §4.1 (`pbr_emissive`, `hdr_sky`): a float source that goes to BC6H is linear radiance, so
@@ -1414,6 +1498,9 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     ));
     if available && profile.subtype == Subtype::SkinWet {
         warnings.push(skin_wet_notice(&profile, f, &provenance));
+    }
+    if available && profile.subtype == Subtype::PbrEmissive {
+        warnings.push(hdr_source_notice(ctx, &profile, f, &provenance));
     }
     if !reasons.is_empty() {
         warnings.push(

@@ -1200,24 +1200,17 @@ fn two_to_one_sets_keep_their_own_chains() {
 }
 
 #[test]
-fn bc6h_emissive_in_a_pbr_set() {
+fn an_8_bit_emissive_is_bc7_srgb_not_bc6h() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "textures/pbr/lamp_g.png", rgb(64));
     let o = convert(d.path(), Target::Cs, &[], &[]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
-    assert_eq!(warnings(&o), vec![], "a clean fixture raises nothing");
-    assert_profile(
-        &o,
-        "lamp_g.png",
-        "pbr_emissive",
-        "remove",
-        false,
-        "bc6h_uf16",
-    );
-    assert_eq!(planned(&o, "lamp_g.png")["profile"]["color"]["tag"], "n/a");
+    assert_eq!(warnings(&o), vec![Code::FmtHdrSource]);
+    assert_profile(&o, "lamp_g.png", "pbr_emissive", "remove", false, "bc7");
+    assert_eq!(planned(&o, "lamp_g.png")["profile"]["color"]["tag"], "srgb");
     assert_dds(
         &dds(d.path(), "textures/pbr/lamp_g.dds"),
-        DdsPixelFormat::Bc6hUf16,
+        DdsPixelFormat::Bc7 { srgb: true },
         HeaderKind::Dx10,
         7,
     );
@@ -1245,7 +1238,7 @@ fn hdr_float_emissive_is_bc6h() {
     );
     assert_eq!(
         warnings(&o),
-        vec![],
+        vec![Code::FmtHdrSource],
         "no LOSS-*, VAL-BC6H-PEAK or other warning"
     );
     assert_profile(
@@ -2192,7 +2185,7 @@ fn exr_and_radiance_hdr_float_emissives_are_bc6h() {
             "{ext}: {:?}",
             warnings(&o)
         );
-        assert_eq!(warnings(&o), vec![], "{ext}");
+        assert_eq!(warnings(&o), vec![Code::FmtHdrSource], "{ext}");
         assert_profile(
             &o,
             &format!("lamp_g.{ext}"),

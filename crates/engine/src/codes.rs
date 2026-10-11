@@ -6,7 +6,7 @@
 //! matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or set that no longer exists, M3b), PACK-RECIPE-CONFLICT and
 //! PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set could not follow, packing-fills Task 1) and SKIN-WET-FORM
 //! (which form `skin_wet` was read as, Task 1b) and
-//! IN-ICC-IGNORED (an embedded ICC profile, M6).
+//! IN-ICC-IGNORED (an embedded ICC profile, M6) and FMT-HDR-SOURCE (why `pbr_emissive` is or is not BC6H, O2).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +49,7 @@ codes! {
     FmtLandscapeBc1 = "FMT-LANDSCAPE-BC1" => Blocking,
     FmtBc1Alpha = "FMT-BC1-ALPHA" => Blocking,
     FmtPerceptualData = "FMT-PERCEPTUAL-DATA" => Error,
+    FmtHdrSource = "FMT-HDR-SOURCE" => Info,
     AlphaExactOffM = "ALPHA-EXACT-OFF-M" => Blocking,
     Alpha254 = "ALPHA-254" => Info,
     AlphaNearOpaque = "ALPHA-NEAR-OPAQUE" => Info,
@@ -164,7 +165,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 64);
+        assert_eq!(Code::ALL.len(), 65);
         assert_eq!(Code::InIccIgnored.severity(), Severity::Info);
     }
 }
