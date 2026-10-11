@@ -244,7 +244,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | `coat_normal` | BC7_UNORM | — | — |
 | `envmask`, `height`, `msn_specular` | BC4_UNORM | same | same |
 | `complex_material` | BC7_UNORM (BC3 option) | BC7_UNORM (BC3 option) | — (→ `envmask`, `LOSS-ALPHA-DATA`) |
-| `rmaos`, `rfaos` | BC7_UNORM; BC1_UNORM if A removed | — | — |
+| `rmaos`, `skin_rfaos` | BC7_UNORM; BC1_UNORM if A removed | — | — |
 | `flow` | **BC5_UNORM** [Requirement] | — (CS feature) | — (CS feature) |
 | `generic_two_channel` | BC5_UNORM | same | same |
 | `generic_data` | BC7_UNORM | same | same |
@@ -262,7 +262,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 1. **PBR sets.** Under `cs`, a set is PBR if its path has a `pbr` component or it contains `_rmaos`, `_rfaos`, `_cnr` or `_f`. **[Proposal]** It is also PBR if it contains a raw packing input that starts the `_rmaos`/`_rfaos` recipe (roughness, glossiness, metallic or AO; §4.4, §6.4), because the packed map will join the set; this applies from Phase 1, before packing exists. Otherwise a no-suffix colour file is `diffuse` (medium confidence). **[Requirement]** `_d` and the colour vocabulary (§4.4) are high confidence for the colour role; the path and set still pick `diffuse`, `pbr_albedo`, `landscape_diffuse` or `ui_sky`, and alpha meaning is never assumed [D-H]. **[Proposal]** An `hdr_sky` reading (float source under `sky/`) stays medium.
 2. **`_s` has four readings** [SC §1], [TPM README]: MSN specular (set has `_msn` → `msn_specular`); TruePBR subsurface and coat colour (both slot TX07 → `pbr_subsurface`); PGPatcher's "Subsurface Tint" (otherwise → `subsurface_tint`, low confidence).
 3. **`_m`** → `complex_material` if alpha is not constant 255, else `envmask`; always `envmask` under `vanilla`.
-4. **`_rfaos`** → `rfaos`, high confidence [D-B]; green is a fuzz mask, not metalness.
+4. **`_rfaos`** → `skin_rfaos`, high confidence [D-B]; green is a fuzz mask, not metalness.
 5. Analysis can raise or lower confidence but never overrides an explicit choice; contradictions (an `_n` with constant alpha in a non-PBR set, a `pbr` path with a vanilla `_s`) are reported.
 6. **Suffix aliases** (§3.7) are read as their canonical suffix; an alias match raises the top suggestion to high confidence, except for `_s` [D-G].
 7. **Exporter vocabulary** (§4.4). **[Proposal]** A vocabulary term is read as its Skyrim role: colour terms as the colour member at high confidence (item 1), normal terms as `_n`, emissive terms as `_g`; raw maps get no sub-type suggestion (they are packing inputs). Each suggestion reason begins `exporter suffix _<term> (<role>)`.
@@ -442,7 +442,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 6.1 Grouping
 
-**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_wet`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
+**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. `_wet` is a suffix only on `cs` and only when the stem without it names an Advanced skin set (an `_rfaos` member, or a recipe that builds `_rfaos`); there `x_wet` joins set `x` as its `skin_wet` member, and everywhere else `_wet` stays part of the base name (DECISIONS Note R). Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
 
 ### 6.2 Variance bake into roughness
 
@@ -473,12 +473,12 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 
 **[Requirement]** Raw single-channel maps (§4.4: roughness, metallic, AO, specular, glossiness, height, fuzz, …) in one texture set are **packed automatically per target**: `cs` `_rmaos`/`_rfaos` + `_p`; `cpm` complex `_m`; `vanilla` `_m` only when a source exists. Raw maps are not written on their own by default; this is overridable per set. Missing channels take neutral defaults plus a warning naming each defaulted channel (AO white, metallic black, specular alpha white = the TruePBR default). Missing roughness does **not** block when an AO or metallic map is found; roughness then takes a neutral default with a warning. **[Requirement]** Global fill values (owner, 2026-10-09 [D-H]): for every packed channel without a source map the user can set a fill value, as a slider in the GUI and as a CLI option (e.g. `--fill metallic=255` writes 255 instead of the neutral 0); the neutral defaults below apply only when no value is given. Packing is its own milestone right after the CLI MVP (plan M2.5) [D-H].
 
-**Recipes.** Channel layouts are those of §4.1 (`rmaos`, `rfaos` [D-B], `height`, `complex_material`, `envmask`); sources and triggers are **[Proposal]** unless marked.
+**Recipes.** Channel layouts are those of §4.1 (`rmaos`, `skin_rfaos` [D-B], `height`, `complex_material`, `envmask`); sources and triggers are **[Proposal]** unless marked.
 
 | Target | Output (sub-type) | R | G | B | A | Runs when |
 |---|---|---|---|---|---|---|
 | `cs` | `<base>_rmaos.dds` (`rmaos`) | roughness, else 1 − glossiness | metallic | AO | specular | A roughness or glossiness source exists, or (owner: roughness missing does not block) an AO or metallic source exists [Requirement]; and no fuzz source |
-| `cs` | `<base>_rfaos.dds` (`rfaos`) | roughness, else 1 − glossiness | fuzz | AO | specular | As `_rmaos`, and a fuzz source exists |
+| `cs` | `<base>_rfaos.dds` (`skin_rfaos`) | roughness, else 1 − glossiness | fuzz | AO | specular | As `_rmaos`, and a fuzz source exists |
 | `cs` | `<base>_p.dds` (`height`, BC4) | height | — | — | — | A height source exists |
 | `cpm` | `<base>_m.dds` (`complex_material`) | env mask | glossiness, else 1 − roughness | metallic | height | A roughness, glossiness, metallic or height source exists |
 | `vanilla` | `<base>_m.dds` (`envmask`, BC4) | env mask | — | — | — | A metallic or specular source exists [Requirement: only when a source exists] |
