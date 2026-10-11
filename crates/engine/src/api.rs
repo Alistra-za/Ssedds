@@ -13,8 +13,8 @@ use crate::events::{EventKind, Reporter, SkipKind, Stage};
 use crate::group::{group_sets_with, join_skin_wet, member_split, TextureSet};
 use crate::load::{load_image, LoadError};
 use crate::manifest::{
-    bc1_model_id, output_key, sha256_file, sha256_json, EncoderVersions, Manifest, ManifestEntry,
-    PresetRef, ENGINE_VERSION,
+    bc1_model_id, output_key, profile_sha256, sha256_file, EncoderVersions, Manifest,
+    ManifestEntry, PresetRef, ENGINE_VERSION,
 };
 use crate::overrides::{path_key_matches, project_rel, to_patch, FileScopes, Scope, SetOverride};
 use crate::pack;
@@ -489,7 +489,7 @@ fn is_up_to_date(
                 .eq(e.sources.iter().map(|r| (r.sha256.clone(), r.bake.clone())))
         })
         && pack_roles_match(e, job)
-        && sha256_json(&job.profile).is_ok_and(|h| h == e.profile_sha256)
+        && profile_sha256(&job.profile).is_ok_and(|h| h == e.profile_sha256)
         && sha256_file(&job.input).is_ok_and(|h| h == e.source_sha256)
 }
 
@@ -1841,7 +1841,7 @@ mod tests {
             output: "rock.dds".into(),
             source_sha256: sha256_file(&src).unwrap(),
             sources: vec![],
-            profile_sha256: sha256_json(&job.profile).unwrap(),
+            profile_sha256: profile_sha256(&job.profile).unwrap(),
             engine_version: ENGINE_VERSION.into(),
             encoders: Some(enc.clone()),
             preset: PresetRef::for_preset(&reg, "cs-quality", None),

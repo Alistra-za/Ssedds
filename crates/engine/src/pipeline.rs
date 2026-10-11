@@ -17,8 +17,8 @@ use crate::events::{EventKind, Reporter, Stage};
 use crate::image::Rgba32F;
 use crate::load::load_image;
 use crate::manifest::{
-    bc1_model_id, dispatched_isa, engine_commit, now_rfc3339, output_key, sha256_file, sha256_json,
-    EncoderVersions, Manifest, ManifestRecord, PresetRef, SourceRef, ENGINE_VERSION,
+    bc1_model_id, dispatched_isa, engine_commit, now_rfc3339, output_key, profile_sha256,
+    sha256_file, EncoderVersions, Manifest, ManifestRecord, PresetRef, SourceRef, ENGINE_VERSION,
     MANIFEST_SCHEMA,
 };
 use crate::mips::build_chain_with;
@@ -451,7 +451,7 @@ pub fn process_file(
         isa: dispatched_isa().into(),
         preset: preset.clone(),
         profile: p.clone(),
-        profile_sha256: sha256_json(p).map_err(|e| fail(Stage::Write)(e.to_string()))?,
+        profile_sha256: profile_sha256(p).map_err(|e| fail(Stage::Write)(e.to_string()))?,
         provenance: job.provenance.clone(),
         source: job.input.to_string_lossy().replace('\\', "/"),
         source_sha256,

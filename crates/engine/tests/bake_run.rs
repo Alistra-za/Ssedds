@@ -316,3 +316,51 @@ fn a_normal_repainted_at_the_same_size_after_planning_fails_the_member() {
         "{err}"
     );
 }
+
+/// Final review Minor 2 (DECISIONS R12): the `_n`'s bytes do not depend on whether it bakes, so attaching or
+/// detaching the bake (its roughness member leaves the batch and comes back) leaves the `_n` up to date.
+#[test]
+fn the_n_stays_up_to_date_when_its_bake_turns_on_or_off() {
+    let d = tempfile::tempdir().unwrap();
+    // Under `textures/pbr/`, so the lone `_n` is still a `pbr_normal` (path-based PBR set).
+    let pbr = d.path().join("in/textures/pbr");
+    std::fs::create_dir_all(&pbr).unwrap();
+    std::fs::rename(bumpy_n(d.path(), 32, 0.0), pbr.join("iron_n.png")).unwrap();
+    let r = pbr.join("iron_rmaos.png");
+    std::fs::rename(rmaos(d.path(), 32), &r).unwrap();
+    let aside = d.path().join("iron_rmaos.png");
+    let convert = || {
+        let mut req =
+            BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+        req.recursive = true;
+        req.accept = AcceptSuggestions::High;
+        req.on_existing = OnExisting::IfChanged;
+        let sink = Arc::new(VecSink::default());
+        let rep = Reporter::new(sink.clone(), "bake-toggle");
+        let e = Engine::new().unwrap();
+        let p = e.plan(req, &rep, &CancelToken::default()).unwrap();
+        let n = p
+            .jobs
+            .iter()
+            .find(|j| j.input.ends_with("iron_n.png"))
+            .expect("the _n has a job");
+        assert_eq!(n.profile.subtype, Subtype::PbrNormal);
+        e.run(p, &rep, &CancelToken::default()).unwrap()
+    };
+    let s = convert();
+    assert_eq!((s.converted, s.up_to_date), (2, 0));
+    std::fs::rename(&r, &aside).unwrap();
+    let s = convert();
+    assert_eq!(
+        (s.converted, s.up_to_date),
+        (0, 1),
+        "bake off: the _n is unchanged"
+    );
+    std::fs::rename(&aside, &r).unwrap();
+    let s = convert();
+    assert_eq!(
+        (s.converted, s.up_to_date),
+        (0, 2),
+        "bake on again: nothing changed"
+    );
+}

@@ -1,5 +1,5 @@
 //! Batch manifest (spec §3.6): one JSON Lines file per output root, last record per output wins.
-use crate::config::{Profile, RawMap};
+use crate::config::{NormalMips, Profile, RawMap, Subtype};
 use crate::presets::{PresetFile, PresetRegistry, Provenance};
 use crate::validate::ValidationSummary;
 use schemars::JsonSchema;
@@ -351,4 +351,17 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
 /// hash is stable for equal values.
 pub fn sha256_json<T: Serialize>(v: &T) -> Result<String, serde_json::Error> {
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(v)?)))
+}
+
+/// The manifest's `profile_sha256` for an output written with `p` (spec §8 `if-changed`). A `pbr_normal`'s
+/// `mips.normal = renormalize_bake` hashes as `renormalize`: whether its set bakes changes none of the `_n`'s own
+/// bytes (only its roughness member's), so the bake turning on or off does not re-encode the `_n` (DECISIONS R12,
+/// M4 final review Minor 2). A `coat_normal`'s self-bake does change its bytes and keeps its own hash.
+pub fn profile_sha256(p: &Profile) -> Result<String, serde_json::Error> {
+    if p.subtype == Subtype::PbrNormal && p.mips.normal == NormalMips::RenormalizeBake {
+        let mut q = p.clone();
+        q.mips.normal = NormalMips::Renormalize;
+        return sha256_json(&q);
+    }
+    sha256_json(p)
 }
