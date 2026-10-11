@@ -415,7 +415,7 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
         candidates.iter().any(|(_, c, _)| c == k)
             || m.last_inputs
                 .as_ref()
-                .is_some_and(|(_, p)| p.contains_key(k))
+                .is_some_and(|l| l.output_paths.contains_key(k))
     };
     let mirrored: BTreeSet<String> = m
         .items

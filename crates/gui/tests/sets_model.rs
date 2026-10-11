@@ -934,3 +934,47 @@ fn a_shared_normal_bakes_the_borrowers_own_rmaos() {
         j.warnings
     );
 }
+
+/// Final review Minor 1: after a vanilla → cs switch the first cs plan is requested with the old target's (empty)
+/// shared-roughness list. The settle check compares that list too, so the plan on screen is re-planned even when the
+/// output paths did not change (here rock01 has a bad `rename`, so it has no output paths at all).
+#[test]
+fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
+    use engine::config::Target;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let odd = key_of(&m, "odd.png");
+    let id = m.drop_new_set(&odd).unwrap();
+    idle(&mut m);
+    let rmaos = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("rmaos"))
+        .unwrap()
+        .key
+        .clone();
+    m.drop_on_set(&rmaos, &id);
+    assert_eq!(
+        m.drop_choice(&rmaos, &id, DropChoice::Share),
+        DropOutcome::Joined
+    );
+    m.set_json_value("landscape/rock01", "rename", Some(json!("../outside")));
+    idle(&mut m);
+    let bake = |m: &sdc_gui::model::AppModel| {
+        m.item(&rmaos)
+            .and_then(|i| i.job.as_ref())
+            .map(|j| j.bake.is_some())
+    };
+    assert_eq!(bake(&m), Some(false), "a shared rmaos never bakes");
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    m.set_target(Target::Cs);
+    idle(&mut m);
+    assert!(!shared_roughness(&m).is_empty());
+    assert_eq!(
+        bake(&m),
+        Some(false),
+        "the plan on screen still bakes the shared rmaos"
+    );
+}

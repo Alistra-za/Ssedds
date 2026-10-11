@@ -110,11 +110,27 @@ pub enum Answer {
     Acknowledge(Code),
 }
 
-/// What a plan takes from the sets: `set_edits` and `output_paths`.
-type EngineInputs = (
-    Vec<engine::sets::SetEdit>,
-    std::collections::BTreeMap<engine::sets::OutputKey, PathBuf>,
-);
+/// What a plan takes from the sets: `set_edits`, `output_paths`, and the shared roughness slots and borrowed
+/// normals that gate the bake (DECISIONS R7, Note R M4-final-1). All four settle the two-pass planning.
+#[derive(Debug, Clone, PartialEq)]
+struct EngineInputs {
+    set_edits: Vec<engine::sets::SetEdit>,
+    output_paths: std::collections::BTreeMap<engine::sets::OutputKey, PathBuf>,
+    shared_roughness: std::collections::BTreeSet<String>,
+    borrowed_normal: std::collections::BTreeMap<String, String>,
+}
+
+impl EngineInputs {
+    fn of(m: &AppModel) -> Self {
+        let (set_edits, output_paths) = sets::engine_inputs(m);
+        EngineInputs {
+            set_edits,
+            output_paths,
+            shared_roughness: sets::shared_roughness(m),
+            borrowed_normal: sets::borrowed_normal(m),
+        }
+    }
+}
 
 fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
@@ -168,7 +184,7 @@ pub struct AppModel {
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
     close_ready: bool,
-    /// The set edits and output paths the latest plan was requested with (DECISIONS P1: two-pass planning).
+    /// The engine inputs the latest plan was requested with (DECISIONS P1: two-pass planning).
     last_inputs: Option<EngineInputs>,
     /// Automatic re-plans in a row because the inputs changed; bounded so a bug can never loop.
     auto_replans: u8,
@@ -327,7 +343,12 @@ impl AppModel {
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
         self.status_line = "Planning…".into();
-        self.last_inputs = Some((req.set_edits.clone(), req.output_paths.clone()));
+        self.last_inputs = Some(EngineInputs {
+            set_edits: req.set_edits.clone(),
+            output_paths: req.output_paths.clone(),
+            shared_roughness: req.shared_roughness.clone(),
+            borrowed_normal: req.borrowed_normal.clone(),
+        });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
 
@@ -508,7 +529,7 @@ impl AppModel {
         if !self
             .last_inputs
             .as_ref()
-            .is_some_and(|l| *l != sets::engine_inputs(self))
+            .is_some_and(|l| *l != EngineInputs::of(self))
         {
             return false;
         }
@@ -914,7 +935,7 @@ impl AppModel {
         }
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
-        let now = sets::engine_inputs(self);
+        let now = EngineInputs::of(self);
         if self.last_inputs.as_ref() != Some(&now) && self.auto_replans < 2 {
             self.auto_replans += 1;
             self.replan();
