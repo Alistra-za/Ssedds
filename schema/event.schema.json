@@ -362,7 +362,9 @@
         "PACK-UNUSED-INPUT",
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
-        "SKIN-WET-FORM"
+        "SKIN-WET-FORM",
+        "DDS-HEADER-PATCHED",
+        "DDS-HEADER-UNPATCHABLE"
       ],
       "type": "string"
     },

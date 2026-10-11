@@ -6,7 +6,8 @@
 //! matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or set that no longer exists, M3b), PACK-RECIPE-CONFLICT and
 //! PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set could not follow, packing-fills Task 1) and SKIN-WET-FORM
 //! (which form `skin_wet` was read as, Task 1b) and
-//! IN-ICC-IGNORED (an embedded ICC profile, M6) and FMT-HDR-SOURCE (why `pbr_emissive` is or is not BC6H, O2).
+//! IN-ICC-IGNORED (an embedded ICC profile, M6) and FMT-HDR-SOURCE (why `pbr_emissive` is or is not BC6H, O2) and
+//! DDS-HEADER-PATCHED / DDS-HEADER-UNPATCHABLE (a header-only DDS fix applied or refused, M6 DECISIONS S7).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +102,8 @@ codes! {
     PackRecipeConflict = "PACK-RECIPE-CONFLICT" => Warning,
     PackRecipeUnbuildable = "PACK-RECIPE-UNBUILDABLE" => Warning,
     SkinWetForm = "SKIN-WET-FORM" => Info,
+    DdsHeaderPatched = "DDS-HEADER-PATCHED" => Info,
+    DdsHeaderUnpatchable = "DDS-HEADER-UNPATCHABLE" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -165,7 +168,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 65);
+        assert_eq!(Code::ALL.len(), 67);
         assert_eq!(Code::InIccIgnored.severity(), Severity::Info);
     }
 }

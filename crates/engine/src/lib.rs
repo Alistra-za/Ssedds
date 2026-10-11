@@ -6,6 +6,7 @@ pub mod codes;
 pub mod config;
 pub mod coverage;
 pub mod dds;
+pub mod dds_patch;
 pub mod decode;
 pub mod dilate;
 pub mod discover;
