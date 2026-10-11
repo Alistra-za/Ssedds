@@ -890,6 +890,82 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
     Ok(0)
 }
 
+/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable or refused, else 0; usage errors are 2.
+pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
+    use engine::dds_patch::{plan_patch, PatchRequest};
+    let target = a.target.map_or(Target::Cs, Target::from);
+    let mut req = PatchRequest::default();
+    if let Some(id) = &a.subtype {
+        let st: Subtype = serde_json::from_value(Value::String(id.clone()))
+            .map_err(|_| EngineError::Usage(format!("--subtype {id}: unknown sub-type")))?;
+        if !matches!(availability(target, st), Availability::Available) {
+            return Err(EngineError::Usage(format!(
+                "--subtype {id} is unavailable under {target:?} (CFG-UNAVAILABLE)"
+            )));
+        }
+        let p = Engine::new()?.registry().base_profile(target, st);
+        req.srgb = Some(p.srgb_tag());
+        req.require_full_mips = p.mips.levels == MipLevels::Keyword(MipKeyword::Full);
+    }
+    if let Some(t) = a.tag {
+        req.srgb = Some(matches!(t, TagArg::Srgb));
+    }
+    if let Some(f) = &a.format {
+        req.expect_format = Some(
+            serde_json::from_value(Value::String(f.clone()))
+                .map_err(|_| EngineError::Usage(format!("--format {f}: unknown format")))?,
+        );
+    }
+    let mut names = std::collections::BTreeSet::new();
+    if a.out_dir.is_some() {
+        for p in &a.dds {
+            let n = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+            if !names.insert(n.clone()) {
+                return Err(EngineError::Usage(format!(
+                    "two inputs are named {n}: --out-dir would write one over the other"
+                )));
+            }
+        }
+    }
+    let mut exit = 0;
+    for path in &a.dds {
+        let shown = path.display();
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                println!("{shown}: unreadable: {e}");
+                exit = 1;
+                continue;
+            }
+        };
+        match plan_patch(&bytes, &req) {
+            Ok(None) => println!("{shown}: header already valid; nothing to patch"),
+            Ok(Some(p)) => {
+                let w = p.warning();
+                println!("{shown}: {}: {}", w.code.as_str(), w.message);
+                if !a.dry_run {
+                    let out = match &a.out_dir {
+                        Some(dir) => dir.join(path.file_name().unwrap_or_default()),
+                        None => path.clone(),
+                    };
+                    engine::dds::write_atomic(&out, &p.bytes)
+                        .map_err(|e| EngineError::Fatal(format!("{}: {e}", out.display())))?;
+                }
+            }
+            Err(u) => {
+                let w = u.warning();
+                println!("{shown}: {}: {}", w.code.as_str(), w.message);
+                exit = 1;
+            }
+        }
+    }
+    Ok(exit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -62,6 +62,7 @@ fn run(cli: Cli) -> Result<i32, EngineError> {
         Command::Validate(a) => verbs::validate_files(a),
         Command::Presets(c) => verbs::presets(c),
         Command::Encoders(a) => verbs::encoders(a),
+        Command::PatchHeader(a) => verbs::patch_header(a),
     }
 }
 

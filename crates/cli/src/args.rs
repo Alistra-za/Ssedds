@@ -34,6 +34,8 @@ pub enum Command {
     Presets(PresetsCmd),
     /// Built-in encoder versions and NVTT detection.
     Encoders(EncodersArgs),
+    /// Fix DDS header faults that need no pixel change (mip count, flags, caps, legacy/DX10, an explicit tag).
+    PatchHeader(PatchHeaderArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -380,4 +382,38 @@ mod tests {
         }
         assert!(parse_bytes("0").unwrap_err().contains("greater than 0"));
     }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum TagArg {
+    Srgb,
+    Unorm,
+}
+
+#[derive(Args)]
+#[command(group(clap::ArgGroup::new("dest").required(true).args(["out_dir", "in_place"])))]
+pub struct PatchHeaderArgs {
+    #[arg(required = true)]
+    pub dds: Vec<PathBuf>,
+    /// Write each patched file into this folder (by file name). The input is never changed.
+    #[arg(long)]
+    pub out_dir: Option<PathBuf>,
+    /// Rewrite each input in place (atomically).
+    #[arg(long)]
+    pub in_place: bool,
+    /// Target whose rules give the tag and mip expectation of `--subtype` (default cs).
+    #[arg(long, value_enum)]
+    pub target: Option<TargetArg>,
+    /// Sub-type the files are meant to be: sets the tag and requires a full mip chain when its profile has one.
+    #[arg(long)]
+    pub subtype: Option<String>,
+    /// Tag to write; overrides `--subtype`'s. Without either, the file's tag is kept.
+    #[arg(long, value_enum)]
+    pub tag: Option<TagArg>,
+    /// Block format the files must be; another one is refused.
+    #[arg(long)]
+    pub format: Option<String>,
+    /// Report what would change; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
