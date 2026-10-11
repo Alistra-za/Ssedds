@@ -25,6 +25,7 @@ pub mod quantize;
 pub mod reports;
 pub mod schemas;
 pub mod session;
+pub mod sets;
 pub mod suggest;
 pub mod sysmem;
 pub mod validate;

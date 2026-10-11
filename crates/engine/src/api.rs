@@ -73,6 +73,8 @@ pub struct BatchRequest {
     /// Per-file acknowledgements (DECISIONS N2): `[files]` key → codes. Merged with the project config's
     /// `[files.*].allow` (Task 3).
     pub file_allow: BTreeMap<String, BTreeSet<Code>>,
+    /// GUI set edits (M3b spec §2.1): applied in order after the automatic grouping. Empty for the CLI.
+    pub set_edits: Vec<crate::sets::SetEdit>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -100,6 +102,7 @@ impl BatchRequest {
             accept: AcceptSuggestions::None,
             allow: BTreeSet::new(),
             file_allow: BTreeMap::new(),
+            set_edits: vec![],
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -634,7 +637,39 @@ impl Engine {
                 },
             );
         }
-        let (mut sets, dups) = group_sets_with(&files, registry.alias_table());
+        // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
+        // 1. `discover`, then `canonicalise_outputs` (above).
+        // 2. `group_sets_with` gives the automatic sets; its duplicate-output groups are ignored from now on.
+        // 3. `apply_set_edits`. Set keys are fixed from here on: output overrides never change a key.
+        // 4. `apply_output_paths` (Task 3).
+        // 5. `duplicate_outputs` on the final paths, so two sets writing one file are caught after paths change.
+        // 6. Predicted packing suffixes, the skip/work loop, then packing.
+        let scope_root =
+            project_root(&req).or_else(|| req.inputs.first().filter(|p| p.is_dir()).cloned());
+        let (mut sets, _) = group_sets_with(&files, registry.alias_table());
+        let stale = crate::sets::apply_set_edits(
+            &mut sets,
+            &files,
+            scope_root.as_deref(),
+            &req.output_root,
+            registry.alias_table(),
+            &req.set_edits,
+        );
+        for s in &stale {
+            rep.emit(
+                None,
+                None,
+                EventKind::Warning(
+                    Warning::new(
+                        Code::SetEditStale,
+                        format!("set edit skipped: {}", s.reason),
+                    )
+                    .with_data(serde_json::json!({ "edit": s.edit, "reason": s.reason })),
+                ),
+            );
+        }
+        let dups = crate::group::duplicate_outputs(&files);
+
         // Spec §6.4 "Set membership", DECISIONS Note M7: a recipe's output joins its set before anything resolves.
         for set in &mut sets {
             let roles: BTreeSet<RawMap> = set
@@ -692,7 +727,7 @@ impl Engine {
                 .extend(codes.iter().copied());
         }
         let file_scopes = FileScopes {
-            root: project_root(&req).or_else(|| req.inputs.first().filter(|p| p.is_dir()).cloned()),
+            root: scope_root.clone(),
             overrides: file_overrides,
             allow: file_allow,
         };

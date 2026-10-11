@@ -191,12 +191,7 @@ pub fn group_sets_with(
     aliases: &BTreeMap<String, String>,
 ) -> (Vec<TextureSet>, Vec<Vec<usize>>) {
     let mut sets: BTreeMap<String, TextureSet> = BTreeMap::new();
-    let mut outs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, f) in files.iter().enumerate() {
-        // A DDS input is never re-encoded (spec §2, DECISIONS Note I), so it has no output to collide on.
-        if f.kind != InputKind::Dds {
-            outs.entry(fold(&f.output)).or_default().push(i);
-        }
         let stem = f
             .rel
             .file_stem()
@@ -216,6 +211,17 @@ pub fn group_sets_with(
             set.suffixes.insert(s);
         }
     }
-    let dups = outs.into_values().filter(|v| v.len() > 1).collect();
-    (sets.into_values().collect(), dups)
+    (sets.into_values().collect(), duplicate_outputs(files))
+}
+
+/// Groups of two or more inputs that map to one output path, compared case-insensitively. DDS inputs take no part:
+/// they are skipped, not written. Called again after GUI output paths are applied (M3b), so it is separate.
+pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
+    let mut outs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, f) in files.iter().enumerate() {
+        if f.kind != InputKind::Dds {
+            outs.entry(fold(&f.output)).or_default().push(i);
+        }
+    }
+    outs.into_values().filter(|v| v.len() > 1).collect()
 }

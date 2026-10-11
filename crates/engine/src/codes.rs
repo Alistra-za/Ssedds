@@ -3,7 +3,7 @@
 //! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (a float
 //! source written to an LDR format, an interim guard until the M6 source-transfer split) and the four `PACK-*`
 //! codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a `[files]` key of `sdc.toml` that
-//! matches no file, M3a).
+//! matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or set that no longer exists, M3b).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,7 @@ codes! {
     SetCompanionOutside = "SET-COMPANION-OUTSIDE" => Info,
     SetCompanionDds = "SET-COMPANION-DDS" => Warning,
     SetBakeRatio = "SET-BAKE-RATIO" => Warning,
+    SetEditStale = "SET-EDIT-STALE" => Info,
     SugLowConfidence = "SUG-LOW-CONFIDENCE" => Blocking,
     SugContradiction = "SUG-CONTRADICTION" => Warning,
     ValAlphaGuarantee = "VAL-ALPHA-GUARANTEE" => Error,
@@ -151,6 +152,6 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 57);
+        assert_eq!(Code::ALL.len(), 58);
     }
 }
