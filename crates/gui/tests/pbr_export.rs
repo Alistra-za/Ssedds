@@ -782,3 +782,69 @@ fn an_identical_file_on_disk_is_not_asked_about() {
         Finish::Overwrite(_)
     ));
 }
+
+/// Final review C1: a new set whose id sorts before the source set (no reorder) owns the shared `_rmaos`, so it is
+/// written at the borrower's path; the source set's entry must then point there too (spec §3.3).
+#[test]
+fn a_sharing_set_ordered_first_owns_the_output_and_both_entries_point_at_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    let leaf = m
+        .items
+        .iter()
+        .find(|i| i.name == "leaf.png")
+        .unwrap()
+        .key
+        .clone();
+    m.set_field(&leaf, "subtype", json!("pbr_albedo"));
+    m.set_field(&leaf, "alpha.policy", json!("remove"));
+    m.decide(
+        &leaf,
+        sdc_gui::model::Answer::Acknowledge(engine::codes::Code::LossAlphaData),
+    );
+    idle(&mut m);
+    let id = m.drop_new_set(&leaf).unwrap();
+    idle(&mut m);
+    let rmaos = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("rmaos"))
+        .unwrap()
+        .key
+        .clone();
+    assert!(matches!(
+        m.drop_choice(&rmaos, &id, DropChoice::Share),
+        DropOutcome::Joined
+    ));
+    idle(&mut m);
+    let order: Vec<String> = set_views(&m).into_iter().map(|v| v.id).collect();
+    assert!(
+        order.iter().position(|i| *i == id) < order.iter().position(|i| i == "landscape/rock01"),
+        "the sharing set sorts first: {order:?}"
+    );
+    let shared = r"textures\pbr\landscape\leaf_rmaos.dds";
+    for (v, e) in json_entries(&m) {
+        assert_eq!(
+            e.slots.get(&6).map(String::as_str),
+            Some(shared),
+            "{}: {:?}",
+            v.id,
+            e.slots
+        );
+    }
+    assert_eq!(export_blocks(&m), vec![]);
+    export_and_wait(&mut m);
+    let out = m.export_root().join("textures/pbr/landscape");
+    assert!(out.join("leaf_rmaos.dds").exists());
+    assert!(!out.join("rock01_rmaos.dds").exists());
+    let p = m
+        .export_root()
+        .join("PBRNIFPatcher")
+        .join(format!("{}.json", json_name(&m)));
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{v}; notes {:?}", m.export.notes);
+    for e in entries {
+        assert_eq!(e["slot6"], json!(shared), "{e}");
+    }
+}

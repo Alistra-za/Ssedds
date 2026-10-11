@@ -5,7 +5,7 @@ use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
 use super::AppModel;
-use crate::pgp::prefix::{check_rel_path, pitfalls};
+use crate::pgp::prefix::{check_rel_path, output_rel, pitfalls};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, to_text, EntryInput};
@@ -54,7 +54,21 @@ pub fn json_name(m: &AppModel) -> String {
         .unwrap_or_else(|| "sdc".into())
 }
 
-/// The final slot paths of a set: a borrowed slot points at the owner's output; an explicit `slotN` setting wins.
+/// The output path of the texture filling a slot, when it has one.
+fn fill_path<'a>(
+    item: &str,
+    views: &[SetView],
+    paths: &'a BTreeMap<OutputKey, PathBuf>,
+    m: &AppModel,
+) -> Option<&'a PathBuf> {
+    m.item(item)
+        .and_then(|it| item_output_key(views, it))
+        .and_then(|k| paths.get(&k))
+}
+
+/// The final slot paths of a set: a slot whose finished file lives at another set's path points there (a borrowed
+/// slot, or the set's own texture when a set earlier in the order owns it, spec §3.3); an explicit `slotN` setting
+/// wins.
 fn slots_of(
     v: &SetView,
     views: &[SetView],
@@ -63,14 +77,20 @@ fn slots_of(
 ) -> BTreeMap<u8, String> {
     let mut out = BTreeMap::new();
     for (kind, fill) in &v.slots {
-        let SlotFill::Borrowed { item, .. } = fill else {
+        let (item, borrowed) = match fill {
+            SlotFill::Borrowed { item, .. } => (item, true),
+            SlotFill::Own { item } => (item, false),
+            SlotFill::Empty => continue,
+        };
+        let Some(p) = fill_path(item, views, paths, m) else {
             continue;
         };
-        let path = m
-            .item(item)
-            .and_then(|it| item_output_key(views, it))
-            .and_then(|k| paths.get(&k));
-        if let Some(p) = path {
+        // PGPatcher finds the set's own texture at `<prefix>_<suffix>.dds` without a slot command.
+        let at_own_path = v
+            .prefix
+            .as_deref()
+            .is_some_and(|pre| path_lower(p) == path_lower(&output_rel(pre, kind.suffix())));
+        if borrowed || !at_own_path {
             out.insert(kind.slot_number(), p.to_string_lossy().replace('/', "\\"));
         }
     }
@@ -82,29 +102,28 @@ fn slots_of(
     out
 }
 
-/// Borrowed slots whose owner has no output path (the owner was dropped as a duplicate, or its prefix is unusable),
-/// as (slot number, source set). The JSON would silently lack the slot, so Export blocks (unless `slotN` is set).
-fn unresolved_borrows(
+/// Filled slots whose texture has no output path (its owner was dropped as a duplicate, or its prefix is unusable),
+/// as (slot number, source set; `None` for the set's own texture). The file would not be where the JSON points
+/// (a borrowed slot, or PGPatcher's default `<prefix>_<suffix>.dds`), so Export blocks (unless `slotN` is set).
+fn unresolved_slots(
     v: &SetView,
     views: &[SetView],
     paths: &BTreeMap<OutputKey, PathBuf>,
     m: &AppModel,
-) -> Vec<(u8, String)> {
+) -> Vec<(u8, Option<String>)> {
     let mut out = vec![];
     for (kind, fill) in &v.slots {
-        let SlotFill::Borrowed { item, from } = fill else {
-            continue;
+        let (item, from) = match fill {
+            SlotFill::Borrowed { item, from } => (item, Some(from.clone())),
+            SlotFill::Own { item } => (item, None),
+            SlotFill::Empty => continue,
         };
         let n = kind.slot_number();
         if matches!(v.settings.get(&format!("slot{n}")), Some(Value::String(s)) if !s.is_empty()) {
             continue;
         }
-        let found = m
-            .item(item)
-            .and_then(|it| item_output_key(views, it))
-            .is_some_and(|k| paths.contains_key(&k));
-        if !found {
-            out.push((n, from.clone()));
+        if fill_path(item, views, paths, m).is_none() {
+            out.push((n, from));
         }
     }
     out
@@ -268,20 +287,21 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
     if m.target == Target::Cs {
         let entries: Vec<EntryInput> = json_entries(m).into_iter().map(|(_, e)| e).collect();
         if !entries.is_empty() {
-            // A borrowed slot with no path is reported only when nothing above already explains it (a dropped
+            // A filled slot with no path is reported only when nothing above already explains it (a dropped
             // duplicate or an unusable prefix is already a block of its own).
             if out.is_empty() {
                 let views = set_views(m);
                 let (_, paths) = engine_inputs(m);
                 for v in views.iter().filter(|v| v.pbr) {
-                    for (n, from) in unresolved_borrows(v, &views, &paths, m) {
-                        out.push(issue(
-                            v,
-                            format!(
+                    for (n, from) in unresolved_slots(v, &views, &paths, m) {
+                        let text = match from {
+                            Some(from) => format!(
                                 "{}: slot{n} borrows from {from}, which has no output path",
                                 v.id
                             ),
-                        ));
+                            None => format!("{}: slot{n}'s texture has no output path", v.id),
+                        };
+                        out.push(issue(v, text));
                     }
                 }
             }
