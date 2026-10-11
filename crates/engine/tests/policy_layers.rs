@@ -350,6 +350,11 @@ fn float_source_to_bc6h_resolves_linear_content_as_an_analysis_fact() {
         content_of(g, "g", &RGB32F, Subtype::PbrEmissive, &["format=bc7"]).0,
         ColorContent::Srgb
     );
+    // Controller ruling (Task 6): every HDR format carries linear radiance, RGBA16F included.
+    assert_eq!(
+        content_of(g, "g", &RGB32F, Subtype::PbrEmissive, &["format=rgba16f"]),
+        (ColorContent::Linear, "analysis:float-source".into())
+    );
     // A float LDR sub-type is out of scope.
     assert_eq!(
         content_of("textures/a/rock_d.tif", "d", &RGB32F, Subtype::Diffuse, &[]).0,

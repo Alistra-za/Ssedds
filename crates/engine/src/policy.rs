@@ -622,6 +622,15 @@ pub fn is_hdr_source(f: &FileFacts) -> bool {
     f.info.is_float && f.analysis.channels[..3].iter().any(|c| c.max > 1.0)
 }
 
+/// The name messages use for an HDR format: "BC6H" (not the id `bc6h_uf16`) or "RGBA16F".
+fn hdr_name(f: Format) -> String {
+    if f == Format::Bc6hUf16 {
+        "BC6H".into()
+    } else {
+        f.id().to_uppercase()
+    }
+}
+
 /// DECISIONS O2/S3, the fact `analysis:hdr-source`: a `pbr_emissive` whose BC6H format no layer chose explicitly
 /// becomes BC7 unless the source is HDR; then, on every `pbr_emissive`, `color.tag` follows the final format
 /// (`n/a` for BC6H, else `srgb`) unless a layer set it. Runs after every layer, so an explicit `format` or tag from
@@ -645,7 +654,7 @@ fn emissive_hdr_choice(
         }
     }
     if !field_explicit(ctx, prov, "color.tag") {
-        let tag = if p.format == Format::Bc6hUf16 {
+        let tag = if p.format.is_hdr() {
             ColorTag::NotApplicable
         } else {
             ColorTag::Srgb
@@ -680,7 +689,7 @@ fn hdr_source_notice(
         matches!(prov.get("format"), Some(Provenance::AnalysisFact(x)) if x == "hdr-source");
     let explicit = !by_fact && field_explicit(ctx, prov, "format");
     let chosen = match (p.format, p.color.tag) {
-        (Format::Bc6hUf16, _) => "BC6H".to_string(),
+        (f, _) if f.is_hdr() => hdr_name(f),
         (fmt, ColorTag::Srgb) => format!("{} sRGB", fmt.id().to_uppercase()),
         (fmt, _) => format!("{} UNORM", fmt.id().to_uppercase()),
     };
@@ -710,7 +719,7 @@ fn float_source_is_linear(p: &mut Profile, prov: &mut BTreeMap<String, Provenanc
     let overruled = prov
         .get(FIELD)
         .is_some_and(|s| *s >= Provenance::Suffix(String::new()));
-    if f.info.is_float && p.format == Format::Bc6hUf16 && !overruled {
+    if f.info.is_float && p.format.is_hdr() && !overruled {
         p.color.content = ColorContent::Linear;
         prov.insert(
             FIELD.into(),
@@ -896,7 +905,10 @@ impl SourceStamp {
 /// Formats that store alpha in v1. BC1 is opaque only (spec §3.3, DECISIONS Note F), although
 /// `Format::has_alpha` counts its 1-bit mode.
 fn stores_alpha(f: Format) -> bool {
-    matches!(f, Format::Bc3 | Format::Bc7)
+    matches!(
+        f,
+        Format::Bc3 | Format::Bc7 | Format::Rgba8 | Format::Rgba16f
+    )
 }
 
 /// `normal_len_err` above this is "far from unit length" (CHAN-NORMAL-LENGTH, SUG-CONTRADICTION).
@@ -964,8 +976,8 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     }
     let mut w = vec![];
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
-    // BC6H outside cs cannot be acknowledged: an error, added after the other checks.
-    let bc6h_outside_cs = p.format == Format::Bc6hUf16 && p.target != Target::Cs;
+    // An HDR format (BC6H, RGBA16F) outside cs cannot be acknowledged: an error, added after the other checks.
+    let hdr_outside_cs = p.format.is_hdr() && p.target != Target::Cs;
     if !(5..=200).contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
@@ -1038,29 +1050,47 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             );
         }
     }
-    // BC6H has no _SRGB or UNORM form, and every other format needs one (spec §3.2, §4.2).
-    let bc6h = p.format == Format::Bc6hUf16;
-    if bc6h != (p.color.tag == ColorTag::NotApplicable) {
-        let msg = if bc6h {
-            "BC6H has no _SRGB or UNORM form; set color.tag=n/a".to_string()
+    // An HDR format (BC6H, RGBA16F) has no _SRGB or UNORM form, and every other format needs one (spec §3.2, §4.2).
+    let hdr = p.format.is_hdr();
+    if hdr != (p.color.tag == ColorTag::NotApplicable) {
+        let fmt = p.format.id().to_uppercase();
+        let msg = if hdr {
+            format!(
+                "{} has no _SRGB or UNORM form; set color.tag=n/a",
+                hdr_name(p.format)
+            )
         } else if st.is_pbr_color() && p.target == Target::Cs {
             format!(
-                "color.tag n/a is only for BC6H on {}: set color.tag=srgb for a non-BC6H _g",
+                "color.tag n/a is only for BC6H or RGBA16F on {}: set color.tag=srgb for a non-BC6H _g ({fmt})",
                 st.id()
             )
         } else {
             format!(
-                "color.tag n/a is only for BC6H: set color.tag=unorm for a non-BC6H {}",
+                "color.tag n/a is only for BC6H or RGBA16F: set color.tag=unorm for a non-BC6H {} ({fmt})",
                 st.id()
             )
         };
         add(CfgInvalid, msg);
     }
-    // Owner, 2026-10-11: a packed map and BC6H are mutually exclusive (packed channels are data, often with alpha).
-    if bc6h && p.category == Category::MixedPacked {
+    if matches!(p.format, Format::R8 | Format::Rg8) && p.srgb_tag() {
         add(
             CfgInvalid,
-            format!("{} is a packed map; BC6H cannot store it, use bc7", st.id()),
+            format!(
+                "{} has no _SRGB form; set color.tag=unorm",
+                p.format.id().to_uppercase()
+            ),
+        );
+    }
+    // Owner, 2026-10-11: a packed map and an HDR format are mutually exclusive (packed channels are 8-bit data,
+    // often with alpha).
+    if hdr && p.category == Category::MixedPacked {
+        add(
+            CfgInvalid,
+            format!(
+                "{} is a packed map; {} cannot store it, use bc7",
+                st.id(),
+                hdr_name(p.format)
+            ),
         );
     }
     let srgb = p.srgb_tag();
@@ -1075,7 +1105,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             "_SRGB on a non-PBR sub-type renders darker [SC §6]".into(),
         );
     }
-    if p.color.tag == ColorTag::Unorm && st.is_pbr_color() && !bc6h && p.target == Target::Cs {
+    if p.color.tag == ColorTag::Unorm && st.is_pbr_color() && !hdr && p.target == Target::Cs {
         add(
             TagUnormPbr,
             "UNORM on PBR colour looks washed out with linear lighting off".into(),
@@ -1101,10 +1131,15 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             "roughness member with sRGB content: roughness is linear data, so it is not variance-baked".into(),
         );
     }
-    if p.category == Category::Normal && matches!(p.format, Format::Bc4 | Format::Bc5) {
+    if p.category == Category::Normal
+        && matches!(
+            p.format,
+            Format::Bc4 | Format::Bc5 | Format::R8 | Format::Rg8
+        )
+    {
         add(
             FmtBc5Normal,
-            "BC4/BC5 on a normal: Skyrim reads Z directly, so Z decodes -1 and alpha is lost [SC §2]".into(),
+            "BC4/BC5/R8/RG8 on a normal: Skyrim reads Z directly, so Z decodes -1 and alpha is lost [SC §2]".into(),
         );
     }
     if st == Subtype::LandscapeDiffuse && p.format == Format::Bc1 {
@@ -1171,7 +1206,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     }
     // DECISIONS S1: a float source is linear light; Quantise clamps it to [0, 1] and encodes it per color.content.
     // Values outside that range are lost: a warning, never a block. (IN-FLOAT-LDR is retired, DECISIONS S2.)
-    if f.info.is_float && !bc6h {
+    if f.info.is_float && !hdr {
         let channels = if f.info.has_alpha { 4 } else { 3 };
         let (lo, hi) = a.channels[..channels]
             .iter()
@@ -1185,7 +1220,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             );
         }
     }
-    if (f.info.bit_depth > 8 || f.info.is_float) && !bc6h {
+    if (f.info.bit_depth > 8 || f.info.is_float) && !hdr {
         add(
             LossBitdepth,
             format!(
@@ -1315,13 +1350,17 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             .with_data(json!({ "samples": samples })),
         );
     }
-    if bc6h_outside_cs {
+    if hdr_outside_cs {
         // Not a "—" cell with a fallback to accept: `--allow CFG-UNAVAILABLE` must not let it through [D#3].
         w.push(Warning {
             severity: Severity::Error,
             ..Warning::new(
                 CfgUnavailable,
-                "BC6H is usable only under Community Shaders [D#3]; choose another format",
+                if p.format == Format::Bc6hUf16 {
+                    "BC6H is usable only under Community Shaders [D#3]; choose another format"
+                } else {
+                    "RGBA16F is usable only under Community Shaders (DECISIONS S4); choose another format"
+                },
             )
         });
     }

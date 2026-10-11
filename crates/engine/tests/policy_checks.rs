@@ -1930,3 +1930,137 @@ fn skin_wet_height_form_is_stored_domain_and_the_normal_form_is_not() {
     assert_eq!(j.profile.category, Category::Normal);
     assert_eq!(domain_for(&j.profile), Domain::Normal);
 }
+
+/// DECISIONS S4: r8/rg8 have no _SRGB form; on a normal map they block like BC4/BC5.
+#[test]
+fn r8_and_rg8_are_unorm_only_and_block_on_normals() {
+    let j = run(
+        Target::Cs,
+        "textures/pbr/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=pbr_albedo", "format=r8"],
+        &[],
+    );
+    assert!(
+        warning(&j, Code::CfgInvalid)
+            .message
+            .contains("has no _SRGB form"),
+        "{:?}",
+        j.warnings
+    );
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        opaque(),
+        &[
+            "subtype=normal",
+            "format=rg8",
+            "channels.green_convention=directx",
+        ],
+        &[],
+    );
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::FmtBc5Normal),
+        "{:?}",
+        j.warnings
+    );
+}
+
+/// Controller ruling (Task 6): every HDR format (BC6H, RGBA16F) pairs with tag n/a, both ways, and the message
+/// names the format.
+#[test]
+fn rgba16f_and_tag_na_must_agree() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=hdr_sky", "format=rgba16f", "color.tag=unorm"],
+        &[],
+    );
+    assert!(
+        warning(&j, Code::CfgInvalid)
+            .message
+            .contains("RGBA16F has no _SRGB or UNORM form; set color.tag=n/a"),
+        "{:?}",
+        j.warnings
+    );
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=hdr_sky", "format=rgba16f", "color.tag=n/a"],
+        &[],
+    );
+    assert!(
+        !j.warnings.iter().any(|w| w.code == Code::CfgInvalid),
+        "{:?}",
+        j.warnings
+    );
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=diffuse", "format=rgba8", "color.tag=n/a"],
+        &[],
+    );
+    assert!(
+        warning(&j, Code::CfgInvalid).message.contains("(RGBA8)"),
+        "{:?}",
+        j.warnings
+    );
+}
+
+/// Controller ruling (Task 6): RGBA16F is cs-only, an error even with --allow CFG-UNAVAILABLE.
+#[test]
+fn rgba16f_outside_cs_is_an_error() {
+    let j = run(
+        Target::Vanilla,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        &["subtype=glow", "format=rgba16f", "color.tag=n/a"],
+        &[Code::CfgUnavailable],
+    );
+    assert_eq!(
+        j.status,
+        JobStatus::Error {
+            codes: vec![Code::CfgUnavailable]
+        },
+        "{:?}",
+        j.warnings
+    );
+    assert!(warning(&j, Code::CfgUnavailable)
+        .message
+        .starts_with("RGBA16F is usable only under Community Shaders"));
+}
+
+/// Controller ruling (Task 6): a packed map cannot be RGBA16F either (packed channels are 8-bit data).
+#[test]
+fn packed_maps_reject_rgba16f() {
+    let j = run(
+        Target::Cs,
+        "textures/pbr/x_rmaos.png",
+        Some("rmaos"),
+        &["rmaos"],
+        opaque(),
+        &["subtype=rmaos", "format=rgba16f", "color.tag=n/a"],
+        &[],
+    );
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::CfgInvalid
+            && w.message == "rmaos is a packed map; RGBA16F cannot store it, use bc7"),
+        "{:?}",
+        j.warnings
+    );
+}

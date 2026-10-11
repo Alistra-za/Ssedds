@@ -602,7 +602,7 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
                     .map_err(|e| EngineError::Fatal(e.to_string()))?;
                 p.format = format;
                 p.color.tag = match (format, srgb) {
-                    (Format::Bc6hUf16, _) => ColorTag::NotApplicable,
+                    (f, _) if f.is_hdr() => ColorTag::NotApplicable,
                     (_, true) => ColorTag::Srgb,
                     (_, false) => ColorTag::Unorm,
                 };

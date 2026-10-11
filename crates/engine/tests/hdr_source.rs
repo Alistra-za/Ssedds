@@ -170,3 +170,28 @@ fn hdr_sky_is_unchanged() {
     assert_eq!(j.profile.format, Format::Bc6hUf16);
     assert!(j.warnings.iter().all(|w| w.code != Code::FmtHdrSource));
 }
+
+/// Controller ruling (Task 6): on pbr_emissive the tag follows the final format via `is_hdr()`, so RGBA16F gets n/a.
+#[test]
+fn an_explicit_rgba16f_emissive_gets_tag_na() {
+    let d = tempfile::tempdir().unwrap();
+    let j = plan_one(
+        d.path(),
+        "lamp_g.png",
+        eight_bit_g(),
+        &["file:**/lamp_g.png.format=rgba16f"],
+    );
+    assert_eq!(
+        (
+            j.profile.format,
+            j.profile.color.tag,
+            j.profile.encoder.backend
+        ),
+        (
+            Format::Rgba16f,
+            ColorTag::NotApplicable,
+            Backend::Uncompressed
+        )
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+}

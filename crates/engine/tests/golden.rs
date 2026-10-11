@@ -2328,3 +2328,133 @@ fn broken_new_format_files_fail_with_in_decode_and_the_batch_continues() {
             == 4
     );
 }
+
+/// DECISIONS S4: `rgba8` UNORM is a legacy B8G8R8A8 file, lossless (mip 0 equals the source), full chain, 99 dB.
+#[test]
+fn rgba8_output_is_legacy_b8g8r8a8_and_lossless() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.png", rgb(64));
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["file:**/rock.png.subtype=diffuse", "format=rgba8"],
+        &[],
+    );
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    let f = dds(d.path(), "textures/a/rock.dds");
+    assert_dds(
+        &f,
+        DdsPixelFormat::Bgra8 { srgb: false },
+        HeaderKind::Legacy,
+        7,
+    );
+    let src = rgb(64).to_rgb8();
+    for (i, p) in levels(&f)[0].iter().enumerate() {
+        let s = src.get_pixel(i as u32 % 64, i as u32 / 64).0;
+        assert_eq!(&p[..3], &s[..], "texel {i}");
+    }
+    assert_eq!(validation_of(&o, "rock.png").min_mip_psnr_db, Some(99.0));
+    assert_eq!(
+        planned(&o, "rock.png")["profile"]["encoder"]["backend"],
+        "uncompressed"
+    );
+}
+
+/// A cs PBR albedo as rgba8 is DX10 B8G8R8A8_UNORM_SRGB (91).
+#[test]
+fn rgba8_srgb_pbr_albedo_is_dx10_91() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/pbr/iron.png", rgb(64));
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["subtype=pbr_albedo", "format=rgba8"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/pbr/iron.dds");
+    assert_dds(
+        &f,
+        DdsPixelFormat::Bgra8 { srgb: true },
+        HeaderKind::Dx10,
+        7,
+    );
+    assert_eq!(f.dx10.unwrap().dxgi, 91);
+}
+
+/// `r8` and `rg8` are DX10 UNORM and keep R (and G) exactly.
+#[test]
+fn r8_and_rg8_outputs_are_dx10_and_exact() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/hill.png", gray_ramp(64));
+    put(d.path(), "textures/a/vec.png", rgb(64));
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &[
+            "file:**/hill.png.subtype=height",
+            "file:**/hill.png.format=r8",
+            "file:**/vec.png.subtype=generic_two_channel",
+            "file:**/vec.png.format=rg8",
+        ],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 2, "{:?}", warnings(&o));
+    let h = dds(d.path(), "textures/a/hill.dds");
+    assert_dds(&h, DdsPixelFormat::R8, HeaderKind::Dx10, 7);
+    assert_eq!(h.dx10.unwrap().dxgi, 61);
+    assert!(levels(&h)[0]
+        .iter()
+        .enumerate()
+        .all(|(i, p)| p[0] == ((i as u32 % 64) * 4) as u8));
+    let v = dds(d.path(), "textures/a/vec.dds");
+    assert_dds(&v, DdsPixelFormat::Rg8, HeaderKind::Dx10, 7);
+    let src = rgb(64).to_rgb8();
+    for (i, p) in levels(&v)[0].iter().enumerate() {
+        let s = src.get_pixel(i as u32 % 64, i as u32 / 64).0;
+        assert_eq!((p[0], p[1]), (s[0], s[1]), "texel {i}");
+    }
+}
+
+/// `rgba16f` keeps float values (half precision), tag n/a, DXGI 10; it is cs-only (open question 2).
+#[test]
+fn rgba16f_output_keeps_float_values_and_is_cs_only() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/pbr/lamp_g.tif", hdr_emissive());
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["file:**/lamp_g.tif.format=rgba16f"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(planned(&o, "lamp_g.tif")["profile"]["color"]["tag"], "n/a");
+    let f = dds(d.path(), "textures/pbr/lamp_g.dds");
+    assert_dds(&f, DdsPixelFormat::Rgba16f, HeaderKind::Dx10, 7);
+    let (w, h, r) = f.levels[0].clone();
+    let Decoded::Hdr(px) = decode_level(f.format, w, h, &f.data[r], None).unwrap() else {
+        panic!()
+    };
+    let src = hdr_emissive().to_rgb32f();
+    for (p, s) in px.iter().zip(src.pixels()) {
+        for (q, t) in p.iter().zip(s.0) {
+            assert!((q - t).abs() <= 2e-3 * t.max(1.0), "{q} vs {t}");
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/lamp.tif", hdr_emissive());
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["subtype=glow", "format=rgba16f", "color.tag=n/a"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 0);
+    let w = warning_of(&o, "lamp.tif", Code::CfgUnavailable);
+    assert_eq!(w.severity, Severity::Error);
+}

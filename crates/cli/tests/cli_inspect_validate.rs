@@ -845,3 +845,45 @@ fn inspect_reports_nonfinite_samples_of_an_image() {
     let all = format!("{}{}", text(&o.stdout), text(&o.stderr));
     assert!(all.contains("IN-NONFINITE"), "{all}");
 }
+
+/// Controller ruling (Task 6): `validate` infers tag n/a for every HDR format, so an sdc RGBA16F output is judged
+/// and passes.
+#[test]
+fn validate_judges_an_rgba16f_output_with_tag_na() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    std::fs::create_dir_all(&src).unwrap();
+    image::DynamicImage::ImageRgb32F(ImageBuffer::from_fn(16, 16, |x, _| {
+        Rgb([x as f32 / 4.0, 0.5, 0.25])
+    }))
+    .save(src.join("lamp_g.tif"))
+    .unwrap();
+    let out = d.path().join("out");
+    let o = sdc()
+        .args([
+            "convert",
+            "--accept-suggestions",
+            "high",
+            "--set",
+            "format=rgba16f",
+            "--set",
+            "color.tag=n/a",
+            "-o",
+        ])
+        .arg(&out)
+        .arg(src.join("lamp_g.tif"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let o = validate(
+        &["--json", "--subtype", "pbr_emissive"],
+        &out.join("lamp_g.dds"),
+    );
+    assert_eq!(code(&o), 0, "{}", text(&o.stdout));
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(
+        (v["judged"].as_bool(), v["passed"].as_bool()),
+        (Some(true), Some(true)),
+        "{v}"
+    );
+}
