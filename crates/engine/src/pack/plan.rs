@@ -309,16 +309,25 @@ fn chosen_recipe(
 /// raw-map recipe that resolves to `_rfaos` (an explicit `packing.recipe`, or `auto` with a fuzz source). Called at
 /// suggestion time, before Pass 1, from the raw roles the set's suffixes name; `this` is any member of the set (it
 /// supplies the folder and base the packed output's `[files]` key is read from).
+///
+/// `set.suffixes` also holds the suffixes `auto` predicts from the raw roles (DECISIONS Note M7), so an `rfaos` in
+/// it counts as a real `_rfaos` member only when `auto` does not predict it (final review I1). Otherwise the
+/// recipe actually chosen decides: a forced `rmaos` with a fuzz source builds `_rmaos` and is not skin.
 pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile) -> bool {
     if ctx.target != Target::Cs {
         return false;
     }
-    if set.suffixes.contains("rfaos") {
+    let roles: BTreeSet<RawMap> = RawMap::ALL
+        .into_iter()
+        .filter(|r| set.suffixes.contains(&r.id()))
+        .collect();
+    if set.suffixes.contains("rfaos")
+        && !super::predicted_suffixes(ctx.target, &roles).contains(&"rfaos")
+    {
         return true;
     }
-    let raw: Vec<RawInput> = RawMap::ALL
+    let raw: Vec<RawInput> = roles
         .iter()
-        .filter(|r| set.suffixes.contains(&r.id()))
         .map(|&role| RawInput {
             path: PathBuf::from(format!("{}.{}", set.key, role.id())),
             role,

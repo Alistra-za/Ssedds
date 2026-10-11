@@ -331,3 +331,26 @@ fn wet_is_a_suffix() {
     );
     assert!(!engine::group::is_vocabulary("wet"));
 }
+
+/// Final review I1: a forced `_rmaos` beats a fuzz source. The set builds `_rmaos`, so it is not Advanced skin;
+/// only a real `_rfaos` member short-circuits, never the `rfaos` suffix that `auto` predicts from the fuzz source.
+#[test]
+fn a_forced_rmaos_with_a_fuzz_source_is_not_advanced_skin() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    put(d.path(), "x_sk.png", grey(64));
+    put(d.path(), "x_roughness.png", grey(64));
+    put(d.path(), "x_fuzz.png", grey(64));
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[files.\"x_rmaos\".packing]\nrecipe = \"rmaos\"\n",
+    )
+    .unwrap();
+    let p = plan(&d, Target::Cs, &[]);
+    assert!(p
+        .jobs
+        .iter()
+        .any(|j| j.output.file_name().is_some_and(|n| n == "x_rmaos.dds")));
+    assert_eq!(top(&p, "x.png").0, Subtype::PbrAlbedo);
+    assert_eq!(top(&p, "x_sk.png").0, Subtype::BacklightTint);
+}
