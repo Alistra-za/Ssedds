@@ -665,3 +665,40 @@ fn a_read_only_sdc_toml_disables_format_and_opaque_and_explains_why() {
         "the reason shows on hover"
     );
 }
+
+#[test]
+fn hovering_a_pills_warning_badge_lists_the_warnings() {
+    use engine::codes::{Code, Warning};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .members[0]
+        .clone();
+    let member = m.items.iter_mut().find(|i| i.key == key).unwrap();
+    let name = member.name.clone();
+    member.warnings = vec![Warning::new(Code::LossAlphaData, "the alpha would be lost")];
+    let total: usize = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .members
+        .iter()
+        .filter_map(|k| m.item(k))
+        .map(|i| i.warnings.len())
+        .sum();
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    assert!(
+        h.query_by_label_contains("the alpha would be lost")
+            .is_none(),
+        "the warning shows only on hover"
+    );
+    h.get_by_label(&format!("⚠ {total}")).hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains(&format!("{name}: LOSS-ALPHA-DATA the alpha would be lost"));
+}

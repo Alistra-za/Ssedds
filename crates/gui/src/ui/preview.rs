@@ -113,6 +113,7 @@ impl Info {
 struct Requests {
     fit: bool,
     one_to_one: bool,
+    close: bool,
 }
 
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu: &GpuStatus) {
@@ -137,6 +138,10 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
     let requests = egui::Panel::top("preview-toolbar")
         .show(ui, |ui| toolbar(ui, model, &info))
         .inner;
+    if requests.close {
+        model.collapse();
+        return;
+    }
     egui::Panel::bottom("preview-notes").show(ui, |ui| notes(ui, model, &info, gpu));
     let rect = ui.available_rect_before_wrap();
     if viewports(ui, model, &info, gpu, rect, requests, state, &key) {
@@ -210,6 +215,10 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, info: &Info) -> Requests {
         if encode_button(ui, model) {
             model.encode_now();
         }
+        ui.separator();
+        if ui.button("✕ Close").on_hover_text("Close (Esc)").clicked() {
+            requests.close = true;
+        }
     });
     requests
 }
@@ -224,7 +233,12 @@ fn mip_control(ui: &mut egui::Ui, view: &mut ViewState, info: &Info) {
     ui.label(format!("mip {} ({w}×{h})", view.mip));
     if info.end - info.first > 1 {
         let mut mip = view.mip;
-        let r = ui.add(egui::Slider::new(&mut mip, info.first..=info.end - 1).show_value(false));
+        let r = ui.add(
+            egui::Slider::new(&mut mip, info.first..=info.end - 1)
+                .step_by(1.0)
+                .show_value(false),
+        );
+        paint_ticks(ui, r.rect, info.first, info.end, view.mip);
         if r.changed() {
             view.set_mip(mip, info.size_of(view.mip), info.size_of(mip));
         }
@@ -580,4 +594,52 @@ fn pane_overlay(
         );
     }
     pressed
+}
+
+/// The x of each mip's stop along a slider whose widget spans `left..=right` (the handle's travel is inset by
+/// its radius, about two fifths of the slider's height; `radius`).
+fn tick_xs(left: f32, right: f32, radius: f32, count: usize) -> Vec<f32> {
+    let (a, b) = (left + radius, right - radius);
+    match count {
+        0 => vec![],
+        1 => vec![(a + b) / 2.0],
+        n => (0..n)
+            .map(|i| a + (b - a) * i as f32 / (n - 1) as f32)
+            .collect(),
+    }
+}
+
+/// A short tick under the slider's track for each mip, the current one drawn longer and in the accent colour.
+fn paint_ticks(ui: &egui::Ui, rect: Rect, first: usize, end: usize, current: usize) {
+    let radius = rect.height() / 2.5;
+    let weak = ui.visuals().weak_text_color();
+    let accent = ui.visuals().selection.bg_fill;
+    for (i, x) in tick_xs(rect.left(), rect.right(), radius, end - first)
+        .into_iter()
+        .enumerate()
+    {
+        let is_current = first + i == current;
+        let (len, stroke) = if is_current {
+            (5.0, egui::Stroke::new(2.0, accent))
+        } else {
+            (3.0, egui::Stroke::new(1.0, weak))
+        };
+        let y = rect.bottom();
+        ui.painter()
+            .line_segment([egui::pos2(x, y - len), egui::pos2(x, y)], stroke);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tick_xs;
+
+    #[test]
+    fn ticks_are_evenly_spaced_between_the_handle_ends() {
+        let xs = tick_xs(0.0, 100.0, 10.0, 5);
+        assert_eq!(xs, vec![10.0, 30.0, 50.0, 70.0, 90.0]);
+        assert_eq!(tick_xs(0.0, 100.0, 10.0, 2), vec![10.0, 90.0]);
+        assert_eq!(tick_xs(0.0, 100.0, 10.0, 1), vec![50.0]);
+        assert!(tick_xs(0.0, 100.0, 10.0, 0).is_empty());
+    }
 }

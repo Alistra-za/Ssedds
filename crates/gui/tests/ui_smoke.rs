@@ -779,3 +779,24 @@ fn a_stale_pending_member_click_does_not_replace_a_set_opened_later() {
     }
     assert_eq!(h.state().selection, Selection::Set(key));
 }
+
+#[test]
+fn the_preview_has_a_close_button_that_collapses_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/rock01_rmaos");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    h.get_by_label("✕ Close");
+    press(&mut h, "✕ Close");
+    assert!(h.state().expanded.is_none());
+}
+
+#[test]
+fn the_export_button_is_big_enough_to_find() {
+    let mut h = harness(AppModel::placeholder(GuiSettings::default()));
+    h.run();
+    let r = h.get_by_label("Export").rect();
+    assert!(r.width() >= 110.0 && r.height() >= 28.0, "{r:?}");
+}

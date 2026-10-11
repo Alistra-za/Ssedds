@@ -7,6 +7,7 @@ use crate::model::pbr_export::export_blocks;
 use crate::model::sets::{set_views, DropChoice, DropOutcome, SetView, SlotFill};
 use crate::model::{AppModel, Selection};
 use eframe::egui;
+use engine::codes::Warning;
 use engine::config::Target;
 
 /// Drag payload: a texture, by item key.
@@ -42,7 +43,14 @@ pub enum Pending {
 #[derive(Debug, Default)]
 pub struct DropState {
     pub pending: Option<Pending>,
+    /// The set that was just reordered and when (egui time): its border flashes for `FLASH_SECS`.
+    pub flash: Option<(String, f64)>,
 }
+
+/// How long the moved pill flashes after a reorder.
+const FLASH_SECS: f64 = 1.0;
+/// The warning tooltip shows this many lines, then "… and K more".
+const TIP_LINES: usize = 10;
 
 enum Act {
     Select(String),
@@ -56,12 +64,28 @@ enum Act {
     RemoveMember(String, String),
 }
 
-fn badge(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) {
+fn badge(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) -> egui::Response {
     let t = egui::RichText::new(text).small();
     ui.label(match color {
         Some(c) => t.color(c),
         None => t.weak(),
-    });
+    })
+}
+
+/// The warning tooltip: `<file>: <code> <message>` per warning, at most `TIP_LINES`, then "… and K more".
+fn warning_tooltip(rows: &[(&str, &Warning)]) -> String {
+    let mut lines: Vec<String> = rows
+        .iter()
+        .take(TIP_LINES)
+        .map(|(file, w)| format!("{file}: {} {}", w.code.as_str(), w.message))
+        .collect();
+    if rows.len() > TIP_LINES {
+        lines.push(format!("… and {} more", rows.len() - TIP_LINES));
+    }
+    lines.join(
+        "
+",
+    )
 }
 
 /// Whether the sets document can be changed (P8), and the banner's reason when it cannot.
@@ -86,17 +110,56 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
     let blocked: Vec<String> = export_blocks(model).into_iter().map(|i| i.set_id).collect();
     let mut acts = vec![];
     let (mut released, mut hovered) = (None, None);
+    let ctx = ui.ctx().clone();
+    let now = ctx.input(|i| i.time);
+    // The set being dragged (a peek: the payload stays for the reorder).
+    let dragged: Option<String> = egui::DragAndDrop::payload::<DragSet>(&ctx).map(|p| p.0.clone());
+    let dragged_index = dragged
+        .as_deref()
+        .and_then(|d| views.iter().position(|v| v.id == d));
+    if st
+        .flash
+        .as_ref()
+        .is_some_and(|(_, t)| now - t >= FLASH_SECS)
+    {
+        st.flash = None;
+    }
+    if st.flash.is_some() {
+        ctx.request_repaint();
+    }
+    let flash = st
+        .flash
+        .as_ref()
+        .map(|(id, t)| (id.as_str(), (now - t) / FLASH_SECS));
+    let mut rects = vec![];
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, v) in views.iter().enumerate() {
                 let is_blocked = blocked.contains(&v.id);
-                let out = pill(ui, model, thumbs, v, index, &editing, is_blocked, &mut acts);
+                let look = PillLook {
+                    dragging: dragged.as_deref() == Some(v.id.as_str()),
+                    flash: flash.filter(|(id, _)| *id == v.id).map(|(_, f)| f),
+                };
+                let out = pill(
+                    ui, model, thumbs, v, index, &editing, is_blocked, look, &mut acts,
+                );
+                rects.push(out.rect);
                 if out.handle_released {
                     released = Some(v.id.clone());
                 }
                 if out.hovered_by_set {
                     hovered = Some(index);
+                }
+            }
+            if let (Some(from), Some(to)) = (dragged_index, hovered) {
+                if let Some(y) = rects.get(to).map(|r| insertion_y(from, to, *r)) {
+                    let r = rects[to];
+                    let accent = ui.visuals().selection.stroke.color;
+                    ui.painter().line_segment(
+                        [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
+                        egui::Stroke::new(3.0, accent),
+                    );
                 }
             }
             if model.root.is_some() {
@@ -134,7 +197,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
                 // `None`: nothing was done (read-only file, or a packed map, which follows its raw maps).
                 let _ = model.drop_new_set(&item);
             }
-            Act::Reorder(id, to) => model.reorder_set(&id, to),
+            Act::Reorder(id, to) => {
+                model.reorder_set(&id, to);
+                if editable {
+                    st.flash = Some((id, now));
+                }
+            }
             Act::OpenRename(id) => {
                 st.pending = Some(Pending::Rename {
                     text: id.clone(),
@@ -207,6 +275,24 @@ fn reorder_target(
 struct PillOut {
     handle_released: bool,
     hovered_by_set: bool,
+    rect: egui::Rect,
+}
+
+/// How a pill is drawn this frame: held by the pointer, or just moved (progress 0..1 through the flash).
+#[derive(Clone, Copy)]
+struct PillLook {
+    dragging: bool,
+    flash: Option<f64>,
+}
+
+/// The y of the insertion line when set `from` is dragged over the pill at `to` (whose rect is `r`): moving
+/// down lands after that pill, moving up before it (the same rule as `reorder_set`).
+fn insertion_y(from: usize, to: usize, r: egui::Rect) -> f32 {
+    if to > from {
+        r.bottom()
+    } else {
+        r.top()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -218,16 +304,25 @@ fn pill(
     index: usize,
     editing: &Editing,
     blocked: bool,
+    look: PillLook,
     acts: &mut Vec<Act>,
 ) -> PillOut {
     let mut handle_released = false;
     let selected = matches!(&model.selection, Selection::Set(k) if !k.is_empty() && *k == v.key);
-    let stroke = if selected {
+    let accent = ui.visuals().selection.stroke.color;
+    let stroke = if look.dragging {
+        egui::Stroke::new(2.0, accent)
+    } else if let Some(f) = look.flash {
+        egui::Stroke::new(2.0, accent.gamma_multiply((1.0 - f as f32).clamp(0.0, 1.0)))
+    } else if selected {
         ui.visuals().selection.stroke
     } else {
         ui.visuals().widgets.noninteractive.bg_stroke
     };
     let scoped = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+        if look.dragging {
+            ui.set_opacity(0.5);
+        }
         let (_zone, dropped) = item_zone(
             ui,
             editing.on,
@@ -256,14 +351,15 @@ fn pill(
                     } else {
                         badge(ui, "vanilla set (no JSON)", None);
                     }
-                    let warnings: usize = v
+                    let rows: Vec<(&str, &Warning)> = v
                         .members
                         .iter()
                         .filter_map(|k| model.item(k))
-                        .map(|i| i.warnings.len())
-                        .sum();
-                    if warnings > 0 {
-                        badge(ui, &format!("⚠ {warnings}"), Some(AMBER));
+                        .flat_map(|i| i.warnings.iter().map(move |w| (i.name.as_str(), w)))
+                        .collect();
+                    if !rows.is_empty() {
+                        badge(ui, &format!("⚠ {}", rows.len()), Some(AMBER))
+                            .on_hover_text(warning_tooltip(&rows));
                     }
                     if blocked {
                         badge(ui, "blocked", Some(RED));
@@ -333,6 +429,7 @@ fn pill(
     PillOut {
         handle_released,
         hovered_by_set,
+        rect: resp.rect,
     }
 }
 
@@ -529,6 +626,32 @@ fn rename_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::codes::Code;
+
+    fn warn(msg: &str) -> Warning {
+        Warning::new(Code::LossAlphaData, msg)
+    }
+
+    #[test]
+    fn the_warning_tooltip_lists_file_code_message_and_caps_at_ten() {
+        let w = warn("alpha is lost");
+        let few = [("a.png", &w), ("b.png", &w)];
+        let t = warning_tooltip(&few);
+        assert_eq!(t.lines().count(), 2);
+        assert!(t.starts_with("a.png: LOSS-ALPHA-DATA alpha is lost"), "{t}");
+        let many: Vec<(&str, &Warning)> = (0..13).map(|_| ("x.png", &w)).collect();
+        let t = warning_tooltip(&many);
+        assert_eq!(t.lines().count(), 11);
+        assert_eq!(t.lines().last(), Some("… and 3 more"));
+        assert!(!warning_tooltip(&many[..10]).contains("more"));
+    }
+
+    #[test]
+    fn the_insertion_line_is_after_the_target_when_moving_down_and_before_it_when_moving_up() {
+        let r = egui::Rect::from_min_max(egui::pos2(0.0, 10.0), egui::pos2(5.0, 30.0));
+        assert_eq!(insertion_y(0, 2, r), 30.0);
+        assert_eq!(insertion_y(2, 0, r), 10.0);
+    }
 
     #[test]
     fn a_released_handle_over_another_pill_reorders_to_its_index() {
