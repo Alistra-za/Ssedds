@@ -37,10 +37,12 @@ pub struct SdcApp {
 
 impl SdcApp {
     pub fn new(model: AppModel) -> SdcApp {
-        let meshes = crate::model::meshes::MeshesModel::new(
+        let mut meshes = crate::model::meshes::MeshesModel::new(
             crate::model::meshes::default_store_path(),
             model.settings.meshes.clone(),
         );
+        meshes.v3 =
+            crate::model::viewport3d::Viewport3d::new(model.settings.render3d.shaders.clone());
         SdcApp {
             model,
             meshes,
@@ -140,6 +142,7 @@ impl SdcApp {
     /// The window regained focus: the place to look for source files that changed meanwhile.
     fn focus_regained(&mut self) {
         self.model.check_sources();
+        self.meshes.relocate();
     }
 }
 
@@ -208,6 +211,10 @@ impl eframe::App for SdcApp {
                 self.model.settings.meshes = s;
                 self.model.save_settings();
             }
+            if let Some(fp) = self.meshes.v3.take_shaders_changed() {
+                self.model.settings.render3d.shaders = Some(fp);
+                self.model.save_settings();
+            }
             // The Textures model's dialogs (close with unsaved edits, an export error) must show in this view too.
             crate::ui::dialogs::draw(&ctx, &mut self.model);
         } else {
@@ -215,7 +222,7 @@ impl eframe::App for SdcApp {
         }
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
-        if self.model.busy() || self.meshes.scanning() {
+        if self.model.busy() || self.meshes.scanning() || self.meshes.v3.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if self.model.preview.scheduled() {

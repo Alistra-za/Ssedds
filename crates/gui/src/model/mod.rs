@@ -10,6 +10,7 @@ mod pbr_follow;
 pub mod preview;
 pub mod sets;
 pub mod view;
+pub mod viewport3d;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;

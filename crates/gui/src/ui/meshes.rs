@@ -289,6 +289,18 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         });
     }
+    ui.horizontal(|ui| {
+        if ui.selectable_label(!m.tab_3d, "Shapes").clicked() {
+            m.tab_3d = false;
+        }
+        if ui.selectable_label(m.tab_3d, "3D").clicked() {
+            m.tab_3d = true;
+        }
+    });
+    if m.tab_3d {
+        super::viewport3d::show(ui, &mut m.v3);
+        return;
+    }
     let mut clicked = None;
     egui::ScrollArea::vertical()
         .id_salt("meshes-shapes-scroll")

@@ -12,6 +12,7 @@ pub mod sets_column;
 pub mod settings_panel;
 pub mod slot_commands;
 pub mod thumbs;
+pub mod viewport3d;
 
 use crate::model::{AppModel, Selection};
 use eframe::egui;

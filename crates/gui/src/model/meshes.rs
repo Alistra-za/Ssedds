@@ -3,6 +3,7 @@
 //!
 //! The model owns its own worker channel, so the Textures view's model is untouched. Reads go through its own
 //! read-only `Store` connection and happen only on a selection change or when a scan ends, never per frame.
+use crate::model::viewport3d::{FileSource, MeshSpec, Viewport3d};
 use crate::settings::MeshesSettings;
 use crate::worker::{start_scan, WorkerMsg};
 use modscan::mo2::Instance;
@@ -225,6 +226,10 @@ pub struct MeshesModel {
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
     pub status: String,
+    /// The right column shows the 3D panel instead of the shapes (plan B Task B8).
+    pub tab_3d: bool,
+    /// The 3D panel.
+    pub v3: Viewport3d,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
     settings: MeshesSettings,
@@ -267,6 +272,8 @@ impl MeshesModel {
             report: None,
             progress: None,
             status: String::new(),
+            tab_3d: false,
+            v3: Viewport3d::new(None),
             procs: system_procs,
             settings,
             settings_changed: false,
@@ -307,6 +314,7 @@ impl MeshesModel {
                 self.dialog = Some(MeshesDialog::Mo2 { root, profile });
             }
         }
+        self.v3.locate(self.target.clone());
         if let Some(p) = self.store_path.clone() {
             match Store::open(&p) {
                 Ok(store) => {
@@ -418,9 +426,16 @@ impl MeshesModel {
         }
     }
 
+    /// Window focus: look for Community Shaders again (00 §6.4); nothing before the view was first opened.
+    pub fn relocate(&mut self) {
+        if self.activated {
+            self.v3.locate(self.target.clone());
+        }
+    }
+
     /// Drain worker messages. True when anything changed.
     pub fn poll(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.v3.poll();
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
@@ -528,6 +543,7 @@ impl MeshesModel {
         self.pair = None;
         self.view_source = false;
         self.tex_users = None;
+        self.v3.set_mesh(None);
     }
 
     /// Opens a mod's NIF list. A PGPatcher-derived mod is never opened: its meshes show through their source mods.
@@ -640,8 +656,16 @@ impl MeshesModel {
         });
         match r {
             Ok(s) => {
+                let spec = mesh_spec(store, copy, &s);
                 self.shapes = s;
                 self.resolved = resolved;
+                match spec {
+                    Ok(spec) => self.v3.set_mesh(spec),
+                    Err(e) => {
+                        self.v3.set_mesh(None);
+                        self.error = Some(db_err(e));
+                    }
+                }
             }
             Err(e) => {
                 self.shapes.clear();
@@ -695,6 +719,31 @@ impl MeshesModel {
             .map_err(db_err)?;
         Ok(rows)
     }
+}
+
+/// What the 3D panel draws for `copy`: where its bytes are and where the game's copy of each texture is.
+fn mesh_spec(
+    store: &Store,
+    copy: i64,
+    shapes: &[ShapeView],
+) -> Result<Option<MeshSpec>, ScanError> {
+    let Some((path, kind, root)) = store.copy_location(copy)? else {
+        return Ok(None);
+    };
+    let mut textures = HashMap::new();
+    for t in shapes.iter().flat_map(|s| s.textures.iter().flatten()) {
+        if textures.contains_key(t) {
+            continue;
+        }
+        if let Some((k, r)) = store.texture_location(t)? {
+            textures.insert(t.clone(), FileSource::from_store(k, &r, t));
+        }
+    }
+    Ok(Some(MeshSpec {
+        key: copy,
+        nif: FileSource::from_store(kind, &root, &path),
+        textures,
+    }))
 }
 
 /// One line about a finished scan.
