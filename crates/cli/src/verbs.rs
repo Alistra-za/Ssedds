@@ -329,6 +329,15 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
     // Codex-CLI 2: the shared batch options and every config are checked before any output, even when only DDS
     // files (or nothing) are found and no plan runs.
     let mut req = build_request(&a.batch, root.path().to_path_buf()).map_err(EngineError::Usage)?;
+    // A DDS is reported once, by its header below, never also as a re-encode job (DECISIONS S6): drop every
+    // command-line `reencode`; the unscoped `false` then outranks any `[files]` opt-in.
+    req.overrides
+        .retain(|o| o.field != engine::overrides::REENCODE_FIELD);
+    req.overrides.push(engine::overrides::SetOverride {
+        scope: engine::overrides::Scope::All,
+        field: engine::overrides::REENCODE_FIELD.into(),
+        value: false.into(),
+    });
     let engine = Engine::new()?;
     engine.preflight(&req)?;
     // The BC1 model is global rgbcx state; set it before any decode.

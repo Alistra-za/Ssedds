@@ -670,7 +670,7 @@ impl Engine {
         //    `join_skin_wet` then moves a skin `_wet` member into its Advanced skin set.
         // 3. `apply_set_edits`. Set keys are fixed from here on: output overrides never change a key.
         // 4. `apply_output_paths` (Task 3).
-        // 5. `duplicate_outputs` on the final paths, so two sets writing one file are caught after paths change.
+        // 5. `duplicate_outputs_with` on the final paths, so two sets writing one file are caught after paths change.
         // 6. Predicted packing suffixes, the skip/work loop, then packing.
         let scope_root =
             project_root(&req).or_else(|| req.inputs.first().filter(|p| p.is_dir()).cloned());
@@ -799,12 +799,26 @@ impl Engine {
                         continue;
                     }
                     // DECISIONS S6: never write over the source DDS (output root == input folder).
-                    let same = |p: &Path| {
+                    // Canonical (junctions, symlinks, `..` resolved); the output may not exist yet, so its folder is.
+                    let canon = |p: &Path| {
+                        std::fs::canonicalize(p).ok().or_else(|| {
+                            let dir = std::fs::canonicalize(p.parent()?).ok()?;
+                            Some(dir.join(p.file_name()?))
+                        })
+                    };
+                    let lexical = |p: &Path| {
                         crate::overrides::absolute_or_same(p)
                             .to_string_lossy()
                             .to_lowercase()
                     };
-                    if same(&files[i].path) == same(&files[i].output) {
+                    let (src, out) = (&files[i].path, &files[i].output);
+                    let same = match (canon(src), canon(out)) {
+                        (Some(a), Some(b)) => {
+                            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+                        }
+                        _ => lexical(src) == lexical(out),
+                    };
+                    if same {
                         self_overwrite.push(FailedFile {
                             path: files[i].path.clone(),
                             output: files[i].output.clone(),

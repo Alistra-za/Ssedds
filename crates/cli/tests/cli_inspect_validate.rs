@@ -926,3 +926,35 @@ fn validate_judges_an_uncompressed_sdc_output_in_full() {
         "{v}"
     );
 }
+
+/// DECISIONS S6: `inspect --set reencode=true` reports a DDS once, by its header, even next to images.
+#[test]
+fn inspect_reports_an_opted_in_dds_once() {
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_normal(d.path());
+    let dir = dds.parent().unwrap();
+    ImageBuffer::from_fn(8, 8, |_, _| Rgb([128u8, 128, 255]))
+        .save(dir.join("rock_n.png"))
+        .unwrap();
+    let o = sdc()
+        .args(["inspect", "--json", "--set", "reencode=true"])
+        .arg(dir)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let lines: Vec<serde_json::Value> = text(&o.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let about_dds = |kind: &str| {
+        lines
+            .iter()
+            .filter(|v| v["kind"] == kind && v.to_string().contains("wall_n.dds"))
+            .count()
+    };
+    assert_eq!((about_dds("dds_info"), about_dds("file_planned")), (1, 0));
+    assert_eq!(
+        lines.iter().filter(|v| v["kind"] == "file_planned").count(),
+        1
+    ); // rock_n.png
+}

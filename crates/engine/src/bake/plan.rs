@@ -122,7 +122,7 @@ fn missing_normal(cx: &BakeCtx, set: &TextureSet, batch: &BTreeSet<PathBuf>, j: 
     }
     if let Some(f) = member_file(cx, set, InputKind::Dds, is_normal_suffix) {
         let msg = format!(
-            "the set's _n is only a DDS ({}): DDS inputs are not re-encoded, so the roughness is written without the variance bake",
+            "the set's _n is only a DDS ({}): DDS members do not bake, so the roughness is written without the variance bake",
             f.path.display()
         );
         note(j, Code::SetCompanionDds, msg, Some(&f.path));
@@ -181,7 +181,7 @@ fn missing_roughness(
 ) {
     if let Some(f) = member_file(cx, set, InputKind::Dds, is_roughness_suffix) {
         let msg = format!(
-            "the set's roughness member is only a DDS ({}): DDS inputs are not re-encoded, so the normal is renormalised only",
+            "the set's roughness member is only a DDS ({}): DDS members do not bake, so the normal is renormalised only",
             f.path.display()
         );
         note(j, Code::SetCompanionDds, msg, Some(&f.path));
@@ -281,11 +281,20 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     any
 }
 
+/// A re-encoded DDS member (DECISIONS S6: it does not bake, as bakee or source); the `missing_*` notes then say so.
+fn is_dds(j: &ResolvedJob) -> bool {
+    j.pack.is_none()
+        && j.input
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
+}
+
 /// The set's `_n`: its first `pbr_normal` job by path that did not fail (DECISIONS R9).
 fn own_normal(jobs: &[ResolvedJob], key: &str) -> Option<usize> {
     (0..jobs.len())
         .filter(|&i| {
             jobs[i].set_key == key
+                && !is_dds(&jobs[i])
                 && jobs[i].profile.subtype == Subtype::PbrNormal
                 && !matches!(jobs[i].status, JobStatus::Error { .. })
         })
@@ -297,6 +306,7 @@ fn roughness_members(jobs: &[ResolvedJob], key: &str) -> Vec<usize> {
     (0..jobs.len())
         .filter(|&i| {
             jobs[i].set_key == key
+                && !is_dds(&jobs[i])
                 && jobs[i].profile.subtype.is_roughness_member()
                 && writable(&jobs[i])
         })

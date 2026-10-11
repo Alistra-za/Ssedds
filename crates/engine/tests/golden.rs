@@ -2572,3 +2572,68 @@ fn an_opted_in_dds_and_a_same_stem_image_are_duplicates() {
     assert_eq!(skip_code(&o, "rock.dds"), Some(Code::InDdsSkipped));
     assert_eq!(o.summary.converted, 1);
 }
+
+/// DECISIONS S6 "a re-encoded DDS member does not bake": an opted-in DDS `_n` next to an image `_rmaos` is re-encoded,
+/// the roughness is written without the variance bake, and SET-COMPANION-DDS says why.
+#[test]
+fn an_opted_in_dds_normal_does_not_bake() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/pbr/iron_n.png", bumpy_normal(64));
+    assert_eq!(convert(d.path(), Target::Cs, &[], &[]).summary.converted, 1);
+    let n_dds = std::fs::read(d.path().join("out/textures/pbr/iron_n.dds")).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in/textures/pbr")).unwrap();
+    std::fs::write(d.path().join("in/textures/pbr/iron_n.dds"), &n_dds).unwrap();
+    put(d.path(), "textures/pbr/iron_rmaos.png", rough_member(64));
+    let o = convert(d.path(), Target::Cs, &["reencode=true"], &[]);
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (2, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    assert!(!o
+        .events
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::SetResolved { bake: true, .. })));
+    assert!(planned(&o, "iron_rmaos.png").get("bake").is_none());
+    let w = warning_of(&o, "iron_rmaos.png", Code::SetCompanionDds);
+    assert!(
+        w.message.contains("DDS members do not bake"),
+        "{}",
+        w.message
+    );
+    assert!(d.path().join("out/textures/pbr/iron_rmaos.dds").exists());
+}
+
+/// Review Focus 1: an input reached through a junction still maps onto itself: the guard compares canonical paths.
+#[cfg(windows)]
+#[test]
+fn reencode_through_a_junction_into_its_own_folder_fails() {
+    let rgba8 = converted_bytes(Target::Vanilla, &["subtype=diffuse", "format=rgba8"]);
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::write(real.join("rock.dds"), &rgba8).unwrap();
+    let link = d.path().join("link");
+    let mk = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&real)
+        .output()
+        .unwrap();
+    assert!(
+        mk.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mk.stderr)
+    );
+    let mut req = BatchRequest::new(vec![link.join("rock.dds")], real.clone(), Target::Vanilla);
+    req.overrides = ["reencode=true", "subtype=diffuse"]
+        .iter()
+        .map(|s| parse_set(s).unwrap())
+        .collect();
+    req.on_existing = OnExisting::Overwrite;
+    let o = run(req);
+    assert_eq!((o.summary.converted, o.summary.failed), (0, 1));
+    assert_eq!(std::fs::read(real.join("rock.dds")).unwrap(), rgba8);
+}
