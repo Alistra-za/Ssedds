@@ -1838,3 +1838,75 @@ fn inferred_remove_on_diffuse_and_vanilla_normal_still_block() {
     assert!(codes(&j).contains(&Code::LossAlphaData), "{:?}", j.warnings);
     assert!(!codes(&j).contains(&Code::AlphaPbrNormalDropped));
 }
+
+fn short_normal(len: f32) -> Rgba32F {
+    // Decodes to (len, 0, 0): mean decoded length `len`.
+    Rgba32F::new(64, 64, [0.5 + len / 2.0, 0.5, 0.5, 1.0])
+}
+
+fn run_normal(suffix: &str, img: Rgba32F, sets_cli: &[&str]) -> ResolvedJob {
+    let sets: &[&str] = if suffix == "wet" {
+        &["wet", "rfaos"] // an Advanced skin set
+    } else {
+        &[suffix]
+    };
+    run(
+        Target::Cs,
+        &format!("textures/a/x_{suffix}.png"),
+        Some(suffix),
+        sets,
+        img,
+        sets_cli,
+        &[],
+    )
+}
+
+fn count(j: &ResolvedJob, c: Code) -> usize {
+    codes(j).iter().filter(|x| **x == c).count()
+}
+
+#[test]
+fn chan_normal_short_fires_below_0_9_only() {
+    let j = run_normal("n", short_normal(0.89), &[]);
+    assert_eq!(count(&j, Code::ChanNormalShort), 1, "{:?}", j.warnings);
+    let j = run_normal("n", short_normal(0.91), &[]); // 0.9 itself is not exact in f32
+    assert_eq!(count(&j, Code::ChanNormalShort), 0, "{:?}", j.warnings);
+}
+
+#[test]
+fn chan_normal_short_is_reported_under_both_normal_bases() {
+    // The brief emits it under `keep` too, with a message saying mip 0 is stored as authored.
+    let msg = |j: &ResolvedJob| {
+        j.warnings
+            .iter()
+            .find(|w| w.code == Code::ChanNormalShort)
+            .map(|w| w.message.clone())
+            .unwrap_or_else(|| panic!("no CHAN-NORMAL-SHORT: {:?}", j.warnings))
+    };
+    let renorm = run_normal("n", short_normal(0.5), &[]);
+    assert!(msg(&renorm).contains("renormalised"), "{}", msg(&renorm));
+    let keep = run_normal("n", short_normal(0.5), &["mips.normal_base=keep"]);
+    assert!(msg(&keep).contains("as authored"), "{}", msg(&keep));
+}
+
+#[test]
+fn chan_normal_short_fires_for_msn_and_coexists_with_the_length_warning() {
+    let msn = run_normal("msn", short_normal(0.5), &[]);
+    assert_eq!(count(&msn, Code::ChanNormalShort), 1, "{:?}", msn.warnings);
+    let n = run_normal("n", short_normal(0.5), &[]);
+    assert_eq!(count(&n, Code::ChanNormalShort), 1);
+    assert_eq!(count(&n, Code::ChanNormalLength), 1, "{:?}", n.warnings);
+}
+
+#[test]
+fn skin_wet_height_form_is_stored_domain_and_the_normal_form_is_not() {
+    use engine::ops::{domain_for, Domain};
+    let grey = Rgba32F::new(64, 64, [0.4, 0.4, 0.4, 1.0]);
+    let j = run_normal("wet", grey, &[]);
+    assert_eq!(j.profile.subtype, Subtype::SkinWet, "{:?}", j.warnings);
+    assert_eq!(j.profile.category, Category::Grayscale);
+    assert_eq!(domain_for(&j.profile), Domain::Stored);
+    let j = run_normal("wet", opaque(), &[]);
+    assert_eq!(j.profile.category, Category::Normal);
+    assert_eq!(domain_for(&j.profile), Domain::Normal);
+}
