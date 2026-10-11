@@ -9,6 +9,7 @@ use super::items::Decision;
 use super::sets::{set_views, SlotFill, SlotKind};
 use super::AppModel;
 use engine::config::Subtype;
+use engine::presets::Provenance;
 use serde_json::json;
 
 /// The PBR counterpart of an inferred member sub-type; `None` leaves the member alone (`height` stays `height`).
@@ -36,6 +37,7 @@ impl AppModel {
             return;
         }
         let follow = self.follow_of(key, new);
+        let live: Vec<String> = self.items.iter().map(|i| i.key.clone()).collect();
         let k = key.to_string();
         self.edit_docs(label, None, true, move |p, s| {
             match new {
@@ -70,10 +72,34 @@ impl AppModel {
                     }
                 }
             }
+            // Files that no longer exist drop off the list whenever it is written.
+            auto.retain(|a| live.contains(a));
             if auto != before {
                 s.set_auto_pbr(&auto);
             }
         });
+    }
+
+    /// Whether the diffuse `key` ends up with a non-PBR-colour sub-type after setting `new` (`Some`) or clearing
+    /// its own entry (`None`). A clear falls back to another `[files]` key that matches the file (the extension-less
+    /// spelling) or the engine's suggestion, so it leaves PBR only when neither names a PBR colour type.
+    fn leaves_pbr(&self, key: &str, new: Option<Subtype>) -> bool {
+        if let Some(st) = new {
+            return !st.is_pbr_color();
+        }
+        let (Some(p), Some(job)) = (
+            self.project.as_ref(),
+            self.item(key).and_then(|i| i.job.as_ref()),
+        ) else {
+            return false;
+        };
+        let suggested = job.suggestions.first().map(|s| s.subtype);
+        let other = p.file_keys().into_iter().any(|k| {
+            k != key
+                && engine::overrides::path_key_matches(&k, key)
+                && p.file_value(&k, "subtype") == Some(json!(Subtype::PbrAlbedo))
+        });
+        !other && suggested.is_none_or(|s| !s.is_pbr_color())
     }
 
     fn follow_of(&self, key: &str, new: Option<Subtype>) -> Follow {
@@ -84,8 +110,9 @@ impl AppModel {
             .job
             .as_ref()
             .is_some_and(|j| j.profile.subtype == Subtype::PbrAlbedo);
-        let will_be_pbr = new == Some(Subtype::PbrAlbedo);
-        if was_pbr == will_be_pbr {
+        let enters = !was_pbr && new == Some(Subtype::PbrAlbedo);
+        let leaves = was_pbr && self.leaves_pbr(key, new);
+        if !enters && !leaves {
             return Follow::Nothing;
         }
         let views = set_views(self);
@@ -93,15 +120,12 @@ impl AppModel {
             return Follow::Nothing;
         };
         // Only the set's own Diffuse-slot member leads; borrowed slots do not.
-        let leads = match v.slots.get(&SlotKind::Diffuse) {
-            Some(SlotFill::Own { item }) => item == key,
-            None => will_be_pbr,
-            Some(_) => false,
-        };
+        let leads =
+            matches!(v.slots.get(&SlotKind::Diffuse), Some(SlotFill::Own { item }) if item == key);
         if !leads {
             return Follow::Nothing;
         }
-        if !will_be_pbr {
+        if leaves {
             return Follow::Revert(v.members.clone());
         }
         let switch = v
@@ -111,6 +135,12 @@ impl AppModel {
             .filter_map(|m| {
                 let it = self.item(m)?;
                 let job = it.job.as_ref()?;
+                // Inferred means nothing the user wrote decided it: no `[files]` entry (under either spelling of the
+                // key) and no rule. `[files]` keys are paths, never globs; only the CLI's `--set` takes globs. Anything
+                // the user wrote resolves with a provenance other than the engine's own suggestion.
+                if job.provenance.get("subtype") != Some(&Provenance::Suggestion) {
+                    return None;
+                }
                 let suggested = it.decisions.iter().find_map(|d| match d {
                     Decision::Subtype { suggested } => *suggested,
                     _ => None,
