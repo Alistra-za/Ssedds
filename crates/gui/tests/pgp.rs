@@ -78,7 +78,7 @@ fn keys_follow_schema_order() {
 #[test]
 fn kinds_match_the_owner_rules() {
     for k in ["emissive", "parallax", "subsurface"] {
-        assert_eq!(spec(k).unwrap().kind, KeyKind::AlwaysBool, "{k}");
+        assert_eq!(spec(k).unwrap().kind, KeyKind::OnlyTrue, "{k}");
     }
     for k in ["hair", "multilayer"] {
         assert_eq!(spec(k).unwrap().kind, KeyKind::OnlyTrue, "{k}");
@@ -119,15 +119,6 @@ fn mutual_exclusion_follows_the_owner_table() {
     // A feature never blocks itself, and off features block nothing.
     assert_eq!(blocked_by(&hair, Hair), None);
     assert_eq!(blocked_by(&s(&[("hair", json!(false))]), Emissive), None);
-}
-
-#[test]
-fn effective_overlays_own_values_on_defaults() {
-    let d = s(&[("specular_level", json!(0.04)), ("parallax", json!(true))]);
-    let own = s(&[("parallax", json!(false))]);
-    let e = effective(&d, &own);
-    assert_eq!(e["specular_level"], json!(0.04));
-    assert_eq!(e["parallax"], json!(false));
 }
 
 use sdc_gui::pgp::prefix::*;
@@ -275,113 +266,164 @@ fn entry(pairs: &[(&str, Value)], derived: &str) -> EntryInput {
     }
 }
 
-fn written(e: &EntryInput, defaults: &Settings) -> Value {
-    document(defaults, std::slice::from_ref(e)).to_value()["entries"][0].clone()
+fn written(e: &EntryInput) -> Value {
+    document(std::slice::from_ref(e)).to_value()["entries"][0].clone()
 }
 
 #[test]
-fn a_plain_entry_writes_the_match_and_the_three_always_written_features() {
-    let v = written(&entry(&[], r"landscape\rock01"), &Settings::new());
-    assert_eq!(
-        v,
-        json!({ "match_diffuse": r"landscape\rock01", "emissive": false, "parallax": false, "subsurface": false })
-    );
+fn a_plain_entry_writes_only_the_match() {
+    let v = written(&entry(&[], r"landscape\rock01"));
+    assert_eq!(v, json!({ "match_diffuse": r"landscape\rock01" }));
 }
 
 #[test]
-fn defaults_feed_always_written_features_but_are_not_copied() {
-    let d = s(&[("parallax", json!(true)), ("specular_level", json!(0.04))]);
-    let v = written(&entry(&[], "x"), &d);
-    assert_eq!(v["parallax"], json!(true));
-    assert!(
-        v.get("specular_level").is_none(),
-        "the default block carries it"
-    );
-    let doc = document(&d, &[entry(&[], "x")]).to_value();
+fn the_default_block_is_fixed_and_in_schema_order() {
+    let doc = document(&[entry(&[], "x")]);
+    let Node::Obj(top) = &doc else { panic!() };
+    let Node::Obj(block) = &top[1].1 else {
+        panic!()
+    };
+    let keys: Vec<&str> = block.iter().map(|(k, _)| k.as_str()).collect();
+    let want: Vec<&str> = KEYS
+        .iter()
+        .map(|k| k.key)
+        .filter(|k| FIXED_FLAGS.contains(k) || FIXED_NUMBERS.iter().any(|(n, _)| n == k))
+        .collect();
+    assert_eq!(keys, want);
+    assert_eq!(keys.len(), 6);
+    let v = doc.to_value();
     assert_eq!(
-        doc["default"],
-        json!({ "parallax": true, "specular_level": 0.04 })
+        v["default"],
+        json!({ "emissive": false, "parallax": false, "subsurface": false, "roughness_scale": 1.0, "specular_level": 0.04, "displacement_scale": 1.0 })
     );
-    assert_eq!(doc["$schema"], json!(sdc_gui::pgp::schema::SCHEMA_URL));
+    assert_eq!(v["$schema"], json!(sdc_gui::pgp::schema::SCHEMA_URL));
+    // The block does not depend on the entries.
+    assert_eq!(document(&[]).to_value()["default"], v["default"]);
+}
+
+#[test]
+fn fixed_numbers_are_omitted_when_unset_or_equal_and_written_otherwise() {
+    let none = written(&entry(&[], "x"));
+    for k in ["roughness_scale", "specular_level", "displacement_scale"] {
+        assert!(none.get(k).is_none(), "{k}");
+    }
+    let v = written(&entry(
+        &[
+            ("specular_level", json!(0.04)),
+            ("roughness_scale", json!(1.0)),
+        ],
+        "x",
+    ));
+    assert!(v.get("specular_level").is_none() && v.get("roughness_scale").is_none());
+    let v = written(&entry(
+        &[
+            ("specular_level", json!(0.06)),
+            ("roughness_scale", json!(0.5)),
+        ],
+        "x",
+    ));
+    assert_eq!(v["specular_level"], json!(0.06));
+    assert_eq!(v["roughness_scale"], json!(0.5));
+    // displacement_scale follows parallax: equal to the fixed value it is omitted, otherwise written.
+    let p = |d: f64| {
+        written(&entry(
+            &[("parallax", json!(true)), ("displacement_scale", json!(d))],
+            "x",
+        ))
+    };
+    assert!(p(1.0).get("displacement_scale").is_none());
+    assert_eq!(p(0.4)["displacement_scale"], json!(0.4));
+}
+
+#[test]
+fn emissive_parallax_and_subsurface_are_written_only_as_true() {
+    for k in ["emissive", "parallax", "subsurface"] {
+        assert!(written(&entry(&[], "x")).get(k).is_none(), "{k} unset");
+        assert!(
+            written(&entry(&[(k, json!(false))], "x")).get(k).is_none(),
+            "{k} off"
+        );
+        assert_eq!(written(&entry(&[(k, json!(true))], "x"))[k], json!(true));
+        assert!(
+            written(&entry(&[(k, json!(true)), ("hair", json!(true))], "x"))
+                .get(k)
+                .is_none(),
+            "{k} blocked by hair"
+        );
+    }
+    // Multilayer blocks subsurface only.
+    let ml = |k: &str| {
+        written(&entry(
+            &[(k, json!(true)), ("multilayer", json!(true))],
+            "x",
+        ))
+    };
+    assert!(ml("subsurface").get("subsurface").is_none());
+    assert_eq!(ml("parallax")["parallax"], json!(true));
 }
 
 #[test]
 fn colours_convert_and_emissive_gets_alpha_one() {
-    let v = written(
-        &entry(
-            &[
-                ("emissive", json!(true)),
-                ("emissive_color", json!([255, 128, 0])),
-                ("emissive_scale", json!(2.0)),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
+    let v = written(&entry(
+        &[
+            ("emissive", json!(true)),
+            ("emissive_color", json!([255, 128, 0])),
+            ("emissive_scale", json!(2.0)),
+        ],
+        "x",
+    ));
     assert_eq!(v["emissive_color"], json!([1.0, 0.502, 0.0, 1.0]));
     assert_eq!(v["emissive_scale"], json!(2.0));
 }
 
 #[test]
 fn dependent_keys_need_their_feature() {
-    let v = written(
-        &entry(
-            &[
-                ("emissive_scale", json!(2.0)),
-                ("displacement_scale", json!(0.4)),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
+    let v = written(&entry(
+        &[
+            ("emissive_scale", json!(2.0)),
+            ("displacement_scale", json!(0.4)),
+        ],
+        "x",
+    ));
     assert!(v.get("emissive_scale").is_none() && v.get("displacement_scale").is_none());
 }
 
 #[test]
 fn blocked_features_are_not_written() {
-    let v = written(
-        &entry(
-            &[
-                ("hair", json!(true)),
-                ("parallax", json!(true)),
-                ("multilayer", json!(true)),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
+    let v = written(&entry(
+        &[
+            ("hair", json!(true)),
+            ("parallax", json!(true)),
+            ("multilayer", json!(true)),
+        ],
+        "x",
+    ));
     assert_eq!(v["hair"], json!(true));
-    assert_eq!(v["parallax"], json!(false));
+    assert!(v.get("parallax").is_none());
     assert!(v.get("multilayer").is_none());
 }
 
 #[test]
 fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
-    let v = written(
-        &entry(
-            &[
-                ("glint", json!(true)),
-                ("glint.microfacet_roughness", json!(0.02)),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
+    let v = written(&entry(
+        &[
+            ("glint", json!(true)),
+            ("glint.microfacet_roughness", json!(0.02)),
+        ],
+        "x",
+    ));
     assert_eq!(
         v["glint"],
         json!({ "screen_space_scale": 1.5, "log_microfacet_density": 40.0, "microfacet_roughness": 0.02, "density_randomization": 2.0 })
     );
-    let v = written(
-        &entry(
-            &[
-                ("fuzz", json!(true)),
-                ("fuzz.texture", json!(true)),
-                ("fuzz.color", json!([0, 0, 0])),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
+    let v = written(&entry(
+        &[
+            ("fuzz", json!(true)),
+            ("fuzz.texture", json!(true)),
+            ("fuzz.color", json!([0, 0, 0])),
+        ],
+        "x",
+    ));
     assert_eq!(
         v["fuzz"],
         json!({ "texture": true, "color": [0.0, 0.0, 0.0] })
@@ -390,16 +432,13 @@ fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
 
 #[test]
 fn other_match_modes_omit_match_diffuse_and_tri_state_writes_only_when_set() {
-    let v = written(
-        &entry(
-            &[
-                ("match2", json!(r"a\b_n.dds")),
-                ("lock_rmaos", json!(false)),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
+    let v = written(&entry(
+        &[
+            ("match2", json!(r"a\b_n.dds")),
+            ("lock_rmaos", json!(false)),
+        ],
+        "x",
+    ));
     assert!(v.get("match_diffuse").is_none());
     assert_eq!(v["match2"], json!(r"a\b_n.dds"));
     assert_eq!(v["lock_rmaos"], json!(false));
@@ -408,18 +447,23 @@ fn other_match_modes_omit_match_diffuse_and_tri_state_writes_only_when_set() {
 
 #[test]
 fn slots_and_key_order() {
-    let mut e = entry(&[("specular_level", json!(0.04))], "x");
+    let mut e = entry(
+        &[("emissive", json!(true)), ("specular_level", json!(0.06))],
+        "x",
+    );
     e.slots.insert(6, r"textures\pbr\a\rock01_rmaos.dds".into());
     e.slots.insert(3, String::new());
-    let text = to_text(&document(&Settings::new(), &[e]));
+    let text = to_text(&document(&[e]));
+    let entries = text.find("\"entries\"").unwrap();
     let pos = |k: &str| {
-        text.find(&format!("\"{k}\""))
+        text[entries..]
+            .find(&format!("\"{k}\""))
             .unwrap_or_else(|| panic!("{k} in {text}"))
     };
     assert!(pos("match_diffuse") < pos("emissive") && pos("emissive") < pos("specular_level"));
     assert!(pos("specular_level") < pos("slot3") && pos("slot3") < pos("slot6"));
     assert!(
-        text.ends_with("}\n") && text.contains("\n  \"default\": {}"),
+        text.ends_with("}\n") && text.contains("\n  \"default\": {\n"),
         "{text}"
     );
     assert!(
@@ -429,17 +473,17 @@ fn slots_and_key_order() {
 }
 
 #[test]
-fn a_conflict_through_defaults_keeps_the_stronger_feature() {
-    let d = s(&[("multilayer", json!(true))]);
-    let v = written(&entry(&[("subsurface", json!(true))], "x"), &d);
-    assert_eq!(v["subsurface"], json!(false));
-    let doc = document(&d, &[entry(&[], "x")]).to_value();
-    assert_eq!(doc["default"]["multilayer"], json!(true));
+fn a_conflict_inside_one_set_keeps_the_stronger_feature() {
+    let v = written(&entry(
+        &[("multilayer", json!(true)), ("subsurface", json!(true))],
+        "x",
+    ));
+    assert_eq!(v["multilayer"], json!(true));
+    assert!(v.get("subsurface").is_none());
 }
 
 #[test]
 fn blocked_objects_are_omitted_and_glint_false_writes_nothing() {
-    let d = Settings::new();
     for (label, pairs) in [
         (
             "hair blocks glint",
@@ -462,7 +506,7 @@ fn blocked_objects_are_omitted_and_glint_false_writes_nothing() {
             vec![("multilayer", json!(true)), ("fuzz", json!(true))],
         ),
     ] {
-        let v = written(&entry(&pairs, "x"), &d);
+        let v = written(&entry(&pairs, "x"));
         let blocked = if label.contains("fuzz") {
             "fuzz"
         } else {
@@ -470,60 +514,55 @@ fn blocked_objects_are_omitted_and_glint_false_writes_nothing() {
         };
         assert!(v.get(blocked).is_none(), "{label}: {v}");
     }
-    let v = written(&entry(&[("glint", json!(false))], "x"), &d);
+    let v = written(&entry(&[("glint", json!(false))], "x"));
     assert!(v.get("glint").is_none());
     // glint wins over fuzz when both are on; the winner is still written.
-    let v = written(
-        &entry(&[("glint", json!(true)), ("fuzz", json!(true))], "x"),
-        &d,
-    );
+    let v = written(&entry(
+        &[("glint", json!(true)), ("fuzz", json!(true))],
+        "x",
+    ));
     assert!(v.get("glint").is_some() && v.get("fuzz").is_none());
 }
 
 #[test]
 fn dependents_of_a_blocked_feature_are_dropped() {
-    let v = written(
-        &entry(
-            &[
-                ("hair", json!(true)),
-                ("parallax", json!(true)),
-                ("displacement_scale", json!(0.4)),
-                ("emissive", json!(true)),
-                ("emissive_scale", json!(2.0)),
-                ("subsurface", json!(true)),
-                ("subsurface_opacity", json!(0.5)),
-            ],
-            "x",
-        ),
-        &Settings::new(),
-    );
-    assert_eq!(v["parallax"], json!(false));
-    assert_eq!(v["emissive"], json!(false));
-    assert_eq!(v["subsurface"], json!(false));
-    for k in ["displacement_scale", "emissive_scale", "subsurface_opacity"] {
+    let v = written(&entry(
+        &[
+            ("hair", json!(true)),
+            ("parallax", json!(true)),
+            ("displacement_scale", json!(0.4)),
+            ("emissive", json!(true)),
+            ("emissive_scale", json!(2.0)),
+            ("subsurface", json!(true)),
+            ("subsurface_opacity", json!(0.5)),
+        ],
+        "x",
+    ));
+    for k in [
+        "parallax",
+        "emissive",
+        "subsurface",
+        "displacement_scale",
+        "emissive_scale",
+        "subsurface_opacity",
+    ] {
         assert!(v.get(k).is_none(), "{k} in {v}");
     }
     assert_eq!(v["hair"], json!(true));
 }
 
 #[test]
-fn an_entry_switches_a_default_on_only_true_key_off_by_writing_false() {
-    let d = s(&[("hair", json!(true))]);
-    let v = written(&entry(&[("hair", json!(false))], "x"), &d);
-    assert_eq!(v["hair"], json!(false));
-    // Unset: the default block carries it. Off with no default on: not written.
-    assert!(written(&entry(&[], "x"), &d).get("hair").is_none());
-    assert!(
-        written(&entry(&[("hair", json!(false))], "x"), &Settings::new())
-            .get("hair")
-            .is_none()
-    );
-    // With the entry's own false, the hair-blocked features are live again.
-    let v = written(
-        &entry(&[("hair", json!(false)), ("parallax", json!(true))], "x"),
-        &d,
-    );
-    assert_eq!(v["parallax"], json!(true));
+fn hair_with_parallax_writes_no_parallax_and_no_displacement_scale() {
+    let v = written(&entry(
+        &[
+            ("hair", json!(true)),
+            ("parallax", json!(true)),
+            ("displacement_scale", json!(0.4)),
+        ],
+        "x",
+    ));
+    assert!(v.get("parallax").is_none() && v.get("displacement_scale").is_none());
+    assert_eq!(v["hair"], json!(true));
 }
 
 fn keywords_in(v: &Value, out: &mut std::collections::BTreeSet<String>, under_properties: bool) {
@@ -577,7 +616,7 @@ fn written_documents_validate_and_bad_ones_do_not() {
         ],
         "a",
     );
-    validate(&document(&s(&[("specular_level", json!(0.04))]), &[e]).to_value()).unwrap();
+    validate(&document(&[e]).to_value()).unwrap();
     // An entry with no match key, a removed key, an unknown key, a wrong type, a short colour.
     for bad in [
         json!({ "default": {}, "entries": [ { "emissive": true } ] }),

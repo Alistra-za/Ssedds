@@ -11,9 +11,7 @@ pub const NOT_EXPOSED: &[&str] = &["texture", "delete"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyKind {
-    /// On/off, always written (absent = false).
-    AlwaysBool,
-    /// On/off, written only when on.
+    /// On/off, written only when on. The fixed `default` block supplies `false` for emissive, parallax, subsurface.
     OnlyTrue,
     /// Not set / on / off; written only when set.
     Tri,
@@ -122,7 +120,7 @@ pub const KEYS: &[KeySpec] = &[
     k("zbuffer_write", K::Tri, G::Vertex, true, "Z-buffer write"),
     k("lock_diffuse", K::Tri, G::Locks, true, "Lock diffuse"),
     k("lock_normal", K::Tri, G::Locks, true, "Lock normal"),
-    k("emissive", K::AlwaysBool, G::Features, false, "Emissive"),
+    k("emissive", K::OnlyTrue, G::Features, false, "Emissive"),
     k("lock_emissive", K::Tri, G::Locks, true, "Lock emissive"),
     k(
         "emissive_scale",
@@ -138,7 +136,7 @@ pub const KEYS: &[KeySpec] = &[
         false,
         "Emissive colour",
     ),
-    k("parallax", K::AlwaysBool, G::Features, false, "Parallax"),
+    k("parallax", K::OnlyTrue, G::Features, false, "Parallax"),
     k("lock_parallax", K::Tri, G::Locks, true, "Lock parallax"),
     k(
         "displacement_scale",
@@ -164,13 +162,7 @@ pub const KEYS: &[KeySpec] = &[
         false,
         "Roughness scale",
     ),
-    k(
-        "subsurface",
-        K::AlwaysBool,
-        G::Features,
-        false,
-        "Subsurface",
-    ),
+    k("subsurface", K::OnlyTrue, G::Features, false, "Subsurface"),
     k(
         "subsurface_foliage",
         K::OnlyTrue,

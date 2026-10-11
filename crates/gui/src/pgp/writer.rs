@@ -2,7 +2,7 @@
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
 use super::prefix::{match_mode, MatchMode};
 use super::schema::{Group, KeyKind, KEYS, SCHEMA_URL};
-use super::settings::{effective, feature_on, Feature, Settings, GLINT_DEFAULTS};
+use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -72,12 +72,12 @@ fn feature_of_key(key: &str) -> Option<Feature> {
         .map(|(f, _)| *f)
 }
 
-/// Whether feature `f` is written as on. Two exclusive features can both be on only through a default plus an own
-/// value (the UI greys the second); then exactly one is written, by precedence: hair, then multilayer, then glint,
-/// then fuzz; emissive and parallax yield to hair, subsurface to hair and multilayer.
-fn live(eff: &Settings, f: Feature) -> bool {
+/// Whether feature `f` is written as on. Two exclusive features can both be on only through hand-edited settings
+/// (the UI greys the second); then exactly one is written, by precedence: hair, then multilayer, then glint, then
+/// fuzz; emissive and parallax yield to hair, subsurface to hair and multilayer.
+fn live(own: &Settings, f: Feature) -> bool {
     use Feature::*;
-    let on = |g| feature_on(eff, g);
+    let on = |g| feature_on(own, g);
     let hair = on(Hair);
     let ml = on(Multilayer) && !hair;
     let glint = on(Glint) && !hair && !ml;
@@ -92,68 +92,67 @@ fn live(eff: &Settings, f: Feature) -> bool {
     }
 }
 
-/// The entries of one object: `own` written under the rules; `eff` decides features; `derived` is the derived match
-/// (`None` for the default block); `slots` final slot paths.
-fn object(
-    defaults: &Settings,
-    own: &Settings,
-    eff: &Settings,
-    derived: Option<&str>,
-    slots: &BTreeMap<u8, String>,
-) -> Vec<(String, Node)> {
+/// The flags of the fixed `default` block (all `false`). An entry writes one only as `true`.
+pub const FIXED_FLAGS: [&str; 3] = ["emissive", "parallax", "subsurface"];
+/// The numbers of the fixed `default` block. An entry omits one that is unset or equal to this value.
+pub const FIXED_NUMBERS: [(&str, f64); 3] = [
+    ("roughness_scale", 1.0),
+    ("specular_level", 0.04),
+    ("displacement_scale", 1.0),
+];
+
+/// The fixed `default` block (owner, 2026-10-10): six keys, in schema (KEYS) order. Users cannot change it.
+fn fixed_default_block() -> Vec<(String, Node)> {
+    KEYS.iter()
+        .filter_map(|k| {
+            if FIXED_FLAGS.contains(&k.key) {
+                Some((k.key.to_string(), Node::Scalar(json!(false))))
+            } else {
+                FIXED_NUMBERS
+                    .iter()
+                    .find(|(n, _)| *n == k.key)
+                    .map(|(n, x)| (n.to_string(), Node::Scalar(json!(x))))
+            }
+        })
+        .collect()
+}
+
+/// The entry for one set: only the set's own settings, under the per-kind rules, in schema order.
+fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(String, Node)> {
     let mut out = vec![];
-    let mode = match_mode(eff);
+    let mode = match_mode(own);
     for k in KEYS.iter().filter(|k| !k.key.contains('.')) {
         if let Some(f) = group_feature(k.group) {
-            if !live(eff, f) {
+            if !live(own, f) {
                 continue;
             }
         }
-        let v = own.get(k.key);
+        let v = own.get(k.key).filter(|v| !v.is_null());
         let node = match k.kind {
-            KeyKind::AlwaysBool => {
-                if derived.is_none() && v.is_none() {
-                    None // the default block writes only what it sets
-                } else {
-                    let f = feature_of_key(k.key).expect("always-written keys are features");
-                    Some(Node::Scalar(json!(live(eff, f))))
-                }
-            }
             KeyKind::OnlyTrue => {
                 let on = v.and_then(Value::as_bool) == Some(true);
-                let ok = feature_of_key(k.key).is_none_or(|f| live(eff, f));
-                // PGPatcher copies the default block into entries, so an entry can only switch a default-on key
-                // off by writing `false` itself.
-                let switched_off = v.and_then(Value::as_bool) == Some(false)
-                    && defaults.get(k.key).and_then(Value::as_bool) == Some(true);
-                if switched_off {
-                    Some(Node::Scalar(json!(false)))
-                } else {
-                    (on && ok).then_some(Node::Scalar(json!(true)))
-                }
+                let ok = feature_of_key(k.key).is_none_or(|f| live(own, f));
+                (on && ok).then_some(Node::Scalar(json!(true)))
             }
             KeyKind::Object => {
                 let f = feature_of_key(k.key).expect("objects are features");
-                if !live(eff, f) || (derived.is_none() && v.is_none()) {
-                    None
-                } else {
-                    Some(Node::Obj(sub_object(k.key, own, eff)))
-                }
+                live(own, f).then(|| Node::Obj(sub_object(k.key, own)))
             }
-            KeyKind::Tri | KeyKind::Number => {
-                v.filter(|v| !v.is_null()).map(|v| Node::Scalar(v.clone()))
+            KeyKind::Number => {
+                let fixed = FIXED_NUMBERS.iter().find(|(n, _)| *n == k.key);
+                v.filter(|v| fixed.is_none_or(|(_, x)| v.as_f64() != Some(*x)))
+                    .map(|v| Node::Scalar(v.clone()))
             }
+            KeyKind::Tri => v.map(|v| Node::Scalar(v.clone())),
             KeyKind::Text => {
                 if k.key == "match_diffuse" {
-                    match (derived, mode) {
-                        (Some(d), MatchMode::Diffuse) => Some(Node::Scalar(json!(v
+                    match mode {
+                        MatchMode::Diffuse => Some(Node::Scalar(json!(v
                             .and_then(Value::as_str)
                             .filter(|s| !s.is_empty())
-                            .unwrap_or(d)))),
+                            .unwrap_or(derived)))),
                         _ => None,
                     }
-                } else if derived.is_none() && k.group == Group::Match {
-                    None // match fields are per set only
                 } else {
                     v.and_then(Value::as_str)
                         .filter(|s| !s.is_empty())
@@ -174,17 +173,14 @@ fn object(
     out
 }
 
-fn sub_object(obj: &str, own: &Settings, eff: &Settings) -> Vec<(String, Node)> {
+fn sub_object(obj: &str, own: &Settings) -> Vec<(String, Node)> {
     let mut out = vec![];
     for k in KEYS
         .iter()
         .filter(|k| k.key.starts_with(&format!("{obj}.")))
     {
         let name = &k.key[obj.len() + 1..];
-        let v = own
-            .get(k.key)
-            .or_else(|| eff.get(k.key))
-            .filter(|v| !v.is_null());
+        let v = own.get(k.key).filter(|v| !v.is_null());
         let node = match k.kind {
             KeyKind::Number => v
                 .cloned()
@@ -208,31 +204,17 @@ fn sub_object(obj: &str, own: &Settings, eff: &Settings) -> Vec<(String, Node)> 
     out
 }
 
-pub fn entry_node(defaults: &Settings, e: &EntryInput) -> Node {
-    let eff = effective(defaults, &e.settings);
-    Node::Obj(object(
-        defaults,
-        &e.settings,
-        &eff,
-        Some(&e.derived_match),
-        &e.slots,
-    ))
+pub fn entry_node(e: &EntryInput) -> Node {
+    Node::Obj(object(&e.settings, &e.derived_match, &e.slots))
 }
 
-pub fn document(defaults: &Settings, entries: &[EntryInput]) -> Node {
-    let default = Node::Obj(object(
-        &Settings::new(),
-        defaults,
-        defaults,
-        None,
-        &BTreeMap::new(),
-    ));
+pub fn document(entries: &[EntryInput]) -> Node {
     Node::Obj(vec![
         ("$schema".into(), Node::Scalar(json!(SCHEMA_URL))),
-        ("default".into(), default),
+        ("default".into(), Node::Obj(fixed_default_block())),
         (
             "entries".into(),
-            Node::Arr(entries.iter().map(|e| entry_node(defaults, e)).collect()),
+            Node::Arr(entries.iter().map(entry_node).collect()),
         ),
     ])
 }

@@ -1,4 +1,4 @@
-//! A set's (or the defaults') JSON settings, by schema key path (`glint.screen_space_scale`). Colours are 0–255
+//! A set's JSON settings, by schema key path (`glint.screen_space_scale`). Colours are 0–255
 //! integer arrays here; the writer converts them (DECISIONS P10). Features and their mutual exclusion (spec §5.4).
 use serde_json::Value;
 
@@ -78,11 +78,4 @@ pub fn blocked_by(s: &Settings, f: Feature) -> Option<Feature> {
             None
         }
     })
-}
-
-/// `own` over `defaults` (the JSON `default` block applies to every entry that does not set the key).
-pub fn effective(defaults: &Settings, own: &Settings) -> Settings {
-    let mut out = defaults.clone();
-    out.extend(own.iter().map(|(k, v)| (k.clone(), v.clone())));
-    out
 }

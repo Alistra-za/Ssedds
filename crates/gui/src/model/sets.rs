@@ -4,7 +4,7 @@ use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
 use crate::pgp::prefix::{check_rel_path, derive_match_diffuse, output_rel, prefix_of};
-use crate::pgp::settings::{effective, Settings};
+use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
 use engine::config::{Subtype, Target};
 use engine::group::{split_suffix, split_vocab, VocabRole};
@@ -200,11 +200,6 @@ fn mirrored_stem(item: &TextureItem) -> String {
 pub fn set_views(m: &AppModel) -> Vec<SetView> {
     let root = m.export_root();
     let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
-    let defaults = m
-        .sets_doc
-        .as_ref()
-        .map(|d| d.defaults())
-        .unwrap_or_default();
     let order = m.sets_doc.as_ref().map(|d| d.order()).unwrap_or_default();
 
     let mut views: Vec<SetView> = m
@@ -291,8 +286,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
             .and_then(|i| i.job.as_ref())
             .is_some_and(|j| j.profile.subtype == Subtype::PbrAlbedo);
         v.derived_match = diffuse.map(|i| derive_match_diffuse(dir_of(&i.key), &mirrored_stem(i)));
-        let eff = effective(&defaults, &v.settings);
-        match prefix_of(&eff, v.derived_match.as_deref().unwrap_or("")) {
+        match prefix_of(&v.settings, v.derived_match.as_deref().unwrap_or("")) {
             Ok(p) => v.prefix = Some(p),
             Err(e) => v.prefix_error = Some(e.0),
         }
@@ -918,23 +912,17 @@ impl AppModel {
         Ok(())
     }
 
-    /// A JSON value of set `set`, or of the defaults with `None`. Material values do not plan; match fields do (P7).
-    pub fn set_json_value(&mut self, set: Option<&str>, key: &str, v: Option<Value>) {
+    /// A JSON value of set `set`. Material values do not plan; match fields do (P7).
+    pub fn set_json_value(&mut self, set: &str, key: &str, v: Option<Value>) {
         if !self.sets_editable() {
             return;
         }
         let replan = replans(key);
-        let (s_id, k) = (set.map(str::to_string), key.to_string());
-        let merge = Some(format!("{}:{key}", set.unwrap_or("defaults")));
-        self.edit_docs(
-            &format!("Change {key}"),
-            merge,
-            replan,
-            move |_, d| match &s_id {
-                Some(id) => d.set_value(id, &k, v),
-                None => d.set_default(&k, v),
-            },
-        );
+        let (s_id, k) = (set.to_string(), key.to_string());
+        let merge = Some(format!("{set}:{key}"));
+        self.edit_docs(&format!("Change {key}"), merge, replan, move |_, d| {
+            d.set_value(&s_id, &k, v)
+        });
     }
 
     /// A slot command (spec §4.2). A path is checked first; the reason comes back when it is refused.
@@ -962,7 +950,7 @@ impl AppModel {
                 Some(Value::from(p.trim().replace('/', "\\")))
             }
         };
-        self.set_json_value(Some(set), &key, v);
+        self.set_json_value(set, &key, v);
         Ok(())
     }
 }

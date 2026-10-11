@@ -234,36 +234,6 @@ impl SetsDoc {
         self.set_project("order", Some(Value::Array(arr)));
     }
 
-    pub fn defaults(&self) -> Settings {
-        let mut out = Settings::new();
-        if let Some(t) = self.doc.get("defaults").and_then(Item::as_table_like) {
-            flatten(t, "", &mut out);
-        }
-        out
-    }
-
-    pub fn set_default(&mut self, key: &str, v: Option<Json>) {
-        if self.read_only() {
-            return;
-        }
-        let Some(t) = sub_table(self.doc.as_table_mut(), "defaults", || {
-            Item::Table(Table::new())
-        }) else {
-            return;
-        };
-        if write_path(t, key, v) {
-            self.dirty = true;
-        }
-        if self
-            .doc
-            .get("defaults")
-            .and_then(Item::as_table_like)
-            .is_some_and(TableLike::is_empty)
-        {
-            self.doc.remove("defaults");
-        }
-    }
-
     pub fn entries(&self) -> Vec<SetEntry> {
         self.doc
             .get("sets")

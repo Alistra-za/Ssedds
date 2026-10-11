@@ -28,7 +28,6 @@ fn entries_read_back_with_their_settings_flattened() {
     ));
     assert_eq!(s.json_name().as_deref(), Some("pack"));
     assert_eq!(s.order(), vec!["b/two".to_string(), "a/one".into()]);
-    assert_eq!(s.defaults()["specular_level"], json!(0.04));
     let e = &s.entries()[0];
     assert_eq!(e.id, "a/one");
     assert!(e.created);
@@ -250,4 +249,25 @@ fn a_non_conflict_save_error_names_the_file() {
         Some(Dialog::Error(t)) => assert!(t.starts_with("sdc-project.toml: "), "{t}"),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_hand_written_defaults_table_is_ignored_and_left_untouched() {
+    let (d, mut s) = doc(Some(
+        "[defaults]\nspecular_level = 0.09\nparallax = true\n\n[[sets]]\nid = \"a/one\"\n",
+    ));
+    assert!(!s.read_only() && s.error().is_none());
+    let e = &s.entries()[0];
+    assert!(
+        e.settings.is_empty(),
+        "no default leaks into a set: {:?}",
+        e.settings
+    );
+    s.set_value("a/one", "hair", Some(json!(true)));
+    s.save(false).unwrap();
+    let text = std::fs::read_to_string(d.path().join("sdc-project.toml")).unwrap();
+    assert!(
+        text.contains("[defaults]\nspecular_level = 0.09\nparallax = true\n"),
+        "{text}"
+    );
 }

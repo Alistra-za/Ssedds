@@ -304,14 +304,10 @@ fn json_only_edits_do_not_replan_but_match_edits_do() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     idle(&mut m);
-    m.set_json_value(
-        Some("landscape/rock01"),
-        "specular_level",
-        Some(json!(0.05)),
-    );
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
     assert!(!m.busy(), "a material value does not plan");
     m.set_json_value(
-        Some("landscape/rock01"),
+        "landscape/rock01",
         "match_diffuse",
         Some(json!(r"landscape\boulder")),
     );
@@ -330,7 +326,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
     let mut m = pbr_opened(d.path());
     idle(&mut m);
     m.set_json_value(
-        Some("landscape/rock01"),
+        "landscape/rock01",
         "match_diffuse",
         Some(json!(r"landscape\boulder")),
     );
@@ -350,7 +346,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
             .as_deref(),
         Some(r"landscape\rock01")
     );
-    m.set_json_value(Some("landscape/rock01"), "match_diffuse", None);
+    m.set_json_value("landscape/rock01", "match_diffuse", None);
     idle(&mut m);
     assert_eq!(
         view(&set_views(&m), "landscape/rock01").prefix.as_deref(),
@@ -506,7 +502,7 @@ fn a_read_only_project_file_refuses_set_edits_but_sdc_toml_still_edits() {
     let order = m.sets_doc.as_ref().unwrap().order();
     m.reorder_set("landscape/rock01", 3);
     assert_eq!(m.sets_doc.as_ref().unwrap().order(), order);
-    m.set_json_value(Some("landscape/rock01"), "specular_level", Some(json!(0.1)));
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.1)));
     assert!(!m.can_undo(), "no set edit was recorded");
     m.set_target(engine::config::Target::Vanilla);
     assert!(m.can_undo(), "sdc.toml edits still work");
@@ -612,11 +608,7 @@ fn an_entry_whose_files_are_all_gone_shows_as_missing() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     idle(&mut m);
-    m.set_json_value(
-        Some("landscape/rock01"),
-        "specular_level",
-        Some(json!(0.05)),
-    );
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
     let root = m.root.clone().unwrap();
     for f in [
         "rock01.png",
@@ -693,7 +685,7 @@ fn the_entry_of_a_set_whose_files_are_gone_can_be_deleted() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     idle(&mut m);
-    m.set_json_value(Some("landscape/leaf"), "specular_level", Some(json!(0.05)));
+    m.set_json_value("landscape/leaf", "specular_level", Some(json!(0.05)));
     std::fs::remove_file(m.root.clone().unwrap().join("landscape/leaf.png")).unwrap();
     m.reload_changed();
     idle(&mut m);
