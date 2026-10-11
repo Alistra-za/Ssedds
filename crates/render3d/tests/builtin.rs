@@ -1,9 +1,10 @@
-//! Built-in sphere / plane / cube: geometry checks, the tangent convention measured on nifly's fixtures, and the
-//! convention seen by a shader (WARP, stand-in `STANDIN_TBN`).
+//! Built-in sphere / plane / cube / material ball: geometry checks, the tangent convention measured on nifly's
+//! fixtures, and the convention seen by a shader (WARP, stand-in `STANDIN_TBN`).
 mod common;
 use common::{channel, covered, dds_rgba8, fixture, renderer};
 use nif::geom::Mesh;
 use nif::material::MaterialState;
+use render3d::builtin::BUILTIN_SIZE;
 use render3d::scene::Scene;
 use render3d::{builtin_mesh, parse, Builtin, ShapeId, ShapeStatus};
 
@@ -123,7 +124,7 @@ fn fixture_triangles_wind_around_their_normals() {
 
 #[test]
 fn builtins_follow_the_fixture_convention() {
-    for b in [Builtin::Sphere, Builtin::Plane, Builtin::Cube] {
+    for b in Builtin::ALL {
         let m = builtin_mesh(b);
         let f = frame_stats(&[&m]);
         assert!(f.n > 0, "{b:?}");
@@ -136,7 +137,7 @@ fn builtins_follow_the_fixture_convention() {
 /// 03 T-B1.
 #[test]
 fn builtins_validate() {
-    for b in [Builtin::Sphere, Builtin::Plane, Builtin::Cube] {
+    for b in Builtin::ALL {
         let m = builtin_mesh(b);
         render3d::mesh::validate(&m).unwrap();
         assert!(m.colors.is_empty() && m.bone_weights.is_empty() && m.bone_indices.is_empty());
@@ -158,7 +159,8 @@ fn builtins_validate() {
             assert!(len(cr) > 1e-3, "{b:?}: degenerate {t:?}");
             let n = [0, 1, 2].map(|k| m.normals[a][k] + m.normals[bb][k] + m.normals[c][k]);
             assert!(dot(cr, n) > 0.0, "{b:?}: {t:?} winds clockwise");
-            if b != Builtin::Plane {
+            // Only convex shapes centred on the origin; the ball's recesses face inwards by design.
+            if matches!(b, Builtin::Sphere | Builtin::Cube) {
                 let centroid = [0, 1, 2].map(|k| (pa[k] + pb[k] + pc[k]) / 3.0);
                 assert!(dot(cr, centroid) > 0.0, "{b:?}: {t:?} faces inwards");
             }
@@ -205,6 +207,87 @@ fn load_builtin_is_shape_zero() {
         r.set_material(ShapeId(0), uv, &|_| None),
         Ok(render3d::EditKind::Cbuffer)
     );
+}
+
+/// Means over triangles can hide a few wrong ones: on the ball, every triangle follows the convention.
+#[test]
+fn material_ball_every_triangle_follows_the_convention() {
+    let m = builtin_mesh(Builtin::MaterialBall);
+    for t in &m.triangles {
+        let [i0, i1, i2] = t.map(|i| i as usize);
+        let (e1, e2) = (
+            sub(m.positions[i1], m.positions[i0]),
+            sub(m.positions[i2], m.positions[i0]),
+        );
+        let (du1, dv1) = (m.uvs[i1][0] - m.uvs[i0][0], m.uvs[i1][1] - m.uvs[i0][1]);
+        let (du2, dv2) = (m.uvs[i2][0] - m.uvs[i0][0], m.uvs[i2][1] - m.uvs[i0][1]);
+        let det = du1 * dv2 - du2 * dv1;
+        let dpdu = unit([0, 1, 2].map(|k| (e1[k] * dv2 - e2[k] * dv1) / det));
+        let dpdv = unit([0, 1, 2].map(|k| (e2[k] * du1 - e1[k] * du2) / det));
+        assert!(dot(m.tangents[i0], dpdv) > 0.5, "{t:?}");
+        assert!(dot(m.bitangents[i0], dpdu) > 0.5, "{t:?}");
+        assert!(dot(cross(e1, e2), m.normals[i0]) > 0.0, "{t:?}");
+    }
+}
+
+#[test]
+fn material_ball_shape() {
+    let m = builtin_mesh(Builtin::MaterialBall);
+    let r = BUILTIN_SIZE;
+    assert!(m.positions.len() < 20_000, "{}", m.positions.len());
+    for i in 0..m.positions.len() {
+        for v in [m.normals[i], m.tangents[i], m.bitangents[i]] {
+            assert!((len(v) - 1.0).abs() < 1e-3, "vertex {i}: {v:?}");
+        }
+    }
+    // Everything on or above the floor; the pedestal top is at 0.12·R. Down-facing points within the neck
+    // radius are the pedestal underside (z = 0) or the ball's underside, which clears the pedestal top.
+    assert!(m.positions.iter().all(|p| p[2] >= -1e-3));
+    let mut ball_bottom = f32::MAX;
+    for (p, n) in m.positions.iter().zip(&m.normals) {
+        if p[0].hypot(p[1]) < 0.2 * r && n[2] < -0.9 && p[2] > 1e-3 {
+            ball_bottom = ball_bottom.min(p[2]);
+        }
+    }
+    assert!(
+        ball_bottom >= 0.12 * r - 1e-3 && ball_bottom < 0.5 * r,
+        "{ball_bottom}"
+    );
+    // The C-ring (beyond the pedestal, below the ball) leaves a gap of ±50° around +Y, towards the camera.
+    let ring: Vec<_> = m
+        .positions
+        .iter()
+        .filter(|p| p[0].hypot(p[1]) > 0.9 * r && p[2] < 0.5 * r)
+        .collect();
+    assert!(ring.len() > 100, "{}", ring.len());
+    for p in ring {
+        let from_y = p[0].atan2(p[1]).to_degrees().abs();
+        assert!(from_y > 50.0, "{p:?} at {from_y}° from +Y");
+    }
+}
+
+#[test]
+fn load_builtin_material_ball_draws() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), common::FLAT);
+    let rep = r.load_builtin(
+        Builtin::MaterialBall,
+        MaterialState::builtin_default(),
+        &|_| None,
+    );
+    assert!(
+        rep.errors.is_empty() && rep.compile_errors.is_empty(),
+        "{rep:?}"
+    );
+    let s = r.shapes();
+    assert_eq!(s.len(), 1);
+    assert_eq!((s[0].id, s[0].name.as_str()), (ShapeId(0), "MaterialBall"));
+    assert_eq!(s[0].status, ShapeStatus::Drawing);
+    let px = r.render(&Scene::neutral(), 64, 64).unwrap();
+    let centre: Vec<u8> = (28..36)
+        .flat_map(|y| px[(y * 64 + 28) * 4..(y * 64 + 36) * 4].to_vec())
+        .collect();
+    assert_eq!(covered(&centre), 64);
 }
 
 /// 03 T-B3: a normal-map texel tilted towards tangent-space +x (+u) on the plane is lit by a light on the plane's
