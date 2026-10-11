@@ -10,6 +10,8 @@ pub struct Header {
     pub strings: Vec<Vec<u8>>,
     /// Offset of block 0.
     pub data_start: usize,
+    /// Absolute offset of each block.
+    pub offsets: Vec<usize>,
 }
 
 const MAX_BLOCKS: u32 = 1 << 20; // nifly NIF_BLOCK_INDEX_LIMIT
@@ -73,6 +75,15 @@ impl Header {
             .collect::<Result<Vec<_>, _>>()?;
         let ngroups = c.u32()? as usize;
         c.skip(4 * ngroups)?;
+        let mut p = c.pos();
+        let offsets = sizes
+            .iter()
+            .map(|&s| {
+                let o = p;
+                p += s as usize;
+                o
+            })
+            .collect();
         Ok(Header {
             bsver,
             block_types,
@@ -80,19 +91,12 @@ impl Header {
             sizes,
             strings,
             data_start: c.pos(),
+            offsets,
         })
     }
 
-    pub fn offsets(&self) -> Vec<usize> {
-        let mut p = self.data_start;
-        self.sizes
-            .iter()
-            .map(|&s| {
-                let o = p;
-                p += s as usize;
-                o
-            })
-            .collect()
+    pub fn offsets(&self) -> &[usize] {
+        &self.offsets
     }
 
     pub fn kind(&self, block: usize) -> &[u8] {

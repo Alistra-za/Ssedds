@@ -9,3 +9,6 @@ rust-version.workspace = true
 [dependencies]
 thiserror.workspace = true
 encoding_rs.workspace = true
+
+[dev-dependencies]
+walkdir.workspace = true
