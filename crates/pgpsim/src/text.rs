@@ -70,6 +70,14 @@ pub(crate) fn icontains(hay: &str, needle: &str) -> bool {
         .contains(&needle.to_ascii_lowercase())
 }
 
+/// A leading `textures\` that is not `textures\pbr\` becomes `textures\pbr\` [Src 1.2.0 TP:551-555].
+pub(crate) fn add_pbr(p: &str) -> String {
+    match p.strip_prefix("textures\\") {
+        Some(rest) if !rest.starts_with("pbr\\") => format!("textures\\pbr\\{rest}"),
+        _ => p.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
