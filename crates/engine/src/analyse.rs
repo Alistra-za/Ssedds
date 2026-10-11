@@ -48,6 +48,8 @@ pub struct Analysis {
     pub mean_alpha: f64,
     /// Mean |length - 1| of RGB decoded as `*2 - 1`.
     pub normal_len_err: f64,
+    /// Mean length of RGB decoded as `*2 - 1` (DECISIONS R1: below 0.9 a normal map's mip 0 is noticeably short).
+    pub normal_len_mean: f64,
     /// More than half of the pixels have blue below 0.1.
     pub blue_mostly_black: bool,
     /// More than half of the pixels have red above 0.9.
@@ -80,6 +82,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         mean: 0.0,
     }; 4];
     let mut hist = AlphaHistogram::default();
+    let mut len_sum = 0.0f64;
     let (mut gray, mut len_err, mut bb, mut rh, mut peak) = (true, 0.0f64, 0u64, 0u64, 0f32);
     for p in &img.px {
         for (s, &v) in ch.iter_mut().zip(p) {
@@ -103,7 +106,9 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         );
         gray &= r.max(g).max(b) - r.min(g).min(b) <= 4;
         let v = [p[0] * 2.0 - 1.0, p[1] * 2.0 - 1.0, p[2] * 2.0 - 1.0];
-        len_err += f64::from(((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs());
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        len_err += f64::from((len - 1.0).abs());
+        len_sum += f64::from(len);
         bb += u64::from(p[2] < 0.1);
         rh += u64::from(p[0] > 0.9);
         peak = peak.max(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]);
@@ -136,6 +141,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         non_white_share: (count as u64 - hist.eq255) as f64 / n,
         mean_alpha: ch[3].mean,
         normal_len_err: len_err / n,
+        normal_len_mean: len_sum / n,
         blue_mostly_black: bb as f64 / n > 0.5,
         red_mostly_high: rh as f64 / n > 0.5,
         peak_luminance: peak,
@@ -191,6 +197,14 @@ mod tests {
         let px = |c: [f32; 3]| Rgba32F::new(2, 2, [c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0]);
         assert!(!analyse(&px([100.0, 104.0, 108.0]), &RGBA8).grayscale);
         assert!(analyse(&px([100.0, 102.0, 104.0]), &RGBA8).grayscale);
+    }
+
+    #[test]
+    fn normal_length_mean() {
+        let flat = Rgba32F::new(4, 4, [0.5, 0.5, 1.0, 1.0]);
+        assert!((analyse(&flat, &RGBA8).normal_len_mean - 1.0).abs() < 0.01);
+        let short = Rgba32F::new(4, 4, [0.75, 0.5, 0.5, 1.0]); // decodes to (0.5, 0, 0)
+        assert!((analyse(&short, &RGBA8).normal_len_mean - 0.5).abs() < 1e-6);
     }
 
     #[test]

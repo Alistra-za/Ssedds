@@ -269,6 +269,7 @@
         "CHAN-NOT-GRAY",
         "CHAN-CONSTANT-ALPHA-DATA",
         "CHAN-NORMAL-LENGTH",
+        "CHAN-NORMAL-SHORT",
         "CHAN-AO-INVERTED",
         "CHAN-GLOSS-AS-ROUGH",
         "FMT-BC5-NORMAL",

@@ -1,8 +1,9 @@
 //! Float mip chain (spec §5.5). Box filter only in v1 Phase 1; other kernels arrive in milestone M6.
 //!
 //! An *accumulation* chain is built by repeated box filtering of the unnormalised base; every output
-//! level is a *finalised* copy (√ back from squared roughness, renormalised vectors, clamps). Mip 0 is
-//! always the base as authored: it is never renormalised, square-rooted or clamped.
+//! level is a *finalised* copy (√ back from squared roughness, renormalised vectors, clamps). Mip 0 is the base as
+//! authored, except a normal map's vectors, which are renormalised unless `mips.normal_base = keep` (DECISIONS R1); a
+//! vector chain accumulates from that written mip 0, so its lower levels and the variance bake see the stored vectors.
 use crate::config::*;
 use crate::image::Rgba32F;
 use crate::ops::{Domain, Work};
@@ -128,6 +129,44 @@ fn downsample_area(prev: &Rgba32F, weighted: bool) -> Rgba32F {
     out
 }
 
+/// Rescale an RGB vector to unit length in place (spec §5.5). A zero `Normal` vector becomes flat +Z; a zero
+/// `_msn` vector stays zero (model space has no flat default).
+pub(crate) fn normalize_vector(px: &mut [f32; 4], domain: Domain) {
+    let len = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2]).sqrt();
+    if len > 1e-8 {
+        for c in &mut px[..3] {
+            *c /= len;
+        }
+    } else if domain == Domain::Normal {
+        px[..3].copy_from_slice(&[0.0, 0.0, 1.0]);
+    }
+}
+
+/// Mip 0 as stored (spec §5.4, DECISIONS R1): a normal map's base vectors at unit length unless
+/// `mips.normal_base = keep`; anything else as authored. A vector chain accumulates from this level, so the levels
+/// below and the variance bake's footprint lengths average the vectors the file stores (controller correction to R1).
+fn base_level(work: &Work, p: &Profile) -> Rgba32F {
+    let mut out = work.img.clone();
+    if p.mips.normal_base == NormalBase::Renormalize
+        && matches!(work.domain, Domain::Normal | Domain::Msn)
+    {
+        for px in &mut out.px {
+            normalize_vector(px, work.domain);
+        }
+    }
+    out
+}
+
+/// Alpha-weighted RGB filtering (spec §5.5) is for colour. A vector chain (normal, `_msn`, `_flow`) or a roughness
+/// chain is never weighted, even with an alpha-tested policy forced on it (Task 29 carry, DECISIONS R11):
+/// weighting would bend the vectors, and the bake's footprint lengths, toward opaque texels.
+fn weighted_rgb(work: &Work, p: &Profile) -> bool {
+    work.alpha_present
+        && p.alpha_weighted_mips()
+        && !work.roughness_r_squared
+        && !matches!(work.domain, Domain::Normal | Domain::Msn | Domain::SignedRg)
+}
+
 /// Turn an accumulation level (>= 1) into its stored form: roughness √, then the domain's
 /// vector renormalisation or clamp. `SignedRg` (`_flow`) is deliberately left alone.
 fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
@@ -137,16 +176,7 @@ fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
             px[0] = px[0].max(0.0).sqrt();
         }
         match work.domain {
-            Domain::Normal | Domain::Msn => {
-                let len = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2]).sqrt();
-                if len > 1e-8 {
-                    for c in &mut px[..3] {
-                        *c /= len;
-                    }
-                } else if work.domain == Domain::Normal {
-                    px[..3].copy_from_slice(&[0.0, 0.0, 1.0]);
-                }
-            }
+            Domain::Normal | Domain::Msn => normalize_vector(px, work.domain),
             Domain::Hdr => {
                 for c in &mut px[..3] {
                     *c = c.max(0.0);
@@ -165,14 +195,14 @@ fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
 
 /// Finalised mip levels, level 0 first, in the Work's domain.
 ///
-/// Levels >= 1 are finalised and clamped (roughness √, vector renormalisation, domain clamps). Mip 0 is
-/// returned exactly as authored, so the consumer (Quantise, Task 31) must clamp it for the target format.
-/// `p.mips.normal` is not read: `RenormalizeBake` degrades to `Renormalize` until M4.
+/// Levels >= 1 are finalised and clamped (roughness √, vector renormalisation, domain clamps). Mip 0 is the base as
+/// authored, except a normal map's vectors, renormalised unless `mips.normal_base = keep` (DECISIONS R1); a vector
+/// chain accumulates from that written mip 0. The consumer (Quantise, Task 31) clamps mip 0 for the target format.
 pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F> {
     let n = level_count(work.img.width, work.img.height, &p.mips.levels);
-    let weighted = work.alpha_present && p.alpha_weighted_mips();
+    let weighted = weighted_rgb(work, p);
     let mut out = Vec::with_capacity(n as usize);
-    out.push(work.img.clone());
+    out.push(base_level(work, p));
     // `acc` is the unnormalised accumulation level; the first step reads the base directly unless
     // roughness needs squaring, so the base is not cloned a second time.
     let mut acc: Option<Rgba32F> = None;
@@ -185,6 +215,10 @@ pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F> {
                     px[0] *= px[0];
                 }
                 downsample(&squared, weighted)
+            }
+            // A vector chain accumulates from mip 0 as written (unit length unless `normal_base = keep`).
+            None if matches!(work.domain, Domain::Normal | Domain::Msn) => {
+                downsample(&out[0], weighted)
             }
             None => downsample(&work.img, weighted),
         };
@@ -214,6 +248,92 @@ mod tests {
             roughness_r_squared: false,
             nonfinite_samples: 0,
         }
+    }
+
+    #[test]
+    fn short_normals_at_mip_0_are_renormalised_by_default() {
+        let mut img = Rgba32F::new(2, 1, [0.0, 0.0, 0.5, 0.7]);
+        img.px[1] = [0.0, 0.0, 0.0, 0.7]; // a zero vector becomes flat +Z
+        let c = build_chain(&work(img, Domain::Normal, true), &profile(Subtype::Normal));
+        assert_eq!(c[0].px[0], [0.0, 0.0, 1.0, 0.7]);
+        assert_eq!(c[0].px[1], [0.0, 0.0, 1.0, 0.7]); // the (specular) alpha is untouched
+    }
+
+    #[test]
+    fn the_chain_accumulates_mip_0_as_written() {
+        let mut img = Rgba32F::new(2, 1, [0.6, 0.0, 0.0, 1.0]);
+        img.px[1] = [0.0, 0.0, 0.3, 1.0];
+        let mut p = profile(Subtype::Normal);
+        let renormalised = build_chain(&work(img.clone(), Domain::Normal, true), &p);
+        p.mips.normal_base = NormalBase::Keep;
+        let kept = build_chain(&work(img.clone(), Domain::Normal, true), &p);
+        assert_eq!(kept[0].px, img.px);
+        assert_ne!(renormalised[0].px, img.px);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        // Default: level 1 averages the written unit vectors (1,0,0) and (0,0,1).
+        let v = renormalised[1].px[0];
+        assert!((v[0] - h).abs() < 1e-5 && (v[2] - h).abs() < 1e-5, "{v:?}");
+        // keep: level 1 averages the authored vectors, (0.3, 0, 0.15) normalised (the pre-M4 chain).
+        let len = (0.3f32 * 0.3 + 0.15 * 0.15).sqrt();
+        let v = kept[1].px[0];
+        assert!(
+            (v[0] - 0.3 / len).abs() < 1e-5 && (v[2] - 0.15 / len).abs() < 1e-5,
+            "{v:?}"
+        );
+    }
+
+    #[test]
+    fn msn_mip_0_is_renormalised_by_length_only() {
+        let mut img = Rgba32F::new(2, 1, [0.0, -0.3, -0.4, 1.0]);
+        img.px[1] = [0.0, 0.0, 0.0, 1.0];
+        let c = build_chain(&work(img, Domain::Msn, true), &profile(Subtype::Msn));
+        let v = c[0].px[0];
+        assert!(v[0].abs() < 1e-6 && (v[1] + 0.6).abs() < 1e-6 && (v[2] + 0.8).abs() < 1e-6);
+        assert_eq!(&c[0].px[1][..3], &[0.0, 0.0, 0.0]); // no flat default in model space
+    }
+
+    #[test]
+    fn colour_and_data_mip_0_is_never_renormalised() {
+        let img = Rgba32F::new(2, 1, [0.2, 0.2, 0.2, 1.0]);
+        let c = build_chain(
+            &work(img.clone(), Domain::Stored, false),
+            &profile(Subtype::GenericData),
+        );
+        assert_eq!(c[0].px, img.px);
+    }
+
+    #[test]
+    fn a_forced_cutout_does_not_alpha_weight_normals_or_roughness() {
+        // An opaque +X and an invisible +Z: weighting would give +X, the vector chain averages both.
+        let mut img = Rgba32F::new(2, 1, [0.0, 0.0, 1.0, 0.0]);
+        img.px[0] = [1.0, 0.0, 0.0, 1.0];
+        let mut p = profile(Subtype::Normal);
+        p.alpha.policy = AlphaPolicy::Cutout;
+        let c = build_chain(&work(img, Domain::Normal, true), &p);
+        let v = c[1].px[0];
+        assert!(
+            (v[0] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5
+                && (v[2] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5,
+            "{v:?}"
+        );
+        // Roughness: r = 1 opaque and r = 0 invisible average to sqrt(0.5) on alpha = r², not 1.
+        let mut p = profile(Subtype::Rmaos);
+        p.alpha.policy = AlphaPolicy::Cutout;
+        let mut img = Rgba32F::new(2, 1, [0.0, 0.0, 0.0, 0.0]);
+        img.px[0] = [1.0, 0.0, 0.0, 1.0];
+        let w = Work {
+            img,
+            alpha_present: true,
+            domain: Domain::Stored,
+            roughness_r_squared: true,
+            nonfinite_samples: 0,
+        };
+        let c = build_chain(&w, &p);
+        assert!(
+            (c[1].px[0][0] - 0.5f32.sqrt()).abs() < 1e-6,
+            "{:?}",
+            c[1].px[0]
+        );
     }
 
     #[test]

@@ -811,6 +811,9 @@ fn stores_alpha(f: Format) -> bool {
 /// `normal_len_err` above this is "far from unit length" (CHAN-NORMAL-LENGTH, SUG-CONTRADICTION).
 const NORMAL_LEN_TOL: f64 = 0.1;
 
+/// Mean decoded normal length below which mip 0 is "noticeably short" (CHAN-NORMAL-SHORT, DECISIONS R1).
+const NORMAL_SHORT_MEAN: f64 = 0.9;
+
 /// Spec §4.3 rule 5: content that contradicts the decided sub-type. Reported, never blocking.
 fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
     let a = f.analysis;
@@ -1131,6 +1134,26 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
                 a.normal_len_err
             ),
         );
+        // Owner 2026-10-11 (DECISIONS R1): a noticeably short normal map, and what happens to its mip 0. A rebuilt Z is
+        // unit length by construction.
+        if p.category == Category::Normal
+            && !p.channels.reconstruct_z
+            && a.normal_len_mean < NORMAL_SHORT_MEAN
+        {
+            let what = match p.mips.normal_base {
+            NormalBase::Renormalize => {
+                "mip 0 is renormalised to unit length (set mips.normal_base = keep to store it as authored)"
+            }
+            NormalBase::Keep => "mip 0 is stored as authored (mips.normal_base = keep)",
+        };
+            add(
+                ChanNormalShort,
+                format!(
+                    "mean normal length {:.3} at mip 0: {what}",
+                    a.normal_len_mean
+                ),
+            );
+        }
     }
     if st.is_roughness_member() && a.blue_mostly_black {
         add(

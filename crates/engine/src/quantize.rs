@@ -1,6 +1,6 @@
 //! Float level -> encoder input (u8 RGBA for BC1/3/4/5/7, half RGBA for BC6H).
 //!
-//! Quantise is the clamp point for mip 0: `mips::build_chain` returns level 0 exactly as authored, so
+//! Quantise is the clamp point for mip 0: `mips::build_chain` returns level 0 as authored (a normal map's vectors renormalised, DECISIONS R1), so
 //! every path here clamps to the range its target format can hold before converting.
 use crate::analyse::code8;
 use crate::config::*;

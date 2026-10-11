@@ -41,6 +41,7 @@ codes! {
     ChanNotGray = "CHAN-NOT-GRAY" => Warning,
     ChanConstantAlphaData = "CHAN-CONSTANT-ALPHA-DATA" => Info,
     ChanNormalLength = "CHAN-NORMAL-LENGTH" => Warning,
+    ChanNormalShort = "CHAN-NORMAL-SHORT" => Info,
     ChanAoInverted = "CHAN-AO-INVERTED" => Warning,
     ChanGlossAsRough = "CHAN-GLOSS-AS-ROUGH" => Warning,
     FmtBc5Normal = "FMT-BC5-NORMAL" => Blocking,
@@ -130,6 +131,7 @@ mod tests {
     #[test]
     fn severities_follow_spec_section_10() {
         assert_eq!(Code::FmtBc5Normal.severity(), Severity::Blocking);
+        assert_eq!(Code::ChanNormalShort.severity(), Severity::Info);
         assert_eq!(Code::TagSrgbVanilla.severity(), Severity::Error);
         assert_eq!(Code::Alpha254.severity(), Severity::Info);
         assert_eq!(Code::AlphaNearOpaque.severity(), Severity::Info);
@@ -158,6 +160,6 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 62);
+        assert_eq!(Code::ALL.len(), 63);
     }
 }
