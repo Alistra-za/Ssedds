@@ -1,16 +1,63 @@
 //! PGPatcher 1.2.0 TruePBR patch, simulated in memory for the 3D preview (P1 spec §2.1).
 //! Rules: `F:\ai\dds\nifparseref\plan\p1\01-pgpatcher-truepbr-rules.md` ("01"). Pure: no GPU, no egui, no IO.
 //! It stops at "the NIF as PGPatcher leaves it", a `MaterialState`; CS's load-time remap belongs to render3d.
-
-// `json` and `slots` are wired into `simulate` by Task 4; until then only their unit tests use them.
-#[allow(dead_code)]
+mod check;
 mod json;
 mod matching;
+mod patch;
 mod prep;
-#[allow(dead_code)]
 mod slots;
 mod text;
 
 pub use matching::{matched_path, shape_matches};
 pub use nif::material::MaterialState;
 pub use prep::prepare;
+use serde_json::Value;
+
+pub struct SimInput<'a> {
+    /// One PGPatcher entry exactly as sdc writes it (`pgp::writer::entry_node(..).to_value()`).
+    pub entry: &'a Value,
+    /// The file's `default` object (`pgp::writer::document(&[]).to_value()["default"]`), or `Value::Null`.
+    pub default: &'a Value,
+    /// Mesh path relative to Data, PGPatcher form (`meshes\…`, any case).
+    pub nif_path: &'a str,
+    pub source: &'a MaterialState,
+    /// Does a texture exist in the VFS / will sdc produce it? Called with lower-cased PGPatcher-form paths for
+    /// EVERY non-empty slot after the slot pass (01 §1.4, TP:348-375): the new `textures\pbr\…` paths, `slotN`
+    /// overrides, the cubemap, and untouched source slots (which may live in BSAs).
+    pub exists: &'a dyn Fn(&str) -> bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Badge {
+    /// A key the preview does not show (geometry ops, 1.2.0-only keys); the value is the key name.
+    NotPreviewed(&'static str),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SimResult {
+    NoMatch,
+    /// `matched_path` is "" for `pbr:false` (scalars only). `material.hidden` is set by `delete`.
+    Patched {
+        material: MaterialState,
+        matched_path: String,
+        badges: Vec<Badge>,
+    },
+    /// PGPatcher would skip this shape for this file; the shape keeps `source`.
+    Skip(String),
+}
+
+/// One entry (sdc's case): prepare, match (with `nif_filter`), then patch.
+pub fn simulate(i: &SimInput) -> SimResult {
+    let prepared = prepare(i.entry, i.default);
+    if !shape_matches(&prepared, i.nif_path, &i.source.slots) {
+        return SimResult::NoMatch;
+    }
+    match (
+        prepared.as_object(),
+        matched_path(&prepared, &i.source.slots),
+    ) {
+        (Some(e), Some(mp)) => patch::run(&[(e, mp)], i.source, i.exists),
+        _ => SimResult::NoMatch,
+    }
+}
