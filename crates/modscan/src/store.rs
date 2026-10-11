@@ -198,6 +198,43 @@ pub struct RawSlot {
     pub flags: PathFlags,
 }
 
+/// What [`Store::nifs_using_texture`] looks for in one texture-set slot (spec §2.4, 01 §1.3). `slot` is 0-based
+/// (PGPatcher `slotN` − 1). Values come in PGPatcher form (backslashes, any case); the query lowercases them and turns
+/// `\` into `/`, the form `path.p` stores (`canon_texture`: lower case, `/`, `textures/…`, extension kept).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TexKey {
+    /// The slot path, without its extension, with a leading `textures/pbr/` read as `textures/` (and on slot 1 a
+    /// trailing `_msn`/`_n` dropped), ends with `/` + `stem`, so on whole path components. `stem`: no extension, no
+    /// leading `textures\`. `match_diffuse` (slot 0) and `match_normal` (slot 1).
+    Suffix { slot: u32, stem: String },
+    /// That same shape-side form contains `frag` (`path_contains`, slot 0).
+    Contains { slot: u32, frag: String },
+    /// The slot path equals `path` (with its extension; `textures\` is added when missing). `matchN`.
+    Exact { slot: u32, path: String },
+}
+
+/// One Lighting shape of a game-winning NIF whose slot matches a [`TexKey`]. The SQL is a candidate filter: the
+/// panel re-checks every shape with `pgpsim::shape_matches` on its raw slot strings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchRow {
+    /// The copy the game loads.
+    pub copy_id: i64,
+    /// Canonical mesh path (`meshes/…`, lower case, `/`).
+    pub nif_path: String,
+    /// The mod of the copy to load.
+    pub origin: String,
+    /// Block, name, skinning and LE flag in the copy to load.
+    pub shape_block: u32,
+    pub shape_name: Option<String>,
+    pub le_mesh: bool,
+    pub skinned: bool,
+    /// The game winner is a PGPatcher output copy.
+    pub derived: bool,
+    /// The copy to read: the winner, or for a derived winner its source (`nif_winner_src`, else `source_copy_id`).
+    /// The simulation applies the patch itself, so a derived copy would be patched twice (02 §5.2).
+    pub load_copy_id: i64,
+}
+
 /// Slots stored in `texset` (t0..t8). A set with more is truncated and the copy gets a problem.
 pub const MAX_SLOTS: usize = 9;
 
@@ -209,6 +246,52 @@ fn keep_raw(p: &TexPath) -> bool {
         return true;
     }
     p.raw.replace('\\', "/").to_ascii_lowercase() != p.norm
+}
+
+/// Slot, SQL condition on `tp.p`, its bound argument, and the exact post-filter.
+type TexQuery = (u32, &'static str, String, Box<dyn Fn(&str) -> bool>);
+
+/// A key value in the stored form: trimmed, `/` separators, lower case, no leading `/`.
+fn key_form(s: &str) -> String {
+    s.trim()
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+        .trim_start_matches('/')
+        .to_string()
+}
+
+/// PGPatcher's shape-side form of a stored slot path (01 §1.3): extension stripped, a leading `textures/pbr/` read
+/// as `textures/`, and on the normal slot a trailing `_msn`/`_n` stripped.
+fn pgp_form(norm: &str, normal: bool) -> String {
+    let base = match norm.rfind('.') {
+        Some(i) if !norm[i..].contains('/') => &norm[..i],
+        _ => norm,
+    };
+    let mut s = match base.strip_prefix("textures/pbr/") {
+        Some(rest) => format!("textures/{rest}"),
+        None => base.to_string(),
+    };
+    if normal {
+        for suf in ["_msn", "_n"] {
+            if let Some(x) = s.strip_suffix(suf) {
+                s = x.to_string();
+                break;
+            }
+        }
+    }
+    s
+}
+
+/// `s` for a `LIKE … ESCAPE '\'` pattern: `%` and `_` are literal (stems such as `rock01_d` contain `_`).
+fn like_escape(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            o.push('\\');
+        }
+        o.push(c);
+    }
+    o
 }
 
 /// Outcome of reading and scanning one copy.
@@ -585,6 +668,24 @@ impl Store {
             tx.execute_batch(SCHEMA)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
+        }
+        Ok(Store { conn })
+    }
+
+    /// A connection that never writes: no folder or file is created, no WAL switch, and another schema version is
+    /// [`ScanError::SchemaVersion`] instead of a rebuild (a scan may be writing the database right now).
+    pub fn open_read_only(path: &Path) -> Result<Store, ScanError> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let found: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if found != SCHEMA_VERSION {
+            return Err(ScanError::SchemaVersion {
+                found,
+                want: SCHEMA_VERSION,
+            });
         }
         Ok(Store { conn })
     }
@@ -1100,6 +1201,99 @@ impl Store {
             })?
             .collect::<Result<_, _>>()?;
         Ok(v)
+    }
+
+    /// Lighting shapes of game-winning NIFs whose slot matches `key` (spec §2.4), best first: non-skinned, fewest
+    /// shapes in the NIF, then path and block. At most `limit` rows. A derived winner is matched on its source
+    /// copy's shapes. `Suffix`/`Contains` cannot use the path index (a scan of `path`); the caller runs this off the
+    /// UI thread.
+    pub fn nifs_using_texture(
+        &self,
+        key: &TexKey,
+        limit: usize,
+    ) -> Result<Vec<MatchRow>, ScanError> {
+        let (slot, cond, arg, check): TexQuery = match key {
+            TexKey::Suffix { slot, stem } => {
+                let stem = key_form(stem);
+                if stem.is_empty() {
+                    return Ok(vec![]);
+                }
+                let pattern = format!("%/{}%", like_escape(&stem));
+                let want = format!("/{stem}");
+                let normal = *slot == 1;
+                (
+                    *slot,
+                    "tp.p LIKE ?2 ESCAPE '\\'",
+                    pattern,
+                    Box::new(move |p: &str| pgp_form(p, normal).ends_with(&want)),
+                )
+            }
+            TexKey::Contains { slot, frag } => {
+                let frag = key_form(frag);
+                if frag.is_empty() {
+                    return Ok(vec![]);
+                }
+                let pattern = format!("%{}%", like_escape(&frag));
+                let normal = *slot == 1;
+                (
+                    *slot,
+                    "tp.p LIKE ?2 ESCAPE '\\'",
+                    pattern,
+                    Box::new(move |p: &str| pgp_form(p, normal).contains(&frag)),
+                )
+            }
+            TexKey::Exact { slot, path } => {
+                let p = key_form(path);
+                let p = if p.starts_with("textures/") {
+                    p
+                } else {
+                    format!("textures/{p}")
+                };
+                (*slot, "tp.p = ?2", p, Box::new(|_: &str| true))
+            }
+        };
+        let sql = format!(
+            "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, tp.p,
+                    (SELECT count(*) FROM shape s2 WHERE s2.copy_id = c.id) AS n_shapes
+             FROM path tp
+             JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = ?1
+             JOIN shape s ON s.texset_id = tu.texset_id AND s.shader_kind = 1
+             JOIN nif_copy c ON c.id = s.copy_id
+             JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
+             JOIN nif_winner w ON w.path_id = c.path_id
+             JOIN nif_copy wc ON wc.id = w.copy_id
+             JOIN origin wo ON wo.id = wc.origin_id AND wo.enabled = 1
+             LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
+             JOIN path np ON np.id = c.path_id
+             WHERE {cond}
+               AND c.id = CASE WHEN wc.is_derived = 1 THEN coalesce(ws.copy_id, wc.source_copy_id, wc.id)
+                               ELSE wc.id END
+             ORDER BY s.skinned, n_shapes, np.p, s.block"
+        );
+        let mut st = self.conn.prepare(&sql)?;
+        let mut rows = st.query(params![slot as i64, arg])?;
+        let mut out = vec![];
+        while let Some(r) = rows.next()? {
+            let tex: String = r.get(9)?;
+            if !check(&tex) {
+                continue;
+            }
+            out.push(MatchRow {
+                copy_id: r.get(0)?,
+                nif_path: r.get(1)?,
+                origin: r.get(2)?,
+                shape_block: r.get::<_, i64>(3)? as u32,
+                shape_name: r.get(4)?,
+                le_mesh: r.get(5)?,
+                skinned: r.get(6)?,
+                derived: r.get(7)?,
+                load_copy_id: r.get(8)?,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     /// Raw connection for read-only queries by later tasks and tests.

@@ -22,4 +22,9 @@ pub enum ScanError {
     PgpRunning,
     #[error(transparent)]
     Db(#[from] rusqlite::Error),
+    /// `Store::open_read_only` found another schema version; only a scan (read-write open) rebuilds it.
+    #[error(
+        "scan database version {found}, this build reads {want}: scan again in the Meshes view"
+    )]
+    SchemaVersion { found: i64, want: i64 },
 }

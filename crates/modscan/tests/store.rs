@@ -265,3 +265,358 @@ fn read_api_reports_database_errors() {
     s.conn().execute_batch("DROP TABLE origin;").unwrap();
     assert!(s.mods().is_err());
 }
+
+// ---- P1-A Task 11: the set preview's mesh query and the read-only open ----
+
+use modscan::store::{DeriveRow, OriginSpec, TexKey, KIND_MOD};
+use std::collections::HashMap;
+
+fn origin(s: &mut Store, name: &str, priority: i32) -> i64 {
+    s.upsert_origin(&OriginSpec {
+        kind: KIND_MOD,
+        name: name.into(),
+        root: name.into(),
+        parent: None,
+        priority,
+        derived_by: None,
+        derived_state: None,
+    })
+    .unwrap()
+}
+
+fn lit(slots: &[&str]) -> Shader {
+    Shader::Lighting(
+        lighting(),
+        slots.iter().map(|p| canon_texture(p.as_bytes())).collect(),
+    )
+}
+
+fn put(s: &mut Store, path: &str, o: i64, block: u32, shader: Shader, skinned: bool) -> i64 {
+    let scan = scan_of(vec![ShapeRow {
+        block,
+        head: head(skinned),
+        shader,
+        alpha: None,
+    }]);
+    s.upsert_copy(path, o, 1, 1, CopyResult::Scanned(scan), None)
+        .unwrap()
+}
+
+/// a: vanilla diffuse + normal (wins). b: already-PBR paths, skinned (wins). c: `myreserve` (not on a component
+/// boundary). d: a PGPatcher-derived winner over its source copy in A. e: A's copy loses to B's. f: the texture on
+/// an effect shader. g: `axb`, a trap for an unescaped LIKE `_`.
+fn query_store() -> (tempfile::TempDir, Store, HashMap<&'static str, i64>) {
+    let (d, mut s, a) = store();
+    let b = origin(&mut s, "B", 1);
+    let pgp = origin(&mut s, "PGPatcher output", 2);
+    let mut ids = HashMap::new();
+    let vanilla = [
+        r"textures\xmead\reserve.dds",
+        r"textures\xmead\reserve_n.dds",
+    ];
+    let pbr = [
+        r"textures\pbr\xmead\reserve.dds",
+        r"textures\pbr\xmead\reserve_msn.dds",
+    ];
+    ids.insert(
+        "a",
+        put(&mut s, "meshes/x/a.nif", a, 3, lit(&vanilla), false),
+    );
+    ids.insert("b", put(&mut s, "meshes/x/b.nif", a, 1, lit(&pbr), true));
+    ids.insert(
+        "c",
+        put(
+            &mut s,
+            "meshes/x/c.nif",
+            a,
+            0,
+            lit(&[r"textures\other\myreserve.dds"]),
+            false,
+        ),
+    );
+    ids.insert(
+        "d_src",
+        put(&mut s, "meshes/x/d.nif", a, 5, lit(&[vanilla[0]]), false),
+    );
+    ids.insert(
+        "d",
+        put(&mut s, "meshes/x/d.nif", pgp, 7, lit(&[pbr[0]]), false),
+    );
+    ids.insert(
+        "e_lose",
+        put(&mut s, "meshes/x/e.nif", a, 0, lit(&[vanilla[0]]), false),
+    );
+    ids.insert(
+        "e_win",
+        put(
+            &mut s,
+            "meshes/x/e.nif",
+            b,
+            0,
+            lit(&[r"textures\other\rock.dds"]),
+            false,
+        ),
+    );
+    ids.insert(
+        "f",
+        put(
+            &mut s,
+            "meshes/x/f.nif",
+            a,
+            0,
+            Shader::Effect(effect(vanilla[0].as_bytes())),
+            false,
+        ),
+    );
+    ids.insert(
+        "g",
+        put(
+            &mut s,
+            "meshes/x/g.nif",
+            a,
+            0,
+            lit(&[r"textures\axb.dds"]),
+            false,
+        ),
+    );
+    s.set_derived(
+        &[DeriveRow {
+            copy_id: ids["d"],
+            is_derived: true,
+            source_copy_id: Some(ids["d_src"]),
+            derive_check: Some(0),
+        }],
+        &HashMap::new(),
+    )
+    .unwrap();
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    let paths: Vec<String> = names.iter().map(|n| format!("meshes/x/{n}.nif")).collect();
+    let pid = s
+        .path_ids(&paths.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap();
+    let winner = |n: &str| match n {
+        "e" => ids["e_win"],
+        other => ids[other],
+    };
+    let game: HashMap<i64, (i64, u32)> = names
+        .iter()
+        .zip(&pid)
+        .map(|(n, p)| (*p, (winner(n), 1)))
+        .collect();
+    let source: HashMap<i64, i64> = [(pid[3], ids["d_src"])].into_iter().collect();
+    s.set_winners(&game, &source).unwrap();
+    (d, s, ids)
+}
+
+fn nifs(rows: &[modscan::store::MatchRow]) -> Vec<&str> {
+    rows.iter().map(|r| r.nif_path.as_str()).collect()
+}
+
+#[test]
+fn suffix_on_the_diffuse_matches_whole_components_of_winners_and_pbr_paths() {
+    let (_d, s, ids) = query_store();
+    let key = TexKey::Suffix {
+        slot: 0,
+        stem: r"XMead\Reserve".into(),
+    };
+    let rows = s.nifs_using_texture(&key, 50).unwrap();
+    // Non-skinned first, then fewest shapes, then path; b (skinned) last.
+    assert_eq!(
+        nifs(&rows),
+        ["meshes/x/a.nif", "meshes/x/d.nif", "meshes/x/b.nif"]
+    );
+    assert_eq!(
+        (rows[0].copy_id, rows[0].load_copy_id, rows[0].shape_block),
+        (ids["a"], ids["a"], 3)
+    );
+    assert!(!rows[0].derived);
+    // A derived winner is matched and loaded through its source copy.
+    assert_eq!(
+        (rows[1].copy_id, rows[1].load_copy_id, rows[1].shape_block),
+        (ids["d"], ids["d_src"], 5)
+    );
+    assert!(rows[1].derived);
+    assert!(rows[2].skinned);
+    assert_eq!(rows[0].origin, "A");
+    // `myreserve` is not on a component boundary, the loser and the effect shape are out, the limit holds.
+    let all = s
+        .nifs_using_texture(
+            &TexKey::Suffix {
+                slot: 0,
+                stem: "reserve".into(),
+            },
+            50,
+        )
+        .unwrap();
+    assert_eq!(
+        nifs(&all),
+        ["meshes/x/a.nif", "meshes/x/d.nif", "meshes/x/b.nif"]
+    );
+    assert_eq!(
+        s.nifs_using_texture(
+            &TexKey::Suffix {
+                slot: 0,
+                stem: "reserve".into()
+            },
+            2
+        )
+        .unwrap()
+        .len(),
+        2
+    );
+    // `_` is not a wildcard.
+    assert!(s
+        .nifs_using_texture(
+            &TexKey::Suffix {
+                slot: 0,
+                stem: "a_b".into()
+            },
+            50
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn suffix_on_the_normal_strips_n_and_msn_on_the_shape_side_only() {
+    let (_d, s, _) = query_store();
+    let rows = s
+        .nifs_using_texture(
+            &TexKey::Suffix {
+                slot: 1,
+                stem: r"xmead\reserve".into(),
+            },
+            50,
+        )
+        .unwrap();
+    assert_eq!(nifs(&rows), ["meshes/x/a.nif", "meshes/x/b.nif"]);
+    // PGPatcher never strips `_n` from the JSON value (01 §1.3).
+    assert!(s
+        .nifs_using_texture(
+            &TexKey::Suffix {
+                slot: 1,
+                stem: r"xmead\reserve_n".into()
+            },
+            50
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn contains_reads_the_extension_less_pbr_stripped_diffuse() {
+    let (_d, s, _) = query_store();
+    let rows = s
+        .nifs_using_texture(
+            &TexKey::Contains {
+                slot: 0,
+                frag: "XMEAD".into(),
+            },
+            50,
+        )
+        .unwrap();
+    assert_eq!(
+        nifs(&rows),
+        ["meshes/x/a.nif", "meshes/x/d.nif", "meshes/x/b.nif"]
+    );
+    // `textures\pbr\` is read as `textures\`, and `.dds` is gone.
+    for frag in ["pbr", ".dds"] {
+        assert!(
+            s.nifs_using_texture(
+                &TexKey::Contains {
+                    slot: 0,
+                    frag: frag.into()
+                },
+                50
+            )
+            .unwrap()
+            .is_empty(),
+            "{frag}"
+        );
+    }
+}
+
+#[test]
+fn exact_compares_the_full_path_with_textures_added() {
+    let (_d, s, _) = query_store();
+    for path in [r"textures\xmead\reserve.dds", r"xmead\RESERVE.dds"] {
+        let rows = s
+            .nifs_using_texture(
+                &TexKey::Exact {
+                    slot: 0,
+                    path: path.into(),
+                },
+                50,
+            )
+            .unwrap();
+        assert_eq!(nifs(&rows), ["meshes/x/a.nif", "meshes/x/d.nif"], "{path}");
+    }
+    let rows = s
+        .nifs_using_texture(
+            &TexKey::Exact {
+                slot: 0,
+                path: r"textures\pbr\xmead\reserve.dds".into(),
+            },
+            50,
+        )
+        .unwrap();
+    assert_eq!(
+        nifs(&rows),
+        ["meshes/x/b.nif"],
+        "the derived copy's own rows are never used"
+    );
+}
+
+#[test]
+fn open_read_only_never_creates_rebuilds_or_writes() {
+    let d = tempfile::tempdir().unwrap();
+    let missing = d.path().join("nope").join("scan.db");
+    assert!(Store::open_read_only(&missing).is_err());
+    assert!(!missing.parent().unwrap().exists(), "no folder is created");
+    let old = d.path().join("old.db");
+    {
+        let c = rusqlite::Connection::open(&old).unwrap();
+        c.execute_batch("CREATE TABLE shape (a INTEGER); INSERT INTO shape VALUES (1); PRAGMA user_version = 2;")
+            .unwrap();
+    }
+    assert!(matches!(
+        Store::open_read_only(&old),
+        Err(modscan::ScanError::SchemaVersion { found: 2, want: 3 })
+    ));
+    let n: i64 = rusqlite::Connection::open(&old)
+        .unwrap()
+        .query_row("SELECT count(*) FROM shape", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "another version is left alone");
+    let (q, _rw, _) = query_store();
+    let ro = Store::open_read_only(&q.path().join("scan.db")).unwrap();
+    let rows = ro
+        .nifs_using_texture(
+            &TexKey::Exact {
+                slot: 0,
+                path: r"textures\xmead\reserve.dds".into(),
+            },
+            10,
+        )
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(ro
+        .conn()
+        .execute_batch("CREATE TABLE x (a INTEGER)")
+        .is_err());
+}
+
+#[test]
+fn the_mesh_query_reports_database_errors() {
+    let (_d, s, _) = query_store();
+    s.conn().execute_batch("DROP TABLE nif_winner;").unwrap();
+    assert!(s
+        .nifs_using_texture(
+            &TexKey::Suffix {
+                slot: 0,
+                stem: "reserve".into()
+            },
+            5
+        )
+        .is_err());
+}
