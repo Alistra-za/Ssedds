@@ -1,3 +1,4 @@
+pub mod builtin;
 pub mod cbuffer;
 pub mod compile;
 pub mod device;
@@ -11,6 +12,7 @@ pub mod permutation;
 pub mod scene;
 pub mod textures;
 
+pub use builtin::{builtin_mesh, Builtin};
 pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
@@ -521,6 +523,29 @@ impl Renderer {
             .filter(|s| s.status == ShapeStatus::Drawing)
             .count();
         rep
+    }
+
+    /// Replaces the loaded model with one built-in shape: `ShapeId(0)`, named after the shape. The
+    /// geometry-bound fields are forced to match the mesh (no bones, no vertex colours).
+    pub fn load_builtin(
+        &mut self,
+        b: Builtin,
+        m: MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) -> LoadReport {
+        let mut material = m;
+        material.skinned = false;
+        material.has_vertex_colors = false;
+        let parsed = ParsedNif {
+            shapes: vec![ParsedShape {
+                id: ShapeId(0),
+                name: format!("{b:?}"),
+                mesh: Arc::new(builtin_mesh(b)),
+                material,
+            }],
+            ..ParsedNif::default()
+        };
+        self.load_parsed(&parsed, textures)
     }
 
     /// Every loaded shape in id order, with the material last loaded or set and its status.
