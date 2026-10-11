@@ -468,3 +468,196 @@ fn fuzz_texture_without_an_f_map_blocks_through_the_normal_path() {
         )]
     );
 }
+
+fn export_and_wait(m: &mut sdc_gui::model::AppModel) {
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(
+        m.wait_idle(Duration::from_secs(120)),
+        "export did not finish"
+    );
+}
+
+fn json_path(m: &sdc_gui::model::AppModel) -> std::path::PathBuf {
+    m.export_root()
+        .join("PBRNIFPatcher")
+        .join(format!("{}.json", json_name(m)))
+}
+
+#[test]
+fn export_writes_a_valid_json_and_records_its_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
+    export_and_wait(&mut m);
+    let p = json_path(&m);
+    let text = std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("{p:?}: {e}; notes {:?}", m.export.notes));
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    sdc_gui::pgp::validate::validate(&v).unwrap();
+    let e = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["match_diffuse"] == json!(r"landscape\rock01"))
+        .unwrap();
+    assert_eq!(e["specular_level"], json!(0.05));
+    assert!(m
+        .export_root()
+        .join("textures/pbr/landscape/rock01_rmaos.dds")
+        .exists());
+    let sha = m.sets_doc.as_ref().unwrap().last_json_sha256().unwrap();
+    assert_eq!(Some(sha), sdc_gui::model::history::sha256_of(&p));
+    assert!(!m.is_dirty(), "the hash record was saved");
+}
+
+#[test]
+fn a_hand_edited_json_asks_before_overwriting() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    export_and_wait(&mut m);
+    let p = json_path(&m);
+    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    export_and_wait(&mut m);
+    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+    m.resolve_overwrite_json(true);
+    assert!(std::fs::read_to_string(&p).unwrap().contains("0.06"));
+    assert_eq!(
+        m.sets_doc.as_ref().unwrap().last_json_sha256(),
+        sdc_gui::model::history::sha256_of(&p)
+    );
+}
+
+#[test]
+fn keeping_a_hand_edited_json_leaves_it_and_the_record() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    export_and_wait(&mut m);
+    let p = json_path(&m);
+    let before = m.sets_doc.as_ref().unwrap().last_json_sha256();
+    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    export_and_wait(&mut m);
+    m.resolve_overwrite_json(false);
+    assert!(m.dialog.is_none());
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+    assert_eq!(m.sets_doc.as_ref().unwrap().last_json_sha256(), before);
+}
+
+#[test]
+fn a_cancelled_export_writes_no_json() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    m.cancel_export();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    if m.export
+        .summary
+        .as_ref()
+        .is_some_and(|s| !s.cancelled.is_empty())
+        || m.export.error.is_some()
+    {
+        assert!(!json_path(&m).exists());
+        assert!(
+            m.export.notes.iter().any(|n| n.contains("not written")),
+            "{:?}",
+            m.export.notes
+        );
+    }
+    // (If the export finished before the cancel landed, there is nothing to check: the test is about the cancel path.)
+}
+
+#[test]
+fn finish_leaves_out_sets_whose_outputs_did_not_export() {
+    use sdc_gui::model::export::{Row, RowState};
+    use sdc_gui::pgp::writer::EntryInput;
+    let dir = tempfile::tempdir().unwrap();
+    let p = PendingJson {
+        path: dir.path().join("PBRNIFPatcher/x.json"),
+        entries: vec![
+            (
+                "a/one".into(),
+                vec!["a/one.dds".into()],
+                EntryInput {
+                    derived_match: "a\\one".into(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "a/two".into(),
+                vec!["a/two.dds".into()],
+                EntryInput {
+                    derived_match: "a\\two".into(),
+                    ..Default::default()
+                },
+            ),
+        ],
+        copies: vec![],
+    };
+    let rows = vec![
+        Row {
+            job_key: "a/one.dds".into(),
+            path: String::new(),
+            state: RowState::Done { passed: true },
+            warnings: vec![],
+        },
+        Row {
+            job_key: "a/two.dds".into(),
+            path: String::new(),
+            state: RowState::Failed("boom".into()),
+            warnings: vec![],
+        },
+    ];
+    let mut notes = vec![];
+    let r = finish(&p, &rows, None, &mut notes);
+    assert!(matches!(r, Finish::Written(_)), "{r:?}");
+    let text = std::fs::read_to_string(&p.path).unwrap();
+    assert!(
+        text.contains(r#""a\\one""#) && !text.contains(r#""a\\two""#),
+        "{text}"
+    );
+    assert!(
+        notes.iter().any(|n| n.contains("not in JSON: a/two")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn finish_copies_borrowed_slots_and_notes_a_missing_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("owner_n.dds");
+    std::fs::write(&src, b"dds").unwrap();
+    let p = PendingJson {
+        path: std::path::PathBuf::new(),
+        entries: vec![],
+        copies: vec![
+            (src.clone(), dir.path().join("borrower_n.dds")),
+            (dir.path().join("gone.dds"), dir.path().join("x.dds")),
+        ],
+    };
+    let mut notes = vec![];
+    assert_eq!(finish(&p, &[], None, &mut notes), Finish::Nothing);
+    assert_eq!(
+        std::fs::read(dir.path().join("borrower_n.dds")).unwrap(),
+        b"dds"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("copied ") && n.contains('→')),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("could not copy") && n.contains("not exported")),
+        "{notes:?}"
+    );
+}

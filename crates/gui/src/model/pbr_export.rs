@@ -1,4 +1,6 @@
 //! Export of PBR sets (M3b spec §6): the checks that block or ask, and the JSON entries. No egui types.
+use super::export::{Row, RowState};
+use super::history::sha256_of;
 use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
@@ -6,7 +8,7 @@ use super::AppModel;
 use crate::pgp::prefix::{check_rel_path, pitfalls};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
-use crate::pgp::writer::{document, EntryInput};
+use crate::pgp::writer::{document, to_text, EntryInput};
 use engine::config::Target;
 use engine::sets::OutputKey;
 use serde_json::Value;
@@ -379,4 +381,191 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
                 .map(move |w| issue(v, format!("{}: {w}", v.id)))
         })
         .collect()
+}
+
+/// What an export about to start writes once it has ended: the PGPatcher JSON and the vanilla/CPM copies.
+#[derive(Debug, Clone)]
+pub struct PendingJson {
+    pub path: PathBuf,
+    /// Set id, the job keys its entry depends on, and the entry.
+    pub entries: Vec<(String, Vec<String>, EntryInput)>,
+    /// Borrowed-slot copies for vanilla/CPM: (owner's output, borrower's path), both absolute (DECISIONS P4).
+    pub copies: Vec<(PathBuf, PathBuf)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Finish {
+    Written(String),
+    /// The file was edited outside the GUI: ask, with this text ready to write.
+    Overwrite(String),
+    Nothing,
+}
+
+/// What the export about to start will write afterwards (computed when it starts, so edits made while it runs do
+/// not change it).
+pub fn prepare(m: &AppModel) -> Option<PendingJson> {
+    let views = set_views(m);
+    if m.target != Target::Cs {
+        let mut copies = vec![];
+        for v in &views {
+            let Some(SlotFill::Own { item: d }) = v.slots.get(&SlotKind::Diffuse) else {
+                continue;
+            };
+            let Some(dout) = m
+                .item(d)
+                .and_then(|i| i.job.as_ref())
+                .map(|j| j.output.clone())
+            else {
+                continue;
+            };
+            let stem = dout
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            for (kind, f) in &v.slots {
+                let SlotFill::Borrowed { item, .. } = f else {
+                    continue;
+                };
+                let Some(src) = m
+                    .item(item)
+                    .and_then(|i| i.job.as_ref())
+                    .map(|j| j.output.clone())
+                else {
+                    continue;
+                };
+                let name = if kind.suffix().is_empty() {
+                    format!("{stem}.dds")
+                } else {
+                    format!("{stem}_{}.dds", kind.suffix())
+                };
+                copies.push((src, dout.with_file_name(name)));
+            }
+        }
+        return (!copies.is_empty()).then(|| PendingJson {
+            path: PathBuf::new(),
+            entries: vec![],
+            copies,
+        });
+    }
+    let deps = |v: &SetView| -> Vec<String> {
+        v.slots
+            .values()
+            .filter_map(|f| match f {
+                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => m
+                    .item(item)
+                    .map(|i| i.job_key.clone())
+                    .filter(|j| !j.is_empty()),
+                SlotFill::Empty => None,
+            })
+            .collect()
+    };
+    let entries: Vec<_> = json_entries(m)
+        .into_iter()
+        .map(|(v, e)| (v.id.clone(), deps(&v), e))
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    Some(PendingJson {
+        path: m
+            .export_root()
+            .join("PBRNIFPatcher")
+            .join(format!("{}.json", json_name(m))),
+        entries,
+        copies: vec![],
+    })
+}
+
+fn exported(rows: &[Row], key: &str) -> Result<(), String> {
+    match rows.iter().find(|r| r.job_key.eq_ignore_ascii_case(key)) {
+        Some(Row {
+            state: RowState::Done { .. } | RowState::UpToDate,
+            ..
+        }) => Ok(()),
+        Some(r) => Err(r.state.label()),
+        None => Err("not exported".into()),
+    }
+}
+
+fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = path.with_extension("json.sdc-tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// After a successful export: the copies, then the JSON of the sets that fully exported (spec §6.1, §6.4).
+pub fn finish(
+    p: &PendingJson,
+    rows: &[Row],
+    last_sha: Option<&str>,
+    notes: &mut Vec<String>,
+) -> Finish {
+    for (src, dst) in &p.copies {
+        match std::fs::copy(src, dst) {
+            Ok(_) => notes.push(format!("copied {} → {}", src.display(), dst.display())),
+            Err(e) => notes.push(format!(
+                "could not copy {} ({e}; not exported?)",
+                src.display()
+            )),
+        }
+    }
+    if p.entries.is_empty() {
+        return Finish::Nothing;
+    }
+    let mut kept = vec![];
+    for (id, deps, e) in &p.entries {
+        match deps.iter().map(|k| exported(rows, k)).find_map(Result::err) {
+            None => kept.push(e.clone()),
+            Some(why) => notes.push(format!("not in JSON: {id} ({why})")),
+        }
+    }
+    if kept.is_empty() {
+        notes.push("PGPatcher JSON not written: no PBR set exported completely".into());
+        return Finish::Nothing;
+    }
+    let doc = document(&kept);
+    if let Err(errs) = validate(&doc.to_value()) {
+        notes.push(format!(
+            "PGPatcher JSON not written: it does not validate ({})",
+            errs[0]
+        ));
+        return Finish::Nothing;
+    }
+    let text = to_text(&doc);
+    let on_disk = sha256_of(&p.path);
+    if on_disk.is_some() && on_disk.as_deref() != last_sha {
+        return Finish::Overwrite(text);
+    }
+    match write_atomic(&p.path, &text) {
+        Ok(()) => {
+            notes.push(format!(
+                "PGPatcher JSON written: {} ({} entries)",
+                p.path.display(),
+                kept.len()
+            ));
+            sha256_of(&p.path).map_or(Finish::Nothing, Finish::Written)
+        }
+        Err(e) => {
+            notes.push(format!("PGPatcher JSON not written: {e}"));
+            Finish::Nothing
+        }
+    }
+}
+
+/// Write `text` over an existing (hand-edited) JSON: the answer "Overwrite" to `Dialog::OverwriteJson`.
+pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) -> Option<String> {
+    match write_atomic(path, text) {
+        Ok(()) => {
+            notes.push(format!("PGPatcher JSON written: {}", path.display()));
+            sha256_of(path)
+        }
+        Err(e) => {
+            notes.push(format!("PGPatcher JSON not written: {e}"));
+            None
+        }
+    }
 }

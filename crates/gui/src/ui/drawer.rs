@@ -82,6 +82,9 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel) {
         if let Some(e) = &model.export.error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
+        for n in &model.export.notes {
+            ui.label(egui::RichText::new(n).small());
+        }
     });
     ui.horizontal(|ui| {
         if running {

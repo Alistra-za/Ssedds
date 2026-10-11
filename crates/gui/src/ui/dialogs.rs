@@ -11,6 +11,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::OpenUnsaved(root) => open_unsaved(ctx, model, root),
         Dialog::ExportRunning(action) => export_running(ctx, model, action),
         Dialog::ExternalChange(which) => external_change(ctx, model, which),
+        Dialog::OverwriteJson(path) => overwrite_json(ctx, model, &path),
         Dialog::Error(msg) => error(ctx, model, &msg),
         Dialog::ProceedAnyway(n) => proceed_anyway(ctx, model, n),
         Dialog::ExportBlocked(issues) => export_issues(ctx, model, &issues, false),
@@ -204,5 +205,28 @@ fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport
         model.resolve_export_running(action, true);
     } else if keep {
         model.resolve_export_running(action, false);
+    }
+}
+
+fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::Path) {
+    let (mut overwrite, mut keep) = (false, false);
+    modal(ctx, "overwrite-json", |ui| {
+        ui.heading("The PGPatcher JSON was edited");
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        ui.label(format!(
+            "{name} was edited outside sdc since the last export."
+        ));
+        ui.horizontal(|ui| {
+            overwrite = ui.button("Overwrite edited JSON").clicked();
+            keep = ui.button("Keep it").clicked();
+        });
+    });
+    if overwrite {
+        model.resolve_overwrite_json(true);
+    } else if keep {
+        model.resolve_overwrite_json(false);
     }
 }

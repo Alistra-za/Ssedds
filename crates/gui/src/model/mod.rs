@@ -69,6 +69,8 @@ pub enum Dialog {
     OpenUnsaved(PathBuf),
     /// An export is running; closing or opening would have to cancel it first (M3a spec §2.6).
     ExportRunning(AfterExport),
+    /// The PGPatcher JSON was edited outside sdc since the last export; the new text waits for the answer.
+    OverwriteJson(PathBuf),
     Error(String),
 }
 
@@ -133,6 +135,10 @@ pub struct AppModel {
     export_after_plan: bool,
     /// The user chose to cancel the running export and then close or open: done when the export has ended.
     after_export: Option<AfterExport>,
+    /// What the running export writes afterwards (the JSON and the vanilla/CPM copies).
+    pending_json: Option<pbr_export::PendingJson>,
+    /// The JSON text waiting for the answer to `Dialog::OverwriteJson`.
+    pending_text: Option<String>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -191,6 +197,8 @@ impl AppModel {
             gpu_available: true,
             export_after_plan: false,
             after_export: None,
+            pending_json: None,
+            pending_text: None,
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -206,6 +214,11 @@ impl AppModel {
     pub fn open_folder(&mut self, root: PathBuf) {
         // Whatever was pending for the previous folder no longer applies (spec §8).
         self.after_export = None;
+        self.pending_json = None;
+        self.pending_text = None;
+        if matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
+            self.dialog = None;
+        }
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
         self.last_inputs = None;
@@ -388,6 +401,7 @@ impl AppModel {
                         failure = Some(e);
                     }
                 }
+                self.finish_json();
                 // A user who cancelled the export to leave does not need its error as a dialog.
                 if !self.run_after_export() {
                     if let Some(e) = failure {
@@ -537,6 +551,8 @@ impl AppModel {
             return;
         };
         req.on_existing = engine::api::OnExisting::IfChanged;
+        self.pending_json = pbr_export::prepare(self);
+        self.pending_text = None;
         self.export = export::ExportModel {
             open: true,
             ..Default::default()
@@ -544,6 +560,83 @@ impl AppModel {
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
         spawn_export(self.tx.clone(), session, req, cancel);
+    }
+
+    /// The export ended: write the copies and the JSON of the sets that exported (spec §6.1). Nothing is written
+    /// after a cancelled or failed export.
+    fn finish_json(&mut self) {
+        let Some(p) = self.pending_json.take() else {
+            return;
+        };
+        let ok = self.export.error.is_none()
+            && self
+                .export
+                .summary
+                .as_ref()
+                .is_some_and(|s| s.cancelled.is_empty());
+        if !ok {
+            let why = if self.export.error.is_some() {
+                "failed"
+            } else {
+                "cancelled"
+            };
+            self.export
+                .notes
+                .push(format!("PGPatcher JSON not written: the export was {why}"));
+            return;
+        }
+        let last = self.sets_doc.as_ref().and_then(|d| d.last_json_sha256());
+        match pbr_export::finish(
+            &p,
+            &self.export.rows,
+            last.as_deref(),
+            &mut self.export.notes,
+        ) {
+            pbr_export::Finish::Written(sha) => self.record_json_sha(&sha),
+            pbr_export::Finish::Overwrite(text) => {
+                self.pending_text = Some(text);
+                self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
+                self.pending_json = Some(p);
+            }
+            pbr_export::Finish::Nothing => {}
+        }
+    }
+
+    /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
+    /// the project file is read-only (a bad `sdc-project.toml`, ruling P8) the JSON is still written but no hash is
+    /// recorded: the next export then asks before overwriting it.
+    fn record_json_sha(&mut self, sha: &str) {
+        let Some(d) = self.sets_doc.as_mut() else {
+            return;
+        };
+        if d.read_only() {
+            self.export
+                .notes
+                .push("the JSON's hash was not recorded: sdc-project.toml is read-only".into());
+            return;
+        }
+        d.set_last_json_sha256(sha);
+        if let Err(e) = d.save(false) {
+            self.dialog = Some(Dialog::Error(format!("sdc-project.toml: {e}")));
+        }
+    }
+
+    /// The answer to `Dialog::OverwriteJson`.
+    pub fn resolve_overwrite_json(&mut self, overwrite: bool) {
+        self.dialog = None;
+        let (Some(p), Some(text)) = (self.pending_json.take(), self.pending_text.take()) else {
+            return;
+        };
+        if overwrite {
+            if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
+                self.record_json_sha(&sha);
+            }
+        } else {
+            self.export.notes.push(format!(
+                "PGPatcher JSON kept as edited: {}",
+                p.path.display()
+            ));
+        }
     }
 
     /// The export ended: do what was asked while it ran (close, or open another folder). True when there was

@@ -61,6 +61,8 @@ pub struct ExportModel {
     pub events: Vec<EngineEvent>,
     pub summary: Option<BatchSummary>,
     pub error: Option<String>,
+    /// What the export did besides converting: the JSON, the vanilla/CPM copies, and what was left out.
+    pub notes: Vec<String>,
 }
 
 fn slash(p: &str) -> String {
