@@ -160,67 +160,72 @@ fn escape_pressed(ui: &mut egui::Ui, model: &AppModel) -> bool {
 
 fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, info: &Info) -> Requests {
     let mut requests = Requests::default();
-    ui.horizontal_wrapped(|ui| {
-        for (channel, name) in CHANNELS {
-            if ui
-                .selectable_label(model.view.channel == channel, name)
-                .clicked()
-            {
-                model.view.channel = channel;
-            }
-        }
-        ui.separator();
-        mip_control(ui, &mut model.view, info);
-        ui.separator();
-        // BC6H is tone-mapped for display: the sRGB / UNORM choice does not apply to it.
-        let bc6h = info.format == Some(Format::Bc6hUf16);
-        ui.add_enabled_ui(!bc6h, |ui| {
-            let linear = model.view.view_linear;
-            if ui.selectable_label(!linear, "sRGB").clicked() {
-                model.view.view_linear = false;
-            }
-            if ui.selectable_label(linear, "UNORM").clicked() {
-                model.view.view_linear = true;
-            }
-        })
-        .response
-        .on_disabled_hover_text("BC6H is tone-mapped for display");
-        ui.separator();
-        let layout = model.view.layout;
-        if ui
-            .selectable_label(layout == Layout::SideBySide, "Side by side")
-            .clicked()
-        {
-            model.view.layout = Layout::SideBySide;
-        }
-        if ui
-            .selectable_label(layout == Layout::Split, "Split")
-            .clicked()
-        {
-            model.view.layout = Layout::Split;
-        }
-        let possible = info.heatmap_possible();
-        ui.add_enabled_ui(possible, |ui| {
-            ui.toggle_value(&mut model.view.heatmap, "Heatmap")
-                .on_disabled_hover_text("Needs an encoded result with a source image");
-        });
-        ui.separator();
-        requests.fit = ui.button("Fit").clicked();
-        requests.one_to_one = ui.button("1:1").clicked();
-        ui.separator();
-        let mut live = model.preview.live;
-        if ui.checkbox(&mut live, "Live encode").changed() {
-            model.set_live(live);
-        }
-        if encode_button(ui, model) {
-            model.encode_now();
-        }
-        ui.separator();
+    ui.with_layout(UiLayout::right_to_left(Align::Min), |ui| {
         if ui.button("✕ Close").on_hover_text("Close (Esc)").clicked() {
             requests.close = true;
         }
+        ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
+            ui.horizontal_wrapped(|ui| toolbar_row(ui, model, info, &mut requests));
+        });
     });
     requests
+}
+
+fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &mut Requests) {
+    for (channel, name) in CHANNELS {
+        if ui
+            .selectable_label(model.view.channel == channel, name)
+            .clicked()
+        {
+            model.view.channel = channel;
+        }
+    }
+    ui.separator();
+    mip_control(ui, &mut model.view, info);
+    ui.separator();
+    // BC6H is tone-mapped for display: the sRGB / UNORM choice does not apply to it.
+    let bc6h = info.format == Some(Format::Bc6hUf16);
+    ui.add_enabled_ui(!bc6h, |ui| {
+        let linear = model.view.view_linear;
+        if ui.selectable_label(!linear, "sRGB").clicked() {
+            model.view.view_linear = false;
+        }
+        if ui.selectable_label(linear, "UNORM").clicked() {
+            model.view.view_linear = true;
+        }
+    })
+    .response
+    .on_disabled_hover_text("BC6H is tone-mapped for display");
+    ui.separator();
+    let layout = model.view.layout;
+    if ui
+        .selectable_label(layout == Layout::SideBySide, "Side by side")
+        .clicked()
+    {
+        model.view.layout = Layout::SideBySide;
+    }
+    if ui
+        .selectable_label(layout == Layout::Split, "Split")
+        .clicked()
+    {
+        model.view.layout = Layout::Split;
+    }
+    let possible = info.heatmap_possible();
+    ui.add_enabled_ui(possible, |ui| {
+        ui.toggle_value(&mut model.view.heatmap, "Heatmap")
+            .on_disabled_hover_text("Needs an encoded result with a source image");
+    });
+    ui.separator();
+    requests.fit = ui.button("Fit").clicked();
+    requests.one_to_one = ui.button("1:1").clicked();
+    ui.separator();
+    let mut live = model.preview.live;
+    if ui.checkbox(&mut live, "Live encode").changed() {
+        model.set_live(live);
+    }
+    if encode_button(ui, model) {
+        model.encode_now();
+    }
 }
 
 /// The mip label (`mip k (w×h)`) and, when there is a choice, the slider.
@@ -238,7 +243,7 @@ fn mip_control(ui: &mut egui::Ui, view: &mut ViewState, info: &Info) {
                 .step_by(1.0)
                 .show_value(false),
         );
-        paint_ticks(ui, r.rect, info.first, info.end, view.mip);
+        paint_ticks(ui, r.rect, info.first, info.end, mip);
         if r.changed() {
             view.set_mip(mip, info.size_of(view.mip), info.size_of(mip));
         }

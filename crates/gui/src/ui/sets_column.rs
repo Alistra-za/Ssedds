@@ -153,8 +153,10 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
                 }
             }
             if let (Some(from), Some(to)) = (dragged_index, hovered) {
-                if let Some(y) = rects.get(to).map(|r| insertion_y(from, to, *r)) {
-                    let r = rects[to];
+                if let Some((r, y)) = rects
+                    .get(to)
+                    .and_then(|r| insertion_y(from, to, *r).map(|y| (*r, y)))
+                {
                     let accent = ui.visuals().selection.stroke.color;
                     ui.painter().line_segment(
                         [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
@@ -201,6 +203,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
                 model.reorder_set(&id, to);
                 if editable {
                     st.flash = Some((id, now));
+                    ctx.request_repaint();
                 }
             }
             Act::OpenRename(id) => {
@@ -285,13 +288,13 @@ struct PillLook {
     flash: Option<f64>,
 }
 
-/// The y of the insertion line when set `from` is dragged over the pill at `to` (whose rect is `r`): moving
+/// The y of the insertion line (None over the dragged pill itself, where nothing moves) when set `from` is dragged over the pill at `to` (whose rect is `r`): moving
 /// down lands after that pill, moving up before it (the same rule as `reorder_set`).
-fn insertion_y(from: usize, to: usize, r: egui::Rect) -> f32 {
-    if to > from {
-        r.bottom()
-    } else {
-        r.top()
+fn insertion_y(from: usize, to: usize, r: egui::Rect) -> Option<f32> {
+    match to.cmp(&from) {
+        std::cmp::Ordering::Greater => Some(r.bottom()),
+        std::cmp::Ordering::Less => Some(r.top()),
+        std::cmp::Ordering::Equal => None,
     }
 }
 
@@ -649,8 +652,13 @@ mod tests {
     #[test]
     fn the_insertion_line_is_after_the_target_when_moving_down_and_before_it_when_moving_up() {
         let r = egui::Rect::from_min_max(egui::pos2(0.0, 10.0), egui::pos2(5.0, 30.0));
-        assert_eq!(insertion_y(0, 2, r), 30.0);
-        assert_eq!(insertion_y(2, 0, r), 10.0);
+        assert_eq!(insertion_y(0, 2, r), Some(30.0));
+        assert_eq!(insertion_y(2, 0, r), Some(10.0));
+        assert_eq!(
+            insertion_y(1, 1, r),
+            None,
+            "hovering the dragged pill itself shows no line"
+        );
     }
 
     #[test]
