@@ -11,7 +11,7 @@
 use super::AppModel;
 use crate::project::ProjectDoc;
 use engine::config::{PackRecipe, RawMap, Target};
-use engine::pack::{ChannelSource, RecipeKind};
+use engine::pack::{recipes_for_with, ChannelSource, RawInput, RecipeKind};
 use serde_json::json;
 
 /// The role each channel of a packed output holds, R to A, where a fill can stand in for a missing source.
@@ -26,6 +26,9 @@ pub fn channel_roles(kind: RecipeKind) -> [Option<RawMap>; 4] {
         RecipeKind::Parallax | RecipeKind::VanillaM => [None; 4],
     }
 }
+
+/// The engine's reason (`PACK-RECIPE-UNBUILDABLE`) shown when RFAOS cannot be built.
+pub const RFAOS_UNBUILDABLE: &str = "RFAOS needs a roughness, glossiness or AO source";
 
 /// The roles both `_rmaos` and `_rfaos` have, which follow the output across a recipe switch.
 const SHARED_FILLS: [RawMap; 3] = [RawMap::Roughness, RawMap::Ao, RawMap::Specular];
@@ -94,15 +97,49 @@ impl AppModel {
         });
     }
 
+    /// Why the set of the cs packed output `packed_key` cannot build `_rfaos`, if it cannot (final review I2): the
+    /// engine's rule (`recipes_for_with` with `rfaos`) on the sources the output is planned from. `_rfaos` has no
+    /// metallic channel, so a metallic-only set gets `PACK-RECIPE-UNBUILDABLE` and keeps `_rmaos`. `None` when
+    /// there is nothing to judge (no planned packed job).
+    pub fn rfaos_unbuildable(&self, packed_key: &str) -> Option<&'static str> {
+        let pk = self.item(packed_key)?.job.as_ref()?.pack.as_ref()?;
+        if pk.kind == RecipeKind::Rfaos {
+            return None;
+        }
+        let raw: Vec<RawInput> = pk
+            .channels
+            .iter()
+            .filter_map(|c| match c {
+                ChannelSource::Source { path, role, .. } => Some(RawInput {
+                    path: path.clone(),
+                    role: *role,
+                }),
+                _ => None,
+            })
+            .collect();
+        let built = recipes_for_with(Target::Cs, &raw, PackRecipe::Rfaos)
+            .0
+            .iter()
+            .any(|r| r.kind == RecipeKind::Rfaos);
+        (!built).then_some(RFAOS_UNBUILDABLE)
+    }
+
     /// Choose `_rmaos` or `_rfaos` for the set that owns the packed output `packed_key`, as one undo step.
-    /// `Auto` is not a choice the card offers.
-    pub fn set_packing_recipe(&mut self, packed_key: &str, choice: PackRecipe) {
+    /// `Auto` is not a choice the card offers. RFAOS on a set that cannot build it changes nothing and returns
+    /// the reason: the fills never move to a key whose output is not planned (final review I2), so the key a note
+    /// goes on (`to`) is always the key of the card shown after the re-plan.
+    pub fn set_packing_recipe(&mut self, packed_key: &str, choice: PackRecipe) -> Option<String> {
         let (Some(new), Some((base, current))) = (kind_of(choice), split_packed_key(packed_key))
         else {
-            return;
+            return None;
         };
         if self.target != Target::Cs || self.project.as_ref().is_none_or(ProjectDoc::read_only) {
-            return;
+            return None;
+        }
+        if new == RecipeKind::Rfaos {
+            if let Some(why) = self.rfaos_unbuildable(packed_key) {
+                return Some(why.to_string());
+            }
         }
         let key = |kind: RecipeKind| format!("{base}_{}", kind.suffix());
         let (from, to) = (packed_key.to_string(), key(new));
@@ -165,6 +202,7 @@ impl AppModel {
         if !notes.is_empty() {
             self.dropped_fills.insert(note_key, notes.join("; "));
         }
+        None
     }
 
     /// The project-wide `defaults.packing.fill.*` values still in `sdc.toml` (the retired global panel's keys).

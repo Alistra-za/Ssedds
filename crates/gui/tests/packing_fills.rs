@@ -643,3 +643,136 @@ fn picking_rfaos_keeps_the_set_in_the_json() {
     h.run();
     h.get_by_label("skin → JSON");
 }
+
+/// A metallic-only cs set: `_rmaos` from a metallic map, which `_rfaos` (no metallic channel) cannot be built from.
+fn metallic_only(dir: &Path) -> AppModel {
+    metallic_only_with(dir, "")
+}
+
+/// [`metallic_only`] with more `sdc.toml` text.
+fn metallic_only_with(dir: &Path, extra: &str) -> AppModel {
+    let r = dir.join("m");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, (y * 4) as u8, 90u8]))
+        .save(r.join("rock01.png"))
+        .unwrap();
+    grey(&r, "rock01_metallic.png", 30);
+    std::fs::write(
+        dir.join("sdc.toml"),
+        format!("[files.\"m/rock01_rmaos\".packing.fill]\nao = 99\n{extra}"),
+    )
+    .unwrap();
+    let settings = GuiSettings {
+        export_folder: Some(dir.join("export")),
+        ..GuiSettings::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.open_folder(dir.to_path_buf());
+    idle(&mut m);
+    m
+}
+
+const RFAOS_WHY: &str = "RFAOS needs a roughness, glossiness or AO source";
+
+/// Final review I2: RFAOS cannot be built from a metallic-only set, so the model refuses it with the reason and
+/// moves nothing (the fills stay on the planned `_rmaos` key).
+#[test]
+fn rfaos_on_a_metallic_only_set_is_refused_with_the_reason() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = metallic_only(d.path());
+    assert!(m.item(RMAOS).is_some());
+    assert_eq!(m.rfaos_unbuildable(RMAOS), Some(RFAOS_WHY));
+    let before = texts(&m);
+    assert_eq!(
+        m.set_packing_recipe(RMAOS, PackRecipe::Rfaos),
+        Some(RFAOS_WHY.to_string())
+    );
+    idle(&mut m);
+    assert_eq!(texts(&m), before, "nothing written");
+    assert!(m.item(RMAOS).is_some());
+    assert!(m.unmatched_keys.is_empty(), "{:?}", m.unmatched_keys);
+    assert!(m.dropped_fills.is_empty());
+    // A set with a roughness source can build it.
+    let d = tempfile::tempdir().unwrap();
+    let m = fixture(d.path());
+    assert_eq!(m.rfaos_unbuildable(RMAOS), None);
+}
+
+/// Final review I2: the card offers RFAOS disabled on a metallic-only set.
+#[test]
+fn the_rfaos_option_is_disabled_on_a_metallic_only_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = editor(metallic_only(d.path()));
+    h.run();
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("RMAOS (auto)"))
+        .expect("the recipe selector")
+        .click();
+    h.run();
+    h.run();
+    let rfaos = h.get_by_label("RFAOS (skin)");
+    assert!(rfaos.accesskit_node().is_disabled());
+    rfaos.hover();
+    h.run();
+    h.run();
+    h.get_by_label(RFAOS_WHY);
+    // The RMAOS option in the open list (the slot card is labelled "RMAOS" too, but is no button).
+    let rmaos = h
+        .query_all_by_label("RMAOS")
+        .find(|n| n.accesskit_node().role() == eframe::egui::accesskit::Role::Button)
+        .expect("the RMAOS option");
+    assert!(!rmaos.accesskit_node().is_disabled());
+}
+
+/// Final review I2: a hand-written `rfaos` the engine could not follow leaves the card on RMAOS; picking RMAOS
+/// still writes it, which clears the stale value.
+#[test]
+fn picking_rmaos_clears_a_stale_rfaos() {
+    let d = tempfile::tempdir().unwrap();
+    let m = metallic_only_with(
+        d.path(),
+        "\n[files.\"m/rock01_rfaos\".packing]\nrecipe = \"rfaos\"\n",
+    );
+    assert!(m.item(RMAOS).is_some(), "unbuildable: still _rmaos");
+    assert_eq!(m.explicit_recipe(RMAOS), PackRecipe::Rfaos);
+    let mut h = editor(m);
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("RMAOS"))
+        .expect("the recipe selector, no (auto)")
+        .click();
+    h.run();
+    h.run();
+    h.query_all_by_label("RMAOS")
+        .find(|n| n.accesskit_node().role() == eframe::egui::accesskit::Role::Button)
+        .expect("the RMAOS option")
+        .click();
+    settle(&mut h);
+    let p = h.state().project.as_ref().unwrap();
+    assert_eq!(p.file_value(RMAOS, "packing.recipe"), Some(json!("rmaos")));
+    assert_eq!(p.file_value(RFAOS, "packing.recipe"), None);
+}
+
+/// Final review I2: re-picking the recipe an `auto` card already built writes nothing (the set keeps following
+/// `auto`).
+#[test]
+fn re_picking_the_auto_recipe_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let m = fixture(d.path());
+    let before = texts(&m);
+    let mut h = editor(m);
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("RMAOS (auto)"))
+        .expect("the recipe selector")
+        .click();
+    h.run();
+    h.run();
+    h.query_all_by_label("RMAOS")
+        .find(|n| n.accesskit_node().role() == eframe::egui::accesskit::Role::Button)
+        .expect("the RMAOS option")
+        .click();
+    settle(&mut h);
+    assert_eq!(texts(h.state()), before);
+}

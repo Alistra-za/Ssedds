@@ -98,7 +98,9 @@ pub fn draw(
             Act::Expand(k) => expand = Some(k),
             Act::Format(k, f, t) => model.set_format(&k, f, t),
             Act::Opaque(k, on) => model.set_opaque(&k, on),
-            Act::Recipe(k, r) => model.set_packing_recipe(&k, r),
+            Act::Recipe(k, r) => {
+                model.set_packing_recipe(&k, r);
+            }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
         }
     }
@@ -343,8 +345,16 @@ fn packed_controls(
                 RecipeKind::Rfaos => "RFAOS (skin)",
                 _ => "RMAOS",
             };
-            let auto = model.explicit_recipe(&item.key) == PackRecipe::Auto;
-            let mut choice = pk.kind;
+            let explicit = model.explicit_recipe(&item.key);
+            let auto = explicit == PackRecipe::Auto;
+            let recipe = |k: RecipeKind| {
+                if k == RecipeKind::Rfaos {
+                    PackRecipe::Rfaos
+                } else {
+                    PackRecipe::Rmaos
+                }
+            };
+            let unbuildable = model.rfaos_unbuildable(&item.key);
             egui::ComboBox::from_id_salt(("pack-recipe", &item.key))
                 .selected_text(format!(
                     "{}{}",
@@ -354,17 +364,25 @@ fn packed_controls(
                 .width(CARD - 24.0)
                 .show_ui(ui, |ui| {
                     for k in [RecipeKind::Rmaos, RecipeKind::Rfaos] {
-                        ui.selectable_value(&mut choice, k, label(k));
+                        // Final review I2: RFAOS is offered only where the set can build it.
+                        let why = unbuildable.filter(|_| k == RecipeKind::Rfaos);
+                        let r = ui
+                            .add_enabled(
+                                why.is_none(),
+                                egui::Button::selectable(pk.kind == k, label(k)),
+                            )
+                            .on_disabled_hover_text(why.unwrap_or_default());
+                        // Picking the built recipe again still writes it when an explicit value differs: a stale
+                        // hand-written `rfaos` the engine could not follow is cleared by picking RMAOS. An `auto`
+                        // choice is never pinned by a re-click.
+                        if r.clicked()
+                            && (k != pk.kind
+                                || (explicit != PackRecipe::Auto && explicit != recipe(k)))
+                        {
+                            acts.push(Act::Recipe(item.key.clone(), recipe(k)));
+                        }
                     }
                 });
-            if choice != pk.kind {
-                let r = if choice == RecipeKind::Rfaos {
-                    PackRecipe::Rfaos
-                } else {
-                    PackRecipe::Rmaos
-                };
-                acts.push(Act::Recipe(item.key.clone(), r));
-            }
         }
         fill_controls(ui, model, &item.key, acts);
         if let Some(note) = model.dropped_fills.get(&item.key) {
