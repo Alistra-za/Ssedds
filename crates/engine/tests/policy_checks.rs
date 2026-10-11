@@ -1623,7 +1623,8 @@ fn near_opaque_alpha_on_pbr_normal_resolves_to_remove_with_an_info() {
         w.message,
         "source alpha 251–254 present (min 251): treated as opaque (BC encode artefact); alpha removed"
     );
-    // One texel below the cutoff: the unchanged varying-alpha rules (LOSS-ALPHA-DATA blocks, no info).
+    // One texel below the cutoff: genuinely varying alpha is no longer "near opaque", so the PBR-normal drop info replaces the near-opaque one
+    // (owner 2026-10-11, DECISIONS P25: no LOSS-ALPHA-DATA block on a PBR normal).
     let j = run(
         Target::Cs,
         "textures/a/x_n.png",
@@ -1633,14 +1634,9 @@ fn near_opaque_alpha_on_pbr_normal_resolves_to_remove_with_an_info() {
         &["subtype=pbr_normal"],
         &[],
     );
-    assert_eq!(
-        j.status,
-        JobStatus::Blocked {
-            codes: vec![Code::LossAlphaData]
-        },
-        "{:?}",
-        j.warnings
-    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert!(!codes(&j).contains(&Code::LossAlphaData));
+    assert!(codes(&j).contains(&Code::AlphaPbrNormalDropped));
     assert!(!codes(&j).contains(&Code::AlphaNearOpaque));
     // Constant 255 raises neither.
     let j = run(
@@ -1759,4 +1755,86 @@ fn roughness_default_outside_0_1_is_cfg_invalid() {
         &[],
     );
     assert!(!codes(&j).contains(&Code::CfgInvalid), "{:?}", j.warnings);
+}
+
+// Owner 2026-10-11 (DECISIONS P25): LOSS-ALPHA-DATA was too broad. A PBR normal's vanilla specular in alpha is
+// dropped with an info, and an alpha the user explicitly removed is not reported as a loss.
+
+/// A varying `pbr_normal` alpha (inferred remove) is an info, not a block.
+#[test]
+fn pbr_normal_alpha_drop_is_an_info_not_a_block() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        alpha_codes(&[10, 120, 250]),
+        &["subtype=pbr_normal"],
+        &[],
+    );
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert!(
+        !codes(&j).contains(&Code::LossAlphaData),
+        "{:?}",
+        j.warnings
+    );
+    let w = warning(&j, Code::AlphaPbrNormalDropped);
+    assert_eq!(w.severity, engine::codes::Severity::Info);
+    assert_eq!(
+        w.message,
+        "vanilla specular in alpha dropped (PBR normals don't use alpha)"
+    );
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+}
+
+/// An explicit `alpha.policy = "remove"` (here a `[files]`-style scope and a `--set`) is the user's decision.
+#[test]
+fn explicit_remove_raises_no_alpha_loss() {
+    for sets in [
+        &["subtype=diffuse", "file:x_d.png.alpha.policy=remove"][..],
+        &["subtype=diffuse", "alpha.policy=remove"][..],
+    ] {
+        let j = run(
+            Target::Cs,
+            "textures/a/x_d.png",
+            Some("d"),
+            &["d"],
+            alpha_codes(&[10, 120, 250]),
+            sets,
+            &[],
+        );
+        assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove, "{sets:?}");
+        assert!(
+            !codes(&j).contains(&Code::LossAlphaData),
+            "{sets:?}: {:?}",
+            j.warnings
+        );
+    }
+}
+
+/// An inferred remove on a diffuse (or albedo) with varying alpha still blocks, and so does a vanilla normal.
+#[test]
+fn inferred_remove_on_diffuse_and_vanilla_normal_still_block() {
+    // The diffuse default keeps alpha, so force an inferred remove through a format that cannot store it.
+    let j = run(
+        Target::Cs,
+        "textures/a/x_d.png",
+        Some("d"),
+        &["d"],
+        alpha_codes(&[10, 120, 250]),
+        &["subtype=diffuse", "format=bc1"],
+        &[],
+    );
+    assert!(codes(&j).contains(&Code::LossAlphaData), "{:?}", j.warnings);
+    let j = run(
+        Target::Cs,
+        "textures/a/x_n.png",
+        Some("n"),
+        &["n"],
+        alpha_codes(&[10, 120, 250]),
+        &["subtype=normal", "alpha.policy=data", "format=bc1"],
+        &[],
+    );
+    assert!(codes(&j).contains(&Code::LossAlphaData), "{:?}", j.warnings);
+    assert!(!codes(&j).contains(&Code::AlphaPbrNormalDropped));
 }

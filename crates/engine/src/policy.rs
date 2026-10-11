@@ -757,7 +757,7 @@ fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
 ///
 /// A sub-type unavailable under the target (spec §3.1, §4.2) reports CFG-UNAVAILABLE only: that profile is never
 /// written, so its format, tag, alpha and dimension checks would be a cascade of the one root cause.
-pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
+pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Warning> {
     use Code::*;
     let a = f.analysis;
     let st = p.subtype;
@@ -927,13 +927,25 @@ pub fn check_profile(p: &Profile, f: &FileFacts) -> Vec<Warning> {
             "perceptual BC7 is allowed only for colour without data alpha [B2 §1]".into(),
         );
     }
+    // Owner 2026-10-11 (DECISIONS P25): an alpha the user explicitly removed is their decision, not a loss; a
+    // PBR normal's alpha is vanilla specular that PBR does not use, so dropping it is an info. Any other
+    // discarded varying alpha (an inferred remove, or a format that cannot store it) still blocks.
+    let explicit_remove = alpha_explicit && p.alpha.policy == AlphaPolicy::Remove;
     if a.alpha == AlphaContent::Varying
+        && !explicit_remove
         && (p.alpha.policy == AlphaPolicy::Remove || !stores_alpha(p.format))
     {
-        add(
-            LossAlphaData,
-            "non-constant alpha would be discarded".into(),
-        );
+        if st == Subtype::PbrNormal {
+            add(
+                AlphaPbrNormalDropped,
+                "vanilla specular in alpha dropped (PBR normals don't use alpha)".into(),
+            );
+        } else {
+            add(
+                LossAlphaData,
+                "non-constant alpha would be discarded".into(),
+            );
+        }
     }
     // DECISIONS Note L: the analysis already classed near-opaque alpha as constant, so no LOSS-ALPHA-DATA above;
     // this only reports that the (noise) alpha is dropped. Under `data` the alpha is kept, so nothing is claimed.
@@ -1245,7 +1257,11 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         }
     }
     let mut warnings: Vec<Warning> = fallback_note.into_iter().collect();
-    warnings.extend(check_profile(&profile, f));
+    warnings.extend(check_profile(
+        &profile,
+        f,
+        alpha_policy_explicit(ctx, &provenance),
+    ));
     if !reasons.is_empty() {
         warnings.push(
             Warning::new(Code::SugLowConfidence, reasons.join("; "))

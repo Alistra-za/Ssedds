@@ -1615,7 +1615,7 @@ fn suffix_alias_writes_the_canonical_name_with_the_alias_preset_provenance() {
 }
 
 /// DECISIONS Note L, end to end: a PBR `_n` re-exported with alpha 251..=255 converts with the alpha removed, the
-/// ALPHA-NEAR-OPAQUE info and no LOSS-ALPHA-DATA; one texel at 250 blocks the file as varying alpha.
+/// ALPHA-NEAR-OPAQUE info and no LOSS-ALPHA-DATA; one texel at 250 is genuinely varying alpha, dropped with ALPHA-PBR-NORMAL-DROPPED (P25).
 #[test]
 fn near_opaque_normal_alpha_is_removed_with_an_info() {
     let d = tempfile::tempdir().unwrap();
@@ -1666,7 +1666,8 @@ fn near_opaque_normal_alpha_is_removed_with_an_info() {
         &["file:**/iron_n.png.subtype=pbr_normal"],
         &[],
     );
-    assert_eq!(o.summary.converted, 0, "{:?}", warnings(&o));
-    assert_eq!(skip_code(&o, "iron_n.png"), Some(Code::LossAlphaData));
+    // Owner 2026-10-11 (DECISIONS P25): a PBR normal's genuinely varying alpha is dropped with an info, no block.
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(warnings(&o), vec![Code::AlphaPbrNormalDropped]);
     assert!(!warnings(&o).contains(&Code::AlphaNearOpaque));
 }

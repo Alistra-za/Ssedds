@@ -619,7 +619,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 
 | Code | Severity | Trigger → message | Resolution |
 |---|---|---|---|
-| `LOSS-ALPHA-DATA` | blocking | Non-constant alpha (minimum < 251) discarded by `remove` or a no-alpha format | Keep alpha or acknowledge |
+| `LOSS-ALPHA-DATA` | blocking | Non-constant alpha (minimum < 251) discarded by `remove` or a no-alpha format, except a `pbr_normal` (`ALPHA-PBR-NORMAL-DROPPED`) or an explicit `alpha.policy = remove` (DECISIONS P25) | Keep alpha or acknowledge |
 | `LOSS-CLAMP-HDR` | warning | Float values outside [0, 1] written to LDR → clamped. Raised by the interim float guard (§5.1) until the M6 transfer split | HDR category under `cs`, or accept |
 | `LOSS-BITDEPTH` | info | 16-bit/float source to 8-bit-endpoint format | — |
 | `LOSS-REENCODE` (M6) | warning | Compressed DDS re-encoded; cannot improve it [SC §7]. Not emitted yet: DDS re-encode lands in M6 | Use the source |
@@ -635,6 +635,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `ALPHA-EXACT-OFF-M` | blocking | `exact_opaque` off on an `_m` written as BC7 (BC3's alpha block stores 255 exactly) → 254 may reach PGPatcher/ENB checks; blocking since S6 (7 of 28 real `_m` at ≥ 40% alpha ≠ 255) | Keep it on, or `--allow` |
 | `ALPHA-254` | info | Decoded 254 present (bc7e with flag off, or a validated third-party DDS); harmless to CS's 251/255 gate [D-A] | Turn flag on if alpha is read |
 | `ALPHA-NEAR-OPAQUE` | info | Source alpha 251–254 present, minimum ≥ 251: treated as opaque (BC encode artefact); alpha removed (DECISIONS Note L) | — |
+| `ALPHA-PBR-NORMAL-DROPPED` | info | Varying alpha dropped from a `pbr_normal`: vanilla specular in alpha, which PBR normals do not use (DECISIONS P25) | — |
 | `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla` or `cpm` [D#4] | UNORM |
 | `TAG-SRGB-NONPBR` | blocking | `_SRGB` on a non-PBR sub-type under `cs` → renders darker [SC §6] | UNORM |
 | `TAG-UNORM-PBR` | warning | UNORM on PBR colour → washed out with LL off [SC §6] | `_SRGB` |

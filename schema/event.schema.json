@@ -278,6 +278,7 @@
         "ALPHA-EXACT-OFF-M",
         "ALPHA-254",
         "ALPHA-NEAR-OPAQUE",
+        "ALPHA-PBR-NORMAL-DROPPED",
         "TAG-SRGB-VANILLA",
         "TAG-SRGB-NONPBR",
         "TAG-UNORM-PBR",

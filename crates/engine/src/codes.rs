@@ -48,6 +48,7 @@ codes! {
     AlphaExactOffM = "ALPHA-EXACT-OFF-M" => Blocking,
     Alpha254 = "ALPHA-254" => Info,
     AlphaNearOpaque = "ALPHA-NEAR-OPAQUE" => Info,
+    AlphaPbrNormalDropped = "ALPHA-PBR-NORMAL-DROPPED" => Info,
     TagSrgbVanilla = "TAG-SRGB-VANILLA" => Error,
     TagSrgbNonpbr = "TAG-SRGB-NONPBR" => Blocking,
     TagUnormPbr = "TAG-UNORM-PBR" => Warning,
@@ -152,6 +153,6 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 58);
+        assert_eq!(Code::ALL.len(), 59);
     }
 }
