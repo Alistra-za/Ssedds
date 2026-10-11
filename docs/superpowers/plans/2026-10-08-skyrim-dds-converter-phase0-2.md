@@ -11975,6 +11975,15 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - float `_g` with peak ≤ 1 → BC7 sRGB;
       - an explicit `--set` override wins in both directions.
     - Ask the owner whether `hdr_sky` should get the same check.
+  - **Owner idea to evaluate (2026-10-10): CPM `_m` without parallax.**
+    - **The idea:** a `cpm` `_m` given as a file (not packed) whose alpha holds no height is forced to alpha 255 today (exact opaque). That makes it a plain env mask, so PGPatcher and the CS complex-material gate don't treat it as CPM.
+      - Instead, write a **constant height** so it is patched as complex material.
+      - The owner suggested 0. The packed path already uses **0.5 (128)** as the `cpm` `_m` height default (Note M1, Spike S8: gate on at alpha ≤ 250). Pick one value for both paths; 0.5 is the neutral height, so it gives no constant parallax shift.
+      - Keep the exact-opaque option for real env masks.
+    - **Env-mask sub-types:** offer or force **BC4**, or uncompressed (Note O1), for a single-channel env mask.
+    - **To check first:**
+      - which channel the vanilla env-mask shader samples (BC4 stores R only);
+      - PGPatcher's own complex-material test on a constant alpha (the "≥50% non-white" rule, DECISIONS line 46, still Open).
 - **Carried items** (final review, SDD ledger):
   - Tent, Mitchell and Kaiser mips (mipcheck `RESULTS-2.md` B8):
     - Build each level **directly from mip 0**, with the kernel widened 2^N, and keep float values between levels.
