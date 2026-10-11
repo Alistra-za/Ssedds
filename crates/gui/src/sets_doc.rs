@@ -192,7 +192,8 @@ impl SetsDoc {
     }
 
     fn set_project(&mut self, key: &str, v: Option<Value>) {
-        if self.read_only() {
+        let absent = self.doc.get("project").and_then(|p| p.get(key)).is_none();
+        if self.read_only() || (v.is_none() && absent) {
             return;
         }
         let Some(p) = sub_table(self.doc.as_table_mut(), "project", || {
@@ -316,6 +317,9 @@ impl SetsDoc {
             return;
         }
         let lower = id.to_lowercase();
+        if !self.entries().iter().any(|e| e.id.to_lowercase() == lower) {
+            return;
+        }
         if let Some(tables) = self
             .doc
             .get_mut("sets")

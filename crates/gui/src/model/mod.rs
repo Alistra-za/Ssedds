@@ -190,20 +190,9 @@ impl AppModel {
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
-        self.banner = project.error().map(read_only_banner);
         self.project = Some(project);
-        let sets_doc = crate::sets_doc::SetsDoc::open(&root);
-        if let Some(e) = sets_doc.error() {
-            // P8: a bad sdc-project.toml makes sets and JSON read-only; sdc.toml keeps working.
-            let line = format!(
-                "{e} — sets and PBR JSON settings are read-only until it is fixed and reloaded"
-            );
-            self.banner = Some(match self.banner.take() {
-                Some(b) => format!("{b}\n{line}"),
-                None => line,
-            });
-        }
-        self.sets_doc = Some(sets_doc);
+        self.sets_doc = Some(crate::sets_doc::SetsDoc::open(&root));
+        self.refresh_banner();
         self.settings.push_recent(root.clone());
         self.save_settings();
         self.root = Some(root);
@@ -337,7 +326,7 @@ impl AppModel {
         if f.config && !from_user_config {
             if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
                 p.set_error(&f.message);
-                self.banner = p.error().map(read_only_banner);
+                self.refresh_banner();
                 self.ignored_by_plan = true;
                 self.replan();
                 return;
@@ -347,7 +336,7 @@ impl AppModel {
             if std::mem::take(&mut self.ignored_by_plan) {
                 if let Some(p) = self.project.as_mut() {
                     p.reload();
-                    self.banner = p.error().map(read_only_banner);
+                    self.refresh_banner();
                 }
             }
         }
@@ -755,6 +744,38 @@ impl AppModel {
         });
     }
 
+    /// Rebuild the banner from both files: `sdc.toml`'s read-only reason and `sdc-project.toml`'s (P8).
+    pub fn refresh_banner(&mut self) {
+        let mut lines = Vec::new();
+        if let Some(e) = self.project.as_ref().and_then(ProjectDoc::error) {
+            lines.push(read_only_banner(e));
+        }
+        if let Some(e) = self.sets_doc.as_ref().and_then(|s| s.error()) {
+            lines.push(format!(
+                "{e} — sets and PBR JSON settings are read-only until it is fixed and reloaded"
+            ));
+        }
+        self.banner = if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        };
+    }
+
+    /// Reload both documents from disk (the banner's Reload), then plan once.
+    pub fn reload_documents(&mut self) {
+        self.dialog = None;
+        if let Some(p) = self.project.as_mut() {
+            p.reload();
+        }
+        if let Some(s) = self.sets_doc.as_mut() {
+            s.reload();
+        }
+        self.ignored_by_plan = false;
+        self.refresh_banner();
+        self.replan();
+    }
+
     /// Save `sdc.toml`, then `sdc-project.toml`; the first error is returned (and raises its dialog).
     pub fn save(&mut self) -> Result<(), SaveError> {
         if let Some(p) = self.project.as_mut() {
@@ -763,8 +784,12 @@ impl AppModel {
                 return Err(e);
             }
         }
-        // A read-only sdc-project.toml is skipped: its edits never happened.
-        if let Some(s) = self.sets_doc.as_mut().filter(|s| !s.read_only()) {
+        // A clean sdc-project.toml is not written (no empty file, no spurious conflict); a read-only one never has edits.
+        if let Some(s) = self
+            .sets_doc
+            .as_mut()
+            .filter(|s| s.is_dirty() && !s.read_only())
+        {
             if let Err(e) = s.save(false) {
                 self.save_failed(DocKind::Project, &e);
                 return Err(e);
@@ -787,7 +812,7 @@ impl AppModel {
                 } else {
                     p.reload();
                     self.ignored_by_plan = false;
-                    self.banner = p.error().map(str::to_string);
+                    self.refresh_banner();
                     self.replan();
                 }
             }
@@ -801,6 +826,7 @@ impl AppModel {
                     }
                 } else {
                     s.reload();
+                    self.refresh_banner();
                     self.replan();
                 }
             }

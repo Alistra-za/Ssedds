@@ -70,6 +70,7 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         if let Some(s) = model.sets_doc.as_mut() {
             s.reload();
         }
+        model.refresh_banner();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     } else if cancel {
         model.dialog = None;

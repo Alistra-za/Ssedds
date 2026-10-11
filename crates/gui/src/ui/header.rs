@@ -1,5 +1,5 @@
 //! The header (M3a spec §2.1): open, recent, mode, collapse, export folder, save, export; then the status line and banner.
-use crate::model::{AppModel, DocKind};
+use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Target;
 use std::path::PathBuf;
@@ -147,8 +147,7 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(WARNING, format!("⚠ {b}"));
                 if model.project.is_some() && ui.button("Reload").clicked() {
-                    model.resolve_external_change(DocKind::SdcToml, false);
-                    model.resolve_external_change(DocKind::Project, false);
+                    model.reload_documents();
                 }
             });
         }

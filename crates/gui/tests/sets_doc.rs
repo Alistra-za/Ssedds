@@ -168,3 +168,86 @@ fn the_model_opens_saves_and_reports_both_files() {
     assert!(m.save().is_err());
     assert_eq!(m.dialog, Some(Dialog::ExternalChange(DocKind::Project)));
 }
+
+#[test]
+fn a_clean_sets_doc_is_never_written_or_checked() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    let root = m.root.clone().unwrap();
+    m.project
+        .as_mut()
+        .unwrap()
+        .set_target(engine::config::Target::Cs);
+    assert!(m.is_dirty());
+    m.save().unwrap();
+    assert!(
+        !root.join("sdc-project.toml").exists(),
+        "a clean sets doc creates no file"
+    );
+    // A file that appears outside the GUI while the doc is clean is not a conflict.
+    std::fs::write(root.join("sdc-project.toml"), "# elsewhere\n").unwrap();
+    m.project
+        .as_mut()
+        .unwrap()
+        .set_target(engine::config::Target::Cs);
+    m.save().unwrap();
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
+}
+
+#[test]
+fn a_bad_sdc_project_toml_keeps_sdc_toml_working() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    let root = m.root.clone().unwrap();
+    std::fs::write(root.join("sdc-project.toml"), "[[sets]\nid = ").unwrap();
+    m.reload_documents();
+    m.wait_idle(std::time::Duration::from_secs(60));
+    let banner = m.banner.clone().unwrap();
+    assert!(banner.contains("sdc-project.toml"), "{banner}");
+    // (c) set edits are a no-op
+    m.sets_doc
+        .as_mut()
+        .unwrap()
+        .set_value("a", "hair", Some(json!(true)));
+    assert!(m.sets_doc.as_ref().unwrap().read_only() && !m.sets_doc.as_ref().unwrap().is_dirty());
+    // (b) sdc.toml edits still apply and save
+    m.project
+        .as_mut()
+        .unwrap()
+        .set_target(engine::config::Target::Cs);
+    assert!(m.is_dirty());
+    m.save().unwrap();
+    assert!(root.join("sdc.toml").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("sdc-project.toml")).unwrap(),
+        "[[sets]\nid = "
+    );
+    // (d) Reload with the file still bad keeps the banner
+    m.reload_documents();
+    m.wait_idle(std::time::Duration::from_secs(60));
+    assert!(m.banner.clone().unwrap().contains("sdc-project.toml"));
+    // Fixed: the banner clears.
+    std::fs::write(root.join("sdc-project.toml"), "").unwrap();
+    m.reload_documents();
+    m.wait_idle(std::time::Duration::from_secs(60));
+    assert!(m.banner.is_none(), "{:?}", m.banner);
+}
+
+#[test]
+fn a_non_conflict_save_error_names_the_file() {
+    use sdc_gui::model::Dialog;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    let root = m.root.clone().unwrap();
+    // A directory where the temp file goes makes the write fail.
+    std::fs::create_dir(root.join("sdc-project.toml.sdc-tmp")).unwrap();
+    m.sets_doc
+        .as_mut()
+        .unwrap()
+        .set_value("a", "hair", Some(json!(true)));
+    assert!(m.save().is_err());
+    match &m.dialog {
+        Some(Dialog::Error(t)) => assert!(t.starts_with("sdc-project.toml: "), "{t}"),
+        other => panic!("{other:?}"),
+    }
+}
