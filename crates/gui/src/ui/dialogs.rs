@@ -13,7 +13,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ExternalChange(which) => external_change(ctx, model, which),
         Dialog::OverwriteJson(path) => overwrite_json(ctx, model, &path),
         Dialog::Error(msg) => error(ctx, model, &msg),
-        Dialog::ProceedAnyway(n) => proceed_anyway(ctx, model, n),
+        Dialog::ProceedAnyway(keys) => proceed_anyway(ctx, model, &keys),
         Dialog::ExportBlocked(issues) => export_issues(ctx, model, &issues, false),
         Dialog::ExportWarnings(issues) => export_issues(ctx, model, &issues, true),
     }
@@ -72,20 +72,91 @@ fn export_issues(
     }
 }
 
-fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, n: usize) {
-    let (mut proceed, mut cancel) = (false, false);
+/// Rows past which the list scrolls.
+const VISIBLE_ROWS: f32 = 12.0;
+
+fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
+    use super::settings_panel::{subtype_groups, subtype_label};
+    use engine::policy::{availability, Availability};
+    let (mut proceed, mut cancel, mut accept_all) = (false, false, false);
+    let mut select: Option<String> = None;
+    let mut decide: Option<(String, engine::config::Subtype)> = None;
+    let any_suggestion = keys
+        .iter()
+        .any(|k| matches!(model.subtype_question(k), Some(Some(_))));
+    let target = model.target;
     modal(ctx, "proceed-anyway", |ui| {
         ui.heading("Undecided textures");
-        ui.label(format!("{n} textures still need a decision."));
+        ui.label(format!("{} textures still need a decision.", keys.len()));
         ui.label(
-            "Proceed anyway exports the decided textures and skips these; nothing is decided for you.",
+            "Decide them here, or proceed anyway to export the decided textures and skip these.",
         );
+        let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+        egui::ScrollArea::vertical()
+            .max_height(row_h * VISIBLE_ROWS)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for key in keys {
+                    let Some(item) = model.item(key) else {
+                        continue;
+                    };
+                    let name = item.name.clone();
+                    let fallback = item.job.as_ref().map(|j| j.profile.subtype);
+                    let question = model.subtype_question(key);
+                    ui.horizontal(|ui| {
+                        if ui.link(&name).clicked() {
+                            select = Some(key.clone());
+                        }
+                        let Some(suggested) = question else {
+                            ui.weak("decide in the settings panel");
+                            return;
+                        };
+                        let Some(default) = suggested.or(fallback) else {
+                            return;
+                        };
+                        let id = egui::Id::new(("undecided-row", key));
+                        let mut chosen: engine::config::Subtype =
+                            ui.data(|d| d.get_temp(id)).unwrap_or(default);
+                        egui::ComboBox::from_id_salt(id)
+                            .selected_text(subtype_label(chosen))
+                            .show_ui(ui, |ui| {
+                                for (heading, members) in subtype_groups(|s| {
+                                    matches!(availability(target, s), Availability::Available)
+                                }) {
+                                    ui.label(egui::RichText::new(heading).weak());
+                                    for st in members {
+                                        ui.selectable_value(&mut chosen, st, subtype_label(st));
+                                    }
+                                }
+                            });
+                        ui.data_mut(|d| d.insert_temp(id, chosen));
+                        if ui
+                            .button("\u{2713}")
+                            .on_hover_text("Decide this texture")
+                            .clicked()
+                        {
+                            decide = Some((key.clone(), chosen));
+                        }
+                    });
+                }
+            });
         ui.horizontal(|ui| {
+            accept_all = ui
+                .add_enabled(any_suggestion, egui::Button::new("Accept all suggestions"))
+                .on_hover_text("Decide every texture that has a suggestion; the others stay listed")
+                .clicked();
             proceed = ui.button("Proceed anyway").clicked();
             cancel = ui.button("Cancel").clicked();
         });
     });
-    if proceed {
+    if let Some(k) = select {
+        model.select_item(&k);
+    }
+    if let Some((k, st)) = decide {
+        model.decide_undecided_row(&k, st);
+    } else if accept_all {
+        model.accept_all_suggestions();
+    } else if proceed {
         model.proceed_anyway();
     } else if cancel {
         // The undecided textures stay highlighted in the Textures column.

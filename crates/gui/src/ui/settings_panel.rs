@@ -34,7 +34,7 @@ fn opt(v: Value, label: &str) -> (Value, String) {
     (v, label.to_string())
 }
 
-fn subtype_label(st: Subtype) -> String {
+pub fn subtype_label(st: Subtype) -> String {
     st.id().replace('_', " ")
 }
 

@@ -59,7 +59,8 @@ impl DocKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialog {
-    ProceedAnyway(usize),
+    /// The export asks about these undecided textures (item keys): decide them here, or proceed without.
+    ProceedAnyway(Vec<String>),
     /// Export cannot start: these must be fixed first (M3b §6.3).
     ExportBlocked(Vec<pbr_export::ExportIssue>),
     /// Export can start after a "Proceed anyway" (M3b §6.3: matchN pitfalls).
@@ -73,6 +74,15 @@ pub enum Dialog {
     /// The PGPatcher JSON was edited outside sdc since the last export; the new text waits for the answer.
     OverwriteJson(PathBuf),
     Error(String),
+}
+
+/// How the export continues once the plan that follows the undecided-texture dialog has landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Continue {
+    /// Every row was decided: ask the undecided question again (a new plan can raise new ones), then export.
+    Recheck,
+    /// "Proceed anyway" on a plan that was not settled yet: export, skipping what is undecided.
+    Start,
 }
 
 /// What was asked while an export ran: it happens when the export has ended.
@@ -134,6 +144,8 @@ pub struct AppModel {
     pub restart_needed: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
+    /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
+    continue_after_plan: Option<Continue>,
     /// The user chose to cancel the running export and then close or open: done when the export has ended.
     after_export: Option<AfterExport>,
     /// What the running export writes afterwards (the JSON and the vanilla/CPM copies).
@@ -197,6 +209,7 @@ impl AppModel {
             gpu_max_dim: 16384,
             gpu_available: true,
             export_after_plan: false,
+            continue_after_plan: None,
             after_export: None,
             pending_json: None,
             pending_text: None,
@@ -222,6 +235,7 @@ impl AppModel {
         }
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
+        self.continue_after_plan = None;
         self.last_inputs = None;
         self.auto_replans = 0;
         let same_folder = self.root.as_ref() == Some(&root);
@@ -339,6 +353,7 @@ impl AppModel {
                     "plan" => {
                         self.planning = None;
                         self.export_after_plan = false;
+                        self.continue_after_plan = None;
                     }
                     "export" => {
                         self.export.running = None;
@@ -360,6 +375,7 @@ impl AppModel {
     /// folder again without it. Any other failure (or a config error with `sdc.toml` already ignored) is a dialog.
     fn plan_failed(&mut self, f: PlanFailure) {
         self.export_after_plan = false;
+        self.continue_after_plan = None;
         // An error naming the user config is not the project's fault; ignoring `sdc.toml` would not help.
         let from_user_config = self
             .user_config
@@ -443,20 +459,7 @@ impl AppModel {
         };
         // The plan on screen must be the one for these sets: a plan whose output paths no longer match (the
         // two-pass planning hit its bound) would write files where the sets do not expect them.
-        if self
-            .last_inputs
-            .as_ref()
-            .is_some_and(|l| *l != sets::engine_inputs(self))
-        {
-            let mut msg = String::from(
-                "The sets changed while planning (two outputs may share one path), so nothing was exported. \
-                 Check set names and the match/rename fields, then export again.",
-            );
-            for c in pbr_export::path_collisions(self) {
-                msg.push('\n');
-                msg.push_str(&c.text);
-            }
-            self.dialog = Some(Dialog::Error(msg));
+        if self.plan_unsettled() {
             return;
         }
         if let Some(problem) = export::export_folder_problem(&root, &self.export_root()) {
@@ -476,14 +479,118 @@ impl AppModel {
         self.undecided_check();
     }
 
+    /// True (with an error dialog) when the plan on screen is not the one for these sets.
+    fn plan_unsettled(&mut self) -> bool {
+        if !self
+            .last_inputs
+            .as_ref()
+            .is_some_and(|l| *l != sets::engine_inputs(self))
+        {
+            return false;
+        }
+        let mut msg = String::from(
+            "The sets changed while planning (two outputs may share one path), so nothing was exported. \
+             Check set names and the match/rename fields, then export again.",
+        );
+        for c in pbr_export::path_collisions(self) {
+            msg.push('\n');
+            msg.push_str(&c.text);
+        }
+        self.dialog = Some(Dialog::Error(msg));
+        true
+    }
+
     /// The undecided-texture question, then the export itself.
     fn undecided_check(&mut self) {
-        let n = self.undecided();
-        if n > 0 {
-            self.dialog = Some(Dialog::ProceedAnyway(n));
+        let keys = self.undecided_keys();
+        if !keys.is_empty() {
+            self.dialog = Some(Dialog::ProceedAnyway(keys));
             return;
         }
         self.start_export();
+    }
+
+    /// Keys of the textures that still need a decision, in list order.
+    pub fn undecided_keys(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .filter(|i| i.status == ItemStatus::NeedsDecision)
+            .map(|i| i.key.clone())
+            .collect()
+    }
+
+    /// Whether the texture asks for its sub-type, and the engine's suggestion for it (the one the confirm-subtype
+    /// box preselects). `None`: the sub-type is not what it waits for (an alpha or green-channel question).
+    pub fn subtype_question(&self, key: &str) -> Option<Option<Subtype>> {
+        self.item(key)?.decisions.iter().find_map(|d| match d {
+            Decision::Subtype { suggested } => Some(*suggested),
+            _ => None,
+        })
+    }
+
+    /// One row of the export dialog: decide `key` as `st`. When it was the last row the export continues.
+    pub fn decide_undecided_row(&mut self, key: &str, st: Subtype) {
+        self.decide(key, Answer::Subtype(st));
+        self.drop_rows(&[key.to_string()]);
+    }
+
+    /// "Accept all suggestions": decide every listed texture that has a suggestion as that suggestion, as one undo
+    /// step. A texture without a suggestion stays listed and undecided.
+    pub fn accept_all_suggestions(&mut self) {
+        let Some(Dialog::ProceedAnyway(keys)) = self.dialog.clone() else {
+            return;
+        };
+        let picks: Vec<(String, Subtype)> = keys
+            .into_iter()
+            .filter_map(|k| {
+                let st = self.subtype_question(&k)??;
+                Some((k, st))
+            })
+            .collect();
+        if picks.is_empty() {
+            return;
+        }
+        // Each decision goes through `decide` (so the PBR follow-on applies); the steps they push fold into one.
+        let pushed = self.history.pushed;
+        for (k, st) in &picks {
+            self.decide(k, Answer::Subtype(*st));
+        }
+        let n = self.history.pushed - pushed;
+        self.history.fold_last(n, "Accept all suggestions");
+        let done: Vec<String> = picks.into_iter().map(|(k, _)| k).collect();
+        self.drop_rows(&done);
+    }
+
+    /// Take the decided rows out of the dialog; with none left, close it and continue to the export.
+    fn drop_rows(&mut self, decided: &[String]) {
+        let Some(Dialog::ProceedAnyway(keys)) = self.dialog.as_mut() else {
+            return;
+        };
+        keys.retain(|k| !decided.contains(k));
+        if keys.is_empty() {
+            self.dialog = None;
+            self.continue_export(Continue::Recheck);
+        }
+    }
+
+    /// Continue the export from the undecided-texture dialog. The decisions re-planned: a plan still in flight
+    /// is waited for (never export on a stale plan), then `how` decides what comes next.
+    fn continue_export(&mut self, how: Continue) {
+        if self.planning.is_some() {
+            self.continue_after_plan = Some(how);
+        } else {
+            self.run_continue(how);
+        }
+    }
+
+    fn run_continue(&mut self, how: Continue) {
+        if self.plan_unsettled() {
+            return;
+        }
+        match how {
+            Continue::Recheck => self.undecided_check(),
+            Continue::Start => self.start_export(),
+        }
     }
 
     /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export.
@@ -540,7 +647,7 @@ impl AppModel {
     /// DECISIONS N3: undecided textures are skipped, never decided here.
     pub fn proceed_anyway(&mut self) {
         self.dialog = None;
-        self.start_export();
+        self.continue_export(Continue::Start);
     }
 
     /// Save first (the CLI command and the next session read `sdc.toml`), then run the export on a worker.
@@ -754,6 +861,8 @@ impl AppModel {
         self.auto_replans = 0;
         if std::mem::take(&mut self.export_after_plan) {
             self.export_checks();
+        } else if let Some(how) = self.continue_after_plan.take() {
+            self.run_continue(how);
         }
     }
 

@@ -33,7 +33,8 @@ fn undecided_textures_ask_first_and_proceed_anyway_skips_them() {
     let n = m.undecided();
     assert!(n > 0);
     m.export_clicked();
-    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(n)));
+    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided_keys())));
+    assert_eq!(m.undecided_keys().len(), n);
     assert!(m.export.running.is_none(), "nothing runs before the answer");
     m.proceed_anyway();
     assert!(m.wait_idle(Duration::from_secs(120)));
