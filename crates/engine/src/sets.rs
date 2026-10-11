@@ -193,8 +193,18 @@ pub enum OutputKey {
     Packed { set: String, suffix: String },
 }
 
+/// Whether `rel` stays under the folder it is joined to: relative, with no `..`, root or drive part.
+fn stays_under(rel: &Path) -> bool {
+    use std::path::Component;
+    !rel.is_absolute()
+        && rel
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
 /// Give each file named by an `OutputKey::File` the output `output_root/<path>`. Keys that match no file are
-/// ignored (the GUI computes them from the previous plan; a vanished file is reported by its set edit, if any).
+/// ignored (the GUI computes them from the previous plan; a vanished file is reported by its set edit, if any), and
+/// so are paths that would leave the output root (absolute, or with `..`).
 pub fn apply_output_paths(
     files: &mut [InputFile],
     root: Option<&Path>,
@@ -202,7 +212,7 @@ pub fn apply_output_paths(
     paths: &BTreeMap<OutputKey, PathBuf>,
 ) {
     let Some(root) = root else { return };
-    for (k, rel) in paths {
+    for (k, rel) in paths.iter().filter(|(_, rel)| stays_under(rel)) {
         let OutputKey::File(key) = k else { continue };
         for f in files.iter_mut() {
             if project_rel(root, f).is_some_and(|r| path_key_matches(key, &r)) {
@@ -212,13 +222,15 @@ pub fn apply_output_paths(
     }
 }
 
-/// The packed-output paths by (set key, recipe suffix), absolute, for `plan_packing`.
+/// The packed-output paths by (set key, recipe suffix), absolute, for `plan_packing`. A path that would leave the
+/// output root is ignored, as in `apply_output_paths`.
 pub fn packed_outputs(
     output_root: &Path,
     paths: &BTreeMap<OutputKey, PathBuf>,
 ) -> BTreeMap<(String, String), PathBuf> {
     paths
         .iter()
+        .filter(|(_, rel)| stays_under(rel))
         .filter_map(|(k, rel)| match k {
             OutputKey::Packed { set, suffix } => Some((
                 (set_key(output_root, set), suffix.to_lowercase()),

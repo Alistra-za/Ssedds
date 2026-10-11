@@ -342,3 +342,37 @@ fn an_output_path_for_a_missing_file_is_ignored() {
     let (b, _) = plan_events(r);
     assert_eq!(outputs(&a), outputs(&b));
 }
+
+/// Final review Minor 3: an output path is joined under the output root, so one that is absolute or climbs out with
+/// `..` is ignored (file and packed outputs alike): nothing is written outside the export folder.
+#[test]
+fn an_output_path_outside_the_output_root_is_ignored() {
+    let d = fixture();
+    let (a, _) = plan_events(req(&d));
+    let mut bad = vec![
+        PathBuf::from("../escape/rock01.dds"),
+        PathBuf::from("textures/../../escape/rock01.dds"),
+        d.path().join("elsewhere/rock01.dds"),
+    ];
+    if cfg!(windows) {
+        bad.push(PathBuf::from(r"\escape\rock01.dds"));
+        bad.push(PathBuf::from("C:escape/rock01.dds"));
+    } else {
+        bad.push(PathBuf::from("/escape/rock01.dds"));
+    }
+    for rel in bad {
+        let mut r = req(&d);
+        r.output_paths = BTreeMap::from([
+            (OutputKey::File("landscape/rock01.png".into()), rel.clone()),
+            (
+                OutputKey::Packed {
+                    set: "stone/stone".into(),
+                    suffix: "rmaos".into(),
+                },
+                rel.clone(),
+            ),
+        ]);
+        let (b, _) = plan_events(r);
+        assert_eq!(outputs(&a), outputs(&b), "{}", rel.display());
+    }
+}
