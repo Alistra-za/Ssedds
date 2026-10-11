@@ -36,6 +36,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS texset_key ON texset(n, ifnull(t0,0), ifnull(t
 CREATE INDEX IF NOT EXISTS shape_texset ON shape(texset_id);
 "#;
 
+/// Schema step 1 to 2: texture copies and their game-view winners.
+const TEX_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS tex_copy   (path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER,
+                                   PRIMARY KEY(path_id, origin_id)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS tex_winner (path_id INTEGER PRIMARY KEY, origin_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
+"#;
+
 const TEMP: &str = r#"
 CREATE TEMP TABLE IF NOT EXISTS pending_derived (pid INTEGER PRIMARY KEY, path_id INTEGER NOT NULL,
                                    origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER, crc32 INTEGER,
@@ -94,6 +101,13 @@ pub fn check_name(code: i32) -> Option<&'static str> {
         5 => "dup_of",
         _ => return None,
     })
+}
+
+/// Where the game gets a texture slot path from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TexResolution {
+    Found { origin: String, n_copies: u32 },
+    Missing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -448,7 +462,10 @@ impl Store {
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v == 0 {
             conn.execute_batch(SCHEMA)?;
-            conn.pragma_update(None, "user_version", 1)?;
+        }
+        if v < 2 {
+            conn.execute_batch(TEX_SCHEMA)?;
+            conn.pragma_update(None, "user_version", 2)?;
         }
         Ok(Store { conn })
     }
@@ -627,6 +644,46 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Replaces `tex_copy` and `tex_winner`: copies as (path_id, origin_id, size, mtime), winners
+    /// path_id -> (origin_id, n_copies).
+    pub fn set_textures(
+        &mut self,
+        copies: &[(i64, i64, u64, i64)],
+        winners: &HashMap<i64, (i64, u32)>,
+    ) -> Result<(), ScanError> {
+        let tx = self.conn.transaction()?;
+        tx.execute_batch("DELETE FROM tex_copy; DELETE FROM tex_winner;")?;
+        {
+            let mut c = tx.prepare("INSERT OR REPLACE INTO tex_copy VALUES (?1,?2,?3,?4)")?;
+            for (p, o, s, m) in copies {
+                c.execute(params![p, o, *s as i64, m])?;
+            }
+            let mut w = tx.prepare("INSERT INTO tex_winner VALUES (?1,?2,?3)")?;
+            for (p, (o, n)) in winners {
+                w.execute(params![p, o, n])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The origin supplying the texture the game loads for `norm` (canonical path), or Missing.
+    pub fn resolve_texture(&self, norm: &str) -> TexResolution {
+        self.conn
+            .query_row(
+                "SELECT o.name, w.n_copies FROM tex_winner w JOIN path p ON p.id = w.path_id
+                 JOIN origin o ON o.id = w.origin_id WHERE p.p = ?1",
+                [norm],
+                |r| {
+                    Ok(TexResolution::Found {
+                        origin: r.get(0)?,
+                        n_copies: r.get(1)?,
+                    })
+                },
+            )
+            .unwrap_or(TexResolution::Missing)
     }
 
     /// Replaces `pgp_diff` with path → (crc32original, crc32patched).

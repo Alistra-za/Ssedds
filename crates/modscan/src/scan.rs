@@ -218,7 +218,7 @@ pub fn run(
     }
 
     // 3. Walk.
-    let (copies, locs, opened) = walk(&loose, &bsas, &mut report, progress);
+    let (copies, locs, opened, tex) = walk(&loose, &bsas, &mut report, progress);
     let derived: Vec<bool> = copies
         .iter()
         .map(|c| match c.origin {
@@ -391,6 +391,25 @@ pub fn run(
         .collect();
     store.set_winners(&game_rows, &src_rows)?;
 
+    // Texture winners (game view only; stat-only data from the walk).
+    let tex_pids = store.path_ids(&tex.iter().map(|c| c.path.as_str()).collect::<Vec<_>>())?;
+    let tex_win = winners(&tex, &loose, &bsas, &|_| false);
+    let tex_pid_of: HashMap<&str, i64> = tex
+        .iter()
+        .zip(&tex_pids)
+        .map(|(c, &p)| (c.path.as_str(), p))
+        .collect();
+    let tex_rows: Vec<(i64, i64, u64, i64)> = tex
+        .iter()
+        .zip(&tex_pids)
+        .map(|(c, &p)| (p, origin_id(c.origin), c.size, c.mtime))
+        .collect();
+    let tex_win_rows: HashMap<i64, (i64, u32)> = tex_win
+        .iter()
+        .map(|(p, &(i, n))| (tex_pid_of[p.as_str()], (origin_id(tex[i].origin), n)))
+        .collect();
+    store.set_textures(&tex_rows, &tex_win_rows)?;
+
     // pgp_diff: higher-priority origins overwrite lower ones on the same key.
     let mut order: Vec<usize> = (0..loose.len()).filter(|&i| diffs[i].is_some()).collect();
     order.sort_by_key(|&i| loose[i].priority);
@@ -487,10 +506,11 @@ fn walk(
     bsas: &[ActiveBsa],
     report: &mut Report,
     progress: &dyn Fn(Progress),
-) -> (Vec<Copy>, Vec<Loc>, Vec<Bsa>) {
+) -> (Vec<Copy>, Vec<Loc>, Vec<Bsa>, Vec<Copy>) {
     let total = loose.len() + bsas.len();
     let mut copies = vec![];
     let mut locs = vec![];
+    let mut tex: Vec<Copy> = vec![];
     let mut seen: HashSet<(String, OriginRef)> = HashSet::new();
     for (i, o) in loose.iter().enumerate() {
         progress(Progress {
@@ -511,6 +531,15 @@ fn walk(
             });
             locs.push(Loc::Loose(f.abs));
         }
+        // Textures: directory-entry stat only, never the bytes. Distinct paths per origin by construction.
+        for f in vfs::loose::walk(&o.root, &["textures"], &["dds"]) {
+            tex.push(Copy {
+                path: f.norm,
+                origin: OriginRef::Loose(i),
+                size: f.size,
+                mtime: f.mtime,
+            });
+        }
     }
     let mut opened = vec![];
     for (i, b) in bsas.iter().enumerate() {
@@ -530,6 +559,16 @@ fn walk(
         };
         let mtime = file_mtime(&b.path);
         let bi = opened.len();
+        for e in &bsa.entries {
+            if e.norm.starts_with("textures/") && e.norm.ends_with(".dds") && !is_facegen(&e.norm) {
+                tex.push(Copy {
+                    path: e.norm.clone(),
+                    origin: OriginRef::Bsa(i),
+                    size: e.size as u64,
+                    mtime,
+                });
+            }
+        }
         for (ei, e) in bsa.entries.iter().enumerate() {
             if !e.norm.starts_with("meshes/") || !e.norm.ends_with(".nif") || is_facegen(&e.norm) {
                 continue;
@@ -553,5 +592,5 @@ fn walk(
         done: total,
         total,
     });
-    (copies, locs, opened)
+    (copies, locs, opened, tex)
 }
