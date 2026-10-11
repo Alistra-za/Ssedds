@@ -816,7 +816,7 @@ fn leaf_with_policy(policy: engine::config::AlphaPolicy) -> Harness<'static, App
 
 fn mips_levels(h: &Harness<'static, AppModel>) -> serde_json::Value {
     let job = h.state().item("landscape/leaf.png").unwrap().job.clone();
-    serde_json::to_value(&job.unwrap().profile.mips.levels).unwrap()
+    serde_json::to_value(job.unwrap().profile.mips.levels).unwrap()
 }
 
 #[test]

@@ -308,14 +308,14 @@ fn editor(
 }
 
 /// Everything a group's rows need besides the group name.
-struct Ctx<'a> {
-    key: &'a str,
-    job: &'a ResolvedJob,
-    target: Target,
-    busy: bool,
-    compact: bool,
+pub struct Ctx<'a> {
+    pub key: &'a str,
+    pub job: &'a ResolvedJob,
+    pub target: Target,
+    pub busy: bool,
+    pub compact: bool,
     /// Why `sdc.toml` cannot be edited, when it is read-only.
-    toml_read_only: Option<String>,
+    pub toml_read_only: Option<String>,
 }
 
 /// What a field row asks of the model.
@@ -327,16 +327,7 @@ pub enum RowEdit {
 
 /// One grid row of a field: its label, its editor (disabled with the reason when locked), where the value came from
 /// (or the lock's reason), and a reset when the texture's own entry sets it. `compact` leaves the provenance blank.
-pub fn field_row(
-    ui: &mut egui::Ui,
-    key: &str,
-    target: Target,
-    job: &ResolvedJob,
-    busy: bool,
-    compact: bool,
-    toml_read_only: Option<&str>,
-    f: &FieldView,
-) -> Option<RowEdit> {
+pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> {
     let mut edit = None;
     ui.label(f.label);
     let (set, r) = ui
@@ -344,20 +335,16 @@ pub fn field_row(
             if f.lock.is_some() {
                 ui.disable();
             }
-            editor(ui, key, target, job, busy, f)
+            editor(ui, cx.key, cx.target, cx.job, cx.busy, f)
         })
         .inner;
-    if let Some(reason) = f
-        .lock
-        .map(str::to_string)
-        .or(toml_read_only.map(str::to_string))
-    {
+    if let Some(reason) = f.lock.map(str::to_string).or(cx.toml_read_only.clone()) {
         r.on_disabled_hover_text(reason);
     }
     if let Some(v) = set {
         edit = Some(RowEdit::Set(v));
     }
-    if compact {
+    if cx.compact {
         ui.label("");
     } else if let Some(reason) = f.lock {
         ui.label(egui::RichText::new(reason).small().weak());
@@ -441,17 +428,7 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
                     for f in field_views(cx.target, cx.job).into_iter().filter(|f| {
                         group_of(f.field) == name && !field_hidden(&cx.job.profile, f.field)
                     }) {
-                        let toml_read_only = cx.toml_read_only.as_deref();
-                        match field_row(
-                            ui,
-                            cx.key,
-                            cx.target,
-                            cx.job,
-                            cx.busy,
-                            cx.compact,
-                            toml_read_only,
-                            &f,
-                        ) {
+                        match field_row(ui, cx, &f) {
                             Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
                             Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
                             None => {}

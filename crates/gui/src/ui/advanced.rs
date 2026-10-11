@@ -2,7 +2,7 @@
 //! the rarely changed texture fields, and the `[files]` entries that match nothing. Drawing only: every edit is a
 //! call on the model, applied once the drawing is over.
 use super::columns::{strip_button, AMBER, STRIP_WIDTH};
-use super::settings_panel::{commit_slider, field_row, toml_read_only_reason, RowEdit};
+use super::settings_panel::{commit_slider, field_row, toml_read_only_reason, Ctx, RowEdit};
 use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
 use crate::model::{AppModel, Selection};
@@ -338,16 +338,15 @@ fn mipmaps(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             egui::Grid::new(("advanced-mips", &key))
                 .num_columns(4)
                 .show(ui, |ui| {
-                    match field_row(
-                        ui,
-                        &key,
-                        model.target,
-                        &job,
-                        model.busy(),
-                        false,
-                        why.as_deref(),
-                        &f,
-                    ) {
+                    let cx = Ctx {
+                        key: &key,
+                        job: &job,
+                        target: model.target,
+                        busy: model.busy(),
+                        compact: false,
+                        toml_read_only: why.clone(),
+                    };
+                    match field_row(ui, &cx, &f) {
                         Some(RowEdit::Set(v)) => {
                             actions.push(Action::SetField(key.clone(), f.field, v))
                         }
@@ -374,17 +373,16 @@ fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>
             egui::Grid::new(("advanced-fields", &key))
                 .num_columns(4)
                 .show(ui, |ui| {
+                    let cx = Ctx {
+                        key: &key,
+                        job: &job,
+                        target: model.target,
+                        busy,
+                        compact: false,
+                        toml_read_only: why.clone(),
+                    };
                     for f in advanced_field_views(model.target, &job) {
-                        match field_row(
-                            ui,
-                            &key,
-                            model.target,
-                            &job,
-                            busy,
-                            false,
-                            why.as_deref(),
-                            &f,
-                        ) {
+                        match field_row(ui, &cx, &f) {
                             Some(RowEdit::Set(v)) => {
                                 actions.push(Action::SetField(key.clone(), f.field, v))
                             }
