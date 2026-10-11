@@ -629,6 +629,10 @@ impl Renderer {
             if let Some(state) = self.shapes.get_mut(&id) {
                 state.material = m;
                 state.status = ShapeStatus::Hidden;
+                // Not updated while hidden: whatever returns it to the draw order must rewrite its fields.
+                if let Some(d) = state.draw.as_mut() {
+                    d.stale = true;
+                }
             }
             self.sort_draw_order();
             return Ok(kind);
@@ -861,7 +865,6 @@ impl Renderer {
             }
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
         }
-        self.last_frame = Some((scene.clone(), view));
         self.uploads = uploads;
         let draw_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let t1 = std::time::Instant::now();
@@ -869,6 +872,8 @@ impl Renderer {
         let gpu_ms = t1.elapsed().as_secs_f64() * 1000.0;
         let t2 = std::time::Instant::now();
         let px = target.readback_display(gpu, self.encode_srgb)?;
+        // Only a fully successful frame may suppress the next one's writes.
+        self.last_frame = Some((scene.clone(), view));
         self.timing = FrameTiming {
             draw_ms,
             gpu_ms,

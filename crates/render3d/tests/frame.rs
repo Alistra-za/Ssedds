@@ -281,3 +281,61 @@ fn record_draw_ms_deep_graph() {
         );
     }
 }
+
+/// A draw kept across hide / failed un-hide must not come back with the constants of before the hide.
+#[test]
+fn a_retained_draw_returning_from_hidden_matches_the_by_name_writer() {
+    let (ca, cb) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // No STANDIN_OPAQUE_OK: a material without alpha test fails to compile (edit.rs's failing_permutation).
+    let mut a = renderer(ca.path(), &["STANDIN_FLAT"]);
+    let mut b = renderer(cb.path(), &["STANDIN_FLAT"]);
+    b.set_reference_writer(true);
+    let nif = fixture("TestNifFile_DeepGraph_SE.nif");
+    a.load(&nif, &|_| None);
+    b.load(&nif, &|_| None);
+    let peg = ShapeId(103);
+    let mut scene = Scene::neutral();
+    same(&mut a, &mut b, &scene, 96, 96, "first frame");
+    let good = a
+        .shapes()
+        .into_iter()
+        .find(|s| s.id == peg)
+        .unwrap()
+        .material;
+    let mut hidden = good.clone();
+    hidden.hidden = true;
+    for x in [&mut a, &mut b] {
+        x.set_material(peg, hidden.clone(), &|_| None).unwrap();
+    }
+    let (c, r) = a.bounds().unwrap();
+    scene.camera = Camera::Orbit {
+        target: c,
+        yaw: 2.0,
+        pitch: 0.5,
+        distance: 3.0 * r,
+    };
+    scene.dir_light.direction = [-0.6, 0.3, 0.74];
+    same(&mut a, &mut b, &scene, 96, 96, "moved while hidden");
+    let mut bad = good;
+    bad.alpha = None;
+    for x in [&mut a, &mut b] {
+        x.set_material(peg, bad.clone(), &|_| None).unwrap();
+        assert!(matches!(
+            x.shapes().into_iter().find(|s| s.id == peg).unwrap().status,
+            render3d::ShapeStatus::Failed(_)
+        ));
+    }
+    same(
+        &mut a,
+        &mut b,
+        &scene,
+        96,
+        96,
+        "un-hidden with a failed rebuild",
+    );
+    // Pixels can hide it (the peg may be occluded); the retained draw must also have been rewritten.
+    assert!(
+        a.last_uploads() >= 1,
+        "retained draw drew with pre-hide constants"
+    );
+}
