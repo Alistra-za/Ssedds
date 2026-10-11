@@ -336,3 +336,68 @@ fn emissive_d1() {
         [1.0, 0.5, 2.0]
     );
 }
+
+#[test]
+fn classify_table() {
+    use nif::props::Alpha;
+    use render3d::material::{classify, EditKind};
+    let f = ["ENABLE_LL"];
+    let base = MaterialState::builtin_default();
+    let with = |edit: &dyn Fn(&mut MaterialState)| {
+        let mut m = base.clone();
+        edit(&mut m);
+        m
+    };
+    assert_eq!(classify(&base, &base.clone(), &f), EditKind::Same);
+    let uv = with(&|m| m.params.uv_scale = [2.0, 2.0]);
+    assert_eq!(classify(&base, &uv, &f), EditKind::Cbuffer);
+    let emit = with(&|m| m.params.emissive_color = [1.0, 0.0, 0.0]);
+    assert_eq!(classify(&base, &emit, &f), EditKind::Cbuffer);
+    let hidden = with(&|m| m.hidden = true);
+    assert_eq!(classify(&base, &hidden, &f), EditKind::Cbuffer);
+    // Adding the alpha property toggles DO_ALPHA_TEST; flipping blend on an existing one does not.
+    let test_only = with(&|m| {
+        m.alpha = Some(Alpha {
+            flags: 0x200,
+            threshold: 128,
+        })
+    });
+    assert_eq!(classify(&base, &test_only, &f), EditKind::Permutation);
+    let mut blended = test_only.clone();
+    blended.alpha = Some(Alpha {
+        flags: 0x201,
+        threshold: 128,
+    });
+    assert_eq!(classify(&test_only, &blended, &f), EditKind::Cbuffer);
+    // Specular strength 0 ↔ > 0 toggles SPECULAR on vanilla shapes.
+    let no_spec = with(&|m| m.params.specular_strength = 0.0);
+    assert_eq!(classify(&base, &no_spec, &f), EditKind::Permutation);
+    // A new slot path rebinds; a raw-only change (same canonical path) does not.
+    let tex = with(&|m| m.set_slot_raw(0, "textures\\a.dds"));
+    assert_eq!(classify(&base, &tex, &f), EditKind::Textures);
+    let mut same_norm = tex.clone();
+    same_norm.set_slot_raw(0, "Textures/A.DDS");
+    assert_eq!(classify(&tex, &same_norm, &f), EditKind::Cbuffer);
+    // Glowmap (type 2) moves slot 2 from t12 to t6 without a define: a binding change.
+    let mut glow_src = base.clone();
+    glow_src.set_slot_raw(2, "textures\\g.dds");
+    let mut glow = glow_src.clone();
+    glow.shader_type = 2;
+    assert_eq!(classify(&glow_src, &glow, &f), EditKind::Textures);
+    // PBR on/off is TRUE_PBR; under PBR, roughness and the shader type (technique 0) are cbuffer edits,
+    // Rim (→ Subsurface) too, but Fit_Slope toggles GLINT.
+    let pbr = with(&|m| m.slsf2 |= 1 << 23);
+    assert_eq!(classify(&base, &pbr, &f), EditKind::Permutation);
+    let mut rough = pbr.clone();
+    rough.params.specular_strength = 0.25;
+    assert_eq!(classify(&pbr, &rough, &f), EditKind::Cbuffer);
+    let mut t11 = pbr.clone();
+    t11.shader_type = 11;
+    assert_eq!(classify(&pbr, &t11, &f), EditKind::Cbuffer);
+    let mut rim = pbr.clone();
+    rim.slsf2 |= 1 << 26;
+    assert_eq!(classify(&pbr, &rim, &f), EditKind::Cbuffer);
+    let mut glint = pbr.clone();
+    glint.slsf2 |= 1 << 12;
+    assert_eq!(classify(&pbr, &glint, &f), EditKind::Permutation);
+}

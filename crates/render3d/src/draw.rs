@@ -5,9 +5,10 @@
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
-use crate::material::Bound;
+use crate::material::{write_material, Bound};
 use crate::mesh::GpuMesh;
 use crate::scene::{Mat3x4, Scene, View};
+use nif::material::MaterialState;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11PixelShader, ID3D11ShaderResourceView, ID3D11VertexShader,
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_USAGE_DEFAULT,
@@ -115,5 +116,15 @@ impl ShapeDraw {
                 )
             };
         }
+    }
+
+    /// A cbuffer edit (03 §1.3): every writer back to zero, then the material, so no field of the previous
+    /// material survives. The scene fields are written again by the next [`ShapeDraw::update`].
+    pub fn rewrite_material(&mut self, m: &MaterialState, linear_lighting: bool) {
+        for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
+            cb.writer.zero();
+            write_material(&mut cb.writer, m, &self.bound, linear_lighting);
+        }
+        self.blend = m.blend();
     }
 }

@@ -11,7 +11,7 @@ pub mod permutation;
 pub mod scene;
 pub mod textures;
 
-pub use material::{pbr_flags, Bound};
+pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
 use compile::{compile, SrvKind};
@@ -110,6 +110,14 @@ struct ShapeState {
 enum BuildError {
     Compile(String),
     Other(String),
+}
+
+impl BuildError {
+    fn into_text(self) -> String {
+        match self {
+            BuildError::Compile(e) | BuildError::Other(e) => e,
+        }
+    }
 }
 
 /// A texture resolved once per load: its view and kind, or `None` (the resolver had no bytes, or they did
@@ -526,6 +534,107 @@ impl Renderer {
                 status: s.status.clone(),
             })
             .collect()
+    }
+
+    /// Replaces shape `id`'s material and applies it the cheapest way [`classify`] allows (03 §1.3):
+    /// - `Cbuffer`: every cbuffer of the draw back to zero, then the material; on the next frame, no compile;
+    /// - `Textures`: the slots resolved again through `textures` and rebound, then the `Cbuffer` path (the PBR
+    ///   flags and `EnvmapData.y` depend on what is bound);
+    /// - `Permutation`: a new draw is built now (synchronous compile in P1-A; background compile is P1-B).
+    ///
+    /// A shape that is not `Drawing` (failed, hidden) is always rebuilt. On any build error the previous draw
+    /// stays on screen and the status is `Failed(error)`; the result is still `Ok(kind)`. A hidden material
+    /// stops drawing the shape and keeps its draw for later. Paths the resolver did not return before are asked
+    /// for again. `Err` only for an id that is not loaded.
+    pub fn set_material(
+        &mut self,
+        id: ShapeId,
+        m: MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) -> Result<EditKind, String> {
+        let (kind, rebuild) = {
+            let state = self
+                .shapes
+                .get(&id)
+                .ok_or_else(|| format!("no shape with id {} is loaded", id.0))?;
+            let features: Vec<&str> = self.features.iter().map(String::as_str).collect();
+            let kind = classify(&state.material, &m, &features);
+            let rebuild = state.draw.is_none()
+                || state.status != ShapeStatus::Drawing
+                || kind == EditKind::Permutation;
+            (kind, rebuild)
+        };
+        if m.hidden {
+            if let Some(state) = self.shapes.get_mut(&id) {
+                state.material = m;
+                state.status = ShapeStatus::Hidden;
+            }
+            self.sort_draw_order();
+            return Ok(kind);
+        }
+        if kind == EditKind::Same && !rebuild {
+            return Ok(kind);
+        }
+        self.tex_cache.retain(|_, t| t.is_some());
+        let mut scratch = LoadReport::default();
+        let outcome = if rebuild {
+            let (name, mesh) = {
+                let s = &self.shapes[&id];
+                (s.name.clone(), s.mesh.clone())
+            };
+            match self.build_draw(&name, &mesh, &m, textures, &mut scratch) {
+                Ok(d) => {
+                    if let Some(s) = self.shapes.get_mut(&id) {
+                        s.draw = Some(d);
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(e.into_text()),
+            }
+        } else {
+            self.apply_in_place(id, kind, &m, textures, &mut scratch)
+        };
+        if let Some(state) = self.shapes.get_mut(&id) {
+            state.status = match outcome {
+                Ok(()) => ShapeStatus::Drawing,
+                Err(e) => ShapeStatus::Failed(e),
+            };
+            state.material = m;
+        }
+        self.sort_draw_order();
+        Ok(kind)
+    }
+
+    /// A `Cbuffer` or `Textures` edit on the shape's existing draw (same permutation, so the program is an
+    /// in-memory hit).
+    fn apply_in_place(
+        &mut self,
+        id: ShapeId,
+        kind: EditKind,
+        m: &MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        rep: &mut LoadReport,
+    ) -> Result<(), String> {
+        if kind == EditKind::Textures {
+            let name = self.shapes[&id].name.clone();
+            let program = self.program(&perm_material(m))?;
+            let (srvs, bound) = self.bind_textures(&name, &program, m, textures, rep)?;
+            let d = self
+                .shapes
+                .get_mut(&id)
+                .and_then(|s| s.draw.as_mut())
+                .ok_or("no draw")?;
+            d.srvs = srvs;
+            d.bound = bound;
+        }
+        let ll = self.linear_lighting();
+        let d = self
+            .shapes
+            .get_mut(&id)
+            .and_then(|s| s.draw.as_mut())
+            .ok_or("no draw")?;
+        d.rewrite_material(m, ll);
+        Ok(())
     }
 
     fn compute_bounds(&self) -> Option<([f32; 3], f32)> {

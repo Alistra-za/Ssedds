@@ -2,7 +2,7 @@
 //! (03 §1.2-1.3; 01 §3.1-3.4). `write_material`, `pack_specular` and `pbr_params` moved here from `draw.rs`
 //! (P0 borrowed `nif::props::Lighting`).
 use crate::cbuffer::CbWriter;
-use crate::permutation::{runtime_bits, Material};
+use crate::permutation::{defines, runtime_bits, Material, Stage};
 use crate::scene::srgb_to_linear;
 use nif::material::MaterialState;
 use nif::props::{LightingParams, LightingTrailer};
@@ -298,4 +298,53 @@ pub fn write_material(w: &mut CbWriter, m: &MaterialState, bound: &Bound, linear
         .collect();
     w.set("Bones", &bones);
     w.set("PreviousBones", &bones);
+}
+
+/// How a material change reaches the screen (03 §1.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditKind {
+    /// Nothing changed.
+    Same,
+    /// Only cbuffer fields (and possibly blending / `hidden`): rewrite the cbuffers, no compile.
+    Cbuffer,
+    /// A slot path or the slot → register mapping changed: rebind textures, then rewrite the cbuffers.
+    Textures,
+    /// The VS or PS define set changed: a new program and a new draw.
+    Permutation,
+}
+
+/// Which texture each slot feeds: `(register, canonical path)` per slot (`textures::register_for_slot`).
+fn bindings(m: &MaterialState) -> Vec<(Option<u32>, &str)> {
+    let msn = bit(m.slsf1, 12);
+    m.slots
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            (
+                crate::textures::register_for_slot(m.shader_type, m.is_pbr(), msn, i),
+                s.norm.as_str(),
+            )
+        })
+        .collect()
+}
+
+/// Sorts an edit by what it costs. The permutation oracle is `permutation::defines` (03 §1.2): `Permutation`
+/// iff the VS or PS define set differs. Otherwise `Textures` iff a slot's register or canonical path differs
+/// (e.g. a new path, or type 0 ↔ 2 moving slot 2 between t12 and t6), else `Cbuffer`. A change of `hidden` alone
+/// is `Cbuffer`.
+pub fn classify(old: &MaterialState, new: &MaterialState, features: &[&str]) -> EditKind {
+    if old == new {
+        return EditKind::Same;
+    }
+    let (a, b) = (perm_material(old), perm_material(new));
+    for stage in [Stage::Vertex, Stage::Pixel] {
+        if defines(&a, stage, features, false) != defines(&b, stage, features, false) {
+            return EditKind::Permutation;
+        }
+    }
+    if bindings(old) != bindings(new) {
+        EditKind::Textures
+    } else {
+        EditKind::Cbuffer
+    }
 }
