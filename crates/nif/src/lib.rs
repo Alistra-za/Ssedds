@@ -4,6 +4,7 @@
 pub mod cursor;
 pub mod geom;
 pub mod header;
+pub mod material;
 pub mod path;
 pub mod props;
 pub mod scan;
