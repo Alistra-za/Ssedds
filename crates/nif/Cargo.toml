@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 thiserror.workspace = true
 encoding_rs.workspace = true
+half.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]

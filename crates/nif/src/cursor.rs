@@ -12,6 +12,10 @@ impl<'a> Cursor<'a> {
     pub fn pos(&self) -> usize {
         self.pos
     }
+    /// Bytes left before the end of the buffer (0 when the position is past it).
+    pub fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
+    }
     fn take(&mut self, n: usize) -> Result<&'a [u8], NifError> {
         let end = self.pos.checked_add(n).filter(|&e| e <= self.buf.len());
         match end {
