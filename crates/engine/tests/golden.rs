@@ -236,7 +236,7 @@ fn decoded_normal(p: &image::Rgb<u8>) -> [f64; 3] {
     }
 }
 
-/// Spec §6.2 step 2 in f64 (test code only): `min(2v, t²)` for the mean of `normals`.
+/// Spec §6.2 step 2 in f64 (test code only): `min(2v, t²)` for the mean of `normals`, 0 at or above the noise floor.
 fn reference_add(normals: impl Iterator<Item = [f64; 3]>) -> f64 {
     let t = 0.25f64;
     let (mut s, mut k) = ([0.0f64; 3], 0.0f64);
@@ -247,7 +247,8 @@ fn reference_add(normals: impl Iterator<Item = [f64; 3]>) -> f64 {
         k += 1.0;
     }
     let l = ((s[0] / k).powi(2) + (s[1] / k).powi(2) + (s[2] / k).powi(2)).sqrt();
-    if l >= 1.0 - 1e-6 {
+    // The 8-bit noise floor (owner 2026-10-11, DECISIONS Note R M4-final-2), restated here, not imported.
+    if l >= 0.999 {
         0.0
     } else if l <= 0.0 {
         t * t
@@ -1998,5 +1999,156 @@ fn cnr_self_bake_matches_the_reference_and_a_flat_coat_keeps_its_alpha() {
             a.width,
             a.height
         );
+    }
+}
+
+/// A visually flat `_n` with 8-bit noise of up to ±2 codes on X and Y (deterministic), the case that lifted
+/// near-mirror roughness to about 0.04–0.05 before the noise floor (final review Minor 9).
+fn noisy_flat_normal(w: u32) -> image::RgbImage {
+    let n = |x: u32, y: u32, salt: u32| {
+        let h = (x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663) ^ salt)
+            .wrapping_mul(2_654_435_761);
+        ((h >> 13) % 5) as i32 - 2
+    };
+    ImageBuffer::from_fn(w, w, |x, y| {
+        Rgb([
+            (128 + n(x, y, 0x9e37)) as u8,
+            (128 + n(x, y, 0x7f4a)) as u8,
+            255,
+        ])
+    })
+}
+
+/// Columns alternating between X codes `128 + k` and `128 − k`: every footprint of mip ≥ 1 has the same length.
+fn tilted_columns(w: u32, k: u8) -> image::RgbImage {
+    ImageBuffer::from_fn(w, w, |x, _| {
+        Rgb([if x % 2 == 0 { 128 + k } else { 128 - k }, 128, 255])
+    })
+}
+
+/// The f64 footprint length (spec §6.2 step 1) of mip `level`'s texel (x, y) of `n`, test code only.
+fn reference_length(n: &image::RgbImage, level: u32, x: u32, y: u32) -> f64 {
+    let f = 1u32 << level;
+    let mut s = [0.0f64; 3];
+    for k in 0..f * f {
+        let v = decoded_normal(n.get_pixel(x * f + k % f, y * f + k / f));
+        for c in 0..3 {
+            s[c] += v[c] / f64::from(f * f);
+        }
+    }
+    (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]).sqrt()
+}
+
+/// Owner 2026-10-11 (DECISIONS Note R M4-final-2): a flat-but-noisy `_n` adds no variance at any mip, so a mirror
+/// roughness (R = 0) stays 0 and a near-mirror `_cnr` coat keeps its alpha, as with the bake off.
+#[test]
+fn a_flat_but_noisy_normal_keeps_mirror_roughness_at_every_mip() {
+    let session = Session::new(Bc1Model::Ideal).unwrap();
+    let noisy = noisy_flat_normal(64);
+    // Measurement: every footprint is above the floor, and without it this fixture is the reported lift.
+    let mut min_l = 1.0f64;
+    for level in 1..=6u32 {
+        let w = 64 >> level;
+        for y in 0..w {
+            for x in 0..w {
+                min_l = min_l.min(reference_length(&noisy, level, x, y));
+            }
+        }
+    }
+    assert!(min_l >= 0.999, "min footprint length {min_l}");
+    let old_lift = (0.5 * (1.0 - min_l * min_l) / (3.0 * min_l - min_l.powi(3))).powf(0.25);
+    assert!(
+        old_lift > 0.03,
+        "the fixture reproduces the lift: {old_lift}"
+    );
+
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/pbr/iron_n.png",
+        DynamicImage::ImageRgb8(noisy.clone()),
+    );
+    put(
+        d.path(),
+        "textures/pbr/iron_rmaos.png",
+        rgba(64, |_, _| [0, 0, 200, 255]),
+    );
+    let (job, levels) = planned_chain(
+        &session,
+        request(d.path(), Target::Cs, &[], &[]),
+        "iron_rmaos.png",
+    );
+    assert!(job.bake.is_some(), "{:?}", job.warnings);
+    for (level, l) in levels.iter().enumerate() {
+        assert!(
+            l.px.iter().all(|p| p[0] == 0.0),
+            "mip {level}: roughness lifted to {:?}",
+            l.px.iter().map(|p| p[0]).fold(0.0f32, f32::max)
+        );
+    }
+
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/pbr/silk_cnr.png",
+        rgba(64, |x, y| {
+            let p = noisy.get_pixel(x, y);
+            [p[0], p[1], p[2], 2]
+        }),
+    );
+    let chain = |sets: &[&str]| {
+        planned_chain(
+            &session,
+            request(d.path(), Target::Cs, sets, &[]),
+            "silk_cnr.png",
+        )
+        .1
+    };
+    let (on, off) = (
+        chain(&[]),
+        chain(&["file:**/silk_cnr.png.mips.normal=renormalize"]),
+    );
+    for (a, b) in on.iter().zip(&off) {
+        assert!(
+            a.px.iter().zip(&b.px).all(|(p, q)| p[3] == q[3]),
+            "{}x{}: the coat roughness lifted",
+            a.width,
+            a.height
+        );
+    }
+}
+
+/// Just above the floor (footprint length 0.99889, X ±6 codes) the bake widens mirror roughness, matching the f64
+/// reference; at ±5 codes (0.99923) it is below the floor and adds nothing.
+#[test]
+fn a_tilt_just_above_the_noise_floor_still_widens() {
+    let session = Session::new(Bc1Model::Ideal).unwrap();
+    let mirror = rgba(64, |_, _| [0, 0, 200, 255]);
+    for (k, widens) in [(6u8, true), (5, false)] {
+        let n = tilted_columns(64, k);
+        let l1 = reference_length(&n, 1, 0, 0);
+        assert_eq!(l1 < 0.999, widens, "k = {k}: L = {l1}");
+        let d = tempfile::tempdir().unwrap();
+        put(
+            d.path(),
+            "textures/pbr/iron_n.png",
+            DynamicImage::ImageRgb8(n.clone()),
+        );
+        put(d.path(), "textures/pbr/iron_rmaos.png", mirror.clone());
+        let (_, levels) = planned_chain(
+            &session,
+            request(d.path(), Target::Cs, &[], &[]),
+            "iron_rmaos.png",
+        );
+        let r = mirror.to_rgba8();
+        for (level, l) in levels.iter().enumerate().skip(1) {
+            let want = reference_roughness(&n, &r, level as u32, 0, 0, 0);
+            let got = f64::from(l.at(0, 0)[0]);
+            assert!(
+                (got - want).abs() <= 1.0 / 255.0,
+                "k = {k} mip {level}: {got} vs {want}"
+            );
+            assert_eq!(got > 0.1, widens, "k = {k} mip {level}: {got}");
+        }
     }
 }

@@ -11,15 +11,22 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Lengths at or above this count as unit: no variance (spec §6.2 step 2).
-pub const UNIT_LENGTH: f64 = 1.0 - 1e-6;
+/// The 8-bit noise floor (owner, 2026-10-11, DECISIONS Note R M4-final-2): a footprint whose average normal is at
+/// least this long adds no variance, so a visually flat `_n` with quantisation noise keeps glossy roughness glossy
+/// while real bumps still widen it. Measured (golden `a_flat_but_noisy_normal_keeps_mirror_roughness_at_every_mip`,
+/// `a_tilt_just_above_the_noise_floor_still_widens`): ±2-code noise on X and Y leaves every footprint within about
+/// 1e-4 of unit length (it lifted r = 0 to 0.10 at mip 1 without the floor), and the worst case for ±k-code noise
+/// is 1 − cos(θ) with θ ≈ k·(2/255)·√2, under 1e-3 up to k = 4. The bumpy golden normals sit far below the floor.
+/// The cost is that a deliberate tilt of up to about ±2.2° (X ±5 codes, L = 0.99923) also adds nothing; ±6 codes
+/// (L = 0.99889) widens. Applies to the `_n` → roughness bake and the `_cnr` self-bake alike.
+pub const NOISE_FLOOR_L: f64 = 0.999;
 
-/// `min(2v, t²)` for a footprint whose average normal has length `len` (spec §6.2 steps 2 and 4): 0 for a unit or
-/// longer average (or NaN), `t²` for a zero-length one. Computed in f64.
+/// `min(2v, t²)` for a footprint whose average normal has length `len` (spec §6.2 steps 2 and 4): 0 at or above
+/// the noise floor [`NOISE_FLOOR_L`] (or NaN), `t²` for a zero-length one. Computed in f64.
 pub fn variance_add(len: f32, clamp_t: f64) -> f32 {
     let l = f64::from(len);
     let cap = clamp_t * clamp_t;
-    if l.is_nan() || l >= UNIT_LENGTH {
+    if l.is_nan() || l >= NOISE_FLOOR_L {
         return 0.0;
     }
     if l <= 0.0 {
@@ -310,7 +317,7 @@ mod tests {
             }
             let n = f64::from(g * g);
             let l = ((s[0] / n).powi(2) + (s[1] / n).powi(2) + (s[2] / n).powi(2)).sqrt();
-            if l >= 1.0 - 1e-6 {
+            if l >= 0.999 {
                 0.0
             } else if l <= 0.0 {
                 t * t
@@ -344,6 +351,10 @@ mod tests {
         assert_eq!(variance_add(1.0, 0.25), 0.0);
         assert_eq!(variance_add(1.2, 0.25), 0.0); // longer than unit: no variance
         assert_eq!(variance_add(f32::NAN, 0.25), 0.0);
+        // The 8-bit noise floor (DECISIONS Note R M4-final-2): nothing at or above L = 0.999, the formula below it.
+        assert_eq!(variance_add(0.9995, 0.25), 0.0);
+        assert_eq!(variance_add(0.999, 0.25), 0.0);
+        assert!(variance_add(0.9985, 0.25) > 0.0);
         assert!(close(variance_add(0.0, 0.25), 0.0625)); // t²
                                                          // L = 0.9: κ = (2.7 − 0.729) / 0.19 = 10.3737, 2v = 0.0482 < t².
         let l = 0.9f64;
