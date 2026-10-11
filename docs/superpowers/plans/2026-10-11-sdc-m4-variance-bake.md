@@ -6,7 +6,7 @@
 
 **Architecture:**
 - **Coverage first** (`coverage.rs`, Tasks 1–2):
-  - a level whose nearest reachable pass count is more than 2× off the target keeps its box alpha (B1);
+  - every level passes exactly `k` texels: ties at the coverage boundary are split in 8×8 Bayer order, so thin strands keep their coverage at the low mips (B1, owner);
   - remapped texels sit two codes clear of the threshold, so BC7 cannot flip them (B6).
 - **Mips** (`mips.rs`, Tasks 4–6):
   - Mip 0 of a normal map is renormalised unless `mips.normal_base = keep`.
@@ -92,7 +92,7 @@ It also uses:
 | R10 | **sRGB roughness:** a roughness member with `color.content = srgb` raises `TAG-CONTENT-MISMATCH` (warning) and does not bake | Roughness is linear data. sRGB content would decode it before squaring and baking | None |
 | R11 | **No alpha weighting for vectors or roughness.** Normal, `_msn`, `_flow` and roughness chains are never alpha-weighted, even when a cutout policy is forced on them (Task 29 carry). Preprocess dilation under α = 0 still runs for alpha-tested policies; it only fills invisible texels | Weighting bends vectors, and the bake's lengths, toward opaque texels | None |
 | R12 | **`if-changed`:** the baked `_n` is recorded in the manifest's `sources`. Its `SourceRef.bake` holds the SHA-256 of its decode settings (`channels`, `alpha.policy`, `mips.normal_base`) and the level shift. A changed `_n`, changed decode settings, or a bake turned on or off re-encodes the roughness member. `Profile` gains two fields, so every `profile_sha256` changes once and the first M4 run re-encodes every output, as for M2.5 (Note M10) | The output depends on the `_n`, so `if-changed` has to see it | One full re-encode |
-| R13 | **Coverage fixes (mipcheck B1, B6):**<br>• **B1:** "no texel passes" counts as a candidate. A level whose nearest reachable count is more than 2× off the target (`count > 2k` or `2·count < k`, which includes every case where 0 is nearer) keeps its box alpha.<br>• **B6:** remapped passing texels land at least 2 codes above the first passing code, and failing ones at least 2 codes below the last failing code.<br>• The spatial tie-break (dither) is **not** in M4 | This is the roadmap's fix as written. Dithering trades exactness for speckle and wants an owner look first | Thin tied strands lose coverage from about 256² down (they used to overshoot up to ×32) |
+| R13 | **Coverage fixes (mipcheck B1, B6), with the owner's dither decision (2026-10-11):**<br>• **B1:** every level ≥ 1 passes exactly `k = round(p·n)` texels: those above the k-th largest alpha, plus texels tied with it chosen in 8×8 Bayer order of position (deterministic, no RNG). Owner, verbatim: "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them".<br>• "No texel passes" stays the target when `k = 0` (box alpha kept); zero alpha is never raised; the box alpha is also kept when no texel is positive. The "more than 2× off keeps the box alpha" fallback is not built.<br>• **B6:** remapped passing texels land at least 2 codes above the first passing code, failing ones at least 2 codes below the last failing code, the split's texels included | Exact coverage at the mips players mostly see; monotone whole-group remaps cannot split ties (up to ×32 overshoot measured) | Thin strands become a sparse ordered pattern at distance instead of thick or vanishing |
 | R14 | **`sdc-base` gets a minor version bump** from whatever the packing-fills plan left (1.0.0 → 1.1.0, or 1.1.0 → 1.2.0). It gains `mips.normal_base`, `mips.bake_clamp` and the `coat_normal` self-bake default (spec §3.5: changing a built-in default bumps the version) | — | None |
 
 ## Review Focus
@@ -131,7 +131,7 @@ Most likely first. Each item's test is in the task named.
 
 **`crates/engine/src/coverage.rs`** (Tasks 1–2):
 - `pub const EDGE_MARGIN_CODES: u8 = 2;`
-- private helpers: `far_off(count: usize, k: usize) -> bool`, `first_float_with_code(code: u8) -> f32`, `first_passing_code(threshold: u8, compare: AlphaCompare) -> Option<u8>`.
+- private helpers: `bayer8(x: u32, y: u32) -> u32`, `exact_pass_set(w: &[f32], width: u32, k: usize) -> Option<Vec<bool>>`, `remap(level: &mut Rgba32F, w: &[f32], pass: &[bool], t_pass: f32, t_fail: f32)` (Task 1); `first_float_with_code(code: u8) -> f32`, `first_passing_code(threshold: u8, compare: AlphaCompare) -> Option<u8>` (Task 2). `nearest_group` and `first_passing` are deleted.
 - `preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCompare)`: the signature is unchanged.
 
 **`crates/engine/src/config.rs`** (Task 3):
@@ -191,7 +191,7 @@ Most likely first. Each item's test is in the task named.
 
 | File | Status | Responsibility | Tasks |
 |---|---|---|---|
-| `crates/engine/src/coverage.rs` | modify | B1 far-off rule, B6 edge margin | 1, 2 |
+| `crates/engine/src/coverage.rs` | modify | B1 exact coverage by Bayer tie-split, B6 edge margin | 1, 2 |
 | `crates/engine/src/config.rs` | modify | `NormalBase`, `MipSpec::{normal_base, bake_clamp}` | 3 |
 | `presets/sdc-base.toml` | modify | New defaults; `coat_normal` self-bake; version 1.1.0 | 3, 6 |
 | `crates/engine/src/overrides.rs` | modify | `FIELD_PATHS` | 3 |
@@ -221,49 +221,91 @@ Tasks run in order. Tasks 1–2 depend on nothing. Task 4 needs Task 3. Task 5 n
 
 ---
 
-### Task 1: Coverage keeps the box alpha when every reachable count is more than 2× off (mipcheck B1)
+### Task 1: Coverage reaches the target exactly: ties are split in Bayer order (mipcheck B1, owner)
 
 **Files:**
-- Modify: `crates/engine/src/coverage.rs` (module doc "Ties" bullet; `preserve_coverage` and its doc; new `far_off`; unit tests)
+- Modify: `crates/engine/src/coverage.rs`:
+  - module doc ("Ties" and "Remap shape" bullets);
+  - `preserve_coverage` and its doc;
+  - delete `nearest_group`;
+  - new `bayer8`, `exact_pass_set` and `remap`;
+  - unit tests.
 - Test: `crates/engine/src/coverage.rs` (`mod tests`)
 
 **Interfaces:**
-- Consumes: nothing new.
-- Produces: `fn far_off(count: usize, k: usize) -> bool` (private). The behaviour of `preserve_coverage` changes; its signature does not.
+- Consumes: `first_passing`, `passes`, `code8`, `unit_alpha`, `coverage_fraction` (all existing).
+- Produces private helpers:
+  - `bayer8(x: u32, y: u32) -> u32`;
+  - `exact_pass_set(w: &[f32], width: u32, k: usize) -> Option<Vec<bool>>`;
+  - `remap(level: &mut Rgba32F, w: &[f32], pass: &[bool], t_pass: f32, t_fail: f32)`.
+- Task 2 changes only how `t_pass` and `t_fail` are computed.
+- `preserve_coverage` keeps its signature.
+
+**Owner decision (2026-10-11), verbatim:** "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them".
 
 **Background (RESULTS-2 B1):**
-- `nearest_group` only offers whole groups of tied alpha, and never "no texel passes".
-- On one-pixel strands it overshoots up to ×32. At mip 5 of the sparse image, k = 20 but 655 texels pass.
-- Fix:
-  - "No texel passes" (count 0, distance `k`) is nearer than a group exactly when that group's count is above `2k`.
-  - So one rule covers both the zero candidate and the 2× guard: when the nearest group's count is above `2k` or below `k/2`, leave the level's box alpha alone. The test applies to the group the nearest-count rule picks (k = 10 with groups of 19 and 4 picks 4, which is far off, so the level keeps its box alpha although 19 was within 2×). That follows the roadmap's "best count" wording and is deliberate (Note R13).
+- A monotone remap can only pass whole groups of tied alpha. On one-pixel strands every texel touching a strand has the same alpha, so the reachable counts jump. The measured overshoot was up to ×32 (mip 5: k = 20, 655 passing).
+
+**Rules (DECISIONS R13):**
+- **The target** for each level ≥ 1 is `k = round(p · n)`, where `p` is mip 0's pass fraction.
+- **`k = 0`:** the level keeps its box alpha. This is the "no texel passes" candidate, kept as the spec has it.
+- **Already right:** when the level already passes exactly `k`, it is left unchanged.
+- **Exact pass set.** Otherwise:
+  - take `v`, the `k`-th largest alpha;
+  - every texel above `v` passes;
+  - among the texels tied at `v`, exactly as many pass as are still needed;
+  - those are chosen in **8×8 Bayer order** of their (x, y) position, ties by texel index;
+  - this is deterministic, with no RNG.
+- **Result:** exactly `k` texels pass at every level, including the low mips where tied groups are the rule.
+- **Zero alpha is never raised.** With fewer than `k` positive texels, every positive texel passes (the most a remap can reach without inventing coverage). With none, the level keeps its box alpha.
+- **The remap:**
+  - Passing texels map monotonically onto `[t_pass, 1]`. The smallest passing alpha goes to `t_pass`, and 1.0 stays 1.0.
+  - Failing texels map onto `[0, t_fail]`. The largest failing alpha goes to `t_fail` exactly.
+  - Within each side the order is kept; only the tied group is split.
+  - A 1.0 texel that the split leaves out fails at `t_fail`. Under box filtering this needs a level whose count of 1.0 texels exceeds `k`, which only rounding can cause.
+- **The "more than 2× off keeps the box alpha" fallback is not built.** The dither replaces it, and the box alpha is kept only where the dither cannot apply (`k = 0`, or no positive texel).
 
 **Unit tests that change (named):**
-- `binary_tie_takes_the_only_achievable_count` is replaced by `binary_tie_far_from_the_target_keeps_the_box_alpha`.
-- `mostly_empty_level_falls_back_to_smallest_positive_alpha` is replaced by `too_few_positive_texels_keep_the_box_alpha`.
-- No golden expectation changes. The golden cutout fixtures have continuous alpha, and their nearest count stays within one texel of `k`.
+- `binary_tie_takes_the_only_achievable_count` becomes `binary_tie_lets_exactly_k_through_in_bayer_order`.
+- `tie_picks_the_nearer_achievable_group` becomes `ties_are_split_in_bayer_order_to_reach_k_exactly`.
+- `opaque_anchor_with_lower_passing_group_demotes_the_lower_group` is unchanged and still passes: the largest failing alpha lands on `t_fail` exactly.
+- No golden expectation changes. The golden cutout fixtures have continuous alpha, and their counts move from "within one texel of `k`" to exactly `k`.
 
-- [ ] **Step 1: Write the failing tests.** In `crates/engine/src/coverage.rs` `mod tests`, delete `binary_tie_takes_the_only_achievable_count` and `mostly_empty_level_falls_back_to_smallest_positive_alpha`, and add:
+- [ ] **Step 1: Write the failing tests.** In `crates/engine/src/coverage.rs` `mod tests`, delete `binary_tie_takes_the_only_achievable_count` and `tie_picks_the_nearer_achievable_group`, and add:
 
 ```rust
     #[test]
-    fn binary_tie_far_from_the_target_keeps_the_box_alpha() {
-        // One opaque texel per 2x2 footprint: level 1 is four tied 0.25s and k = 1. The only achievable group (4) is
-        // more than 2x off, so the level keeps its box alpha (mipcheck B1; it used to pass all four).
+    fn bayer8_is_the_standard_8x8_ordered_dither() {
+        let mut seen = [false; 64];
+        for y in 0..8 {
+            for x in 0..8 {
+                seen[bayer8(x, y) as usize] = true;
+                assert_eq!(bayer8(x, y), bayer8(x + 8, y + 16), "the matrix tiles");
+            }
+        }
+        assert!(seen.iter().all(|&s| s), "a permutation of 0..64");
+        let row0: Vec<u32> = (0..8).map(|x| bayer8(x, 0)).collect();
+        assert_eq!(row0, [0, 32, 8, 40, 2, 34, 10, 42]);
+        assert_eq!(bayer8(0, 1), 48);
+    }
+
+    #[test]
+    fn binary_tie_lets_exactly_k_through_in_bayer_order() {
+        // One opaque texel per 2x2 footprint: level 1 is four tied 0.25s and k = 1. The old solver passed all four;
+        // now exactly one passes, the texel with the lowest Bayer rank, (0, 0).
         let mut base = Rgba32F::new(4, 4, [0.0; 4]);
         for (x, y) in [(0, 0), (2, 0), (0, 2), (2, 2)] {
             base.at_mut(x, y)[3] = 1.0;
         }
         let mut c = box_chain(base);
-        let before = c[1].clone();
         assert!(alpha_of(&c[1]).all(|a| a == 0.25));
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
-        assert_eq!(c[1], before);
-        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 0);
+        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 1);
+        assert!(passes(code8(c[1].px[0][3]), 127, AlphaCompare::Gt));
     }
 
     #[test]
-    fn mipcheck_b1_three_texel_repro_no_longer_overshoots() {
+    fn mipcheck_b1_three_texel_repro_gets_exactly_k() {
         // RESULTS-2 B1, smallest reproduction: alpha 255 at (0,0), (0,2), (2,0). Level 1 holds three tied 0.25s and
         // k = round(3/16 * 4) = 1; the old solver passed all three.
         let mut base = Rgba32F::new(4, 4, [0.0; 4]);
@@ -271,46 +313,48 @@ Tasks run in order. Tasks 1–2 depend on nothing. Task 4 needs Task 3. Task 5 n
             base.at_mut(x, y)[3] = 1.0;
         }
         let mut c = box_chain(base);
-        let before = c[1].clone();
         preserve_coverage(&mut c, 128, AlphaCompare::Ge);
-        assert_eq!(c[1], before);
-        assert_eq!(pass_count(&c[1], 128, AlphaCompare::Ge), 0);
+        assert_eq!(pass_count(&c[1], 128, AlphaCompare::Ge), 1);
     }
 
     #[test]
-    fn a_group_exactly_twice_the_target_is_still_taken() {
-        // p = 4/16, so k = 1 at level 1; the only group (two 0.3s) is exactly 2k: it is remapped and 2 pass.
+    fn ties_are_split_in_bayer_order_to_reach_k_exactly() {
+        // Footprints with 3, 1, 1, 1 opaque texels: level 1 = [0.75, 0.25, 0.25, 0.25], k = round(1.5) = 2. The 0.75
+        // passes, and one of the three tied 0.25s: (1, 1) has the lowest Bayer rank of (1,0), (0,1), (1,1).
         let mut base = Rgba32F::new(4, 4, [0.0; 4]);
-        for x in 0..4 {
-            base.at_mut(x, 0)[3] = 1.0;
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (2, 0), (0, 2), (2, 2)] {
+            base.at_mut(x, y)[3] = 1.0;
         }
-        let mut lvl1 = Rgba32F::new(2, 2, [0.0; 4]);
-        lvl1.px[0][3] = 0.3;
-        lvl1.px[1][3] = 0.3;
-        lvl1.px[2][3] = 0.1;
-        let mut c = vec![base, lvl1];
+        let mut c = box_chain(base);
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
         assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 2);
+        let pass: Vec<bool> = alpha_of(&c[1])
+            .map(|a| passes(code8(a), 127, AlphaCompare::Gt))
+            .collect();
+        assert_eq!(pass, [true, false, false, true]);
     }
 
-    #[test]
-    fn thin_tied_strands_stay_within_2x_or_keep_the_box_alpha() {
-        // 64x64 with a one-texel vertical strand every 16 columns (p = 1/16): every level's alphas are tied.
+    /// 64x64 with a one-texel vertical strand every 16 columns (p = 1/16): every level's alphas are tied.
+    fn strands() -> Vec<Rgba32F> {
         let mut base = Rgba32F::new(64, 64, [0.0; 4]);
         for y in 0..64 {
             for x in (0..64).step_by(16) {
                 base.at_mut(x, y)[3] = 1.0;
             }
         }
-        let boxed = box_chain(base);
-        let mut c = boxed.clone();
+        box_chain(base)
+    }
+
+    #[test]
+    fn thin_tied_strands_keep_coverage_within_one_texel_down_to_4x4() {
+        let mut c = strands();
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
         let p = coverage_fraction(alpha_of(&c[0]), 127, AlphaCompare::Gt);
-        for (l, b) in c.iter().zip(&boxed).skip(1) {
-            let k = (p * l.px.len() as f64).round() as usize;
-            let got = pass_count(l, 127, AlphaCompare::Gt);
+        for l in c.iter().skip(1).filter(|l| l.px.len() >= 16) {
+            let k = p * l.px.len() as f64;
+            let got = pass_count(l, 127, AlphaCompare::Gt) as f64;
             assert!(
-                l == b || (2 * got >= k && got <= 2 * k),
+                (got - k).abs() <= 1.0,
                 "{}x{}: {got} passing for k = {k}",
                 l.width,
                 l.height
@@ -319,15 +363,28 @@ Tasks run in order. Tasks 1–2 depend on nothing. Task 4 needs Task 3. Task 5 n
     }
 
     #[test]
-    fn too_few_positive_texels_keep_the_box_alpha() {
-        // Full coverage wanted (k = 4) but one positive texel: count 1 is more than 2x off, so the level is left
-        // alone instead of promoting a near-zero texel to the anchor.
-        let base = Rgba32F::new(4, 4, [0.0, 0.0, 0.0, 1.0]);
-        let mut lvl1 = Rgba32F::new(2, 2, [0.0; 4]);
-        lvl1.px[0][3] = 0.01;
-        let mut c = vec![base, lvl1.clone()];
+    fn the_dither_is_deterministic() {
+        let (mut a, mut b) = (strands(), strands());
+        preserve_coverage(&mut a, 127, AlphaCompare::Gt);
+        preserve_coverage(&mut b, 127, AlphaCompare::Gt);
+        assert_eq!(a, b);
+        let (mut a, mut b) = (foliage_chain(), foliage_chain());
+        preserve_coverage(&mut a, 64, AlphaCompare::Ge);
+        preserve_coverage(&mut b, 64, AlphaCompare::Ge);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn foliage_every_level_reaches_k_exactly() {
+        let mut c = foliage_chain();
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
-        assert_eq!(c[1], lvl1);
+        let p = coverage_fraction(alpha_of(&c[0]), 127, AlphaCompare::Gt);
+        for l in &c[1..] {
+            let k = ((p * l.px.len() as f64).round() as usize).min(l.px.len());
+            if k > 0 {
+                assert_eq!(pass_count(l, 127, AlphaCompare::Gt), k, "{}x{}", l.width, l.height);
+            }
+        }
     }
 ```
 
@@ -335,71 +392,149 @@ Tasks run in order. Tasks 1–2 depend on nothing. Task 4 needs Task 3. Task 5 n
 
 Run: `cargo test -p engine --lib coverage::tests`
 Expected:
-- FAIL: `binary_tie_far_from_the_target_keeps_the_box_alpha` (4 pass), `mipcheck_b1_three_texel_repro_no_longer_overshoots` (3 pass), `thin_tied_strands_stay_within_2x_or_keep_the_box_alpha` (the 16×16 level passes 64 for k = 16) and `too_few_positive_texels_keep_the_box_alpha` (the texel is promoted).
-- PASS: `a_group_exactly_twice_the_target_is_still_taken` passes before and after. It guards the boundary of the new rule.
+- FAIL to compile (`bayer8` does not exist).
+- With `bayer8` stubbed, these fail: `binary_tie_lets_exactly_k_through_in_bayer_order` (4 pass), `mipcheck_b1_three_texel_repro_gets_exactly_k` (3 pass), `ties_are_split_in_bayer_order_to_reach_k_exactly` (1 pass) and `thin_tied_strands_keep_coverage_within_one_texel_down_to_4x4` (the 16×16 level passes 64 for k = 16).
 
 - [ ] **Step 3: Implement.** In `crates/engine/src/coverage.rs`:
 
-Replace the module doc's "**Ties.**" bullet with:
+1. Replace the module doc's "**Ties.**" and "**Remap shape**" bullets with:
 
 ```rust
-//! - **Ties.** A monotone remap cannot split equal alphas, so the achievable counts are the
-//!   group boundaries `#(alpha >= v)` of the distinct positive values `v`, plus "no texel
-//!   passes". The nearest group is taken, the larger on a tie (coverage loss is the visible
-//!   failure), unless it is more than 2x off the target (`count > 2k` or `2·count < k`): then
-//!   the level keeps its box-filtered alpha (mipcheck round 2, B1). "No texel passes" is nearer
-//!   than the nearest group exactly when that group is above `2k`, so one rule covers both. A
-//!   binary base with thin, tied strands therefore passes fewer texels than `k` rather than up
-//!   to 32x more (DECISIONS R13).
+//! - **Ties, dithered (owner 2026-10-11, DECISIONS R13).** On thin strands every texel touching
+//!   a strand has the same alpha, so whole tied groups cannot reach the target (mipcheck round
+//!   2, B1: up to 32x over). Each level instead passes exactly `k = round(p · n)` texels: those
+//!   above the k-th largest alpha `v`, plus as many texels tied at `v` as are still needed,
+//!   chosen in 8x8 Bayer order of their position. That is deterministic, with no RNG, and spreads
+//!   the passing texels along the strand, so foliage and grass keep their coverage at the low
+//!   mips players mostly see. Zero alpha is never raised.
+//! - **Remap shape (deviation from Castaño).** Castaño scales alpha uniformly by `T/a`, which
+//!   halves opaque interiors and breaks `cutout_blend`. Here passing texels map monotonically
+//!   onto `[T_pass, 1]` (1.0 stays 1.0) and failing ones onto `[0, T_fail]`, each side keeping
+//!   the order of its alphas; only the tied boundary group is split (controller ruling, owner
+//!   check; spec §5.5 note).
 ```
 
-Add above `preserve_coverage`:
+2. Delete `nearest_group`.
+
+3. Add:
 
 ```rust
-/// The achievable `count` is more than 2x off the target `k` (mipcheck B1, DECISIONS R13). "No texel passes" (count
-/// 0, distance `k`) is nearer than `count` exactly when `count > 2k`, so this also decides that candidate.
-fn far_off(count: usize, k: usize) -> bool {
-    count > 2 * k || 2 * count < k
+/// Rank of texel (x, y) in the 8x8 ordered-dither (Bayer) matrix, 0..64: the order in which texels tied at the
+/// coverage boundary are let through (owner 2026-10-11, DECISIONS R13). The bit-reversed interleave of `x ^ y` and
+/// `y`; deterministic, no RNG.
+fn bayer8(x: u32, y: u32) -> u32 {
+    let (a, b) = ((x ^ y) & 7, y & 7);
+    ((a & 1) << 5) | ((b & 1) << 4) | ((a & 2) << 2) | ((b & 2) << 1) | ((a & 4) >> 1) | ((b & 4) >> 2)
+}
+
+/// Which texels pass so that exactly `k` do: every texel above the k-th largest alpha `v`, plus as many texels tied
+/// at `v` as are still needed, in Bayer order of their position (ties by index). Zero alpha is never raised, so with
+/// fewer than `k` positive texels every positive one passes; `None` when none is positive. `w` is the level's alpha
+/// as [`unit_alpha`] reads it, row-major with `width` texels per row.
+fn exact_pass_set(w: &[f32], width: u32, k: usize) -> Option<Vec<bool>> {
+    let positive = w.iter().filter(|&&a| a > 0.0).count();
+    let k = k.min(positive);
+    if k == 0 {
+        return None;
+    }
+    let mut scratch = w.to_vec();
+    let (_, &mut v, _) = scratch.select_nth_unstable_by(k - 1, |x, y| y.total_cmp(x));
+    let mut pass: Vec<bool> = w.iter().map(|&a| a > v).collect();
+    let above = pass.iter().filter(|&&p| p).count();
+    let mut tied: Vec<usize> = (0..w.len()).filter(|&i| w[i] == v).collect();
+    tied.sort_by_key(|&i| (bayer8(i as u32 % width, i as u32 / width), i));
+    for &i in tied.iter().take(k - above) {
+        pass[i] = true;
+    }
+    Some(pass)
+}
+
+/// Rewrite alpha so exactly the texels in `pass` pass. Passing texels map monotonically onto `[t_pass, 1]` (the
+/// smallest goes to `t_pass`, 1.0 stays 1.0); failing ones onto `[0, t_fail]` (the largest goes to `t_fail`). Each
+/// side keeps the order of its alphas.
+fn remap(level: &mut Rgba32F, w: &[f32], pass: &[bool], t_pass: f32, t_fail: f32) {
+    let lo_pass = w.iter().zip(pass).filter(|(_, p)| **p).map(|(a, _)| *a).fold(1.0f32, f32::min);
+    let hi_fail = w.iter().zip(pass).filter(|(_, p)| !**p).map(|(a, _)| *a).fold(0.0f32, f32::max);
+    for (q, (&a, &p)) in level.px.iter_mut().zip(w.iter().zip(pass)) {
+        q[3] = if p {
+            if a >= 1.0 {
+                1.0
+            } else {
+                // a >= lo_pass and a < 1, so lo_pass < 1; the result is >= t_pass, and a = lo_pass gives t_pass.
+                (t_pass + (a - lo_pass) * ((1.0 - t_pass) / (1.0 - lo_pass))).min(1.0)
+            }
+        } else if a <= 0.0 {
+            0.0 // zero alpha stays zero (invisible texels are never lifted toward the threshold)
+        } else if a >= hi_fail {
+            t_fail // the largest failing alpha (an unchosen tied texel included) lands exactly on t_fail
+        } else {
+            // 0 < a < hi_fail here; capped so f32 rounding cannot lift it past t_fail.
+            (a * (t_fail / hi_fail)).min(t_fail)
+        };
+    }
 }
 ```
 
-In `preserve_coverage`, replace
+4. Replace the whole body of `preserve_coverage` after `let Some((base, rest)) = chain.split_first_mut() else { return; };` with:
 
 ```rust
-        let Some((a, count)) = nearest_group(&mut w, k) else {
-            continue;
-        };
-```
-
-with
-
-```rust
-        let Some((a, count)) = nearest_group(&mut w, k) else {
-            continue;
-        };
-        // mipcheck B1: a nearest group more than 2x off `k` (every case where "no texel passes" is nearer included)
-        // leaves the box-filtered alpha alone instead of over- or under-covering by whole tied groups.
-        if far_off(count, k) {
+    // No passing code (`gt 255`): p = 0. Every code passes (`ge 0`): every level is full.
+    let Some(t) = first_passing(threshold, compare) else {
+        return;
+    };
+    if t == 0.0 {
+        return;
+    }
+    // Where remapped texels land: passing ones at or above `t_pass`, failing ones at or below `t_fail` (Task 2 moves
+    // both clear of the threshold).
+    let (t_pass, t_fail) = (t, t.next_down());
+    let p = coverage_fraction(base.px.iter().map(|q| q[3]), threshold, compare);
+    let pass_count = |l: &Rgba32F| {
+        l.px.iter()
+            .filter(|q| passes(code8(q[3]), threshold, compare))
+            .count()
+    };
+    for level in rest {
+        let n = level.px.len();
+        let k = ((p * n as f64).round() as usize).min(n);
+        // "No texel passes" is the target: the box alpha is left alone (spec §5.5). So is a level already on target.
+        if k == 0 || pass_count(level) == k {
             continue;
         }
+        let w: Vec<f32> = level.px.iter().map(|q| unit_alpha(q[3])).collect();
+        // `None`: no positive alpha to let through, so the dither cannot apply and the box alpha stays.
+        let Some(pass) = exact_pass_set(&w, level.width, k) else {
+            continue;
+        };
+        remap(level, &w, &pass, t_pass, t_fail);
+        debug_assert_eq!(pass_count(level), pass.iter().filter(|&&b| b).count());
+    }
 ```
 
-and change the last sentence of the `preserve_coverage` doc comment to: "A level is left unchanged when `k = 0`, when it has no positive alpha, when the nearest achievable count is more than 2x off `k`, or when its pass count already equals the chosen count."
+5. Replace the `preserve_coverage` doc comment with:
+
+```rust
+/// Rewrite the alpha of every level `>= 1` so it passes exactly `k = round(p · n)` texels, `p` the pass fraction of
+/// level 0 (the reference, left untouched): the texels above the k-th largest alpha, plus texels tied with it in
+/// Bayer order of position (owner 2026-10-11, DECISIONS R13). Passing texels are remapped onto `[T_pass, 1]` and
+/// failing ones onto `[0, T_fail]`. A level is left unchanged when `k = 0`, when it already passes `k`, or when it has
+/// no positive alpha; zero alpha is never raised, so a level with fewer than `k` positive texels passes all of them.
+```
 
 - [ ] **Step 4: Run the tests to see them pass.**
 
 Run: `cargo test -p engine --lib coverage::tests`
-Expected: PASS, every test in the module.
+Expected: PASS, every test in the module, including the existing `foliage_*`, `near_boundary_*`, `opaque_*`, `boundary_*`, `zero_target_*`, `degenerate_*` and `mostly_empty_*` tests.
 
 Run: `cargo test -p engine --test golden cutout`
-Expected: PASS (`cutout_keeps_coverage_and_blend_has_none`, `cutout_blend_keeps_coverage_by_default`).
+Expected: PASS.
 
 - [ ] **Step 5: Run every gate and commit.**
 
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 git add crates/engine/src/coverage.rs
-git commit -m "fix(engine): coverage keeps the box alpha when every reachable count is over 2x off (mipcheck B1)
+git commit -m "fix(engine): coverage passes exactly k texels per level, splitting tied alpha in Bayer order (mipcheck B1, owner)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -409,11 +544,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 2: Remapped alpha keeps two codes clear of the threshold (mipcheck B6)
 
 **Files:**
-- Modify: `crates/engine/src/coverage.rs` (module doc "Boundary" and "Remap shape" bullets; replace `first_passing`; the remap in `preserve_coverage`; unit tests)
+- Modify: `crates/engine/src/coverage.rs` (module doc "Boundary" bullet; replace `first_passing`; how `preserve_coverage` computes `t_pass` and `t_fail`; unit tests)
 - Test: `crates/engine/src/coverage.rs` (`mod tests`)
 
 **Interfaces:**
-- Consumes: `far_off` (Task 1).
+- Consumes: `exact_pass_set`, `remap` and the `t_pass`/`t_fail` pair of `preserve_coverage` (Task 1).
 - Produces: `pub const EDGE_MARGIN_CODES: u8 = 2;` (used by the tests), plus the private `first_float_with_code(code: u8) -> f32` and `first_passing_code(threshold: u8, compare: AlphaCompare) -> Option<u8>`. `first_passing` is deleted.
 
 **Background (RESULTS-2 B1/B6):**
@@ -511,6 +646,30 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
         }
         assert!(remapped > 0, "the fixture must exercise the remap");
     }
+
+    #[test]
+    fn the_margin_holds_after_the_bayer_split() {
+        // Thin tied strands (Task 1): the texels the split lets through sit two codes above the threshold, the tied
+        // texels it holds back two codes below, and the count stays exact.
+        let boxed = strands();
+        let mut c = boxed.clone();
+        preserve_coverage(&mut c, 127, AlphaCompare::Gt);
+        let p = coverage_fraction(alpha_of(&c[0]), 127, AlphaCompare::Gt);
+        let mut split = 0;
+        for (l, b) in c.iter().zip(&boxed).skip(1) {
+            if l == b {
+                continue;
+            }
+            split += 1;
+            let k = ((p * l.px.len() as f64).round() as usize).min(l.px.len());
+            assert_eq!(pass_count(l, 127, AlphaCompare::Gt), k, "{}x{}", l.width, l.height);
+            for a in alpha_of(l) {
+                let code = code8(a);
+                assert!(code <= 125 || code >= 130, "{}x{}: code {code}", l.width, l.height);
+            }
+        }
+        assert!(split > 0, "the fixture must exercise the split");
+    }
 ```
 
 - [ ] **Step 2: Run the tests to see them fail.**
@@ -526,12 +685,11 @@ Expected: FAIL. `EDGE_MARGIN_CODES` does not exist yet (compile error).
 //! - **Boundary.** Remapped passing texels land on the smallest float whose code is
 //!   [`EDGE_MARGIN_CODES`] above the first passing code, and remapped failing texels at or below
 //!   the largest float that many codes under the last failing code (found by search, not code
-//!   centres), so BC7's one- or two-code error does not flip them (mipcheck round 2, B6).
+//!   centres), so BC7's one- or two-code error does not flip them (mipcheck round 2, B6). This
+//!   holds for the texels the Bayer split lets through or holds back too.
 ```
 
-2. In the "**Remap shape**" bullet, replace `` `[0, a] → [0, T]`, `[a, 1] → [T, 1]` `` with `` `[0, a) → [0, T_fail]`, `[a, 1] → [T_pass, 1]` ``, and replace `` mapped to the largest failing float (`[0, b] → [0, T⁻]`, `[b, 1] → [T⁻, 1]`) `` with `` mapped to `T_fail` ``.
-
-3. Replace the whole `first_passing` function with:
+2. Replace the whole `first_passing` function with:
 
 ```rust
 /// mipcheck round 2, B6: BC7 moves alpha by a code or two, so a remapped texel left exactly on the first passing
@@ -565,7 +723,7 @@ fn first_passing_code(threshold: u8, compare: AlphaCompare) -> Option<u8> {
 }
 ```
 
-4. In `preserve_coverage`, replace
+3. In `preserve_coverage` (as Task 1 left it), replace
 
 ```rust
     // No passing code (`gt 255`): p = 0. Every code passes (`ge 0`): every level is full.
@@ -575,7 +733,9 @@ fn first_passing_code(threshold: u8, compare: AlphaCompare) -> Option<u8> {
     if t == 0.0 {
         return;
     }
-    let t_fail = t.next_down(); // the largest failing float
+    // Where remapped texels land: passing ones at or above `t_pass`, failing ones at or below `t_fail` (Task 2 moves
+    // both clear of the threshold).
+    let (t_pass, t_fail) = (t, t.next_down());
 ```
 
 with
@@ -589,50 +749,14 @@ with
         return;
     }
     // Remapped texels that pass land on code `c + margin` or above, those that fail on `c - 1 - margin` or below
-    // (each clamped to the code range).
+    // (each clamped to the code range), so BC7 error cannot flip them (mipcheck B6).
     let t_pass = first_float_with_code(c.saturating_add(EDGE_MARGIN_CODES));
     let t_fail = first_float_with_code(c.saturating_sub(EDGE_MARGIN_CODES).max(1)).next_down();
 ```
 
-5. Replace everything from the comment `// The knot `(x, y)` of the remap.` down to (but not including) `debug_assert_eq!(pass_count(level), count);` with:
+`remap` (Task 1) is unchanged: it already puts the smallest passing alpha on `t_pass` and the largest failing one on `t_fail`.
 
-```rust
-        // The knot. Normally the anchor `a` goes to `t_pass` and everything below it to at most `t_fail`. An anchor
-        // of 1.0 must stay 1.0, so then the next lower distinct alpha `b` goes to `t_fail` and only the 1.0 group
-        // passes. `passing > count` in that case (1.0 always passes), so a lower passing `b` exists.
-        let x = if a < 1.0 {
-            a
-        } else {
-            let Some(b) = w.iter().copied().filter(|&v| v < 1.0).reduce(f32::max) else {
-                continue;
-            };
-            if b < f32::MIN_POSITIVE {
-                continue;
-            }
-            b
-        };
-        let below = t_fail / x; // finite: x >= f32::MIN_POSITIVE
-        let above = (1.0 - t_pass) / (1.0 - x); // only read when a < 1, so x < 1
-        for q in &mut level.px {
-            let w = unit_alpha(q[3]);
-            q[3] = if w >= 1.0 {
-                1.0
-            } else if w >= x {
-                if a < 1.0 {
-                    // Every term is >= 0, so the result is >= t_pass; w = a gives t_pass exactly.
-                    (t_pass + (w - x) * above).min(1.0)
-                } else {
-                    // a = 1.0: nothing lies in (b, 1), so w is the knot `b` itself; it lands on t_fail exactly.
-                    t_fail
-                }
-            } else {
-                // Capped at `t_fail`, so f32 rounding cannot lift it into the margin.
-                (w * below).min(t_fail)
-            };
-        }
-```
-
-6. Update the `preserve_coverage` doc comment. In the sentence describing the remap, replace `` `[0, a] → [0, T]` and `[a, 1] → [T, 1]` with `T` the smallest float whose code passes `` with `` `[0, a) → [0, T_fail]` and `[a, 1] → [T_pass, 1]`, `T_pass` and `T_fail` [`EDGE_MARGIN_CODES`] codes clear of the threshold ``, and replace "mapped to the largest failing float" with "mapped to `T_fail`".
+4. In the `preserve_coverage` doc comment, replace "Passing texels are remapped onto `[T_pass, 1]` and failing ones onto `[0, T_fail]`." with "Passing texels are remapped onto `[T_pass, 1]` and failing ones onto `[0, T_fail]`, `T_pass` and `T_fail` [`EDGE_MARGIN_CODES`] codes clear of the threshold (mipcheck B6)."
 
 - [ ] **Step 4: Run the tests to see them pass.**
 
@@ -3877,7 +4001,7 @@ Owner decisions of 2026-10-11 (R1–R3) and the rulings of `docs/superpowers/pla
 - **R10 sRGB roughness** (plan): a roughness member with `color.content = srgb` raises `TAG-CONTENT-MISMATCH` and does not bake.
 - **R11 No alpha weighting for vectors or roughness** (plan, Task 29 carry): normal, `_msn`, `_flow` and roughness chains are never alpha-weighted, even with a cutout policy forced on them. Preprocess dilation under α = 0 still runs for alpha-tested policies.
 - **R12 `if-changed` and the bake** (plan): the baked `_n` is recorded in the manifest's `sources` with `bake` = the SHA-256 of its decode settings (`channels`, `alpha.policy`, `mips.normal_base`) and level shift; a changed `_n`, changed settings, or the bake turning on or off re-encodes the member. `Profile` gains `mips.normal_base` and `mips.bake_clamp`, so every `profile_sha256` changes once and the first M4 run re-encodes every output (as Note M10).
-- **R13 Coverage, mipcheck round 2 B1/B6** (plan, the roadmap's fix): "no texel passes" is a candidate, and a level whose nearest achievable count is more than 2× off the target keeps its box alpha (B1); remapped texels sit at least 2 codes clear of the threshold (B6). The 2× test applies to the group the nearest-count rule picks: with k = 10 and groups of 19 and 4, the nearer 4 is picked, found more than 2× off, and the level keeps its box alpha even though 19 was within 2× (the roadmap's "best count" wording; deliberate). A spatial tie-break (dither) for exact coverage on tied alpha is not built.
+- **R13 Coverage, mipcheck round 2 B1/B6** (owner decision on the dither, 2026-10-11, verbatim: "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them"): every level ≥ 1 passes exactly `k = round(p·n)` texels, the texels above the k-th largest alpha plus as many tied with it as are needed, chosen in 8×8 Bayer order of position (deterministic, no RNG), so tied alpha on thin strands neither overshoots (up to ×32 before) nor vanishes (B1). `k = 0` keeps the box alpha ("no texel passes"); zero alpha is never raised, and a level with no positive alpha keeps its box alpha; there is no "more than 2× off" fallback. Remapped texels, the split's included, sit at least 2 codes clear of the threshold (B6).
 - **R14 `sdc-base` 1.1.0** (plan): new defaults `mips.normal_base`, `mips.bake_clamp` (0.25) and the `coat_normal` self-bake.
 ```
 
@@ -3927,7 +4051,7 @@ with
 | Normals | Box only, never alpha-weighted | Vector | Every level renormalised (mip 0 unless `mips.normal_base = keep`), accumulated from mip 0 as written; `msn` by length only; a `_cnr` self-bakes its alpha (DECISIONS R1, R2, R11) |
 ```
 
-§5.5 coverage paragraph: after the sentence ending `the §11.5 in-game check watches for thick distant edges.`, insert ` **[Decided]** (M4, DECISIONS R13) mipcheck round 2: a level whose nearest achievable count is more than 2× off the target keeps its box alpha (B1: no ×32 overshoot on thin tied strands), and remapped texels sit at least two codes clear of the threshold so BC7 cannot flip them (B6).`
+§5.5 coverage paragraph: after the sentence ending `the §11.5 in-game check watches for thick distant edges.`, insert ` **[Decided]** (M4, owner 2026-10-11, DECISIONS R13) mipcheck round 2: every level passes exactly its target count; texels tied at the boundary are split in 8×8 Bayer order of position, deterministic, so thin foliage and grass keep their coverage at low mips (B1: no ×32 overshoot, no vanishing strands), and remapped texels sit at least two codes clear of the threshold so BC7 cannot flip them (B6).` In the same paragraph, the two documented limits (the tie-group over-coverage and the "nearest group" rule) no longer apply: replace the sentence beginning `A monotone remap cannot split equal alphas` with `Equal alphas at the boundary are split in Bayer order, so every count is reachable.`
 
 §6.2: replace the sentence `**[Proposal]** The CLI MVP renormalises `_n` mips and does not bake (owner: the bake arrives in M4); `mips.normal = renormalize_bake` is accepted and behaves as `renormalize` until then.` with `**[Decided]** Shipped in M4 (DECISIONS Note R): the roughness member decodes its `_n` itself (R4); footprint lengths come from a box pyramid of the `_n`'s mip 0 as written (R1, R5), so step 1 averages unit normals unless `mips.normal_base = keep`; a `_cnr` bakes its own variance into its coat roughness (R2).`
 
@@ -3941,8 +4065,6 @@ with
 - `SET-COMPANION-DDS (M4)` row: drop ` (M4)` and make the trigger `The missing companion (`_n` or roughness member) exists only as DDS → no bake (DECISIONS R8)`.
 - `SET-BAKE-RATIO (M4)` row: drop ` (M4)` and make the trigger `` `_n`/roughness-member sizes are not powers of two with one aspect → bake off (DECISIONS R5) ``.
 
-§14 table: add the row `| 23 | Spatial tie-break (dither) for tied coverage groups | Not built: a level more than 2× off keeps its box alpha (DECISIONS R13) | Thin alpha-tested strands vanish at distance in spot checks | Owner |`.
-
 - [ ] **Step 3: The roadmap** (`docs/superpowers/plans/2026-10-08-skyrim-dds-converter-phase0-2.md`). At the end of the `### M4 — Texture-set variance bake (spec §6.2–6.3)` section, before `### M5`, add:
 
 ```markdown
@@ -3954,12 +4076,11 @@ with
     - the four `SET-*` codes (R8);
     - no alpha weighting for vector or roughness chains (R11);
     - the `_n` is stamped, hashed and admitted with its member (R4, R12);
-    - mipcheck B1/B6 (R13);
+    - mipcheck B1/B6, with the owner's dithered exact coverage (R13);
     - the owner's `_cnr` self-bake (R2);
     - B2's accumulation length (before normalising) is the bake's L, taken from mip 0 as written (R1).
   - Owner decision 2026-10-11: normal mip 0 is renormalised by default (`mips.normal_base`, `CHAN-NORMAL-SHORT`, R1).
 - **Still open after M4:**
-  - a spatial tie-break (dither) for exact coverage on tied alpha (spec §14 #23);
   - the in-game check of the bake's look at distance (spec §14 #4, t = 0.25);
   - per-mip angular-error metrics for normals (M7).
 ```
@@ -4028,26 +4149,22 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ## Open questions (shipped defaults in this plan; ask the owner at review)
 
-1. **Tied-alpha coverage.**
-   - Question: should a spatial tie-break (dither) make exact coverage reachable on thin tied strands?
-   - Shipped: no, per the roadmap's fix (R13). Thin strands now lose coverage from about 256² down instead of overshooting up to ×32.
-   - Recommendation: keep it off and look at B1's sparse image in game first.
-2. **What the bake averages. Resolved by a controller correction (2026-10-11), no longer open.**
+1. **What the bake averages. Resolved by a controller correction (2026-10-11), no longer open.**
    - The earlier wording "the bake reads the source before any renormalise" was the controller's, not the owner's. The owner decided only "per-preset option, default renormalise".
    - The bake averages mip 0 **as written**: unit length under the default, as authored under `mips.normal_base = keep`. This agrees with spec §6.2 step 1 ("unit normals").
    - A uniformly short flat `_n` adds no roughness by default, and adds roughness under `keep`. Test: `a_uniformly_short_flat_normal_adds_roughness_only_under_keep` (Task 7).
-3. **`_cnr` coat alpha filter.**
+2. **`_cnr` coat alpha filter.**
    - Shipped: the plain box mean, with the bake on top. A flat coat is then unchanged, as the roadmap exit asks.
    - Alternative: filter it on α = r² like `_rmaos` R. That is closer to "the same formula", but it changes every `_cnr` with varying alpha, flat or not.
    - Recommendation: the plain box (shipped).
-4. **Lone albedo.**
+3. **Lone albedo.**
    - Question: should a PBR set holding only an albedo raise `SET-MISSING-COMPANION`?
    - Shipped: no (R8). It makes no bake decision, and it would add an info to every lone PBR texture.
    - Recommendation: no.
-5. **A blocked `_n`.**
+4. **A blocked `_n`.**
    - Question: should a blocked `_n` (for example BC5 not yet allowed) still bake its variance into the roughness member?
    - Shipped: yes (R9). The bake reads the source, and the member is right whichever way the `_n` is finally written.
    - Recommendation: yes.
-6. **`CHAN-NORMAL-SHORT` threshold.**
+5. **`CHAN-NORMAL-SHORT` threshold.**
    - Shipped: below a mean length of 0.9. It fires alongside `CHAN-NORMAL-LENGTH` (warning, mean |len − 1| > 0.1), which asks whether the file is a normal map at all.
    - Recommendation: keep both.
