@@ -7,7 +7,12 @@ pub struct Expanded {
 }
 
 fn target(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix("#include")?.trim();
+    let rest = line
+        .trim_start()
+        .strip_prefix('#')?
+        .trim_start()
+        .strip_prefix("include")?
+        .trim();
     let rest = rest.strip_prefix('"').or_else(|| rest.strip_prefix('<'))?;
     rest.split(['"', '>']).next()
 }
@@ -25,7 +30,9 @@ fn go(file: &Path, search: &[PathBuf], depth: u32, out: &mut Expanded) -> std::i
             file.display()
         )));
     }
-    let text = std::fs::read_to_string(file)?;
+    let bytes = std::fs::read(file)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     out.files.push(file.to_path_buf());
     let fname = slash(file);
     for (n, line) in text.lines().enumerate() {

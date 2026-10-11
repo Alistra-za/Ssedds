@@ -61,15 +61,40 @@ fn real_cs_lighting_expands() {
     let left: Vec<&str> = e
         .text
         .lines()
-        .filter(|l| l.trim_start().starts_with("#include"))
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with('#') && t[1..].trim_start().starts_with("include")
+        })
         .collect();
     eprintln!(
-        "files={} bytes={} unexpanded={}",
+        "files={} distinct={} bytes={} unexpanded={}",
         e.files.len(),
+        e.files
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
         e.text.len(),
         left.len()
     );
     for l in &left {
         eprintln!("UNEXPANDED: {l}");
     }
+}
+
+#[test]
+fn spaced_and_tabbed_include_directives_expand() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path();
+    fs::write(
+        r.join("m.hlsl"),
+        "#\tinclude \"x.hlsli\"\n#  include <y.hlsli>\nfloat m;\n",
+    )
+    .unwrap();
+    fs::write(r.join("x.hlsli"), "\u{feff}float x;\n").unwrap();
+    fs::write(r.join("y.hlsli"), b"float y;\n\xff\n").unwrap();
+    let e = expand(&r.join("m.hlsl"), &[r.to_path_buf()]).unwrap();
+    assert_eq!(e.files.len(), 3);
+    assert!(e.text.contains("float x;") && e.text.contains("float y;"));
+    assert!(!e.text.contains('\u{feff}'));
+    assert!(!e.text.contains("include"));
 }
