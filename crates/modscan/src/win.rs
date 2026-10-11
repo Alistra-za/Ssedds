@@ -115,3 +115,15 @@ pub fn current_instance_name() -> Option<String> {
         Some(String::from_utf16_lossy(&buf[..n])).filter(|s| !s.is_empty())
     }
 }
+
+/// The user's Documents folder from the shell (FOLDERID_Documents), so OneDrive or other redirection is honoured.
+pub fn documents_dir() -> Option<PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_Documents, KNOWN_FOLDER_FLAG(0), None).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const core::ffi::c_void));
+        s.map(PathBuf::from)
+    }
+}

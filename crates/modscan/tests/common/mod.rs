@@ -1,5 +1,7 @@
 use std::fs;
 
+/// An MO2 instance in a temp dir. The profile uses profile-local INIs (`LocalSettings=true`) and has none, so
+/// scans never read the real Documents folder.
 pub fn instance_fixture(modlist: &str) -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     let r = d.path();
@@ -19,5 +21,10 @@ pub fn instance_fixture(modlist: &str) -> tempfile::TempDir {
     fs::create_dir_all(r.join("overwrite")).unwrap();
     fs::create_dir_all(r.join("profiles/Default")).unwrap();
     fs::write(r.join("profiles/Default/modlist.txt"), modlist).unwrap();
+    fs::write(
+        r.join("profiles/Default/settings.ini"),
+        "[General]\nLocalSettings=true\n",
+    )
+    .unwrap();
     d
 }

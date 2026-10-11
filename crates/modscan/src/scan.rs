@@ -14,6 +14,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use vfs::bsa::Bsa;
 
 const CHUNK: usize = 512;
@@ -53,6 +54,36 @@ pub struct Report {
     pub pgp: Vec<PgpOrigin>,
     pub tainted: bool,
     pub missing_mods: Vec<String>,
+    /// Informational notes (e.g. no INI archive list found).
+    pub notes: Vec<String>,
+    /// Wall time per phase in milliseconds, in run order: origins, walk, parse, write, resolve, textures.
+    pub phase_ms: Vec<(&'static str, u64)>,
+}
+
+/// Elapsed milliseconds since `t`, and restarts `t`.
+fn lap(t: &mut Instant) -> u64 {
+    let ms = t.elapsed().as_millis() as u64;
+    *t = Instant::now();
+    ms
+}
+
+/// Scans one file's bytes; a parser panic becomes a `Failed` copy instead of aborting the scan.
+pub fn scan_guarded(b: &[u8]) -> CopyResult {
+    guarded(|| nif::scan::scan(b))
+}
+
+fn guarded(f: impl FnOnce() -> Result<nif::scan::NifScan, nif::NifError>) -> CopyResult {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => CopyResult::from(r),
+        Err(p) => {
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".into());
+            CopyResult::Failed(format!("parser panic: {msg}"))
+        }
+    }
 }
 
 enum Loc {
@@ -117,13 +148,15 @@ pub fn run(
         return Err(ScanError::PgpRunning);
     }
     let mut report = Report::default();
+    let mut t = Instant::now();
 
     // 2. Origins.
     let (loose, bsas, seps) = match src {
         Source::Mo2(inst) => {
             let (l, missing) = loose_origins(inst)?;
             report.missing_mods = missing;
-            let b = active_bsas(inst, &l);
+            let (b, notes) = active_bsas(inst, &l);
+            report.notes = notes;
             let s = separators(inst, &l)?;
             (l, b, s)
         }
@@ -217,8 +250,12 @@ pub fn run(
         }
     }
 
+    report.phase_ms.push(("origins", lap(&mut t)));
+
     // 3. Walk.
     let (copies, locs, opened, tex) = walk(&loose, &bsas, &mut report, progress);
+    report.phase_ms.push(("walk", lap(&mut t)));
+    let (mut parse_ms, mut write_ms) = (0u64, 0u64);
     let derived: Vec<bool> = copies
         .iter()
         .map(|c| match c.origin {
@@ -301,12 +338,13 @@ pub fn run(
                 match bytes {
                     Ok(b) => {
                         let crc = candidate[i].then(|| crc32fast::hash(&b));
-                        (i, CopyResult::from(nif::scan::scan(&b)), crc)
+                        (i, scan_guarded(&b), crc)
                     }
                     Err(e) => (i, CopyResult::ReadFailed(e), None),
                 }
             })
             .collect();
+        parse_ms += lap(&mut t);
         let mut items = Vec::with_capacity(results.len());
         for (i, res, crc) in results {
             let c = &copies[i];
@@ -333,6 +371,7 @@ pub fn run(
             });
         }
         store.write_chunk(&items)?;
+        write_ms += lap(&mut t);
     }
     progress(Progress {
         phase: "parse",
@@ -351,6 +390,9 @@ pub fn run(
         return Ok(report);
     }
     store.commit_pending()?;
+    write_ms += lap(&mut t);
+    report.phase_ms.push(("parse", parse_ms));
+    report.phase_ms.push(("write", write_ms));
 
     // 6. Winners and the derived layer.
     progress(Progress {
@@ -390,6 +432,7 @@ pub fn run(
         .map(|(p, &i)| (pid_of[p.as_str()], ids[i]))
         .collect();
     store.set_winners(&game_rows, &src_rows)?;
+    let mut resolve_ms = lap(&mut t);
 
     // Texture winners (game view only; stat-only data from the walk).
     let tex_pids = store.path_ids(&tex.iter().map(|c| c.path.as_str()).collect::<Vec<_>>())?;
@@ -409,6 +452,7 @@ pub fn run(
         .map(|(p, &(i, n))| (tex_pid_of[p.as_str()], (origin_id(tex[i].origin), n)))
         .collect();
     store.set_textures(&tex_rows, &tex_win_rows)?;
+    let textures_ms = lap(&mut t);
 
     // pgp_diff: higher-priority origins overwrite lower ones on the same key.
     let mut order: Vec<usize> = (0..loose.len()).filter(|&i| diffs[i].is_some()).collect();
@@ -492,6 +536,9 @@ pub fn run(
     // 7. Drop copies not seen in this walk.
     let seen: HashSet<i64> = ids.iter().copied().collect();
     store.delete_unseen(&seen)?;
+    resolve_ms += lap(&mut t);
+    report.phase_ms.push(("resolve", resolve_ms));
+    report.phase_ms.push(("textures", textures_ms));
     progress(Progress {
         phase: "resolve",
         done: 1,
@@ -593,4 +640,23 @@ fn walk(
         total,
     });
     (copies, locs, opened, tex)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_panic_becomes_a_failed_copy() {
+        let r = guarded(|| panic!("boom"));
+        assert!(
+            matches!(&r, CopyResult::Failed(m) if m.contains("parser panic") && m.contains("boom")),
+            "{r:?}"
+        );
+        let r = guarded(|| panic!("{}", String::from("owned")));
+        assert!(
+            matches!(&r, CopyResult::Failed(m) if m.contains("owned")),
+            "{r:?}"
+        );
+    }
 }

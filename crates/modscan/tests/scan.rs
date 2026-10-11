@@ -414,6 +414,8 @@ fn owner_smoke() {
         println!("problem: {p:?}");
     }
     println!("elapsed: {:.1}s", el.as_secs_f64());
+    println!("phase_ms: {:?}", r.phase_ms);
+    println!("notes: {:?}", r.notes);
     let c = store.conn();
     let q = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
     let w = q("SELECT count(*) FROM nif_winner");
@@ -435,6 +437,13 @@ fn owner_smoke() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
+    println!(
+        "bsa origins: {}; tex_raw rows: {}; shapes: {}; tex winners: {}",
+        q("SELECT count(*) FROM origin WHERE kind = 4 AND enabled = 1"),
+        q("SELECT count(*) FROM tex_raw"),
+        q("SELECT count(*) FROM shape"),
+        q("SELECT count(*) FROM tex_winner")
+    );
     println!("derive_check counts (0 match,1 stale_changed,2 stale_reordered,3 unverified,4 unknown,5 dup_of): {checks:?}");
 }
 
@@ -495,4 +504,32 @@ fn disabled_mod_is_hidden_and_reused_when_reenabled() {
     let (store, r) = go(&d, vec![]);
     assert_eq!((r.parsed, r.reused), (0, 2));
     assert!(store.nifs_of(mod_id(&store, "B")).unwrap()[0].wins);
+}
+
+#[test]
+fn report_has_phase_timings() {
+    let d = instance_fixture(
+        "+A
+",
+    );
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let (_, r) = go(&d, vec![]);
+    let names: Vec<&str> = r.phase_ms.iter().map(|p| p.0).collect();
+    assert_eq!(
+        names,
+        ["origins", "walk", "parse", "write", "resolve", "textures"]
+    );
+    // the fixture profile has no INI and the game folder no Skyrim_Default.ini: a note, not a problem
+    assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+}
+
+/// Manual check of the shell Documents lookup (prints the folder; reads nothing in it).
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn documents_dir_resolves() {
+    let d = modscan::win::documents_dir().expect("FOLDERID_Documents");
+    println!("documents: {}", d.display());
+    assert!(d.is_dir());
 }
