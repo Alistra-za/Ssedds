@@ -66,6 +66,12 @@ impl CbWriter {
     pub fn bytes(&self) -> &[u8] {
         &self.data
     }
+
+    /// Every byte back to 0, as [`CbWriter::new`] leaves it. A material rewrite starts here, so no field of the
+    /// previous material survives (answers.md §Surprises 3; 03 T-E2).
+    pub fn zero(&mut self) {
+        self.data.fill(0);
+    }
 }
 
 #[cfg(test)]

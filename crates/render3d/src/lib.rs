@@ -4,18 +4,21 @@ pub mod device;
 pub mod draw;
 pub mod includes;
 pub mod locate;
+pub mod material;
 pub mod mesh;
 pub mod parse;
 pub mod permutation;
 pub mod scene;
 pub mod textures;
 
+pub use material::{pbr_flags, Bound};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
 use compile::{compile, SrvKind};
 use device::{Gpu, Target};
-use draw::{cbuffers, create_program, write_material, MaterialInputs, Program, ShapeDraw};
+use draw::{cbuffers, create_program, Program, ShapeDraw};
 use locate::Fingerprint;
+use material::{perm_material, write_material};
 use permutation::{defines, Material, Stage};
 use scene::{Scene, View};
 use std::collections::HashMap;
@@ -315,7 +318,9 @@ impl Renderer {
                 rep.errors.push(format!("{label}: {e}"));
                 continue;
             }
-            let material = Material::from_shape(&row.head, lighting, row.alpha);
+            let state =
+                nif::material::MaterialState::from_lighting(&row.head, lighting, slots, row.alpha);
+            let material = perm_material(&state);
             let program = match self.program(&material) {
                 Ok(p) => p,
                 Err(e) => {
@@ -327,8 +332,6 @@ impl Renderer {
             let msn = bit(lighting.slsf1, 12);
             let blend = row.alpha.is_some_and(|a| a.blend());
             let ps_defines = &program.ps.reflection;
-            let specular =
-                !pbr && bit(lighting.slsf1, 0) && lighting.params.specular_strength > 0.0;
             // NIF slot → register; a texture is loaded only if the PS reads its register.
             let mut bound: HashMap<u32, ID3D11ShaderResourceView> = HashMap::new();
             for (slot, path) in slots.iter().enumerate() {
@@ -410,18 +413,11 @@ impl Renderer {
                     continue;
                 }
             };
-            let inputs = MaterialInputs {
-                lighting,
-                alpha: row.alpha,
-                material,
-                pbr,
-                specular,
-                linear_lighting,
-                blend,
-                has_env_mask: bound.contains_key(&5),
+            let bound_regs = Bound {
+                regs: bound.keys().copied().collect(),
             };
             for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
-                write_material(&mut cb.writer, &inputs);
+                write_material(&mut cb.writer, &state, &bound_regs, linear_lighting);
             }
             let model = mesh.transform;
             for p in &mesh.positions {

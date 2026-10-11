@@ -101,8 +101,12 @@ pub fn defines(m: &Material, stage: Stage, features: &[&str], deferred: bool) ->
     if ps && m.shader_type == 6 && (bit(m.slsf1, 26) || bit(m.slsf1, 27)) {
         out.push("DEPTH_WRITE_DECALS");
     }
-    if ps && bit(m.slsf2, 21) {
-        out.push(if pbr { "GLINT" } else { "ANISO_LIGHTING" });
+    // TruePBR: CS enables glint from its remapped Glint flag (Fit_Slope without MLP/Soft/Back; 01 §3.1, P1 spec
+    // §2.2); SLSF2.21 is cleared at load. Vanilla: Anisotropic_Lighting (SLSF2.21) → ANISO_LIGHTING.
+    if pbr && crate::material::remapped_glint(m.slsf2) {
+        out.push("GLINT");
+    } else if ps && !pbr && bit(m.slsf2, 21) {
+        out.push("ANISO_LIGHTING");
     }
     // Compile-time in installed CS 1.9, PS only, and not under TruePBR (answers.md Q4.1/Q4.2).
     if ps && !pbr {

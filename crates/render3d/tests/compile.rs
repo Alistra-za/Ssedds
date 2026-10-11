@@ -74,13 +74,35 @@ fn define_table() {
         names(&defines(&m(6, 0, 1 << 21, true), Stage::Pixel, &[], false))
             .contains(&"ANISO_LIGHTING")
     );
-    let glint = defines(
-        &m(0, 0, (1 << 21) | (1 << 23), false),
-        Stage::Pixel,
-        &[],
-        false,
+    // TruePBR: GLINT comes from CS's remapped Glint flag (Fit_Slope 12 without MLP 24 / Soft 25 / Back 27),
+    // never from SLSF2.21, which CS clears at load (P1 spec §2.2).
+    let pbr_ps = |slsf2: u32| -> Vec<String> {
+        names(&defines(
+            &m(11, 0, slsf2 | (1 << 23), false),
+            Stage::Pixel,
+            &[],
+            false,
+        ))
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    };
+    let has = |v: &[String], n: &str| v.iter().any(|x| x == n);
+    assert!(!has(&pbr_ps(1 << 21), "GLINT") && !has(&pbr_ps(1 << 21), "ANISO_LIGHTING"));
+    assert!(has(&pbr_ps(1 << 12), "GLINT"));
+    assert!(
+        has(&pbr_ps((1 << 12) | (1 << 26)), "GLINT"),
+        "subsurface + glint"
     );
-    assert!(names(&glint).contains(&"GLINT") && !names(&glint).contains(&"ANISO_LIGHTING"));
+    for blocker in [24, 25, 27] {
+        assert!(
+            !has(&pbr_ps((1 << 12) | (1 << blocker)), "GLINT"),
+            "{blocker}"
+        );
+    }
+    assert!(
+        !names(&defines(&m(0, 0, 1 << 12, false), Stage::Pixel, &[], false)).contains(&"GLINT")
+    );
     // DO_ALPHA_TEST whenever the shape has an NiAlphaProperty (blend-only included).
     let mut alpha = m(6, 0, 0, true);
     alpha.alpha_test = true;
