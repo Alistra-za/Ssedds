@@ -103,7 +103,7 @@ fn srv_from(
         gpu.device
             .CreateShaderResourceView(res, Some(desc), Some(&mut v))
     }
-    .map_err(|e| format!("CreateShaderResourceView: {e}"))?;
+    .map_err(|e| gpu.fail("CreateShaderResourceView", e))?;
     v.ok_or_else(|| "CreateShaderResourceView returned no view".to_string())
 }
 
@@ -141,7 +141,7 @@ fn create_texture(
         gpu.device
             .CreateTexture2D(desc, Some(init.as_ptr()), Some(&mut t))
     }
-    .map_err(|e| format!("CreateTexture2D: {e}"))?;
+    .map_err(|e| gpu.fail("CreateTexture2D", e))?;
     t.ok_or_else(|| "CreateTexture2D returned no texture".to_string())
 }
 
@@ -233,7 +233,7 @@ pub fn default_srv(
             let mut b: Option<ID3D11Buffer> = None;
             // SAFETY: descriptors and `zero` are live locals for the call.
             unsafe { gpu.device.CreateBuffer(&bd, Some(&init), Some(&mut b)) }
-                .map_err(|e| format!("CreateBuffer: {e}"))?;
+                .map_err(|e| gpu.fail("CreateBuffer", e))?;
             let b = b.ok_or("CreateBuffer returned no buffer")?;
             let mut el = D3D11_BUFFER_SRV::default();
             el.Anonymous2.NumElements = 1;

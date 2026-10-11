@@ -210,7 +210,7 @@ pub fn cbuffers(gpu: &Gpu, r: &Reflection) -> Result<Vec<Cb>, String> {
             let mut b = None;
             // SAFETY: descriptor is a local; no initial data.
             unsafe { gpu.device.CreateBuffer(&d, None, Some(&mut b)) }
-                .map_err(|e| format!("CreateBuffer({}): {e}", l.name))?;
+                .map_err(|e| gpu.fail(&format!("CreateBuffer({})", l.name), e))?;
             Ok(Cb {
                 slot: l.slot,
                 writer,
@@ -251,10 +251,10 @@ pub fn create_program(gpu: &Gpu, vs: Compiled, ps: Compiled) -> Result<Program, 
     unsafe {
         gpu.device
             .CreateVertexShader(&vs.bytecode, None, Some(&mut v))
-            .map_err(|e| format!("CreateVertexShader: {e}"))?;
+            .map_err(|e| gpu.fail("CreateVertexShader", e))?;
         gpu.device
             .CreatePixelShader(&ps.bytecode, None, Some(&mut p))
-            .map_err(|e| format!("CreatePixelShader: {e}"))?;
+            .map_err(|e| gpu.fail("CreatePixelShader", e))?;
     }
     Ok(Program {
         vs_obj: v.ok_or("no vertex shader")?,

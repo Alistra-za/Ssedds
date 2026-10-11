@@ -32,6 +32,8 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 /// (answers.md: `SettingsUser.json` `enableLinearLighting: 1`), and Linear Lighting is the compile-time
 /// define `ENABLE_LL` (`Common/ColorManagement.hlsli:13,133`). P0 does no other installed-feature detection;
 /// the GUI's "Community Shaders features" toggle clears this list (`Renderer::set_features`).
+///
+/// This is the owner's CS SettingsUser.json / frame-11178 value; P1 reads the enabled features per user.
 pub const DEFAULT_FEATURES: &[&str] = &["ENABLE_LL"];
 
 /// Result of [`Renderer::load`].
@@ -485,7 +487,8 @@ impl Renderer {
         rep
     }
 
-    /// Renders the loaded model into a `w × h` RGBA8 frame (tightly packed, top row first). Errors (device
+    /// Renders the loaded model into a `w × h` RGBA8 frame (tightly packed, top row first, alpha 255: see
+    /// [`Target::readback_display`]). Errors (device
     /// removed, allocation failure) are text; see [`device`] for the device-removed contract.
     pub fn render(&mut self, scene: &Scene, w: u32, h: u32) -> Result<Vec<u8>, String> {
         let t0 = std::time::Instant::now();
@@ -556,7 +559,7 @@ impl Renderer {
         wait_idle(gpu)?;
         let gpu_ms = t1.elapsed().as_secs_f64() * 1000.0;
         let t2 = std::time::Instant::now();
-        let px = target.readback(gpu, self.encode_srgb)?;
+        let px = target.readback_display(gpu, self.encode_srgb)?;
         self.timing = FrameTiming {
             draw_ms,
             gpu_ms,

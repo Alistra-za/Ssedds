@@ -770,6 +770,27 @@ fn render_loop(
         adapter: r.gpu().adapter.clone(),
         warp: r.gpu().warp,
     });
+    // After a device loss: a new renderer (maybe WARP, same shaders and features), `Ready`, the last mesh
+    // loaded again and its `Loaded`. Err when no device can be made at all.
+    let rebuild = |r: &mut Renderer,
+                   last: &Option<(u64, Arc<MeshSpec>)>,
+                   features: bool|
+     -> Result<(), String> {
+        *r = make(r.shaders().clone(), features)?;
+        send(V3Reply::Ready {
+            adapter: r.gpu().adapter.clone(),
+            warp: r.gpu().warp,
+        });
+        if let Some((id, spec)) = last {
+            let report = load(r, spec);
+            send(V3Reply::Loaded {
+                id: *id,
+                report,
+                bounds: r.bounds(),
+            });
+        }
+        Ok(())
+    };
     let mut last: Option<(u64, Arc<MeshSpec>)> = None;
     while let Ok(first) = rx.recv() {
         let mut reload = false;
@@ -796,11 +817,19 @@ fn render_loop(
         if reload {
             if let Some((id, spec)) = &last {
                 let report = load(&mut r, spec);
-                send(V3Reply::Loaded {
-                    id: *id,
-                    report,
-                    bounds: r.bounds(),
-                });
+                if r.gpu().is_removed() {
+                    // Lost during the load (its errors carry the device-removed prefix): rebuild and load again
+                    // now; with no shapes no Render would follow to trigger the rebuild.
+                    if let Err(e) = rebuild(&mut r, &last, features) {
+                        return send(V3Reply::Failed(e));
+                    }
+                } else {
+                    send(V3Reply::Loaded {
+                        id: *id,
+                        report,
+                        bounds: r.bounds(),
+                    });
+                }
             }
         }
         let Some((id, camera, w, h)) = render else {
@@ -814,25 +843,10 @@ fn render_loop(
         if let Err(e) = &result {
             if e.starts_with(render3d::device::DEVICE_REMOVED) {
                 // Device lost (TDR, driver update): a new device (maybe WARP), the mesh again, one retry.
-                match make(r.shaders().clone(), features) {
-                    Ok(nr) => {
-                        r = nr;
-                        send(V3Reply::Ready {
-                            adapter: r.gpu().adapter.clone(),
-                            warp: r.gpu().warp,
-                        });
-                        if let Some((lid, spec)) = &last {
-                            let report = load(&mut r, spec);
-                            send(V3Reply::Loaded {
-                                id: *lid,
-                                report,
-                                bounds: r.bounds(),
-                            });
-                        }
-                        result = r.render(&scene, w, h);
-                    }
-                    Err(e) => return send(V3Reply::Failed(e)),
+                if let Err(e) = rebuild(&mut r, &last, features) {
+                    return send(V3Reply::Failed(e));
                 }
+                result = r.render(&scene, w, h);
             }
         }
         match result {

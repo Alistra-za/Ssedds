@@ -44,3 +44,17 @@ fn unknown_luid_falls_back() {
     t.clear(&gpu, [0.25, 0.0, 1.0, 0.5]);
     assert_eq!(t.readback_rgba8(&gpu).unwrap(), [64, 0, 255, 128].repeat(3));
 }
+
+/// The display readback is opaque; the linear test readback keeps the target's alpha.
+#[test]
+fn display_readback_is_opaque() {
+    let gpu = Gpu::new_warp().unwrap();
+    let t = Target::new(&gpu, 2, 1).unwrap();
+    t.clear(&gpu, [0.25, 0.0, 1.0, 0.5]);
+    assert_eq!(t.readback_rgba8(&gpu).unwrap(), [64, 0, 255, 128].repeat(2));
+    assert_eq!(
+        t.readback_display(&gpu, false).unwrap(),
+        [64, 0, 255, 255].repeat(2)
+    );
+    assert_eq!(t.readback_display(&gpu, true).unwrap()[3], 255);
+}

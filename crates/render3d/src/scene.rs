@@ -286,6 +286,8 @@ pub fn rows<const R: usize>(m: &[[f32; 4]; R]) -> Vec<f32> {
 /// any feature define (linear-lighting multipliers in `Color::DirectionalLight/Ambient`, vanilla Fresnel,
 /// TruePBR micro-shadows) plus the CS Skin / Hair blocks for when those features are compiled. Values from
 /// `state_6544.json` (frame11178).
+///
+/// These are the owner's CS SettingsUser.json / frame-11178 weather values; P1 reads them per user.
 const FEATURE_FLOATS: &[(&str, &[f32])] = &[
     ("linearLightingSettings.diffuseGamma", &[2.2]),
     ("linearLightingSettings.directionalLightMult", &[1.0]),
@@ -336,6 +338,7 @@ const FEATURE_FLOATS: &[(&str, &[f32])] = &[
     ("skinData.physicalParams", &[1.3, 0.75, 1.0, 1.0]),
     ("skinData.wetParams", &[512.0, 0.7, 10.0, 4.0]),
 ];
+/// Owner's CS SettingsUser.json / frame-11178 values (see [`FEATURE_FLOATS`]); P1 reads them per user.
 const FEATURE_UINTS: &[(&str, u32)] = &[
     ("vanillaFresnelSettings.Enable", 1),
     ("vanillaFresnelSettings.EnableEyeSpecialHandling", 1),

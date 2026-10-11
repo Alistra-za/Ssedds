@@ -353,12 +353,24 @@ impl Target {
     /// As [`Target::readback_rgba8`]; with `srgb` the colour channels are sRGB-encoded from the half values
     /// (alpha stays linear), for display of a frame drawn in linear working space (Linear Lighting on).
     pub fn readback(&self, gpu: &Gpu, srgb: bool) -> Result<Vec<u8>, String> {
+        self.read(gpu, srgb, false)
+    }
+
+    /// The frame for display: as [`Target::readback`], but alpha is 255 everywhere. Opaque shapes write
+    /// their diffuse alpha into the target (CS `psout.Diffuse.w = baseColor.w`); the frame is already drawn
+    /// over the clear colour, so its alpha must not make the viewer see through an opaque mesh.
+    pub fn readback_display(&self, gpu: &Gpu, srgb: bool) -> Result<Vec<u8>, String> {
+        self.read(gpu, srgb, true)
+    }
+
+    fn read(&self, gpu: &Gpu, srgb: bool, opaque: bool) -> Result<Vec<u8>, String> {
         let colour = if srgb {
             table(&SRGB8, srgb8)
         } else {
             table(&UNORM8, unorm8)
         };
         let alpha = table(&UNORM8, unorm8);
+        let alpha = |bits: usize| if opaque { 255 } else { alpha[bits] };
         let mut sd = tex2d_desc(self.width, self.height, DXGI_FORMAT_R16G16B16A16_FLOAT);
         sd.Usage = D3D11_USAGE_STAGING;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -385,7 +397,7 @@ impl Target {
                 out.extend(row.as_chunks::<2>().0.iter().enumerate().map(|(i, c)| {
                     let bits = u16::from_le_bytes(*c) as usize;
                     if i % 4 == 3 {
-                        alpha[bits]
+                        alpha(bits)
                     } else {
                         colour[bits]
                     }

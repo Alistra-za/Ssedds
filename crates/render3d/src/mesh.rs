@@ -175,7 +175,7 @@ fn buffer(gpu: &Gpu, bytes: &[u8], bind: D3D11_BIND_FLAG) -> Result<ID3D11Buffer
     let mut b = None;
     // SAFETY: `bytes` outlives the call; descriptors are locals.
     unsafe { gpu.device.CreateBuffer(&d, Some(&init), Some(&mut b)) }
-        .map_err(|e| format!("CreateBuffer: {e}"))?;
+        .map_err(|e| gpu.fail("CreateBuffer", e))?;
     b.ok_or_else(|| "CreateBuffer returned no buffer".into())
 }
 
@@ -217,7 +217,7 @@ pub fn build(
         gpu.device
             .CreateInputLayout(&elems, vs_bytecode, Some(&mut layout))
     }
-    .map_err(|e| format!("CreateInputLayout: {e}"))?;
+    .map_err(|e| gpu.fail("CreateInputLayout", e))?;
     let idx: Vec<u8> = m
         .triangles
         .iter()
