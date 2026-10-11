@@ -871,9 +871,14 @@ impl AppModel {
         Ok(())
     }
 
-    /// Delete a set the user created (DECISIONS P2–P3); false (nothing done) for an automatic set.
+    /// Delete a set the user created, or the entry of a set whose files have all gone (DECISIONS P2–P3: neither
+    /// comes back from the file names); false (nothing done) for a live automatic set.
     pub fn delete_set(&mut self, id: &str) -> bool {
-        if !self.sets_editable() || !self.view_of(id).is_some_and(|v| v.created) {
+        if !self.sets_editable()
+            || !self
+                .view_of(id)
+                .is_some_and(|v| v.created || v.key.is_empty())
+        {
             return false;
         }
         let i = id.to_string();

@@ -687,3 +687,18 @@ fn an_entry_left_with_only_its_id_is_not_an_edit() {
         DropOutcome::AskChoice { .. }
     ));
 }
+
+#[test]
+fn the_entry_of_a_set_whose_files_are_gone_can_be_deleted() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_json_value(Some("landscape/leaf"), "specular_level", Some(json!(0.05)));
+    std::fs::remove_file(m.root.clone().unwrap().join("landscape/leaf.png")).unwrap();
+    m.reload_changed();
+    idle(&mut m);
+    assert!(view(&set_views(&m), "landscape/leaf").key.is_empty());
+    assert!(m.delete_set("landscape/leaf"));
+    idle(&mut m);
+    assert!(!set_views(&m).iter().any(|s| s.id == "landscape/leaf"));
+}
