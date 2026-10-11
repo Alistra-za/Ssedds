@@ -191,3 +191,34 @@ fn rows_waiting_on_alpha_are_answered_inline_and_leave_when_decided() {
     idle(&mut m);
     assert!(!listed(&m).contains(&LEAF.to_string()));
 }
+
+#[test]
+fn rows_decided_in_the_dialog_go_back_through_the_export_blocks() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    answer_all_but_subtypes(&mut m);
+    // Emissive is on with no emissive texture: a block only once rock01 is a PBR set, which it is not yet.
+    m.set_json_value(
+        "landscape/rock01",
+        "emissive",
+        Some(serde_json::json!(true)),
+    );
+    idle(&mut m);
+    m.export_clicked();
+    assert!(!listed(&m).is_empty());
+    // Rock01 becomes a PBR set; every other row is decided as its suggestion until the dialog empties.
+    m.decide_undecided_row(ROCK, Subtype::PbrAlbedo);
+    idle(&mut m);
+    while let Some(Dialog::ProceedAnyway(keys)) = m.dialog.clone() {
+        let k = keys[0].clone();
+        let st = m.subtype_question(&k).flatten().unwrap_or(Subtype::Diffuse);
+        m.decide_undecided_row(&k, st);
+        idle(&mut m);
+    }
+    assert!(
+        matches!(m.dialog, Some(Dialog::ExportBlocked(_))),
+        "{:?}",
+        m.dialog
+    );
+    assert!(m.export.running.is_none() && m.export.summary.is_none());
+}

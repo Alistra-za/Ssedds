@@ -452,23 +452,31 @@ impl AppModel {
         self.export_checks();
     }
 
-    /// The export folder and undecided-texture checks, then the export itself.
-    fn export_checks(&mut self) {
+    /// The guards that stop an export outright, in order: the plan on screen is not the one for these sets, the
+    /// export folder is unusable, an `export_blocks` entry. True (with the dialog showing why) when one fired.
+    /// Shared by `export_checks` and the continuation from the undecided dialog, whose decisions can change them.
+    fn export_stopped(&mut self) -> bool {
         let Some(root) = self.root.clone() else {
-            return;
+            return true;
         };
-        // The plan on screen must be the one for these sets: a plan whose output paths no longer match (the
-        // two-pass planning hit its bound) would write files where the sets do not expect them.
         if self.plan_unsettled() {
-            return;
+            return true;
         }
         if let Some(problem) = export::export_folder_problem(&root, &self.export_root()) {
             self.dialog = Some(Dialog::Error(problem));
-            return;
+            return true;
         }
         let blocks = pbr_export::export_blocks(self);
         if !blocks.is_empty() {
             self.dialog = Some(Dialog::ExportBlocked(blocks));
+            return true;
+        }
+        false
+    }
+
+    /// The export folder and undecided-texture checks, then the export itself.
+    fn export_checks(&mut self) {
+        if self.export_stopped() {
             return;
         }
         let asks = pbr_export::export_asks(self);
@@ -619,7 +627,9 @@ impl AppModel {
     }
 
     fn run_continue(&mut self, how: Continue) {
-        if self.plan_unsettled() {
+        // The decisions made in the dialog can change the blocks (a diffuse decided as PBR switches the set's
+        // checks on), so the guards run again. The asks are not repeated: the user already answered them.
+        if self.export_stopped() {
             return;
         }
         match how {
