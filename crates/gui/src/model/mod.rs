@@ -5,6 +5,7 @@ pub mod history;
 pub mod inspector;
 pub mod items;
 pub mod pbr_export;
+mod pbr_follow;
 pub mod preview;
 pub mod sets;
 pub mod view;
@@ -971,6 +972,11 @@ impl AppModel {
     }
 
     pub fn set_field(&mut self, item_key: &str, field: &str, value: serde_json::Value) {
+        if field == "subtype" {
+            if let Ok(st) = serde_json::from_value::<Subtype>(value.clone()) {
+                return self.edit_subtype("Change subtype", item_key, Some(st));
+            }
+        }
         let k = item_key.to_string();
         let f = field.to_string();
         self.edit(&format!("Change {f}"), move |p| {
@@ -979,6 +985,9 @@ impl AppModel {
     }
 
     pub fn clear_field(&mut self, item_key: &str, field: &str) {
+        if field == "subtype" {
+            return self.edit_subtype("Reset subtype", item_key, None);
+        }
         let k = item_key.to_string();
         let f = field.to_string();
         self.edit(&format!("Reset {f}"), move |p| p.clear_file_value(&k, &f));
@@ -986,6 +995,9 @@ impl AppModel {
 
     /// A confirmation writes the value explicitly, or adds the code to the file's `allow` (M3a spec §5.2).
     pub fn decide(&mut self, item_key: &str, answer: Answer) {
+        if let Answer::Subtype(st) = answer {
+            return self.edit_subtype("Decide", item_key, Some(st));
+        }
         let k = item_key.to_string();
         self.edit("Decide", move |p| match answer {
             Answer::Subtype(st) => p.set_file_value(&k, "subtype", &json!(st)),

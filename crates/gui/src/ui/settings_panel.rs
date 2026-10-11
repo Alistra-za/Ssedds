@@ -38,6 +38,41 @@ fn subtype_label(st: Subtype) -> String {
     st.id().replace('_', " ")
 }
 
+/// The heading of the PBR group in every sub-type dropdown.
+pub const PBR_HEADING: &str = "PBR (Community Shaders)";
+
+/// The sub-types `keep` accepts, grouped for a dropdown: the PBR ones first (every `pbr_*`, `rmaos`, `rfaos` and
+/// `coat_normal`) under `PBR_HEADING`, then the rest by category. Empty groups are left out.
+pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<Subtype>)> {
+    use engine::config::Category;
+    let is_pbr = |s: Subtype| {
+        s.id().starts_with("pbr_")
+            || matches!(s, Subtype::Rmaos | Subtype::Rfaos | Subtype::CoatNormal)
+    };
+    let kept: Vec<Subtype> = Subtype::ALL.into_iter().filter(|s| keep(*s)).collect();
+    let mut groups: Vec<(&'static str, Vec<Subtype>)> = vec![(
+        PBR_HEADING,
+        kept.iter().copied().filter(|s| is_pbr(*s)).collect(),
+    )];
+    for (cat, name) in [
+        (Category::Color, "Colour maps"),
+        (Category::Normal, "Normal maps"),
+        (Category::Grayscale, "Grayscale maps"),
+        (Category::MixedPacked, "Packed and data"),
+        (Category::Hdr, "HDR maps"),
+    ] {
+        groups.push((
+            name,
+            kept.iter()
+                .copied()
+                .filter(|s| !is_pbr(*s) && s.category() == cat)
+                .collect(),
+        ));
+    }
+    groups.retain(|(_, v)| !v.is_empty());
+    groups
+}
+
 fn alpha_options() -> Options {
     vec![
         (json!(AlphaPolicy::Remove), "Remove".into()),
@@ -59,13 +94,15 @@ fn capitalised(s: &str) -> String {
 fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options> {
     let p = &job.profile;
     Some(match field {
-        "subtype" => Subtype::ALL
-            .into_iter()
-            .filter(|s| {
-                *s == p.subtype || matches!(availability(target, *s), Availability::Available)
-            })
-            .map(|s| (json!(s), subtype_label(s)))
-            .collect(),
+        "subtype" => subtype_groups(|s| {
+            s == p.subtype || matches!(availability(target, s), Availability::Available)
+        })
+        .into_iter()
+        .flat_map(|(heading, members)| {
+            std::iter::once((Value::Null, heading.to_string()))
+                .chain(members.into_iter().map(|s| (json!(s), subtype_label(s))))
+        })
+        .collect(),
         "color.content" => vec![
             opt(json!("srgb"), "sRGB-encoded colour"),
             opt(json!("linear"), "Linear data"),
@@ -149,7 +186,10 @@ fn combo(
         .selected_text(shown)
         .show_ui(ui, |ui| {
             for (v, label) in options {
-                if ui.selectable_label(v == current, label).clicked() {
+                // A null value is a non-selectable group heading.
+                if v.is_null() {
+                    ui.label(egui::RichText::new(label).weak());
+                } else if ui.selectable_label(v == current, label).clicked() {
                     picked = Some(v.clone());
                 }
             }
@@ -446,11 +486,13 @@ fn subtype_decision(
         egui::ComboBox::from_id_salt(id)
             .selected_text(subtype_label(chosen))
             .show_ui(ui, |ui| {
-                for st in Subtype::ALL
-                    .into_iter()
-                    .filter(|s| matches!(availability(cx.target, *s), Availability::Available))
-                {
-                    ui.selectable_value(&mut chosen, st, subtype_label(st));
+                for (heading, members) in subtype_groups(|s| {
+                    matches!(availability(cx.target, s), Availability::Available)
+                }) {
+                    ui.label(egui::RichText::new(heading).weak());
+                    for st in members {
+                        ui.selectable_value(&mut chosen, st, subtype_label(st));
+                    }
                 }
             });
         if ui.button("Confirm").clicked() {
