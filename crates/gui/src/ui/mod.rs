@@ -4,10 +4,12 @@ pub mod columns;
 pub mod dialogs;
 pub mod drawer;
 pub mod header;
+pub mod pgp_fields;
 pub mod preview;
-pub mod set_view;
+pub mod set_editor;
 pub mod sets_column;
 pub mod settings_panel;
+pub mod slot_commands;
 pub mod thumbs;
 
 use crate::model::{AppModel, Selection};
@@ -22,6 +24,7 @@ pub struct State {
     pub advanced: advanced::AdvancedState,
     pub preview: preview::PreviewUi,
     pub drops: sets_column::DropState,
+    pub slot_cmds: slot_commands::SlotCmdState,
     /// What is on the GPU; set by the app, empty in tests.
     pub gpu: preview::GpuStatus,
 }
@@ -86,9 +89,7 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
                 .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
         }
         Selection::Set(key) => {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| set_view::draw(ui, model, &key, &mut state.thumbs));
+            set_editor::draw(ui, model, &key, &mut state.thumbs, &mut state.slot_cmds);
         }
         Selection::None => {
             ui.centered_and_justified(|ui| ui.label("Select a texture or a set."));

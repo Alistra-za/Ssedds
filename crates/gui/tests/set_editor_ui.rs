@@ -84,3 +84,142 @@ fn the_rename_dialog_shows_a_collision_and_renames_on_a_free_name() {
     let after: Vec<String> = set_views(&h.state().0).into_iter().map(|v| v.id).collect();
     assert!(after.contains(&"renamed-set".to_string()), "{after:?}");
 }
+
+#[test]
+fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("landscape/rock01"))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+    let mut h = harness(m);
+    h.run();
+    for label in [
+        "Diffuse",
+        "Normal _n",
+        "RMAOS",
+        "Height _p",
+        "Emissive _g",
+        "Subsurface _s",
+        "Coat _cnr",
+        "Fuzz _f",
+    ] {
+        h.get_by_label(label);
+    }
+    h.get_by_label("Opaque");
+    // A combo box exposes its text as a value, not a label.
+    assert!(
+        h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+            .any(|n| n.value().as_deref() == Some("BC7 · sRGB")),
+        "the diffuse card shows its preset"
+    );
+    h.get_by_label("Slot commands…").click();
+    h.run();
+    h.get_by_label_contains("Slot commands: landscape/rock01");
+    assert!(
+        h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+            .any(|n| n.value().as_deref() == Some("From this set")),
+        "every slot starts as From this set"
+    );
+}
+
+#[test]
+fn opaque_and_format_edit_the_diffuse_in_one_step_each() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let diffuse = m
+        .items
+        .iter()
+        .find(|i| i.name == "rock01.png")
+        .unwrap()
+        .key
+        .clone();
+    m.set_opaque(&diffuse, true);
+    assert!(m.is_opaque(&diffuse));
+    m.undo();
+    assert!(!m.is_opaque(&diffuse));
+    m.set_format(
+        &diffuse,
+        engine::config::Format::Bc1,
+        engine::config::ColorTag::Srgb,
+    );
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value(&diffuse, "format"),
+        Some(serde_json::json!("bc1"))
+    );
+    assert_eq!(
+        p.file_value(&diffuse, "color.tag"),
+        Some(serde_json::json!("srgb"))
+    );
+    m.undo();
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value(&diffuse, "format"),
+        None,
+        "both fields undo together"
+    );
+    assert_eq!(p.file_value(&diffuse, "color.tag"), None);
+}
+
+#[test]
+fn a_bad_slot_path_is_refused_with_the_reason() {
+    use sdc_gui::model::sets::SlotCommand;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    assert!(m
+        .set_slot_command("landscape/rock01", 3, SlotCommand::Path(r"..\x.dds".into()))
+        .is_err());
+    assert!(m
+        .set_slot_command(
+            "landscape/rock01",
+            3,
+            SlotCommand::Path(r"effects\white.png".into())
+        )
+        .is_err());
+    m.set_slot_command(
+        "landscape/rock01",
+        3,
+        SlotCommand::Path(r"effects\white.dds".into()),
+    )
+    .unwrap();
+    m.set_slot_command("landscape/rock01", 5, SlotCommand::Clear)
+        .unwrap();
+    let e = m
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .entries()
+        .into_iter()
+        .find(|e| e.id == "landscape/rock01")
+        .unwrap();
+    assert_eq!(e.settings["slot3"], serde_json::json!(r"effects\white.dds"));
+    assert_eq!(e.settings["slot5"], serde_json::json!(""));
+}
+
+#[test]
+fn a_member_links_back_to_its_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let diffuse = m
+        .items
+        .iter()
+        .find(|i| i.name == "rock01.png")
+        .unwrap()
+        .key
+        .clone();
+    m.select_item(&diffuse);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("← ").click();
+    h.run();
+    assert!(matches!(
+        h.state().selection,
+        sdc_gui::model::Selection::Set(_)
+    ));
+}

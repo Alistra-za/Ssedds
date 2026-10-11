@@ -936,6 +936,39 @@ impl AppModel {
         self.apply_snapshot(&c.after);
     }
 
+    /// The slot card's preset dropdown: format and tag together, one undo step (M3b §4.1).
+    pub fn set_format(
+        &mut self,
+        item: &str,
+        f: engine::config::Format,
+        tag: engine::config::ColorTag,
+    ) {
+        let k = item.to_string();
+        self.edit("Format", move |p| {
+            p.set_file_value(&k, "format", &json!(f));
+            p.set_file_value(&k, "color.tag", &json!(tag));
+        });
+    }
+
+    /// The Diffuse card's Opaque checkbox: alpha `remove` while ticked; unticked returns to the resolved default.
+    pub fn set_opaque(&mut self, item: &str, on: bool) {
+        let k = item.to_string();
+        self.edit("Opaque", move |p| {
+            if on {
+                p.set_file_value(&k, "alpha.policy", &json!(AlphaPolicy::Remove));
+            } else {
+                p.clear_file_value(&k, "alpha.policy");
+            }
+        });
+    }
+
+    pub fn is_opaque(&self, item: &str) -> bool {
+        self.project
+            .as_ref()
+            .and_then(|p| p.file_value(item, "alpha.policy"))
+            .is_some_and(|v| v == json!(AlphaPolicy::Remove))
+    }
+
     pub fn set_field(&mut self, item_key: &str, field: &str, value: serde_json::Value) {
         let k = item_key.to_string();
         let f = field.to_string();

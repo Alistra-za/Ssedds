@@ -528,6 +528,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
     let mut actions = vec![];
     if !compact {
+        let set_key = model.item(key).and_then(|i| i.set_key.clone());
+        if let Some(sk) = set_key.filter(|k| model.sets.iter().any(|s| &s.key == k)) {
+            let label = super::columns::set_label(&super::columns::export_prefix(model), &sk);
+            if ui.link(format!("← {label}")).clicked() {
+                model.select_set(&sk);
+            }
+        }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
         ui.add_space(4.0);
