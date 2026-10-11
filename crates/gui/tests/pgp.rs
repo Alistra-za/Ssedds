@@ -262,3 +262,176 @@ fn output_paths_use_the_canonical_suffix() {
         std::path::PathBuf::from("textures/pbr/landscape/rock01_rmaos.dds")
     );
 }
+
+use sdc_gui::pgp::writer::*;
+use std::collections::BTreeMap;
+
+fn entry(pairs: &[(&str, Value)], derived: &str) -> EntryInput {
+    EntryInput {
+        settings: s(pairs),
+        slots: BTreeMap::new(),
+        derived_match: derived.into(),
+    }
+}
+
+fn written(e: &EntryInput, defaults: &Settings) -> Value {
+    document(defaults, std::slice::from_ref(e)).to_value()["entries"][0].clone()
+}
+
+#[test]
+fn a_plain_entry_writes_the_match_and_the_three_always_written_features() {
+    let v = written(&entry(&[], r"landscape\rock01"), &Settings::new());
+    assert_eq!(
+        v,
+        json!({ "match_diffuse": r"landscape\rock01", "emissive": false, "parallax": false, "subsurface": false })
+    );
+}
+
+#[test]
+fn defaults_feed_always_written_features_but_are_not_copied() {
+    let d = s(&[("parallax", json!(true)), ("specular_level", json!(0.04))]);
+    let v = written(&entry(&[], "x"), &d);
+    assert_eq!(v["parallax"], json!(true));
+    assert!(
+        v.get("specular_level").is_none(),
+        "the default block carries it"
+    );
+    let doc = document(&d, &[entry(&[], "x")]).to_value();
+    assert_eq!(
+        doc["default"],
+        json!({ "parallax": true, "specular_level": 0.04 })
+    );
+    assert_eq!(doc["$schema"], json!(sdc_gui::pgp::schema::SCHEMA_URL));
+}
+
+#[test]
+fn colours_convert_and_emissive_gets_alpha_one() {
+    let v = written(
+        &entry(
+            &[
+                ("emissive", json!(true)),
+                ("emissive_color", json!([255, 128, 0])),
+                ("emissive_scale", json!(2.0)),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert_eq!(v["emissive_color"], json!([1.0, 0.502, 0.0, 1.0]));
+    assert_eq!(v["emissive_scale"], json!(2.0));
+}
+
+#[test]
+fn dependent_keys_need_their_feature() {
+    let v = written(
+        &entry(
+            &[
+                ("emissive_scale", json!(2.0)),
+                ("displacement_scale", json!(0.4)),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert!(v.get("emissive_scale").is_none() && v.get("displacement_scale").is_none());
+}
+
+#[test]
+fn blocked_features_are_not_written() {
+    let v = written(
+        &entry(
+            &[
+                ("hair", json!(true)),
+                ("parallax", json!(true)),
+                ("multilayer", json!(true)),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert_eq!(v["hair"], json!(true));
+    assert_eq!(v["parallax"], json!(false));
+    assert!(v.get("multilayer").is_none());
+}
+
+#[test]
+fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
+    let v = written(
+        &entry(
+            &[
+                ("glint", json!(true)),
+                ("glint.microfacet_roughness", json!(0.02)),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert_eq!(
+        v["glint"],
+        json!({ "screen_space_scale": 1.5, "log_microfacet_density": 40.0, "microfacet_roughness": 0.02, "density_randomization": 2.0 })
+    );
+    let v = written(
+        &entry(
+            &[
+                ("fuzz", json!(true)),
+                ("fuzz.texture", json!(true)),
+                ("fuzz.color", json!([0, 0, 0])),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert_eq!(
+        v["fuzz"],
+        json!({ "texture": true, "color": [0.0, 0.0, 0.0] })
+    );
+}
+
+#[test]
+fn other_match_modes_omit_match_diffuse_and_tri_state_writes_only_when_set() {
+    let v = written(
+        &entry(
+            &[
+                ("match2", json!(r"a\b_n.dds")),
+                ("lock_rmaos", json!(false)),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert!(v.get("match_diffuse").is_none());
+    assert_eq!(v["match2"], json!(r"a\b_n.dds"));
+    assert_eq!(v["lock_rmaos"], json!(false));
+    assert!(v.get("lock_diffuse").is_none());
+}
+
+#[test]
+fn slots_and_key_order() {
+    let mut e = entry(&[("specular_level", json!(0.04))], "x");
+    e.slots.insert(6, r"textures\pbr\a\rock01_rmaos.dds".into());
+    e.slots.insert(3, String::new());
+    let text = to_text(&document(&Settings::new(), &[e]));
+    let pos = |k: &str| {
+        text.find(&format!("\"{k}\""))
+            .unwrap_or_else(|| panic!("{k} in {text}"))
+    };
+    assert!(pos("match_diffuse") < pos("emissive") && pos("emissive") < pos("specular_level"));
+    assert!(pos("specular_level") < pos("slot3") && pos("slot3") < pos("slot6"));
+    assert!(
+        text.ends_with("}\n") && text.contains("\n  \"default\": {}"),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#""slot6": "textures\\pbr\\a\\rock01_rmaos.dds""#),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_conflict_through_defaults_keeps_the_stronger_feature() {
+    let d = s(&[("multilayer", json!(true))]);
+    let v = written(&entry(&[("subsurface", json!(true))], "x"), &d);
+    assert_eq!(v["subsurface"], json!(false));
+    let doc = document(&d, &[entry(&[], "x")]).to_value();
+    assert_eq!(doc["default"]["multilayer"], json!(true));
+}
