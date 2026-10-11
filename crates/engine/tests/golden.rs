@@ -1640,7 +1640,10 @@ fn near_opaque_normal_alpha_is_removed_with_an_info() {
     let w = warning_of(&o, "iron_n.png", Code::AlphaNearOpaque);
     assert_eq!(w.severity, Severity::Info);
     assert!(w.message.contains("min 251"), "{}", w.message);
-    assert_eq!(warnings(&o), vec![Code::AlphaNearOpaque]);
+    assert_eq!(
+        warnings(&o),
+        vec![Code::AlphaNearOpaque, Code::SetMissingCompanion]
+    );
     assert_dds(
         &dds(d.path(), "textures/pbr/iron_n.dds"),
         DdsPixelFormat::Bc7 { srgb: false },
@@ -1668,6 +1671,9 @@ fn near_opaque_normal_alpha_is_removed_with_an_info() {
     );
     // Owner 2026-10-11 (DECISIONS P25): a PBR normal's genuinely varying alpha is dropped with an info, no block.
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
-    assert_eq!(warnings(&o), vec![Code::AlphaPbrNormalDropped]);
+    assert_eq!(
+        warnings(&o),
+        vec![Code::AlphaPbrNormalDropped, Code::SetMissingCompanion]
+    );
     assert!(!warnings(&o).contains(&Code::AlphaNearOpaque));
 }

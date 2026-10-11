@@ -77,6 +77,10 @@ pub struct BatchRequest {
     pub set_edits: Vec<crate::sets::SetEdit>,
     /// GUI output paths (M3b, DECISIONS P1), relative to `output_root`. Empty for the CLI.
     pub output_paths: BTreeMap<crate::sets::OutputKey, PathBuf>,
+    /// GUI (M3b spec §3.3, DECISIONS R7): ids of the sets whose roughness slot (`_rmaos`/`_rfaos`) is one output used
+    /// by more than one set, owner and borrowers alike. The engine bakes no normal variance into it and reports no
+    /// missing companion for those sets. Empty for the CLI.
+    pub shared_roughness: BTreeSet<String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -106,6 +110,7 @@ impl BatchRequest {
             file_allow: BTreeMap::new(),
             set_edits: vec![],
             output_paths: BTreeMap::new(),
+            shared_roughness: BTreeSet::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -1053,6 +1058,23 @@ impl Engine {
                 }
             }
         }
+        // Spec §6.2–6.3 (M4): the set-level variance bake, after packing so a packed roughness member counts, and
+        // before `set_resolved` and `file_planned` so both carry the decision.
+        let shared: BTreeSet<String> = req
+            .shared_roughness
+            .iter()
+            .map(|id| crate::sets::set_key(&req.output_root, id))
+            .collect();
+        let baking = crate::bake::plan::plan_bakes(
+            &crate::bake::plan::BakeCtx {
+                target,
+                sets: &sets,
+                files: &files,
+                aliases: registry.alias_table(),
+                shared: &shared,
+            },
+            &mut jobs,
+        );
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];
@@ -1133,8 +1155,7 @@ impl Engine {
                 EventKind::SetResolved {
                     members,
                     pbr,
-                    // The variance bake arrives with milestone M4.
-                    bake: false,
+                    bake: baking.contains(&set.key),
                     recipes: packed.reports.remove(&set.key).unwrap_or_default(),
                 },
             );

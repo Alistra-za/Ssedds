@@ -2,6 +2,8 @@
 //! → v = 0.25/κ → α′² = saturate(α² + min(2v, t²)), r′ = (α′²)^¼ [MIP, Unity HDRP `CommonMaterial.hlsl`]. The
 //! footprint lengths come from a box pyramid of the `_n`'s mip 0 as written: unit length unless `mips.normal_base = keep`
 //! (DECISIONS R1, R5).
+pub mod plan;
+
 use crate::config::{MipKeyword, MipLevels, Profile};
 use crate::image::Rgba32F;
 use crate::policy::SourceStamp;
