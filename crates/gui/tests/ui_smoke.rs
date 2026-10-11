@@ -371,7 +371,9 @@ fn export_asks_about_undecided_textures_then_the_drawer_reports() {
     h.run();
     press(&mut h, "Export");
     h.get_by_label_contains("still need a decision");
-    h.get_by_label_contains("nothing is decided for you");
+    h.get_by_label("Accept all suggestions");
+    h.get_by_label("Proceed anyway");
+    assert!(h.query_all_by_label("\u{2713}").count() >= 1);
     // Cancel closes the question and starts nothing.
     press(&mut h, "Cancel");
     assert!(h.state().dialog.is_none());
