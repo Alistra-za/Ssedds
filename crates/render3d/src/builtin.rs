@@ -228,10 +228,10 @@ fn lathe(m: &mut Mesh, profile: &[Vec<P>], f: &Frame, sweep: (f32, f32), segment
 
 /// A shader ball (no logo) on the floor z = 0, all parts lathed:
 /// - pedestal: disc of radius 0.75·R, height 0.12·R, rounded top edge;
-/// - neck: open cylinder of radius 0.25·R from the pedestal top into the ball;
+/// - neck: open cylinder of radius 0.25·R from the pedestal top up inside the ball (to 0.6·R, well above the ball's underside);
 /// - ball: radius R, bottom 0.1·R above the pedestal, lathed around the window axis `w` (+Y turned 30° towards
 ///   −X, tilted up 15°, facing `Camera::Auto` off-axis) from the front pole to the back: window floor (cap of
-///   radius 0.88·R out to 38° from `w`), rim wall, rounded lip, outer sphere, groove (105°–111°, 0.08·R deep),
+///   radius 0.88·R out to 38° from `w`), rim wall, rounded lip, outer sphere, groove (62°–68° from `w`, 0.08·R deep, outside the rim and visible from the camera),
 ///   outer sphere to the back pole. The seam (u = 0) runs underneath.
 /// - C-ring: rounded-rectangle section (0.18·R wide, 0.28·R high) around radius 1.05·R, swept 250° leaving the
 ///   gap towards +Y, closed by flat fan end caps (dP/dv = −Z, dP/du = the cap's outward normal × −Z).
@@ -252,7 +252,7 @@ fn material_ball() -> Mesh {
         line([0.75 * r, 0.0], [0.0, 0.0]),
     ];
     lathe(&mut m, &pedestal, &Z_UP, full, 64);
-    let neck = [line([0.25 * r, zc - 0.9 * r], [0.25 * r, top])];
+    let neck = [line([0.25 * r, 0.6 * r], [0.25 * r, top])];
     lathe(&mut m, &neck, &Z_UP, full, 64);
 
     // Ball, in (radius, height) about `w`; `pol(ρ, θ)` = the point at distance ρ, θ degrees from `w`.
@@ -280,13 +280,13 @@ fn material_ball() -> Mesh {
         [
             vec![[rim[0], rim[1], sr, cr]],
             arc(pol(r - l, tc), l, 142.0, 90.0 - tc, 2),
-            arc([0.0; 2], r, 90.0 - tc, -15.0, 16)[1..].to_vec(),
+            arc([0.0; 2], r, 90.0 - tc, 28.0, 8)[1..].to_vec(),
         ]
         .concat(),
-        line(pol(r, 105.0), pol(0.92 * r, 105.0)),
-        arc([0.0; 2], 0.92 * r, -15.0, -21.0, 2),
-        line(pol(0.92 * r, 111.0), pol(r, 111.0)),
-        arc([0.0; 2], r, -21.0, -90.0, 17),
+        line(pol(r, 62.0), pol(0.92 * r, 62.0)),
+        arc([0.0; 2], 0.92 * r, 28.0, 22.0, 2),
+        line(pol(0.92 * r, 68.0), pol(r, 68.0)),
+        arc([0.0; 2], r, 22.0, -90.0, 28),
     ];
     lathe(&mut m, &profile, &ball, full, 64);
 

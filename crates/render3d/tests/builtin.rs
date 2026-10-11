@@ -253,6 +253,22 @@ fn material_ball_shape() {
         ball_bottom >= 0.12 * r - 1e-3 && ball_bottom < 0.5 * r,
         "{ball_bottom}"
     );
+    // The neck (radius 0.25R) reaches into the ball: its top ring is above the ball's underside everywhere
+    // (the highest underside height in the annulus bounds every azimuth), so its open edge is hidden.
+    let neck_top = (m.positions.iter().zip(&m.normals))
+        .filter(|(p, n)| (p[0].hypot(p[1]) - 0.25 * r).abs() < 1e-3 && n[2].abs() < 1e-3)
+        .map(|(p, _)| p[2])
+        .fold(f32::MIN, f32::max);
+    let underside = (m.positions.iter().zip(&m.normals))
+        .filter(|(p, n)| {
+            (0.2 * r..0.3 * r).contains(&p[0].hypot(p[1])) && n[2] < -0.5 && p[2] > 1e-3
+        })
+        .map(|(p, _)| p[2])
+        .fold(f32::MIN, f32::max);
+    assert!(
+        underside > 0.2 * r && neck_top > underside + 0.1 * r,
+        "neck top {neck_top} vs ball underside {underside}"
+    );
     // The C-ring (beyond the pedestal, below the ball) leaves a gap of ±50° around +Y, towards the camera.
     let ring: Vec<_> = m
         .positions
