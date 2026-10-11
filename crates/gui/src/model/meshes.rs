@@ -530,7 +530,11 @@ impl MeshesModel {
         self.tex_users = None;
     }
 
+    /// Opens a mod's NIF list. A PGPatcher-derived mod is never opened: its meshes show through their source mods.
     pub fn select_mod(&mut self, id: i64) {
+        if self.mods.iter().any(|r| r.id == id && r.derived) {
+            return;
+        }
         self.selected_mod = Some(id);
         self.clear_nif();
         if let Some(store) = &self.store {
