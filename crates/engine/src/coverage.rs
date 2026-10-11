@@ -27,7 +27,8 @@
 //!   onto `[T_pass, 1]` (1.0 stays 1.0) and failing ones onto `[0, T_fail]`, each side keeping
 //!   the order of its alphas; only the tied boundary group is split (controller ruling, owner
 //!   check; spec §5.5 note).
-//! - **`k = 0`.** A level whose target rounds to zero is left unchanged (spec). Its "within
+//! - **`k = 0`.** A level whose target rounds to zero keeps its box alpha, except that texels
+//!   within two codes of the threshold are pushed clear of it (spec §5.5, R13). Its "within
 //!   one texel" result relies on the level being a box-filtered descendant of level 0: a box
 //!   average passes only if its footprint holds a passing base texel, so ordinary content
 //!   stays near `p · n`. It is not a hard bound: failing alpha just under the threshold around
