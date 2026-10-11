@@ -70,6 +70,17 @@ pub struct GuiSettings {
     pub mem_budget_mb: u64,
     pub columns_collapsed: bool,
     pub advanced_open: bool,
+    /// The Meshes view's source (plan A Task 12), `[meshes]` in the file.
+    pub meshes: MeshesSettings,
+}
+
+/// `[meshes]`: the MO2 instance and profile the Meshes view scans, or the folder chosen instead.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MeshesSettings {
+    pub instance: Option<PathBuf>,
+    pub profile: Option<String>,
+    pub folder: Option<PathBuf>,
 }
 
 impl Default for GuiSettings {
@@ -85,6 +96,7 @@ impl Default for GuiSettings {
             mem_budget_mb: 0,
             columns_collapsed: false,
             advanced_open: false,
+            meshes: MeshesSettings::default(),
         }
     }
 }

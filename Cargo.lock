@@ -3114,6 +3114,7 @@ name = "sdc-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crc32fast",
  "eframe",
  "egui_kittest",
  "encoders-sys",
@@ -3121,7 +3122,10 @@ dependencies = [
  "half",
  "hex",
  "image",
+ "modscan",
+ "nif",
  "rfd",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

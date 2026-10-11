@@ -4,6 +4,7 @@ pub mod fields;
 pub mod history;
 pub mod inspector;
 pub mod items;
+pub mod meshes;
 pub mod pbr_export;
 mod pbr_follow;
 pub mod preview;

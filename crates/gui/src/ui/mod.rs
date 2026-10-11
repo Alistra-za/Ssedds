@@ -4,6 +4,7 @@ pub mod columns;
 pub mod dialogs;
 pub mod drawer;
 pub mod header;
+pub mod meshes;
 pub mod pgp_fields;
 pub mod preview;
 pub mod set_editor;
