@@ -414,6 +414,15 @@
       ],
       "type": "string"
     },
+    "PackRecipe": {
+      "description": "Which cs recipe a set packs (DECISIONS Note R-fills-1): `auto` = `_rfaos` when a fuzz source exists, else\n`_rmaos`; `rfaos`/`rmaos` force one.",
+      "enum": [
+        "auto",
+        "rmaos",
+        "rfaos"
+      ],
+      "type": "string"
+    },
     "PackingSpec": {
       "additionalProperties": false,
       "description": "Channel-packing settings (spec §3.2, §6.4). Fields of the packed output's profile, resolved like any other.",
@@ -429,6 +438,10 @@
         "prefer": {
           "$ref": "#/$defs/PackPrefer",
           "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "recipe": {
+          "$ref": "#/$defs/PackRecipe",
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Read from the packed\noutput's own entry, so it is set per set with `[files.\"<folder/base>_rfaos\"]`."
         },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
@@ -650,6 +663,10 @@
         "prefer": {
           "$ref": "#/$defs/PackPrefer",
           "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "recipe": {
+          "$ref": "#/$defs/PackRecipe",
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Read from the packed\noutput's own entry, so it is set per set with `[files.\"<folder/base>_rfaos\"]`."
         },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",

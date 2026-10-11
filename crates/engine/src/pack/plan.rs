@@ -3,13 +3,13 @@
 //! raw jobs), then assembles, analyses and resolves each [`Candidate`] with [`finish_recipe`] (pass 2).
 use super::assemble::{check_sizes, sizes, PackError};
 use super::{
-    file_name as name, recipes_for, resolve_channels, ChannelSource, PackJob, PackSource, RawInput,
-    RecipeKind, Slot,
+    file_name as name, recipes_for_with, resolve_channels, ChannelSource, PackJob, PackSource,
+    RawInput, RecipeKind, Slot,
 };
 use crate::analyse::{analyse, Analysis};
 use crate::api::SkippedFile;
 use crate::codes::{Code, Warning};
-use crate::config::{GraySource, PackPrefer, RawMap};
+use crate::config::{GraySource, PackPrefer, PackRecipe, Profile, RawMap, Target};
 use crate::discover::{InputFile, InputKind};
 use crate::events::{RecipeReport, RecipeStatus};
 use crate::group::{split_suffix_with, split_vocab, TextureSet, VocabRole};
@@ -214,6 +214,64 @@ fn size_mismatch_job(
     }
 }
 
+/// The packed output's pass 1 profile (DECISIONS Note M6): its `packing.*` and `channels.grayscale_source`.
+fn pass1_profile(
+    ctx: &ResolveCtx,
+    set: &TextureSet,
+    vin: &InputFile,
+    kind: RecipeKind,
+    pa: &Analysis,
+    pinfo: &SourceInfo,
+) -> Profile {
+    let facts = FileFacts {
+        input: vin,
+        suffix: Some(kind.suffix()),
+        alias: None,
+        set,
+        analysis: pa,
+        info: pinfo,
+    };
+    layered_profile_placeholder(ctx, &facts, kind.subtype())
+        .map(|(p, _)| p)
+        .unwrap_or_else(|_| ctx.registry.base_profile(ctx.target, kind.subtype()))
+}
+
+/// The set's `packing.recipe` (cs only; DECISIONS Note R-fills-1). The packed output's `[files]` key carries its
+/// suffix, which is what the recipe decides, so the setting is read from the key of the output it names: the
+/// `_rfaos` entry saying `rfaos` (checked first) or the `_rmaos` entry saying `rmaos`. A project, preset or
+/// default value applies to both keys alike. Anything else is `auto`.
+fn chosen_recipe(
+    ctx: &ResolveCtx,
+    set: &TextureSet,
+    members: &BTreeMap<PathBuf, &InputFile>,
+    raw: &[RawInput],
+    pa: &Analysis,
+    pinfo: &SourceInfo,
+) -> PackRecipe {
+    if ctx.target != Target::Cs {
+        return PackRecipe::Auto;
+    }
+    for pick in [PackRecipe::Rfaos, PackRecipe::Rmaos] {
+        let (recipes, _) = recipes_for_with(ctx.target, raw, pick);
+        let Some(r) = recipes
+            .iter()
+            .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
+        else {
+            continue;
+        };
+        let first = &r.sources()[0].0;
+        let vin = virtual_input(members[first], r.kind);
+        if pass1_profile(ctx, set, &vin, r.kind, pa, pinfo)
+            .packing
+            .recipe
+            == pick
+        {
+            return pick;
+        }
+    }
+    PackRecipe::Auto
+}
+
 /// Pass 1 over every set. `jobs` holds every resolved job of the batch and is changed in place: consumed raw jobs
 /// are removed, unused ones re-tagged `PACK-UNUSED-INPUT` (`IN-PACKING-INPUT` when their recipe is disabled), a
 /// pre-packed job gets `PACK-CONFLICT` or (with `packing.prefer = raw`) moves to `skipped`, and a recipe whose
@@ -260,7 +318,8 @@ pub fn plan_packing(
         if raw.is_empty() {
             continue;
         }
-        let (recipes, unused) = recipes_for(ctx.target, &raw);
+        let choice = chosen_recipe(ctx, set, &members, &raw, &pa, &pinfo);
+        let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice);
         let mut unused: Vec<(PathBuf, String)> =
             unused.into_iter().map(|u| (u.path, u.reason)).collect();
         let mut reports = vec![];
@@ -274,17 +333,7 @@ pub fn plan_packing(
             }
             let st = recipe.kind.subtype();
             // Pass 1: the packed output's own profile decides `packing.*` (DECISIONS Note M6).
-            let facts = FileFacts {
-                input: &vin,
-                suffix: Some(recipe.kind.suffix()),
-                alias: None,
-                set,
-                analysis: &pa,
-                info: &pinfo,
-            };
-            let profile = layered_profile_placeholder(ctx, &facts, st)
-                .map(|(p, _)| p)
-                .unwrap_or_else(|_| ctx.registry.base_profile(ctx.target, st));
+            let profile = pass1_profile(ctx, set, &vin, recipe.kind, &pa, &pinfo);
             let (packing, gray) = (profile.packing, profile.channels.grayscale_source);
             let (channels, defaulted) = resolve_channels(&recipe, &packing);
             let mut report = RecipeReport {

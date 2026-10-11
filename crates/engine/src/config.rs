@@ -63,6 +63,36 @@ impl RawMap {
 
 cfg_enum!(PackPrefer, "lowercase" { Prepacked, Raw });
 
+/// Which cs recipe a set packs (DECISIONS Note R-fills-1): `auto` = `_rfaos` when a fuzz source exists, else
+/// `_rmaos`; `rfaos`/`rmaos` force one.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PackRecipe {
+    #[default]
+    Auto,
+    Rmaos,
+    Rfaos,
+}
+
+impl PackRecipe {
+    pub fn is_auto(&self) -> bool {
+        *self == PackRecipe::Auto
+    }
+}
+
 /// Global fill values for packed channels without a source map (spec §6.4, DECISIONS Notes H and M5): an 8-bit
 /// code per §4.4 raw-map role, `None` = the neutral default. Unset fills are not serialised.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -113,6 +143,10 @@ pub struct PackingSpec {
     pub prefer: PackPrefer,
     #[serde(default)]
     pub fill: FillSpec,
+    /// Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Read from the packed
+    /// output's own entry, so it is set per set with `[files."<folder/base>_rfaos"]`.
+    #[serde(default, skip_serializing_if = "PackRecipe::is_auto")]
+    pub recipe: PackRecipe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

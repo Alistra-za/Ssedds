@@ -303,6 +303,7 @@ fn packing_fields_default_from_the_base_preset() {
             roughness_default: 0.5,
             prefer: PackPrefer::Prepacked,
             fill: FillSpec::default(),
+            recipe: Default::default(),
         }
     );
     // Unset fills are left out of the JSON, so `profile_sha256` moves only when a fill is set.
