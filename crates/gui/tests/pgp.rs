@@ -435,3 +435,92 @@ fn a_conflict_through_defaults_keeps_the_stronger_feature() {
     let doc = document(&d, &[entry(&[], "x")]).to_value();
     assert_eq!(doc["default"]["multilayer"], json!(true));
 }
+
+#[test]
+fn blocked_objects_are_omitted_and_glint_false_writes_nothing() {
+    let d = Settings::new();
+    for (label, pairs) in [
+        (
+            "hair blocks glint",
+            vec![("hair", json!(true)), ("glint", json!(true))],
+        ),
+        (
+            "multilayer blocks glint",
+            vec![("multilayer", json!(true)), ("glint", json!(true))],
+        ),
+        (
+            "glint blocks fuzz",
+            vec![("glint", json!(true)), ("fuzz", json!(true))],
+        ),
+        (
+            "hair blocks fuzz",
+            vec![("hair", json!(true)), ("fuzz", json!(true))],
+        ),
+        (
+            "multilayer blocks fuzz",
+            vec![("multilayer", json!(true)), ("fuzz", json!(true))],
+        ),
+    ] {
+        let v = written(&entry(&pairs, "x"), &d);
+        let blocked = if label.contains("fuzz") {
+            "fuzz"
+        } else {
+            "glint"
+        };
+        assert!(v.get(blocked).is_none(), "{label}: {v}");
+    }
+    let v = written(&entry(&[("glint", json!(false))], "x"), &d);
+    assert!(v.get("glint").is_none());
+    // glint wins over fuzz when both are on; the winner is still written.
+    let v = written(
+        &entry(&[("glint", json!(true)), ("fuzz", json!(true))], "x"),
+        &d,
+    );
+    assert!(v.get("glint").is_some() && v.get("fuzz").is_none());
+}
+
+#[test]
+fn dependents_of_a_blocked_feature_are_dropped() {
+    let v = written(
+        &entry(
+            &[
+                ("hair", json!(true)),
+                ("parallax", json!(true)),
+                ("displacement_scale", json!(0.4)),
+                ("emissive", json!(true)),
+                ("emissive_scale", json!(2.0)),
+                ("subsurface", json!(true)),
+                ("subsurface_opacity", json!(0.5)),
+            ],
+            "x",
+        ),
+        &Settings::new(),
+    );
+    assert_eq!(v["parallax"], json!(false));
+    assert_eq!(v["emissive"], json!(false));
+    assert_eq!(v["subsurface"], json!(false));
+    for k in ["displacement_scale", "emissive_scale", "subsurface_opacity"] {
+        assert!(v.get(k).is_none(), "{k} in {v}");
+    }
+    assert_eq!(v["hair"], json!(true));
+}
+
+#[test]
+fn an_entry_switches_a_default_on_only_true_key_off_by_writing_false() {
+    let d = s(&[("hair", json!(true))]);
+    let v = written(&entry(&[("hair", json!(false))], "x"), &d);
+    assert_eq!(v["hair"], json!(false));
+    // Unset: the default block carries it. Off with no default on: not written.
+    assert!(written(&entry(&[], "x"), &d).get("hair").is_none());
+    assert!(
+        written(&entry(&[("hair", json!(false))], "x"), &Settings::new())
+            .get("hair")
+            .is_none()
+    );
+    // With the entry's own false, the hair-blocked features are live again.
+    let v = written(
+        &entry(&[("hair", json!(false)), ("parallax", json!(true))], "x"),
+        &d,
+    );
+    assert_eq!(v["parallax"], json!(true));
+}

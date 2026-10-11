@@ -95,6 +95,7 @@ fn live(eff: &Settings, f: Feature) -> bool {
 /// The entries of one object: `own` written under the rules; `eff` decides features; `derived` is the derived match
 /// (`None` for the default block); `slots` final slot paths.
 fn object(
+    defaults: &Settings,
     own: &Settings,
     eff: &Settings,
     derived: Option<&str>,
@@ -121,7 +122,15 @@ fn object(
             KeyKind::OnlyTrue => {
                 let on = v.and_then(Value::as_bool) == Some(true);
                 let ok = feature_of_key(k.key).is_none_or(|f| live(eff, f));
-                (on && ok).then_some(Node::Scalar(json!(true)))
+                // PGPatcher copies the default block into entries, so an entry can only switch a default-on key
+                // off by writing `false` itself.
+                let switched_off = v.and_then(Value::as_bool) == Some(false)
+                    && defaults.get(k.key).and_then(Value::as_bool) == Some(true);
+                if switched_off {
+                    Some(Node::Scalar(json!(false)))
+                } else {
+                    (on && ok).then_some(Node::Scalar(json!(true)))
+                }
             }
             KeyKind::Object => {
                 let f = feature_of_key(k.key).expect("objects are features");
@@ -172,7 +181,10 @@ fn sub_object(obj: &str, own: &Settings, eff: &Settings) -> Vec<(String, Node)> 
         .filter(|k| k.key.starts_with(&format!("{obj}.")))
     {
         let name = &k.key[obj.len() + 1..];
-        let v = own.get(k.key).or_else(|| eff.get(k.key));
+        let v = own
+            .get(k.key)
+            .or_else(|| eff.get(k.key))
+            .filter(|v| !v.is_null());
         let node = match k.kind {
             KeyKind::Number => v
                 .cloned()
@@ -198,11 +210,23 @@ fn sub_object(obj: &str, own: &Settings, eff: &Settings) -> Vec<(String, Node)> 
 
 pub fn entry_node(defaults: &Settings, e: &EntryInput) -> Node {
     let eff = effective(defaults, &e.settings);
-    Node::Obj(object(&e.settings, &eff, Some(&e.derived_match), &e.slots))
+    Node::Obj(object(
+        defaults,
+        &e.settings,
+        &eff,
+        Some(&e.derived_match),
+        &e.slots,
+    ))
 }
 
 pub fn document(defaults: &Settings, entries: &[EntryInput]) -> Node {
-    let default = Node::Obj(object(defaults, defaults, None, &BTreeMap::new()));
+    let default = Node::Obj(object(
+        &Settings::new(),
+        defaults,
+        defaults,
+        None,
+        &BTreeMap::new(),
+    ));
     Node::Obj(vec![
         ("$schema".into(), Node::Scalar(json!(SCHEMA_URL))),
         ("default".into(), default),
