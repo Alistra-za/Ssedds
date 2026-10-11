@@ -9,8 +9,12 @@
 //! ([`preserve_coverage`]) share [`passes`] and the engine's [`code8`] rounding, so they
 //! cannot disagree.
 //!
-//! - **Boundary.** `T` is the smallest f32 whose code passes (found by search, not the code
-//!   centre), so only the texels at or above the anchor pass.
+//! - **Boundary.** Remapped passing texels land on the smallest float whose code is
+//!   [`EDGE_MARGIN_CODES`] above the first passing code, and remapped failing texels at or below
+//!   the largest float that many codes under the last failing code (found by search, not code
+//!   centres), so BC7's one- or two-code error does not flip them (mipcheck round 2, B6). This
+//!   holds for the texels the Bayer split lets through or holds back too, and levels that need
+//!   no remap get the same clearance.
 //! - **Ties, dithered (owner 2026-10-11, DECISIONS R13).** On thin strands every texel touching
 //!   a strand has the same alpha, so whole tied groups cannot reach the target (mipcheck round
 //!   2, B1: up to 32x over). Each level instead passes exactly `k = round(p · n)` texels: those
@@ -61,19 +65,20 @@ pub fn coverage_fraction(
     }
 }
 
-/// The smallest `x` in `[0, 1]` whose 8-bit code passes, or `None` when no code passes
-/// (`gt 255`). `passes(code8(x))` is monotone in `x`, and non-negative f32 bit patterns order
-/// like their values, so a binary search over the bits finds the exact boundary.
-fn first_passing(threshold: u8, compare: AlphaCompare) -> Option<f32> {
-    let ok = |bits: u32| passes(code8(f32::from_bits(bits)), threshold, compare);
+/// mipcheck round 2, B6: BC7 moves alpha by a code or two, so a remapped texel left exactly on the first passing
+/// code can fall below the threshold after encoding (Fence007A at 16^2: 94 -> 78 passing texels). Remapped texels
+/// are placed this many codes clear of the threshold on each side (DECISIONS R13).
+pub const EDGE_MARGIN_CODES: u8 = 2;
+
+/// The smallest `x` in `[0, 1]` whose 8-bit code is at least `code`. `code8` is monotone and non-negative f32 bit
+/// patterns order like their values, so a binary search over the bits finds the exact boundary.
+fn first_float_with_code(code: u8) -> f32 {
+    if code == 0 {
+        return 0.0;
+    }
+    let ok = |bits: u32| code8(f32::from_bits(bits)) >= code;
+    // Invariant: `lo` fails, `hi` passes (every code is reached by 1.0).
     let (mut lo, mut hi) = (0u32, 1.0f32.to_bits());
-    if !ok(hi) {
-        return None;
-    }
-    if ok(lo) {
-        return Some(0.0);
-    }
-    // Invariant: `lo` fails, `hi` passes.
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
         if ok(mid) {
@@ -82,7 +87,12 @@ fn first_passing(threshold: u8, compare: AlphaCompare) -> Option<f32> {
             lo = mid;
         }
     }
-    Some(f32::from_bits(hi))
+    f32::from_bits(hi)
+}
+
+/// The first 8-bit code that passes, or `None` when none does (`gt 255`).
+fn first_passing_code(threshold: u8, compare: AlphaCompare) -> Option<u8> {
+    (0..=255u8).find(|&c| passes(c, threshold, compare))
 }
 
 /// Alpha as the solver sees it: clamped to `[0, 1]`, with NaN, negatives and values below
@@ -176,25 +186,47 @@ fn remap(level: &mut Rgba32F, w: &[f32], pass: &[bool], t_pass: f32, t_fail: f32
     }
 }
 
+/// Push every texel within the margin of the threshold to the edge of the margin on its own side: passing alpha
+/// below `t_pass` rises to it, failing alpha above `t_fail` drops to it. Pass counts do not change; alpha already
+/// clear of the threshold (and zero) is untouched.
+fn clear_of_threshold(
+    level: &mut Rgba32F,
+    t_pass: f32,
+    t_fail: f32,
+    threshold: u8,
+    compare: AlphaCompare,
+) {
+    for q in &mut level.px {
+        if passes(code8(q[3]), threshold, compare) {
+            q[3] = q[3].max(t_pass);
+        } else if q[3] > t_fail {
+            q[3] = t_fail;
+        }
+    }
+}
+
 /// Rewrite the alpha of every level `>= 1` so it passes exactly `k = round(p · n)` texels, `p` the pass fraction of
 /// level 0 (the reference, left untouched): the texels above the k-th largest alpha, plus texels tied with it in
 /// Bayer order of position (owner 2026-10-11, DECISIONS R13). Passing texels are remapped onto `[T_pass, 1]` and
-/// failing ones onto `[0, T_fail]`. A level is left unchanged when `k = 0`, when it already passes `k`, or when it has
-/// no positive alpha; zero alpha is never raised, so a level with fewer than `k` positive texels passes all of them.
+/// failing ones onto `[0, T_fail]`, `T_pass` and `T_fail` [`EDGE_MARGIN_CODES`] codes clear of the threshold (mipcheck
+/// B6). A level is not remapped when `k = 0`, when it already passes `k`, or when it has no positive alpha; zero alpha
+/// is never raised, so a level with fewer than `k` positive texels passes all of them. A `k = 0` or on-target level
+/// keeps its alpha except that texels inside the margin are pushed clear on their own side.
 pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCompare) {
     let Some((base, rest)) = chain.split_first_mut() else {
         return;
     };
     // No passing code (`gt 255`): p = 0. Every code passes (`ge 0`): every level is full.
-    let Some(t) = first_passing(threshold, compare) else {
+    let Some(c) = first_passing_code(threshold, compare) else {
         return;
     };
-    if t == 0.0 {
+    if c == 0 {
         return;
     }
-    // Where remapped texels land: passing ones at or above `t_pass`, failing ones at or below `t_fail` (Task 2 moves
-    // both clear of the threshold).
-    let (t_pass, t_fail) = (t, t.next_down());
+    // Remapped texels that pass land on code `c + margin` or above, those that fail on `c - 1 - margin` or below
+    // (each clamped to the code range), so BC7 error cannot flip them (mipcheck B6).
+    let t_pass = first_float_with_code(c.saturating_add(EDGE_MARGIN_CODES));
+    let t_fail = first_float_with_code(c.saturating_sub(EDGE_MARGIN_CODES).max(1)).next_down();
     let p = coverage_fraction(base.px.iter().map(|q| q[3]), threshold, compare);
     let pass_count = |l: &Rgba32F| {
         l.px.iter()
@@ -205,7 +237,9 @@ pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCom
         let n = level.px.len();
         let k = ((p * n as f64).round() as usize).min(n);
         // "No texel passes" is the target: the box alpha is left alone (spec §5.5). So is a level already on target.
+        // Those levels keep their box alpha, but texels inside the margin are pushed clear on their own side.
         if k == 0 || pass_count(level) == k {
+            clear_of_threshold(level, t_pass, t_fail, threshold, compare);
             continue;
         }
         let w: Vec<f32> = level.px.iter().map(|q| unit_alpha(q[3])).collect();
@@ -276,21 +310,23 @@ mod tests {
         assert!(coverage_fraction(alpha_of(&c[3]), 127, AlphaCompare::Gt) < 0.05);
     }
 
-    /// Test-local walk: the smallest f32 in [0, 1] whose 8-bit code passes, stepping one ulp
-    /// at a time from the ideal transition `(c - 0.5) / 255` of the first passing code `c`.
-    fn first_passing_float(threshold: u8, compare: AlphaCompare) -> f32 {
-        let ok = |x: f32| passes(code8(x), threshold, compare);
-        let c = (0..=255u8)
-            .find(|&c| passes(c, threshold, compare))
-            .unwrap();
+    /// Test-local walk: the smallest f32 in [0, 1] whose 8-bit code is at least `c`.
+    fn smallest_float_with_code(c: u8) -> f32 {
         let mut x = ((f32::from(c) - 0.5) / 255.0).max(0.0);
-        while x > 0.0 && ok(x) {
+        while x > 0.0 && code8(x) >= c {
             x = x.next_down();
         }
-        while !ok(x) {
+        while code8(x) < c {
             x = x.next_up();
         }
         x
+    }
+
+    /// The first 8-bit code that passes.
+    fn first_code(threshold: u8, compare: AlphaCompare) -> u8 {
+        (0..=255u8)
+            .find(|&c| passes(c, threshold, compare))
+            .unwrap()
     }
 
     fn pass_count(img: &Rgba32F, threshold: u8, compare: AlphaCompare) -> usize {
@@ -539,7 +575,8 @@ mod tests {
             assert_eq!(pass_count(&lvl1, 127, compare), 8);
             let mut c = vec![base, lvl1];
             preserve_coverage(&mut c, 127, compare);
-            let t_fail = first_passing_float(127, compare).next_down();
+            let t_fail =
+                smallest_float_with_code(first_code(127, compare) - EDGE_MARGIN_CODES).next_down();
             assert_eq!(pass_count(&c[1], 127, compare), 3, "{compare:?}");
             for (i, p) in c[1].px.iter().enumerate() {
                 match i {
@@ -552,16 +589,10 @@ mod tests {
     }
 
     #[test]
-    fn boundary_texel_lands_on_the_first_passing_float() {
-        for (compare, first_code) in [(AlphaCompare::Gt, 128u8), (AlphaCompare::Ge, 127u8)] {
-            let t = first_passing_float(127, compare);
-            assert!(!passes(
-                code8(f32::from_bits(t.to_bits() - 1)),
-                127,
-                compare
-            ));
-            // p = 4/16, so k = 1 at level 1. The runner-up would sit within half a code of the
-            // anchor after a uniform scale to the code centre; it must stay below `t`.
+    fn boundary_texel_lands_two_codes_above_the_threshold() {
+        for compare in [AlphaCompare::Gt, AlphaCompare::Ge] {
+            let first = first_code(127, compare);
+            // p = 4/16, so k = 1 at level 1: only the 0.3 texel passes.
             let mut base = Rgba32F::new(4, 4, [0.0; 4]);
             for x in 0..4 {
                 base.at_mut(x, 0)[3] = 1.0;
@@ -572,11 +603,128 @@ mod tests {
             lvl1.px[2][3] = 0.1;
             let mut c = vec![base, lvl1];
             preserve_coverage(&mut c, 127, compare);
-            assert_eq!(c[1].px[0][3], t, "{compare:?}");
-            assert_eq!(code8(c[1].px[0][3]), first_code);
-            assert!(!passes(code8(c[1].px[1][3]), 127, compare), "{compare:?}");
+            let t_pass = smallest_float_with_code(first + EDGE_MARGIN_CODES);
+            assert_eq!(c[1].px[0][3], t_pass, "{compare:?}");
+            assert_eq!(code8(c[1].px[0][3]), first + EDGE_MARGIN_CODES);
+            // The runner-up sits at least two codes under the last failing code (first - 1).
+            assert!(
+                code8(c[1].px[1][3]) <= first - 1 - EDGE_MARGIN_CODES,
+                "{compare:?}: {}",
+                code8(c[1].px[1][3])
+            );
             assert_eq!(pass_count(&c[1], 127, compare), 1);
         }
+    }
+
+    #[test]
+    fn remapped_levels_keep_a_margin_around_the_threshold() {
+        // gt 127: the first passing code is 128 and the last failing one 127, so a remapped level holds no code in
+        // 126..=129.
+        let boxed = foliage_chain();
+        let mut c = boxed.clone();
+        preserve_coverage(&mut c, 127, AlphaCompare::Gt);
+        let mut remapped = 0;
+        for (l, b) in c.iter().zip(&boxed).skip(1) {
+            if l == b {
+                continue;
+            }
+            remapped += 1;
+            for a in alpha_of(l) {
+                let code = code8(a);
+                assert!(
+                    code <= 125 || code >= 130,
+                    "{}x{}: code {code} inside the margin",
+                    l.width,
+                    l.height
+                );
+            }
+        }
+        assert!(remapped > 0, "the fixture must exercise the remap");
+    }
+
+    #[test]
+    fn the_margin_holds_after_the_bayer_split() {
+        // Thin tied strands (Task 1): the texels the split lets through sit two codes above the threshold, the tied
+        // texels it holds back two codes below, and the count stays exact.
+        let boxed = strands();
+        let mut c = boxed.clone();
+        preserve_coverage(&mut c, 127, AlphaCompare::Gt);
+        let p = coverage_fraction(alpha_of(&c[0]), 127, AlphaCompare::Gt);
+        let mut split = 0;
+        for (l, b) in c.iter().zip(&boxed).skip(1) {
+            if l == b {
+                continue;
+            }
+            split += 1;
+            let k = ((p * l.px.len() as f64).round() as usize).min(l.px.len());
+            assert_eq!(
+                pass_count(l, 127, AlphaCompare::Gt),
+                k,
+                "{}x{}",
+                l.width,
+                l.height
+            );
+            for a in alpha_of(l) {
+                let code = code8(a);
+                assert!(
+                    code <= 125 || code >= 130,
+                    "{}x{}: code {code}",
+                    l.width,
+                    l.height
+                );
+            }
+        }
+        assert!(split > 0, "the fixture must exercise the split");
+    }
+
+    #[test]
+    fn a_level_already_on_target_is_still_pushed_clear_of_the_threshold() {
+        // Task 1 review, Minor 3: levels skipped as already on k keep their box alpha, which can sit right on the
+        // threshold code. Level 1 (2x2) has k = 2: one texel on the first passing code, one on the last failing code,
+        // one opaque, one two codes under that. The count stays 2; each side ends two codes clear.
+        for compare in [AlphaCompare::Gt, AlphaCompare::Ge] {
+            let first = first_code(127, compare);
+            let pass_alpha = smallest_float_with_code(first);
+            let fail_alpha = pass_alpha.next_down();
+            assert_eq!(code8(fail_alpha), first - 1);
+            let mut base = Rgba32F::new(4, 4, [0.0; 4]);
+            for x in 0..4 {
+                base.at_mut(x, 0)[3] = 1.0;
+                base.at_mut(x, 1)[3] = 1.0;
+            }
+            let mut lvl1 = Rgba32F::new(2, 2, [0.0; 4]);
+            lvl1.px[0][3] = pass_alpha;
+            lvl1.px[1][3] = fail_alpha;
+            lvl1.px[2][3] = 1.0;
+            lvl1.px[3][3] = smallest_float_with_code(first - 1 - EDGE_MARGIN_CODES);
+            let mut c = vec![base, lvl1];
+            assert_eq!(pass_count(&c[1], 127, compare), 2);
+            preserve_coverage(&mut c, 127, compare);
+            let codes: Vec<u8> = alpha_of(&c[1]).map(code8).collect();
+            assert_eq!(pass_count(&c[1], 127, compare), 2, "{compare:?}");
+            assert_eq!(codes[0], first + EDGE_MARGIN_CODES, "{compare:?}");
+            assert!(codes[1] <= first - 1 - EDGE_MARGIN_CODES, "{compare:?}");
+            assert_eq!(c[1].px[2][3], 1.0);
+            assert!(codes[3] <= first - 1 - EDGE_MARGIN_CODES, "{compare:?}");
+        }
+    }
+
+    #[test]
+    fn a_zero_target_level_is_pushed_clear_of_the_threshold_too() {
+        // k = 0 leaves the box alpha alone (spec) except for texels within the margin of the threshold, which move to
+        // the side they were on.
+        let mut base = Rgba32F::new(4, 4, [0.0; 4]);
+        base.px[0][3] = 1.0; // 1/16 coverage -> k = round(4/16) = 0 at 2x2
+        let fail_alpha = smallest_float_with_code(128).next_down(); // code 127, fails gt 127
+        let mut lvl1 = Rgba32F::new(2, 2, [0.0; 4]);
+        lvl1.px[0][3] = fail_alpha;
+        lvl1.px[1][3] = 0.25;
+        let mut c = vec![base, lvl1];
+        preserve_coverage(&mut c, 127, AlphaCompare::Gt);
+        assert!(code8(c[1].px[0][3]) <= 125);
+        assert!(c[1].px[0][3] > 0.0);
+        assert_eq!(c[1].px[1][3], 0.25);
+        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 0);
     }
 
     #[test]
