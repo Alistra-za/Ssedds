@@ -114,7 +114,13 @@ fn context(model: &AppModel, set: &str) -> Ctx {
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
         derived: v.and_then(|v| v.derived_match),
         set: set.to_string(),
-        read_only: (!editable).then(|| model.banner.clone().unwrap_or_else(|| READ_ONLY.into())),
+        read_only: (!editable).then(|| {
+            model
+                .sets_doc
+                .as_ref()
+                .and_then(|d| d.error())
+                .map_or_else(|| READ_ONLY.into(), str::to_string)
+        }),
     }
 }
 
@@ -265,8 +271,17 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                 .chain(FIXED_NUMBERS.iter())
                 .find(|(d, _)| *d == k.key)
                 .map(|(_, x)| *x);
+            let unset_unknown = value.is_none() && default.is_none();
             let mut x = value.and_then(|v| v.as_f64()).or(default).unwrap_or(0.0);
-            let r = ui.add(egui::DragValue::new(&mut x).speed(0.01).max_decimals(4));
+            let mut drag = egui::DragValue::new(&mut x)
+                .speed(0.01)
+                .max_decimals(4)
+                .custom_formatter(|n, _| format!("{:?}", (n * 1e4).round() / 1e4));
+            if unset_unknown {
+                // No default to show: say so rather than a 0.0 that looks like one.
+                drag = drag.custom_formatter(|_, _| "not set".to_string());
+            }
+            let r = ui.add(drag);
             if r.changed() {
                 edits.push((key, Some(json!(x))));
             }

@@ -276,26 +276,166 @@ fn feature_toggles_grey_their_exclusions_and_reveal_their_groups() {
     );
 }
 
+fn spin_values(h: &Harness<'static, AppModel>) -> Vec<String> {
+    h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .filter_map(|n| n.value())
+        .collect()
+}
+
 #[test]
 fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
+    use sdc_gui::pgp::settings::GLINT_DEFAULTS;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    assert!(
+        h.query_by_label("Defaults").is_none(),
+        "there is no Defaults editor"
+    );
+    let v = spin_values(&h);
+    assert!(v.contains(&"0.04".to_string()), "specular level: {v:?}");
+    assert!(v.contains(&"1.0".to_string()), "roughness scale: {v:?}");
+    assert!(
+        h.query_by_label("reset").is_none(),
+        "no reset while nothing is the set's own"
+    );
+    // An edit is the set's own: the reset button appears, and clicking it removes the key.
+    h.state_mut().set_json_value(
+        "landscape/rock01",
+        "roughness_scale",
+        Some(serde_json::json!(0.5)),
+    );
+    h.run();
+    assert!(spin_values(&h).contains(&"0.5".to_string()));
+    assert_eq!(h.query_all_by_label("reset").count(), 1);
+    h.get_by_label("reset").click();
+    h.run();
+    assert!(!rock_settings(&h).contains_key("roughness_scale"));
+    assert!(h.query_by_label("reset").is_none());
+    // The dependent groups show their defaults too: displacement scale, and the four glint values.
+    let mut m = pbr_opened(tempfile::tempdir().unwrap().path());
+    rock_selected(&mut m);
+    m.set_json_value(
+        "landscape/rock01",
+        "parallax",
+        Some(serde_json::json!(true)),
+    );
+    let mut h = harness(m);
+    h.run();
+    assert!(
+        spin_values(&h).contains(&"1.0".to_string()),
+        "displacement scale"
+    );
+    h.get_by_label("Parallax").click();
+    h.run();
+    h.get_by_label("Glint").click();
+    h.run();
+    let v = spin_values(&h);
+    for (_, x) in GLINT_DEFAULTS {
+        let t = format!("{x:?}");
+        assert!(v.contains(&t), "glint default {t} in {v:?}");
+    }
+}
+
+#[test]
+fn an_unset_number_without_a_default_says_not_set() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     rock_selected(&mut m);
     m.set_json_value(
         "landscape/rock01",
-        "roughness_scale",
-        Some(serde_json::json!(0.5)),
+        "emissive",
+        Some(serde_json::json!(true)),
     );
     let mut h = harness(m);
     h.run();
-    h.get_by_label("Specular level");
+    assert!(spin_values(&h).contains(&"not set".to_string()));
+}
+
+fn rock_with(keys: &[(&str, serde_json::Value)]) -> Harness<'static, AppModel> {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    for (k, v) in keys {
+        m.set_json_value("landscape/rock01", k, Some(v.clone()));
+    }
+    let mut h = harness(m);
+    h.run();
+    h
+}
+
+fn disabled(h: &Harness<'static, AppModel>, label: &str) -> bool {
+    h.get_by_label(label).accesskit_node().is_disabled()
+}
+
+#[test]
+fn multilayer_and_subsurface_exclude_each_other() {
+    let h = rock_with(&[("subsurface", serde_json::json!(true))]);
+    assert!(disabled(&h, "Multilayer (coat)"));
     assert!(
-        h.query_by_label("Defaults").is_none(),
-        "there is no Defaults editor"
+        !disabled(&h, "Subsurface"),
+        "the one that is on can be turned off"
     );
-    let s = rock_settings(&h);
-    assert_eq!(s["roughness_scale"], serde_json::json!(0.5));
-    assert!(!s.contains_key("specular_level"));
+    let h = rock_with(&[("multilayer", serde_json::json!(true))]);
+    assert!(disabled(&h, "Subsurface"));
+}
+
+#[test]
+fn hair_greys_the_six_features_it_excludes() {
+    let h = rock_with(&[("hair", serde_json::json!(true))]);
+    for l in [
+        "Emissive",
+        "Parallax",
+        "Subsurface",
+        "Multilayer (coat)",
+        "Glint",
+        "Fuzz",
+    ] {
+        assert!(disabled(&h, l), "{l} is greyed while hair is on");
+    }
+    assert!(!disabled(&h, "Hair"));
+}
+
+#[test]
+fn unticking_a_switch_removes_its_key() {
+    let mut h = rock_with(&[("parallax", serde_json::json!(true))]);
+    h.get_by_label("Parallax").click();
+    h.run();
+    assert!(!rock_settings(&h).contains_key("parallax"));
+}
+
+#[test]
+fn the_tri_buttons_write_true_false_and_remove() {
+    let mut h = rock_with(&[]);
+    h.state_mut().settings.advanced_open = true;
+    h.run();
+    // The first Tri row of the Advanced drawer is vertex_colors.
+    let nth = |h: &Harness<'static, AppModel>, l: &str| {
+        h.query_all_by_label(l).next().map(|n| n.rect()).is_some()
+    };
+    assert!(nth(&h, "on"));
+    h.query_all_by_label("on").next().unwrap().click();
+    h.run();
+    assert_eq!(rock_settings(&h)["vertex_colors"], serde_json::json!(true));
+    h.query_all_by_label("off").next().unwrap().click();
+    h.run();
+    assert_eq!(rock_settings(&h)["vertex_colors"], serde_json::json!(false));
+    h.query_all_by_label("not set").next().unwrap().click();
+    h.run();
+    assert!(!rock_settings(&h).contains_key("vertex_colors"));
+}
+
+#[test]
+fn an_empty_json_name_restores_the_default() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let default = sdc_gui::model::pbr_export::json_name(&m);
+    m.set_json_name("rock-pack");
+    m.set_json_name("  ");
+    assert_eq!(sdc_gui::model::pbr_export::json_name(&m), default);
+    assert_eq!(m.sets_doc.as_ref().unwrap().json_name(), None);
 }
 
 #[test]
@@ -441,7 +581,7 @@ fn a_read_only_sets_doc_disables_the_controls_and_explains_why() {
     h.run();
     h.run();
     assert!(
-        h.query_by_label_contains("read-only").is_some(),
+        h.query_by_label_contains("sdc-project.toml").is_some(),
         "the reason shows on hover"
     );
 }

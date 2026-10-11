@@ -153,6 +153,12 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
             .unwrap_or_default()
     });
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+    let why = model
+        .sets_doc
+        .as_ref()
+        .and_then(|d| d.error())
+        .unwrap_or("sdc-project.toml is read-only")
+        .to_string();
     let hover = format!(
         "The PGPatcher JSON is written to {}\\PBRNIFPatcher\\<name>.json",
         model.export_root().display()
@@ -164,7 +170,8 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
                 .hint_text(crate::model::pbr_export::json_name(model))
                 .desired_width(120.0),
         )
-        .on_hover_text(hover);
+        .on_hover_text(hover)
+        .on_disabled_hover_text(why);
     ui.label("JSON:");
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(id, t.clone()));
