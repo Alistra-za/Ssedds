@@ -155,3 +155,32 @@ fn uncompressed_format_labels_say_so() {
         "RGBA16F · HDR linear (uncompressed)"
     );
 }
+
+#[test]
+fn uncompressed_formats_are_offered_and_rgba16f_only_under_cs() {
+    for f in [Format::Rgba8, Format::R8, Format::Rg8] {
+        assert!(format_options(Target::Vanilla).contains(&f), "{f:?}");
+    }
+    assert!(format_options(Target::Cs).contains(&Format::Rgba16f));
+    assert!(!format_options(Target::Cpm).contains(&Format::Rgba16f));
+}
+
+#[test]
+fn uncompressed_locks_explain_themselves() {
+    let reg = engine::presets::PresetRegistry::builtin().unwrap();
+    let mut p = reg.base_profile(Target::Cs, Subtype::Height);
+    p.format = Format::R8;
+    assert_eq!(
+        field_lock(Target::Cs, &p, "color.tag"),
+        Some("R8 and RG8 have no _SRGB form")
+    );
+    assert_eq!(
+        field_lock(Target::Cs, &p, "encoder.effort"),
+        Some("no encoder runs for uncompressed formats")
+    );
+    p.format = Format::Rgba16f;
+    assert_eq!(
+        field_lock(Target::Cs, &p, "color.tag"),
+        Some("float formats have no _SRGB form")
+    );
+}

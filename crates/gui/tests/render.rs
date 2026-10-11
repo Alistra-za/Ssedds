@@ -251,6 +251,24 @@ fn bc5_shows_a_reconstructed_blue_on_both_upload_paths() {
     near(draw(&rs, &r, Slot::Encoded, params())[MIDDLE], want);
 }
 
+/// Controller ruling (M6 Task 11): an RG8 normal rebuilds Z the way BC5 does.
+#[test]
+fn rg8_shows_a_reconstructed_blue_like_bc5() {
+    let Some(rs) = render_state() else { return };
+    let mut r = PreviewRenderer::new(&rs);
+    let grey = 128.0 / 255.0;
+    // `encoded` repeats its block once per 4x4 block: 4 texels of (128, 128) each time. RG8 always takes the CPU decode.
+    let out = encoded(Format::Rg8, 4, 4, &[128; 8], [grey, grey, 0.0, 1.0]);
+    assert!(matches!(
+        r.set_encoded(&rs, &out),
+        UploadPath::CpuDecoded(_)
+    ));
+    near(
+        draw(&rs, &r, Slot::Encoded, params())[MIDDLE],
+        [128, 128, 255, 255],
+    );
+}
+
 #[test]
 fn bc4_is_grey_and_channels_can_be_isolated() {
     let Some(rs) = render_state() else { return };

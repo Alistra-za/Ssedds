@@ -7,7 +7,7 @@ use encoders_sys::Bc1Model;
 use engine::api::CancelToken;
 use engine::config::Format;
 use engine::dds::DdsPixelFormat;
-use engine::decode::{decode_level, Decoded};
+use engine::decode::decode_level_rgba;
 use engine::manifest::sha256_json;
 use engine::policy::{ResolvedJob, SourceStamp};
 use engine::session::{first_level_within, pack_key, PreviewResult, SourcePreview};
@@ -202,56 +202,67 @@ fn signature(job: &ResolvedJob) -> String {
     }
 }
 
-/// `(format, srgb)` as the pixel format the decoder takes.
-pub fn pixel_format(format: Format, srgb: bool) -> DdsPixelFormat {
-    format.pixel_format(srgb)
-}
-
-fn to_rgba(d: Decoded, pixels: usize) -> Vec<[f32; 4]> {
-    let mut out: Vec<[f32; 4]> = match d {
-        Decoded::Ldr(v) => v
-            .iter()
-            .map(|p| {
-                [
-                    p[0] as f32 / 255.0,
-                    p[1] as f32 / 255.0,
-                    p[2] as f32 / 255.0,
-                    p[3] as f32 / 255.0,
-                ]
-            })
-            .collect(),
-        Decoded::Hdr(v) => v.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect(),
-    };
-    out.resize(pixels, [0.0, 0.0, 0.0, 1.0]);
-    out
-}
-
-/// CPU decode of every encoded mip of `r` (a mip that fails to decode comes back black, never missing).
-pub fn decode_levels(r: &PreviewResult, bc1: Bc1Model) -> Vec<Vec<[f32; 4]>> {
-    let fmt = pixel_format(r.format, r.srgb);
-    r.levels
+/// CPU decode of `levels` (mips `first_level..` of the chain `dims`) as `fmt`; a mip that fails comes back black.
+fn decode_chain(
+    fmt: DdsPixelFormat,
+    dims: &[(u32, u32)],
+    first_level: usize,
+    levels: &[Vec<u8>],
+    bc1: Bc1Model,
+) -> Vec<Vec<[f32; 4]>> {
+    levels
         .iter()
         .enumerate()
         .map(|(i, data)| {
-            let (w, h) = r.source.dims[r.source.first_level + i];
+            let (w, h) = dims[first_level + i];
             let pixels = w as usize * h as usize;
-            match decode_level(fmt, w, h, data, Some(bc1)) {
-                Ok(d) => to_rgba(d, pixels),
+            match decode_level_rgba(fmt, w, h, data, Some(bc1)) {
+                Ok(mut v) => {
+                    v.resize(pixels, [0.0, 0.0, 0.0, 1.0]);
+                    v
+                }
                 Err(_) => vec![[0.0, 0.0, 0.0, 1.0]; pixels],
             }
         })
         .collect()
 }
 
+/// CPU decode of every encoded mip of `r` (a mip that fails to decode comes back black, never missing).
+pub fn decode_levels(r: &PreviewResult, bc1: Bc1Model) -> Vec<Vec<[f32; 4]>> {
+    let s = &r.source;
+    decode_chain(
+        r.format.pixel_format(r.srgb),
+        &s.dims,
+        s.first_level,
+        &r.levels,
+        bc1,
+    )
+}
+
 /// A DDS input as stored: its mips within `max`, no source side (M3a spec §2.2).
 pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<PreviewOut, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let f = engine::dds::read_dds(&bytes).map_err(|e| e.to_string())?;
-    let Some((format, srgb)) = f.format.as_format() else {
-        return Err(format!(
-            "{:?} cannot be previewed (only the formats sdc writes)",
-            f.format
-        ));
+    // DECISIONS S5: every uncompressed layout previews (N11 ends); BC2 and signed BC6H still cannot.
+    let (format, srgb) = match f.format.as_format() {
+        Some(v) => v,
+        None if f.format.block_bytes().is_none() => {
+            let float = matches!(f.format, DdsPixelFormat::Rgba32f);
+            (
+                if float {
+                    Format::Rgba16f
+                } else {
+                    Format::Rgba8
+                },
+                false,
+            )
+        }
+        None => {
+            return Err(format!(
+                "{:?} cannot be previewed (BC2 and signed BC6H are not supported)",
+                f.format
+            ));
+        }
     };
     let dims: Vec<(u32, u32)> = f.levels.iter().map(|(w, h, _)| (*w, *h)).collect();
     let first_level = engine::session::first_level_within(&dims, max);
@@ -259,6 +270,8 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
         .iter()
         .map(|(_, _, r)| f.data[r.clone()].to_vec())
         .collect();
+    // Decoded as the file's own layout: for a format sdc never writes, `format` above is only the display kind.
+    let decoded = decode_chain(f.format, &dims, first_level, &levels, bc1);
     let result = PreviewResult {
         source: SourcePreview {
             first_level,
@@ -272,10 +285,7 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
         warnings: vec![],
         normal_len: vec![],
     };
-    Ok(PreviewOut {
-        decoded: decode_levels(&result, bc1),
-        result,
-    })
+    Ok(PreviewOut { decoded, result })
 }
 
 impl AppModel {

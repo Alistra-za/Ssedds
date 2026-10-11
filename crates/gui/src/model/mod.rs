@@ -1,4 +1,5 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
+pub mod dds_patch;
 pub mod export;
 pub mod fields;
 pub mod history;
@@ -163,6 +164,8 @@ pub struct AppModel {
     pub expanded: Option<String>,
     pub export: export::ExportModel,
     pub preview: preview::PreviewModel,
+    /// The DDS header-patch choice (DECISIONS S7).
+    pub dds_patch: dds_patch::DdsPatchState,
     pub view: view::ViewState,
     /// The largest texture side the GPU takes; set from the renderer at start-up (M3a spec §6.5).
     pub gpu_max_dim: u32,
@@ -234,6 +237,7 @@ impl AppModel {
             expanded: None,
             export: export::ExportModel::default(),
             preview,
+            dds_patch: Default::default(),
             view: view::ViewState::default(),
             gpu_max_dim: 16384,
             gpu_available: true,
@@ -252,6 +256,39 @@ impl AppModel {
             tx,
             rx,
         }
+    }
+
+    /// The header check and patch plan of DDS item `key` (DECISIONS S7); `None` for other items.
+    pub fn dds_header(&mut self, key: &str) -> Option<dds_patch::DdsHeaderView> {
+        let item = self.item(key).filter(|i| i.kind == ItemKind::Dds)?;
+        let path = item.input.clone();
+        Some(self.dds_patch.view(key, &path))
+    }
+
+    pub fn set_dds_patch_tag(&mut self, key: &str, srgb: Option<bool>) {
+        self.dds_patch.set_tag(key, srgb);
+    }
+
+    /// Write the patched copy of DDS item `key` to `<export folder>/<job key>`.
+    pub fn patch_dds_header(&mut self, key: &str) -> Result<PathBuf, String> {
+        let item = self
+            .item(key)
+            .filter(|i| i.kind == ItemKind::Dds)
+            .ok_or("not a DDS item")?;
+        let export = self
+            .settings
+            .export_folder
+            .clone()
+            .ok_or("set an export folder first")?;
+        let (src, dest) = (item.input.clone(), export.join(&item.job_key));
+        let tag = self.dds_header(key).and_then(|v| v.tag);
+        let r = dds_patch::write_patch(&src, &dest, tag);
+        self.dds_patch.confirming = None;
+        self.dds_patch.last = Some(match &r {
+            Ok(m) => m.clone(),
+            Err(e) => format!("DDS-HEADER-UNPATCHABLE: {e}"),
+        });
+        r.map(|_| dest)
     }
 
     pub fn open_folder(&mut self, root: PathBuf) {

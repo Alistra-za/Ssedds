@@ -183,9 +183,9 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     ui.separator();
     mip_control(ui, &mut model.view, info);
     ui.separator();
-    // BC6H is tone-mapped for display: the sRGB / UNORM choice does not apply to it.
-    let bc6h = info.format == Some(Format::Bc6hUf16);
-    ui.add_enabled_ui(!bc6h, |ui| {
+    // HDR formats (BC6H, RGBA16F) are tone-mapped for display: the sRGB / UNORM choice does not apply to them.
+    let hdr = info.format.is_some_and(Format::is_hdr);
+    ui.add_enabled_ui(!hdr, |ui| {
         let linear = model.view.view_linear;
         if ui.selectable_label(!linear, "sRGB").clicked() {
             model.view.view_linear = false;
@@ -195,7 +195,7 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
         }
     })
     .response
-    .on_disabled_hover_text("BC6H is tone-mapped for display");
+    .on_disabled_hover_text("HDR formats are tone-mapped for display");
     ui.separator();
     let layout = model.view.layout;
     if ui
@@ -464,7 +464,7 @@ fn draw_source_pane(
     };
     if let (None, SourceState::Ready(s)) = (&text, &model.preview.source) {
         let mip = model.view.mip;
-        let tonemap = info.format == Some(Format::Bc6hUf16);
+        let tonemap = info.format.is_some_and(Format::is_hdr);
         let params = params_for(
             &model.view,
             size,
@@ -527,7 +527,7 @@ fn draw_encoded_pane(
             paint_clipped(ui, viewport, visible, Slot::Heatmap, params);
             drawn = true;
         } else if let (true, Some(out)) = (uploaded, &info.shown) {
-            let tonemap = out.result.format == Format::Bc6hUf16;
+            let tonemap = out.result.format.is_hdr();
             let first = out.result.source.first_level;
             let params = params_for(
                 &model.view,

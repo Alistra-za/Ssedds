@@ -226,3 +226,76 @@ fn a_gpu_limit_that_changes_nothing_adds_no_notice() {
     settle(&mut m);
     assert!(m.preview.notice.is_none(), "{:?}", m.preview.notice);
 }
+
+/// Writes a 16x16 full-chain DDS of `pf` with every texel `px` (raw level bytes per texel).
+fn raw_dds(path: &std::path::Path, dxgi: u32, bpp: u32, texel: &[u8]) {
+    let mut levels = vec![];
+    let mut s = 16u32;
+    loop {
+        levels.extend(
+            std::iter::repeat_n(texel, (s * s) as usize)
+                .flatten()
+                .copied(),
+        );
+        if s == 1 {
+            break;
+        }
+        s /= 2;
+    }
+    let mut hd = [0u32; 31];
+    hd[0] = 124;
+    hd[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x1000 | 0x2_0000;
+    hd[2] = 16;
+    hd[3] = 16;
+    hd[4] = 16 * bpp;
+    hd[5] = 1;
+    hd[6] = 5;
+    hd[18] = 32;
+    hd[19] = 0x4;
+    hd[20] = u32::from_le_bytes(*b"DX10");
+    hd[26] = 0x1000 | 0x8 | 0x40_0000;
+    let mut b = b"DDS ".to_vec();
+    for v in hd {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [dxgi, 3, 0, 1, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend(levels);
+    std::fs::write(path, b).unwrap();
+}
+
+/// DECISIONS S5: N11 ends. sdc's own rgba8 and a third-party BGRX8 preview from the CPU decode.
+#[test]
+fn uncompressed_dds_inputs_preview_from_the_cpu_decode() {
+    for (name, dxgi, bpp, texel, want) in [
+        (
+            "own.dds",
+            87u32,
+            4u32,
+            vec![30u8, 20, 10, 40],
+            [10.0f32, 20.0, 30.0, 40.0],
+        ),
+        (
+            "third.dds",
+            88,
+            4,
+            vec![30, 20, 10, 0],
+            [10.0, 20.0, 30.0, 255.0],
+        ),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let root = support::mod_folder(d.path());
+        raw_dds(&root.join("landscape").join(name), dxgi, bpp, &texel);
+        let mut m = opened(d.path());
+        m.expand(&format!("landscape/{name}"));
+        settle(&mut m);
+        let EncodedState::Done(out) = &m.preview.encoded else {
+            panic!("{name}: {:?}", m.preview.encoded)
+        };
+        let px = out.decoded[0][0];
+        for c in 0..4 {
+            assert!((px[c] * 255.0 - want[c]).abs() < 0.5, "{name} c{c}: {px:?}");
+        }
+    }
+}

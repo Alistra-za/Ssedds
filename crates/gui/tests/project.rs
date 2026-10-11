@@ -54,6 +54,28 @@ fn edits_keep_every_hand_written_byte() {
     assert_eq!(cfg.rules.len(), 1);
 }
 
+/// Controller ruling (M6 Task 11): a `[files]` `reencode` opt-in is accepted and survives a GUI edit and save.
+#[test]
+fn a_reencode_entry_round_trips() {
+    let text = "[files.\"landscape/old.dds\"]\nreencode = true\n";
+    let (d, mut doc) = doc_with(text);
+    assert!(!doc.read_only(), "{:?}", doc.error());
+    assert_eq!(
+        doc.file_value("landscape/old.dds", "reencode"),
+        Some(json!(true))
+    );
+    doc.set_file_value("landscape/old.dds", "format", &json!("bc7"));
+    doc.clear_file_value("landscape/old.dds", "format");
+    doc.set_file_value("landscape/rock01.png", "format", &json!("bc1"));
+    doc.save(false).unwrap();
+    let back = ProjectDoc::open(d.path());
+    assert!(!back.read_only(), "{:?}", back.error());
+    assert_eq!(
+        back.config().unwrap().files["landscape/old.dds"]["reencode"],
+        true
+    );
+}
+
 #[test]
 fn awkward_keys_are_quoted_and_read_back() {
     let (d, mut doc) = doc_with("");

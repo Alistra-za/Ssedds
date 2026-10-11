@@ -91,7 +91,8 @@ const KIND_BC5: u32 = 2;
 fn kind_of(format: Format) -> u32 {
     match format {
         Format::Bc4 => KIND_BC4,
-        Format::Bc5 => KIND_BC5,
+        // RG8 is a two-channel normal like BC5: Z is rebuilt from X and Y.
+        Format::Bc5 | Format::Rg8 => KIND_BC5,
         _ => KIND_PLAIN,
     }
 }

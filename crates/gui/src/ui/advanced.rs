@@ -323,6 +323,7 @@ fn mipmaps(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
                         busy: model.busy(),
                         compact: false,
                         toml_read_only: why.clone(),
+                        warnings: &[],
                     };
                     match field_row(ui, &cx, &f) {
                         Some(RowEdit::Set(v)) => {
@@ -358,6 +359,7 @@ fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>
                         busy,
                         compact: false,
                         toml_read_only: why.clone(),
+                        warnings: &[],
                     };
                     for f in advanced_field_views(model.target, &job) {
                         match field_row(ui, &cx, &f) {

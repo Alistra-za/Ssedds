@@ -20,6 +20,10 @@ enum Action {
     Clear(&'static str),
     Decide(Answer),
     Select(String),
+    PatchTag(Option<bool>),
+    PatchAsk,
+    PatchDo,
+    PatchCancel,
 }
 
 /// The groups the compact strip keeps (Task 17's preview).
@@ -335,6 +339,8 @@ pub struct Ctx<'a> {
     pub compact: bool,
     /// Why `sdc.toml` cannot be edited, when it is read-only.
     pub toml_read_only: Option<String>,
+    /// The item's warnings (the Compression group shows the HDR reason).
+    pub warnings: &'a [Warning],
 }
 
 /// What a field row asks of the model.
@@ -454,6 +460,11 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
                         }
                     }
                 });
+            if name == "Compression" {
+                if let Some(w) = cx.warnings.iter().find(|w| w.code == Code::FmtHdrSource) {
+                    ui.weak(&w.message);
+                }
+            }
         });
 }
 
@@ -592,7 +603,12 @@ fn error_text(codes: &[Code]) -> String {
 fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
     let rest: Vec<&Warning> = warnings
         .iter()
-        .filter(|w| !matches!(w.code, Code::SugLowConfidence | Code::InGreenUnstated))
+        .filter(|w| {
+            !matches!(
+                w.code,
+                Code::SugLowConfidence | Code::InGreenUnstated | Code::FmtHdrSource
+            )
+        })
         .collect();
     if rest.is_empty() {
         return;
@@ -601,6 +617,58 @@ fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
     ui.label(egui::RichText::new("Warnings").strong());
     for w in rest {
         ui.label(egui::RichText::new(format!("{}: {}", w.code.as_str(), w.message)).small());
+    }
+}
+
+fn dds_header_panel(
+    ui: &mut egui::Ui,
+    v: &crate::model::dds_patch::DdsHeaderView,
+    confirming: bool,
+    last: Option<&str>,
+    actions: &mut Vec<Action>,
+) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("DDS header").strong());
+    if v.issues.is_empty() && matches!(v.patch, Ok(None)) {
+        ui.label("Header: valid");
+    }
+    for i in &v.issues {
+        ui.label(egui::RichText::new(i).small());
+    }
+    ui.horizontal(|ui| {
+        ui.label("Tag on patch:");
+        for (label, tag) in [("keep", None), ("sRGB", Some(true)), ("UNORM", Some(false))] {
+            if ui.radio(v.tag == tag, label).clicked() {
+                actions.push(Action::PatchTag(tag));
+            }
+        }
+    });
+    match &v.patch {
+        Ok(Some(fixes)) => {
+            for f in fixes {
+                ui.label(format!("• {f}"));
+            }
+            if confirming {
+                ui.label("Writes a copy with a fixed header to the export folder; the pixel data is copied byte for byte.");
+                ui.horizontal(|ui| {
+                    if ui.button("Patch").clicked() {
+                        actions.push(Action::PatchDo);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        actions.push(Action::PatchCancel);
+                    }
+                });
+            } else if ui.button("Patch header…").clicked() {
+                actions.push(Action::PatchAsk);
+            }
+        }
+        Ok(None) => {}
+        Err(reason) => {
+            ui.colored_label(RED, format!("Cannot patch: {reason}"));
+        }
+    }
+    if let Some(l) = last {
+        ui.label(egui::RichText::new(l).small());
     }
 }
 
@@ -642,6 +710,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let (target, busy) = (model.target, model.busy());
     let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
     let toml_read_only = toml_read_only_reason(model);
+    let header = model.dds_header(key);
+    let confirming = model.dds_patch.confirming.as_deref() == Some(key);
+    let last = model.dds_patch.last.clone();
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());
@@ -665,7 +736,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 ItemStatus::NeedsDecision | ItemStatus::Ready => ui.label(""),
             };
             if kind == ItemKind::Dds {
-                ui.label("Already a DDS file; it is not converted.");
+                ui.label(
+                    "Already a DDS file; it is not converted (opt in with reencode in sdc.toml).",
+                );
+                if let Some(v) = &header {
+                    dds_header_panel(ui, v, confirming, last.as_deref(), &mut actions);
+                }
             }
             if let Some(out) = packed_output {
                 if ui.button("Show packed output").clicked() {
@@ -681,6 +757,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 busy,
                 compact,
                 toml_read_only: toml_read_only.clone(),
+                warnings: &warnings,
             };
             match &status {
                 ItemStatus::Skipped(r) => {
@@ -712,6 +789,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             Action::Clear(f) => model.clear_field(key, f),
             Action::Decide(a) => model.decide(key, a),
             Action::Select(k) => model.select_item(&k),
+            Action::PatchTag(t) => model.set_dds_patch_tag(key, t),
+            Action::PatchAsk => model.dds_patch.confirming = Some(key.to_string()),
+            Action::PatchCancel => model.dds_patch.confirming = None,
+            Action::PatchDo => {
+                // The result line lands in `dds_patch.last`, shown under the panel.
+                let _ = model.patch_dds_header(key);
+            }
         }
     }
 }

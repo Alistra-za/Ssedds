@@ -892,3 +892,113 @@ fn the_filter_row_is_box_and_disabled() {
     let h = leaf_with_policy(engine::config::AlphaPolicy::Cutout);
     assert!(h.get_by_value("Filter: Box").accesskit_node().is_disabled());
 }
+
+#[test]
+fn an_8_bit_emissive_says_why_it_is_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures/pbr");
+    std::fs::create_dir_all(&t).unwrap();
+    image::ImageBuffer::from_fn(16, 16, |x, _| image::Rgb([(x * 16) as u8, 40u8, 20]))
+        .save(t.join("lamp_g.png"))
+        .unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(d.path().join("textures"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.select_item("pbr/lamp_g.png");
+    let mut h = harness(m);
+    h.run();
+    // Exact and unique: shown once, under Compression, without the code prefix of the Warnings list.
+    h.get_by_label("8-bit source, no HDR → BC7 sRGB");
+}
+
+/// Controller ruling F2 (M6 Task 11): an RGBA16F preview is tone-mapped, so its sRGB / UNORM toggle is disabled.
+#[test]
+fn an_rgba16f_preview_disables_the_srgb_unorm_toggle() {
+    use engine::config::Format;
+    use engine::dds::*;
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let mut levels = vec![];
+    let mut s = 16u32;
+    loop {
+        levels.push(vec![0u8; level_size(Format::Rgba16f, s, s)]);
+        if s == 1 {
+            break;
+        }
+        s /= 2;
+    }
+    let desc = DdsDesc {
+        width: 16,
+        height: 16,
+        format: Format::Rgba16f,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    std::fs::write(
+        root.join("landscape/sky.dds"),
+        dds_bytes(&desc, &levels).unwrap(),
+    )
+    .unwrap();
+    let mut model = opened(d.path());
+    model.expand("landscape/sky.dds");
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = harness(model);
+    h.run();
+    assert!(matches!(
+        &h.state().preview.encoded,
+        sdc_gui::model::preview::EncodedState::Done(o) if o.result.format == Format::Rgba16f
+    ));
+    // The header panel's tag radios are also labelled sRGB / UNORM: take the toolbar's toggles.
+    let radio = eframe::egui::accesskit::Role::RadioButton;
+    for label in ["sRGB", "UNORM"] {
+        let toggles: Vec<_> = h
+            .query_all_by_label(label)
+            .filter(|n| n.accesskit_node().role() != radio)
+            .collect();
+        assert_eq!(toggles.len(), 1, "{label}");
+        assert!(toggles[0].accesskit_node().is_disabled(), "{label}");
+    }
+}
+
+#[test]
+fn a_dds_with_undeclared_mips_offers_a_header_patch_and_writes_a_copy() {
+    use engine::config::Format;
+    use engine::dds::*;
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let mut levels = vec![];
+    let mut s = 64u32;
+    loop {
+        levels.push(vec![0u8; level_size(Format::Bc7, s, s)]);
+        if s == 1 {
+            break;
+        }
+        s /= 2;
+    }
+    let mut b = dds_bytes(
+        &DdsDesc {
+            width: 64,
+            height: 64,
+            format: Format::Bc7,
+            srgb: false,
+            header: ResolvedHeader::Dx10,
+        },
+        &levels,
+    )
+    .unwrap();
+    b[28..32].copy_from_slice(&1u32.to_le_bytes());
+    let src = root.join("landscape/broken.dds");
+    std::fs::write(&src, &b).unwrap();
+    let mut m = opened(d.path());
+    m.select_item("landscape/broken.dds");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("mip count 1 → 7");
+    press(&mut h, "Patch header…");
+    press(&mut h, "Patch");
+    let out = d.path().join("export/landscape/broken.dds");
+    let patched = std::fs::read(&out).expect("a patched copy in the export folder");
+    assert_eq!(&patched[148..], &b[148..]);
+    assert_eq!(std::fs::read(&src).unwrap(), b, "the source is untouched");
+    h.get_by_label_contains("DDS-HEADER-PATCHED");
+}

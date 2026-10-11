@@ -74,9 +74,13 @@ pub fn format_options(target: Target) -> Vec<Format> {
         Format::Bc5,
         Format::Bc6hUf16,
         Format::Bc7,
+        Format::Rgba8,
+        Format::R8,
+        Format::Rg8,
+        Format::Rgba16f,
     ]
     .into_iter()
-    .filter(|f| *f != Format::Bc6hUf16 || target == Target::Cs)
+    .filter(|f| !f.is_hdr() || target == Target::Cs)
     .collect()
 }
 
@@ -98,6 +102,13 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
     let cutout = is_cutout(p);
     match field {
         "color.tag" if p.format == Format::Bc6hUf16 => Some("BC6H has no _SRGB form"),
+        "color.tag" if p.format == Format::Rgba16f => Some("float formats have no _SRGB form"),
+        "color.tag" if matches!(p.format, Format::R8 | Format::Rg8) => {
+            Some("R8 and RG8 have no _SRGB form")
+        }
+        "encoder.effort" | "encoder.perceptual" if !p.format.is_block() => {
+            Some("no encoder runs for uncompressed formats")
+        }
         "color.tag" if target != Target::Cs => Some("_SRGB is only written under cs"),
         "encoder.perceptual"
             if !(p.subtype.category() == Category::Color
