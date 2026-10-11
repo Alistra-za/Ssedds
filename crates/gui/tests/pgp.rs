@@ -524,3 +524,70 @@ fn an_entry_switches_a_default_on_only_true_key_off_by_writing_false() {
     );
     assert_eq!(v["parallax"], json!(true));
 }
+
+use sdc_gui::pgp::validate::*;
+
+fn keywords_in(v: &Value, out: &mut std::collections::BTreeSet<String>, under_properties: bool) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m {
+                if !under_properties {
+                    out.insert(k.clone());
+                }
+                // `examples` and `default` hold instance data, not schema.
+                if k != "examples" && k != "default" {
+                    keywords_in(x, out, k == "properties" || k == "definitions");
+                }
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| keywords_in(x, out, false)),
+        _ => {}
+    }
+}
+
+#[test]
+fn the_validator_covers_every_keyword_the_schema_uses() {
+    let schema: Value = serde_json::from_str(sdc_gui::pgp::schema::SCHEMA_JSON).unwrap();
+    let mut used = std::collections::BTreeSet::new();
+    keywords_in(&schema, &mut used, false);
+    let annotations = [
+        "$schema",
+        "$id",
+        "title",
+        "description",
+        "examples",
+        "default",
+        "definitions",
+        "properties",
+    ];
+    for k in used {
+        assert!(
+            KEYWORDS.contains(&k.as_str()) || annotations.contains(&k.as_str()),
+            "the vendored schema uses '{k}', which validate.rs does not implement (DECISIONS P12)"
+        );
+    }
+}
+
+#[test]
+fn written_documents_validate_and_bad_ones_do_not() {
+    let e = entry(
+        &[
+            ("emissive", json!(true)),
+            ("emissive_color", json!([255, 0, 0])),
+            ("glint", json!(true)),
+        ],
+        "a",
+    );
+    validate(&document(&s(&[("specular_level", json!(0.04))]), &[e]).to_value()).unwrap();
+    // An entry with no match key, a removed key, an unknown key, a wrong type, a short colour.
+    for bad in [
+        json!({ "default": {}, "entries": [ { "emissive": true } ] }),
+        json!({ "default": {}, "entries": [ { "match_diffuse": "a", "pbr": true } ] }),
+        json!({ "default": {}, "entries": [ { "match_diffuse": "a", "nope": 1 } ] }),
+        json!({ "default": {}, "entries": [ { "match_diffuse": 3 } ] }),
+        json!({ "default": {}, "entries": [ { "match_diffuse": "a", "subsurface_color": [1, 1] } ] }),
+        json!({ "entries": [] }),
+    ] {
+        assert!(validate(&bad).is_err(), "{bad}");
+    }
+}

@@ -1,0 +1,157 @@
+//! A draft-07 subset validator for the vendored PGPatcher schema (DECISIONS P12): exactly the keywords that schema
+//! uses. A test fails if the schema starts using another one. Validation is a safety net that should never fire:
+//! the writer builds documents from the same key table.
+use super::schema::SCHEMA_JSON;
+use serde_json::Value;
+use std::sync::OnceLock;
+
+pub const KEYWORDS: &[&str] = &[
+    "type",
+    "properties",
+    "additionalProperties",
+    "required",
+    "items",
+    "minItems",
+    "maxItems",
+    "$ref",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+];
+
+fn schema() -> &'static Value {
+    static S: OnceLock<Value> = OnceLock::new();
+    S.get_or_init(|| serde_json::from_str(SCHEMA_JSON).expect("the vendored schema parses"))
+}
+
+fn resolve<'a>(root: &'a Value, r: &str) -> Option<&'a Value> {
+    let path = r.strip_prefix("#/")?;
+    path.split('/').try_fold(root, |v, part| v.get(part))
+}
+
+fn type_ok(t: &str, v: &Value) -> bool {
+    match t {
+        "object" => v.is_object(),
+        "array" => v.is_array(),
+        "string" => v.is_string(),
+        "number" => v.is_number(),
+        "integer" => v.is_i64() || v.is_u64() || v.as_f64().is_some_and(|f| f.fract() == 0.0),
+        "boolean" => v.is_boolean(),
+        "null" => v.is_null(),
+        _ => false,
+    }
+}
+
+fn check(root: &Value, s: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {
+    let Some(s) = s.as_object() else {
+        if s == &Value::Bool(false) {
+            errs.push(format!("{at}: not allowed"));
+        }
+        return;
+    };
+    if let Some(r) = s.get("$ref").and_then(Value::as_str) {
+        match resolve(root, r) {
+            Some(t) => check(root, t, v, at, errs),
+            None => errs.push(format!("{at}: unresolved {r}")),
+        }
+    }
+    if let Some(t) = s.get("type") {
+        let ok = match t {
+            Value::String(t) => type_ok(t, v),
+            Value::Array(ts) => ts.iter().filter_map(Value::as_str).any(|t| type_ok(t, v)),
+            _ => true,
+        };
+        if !ok {
+            errs.push(format!("{at}: expected {t}"));
+            return;
+        }
+    }
+    if let (Some(req), Some(o)) = (s.get("required").and_then(Value::as_array), v.as_object()) {
+        for r in req.iter().filter_map(Value::as_str) {
+            if !o.contains_key(r) {
+                errs.push(format!("{at}: missing '{r}'"));
+            }
+        }
+    }
+    if let Some(o) = v.as_object() {
+        let props = s.get("properties").and_then(Value::as_object);
+        for (k, x) in o {
+            match props.and_then(|p| p.get(k)) {
+                Some(ps) => check(root, ps, x, &format!("{at}.{k}"), errs),
+                None => {
+                    if s.get("additionalProperties") == Some(&Value::Bool(false)) {
+                        errs.push(format!("{at}: unknown key '{k}'"));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(a) = v.as_array() {
+        if let Some(n) = s.get("minItems").and_then(Value::as_u64) {
+            if (a.len() as u64) < n {
+                errs.push(format!("{at}: needs at least {n} items"));
+            }
+        }
+        if let Some(n) = s.get("maxItems").and_then(Value::as_u64) {
+            if (a.len() as u64) > n {
+                errs.push(format!("{at}: needs at most {n} items"));
+            }
+        }
+        if let Some(items) = s.get("items") {
+            for (i, x) in a.iter().enumerate() {
+                check(root, items, x, &format!("{at}[{i}]"), errs);
+            }
+        }
+    }
+    let passes = |sub: &Value| {
+        let mut e = vec![];
+        check(root, sub, v, at, &mut e);
+        e.is_empty()
+    };
+    if let Some(all) = s.get("allOf").and_then(Value::as_array) {
+        for sub in all {
+            check(root, sub, v, at, errs);
+        }
+    }
+    if let Some(any) = s.get("anyOf").and_then(Value::as_array) {
+        if !any.iter().any(passes) {
+            errs.push(format!("{at}: matches none of anyOf"));
+        }
+    }
+    if let Some(one) = s.get("oneOf").and_then(Value::as_array) {
+        let n = one.iter().filter(|x| passes(x)).count();
+        if n != 1 {
+            errs.push(format!("{at}: matches {n} of oneOf, needs exactly 1"));
+        }
+    }
+    if let Some(not) = s.get("not") {
+        if passes(not) {
+            errs.push(format!("{at}: must not match 'not'"));
+        }
+    }
+    if let Some(cond) = s.get("if") {
+        let branch = if passes(cond) {
+            s.get("then")
+        } else {
+            s.get("else")
+        };
+        if let Some(b) = branch {
+            check(root, b, v, at, errs);
+        }
+    }
+}
+
+pub fn validate(doc: &Value) -> Result<(), Vec<String>> {
+    let root = schema();
+    let mut errs = vec![];
+    check(root, root, doc, "$", &mut errs);
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
+}
