@@ -48,7 +48,7 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
     use engine::config::Category;
     let is_pbr = |s: Subtype| {
         s.id().starts_with("pbr_")
-            || matches!(s, Subtype::Rmaos | Subtype::Rfaos | Subtype::CoatNormal)
+            || matches!(s, Subtype::Rmaos | Subtype::SkinRfaos | Subtype::CoatNormal)
     };
     let kept: Vec<Subtype> = Subtype::ALL.into_iter().filter(|s| keep(*s)).collect();
     let mut groups: Vec<(&'static str, Vec<Subtype>)> = vec![(

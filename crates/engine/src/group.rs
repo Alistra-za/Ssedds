@@ -4,9 +4,9 @@ use crate::discover::{InputFile, InputKind};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Spec §6.1 suffix list, longest first so `_msn` wins over `_n` and `_envmask` over `_m`.
-pub const SUFFIXES: [&str; 19] = [
-    "envmask", "rmaos", "rfaos", "flow", "msn", "cnr", "crn", "em", "bl", "sk", "n", "p", "m", "g",
-    "s", "f", "b", "d", "e",
+pub const SUFFIXES: [&str; 20] = [
+    "envmask", "rmaos", "rfaos", "flow", "msn", "cnr", "crn", "wet", "em", "bl", "sk", "n", "p",
+    "m", "g", "s", "f", "b", "d", "e",
 ];
 
 /// Splits one recognised suffix off a stem (case-insensitive). The suffix is returned lower-case;

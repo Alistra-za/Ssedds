@@ -141,13 +141,15 @@ pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
     }
     let st = item.job.as_ref()?.profile.subtype;
     Some(match st {
-        Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse => SlotKind::Diffuse,
+        Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::SkinAlbedo => {
+            SlotKind::Diffuse
+        }
         Subtype::PbrNormal | Subtype::Normal | Subtype::LandscapeNormal | Subtype::Msn => {
             SlotKind::Normal
         }
         Subtype::PbrEmissive | Subtype::Glow => SlotKind::Emissive,
         Subtype::Height => SlotKind::Height,
-        Subtype::Rmaos | Subtype::Rfaos => SlotKind::Rmaos,
+        Subtype::Rmaos | Subtype::SkinRfaos => SlotKind::Rmaos,
         Subtype::CoatNormal => SlotKind::Coat,
         Subtype::PbrFuzz => SlotKind::Fuzz,
         Subtype::PbrSubsurface => SlotKind::Subsurface,

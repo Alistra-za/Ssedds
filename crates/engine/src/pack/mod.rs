@@ -33,7 +33,7 @@ impl RecipeKind {
     pub fn subtype(self) -> Subtype {
         match self {
             RecipeKind::Rmaos => Subtype::Rmaos,
-            RecipeKind::Rfaos => Subtype::Rfaos,
+            RecipeKind::Rfaos => Subtype::SkinRfaos,
             RecipeKind::Parallax => Subtype::Height,
             RecipeKind::CpmM => Subtype::ComplexMaterial,
             RecipeKind::VanillaM => Subtype::Envmask,

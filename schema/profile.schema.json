@@ -413,6 +413,7 @@
       "type": "string"
     },
     "Subtype": {
+      "description": "A texture sub-type. `rfaos` is a deprecated alias of `skin_rfaos`: it still loads and is written back as `skin_rfaos`.",
       "enum": [
         "diffuse",
         "landscape_diffuse",
@@ -432,13 +433,17 @@
         "envmask",
         "complex_material",
         "rmaos",
-        "rfaos",
+        "skin_rfaos",
         "flow",
         "height",
         "msn_specular",
         "generic_two_channel",
         "generic_data",
-        "hdr_sky"
+        "hdr_sky",
+        "skin_albedo",
+        "skin_sk",
+        "skin_wet",
+        "rfaos"
       ],
       "type": "string"
     },

@@ -59,7 +59,7 @@ encoder = { backend = "rgbcx" }
 alpha = { policy = "data", exact_opaque = true }
 [subtypes.rmaos]
 alpha = { policy = "data" }
-[subtypes.rfaos]
+[subtypes.skin_rfaos]
 alpha = { policy = "data" }
 [subtypes.flow]
 format = "bc5"
@@ -79,6 +79,16 @@ alpha = { policy = "data" }
 color = { content = "linear", tag = "n/a" }
 format = "bc6h_uf16"
 encoder = { backend = "ispc_bc6h" }
+# Advanced skin (DECISIONS Note R-skin-1). Albedo is UNORM, not sRGB: the CS skin shader reads it that way.
+[subtypes.skin_albedo]
+color = { content = "srgb", tag = "unorm" }
+# _sk keeps only the red channel.
+[subtypes.skin_sk]
+format = "bc4"
+encoder = { backend = "rgbcx" }
+# _wet is a normal with a binary mask in alpha (BC7); Resolve switches grey content to a BC4 height map.
+[subtypes.skin_wet]
+alpha = { policy = "data" }
 
 [[rules]]
 match = { glob = "**/interface/**" }

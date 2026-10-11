@@ -216,7 +216,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | `envmask` (Grayscale) | `_m`/`_em`/`_envmask`, alpha absent or 255 | R env mask | linear | `remove`, no alpha written [D#9]; `exact_opaque` on if overridden to BC7 | Box | rgbcx BC4 HQ | `CHAN-NOT-GRAY`, `VAL-PGPATCHER-50` |
 | `complex_material` (Mixed-Packed) | `_m` with non-white alpha | **R env, G gloss, B metal, A height** | linear | `data`; `exact_opaque` on | Box, **full chain to 1×1**; A separate | bc7e veryslow, exact opaque | `VAL-M-*` |
 | `rmaos` (Mixed-Packed) | `_rmaos` | **R rough, G metal, B AO, A specular F0** | linear | `data`; `remove` proposed if A is 255 | Box per channel; R on α = r²; bake (§6) | bc7e veryslow; NVTT optional; BC1 if A removed | `CHAN-AO-INVERTED`, `CHAN-GLOSS-AS-ROUGH` [SC §3] |
-| `rfaos` (Mixed-Packed) | `_rfaos`, CS advanced skin [D-B] | **R rough, G fuzz mask, B AO, A specular F0** | linear | As `rmaos` | As `rmaos`, bake included | As `rmaos` | As `rmaos` |
+| `skin_rfaos` (Mixed-Packed; was `rfaos`, Note R-skin-1) | `_rfaos`, CS advanced skin [D-B] | **R rough, G fuzz mask, B AO, A specular F0** | linear | As `rmaos` | As `rmaos`, bake included | As `rmaos` | As `rmaos` |
 | `flow` (Mixed-Packed) | `_flow` | Signed RG vector (`*2 − 1`) | linear | n/a | Box after decode; **not** normalised | rgbcx BC5 HQ | `DIM-FLOW-SMALL` |
 | `height` (Grayscale) | `_p` | R height; 0.5 neutral in CS PBR | linear | `remove` | Box, never sharpened | rgbcx BC4 HQ | — |
 | `msn_specular` (Grayscale) | `_s` with `_msn` in set | R specular | linear | `remove` | Box | rgbcx BC4 HQ | — |
@@ -442,7 +442,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 6.1 Grouping
 
-**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
+**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_wet`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
 
 ### 6.2 Variance bake into roughness
 
@@ -677,6 +677,9 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `PACK-SIZE-MISMATCH` | error | Sources of one recipe differ in size (lists every source and its size) | Resize the sources |
 | `PACK-CONFLICT` | warning | A pre-packed source and raw maps target one output; pre-packed wins by default. Also the intentional skip of the pre-packed file under `packing.prefer = raw` (Note M9) | Remove one side or set `packing.prefer` |
 | `PACK-UNUSED-INPUT` | warning | Raw map used by no recipe under the target | Change target, set a sub-type, or remove it |
+| `PACK-RECIPE-CONFLICT` | warning | The `packing.recipe` of the `<base>_rfaos` and `<base>_rmaos` `[files]` keys disagree; the `_rfaos` entry wins (Note R-fills-1) | Keep the recipe on one key |
+| `PACK-RECIPE-UNBUILDABLE` | warning | `packing.recipe = rfaos` on a set with no roughness, glossiness or AO source (only metallic), so `_rmaos` was built (Note R-fills-1) | Add a roughness, glossiness or AO map, or drop the setting |
+| `SKIN-WET-FORM` | info | Which form a `skin_wet` file was read as: grey content is a BC4 height map, otherwise a BC7 normal with a binary mask in alpha; a `format` override can change it (Note R-skin-1) | Set `format` to force a form |
 
 ---
 

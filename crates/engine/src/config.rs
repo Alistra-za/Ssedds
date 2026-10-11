@@ -13,11 +13,57 @@ macro_rules! cfg_enum {
 
 cfg_enum!(Target, "lowercase" { Cs, Cpm, Vanilla });
 cfg_enum!(Category, "snake_case" { Color, Normal, MixedPacked, Grayscale, Hdr });
-cfg_enum!(Subtype, "snake_case" {
-    Diffuse, LandscapeDiffuse, PbrAlbedo, PbrEmissive, Glow, PbrSubsurface, PbrFuzz, SubsurfaceTint,
-    BacklightTint, UiSky, Normal, LandscapeNormal, PbrNormal, Msn, CoatNormal, Envmask, ComplexMaterial,
-    Rmaos, Rfaos, Flow, Height, MsnSpecular, GenericTwoChannel, GenericData, HdrSky
-});
+/// A texture sub-type. `skin_rfaos` was `rfaos` before the Advanced skin sub-types were prefixed (DECISIONS Note
+/// R-skin-1): the old id still loads, and the new one is written back.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+#[schemars(transform = subtype_schema)]
+pub enum Subtype {
+    Diffuse,
+    LandscapeDiffuse,
+    PbrAlbedo,
+    PbrEmissive,
+    Glow,
+    PbrSubsurface,
+    PbrFuzz,
+    SubsurfaceTint,
+    BacklightTint,
+    UiSky,
+    Normal,
+    LandscapeNormal,
+    PbrNormal,
+    Msn,
+    CoatNormal,
+    Envmask,
+    ComplexMaterial,
+    Rmaos,
+    #[serde(alias = "rfaos")]
+    SkinRfaos,
+    Flow,
+    Height,
+    MsnSpecular,
+    GenericTwoChannel,
+    GenericData,
+    HdrSky,
+    SkinAlbedo,
+    SkinSk,
+    SkinWet,
+}
+
+/// The schema lists the deprecated id `rfaos` next to `skin_rfaos`, so an old file still validates.
+fn subtype_schema(s: &mut schemars::Schema) {
+    if let Some(serde_json::Value::Array(ids)) = s.get_mut("enum") {
+        ids.push("rfaos".into());
+    }
+    s.insert(
+        "description".into(),
+        "A texture sub-type. `rfaos` is a deprecated alias of `skin_rfaos`: it still loads and is written back as \
+         `skin_rfaos`."
+            .into(),
+    );
+}
 cfg_enum!(ColorContent, "lowercase" { Srgb, Linear });
 cfg_enum!(ColorTag, "lowercase" { Srgb, Unorm, NotApplicable = "n/a" });
 cfg_enum!(AlphaPolicy, "snake_case" { Remove, Cutout, Blend, CutoutBlend, Data });
@@ -165,7 +211,7 @@ pub enum MipLevels {
 }
 
 impl Subtype {
-    pub const ALL: [Subtype; 25] = {
+    pub const ALL: [Subtype; 28] = {
         use Subtype::*;
         [
             Diffuse,
@@ -186,13 +232,16 @@ impl Subtype {
             Envmask,
             ComplexMaterial,
             Rmaos,
-            Rfaos,
+            SkinRfaos,
             Flow,
             Height,
             MsnSpecular,
             GenericTwoChannel,
             GenericData,
             HdrSky,
+            SkinAlbedo,
+            SkinSk,
+            SkinWet,
         ]
     };
 
@@ -200,10 +249,10 @@ impl Subtype {
         use Subtype::*;
         match self {
             Diffuse | LandscapeDiffuse | PbrAlbedo | PbrEmissive | Glow | PbrSubsurface
-            | PbrFuzz | SubsurfaceTint | BacklightTint | UiSky => Category::Color,
-            Normal | LandscapeNormal | PbrNormal | Msn | CoatNormal => Category::Normal,
-            Envmask | Height | MsnSpecular => Category::Grayscale,
-            ComplexMaterial | Rmaos | Rfaos | Flow | GenericTwoChannel | GenericData => {
+            | PbrFuzz | SubsurfaceTint | BacklightTint | UiSky | SkinAlbedo => Category::Color,
+            Normal | LandscapeNormal | PbrNormal | Msn | CoatNormal | SkinWet => Category::Normal,
+            Envmask | Height | MsnSpecular | SkinSk => Category::Grayscale,
+            ComplexMaterial | Rmaos | SkinRfaos | Flow | GenericTwoChannel | GenericData => {
                 Category::MixedPacked
             }
             HdrSky => Category::Hdr,
@@ -220,11 +269,14 @@ impl Subtype {
 
     /// Alpha meaning depends on the mesh (NiAlphaProperty), so it is never a high-confidence guess [SC §1].
     pub fn alpha_from_mesh(self) -> bool {
-        matches!(self, Subtype::Diffuse | Subtype::PbrAlbedo | Subtype::UiSky)
+        matches!(
+            self,
+            Subtype::Diffuse | Subtype::PbrAlbedo | Subtype::UiSky | Subtype::SkinAlbedo
+        )
     }
 
     pub fn is_roughness_member(self) -> bool {
-        matches!(self, Subtype::Rmaos | Subtype::Rfaos)
+        matches!(self, Subtype::Rmaos | Subtype::SkinRfaos)
     }
 
     pub fn id(self) -> String {
@@ -237,6 +289,13 @@ impl Subtype {
 }
 
 impl Format {
+    pub fn id(self) -> String {
+        serde_json::to_value(self)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
     pub fn block_bytes(self) -> usize {
         match self {
             Format::Bc1 | Format::Bc4 => 8,
@@ -386,13 +445,13 @@ mod tests {
 
     #[test]
     fn subtypes_map_to_the_categories_of_section_4_1() {
-        assert_eq!(Subtype::ALL.len(), 25);
+        assert_eq!(Subtype::ALL.len(), 28);
         assert_eq!(Subtype::PbrEmissive.category(), Category::Color);
         assert_eq!(Subtype::Msn.category(), Category::Normal);
         assert_eq!(Subtype::Envmask.category(), Category::Grayscale);
         assert_eq!(Subtype::Flow.category(), Category::MixedPacked);
         assert_eq!(Subtype::HdrSky.category(), Category::Hdr);
-        assert!(Subtype::Rfaos.is_roughness_member());
+        assert!(Subtype::SkinRfaos.is_roughness_member());
         assert!(Subtype::PbrFuzz.is_pbr_color());
         assert!(!Subtype::Glow.is_pbr_color());
         assert_eq!(Subtype::ComplexMaterial.id(), "complex_material");
@@ -421,7 +480,7 @@ mod tests {
         }
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 25);
+        assert_eq!(ids.len(), 28);
     }
 
     /// M6: coverage preservation only ever applies to alpha-tested policies; `on` cannot force it onto blended

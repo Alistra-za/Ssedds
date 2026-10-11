@@ -1008,7 +1008,7 @@ fn rfaos_is_bc7_unorm_with_data_alpha() {
         "{:?}",
         warnings(&o)
     );
-    assert_profile(&o, "skin_rfaos.png", "rfaos", "data", false, "bc7");
+    assert_profile(&o, "skin_rfaos.png", "skin_rfaos", "data", false, "bc7");
     assert_eq!(
         planned(&o, "skin_rfaos.png")["profile"]["color"]["tag"],
         "unorm"
@@ -1075,7 +1075,7 @@ fn two_to_one_sets_keep_their_own_chains() {
     }
     assert_profile(&o, "iron_n.png", "pbr_normal", "remove", false, "bc7");
     assert_profile(&o, "iron_rmaos.png", "rmaos", "data", false, "bc7");
-    assert_profile(&o, "skin_rfaos.png", "rfaos", "data", false, "bc7");
+    assert_profile(&o, "skin_rfaos.png", "skin_rfaos", "data", false, "bc7");
 }
 
 #[test]

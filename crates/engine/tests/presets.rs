@@ -372,6 +372,9 @@ fn pack_codes_are_in_the_catalogue() {
         ("PACK-SIZE-MISMATCH", Severity::Error),
         ("PACK-CONFLICT", Severity::Warning),
         ("PACK-UNUSED-INPUT", Severity::Warning),
+        ("PACK-RECIPE-CONFLICT", Severity::Warning),
+        ("PACK-RECIPE-UNBUILDABLE", Severity::Warning),
+        ("SKIN-WET-FORM", Severity::Info),
     ] {
         let c = Code::parse(s).unwrap();
         assert_eq!((c.as_str(), c.severity()), (s, sev));

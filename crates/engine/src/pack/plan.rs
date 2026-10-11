@@ -92,8 +92,9 @@ pub struct Candidate {
     pub job: PackJob,
     /// Channels that took a neutral default (index, slot): one `PACK-DEFAULTED` each.
     pub defaulted: Vec<(usize, Slot)>,
-    /// A `packing.recipe` notice (`PACK-CONFLICT`): the setting was not followed as written, or two keys disagree.
-    pub notes: Vec<String>,
+    /// A `packing.recipe` notice: `PACK-RECIPE-CONFLICT` (the `_rfaos` and `_rmaos` keys disagree) or
+    /// `PACK-RECIPE-UNBUILDABLE` (`rfaos` was asked for on a set that cannot build it).
+    pub notes: Vec<(Code, String)>,
 }
 
 pub struct PackPlan {
@@ -247,11 +248,11 @@ fn pass1_profile(
 fn chosen_recipe(
     ctx: &ResolveCtx,
     set: &TextureSet,
-    members: &BTreeMap<PathBuf, &InputFile>,
+    member: &dyn Fn(&Path) -> InputFile,
     raw: &[RawInput],
     pa: &Analysis,
     pinfo: &SourceInfo,
-) -> (PackRecipe, Option<String>) {
+) -> (PackRecipe, Option<(Code, String)>) {
     if ctx.target != Target::Cs {
         return (PackRecipe::Auto, None);
     }
@@ -264,7 +265,7 @@ fn chosen_recipe(
     };
     let first = &base.sources()[0].0;
     let read = |kind| {
-        let vin = virtual_input(members[first], kind);
+        let vin = virtual_input(&member(first), kind);
         (
             slash(&vin.rel.with_extension("")),
             pass1_profile(ctx, set, &vin, kind, pa, pinfo)
@@ -277,11 +278,11 @@ fn chosen_recipe(
     let mut note = None;
     let pick = if on_rfaos != PackRecipe::Auto {
         if on_rmaos != PackRecipe::Auto && on_rmaos != on_rfaos {
-            note = Some(format!(
+            note = Some((Code::PackRecipeConflict, format!(
                 "packing.recipe disagrees: {rfaos_key} says {}, {rmaos_key} says {}; the _rfaos entry wins",
                 on_rfaos.id(),
                 on_rmaos.id()
-            ));
+            )));
         }
         on_rfaos
     } else {
@@ -295,13 +296,57 @@ fn chosen_recipe(
     {
         return (
             PackRecipe::Auto,
-            Some(format!(
+            Some((Code::PackRecipeUnbuildable, format!(
                 "packing.recipe = rfaos needs a roughness, glossiness or AO source; built _{} instead",
                 base.kind.suffix()
-            )),
+            ))),
         );
     }
     (pick, note)
+}
+
+/// Whether the set holds or builds an `_rfaos` (Advanced skin, DECISIONS Note R-skin-1): an `_rfaos` member, or a
+/// raw-map recipe that resolves to `_rfaos` (an explicit `packing.recipe`, or `auto` with a fuzz source). Called at
+/// suggestion time, before Pass 1, from the raw roles the set's suffixes name; `this` is any member of the set (it
+/// supplies the folder and base the packed output's `[files]` key is read from).
+pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile) -> bool {
+    if ctx.target != Target::Cs {
+        return false;
+    }
+    if set.suffixes.contains("rfaos") {
+        return true;
+    }
+    let raw: Vec<RawInput> = RawMap::ALL
+        .iter()
+        .filter(|r| set.suffixes.contains(&r.id()))
+        .map(|&role| RawInput {
+            path: PathBuf::from(format!("{}.{}", set.key, role.id())),
+            role,
+        })
+        .collect();
+    if raw.is_empty() {
+        return false;
+    }
+    let (pa, pinfo) = placeholder();
+    // The packed output's key is built from a raw map's name, so give it one: `this` may be `x_sk` or `x`.
+    let stem = this
+        .rel
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let base = split_suffix_with(&stem, ctx.registry.alias_table()).base;
+    let ext = this
+        .rel
+        .extension()
+        .map_or_else(|| "png".to_string(), |e| e.to_string_lossy().into_owned());
+    let mut this = this.clone();
+    this.rel = this.rel.with_file_name(format!("{base}_ao.{ext}"));
+    let (choice, _) = chosen_recipe(ctx, set, &|_| this.clone(), &raw, &pa, &pinfo);
+    recipes_for_with(ctx.target, &raw, choice)
+        .0
+        .iter()
+        .any(|r| r.kind == RecipeKind::Rfaos)
 }
 
 /// Pass 1 over every set. `jobs` holds every resolved job of the batch and is changed in place: consumed raw jobs
@@ -350,7 +395,8 @@ pub fn plan_packing(
         if raw.is_empty() {
             continue;
         }
-        let (choice, recipe_note) = chosen_recipe(ctx, set, &members, &raw, &pa, &pinfo);
+        let (choice, recipe_note) =
+            chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &pa, &pinfo);
         let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice);
         let mut unused: Vec<(PathBuf, String)> =
             unused.into_iter().map(|u| (u.path, u.reason)).collect();
@@ -588,9 +634,9 @@ pub fn finish_recipe(
             );
         }
     }
-    for note in &c.notes {
+    for (code, note) in &c.notes {
         job.warnings
-            .push(Warning::new(Code::PackConflict, format!("{out}: {note}")));
+            .push(Warning::new(*code, format!("{out}: {note}")));
     }
     for p in non_gray {
         job.warnings.push(Warning::new(

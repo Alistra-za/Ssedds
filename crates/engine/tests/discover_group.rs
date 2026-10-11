@@ -51,7 +51,7 @@ fn rfaos_and_envmask_are_recognised() {
         split_suffix("rock_envmask"),
         ("rock".into(), Some("envmask".into()))
     );
-    assert_eq!(SUFFIXES.len(), 19);
+    assert_eq!(SUFFIXES.len(), 20);
 }
 
 #[test]

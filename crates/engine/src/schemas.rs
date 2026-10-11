@@ -198,6 +198,14 @@ pub fn subtypes_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema 
         props
             .values_mut()
             .for_each(|p| *p = partial.as_value().clone());
+        // The pre-rename id still loads (DECISIONS Note R-skin-1); editors should strike it through.
+        if let Some(old) = props.get_mut("rfaos") {
+            *old = serde_json::json!({
+                "allOf": [partial.as_value().clone()],
+                "deprecated": true,
+                "description": "Deprecated alias of skin_rfaos: it still loads and is written back as skin_rfaos."
+            });
+        }
     }
     s
 }

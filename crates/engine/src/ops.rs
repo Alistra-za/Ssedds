@@ -254,7 +254,8 @@ mod tests {
         assert_eq!(domain_for(&profile(Subtype::PbrEmissive)), Domain::Hdr);
         assert_eq!(domain_for(&profile(Subtype::Rmaos)), Domain::Stored);
         assert!(
-            preprocess(Rgba32F::new(1, 1, [0.5; 4]), &profile(Subtype::Rfaos)).roughness_r_squared
+            preprocess(Rgba32F::new(1, 1, [0.5; 4]), &profile(Subtype::SkinRfaos))
+                .roughness_r_squared
         );
     }
 

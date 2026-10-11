@@ -170,10 +170,10 @@ fn recipe_is_chosen_per_set() {
     assert!(packed(&p, "iron_rmaos.dds").is_none());
 }
 
-fn conflicts(j: &ResolvedJob) -> Vec<String> {
+fn conflicts(j: &ResolvedJob, code: Code) -> Vec<String> {
     j.warnings
         .iter()
-        .filter(|w| w.code == Code::PackConflict)
+        .filter(|w| w.code == code)
         .map(|w| w.message.clone())
         .collect()
 }
@@ -223,7 +223,7 @@ fn conflicting_keys_follow_the_rfaos_key_and_warn() {
     let p = plan(&d);
     let j = packed(&p, "iron_rfaos.dds").expect("the _rfaos key wins");
     assert!(packed(&p, "iron_rmaos.dds").is_none());
-    let c = conflicts(j);
+    let c = conflicts(j, Code::PackRecipeConflict);
     assert_eq!(c.len(), 1, "{c:?}");
     assert!(
         c[0].contains("iron_rfaos") && c[0].contains("iron_rmaos"),
@@ -236,7 +236,7 @@ fn rfaos_on_a_metallic_only_set_says_why_it_builds_rmaos() {
     let d = fixture(&["iron_metallic.png"], RFAOS);
     let p = plan(&d);
     let j = packed(&p, "iron_rmaos.dds").expect("falls back to _rmaos");
-    let c = conflicts(j);
+    let c = conflicts(j, Code::PackRecipeUnbuildable);
     assert_eq!(c.len(), 1, "{c:?}");
     assert!(
         c[0].contains("needs a roughness, glossiness or AO source"),

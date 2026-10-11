@@ -176,7 +176,7 @@ fn vocabulary_splits_to_skyrim_roles() {
         split_suffix("iron_basecolor"),
         ("iron_basecolor".into(), None)
     );
-    assert_eq!(SUFFIXES.len(), 19);
+    assert_eq!(SUFFIXES.len(), 20);
     // longest first, so `_base_color` is one term
     assert_eq!(VOCABULARY.len(), 31);
     assert!(VOCABULARY

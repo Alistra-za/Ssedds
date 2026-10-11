@@ -1089,6 +1089,7 @@ impl Engine {
                 set_suffixes: &set.suffixes,
                 alpha: AlphaContent::None,
                 is_float: false,
+                advanced_skin: false,
             });
             let members = set.members.iter().map(|&m| slash(&files[m].path)).collect();
             rep.emit(
