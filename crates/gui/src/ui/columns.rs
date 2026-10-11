@@ -4,7 +4,6 @@ use crate::model::items::{ItemStatus, TextureItem};
 use crate::model::{AppModel, Selection};
 use eframe::egui;
 use engine::events::RecipeStatus;
-use std::collections::HashMap;
 
 pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
@@ -141,8 +140,9 @@ fn tile(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, idx: u
             });
         })
         .response
-        .interact(egui::Sense::click())
+        .interact(egui::Sense::click_and_drag())
         .on_hover_text(tile_tooltip(item));
+    resp.dnd_set_drag_payload(crate::ui::sets_column::DragItem(key.clone()));
     if resp.double_clicked() {
         model.expand(&key);
     } else if resp.clicked() {
@@ -156,6 +156,14 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         let n = model.undecided();
         if n > 0 {
             ui.colored_label(AMBER, format!("{n} need a decision"));
+        }
+        let not_in = model.not_in_set_count();
+        if not_in > 0
+            && ui
+                .link(egui::RichText::new(format!("{not_in} not in a set")).color(AMBER))
+                .clicked()
+        {
+            model.filter.not_in_set = true;
         }
     });
     let changed = model.items.iter().filter(|i| i.changed_on_disk).count();
@@ -209,13 +217,6 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         });
 }
 
-/// What a click in the Sets column asks of the model; applied after drawing, which only reads the model.
-enum Click {
-    Set(String),
-    Item(String),
-    Expand(String),
-}
-
 pub(super) fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color32>) {
     match s {
         RecipeStatus::Run => ("run", None),
@@ -231,7 +232,8 @@ pub(super) fn member(
     selected: bool,
     thumbs: &mut ThumbCache,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(MEMBER, MEMBER), egui::Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(MEMBER, MEMBER), egui::Sense::click_and_drag());
     if ui.is_rect_visible(rect) {
         match thumbs.get(ui.ctx(), item) {
             Some(t) => egui::Image::new(&t)
@@ -282,91 +284,5 @@ pub fn set_label(export_root: &str, key: &str) -> String {
         k[export_root.len()..].to_string()
     } else {
         k
-    }
-}
-
-pub fn sets(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
-    ui.heading("Sets");
-    ui.separator();
-    if model.sets.is_empty() {
-        if model.root.is_some() && !model.busy() {
-            ui.weak("No sets.");
-        }
-        return;
-    }
-    let export_root = export_prefix(model);
-    let mut click = None;
-    {
-        let by_key: HashMap<&str, &TextureItem> =
-            model.items.iter().map(|i| (i.key.as_str(), i)).collect();
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for set in &model.sets {
-                    let set_selected =
-                        matches!(&model.selection, Selection::Set(k) if *k == set.key);
-                    let stroke = if set_selected {
-                        ui.visuals().selection.stroke
-                    } else {
-                        ui.visuals().widgets.noninteractive.bg_stroke
-                    };
-                    let pill = ui.scope_builder(
-                        egui::UiBuilder::new().sense(egui::Sense::click()),
-                        |ui| {
-                            ui.style_mut().interaction.selectable_labels = false;
-                            egui::Frame::group(ui.style())
-                                .corner_radius(12.0)
-                                .stroke(stroke)
-                                .show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.label(
-                                        egui::RichText::new(set_label(&export_root, &set.key))
-                                            .strong(),
-                                    );
-                                    ui.horizontal_wrapped(|ui| {
-                                        for mk in &set.members {
-                                            let Some(item) = by_key.get(mk.as_str()) else {
-                                                continue;
-                                            };
-                                            let selected = matches!(
-                                                &model.selection,
-                                                Selection::Item(k) if k == mk
-                                            );
-                                            let r = member(ui, item, selected, thumbs);
-                                            if r.double_clicked() {
-                                                click = Some(Click::Expand(mk.clone()));
-                                            } else if r.clicked() {
-                                                click = Some(Click::Item(mk.clone()));
-                                            }
-                                        }
-                                    });
-                                    for recipe in &set.recipes {
-                                        let (word, color) = status_text(recipe.status);
-                                        let line = format!("{}: {word}", recipe.subtype.id());
-                                        let text = egui::RichText::new(line).small();
-                                        let label = match color {
-                                            Some(c) => text.color(c),
-                                            None => text.weak(),
-                                        };
-                                        let r = ui.label(label);
-                                        if let Some(reason) = &recipe.reason {
-                                            r.on_hover_text(reason);
-                                        }
-                                    }
-                                });
-                        },
-                    );
-                    // A member's own click is taken first; this one is the pill's background.
-                    if pill.response.clicked() && click.is_none() {
-                        click = Some(Click::Set(set.key.clone()));
-                    }
-                }
-            });
-    }
-    match click {
-        Some(Click::Set(k)) => model.select_set(&k),
-        Some(Click::Item(k)) => model.select_item(&k),
-        Some(Click::Expand(k)) => model.expand(&k),
-        None => {}
     }
 }

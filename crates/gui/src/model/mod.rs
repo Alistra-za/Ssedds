@@ -781,13 +781,21 @@ impl AppModel {
             .count()
     }
 
+    /// Whether a texture is in a set of more than itself (the rule of the "Not in a set" filter).
+    fn in_set(&self, i: &TextureItem) -> bool {
+        i.set_key
+            .as_ref()
+            .is_some_and(|k| self.sets.iter().any(|s| &s.key == k && s.members.len() > 1))
+    }
+
+    /// How many textures the "Not in a set" filter would show.
+    pub fn not_in_set_count(&self) -> usize {
+        self.items.iter().filter(|i| !self.in_set(i)).count()
+    }
+
     pub fn visible_items(&self) -> Vec<usize> {
         let q = self.search.to_lowercase();
-        let in_set = |i: &TextureItem| {
-            i.set_key
-                .as_ref()
-                .is_some_and(|k| self.sets.iter().any(|s| &s.key == k && s.members.len() > 1))
-        };
+        let in_set = |i: &TextureItem| self.in_set(i);
         self.items
             .iter()
             .enumerate()

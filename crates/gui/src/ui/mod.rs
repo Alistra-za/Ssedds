@@ -6,6 +6,7 @@ pub mod drawer;
 pub mod header;
 pub mod preview;
 pub mod set_view;
+pub mod sets_column;
 pub mod settings_panel;
 pub mod thumbs;
 
@@ -20,6 +21,7 @@ pub struct State {
     pub drawer: drawer::DrawerState,
     pub advanced: advanced::AdvancedState,
     pub preview: preview::PreviewUi,
+    pub drops: sets_column::DropState,
     /// What is on the GPU; set by the app, empty in tests.
     pub gpu: preview::GpuStatus,
 }
@@ -36,6 +38,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     header::draw(ui, model);
     advanced::draw(ui, model, &mut state.advanced);
+    let (thumbs, drops) = (&mut state.thumbs, &mut state.drops);
     column_panel(
         ui,
         "textures",
@@ -44,7 +47,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         380.0,
         model,
         |ui, model| {
-            columns::textures(ui, model, &mut state.thumbs);
+            columns::textures(ui, model, thumbs);
         },
     );
     column_panel(
@@ -55,7 +58,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         260.0,
         model,
         |ui, model| {
-            columns::sets(ui, model, &mut state.thumbs);
+            sets_column::draw(ui, model, thumbs, drops);
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
