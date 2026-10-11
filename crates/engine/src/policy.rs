@@ -1200,6 +1200,13 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             "CS ignores _flow maps of 32 px or less".into(),
         );
     }
+    if a.icc_profile {
+        add(
+            InIccIgnored,
+            "embedded ICC profile ignored: values are read as stored (colour content as sRGB)"
+                .into(),
+        );
+    }
     if p.encoder.backend == Backend::Nvtt {
         add(
             EncNvttMissing,

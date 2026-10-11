@@ -196,3 +196,23 @@ fn sets_do_not_cross_directories_and_duplicates_ignore_case() {
     assert_eq!(dups.len(), 1);
     assert_eq!(dups[0].len(), 2);
 }
+
+#[test]
+fn folders_discover_every_supported_image_extension() {
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("in");
+    std::fs::create_dir_all(&t).unwrap();
+    for n in [
+        "a.png", "b.tga", "c.tif", "d.tiff", "e.exr", "f.hdr", "g.bmp", "h.jpg", "i.JPEG", "j.dds",
+        "k.txt",
+    ] {
+        std::fs::write(t.join(n), b"x").unwrap();
+    }
+    let found = engine::discover::discover(&[t], &d.path().join("out"), false).unwrap();
+    let names: Vec<String> = found
+        .iter()
+        .map(|f| f.rel.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 10, "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with(".txt")));
+}

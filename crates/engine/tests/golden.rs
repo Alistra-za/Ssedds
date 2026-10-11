@@ -1223,8 +1223,7 @@ fn bc6h_emissive_in_a_pbr_set() {
     );
 }
 
-/// A float HDR emissive (linear radiance up to 4.0). The loader reads float32 TIFF (EXR is not a supported input:
-/// `image` is built with png/tga/tiff only).
+/// A float HDR emissive (linear radiance up to 4.0). The loader reads float32 TIFF, OpenEXR and Radiance HDR.
 fn hdr_emissive() -> DynamicImage {
     DynamicImage::ImageRgb32F(ImageBuffer::from_fn(64, 64, |x, y| {
         Rgb([4.0 * x as f32 / 63.0, 2.0 * y as f32 / 63.0, 0.25])
@@ -2151,4 +2150,165 @@ fn a_tilt_just_above_the_noise_floor_still_widens() {
             assert_eq!(got > 0.1, widens, "k = {k} mip {level}: {got}");
         }
     }
+}
+
+/// M6 (DECISIONS S10): an OpenEXR and a Radiance HDR emissive in a PBR folder are float HDR sources → BC6H.
+#[test]
+fn exr_and_radiance_hdr_float_emissives_are_bc6h() {
+    for ext in ["exr", "hdr"] {
+        let d = tempfile::tempdir().unwrap();
+        put(
+            d.path(),
+            &format!("textures/pbr/lamp_g.{ext}"),
+            hdr_emissive(),
+        );
+        let o = convert(d.path(), Target::Cs, &[], &[]);
+        assert_eq!(
+            (o.summary.converted, o.summary.exit_code()),
+            (1, 0),
+            "{ext}: {:?}",
+            warnings(&o)
+        );
+        assert_eq!(warnings(&o), vec![], "{ext}");
+        assert_profile(
+            &o,
+            &format!("lamp_g.{ext}"),
+            "pbr_emissive",
+            "remove",
+            false,
+            "bc6h_uf16",
+        );
+        assert_dds(
+            &dds(d.path(), "textures/pbr/lamp_g.dds"),
+            DdsPixelFormat::Bc6hUf16,
+            HeaderKind::Dx10,
+            7,
+        );
+    }
+}
+
+/// M6: a BMP diffuse converts like a PNG (lossless 8-bit source).
+#[test]
+fn bmp_diffuse_is_bc7_unorm() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.bmp", rgb(64));
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["file:**/rock.bmp.subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(warnings(&o), vec![]);
+    assert_dds(
+        &dds(d.path(), "textures/a/rock.dds"),
+        DdsPixelFormat::Bc7 { srgb: false },
+        HeaderKind::Dx10,
+        7,
+    );
+}
+
+/// M6: a JPEG diffuse converts; its mip 0 matches the decoded JPEG within BC7 error.
+#[test]
+fn jpeg_diffuse_is_bc7_unorm_close_to_the_decoded_jpeg() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.jpg", rgb(64));
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["file:**/rock.jpg.subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/a/rock.dds");
+    assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 7);
+    let src = image::open(d.path().join("in/textures/a/rock.jpg"))
+        .unwrap()
+        .to_rgb8();
+    for (i, p) in levels(&f)[0].iter().enumerate() {
+        let s = src.get_pixel(i as u32 % 64, i as u32 / 64).0;
+        for c in 0..3 {
+            assert!(
+                (p[c] as i32 - s[c] as i32).abs() <= 8,
+                "texel {i} c{c}: {} vs {}",
+                p[c],
+                s[c]
+            );
+        }
+    }
+}
+
+/// DECISIONS S8: an embedded ICC profile is an info, never a block; the output matches the same PNG without it.
+#[test]
+fn an_icc_profile_is_reported_as_info_and_ignored() {
+    use image::ImageEncoder;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("in/textures/a/rock.png");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let px = rgb(64).to_rgb8().into_raw();
+    let mut f = std::fs::File::create(&p).unwrap();
+    let mut enc = image::codecs::png::PngEncoder::new(&mut f);
+    let mut icc = vec![0u8; 132];
+    icc[..4].copy_from_slice(&132u32.to_be_bytes());
+    icc[36..40].copy_from_slice(b"acsp");
+    enc.set_icc_profile(icc).unwrap();
+    enc.write_image(&px, 64, 64, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    drop(f);
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["file:**/rock.png.subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(
+        warning_of(&o, "rock.png", Code::InIccIgnored).severity,
+        Severity::Info
+    );
+    let plain = tempfile::tempdir().unwrap();
+    put(plain.path(), "textures/a/rock.png", rgb(64));
+    let o2 = convert(
+        plain.path(),
+        Target::Vanilla,
+        &["file:**/rock.png.subtype=diffuse"],
+        &[],
+    );
+    assert!(!warnings(&o2).contains(&Code::InIccIgnored));
+    let out = |p: &Path| std::fs::read(p.join("out/textures/a/rock.dds")).unwrap();
+    assert_eq!(
+        out(d.path()),
+        out(plain.path()),
+        "the profile changes no output byte"
+    );
+}
+
+/// Review Focus 4: a broken file of each new type fails alone with IN-DECODE; the batch goes on.
+#[test]
+fn broken_new_format_files_fail_with_in_decode_and_the_batch_continues() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/good.png", rgb(64));
+    for (n, bytes) in [
+        ("bad_exr.exr", &b"\x76\x2f\x31\x01garbage"[..]),
+        ("bad_hdr.hdr", &b"#?RADIANCE\n"[..]),
+        ("bad_jpg.jpg", &b""[..]),
+        ("bad_bmp.bmp", &b"BM"[..]),
+    ] {
+        std::fs::write(d.path().join("in/textures/a").join(n), bytes).unwrap();
+    }
+    let o = convert(d.path(), Target::Vanilla, &["subtype=diffuse"], &[]);
+    assert_eq!(
+        (o.summary.converted, o.summary.failed),
+        (1, 4),
+        "{:?}",
+        warnings(&o)
+    );
+    assert_eq!(o.summary.exit_code(), 1);
+    assert!(
+        warnings(&o)
+            .iter()
+            .filter(|c| **c == Code::InDecode)
+            .count()
+            == 4
+    );
 }

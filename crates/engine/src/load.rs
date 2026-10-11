@@ -1,10 +1,10 @@
-//! Load PNG/TGA/TIFF (8/16-bit) into float RGBA.
+//! Load PNG/TGA/TIFF/BMP/JPEG/OpenEXR/Radiance HDR into float RGBA.
 //!
 //! Values are stored exactly as decoded (`k / 255.0` for 8-bit, `k / 65535.0` for 16-bit);
 //! no colour-space conversion happens here, the sRGB decode is done later in preprocess.
-//! Embedded ICC profiles are ignored by the `image` crate; the info event the spec (§5.1)
-//! asks for is tracked under milestone M6.
+//! Embedded ICC profiles are detected and ignored (DECISIONS S8).
 use crate::image::{Rgba32F, SourceInfo};
+use image::ImageDecoder;
 use std::path::{Path, PathBuf};
 
 /// Largest accepted width or height (D3D11 texture limit).
@@ -18,9 +18,23 @@ pub enum LoadError {
     Decode { path: PathBuf, msg: String },
 }
 
-/// Decode `path` to float RGBA. The dimension limit is checked from the header
-/// before the full pixel buffer is decoded or allocated.
+/// What `load_image_meta` learns besides the pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SourceMeta {
+    /// The file embeds a non-empty ICC profile; values are still read as stored (DECISIONS S8, `IN-ICC-IGNORED`).
+    pub icc_profile: bool,
+    /// DXGI format of a DDS input (DECISIONS S6); `None` for images.
+    pub dds_dxgi: Option<u32>,
+}
+
+/// Decode `path` to float RGBA. The dimension limit is checked from the header before the full pixel buffer is
+/// decoded or allocated.
 pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
+    load_image_meta(path).map(|(img, info, _)| (img, info))
+}
+
+/// `load_image`, with the ICC flag (and, from Task 7, a DDS input's DXGI format).
+pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError> {
     let err = |e: image::ImageError| LoadError::Decode {
         path: path.to_path_buf(),
         msg: e.to_string(),
@@ -41,7 +55,14 @@ pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
             msg: e.to_string(),
         })?;
     reader.no_limits();
-    let img = reader.decode().map_err(err)?;
+    let mut decoder = reader.into_decoder().map_err(err)?;
+    // A decoder that cannot read a profile, or finds none, is not an error: the profile is ignored either way.
+    let icc_profile = decoder
+        .icc_profile()
+        .ok()
+        .flatten()
+        .is_some_and(|p| !p.is_empty());
+    let img = image::DynamicImage::from_decoder(decoder).map_err(err)?;
     let ct = img.color();
     let channels = ct.channel_count();
     let info = SourceInfo {
@@ -58,5 +79,9 @@ pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
             px,
         },
         info,
+        SourceMeta {
+            icc_profile,
+            dds_dxgi: None,
+        },
     ))
 }

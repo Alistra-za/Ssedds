@@ -4,7 +4,9 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub const IMAGE_EXTS: [&str; 4] = ["png", "tga", "tif", "tiff"];
+pub const IMAGE_EXTS: [&str; 9] = [
+    "png", "tga", "tif", "tiff", "exr", "hdr", "bmp", "jpg", "jpeg",
+];
 
 /// Folder the engine writes provenance to; never treated as input.
 const SDC_DIR: &str = "_sdc";

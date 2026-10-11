@@ -11,7 +11,7 @@ use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
 use crate::events::{EventKind, Reporter, SkipKind, Stage};
 use crate::group::{group_sets_with, join_skin_wet, member_split, TextureSet};
-use crate::load::{load_image, LoadError};
+use crate::load::{load_image_meta, LoadError};
 use crate::manifest::{
     bc1_model_id, output_key, profile_sha256, sha256_file, EncoderVersions, Manifest,
     ManifestEntry, PresetRef, ENGINE_VERSION,
@@ -817,10 +817,11 @@ impl Engine {
                     hit
                 }
                 None => {
-                    let (img, info) = load_image(&f.path)?;
+                    let (img, info, meta) = load_image_meta(&f.path)?;
                     cache.count_loads(1);
                     enter(Stage::Analyse);
-                    let a = analyse(&img, &info);
+                    let mut a = analyse(&img, &info);
+                    a.icc_profile = meta.icc_profile;
                     if let Some(s) = source {
                         cache.put_file(&f.path, s, a.clone(), info, cache.make_thumb(&img, &info));
                     }

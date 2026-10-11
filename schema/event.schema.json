@@ -352,6 +352,7 @@
         "IN-DECODE",
         "IN-NONFINITE",
         "IN-FLOAT-LDR",
+        "IN-ICC-IGNORED",
         "OUT-UNKNOWN-EXISTING",
         "PACK-DEFAULTED",
         "PACK-SIZE-MISMATCH",

@@ -1,5 +1,5 @@
 use engine::load::*;
-use image::{ImageBuffer, Luma, LumaA, Rgb, Rgba};
+use image::{ExtendedColorType, ImageBuffer, ImageEncoder, Luma, LumaA, Rgb, Rgba};
 
 #[test]
 fn png8_rgba_loads_exactly() {
@@ -111,4 +111,119 @@ fn decodes_images_beyond_default_512_mib_limit() {
     let (img, info) = load_image(&p).unwrap();
     assert_eq!((img.width, img.height, info.bit_depth), (12000, 12000, 8));
     assert_eq!(img.at(11999, 11999)[1], 20.0 / 255.0);
+}
+
+#[test]
+fn exr_and_hdr_load_as_float_rgb() {
+    let d = tempfile::tempdir().unwrap();
+    let img = ImageBuffer::from_fn(4, 4, |x, y| {
+        Rgb([if (x, y) == (1, 1) { 2.5f32 } else { 0.25 }, 0.5, 0.75])
+    });
+    for (name, tol) in [("a.exr", 1e-6f32), ("a.hdr", 0.02)] {
+        let p = d.path().join(name);
+        image::DynamicImage::ImageRgb32F(img.clone())
+            .save(&p)
+            .unwrap();
+        let (got, info) = load_image(&p).unwrap();
+        assert_eq!(
+            (info.bit_depth, info.channels, info.has_alpha, info.is_float),
+            (32, 3, false, true),
+            "{name}"
+        );
+        assert!(
+            (got.at(1, 1)[0] - 2.5).abs() <= 2.5 * tol,
+            "{name}: {:?}",
+            got.at(1, 1)
+        );
+        assert_eq!(got.at(0, 0)[3], 1.0, "{name}");
+    }
+}
+
+#[test]
+fn exr_with_alpha_loads_rgba_float() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.exr");
+    image::DynamicImage::ImageRgba32F(ImageBuffer::from_fn(2, 2, |_, _| {
+        Rgba([4.0f32, 0.5, 0.25, 0.5])
+    }))
+    .save(&p)
+    .unwrap();
+    let (img, info) = load_image(&p).unwrap();
+    assert_eq!(
+        (info.channels, info.has_alpha, info.is_float),
+        (4, true, true)
+    );
+    assert_eq!(img.at(1, 1), [4.0, 0.5, 0.25, 0.5]);
+}
+
+#[test]
+fn bmp_loads_exactly_and_jpeg_within_its_loss() {
+    let d = tempfile::tempdir().unwrap();
+    let src = ImageBuffer::from_fn(16, 16, |x, y| Rgb([x as u8 * 16, y as u8 * 16, 90u8]));
+    let bmp = d.path().join("a.bmp");
+    src.save(&bmp).unwrap();
+    let (img, info) = load_image(&bmp).unwrap();
+    assert_eq!(
+        (info.bit_depth, info.channels, info.has_alpha, info.is_float),
+        (8, 3, false, false)
+    );
+    assert_eq!(
+        img.at(3, 5),
+        [48.0 / 255.0, 80.0 / 255.0, 90.0 / 255.0, 1.0]
+    );
+    let jpg = d.path().join("a.jpg");
+    src.save(&jpg).unwrap();
+    let (img, info) = load_image(&jpg).unwrap();
+    assert_eq!(
+        (info.bit_depth, info.channels, info.is_float),
+        (8, 3, false)
+    );
+    for (x, y) in [(0, 0), (7, 9), (15, 15)] {
+        let want = src.get_pixel(x, y).0;
+        for (c, &w) in want.iter().enumerate() {
+            let got = (img.at(x, y)[c] * 255.0).round() as i32;
+            assert!(
+                (got - w as i32).abs() <= 12,
+                "({x},{y}) c{c}: {got} vs {}",
+                w
+            );
+        }
+    }
+}
+
+/// A minimal ICC header: size (big-endian) then the `acsp` signature at byte 36.
+fn icc_blob() -> Vec<u8> {
+    let mut v = vec![0u8; 132];
+    v[..4].copy_from_slice(&132u32.to_be_bytes());
+    v[36..40].copy_from_slice(b"acsp");
+    v
+}
+
+#[test]
+fn an_embedded_icc_profile_is_reported_and_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    let px: Vec<u8> = (0..2 * 2 * 3).map(|i| (i * 20) as u8).collect();
+    let with = d.path().join("icc.png");
+    let mut f = std::fs::File::create(&with).unwrap();
+    let mut enc = image::codecs::png::PngEncoder::new(&mut f);
+    enc.set_icc_profile(icc_blob()).unwrap();
+    enc.write_image(&px, 2, 2, ExtendedColorType::Rgb8).unwrap();
+    drop(f);
+    let without = d.path().join("plain.png");
+    image::codecs::png::PngEncoder::new(std::fs::File::create(&without).unwrap())
+        .write_image(&px, 2, 2, ExtendedColorType::Rgb8)
+        .unwrap();
+    let (a, _, meta) = load_image_meta(&with).unwrap();
+    let (b, _, plain) = load_image_meta(&without).unwrap();
+    assert!(meta.icc_profile && !plain.icc_profile);
+    assert_eq!(a, b, "the profile changes no value");
+    assert_eq!(meta.dds_dxgi, None);
+}
+
+#[test]
+fn a_garbage_exr_is_a_decode_error_not_a_panic() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("bad.exr");
+    std::fs::write(&p, [0x76, 0x2f, 0x31, 0x01, 2, 0, 0, 0, b'x', b'y']).unwrap();
+    assert!(matches!(load_image(&p), Err(LoadError::Decode { .. })));
 }

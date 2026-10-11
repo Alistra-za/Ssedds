@@ -5,7 +5,8 @@
 //! codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a `[files]` key of `sdc.toml` that
 //! matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or set that no longer exists, M3b), PACK-RECIPE-CONFLICT and
 //! PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set could not follow, packing-fills Task 1) and SKIN-WET-FORM
-//! (which form `skin_wet` was read as, Task 1b).
+//! (which form `skin_wet` was read as, Task 1b) and
+//! IN-ICC-IGNORED (an embedded ICC profile, M6).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +90,7 @@ codes! {
     InDecode = "IN-DECODE" => Error,
     InNonfinite = "IN-NONFINITE" => Warning,
     InFloatLdr = "IN-FLOAT-LDR" => Blocking,
+    InIccIgnored = "IN-ICC-IGNORED" => Info,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
     PackDefaulted = "PACK-DEFAULTED" => Warning,
     PackSizeMismatch = "PACK-SIZE-MISMATCH" => Error,
@@ -160,6 +162,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 63);
+        assert_eq!(Code::ALL.len(), 64);
+        assert_eq!(Code::InIccIgnored.severity(), Severity::Info);
     }
 }

@@ -56,6 +56,8 @@ pub struct Analysis {
     pub red_mostly_high: bool,
     /// Largest Rec. 709 luma over the image (not clamped, so HDR sources report above 1).
     pub peak_luminance: f32,
+    /// The source embeds an ICC profile, which sdc ignores (DECISIONS S8). Set by the caller from `SourceMeta`.
+    pub icc_profile: bool,
 }
 
 /// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
@@ -145,6 +147,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         blue_mostly_black: bb as f64 / n > 0.5,
         red_mostly_high: rh as f64 / n > 0.5,
         peak_luminance: peak,
+        icc_profile: false,
     }
 }
 
