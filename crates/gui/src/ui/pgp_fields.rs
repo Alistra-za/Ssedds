@@ -1,7 +1,327 @@
-//! The PGPatcher settings column of the set editor (filled in by M3b Task 15).
+//! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced keys for the
+//! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
+use crate::model::sets::{set_views, SetView, SlotFill, SlotKind};
 use crate::model::AppModel;
+use crate::pgp::prefix::{match_mode, MatchMode};
+use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
+use crate::pgp::settings::{
+    blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
+};
+use crate::pgp::writer::FIXED_NUMBERS;
 use eframe::egui;
+use serde_json::{json, Value};
 
-pub fn panel(ui: &mut egui::Ui, _model: &mut AppModel, _set: &str) {
-    ui.label("PGPatcher settings");
+type Edit = (String, Option<Value>);
+
+const READ_ONLY: &str = "sdc-project.toml is read-only";
+/// Fuzz and a coat normal cannot be in the same set (owner, 2026-10-10).
+const FUZZ_BLOCKED_BY_COAT: &str = "off: the set has a coat normal (_cnr)";
+const COAT_NORMAL_BLOCKED_BY_FUZZ: &str = "off: the set has a fuzz texture (_f)";
+
+/// `glint` and `fuzz` (the Object rows) are switched by `glint_on` / `fuzz_on`; every other key is its own switch.
+fn edit_key(key: &str) -> &str {
+    match key {
+        "glint" => "glint_on",
+        "fuzz" => "fuzz_on",
+        k => k,
+    }
+}
+
+fn feature_of(key: &str) -> Option<Feature> {
+    let key = edit_key(key);
+    FEATURE_KEYS
+        .iter()
+        .find(|(_, k)| *k == key)
+        .map(|(f, _)| *f)
+}
+
+/// The feature's display name: its switch key without the GUI-only `_on`.
+fn feature_name(f: Feature) -> &'static str {
+    feature_key(f).trim_end_matches("_on")
+}
+
+fn group_open(g: Group, own: &Settings) -> bool {
+    let f = match g {
+        Group::Emissive => Feature::Emissive,
+        Group::Parallax => Feature::Parallax,
+        Group::Subsurface => Feature::Subsurface,
+        Group::Multilayer => Feature::Multilayer,
+        Group::Glint => Feature::Glint,
+        Group::Fuzz => Feature::Fuzz,
+        _ => return true,
+    };
+    feature_on(own, f) && blocked_by(own, f).is_none()
+}
+
+fn group_title(g: Group) -> &'static str {
+    match g {
+        Group::Match => "Match",
+        Group::Material => "Material",
+        Group::Features => "Features",
+        Group::Emissive => "Emissive settings",
+        Group::Parallax => "Parallax settings",
+        Group::Subsurface => "Subsurface settings",
+        Group::Multilayer => "Coat settings",
+        Group::Glint => "Glint settings",
+        Group::Fuzz => "Fuzz settings",
+        Group::Vertex => "Vertex colours and depth",
+        Group::Locks => "Texture locks",
+        Group::Uv => "UV and cubemap",
+        Group::Slots => "Slots",
+    }
+}
+
+const MAIN: [Group; 9] = [
+    Group::Match,
+    Group::Material,
+    Group::Features,
+    Group::Emissive,
+    Group::Parallax,
+    Group::Subsurface,
+    Group::Multilayer,
+    Group::Glint,
+    Group::Fuzz,
+];
+const ADVANCED: [Group; 5] = [
+    Group::Match,
+    Group::Uv,
+    Group::Vertex,
+    Group::Locks,
+    Group::Multilayer,
+];
+
+struct Ctx {
+    /// The set's own settings (there are no inherited ones: the `default` block is fixed).
+    own: Settings,
+    derived: Option<String>,
+    set: String,
+    /// Why every control is disabled, when the sets document is read-only.
+    read_only: Option<String>,
+    coat_filled: bool,
+    fuzz_filled: bool,
+}
+
+fn context(model: &AppModel, set: &str) -> Ctx {
+    let v = set_views(model)
+        .into_iter()
+        .find(|v| v.id.eq_ignore_ascii_case(set));
+    let filled =
+        |v: &SetView, s: SlotKind| !matches!(v.slots.get(&s), None | Some(SlotFill::Empty));
+    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+    Ctx {
+        own: v.as_ref().map(|v| v.settings.clone()).unwrap_or_default(),
+        coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
+        fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
+        derived: v.and_then(|v| v.derived_match),
+        set: set.to_string(),
+        read_only: (!editable).then(|| model.banner.clone().unwrap_or_else(|| READ_ONLY.into())),
+    }
+}
+
+/// The main groups of set `set`.
+pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
+    let c = context(model, set);
+    let mut edits: Vec<Edit> = vec![];
+    for g in MAIN {
+        if !group_open(g, &c.own) {
+            continue;
+        }
+        let keys: Vec<&KeySpec> = KEYS
+            .iter()
+            .filter(|k| k.group == g && !k.advanced && k.kind != KeyKind::Slot)
+            .collect();
+        group(ui, &c, "pgp", g, &keys, &mut edits);
+    }
+    for (k, v) in edits {
+        model.set_json_value(set, &k, v);
+    }
+}
+
+/// The advanced keys of set `set` (the Advanced drawer).
+pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
+    let c = context(model, set);
+    let mut edits: Vec<Edit> = vec![];
+    let mode = match match_mode(&c.own) {
+        MatchMode::Diffuse => "match_diffuse".to_string(),
+        MatchMode::Normal => "match_normal".into(),
+        MatchMode::PathContains => "path_contains".into(),
+        MatchMode::Slot(n) => format!("match{n}"),
+    };
+    ui.label(format!("Matching by: {mode}"));
+    for g in ADVANCED {
+        if !group_open(g, &c.own) {
+            continue;
+        }
+        let keys: Vec<&KeySpec> = KEYS.iter().filter(|k| k.group == g && k.advanced).collect();
+        group(ui, &c, "pgp-adv", g, &keys, &mut edits);
+    }
+    for (k, v) in edits {
+        model.set_json_value(set, &k, v);
+    }
+}
+
+fn group(
+    ui: &mut egui::Ui,
+    c: &Ctx,
+    salt: &str,
+    g: Group,
+    keys: &[&KeySpec],
+    edits: &mut Vec<Edit>,
+) {
+    if keys.is_empty() {
+        return;
+    }
+    ui.label(egui::RichText::new(group_title(g)).strong());
+    egui::Grid::new((salt, g as u8, &c.set))
+        .num_columns(3)
+        .show(ui, |ui| {
+            for k in keys {
+                row(ui, k, c, edits);
+                ui.end_row();
+            }
+        });
+    ui.add_space(6.0);
+}
+
+/// Why this key cannot be changed now, if it cannot. A key that is already on can always be turned off.
+fn disabled_reason(k: &KeySpec, c: &Ctx) -> Option<String> {
+    if let Some(why) = &c.read_only {
+        return Some(why.clone());
+    }
+    let on = c.own.get(edit_key(k.key)).and_then(Value::as_bool) == Some(true);
+    if on {
+        return None;
+    }
+    if let Some(b) = feature_of(k.key).and_then(|f| blocked_by(&c.own, f)) {
+        return Some(format!("off: {} is on", feature_name(b)));
+    }
+    match k.key {
+        "fuzz" if c.coat_filled => Some(FUZZ_BLOCKED_BY_COAT.into()),
+        "coat_normal" if c.fuzz_filled => Some(COAT_NORMAL_BLOCKED_BY_FUZZ.into()),
+        _ => None,
+    }
+}
+
+/// One row: label, control, and reset. A disabled control says why on hover.
+fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
+    let key = edit_key(k.key);
+    let own = c.own.get(key);
+    if matches!(k.kind, KeyKind::OnlyTrue | KeyKind::Object) {
+        // The checkbox carries the label, so the label is the clickable part.
+        ui.label("");
+    } else {
+        ui.label(k.label);
+    }
+    let reason = disabled_reason(k, c);
+    let r = ui.add_enabled_ui(reason.is_none(), |ui| {
+        if own.is_none() && matches!(k.kind, KeyKind::Number | KeyKind::Rgb | KeyKind::Rgba) {
+            // An unset value shows what applies, greyed.
+            ui.style_mut().visuals.override_text_color = Some(ui.visuals().weak_text_color());
+        }
+        control(ui, k, own.cloned(), c, edits);
+    });
+    if let Some(why) = reason {
+        r.response.on_disabled_hover_text(why);
+    }
+    if own.is_some() && c.read_only.is_none() {
+        if ui
+            .small_button("reset")
+            .on_hover_text("Remove this setting (the default applies)")
+            .clicked()
+        {
+            edits.push((key.to_string(), None));
+        }
+    } else {
+        ui.label("");
+    }
+}
+
+fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits: &mut Vec<Edit>) {
+    let key = edit_key(k.key).to_string();
+    match k.kind {
+        KeyKind::OnlyTrue | KeyKind::Object => {
+            let mut on = value.and_then(|v| v.as_bool()).unwrap_or(false);
+            if ui.checkbox(&mut on, k.label).changed() {
+                edits.push((key, on.then_some(json!(true))));
+            }
+        }
+        KeyKind::Tri => {
+            let cur = value.and_then(|v| v.as_bool());
+            let mut out = None;
+            ui.horizontal(|ui| {
+                for (label, v) in [("not set", None), ("on", Some(true)), ("off", Some(false))] {
+                    if ui.selectable_label(cur == v, label).clicked() && cur != v {
+                        out = Some(v.map(Value::Bool));
+                    }
+                }
+            });
+            if let Some(v) = out {
+                edits.push((key, v));
+            }
+        }
+        KeyKind::Number => {
+            let default = GLINT_DEFAULTS
+                .iter()
+                .chain(FIXED_NUMBERS.iter())
+                .find(|(d, _)| *d == k.key)
+                .map(|(_, x)| *x);
+            let mut x = value.and_then(|v| v.as_f64()).or(default).unwrap_or(0.0);
+            let r = ui.add(egui::DragValue::new(&mut x).speed(0.01).max_decimals(4));
+            if r.changed() {
+                edits.push((key, Some(json!(x))));
+            }
+        }
+        KeyKind::Text => {
+            let id = egui::Id::new(("pgp-text", k.key, &c.set));
+            let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| {
+                value
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default()
+            });
+            let hint = match (k.key, &c.derived) {
+                ("match_diffuse", Some(d)) => format!("{d} (derived)"),
+                ("match_diffuse", None) => "(derived)".to_string(),
+                _ => String::new(),
+            };
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .hint_text(hint)
+                    .desired_width(160.0),
+            );
+            if r.changed() {
+                ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            }
+            // Committed on Enter or focus loss; an empty field removes the key.
+            if r.lost_focus() {
+                ui.data_mut(|d| d.remove::<String>(id));
+                let t = text.trim();
+                edits.push((key, (!t.is_empty()).then(|| json!(t))));
+            }
+        }
+        KeyKind::Rgb | KeyKind::Rgba => {
+            let mut rgb: [i64; 3] = value
+                .and_then(|v| v.as_array().cloned())
+                .map(|a| {
+                    [0, 1, 2].map(|i| {
+                        a.get(i)
+                            .and_then(Value::as_f64)
+                            .map_or(0, |x| x.round() as i64)
+                    })
+                })
+                .unwrap_or([0, 0, 0]);
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                for (i, l) in ["R", "G", "B"].iter().enumerate() {
+                    ui.label(*l);
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut rgb[i]).range(0..=255))
+                        .changed();
+                }
+            });
+            if changed {
+                edits.push((key, Some(json!(rgb))));
+            }
+        }
+        KeyKind::Slot => {}
+    }
 }

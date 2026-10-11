@@ -1,5 +1,5 @@
 mod support;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::AppModel;
 use support::*;
@@ -222,4 +222,266 @@ fn a_member_links_back_to_its_set() {
         h.state().selection,
         sdc_gui::model::Selection::Set(_)
     ));
+}
+
+fn rock_selected(m: &mut AppModel) {
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with("landscape/rock01"))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+}
+
+fn rock_settings(
+    h: &Harness<'static, AppModel>,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    h.state()
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .entries()
+        .into_iter()
+        .find(|e| e.id == "landscape/rock01")
+        .unwrap()
+        .settings
+        .into_iter()
+        .collect()
+}
+
+#[test]
+fn feature_toggles_grey_their_exclusions_and_reveal_their_groups() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Specular level");
+    assert!(
+        h.query_by_label("Displacement scale").is_none(),
+        "parallax group hidden while off"
+    );
+    h.get_by_label("Parallax").click();
+    h.run();
+    h.get_by_label("Displacement scale");
+    h.get_by_label("Hair").click();
+    h.run();
+    let s = rock_settings(&h);
+    assert_eq!(s["parallax"], serde_json::json!(true));
+    assert!(
+        !s.contains_key("hair"),
+        "hair is greyed while parallax is on"
+    );
+}
+
+#[test]
+fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    m.set_json_value(
+        "landscape/rock01",
+        "roughness_scale",
+        Some(serde_json::json!(0.5)),
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Specular level");
+    assert!(
+        h.query_by_label("Defaults").is_none(),
+        "there is no Defaults editor"
+    );
+    let s = rock_settings(&h);
+    assert_eq!(s["roughness_scale"], serde_json::json!(0.5));
+    assert!(!s.contains_key("specular_level"));
+}
+
+#[test]
+fn the_json_name_is_editable_and_undoable() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_name("rock-pack");
+    assert_eq!(sdc_gui::model::pbr_export::json_name(&m), "rock-pack");
+    m.undo();
+    assert_eq!(sdc_gui::model::pbr_export::json_name(&m), "textures");
+}
+
+#[test]
+fn glint_and_fuzz_switch_the_gui_keys_and_exclude_each_other() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    assert!(h.query_by_label("Screen-space scale").is_none());
+    h.get_by_label("Glint").click();
+    h.run();
+    h.get_by_label("Screen-space scale");
+    let s = rock_settings(&h);
+    assert_eq!(s["glint_on"], serde_json::json!(true));
+    assert!(
+        !s.contains_key("glint"),
+        "the switch never writes the table key"
+    );
+    h.get_by_label("Fuzz").click();
+    h.run();
+    assert!(
+        !rock_settings(&h).contains_key("fuzz_on"),
+        "fuzz is greyed while glint is on"
+    );
+}
+
+#[test]
+fn colours_are_edited_as_rgb_0_to_255() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    m.set_json_value(
+        "landscape/rock01",
+        "emissive",
+        Some(serde_json::json!(true)),
+    );
+    m.set_json_value(
+        "landscape/rock01",
+        "emissive_color",
+        Some(serde_json::json!([10, 20, 30])),
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Emissive colour");
+    // Three drag values (R, G, B) hold the 0-255 integers.
+    for v in ["10", "20", "30"] {
+        assert!(
+            h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+                .any(|n| n.value().as_deref() == Some(v)),
+            "a drag value shows {v}"
+        );
+    }
+}
+
+/// Tooltips show at once, so a hover needs no waiting.
+fn instant_tooltips(h: &Harness<'static, AppModel>) {
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+}
+
+#[test]
+fn a_filled_coat_slot_greys_fuzz_with_its_reason() {
+    use sdc_gui::model::sets::{set_views, SlotFill, SlotKind};
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([128u8, 128, 255]))
+        .save(r.join("rock01_cnr.png"))
+        .unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let v = set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap();
+    assert!(
+        !matches!(v.slots.get(&SlotKind::Coat), None | Some(SlotFill::Empty)),
+        "the fixture puts _cnr in the coat slot: {:?}",
+        v.slots
+    );
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    let fuzz = h.get_by_label("Fuzz");
+    assert!(
+        fuzz.accesskit_node().is_disabled(),
+        "fuzz is greyed while the coat slot is filled"
+    );
+    assert!(
+        h.query_by_label_contains("the set has a coat normal")
+            .is_none(),
+        "the reason shows only on hover"
+    );
+    fuzz.hover();
+    h.run();
+    h.run();
+    assert!(
+        h.query_by_label_contains("the set has a coat normal (_cnr)")
+            .is_some(),
+        "the reason shows on hover"
+    );
+    // The coat normal switch is not greyed by this (only by a filled fuzz slot).
+    assert!(!h
+        .get_by_label("Multilayer (coat)")
+        .accesskit_node()
+        .is_disabled());
+}
+
+#[test]
+fn a_read_only_sets_doc_disables_the_controls_and_explains_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    // A sets document that failed to parse is read-only.
+    let bad = d.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::write(bad.join("sdc-project.toml"), "this is = = not toml\n").unwrap();
+    m.sets_doc = Some(sdc_gui::sets_doc::SetsDoc::open(&bad));
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 500.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, "landscape/rock01"),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    instant_tooltips(&h);
+    h.run();
+    let n = h.get_by_label("Parallax");
+    assert!(n.accesskit_node().is_disabled(), "the control is disabled");
+    n.hover();
+    h.run();
+    h.run();
+    assert!(
+        h.query_by_label_contains("read-only").is_some(),
+        "the reason shows on hover"
+    );
+}
+
+#[test]
+fn a_filled_fuzz_slot_greys_the_coat_normal_switch() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([200u8, 200, 200]))
+        .save(r.join("rock01_f.png"))
+        .unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    m.set_json_value(
+        "landscape/rock01",
+        "multilayer",
+        Some(serde_json::json!(true)),
+    );
+    let mut h = harness(m);
+    h.run();
+    let node = h.get_by_label("Coat normal (_cnr)");
+    assert!(node.accesskit_node().is_disabled());
+    assert!(!h
+        .get_by_label("Coat diffuse")
+        .accesskit_node()
+        .is_disabled());
+}
+
+#[test]
+fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    m.settings.advanced_open = true;
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("JSON:");
+    h.get_by_label_contains("PGPatcher (advanced)");
+    h.get_by_label_contains("Matching by: match_diffuse");
+    h.get_by_label("Match normal");
+    h.get_by_label("Lock diffuse");
 }

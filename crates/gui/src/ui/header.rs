@@ -76,6 +76,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                     let _ = model.save();
                 }
                 export_folder_button(ui, model);
+                json_name_field(ui, model);
             });
         });
     });
@@ -134,6 +135,43 @@ fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
             // Existing outputs decide which textures are up to date.
             model.replan();
         }
+    }
+}
+
+/// The PGPatcher JSON name (CS only, with a folder open). The default shows as hint text; empty restores it.
+fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
+    if model.target != Target::Cs || model.root.is_none() || model.sets_doc.is_none() {
+        return;
+    }
+    // Right-to-left layout: the field is added first so the label ends up on its left.
+    let id = egui::Id::new("json-name");
+    let mut t = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| {
+        model
+            .sets_doc
+            .as_ref()
+            .and_then(|d| d.json_name())
+            .unwrap_or_default()
+    });
+    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+    let hover = format!(
+        "The PGPatcher JSON is written to {}\\PBRNIFPatcher\\<name>.json",
+        model.export_root().display()
+    );
+    let r = ui
+        .add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut t)
+                .hint_text(crate::model::pbr_export::json_name(model))
+                .desired_width(120.0),
+        )
+        .on_hover_text(hover);
+    ui.label("JSON:");
+    if r.changed() {
+        ui.data_mut(|d| d.insert_temp(id, t.clone()));
+    }
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        model.set_json_name(&t);
     }
 }
 

@@ -998,6 +998,14 @@ impl AppModel {
         });
     }
 
+    /// The PGPatcher JSON file name (header field); empty restores the default (the folder's name). No re-plan (P7).
+    pub fn set_json_name(&mut self, name: &str) {
+        let n = name.trim().to_string();
+        self.edit_docs("JSON name", Some("json_name".into()), false, move |_, s| {
+            s.set_json_name(if n.is_empty() { None } else { Some(&n) })
+        });
+    }
+
     pub fn set_target(&mut self, t: Target) {
         self.edit("Mode", move |p| p.set_target(t));
     }

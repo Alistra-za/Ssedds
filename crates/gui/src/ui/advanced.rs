@@ -52,6 +52,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     }
     let mut actions = vec![];
     let mut close = false;
+    let set_id = selected_set_id(model);
     egui::Panel::right("advanced")
         .default_size(380.0)
         .show(ui, |ui| {
@@ -65,6 +66,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     inspector(ui, model, state);
+                    if let Some(id) = &set_id {
+                        egui::CollapsingHeader::new(
+                            egui::RichText::new("PGPatcher (advanced)").strong(),
+                        )
+                        .default_open(true)
+                        .show(ui, |ui| super::pgp_fields::advanced(ui, model, id));
+                    }
                     batch(ui, model, &mut actions);
                     fill_values(ui, model, &mut actions);
                     preview_settings(ui, model, &mut actions);
@@ -88,6 +96,17 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::Bc1(c) => model.set_bc1_choice(c),
         }
     }
+}
+
+/// The id of the selected set, when a set is selected.
+fn selected_set_id(model: &AppModel) -> Option<String> {
+    let Selection::Set(key) = &model.selection else {
+        return None;
+    };
+    crate::model::sets::set_views(model)
+        .into_iter()
+        .find(|v| &v.key == key)
+        .map(|v| v.id)
 }
 
 /// The selected texture's key and resolved job, when it has one.
