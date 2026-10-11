@@ -34,3 +34,4 @@ hex.workspace = true
 egui_kittest = "=0.36.2"
 tempfile.workspace = true
 image.workspace = true
+walkdir.workspace = true
