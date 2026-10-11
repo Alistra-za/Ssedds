@@ -5,14 +5,12 @@
 //! recipe it picks and removes it from the other: the two never disagree, and the key that holds the choice is
 //! the one the output has after the re-plan (a recipe left on the other key would show up as an unmatched entry).
 //!
-//! Picking `_rfaos` also switches the set to Advanced skin (`skin_albedo`, `skin_sk`), and picking `_rmaos`
-//! switches back, as one undo step. Only members whose sub-type is inferred change, and they are tracked in
-//! `sdc-project.toml` (`[project] auto_skin`) like polish Task 2's `auto_pbr`.
-use super::items::TextureItem;
-use super::sets::{set_views, SlotFill, SlotKind};
+//! Picking `_rfaos` also moves the set to Advanced skin, but only through the engine: with the recipe resolved to
+//! `rfaos` it suggests `skin_albedo` and `skin_sk` for the members whose sub-type is inferred, so nothing else is
+//! written and a member the user set stays put.
 use super::AppModel;
 use crate::project::ProjectDoc;
-use engine::config::{PackRecipe, RawMap, Subtype, Target};
+use engine::config::{PackRecipe, RawMap, Target};
 use engine::pack::{ChannelSource, RecipeKind};
 use serde_json::json;
 
@@ -53,23 +51,6 @@ fn kind_of(choice: PackRecipe) -> Option<RecipeKind> {
     }
 }
 
-/// What switching a set to or from Advanced skin does to its members.
-enum SkinFollow {
-    Nothing,
-    /// Members to switch, with their new sub-type.
-    Switch(Vec<(String, Subtype)>),
-    /// The set's members; those listed in `auto_skin` that still hold their auto value go back to inferred.
-    Revert(Vec<String>),
-}
-
-fn skin_counterpart(st: Subtype) -> Option<Subtype> {
-    match st {
-        Subtype::Diffuse | Subtype::PbrAlbedo => Some(Subtype::SkinAlbedo),
-        Subtype::BacklightTint => Some(Subtype::SkinSk),
-        _ => None,
-    }
-}
-
 impl AppModel {
     /// The recipe a packed output was explicitly given: the `_rfaos` key wins, then the `_rmaos` key, then the
     /// output's own resolved `packing.recipe` (a project or preset value). `Auto` when nobody chose.
@@ -102,6 +83,7 @@ impl AppModel {
             return;
         }
         let (k, field) = (packed_key.to_string(), fill_field(role));
+        self.dropped_fills.remove(packed_key);
         self.edit_docs("Fill value", None, true, move |p, _| match value {
             Some(v) => p.set_file_value(&k, &field, &json!(v)),
             None => p.clear_file_value(&k, &field),
@@ -120,15 +102,24 @@ impl AppModel {
         }
         let key = |kind: RecipeKind| format!("{base}_{}", kind.suffix());
         let (from, to) = (packed_key.to_string(), key(new));
+        let note_key = to.clone();
         let other = key(if new == RecipeKind::Rfaos {
             RecipeKind::Rmaos
         } else {
             RecipeKind::Rfaos
         });
-        let follow = self.skin_follow_of(packed_key, new);
-        let live: Vec<String> = self.items.iter().map(|i| i.key.clone()).collect();
         let moves = current != new;
-        self.edit_docs("Packing recipe", None, true, move |p, s| {
+        // A fill with no channel in the new recipe is removed; the card says so.
+        let dropped: Vec<String> = match (moves, self.project.as_ref()) {
+            (true, Some(p)) => RawMap::ALL
+                .into_iter()
+                .filter(|r| !SHARED_FILLS.contains(r))
+                .filter(|r| p.file_value(&from, &fill_field(*r)).is_some())
+                .map(|r| r.id())
+                .collect(),
+            _ => vec![],
+        };
+        self.edit_docs("Packing recipe", None, true, move |p, _| {
             if moves {
                 // The fills follow the output to its new key; one with no channel there is dropped.
                 for role in RawMap::ALL {
@@ -144,85 +135,19 @@ impl AppModel {
             }
             p.set_file_value(&to, "packing.recipe", &json!(choice));
             p.clear_file_value(&other, "packing.recipe");
-            // P8: with `sdc-project.toml` read-only only the recipe changes (the engine still re-suggests the
-            // inferred members); the switched members could not be recorded, so they are not switched.
-            if s.read_only() {
-                return;
-            }
-            let before = s.auto_skin();
-            let mut auto = before.clone();
-            match follow {
-                SkinFollow::Nothing => {}
-                SkinFollow::Switch(members) => {
-                    for (m, st) in members {
-                        p.set_file_value(&m, "subtype", &json!(st));
-                        if !auto.contains(&m) {
-                            auto.push(m);
-                        }
-                    }
-                }
-                SkinFollow::Revert(members) => {
-                    for m in members {
-                        let held = p.file_value(&m, "subtype");
-                        let is_auto = held == Some(json!(Subtype::SkinAlbedo))
-                            || held == Some(json!(Subtype::SkinSk));
-                        if auto.contains(&m) && is_auto {
-                            p.clear_file_value(&m, "subtype");
-                            auto.retain(|a| *a != m);
-                        }
-                    }
-                }
-            }
-            auto.retain(|a| live.contains(a));
-            if auto != before {
-                s.set_auto_skin(&auto);
-            }
         });
-    }
-
-    /// The members that move with the choice, decided from the plan as it is now: once the recipe is written the
-    /// engine's own suggestions change, so "inferred" must be read first.
-    fn skin_follow_of(&self, packed_key: &str, new: RecipeKind) -> SkinFollow {
-        let views = set_views(self);
-        let Some(v) = views
-            .iter()
-            .find(|v| v.members.iter().any(|m| m == packed_key))
-        else {
-            return SkinFollow::Nothing;
-        };
-        if new != RecipeKind::Rfaos {
-            return SkinFollow::Revert(v.members.clone());
+        self.dropped_fills.remove(&note_key);
+        if !dropped.is_empty() {
+            let why = if new == RecipeKind::Rfaos {
+                "RFAOS has no metallic channel"
+            } else {
+                "RMAOS has no fuzz channel"
+            };
+            self.dropped_fills.insert(
+                note_key,
+                format!("{} fill removed ({why})", dropped.join(", ")),
+            );
         }
-        let diffuse = match v.slots.get(&SlotKind::Diffuse) {
-            Some(SlotFill::Own { item }) => Some(item.as_str()),
-            _ => None,
-        };
-        let switch = v
-            .members
-            .iter()
-            .filter_map(|m| {
-                let it = self.item(m)?;
-                let job = it.job.as_ref()?;
-                if job.pack.is_some() || !self.is_inferred_subtype(it) {
-                    return None;
-                }
-                let st = skin_counterpart(job.profile.subtype)?;
-                // A diffuse sub-type counts only on the set's own Diffuse-slot member.
-                (st != Subtype::SkinAlbedo || diffuse == Some(m.as_str())).then(|| (m.clone(), st))
-            })
-            .collect();
-        SkinFollow::Switch(switch)
-    }
-
-    /// Whether nothing the user wrote decided `item`'s sub-type: no `[files]` value, and the engine's own
-    /// suggestion applied (the rule polish Task 2's PBR follow uses).
-    pub(super) fn is_inferred_subtype(&self, item: &TextureItem) -> bool {
-        use engine::presets::Provenance;
-        let (Some(p), Some(job)) = (self.project.as_ref(), item.job.as_ref()) else {
-            return false;
-        };
-        p.file_value(&item.key, "subtype").is_none()
-            && job.provenance.get("subtype") == Some(&Provenance::Suggestion)
     }
 
     /// The project-wide `defaults.packing.fill.*` values still in `sdc.toml` (the retired global panel's keys).

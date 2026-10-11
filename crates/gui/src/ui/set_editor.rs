@@ -367,6 +367,9 @@ fn packed_controls(
             }
         }
         fill_controls(ui, model, &item.key, acts);
+        if let Some(note) = model.dropped_fills.get(&item.key) {
+            ui.add(egui::Label::new(egui::RichText::new(note).small().weak()).wrap());
+        }
     })
     .response
     .on_disabled_hover_text(why.unwrap_or_default());

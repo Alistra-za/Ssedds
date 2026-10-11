@@ -47,12 +47,6 @@ impl AppModel {
             if s.read_only() {
                 return;
             }
-            // A sub-type the user just chose is no longer an automatic skin one either.
-            let skin = s.auto_skin();
-            if skin.contains(&k) {
-                let kept: Vec<String> = skin.iter().filter(|a| **a != k).cloned().collect();
-                s.set_auto_skin(&kept);
-            }
             let before = s.auto_pbr();
             // A sub-type the user just chose is no longer automatic.
             let mut auto: Vec<String> = before.iter().filter(|a| **a != k).cloned().collect();

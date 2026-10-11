@@ -214,13 +214,13 @@ fn rfaos_shows_a_fuzz_row_hides_metallic_and_switches_the_inferred_members() {
     assert_eq!(p.file_value(RMAOS, "packing.fill.ao"), None);
     assert_eq!(p.file_value(RMAOS, "packing.fill.metallic"), None);
     assert!(m.unmatched_keys.is_empty(), "{:?}", m.unmatched_keys);
-    // The inferred members were switched and recorded.
-    assert_eq!(subtype(m, DIFFUSE), Some(json!("skin_albedo")));
-    assert_eq!(subtype(m, SK), Some(json!("skin_sk")));
+    // The inferred members follow the engine's suggestion: nothing was written for them.
+    assert_eq!(subtype(m, DIFFUSE), None);
+    assert_eq!(subtype(m, SK), None);
     assert_eq!(resolved(m, DIFFUSE), Subtype::SkinAlbedo);
-    let mut auto = m.sets_doc.as_ref().unwrap().auto_skin();
-    auto.sort();
-    assert_eq!(auto, vec![DIFFUSE.to_string(), SK.to_string()]);
+    assert_eq!(resolved(m, SK), Subtype::SkinSk);
+    assert!(!m.sets_doc.as_ref().unwrap().text().contains("auto_skin"));
+    h.get_by_label_contains("metallic fill removed (RFAOS has no metallic channel)");
     let v = set_views(m);
     let v = v.iter().find(|v| v.id == "m/rock01").unwrap();
     assert!(matches!(
@@ -236,32 +236,23 @@ fn rfaos_shows_a_fuzz_row_hides_metallic_and_switches_the_inferred_members() {
 }
 
 #[test]
-fn switching_back_to_rmaos_reverts_only_the_listed_members_still_holding_the_auto_value() {
+fn switching_back_to_rmaos_reverts_the_inferred_members_and_keeps_user_set_ones() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path());
     m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
     idle(&mut m);
-    // A hand edit takes the _sk off the list.
+    assert_eq!(resolved(&m, SK), Subtype::SkinSk);
     m.set_field(SK, "subtype", json!("glow"));
     idle(&mut m);
-    assert_eq!(
-        m.sets_doc.as_ref().unwrap().auto_skin(),
-        vec![DIFFUSE.to_string()]
-    );
     m.set_packing_recipe(RFAOS, PackRecipe::Rmaos);
     idle(&mut m);
-    assert_eq!(
-        subtype(&m, DIFFUSE),
-        None,
-        "the auto member is inferred again"
-    );
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::PbrAlbedo, "inferred again");
+    assert_eq!(subtype(&m, DIFFUSE), None);
     assert_eq!(
         subtype(&m, SK),
         Some(json!("glow")),
         "the hand-set one stays"
     );
-    assert!(m.sets_doc.as_ref().unwrap().auto_skin().is_empty());
-    assert!(!m.sets_doc.as_ref().unwrap().text().contains("auto_skin"));
     let p = m.project.as_ref().unwrap();
     assert_eq!(p.file_value(RMAOS, "packing.recipe"), Some(json!("rmaos")));
     assert_eq!(p.file_value(RFAOS, "packing.recipe"), None);
@@ -279,11 +270,12 @@ fn members_the_user_set_are_left_alone() {
     idle(&mut m);
     assert_eq!(subtype(&m, DIFFUSE), Some(json!("diffuse")));
     assert_eq!(subtype(&m, SK), Some(json!("backlight_tint")));
-    assert!(m.sets_doc.as_ref().unwrap().auto_skin().is_empty());
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::Diffuse);
+    assert_eq!(resolved(&m, SK), Subtype::BacklightTint);
 }
 
 #[test]
-fn a_read_only_project_file_changes_only_the_recipe() {
+fn a_read_only_project_file_does_not_stop_the_recipe() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("sdc-project.toml"), "[[sets]\nbroken").unwrap();
     let mut m = fixture(d.path());
@@ -298,7 +290,11 @@ fn a_read_only_project_file_changes_only_the_recipe() {
         Some(json!("rfaos"))
     );
     assert_eq!(subtype(&m, DIFFUSE), None, "no member was written");
-    assert_eq!(subtype(&m, SK), None);
+    assert_eq!(
+        resolved(&m, DIFFUSE),
+        Subtype::SkinAlbedo,
+        "the engine follows"
+    );
     assert!(m.item(RFAOS).is_some(), "the recipe took effect");
 }
 

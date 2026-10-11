@@ -141,6 +141,8 @@ pub struct AppModel {
     pub search: String,
     pub status_line: String,
     pub banner: Option<String>,
+    /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
+    pub dropped_fills: std::collections::BTreeMap<String, String>,
     pub dialog: Option<Dialog>,
     pub expanded: Option<String>,
     pub export: export::ExportModel,
@@ -210,6 +212,7 @@ impl AppModel {
             filter: Filter::default(),
             search: String::new(),
             status_line: String::new(),
+            dropped_fills: Default::default(),
             banner: None,
             dialog: None,
             expanded: None,
@@ -1057,6 +1060,7 @@ impl AppModel {
     }
 
     fn apply_snapshot(&mut self, s: &history::Snapshot) {
+        self.dropped_fills.clear();
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
         // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
