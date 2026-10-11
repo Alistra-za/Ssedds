@@ -890,7 +890,9 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
     Ok(0)
 }
 
-/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable or refused, else 0; usage errors are 2.
+/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable or refused, else 0; usage errors are 2
+/// (including `--out-dir` resolving to an input itself, DECISIONS S6). A write failure is exit 3 and stops the
+/// batch; files written before it stay written.
 pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
     use engine::dds_patch::{plan_patch, PatchRequest};
     let target = a.target.map_or(Target::Cs, Target::from);
@@ -916,9 +918,35 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
                 .map_err(|_| EngineError::Usage(format!("--format {f}: unknown format")))?,
         );
     }
+    // DECISIONS S6, as convert does (api.rs): canonical, else lexical; the output may not exist yet, so its folder is.
+    let canon = |p: &Path| {
+        std::fs::canonicalize(p).ok().or_else(|| {
+            let dir = std::fs::canonicalize(p.parent()?).ok()?;
+            Some(dir.join(p.file_name()?))
+        })
+    };
+    let lexical = |p: &Path| {
+        std::path::absolute(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_lowercase()
+    };
     let mut names = std::collections::BTreeSet::new();
-    if a.out_dir.is_some() {
+    if let Some(dir) = &a.out_dir {
         for p in &a.dds {
+            let out = dir.join(p.file_name().unwrap_or_default());
+            let same = match (canon(p), canon(&out)) {
+                (Some(x), Some(y)) => {
+                    x.to_string_lossy().to_lowercase() == y.to_string_lossy().to_lowercase()
+                }
+                _ => lexical(p) == lexical(&out),
+            };
+            if same {
+                return Err(EngineError::Usage(format!(
+                    "--out-dir would write over the input {}; use --in-place to rewrite it",
+                    p.display()
+                )));
+            }
             let n = p
                 .file_name()
                 .unwrap_or_default()
@@ -945,8 +973,6 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
         match plan_patch(&bytes, &req) {
             Ok(None) => println!("{shown}: header already valid; nothing to patch"),
             Ok(Some(p)) => {
-                let w = p.warning();
-                println!("{shown}: {}: {}", w.code.as_str(), w.message);
                 if !a.dry_run {
                     let out = match &a.out_dir {
                         Some(dir) => dir.join(path.file_name().unwrap_or_default()),
@@ -955,6 +981,9 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
                     engine::dds::write_atomic(&out, &p.bytes)
                         .map_err(|e| EngineError::Fatal(format!("{}: {e}", out.display())))?;
                 }
+                // After the write, so a failed write never reads as patched.
+                let w = p.warning();
+                println!("{shown}: {}: {}", w.code.as_str(), w.message);
             }
             Err(u) => {
                 let w = u.warning();

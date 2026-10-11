@@ -210,6 +210,15 @@ fn a_failed_in_place_patch_leaves_the_original_byte_identical() {
         before,
         "refused patch writes nothing"
     );
+}
+
+/// Windows only: a read-only file in a writable folder does not stop `rename` on Unix.
+#[cfg(windows)]
+#[test]
+fn a_failed_write_leaves_the_original_byte_identical_and_is_not_reported_patched() {
+    let d = tempfile::tempdir().unwrap();
+    let p = broken(d.path());
+    let before = std::fs::read(&p).unwrap();
     let mut perm = std::fs::metadata(&p).unwrap().permissions();
     perm.set_readonly(true);
     std::fs::set_permissions(&p, perm.clone()).unwrap();
@@ -221,7 +230,17 @@ fn a_failed_in_place_patch_leaves_the_original_byte_identical() {
     #[allow(clippy::permissions_set_readonly_false)]
     perm.set_readonly(false);
     std::fs::set_permissions(&p, perm).unwrap();
-    assert_ne!(code(&o), 0, "write onto a read-only file fails");
+    assert_eq!(
+        code(&o),
+        3,
+        "write onto a read-only file fails: {}",
+        text(&o.stderr)
+    );
+    assert!(
+        !text(&o.stdout).contains("DDS-HEADER-PATCHED"),
+        "{}",
+        text(&o.stdout)
+    );
     assert_eq!(
         std::fs::read(&p).unwrap(),
         before,
@@ -233,4 +252,73 @@ fn a_failed_in_place_patch_leaves_the_original_byte_identical() {
         .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
         .collect();
     assert!(leftovers.is_empty(), "no temp left behind");
+}
+
+/// DECISIONS S6: `--out-dir` that resolves to the input's own folder is refused, never a silent overwrite.
+#[test]
+fn out_dir_equal_to_the_input_folder_is_a_usage_error() {
+    let d = tempfile::tempdir().unwrap();
+    let p = broken(d.path());
+    let before = std::fs::read(&p).unwrap();
+    let o = sdc()
+        .args(["patch-header", "--out-dir"])
+        .arg(d.path())
+        .arg(&p)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    // Another spelling of the same folder.
+    let o = sdc()
+        .args(["patch-header", "--out-dir"])
+        .arg(d.path().join("src").join(".."))
+        .arg(&p)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert_eq!(std::fs::read(&p).unwrap(), before, "source untouched");
+}
+
+#[test]
+fn dry_run_with_out_dir_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let p = broken(d.path());
+    let fixed = d.path().join("fixed");
+    let o = sdc()
+        .args(["patch-header", "--dry-run", "--out-dir"])
+        .arg(&fixed)
+        .arg(&p)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stdout).contains("DDS-HEADER-PATCHED"),
+        "{}",
+        text(&o.stdout)
+    );
+    assert!(!fixed.exists(), "dry run creates nothing");
+}
+
+#[test]
+fn two_inputs_with_one_name_are_refused_with_out_dir() {
+    let d = tempfile::tempdir().unwrap();
+    let p = broken(d.path());
+    let other = d.path().join("b");
+    std::fs::create_dir_all(&other).unwrap();
+    let q = other.join("WALL.dds");
+    std::fs::copy(&p, &q).unwrap();
+    let fixed = d.path().join("fixed");
+    let o = sdc()
+        .args(["patch-header", "--out-dir"])
+        .arg(&fixed)
+        .arg(&p)
+        .arg(&q)
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("two inputs are named"),
+        "{}",
+        text(&o.stderr)
+    );
+    assert!(!fixed.exists());
 }
