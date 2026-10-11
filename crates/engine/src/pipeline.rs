@@ -8,7 +8,6 @@
 //! function of its own texels, so the written bytes are identical for any `--jobs`.
 use crate::api::{BatchRequest, CancelToken};
 use crate::bake::NormalVariance;
-use crate::codes::{Code, Warning};
 use crate::config::{Format, Profile};
 use crate::coverage::{coverage_fraction, preserve_coverage};
 use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
@@ -102,8 +101,8 @@ fn force_validation_failure_for_test(job: &ResolvedJob, report: &mut ValidationR
     if std::env::var_os("SDC_TEST_FAIL_VALIDATION")
         .is_some_and(|v| job.input.file_stem() == Some(v.as_os_str()))
     {
-        report.warnings.push(Warning::new(
-            Code::ValHeader,
+        report.warnings.push(crate::codes::Warning::new(
+            crate::codes::Code::ValHeader,
             "test hook: SDC_TEST_FAIL_VALIDATION",
         ));
         report.summary.passed = false;
