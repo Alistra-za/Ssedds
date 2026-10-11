@@ -82,10 +82,7 @@ fn warning_tooltip(rows: &[(&str, &Warning)]) -> String {
     if rows.len() > TIP_LINES {
         lines.push(format!("… and {} more", rows.len() - TIP_LINES));
     }
-    lines.join(
-        "
-",
-    )
+    lines.join("\n")
 }
 
 /// Whether the sets document can be changed (P8), and the banner's reason when it cannot.
