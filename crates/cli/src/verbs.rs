@@ -455,6 +455,7 @@ fn infer_subtype(path: &Path, file: &DdsFile, target: Target, alpha_min: Option<
             file.format,
             DdsPixelFormat::Rgba16f | DdsPixelFormat::Rgba32f | DdsPixelFormat::Bc6hUf16
         ),
+        advanced_skin: false,
     };
     suggest(&ctx)
         .first()

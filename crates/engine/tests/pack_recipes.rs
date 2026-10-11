@@ -228,6 +228,7 @@ fn packing() -> PackingSpec {
         roughness_default: 0.5,
         prefer: PackPrefer::Prepacked,
         fill: FillSpec::default(),
+        recipe: Default::default(),
     }
 }
 

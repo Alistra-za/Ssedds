@@ -5,6 +5,7 @@ pub mod history;
 pub mod inspector;
 pub mod items;
 pub mod meshes;
+pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
 pub mod preview;
@@ -17,7 +18,7 @@ use crate::settings::GuiSettings;
 use crate::worker::{spawn_export, spawn_plan, PlanFailure, WorkerMsg};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
-use engine::config::{AlphaPolicy, GreenConvention, RawMap, Subtype, Target};
+use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
 use engine::policy::{AcceptSuggestions, SourceStamp};
 use engine::presets::ConfigFile;
 use engine::session::Session;
@@ -142,6 +143,8 @@ pub struct AppModel {
     pub search: String,
     pub status_line: String,
     pub banner: Option<String>,
+    /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
+    pub dropped_fills: std::collections::BTreeMap<String, String>,
     pub dialog: Option<Dialog>,
     pub expanded: Option<String>,
     pub export: export::ExportModel,
@@ -211,6 +214,7 @@ impl AppModel {
             filter: Filter::default(),
             search: String::new(),
             status_line: String::new(),
+            dropped_fills: Default::default(),
             banner: None,
             dialog: None,
             expanded: None,
@@ -249,6 +253,7 @@ impl AppModel {
         self.continue_after_plan = None;
         self.last_inputs = None;
         self.auto_replans = 0;
+        self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
@@ -578,9 +583,10 @@ impl AppModel {
         if picks.is_empty() {
             return;
         }
-        // PBR colour picks lead: deciding a set's diffuse as `pbr_albedo` switches its inferred members (PBR follow),
-        // so those members must be looked at afterwards, not decided from the plan's older suggestions.
-        picks.sort_by_key(|(_, st)| !st.is_pbr_color());
+        // PBR colour picks lead: deciding a set's diffuse as `pbr_albedo` or `skin_albedo` switches its inferred
+        // members (PBR follow), so those members must be looked at afterwards, not decided from the plan's older
+        // suggestions.
+        picks.sort_by_key(|(_, st)| !(st.is_pbr_color() || sets::is_pbr_diffuse(*st)));
         // Each decision goes through `decide` (so the PBR follow-on applies); the steps they push fold into one.
         let pushed = self.history.pushed;
         for (k, st) in &picks {
@@ -1058,6 +1064,7 @@ impl AppModel {
     }
 
     fn apply_snapshot(&mut self, s: &history::Snapshot) {
+        self.dropped_fills.clear();
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
         // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
@@ -1194,10 +1201,6 @@ impl AppModel {
 
     pub fn set_target(&mut self, t: Target) {
         self.edit("Mode", move |p| p.set_target(t));
-    }
-
-    pub fn set_fill(&mut self, role: RawMap, value: Option<u8>) {
-        self.edit("Fill value", move |p| p.set_fill(role, value));
     }
 
     /// Remove an unmatched `[files]` entry (one that names no file under the current target) and plan again.

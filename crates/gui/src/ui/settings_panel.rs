@@ -41,20 +41,40 @@ pub fn subtype_label(st: Subtype) -> String {
 
 /// The heading of the PBR group in every sub-type dropdown.
 pub const PBR_HEADING: &str = "PBR (Community Shaders)";
+/// The heading of the Advanced skin group, right after the PBR one.
+pub const SKIN_HEADING: &str = "Advanced skin (Community Shaders)";
+/// The heading of the last group: what no other group claims.
+pub const OTHER_HEADING: &str = "Other";
 
-/// The sub-types `keep` accepts, grouped for a dropdown: the PBR ones first (every `pbr_*`, `rmaos`, `rfaos` and
-/// `coat_normal`) under `PBR_HEADING`, then the rest by category. Empty groups are left out.
+/// The sub-types `keep` accepts, grouped for a dropdown: the PBR ones first (every `pbr_*`, `rmaos` and
+/// `coat_normal`) under `PBR_HEADING`, then the Advanced skin ones (skin_albedo, skin_rfaos, skin_sk, skin_wet) under `SKIN_HEADING`, then the
+/// rest by category, and `ui_sky` last under `OTHER_HEADING`. Empty groups are left out.
 pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<Subtype>)> {
     use engine::config::Category;
     let is_pbr = |s: Subtype| {
-        s.id().starts_with("pbr_")
-            || matches!(s, Subtype::Rmaos | Subtype::Rfaos | Subtype::CoatNormal)
+        s.id().starts_with("pbr_") || matches!(s, Subtype::Rmaos | Subtype::CoatNormal)
     };
+    // The skin group reads in the order a set uses them, not in `Subtype::ALL`'s.
+    let skin = [
+        Subtype::SkinAlbedo,
+        Subtype::SkinRfaos,
+        Subtype::SkinSk,
+        Subtype::SkinWet,
+    ];
+    let is_skin = |s: Subtype| skin.contains(&s);
+    let is_other = |s: Subtype| s == Subtype::UiSky;
+    let claimed = |s: Subtype| is_pbr(s) || is_skin(s) || is_other(s);
     let kept: Vec<Subtype> = Subtype::ALL.into_iter().filter(|s| keep(*s)).collect();
-    let mut groups: Vec<(&'static str, Vec<Subtype>)> = vec![(
-        PBR_HEADING,
-        kept.iter().copied().filter(|s| is_pbr(*s)).collect(),
-    )];
+    let pick = |f: &dyn Fn(Subtype) -> bool| -> Vec<Subtype> {
+        kept.iter().copied().filter(|s| f(*s)).collect()
+    };
+    let mut groups: Vec<(&'static str, Vec<Subtype>)> = vec![
+        (PBR_HEADING, pick(&is_pbr)),
+        (
+            SKIN_HEADING,
+            skin.into_iter().filter(|s| keep(*s)).collect(),
+        ),
+    ];
     for (cat, name) in [
         (Category::Color, "Colour maps"),
         (Category::Normal, "Normal maps"),
@@ -62,14 +82,9 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
         (Category::MixedPacked, "Packed and data"),
         (Category::Hdr, "HDR maps"),
     ] {
-        groups.push((
-            name,
-            kept.iter()
-                .copied()
-                .filter(|s| !is_pbr(*s) && s.category() == cat)
-                .collect(),
-        ));
+        groups.push((name, pick(&|s| !claimed(s) && s.category() == cat)));
     }
+    groups.push((OTHER_HEADING, pick(&is_other)));
     groups.retain(|(_, v)| !v.is_empty());
     groups
 }

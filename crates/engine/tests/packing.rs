@@ -474,3 +474,27 @@ fn an_explicit_height_fill_still_applies() {
     let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
     assert_channel(px, 3, 1, |_, _| 128);
 }
+
+/// Note R-fills-1: a forced `_rfaos` without a fuzz source writes G = 0, or the fuzz fill.
+#[test]
+fn a_forced_rfaos_writes_the_fuzz_default_or_fill_in_g() {
+    for (sets, want) in [
+        (vec!["packing.recipe=rfaos"], 0u8),
+        (vec!["packing.recipe=rfaos", "packing.fill.fuzz=128"], 128),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "iron_roughness.png", r);
+        put(d.path(), "iron_ao.png", ao);
+        let o = convert(d.path(), Target::Cs, &sets);
+        assert!(
+            out_path(d.path(), "iron_rfaos.dds").exists(),
+            "{:?}",
+            warnings(&o)
+        );
+        assert!(!out_path(d.path(), "iron_rmaos.dds").exists());
+        let px = &levels(&dds(d.path(), "iron_rfaos.dds"))[0];
+        assert_channel(px, 1, 2, |_, _| want);
+        assert_channel(px, 0, 4, r);
+        assert_channel(px, 2, 4, ao);
+    }
+}

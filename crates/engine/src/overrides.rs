@@ -148,6 +148,7 @@ pub const FIELD_PATHS: &[&str] = &[
     "packing.enabled",
     "packing.roughness_default",
     "packing.prefer",
+    "packing.recipe",
     "packing.fill.roughness",
     "packing.fill.metallic",
     "packing.fill.ao",

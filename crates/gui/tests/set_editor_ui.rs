@@ -97,7 +97,11 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         .key
         .clone();
     m.select_set(&key);
-    let mut h = harness(m);
+    // Tall enough for the packed card's recipe choice and fill rows, which push the commands button down.
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 1200.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
     for label in [
         "Diffuse",
@@ -105,6 +109,7 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         "RMAOS",
         "Height _p",
         "Emissive _g",
+        "Skin _sk",
         "Subsurface _s",
         "Coat _cnr",
         "Fuzz _f",

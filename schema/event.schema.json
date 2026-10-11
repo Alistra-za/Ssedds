@@ -320,7 +320,10 @@
         "PACK-DEFAULTED",
         "PACK-SIZE-MISMATCH",
         "PACK-CONFLICT",
-        "PACK-UNUSED-INPUT"
+        "PACK-UNUSED-INPUT",
+        "PACK-RECIPE-CONFLICT",
+        "PACK-RECIPE-UNBUILDABLE",
+        "SKIN-WET-FORM"
       ],
       "type": "string"
     },
@@ -747,6 +750,15 @@
       ],
       "type": "string"
     },
+    "PackRecipe": {
+      "description": "Which cs recipe a set packs (DECISIONS Note R-fills-1): `auto` = `_rfaos` when a fuzz source exists, else\n`_rmaos`; `rfaos`/`rmaos` force one.",
+      "enum": [
+        "auto",
+        "rmaos",
+        "rfaos"
+      ],
+      "type": "string"
+    },
     "PackSource": {
       "description": "One source of a packed job and its size and modification time when planning read it (final review I7).",
       "properties": {
@@ -788,6 +800,10 @@
         "prefer": {
           "$ref": "#/$defs/PackPrefer",
           "description": "Which side wins when the set already holds the packed output as a file (`PACK-CONFLICT`)."
+        },
+        "recipe": {
+          "$ref": "#/$defs/PackRecipe",
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Set per set at either packed key,\n`[files.\"<folder/base>_rfaos\"]` or `..._rmaos\"]`."
         },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
@@ -1158,6 +1174,7 @@
       "type": "string"
     },
     "Subtype": {
+      "description": "A texture sub-type. `rfaos` is a deprecated alias of `skin_rfaos`: it still loads and is written back as `skin_rfaos`.",
       "enum": [
         "diffuse",
         "landscape_diffuse",
@@ -1177,13 +1194,17 @@
         "envmask",
         "complex_material",
         "rmaos",
-        "rfaos",
+        "skin_rfaos",
         "flow",
         "height",
         "msn_specular",
         "generic_two_channel",
         "generic_data",
-        "hdr_sky"
+        "hdr_sky",
+        "skin_albedo",
+        "skin_sk",
+        "skin_wet",
+        "rfaos"
       ],
       "type": "string"
     },

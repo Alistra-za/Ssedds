@@ -12,6 +12,7 @@ use crate::discover::InputFile;
 use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};
 use crate::image::SourceInfo;
 use crate::overrides::{path_key_matches, to_patch, FileScopes, Scope, SetOverride};
+use crate::pack::plan::set_is_advanced_skin;
 pub use crate::presets::Provenance;
 use crate::presets::*;
 use crate::suggest::*;
@@ -247,6 +248,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         set_suffixes: &f.set.suffixes,
         alpha: f.analysis.alpha,
         is_float: f.info.is_float,
+        advanced_skin: set_is_advanced_skin(ctx, f.set, f.input),
     });
     if let Some((alias, canonical, preset)) = alias_parts(ctx, f) {
         for s in &mut suggestions {
@@ -381,7 +383,12 @@ fn config_patches(c: &ConfigFile, st: Subtype) -> Vec<(Reach, Value)> {
 /// Whether `alpha.policy` was chosen by an explicit layer (spec §5.2): a user or project preset, a config, a
 /// rule or `--set`. The hidden base and the built-in presets only carry defaults.
 fn alpha_policy_explicit(ctx: &ResolveCtx, prov: &BTreeMap<String, Provenance>) -> bool {
-    match prov.get("alpha.policy") {
+    field_explicit(ctx, prov, "alpha.policy")
+}
+
+/// Whether `field` was chosen by an explicit layer (see [`alpha_policy_explicit`]).
+fn field_explicit(ctx: &ResolveCtx, prov: &BTreeMap<String, Provenance>, field: &str) -> bool {
+    match prov.get(field) {
         None | Some(Provenance::Builtin) => false,
         Some(Provenance::Preset(id)) => !ctx.registry.is_builtin(id),
         Some(_) => true,
@@ -475,6 +482,9 @@ fn layered_profile_with(
             );
         }
     }
+    if st == Subtype::SkinWet {
+        skin_wet_form(ctx, f, &mut doc, &mut prov, &mut sources);
+    }
     // Spec §4.4: `_normalgl`/`_normaldx` state the green convention, a fact at the analysis position (--set wins).
     if let Some(Vocab {
         term,
@@ -514,6 +524,10 @@ fn layered_profile_with(
         }
     }
     let mut profile = finish_profile(doc, ctx.target, st)?;
+    if st == Subtype::SkinWet && (f.analysis.grayscale || profile.format == Format::Bc4) {
+        // The height form is a grayscale map: R is taken and copied to RGB in Preprocess (DECISIONS Note R-skin-1).
+        profile.category = Category::Grayscale;
+    }
     backend_follows_format(&mut profile, &mut prov, &sources);
     float_source_is_linear(&mut profile, &mut prov, f);
     // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
@@ -524,6 +538,82 @@ fn layered_profile_with(
         }
     }
     Ok((profile, prov))
+}
+
+/// `skin_wet` has two forms (DECISIONS Note R-skin-1): a tangent-space normal with a binary mask in alpha (BC7, the
+/// sub-type default) and a grayscale height map (BC4). Grey content (the `VAL-M-GRAYSCALE` test) resolves the
+/// height form as an analysis fact, below every explicit layer: a preset, config, rule or `--set` that names the
+/// `format` (or the alpha policy) keeps it.
+fn skin_wet_form(
+    ctx: &ResolveCtx,
+    f: &FileFacts,
+    doc: &mut Value,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
+) {
+    if !f.analysis.grayscale {
+        return;
+    }
+    let fact = || Provenance::AnalysisFact("skin-wet-form".into());
+    if !field_explicit(ctx, prov, "format") {
+        apply(
+            doc,
+            prov,
+            sources,
+            &to_patch("format", &json!("bc4")),
+            fact(),
+            GENERIC,
+        );
+    }
+    if !alpha_policy_explicit(ctx, prov) {
+        apply(
+            doc,
+            prov,
+            sources,
+            &to_patch("alpha.policy", &json!("remove")),
+            fact(),
+            GENERIC,
+        );
+    }
+}
+
+/// The `SKIN-WET-FORM` notice: which form a `skin_wet` file was read as, and why.
+fn skin_wet_notice(p: &Profile, f: &FileFacts, prov: &BTreeMap<String, Provenance>) -> Warning {
+    let height = p.category == Category::Grayscale;
+    let grey = f.analysis.grayscale;
+    let format_src = prov
+        .get("format")
+        .map_or("builtin".to_string(), |s| s.to_string());
+    let (form, why) = match (height, grey) {
+        (true, true) => (
+            "height",
+            "grey content (R = G = B): a height map".to_string(),
+        ),
+        (true, false) => (
+            "height",
+            format!(
+                "colour content, but format {} (from {format_src}) asks for a red-only height map",
+                p.format.id()
+            ),
+        ),
+        (false, _) => (
+            "normal_mask",
+            "colour content: a tangent-space normal with a binary mask in alpha".to_string(),
+        ),
+    };
+    Warning::new(
+        Code::SkinWetForm,
+        format!(
+            "skin_wet is read as a {}: {why}; written as {}",
+            if height {
+                "height map"
+            } else {
+                "normal map with a mask in alpha"
+            },
+            p.format.id()
+        ),
+    )
+    .with_data(json!({ "form": form, "format": p.format }))
 }
 
 /// Spec §4.1 (`pbr_emissive`, `hdr_sky`): a float source that goes to BC6H is linear radiance, so
@@ -610,7 +700,8 @@ pub fn availability(t: Target, s: Subtype) -> Availability {
         (_, PbrAlbedo) => un(Some(Diffuse)),
         (_, PbrEmissive) => un(Some(Glow)),
         (_, PbrNormal) => un(Some(Normal)),
-        (_, PbrSubsurface | PbrFuzz | CoatNormal | Rmaos | Rfaos | Flow | HdrSky) => un(None),
+        (_, PbrSubsurface | PbrFuzz | CoatNormal | Rmaos | SkinRfaos | Flow | HdrSky) => un(None),
+        (_, SkinAlbedo | SkinSk | SkinWet) => un(None),
         (Target::Vanilla, ComplexMaterial) => un(Some(Envmask)),
         _ => Availability::Available,
     }
@@ -1262,6 +1353,9 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         f,
         alpha_policy_explicit(ctx, &provenance),
     ));
+    if available && profile.subtype == Subtype::SkinWet {
+        warnings.push(skin_wet_notice(&profile, f, &provenance));
+    }
     if !reasons.is_empty() {
         warnings.push(
             Warning::new(Code::SugLowConfidence, reasons.join("; "))
