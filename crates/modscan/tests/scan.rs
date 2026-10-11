@@ -275,7 +275,7 @@ fn shapes_textures_and_texset_dedup() {
         .expect("a texture slot")
         .clone();
     let users = store.users_of_texture(&tex);
-    assert!(users.iter().any(|(n, _)| n == "meshes/x.nif"));
+    assert!(users.iter().any(|(n, _, k)| n == "meshes/x.nif" && *k == 1));
     // Two identical copies share texture sets, including sets with empty slots.
     let sets: i64 = store
         .conn()
@@ -311,6 +311,28 @@ fn removed_files_are_deleted_and_cancel_stops() {
         &|| vec![],
     );
     assert!(matches!(r, Err(modscan::ScanError::Cancelled)));
+}
+
+/// A read failure (here: the file held open with no sharing) is not cached; the next scan re-reads it.
+#[cfg(windows)]
+#[test]
+fn read_failure_is_retried_next_scan() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = instance_fixture("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(d.path().join("mods/A/meshes/x.nif"))
+        .unwrap();
+    let (_, r1) = go(&d, vec![]);
+    assert_eq!((r1.parsed, r1.problems.len()), (1, 1), "{:?}", r1.problems);
+    drop(lock);
+    let (store, r2) = go(&d, vec![]);
+    assert_eq!((r2.parsed, r2.reused, r2.problems.len()), (1, 0, 0));
+    let a = &store.nifs_of(mod_id(&store, "A"))[0];
+    assert!(a.problem.is_none());
+    assert!(!store.shapes_of(a.copy_id).is_empty());
 }
 
 #[test]

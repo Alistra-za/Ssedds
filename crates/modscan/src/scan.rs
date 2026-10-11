@@ -257,7 +257,7 @@ pub fn run(
     let mut work = vec![];
     for (i, c) in copies.iter().enumerate() {
         match existing.get(&(path_ids[i], origin_id(c.origin))) {
-            Some(m) if m.size == c.size && m.mtime == c.mtime => {
+            Some(m) if m.size == Some(c.size) && m.mtime == Some(c.mtime) => {
                 report.reused += 1;
                 if let Some(crc) = m.crc32 {
                     crc_known.insert(i, crc);
@@ -303,7 +303,7 @@ pub fn run(
                         let crc = candidate[i].then(|| crc32fast::hash(&b));
                         (i, CopyResult::from(nif::scan::scan(&b)), crc)
                     }
-                    Err(e) => (i, CopyResult::Failed(e), None),
+                    Err(e) => (i, CopyResult::ReadFailed(e), None),
                 }
             })
             .collect();
@@ -314,7 +314,7 @@ pub fn run(
             match &res {
                 CopyResult::Scanned(s) if s.le_mesh => report.le_meshes += 1,
                 CopyResult::NotSkyrim { .. } => report.not_skyrim += 1,
-                CopyResult::Failed(m) => report
+                CopyResult::Failed(m) | CopyResult::ReadFailed(m) => report
                     .problems
                     .push((format!("{} ({})", c.path, origin_name(c.origin)), m.clone())),
                 _ => {}

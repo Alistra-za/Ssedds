@@ -157,8 +157,15 @@ pub struct ShapeView {
 #[derive(Debug, Clone)]
 pub enum CopyResult {
     Scanned(NifScan),
-    NotSkyrim { bsver: u32, msg: String },
+    NotSkyrim {
+        bsver: u32,
+        msg: String,
+    },
+    /// The bytes were read but are not a valid NIF. Cached: reused while (size, mtime) are unchanged.
     Failed(String),
+    /// The bytes could not be read (I/O, locked file, corrupt BSA entry). Stored with NULL size/mtime so the
+    /// next scan never reuses the row and reads the file again.
+    ReadFailed(String),
 }
 
 impl From<Result<NifScan, NifError>> for CopyResult {
@@ -190,7 +197,9 @@ impl CopyResult {
             CopyResult::NotSkyrim { bsver, msg } => {
                 (PARSE_NOT_SKYRIM, Some(*bsver), false, Some(msg.clone()))
             }
-            CopyResult::Failed(m) => (PARSE_FAILED, None, false, Some(m.clone())),
+            CopyResult::Failed(m) | CopyResult::ReadFailed(m) => {
+                (PARSE_FAILED, None, false, Some(m.clone()))
+            }
         }
     }
 }
@@ -208,12 +217,25 @@ pub struct ChunkItem {
     pub result: CopyResult,
 }
 
+impl ChunkItem {
+    fn read_failed(&self) -> bool {
+        matches!(self.result, CopyResult::ReadFailed(_))
+    }
+    fn stored_size(&self) -> Option<i64> {
+        (!self.read_failed()).then_some(self.size as i64)
+    }
+    fn stored_mtime(&self) -> Option<i64> {
+        (!self.read_failed()).then_some(self.mtime)
+    }
+}
+
 /// What the store already knows about a copy (for reuse by `(size, mtime)`).
 #[derive(Debug, Clone)]
 pub struct CopyMeta {
     pub id: i64,
-    pub size: u64,
-    pub mtime: i64,
+    /// `None` after a read failure, so the copy is never reused and is re-read next scan.
+    pub size: Option<u64>,
+    pub mtime: Option<i64>,
     pub parse_status: i32,
     pub le_mesh: bool,
     pub problem: Option<String>,
@@ -369,8 +391,8 @@ fn upsert_copy_row(c: &Connection, it: &ChunkItem) -> Result<i64, ScanError> {
             params![
                 it.path_id,
                 it.origin_id,
-                it.size as i64,
-                it.mtime,
+                it.stored_size(),
+                it.stored_mtime(),
                 it.crc32.map(i64::from),
                 status,
                 bsver.map(i64::from),
@@ -399,8 +421,8 @@ fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
             params![
                 it.path_id,
                 it.origin_id,
-                it.size as i64,
-                it.mtime,
+                it.stored_size(),
+                it.stored_mtime(),
                 it.crc32.map(i64::from),
                 status,
                 bsver.map(i64::from),
@@ -487,8 +509,8 @@ impl Store {
                 (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?),
                 CopyMeta {
                     id: r.get(0)?,
-                    size: r.get::<_, Option<i64>>(3)?.unwrap_or(-1) as u64,
-                    mtime: r.get::<_, Option<i64>>(4)?.unwrap_or(-1),
+                    size: r.get::<_, Option<i64>>(3)?.map(|s| s as u64),
+                    mtime: r.get::<_, Option<i64>>(4)?,
                     parse_status: r.get(5)?,
                     le_mesh: r.get(6)?,
                     problem: r.get(7)?,
@@ -808,19 +830,24 @@ impl Store {
         q().unwrap_or_default()
     }
 
-    /// Every (NIF path, slot) whose shapes use texture `norm`, across all copies.
-    pub fn users_of_texture(&self, norm: &str) -> Vec<(String, u32)> {
-        let q = || -> rusqlite::Result<Vec<(String, u32)>> {
+    /// Every (NIF path, slot, shader_kind) whose shapes use texture `norm`, across all copies.
+    /// `shader_kind` (1 lighting, 2 effect) gives the slot its meaning: lighting slots are texture-set slots
+    /// 0-8; effect slots are 0 = source, 1 = greyscale. A texset row is only a path tuple and may be shared by a
+    /// lighting and an effect shape with the same paths; the meaning always comes from the using shape.
+    pub fn users_of_texture(&self, norm: &str) -> Vec<(String, u32, i32)> {
+        let q = || -> rusqlite::Result<Vec<(String, u32, i32)>> {
             let mut st = self.conn.prepare(
-                "SELECT DISTINCT np.p, tu.slot FROM path tp
+                "SELECT DISTINCT np.p, tu.slot, s.shader_kind FROM path tp
                  JOIN tex_use tu ON tu.tex_path_id = tp.id
                  JOIN shape s ON s.texset_id = tu.texset_id
                  JOIN nif_copy c ON c.id = s.copy_id
                  JOIN path np ON np.id = c.path_id
-                 WHERE tp.p = ?1 ORDER BY np.p, tu.slot",
+                 WHERE tp.p = ?1 ORDER BY np.p, tu.slot, s.shader_kind",
             )?;
             let v = st
-                .query_map([norm], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32)))?
+                .query_map([norm], |r| {
+                    Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get(2)?))
+                })?
                 .collect();
             v
         };

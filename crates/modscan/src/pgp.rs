@@ -36,10 +36,9 @@ pub fn signature(root: &Path) -> Signature {
     let diff = names
         .iter()
         .any(|n| n.eq_ignore_ascii_case("ParallaxGen_Diff.json"));
+    // PGPatcher-named plugins only: an arbitrary .esp next to meshes\ is an ordinary mod (owner: 265 false
+    // "incomplete" mods with any-ESP; controller ruling on Task 10).
     let esp = names.iter().any(|n| is_pg_esp(n));
-    let any_esp = names
-        .iter()
-        .any(|n| n.to_ascii_lowercase().ends_with(".esp"));
     let cache = names.iter().any(|n| {
         n.to_ascii_lowercase()
             .starts_with("pgpatcher_updatecache.bin")
@@ -48,7 +47,7 @@ pub fn signature(root: &Path) -> Signature {
     let meshes = root.join("meshes").is_dir();
     if diff && esp {
         Signature::Strong
-    } else if meshes && !diff && (any_esp || cache) && !dups {
+    } else if meshes && !diff && (esp || cache) && !dups {
         Signature::Incomplete
     } else if diff || esp || dups {
         Signature::Medium

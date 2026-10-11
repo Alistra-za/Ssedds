@@ -71,3 +71,19 @@ fn staleness_uses_crc_not_mtime() {
     assert_eq!(check(Some(7), None, &[]), DeriveCheck::Unverified);
     assert_eq!(check(None, Some(8), &[]), DeriveCheck::UnknownSource);
 }
+
+#[test]
+fn incomplete_needs_a_pgpatcher_marker_not_any_esp() {
+    let d = tempfile::tempdir().unwrap();
+    mk(d.path(), "meshes/x.nif", b"n");
+    mk(d.path(), "Foo.esp", b"e");
+    assert_eq!(signature(d.path()), Signature::None);
+    let d2 = tempfile::tempdir().unwrap();
+    mk(d2.path(), "meshes/x.nif", b"n");
+    mk(d2.path(), "PGPatcher_UpdateCache.bin", b"c");
+    assert_eq!(signature(d2.path()), Signature::Incomplete);
+    let d3 = tempfile::tempdir().unwrap();
+    mk(d3.path(), "meshes/x.nif", b"n");
+    mk(d3.path(), "PG_3.esp", b"e");
+    assert_eq!(signature(d3.path()), Signature::Incomplete);
+}
