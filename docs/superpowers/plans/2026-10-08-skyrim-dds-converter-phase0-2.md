@@ -11977,8 +11977,16 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
     - Ask the owner whether `hdr_sky` should get the same check.
   - **Owner idea to evaluate (2026-10-10): CPM `_m` without parallax.**
     - **The idea:** a `cpm` `_m` given as a file (not packed) whose alpha holds no height is forced to alpha 255 today (exact opaque). That makes it a plain env mask, so PGPatcher and the CS complex-material gate don't treat it as CPM.
-      - Instead, write a **constant height** so it is patched as complex material.
-      - The owner suggested 0. The packed path already uses **0.5 (128)** as the `cpm` `_m` height default (Note M1, Spike S8: gate on at alpha ≤ 250). Pick one value for both paths; 0.5 is the neutral height, so it gives no constant parallax shift.
+      - Instead, write a **constant alpha 0** (owner).
+      - **Why 0 and not 128** (owner, confirmed against the S8 DXBC in `out/s8-renderdoc.md`):
+        - Parallax runs per pixel only where 4/255 < alpha < 251/255, so alpha 0–4 means "complex material, no parallax".
+        - 128 sits inside the parallax window, so it runs parallax on a flat height, and any alpha noise becomes visible parallax.
+      - **Complex-material gate:** the smallest-mip alpha must be ≤ 250. 251–255 is complex off (255 also reads as a plain env mask to PGPatcher).
+      - **Caveat from the shader:**
+        - alpha 0 keeps complex material on **only if the smallest-mip RGB is not grey** (pairwise differences ≥ 4/255);
+        - the black-RGB exception needs 4 < alpha < 251, so a grey or black `_m` at alpha 0 is complex off;
+        - `VAL-M-GRAYSCALE` already flags the grey case.
+      - **Proposal, needs the owner's yes:** change the **packed** `cpm` `_m` no-height default (Note M1: 0.5/128) to 0 as well, so both paths agree.
       - Keep the exact-opaque option for real env masks.
     - **Env-mask sub-types:** offer or force **BC4**, or uncompressed (Note O1), for a single-channel env mask.
     - **To check first:**
