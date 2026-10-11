@@ -163,8 +163,13 @@ pub fn write_material(w: &mut CbWriter, m: &MaterialInputs) {
     w.set("emissiveMult", &[p.emissive_multiple]);
     // envmap LOD fade, specular LOD fade, alpha.
     w.set("MaterialData", &[1.0, 1.0, p.alpha, 0.0]);
-    let tref = m.alpha.map_or(0.0, |a| a.threshold as f32 / 255.0);
-    w.set("AlphaTestRef", &[tref]);
+    // b11 AlphaTestRefRS = threshold/255 only when the NiAlphaProperty test flag is set; b2 AlphaTestRef stays
+    // 0 (frame11178: Hair ev6544 test 40 → 0.1569, Lashes ev5536 test 5 → 0.0196, blend-only Scalp ev5488
+    // threshold 50 → 0; b2 AlphaTestRef = 0 on all of them). Blend-only shapes still compile DO_ALPHA_TEST.
+    let tref = m
+        .alpha
+        .filter(|a| a.test())
+        .map_or(0.0, |a| a.threshold as f32 / 255.0);
     w.set("AlphaTestRefRS", &[tref]);
     // cb4: engine PS desc & ~compile key = runtime bits only (answers.md Q4.1, B5 `runtime_bits`).
     w.set_u32("PixelShaderDescriptor", &[runtime_bits(&m.material)]);

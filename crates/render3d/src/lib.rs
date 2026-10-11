@@ -231,6 +231,8 @@ impl Renderer {
                 return rep;
             }
         };
+        rep.warnings
+            .extend(scan.problems.iter().map(|p| format!("NIF: {p}")));
         if scan.le_mesh {
             rep.le_mesh = true;
             return rep;
