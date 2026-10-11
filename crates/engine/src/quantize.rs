@@ -41,13 +41,22 @@ fn half_bits(v: f32) -> u16 {
 /// Alpha is `unorm8(a)` when the channel is present, else 255: this is the only place a removed
 /// alpha is synthesised.
 pub fn to_encoder_input(level: &Rgba32F, work: &Work, p: &Profile) -> EncoderInput {
-    if p.format == Format::Bc6hUf16 {
+    if p.format.is_hdr() {
         let one = f16::ONE.to_bits();
+        // DECISIONS S4: rgba16f stores alpha as a half when it is kept; BC6H has no alpha.
+        let keep_alpha = p.format == Format::Rgba16f && work.alpha_present;
         return EncoderInput::Hdr(
             level
                 .px
                 .iter()
-                .map(|q| [half_bits(q[0]), half_bits(q[1]), half_bits(q[2]), one])
+                .map(|q| {
+                    [
+                        half_bits(q[0]),
+                        half_bits(q[1]),
+                        half_bits(q[2]),
+                        if keep_alpha { half_bits(q[3]) } else { one },
+                    ]
+                })
                 .collect(),
         );
     }
@@ -261,5 +270,26 @@ mod tests {
         // Nearest code, just below / above a half-code boundary.
         assert_eq!(unorm8(f32::from_bits((10.5f32 / 255.0).to_bits() - 2)), 10);
         assert_eq!(unorm8(f32::from_bits((10.5f32 / 255.0).to_bits() + 2)), 11);
+    }
+
+    #[test]
+    fn rgba16f_keeps_alpha_as_half_and_bc6h_forces_one() {
+        let mut p = profile(Subtype::PbrEmissive);
+        p.format = Format::Rgba16f;
+        let w = work([2.0, 0.5, 0.25, 0.5], Domain::Hdr, true);
+        let EncoderInput::Hdr(h) = to_encoder_input(&w.img, &w, &p) else {
+            panic!()
+        };
+        assert_eq!(h[0][3], f16::from_f32(0.5).to_bits());
+        let w = work([2.0, 0.5, 0.25, 0.5], Domain::Hdr, false);
+        let EncoderInput::Hdr(h) = to_encoder_input(&w.img, &w, &p) else {
+            panic!()
+        };
+        assert_eq!(h[0][3], f16::ONE.to_bits());
+        assert_eq!(
+            hdr([2.0, 0.5, 0.25, 0.5])[3],
+            f16::ONE.to_bits(),
+            "BC6H unchanged"
+        );
     }
 }

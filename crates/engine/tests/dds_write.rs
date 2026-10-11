@@ -426,3 +426,106 @@ fn atomic_write_to_a_read_only_target_is_an_io_error_and_leaves_no_temp() {
         .count();
     assert_eq!(tmps, 0);
 }
+
+#[test]
+fn uncompressed_formats_have_their_dxgi_header_and_pitch() {
+    for (f, srgb, dxgi, bpp) in [
+        (Format::Rgba8, false, 87, 4),
+        (Format::Rgba8, true, 91, 4),
+        (Format::R8, false, 61, 1),
+        (Format::Rg8, false, 49, 2),
+        (Format::Rgba16f, false, 10, 8),
+    ] {
+        assert_eq!(dxgi_format(f, srgb), dxgi, "{f:?}");
+        let d = DdsDesc {
+            width: 37,
+            height: 5,
+            format: f,
+            srgb,
+            header: ResolvedHeader::Dx10,
+        };
+        let levels = chain(f, 37, 5);
+        let b = dds_bytes(&d, &levels).unwrap();
+        assert_eq!(
+            u(&b, 8) & (DDSD_PITCH | DDSD_LINEARSIZE),
+            DDSD_PITCH,
+            "{f:?}: pitch, not linear size"
+        );
+        assert_eq!(u(&b, 20), 37 * bpp, "{f:?} row pitch");
+        assert_eq!(u(&b, 128), dxgi);
+        assert_payload(&b, 148, &levels);
+        let r = read_dds(&b).unwrap();
+        assert_eq!(
+            r.format.as_format(),
+            Some((f, srgb)),
+            "{f:?} reads back as itself"
+        );
+        assert!(check_header(&r).is_empty(), "{f:?}: {:?}", check_header(&r));
+    }
+}
+
+#[test]
+fn rgba8_unorm_auto_is_legacy_b8g8r8a8_masks() {
+    assert_eq!(
+        resolve_header(Format::Rgba8, false, HeaderForm::Auto),
+        ResolvedHeader::Legacy
+    );
+    assert_eq!(
+        resolve_header(Format::Rgba8, true, HeaderForm::Auto),
+        ResolvedHeader::Dx10
+    );
+    for f in [Format::R8, Format::Rg8, Format::Rgba16f] {
+        assert_eq!(
+            resolve_header(f, false, HeaderForm::Auto),
+            ResolvedHeader::Dx10,
+            "{f:?}"
+        );
+        assert_eq!(
+            resolve_header(f, false, HeaderForm::Legacy),
+            ResolvedHeader::Dx10,
+            "{f:?}"
+        );
+    }
+    let d = DdsDesc {
+        width: 4,
+        height: 4,
+        format: Format::Rgba8,
+        srgb: false,
+        header: ResolvedHeader::Legacy,
+    };
+    let levels = chain(Format::Rgba8, 4, 4);
+    let b = dds_bytes(&d, &levels).unwrap();
+    assert_eq!(u(&b, 80), DDPF_RGB | DDPF_ALPHAPIXELS);
+    assert_eq!(
+        (u(&b, 88), u(&b, 92), u(&b, 96), u(&b, 100), u(&b, 104)),
+        (32, 0xff_0000, 0xff00, 0xff, 0xff00_0000)
+    );
+    assert_payload(&b, 128, &levels);
+    assert_eq!(
+        read_dds(&b).unwrap().format,
+        DdsPixelFormat::Bgra8 { srgb: false }
+    );
+    // A legacy sRGB rgba8 has no form.
+    let d = DdsDesc { srgb: true, ..d };
+    assert!(matches!(
+        dds_bytes(&d, &levels),
+        Err(DdsError::NoLegacyForm { .. })
+    ));
+}
+
+#[test]
+fn header_bytes_is_the_head_of_dds_bytes() {
+    let d = DdsDesc {
+        width: 64,
+        height: 32,
+        format: Format::Bc7,
+        srgb: true,
+        header: ResolvedHeader::Dx10,
+    };
+    let levels = chain(Format::Bc7, 64, 32);
+    let b = dds_bytes(&d, &levels).unwrap();
+    assert_eq!(
+        header_bytes(&d, levels.len() as u32).unwrap(),
+        b[..148].to_vec()
+    );
+}

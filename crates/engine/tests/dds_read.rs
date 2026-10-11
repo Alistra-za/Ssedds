@@ -675,7 +675,7 @@ fn reads_and_decodes_uncompressed_and_legacy_forms() {
             [50, 60, 70, 80],
         ),
         (
-            DdsPixelFormat::Bgra8,
+            DdsPixelFormat::Bgra8 { srgb: false },
             rgba.to_vec(),
             [30, 20, 10, 40],
             [70, 60, 50, 80],
@@ -830,7 +830,7 @@ fn malformed_headers_are_rejected_without_panicking() {
     assert!(
         matches!(read_dds(&ok(*b"XXXX", None)), Err(DdsError::Unsupported(s)) if s.contains("XXXX"))
     );
-    for d in [0, 1, 70, 91, 93, 100, 115, 0xFFFF_FFFF] {
+    for d in [0, 1, 70, 93, 100, 115, 0xFFFF_FFFF] {
         assert!(
             matches!(
                 read_dds(&ok(*b"DX10", Some([d, 3, 0, 1, 0]))),
@@ -1060,7 +1060,7 @@ fn decode_rejects_short_data_and_survives_arbitrary_blocks() {
     }
     for fmt in [
         P::Rgba8 { srgb: false },
-        P::Bgra8,
+        P::Bgra8 { srgb: false },
         P::Bgrx8,
         P::R8,
         P::Rg8,
@@ -1158,4 +1158,16 @@ fn legacy_volume_textures_are_unsupported() {
     // A depth of 1 is a plain 2D texture.
     let f = read_dds(&volume(true, 1, 0, &block)).unwrap();
     assert_eq!(f.levels, vec![(4, 4, 0..8)]);
+}
+
+#[test]
+fn dxgi_round_trips_through_the_pixel_format() {
+    for d in [
+        2u32, 10, 28, 29, 49, 61, 71, 72, 74, 75, 77, 78, 80, 83, 87, 88, 91, 95, 96, 98, 99,
+    ] {
+        let f = from_dxgi(d).unwrap_or_else(|| panic!("{d}"));
+        assert_eq!(f.dxgi(), d);
+    }
+    assert_eq!(from_dxgi(91), Some(DdsPixelFormat::Bgra8 { srgb: true }));
+    assert_eq!(from_dxgi(12345), None);
 }

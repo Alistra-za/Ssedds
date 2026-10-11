@@ -117,7 +117,7 @@ pub fn decode_level(
             )
         }
         Rgba8 { .. } => Decoded::Ldr(quads(data.to_vec())),
-        Bgra8 | Bgrx8 => Decoded::Ldr(
+        Bgra8 { .. } | Bgrx8 => Decoded::Ldr(
             data.as_chunks::<4>()
                 .0
                 .iter()

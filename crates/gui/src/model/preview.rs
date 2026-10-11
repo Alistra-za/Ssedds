@@ -204,14 +204,7 @@ fn signature(job: &ResolvedJob) -> String {
 
 /// `(format, srgb)` as the pixel format the decoder takes.
 pub fn pixel_format(format: Format, srgb: bool) -> DdsPixelFormat {
-    match format {
-        Format::Bc1 => DdsPixelFormat::Bc1 { srgb },
-        Format::Bc3 => DdsPixelFormat::Bc3 { srgb },
-        Format::Bc4 => DdsPixelFormat::Bc4,
-        Format::Bc5 => DdsPixelFormat::Bc5,
-        Format::Bc6hUf16 => DdsPixelFormat::Bc6hUf16,
-        Format::Bc7 => DdsPixelFormat::Bc7 { srgb },
-    }
+    format.pixel_format(srgb)
 }
 
 fn to_rgba(d: Decoded, pixels: usize) -> Vec<[f32; 4]> {

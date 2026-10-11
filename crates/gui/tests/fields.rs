@@ -135,3 +135,23 @@ fn normal_base_level_is_a_normal_map_field() {
         "decided by the texture set (variance bake)"
     );
 }
+
+#[test]
+fn uncompressed_format_labels_say_so() {
+    assert_eq!(
+        format_label(Format::Rgba8, ColorTag::Srgb),
+        "RGBA8 · sRGB (uncompressed)"
+    );
+    assert_eq!(
+        format_label(Format::R8, ColorTag::Unorm),
+        "R8 · linear (one channel, uncompressed)"
+    );
+    assert_eq!(
+        format_label(Format::Rg8, ColorTag::Unorm),
+        "RG8 · linear (two channels, uncompressed)"
+    );
+    assert_eq!(
+        format_label(Format::Rgba16f, ColorTag::NotApplicable),
+        "RGBA16F · HDR linear (uncompressed)"
+    );
+}

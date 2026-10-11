@@ -42,7 +42,7 @@ fn carries_alpha(f: DdsPixelFormat) -> bool {
             | Bc3 { .. }
             | Bc7 { .. }
             | Rgba8 { .. }
-            | Bgra8
+            | Bgra8 { .. }
             | Rgba16f
             | Rgba32f
     )
@@ -918,7 +918,10 @@ mod tests {
             ("Bc7".into(), Some(true))
         );
         assert_eq!(format_name(DdsPixelFormat::Bc5), ("Bc5".into(), None));
-        assert_eq!(format_name(DdsPixelFormat::Bgra8), ("Bgra8".into(), None));
+        assert_eq!(
+            format_name(DdsPixelFormat::Bgra8 { srgb: false }),
+            ("Bgra8".into(), Some(false))
+        );
     }
 
     #[test]

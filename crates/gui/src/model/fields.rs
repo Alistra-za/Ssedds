@@ -59,6 +59,10 @@ pub fn format_label(format: Format, tag: ColorTag) -> String {
         Format::Bc4 => "BC4 · linear (one channel)".into(),
         Format::Bc5 => "BC5 · linear (two channels)".into(),
         Format::Bc6hUf16 => "BC6H · HDR linear".into(),
+        Format::Rgba8 => format!("RGBA8 · {space} (uncompressed)"),
+        Format::R8 => "R8 · linear (one channel, uncompressed)".into(),
+        Format::Rg8 => "RG8 · linear (two channels, uncompressed)".into(),
+        Format::Rgba16f => "RGBA16F · HDR linear (uncompressed)".into(),
     }
 }
 

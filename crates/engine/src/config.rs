@@ -74,9 +74,9 @@ cfg_enum!(MipFilter, "lowercase" { Box });
 cfg_enum!(NormalMips, "snake_case" { Renormalize, RenormalizeBake });
 cfg_enum!(NormalBase, "lowercase" { Renormalize, Keep });
 cfg_enum!(CoverageMode, "lowercase" { Auto, On, Off });
-cfg_enum!(Format, "lowercase" { Bc1, Bc3, Bc4, Bc5, Bc6hUf16 = "bc6h_uf16", Bc7 });
+cfg_enum!(Format, "lowercase" { Bc1, Bc3, Bc4, Bc5, Bc6hUf16 = "bc6h_uf16", Bc7, Rgba8, R8, Rg8, Rgba16f });
 cfg_enum!(HeaderForm, "lowercase" { Auto, Dx10, Legacy });
-cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt });
+cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest });
 cfg_enum!(SearchRadius, "lowercase" { Default, Max });
 cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
@@ -297,14 +297,42 @@ impl Format {
             .unwrap()
             .to_owned()
     }
-    pub fn block_bytes(self) -> usize {
+    /// The DDS pixel format this format and tag are written as (DECISIONS S4: `rgba8` is B8G8R8A8).
+    pub fn pixel_format(self, srgb: bool) -> crate::dds::DdsPixelFormat {
+        use crate::dds::DdsPixelFormat as P;
         match self {
-            Format::Bc1 | Format::Bc4 => 8,
-            _ => 16,
+            Format::Bc1 => P::Bc1 { srgb },
+            Format::Bc3 => P::Bc3 { srgb },
+            Format::Bc4 => P::Bc4,
+            Format::Bc5 => P::Bc5,
+            Format::Bc6hUf16 => P::Bc6hUf16,
+            Format::Bc7 => P::Bc7 { srgb },
+            Format::Rgba8 => P::Bgra8 { srgb },
+            Format::R8 => P::R8,
+            Format::Rg8 => P::Rg8,
+            Format::Rgba16f => P::Rgba16f,
         }
     }
+    /// Bytes per 4x4 block, or `None` for an uncompressed format.
+    pub fn block_bytes(self) -> Option<usize> {
+        self.pixel_format(false).block_bytes()
+    }
+    /// Bytes per texel of an uncompressed format (0 for a block format).
+    pub fn bytes_per_pixel(self) -> usize {
+        self.pixel_format(false).bytes_per_pixel()
+    }
+    pub fn is_block(self) -> bool {
+        self.block_bytes().is_some()
+    }
+    /// Float formats: no `_SRGB`/UNORM tag (`n/a`), the `Hdr` domain, `cs` only (DECISIONS S4).
+    pub fn is_hdr(self) -> bool {
+        matches!(self, Format::Bc6hUf16 | Format::Rgba16f)
+    }
     pub fn has_alpha(self) -> bool {
-        matches!(self, Format::Bc1 | Format::Bc3 | Format::Bc7)
+        matches!(
+            self,
+            Format::Bc1 | Format::Bc3 | Format::Bc7 | Format::Rgba8 | Format::Rgba16f
+        )
     }
 }
 
@@ -501,6 +529,8 @@ mod tests {
             "normal_base",
             "keep",
             "ispc_bc6h",
+            "rgba16f",
+            "uncompressed",
         ] {
             assert!(s.contains(needle), "{needle} missing from schema");
         }
@@ -546,8 +576,37 @@ mod tests {
     fn unknown_fields_are_rejected() {
         let err = serde_json::from_str::<ColorSpec>(r#"{"content":"srgb","tag":"srgb","extra":1}"#);
         assert!(err.is_err());
-        assert_eq!(Format::Bc7.block_bytes(), 16);
-        assert_eq!(Format::Bc4.block_bytes(), 8);
+        assert_eq!(Format::Bc7.block_bytes(), Some(16));
+        assert_eq!(Format::Bc4.block_bytes(), Some(8));
+        assert_eq!(Format::Rgba8.block_bytes(), None);
         assert!(!Format::Bc5.has_alpha());
+    }
+
+    #[test]
+    fn uncompressed_formats_serialise_and_classify() {
+        for (f, id) in [
+            (Format::Rgba8, "rgba8"),
+            (Format::R8, "r8"),
+            (Format::Rg8, "rg8"),
+            (Format::Rgba16f, "rgba16f"),
+        ] {
+            assert_eq!(f.id(), id);
+            assert!(!f.is_block());
+        }
+        assert!(Format::Rgba16f.is_hdr() && Format::Bc6hUf16.is_hdr() && !Format::Rgba8.is_hdr());
+        assert!(
+            Format::Rgba8.has_alpha() && Format::Rgba16f.has_alpha() && !Format::R8.has_alpha()
+        );
+        assert_eq!(
+            serde_json::to_string(&Backend::Uncompressed).unwrap(),
+            "\"uncompressed\""
+        );
+        assert_eq!(
+            (
+                Format::Rgba8.bytes_per_pixel(),
+                Format::Rgba16f.bytes_per_pixel()
+            ),
+            (4, 8)
+        );
     }
 }

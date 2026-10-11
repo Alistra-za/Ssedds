@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 const NO_BC: &str = "This GPU has no BC texture support: showing a CPU decode";
 const NOT_MULTIPLE_OF_4: &str = "Mip size not a multiple of 4: showing a CPU decode";
+const UNCOMPRESSED: &str = "uncompressed format: shown from the CPU decode";
 const TOO_LARGE: &str = "This mip is larger than the GPU texture limit: no preview";
 const NOT_DECODED: &str = "The decoded mips are missing: no preview";
 
@@ -319,7 +320,7 @@ impl PreviewRenderer {
             return UploadPath::Skipped(TOO_LARGE);
         }
         let kind = kind_of(r.format);
-        let reason = if can_upload_bc(self.supports_bc, self.max_dim, base) {
+        let reason = if r.format.is_block() && can_upload_bc(self.supports_bc, self.max_dim, base) {
             if let Some((texture, _)) =
                 upload::bc_chain(&rs.device, &rs.queue, r.format, dims, &r.levels)
             {
@@ -327,6 +328,8 @@ impl PreviewRenderer {
                 return UploadPath::Bc;
             }
             NOT_DECODED
+        } else if !r.format.is_block() {
+            UNCOMPRESSED
         } else if !self.supports_bc {
             NO_BC
         } else {

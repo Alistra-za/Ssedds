@@ -726,6 +726,7 @@ fn backend_fits(b: Backend, f: Format) -> bool {
         Backend::Rgbcx => matches!(f, Format::Bc1 | Format::Bc3 | Format::Bc4 | Format::Bc5),
         Backend::IspcBc6h => f == Format::Bc6hUf16,
         Backend::Nvtt => matches!(f, Format::Bc7 | Format::Bc6hUf16),
+        Backend::Uncompressed => !f.is_block(),
     }
 }
 
@@ -735,6 +736,7 @@ pub(crate) fn default_backend(f: Format) -> Backend {
         Format::Bc1 | Format::Bc3 | Format::Bc4 | Format::Bc5 => Backend::Rgbcx,
         Format::Bc6hUf16 => Backend::IspcBc6h,
         Format::Bc7 => Backend::Bc7e,
+        Format::Rgba8 | Format::R8 | Format::Rg8 | Format::Rgba16f => Backend::Uncompressed,
     }
 }
 

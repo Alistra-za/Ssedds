@@ -8,12 +8,21 @@ use sdc_gui::render::*;
 
 #[test]
 fn formats_map_to_unorm_block_formats() {
-    assert_eq!(wgpu_format(Format::Bc7), wgpu::TextureFormat::Bc7RgbaUnorm);
-    assert_eq!(wgpu_format(Format::Bc5), wgpu::TextureFormat::Bc5RgUnorm);
-    assert_eq!(wgpu_format(Format::Bc4), wgpu::TextureFormat::Bc4RUnorm);
+    assert_eq!(
+        wgpu_format(Format::Bc7),
+        Some(wgpu::TextureFormat::Bc7RgbaUnorm)
+    );
+    assert_eq!(
+        wgpu_format(Format::Bc5),
+        Some(wgpu::TextureFormat::Bc5RgUnorm)
+    );
+    assert_eq!(
+        wgpu_format(Format::Bc4),
+        Some(wgpu::TextureFormat::Bc4RUnorm)
+    );
     assert_eq!(
         wgpu_format(Format::Bc6hUf16),
-        wgpu::TextureFormat::Bc6hRgbUfloat
+        Some(wgpu::TextureFormat::Bc6hRgbUfloat)
     );
 }
 

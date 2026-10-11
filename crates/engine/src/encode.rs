@@ -92,7 +92,7 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
             }
         }
         f => {
-            let bs = f.block_bytes();
+            let bs = f.block_bytes().expect("block format");
             for (blk, src) in o.chunks_mut(bs).zip(b.chunks(BLOCK_TEXELS)) {
                 let src: &[[u8; 4]; 16] = src.try_into().unwrap();
                 match f {
@@ -115,10 +115,32 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
                     Format::Bc5 => {
                         blk.copy_from_slice(&bc5_encode_block(src, radius(e.bc45_search_radius)))
                     }
-                    Format::Bc7 | Format::Bc6hUf16 => unreachable!("handled elsewhere"),
+                    Format::Bc7
+                    | Format::Bc6hUf16
+                    | Format::Rgba8
+                    | Format::R8
+                    | Format::Rg8
+                    | Format::Rgba16f => unreachable!("handled elsewhere"),
                 }
             }
         }
+    }
+}
+
+/// Uncompressed level bytes (DECISIONS S4): `rgba8` as B8G8R8A8, `r8` as R, `rg8` as R then G, `rgba16f` as four
+/// little-endian halves per texel. Rows are tightly packed (pitch `w * bytes_per_pixel`).
+fn pack_uncompressed(input: &EncoderInput, format: Format) -> Vec<u8> {
+    match (input, format) {
+        (EncoderInput::Ldr(px), Format::Rgba8) => {
+            px.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).collect()
+        }
+        (EncoderInput::Ldr(px), Format::R8) => px.iter().map(|p| p[0]).collect(),
+        (EncoderInput::Ldr(px), Format::Rg8) => px.iter().flat_map(|p| [p[0], p[1]]).collect(),
+        (EncoderInput::Hdr(px), Format::Rgba16f) => px
+            .iter()
+            .flat_map(|p| p.iter().flat_map(|h| h.to_le_bytes()))
+            .collect(),
+        _ => unreachable!("encode_level_with checks the input kind against the format"),
     }
 }
 
@@ -149,9 +171,10 @@ fn pad_hdr(px: &[[u16; 4]], w: u32, h: u32) -> (Cow<'_, [[u16; 4]]>, u32, u32) {
 /// non-multiple-of-4 edge) are padded to whole 4x4 blocks by edge replication (`gather_blocks`
 /// for LDR, `pad_hdr` for BC6H). Cancellation is checked before each band and once more at the end.
 ///
-/// Panics if `input` does not match `p.format` (HDR input exactly for BC6H) or `w * h` pixels.
-/// Both are programmer-error invariants, not user-reachable: `quantize::to_encoder_input` yields
-/// HDR input iff the format is BC6H, and the level's pixel count comes from the mip chain.
+/// Panics if `input` does not match `p.format` (HDR input exactly for BC6H and RGBA16F; uncompressed
+/// formats are packed, not encoded) or `w * h` pixels. Both are programmer-error invariants, not
+/// user-reachable: `quantize::to_encoder_input` yields HDR input iff the format is HDR, and the level's
+/// pixel count comes from the mip chain.
 pub fn encode_level(
     input: &EncoderInput,
     w: u32,
@@ -177,10 +200,26 @@ fn encode_level_with(
 ) -> Result<Vec<u8>, Cancelled> {
     assert_eq!(
         matches!(input, EncoderInput::Hdr(_)),
-        p.format == Format::Bc6hUf16,
+        p.format.is_hdr(),
         "encoder input kind does not match format {:?}",
         p.format
     );
+    if !p.format.is_block() {
+        let n = match input {
+            EncoderInput::Ldr(v) => v.len(),
+            EncoderInput::Hdr(v) => v.len(),
+        };
+        assert_eq!(
+            n,
+            w as usize * h as usize,
+            "pixel count does not match width*height"
+        );
+        return if cancelled() {
+            Err(Cancelled)
+        } else {
+            Ok(pack_uncompressed(input, p.format))
+        };
+    }
     // Set when any band is skipped, so its zero-filled output can never be returned, whatever the
     // probe reads at the end (a shared flag may be cleared by another holder).
     let skipped = AtomicBool::new(false);
@@ -194,7 +233,10 @@ fn encode_level_with(
     let out = match input {
         EncoderInput::Ldr(px) => {
             let blocks = gather_blocks(px, w, h);
-            let (bw, bs) = (w.div_ceil(4) as usize, p.format.block_bytes());
+            let (bw, bs) = (
+                w.div_ceil(4) as usize,
+                p.format.block_bytes().expect("block format"),
+            );
             let mut out = vec![0u8; blocks.len() / BLOCK_TEXELS * bs];
             out.par_chunks_mut(bw * bs)
                 .zip(blocks.par_chunks(bw * BLOCK_TEXELS))
@@ -327,5 +369,39 @@ mod tests {
         encode_band(&blocks, &mut plain, &off, false);
         encode_band(&blocks, &mut fixed, &p, false);
         assert_eq!(plain, fixed);
+    }
+
+    #[test]
+    fn uncompressed_levels_are_packed_as_their_dxgi_layout() {
+        let mut p = bc7_exact_profile();
+        let px = vec![[10u8, 20, 30, 40], [50, 60, 70, 80]];
+        for (f, want) in [
+            (Format::Rgba8, vec![30u8, 20, 10, 40, 70, 60, 50, 80]),
+            (Format::R8, vec![10, 50]),
+            (Format::Rg8, vec![10, 20, 50, 60]),
+        ] {
+            p.format = f;
+            p.encoder.backend = Backend::Uncompressed;
+            assert_eq!(
+                encode_level(
+                    &EncoderInput::Ldr(px.clone()),
+                    2,
+                    1,
+                    &p,
+                    &EncodeCtx::default()
+                )
+                .unwrap(),
+                want,
+                "{f:?}"
+            );
+        }
+        p.format = Format::Rgba16f;
+        let h = [half::f16::from_f32(2.0).to_bits(), 0, 0x3c00, 0x3800];
+        let out =
+            encode_level(&EncoderInput::Hdr(vec![h]), 1, 1, &p, &EncodeCtx::default()).unwrap();
+        assert_eq!(
+            out,
+            h.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()
+        );
     }
 }

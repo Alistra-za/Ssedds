@@ -3,20 +3,24 @@ use eframe::egui_wgpu::wgpu;
 use engine::config::Format;
 
 /// The block format a mip is uploaded as. Always UNORM: the shader decides how to show the bytes (spec §6.1).
-pub fn wgpu_format(format: Format) -> wgpu::TextureFormat {
-    match format {
+pub fn wgpu_format(format: Format) -> Option<wgpu::TextureFormat> {
+    Some(match format {
         Format::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
         Format::Bc3 => wgpu::TextureFormat::Bc3RgbaUnorm,
         Format::Bc4 => wgpu::TextureFormat::Bc4RUnorm,
         Format::Bc5 => wgpu::TextureFormat::Bc5RgUnorm,
         Format::Bc6hUf16 => wgpu::TextureFormat::Bc6hRgbUfloat,
         Format::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
-    }
+        Format::Rgba8 | Format::R8 | Format::Rg8 | Format::Rgba16f => return None,
+    })
 }
 
 /// Bytes per row of blocks and the number of block rows of a `w` x `h` mip.
 pub fn block_layout(format: Format, w: u32, h: u32) -> (u32, u32) {
-    (w.div_ceil(4) * format.block_bytes() as u32, h.div_ceil(4))
+    (
+        w.div_ceil(4) * format.block_bytes().unwrap_or(0) as u32,
+        h.div_ceil(4),
+    )
 }
 
 /// BC upload needs the device feature, a first mip whose sides are multiples of 4 (a smaller mip may be 2x2 or 1x1)
@@ -173,7 +177,7 @@ pub(super) fn bc_chain(
     }
     let texture = device.create_texture(&texture_desc(
         "preview encoded",
-        wgpu_format(format),
+        wgpu_format(format)?,
         usable[0],
         mips,
     ));

@@ -40,18 +40,43 @@ pub fn legacy_fourcc(format: Format) -> Option<[u8; 4]> {
         Format::Bc3 => Some(*b"DXT5"),
         Format::Bc4 => Some(*b"BC4U"),
         Format::Bc5 => Some(*b"BC5U"),
-        Format::Bc6hUf16 | Format::Bc7 => None,
+        Format::Bc6hUf16
+        | Format::Bc7
+        | Format::Rgba8
+        | Format::R8
+        | Format::Rg8
+        | Format::Rgba16f => None,
     }
 }
 
-/// Header form for a request. `Auto` picks legacy only for BC1/BC3 UNORM.
+/// Legacy uncompressed pixel format: RGB bit masks are valid.
+pub const DDPF_RGB: u32 = 0x40;
+/// Legacy uncompressed pixel format: the alpha mask is valid.
+pub const DDPF_ALPHAPIXELS: u32 = 0x1;
+
+/// The legacy pixel-format block `(flags, bit count, [R, G, B, A] masks)` of an uncompressed format: only `rgba8`
+/// UNORM has one, B8G8R8A8 (DECISIONS S4).
+pub fn legacy_masks(format: Format) -> Option<(u32, u32, [u32; 4])> {
+    match format {
+        Format::Rgba8 => Some((
+            DDPF_RGB | DDPF_ALPHAPIXELS,
+            32,
+            [0xff_0000, 0xff00, 0xff, 0xff00_0000],
+        )),
+        _ => None,
+    }
+}
+
+/// Header form for a request. `Auto` picks legacy only for BC1/BC3/RGBA8 UNORM.
 ///
 /// An explicit `legacy` on a format with no legacy form (BC6H, BC7, any `_SRGB`) maps to DX10 here as a defensive
 /// fallback only; Resolve rejects such requests as a user error (`CFG-INVALID`) before this is reached.
 pub fn resolve_header(format: Format, srgb: bool, h: HeaderForm) -> ResolvedHeader {
-    let legacy_ok = !srgb && legacy_fourcc(format).is_some();
+    let legacy_ok = !srgb && (legacy_fourcc(format).is_some() || legacy_masks(format).is_some());
     match h {
-        HeaderForm::Auto if !srgb && matches!(format, Format::Bc1 | Format::Bc3) => {
+        HeaderForm::Auto
+            if !srgb && matches!(format, Format::Bc1 | Format::Bc3 | Format::Rgba8) =>
+        {
             ResolvedHeader::Legacy
         }
         HeaderForm::Legacy if legacy_ok => ResolvedHeader::Legacy,
@@ -70,6 +95,11 @@ pub fn dxgi_format(format: Format, srgb: bool) -> u32 {
         (Format::Bc6hUf16, _) => 95,
         (Format::Bc7, false) => 98,
         (Format::Bc7, true) => 99,
+        (Format::Rgba8, false) => 87,
+        (Format::Rgba8, true) => 91,
+        (Format::R8, _) => 61,
+        (Format::Rg8, _) => 49,
+        (Format::Rgba16f, _) => 10,
     }
 }
 
@@ -82,13 +112,11 @@ pub struct DdsDesc {
     pub header: ResolvedHeader,
 }
 
-/// Bytes in one mip level: `ceil(w/4) * ceil(h/4) * block_bytes`, or `None` if that overflows `usize`. A
-/// dimension of 1..=3 is already one block, so no explicit clamp is needed; a zero dimension gives 0 (and is
-/// rejected by `dds_bytes`).
+/// Bytes in one mip level: whole blocks for a block format, `w * h * bytes_per_pixel` otherwise, or `None` if
+/// that overflows `usize`. A dimension of 1..=3 is already one block, so no explicit clamp is needed; a zero
+/// dimension gives 0 (and is rejected by `dds_bytes`).
 pub fn checked_level_size(format: Format, w: u32, h: u32) -> Option<usize> {
-    (w.div_ceil(4) as usize)
-        .checked_mul(h.div_ceil(4) as usize)?
-        .checked_mul(format.block_bytes())
+    format.pixel_format(false).checked_level_size(w, h)
 }
 
 /// `checked_level_size`, saturating to `usize::MAX` on overflow so it never panics and never equals a real
@@ -186,44 +214,82 @@ pub fn dds_bytes(desc: &DdsDesc, levels: &[Vec<u8>]) -> Result<Vec<u8>, DdsError
             });
         }
     }
-    let fourcc = match desc.header {
-        ResolvedHeader::Legacy => match legacy_fourcc(desc.format) {
-            Some(cc) if !desc.srgb => cc,
-            _ => {
-                return Err(DdsError::NoLegacyForm {
-                    format: desc.format,
-                    srgb: desc.srgb,
-                })
-            }
-        },
-        ResolvedHeader::Dx10 => *b"DX10",
-    };
-    let size0 = level_size(desc.format, w, h); // level 0 passed the checked loop above
-    let linear_size = u32::try_from(size0).map_err(|_| DdsError::LinearSizeOverflow(size0))?;
-    let mips = levels.len() as u32;
+    let mut out = header_bytes(desc, levels.len() as u32)?;
+    out.reserve(levels.iter().map(Vec::len).sum::<usize>());
+    for l in levels {
+        out.extend_from_slice(l);
+    }
+    Ok(out)
+}
+
+/// The magic, the 124-byte header and (for DX10) the 20-byte DX10 block of a `desc` file with `mips` levels. A block
+/// format carries `DDSD_LINEARSIZE` and the mip-0 size, an uncompressed one `DDSD_PITCH` and the row pitch.
+pub fn header_bytes(desc: &DdsDesc, mips: u32) -> Result<Vec<u8>, DdsError> {
+    let (w, h) = (desc.width, desc.height);
+    if w == 0 || h == 0 {
+        return Err(DdsError::ZeroDimension {
+            width: w,
+            height: h,
+        });
+    }
+    let block = desc.format.is_block();
+    let size = if block {
+        checked_level_size(desc.format, w, h)
+    } else {
+        checked_level_size(desc.format, w, 1)
+    }
+    .ok_or(DdsError::SizeOverflow {
+        level: 0,
+        width: w,
+        height: h,
+    })?;
+    let size = u32::try_from(size).map_err(|_| DdsError::LinearSizeOverflow(size))?;
     let mut hd = [0u32; 31];
     hd[0] = 124;
     hd[1] = DDSD_CAPS
         | DDSD_HEIGHT
         | DDSD_WIDTH
         | DDSD_PIXELFORMAT
-        | DDSD_LINEARSIZE
+        | if block { DDSD_LINEARSIZE } else { DDSD_PITCH }
         | if mips > 1 { DDSD_MIPMAPCOUNT } else { 0 };
     hd[2] = h;
     hd[3] = w;
-    hd[4] = linear_size;
+    hd[4] = size;
     hd[5] = 1; // depth: texconv writes 1 for 2D textures; not a reserved field
     hd[6] = mips;
     hd[18] = 32;
-    hd[19] = DDPF_FOURCC;
-    hd[20] = u32::from_le_bytes(fourcc);
+    match desc.header {
+        ResolvedHeader::Legacy => {
+            let no_form = DdsError::NoLegacyForm {
+                format: desc.format,
+                srgb: desc.srgb,
+            };
+            if desc.srgb {
+                return Err(no_form);
+            }
+            if let Some(cc) = legacy_fourcc(desc.format) {
+                hd[19] = DDPF_FOURCC;
+                hd[20] = u32::from_le_bytes(cc);
+            } else if let Some((flags, bits, m)) = legacy_masks(desc.format) {
+                hd[19] = flags;
+                hd[21] = bits;
+                hd[22..26].copy_from_slice(&m);
+            } else {
+                return Err(no_form);
+            }
+        }
+        ResolvedHeader::Dx10 => {
+            hd[19] = DDPF_FOURCC;
+            hd[20] = u32::from_le_bytes(*b"DX10");
+        }
+    }
     hd[26] = DDSCAPS_TEXTURE
         | if mips > 1 {
             DDSCAPS_COMPLEX | DDSCAPS_MIPMAP
         } else {
             0
         };
-    let mut out = Vec::with_capacity(148 + levels.iter().map(Vec::len).sum::<usize>());
+    let mut out = Vec::with_capacity(148);
     out.extend_from_slice(b"DDS ");
     for v in hd {
         out.extend_from_slice(&v.to_le_bytes());
@@ -238,9 +304,6 @@ pub fn dds_bytes(desc: &DdsDesc, levels: &[Vec<u8>]) -> Result<Vec<u8>, DdsError
         ] {
             out.extend_from_slice(&v.to_le_bytes());
         }
-    }
-    for l in levels {
-        out.extend_from_slice(l);
     }
     Ok(out)
 }
@@ -311,7 +374,7 @@ pub enum DdsPixelFormat {
     Bc6hSf16,
     Bc7 { srgb: bool },
     Rgba8 { srgb: bool },
-    Bgra8,
+    Bgra8 { srgb: bool },
     Bgrx8,
     R8,
     Rg8,
@@ -330,10 +393,10 @@ impl DdsPixelFormat {
         }
     }
 
-    fn bytes_per_pixel(self) -> usize {
+    pub fn bytes_per_pixel(self) -> usize {
         use DdsPixelFormat::*;
         match self {
-            Rgba8 { .. } | Bgra8 | Bgrx8 => 4,
+            Rgba8 { .. } | Bgra8 { .. } | Bgrx8 => 4,
             R8 => 1,
             Rg8 => 2,
             Rgba16f => 8,
@@ -359,7 +422,8 @@ impl DdsPixelFormat {
         self.checked_level_size(w, h).unwrap_or(usize::MAX)
     }
 
-    /// The writable format and `_SRGB` tag, or `None` for formats sdc never writes (BC2, signed BC6H, uncompressed).
+    /// The writable format and `_SRGB` tag, or `None` for formats sdc never writes (BC2, signed BC6H, RGBA-order
+    /// RGBA8, BGRX8, RGBA32F).
     pub fn as_format(self) -> Option<(Format, bool)> {
         use DdsPixelFormat as P;
         Some(match self {
@@ -369,8 +433,70 @@ impl DdsPixelFormat {
             P::Bc5 => (Format::Bc5, false),
             P::Bc6hUf16 => (Format::Bc6hUf16, false),
             P::Bc7 { srgb } => (Format::Bc7, srgb),
+            P::Bgra8 { srgb } => (Format::Rgba8, srgb),
+            P::R8 => (Format::R8, false),
+            P::Rg8 => (Format::Rg8, false),
+            P::Rgba16f => (Format::Rgba16f, false),
             _ => return None,
         })
+    }
+
+    /// The DXGI number of this pixel format (a legacy header's format maps to its DXGI equivalent).
+    pub fn dxgi(self) -> u32 {
+        use DdsPixelFormat::*;
+        match self {
+            Rgba32f => 2,
+            Rgba16f => 10,
+            Rgba8 { srgb } => {
+                if srgb {
+                    29
+                } else {
+                    28
+                }
+            }
+            Rg8 => 49,
+            R8 => 61,
+            Bc1 { srgb } => {
+                if srgb {
+                    72
+                } else {
+                    71
+                }
+            }
+            Bc2 { srgb } => {
+                if srgb {
+                    75
+                } else {
+                    74
+                }
+            }
+            Bc3 { srgb } => {
+                if srgb {
+                    78
+                } else {
+                    77
+                }
+            }
+            Bc4 => 80,
+            Bc5 => 83,
+            Bgra8 { srgb } => {
+                if srgb {
+                    91
+                } else {
+                    87
+                }
+            }
+            Bgrx8 => 88,
+            Bc6hUf16 => 95,
+            Bc6hSf16 => 96,
+            Bc7 { srgb } => {
+                if srgb {
+                    99
+                } else {
+                    98
+                }
+            }
+        }
     }
 }
 
@@ -424,7 +550,7 @@ const DDSCAPS2_CUBEMAP: u32 = 0x200;
 const DDSCAPS2_VOLUME: u32 = 0x20_0000;
 const DX10_MISC_CUBEMAP: u32 = 0x4;
 
-fn from_dxgi(d: u32) -> Option<DdsPixelFormat> {
+pub fn from_dxgi(d: u32) -> Option<DdsPixelFormat> {
     use DdsPixelFormat::*;
     Some(match d {
         2 => Rgba32f,
@@ -441,7 +567,8 @@ fn from_dxgi(d: u32) -> Option<DdsPixelFormat> {
         78 => Bc3 { srgb: true },
         80 => Bc4,
         83 => Bc5,
-        87 => Bgra8,
+        87 => Bgra8 { srgb: false },
+        91 => Bgra8 { srgb: true },
         88 => Bgrx8,
         95 => Bc6hUf16,
         96 => Bc6hSf16,
@@ -531,7 +658,7 @@ pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
     } else {
         match (bits, rm, gm, bm, am) {
             (32, 0xff, 0xff00, 0xff_0000, 0xff00_0000) => Rgba8 { srgb: false },
-            (32, 0xff_0000, 0xff00, 0xff, 0xff00_0000) => Bgra8,
+            (32, 0xff_0000, 0xff00, 0xff, 0xff00_0000) => Bgra8 { srgb: false },
             (32, 0xff_0000, 0xff00, 0xff, 0) => Bgrx8,
             (8, 0xff, 0, 0, 0) => R8,
             (16, 0xff, 0xff00, 0, 0) => Rg8,
@@ -588,7 +715,7 @@ pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
 
 /// Spec §5.7 rules for a written 2D file. Returns one message per violation; empty means the header is as the
 /// writer would have produced it. A compressed format carries `DDSD_LINEARSIZE` and the mip-0 surface size; an
-/// uncompressed one (which sdc never writes, but whose header is still checked) carries `DDSD_PITCH` and the row
+/// uncompressed one (which sdc writes since M6) carries `DDSD_PITCH` and the row
 /// pitch (Codex-B I2).
 pub fn check_header(f: &DdsFile) -> Vec<String> {
     let mut v = vec![];

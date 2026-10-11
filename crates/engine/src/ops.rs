@@ -39,7 +39,7 @@ pub struct Work {
 }
 
 pub fn domain_for(p: &Profile) -> Domain {
-    if p.format == Format::Bc6hUf16 {
+    if p.format.is_hdr() {
         Domain::Hdr
     } else if p.subtype == Subtype::Msn {
         Domain::Msn
