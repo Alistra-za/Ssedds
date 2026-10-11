@@ -3,10 +3,14 @@ use render3d::device::{Gpu, Target};
 #[test]
 fn clear_and_readback() {
     let gpu = Gpu::new(None).unwrap();
-    eprintln!("adapter: {} (warp: {})", gpu.adapter, gpu.warp);
-    let t = Target::new(&gpu, 4, 2);
+    eprintln!(
+        "adapter: {} (warp: {}, luid: {:02x?})",
+        gpu.adapter, gpu.warp, gpu.luid
+    );
+    assert!(!gpu.is_removed());
+    let t = Target::new(&gpu, 4, 2).unwrap();
     t.clear(&gpu, [1.0, 0.5, 0.0, 1.0]);
-    let px = t.readback_rgba8(&gpu);
+    let px = t.readback_rgba8(&gpu).unwrap();
     assert_eq!(px.len(), 4 * 2 * 4);
     assert_eq!(&px[0..4], &[255, 128, 0, 255]);
 }
@@ -15,9 +19,9 @@ fn clear_and_readback() {
 fn warp_fallback_renders() {
     let gpu = render3d::device::Gpu::new_warp().unwrap();
     assert!(gpu.warp);
-    let t = Target::new(&gpu, 2, 2);
+    let t = Target::new(&gpu, 2, 2).unwrap();
     t.clear(&gpu, [0.0, 1.0, 0.0, 1.0]);
-    assert_eq!(&t.readback_rgba8(&gpu)[0..4], &[0, 255, 0, 255]);
+    assert_eq!(&t.readback_rgba8(&gpu).unwrap()[0..4], &[0, 255, 0, 255]);
 }
 
 #[test]
@@ -28,13 +32,15 @@ fn prefer_luid_picks_that_adapter() {
     };
     let gpu = Gpu::new(Some(luid)).unwrap();
     assert_eq!(gpu.adapter, name);
+    assert_eq!(gpu.luid, luid);
     assert!(!gpu.warp);
 }
 
 #[test]
 fn unknown_luid_falls_back() {
     let gpu = Gpu::new(Some([0xEE; 8])).unwrap();
-    let t = Target::new(&gpu, 3, 1);
+    assert_ne!(gpu.luid, [0xEE; 8]);
+    let t = Target::new(&gpu, 3, 1).unwrap();
     t.clear(&gpu, [0.25, 0.0, 1.0, 0.5]);
-    assert_eq!(t.readback_rgba8(&gpu), [64, 0, 255, 128].repeat(3));
+    assert_eq!(t.readback_rgba8(&gpu).unwrap(), [64, 0, 255, 128].repeat(3));
 }

@@ -1,17 +1,28 @@
-//! D3D11 device creation (hardware adapter by LUID → any hardware → WARP),
-//! an offscreen RGBA16F + D32 target, clear, and RGBA8 readback.
+//! D3D11 device creation (hardware adapter by LUID → each hardware adapter →
+//! default hardware → WARP), an offscreen RGBA16F + D32 target, clear, and
+//! RGBA8 readback.
 //!
 //! Review Focus #5: when no hardware device can be created (RDP session,
 //! broken driver) [`Gpu::new`] falls back to WARP and sets [`Gpu::warp`] so
 //! the GUI can show a "software renderer" notice. If WARP fails too, `new`
 //! returns `Err` (the GUI shows "3D preview unavailable"); it never panics.
+//! [`Target`] operations return `Err` rather than panicking too.
+//!
+//! **Device removal** (TDR, driver update, GPU unplugged): a failing
+//! [`Target`] operation checks `GetDeviceRemovedReason`. When the device is
+//! gone, the error starts with [`DEVICE_REMOVED`] and [`Gpu::is_removed`]
+//! is true. On that error, drop the `Gpu` and everything made from it and
+//! rebuild with [`Gpu::new`] (which may land on WARP this time).
+//!
+//! **Threading:** the immediate context is not thread-safe. Keep a `Gpu`
+//! and its `Target`s on one thread (or serialise every use behind a lock).
 //!
 //! COM objects are released by scope (the `windows` crate's interface types
 //! call `Release` on drop). Every `unsafe` block below is a plain D3D11/DXGI
 //! call whose pointer arguments are locals that outlive the call.
 
 use windows::core::Interface;
-use windows::Win32::Foundation::HMODULE;
+use windows::Win32::Foundation::{HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,
     D3D_FEATURE_LEVEL_11_0,
@@ -31,7 +42,11 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_ADAPTER_DESC1, DXGI_ADAPTER_FLAG_SOFTWARE,
 };
 
-/// A D3D11 device and its immediate context.
+/// Prefix of every error caused by a removed device; see the module docs.
+pub const DEVICE_REMOVED: &str = "device removed";
+
+/// A D3D11 device and its immediate context. Single-threaded: see the
+/// module docs.
 pub struct Gpu {
     pub device: ID3D11Device,
     pub ctx: ID3D11DeviceContext,
@@ -40,14 +55,20 @@ pub struct Gpu {
     pub warp: bool,
     /// Adapter description, e.g. "NVIDIA GeForce RTX 4090".
     pub adapter: String,
+    /// LUID of the adapter the device landed on (byte order: [`luid_bytes`]).
+    /// Compare with the preferred LUID to tell whether it was honoured.
+    /// All zero if DXGI could not report it.
+    pub luid: [u8; 8],
 }
 
-/// `LUID` as 8 bytes: `LowPart` little-endian, then `HighPart` little-endian.
-/// Callers that pass `prefer_luid` (e.g. wgpu's adapter LUID) use this order.
-pub fn luid_bytes(desc: &DXGI_ADAPTER_DESC1) -> [u8; 8] {
+/// The `LUID` struct's in-memory bytes: `LowPart` (u32) little-endian, then
+/// `HighPart` (i32) little-endian. These are the 8 bytes DXGI gives as
+/// `DXGI_ADAPTER_DESC1::AdapterLuid` and Vulkan as
+/// `VkPhysicalDeviceIDProperties::deviceLUID`. `prefer_luid` uses this order.
+pub fn luid_bytes(luid: LUID) -> [u8; 8] {
     let mut b = [0u8; 8];
-    b[..4].copy_from_slice(&desc.AdapterLuid.LowPart.to_le_bytes());
-    b[4..].copy_from_slice(&desc.AdapterLuid.HighPart.to_le_bytes());
+    b[..4].copy_from_slice(&luid.LowPart.to_le_bytes());
+    b[4..].copy_from_slice(&luid.HighPart.to_le_bytes());
     b
 }
 
@@ -98,10 +119,12 @@ fn create(adapter: Option<&IDXGIAdapter>, driver: D3D_DRIVER_TYPE) -> Result<Gpu
         ctx,
         warp: driver == D3D_DRIVER_TYPE_WARP || software,
         adapter: desc.as_ref().map(adapter_name).unwrap_or_default(),
+        luid: desc.map(|d| luid_bytes(d.AdapterLuid)).unwrap_or_default(),
     })
 }
 
-/// Hardware adapters (non-software) from DXGI enumeration.
+/// Hardware adapters (skipping software ones such as the Basic Render
+/// Driver) from DXGI enumeration, in DXGI order.
 fn hardware_adapters() -> Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> {
     let mut out = Vec::new();
     // SAFETY: plain COM factory creation / enumeration.
@@ -127,29 +150,47 @@ fn hardware_adapters() -> Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> {
 pub fn hardware_adapter_list() -> Vec<(String, [u8; 8])> {
     hardware_adapters()
         .iter()
-        .map(|(_, d)| (adapter_name(d), luid_bytes(d)))
+        .map(|(_, d)| (adapter_name(d), luid_bytes(d.AdapterLuid)))
         .collect()
 }
 
+fn create_on(a: &IDXGIAdapter1) -> Result<Gpu, String> {
+    let a = a.cast::<IDXGIAdapter>().map_err(|e| e.to_string())?;
+    create(Some(&a), D3D_DRIVER_TYPE_UNKNOWN)
+}
+
 impl Gpu {
-    /// Hardware adapter whose LUID matches `prefer_luid` (see [`luid_bytes`]
-    /// for the byte order), then any hardware adapter, then WARP. The error
-    /// lists every attempt's failure.
+    /// Tries, in order:
+    /// 1. the hardware adapter whose LUID matches `prefer_luid` (byte order:
+    ///    [`luid_bytes`]);
+    /// 2. every other enumerated hardware adapter, in DXGI order (so a real
+    ///    GPU listed after adapter 0 is still used);
+    /// 3. `D3D_DRIVER_TYPE_HARDWARE` on the default adapter;
+    /// 4. WARP.
+    ///
+    /// The error lists every attempt's failure.
     pub fn new(prefer_luid: Option<[u8; 8]>) -> Result<Gpu, String> {
         let mut errors = Vec::new();
+        let mut adapters = hardware_adapters();
         if let Some(want) = prefer_luid {
-            match hardware_adapters()
-                .into_iter()
-                .find(|(_, d)| luid_bytes(d) == want)
+            match adapters
+                .iter()
+                .position(|(_, d)| luid_bytes(d.AdapterLuid) == want)
             {
-                Some((a, d)) => match a.cast::<IDXGIAdapter>() {
-                    Ok(a) => match create(Some(&a), D3D_DRIVER_TYPE_UNKNOWN) {
+                Some(i) => {
+                    let (a, d) = adapters.remove(i);
+                    match create_on(&a) {
                         Ok(g) => return Ok(g),
                         Err(e) => errors.push(format!("adapter {}: {e}", adapter_name(&d))),
-                    },
-                    Err(e) => errors.push(format!("adapter {}: {e}", adapter_name(&d))),
-                },
+                    }
+                }
                 None => errors.push(format!("no hardware adapter with LUID {want:02x?}")),
+            }
+        }
+        for (a, d) in &adapters {
+            match create_on(a) {
+                Ok(g) => return Ok(g),
+                Err(e) => errors.push(format!("adapter {}: {e}", adapter_name(d))),
             }
         }
         match create(None, D3D_DRIVER_TYPE_HARDWARE) {
@@ -168,6 +209,27 @@ impl Gpu {
     /// Forces the WARP software rasteriser (ships with Windows).
     pub fn new_warp() -> Result<Gpu, String> {
         create(None, D3D_DRIVER_TYPE_WARP).map_err(|e| format!("WARP: {e}"))
+    }
+
+    /// `Some(reason)` once the device has been removed; rebuild the `Gpu`.
+    pub fn removed_reason(&self) -> Option<String> {
+        // SAFETY: plain COM getter on a live interface.
+        unsafe { self.device.GetDeviceRemovedReason() }
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    pub fn is_removed(&self) -> bool {
+        self.removed_reason().is_some()
+    }
+
+    /// Error text for a failed `what`. It starts with [`DEVICE_REMOVED`]
+    /// when the device is gone, so callers know to rebuild.
+    fn fail(&self, what: &str, e: impl std::fmt::Display) -> String {
+        match self.removed_reason() {
+            Some(reason) => format!("{DEVICE_REMOVED}: {reason} ({what}: {e})"),
+            None => format!("{what}: {e}"),
+        }
     }
 }
 
@@ -203,8 +265,9 @@ fn tex2d_desc(w: u32, h: u32, format: DXGI_FORMAT) -> D3D11_TEXTURE2D_DESC {
 fn create_tex(gpu: &Gpu, desc: &D3D11_TEXTURE2D_DESC) -> Result<ID3D11Texture2D, String> {
     let mut t = None;
     // SAFETY: `desc` and the out-pointer are live locals.
-    unsafe { gpu.device.CreateTexture2D(desc, None, Some(&mut t)) }.map_err(|e| e.to_string())?;
-    t.ok_or_else(|| "CreateTexture2D returned no texture".into())
+    unsafe { gpu.device.CreateTexture2D(desc, None, Some(&mut t)) }
+        .map_err(|e| gpu.fail("CreateTexture2D", e))?;
+    t.ok_or_else(|| gpu.fail("CreateTexture2D", "no texture returned"))
 }
 
 /// half → u8: round-to-nearest of clamp(v, 0, 1) × 255 (0.5 → 128; NaN → 0).
@@ -214,12 +277,9 @@ fn unorm8(bits: u16) -> u8 {
 }
 
 impl Target {
-    /// Panics if the device cannot create the textures; see [`Target::try_new`].
-    pub fn new(gpu: &Gpu, w: u32, h: u32) -> Target {
-        Target::try_new(gpu, w, h).expect("create offscreen target")
-    }
-
-    pub fn try_new(gpu: &Gpu, w: u32, h: u32) -> Result<Target, String> {
+    /// Creates the colour and depth textures and their views. A removed
+    /// device gives an error starting with [`DEVICE_REMOVED`].
+    pub fn new(gpu: &Gpu, w: u32, h: u32) -> Result<Target, String> {
         let mut cd = tex2d_desc(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
         cd.BindFlags = D3D11_BIND_RENDER_TARGET.0 as u32;
         let color = create_tex(gpu, &cd)?;
@@ -231,18 +291,18 @@ impl Target {
         unsafe {
             gpu.device
                 .CreateRenderTargetView(&color, None, Some(&mut rtv))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| gpu.fail("CreateRenderTargetView", e))?;
             gpu.device
                 .CreateDepthStencilView(&depth, None, Some(&mut dsv))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| gpu.fail("CreateDepthStencilView", e))?;
         }
         Ok(Target {
             width: w,
             height: h,
             color,
-            rtv: rtv.ok_or("CreateRenderTargetView returned no view")?,
+            rtv: rtv.ok_or_else(|| gpu.fail("CreateRenderTargetView", "no view returned"))?,
             depth,
-            dsv: dsv.ok_or("CreateDepthStencilView returned no view")?,
+            dsv: dsv.ok_or_else(|| gpu.fail("CreateDepthStencilView", "no view returned"))?,
         })
     }
 
@@ -257,16 +317,12 @@ impl Target {
     }
 
     /// Tightly packed RGBA8, `width × height × 4` bytes, top row first.
-    /// Panics on a device error; see [`Target::try_readback_rgba8`].
-    pub fn readback_rgba8(&self, gpu: &Gpu) -> Vec<u8> {
-        self.try_readback_rgba8(gpu)
-            .expect("read back offscreen target")
-    }
-
+    ///
     /// Copies the RGBA16F colour into a staging texture, maps it (rows are
     /// `RowPitch` apart, which may exceed `width × 8`), and converts each
-    /// half to u8 with the identity-clamp tonemap of P0.
-    pub fn try_readback_rgba8(&self, gpu: &Gpu) -> Result<Vec<u8>, String> {
+    /// half to u8 with the identity-clamp tonemap of P0. A removed device
+    /// (surfaced by `Map`) gives an error starting with [`DEVICE_REMOVED`].
+    pub fn readback_rgba8(&self, gpu: &Gpu) -> Result<Vec<u8>, String> {
         let mut sd = tex2d_desc(self.width, self.height, DXGI_FORMAT_R16G16B16A16_FLOAT);
         sd.Usage = D3D11_USAGE_STAGING;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -277,7 +333,7 @@ impl Target {
             gpu.ctx.CopyResource(&staging, &self.color);
             gpu.ctx
                 .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| gpu.fail("Map", e))?;
         }
         let (w, h) = (self.width as usize, self.height as usize);
         let pitch = mapped.RowPitch as usize;
@@ -302,7 +358,7 @@ impl Target {
         // them can return early.
         unsafe { gpu.ctx.Unmap(&staging, 0) };
         if out.len() != w * h * 4 {
-            return Err("Map returned a null pointer".into());
+            return Err(gpu.fail("Map", "null pointer returned"));
         }
         Ok(out)
     }
