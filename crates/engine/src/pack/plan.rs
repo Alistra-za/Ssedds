@@ -214,6 +214,7 @@ fn size_mismatch_job(
         suffix_alias: None,
         source: None,
         pack: None,
+        bake: None,
     }
 }
 

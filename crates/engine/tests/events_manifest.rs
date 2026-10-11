@@ -132,6 +132,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 suffix_alias: None,
                 source: None,
                 pack: None,
+                bake: None,
             }),
         },
         EventKind::Progress {
@@ -491,12 +492,14 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             sha256: "11".into(),
             role: Some(RawMap::Roughness),
             invert: true,
+            bake: None,
         },
         SourceRef {
             path: "in/x_m.png".into(),
             sha256: "22".into(),
             role: None,
             invert: false,
+            bake: None,
         },
     ];
     m.append(&r).unwrap();

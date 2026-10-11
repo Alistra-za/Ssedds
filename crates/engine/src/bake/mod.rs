@@ -2,8 +2,12 @@
 //! → v = 0.25/κ → α′² = saturate(α² + min(2v, t²)), r′ = (α′²)^¼ [MIP, Unity HDRP `CommonMaterial.hlsl`]. The
 //! footprint lengths come from a box pyramid of the `_n`'s mip 0 as written: unit length unless `mips.normal_base = keep`
 //! (DECISIONS R1, R5).
-use crate::config::{MipKeyword, MipLevels};
+use crate::config::{MipKeyword, MipLevels, Profile};
 use crate::image::Rgba32F;
+use crate::policy::SourceStamp;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Lengths at or above this count as unit: no variance (spec §6.2 step 2).
 pub const UNIT_LENGTH: f64 = 1.0 - 1e-6;
@@ -153,10 +157,63 @@ impl NormalVariance {
     }
 }
 
+/// How a roughness member bakes its set's `_n` (`ResolvedJob::bake`, spec §6.2). Set by `plan::plan_bakes`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BakeJob {
+    /// The set's `pbr_normal` source.
+    pub normal: PathBuf,
+    /// That `_n`'s resolved profile: the member decodes the `_n` with it exactly as the `_n`'s own job does
+    /// (swizzle, green flip, Z rebuild; DECISIONS R4).
+    pub normal_profile: Profile,
+    /// log2(`_n` size / member size) ([`bake_shift`]) as planned.
+    pub shift: i32,
+    /// The `_n`'s size and modification time when `Engine::plan` read it (final review I7); `None` is not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<SourceStamp>,
+}
+
+impl BakeJob {
+    /// What the member's output depends on besides the `_n`'s bytes: the decode settings, how mip 0 is written, and
+    /// the level shift (DECISIONS R12). Recorded in the manifest so `if-changed` re-encodes when any changes; the
+    /// `_n`'s path and its own output settings (format, effort) are not part of it.
+    pub fn identity_sha256(&self) -> String {
+        crate::manifest::sha256_json(&(
+            &self.normal_profile.channels,
+            self.normal_profile.alpha.policy,
+            self.normal_profile.mips.normal_base,
+            self.shift,
+        ))
+        .unwrap_or_default()
+    }
+
+    /// Decode the `_n` as its own job does (spec §5.4), write its mip 0 as that job does (unit length unless
+    /// `mips.normal_base = keep`, DECISIONS R1) and keep only the footprint lengths of that written base. The image is
+    /// dropped before this returns (DECISIONS R4).
+    pub fn load_lengths(&self) -> Result<LengthPyramid, String> {
+        let (img, _) = crate::load::load_image(&self.normal).map_err(|e| e.to_string())?;
+        let mut work = crate::ops::preprocess(img, &self.normal_profile);
+        if self.normal_profile.mips.normal_base == crate::config::NormalBase::Renormalize {
+            for px in &mut work.img.px {
+                crate::mips::normalize_vector(px, work.domain);
+            }
+        }
+        Ok(LengthPyramid::build(&work.img))
+    }
+
+    /// Peak bytes the bake holds, for `--mem-budget` admission (DECISIONS R4): the `_n`'s float base (16 per texel),
+    /// one quarter-size accumulation level (4), the pyramid (1.33) and decode slack, so 24 per `_n` texel. 0 when
+    /// the header cannot be read (the load then fails with its own error).
+    pub fn estimated_bytes(&self) -> u64 {
+        ::image::image_dimensions(&self.normal)
+            .map(|(w, h)| u64::from(w) * u64::from(h) * 24)
+            .unwrap_or(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Profile, Subtype, Target};
+    use crate::config::{Format, NormalBase, Profile, Subtype, Target};
     use crate::mips::{build_chain, build_chain_with};
     use crate::ops::preprocess;
     use crate::presets::PresetRegistry;
@@ -375,5 +432,44 @@ mod tests {
         let w = preprocess(bumpy(16), &pn);
         let nv = NormalVariance::new(LengthPyramid::build(&normals), (16, 16), 0.25).unwrap();
         assert_eq!(build_chain_with(&w, &pn, Some(&nv)), build_chain(&w, &pn));
+    }
+
+    #[test]
+    fn a_bake_holds_24_bytes_per_normal_texel() {
+        let d = tempfile::tempdir().unwrap();
+        let n = d.path().join("iron_n.png");
+        ::image::RgbImage::new(64, 32).save(&n).unwrap();
+        let b = BakeJob {
+            normal: n,
+            normal_profile: profile(Subtype::PbrNormal),
+            shift: 0,
+            stamp: None,
+        };
+        assert_eq!(b.estimated_bytes(), 64 * 32 * 24);
+    }
+
+    #[test]
+    fn the_bake_identity_follows_decode_settings_and_shift_only() {
+        let b = BakeJob {
+            normal: "a/iron_n.png".into(),
+            normal_profile: profile(Subtype::PbrNormal),
+            shift: 0,
+            stamp: None,
+        };
+        let mut moved = b.clone();
+        moved.normal = "b/iron_n.png".into();
+        let mut format = b.clone();
+        format.normal_profile.format = Format::Bc1;
+        let mut flip = b.clone();
+        flip.normal_profile.channels.flip_green = true;
+        let mut shift = b.clone();
+        shift.shift = 1;
+        let mut keep = b.clone();
+        keep.normal_profile.mips.normal_base = NormalBase::Keep;
+        assert_eq!(b.identity_sha256(), moved.identity_sha256());
+        assert_eq!(b.identity_sha256(), format.identity_sha256());
+        assert_ne!(b.identity_sha256(), flip.identity_sha256());
+        assert_ne!(b.identity_sha256(), shift.identity_sha256());
+        assert_ne!(b.identity_sha256(), keep.identity_sha256());
     }
 }

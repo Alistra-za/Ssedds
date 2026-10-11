@@ -597,6 +597,13 @@
     "SourceRef": {
       "description": "One source file of a record: its path and SHA-256. A recipe built from several sources (`_rmaos`, `_p`) lists\nthem all so `if-changed` can re-encode when any of them changes.",
       "properties": {
+        "bake": {
+          "description": "The `_n` a roughness member baked its variance from (DECISIONS R12): the SHA-256 of its decode settings and\nlevel shift (`BakeJob::identity_sha256`). Absent on every other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "invert": {
           "description": "The source is stored inverted (a gloss map in a roughness channel).",
           "type": "boolean"
@@ -807,7 +814,7 @@
       "type": "string"
     },
     "sources": {
-      "description": "Every source of a multi-source recipe; empty for a single-source output (`source` is then the only one).",
+      "description": "Every source of a multi-source recipe, then the `_n` a roughness member baked from (DECISIONS R12); empty for a\nsingle-source output that does not bake (`source` is then the only one).",
       "items": {
         "$ref": "#/$defs/SourceRef"
       },

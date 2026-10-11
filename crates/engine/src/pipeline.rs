@@ -7,6 +7,7 @@
 //! parallelism runs on the same pool. Nothing here depends on the thread count: every encoded block is a pure
 //! function of its own texels, so the written bytes are identical for any `--jobs`.
 use crate::api::{BatchRequest, CancelToken};
+use crate::bake::NormalVariance;
 use crate::codes::{Code, Warning};
 use crate::config::{Format, Profile};
 use crate::coverage::{coverage_fraction, preserve_coverage};
@@ -20,7 +21,7 @@ use crate::manifest::{
     EncoderVersions, Manifest, ManifestRecord, PresetRef, SourceRef, ENGINE_VERSION,
     MANIFEST_SCHEMA,
 };
-use crate::mips::build_chain;
+use crate::mips::build_chain_with;
 use crate::ops::preprocess;
 use crate::pack::assemble::assemble;
 use crate::pack::invert_of;
@@ -131,9 +132,9 @@ pub(crate) struct Prepared {
 }
 
 /// Source stamps (final review I7): the plan's decisions (alpha policy, sub-type facts, ...) hold only for the
-/// file it analysed; a packed job checks every source.
+/// file it analysed; a packed job checks every source, and a baking roughness member its `_n` too (M4 carry).
 fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
-    let stamps: Vec<(&Path, Option<SourceStamp>)> = match &job.pack {
+    let mut stamps: Vec<(&Path, Option<SourceStamp>)> = match &job.pack {
         Some(pk) => pk
             .sources
             .iter()
@@ -141,10 +142,14 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
             .collect(),
         None => vec![(job.input.as_path(), job.source)],
     };
+    if let Some(b) = &job.bake {
+        stamps.push((b.normal.as_path(), b.stamp));
+    }
+    let named = job.pack.is_some() || job.bake.is_some();
     for (src, planned) in stamps {
         if let Some(planned) = planned {
             if SourceStamp::of(src) != Some(planned) {
-                let what = if job.pack.is_some() {
+                let what = if named {
                     format!("{}: ", src.display())
                 } else {
                     String::new()
@@ -194,6 +199,16 @@ fn prepare_then<T>(
     enter(Stage::Load);
     check_stamps(job)?;
     let extra = after_stamps()?;
+    // Spec §6.2–6.3 (DECISIONS R4): a roughness member decodes its `_n` first and keeps only the footprint lengths,
+    // so the two images are never held together.
+    let lengths = match &job.bake {
+        Some(b) => Some(
+            b.load_lengths()
+                .map_err(|e| fail(Stage::Load)(format!("{}: {e}", b.normal.display())))?,
+        ),
+        None => None,
+    };
+    stop()?;
     let img = match &job.pack {
         Some(pk) => {
             // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
@@ -206,6 +221,21 @@ fn prepare_then<T>(
                 .map_err(|e| fail(Stage::Load)(e.to_string()))?
                 .0
         }
+    };
+    let bake = match (lengths, &job.bake) {
+        (Some(l), Some(b)) => {
+            let nv = NormalVariance::new(l, (img.width, img.height), p.mips.bake_clamp).map_err(
+                |e| fail(Stage::Load)(format!("variance bake with {}: {e}", b.normal.display())),
+            )?;
+            if nv.shift() != b.shift {
+                return Err(fail(Stage::Load)(format!(
+                    "{}: size changed since planning; re-run",
+                    b.normal.display()
+                )));
+            }
+            Some(nv)
+        }
+        _ => None,
     };
     stop()?;
 
@@ -231,7 +261,8 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Mipmaps);
-    let mut chain = build_chain(&work, p);
+    let mut chain = build_chain_with(&work, p, bake.as_ref());
+    drop(bake);
     let alpha_present = work.alpha_present;
     // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
     // only alpha channel.
@@ -360,7 +391,7 @@ pub fn process_file(
             let source_sha256 =
                 sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
             // Spec §6.4 "Provenance": a packed output records every source (its first source is `job.input`, Note M8).
-            let sources: Vec<SourceRef> = match &job.pack {
+            let mut sources: Vec<SourceRef> = match &job.pack {
                 Some(pk) => pk
                     .sources
                     .iter()
@@ -369,6 +400,13 @@ pub fn process_file(
                     .map_err(|e| fail(Stage::Load)(e.to_string()))?,
                 None => vec![],
             };
+            // DECISIONS R12: the baked `_n`, with the identity of its decode settings.
+            if let Some(b) = &job.bake {
+                sources.push(
+                    SourceRef::of_bake(&b.normal, b.identity_sha256())
+                        .map_err(|e| fail(Stage::Load)(e.to_string()))?,
+                );
+            }
             Ok((source_sha256, sources))
         })?;
     let (width, height) = prep.dims[0];

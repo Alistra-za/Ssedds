@@ -339,6 +339,16 @@ fn estimated_bytes(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// [`estimated_bytes`] of the job's input, plus what its variance bake holds (DECISIONS R4; the M4 carry "the
+/// summed-area table counts against `--mem-budget`", a length pyramid since R5).
+fn job_bytes(job: &ResolvedJob) -> u64 {
+    estimated_bytes(&job.input)
+        + job
+            .bake
+            .as_ref()
+            .map_or(0, crate::bake::BakeJob::estimated_bytes)
+}
+
 /// The admission limit: `--mem-budget`, else half of physical memory (spec §5.9).
 fn budget_limit(req: &BatchRequest) -> u64 {
     if req.mem_budget > 0 {
@@ -399,17 +409,20 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// The SHA-256 of every pack source now, in source order, or none for an ordinary file. `None` when a source
-/// cannot be hashed (then the output is not up to date).
-fn current_source_hashes(job: &ResolvedJob) -> Option<Vec<String>> {
-    match &job.pack {
-        None => Some(vec![]),
-        Some(pk) => pk
-            .sources
-            .iter()
-            .map(|s| sha256_file(&s.path).ok())
-            .collect(),
+/// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), as
+/// (SHA-256, bake identity). Empty for an ordinary file that does not bake; `None` when a source cannot be hashed
+/// (then the output is not up to date).
+fn current_sources(job: &ResolvedJob) -> Option<Vec<(String, Option<String>)>> {
+    let mut v = vec![];
+    if let Some(pk) = &job.pack {
+        for s in &pk.sources {
+            v.push((sha256_file(&s.path).ok()?, None));
+        }
     }
+    if let Some(b) = &job.bake {
+        v.push((sha256_file(&b.normal).ok()?, Some(b.identity_sha256())));
+    }
+    Some(v)
 }
 
 /// A packed job's sources fill the same roles, inverted the same way, as the record's (DECISIONS N7). A schema-1
@@ -417,10 +430,15 @@ fn current_source_hashes(job: &ResolvedJob) -> Option<Vec<String>> {
 fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
     match &job.pack {
         None => true,
-        Some(pk) => e.sources.iter().map(|r| (r.role, r.invert)).eq(pk
+        Some(pk) => e
             .sources
             .iter()
-            .map(|s| (Some(s.role), pack::invert_of(pk, &s.path)))),
+            .filter(|r| r.bake.is_none())
+            .map(|r| (r.role, r.invert))
+            .eq(pk
+                .sources
+                .iter()
+                .map(|s| (Some(s.role), pack::invert_of(pk, &s.path)))),
     }
 }
 
@@ -452,8 +470,10 @@ fn is_up_to_date(
         == Some(true);
     passed
         && e.engine_version == ENGINE_VERSION
-        && current_source_hashes(job)
-            .is_some_and(|h| h.iter().eq(e.sources.iter().map(|r| &r.sha256)))
+        && current_sources(job).is_some_and(|now| {
+            now.into_iter()
+                .eq(e.sources.iter().map(|r| (r.sha256.clone(), r.bake.clone())))
+        })
         && pack_roles_match(e, job)
         && sha256_json(&job.profile).is_ok_and(|h| h == e.profile_sha256)
         && sha256_file(&job.input).is_ok_and(|h| h == e.source_sha256)
@@ -1421,7 +1441,7 @@ impl Engine {
                     lock(&state).cancelled.push(job.input.clone());
                     continue;
                 }
-                let est = estimated_bytes(&job.input);
+                let est = job_bytes(job);
                 budget.acquire(est);
                 let admitted = Admitted(&budget, est);
                 if cancel.is_cancelled() {
@@ -1758,6 +1778,7 @@ mod tests {
             suffix_alias: None,
             source: None,
             pack: None,
+            bake: None,
         };
         let enc = EncoderVersions::current();
         let entry_for = |job: &ResolvedJob| ManifestEntry {
@@ -1808,6 +1829,7 @@ mod tests {
                         sha256: "0".repeat(64),
                         role: None,
                         invert: false,
+                        bake: None,
                     }]
                 }),
             ),

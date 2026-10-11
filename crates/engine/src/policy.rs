@@ -774,6 +774,10 @@ pub struct ResolvedJob {
     /// job `input` is `pack.sources[0].path` (DECISIONS Note M8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pack: Option<crate::pack::PackJob>,
+    /// A roughness member's normal-variance bake (spec §6.2, DECISIONS R4): the `_n` it reads and how. `None` for
+    /// every other job and for a member that does not bake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bake: Option<crate::bake::BakeJob>,
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1255,6 +1259,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         suffix_alias: None,
         source: None,
         pack: None,
+        bake: None,
     }
 }
 
@@ -1341,6 +1346,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                 suffix_alias,
                 source: None,
                 pack: None,
+                bake: None,
             };
         }
     };
@@ -1447,5 +1453,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         suffix_alias,
         source: None,
         pack: None,
+        bake: None,
     }
 }

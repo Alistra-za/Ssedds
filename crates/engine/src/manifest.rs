@@ -119,6 +119,10 @@ pub struct SourceRef {
     /// The source is stored inverted (a gloss map in a roughness channel).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invert: bool,
+    /// The `_n` a roughness member baked its variance from (DECISIONS R12): the SHA-256 of its decode settings and
+    /// level shift (`BakeJob::identity_sha256`). Absent on every other source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bake: Option<String>,
 }
 
 impl SourceRef {
@@ -129,6 +133,7 @@ impl SourceRef {
             sha256: sha256_file(path)?,
             role: None,
             invert: false,
+            bake: None,
         })
     }
 
@@ -137,6 +142,14 @@ impl SourceRef {
         Ok(SourceRef {
             role: Some(role),
             invert,
+            ..SourceRef::of(path)?
+        })
+    }
+
+    /// The `_n` a roughness member bakes from, with its bake identity (DECISIONS R12).
+    pub fn of_bake(path: &Path, identity: String) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            bake: Some(identity),
             ..SourceRef::of(path)?
         })
     }
@@ -157,7 +170,8 @@ pub struct ManifestRecord {
     pub provenance: BTreeMap<String, Provenance>,
     pub source: String,
     pub source_sha256: String,
-    /// Every source of a multi-source recipe; empty for a single-source output (`source` is then the only one).
+    /// Every source of a multi-source recipe, then the `_n` a roughness member baked from (DECISIONS R12); empty for a
+    /// single-source output that does not bake (`source` is then the only one).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceRef>,
     /// The canonical key from [`output_key`].

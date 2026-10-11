@@ -113,6 +113,41 @@
       ],
       "type": "string"
     },
+    "BakeJob": {
+      "description": "How a roughness member bakes its set's `_n` (`ResolvedJob::bake`, spec §6.2). Set by `plan::plan_bakes`.",
+      "properties": {
+        "normal": {
+          "description": "The set's `pbr_normal` source.",
+          "type": "string"
+        },
+        "normal_profile": {
+          "$ref": "#/$defs/Profile",
+          "description": "That `_n`'s resolved profile: the member decodes the `_n` with it exactly as the `_n`'s own job does\n(swizzle, green flip, Z rebuild; DECISIONS R4)."
+        },
+        "shift": {
+          "description": "log2(`_n` size / member size) ([`bake_shift`]) as planned.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "stamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceStamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `_n`'s size and modification time when `Engine::plan` read it (final review I7); `None` is not checked."
+        }
+      },
+      "required": [
+        "normal",
+        "normal_profile",
+        "shift"
+      ],
+      "type": "object"
+    },
     "Category": {
       "enum": [
         "color",
@@ -1000,6 +1035,17 @@
     },
     "ResolvedJob": {
       "properties": {
+        "bake": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BakeJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A roughness member's normal-variance bake (spec §6.2, DECISIONS R4): the `_n` it reads and how. `None` for\nevery other job and for a member that does not bake."
+        },
         "game_path": {
           "type": "string"
         },
