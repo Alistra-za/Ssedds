@@ -533,3 +533,63 @@ fn documents_dir_resolves() {
     println!("documents: {}", d.display());
     assert!(d.is_dir());
 }
+
+/// Controller ruling R6 (Task 12): "Scan without PGPatcher output". A running PGPatcher does not block the scan,
+/// PGPatcher-generated mods are left out of the run, and derived paths in overwrite are not walked.
+#[test]
+fn skip_derived_ignores_pgp_and_running_process() {
+    let d = instance_fixture("+PGP\n+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/A/meshes/y.nif", None);
+    put(d.path(), "mods/PGP/meshes/x.nif", None);
+    put(d.path(), "mods/PGP/PGPatcher.esp", Some(b"e"));
+    put(
+        d.path(),
+        "mods/PGP/ParallaxGen_Diff.json",
+        Some(br#"{"meshes\x.nif":{"crc32original":1,"crc32patched":2}}"#),
+    );
+    put(d.path(), "overwrite/meshes/_pgpatcher_dups/1/y.nif", None);
+    put(d.path(), "overwrite/meshes/z.nif", None); // ordinary overwrite file
+    put(d.path(), "overwrite/PGPatcher.esp", Some(b"e"));
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let r = modscan::scan::run_with(
+        &Source::Mo2(inst),
+        &mut store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec!["pgpatcher.exe".into()],
+        true,
+    )
+    .unwrap();
+    assert!(!r.tainted);
+    assert!(r.pgp.is_empty(), "{:?}", r.pgp);
+    let mods = store.mods().unwrap();
+    assert!(
+        mods.iter().all(|m| m.name != "PGP" && !m.derived),
+        "{mods:?}"
+    );
+    let a = store.nifs_of(mod_id(&store, "A")).unwrap();
+    assert_eq!(a.len(), 2);
+    assert!(a
+        .iter()
+        .all(|n| n.wins && !n.patched_in_game && n.derive_check.is_none()));
+    let ow: Vec<String> = store
+        .nifs_of(mod_id(&store, "overwrite"))
+        .unwrap()
+        .into_iter()
+        .map(|n| n.path)
+        .collect();
+    assert_eq!(ow, vec!["meshes/z.nif".to_string()]);
+    // The default run still honours the gate.
+    let inst = Instance::load(d.path(), None).unwrap();
+    let r = modscan::scan::run_with(
+        &Source::Mo2(inst),
+        &mut store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec!["pgpatcher.exe".into()],
+        false,
+    );
+    assert!(matches!(r, Err(modscan::ScanError::PgpRunning)));
+}

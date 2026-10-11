@@ -143,15 +143,29 @@ pub fn run(
     progress: &dyn Fn(Progress),
     procs: &dyn Fn() -> Vec<String>,
 ) -> Result<Report, ScanError> {
+    run_with(src, store, cancel, progress, procs, false)
+}
+
+/// `run`, optionally without the PGPatcher output ("Scan without PGPatcher output", Task 12 / ruling R6). With
+/// `skip_derived`, a running PGPatcher does not block or taint the scan, mods carrying the PGPatcher signature are
+/// left out of the run (as if disabled), and in other origins every derived path (dups, diff-listed) is skipped.
+pub fn run_with(
+    src: &Source,
+    store: &mut Store,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+    procs: &dyn Fn() -> Vec<String>,
+    skip_derived: bool,
+) -> Result<Report, ScanError> {
     // 1. Process gate.
-    if pgp::running(&procs()) {
+    if !skip_derived && pgp::running(&procs()) {
         return Err(ScanError::PgpRunning);
     }
     let mut report = Report::default();
     let mut t = Instant::now();
 
     // 2. Origins.
-    let (loose, bsas, seps) = match src {
+    let (mut loose, bsas, seps) = match src {
         Source::Mo2(inst) => {
             let (l, missing) = loose_origins(inst)?;
             report.missing_mods = missing;
@@ -174,6 +188,10 @@ pub fn run(
             vec![],
         ),
     };
+    if skip_derived {
+        // BSA ranks and separator priorities above were computed with these mods present, as MO2 sees them.
+        loose.retain(|o| o.kind != OriginKind::Mod || pgp::signature(&o.root) == Signature::None);
+    }
     store.begin_scan()?;
     let mut loose_ids = Vec::with_capacity(loose.len());
     // Whole-origin derived flag (Mod with a signature) and the parsed diff, per loose origin.
@@ -188,8 +206,10 @@ pub fn run(
             (OriginKind::Mod, _) => Some(DerivedState::Ok),
             _ => Some(DerivedState::InOverwrite),
         };
-        whole_derived[i] = o.kind == OriginKind::Mod && sig != Signature::None;
+        whole_derived[i] = !skip_derived && o.kind == OriginKind::Mod && sig != Signature::None;
         sig_any[i] = sig != Signature::None;
+        // Without the PGPatcher output, the origin is recorded as ordinary; its derived paths are dropped below.
+        let state = state.filter(|_| !skip_derived);
         let id = store.upsert_origin(&OriginSpec {
             kind: kind_code(o.kind),
             name: o.name.clone(),
@@ -253,10 +273,10 @@ pub fn run(
     report.phase_ms.push(("origins", lap(&mut t)));
 
     // 3. Walk.
-    let (copies, locs, opened, tex) = walk(&loose, &bsas, &mut report, progress);
+    let (mut copies, mut locs, opened, tex) = walk(&loose, &bsas, &mut report, progress);
     report.phase_ms.push(("walk", lap(&mut t)));
     let (mut parse_ms, mut write_ms) = (0u64, 0u64);
-    let derived: Vec<bool> = copies
+    let mut derived: Vec<bool> = copies
         .iter()
         .map(|c| match c.origin {
             OriginRef::Loose(i) => {
@@ -265,6 +285,13 @@ pub fn run(
             OriginRef::Bsa(_) => false,
         })
         .collect();
+    if skip_derived {
+        let mut keep = derived.iter().map(|d| !d);
+        copies.retain(|_| keep.next().unwrap_or(true));
+        let mut keep = derived.iter().map(|d| !d);
+        locs.retain(|_| keep.next().unwrap_or(true));
+        derived = vec![false; copies.len()];
+    }
     let origin_id = |o: OriginRef| match o {
         OriginRef::Loose(i) => loose_ids[i],
         OriginRef::Bsa(i) => bsa_ids[i],
@@ -380,7 +407,7 @@ pub fn run(
     });
 
     // 5. Re-check the process gate: a run that overlapped PGPatcher keeps the previous derived rows.
-    if pgp::running(&procs()) {
+    if !skip_derived && pgp::running(&procs()) {
         report.tainted = true;
         store.discard_pending()?;
         for p in &mut report.pgp {
