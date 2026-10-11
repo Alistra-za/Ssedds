@@ -107,12 +107,6 @@ fn editor(mut m: AppModel) -> Harness<'static, AppModel> {
     h
 }
 
-fn disabled_spins(h: &Harness<'static, AppModel>) -> usize {
-    h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
-        .filter(|n| n.accesskit_node().is_disabled())
-        .count()
-}
-
 fn settle(h: &mut Harness<'static, AppModel>) {
     h.run();
     h.state_mut().wait_idle(Duration::from_secs(60));
@@ -326,11 +320,19 @@ fn a_read_only_sdc_toml_disables_the_recipe_and_the_fills_and_says_why() {
         })
         .expect("the recipe selector");
     assert!(combo.accesskit_node().is_disabled());
-    // The three fill rows (metallic, AO, specular) are the only extra disabled value boxes.
-    let d2 = tempfile::tempdir().unwrap();
-    let mut open = editor(fixture(d2.path()));
-    open.run();
-    assert_eq!(disabled_spins(&h), disabled_spins(&open) + 3);
+    // The value box on each named fill row is disabled; the controls are found by their row's label.
+    for name in ["metallic", "AO", "specular"] {
+        let y = h.get_by_label(name).accesskit_node().raw_bounds().unwrap();
+        let row: Vec<_> = h
+            .query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+            .filter(|n| {
+                let b = n.accesskit_node().raw_bounds().unwrap();
+                (b.y0 - y.y0).abs() < 6.0
+            })
+            .collect();
+        assert_eq!(row.len(), 1, "one value box on the {name} row");
+        assert!(row[0].accesskit_node().is_disabled(), "{name}");
+    }
 }
 
 #[test]
@@ -449,4 +451,78 @@ fn the_open_dropdown_draws_the_skin_group_after_pbr_and_other_last() {
     assert!(y("skin rfaos") < y("Colour maps"));
     assert!(y("Other") > y("Grayscale maps"));
     assert!(y("ui sky") > y("Other"));
+}
+
+fn note(m: &AppModel, key: &str) -> Option<String> {
+    m.dropped_fills.get(key).cloned()
+}
+
+#[test]
+fn a_dropped_fill_note_does_not_survive_reopening_the_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_pack_fill(RMAOS, RawMap::Metallic, Some(9));
+    idle(&mut m);
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    assert!(note(&m, RFAOS).unwrap().contains("metallic fill removed"));
+    m.open_folder(d.path().to_path_buf());
+    idle(&mut m);
+    assert!(m.dropped_fills.is_empty());
+}
+
+#[test]
+fn only_the_latest_switchs_notes_show() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_pack_fill(RMAOS, RawMap::Metallic, Some(9));
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    assert!(note(&m, RFAOS).is_some());
+    m.set_pack_fill(RFAOS, RawMap::Fuzz, Some(30));
+    idle(&mut m);
+    m.set_packing_recipe(RFAOS, PackRecipe::Rmaos);
+    idle(&mut m);
+    assert!(note(&m, RFAOS).is_none(), "the old note is gone");
+    assert!(note(&m, RMAOS).unwrap().contains("fuzz fill removed"));
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    assert!(m.dropped_fills.is_empty(), "{:?}", m.dropped_fills);
+}
+
+#[test]
+fn a_moved_fill_never_overwrites_the_destination_silently() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_pack_fill(RMAOS, RawMap::Ao, Some(128));
+    m.set_pack_fill(RFAOS, RawMap::Ao, Some(64));
+    idle(&mut m);
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(p.file_value(RFAOS, "packing.fill.ao"), Some(json!(64)));
+    assert_eq!(p.file_value(RMAOS, "packing.fill.ao"), None);
+    assert_eq!(
+        note(&m, RFAOS).unwrap(),
+        "ao fill 128 not moved: the _rfaos entry already had 64"
+    );
+}
+
+#[test]
+fn cpm_m_has_glossiness_metallic_and_height_rows_and_vanilla_m_none() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    grey(&d.path().join("m"), "rock03_metallic.png", 5);
+    m.open_folder(d.path().to_path_buf());
+    idle(&mut m);
+    m.set_target(engine::config::Target::Cpm);
+    idle(&mut m);
+    assert_eq!(
+        roles(&m, "m/rock01_m"),
+        vec![RawMap::Glossiness, RawMap::Metallic, RawMap::Height]
+    );
+    m.set_target(engine::config::Target::Vanilla);
+    idle(&mut m);
+    assert!(m.item("m/rock03_m").is_some(), "vanilla builds the _m");
+    assert!(roles(&m, "m/rock03_m").is_empty());
 }

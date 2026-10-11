@@ -934,3 +934,31 @@ fn emissive_and_skin_sk_clash_on_any_set() {
         texts(&m)
     );
 }
+
+#[test]
+fn a_borrowed_skin_sk_is_written_to_slot3() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Luma([x as u8]))
+        .save(r.join("rock01_sk.png"))
+        .unwrap();
+    let mut m = ready(d.path());
+    m.set_field("landscape/rock01_sk.png", "subtype", json!("skin_sk"));
+    idle(&mut m);
+    m.set_field("landscape/leaf.png", "subtype", json!("pbr_albedo"));
+    idle(&mut m);
+    let id = m.drop_new_set("landscape/leaf.png").unwrap();
+    idle(&mut m);
+    assert!(matches!(
+        m.drop_choice("landscape/rock01_sk.png", &id, DropChoice::Share),
+        DropOutcome::Joined
+    ));
+    idle(&mut m);
+    let (_, e) = json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == id)
+        .unwrap();
+    let p = e.slots.get(&3).expect("slot3 is written");
+    assert!(p.ends_with("_sk.dds"), "{p}");
+}

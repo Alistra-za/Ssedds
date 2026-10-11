@@ -251,6 +251,7 @@ impl AppModel {
         self.continue_after_plan = None;
         self.last_inputs = None;
         self.auto_replans = 0;
+        self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);

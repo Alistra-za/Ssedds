@@ -30,6 +30,10 @@ pub fn channel_roles(kind: RecipeKind) -> [Option<RawMap>; 4] {
 /// The roles both `_rmaos` and `_rfaos` have, which follow the output across a recipe switch.
 const SHARED_FILLS: [RawMap; 3] = [RawMap::Roughness, RawMap::Ao, RawMap::Specular];
 
+fn role_name(role: RawMap) -> String {
+    role.id()
+}
+
 fn fill_field(role: RawMap) -> String {
     format!("packing.fill.{}", role.id())
 }
@@ -110,15 +114,35 @@ impl AppModel {
         });
         let moves = current != new;
         // A fill with no channel in the new recipe is removed; the card says so.
-        let dropped: Vec<String> = match (moves, self.project.as_ref()) {
-            (true, Some(p)) => RawMap::ALL
+        let mut notes: Vec<String> = vec![];
+        if let (true, Some(p)) = (moves, self.project.as_ref()) {
+            let dropped: Vec<String> = RawMap::ALL
                 .into_iter()
                 .filter(|r| !SHARED_FILLS.contains(r))
                 .filter(|r| p.file_value(&from, &fill_field(*r)).is_some())
-                .map(|r| r.id())
-                .collect(),
-            _ => vec![],
-        };
+                .map(role_name)
+                .collect();
+            if !dropped.is_empty() {
+                let why = if new == RecipeKind::Rfaos {
+                    "RFAOS has no metallic channel"
+                } else {
+                    "RMAOS has no fuzz channel"
+                };
+                notes.push(format!("{} fill removed ({why})", dropped.join(", ")));
+            }
+            for r in SHARED_FILLS {
+                let f = fill_field(r);
+                if let (Some(a), Some(b)) = (p.file_value(&from, &f), p.file_value(&to, &f)) {
+                    if a != b {
+                        notes.push(format!(
+                            "{} fill {a} not moved: the _{} entry already had {b}",
+                            role_name(r),
+                            new.suffix()
+                        ));
+                    }
+                }
+            }
+        }
         self.edit_docs("Packing recipe", None, true, move |p, _| {
             if moves {
                 // The fills follow the output to its new key; one with no channel there is dropped.
@@ -136,17 +160,10 @@ impl AppModel {
             p.set_file_value(&to, "packing.recipe", &json!(choice));
             p.clear_file_value(&other, "packing.recipe");
         });
-        self.dropped_fills.remove(&note_key);
-        if !dropped.is_empty() {
-            let why = if new == RecipeKind::Rfaos {
-                "RFAOS has no metallic channel"
-            } else {
-                "RMAOS has no fuzz channel"
-            };
-            self.dropped_fills.insert(
-                note_key,
-                format!("{} fill removed ({why})", dropped.join(", ")),
-            );
+        // Only the latest switch's notes show.
+        self.dropped_fills.clear();
+        if !notes.is_empty() {
+            self.dropped_fills.insert(note_key, notes.join("; "));
         }
     }
 
