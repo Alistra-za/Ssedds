@@ -98,3 +98,13 @@ fn mesh_paths_and_facegen() {
         "meshes/actors/character/character assets/malehead.nif"
     ));
 }
+
+#[test]
+fn path_flags_bits_round_trip() {
+    use nif::path::PathFlags;
+    for b in 0u8..16 {
+        assert_eq!(PathFlags::from_bits(b).bits(), b);
+    }
+    let f = nif::path::canon_texture(b"c_n");
+    assert_eq!(f.flags.bits(), 4 | 8);
+}

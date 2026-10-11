@@ -192,3 +192,61 @@ fn ref_out_of_range_is_a_problem() {
     assert!(matches!(s.shapes[0].shader, Shader::None));
     assert_eq!(s.problems.len(), 1);
 }
+
+fn bstri(shader: i32, alpha: i32) -> Vec<u8> {
+    avobj(net(-1))
+        .fs(&[0.0; 4])
+        .i32(-1)
+        .i32(shader)
+        .i32(alpha)
+        .u64(0)
+        .u16(0)
+        .u16(0)
+        .u32(0)
+        .0
+}
+
+#[test]
+fn bad_texture_set_ref_is_a_problem() {
+    // out of range
+    let mut n = Nif::new(100);
+    n.block("BSTriShape", bstri(1, -1));
+    n.block("BSLightingShaderProperty", lsp(0, 99));
+    let s = scan(&n.bytes()).unwrap();
+    assert!(matches!(&s.shapes[0].shader, Shader::Lighting(_, t) if t.is_empty()));
+    assert_eq!(s.problems.len(), 1, "{:?}", s.problems);
+    assert!(s.problems[0].contains("texture set"), "{:?}", s.problems);
+    // wrong kind (points at the alpha block)
+    let mut n = Nif::new(100);
+    n.block("BSTriShape", bstri(1, 2));
+    n.block("BSLightingShaderProperty", lsp(0, 2));
+    n.block("NiAlphaProperty", net(-1).u16(0x00ED).u8(128).0);
+    let s = scan(&n.bytes()).unwrap();
+    assert_eq!(s.problems.len(), 1, "{:?}", s.problems);
+    assert!(
+        s.problems[0].contains("NiAlphaProperty"),
+        "{:?}",
+        s.problems
+    );
+    // -1 is "no texture set", not a problem
+    let mut n = Nif::new(100);
+    n.block("BSTriShape", bstri(1, -1));
+    n.block("BSLightingShaderProperty", lsp(0, -1));
+    assert!(scan(&n.bytes()).unwrap().problems.is_empty());
+}
+
+#[test]
+fn bad_alpha_ref_is_a_problem() {
+    let mut n = Nif::new(100);
+    n.block("BSTriShape", bstri(-1, 7));
+    let s = scan(&n.bytes()).unwrap();
+    assert!(s.shapes[0].alpha.is_none());
+    assert_eq!(s.problems.len(), 1, "{:?}", s.problems);
+    let mut n = Nif::new(100);
+    n.block("BSTriShape", bstri(-1, 1));
+    n.block("BSLightingShaderProperty", lsp(0, -1));
+    let s = scan(&n.bytes()).unwrap();
+    assert!(s.shapes[0].alpha.is_none());
+    assert_eq!(s.problems.len(), 1, "{:?}", s.problems);
+    assert!(s.problems[0].contains("alpha"), "{:?}", s.problems);
+}
