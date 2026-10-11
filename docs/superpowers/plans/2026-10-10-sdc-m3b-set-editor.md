@@ -6114,7 +6114,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - An unset `Number` shows its value greyed: the fixed default for `roughness_scale` (1.0), `specular_level` (0.04) and `displacement_scale` (1.0), or the glint default. Typing the fixed value is allowed; the writer then omits it.
   - A `Text` field shows "(derived)" with the derived value as hint text for `match_diffuse`.
   - Colours have no 0–1 toggle (owner).
-  - Turning glint on writes only `glint = true`; the writer fills the defaults. The four fields show `GLINT_DEFAULTS` as values until edited.
+  - Turning glint on writes only `glint_on = true`; the writer fills the defaults. The four fields show `GLINT_DEFAULTS` as values until edited.
+  - **Glint and fuzz switches (fix, Task 11 round 2):** the `Object` rows `glint` and `fuzz` are drawn as a checkbox that edits the GUI-only settings key `glint_on` / `fuzz_on` (`feature_key(Feature::Glint)` / `feature_key(Feature::Fuzz)`), never the key `glint` / `fuzz`, because the sub-settings `glint.*` / `fuzz.*` put a table at that key. `glint_on` and `fuzz_on` are not in `KEYS`, so the writer never emits them. Hover text and group titles use the feature's display name (`glint`, `fuzz`), not the switch key (strip a `_on` suffix).
 - **Greying:** a feature checkbox is disabled when `blocked_by(settings, f)` is `Some(b)`, with the hover text `off: <b> is on`. Its dependent group isn't shown while it's off.
 - **Reset:** a **reset** button removes the set's own value (shown only when the set has its own value). There are no inherited values: the `default` block is fixed (owner, 2026-10-10).
 - **Sliders and `DragValue`s** send one `set_json_value` per change. The model merges consecutive changes of the same key into one undo step (Task 10's merge key).
@@ -6207,7 +6208,13 @@ use serde_json::{json, Value};
 
 type Edit = (String, Option<Value>);
 
+/// `glint` and `fuzz` (the Object rows) are switched by `glint_on` / `fuzz_on`.
 fn feature_of(key: &str) -> Option<Feature> {
+    let key = match key {
+        "glint" => "glint_on",
+        "fuzz" => "fuzz_on",
+        k => k,
+    };
     FEATURE_KEYS.iter().find(|(_, k)| *k == key).map(|(f, _)| *f)
 }
 
@@ -6351,7 +6358,7 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
         })
         .inner;
     if let (Some(b), Some(r)) = (block, r) {
-        r.on_disabled_hover_text(format!("off: {} is on", feature_key(b)));
+        r.on_disabled_hover_text(format!("off: {} is on", feature_key(b).trim_end_matches("_on")));
     }
     if own.is_some() {
         if ui.small_button("reset").on_hover_text("Remove this setting (the default applies)").clicked() {
