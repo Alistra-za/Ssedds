@@ -67,7 +67,7 @@ Excluded: LOD types, Tree Anim, Snow/Sparkle Snow, Cloud, Face Tint (FaceGen dat
    9. a path component `hair` → `hair`
    10. a path component `eyes` → `eye`
    11. a landscape diffuse or path (the existing landscape rule) → `landscape`
-   12. otherwise → the mode's default.
+   12. otherwise → `default` (owner, 2026-10-11 plan review: a set with no PBR member never auto-picks `pbr`, even on CS, so plain sets raise no false missing-map warnings). The mode default (`pbr` on CS) is what the dropdown offers first and what an explicit "mode default" means; auto-pick only reaches `pbr` through rule 2.
 3. **Unavailable in the mode** (e.g. `pbr` under vanilla, explicit or auto): fall back to the mode's default and raise `SHADER-UNAVAILABLE`.
 4. **Provenance:** the result carries a provenance (`set`, `auto:<rule>`, `fallback`) shown by `plan`, `inspect`, the manifest and the GUI.
 
@@ -77,7 +77,7 @@ Excluded: LOD types, Tree Anim, Snow/Sparkle Snow, Cloud, Face Tint (FaceGen dat
   - `hair`: diffuse alpha policy `cutout`, coverage `on`.
   - `eye`: the `_n` member is model-space (`msn` handling, no tangent-space ops).
   - `landscape`: diffuse sub-type `landscape_diffuse` (alpha = snow mask, data).
-  - `multilayer`: diffuse alpha is kept (`blend`/`data` per the existing sub-type rules, never `remove`).
+  - `multilayer`: diffuse alpha policy `data` (owner, 2026-10-11: the alpha is the layer mask, kept exact). `_i` (inner layer) becomes a set suffix suggesting `diffuse` (owner: yes).
   - `envmap`: `_m` is single-channel, format **BC4** (§6).
   - `parallax`: `_p` is single-channel, format **BC4** (§6).
   - Every other shader: the current defaults, unchanged.
@@ -143,3 +143,9 @@ The default BC4 for env `_m` and `_p`, and the hair default, change outputs. Bum
 ## 11. Effect on Track D (presets)
 
 The roadmap item "offer or force BC4 for single-channel env mask / red-only `_p`/`_sk`" is delivered here (§6). Track D keeps the rest: the Compact and Fast-preview built-ins, the `presets` verbs, `--preset-file`, migrations, rule tables and the carried preset minors.
+
+## 12. Plan-review amendments (owner, 2026-10-11)
+
+- Rule 12 auto-picks `default`, not the mode default (§4.2).
+- Multilayer diffuse alpha is `data`. `_i` joins sets (§5).
+- **`_coat` suffix:** a new suffix alias for the PBR coat colour map, the map that `_s` carries today when coat is used. Owner: "_coat (for the coat diffuse)". It is a suffix alias only: same sub-type, same slot, same output name rules as the existing coat colour member. The planner confirms which sub-type that is and records it in Note S.
