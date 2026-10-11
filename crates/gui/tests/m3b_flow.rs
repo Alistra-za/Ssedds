@@ -109,6 +109,12 @@ fn build_sets_export_and_reexport_unchanged() {
         !out.join(&second_rmaos).exists(),
         "the borrowed _rmaos is written once, at the owner's path"
     );
+    let rmaos: Vec<_> = walk(&out.join("textures/pbr"))
+        .into_iter()
+        .map(|(f, _)| f)
+        .filter(|f| f.ends_with("_rmaos.dds"))
+        .collect();
+    assert_eq!(rmaos.len(), 1, "exactly one _rmaos is written: {rmaos:?}");
 
     let p = out
         .join("PBRNIFPatcher")
@@ -125,7 +131,10 @@ fn build_sets_export_and_reexport_unchanged() {
         entries[1]["slot6"],
         json!(r"textures\pbr\landscape\rock01_rmaos.dds")
     );
-    assert!(entries[1].get("parallax").is_none() || entries[1]["parallax"] == json!(false));
+    assert!(
+        entries[1].get("parallax").is_none(),
+        "the default block holds parallax: false, so an entry never repeats it: {text}"
+    );
     let sha = m.sets_doc.as_ref().unwrap().last_json_sha256();
     assert!(sha.is_some(), "the JSON hash is recorded");
 
