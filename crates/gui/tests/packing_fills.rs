@@ -6,6 +6,7 @@ use egui_kittest::Harness;
 use engine::config::{PackRecipe, RawMap, Subtype};
 use image::{ImageBuffer, Luma, Rgb};
 use sdc_gui::model::pack_fills::{fill_rows, FillRow};
+use sdc_gui::model::pbr_export::{export_blocks, json_entries};
 use sdc_gui::model::sets::{set_views, SlotFill, SlotKind};
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::GuiSettings;
@@ -550,4 +551,95 @@ fn a_fuzz_source_set_switched_to_rmaos_reverts_the_members() {
     assert!(m.item(RFAOS).is_some());
     assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
     assert_eq!(resolved(&m, SK), Subtype::SkinSk);
+}
+
+/// A pre-packed Advanced skin set: `rock01.png`, `rock01_rfaos.png`, `rock01_sk.png`.
+fn skin_fixture(dir: &Path) -> AppModel {
+    let r = dir.join("m");
+    std::fs::create_dir_all(&r).unwrap();
+    for name in ["rock01.png", "rock01_rfaos.png"] {
+        ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, (y * 4) as u8, 90u8]))
+            .save(r.join(name))
+            .unwrap();
+    }
+    grey(&r, "rock01_sk.png", 0);
+    let settings = GuiSettings {
+        export_folder: Some(dir.join("export")),
+        ..GuiSettings::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.open_folder(dir.to_path_buf());
+    idle(&mut m);
+    m
+}
+
+fn rock01_entry(m: &AppModel) -> Option<sdc_gui::pgp::writer::EntryInput> {
+    json_entries(m)
+        .into_iter()
+        .find(|(v, _)| v.id == "m/rock01")
+        .map(|(_, e)| e)
+}
+
+/// Final review C1: an Advanced skin set is a PBR set for the PGPatcher JSON and every PBR export check.
+#[test]
+fn an_rfaos_set_is_in_the_json_with_its_slots() {
+    let d = tempfile::tempdir().unwrap();
+    let m = skin_fixture(d.path());
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
+    let v = set_views(&m);
+    let v = v.iter().find(|v| v.id == "m/rock01").unwrap();
+    assert!(v.pbr && v.skin, "pbr {} skin {}", v.pbr, v.skin);
+    let e = rock01_entry(&m).expect("a JSON entry for the skin set");
+    let slot6 = e.slots.get(&6).expect("slot6 names the _rfaos");
+    assert!(
+        slot6.to_lowercase().ends_with("rock01_rfaos.dds"),
+        "{slot6}"
+    );
+    // The packed file keeps its `_rfaos` name under the set prefix (never `_rmaos`).
+    let out = &m
+        .item("m/rock01_rfaos.png")
+        .unwrap()
+        .job
+        .as_ref()
+        .unwrap()
+        .output;
+    assert!(
+        out.to_string_lossy().ends_with("rock01_rfaos.dds"),
+        "{out:?}"
+    );
+    let slot3 = e.slots.get(&3).expect("slot3 names the _sk");
+    assert!(slot3.to_lowercase().ends_with("rock01_sk.dds"), "{slot3}");
+    assert_eq!(export_blocks(&m), vec![]);
+}
+
+/// Final review C1: emissive on with no `_g` blocks a skin set, as it does any PBR set.
+#[test]
+fn a_skin_set_with_emissive_on_and_no_g_is_blocked() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = skin_fixture(d.path());
+    m.set_json_value("m/rock01", "emissive", Some(json!(true)));
+    idle(&mut m);
+    let b = export_blocks(&m);
+    assert!(
+        b.iter().any(|i| i.set_id == "m/rock01"
+            && i.text == "m/rock01: emissive is on but the set has no emissive texture (_g)"),
+        "{b:?}"
+    );
+}
+
+/// Final review C1: picking RFAOS on the card keeps the set in the JSON, and the set badge says so.
+#[test]
+fn picking_rfaos_keeps_the_set_in_the_json() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    assert!(rock01_entry(&m).is_some());
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
+    let e = rock01_entry(&m).expect("still in the JSON");
+    assert!(e.slots.contains_key(&6), "{:?}", e.slots);
+    let mut h = editor(m);
+    h.run();
+    h.run();
+    h.get_by_label("skin → JSON");
 }

@@ -104,8 +104,11 @@ pub struct SetView {
     /// Item keys of every member, packed outputs and raw sources included.
     pub members: Vec<String>,
     pub slots: BTreeMap<SlotKind, SlotFill>,
-    /// The diffuse resolves to `pbr_albedo` (DECISIONS P5).
+    /// The diffuse resolves to a PBR diffuse, `pbr_albedo` or `skin_albedo` ([`is_pbr_diffuse`], DECISIONS P5 as
+    /// amended by Note R, final review C1).
     pub pbr: bool,
+    /// The diffuse resolves to `skin_albedo`: an Advanced skin set (a PBR set too, final review C1).
+    pub skin: bool,
     pub created: bool,
     /// `add`/`remove` entries of `sdc-project.toml` that match no file (Review focus 1).
     pub missing: Vec<String>,
@@ -128,6 +131,7 @@ impl SetView {
             members,
             slots: BTreeMap::new(),
             pbr: false,
+            skin: false,
             created: false,
             missing: vec![],
             owns: vec![],
@@ -137,6 +141,13 @@ impl SetView {
             settings: Settings::new(),
         }
     }
+}
+
+/// A diffuse sub-type that makes its set a PBR set (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
+/// `skin_albedo`, which is Community Shaders TruePBR too and so belongs in the PGPatcher JSON (final review C1).
+/// Not the engine's `is_pbr_color`, which decides sRGB and leaves `skin_albedo` (UNORM) out.
+pub fn is_pbr_diffuse(st: Subtype) -> bool {
+    matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
 }
 
 /// The slot a texture fills, by its resolved sub-type. Raw packing sources and items without a job have none.
@@ -292,9 +303,11 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
             Some(SlotFill::Own { item: k } | SlotFill::Borrowed { item: k, .. }) => m.item(k),
             _ => None,
         };
-        v.pbr = diffuse
+        let st = diffuse
             .and_then(|i| i.job.as_ref())
-            .is_some_and(|j| j.profile.subtype == Subtype::PbrAlbedo);
+            .map(|j| j.profile.subtype);
+        v.pbr = st.is_some_and(is_pbr_diffuse);
+        v.skin = st == Some(Subtype::SkinAlbedo);
         v.derived_match = diffuse.map(|i| derive_match_diffuse(dir_of(&i.key), &mirrored_stem(i)));
         match prefix_of(&v.settings, v.derived_match.as_deref().unwrap_or("")) {
             Ok(p) => v.prefix = Some(p),
@@ -343,6 +356,16 @@ fn owners(views: &[SetView]) -> Ownership {
             ((item, us.into_iter().map(|(id, _)| id).collect()), owner)
         })
         .collect()
+}
+
+/// The suffix of `item`'s output under a set prefix (M3b spec: `<prefix><canonical suffix>.dds`): its slot's,
+/// except that an `_rfaos` keeps `rfaos` (the packed file suffix stays `_rfaos`, DECISIONS Note R-skin-1), where
+/// the RMAOS slot's suffix would rename it `_rmaos` (final review C1).
+fn output_suffix(item: &TextureItem, slot: SlotKind) -> &'static str {
+    match item.job.as_ref().map(|j| j.profile.subtype) {
+        Some(Subtype::SkinRfaos) => "rfaos",
+        _ => slot.suffix(),
+    }
 }
 
 /// The recipe suffix of a packed item (`rmaos`, `rfaos`, `p`, `m`).
@@ -437,7 +460,7 @@ pub fn output_candidates(m: &AppModel, views: &[SetView]) -> Vec<(String, Output
             continue;
         };
         let Some(slot) = slot_of(item) else { continue };
-        let rel = output_rel(prefix, slot.suffix());
+        let rel = output_rel(prefix, output_suffix(item, slot));
         if check_rel_path(&rel.to_string_lossy(), "output path").is_err() {
             continue;
         }

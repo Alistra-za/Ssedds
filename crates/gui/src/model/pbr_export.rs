@@ -85,11 +85,13 @@ fn slots_of(
         let Some(p) = fill_path(item, views, paths, m) else {
             continue;
         };
-        // PGPatcher finds the set's own texture at `<prefix>_<suffix>.dds` without a slot command.
-        let at_own_path = v
-            .prefix
-            .as_deref()
-            .is_some_and(|pre| path_lower(p) == path_lower(&output_rel(pre, kind.suffix())));
+        // PGPatcher finds the set's own texture at `<prefix>_<suffix>.dds` without a slot command. Its slot 3 default
+        // is not known to look for `_sk`, so a skin `_sk` is always named (final review M5): an explicit slot is
+        // never wrong. An `_rfaos` is not at the RMAOS slot's own path, so slot 6 is named too.
+        let at_own_path = *kind != SlotKind::SkinSk
+            && v.prefix
+                .as_deref()
+                .is_some_and(|pre| path_lower(p) == path_lower(&output_rel(pre, kind.suffix())));
         if borrowed || !at_own_path {
             out.insert(kind.slot_number(), p.to_string_lossy().replace('/', "\\"));
         }

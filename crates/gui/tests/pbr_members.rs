@@ -415,3 +415,19 @@ fn accept_all_keeps_the_pbr_follow_for_a_member_decided_on_a_stale_plan() {
     a.sort();
     assert_eq!(a, vec![G.to_string(), N.to_string()]);
 }
+
+/// Final review C1: `skin_albedo` is a PBR diffuse too. Deciding it switches the inferred members like
+/// `pbr_albedo`, and moving between the two reverts nothing.
+#[test]
+fn a_skin_diffuse_is_a_pbr_diffuse_for_the_follow() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.decide(DIFFUSE, Answer::Subtype(Subtype::SkinAlbedo));
+    idle(&mut m);
+    assert_eq!(subtype(&m, N), Some(json!("pbr_normal")));
+    assert_eq!(subtype(&m, G), Some(json!("pbr_emissive")));
+    m.set_field(DIFFUSE, "subtype", json!("pbr_albedo"));
+    idle(&mut m);
+    assert_eq!(subtype(&m, N), Some(json!("pbr_normal")), "still PBR");
+    assert_eq!(subtype(&m, G), Some(json!("pbr_emissive")));
+}

@@ -581,9 +581,10 @@ impl AppModel {
         if picks.is_empty() {
             return;
         }
-        // PBR colour picks lead: deciding a set's diffuse as `pbr_albedo` switches its inferred members (PBR follow),
-        // so those members must be looked at afterwards, not decided from the plan's older suggestions.
-        picks.sort_by_key(|(_, st)| !st.is_pbr_color());
+        // PBR colour picks lead: deciding a set's diffuse as `pbr_albedo` or `skin_albedo` switches its inferred
+        // members (PBR follow), so those members must be looked at afterwards, not decided from the plan's older
+        // suggestions.
+        picks.sort_by_key(|(_, st)| !(st.is_pbr_color() || sets::is_pbr_diffuse(*st)));
         // Each decision goes through `decide` (so the PBR follow-on applies); the steps they push fold into one.
         let pushed = self.history.pushed;
         for (k, st) in &picks {
