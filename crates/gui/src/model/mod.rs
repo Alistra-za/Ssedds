@@ -433,11 +433,15 @@ impl AppModel {
             .as_ref()
             .is_some_and(|l| *l != sets::engine_inputs(self))
         {
-            self.dialog = Some(Dialog::Error(
-                "The plan does not match the sets (planning did not settle), so nothing was exported. \
-                 Reload and export again; if this repeats, please report it."
-                    .into(),
-            ));
+            let mut msg = String::from(
+                "The sets changed while planning (two outputs may share one path), so nothing was exported. \
+                 Check set names and the match/rename fields, then export again.",
+            );
+            for c in pbr_export::path_collisions(self) {
+                msg.push('\n');
+                msg.push_str(&c.text);
+            }
+            self.dialog = Some(Dialog::Error(msg));
             return;
         }
         if let Some(problem) = export::export_folder_problem(&root, &self.export_root()) {

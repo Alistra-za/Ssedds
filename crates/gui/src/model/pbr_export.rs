@@ -4,7 +4,7 @@ use super::sets::{
 };
 use super::AppModel;
 use crate::pgp::prefix::{check_rel_path, pitfalls};
-use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, FEATURE_KEYS};
+use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, EntryInput};
 use engine::config::Target;
@@ -80,6 +80,69 @@ fn slots_of(
     out
 }
 
+/// Borrowed slots whose owner has no output path (the owner was dropped as a duplicate, or its prefix is unusable),
+/// as (slot number, source set). The JSON would silently lack the slot, so Export blocks (unless `slotN` is set).
+fn unresolved_borrows(
+    v: &SetView,
+    views: &[SetView],
+    paths: &BTreeMap<OutputKey, PathBuf>,
+    m: &AppModel,
+) -> Vec<(u8, String)> {
+    let mut out = vec![];
+    for (kind, fill) in &v.slots {
+        let SlotFill::Borrowed { item, from } = fill else {
+            continue;
+        };
+        let n = kind.slot_number();
+        if matches!(v.settings.get(&format!("slot{n}")), Some(Value::String(s)) if !s.is_empty()) {
+            continue;
+        }
+        let found = m
+            .item(item)
+            .and_then(|it| item_output_key(views, it))
+            .is_some_and(|k| paths.contains_key(&k));
+        if !found {
+            out.push((n, from.clone()));
+        }
+    }
+    out
+}
+
+/// Why `name` cannot be the JSON file name (a single file name, without `.json`).
+fn json_name_problem(name: &str) -> Option<String> {
+    let bad = |why: &str| Some(format!("JSON name: {why} ({name:?})"));
+    if name.trim().is_empty() {
+        return bad("empty");
+    }
+    if name.contains(['\\', '/']) {
+        return bad("must be a single file name, not a path");
+    }
+    if name == ".." || name.contains("..") {
+        return bad("must not contain '..'");
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return bad("must not end in a dot or a space");
+    }
+    if check_rel_path(name, "JSON name").is_err() {
+        return bad("contains a character Windows does not allow in names");
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|p| {
+            stem.strip_prefix(p)
+                .is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        });
+    if reserved {
+        return bad("is a name Windows reserves for a device");
+    }
+    None
+}
+
 /// Every PBR set's JSON entry, in display order (CS only; empty otherwise).
 pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
     if m.target != Target::Cs {
@@ -106,24 +169,55 @@ const NEEDS: [(Feature, SlotKind, &str, &str); 3] = [
         Feature::Emissive,
         SlotKind::Emissive,
         "emissive",
-        "an emissive texture (_g)",
+        "emissive texture (_g)",
     ),
     (
         Feature::Parallax,
         SlotKind::Height,
         "parallax",
-        "a height texture (_p)",
+        "height texture (_p)",
     ),
     (
         Feature::Subsurface,
         SlotKind::Subsurface,
         "subsurface",
-        "a subsurface texture (_s)",
+        "subsurface texture (_s)",
     ),
 ];
 
 fn has(v: &SetView, s: SlotKind) -> bool {
     !matches!(v.slots.get(&s), None | Some(SlotFill::Empty))
+}
+
+/// The "feature is on but its texture is missing" blocks of one PBR set; `has` says whether a slot is filled.
+pub fn missing_texture_texts(
+    id: &str,
+    s: &Settings,
+    has: impl Fn(SlotKind) -> bool,
+) -> Vec<String> {
+    let mut out = vec![];
+    for (f, slot, name, what) in NEEDS {
+        if feature_on(s, f) && blocked_by(s, f).is_none() && !has(slot) {
+            out.push(format!("{id}: {name} is on but the set has no {what}"));
+        }
+    }
+    if feature_on(s, Feature::Multilayer)
+        && s.get("coat_normal") == Some(&Value::Bool(true))
+        && !has(SlotKind::Coat)
+    {
+        out.push(format!(
+            "{id}: coat normal is on but the set has no coat normal texture (_cnr)"
+        ));
+    }
+    if feature_on(s, Feature::Fuzz)
+        && s.get("fuzz.texture") == Some(&Value::Bool(true))
+        && !has(SlotKind::Fuzz)
+    {
+        out.push(format!(
+            "{id}: fuzz texture is on but the set has no fuzz texture (_f)"
+        ));
+    }
+    out
 }
 
 /// What stops Export (spec §6.3). On CS the PBR sets are checked; slot clashes apply to every set.
@@ -137,37 +231,8 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
             continue;
         }
         let s = &v.settings;
-        for (f, slot, name, what) in NEEDS {
-            if feature_on(s, f) && blocked_by(s, f).is_none() && !has(v, slot) {
-                out.push(issue(
-                    v,
-                    format!("{}: {name} is on but the set has no {what}", v.id),
-                ));
-            }
-        }
-        if feature_on(s, Feature::Multilayer)
-            && s.get("coat_normal") == Some(&Value::Bool(true))
-            && !has(v, SlotKind::Coat)
-        {
-            out.push(issue(
-                v,
-                format!(
-                    "{}: coat normal is on but the set has no coat normal texture (_cnr)",
-                    v.id
-                ),
-            ));
-        }
-        if feature_on(s, Feature::Fuzz)
-            && s.get("fuzz.texture") == Some(&Value::Bool(true))
-            && !has(v, SlotKind::Fuzz)
-        {
-            out.push(issue(
-                v,
-                format!(
-                    "{}: fuzz texture is on but the set has no fuzz texture (_f)",
-                    v.id
-                ),
-            ));
+        for text in missing_texture_texts(&v.id, s, |k| has(v, k)) {
+            out.push(issue(v, text));
         }
         for (f, _) in FEATURE_KEYS {
             if let Some(b) = feature_on(s, f).then(|| blocked_by(s, f)).flatten() {
@@ -199,11 +264,28 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
     }
     out.extend(path_collisions(m));
     if m.target == Target::Cs {
-        if let Err(e) = check_rel_path(&json_name(m), "JSON name") {
-            out.push(general(e.0));
-        }
         let entries: Vec<EntryInput> = json_entries(m).into_iter().map(|(_, e)| e).collect();
         if !entries.is_empty() {
+            // A borrowed slot with no path is reported only when nothing above already explains it (a dropped
+            // duplicate or an unusable prefix is already a block of its own).
+            if out.is_empty() {
+                let views = set_views(m);
+                let (_, paths) = engine_inputs(m);
+                for v in views.iter().filter(|v| v.pbr) {
+                    for (n, from) in unresolved_borrows(v, &views, &paths, m) {
+                        out.push(issue(
+                            v,
+                            format!(
+                                "{}: slot{n} borrows from {from}, which has no output path",
+                                v.id
+                            ),
+                        ));
+                    }
+                }
+            }
+            if let Some(why) = json_name_problem(&json_name(m)) {
+                out.push(general(why));
+            }
             if let Err(errs) = validate(&document(&entries).to_value()) {
                 out.push(general(format!(
                     "PGPatcher JSON does not validate: {}",
