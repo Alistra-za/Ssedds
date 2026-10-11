@@ -800,3 +800,95 @@ fn the_export_button_is_big_enough_to_find() {
     let r = h.get_by_label("Export").rect();
     assert!(r.width() >= 110.0 && r.height() >= 28.0, "{r:?}");
 }
+
+fn leaf_with_policy(policy: engine::config::AlphaPolicy) -> Harness<'static, AppModel> {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.decide("landscape/leaf.png", sdc_gui::model::Answer::Alpha(policy));
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    model.select_item("landscape/leaf.png");
+    // The temp folder is only read while the model opens; the harness keeps the model.
+    std::mem::forget(d);
+    let mut h = harness(model);
+    h.run();
+    h
+}
+
+fn mips_levels(h: &Harness<'static, AppModel>) -> serde_json::Value {
+    let job = h.state().item("landscape/leaf.png").unwrap().job.clone();
+    serde_json::to_value(&job.unwrap().profile.mips.levels).unwrap()
+}
+
+#[test]
+fn the_mipmaps_tick_box_writes_none_and_full() {
+    use eframe::egui::accesskit::Role;
+    let mut h = leaf_with_policy(engine::config::AlphaPolicy::Cutout);
+    assert_eq!(mips_levels(&h), serde_json::json!("full"));
+    let tick = |h: &mut Harness<'static, AppModel>| {
+        h.get_by_role_and_label(Role::CheckBox, "Mipmaps").hover();
+        h.run();
+        h.get_by_role_and_label(Role::CheckBox, "Mipmaps").click();
+        h.run();
+        settle(h);
+    };
+    tick(&mut h);
+    assert_eq!(mips_levels(&h), serde_json::json!("none"));
+    let item = h.state().item("landscape/leaf.png").unwrap();
+    assert_eq!(
+        item.job.as_ref().unwrap().provenance["mips.levels"].to_string(),
+        "project_file"
+    );
+    tick(&mut h);
+    assert_eq!(mips_levels(&h), serde_json::json!("full"));
+}
+
+#[test]
+fn a_mip_count_shows_ticked_with_a_note() {
+    use eframe::egui::accesskit::Role;
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.set_field("landscape/leaf.png", "mips.levels", serde_json::json!(3));
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    model.select_item("landscape/leaf.png");
+    let mut h = harness(model);
+    h.run();
+    let tick = h.get_by_role_and_label(Role::CheckBox, "Mipmaps");
+    assert_eq!(
+        tick.accesskit_node().toggled(),
+        Some(eframe::egui::accesskit::Toggled::True)
+    );
+    h.get_by_label("(3 levels — see Advanced)");
+}
+
+#[test]
+fn levels_live_in_the_advanced_drawer_not_the_main_panel() {
+    let mut h = leaf_with_policy(engine::config::AlphaPolicy::Cutout);
+    assert!(h.query_by_label("Levels").is_none());
+    h.state_mut().settings.advanced_open = true;
+    h.run();
+    h.get_by_label("Levels");
+    // The drawer adds its own "Mipmaps" section heading next to the group heading and the tick box.
+    assert!(h.query_all_by_label("Mipmaps").count() >= 3);
+}
+
+#[test]
+fn coverage_sits_under_alpha_for_cutout_policies_only() {
+    use eframe::egui::accesskit::Role;
+    let h = leaf_with_policy(engine::config::AlphaPolicy::Cutout);
+    let y = |label: &str| h.get_by_label(label).rect().top();
+    let tick_y = h
+        .get_by_role_and_label(Role::CheckBox, "Mipmaps")
+        .rect()
+        .top();
+    assert!(y("Coverage") > y("Comparison"), "directly under Comparison");
+    assert!(y("Coverage") < tick_y, "inside the Alpha group");
+    let h = leaf_with_policy(engine::config::AlphaPolicy::Blend);
+    assert!(h.query_by_label("Coverage").is_none());
+    h.get_by_label("Threshold"); // locked, but still listed
+}
+
+#[test]
+fn the_filter_row_is_box_and_disabled() {
+    let h = leaf_with_policy(engine::config::AlphaPolicy::Cutout);
+    assert!(h.get_by_value("Filter: Box").accesskit_node().is_disabled());
+}

@@ -4,17 +4,16 @@ use engine::policy::ResolvedJob;
 use serde_json::Value;
 
 /// The editable fields in display order, with the label each row shows.
-pub const FIELDS: [(&str, &str); 13] = [
+pub const FIELDS: [(&str, &str); 12] = [
     ("subtype", "Sub-type"),
     ("color.content", "Content"),
     ("color.tag", "DDS tag"),
     ("alpha.policy", "Alpha"),
     ("alpha.threshold", "Threshold"),
     ("alpha.compare", "Comparison"),
-    ("alpha.exact_opaque", "Exact opaque alpha"),
-    ("mips.levels", "Levels"),
-    ("mips.normal", "Normal handling"),
     ("mips.coverage", "Coverage"),
+    ("alpha.exact_opaque", "Exact opaque alpha"),
+    ("mips.normal", "Normal handling"),
     ("format", "Format"),
     ("encoder.effort", "Effort"),
     ("encoder.perceptual", "Perceptual"),
@@ -29,7 +28,14 @@ pub const ADVANCED_FIELDS: [(&str, &str); 5] = [
     ("header", "DDS header"),
 ];
 
+/// The mip level count: shown as the basic Mipmaps tick box, edited as a count in the Advanced drawer.
+pub const LEVELS_FIELD: (&str, &str) = ("mips.levels", "Levels");
+
 pub fn group_of(field: &str) -> &'static str {
+    // Coverage only ever applies to the alpha-tested policies, so it sits with the alpha settings.
+    if field == "mips.coverage" {
+        return "Alpha";
+    }
     match field.split('.').next().unwrap_or("") {
         "subtype" => "Type",
         "color" => "Colour",
@@ -69,12 +75,22 @@ pub fn format_options(target: Target) -> Vec<Format> {
     .collect()
 }
 
-/// Why a field cannot be changed for this profile, or `None`.
-pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static str> {
-    let cutout = matches!(
+/// True for the alpha-tested policies (`cutout`, `cutout_blend`).
+pub fn is_cutout(p: &Profile) -> bool {
+    matches!(
         p.alpha.policy,
         AlphaPolicy::Cutout | AlphaPolicy::CutoutBlend
-    );
+    )
+}
+
+/// A field the panel leaves out entirely for this profile (coverage outside the cutout policies).
+pub fn field_hidden(p: &Profile, field: &str) -> bool {
+    field == "mips.coverage" && !is_cutout(p)
+}
+
+/// Why a field cannot be changed for this profile, or `None`.
+pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static str> {
+    let cutout = is_cutout(p);
     match field {
         "color.tag" if p.format == Format::Bc6hUf16 => Some("BC6H has no _SRGB form"),
         "color.tag" if target != Target::Cs => Some("_SRGB is only written under cs"),
@@ -113,6 +129,21 @@ pub struct FieldView {
 
 pub fn field_views(target: Target, job: &ResolvedJob) -> Vec<FieldView> {
     views_of(&FIELDS, target, job)
+}
+
+/// The mip level count's view (value `"full"`, `"none"` or a number).
+pub fn levels_view(target: Target, job: &ResolvedJob) -> FieldView {
+    views_of(&[LEVELS_FIELD], target, job).remove(0)
+}
+
+/// Whether the level value means mipmaps are on: anything but `"none"`.
+pub fn mips_on(levels: &Value) -> bool {
+    levels.as_str() != Some("none")
+}
+
+/// The level count, when the value is a number rather than `"full"` or `"none"`.
+pub fn mips_count(levels: &Value) -> Option<u64> {
+    levels.as_u64()
 }
 
 /// The Advanced drawer's fields, with their locks.

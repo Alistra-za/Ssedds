@@ -2,8 +2,8 @@
 //! the rarely changed texture fields, and the `[files]` entries that match nothing. Drawing only: every edit is a
 //! call on the model, applied once the drawing is over.
 use super::columns::{strip_button, AMBER, STRIP_WIDTH};
-use super::settings_panel::{commit_slider, field_row, RowEdit};
-use crate::model::fields::{advanced_field_views, provenance_text};
+use super::settings_panel::{commit_slider, field_row, toml_read_only_reason, RowEdit};
+use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
 use crate::model::{AppModel, Selection};
 use crate::settings::{Bc1Choice, PREVIEW_SIZES};
@@ -76,6 +76,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
                     batch(ui, model, &mut actions);
                     fill_values(ui, model, &mut actions);
                     preview_settings(ui, model, &mut actions);
+                    mipmaps(ui, model, &mut actions);
                     texture_fields(ui, model, &mut actions);
                     unmatched(ui, model, &mut actions);
                 });
@@ -323,6 +324,43 @@ fn preview_settings(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Actio
     });
 }
 
+/// The mip level count (Full chain, None or 2..N levels); the basic panel only has the on/off tick box.
+fn mipmaps(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    section(ui, "Mipmaps", |ui| {
+        let Some((key, job)) = selected_job(model) else {
+            ui.weak("Select a texture to edit its mip level count.");
+            return;
+        };
+        let read_only = model.project.as_ref().is_none_or(|p| p.read_only());
+        let why = toml_read_only_reason(model);
+        let f = levels_view(model.target, &job);
+        ui.add_enabled_ui(!read_only, |ui| {
+            egui::Grid::new(("advanced-mips", &key))
+                .num_columns(4)
+                .show(ui, |ui| {
+                    match field_row(
+                        ui,
+                        &key,
+                        model.target,
+                        &job,
+                        model.busy(),
+                        false,
+                        why.as_deref(),
+                        &f,
+                    ) {
+                        Some(RowEdit::Set(v)) => {
+                            actions.push(Action::SetField(key.clone(), f.field, v))
+                        }
+                        Some(RowEdit::Clear) => {
+                            actions.push(Action::ClearField(key.clone(), f.field))
+                        }
+                        None => {}
+                    }
+                });
+        });
+    });
+}
+
 fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
     section(ui, "Advanced texture fields", |ui| {
         let Some((key, job)) = selected_job(model) else {
@@ -331,12 +369,22 @@ fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>
         };
         let read_only = model.project.as_ref().is_none_or(|p| p.read_only());
         let busy = model.busy();
+        let why = toml_read_only_reason(model);
         ui.add_enabled_ui(!read_only, |ui| {
             egui::Grid::new(("advanced-fields", &key))
                 .num_columns(4)
                 .show(ui, |ui| {
                     for f in advanced_field_views(model.target, &job) {
-                        match field_row(ui, &key, model.target, &job, busy, false, &f) {
+                        match field_row(
+                            ui,
+                            &key,
+                            model.target,
+                            &job,
+                            busy,
+                            false,
+                            why.as_deref(),
+                            &f,
+                        ) {
                             Some(RowEdit::Set(v)) => {
                                 actions.push(Action::SetField(key.clone(), f.field, v))
                             }

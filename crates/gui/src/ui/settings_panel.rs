@@ -2,7 +2,8 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    channel_text, field_views, format_label, format_options, group_of, provenance_text, FieldView,
+    channel_text, field_hidden, field_views, format_label, format_options, group_of, levels_view,
+    mips_count, mips_on, provenance_text, FieldView,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -313,6 +314,8 @@ struct Ctx<'a> {
     target: Target,
     busy: bool,
     compact: bool,
+    /// Why `sdc.toml` cannot be edited, when it is read-only.
+    toml_read_only: Option<String>,
 }
 
 /// What a field row asks of the model.
@@ -331,6 +334,7 @@ pub fn field_row(
     job: &ResolvedJob,
     busy: bool,
     compact: bool,
+    toml_read_only: Option<&str>,
     f: &FieldView,
 ) -> Option<RowEdit> {
     let mut edit = None;
@@ -343,7 +347,11 @@ pub fn field_row(
             editor(ui, key, target, job, busy, f)
         })
         .inner;
-    if let Some(reason) = f.lock {
+    if let Some(reason) = f
+        .lock
+        .map(str::to_string)
+        .or(toml_read_only.map(str::to_string))
+    {
         r.on_disabled_hover_text(reason);
     }
     if let Some(v) = set {
@@ -372,6 +380,54 @@ pub fn field_row(
     edit
 }
 
+/// The basic Mipmaps rows: the on/off tick box (the level count lives in the Advanced drawer), then the filter.
+fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
+    let f = levels_view(cx.target, cx.job);
+    let mut on = mips_on(&f.value);
+    let ticked = ui.add_enabled(
+        cx.toml_read_only.is_none(),
+        egui::Checkbox::new(&mut on, "Mipmaps"),
+    );
+    let ticked = match &cx.toml_read_only {
+        Some(why) => ticked.on_disabled_hover_text(why),
+        None => ticked,
+    };
+    if ticked.changed() {
+        actions.push(Action::Set(
+            f.field,
+            json!(if on { "full" } else { "none" }),
+        ));
+    }
+    match mips_count(&f.value) {
+        Some(n) if !cx.compact => ui.label(format!("({n} levels — see Advanced)")),
+        _ if cx.compact => ui.label(""),
+        _ => ui.label(
+            egui::RichText::new(provenance_text(&f.provenance))
+                .small()
+                .weak(),
+        ),
+    };
+    ui.label("");
+    if f.edited
+        && ui
+            .small_button("↺")
+            .on_hover_text("Use the inherited value")
+            .clicked()
+    {
+        actions.push(Action::Clear(f.field));
+    }
+    ui.end_row();
+    // `box` is the only filter the engine has in v1.
+    ui.add_enabled_ui(false, |ui| {
+        egui::ComboBox::from_id_salt((cx.key, "mips.filter"))
+            .selected_text("Filter: Box")
+            .show_ui(ui, |_| {})
+    })
+    .response
+    .on_disabled_hover_text("More filters (Kaiser, Mitchell, Lanczos) arrive with M6");
+    ui.end_row();
+}
+
 fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Action>) {
     egui::CollapsingHeader::new(name)
         .default_open(true)
@@ -379,11 +435,23 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
             egui::Grid::new((cx.key, name))
                 .num_columns(4)
                 .show(ui, |ui| {
-                    for f in field_views(cx.target, cx.job)
-                        .into_iter()
-                        .filter(|f| group_of(f.field) == name)
-                    {
-                        match field_row(ui, cx.key, cx.target, cx.job, cx.busy, cx.compact, &f) {
+                    if name == "Mipmaps" {
+                        mipmaps_rows(ui, cx, actions);
+                    }
+                    for f in field_views(cx.target, cx.job).into_iter().filter(|f| {
+                        group_of(f.field) == name && !field_hidden(&cx.job.profile, f.field)
+                    }) {
+                        let toml_read_only = cx.toml_read_only.as_deref();
+                        match field_row(
+                            ui,
+                            cx.key,
+                            cx.target,
+                            cx.job,
+                            cx.busy,
+                            cx.compact,
+                            toml_read_only,
+                            &f,
+                        ) {
                             Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
                             Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
                             None => {}
@@ -540,6 +608,15 @@ fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
     }
 }
 
+/// Why `sdc.toml` cannot take an edit, when its file is read-only.
+pub fn toml_read_only_reason(model: &AppModel) -> Option<String> {
+    model
+        .project
+        .as_ref()
+        .and_then(|p| p.error())
+        .map(|e| format!("sdc.toml is read-only: {e}"))
+}
+
 /// Draw texture `key`'s settings. `compact` (the preview's strip) keeps the decision box and the Alpha, Mipmaps and
 /// Compression groups, without provenance text.
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
@@ -568,6 +645,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     };
     let (target, busy) = (model.target, model.busy());
     let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
+    let toml_read_only = toml_read_only_reason(model);
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());
@@ -606,6 +684,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 target,
                 busy,
                 compact,
+                toml_read_only: toml_read_only.clone(),
             };
             match &status {
                 ItemStatus::Skipped(r) => {
