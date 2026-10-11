@@ -81,6 +81,9 @@ pub struct BatchRequest {
     /// by more than one set, owner and borrowers alike. The engine bakes no normal variance into it and reports no
     /// missing companion for those sets. Empty for the CLI.
     pub shared_roughness: BTreeSet<String>,
+    /// GUI (DECISIONS Note R M4-final-1): borrower set id → the id of the set whose `_n` its Normal slot borrows. The
+    /// engine bakes the borrower's own roughness member from that `_n`, under every usual bake rule. Empty for the CLI.
+    pub borrowed_normal: BTreeMap<String, String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -111,6 +114,7 @@ impl BatchRequest {
             set_edits: vec![],
             output_paths: BTreeMap::new(),
             shared_roughness: BTreeSet::new(),
+            borrowed_normal: BTreeMap::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -1065,6 +1069,16 @@ impl Engine {
             .iter()
             .map(|id| crate::sets::set_key(&req.output_root, id))
             .collect();
+        let borrowed: BTreeMap<String, String> = req
+            .borrowed_normal
+            .iter()
+            .map(|(b, o)| {
+                (
+                    crate::sets::set_key(&req.output_root, b),
+                    crate::sets::set_key(&req.output_root, o),
+                )
+            })
+            .collect();
         let baking = crate::bake::plan::plan_bakes(
             &crate::bake::plan::BakeCtx {
                 target,
@@ -1072,6 +1086,7 @@ impl Engine {
                 files: &files,
                 aliases: registry.alias_table(),
                 shared: &shared,
+                borrowed: &borrowed,
             },
             &mut jobs,
         );

@@ -466,6 +466,26 @@ pub fn shared_roughness(m: &AppModel) -> BTreeSet<String> {
         .collect()
 }
 
+/// Borrower id → owner id for every set whose Normal slot borrows another set's `_n` (DECISIONS Note R
+/// M4-final-1). The engine bakes the borrower's own roughness member from that `_n`. Empty off `cs`.
+pub fn borrowed_normal(m: &AppModel) -> BTreeMap<String, String> {
+    if m.target != Target::Cs {
+        return BTreeMap::new();
+    }
+    let views = set_views(m);
+    views
+        .iter()
+        .filter_map(|v| match v.slots.get(&SlotKind::Normal) {
+            Some(SlotFill::Borrowed { from, .. }) => {
+                // The owner's id as the engine knows it (`from` is matched case-insensitively in `set_views`).
+                let owner = views.iter().find(|o| same_id(&o.id, from))?;
+                Some((v.id.clone(), owner.id.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Every owned output's explicit path, sorted by its owner's display position: (owner id, key, path relative to
 /// the export root). Duplicate paths are kept here; `engine_inputs` drops them and `path_collisions` reports them.
 /// A path that fails `check_rel_path` is never a candidate: the engine joins these under the export folder as given.

@@ -20,6 +20,9 @@ pub struct BakeCtx<'a> {
     pub aliases: &'a BTreeMap<String, String>,
     /// Keys of the sets whose roughness slot is shared (`BatchRequest::shared_roughness`, as set keys; DECISIONS R7).
     pub shared: &'a BTreeSet<String>,
+    /// Borrower set key → the key of the set whose `_n` it borrows (`BatchRequest::borrowed_normal`, as set keys;
+    /// DECISIONS Note R M4-final-1).
+    pub borrowed: &'a BTreeMap<String, String>,
 }
 
 fn is_normal_suffix(s: &str) -> bool {
@@ -149,6 +152,23 @@ fn missing_normal(cx: &BakeCtx, set: &TextureSet, batch: &BTreeSet<PathBuf>, j: 
     }
 }
 
+/// Why a roughness member whose set borrows the `_n` of set `owner` has nothing to bake from (DECISIONS Note R
+/// M4-final-1): the owner has no usable `pbr_normal` job.
+fn missing_borrowed_normal(cx: &BakeCtx, owner: &TextureSet, j: &mut ResolvedJob) {
+    let file = member_file(cx, owner, InputKind::Image, is_normal_suffix)
+        .or_else(|| member_file(cx, owner, InputKind::Dds, is_normal_suffix));
+    let msg = format!(
+        "the set's _n is borrowed from {}, which has no usable pbr_normal job: the roughness is written without the variance bake",
+        owner.key.replace('\\', "/")
+    );
+    note(
+        j,
+        Code::SetMissingCompanion,
+        msg,
+        file.map(|f| f.path.as_path()),
+    );
+}
+
 /// Why a `pbr_normal` has no roughness member to bake into (spec §6.3, DECISIONS R8).
 fn missing_roughness(
     cx: &BakeCtx,
@@ -258,12 +278,42 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     any
 }
 
+/// The set's `_n`: its first `pbr_normal` job by path that did not fail (DECISIONS R9).
+fn own_normal(jobs: &[ResolvedJob], key: &str) -> Option<usize> {
+    (0..jobs.len())
+        .filter(|&i| {
+            jobs[i].set_key == key
+                && jobs[i].profile.subtype == Subtype::PbrNormal
+                && !matches!(jobs[i].status, JobStatus::Error { .. })
+        })
+        .min_by(|&a, &b| jobs[a].input.cmp(&jobs[b].input))
+}
+
+/// The set's roughness members that are (or will be) written.
+fn roughness_members(jobs: &[ResolvedJob], key: &str) -> Vec<usize> {
+    (0..jobs.len())
+        .filter(|&i| {
+            jobs[i].set_key == key
+                && jobs[i].profile.subtype.is_roughness_member()
+                && writable(&jobs[i])
+        })
+        .collect()
+}
+
 /// Decide every set's bake (spec §6.2–6.3). Attaches `ResolvedJob::bake` to each baking roughness member, records
 /// the `_n`'s `mips.normal = renormalize_bake` with provenance `set`, and appends the `SET-*` codes to the jobs they
 /// concern. Returns the keys of the sets that bake (`set_resolved.bake`).
 pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
     let batch: BTreeSet<PathBuf> = cx.files.iter().map(|f| f.path.clone()).collect();
     let mut baking = BTreeSet::new();
+    // DECISIONS Note R M4-final-1: the `_n` jobs that a borrower set with a roughness member of its own uses. Such an
+    // `_n` reports no missing roughness in its own set, whether the borrower bakes or is shared (R7).
+    let lent: BTreeSet<usize> = cx
+        .borrowed
+        .iter()
+        .filter(|(b, _)| !roughness_members(jobs, b).is_empty())
+        .filter_map(|(_, o)| own_normal(jobs, o))
+        .collect();
     for set in cx.sets {
         let idx: Vec<usize> = (0..jobs.len())
             .filter(|&i| jobs[i].set_key == set.key)
@@ -292,30 +342,34 @@ pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
             continue;
         }
         let shared = cx.shared.contains(&set.key);
-        let mut normals: Vec<usize> = idx
-            .iter()
-            .copied()
-            .filter(|&i| {
-                jobs[i].profile.subtype == Subtype::PbrNormal
-                    && !matches!(jobs[i].status, JobStatus::Error { .. })
-            })
-            .collect();
-        normals.sort_by(|&a, &b| jobs[a].input.cmp(&jobs[b].input));
-        let members: Vec<usize> = idx
-            .iter()
-            .copied()
-            .filter(|&i| jobs[i].profile.subtype.is_roughness_member() && writable(&jobs[i]))
-            .collect();
-        match (normals.first().copied(), members.is_empty()) {
+        // A borrowed Normal slot (GUI) stands in for the set's own `_n` (DECISIONS Note R M4-final-1).
+        let owner = cx.borrowed.get(&set.key);
+        let normal = match owner {
+            Some(o) => own_normal(jobs, o),
+            None => own_normal(jobs, &set.key),
+        };
+        let members = roughness_members(jobs, &set.key);
+        match (normal, members.is_empty()) {
             (None, true) => {}
             // M3b spec §3.3 (v1 instruction, DECISIONS R7): a shared roughness renormalises only, silently.
             _ if shared => {}
-            (None, false) => {
-                for &m in &members {
-                    missing_normal(cx, set, &batch, &mut jobs[m]);
+            (None, false) => match owner.and_then(|o| cx.sets.iter().find(|s| &s.key == o)) {
+                Some(os) => {
+                    for &m in &members {
+                        missing_borrowed_normal(cx, os, &mut jobs[m]);
+                    }
+                }
+                None => {
+                    for &m in &members {
+                        missing_normal(cx, set, &batch, &mut jobs[m]);
+                    }
+                }
+            },
+            (Some(n), true) => {
+                if owner.is_none() && !lent.contains(&n) {
+                    missing_roughness(cx, set, &batch, &mut jobs[n]);
                 }
             }
-            (Some(n), true) => missing_roughness(cx, set, &batch, &mut jobs[n]),
             (Some(n), false) => {
                 if bake_set(jobs, n, &members) {
                     baking.insert(set.key.clone());

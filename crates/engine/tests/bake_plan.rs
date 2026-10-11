@@ -332,6 +332,88 @@ fn a_shared_roughness_is_never_baked_and_reports_nothing() {
     assert!(!bake_flag(&ev, "textures/pbr/iron"));
 }
 
+fn borrow(r: &mut BatchRequest, pairs: &[(&str, &str)]) {
+    r.borrowed_normal = pairs
+        .iter()
+        .map(|(b, o)| ((*b).to_string(), (*o).to_string()))
+        .collect();
+}
+
+/// DECISIONS Note R M4-final-1: a set whose Normal slot is borrowed (GUI share) bakes its own roughness from the
+/// owner set's `_n`, and neither set reports a missing companion.
+#[test]
+fn a_borrowed_n_bakes_the_borrowers_own_roughness() {
+    let d = tempfile::tempdir().unwrap();
+    normal(d.path(), "textures/pbr/iron_n.png", 64, 64);
+    rough(d.path(), "textures/pbr/iron_rmaos.png", 64, 64);
+    rough(d.path(), "textures/pbr/steel_rmaos.png", 32, 32);
+    // An owner with no roughness of its own lends its `_n` too.
+    normal(d.path(), "textures/pbr/copper_n.png", 64, 64);
+    rough(d.path(), "textures/pbr/brass_rmaos.png", 64, 64);
+    let mut r = req(d.path(), &[]);
+    borrow(
+        &mut r,
+        &[
+            ("textures/pbr/steel", "textures/pbr/iron"),
+            ("textures/pbr/brass", "textures/pbr/copper"),
+        ],
+    );
+    let (p, ev) = plan(r);
+    let s = job(&p, "steel_rmaos.png");
+    let b = s.bake.as_ref().expect("the borrower's rmaos bakes");
+    assert!(b.normal.ends_with("iron_n.png"));
+    assert_eq!(b.shift, 1); // the 64 px `_n` over a 32 px member
+    assert!(b.stamp.is_some());
+    assert!(set_codes(s).is_empty(), "{:?}", s.warnings);
+    assert!(job(&p, "iron_rmaos.png").bake.is_some());
+    assert!(bake_flag(&ev, "textures/pbr/steel"));
+    let brass = job(&p, "brass_rmaos.png");
+    assert!(brass
+        .bake
+        .as_ref()
+        .is_some_and(|b| b.normal.ends_with("copper_n.png")));
+    assert!(set_codes(brass).is_empty(), "{:?}", brass.warnings);
+    let copper = job(&p, "copper_n.png");
+    assert!(set_codes(copper).is_empty(), "{:?}", copper.warnings);
+    assert_eq!(copper.profile.mips.normal, NormalMips::RenormalizeBake);
+    assert!(bake_flag(&ev, "textures/pbr/brass"));
+    assert!(!bake_flag(&ev, "textures/pbr/copper"));
+}
+
+/// The usual rules hold for a borrowed `_n`: the size ratio.
+#[test]
+fn a_borrowed_n_of_another_aspect_is_set_bake_ratio() {
+    let d = tempfile::tempdir().unwrap();
+    normal(d.path(), "textures/pbr/iron_n.png", 64, 64);
+    rough(d.path(), "textures/pbr/steel_rmaos.png", 64, 32);
+    let mut r = req(d.path(), &[]);
+    borrow(&mut r, &[("textures/pbr/steel", "textures/pbr/iron")]);
+    let (p, _) = plan(r);
+    let s = job(&p, "steel_rmaos.png");
+    assert!(s.bake.is_none());
+    assert_eq!(set_codes(s), vec![Code::SetBakeRatio]);
+}
+
+/// R7 still wins: a shared roughness slot never bakes, even from a borrowed `_n`.
+#[test]
+fn a_shared_roughness_never_bakes_even_with_a_borrowed_n() {
+    let d = tempfile::tempdir().unwrap();
+    normal(d.path(), "textures/pbr/iron_n.png", 64, 64);
+    rough(d.path(), "textures/pbr/steel_rmaos.png", 64, 64);
+    let mut r = req(d.path(), &[]);
+    borrow(&mut r, &[("textures/pbr/steel", "textures/pbr/iron")]);
+    r.shared_roughness = ["textures/pbr/steel".to_string()].into_iter().collect();
+    let (p, ev) = plan(r);
+    let s = job(&p, "steel_rmaos.png");
+    assert!(s.bake.is_none());
+    assert!(set_codes(s).is_empty(), "{:?}", s.warnings);
+    assert!(!bake_flag(&ev, "textures/pbr/steel"));
+    // The lent `_n` renormalises only, silently: its borrower's roughness is shared (R7).
+    let n = job(&p, "iron_n.png");
+    assert_eq!(n.profile.mips.normal, NormalMips::Renormalize);
+    assert!(set_codes(n).is_empty(), "{:?}", n.warnings);
+}
+
 #[test]
 fn an_undecided_n_does_not_bake_and_says_so() {
     let d = tempfile::tempdir().unwrap();

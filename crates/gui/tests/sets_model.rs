@@ -870,3 +870,67 @@ fn a_shared_rmaos_is_sent_to_the_engine_for_owner_and_borrower() {
     // Plan (`replan`) and export (`start_export`) both build their `BatchRequest` through `request()`.
     assert_eq!(m.request().unwrap().shared_roughness, shared);
 }
+
+/// Final review I1 (DECISIONS Note R M4-final-1): `rock01_normal` shared into a set with its own `rock02_rmaos`. The
+/// borrower bakes its roughness from the borrowed `_n` and reports no missing companion.
+#[test]
+fn a_shared_normal_bakes_the_borrowers_own_rmaos() {
+    use engine::codes::Code;
+    use engine::config::Subtype;
+    use image::{ImageBuffer, Rgb, Rgba};
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, (y * 4) as u8, 60u8]))
+        .save(r.join("rock02.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |x, _| Rgba([(x * 4) as u8, 0, 200, 255]))
+        .save(r.join("rock02_rmaos.png"))
+        .unwrap();
+    let mut m = pbr_opened(d.path());
+    m.decide("landscape/rock02.png", Answer::Subtype(Subtype::PbrAlbedo));
+    idle(&mut m);
+    let rmaos02 = key_of(&m, "rock02_rmaos.png");
+    let member = |m: &sdc_gui::model::AppModel| {
+        m.item(&rmaos02)
+            .and_then(|i| i.job.clone())
+            .expect("rock02_rmaos has a job")
+    };
+    assert_eq!(member(&m).profile.subtype, Subtype::Rmaos);
+    // Before the share, rock02 has no `_n`: the honest code.
+    assert!(member(&m)
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::SetMissingCompanion));
+    let normal = key_of(&m, "rock01_normal.png");
+    assert_eq!(
+        m.drop_on_set(&normal, "landscape/rock02"),
+        DropOutcome::AskChoice {
+            from: "landscape/rock01".into()
+        }
+    );
+    assert_eq!(
+        m.drop_choice(&normal, "landscape/rock02", DropChoice::Share),
+        DropOutcome::Joined
+    );
+    idle(&mut m);
+    let borrowed = borrowed_normal(&m);
+    assert_eq!(
+        borrowed.get("landscape/rock02").map(String::as_str),
+        Some("landscape/rock01"),
+        "{borrowed:?}"
+    );
+    assert!(shared_roughness(&m).is_empty());
+    assert_eq!(m.request().unwrap().borrowed_normal, borrowed);
+    let j = member(&m);
+    let b = j.bake.as_ref().expect("the borrower's own rmaos bakes");
+    assert!(b.normal.ends_with("rock01_normal.png"), "{:?}", b.normal);
+    assert!(
+        !j.warnings
+            .iter()
+            .any(|w| w.code == Code::SetMissingCompanion),
+        "{:?}",
+        j.warnings
+    );
+}

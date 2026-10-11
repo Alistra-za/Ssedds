@@ -309,6 +309,7 @@ impl AppModel {
         req.set_edits = edits;
         req.output_paths = paths;
         req.shared_roughness = sets::shared_roughness(self);
+        req.borrowed_normal = sets::borrowed_normal(self);
         Some(req)
     }
 
