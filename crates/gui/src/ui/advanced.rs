@@ -1,19 +1,15 @@
-//! The right-hand Advanced drawer (M3a spec §2.5): the preset inspector, batch, packing fill and preview settings,
+//! The right-hand Advanced drawer (M3a spec §2.5): the preset inspector, batch, legacy project-wide fills and preview settings,
 //! the rarely changed texture fields, and the `[files]` entries that match nothing. Drawing only: every edit is a
 //! call on the model, applied once the drawing is over.
 use super::columns::{strip_button, AMBER, STRIP_WIDTH};
-use super::settings_panel::{commit_slider, field_row, toml_read_only_reason, Ctx, RowEdit};
+use super::settings_panel::{field_row, toml_read_only_reason, Ctx, RowEdit};
 use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
 use crate::model::{AppModel, Selection};
 use crate::settings::{Bc1Choice, PREVIEW_SIZES};
 use eframe::egui;
-use engine::config::RawMap;
 use engine::policy::ResolvedJob;
 use serde_json::Value;
-
-/// The fill a freshly ticked role starts from (the slider moves it).
-const FIRST_FILL: u8 = 128;
 
 #[derive(Debug, Default)]
 pub struct AdvancedState {
@@ -24,7 +20,7 @@ pub struct AdvancedState {
 enum Action {
     SetField(String, &'static str, Value),
     ClearField(String, &'static str),
-    Fill(RawMap, Option<u8>),
+    ClearLegacyFills,
     RemoveUnmatched(String),
     PreviewMax(u32),
     Allow16k(bool),
@@ -74,7 +70,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
                         .show(ui, |ui| super::pgp_fields::advanced(ui, model, id));
                     }
                     batch(ui, model, &mut actions);
-                    fill_values(ui, model, &mut actions);
+                    legacy_fills(ui, model, &mut actions);
                     preview_settings(ui, model, &mut actions);
                     mipmaps(ui, model, &mut actions);
                     texture_fields(ui, model, &mut actions);
@@ -89,7 +85,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
         match a {
             Action::SetField(k, f, v) => model.set_field(&k, f, v),
             Action::ClearField(k, f) => model.clear_field(&k, f),
-            Action::Fill(role, v) => model.set_fill(role, v),
+            Action::ClearLegacyFills => model.clear_legacy_fills(),
             Action::RemoveUnmatched(k) => model.remove_unmatched(&k),
             Action::PreviewMax(n) => model.set_preview_max(n),
             Action::Allow16k(on) => model.set_allow_16k_preview(on),
@@ -190,7 +186,7 @@ fn bc1_label(c: Bc1Choice) -> &'static str {
 }
 
 /// A number box; true once its value is settled (a drag ended, or a typed value was accepted).
-fn settled_drag<T: egui::emath::Numeric>(
+pub(super) fn settled_drag<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     value: &mut T,
     speed: f64,
@@ -238,49 +234,31 @@ fn batch(ui: &mut egui::Ui, model: &mut AppModel, actions: &mut Vec<Action>) {
     });
 }
 
-fn fill_values(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
-    section(ui, "Packing fill values", |ui| {
-        ui.label(
-            egui::RichText::new(
-                "A fill replaces the neutral default for a packed channel that has no source map.",
-            )
-            .small()
-            .weak(),
-        );
+/// The project-wide fills an older `sdc.toml` may still hold (`defaults.packing.fill.*`). They still apply as a
+/// fallback under each packed output's own fills; new fills are set on the packed output's card.
+fn legacy_fills(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    let fills = model.legacy_fills();
+    if fills.is_empty() {
+        return;
+    }
+    let list: Vec<String> = fills
+        .iter()
+        .map(|(role, v)| format!("{} {v}", role.id()))
+        .collect();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("Project-wide fills (legacy): {}", list.join(", ")));
+        let why = toml_read_only_reason(model);
         let editable = model.project.as_ref().is_some_and(|p| !p.read_only());
-        ui.add_enabled_ui(editable, |ui| {
-            egui::Grid::new("fills").num_columns(3).show(ui, |ui| {
-                for role in RawMap::ALL {
-                    let id = role.id();
-                    let current = model.project.as_ref().and_then(|p| p.fill(role));
-                    ui.label(&id);
-                    // The value is kept while the box is unticked, so ticking it again restores it.
-                    let memo = egui::Id::new(("fill-memo", &id));
-                    let remembered: u8 = ui.data(|d| d.get_temp(memo)).unwrap_or(FIRST_FILL);
-                    let mut on = current.is_some();
-                    if ui.checkbox(&mut on, "Fill").changed() {
-                        actions.push(Action::Fill(role, on.then_some(remembered)));
-                    }
-                    ui.add_enabled_ui(current.is_some(), |ui| {
-                        let shown = current.unwrap_or(remembered);
-                        let (set, _) = commit_slider(
-                            ui,
-                            model.busy(),
-                            egui::Id::new(("fill", &id)),
-                            u32::from(shown),
-                            0..=255,
-                        );
-                        if let Some(v) = set {
-                            actions.push(Action::Fill(role, Some(v as u8)));
-                        }
-                    });
-                    if let Some(v) = current {
-                        ui.data_mut(|d| d.insert_temp(memo, v));
-                    }
-                    ui.end_row();
-                }
-            });
-        });
+        if ui
+            .add_enabled(editable, egui::Button::new("Clear"))
+            .on_hover_text(
+                "Remove the project-wide fills; set fills on each packed output's card instead",
+            )
+            .on_disabled_hover_text(why.unwrap_or_default())
+            .clicked()
+        {
+            actions.push(Action::ClearLegacyFills);
+        }
     });
 }
 

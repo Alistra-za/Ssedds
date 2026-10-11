@@ -31,10 +31,14 @@ fn the_inspector_shows_provenance_and_differences_from_the_base() {
 }
 
 #[test]
-fn fill_values_are_written_to_defaults() {
+fn a_project_wide_fill_still_applies_as_a_fallback() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    m.set_fill(RawMap::Metallic, Some(255));
+    m.project
+        .as_mut()
+        .unwrap()
+        .set_fill(RawMap::Metallic, Some(255));
+    m.replan();
     assert!(m.wait_idle(Duration::from_secs(60)));
     let job = m
         .item("landscape/rock01_rmaos")
@@ -241,7 +245,6 @@ fn the_open_drawer_shows_its_sections() {
     for label in [
         "Preset inspector",
         "Batch",
-        "Packing fill values",
         "Preview",
         "Advanced texture fields",
         "Unmatched [files] entries",
@@ -273,7 +276,7 @@ fn the_strip_opens_the_drawer_and_close_collapses_it() {
 }
 
 #[test]
-fn ticking_fill_writes_a_fill_and_remove_drops_an_unmatched_entry() {
+fn remove_drops_an_unmatched_entry() {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened(d.path());
     model.set_field(
@@ -293,13 +296,10 @@ fn ticking_fill_writes_a_fill_and_remove_drops_an_unmatched_entry() {
     h.run();
     assert!(h.state().unmatched_keys.is_empty());
 
-    let first_fill = h.query_all_by_label("Fill").next().unwrap();
-    first_fill.click();
-    h.run();
-    h.state_mut().wait_idle(Duration::from_secs(60));
-    h.run();
-    let fill = h.state().project.as_ref().unwrap().fill(RawMap::Roughness);
-    assert_eq!(fill, Some(128));
+    assert!(
+        h.query_by_label("Packing fill values").is_none(),
+        "the global fill panel is retired"
+    );
 }
 
 #[test]

@@ -248,6 +248,9 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
         if has(v, SlotKind::Coat) && has(v, SlotKind::Fuzz) {
             out.push(issue(v, format!("{}: _cnr and _f both use slot 7", v.id)));
         }
+        if has(v, SlotKind::Emissive) && has(v, SlotKind::SkinSk) {
+            out.push(issue(v, format!("{}: _g and _sk both use slot 3", v.id)));
+        }
         if m.target != Target::Cs || !v.pbr {
             continue;
         }

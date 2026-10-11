@@ -19,6 +19,8 @@ pub enum SlotKind {
     Diffuse,
     Normal,
     Emissive,
+    /// The Advanced skin `_sk` (slot 3, shared with the emissive).
+    SkinSk,
     Height,
     Rmaos,
     Coat,
@@ -28,12 +30,13 @@ pub enum SlotKind {
 
 impl SlotKind {
     /// The slot cards' order (spec §4.1).
-    pub const ALL: [SlotKind; 8] = [
+    pub const ALL: [SlotKind; 9] = [
         SlotKind::Diffuse,
         SlotKind::Normal,
         SlotKind::Rmaos,
         SlotKind::Height,
         SlotKind::Emissive,
+        SlotKind::SkinSk,
         SlotKind::Subsurface,
         SlotKind::Coat,
         SlotKind::Fuzz,
@@ -43,7 +46,7 @@ impl SlotKind {
         match self {
             SlotKind::Diffuse => 1,
             SlotKind::Normal => 2,
-            SlotKind::Emissive => 3,
+            SlotKind::Emissive | SlotKind::SkinSk => 3,
             SlotKind::Height => 4,
             SlotKind::Rmaos => 6,
             SlotKind::Coat | SlotKind::Fuzz => 7,
@@ -56,6 +59,7 @@ impl SlotKind {
             SlotKind::Diffuse => "",
             SlotKind::Normal => "n",
             SlotKind::Emissive => "g",
+            SlotKind::SkinSk => "sk",
             SlotKind::Height => "p",
             SlotKind::Rmaos => "rmaos",
             SlotKind::Coat => "cnr",
@@ -68,6 +72,7 @@ impl SlotKind {
             SlotKind::Diffuse => "Diffuse",
             SlotKind::Normal => "Normal _n",
             SlotKind::Emissive => "Emissive _g",
+            SlotKind::SkinSk => "Skin _sk",
             SlotKind::Height => "Height _p",
             SlotKind::Rmaos => "RMAOS",
             SlotKind::Coat => "Coat _cnr",
@@ -148,6 +153,7 @@ pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
             SlotKind::Normal
         }
         Subtype::PbrEmissive | Subtype::Glow => SlotKind::Emissive,
+        Subtype::SkinSk => SlotKind::SkinSk,
         Subtype::Height => SlotKind::Height,
         Subtype::Rmaos | Subtype::SkinRfaos => SlotKind::Rmaos,
         Subtype::CoatNormal => SlotKind::Coat,
@@ -157,18 +163,23 @@ pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
     })
 }
 
-/// Why `incoming` cannot join a set holding `existing`, if it cannot (spec §4.1: `_cnr` and `_f` share slot 7).
+/// Why `incoming` cannot join a set holding `existing`, if it cannot (spec §4.1: `_cnr` and `_f` share slot 7;
+/// the emissive `_g` and the Advanced skin `_sk` share slot 3).
 pub fn slot_conflict(existing: &[SlotKind], incoming: SlotKind) -> Option<String> {
-    let clash = match incoming {
-        SlotKind::Coat => existing.contains(&SlotKind::Fuzz),
-        SlotKind::Fuzz => existing.contains(&SlotKind::Coat),
-        _ => false,
-    };
-    clash.then(|| {
-        "a set cannot hold both a coat normal (_cnr) and a fuzz map (_f): both use slot 7"
-            .to_string()
-    })
+    let clash = |other: SlotKind| existing.contains(&other);
+    match incoming {
+        SlotKind::Coat if clash(SlotKind::Fuzz) => Some(SLOT7_CLASH.into()),
+        SlotKind::Fuzz if clash(SlotKind::Coat) => Some(SLOT7_CLASH.into()),
+        SlotKind::Emissive if clash(SlotKind::SkinSk) => Some(SLOT3_CLASH.into()),
+        SlotKind::SkinSk if clash(SlotKind::Emissive) => Some(SLOT3_CLASH.into()),
+        _ => None,
+    }
 }
+
+const SLOT7_CLASH: &str =
+    "a set cannot hold both a coat normal (_cnr) and a fuzz map (_f): both use slot 7";
+const SLOT3_CLASH: &str =
+    "a set cannot hold both an emissive map (_g) and a skin _sk map: both use slot 3";
 
 fn entry_of<'a>(entries: &'a [SetEntry], id: &str) -> Option<&'a SetEntry> {
     entries.iter().find(|e| same_id(&e.id, id))

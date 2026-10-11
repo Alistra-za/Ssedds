@@ -4,6 +4,7 @@ pub mod fields;
 pub mod history;
 pub mod inspector;
 pub mod items;
+pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
 pub mod preview;
@@ -15,7 +16,7 @@ use crate::settings::GuiSettings;
 use crate::worker::{spawn_export, spawn_plan, PlanFailure, WorkerMsg};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
-use engine::config::{AlphaPolicy, GreenConvention, RawMap, Subtype, Target};
+use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
 use engine::policy::{AcceptSuggestions, SourceStamp};
 use engine::presets::ConfigFile;
 use engine::session::Session;
@@ -1192,10 +1193,6 @@ impl AppModel {
 
     pub fn set_target(&mut self, t: Target) {
         self.edit("Mode", move |p| p.set_target(t));
-    }
-
-    pub fn set_fill(&mut self, role: RawMap, value: Option<u8>) {
-        self.edit("Fill value", move |p| p.set_fill(role, value));
     }
 
     /// Remove an unmatched `[files]` entry (one that names no file under the current target) and plan again.

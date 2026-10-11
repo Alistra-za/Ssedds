@@ -912,3 +912,25 @@ fn a_skipped_dds_on_a_pbr_output_path_does_not_hold_it_back() {
         .join("textures/pbr/landscape/rock01.dds")
         .exists());
 }
+
+#[test]
+fn emissive_and_skin_sk_clash_on_any_set() {
+    // Both use slot 3 (P6). The set is not PBR (undecided diffuse); the clash blocks every set.
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    for n in ["zed.png", "zed_sk.png", "zed_g.png"] {
+        image::ImageBuffer::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 9u8]))
+            .save(r.join(n))
+            .unwrap();
+    }
+    let mut m = ready(d.path());
+    m.set_field("landscape/zed_sk.png", "subtype", json!("skin_sk"));
+    m.set_field("landscape/zed_g.png", "subtype", json!("glow"));
+    idle(&mut m);
+    assert!(
+        texts(&m).contains(&"landscape/zed: _g and _sk both use slot 3".to_string()),
+        "{:?}",
+        texts(&m)
+    );
+}

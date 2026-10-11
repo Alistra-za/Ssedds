@@ -257,14 +257,30 @@ impl SetsDoc {
     /// Files whose sub-type was switched to its PBR counterpart because their set's diffuse became `pbr_albedo`
     /// (so a revert finds them). GUI bookkeeping in `[project]`: `sdc.toml` rejects unknown keys.
     pub fn auto_pbr(&self) -> Vec<String> {
-        strings(self.doc.get("project").and_then(|p| p.get("auto_pbr")))
+        self.auto_list("auto_pbr")
     }
     pub fn set_auto_pbr(&mut self, keys: &[String]) {
+        self.set_auto_list("auto_pbr", keys);
+    }
+
+    /// Files whose sub-type was switched to its Advanced skin counterpart because their set picked `_rfaos`
+    /// (`skin_albedo`, `skin_sk`), so switching back finds them. Bookkeeping like `auto_pbr`.
+    pub fn auto_skin(&self) -> Vec<String> {
+        self.auto_list("auto_skin")
+    }
+    pub fn set_auto_skin(&mut self, keys: &[String]) {
+        self.set_auto_list("auto_skin", keys);
+    }
+
+    fn auto_list(&self, name: &str) -> Vec<String> {
+        strings(self.doc.get("project").and_then(|p| p.get(name)))
+    }
+    fn set_auto_list(&mut self, name: &str, keys: &[String]) {
         let mut arr = Array::new();
         for k in keys {
             arr.push(k.as_str());
         }
-        self.set_project("auto_pbr", (!keys.is_empty()).then_some(Value::Array(arr)));
+        self.set_project(name, (!keys.is_empty()).then_some(Value::Array(arr)));
     }
 
     pub fn entries(&self) -> Vec<SetEntry> {

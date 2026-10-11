@@ -238,6 +238,13 @@ fn coat_and_fuzz_cannot_share_a_set() {
 }
 
 #[test]
+fn emissive_and_skin_sk_cannot_share_a_set() {
+    assert!(slot_conflict(&[SlotKind::Emissive], SlotKind::SkinSk).is_some());
+    assert!(slot_conflict(&[SlotKind::SkinSk], SlotKind::Emissive).is_some());
+    assert!(slot_conflict(&[SlotKind::Diffuse, SlotKind::Normal], SlotKind::SkinSk).is_none());
+}
+
+#[test]
 fn slot_numbers_follow_p6() {
     let n: Vec<(SlotKind, u8, &str)> = SlotKind::ALL
         .iter()
@@ -251,6 +258,7 @@ fn slot_numbers_follow_p6() {
             (SlotKind::Rmaos, 6, "rmaos"),
             (SlotKind::Height, 4, "p"),
             (SlotKind::Emissive, 3, "g"),
+            (SlotKind::SkinSk, 3, "sk"),
             (SlotKind::Subsurface, 8, "s"),
             (SlotKind::Coat, 7, "cnr"),
             (SlotKind::Fuzz, 7, "f"),

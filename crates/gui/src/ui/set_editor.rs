@@ -4,11 +4,14 @@ use super::columns::{border_of, status_text, AMBER, RED};
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::fields::{channel_text, field_lock, format_label, format_options};
-use crate::model::sets::{set_views, SetView, SlotFill, SlotKind};
+use crate::model::items::{ItemKind, TextureItem};
+use crate::model::pack_fills::{fill_rows, FillRow};
+use crate::model::sets::{set_views, slot_of, SetView, SlotFill, SlotKind};
 use crate::model::AppModel;
 use eframe::egui;
-use engine::config::{ColorTag, Format};
+use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
 use engine::events::RecipeReport;
+use engine::pack::RecipeKind;
 
 const CARD: f32 = 150.0;
 const THUMB: f32 = 72.0;
@@ -24,6 +27,8 @@ enum Act {
     Expand(String),
     Format(String, Format, ColorTag),
     Opaque(String, bool),
+    Recipe(String, PackRecipe),
+    Fill(String, RawMap, Option<u8>),
 }
 
 fn tag_options(f: Format) -> Vec<ColorTag> {
@@ -72,6 +77,7 @@ pub fn draw(
             ui.columns(2, |cols| {
                 let ui = &mut cols[0];
                 cards(ui, model, &v, thumbs, &mut acts);
+                unslotted_packed(ui, model, &v, &mut acts);
                 ui.add_space(6.0);
                 ui.add_enabled_ui(editable, |ui| {
                     if ui.button("Slot commands…").clicked() {
@@ -92,6 +98,8 @@ pub fn draw(
             Act::Expand(k) => expand = Some(k),
             Act::Format(k, f, t) => model.set_format(&k, f, t),
             Act::Opaque(k, on) => model.set_opaque(&k, on),
+            Act::Recipe(k, r) => model.set_packing_recipe(&k, r),
+            Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
         }
     }
     select_or_expand(ui, model, select, expand);
@@ -254,6 +262,9 @@ fn card(
             if choice != (cur_f, cur_t) {
                 acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
             }
+            if i.kind == ItemKind::Packed {
+                packed_controls(ui, model, i, toml_read_only.as_deref(), acts);
+            }
             if slot == SlotKind::Diffuse {
                 let mut on = model.is_opaque(&i.key);
                 if ui
@@ -304,5 +315,119 @@ fn select_or_expand(
     } else {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_secs_f64(left));
+    }
+}
+
+fn role_label(role: RawMap) -> String {
+    match role {
+        RawMap::Ao => "AO".into(),
+        other => other.id(),
+    }
+}
+
+/// A packed output's recipe choice (cs `_rmaos`/`_rfaos`) and its fill rows. Both write `sdc.toml`, so both are
+/// disabled, with the reason on hover, while it is read-only.
+fn packed_controls(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    item: &TextureItem,
+    why: Option<&str>,
+    acts: &mut Vec<Act>,
+) {
+    let Some(pk) = item.job.as_ref().and_then(|j| j.pack.as_ref()) else {
+        return;
+    };
+    ui.add_enabled_ui(why.is_none(), |ui| {
+        if model.target == Target::Cs && matches!(pk.kind, RecipeKind::Rmaos | RecipeKind::Rfaos) {
+            let label = |k: RecipeKind| match k {
+                RecipeKind::Rfaos => "RFAOS (skin)",
+                _ => "RMAOS",
+            };
+            let auto = model.explicit_recipe(&item.key) == PackRecipe::Auto;
+            let mut choice = pk.kind;
+            egui::ComboBox::from_id_salt(("pack-recipe", &item.key))
+                .selected_text(format!(
+                    "{}{}",
+                    label(pk.kind),
+                    if auto { " (auto)" } else { "" }
+                ))
+                .width(CARD - 24.0)
+                .show_ui(ui, |ui| {
+                    for k in [RecipeKind::Rmaos, RecipeKind::Rfaos] {
+                        ui.selectable_value(&mut choice, k, label(k));
+                    }
+                });
+            if choice != pk.kind {
+                let r = if choice == RecipeKind::Rfaos {
+                    PackRecipe::Rfaos
+                } else {
+                    PackRecipe::Rmaos
+                };
+                acts.push(Act::Recipe(item.key.clone(), r));
+            }
+        }
+        fill_controls(ui, model, &item.key, acts);
+    })
+    .response
+    .on_disabled_hover_text(why.unwrap_or_default());
+}
+
+/// One row per channel that a fill can stand in for: a value box with a reset while the channel has no source,
+/// read-only text naming the file when it has one.
+fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<Act>) {
+    for row in fill_rows(model, key) {
+        match row {
+            FillRow::FromFile { role, file } => {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{}: from {file}", role_label(role))).small(),
+                    )
+                    .truncate(),
+                );
+            }
+            FillRow::Value {
+                role,
+                shown,
+                own_key,
+            } => {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(role_label(role)).small());
+                    let mut v = shown;
+                    if super::advanced::settled_drag(ui, &mut v, 1.0, 0..=255) {
+                        acts.push(Act::Fill(key.to_string(), role, Some(v)));
+                    }
+                    if own_key
+                        && ui
+                            .small_button("Reset")
+                            .on_hover_text("Remove this fill")
+                            .clicked()
+                    {
+                        acts.push(Act::Fill(key.to_string(), role, None));
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Packed outputs that fill no slot card (the cpm `_m`) get their fill rows here, under the cards.
+fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut Vec<Act>) {
+    let why = super::settings_panel::toml_read_only_reason(model);
+    for item in v
+        .members
+        .iter()
+        .filter_map(|m| model.item(m))
+        .filter(|i| i.kind == ItemKind::Packed && slot_of(i).is_none())
+    {
+        if fill_rows(model, &item.key).is_empty() {
+            continue;
+        }
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(&item.name).strong());
+        ui.add_enabled_ui(why.is_none(), |ui| {
+            fill_controls(ui, model, &item.key, acts)
+        })
+        .response
+        .on_disabled_hover_text(why.clone().unwrap_or_default());
     }
 }
