@@ -846,8 +846,9 @@ fn inspect_reports_nonfinite_samples_of_an_image() {
     assert!(all.contains("IN-NONFINITE"), "{all}");
 }
 
-/// Controller ruling (Task 6): `validate` infers tag n/a for every HDR format, so an sdc RGBA16F output is judged
-/// and passes.
+/// Controller ruling (Task 6): an sdc RGBA16F output is judged by `validate` and passes. This does not guard the
+/// `is_hdr()` tag-n/a inference in `verbs.rs` (a revert to BC6H-only would still pass): validate reads the tag only
+/// through `srgb_tag`, which is false for both `n/a` and `unorm`.
 #[test]
 fn validate_judges_an_rgba16f_output_with_tag_na() {
     let d = tempfile::tempdir().unwrap();

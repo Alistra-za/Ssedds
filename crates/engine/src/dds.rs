@@ -320,17 +320,7 @@ impl Drop for TempGuard<'_> {
     }
 }
 
-/// Write `bytes` to `path` via a temp file in the same directory, then rename over any existing file.
-///
-/// The temp is named `.sdc-<pid>-<thread>-<counter>.tmp` and created with `create_new`, so concurrent writers in
-/// one directory never share a temp; a name left by a crashed run with a recycled pid is skipped. The temp is
-/// removed on any error. A temp left behind by a crash (process killed between create and rename) is not
-/// cleaned up: discovery ignores it (not `.dds`) and a sweep is deferred.
-///
-/// Failures surface as `io::Error`: for example the rename fails with access denied when the target is read-only
-/// or open elsewhere without delete sharing, and when it is a directory.
-/// DECISIONS S6: whether writing `out` would overwrite `src`. Canonical (junctions, symlinks, `..` resolved; a missing
-/// `out` by its folder), else lexical; case-insensitive, as Windows paths are.
+/// DECISIONS S6: whether writing `out` would overwrite `src` (canonical, else lexical; case-insensitive).
 pub fn same_file(src: &Path, out: &Path) -> bool {
     let canon = |p: &Path| {
         std::fs::canonicalize(p).ok().or_else(|| {
@@ -351,6 +341,15 @@ pub fn same_file(src: &Path, out: &Path) -> bool {
     }
 }
 
+/// Write `bytes` to `path` via a temp file in the same directory, then rename over any existing file.
+///
+/// The temp is named `.sdc-<pid>-<thread>-<counter>.tmp` and created with `create_new`, so concurrent writers in
+/// one directory never share a temp; a name left by a crashed run with a recycled pid is skipped. The temp is
+/// removed on any error. A temp left behind by a crash (process killed between create and rename) is not
+/// cleaned up: discovery ignores it (not `.dds`) and a sweep is deferred.
+///
+/// Failures surface as `io::Error`: for example the rename fails with access denied when the target is read-only
+/// or open elsewhere without delete sharing, and when it is a directory.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path
         .parent()

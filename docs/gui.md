@@ -12,6 +12,9 @@ The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `s
 
 - **Textures** (left): one tile per file, with a thumbnail, its name and badges. Filters: *Needs decision*, *Has warnings*, *Failed*, *Not in a set*; the search box filters by name. A raw map that feeds a packed output shows "packed into ...".
 - **Centre**: the settings of the selected texture, grouped (Type, Colour, Alpha, Mipmaps, Compression). Every value shows where it came from (preset, config, analysis, your `[files]` entry). Selecting a set shows its recipes instead.
+  - *Compression* shows the `FMT-HDR-SOURCE` reason for an emissive (why it is BC6H or BC7 sRGB).
+  - The format dropdown also lists the uncompressed formats (`RGBA8`, `R8`, `RG8`, and `RGBA16F` only under `cs`); Effort and Perceptual are locked for them.
+  - A DDS file shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder; the DDS itself is never changed.
 - **Sets** (right): textures grouped into material sets, with the recipe status (run, conflict, disabled, failed) of each packed output.
 
 The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector, batch settings (worker threads, memory budget, BC1 decoder), packing fill values, the preview settings and a list of unmatched `[files]` entries.
@@ -38,7 +41,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - Each previewed mip is byte-identical to the same mip of the DDS that Export writes.
 - The preview encodes only mips whose larger side is at most the **preview size limit**: **4096 by default**, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and the preview says so.
 - Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
-- A DDS file in the folder previews as stored (there is no source side). A DDS in a format sdc does not write (uncompressed, BC2, signed BC6H) shows "cannot be previewed".
+- A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
 
 ## Export

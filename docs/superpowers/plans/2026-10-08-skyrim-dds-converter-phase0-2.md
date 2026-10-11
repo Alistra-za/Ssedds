@@ -11992,7 +11992,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
 - **Entry:** Phase 2 exit.
 - **Exit:** preset tests per target; golden cases for each new input type; preset changelog entries.
 - **Owner additions (2026-10-10, DECISIONS Note O):**
-  - **Owner idea (2026-10-11): patch wrong DDS headers in place, without re-encoding.**
+  - **Owner idea (2026-10-11): patch wrong DDS headers in place, without re-encoding.** **Done (M6 Track B, Note S).**
     - DDS inputs are still skipped (`IN-DDS-SKIPPED`).
     - Some header faults can be fixed with no pixel change. For each fixable DDS, offer a header-only fix:
       - a wrong sRGB/UNORM tag, e.g. `BC7_UNORM` ↔ `BC7_UNORM_SRGB` per §5.8 `TAG-*`;
@@ -12005,7 +12005,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - a patched file's payload is byte-identical to the original;
       - `sdc validate` passes after patching;
       - unpatchable faults are refused with a reason.
-  - **Uncompressed DDS, as output and input (O1).**
+  - **Uncompressed DDS, as output and input (O1).** **Done (M6 Track B, Note S).**
     - Output: new `format` values for uncompressed DDS:
       - `rgba8` (UNORM/SRGB per `color.tag`), written as `B8G8R8A8` (legacy header where `header=auto` allows);
       - `r8`, `rg8`;
@@ -12016,7 +12016,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - one golden case per format;
       - texconv and nvddsinfo read every output;
       - a re-encode round trip.
-  - **HDR check before BC6H for `pbr_emissive` (O2).** BC6H is chosen only for a real HDR source: float (16F/32F EXR, HDR, float TIFF or float DDS) **and** a peak above 1.0 in any colour channel. Otherwise the default is `bc7` with tag `srgb` (`BC7_UNORM_SRGB`).
+  - **HDR check before BC6H for `pbr_emissive` (O2).** BC6H is chosen only for a real HDR source: float (16F/32F EXR, HDR, float TIFF or float DDS) **and** a peak above 1.0 in any colour channel. Otherwise the default is `bc7` with tag `srgb` (`BC7_UNORM_SRGB`). **Done (M6 Track B, Note S).**
     - The choice is an analysis fact (`analysis:hdr-source`). It sits below a suffix fact and `--set`, so `--set file:<glob>.format=bc6h_uf16` still forces BC6H.
     - Inspect, plan and the GUI show the reason (e.g. "8-bit source, no HDR → BC7 sRGB").
     - A float source that peaks at or below 1.0 depends on the float-source transfer split (Carried item below).
@@ -12061,15 +12061,15 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
     - Build each level **directly from mip 0**, with the kernel widened 2^N, and keep float values between levels.
     - Measured: recursion costs 1.5–2.5 dB (tent), 1–1.5 dB (Mitchell) and ≤ 0.5 dB (Kaiser) against a Lanczos-8 reference. 8-bit levels in between add up to 5 codes of drift with Kaiser.
     - Box stays recursive; it is identical either way.
-  - Float source → LDR colour output needs a source-transfer versus output-encode split (Task 39 carry). It replaces the interim blocking `IN-FLOAT-LDR` guard and its `LOSS-CLAMP-HDR` use added at the final review (I4); keep the golden cases for float TIFF diffuse and float BC6H.
-  - `FIELD_PATHS` lacks `reencode` and `resize` (Task 25 carry); spec §8 promises `--set file:<glob>.reencode=true`, which is a usage error today.
+  - Float source → LDR colour output needs a source-transfer versus output-encode split (Task 39 carry). It replaces the interim blocking `IN-FLOAT-LDR` guard and its `LOSS-CLAMP-HDR` use added at the final review (I4); keep the golden cases for float TIFF diffuse and float BC6H. **Done (M6 Track B, Note S).**
+  - `FIELD_PATHS` lacks `reencode` and `resize` (Task 25 carry); spec §8 promises `--set file:<glob>.reencode=true`, which is a usage error today. **`reencode` done (M6 Track B, Note S); the `resize` half stays open.**
   - Double work per file (m16): every converted file is decoded twice (plan, then run) and hashed twice when an output exists; reuse the plan-time load or hash for `is_up_to_date`.
   - Serial hashing on reruns (Task 37 M8): hash the sources of an `if-changed` rerun in parallel.
-  - `IN-NONFINITE` is not reported by `--dry-run` or `inspect` (m7, Task 37 M5); `analyse` already visits every sample and can count them. Its mean and `normal_len_err` are also poisoned by NaN (Task 23 minor).
+  - `IN-NONFINITE` is not reported by `--dry-run` or `inspect` (m7, Task 37 M5); `analyse` already visits every sample and can count them. Its mean and `normal_len_err` are also poisoned by NaN (Task 23 minor). **Done (M6 Track B, Note S).**
   - Project config discovery reads `sdc.toml` from the first input only, and only when it is a folder (m10): document it or warn when another input root contains an `sdc.toml`.
   - 16K peak memory is about 13 GiB (Task 29 minor), and Preprocess is single-threaded with a per-channel `powf` (Task 28 minor); revisit admission and the scheduler together.
   - Discovery (m6, Task 21 minors): one unreadable subfolder aborts the whole `convert` as a usage error where spec §8 says `file_failed` and continue; the same file given twice, or a folder plus a file at its top level, becomes `IN-DUPLICATE` for both copies (dedupe on the canonical path, add a test); symlinks are skipped silently.
-  - Load: record the DXGI format of a DDS input in `Analysis` for the DDS re-encode opt-in (Task 23 carry).
+  - Load: record the DXGI format of a DDS input in `Analysis` for the DDS re-encode opt-in (Task 23 carry). **Done (M6 Track B, Note S).**
   - Revisit the BC4/BC5 search radius default (5, as the bench ran; 10 gains about 0.09 dB on real masks) when the presets are completed (Task 6 ruling).
   - Preset and rule tests: `add_toml` silently overwrites a duplicate or built-in id and `merge_json` inserts null for absent keys (Task 20 minors); rule overrides still apply when `--set` changes the sub-type, and the precedence edge cases lack tests (Task 25 minors); the landscape suffix match is too broad, and `hdr_sky` is also suggested under `interface/` while its reason text says `sky/` (Task 24 minors); a deferred `CFG-INVALID` on an unavailable profile is untested on the fallback path (Task 39 M1/M2); an explicit `flip_green` that disagrees with `green_convention` is unwarned (Task 27a minor).
 

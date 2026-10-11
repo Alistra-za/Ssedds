@@ -27,9 +27,9 @@
 | `cpm` — CPM / ENB complex material | Non-PBR shading; complex `_m` (R env, G gloss, B metal, A height); landscape diffuse alpha as parallax height |
 | `vanilla` — Vanilla SE/AE | Bethesda shaders: no `_SRGB`, no BC6H, no complex `_m`; landscape diffuse alpha as snow mask |
 
-**Inputs.** **[Requirement]** Artists' source images: PNG (8/16-bit), TGA, TIFF (8/16-bit, 32-bit float), OpenEXR, Radiance HDR, BMP and JPEG, as single files or folders. DDS input is secondary: read for preview, inspection, validation and, on explicit request, re-encoding [D, scope]. **[Proposal]** The DDS reader accepts BC1–BC7 with legacy (`DXT1`–`DXT5`, `ATI1`, `ATI2`, `BC4U`, `BC5U`) or DX10 headers, the common uncompressed layouts (RGBA8, BGRA8, BGRX8, R8, RG8, RGBA16F, RGBA32F) and cubemaps.
+**Inputs.** **[Requirement]** Artists' source images: PNG (8/16-bit), TGA, TIFF (8/16-bit, 32-bit float), OpenEXR, Radiance HDR, BMP and JPEG, as single files or folders. DDS input is secondary: read for preview, inspection, validation and, on explicit request (opt-in `reencode`, §8), re-encoding [D, scope]. **[Proposal]** The DDS reader accepts BC1–BC7 with legacy (`DXT1`–`DXT5`, `ATI1`, `ATI2`, `BC4U`, `BC5U`) or DX10 headers, the common uncompressed layouts (RGBA8, BGRA8, BGRX8, R8, RG8, RGBA16F, RGBA32F) and cubemaps.
 
-**Outputs.** **[Requirement]** DDS in BC1, BC3, BC4, BC5, BC6H or BC7 for SE/AE, tagged per target; Legendary Edition is out of scope [PLAN §1]. **[Proposal]** The output tree mirrors the input tree under an output root, each output keeps its source stem (`wood01_n.png` → `wood01_n.dds`), and a batch manifest records what was done (§3.6). Two exceptions rename the output to the Skyrim name: a preset suffix alias (§3.7) and an exporter vocabulary suffix (§4.4, e.g. `iron_basecolor.png` → `iron.dds`, `iron_normalgl.png` → `iron_n.dds`). **[Requirement]** Outputs always use Skyrim names [D-H].
+**Outputs.** **[Requirement]** DDS in BC1, BC3, BC4, BC5, BC6H or BC7, or uncompressed (`rgba8` as B8G8R8A8, `r8`, `rg8`, `rgba16f`; DECISIONS O1, S4), for SE/AE, tagged per target; Legendary Edition is out of scope [PLAN §1]. **[Proposal]** The output tree mirrors the input tree under an output root, each output keeps its source stem (`wood01_n.png` → `wood01_n.dds`), and a batch manifest records what was done (§3.6). Two exceptions rename the output to the Skyrim name: a preset suffix alias (§3.7) and an exporter vocabulary suffix (§4.4, e.g. `iron_basecolor.png` → `iron.dds`, `iron_normalgl.png` → `iron_n.dds`). **[Requirement]** Outputs always use Skyrim names [D-H].
 
 **The user decides.** **[Requirement]** Path and suffix inference *proposes* a category, sub-type, preset and defaults; the user always decides category, encoder and settings [D, scope]. **[Finding]** Suffixes are convention only, `_s` has several meanings, and diffuse alpha meaning depends on the mesh's NiAlphaProperty, which the converter cannot see [SC §1]. Low-confidence proposals therefore block conversion until confirmed (§8, §9).
 
@@ -62,7 +62,7 @@ converter/
 
 | Unit | What it does | How it is used | Depends on |
 |---|---|---|---|
-| `engine` | Configuration model, presets, suffix rules, pipeline stages (§5), texture-set jobs (§6), DDS reader/writer, decoders, validation, scheduler, event stream | Linked by `cli`, `gui`, `bench` through `Engine::plan(BatchRequest, &Reporter, &CancelToken) -> Result<Plan, EngineError>` and `Engine::run(Plan, &Reporter, &CancelToken) -> Result<BatchSummary, EngineError>`; a `Reporter` wraps an `Arc<dyn EventSink>` (§5.9) | `encoders-sys`; `image` (PNG, TGA, TIFF; `exr` joins with OpenEXR input in M6), `half`, `bcdec_rs`, `rayon`, `serde`, `toml`, `serde_json`, `schemars`, `sha2`, `hex`, `globset`, `walkdir`, `humantime`, `thiserror`. Schemas are checked by regenerating them and comparing with the committed files, so `jsonschema` is not a dependency |
+| `engine` | Configuration model, presets, suffix rules, pipeline stages (§5), texture-set jobs (§6), DDS reader/writer, decoders, validation, scheduler, event stream | Linked by `cli`, `gui`, `bench` through `Engine::plan(BatchRequest, &Reporter, &CancelToken) -> Result<Plan, EngineError>` and `Engine::run(Plan, &Reporter, &CancelToken) -> Result<BatchSummary, EngineError>`; a `Reporter` wraps an `Arc<dyn EventSink>` (§5.9) | `encoders-sys`; `image` (PNG, TGA, TIFF, BMP, JPEG, Radiance HDR, and OpenEXR through `exr`), `half`, `bcdec_rs`, `rayon`, `serde`, `toml`, `serde_json`, `schemars`, `sha2`, `hex`, `globset`, `walkdir`, `humantime`, `thiserror`. Schemas are checked by regenerating them and comparing with the committed files, so `jsonschema` is not a dependency |
 | `encoders-sys` | Safe wrappers over bc7e (BC7), rgbcx (BC1/3/4/5 encode, BC1 decode per decoder model) and ISPC TC (BC6H); reports vendored versions | Called only by `engine::encode`; one-time global init (§7.3) | Committed ISPC objects and headers; rgbcx and ISPC TC host C++ built by `build.rs` with the `cc` crate and MSVC; C shims for the C++ APIs |
 | `cli` | Commands, config and preset loading, human log on stderr, JSON Lines on stdout, exit codes | Users, scripts, CI, the GUI's isolated-worker mode | `engine`, `clap`, `ctrlc`, `anyhow`; `indicatif` progress bars arrive in M6 |
 | `gui` | Source list, controls, preset inspector, GPU preview, progress, reports | Users | `engine` in-process, `eframe`/`egui`, `egui_wgpu`, `wgpu` (`TEXTURE_COMPRESSION_BC`), `rfd` |
@@ -121,9 +121,9 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `mips.normal_base` | `renormalize` / `keep` | `renormalize` (owner 2026-10-11, DECISIONS R1) | Normal category: mip 0 stored at unit length unless `keep` |
 | `mips.bake_clamp` | (0, 1] | 0.25 (DECISIONS Note E) | Clamp *t* of the variance bake (§6.2), read from the profile the bake writes into |
 | `mips.coverage` | `auto` / `on` / `off`, **per texture** | `auto` = on for `cutout` and `cutout_blend`; switchable per image [Requirement] | §5.5. Applies only to `cutout` and `cutout_blend`: on `blend`, `data` or `remove` the field is a no-op even when set on, because blended alpha keeps box-averaged opacity (§5.5) |
-| `format` | `bc1`/`bc3`/`bc4`/`bc5`/`bc6h_uf16`/`bc7` | Sub-type × target | Always unsigned |
+| `format` | `bc1`/`bc3`/`bc4`/`bc5`/`bc6h_uf16`/`bc7`/`rgba8`/`r8`/`rg8`/`rgba16f` | Sub-type × target | Always unsigned. The last four are uncompressed (DECISIONS S4) |
 | `header` | `auto` / `dx10` / `legacy` | `auto` = `legacy` for BC1/BC3 UNORM, else `dx10`. An explicit `legacy` on BC6H, BC7 or any `_SRGB` is `CFG-INVALID` rather than silently becoming DX10 | BC4/BC5 legacy = `BC4U`/`BC5U`; `ATI1`/`ATI2` never written [D#2] |
-| `encoder.backend` | `bc7e` / `rgbcx` / `ispc_bc6h` / `nvtt` | Format | §7 |
+| `encoder.backend` | `bc7e` / `rgbcx` / `ispc_bc6h` / `nvtt` / `uncompressed` | Format | §7; `uncompressed` (no encoder runs) for the uncompressed formats |
 | `encoder.effort` | Named levels (§7.4) | bc7e `veryslow` (= u5); rgbcx 18; BC6H `veryslow` | |
 | `encoder.perceptual` | bool | `false` | Locked off unless Color with alpha ≠ `data` |
 | `encoder.bc1_transparent_black` | bool | `false` | rgbcx 3-colour transparent-black mode; `true` with a BC1 output is `CFG-INVALID` in v1 (DECISIONS Notes F, K) |
@@ -132,6 +132,8 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `validation` | `min_mip_psnr_db`, `coverage_tolerance_pts`, `complex_m_warn_alpha`, `bc6h_min_peak_ratio`, `pgpatcher_non_white_share` (§5.8) | 30 dB, 2 points, 247, 0.8, 0.5 | The thresholds behind `VAL-MIP-ERROR`, `VAL-COVERAGE`, `VAL-M-COMPLEX-MARGIN`, `VAL-BC6H-PEAK` and `VAL-PGPATCHER-50` |
 | `packing` | `enabled`, `roughness_default`, `prefer: prepacked / raw`, `fill` (per-role values) | `true`, 0.5 (**[Requirement]** confirmed 2026-10-09 [D-H]), `prepacked`, none | Packed outputs only (§6.4); shipped in M2.5. **[Requirement]** The user can set a **global fill value for each packed channel that has no source map** (GUI slider, CLI option), which replaces the neutral default for that channel [D-H]. **[Decided]** (plan M2.5, DECISIONS Note M5) Field `packing.fill.<role>` (a raw-map role id of §4.4, e.g. `metallic`), 8-bit code 0–255; the CLI shorthand is `--fill <role>=<0..255>` (e.g. `--fill metallic=255`), equivalent to an unscoped `--set packing.fill.<role>=…` |
 | `output` | `path`, `on_existing` | Batch; path `./sdc-out` when no `-o` is given | §8 |
+
+**[Decided] `reencode`** (DECISIONS S6) is a plan-time selector, not a `Profile` field: a boolean set unscoped, per `file:` glob or in a `[files]` entry, that opts a DDS input into `convert` (§8).
 
 **[Proposal] Batch-level settings.** `bc1_decoder_model` (default `cBC1Ideal`, **[Requirement]** owner 2026-10-08; NVIDIA / AMD / IdealRound4 selectable) is batch-level because `rgbcx::init` sets it as global, non-thread-safe state [EI §1]; a conflicting preset value raises an info event. `jobs`, `mem_budget`, the NVTT path and the preview limit are also batch-level.
 
@@ -237,7 +239,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | `diffuse` | BC7_UNORM (Compact: BC1_UNORM if `remove`) | same | same |
 | `landscape_diffuse` | BC7_UNORM (A height) | BC7_UNORM (A height) | BC7_UNORM (A snow mask) |
 | `pbr_albedo` | **BC7_UNORM_SRGB** (BC1_UNORM_SRGB if `remove`) | — (→ `diffuse`) | — (→ `diffuse`) |
-| `pbr_emissive` | **BC6H_UF16** [D#3, TPM]; option BC7/BC1_UNORM_SRGB | — (→ `glow`) | — (→ `glow`) |
+| `pbr_emissive` | **BC6H_UF16 for an HDR source** (float, peak > 1.0); otherwise BC7_UNORM_SRGB (`analysis:hdr-source`, DECISIONS O2, S3) | — (→ `glow`) | — (→ `glow`) |
 | `pbr_subsurface`, `pbr_fuzz` | **BC7_UNORM_SRGB** | — | — |
 | `glow`, `subsurface_tint`, `backlight_tint` | BC7_UNORM / BC1_UNORM | same | same |
 | `ui_sky` | BC7_UNORM, no mips | same | same |
@@ -256,6 +258,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 - **[Requirement]** BC4/BC5 are unsigned. **[Proposal]** DX10 `BC4_UNORM`/`BC5_UNORM` by default, legacy `BC4U`/`BC5U` as an option, `ATI1`/`ATI2` never written [D#2].
 - **[Finding]** LOD shaders reject sRGB [SC §4]. **[Proposal]** `_SRGB` under a `lod/` path raises `TAG-SRGB-LOD` in every target.
 - **[Proposal]** BC7 perceptual is opt-in for Color with non-`data` alpha only. **[Finding]** It costs +37% normal angular error, −1.6 dB on packed data and −2.7 to −3.5 dB with data in alpha [B2 §1], [B1 §4].
+- **[Decided]** (DECISIONS S4) Uncompressed formats take the tag like BC: `rgba8` is `B8G8R8A8_UNORM` or `_SRGB` per `color.tag`; `r8` and `rg8` are UNORM only (`srgb` is `CFG-INVALID`) and blocked on Normal sub-types (`FMT-BC5-NORMAL`); `rgba16f` has tag `n/a`, keeps alpha as half, and is `cs`-only like BC6H. A packed map cannot use BC6H or `rgba16f` (`CFG-INVALID`, DECISIONS S12).
 
 ### 4.3 Suggestion and disambiguation
 
@@ -343,11 +346,11 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 5.1 Load and Analyse
 
-**[Proposal]** Load produces float32 RGBA in the source's own transfer; 16-bit and float data are never quantised to 8 bits before encoding. **[Finding]** Early 8-bit quantisation is one of AlphaBloom's fidelity defects [MIP §AlphaBloom]. ICC profiles are ignored (the info event lands in M6); images above 16384 px are rejected (D3D11 limit [SC §5]). The loader reads PNG, TGA and TIFF (8/16-bit and 32-bit float) today; OpenEXR, Radiance HDR, BMP and JPEG arrive in M6. Analyse computes per-channel min/max/mean and constancy; an alpha histogram (255, 254, 0, ≤ 5, ≥ 250, CS parallax band); a grayscale test (within 4/255); for normals, length statistics, Z presence and a green-convention guess; for `_m`, the PGPatcher non-white share and predicted 1×1 alpha; HDR range and peak; size and power-of-two status; the DXGI format of DDS inputs. **[Finding]** The engine's `Analysis` does not yet carry the CS parallax alpha band, a Z-presence flag, the green-convention guess or a DDS input's DXGI format (the last arrives with the DDS re-encode opt-in, M6); it keeps the other statistics, plus `blue_mostly_black` and `red_mostly_high` flags, and no rule depends on the missing ones.
+**[Proposal]** Load produces float32 RGBA in the source's own transfer; 16-bit and float data are never quantised to 8 bits before encoding. **[Finding]** Early 8-bit quantisation is one of AlphaBloom's fidelity defects [MIP §AlphaBloom]. ICC profiles are detected and ignored, with the info event `IN-ICC-IGNORED` (DECISIONS S8); images above 16384 px are rejected (D3D11 limit [SC §5]). The loader reads PNG, TGA, TIFF (8/16-bit and 32-bit float), OpenEXR (first RGB(A) layer), Radiance HDR, BMP and JPEG, and a DDS input's mip 0 when it is opted in (DECISIONS S10, S6). Analyse computes per-channel min/max/mean and constancy; an alpha histogram (255, 254, 0, ≤ 5, ≥ 250, CS parallax band); a grayscale test (within 4/255); for normals, length statistics, Z presence and a green-convention guess; for `_m`, the PGPatcher non-white share and predicted 1×1 alpha; HDR range and peak; size and power-of-two status; the DXGI format of DDS inputs. The statistics skip non-finite samples, and `IN-NONFINITE` is reported once, at plan time, so `inspect` and `--dry-run` show it (DECISIONS S9). **[Finding]** The engine's `Analysis` does not yet carry the CS parallax alpha band, a Z-presence flag or the green-convention guess; it keeps the other statistics, plus `blue_mostly_black` and `red_mostly_high` flags, and carries a DDS input's DXGI format (`dds_dxgi`, DECISIONS S6); no rule depends on the missing ones.
 
 **[Requirement]** Near-opaque alpha (DECISIONS Note L): source alpha whose minimum is ≥ 251/255 (no texel below 251) is *opaque within BC tolerance* and classed exactly like constant 255, so `remove` resolves as a high-confidence analysis fact, no `LOSS-ALPHA-DATA` is raised and the alpha meaning is not unconfirmed. When some texel is 251–254, `ALPHA-NEAR-OPAQUE` (info) reports the minimum. One texel below 251 leaves the alpha varying, and an explicit `alpha.policy` (e.g. `--set alpha.policy=data`) still wins. The test is on the stored float: an 8-bit source compares its codes, a 16-bit or float source compares against 251/255 itself.
 
-**[Proposal]** Interim float guard (final review I4, until M6). The transfer of a float source is not yet separated from the output encoding, so a 32-bit float TIFF written to an LDR format would be treated like integer data (sRGB-decoded as gamma-encoded, values above 1 clamped) and could come out visibly darker without any error. Until M6 adds the source-transfer versus output-encode split, a float source resolved to any format other than BC6H is blocked with `IN-FLOAT-LDR` (acknowledge with `--allow IN-FLOAT-LDR`, after which the values convert as stored), and values outside [0, 1] raise `LOSS-CLAMP-HDR`. A float source written as BC6H is linear content (`analysis:float-source`, §5.2).
+**[Decided]** Float-source transfer split (DECISIONS S1, replaces the interim `IN-FLOAT-LDR` guard). A float source (32-bit float TIFF, OpenEXR, Radiance HDR, float or half DDS) is linear light, so Preprocess never sRGB-decodes it. For an LDR output, Quantise clamps each channel to [0, 1] and encodes it per `color.content` (`srgb` → sRGB OETF, `linear` → stored), keyed on content rather than the tag, and values outside [0, 1] raise `LOSS-CLAMP-HDR`. A float normal, `_msn` or `_flow` keeps the stored-value reading, and a float source written as BC6H or `rgba16f` is linear content (`analysis:float-source`, §5.2).
 
 ### 5.2 Resolve
 
@@ -407,6 +410,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 - Flags `CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE`, plus `MIPMAPCOUNT` with mips; caps `TEXTURE`, plus `COMPLEX | MIPMAP` with mips; linear size of mip 0; mip count consistent with dimensions.
 - Never `DDPF_NORMAL` (**[Finding]** NVTT's `-normal` only sets that non-standard flag [B2 §1]).
 - Legacy `DXT1`/`DXT5` for BC1/BC3 UNORM by default; DX10 for all `_SRGB`, BC6H, BC7, and by default BC4/BC5. DX10 fields: `TEXTURE2D`, array size 1, `miscFlags2` 0; reserved fields zero.
+- Uncompressed formats (DECISIONS S4) use `DDSD_PITCH` with a tight row pitch instead of `LINEARSIZE`; `rgba8` UNORM under `header = auto` is a legacy B8G8R8A8 header (RGB masks), every other uncompressed format DX10.
 - Atomic write: temp file in the target directory, then rename.
 
 ### 5.8 Validate
@@ -416,10 +420,12 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 | Check | Rule | Failure |
 |---|---|---|
 | Header | §5.7 rules | Error |
-| Per-mip error | Channel PSNR against the encoder input (the quantised pre-encode chain), floor `validation.min_mip_psnr_db` = 30 dB (`VAL-MIP-ERROR`); the angular error for normals arrives with the per-mip metrics of M7 (§11.3) | Warning below threshold |
+| Per-mip error | Channel PSNR against the encoder input (the quantised pre-encode chain; `r8` compares R, `rg8` R and G), floor `validation.min_mip_psnr_db` = 30 dB (`VAL-MIP-ERROR`); the angular error for normals arrives with the per-mip metrics of M7 (§11.3) | Warning below threshold |
 | **Smallest-mip alpha** | **Decode the smallest mip (and every level) and check alpha**: `remove` → ≥ the encoder guarantee below; with `exact_opaque`, exactly 255 on every all-255 source block; `cutout` → coverage within 2 points of mip 0, checked on levels of 256 texels or more (a single flipped texel moves smaller levels by more than the tolerance); `complex_material` → CS's smallest-mip rule (S8, read from the shader): complex when the RGB is not grey (some pair of channels ≥ 4/255 apart) or is black (all channels < 4/255 with 4/255 < alpha < 251/255), and alpha < 251/255; warn from 247/255 (a 4-code margin) and say "off" from 251/255 (**[Decided]**, S8) | Per rule |
 | PGPatcher count | `_m` outputs storing alpha: base-mip share of α ≠ 255 vs the ≥ 50% rule | Warning |
 | BC6H peak | Decoded ÷ source peak ≥ 0.8 (**[Open]**) | Warning |
+
+**[Decided]** Uncompressed outputs (DECISIONS S4) get the same checks minus the BC-only ones (`ALPHA-254`, the BC6H peak ratio); their alpha guarantee is 255, since the stored values are the encoder input.
 
 **[Proposal]** A file whose validation reports an error is still written and counted (exit 4, §8); a later `if-changed` run re-encodes it instead of calling it up to date.
 
@@ -563,10 +569,11 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 | Command | Purpose | Writes |
 |---|---|---|
 | `sdc convert <inputs…> [-o <root>]` | Convert images or folders | Yes, unless `--dry-run` |
-| `sdc inspect <inputs…>` | Analyse; print proposed sub-type, profile, warnings; DDS headers and mip statistics | No |
+| `sdc inspect <inputs…>` | Analyse; print proposed sub-type, profile, warnings; DDS headers and mip statistics. A DDS input always shows its header report: `inspect` ignores `reencode` | No |
 | `sdc validate <dds…> [--target <t>] [--subtype <id>]` | §5.8 checks on existing DDS; `--target` defaults to `cs` | No |
 | `sdc presets list / show / diff / export / validate / schema` | Inspect, compare, export, check presets; print schemas | `export` only |
 | `sdc encoders` | Built-in encoder versions; NVTT detection | No |
+| `sdc patch-header <dds…> (--out-dir <dir> \| --in-place) [--target <t>] [--subtype <id>] [--tag srgb\|unorm] [--format <f>] [--dry-run]` | Header-only fix of existing DDS files, payload byte-identical (DECISIONS S7). `--subtype` sets the tag and requires a full mip chain when its profile has one; `--tag` overrides it; without either the tag is kept; `--format` refuses another block format. Prints `DDS-HEADER-PATCHED` or `DDS-HEADER-UNPATCHABLE` with the reason per file. Exit 0, or 1 when a file is unreadable or refused; 2 for a usage error, including `--out-dir` resolving to an input itself or two inputs with one file name; 3 when a write fails (the batch stops; files written before it stay written) | `--out-dir` copies or the inputs (`--in-place`, atomic), unless `--dry-run` |
 
 Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; loads a preset, e.g. one declaring suffix aliases, without selecting it, §3.7), `--config <file>`, `--set <field>=<value>` (scoped: `--set 'subtype:rmaos.format=bc1'`, `--set 'file:<glob>.alpha.policy=blend'`), `--accept-suggestions {none,high}` (default `none`), `--allow <code>`, `--recursive`, `--jobs`, `--mem-budget`, `--on-existing {if-changed,skip,overwrite}`, `--dry-run`, `--json`, `--sidecar`, `--nvtt <path>`, `--bc1-decoder {ideal,ideal-round4,nvidia,amd}`, and `--fill <role>=<0..255>` (repeatable, §3.2), an unscoped `--set packing.fill.<role>` applied after every `--set` (Note M5).
 
@@ -584,7 +591,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Invalid or unreadable input | `file_failed` at Load; batch continues |
 | Same stem, different formats | `IN-DUPLICATE`; both skipped |
 | Raw packing input (§4.4) | Consumed by a packing recipe (§6.4). One whose recipe is off (`IN-PACKING-INPUT`) or that no recipe uses (`PACK-UNUSED-INPUT`) is reported as `file_skipped` but not counted for exit 1 (Note M4) |
-| DDS input in `convert` | Skipped (`IN-DDS-SKIPPED`) unless `--set file:<glob>.reencode=true` (`LOSS-REENCODE`). The opt-in is M6: `reencode` (like `resize`) is not a settable field yet, so today it is a usage error |
+| DDS input in `convert` | Skipped (`IN-DDS-SKIPPED`) unless `--set [file:<glob>.]reencode=true` or `[files] reencode = true` (`LOSS-REENCODE` for a block-compressed input; a re-encode over its own source fails) |
 | Unsupported setting for a file (BC6H under `vanilla`, BC5 on `_n` without `--allow`) | File skipped with its blocking code; exit 1 |
 | Unsupported setting for the whole batch | Exit 2 before work starts |
 | Encoder failure or panic | That file fails, at whichever stage it was in (Load, Analyse and Resolve during planning included); others continue; exit 1 |
@@ -624,9 +631,9 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | Code | Severity | Trigger → message | Resolution |
 |---|---|---|---|
 | `LOSS-ALPHA-DATA` | blocking | Non-constant alpha (minimum < 251) discarded by `remove` or a no-alpha format, except a `pbr_normal` (`ALPHA-PBR-NORMAL-DROPPED`) or an explicit `alpha.policy = remove` (DECISIONS P25) | Keep alpha or acknowledge |
-| `LOSS-CLAMP-HDR` | warning | Float values outside [0, 1] written to LDR → clamped. Raised by the interim float guard (§5.1) until the M6 transfer split | HDR category under `cs`, or accept |
+| `LOSS-CLAMP-HDR` | warning | Float values outside [0, 1] written to an LDR format → clamped (DECISIONS S1) | HDR category under `cs`, or accept |
 | `LOSS-BITDEPTH` | info | 16-bit/float source to 8-bit-endpoint format | — |
-| `LOSS-REENCODE` (M6) | warning | Compressed DDS re-encoded; cannot improve it [SC §7]. Not emitted yet: DDS re-encode lands in M6 | Use the source |
+| `LOSS-REENCODE` | warning | Compressed DDS re-encoded; cannot improve it [SC §7] | Use the source |
 | `CHAN-NOT-GRAY` | warning | Grayscale sub-type, R/G/B differ > 4/255 → only R (or luma) kept | Pick channel or sub-type |
 | `CHAN-CONSTANT-ALPHA-DATA` | info | `data` alpha is constant; `remove` would save bits | Accept or switch |
 | `CHAN-NORMAL-LENGTH` | warning | Normal source far from unit length, or no Z | Check category; Z rebuild |
@@ -636,6 +643,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `FMT-BC5-NORMAL` | **blocking** | BC5/BC4 on a Normal sub-type → Z decodes −1, alpha lost [SC §2] | BC7 |
 | `FMT-LANDSCAPE-BC1` | blocking | BC1 on `landscape_diffuse` → destroys snow mask/height [SC §4] | BC7 or BC3 |
 | `FMT-BC1-ALPHA` | blocking | BC1 with policy ≠ `remove` (v1 BC1 has no alpha) | BC7/BC3 or `remove` |
+| `FMT-HDR-SOURCE` | info | Why a `pbr_emissive` is or is not BC6H: float source peaking above 1.0 → BC6H, otherwise BC7 sRGB (DECISIONS O2, S3) | `--set file:<glob>.format=…` to choose |
 | `FMT-PERCEPTUAL-DATA` | error | Perceptual where locked [B2 §1] | — |
 | `ALPHA-EXACT-OFF-M` | blocking | `exact_opaque` off on an `_m` written as BC7 (BC3's alpha block stores 255 exactly) → 254 may reach PGPatcher/ENB checks; blocking since S6 (7 of 28 real `_m` at ≥ 40% alpha ≠ 255) | Keep it on, or `--allow` |
 | `ALPHA-254` | info | Decoded 254 present (bc7e with flag off, or a validated third-party DDS); harmless to CS's 251/255 gate [D-A] | Turn flag on if alpha is read |
@@ -646,7 +654,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `TAG-UNORM-PBR` | warning | UNORM on PBR colour → washed out with LL off [SC §6] | `_SRGB` |
 | `TAG-SRGB-LOD` | blocking | `_SRGB` under `lod/` → LOD shaders reject sRGB [SC §4] | UNORM |
 | `TAG-CONTENT-MISMATCH` | warning | Linear content with `_SRGB` tag, colour sub-type with linear content, or a roughness member with sRGB content (no bake, DECISIONS R10) | Check both fields |
-| `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |
+| `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a packed map with BC6H or `rgba16f` (DECISIONS S12), `srgb` on `r8`/`rg8`, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |
 | `CFG-FILE-UNMATCHED` | info | A `[files]` key in `sdc.toml` matches no file (M3a, DECISIONS N2); the key stays in the file | Fix the key or remove the entry |
 | `CFG-UNAVAILABLE` | blocking | Sub-type or format unavailable under the target (BC6H outside `cs`, `flow` under `vanilla`) | Accept fallback or change target |
 | `DIM-NPOT` | blocking | Non-power-of-two dimension [SC §5] | Resize policy, e.g. `--set resize=pot-down` (M6) |
@@ -672,11 +680,14 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `ENC-NVTT-VERSION` (M5) | blocking | Untested NVTT version | Acknowledge |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
 | `IN-DDS-SKIPPED` | info | DDS input not re-encoded by default | Opt in |
+| `DDS-HEADER-PATCHED` | info | `sdc patch-header` or the GUI rewrote a DDS header, payload byte-identical; lists the fixes (DECISIONS S7) | — |
+| `DDS-HEADER-UNPATCHABLE` | warning | A DDS header cannot be fixed without re-encoding (unreadable, cubemap/array, a format sdc does not write, sRGB on a format without one, no whole mip chain in the payload, missing mips when a full chain is wanted, BC1 with transparent texels, the wrong block format under `--format`); names the reason (DECISIONS S7) | Re-encode from the source, or opt the DDS into `reencode` |
 | `IN-PACKING-INPUT` | warning | Raw single-channel map (§4.4) is a channel-packing input, not converted on its own (its recipe is off, `packing.enabled = false`) | Enable packing, or set a sub-type for it |
 | `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm` states no green convention (§4.4); never settled by `--accept-suggestions` or `--allow` | `--set 'file:<name>.channels.green_convention=opengl\|directx'` |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `IN-NONFINITE` | warning | Source has NaN or infinite samples; Preprocess replaced them (NaN and −∞ → 0, +∞ → 1, or the half-float maximum for HDR colour) | Fix the source |
-| `IN-FLOAT-LDR` | blocking | 32-bit float source resolved to a format other than BC6H; its transfer is not separated from the output encoding until M6 → "32-bit float source written to <fmt>: transfer handling lands in M6; acknowledge with --allow IN-FLOAT-LDR to convert as stored values" (interim guard, final review I4) | BC6H for HDR content under `cs`, an 8/16-bit source, or `--allow IN-FLOAT-LDR` |
+| `IN-FLOAT-LDR` | info, **retired (M6, DECISIONS S2)** | Never emitted; `--allow IN-FLOAT-LDR` still parses | — |
+| `IN-ICC-IGNORED` | info | The source embeds an ICC profile; it is ignored and the pixels are read as stored (DECISIONS S8) | Convert the source to sRGB or linear first if the profile matters |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |
 | `PACK-DEFAULTED` | warning | A packed channel has no source → neutral default (names output and channel) [D-H] | Supply the map or accept |
 | `PACK-SIZE-MISMATCH` | error | Sources of one recipe differ in size (lists every source and its size) | Resize the sources |

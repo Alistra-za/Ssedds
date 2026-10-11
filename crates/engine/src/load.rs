@@ -27,8 +27,8 @@ pub struct SourceMeta {
     pub dds_dxgi: Option<u32>,
 }
 
-/// Decode `path` to float RGBA. The dimension limit is checked from the header before the full pixel buffer is
-/// decoded or allocated.
+/// Decode `path` to float RGBA. The dimension limit is checked from the header before the float pixel buffer is
+/// decoded or allocated; a DDS input is first read whole into memory (its file bytes), then checked.
 pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
     load_image_meta(path).map(|(img, info, _)| (img, info))
 }

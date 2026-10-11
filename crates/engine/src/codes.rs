@@ -1,11 +1,10 @@
 //! Warning and error codes (spec §10). Codes added by this plan beyond the spec's original catalogue: VAL-MIP-ERROR
 //! (§5.8 per-mip error warning), CFG-INVALID (a field value outside its allowed range or an encoder/format
 //! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (retired in M6:
-//! never emitted) and the four `PACK-*`
-//! codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a `[files]` key of `sdc.toml` that
-//! matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or set that no longer exists, M3b), PACK-RECIPE-CONFLICT and
-//! PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set could not follow, packing-fills Task 1) and SKIN-WET-FORM
-//! (which form `skin_wet` was read as, Task 1b) and
+//! never emitted) and the four `PACK-*` codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a
+//! `[files]` key of `sdc.toml` that matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or
+//! set that no longer exists, M3b), PACK-RECIPE-CONFLICT and PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set
+//! could not follow, packing-fills Task 1) and SKIN-WET-FORM (which form `skin_wet` was read as, Task 1b) and
 //! IN-ICC-IGNORED (an embedded ICC profile, M6) and FMT-HDR-SOURCE (why `pbr_emissive` is or is not BC6H, O2) and
 //! DDS-HEADER-PATCHED / DDS-HEADER-UNPATCHABLE (a header-only DDS fix applied or refused, M6 DECISIONS S7).
 use schemars::JsonSchema;
