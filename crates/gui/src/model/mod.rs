@@ -25,6 +25,15 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+/// Whether a warning counts toward the amber ⚠ badge and the "Has warnings" filter. Info lines (a note, not a
+/// problem) stay in the texture's own warnings list only. One predicate for the pill, the tile and the filter.
+pub fn counts_toward_badge(w: &engine::codes::Warning) -> bool {
+    use engine::codes::Severity;
+    matches!(
+        w.severity,
+        Severity::Warning | Severity::Error | Severity::Blocking
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selection {
@@ -964,7 +973,7 @@ impl AppModel {
             .enumerate()
             .filter(|(_, i)| q.is_empty() || i.key.to_lowercase().contains(&q))
             .filter(|(_, i)| !self.filter.needs_decision || i.status == ItemStatus::NeedsDecision)
-            .filter(|(_, i)| !self.filter.warnings || !i.warnings.is_empty())
+            .filter(|(_, i)| !self.filter.warnings || i.warnings.iter().any(counts_toward_badge))
             .filter(|(_, i)| {
                 !self.filter.failed
                     || matches!(i.status, ItemStatus::Failed(_) | ItemStatus::Error(_))

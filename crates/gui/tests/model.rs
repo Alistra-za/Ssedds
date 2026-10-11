@@ -260,3 +260,17 @@ fn saving_before_opening_writes_the_edit_first() {
     assert_eq!(m.root, Some(other_root));
     assert!(std::fs::read_to_string(toml).unwrap().contains("vanilla"));
 }
+
+#[test]
+fn the_has_warnings_filter_ignores_info_like_the_badge() {
+    use engine::codes::{Code, Warning};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    for i in m.items.iter_mut() {
+        i.warnings = vec![];
+    }
+    m.items[0].warnings = vec![Warning::new(Code::AlphaPbrNormalDropped, "dropped")];
+    m.items[1].warnings = vec![Warning::new(Code::LossReencode, "re-encoded")];
+    m.filter.warnings = true;
+    assert_eq!(m.visible_items(), vec![1]);
+}

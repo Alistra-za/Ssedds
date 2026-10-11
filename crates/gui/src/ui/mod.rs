@@ -16,15 +16,8 @@ use crate::model::{AppModel, Selection};
 use eframe::egui;
 use std::cell::RefCell;
 
-/// Whether a warning counts toward the amber ⚠ badge on a set pill or a texture tile. Info lines (a note, not a
-/// problem) stay in the texture's own warnings list only. One predicate, so the pill and the tile agree.
-pub fn counts_toward_badge(w: &engine::codes::Warning) -> bool {
-    use engine::codes::Severity;
-    matches!(
-        w.severity,
-        Severity::Warning | Severity::Error | Severity::Blocking
-    )
-}
+/// The badge rule lives in the model (the "Has warnings" filter shares it).
+pub use crate::model::counts_toward_badge;
 
 /// Per-window drawing state that is not part of the model.
 #[derive(Default)]
