@@ -5,6 +5,7 @@ pub mod history;
 pub mod inspector;
 pub mod items;
 pub mod preview;
+pub mod sets;
 pub mod view;
 
 use crate::project::{ProjectDoc, SaveError};
@@ -81,6 +82,12 @@ pub enum Answer {
     Acknowledge(Code),
 }
 
+/// What a plan takes from the sets: `set_edits` and `output_paths`.
+type EngineInputs = (
+    Vec<engine::sets::SetEdit>,
+    std::collections::BTreeMap<engine::sets::OutputKey, PathBuf>,
+);
+
 fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
@@ -125,6 +132,10 @@ pub struct AppModel {
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
     close_ready: bool,
+    /// The set edits and output paths the latest plan was requested with (DECISIONS P1: two-pass planning).
+    last_inputs: Option<EngineInputs>,
+    /// Automatic re-plans in a row because the inputs changed; bounded so a bug can never loop.
+    auto_replans: u8,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -178,6 +189,8 @@ impl AppModel {
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
+            last_inputs: None,
+            auto_replans: 0,
             generation: 0,
             planning: None,
             tx,
@@ -190,6 +203,8 @@ impl AppModel {
         self.after_export = None;
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
+        self.last_inputs = None;
+        self.auto_replans = 0;
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
@@ -243,6 +258,9 @@ impl AppModel {
         req.user_config = self.user_config.clone();
         req.jobs = self.settings.jobs;
         req.mem_budget = self.settings.mem_budget_mb * 1024 * 1024;
+        let (edits, paths) = sets::engine_inputs(self);
+        req.set_edits = edits;
+        req.output_paths = paths;
         Some(req)
     }
 
@@ -260,6 +278,7 @@ impl AppModel {
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
         self.status_line = "Planning…".into();
+        self.last_inputs = Some((req.set_edits.clone(), req.output_paths.clone()));
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
 
@@ -590,6 +609,15 @@ impl AppModel {
                 self.preview_after_plan();
             }
         }
+        // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
+        // `export_after_plan` survives the return: export starts when the final plan lands.
+        let now = sets::engine_inputs(self);
+        if self.last_inputs.as_ref() != Some(&now) && self.auto_replans < 2 {
+            self.auto_replans += 1;
+            self.replan();
+            return;
+        }
+        self.auto_replans = 0;
         if std::mem::take(&mut self.export_after_plan) {
             self.export_checks();
         }
@@ -699,6 +727,7 @@ impl AppModel {
             merge,
             created_file: None,
         });
+        self.auto_replans = 0;
         if replan {
             self.replan();
         }

@@ -601,3 +601,16 @@ fn failures_name_the_path_and_the_key() {
         "{errs:?}"
     );
 }
+
+#[test]
+fn slot_suffixes_compare_ascii_only() {
+    // The Kelvin sign lower-cases to an ASCII 'k'; it is not the `_sk` suffix and must not be cut (nor panic).
+    let p = prefix_of(&s(&[("match3", json!("x/a_s\u{212A}.dds"))]), "unused").unwrap();
+    assert_eq!(p, "textures\\pbr\\x\\a_s\u{212A}");
+    let p = prefix_of(
+        &s(&[("match3", json!("x/\u{212A}\u{212A}_SK.dds"))]),
+        "unused",
+    )
+    .unwrap();
+    assert_eq!(p, "textures\\pbr\\x\\\u{212A}\u{212A}");
+}

@@ -133,10 +133,12 @@ fn text<'a>(s: &'a Settings, k: &str) -> Option<&'a str> {
 }
 
 fn strip_slot_suffix(v: &str, n: u8) -> String {
-    let lower = v.to_lowercase();
+    // ASCII-only comparison on bytes: `to_lowercase` can change a string's length (the Kelvin sign).
     for suf in slot_suffixes(n) {
-        if lower.ends_with(suf) {
-            return v[..v.len() - suf.len()].to_string();
+        let cut = v.len().checked_sub(suf.len());
+        if let Some(c) = cut.filter(|&c| v.is_char_boundary(c) && v[c..].eq_ignore_ascii_case(suf))
+        {
+            return v[..c].to_string();
         }
     }
     v.to_string()

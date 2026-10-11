@@ -58,3 +58,25 @@ pub fn opened(dir: &Path) -> AppModel {
     );
     m
 }
+
+/// The M3a fixture with rock01 decided as a TruePBR set: `pbr_albedo` diffuse, `pbr_normal` normal (DirectX green).
+/// leaf.png and odd.png stay undecided, as in M3a.
+pub fn pbr_opened(dir: &Path) -> AppModel {
+    use engine::config::{GreenConvention, Subtype};
+    use sdc_gui::model::Answer;
+    let mut m = opened(dir);
+    m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Subtype(Subtype::PbrNormal),
+    );
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Green(GreenConvention::Directx),
+    );
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
+    m
+}

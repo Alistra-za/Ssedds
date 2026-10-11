@@ -360,10 +360,13 @@ impl SetsDoc {
         let t = self.table_mut(from);
         t.insert("id", toml_edit::value(to));
         if !created {
-            t.insert(
-                "renamed_from",
-                toml_edit::value(already.unwrap_or_else(|| from.to_string())),
-            );
+            // Renamed back to the engine's own name: no rename left to apply.
+            let original = already.unwrap_or_else(|| from.to_string());
+            if original.eq_ignore_ascii_case(to) {
+                t.remove("renamed_from");
+            } else {
+                t.insert("renamed_from", toml_edit::value(original));
+            }
         }
         let order: Vec<String> = self
             .order()
