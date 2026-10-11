@@ -55,17 +55,15 @@ pub struct Compiled {
 
 const FLAGS: u32 = D3DCOMPILE_OPTIMIZATION_LEVEL3;
 
-fn key(file: &Path, d: &Defines, target: &str, root_hash: &str) -> String {
+fn key(file: &Path, root: &Path, d: &Defines, target: &str, root_hash: &str) -> String {
     let mut sorted = d.0.clone();
     sorted.sort();
     let mut h = Sha256::new();
     h.update(root_hash);
     h.update([0]);
-    h.update(
-        file.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-    );
+    // Root-relative path, so `a/x.hlsl` and `b/x.hlsl` never share an entry.
+    let rel = file.strip_prefix(root).unwrap_or(file);
+    h.update(rel.to_string_lossy().replace('\\', "/"));
     h.update([0]);
     for (k, v) in &sorted {
         h.update(format!("{k}={v};"));
@@ -103,18 +101,13 @@ pub fn compile(
     cache_dir: &Path,
     root_hash: &str,
 ) -> Result<Compiled, String> {
-    let k = key(file, d, target, root_hash);
+    let k = key(file, root, d, target, root_hash);
     let (cso, js) = (
         cache_dir.join(format!("{k}.cso")),
         cache_dir.join(format!("{k}.json")),
     );
-    if let (Ok(b), Ok(j)) = (std::fs::read(&cso), std::fs::read_to_string(&js)) {
-        if let Ok(r) = serde_json::from_str(&j) {
-            return Ok(Compiled {
-                bytecode: b,
-                reflection: r,
-            });
-        }
+    if let Some(hit) = read_cache(&cso, &js) {
+        return Ok(hit);
     }
     let src =
         expand(file, &[root.to_path_buf()]).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -160,16 +153,68 @@ pub fn compile(
     }
     let bytecode = blob_bytes(&code.ok_or("D3DCompile returned no bytecode")?);
     let reflection = reflect(&bytecode)?;
-    if std::fs::create_dir_all(cache_dir).is_ok() {
-        if let Ok(j) = serde_json::to_string(&reflection) {
-            let _ = std::fs::write(&cso, &bytecode);
-            let _ = std::fs::write(&js, j);
-        }
-    }
+    write_cache(cache_dir, &cso, &js, &bytecode, &reflection);
     Ok(Compiled {
         bytecode,
         reflection,
     })
+}
+
+/// The `.json` half of a cache entry: the reflection plus what the `.cso` must be.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheMeta {
+    len: usize,
+    sha256: String,
+    reflection: Reflection,
+}
+
+/// DXBC container: "DXBC" magic, total size (u32 LE) at bytes 24..28.
+fn valid_dxbc(b: &[u8]) -> bool {
+    b.len() >= 32
+        && &b[..4] == b"DXBC"
+        && u32::from_le_bytes([b[24], b[25], b[26], b[27]]) as usize == b.len()
+}
+
+/// Any mismatch (missing, truncated, torn or foreign files) is a miss; the caller recompiles.
+fn read_cache(cso: &Path, js: &Path) -> Option<Compiled> {
+    let meta: CacheMeta = serde_json::from_str(&std::fs::read_to_string(js).ok()?).ok()?;
+    let b = std::fs::read(cso).ok()?;
+    if b.len() != meta.len || !valid_dxbc(&b) || hex::encode(Sha256::digest(&b)) != meta.sha256 {
+        return None;
+    }
+    Some(Compiled {
+        bytecode: b,
+        reflection: meta.reflection,
+    })
+}
+
+/// Best-effort: unique temp file + rename for each half, `.json` last, so a reader never sees a new `.json`
+/// next to a partial `.cso`. Failures only cost a recompile next time.
+fn write_cache(dir: &Path, cso: &Path, js: &Path, bytecode: &[u8], reflection: &Reflection) {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let meta = CacheMeta {
+        len: bytecode.len(),
+        sha256: hex::encode(Sha256::digest(bytecode)),
+        reflection: reflection.clone(),
+    };
+    let Ok(j) = serde_json::to_vec(&meta) else {
+        return;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let put = |dst: &Path, data: &[u8]| -> bool {
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!(".tmp-{}-{n}", std::process::id()));
+        if std::fs::write(&tmp, data).is_ok() && std::fs::rename(&tmp, dst).is_ok() {
+            return true;
+        }
+        let _ = std::fs::remove_file(&tmp);
+        false
+    };
+    if put(cso, bytecode) {
+        put(js, &j);
+    }
 }
 
 fn srv_kind(b: &D3D11_SHADER_INPUT_BIND_DESC) -> Option<SrvKind> {

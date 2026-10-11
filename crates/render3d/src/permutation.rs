@@ -69,7 +69,13 @@ pub fn defines(m: &Material, stage: Stage, features: &[&str], deferred: bool) ->
     let mut out: Vec<&str> = vec![if ps { "PSHADER" } else { "VSHADER" }];
     let vs_cleared = matches!(m.shader_type, 2 | 3 | 4 | 5 | 6 | 13 | 14 | 15);
     if ps || !vs_cleared {
-        out.extend_from_slice(technique(m.shader_type));
+        // CS drops the EnvMap/Parallax/MLP technique for TruePBR on both stages (captured Arch_Eye_Moisture:
+        // type 11 + SLSF2.23 → PS key 100009 and VS desc 2, technique 0). Keeping them collides with the PBR
+        // samplers (Lighting.hlsl:360-371: s4/s5 overlap, SampParallaxSampler redefinition).
+        let pbr_material = bit(m.slsf2, 23);
+        out.extend(technique(m.shader_type).iter().filter(|t| {
+            !(pbr_material && matches!(**t, "ENVMAP" | "PARALLAX" | "MULTI_LAYER_PARALLAX"))
+        }));
     }
     if m.skinned {
         out.push("SKINNED");
@@ -86,8 +92,14 @@ pub fn defines(m: &Material, stage: Stage, features: &[&str], deferred: bool) ->
     if pbr {
         out.push("TRUE_PBR");
     }
-    if m.alpha_test {
+    // PS only: the VS never reads it, and captured VS descriptors lack bit 20 (answers.md Q4.2).
+    if ps && m.alpha_test {
         out.push("DO_ALPHA_TEST");
+    }
+    // HAIR + Decal/Dynamic_Decal (SLSF1.26/27) → DepthWriteDecals (answers.md Q4.2, Arch_Scalp/Lashes).
+    // PS only: read at Lighting.hlsl:884, 892, 3036 (all in the PSHADER section).
+    if ps && m.shader_type == 6 && (bit(m.slsf1, 26) || bit(m.slsf1, 27)) {
+        out.push("DEPTH_WRITE_DECALS");
     }
     if ps && bit(m.slsf2, 21) {
         out.push(if pbr { "GLINT" } else { "ANISO_LIGHTING" });

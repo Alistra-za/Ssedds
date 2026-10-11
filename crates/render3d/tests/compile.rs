@@ -85,6 +85,38 @@ fn define_table() {
     let mut alpha = m(6, 0, 0, true);
     alpha.alpha_test = true;
     assert!(names(&defines(&alpha, Stage::Pixel, &[], false)).contains(&"DO_ALPHA_TEST"));
+    assert!(!names(&defines(&alpha, Stage::Vertex, &[], false)).contains(&"DO_ALPHA_TEST"));
+    // HAIR + Decal / Dynamic_Decal → DEPTH_WRITE_DECALS (PS only); not on other types.
+    for decal in [26, 27] {
+        let hair = m(6, 1 << decal, 0, true);
+        assert!(names(&defines(&hair, Stage::Pixel, &[], false)).contains(&"DEPTH_WRITE_DECALS"));
+        assert!(!names(&defines(&hair, Stage::Vertex, &[], false)).contains(&"DEPTH_WRITE_DECALS"));
+        let not_hair = m(0, 1 << decal, 0, true);
+        assert!(
+            !names(&defines(&not_hair, Stage::Pixel, &[], false)).contains(&"DEPTH_WRITE_DECALS")
+        );
+    }
+    assert!(
+        !names(&defines(&m(6, 0, 0, true), Stage::Pixel, &[], false))
+            .contains(&"DEPTH_WRITE_DECALS")
+    );
+    // TruePBR drops ENVMAP / PARALLAX / MULTI_LAYER_PARALLAX on both stages (Arch_Eye_Moisture capture).
+    for st in [1, 3, 11] {
+        for stage in [Stage::Pixel, Stage::Vertex] {
+            let d = defines(&m(st, 0, 1 << 23, false), stage, &[], false);
+            for no in ["ENVMAP", "PARALLAX", "MULTI_LAYER_PARALLAX"] {
+                assert!(
+                    !names(&d).contains(&no),
+                    "type {st} {stage:?}: {no} in {:?}",
+                    names(&d)
+                );
+            }
+        }
+    }
+    // FaceGen keeps its technique under PBR (guarded at Lighting.hlsl:366).
+    assert!(
+        names(&defines(&m(4, 0, 1 << 23, true), Stage::Pixel, &[], false)).contains(&"FACEGEN")
+    );
     // VS VC needs SLSF2.5 and vertex colours present.
     let mut vc = m(0, 0, 1 << 5, false);
     assert!(!names(&defines(&vc, Stage::Vertex, &[], false)).contains(&"VC"));
@@ -224,19 +256,99 @@ fn installed_cs() {
     let mut hair = m(6, 1, (1 << 21) | (1 << 25) | (1 << 26) | (1 << 27), true);
     hair.alpha_test = true;
     let pbr = m(0, 1, (1 << 21) | (1 << 23), false);
-    for (name, mat) in [("hair", hair), ("pbr+glint", pbr)] {
-        let d = defines(&mat, Stage::Pixel, &[], false);
+    let mut decal_hair = m(6, (1 << 26) | (1 << 27), 1 << 27, true);
+    decal_hair.alpha_test = true;
+    let mlp_pbr = m(11, 0, (1 << 23) | (1 << 25) | (1 << 27), false);
+    let env_pbr = m(1, 0, 1 << 23, false);
+    for (name, mat, stage, target) in [
+        ("hair", hair, Stage::Pixel, "ps_5_0"),
+        ("pbr+glint", pbr, Stage::Pixel, "ps_5_0"),
+        ("hair+decal", decal_hair, Stage::Pixel, "ps_5_0"),
+        ("mlp+pbr ps", mlp_pbr, Stage::Pixel, "ps_5_0"),
+        ("mlp+pbr vs", mlp_pbr, Stage::Vertex, "vs_5_0"),
+        ("envmap+pbr ps", env_pbr, Stage::Pixel, "ps_5_0"),
+        ("envmap+pbr vs", env_pbr, Stage::Vertex, "vs_5_0"),
+    ] {
+        let d = defines(&mat, stage, &[], false);
         let t = std::time::Instant::now();
         let c = compile(
             &root.join("Lighting.hlsl"),
             &root,
             &d,
-            "ps_5_0",
+            target,
             cache.path(),
             "x",
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
-        println!("{name} ps_5_0: {} ms", t.elapsed().as_millis());
+        println!("{name} {target}: {} ms", t.elapsed().as_millis());
         assert!(!c.reflection.cbuffers.is_empty());
     }
+}
+
+#[test]
+fn truncated_cache_entry_is_recompiled() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let cache = tempfile::tempdir().unwrap();
+    let d = render3d::permutation::Defines(vec![("PSHADER".into(), "1".into())]);
+    let file = std::path::PathBuf::from(format!("{dir}/tiny.hlsl"));
+    let run = || {
+        compile(
+            &file,
+            std::path::Path::new(dir),
+            &d,
+            "ps_5_0",
+            cache.path(),
+            "h",
+        )
+        .unwrap()
+    };
+    let first = run();
+    let cso = std::fs::read_dir(cache.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "cso"))
+        .unwrap();
+    std::fs::write(&cso, &first.bytecode[..first.bytecode.len() / 2]).unwrap();
+    let again = run();
+    assert_eq!(again.bytecode, first.bytecode);
+    assert_eq!(
+        std::fs::read(&cso).unwrap(),
+        first.bytecode,
+        "cache entry rewritten"
+    );
+    // Garbage of the right length is rejected too (bad DXBC magic).
+    std::fs::write(&cso, vec![0u8; first.bytecode.len()]).unwrap();
+    assert_eq!(run().bytecode, first.bytecode);
+    let names: Vec<_> = std::fs::read_dir(cache.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "no temp files left behind: {names:?}");
+}
+
+#[test]
+fn cache_key_uses_path_relative_to_root() {
+    let d = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    for (sub, v) in [("a", "1"), ("b", "0.5")] {
+        std::fs::create_dir_all(d.path().join(sub)).unwrap();
+        std::fs::write(
+            d.path().join(sub).join("x.hlsl"),
+            format!("float4 main() : SV_Target {{ return {v}; }}"),
+        )
+        .unwrap();
+    }
+    let c = |sub: &str| {
+        compile(
+            &d.path().join(sub).join("x.hlsl"),
+            d.path(),
+            &Default::default(),
+            "ps_5_0",
+            cache.path(),
+            "h",
+        )
+        .unwrap()
+        .bytecode
+    };
+    assert_ne!(c("a"), c("b"));
 }
