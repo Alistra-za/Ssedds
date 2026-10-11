@@ -27,6 +27,8 @@ anyhow.workspace = true
 eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "links", "wgpu"] }
 rfd = "=0.17.2"
 toml_edit = "0.25"
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 egui_kittest = "=0.36.2"

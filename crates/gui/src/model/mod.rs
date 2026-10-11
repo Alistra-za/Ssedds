@@ -1,6 +1,7 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod export;
 pub mod fields;
+pub mod history;
 pub mod inspector;
 pub mod items;
 pub mod preview;
@@ -93,6 +94,7 @@ pub struct AppModel {
     pub root: Option<PathBuf>,
     pub project: Option<ProjectDoc>,
     pub sets_doc: Option<crate::sets_doc::SetsDoc>,
+    pub history: history::History,
     pub target: Target,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
@@ -153,6 +155,7 @@ impl AppModel {
             root: None,
             project: None,
             sets_doc: None,
+            history: history::History::default(),
             target: Target::Cs,
             items: vec![],
             sets: vec![],
@@ -192,6 +195,7 @@ impl AppModel {
         let project = ProjectDoc::open(&root);
         self.project = Some(project);
         self.sets_doc = Some(crate::sets_doc::SetsDoc::open(&root));
+        self.history.clear();
         self.refresh_banner();
         self.settings.push_recent(root.clone());
         self.save_settings();
@@ -336,6 +340,7 @@ impl AppModel {
             if std::mem::take(&mut self.ignored_by_plan) {
                 if let Some(p) = self.project.as_mut() {
                     p.reload();
+                    self.history.clear();
                     self.refresh_banner();
                 }
             }
@@ -656,33 +661,126 @@ impl AppModel {
         self.preview_close();
     }
 
-    fn edit(&mut self, f: impl FnOnce(&mut ProjectDoc)) {
-        let Some(p) = self.project.as_mut() else {
+    fn snapshot_of(
+        p: Option<&ProjectDoc>,
+        s: Option<&crate::sets_doc::SetsDoc>,
+    ) -> history::Snapshot {
+        history::Snapshot {
+            sdc_toml: p.map(ProjectDoc::text).unwrap_or_default(),
+            project: s.map(crate::sets_doc::SetsDoc::text).unwrap_or_default(),
+        }
+    }
+
+    /// Every edit goes through here (spec §7.2): run `f` on both documents, record one undo step when anything
+    /// changed, and plan again when `replan` (DECISIONS P7: JSON-only edits do not). A read-only document ignores
+    /// its own edits (its text does not change, so it adds nothing to the step); the other document is unaffected
+    /// (DECISIONS P8).
+    pub fn edit_docs(
+        &mut self,
+        label: &str,
+        merge: Option<String>,
+        replan: bool,
+        f: impl FnOnce(&mut ProjectDoc, &mut crate::sets_doc::SetsDoc),
+    ) {
+        let (Some(p), Some(s)) = (self.project.as_mut(), self.sets_doc.as_mut()) else {
             return;
         };
-        if p.read_only() {
+        let before = Self::snapshot_of(Some(p), Some(s));
+        f(p, s);
+        let after = Self::snapshot_of(Some(p), Some(s));
+        if after == before {
             return;
         }
-        f(p);
+        self.history.push(history::Command {
+            label: label.into(),
+            before,
+            after,
+            merge,
+            created_file: None,
+        });
+        if replan {
+            self.replan();
+        }
+    }
+
+    /// An `sdc.toml` edit (a read-only `sdc.toml` ignores it), re-planned. The sets document is not touched, so
+    /// it works the same when `sdc-project.toml` is read-only.
+    fn edit(&mut self, label: &str, f: impl FnOnce(&mut ProjectDoc)) {
+        if self.project.as_ref().is_none_or(ProjectDoc::read_only) {
+            return;
+        }
+        self.edit_docs(label, None, true, |p, _| f(p));
+    }
+
+    fn apply_snapshot(&mut self, s: &history::Snapshot) {
+        if let Some(p) = self.project.as_mut() {
+            p.restore(&s.sdc_toml);
+        }
+        if let Some(d) = self.sets_doc.as_mut() {
+            d.restore(&s.project);
+        }
         self.replan();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Undo one step. A step that created a file (Duplicate source) deletes it first, and only if it is unchanged
+    /// (spec §3.4); otherwise the undo is refused with the reason.
+    pub fn undo(&mut self) {
+        let Some(c) = self.history.undo_step() else {
+            return;
+        };
+        if let Some(cf) = &c.created_file {
+            if let Err(why) = remove_created(cf) {
+                self.history.refuse_undo();
+                self.dialog = Some(Dialog::Error(why));
+                return;
+            }
+        }
+        self.apply_snapshot(&c.before);
+    }
+
+    /// Redo one step. A step that created a file copies it again from its source.
+    pub fn redo(&mut self) {
+        let Some(c) = self.history.redo_step() else {
+            return;
+        };
+        if let Some(cf) = &c.created_file {
+            if let Err(e) = std::fs::copy(&cf.source, &cf.path) {
+                self.history.refuse_redo();
+                self.dialog = Some(Dialog::Error(format!(
+                    "could not copy {} again: {e}",
+                    cf.source.display()
+                )));
+                return;
+            }
+        }
+        self.apply_snapshot(&c.after);
     }
 
     pub fn set_field(&mut self, item_key: &str, field: &str, value: serde_json::Value) {
         let k = item_key.to_string();
         let f = field.to_string();
-        self.edit(move |p| p.set_file_value(&k, &f, &value));
+        self.edit(&format!("Change {f}"), move |p| {
+            p.set_file_value(&k, &f, &value)
+        });
     }
 
     pub fn clear_field(&mut self, item_key: &str, field: &str) {
         let k = item_key.to_string();
         let f = field.to_string();
-        self.edit(move |p| p.clear_file_value(&k, &f));
+        self.edit(&format!("Reset {f}"), move |p| p.clear_file_value(&k, &f));
     }
 
     /// A confirmation writes the value explicitly, or adds the code to the file's `allow` (M3a spec §5.2).
     pub fn decide(&mut self, item_key: &str, answer: Answer) {
         let k = item_key.to_string();
-        self.edit(move |p| match answer {
+        self.edit("Decide", move |p| match answer {
             Answer::Subtype(st) => p.set_file_value(&k, "subtype", &json!(st)),
             Answer::Alpha(a) => p.set_file_value(&k, "alpha.policy", &json!(a)),
             Answer::Green(g) => p.set_file_value(&k, "channels.green_convention", &json!(g)),
@@ -695,17 +793,17 @@ impl AppModel {
     }
 
     pub fn set_target(&mut self, t: Target) {
-        self.edit(move |p| p.set_target(t));
+        self.edit("Mode", move |p| p.set_target(t));
     }
 
     pub fn set_fill(&mut self, role: RawMap, value: Option<u8>) {
-        self.edit(move |p| p.set_fill(role, value));
+        self.edit("Fill value", move |p| p.set_fill(role, value));
     }
 
     /// Remove an unmatched `[files]` entry (one that names no file under the current target) and plan again.
     pub fn remove_unmatched(&mut self, key: &str) {
         let k = key.to_string();
-        self.edit(move |p| p.remove_file_entry(&k));
+        self.edit("Remove entry", move |p| p.remove_file_entry(&k));
     }
 
     /// The BC1 decoder for the next launch. The session's model is fixed, so a difference needs a restart.
@@ -767,9 +865,11 @@ impl AppModel {
         self.dialog = None;
         if let Some(p) = self.project.as_mut() {
             p.reload();
+            self.history.clear();
         }
         if let Some(s) = self.sets_doc.as_mut() {
             s.reload();
+            self.history.clear();
         }
         self.ignored_by_plan = false;
         self.refresh_banner();
@@ -811,6 +911,7 @@ impl AppModel {
                     }
                 } else {
                     p.reload();
+                    self.history.clear();
                     self.ignored_by_plan = false;
                     self.refresh_banner();
                     self.replan();
@@ -826,6 +927,7 @@ impl AppModel {
                     }
                 } else {
                     s.reload();
+                    self.history.clear();
                     self.refresh_banner();
                     self.replan();
                 }
@@ -879,9 +981,11 @@ impl AppModel {
         } else {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
+                self.history.clear();
             }
             if let Some(s) = self.sets_doc.as_mut() {
                 s.reload();
+                self.history.clear();
             }
         }
         self.open_folder(root);
@@ -897,5 +1001,18 @@ impl AppModel {
         } else {
             true
         }
+    }
+}
+
+/// Delete a file a command created, if it still has the SHA-256 it was created with.
+fn remove_created(cf: &history::CreatedFile) -> Result<(), String> {
+    match history::sha256_of(&cf.path) {
+        None => Ok(()), // already gone
+        Some(h) if h == cf.sha256 => std::fs::remove_file(&cf.path)
+            .map_err(|e| format!("could not delete {}: {e}", cf.path.display())),
+        Some(_) => Err(format!(
+            "{} has changed since it was duplicated, so undo keeps it. Delete it yourself if you no longer need it.",
+            cf.path.display()
+        )),
     }
 }
