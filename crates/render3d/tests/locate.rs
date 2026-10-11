@@ -69,3 +69,28 @@ fn highest_priority_provider_wins() {
     .unwrap();
     assert_eq!(got.0, "B");
 }
+
+#[test]
+fn nonexistent_root_is_error() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(fingerprint(&d.path().join("nope"), None).is_err());
+    let f = d.path().join("file.txt");
+    fs::write(&f, "x").unwrap();
+    assert!(fingerprint(&f, None).is_err());
+}
+
+#[test]
+fn same_folder_two_spellings_is_not_moved() {
+    let d = tempfile::tempdir().unwrap();
+    cs(d.path(), "a");
+    let root = d.path().join("Shaders");
+    let saved = fingerprint(&root, Some("CS".into())).unwrap();
+    let alt = std::path::PathBuf::from(
+        root.to_string_lossy()
+            .to_ascii_uppercase()
+            .replace('\\', "/"),
+    );
+    let mut found = fingerprint(&root, Some("cs".into())).unwrap();
+    found.root = alt;
+    assert!(matches!(compare(Some(&saved), Some(found)), Change::Same));
+}

@@ -9,17 +9,29 @@ pub struct Fingerprint {
     pub hash: String,
 }
 
+/// Hash every `*.hlsl` / `*.hlsli` under `root`.
+///
+/// This reads every shader file (hundreds, several MB), so call it off the UI
+/// thread. A missing / non-directory root or any unreadable entry is an error,
+/// never a silently partial hash.
 pub fn fingerprint(root: &Path, owner_mod: Option<String>) -> std::io::Result<Fingerprint> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| {
-            p.extension()
+    if !root.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("shaders root is not a directory: {}", root.display()),
+        ));
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let e = entry.map_err(std::io::Error::from)?;
+        if e.file_type().is_file()
+            && e.path()
+                .extension()
                 .is_some_and(|x| x.eq_ignore_ascii_case("hlsl") || x.eq_ignore_ascii_case("hlsli"))
-        })
-        .collect();
+        {
+            files.push(e.into_path());
+        }
+    }
     files.sort();
     let mut h = Sha256::new();
     for f in &files {
@@ -27,6 +39,7 @@ pub fn fingerprint(root: &Path, owner_mod: Option<String>) -> std::io::Result<Fi
             f.strip_prefix(root)
                 .unwrap()
                 .to_string_lossy()
+                .replace('\\', "/")
                 .to_ascii_lowercase()
                 .as_bytes(),
         );
@@ -40,6 +53,8 @@ pub fn fingerprint(root: &Path, owner_mod: Option<String>) -> std::io::Result<Fi
     })
 }
 
+/// Highest-priority origin providing `Shaders/Lighting.hlsl`. On equal
+/// priority the origin listed LAST wins (`Iterator::max_by_key` semantics).
 pub fn find_in_mods(origins: &[(String, PathBuf, i32)]) -> Option<(String, PathBuf)> {
     origins
         .iter()
@@ -56,6 +71,58 @@ pub enum Change {
     NotFound { old: Option<Fingerprint> },
 }
 
+fn norm(p: &Path) -> String {
+    p.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+/// (volume serial, file index) of a directory, Windows only.
+#[cfg(windows)]
+fn file_id(p: &Path) -> Option<(u32, u64)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(p)
+        .ok()?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the handle is valid for the lifetime of `f`; `info` is a valid out pointer.
+    unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }.ok()?;
+    Some((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
+}
+
+#[cfg(not(windows))]
+fn file_id(_p: &Path) -> Option<(u32, u64)> {
+    None
+}
+
+/// Same folder? File identity when both open (handles drive-letter / mount
+/// aliases of one volume), else a case- and separator-insensitive path compare.
+fn same_root(a: &Path, b: &Path) -> bool {
+    match (file_id(a), file_id(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => norm(a) == norm(b),
+    }
+}
+
+fn same_owner(a: &Option<String>, b: &Option<String>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.eq_ignore_ascii_case(y),
+        _ => false,
+    }
+}
+
 pub fn compare(saved: Option<&Fingerprint>, found: Option<Fingerprint>) -> Change {
     match (saved, found) {
         (_, None) => Change::NotFound {
@@ -69,7 +136,9 @@ pub fn compare(saved: Option<&Fingerprint>, found: Option<Fingerprint>) -> Chang
             },
             new,
         },
-        (Some(old), Some(new)) if old.root == new.root && old.owner_mod == new.owner_mod => {
+        (Some(old), Some(new))
+            if same_root(&old.root, &new.root) && same_owner(&old.owner_mod, &new.owner_mod) =>
+        {
             if old.hash == new.hash {
                 Change::Same
             } else {
