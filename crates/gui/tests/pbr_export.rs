@@ -876,3 +876,39 @@ fn an_owned_path_on_a_mirrored_output_settles_and_blocks_by_name() {
         d => panic!("expected ExportBlocked naming the clash, got {d:?}"),
     }
 }
+
+/// Final re-review (5d regression): a source DDS on a PBR output path is skipped (IN-DDS-SKIPPED) and writes
+/// nothing, so it must not hold back the PBR path: no block, and the export goes ahead.
+#[test]
+fn a_skipped_dds_on_a_pbr_output_path_does_not_hold_it_back() {
+    let d = tempfile::tempdir().unwrap();
+    // A previous export's file kept in the source tree, at the path rock01's diffuse is written to.
+    let ref_dir = tempfile::tempdir().unwrap();
+    let mut first = ready(ref_dir.path());
+    export_and_wait(&mut first);
+    let dds = first
+        .export_root()
+        .join("textures/pbr/landscape/rock01.dds");
+    assert!(dds.exists());
+    let kept = d.path().join("textures/textures/pbr/landscape");
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::copy(&dds, kept.join("rock01.dds")).unwrap();
+    let mut m = ready(d.path());
+    let it = m
+        .items
+        .iter()
+        .find(|i| i.key == "textures/pbr/landscape/rock01.dds")
+        .unwrap_or_else(|| panic!("{:?}", m.items.iter().map(|i| &i.key).collect::<Vec<_>>()));
+    assert!(
+        it.job.is_none(),
+        "the source DDS is skipped: {:?}",
+        it.status
+    );
+    assert_eq!(export_blocks(&m), vec![]);
+    export_and_wait(&mut m);
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(m
+        .export_root()
+        .join("textures/pbr/landscape/rock01.dds")
+        .exists());
+}

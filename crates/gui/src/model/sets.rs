@@ -384,7 +384,8 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
     let mirrored: BTreeSet<String> = m
         .items
         .iter()
-        .filter(|it| !it.job_key.is_empty())
+        // Only a texture that will be written (skipped and failed files have no job, as in `path_collisions`).
+        .filter(|it| it.job.is_some() && !it.job_key.is_empty())
         .filter(|it| {
             let k = item_output_key(&views, it).unwrap_or(OutputKey::File(it.key.clone()));
             !explicit(&k)
