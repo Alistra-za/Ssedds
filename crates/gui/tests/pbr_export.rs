@@ -244,11 +244,10 @@ fn feature_rows_use_the_exact_text() {
 
 #[test]
 fn fuzz_texture_row_and_a_filled_slot() {
-    // `fuzz` and `fuzz.texture` cannot both be written through the TOML document today (a bool and a table share
-    // the key), so this row is checked on the settings directly.
+    // The switch is `fuzz_on`; `fuzz.texture` is a sub-setting that lives beside it.
     use sdc_gui::model::sets::SlotKind;
     let mut s = sdc_gui::pgp::settings::Settings::new();
-    s.insert("fuzz".into(), json!(true));
+    s.insert("fuzz_on".into(), json!(true));
     s.insert("fuzz.texture".into(), json!(true));
     assert_eq!(
         missing_texture_texts("a/b", &s, |_| false),
@@ -399,4 +398,73 @@ fn a_borrow_whose_owner_is_blocked_is_reported_once_by_the_owners_block() {
     let b = texts(&m);
     assert!(b.iter().any(|t| t.contains("rename")), "{b:?}");
     assert!(!b.iter().any(|t| t.contains("borrows")), "{b:?}");
+}
+
+#[test]
+fn glint_and_fuzz_switches_save_with_their_sub_settings_and_reach_the_json() {
+    use sdc_gui::pgp::writer::{entry_node, EntryInput};
+    use sdc_gui::sets_doc::SetsDoc;
+    let d = tempfile::tempdir().unwrap();
+    let mut doc = SetsDoc::open(d.path());
+    doc.create_set("a/fz");
+    doc.create_set("a/gl");
+    doc.set_value("a/fz", "fuzz_on", Some(json!(true)));
+    doc.set_value("a/fz", "fuzz.texture", Some(json!(true)));
+    doc.set_value("a/gl", "glint_on", Some(json!(true)));
+    doc.set_value("a/gl", "glint.screen_space_scale", Some(json!(2.0)));
+    doc.save(false).unwrap();
+    let doc = SetsDoc::open(d.path());
+    let entries = doc.entries();
+    let of = |id: &str| {
+        entries
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap()
+            .settings
+            .clone()
+    };
+    let (fz, gl) = (of("a/fz"), of("a/gl"));
+    assert_eq!(fz["fuzz.texture"], json!(true));
+    assert_eq!(gl["glint.screen_space_scale"], json!(2.0));
+    assert!(sdc_gui::pgp::settings::feature_on(
+        &fz,
+        sdc_gui::pgp::settings::Feature::Fuzz
+    ));
+    assert!(sdc_gui::pgp::settings::feature_on(
+        &gl,
+        sdc_gui::pgp::settings::Feature::Glint
+    ));
+    let json_of = |s| {
+        entry_node(&EntryInput {
+            settings: s,
+            slots: Default::default(),
+            derived_match: "ax".into(),
+        })
+        .to_value()
+    };
+    let (f, g) = (json_of(fz), json_of(gl));
+    assert_eq!(f["fuzz"]["texture"], json!(true));
+    assert_eq!(g["glint"]["screen_space_scale"], json!(2.0));
+    // The switches themselves are GUI-only and never reach the JSON.
+    for v in [&f, &g] {
+        assert!(
+            v.get("fuzz_on").is_none() && v.get("glint_on").is_none(),
+            "{v}"
+        );
+    }
+}
+
+#[test]
+fn fuzz_texture_without_an_f_map_blocks_through_the_normal_path() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    let id = "landscape/rock01";
+    m.set_json_value(id, "fuzz_on", Some(json!(true)));
+    m.set_json_value(id, "fuzz.texture", Some(json!(true)));
+    assert_eq!(
+        texts(&m),
+        vec![format!(
+            "{id}: fuzz texture is on but the set has no fuzz texture (_f)"
+        )]
+    );
 }

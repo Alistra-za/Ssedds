@@ -72,6 +72,15 @@ fn feature_of_key(key: &str) -> Option<Feature> {
         .map(|(f, _)| *f)
 }
 
+/// The feature an `Object` key (`glint`, `fuzz`) belongs to: the object is written only while that feature is on.
+fn feature_of_object(key: &str) -> Option<Feature> {
+    match key {
+        "glint" => Some(Feature::Glint),
+        "fuzz" => Some(Feature::Fuzz),
+        _ => None,
+    }
+}
+
 /// Whether feature `f` is written as on. Two exclusive features can both be on only through hand-edited settings
 /// (the UI greys the second); then exactly one is written, by precedence: hair, then multilayer, then glint, then
 /// fuzz; emissive and parallax yield to hair, subsurface to hair and multilayer.
@@ -135,7 +144,7 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                 (on && ok).then_some(Node::Scalar(json!(true)))
             }
             KeyKind::Object => {
-                let f = feature_of_key(k.key).expect("objects are features");
+                let f = feature_of_object(k.key).expect("objects are features");
                 live(own, f).then(|| Node::Obj(sub_object(k.key, own)))
             }
             KeyKind::Number => {

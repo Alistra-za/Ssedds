@@ -110,7 +110,7 @@ fn mutual_exclusion_follows_the_owner_table() {
     }
     assert_eq!(blocked_by(&ml, Emissive), None);
     assert_eq!(blocked_by(&ml, Parallax), None);
-    let glint = s(&[("glint", json!(true))]);
+    let glint = s(&[("glint_on", json!(true))]);
     assert_eq!(blocked_by(&glint, Fuzz), Some(Glint));
     assert_eq!(blocked_by(&glint, Multilayer), Some(Glint));
     let ss = s(&[("subsurface", json!(true))]);
@@ -407,7 +407,7 @@ fn blocked_features_are_not_written() {
 fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
     let v = written(&entry(
         &[
-            ("glint", json!(true)),
+            ("glint_on", json!(true)),
             ("glint.microfacet_roughness", json!(0.02)),
         ],
         "x",
@@ -418,7 +418,7 @@ fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
     );
     let v = written(&entry(
         &[
-            ("fuzz", json!(true)),
+            ("fuzz_on", json!(true)),
             ("fuzz.texture", json!(true)),
             ("fuzz.color", json!([0, 0, 0])),
         ],
@@ -487,23 +487,23 @@ fn blocked_objects_are_omitted_and_glint_false_writes_nothing() {
     for (label, pairs) in [
         (
             "hair blocks glint",
-            vec![("hair", json!(true)), ("glint", json!(true))],
+            vec![("hair", json!(true)), ("glint_on", json!(true))],
         ),
         (
             "multilayer blocks glint",
-            vec![("multilayer", json!(true)), ("glint", json!(true))],
+            vec![("multilayer", json!(true)), ("glint_on", json!(true))],
         ),
         (
             "glint blocks fuzz",
-            vec![("glint", json!(true)), ("fuzz", json!(true))],
+            vec![("glint_on", json!(true)), ("fuzz_on", json!(true))],
         ),
         (
             "hair blocks fuzz",
-            vec![("hair", json!(true)), ("fuzz", json!(true))],
+            vec![("hair", json!(true)), ("fuzz_on", json!(true))],
         ),
         (
             "multilayer blocks fuzz",
-            vec![("multilayer", json!(true)), ("fuzz", json!(true))],
+            vec![("multilayer", json!(true)), ("fuzz_on", json!(true))],
         ),
     ] {
         let v = written(&entry(&pairs, "x"));
@@ -514,11 +514,11 @@ fn blocked_objects_are_omitted_and_glint_false_writes_nothing() {
         };
         assert!(v.get(blocked).is_none(), "{label}: {v}");
     }
-    let v = written(&entry(&[("glint", json!(false))], "x"));
+    let v = written(&entry(&[("glint_on", json!(false))], "x"));
     assert!(v.get("glint").is_none());
     // glint wins over fuzz when both are on; the winner is still written.
     let v = written(&entry(
-        &[("glint", json!(true)), ("fuzz", json!(true))],
+        &[("glint_on", json!(true)), ("fuzz_on", json!(true))],
         "x",
     ));
     assert!(v.get("glint").is_some() && v.get("fuzz").is_none());
@@ -612,7 +612,7 @@ fn written_documents_validate_and_bad_ones_do_not() {
         &[
             ("emissive", json!(true)),
             ("emissive_color", json!([255, 0, 0])),
-            ("glint", json!(true)),
+            ("glint_on", json!(true)),
         ],
         "a",
     );

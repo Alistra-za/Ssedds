@@ -31,8 +31,8 @@ pub const FEATURE_KEYS: [(Feature, &str); 7] = [
     (Feature::Subsurface, "subsurface"),
     (Feature::Hair, "hair"),
     (Feature::Multilayer, "multilayer"),
-    (Feature::Glint, "glint"),
-    (Feature::Fuzz, "fuzz"),
+    (Feature::Glint, "glint_on"),
+    (Feature::Fuzz, "fuzz_on"),
 ];
 
 pub fn feature_key(f: Feature) -> &'static str {

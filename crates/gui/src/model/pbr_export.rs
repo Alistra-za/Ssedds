@@ -242,8 +242,8 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
                         format!(
                             "{}: {} and {} can't both be on",
                             v.id,
-                            feature_key(f),
-                            feature_key(b)
+                            feature_key(f).trim_end_matches("_on"),
+                            feature_key(b).trim_end_matches("_on")
                         ),
                     ));
                 }
