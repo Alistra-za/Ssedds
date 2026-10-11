@@ -22,7 +22,7 @@ use crate::manifest::{
     MANIFEST_SCHEMA,
 };
 use crate::mips::build_chain_with;
-use crate::ops::preprocess;
+use crate::ops::{preprocess_with, SourceTransfer};
 use crate::pack::assemble::assemble;
 use crate::pack::invert_of;
 use crate::policy::{ResolvedJob, SourceStamp};
@@ -202,17 +202,17 @@ fn prepare_then<T>(
         None => None,
     };
     stop()?;
-    let img = match &job.pack {
+    let (img, transfer) = match &job.pack {
         Some(pk) => {
             // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
-            assemble(pk, pk.gray)
-                .map_err(|e| fail(Stage::Load)(e.to_string()))?
-                .image
+            let asm = assemble(pk, pk.gray).map_err(|e| fail(Stage::Load)(e.to_string()))?;
+            let t = SourceTransfer::of(&asm.info);
+            (asm.image, t)
         }
         None => {
-            load_image(&job.input)
-                .map_err(|e| fail(Stage::Load)(e.to_string()))?
-                .0
+            let (img, info) =
+                load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
+            (img, SourceTransfer::of(&info))
         }
     };
     let bake = match (lengths, &job.bake) {
@@ -233,7 +233,7 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Preprocess);
-    let work = preprocess(img, p);
+    let work = preprocess_with(img, p, transfer);
     stop()?;
 
     enter(Stage::Mipmaps);

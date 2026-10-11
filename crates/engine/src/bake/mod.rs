@@ -199,8 +199,12 @@ impl BakeJob {
     /// `mips.normal_base = keep`, DECISIONS R1) and keep only the footprint lengths of that written base. The image is
     /// dropped before this returns (DECISIONS R4).
     pub fn load_lengths(&self) -> Result<LengthPyramid, String> {
-        let (img, _) = crate::load::load_image(&self.normal).map_err(|e| e.to_string())?;
-        let mut work = crate::ops::preprocess(img, &self.normal_profile);
+        let (img, info) = crate::load::load_image(&self.normal).map_err(|e| e.to_string())?;
+        let mut work = crate::ops::preprocess_with(
+            img,
+            &self.normal_profile,
+            crate::ops::SourceTransfer::of(&info),
+        );
         if self.normal_profile.mips.normal_base == crate::config::NormalBase::Renormalize {
             for px in &mut work.img.px {
                 crate::mips::normalize_vector(px, work.domain);

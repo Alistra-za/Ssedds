@@ -1,7 +1,7 @@
 //! Warning and error codes (spec §10). Codes added by this plan beyond the spec's original catalogue: VAL-MIP-ERROR
 //! (§5.8 per-mip error warning), CFG-INVALID (a field value outside its allowed range or an encoder/format
-//! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (a float
-//! source written to an LDR format, an interim guard until the M6 source-transfer split) and the four `PACK-*`
+//! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (retired in M6:
+//! never emitted) and the four `PACK-*`
 //! codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a `[files]` key of `sdc.toml` that
 //! matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or set that no longer exists, M3b), PACK-RECIPE-CONFLICT and
 //! PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set could not follow, packing-fills Task 1) and SKIN-WET-FORM
@@ -89,7 +89,8 @@ codes! {
     InGreenUnstated = "IN-GREEN-UNSTATED" => Blocking,
     InDecode = "IN-DECODE" => Error,
     InNonfinite = "IN-NONFINITE" => Warning,
-    InFloatLdr = "IN-FLOAT-LDR" => Blocking,
+    // Retired in M6 (DECISIONS S2): never emitted; kept so --allow and [files] allow lists still load.
+    InFloatLdr = "IN-FLOAT-LDR" => Info,
     InIccIgnored = "IN-ICC-IGNORED" => Info,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
     PackDefaulted = "PACK-DEFAULTED" => Warning,
@@ -132,6 +133,7 @@ mod tests {
 
     #[test]
     fn severities_follow_spec_section_10() {
+        assert_eq!(Code::InFloatLdr.severity(), Severity::Info);
         assert_eq!(Code::FmtBc5Normal.severity(), Severity::Blocking);
         assert_eq!(Code::ChanNormalShort.severity(), Severity::Info);
         assert_eq!(Code::TagSrgbVanilla.severity(), Severity::Error);

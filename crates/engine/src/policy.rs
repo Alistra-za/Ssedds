@@ -619,7 +619,8 @@ fn skin_wet_notice(p: &Profile, f: &FileFacts, prov: &BTreeMap<String, Provenanc
 /// Spec §4.1 (`pbr_emissive`, `hdr_sky`): a float source that goes to BC6H is linear radiance, so
 /// `color.content` resolves `linear` as an analysis fact (`analysis:float-source`): above presets, config
 /// and rules, below suffix facts and `--set`. It reads the resolved format, so it runs after the layers.
-/// Float sources written to LDR formats keep the sub-type's content (a separate carry).
+/// A float source written to an LDR format keeps the sub-type's content, which then names only the output encoding:
+/// the source is linear light either way (DECISIONS S1).
 fn float_source_is_linear(p: &mut Profile, prov: &mut BTreeMap<String, Provenance>, f: &FileFacts) {
     const FIELD: &str = "color.content";
     let overruled = prov
@@ -1075,17 +1076,9 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             ),
         );
     }
-    // Final review I4, an interim guard until the M6 source-transfer split: a float source's transfer (linear or
-    // sRGB-encoded) is unknown, and an LDR format would read its stored values as if they were gamma-encoded, so
-    // it is held until acknowledged. Values outside [0, 1] are clamped by Quantise.
+    // DECISIONS S1: a float source is linear light; Quantise clamps it to [0, 1] and encodes it per color.content.
+    // Values outside that range are lost: a warning, never a block. (IN-FLOAT-LDR is retired, DECISIONS S2.)
     if f.info.is_float && !bc6h {
-        add(
-            InFloatLdr,
-            format!(
-                "32-bit float source written to {}: transfer handling lands in M6; acknowledge with --allow IN-FLOAT-LDR to convert as stored values",
-                format!("{:?}", p.format).to_uppercase()
-            ),
-        );
         let channels = if f.info.has_alpha { 4 } else { 3 };
         let (lo, hi) = a.channels[..channels]
             .iter()
@@ -1095,7 +1088,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
         if lo < 0.0 || hi > 1.0 {
             add(
                 LossClampHdr,
-                format!("float values range {lo} to {hi}: those outside [0, 1] are clamped"),
+                format!("float values range {lo} to {hi}: values outside [0, 1] are clamped"),
             );
         }
     }

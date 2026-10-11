@@ -1299,45 +1299,37 @@ fn hdr_float_emissive_content_is_linear() {
     }
 }
 
-/// Final review I4 (interim guard until the M6 source-transfer split): a float source resolved to an LDR format is
-/// blocked by IN-FLOAT-LDR; `--allow IN-FLOAT-LDR` converts it as stored values, with LOSS-CLAMP-HDR (warning)
-/// for the values above 1. The float BC6H cases above are unchanged.
+/// Mean decoded value of channel `c` over mip 0.
+fn mean_code(f: &DdsFile, c: usize) -> f64 {
+    let l = &levels(f)[0];
+    l.iter().map(|p| p[c] as f64).sum::<f64>() / l.len() as f64
+}
+
+/// DECISIONS S1: a float source is linear light. To BC7 under cs it converts without --allow; values above 1 are
+/// clamped (LOSS-CLAMP-HDR, a warning) and every value is sRGB-encoded: a constant linear 0.25 blue decodes near
+/// code 137 (sRGB 0.537), not 64 (the stored value).
 #[test]
-fn float_source_to_an_ldr_format_is_blocked_until_allowed() {
+fn float_source_to_bc7_is_linear_light_encoded_as_srgb() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "textures/a/lamp.tif", hdr_emissive());
-    let sets = ["subtype=diffuse"];
-    let o = convert(d.path(), Target::Cs, &sets, &[]);
+    let o = convert(d.path(), Target::Cs, &["subtype=diffuse"], &[]);
     assert_eq!(
         (o.summary.converted, o.summary.exit_code()),
-        (0, 1),
+        (1, 0),
         "{:?}",
         warnings(&o)
     );
-    assert_eq!(skip_code(&o, "lamp.tif"), Some(Code::InFloatLdr));
-    let w = warning_of(&o, "lamp.tif", Code::InFloatLdr);
-    assert_eq!(w.severity, Severity::Blocking);
-    assert!(
-        w.message.contains("32-bit float source written to BC7")
-            && w.message.contains("--allow IN-FLOAT-LDR"),
-        "{}",
-        w.message
-    );
-    assert!(!d.path().join("out/textures/a/lamp.dds").exists());
-
-    let o = convert(d.path(), Target::Cs, &sets, &[Code::InFloatLdr]);
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert!(!warnings(&o).contains(&Code::InFloatLdr));
     assert_eq!(
-        warning_of(&o, "lamp.tif", Code::InFloatLdr).severity,
+        warning_of(&o, "lamp.tif", Code::LossClampHdr).severity,
         Severity::Warning
     );
-    let clamp = warning_of(&o, "lamp.tif", Code::LossClampHdr);
-    assert_eq!(clamp.severity, Severity::Warning);
     assert_profile(&o, "lamp.tif", "diffuse", "remove", false, "bc7");
+    let b = mean_code(&dds(d.path(), "textures/a/lamp.dds"), 2);
+    assert!((b - 137.0).abs() <= 3.0, "blue {b}");
 }
 
-/// A float source whose values all lie in [0, 1] is still blocked by IN-FLOAT-LDR (its transfer is unknown) but
-/// has nothing to clamp: no LOSS-CLAMP-HDR.
+/// A float source inside [0, 1] has nothing to clamp: no LOSS-CLAMP-HDR, and linear 0.5 decodes near 188.
 #[test]
 fn in_range_float_source_has_no_clamp_warning() {
     let d = tempfile::tempdir().unwrap();
@@ -1348,15 +1340,46 @@ fn in_range_float_source_has_no_clamp_warning() {
             Rgb([x as f32 / 63.0, y as f32 / 63.0, 0.5])
         })),
     );
-    let o = convert(
-        d.path(),
-        Target::Cs,
-        &["subtype=diffuse"],
-        &[Code::InFloatLdr],
-    );
+    let o = convert(d.path(), Target::Cs, &["subtype=diffuse"], &[]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
-    assert!(warnings(&o).contains(&Code::InFloatLdr));
     assert!(!warnings(&o).contains(&Code::LossClampHdr));
+    assert!(!warnings(&o).contains(&Code::InFloatLdr));
+    let b = mean_code(&dds(d.path(), "textures/a/plate.dds"), 2);
+    assert!((b - 188.0).abs() <= 3.0, "blue {b}");
+}
+
+/// Review Focus 3: under vanilla (no BC6H) a float diffuse is still sRGB-encoded, into a UNORM file (content srgb,
+/// tag unorm), not written as stored values.
+#[test]
+fn a_float_source_under_vanilla_is_srgb_encoded_into_unorm() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/lamp.tif", hdr_emissive());
+    let o = convert(d.path(), Target::Vanilla, &["subtype=diffuse"], &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/a/lamp.dds");
+    assert_eq!(f.format, DdsPixelFormat::Bc7 { srgb: false });
+    assert!((mean_code(&f, 2) - 137.0).abs() <= 3.0);
+}
+
+/// Review Focus 3: a float data map (content linear) is written as stored values.
+#[test]
+fn a_float_data_map_is_written_as_stored_values() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/mask.tif",
+        DynamicImage::ImageRgb32F(ImageBuffer::from_fn(64, 64, |_, _| Rgb([0.25, 0.5, 0.75]))),
+    );
+    let o = convert(d.path(), Target::Cs, &["subtype=generic_data"], &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let f = dds(d.path(), "textures/a/mask.dds");
+    for (c, want) in [(0, 64.0), (1, 128.0), (2, 191.0)] {
+        assert!(
+            (mean_code(&f, c) - want).abs() <= 2.0,
+            "channel {c}: {}",
+            mean_code(&f, c)
+        );
+    }
 }
 
 /// Spec §3.4/§4.2: `_SRGB` only for PBR colour under cs (albedo, `_g` when not BC6H, `_f`, `_s`); non-PBR colour,

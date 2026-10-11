@@ -1,11 +1,11 @@
 //! Preprocess (spec §5.4): channel and colour operations before mips.
 //!
 //! Non-finite samples are sanitised first (see [`sanitize_non_finite`]). Steps then run in spec order: (1) alpha `remove`, (2) swizzle then grayscale, (3) vector decode,
-//! (4) dilation, (5) sRGB decode. Resize (step 6) is milestone M6; NPOT is blocked by `DIM-NPOT`
+//! (4) dilation, (5) sRGB decode (integer sources only, DECISIONS S1). Resize (step 6) is milestone M6; NPOT is blocked by `DIM-NPOT`
 //! before this stage. Renormalising normals is a mips concern (Task 29), not done here.
 use crate::config::*;
 use crate::dilate::dilate_under_zero_alpha;
-use crate::image::Rgba32F;
+use crate::image::{Rgba32F, SourceInfo};
 
 /// What the float values in a [`Work`] image mean; later stages key their filtering and quantising on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +113,30 @@ fn sanitize_non_finite(img: &mut Rgba32F, hdr: bool, alpha_present: bool) -> u64
     replaced
 }
 
-pub fn preprocess(mut img: Rgba32F, p: &Profile) -> Work {
+/// How a source's stored values relate to light (DECISIONS S1). An integer source holds stored values whose meaning
+/// `color.content` gives (`srgb` → decoded in step 5). A float source is linear light already and is never decoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceTransfer {
+    Stored,
+    Linear,
+}
+
+impl SourceTransfer {
+    pub fn of(info: &SourceInfo) -> Self {
+        if info.is_float {
+            SourceTransfer::Linear
+        } else {
+            SourceTransfer::Stored
+        }
+    }
+}
+
+/// `preprocess_with` for an integer source (tests, bench and callers without a `SourceInfo`).
+pub fn preprocess(img: Rgba32F, p: &Profile) -> Work {
+    preprocess_with(img, p, SourceTransfer::Stored)
+}
+
+pub fn preprocess_with(mut img: Rgba32F, p: &Profile, transfer: SourceTransfer) -> Work {
     let domain = domain_for(p);
     let alpha_present = p.alpha.policy != AlphaPolicy::Remove;
     let nonfinite_samples = sanitize_non_finite(&mut img, domain == Domain::Hdr, alpha_present);
@@ -165,7 +188,9 @@ pub fn preprocess(mut img: Rgba32F, p: &Profile) -> Work {
     if alpha_present && p.alpha_weighted_mips() {
         dilate_under_zero_alpha(&mut img); // (4)
     }
-    if p.color.content == ColorContent::Srgb && matches!(domain, Domain::LinearLight | Domain::Hdr)
+    if p.color.content == ColorContent::Srgb
+        && transfer == SourceTransfer::Stored
+        && matches!(domain, Domain::LinearLight | Domain::Hdr)
     {
         for px in &mut img.px {
             for c in &mut px[..3] {
@@ -200,6 +225,27 @@ mod tests {
             .unwrap()
             .profile("cs-quality", Target::Cs, st)
             .unwrap()
+    }
+
+    #[test]
+    fn a_float_source_is_never_srgb_decoded() {
+        let p = profile(Subtype::Diffuse); // content srgb
+        let img = Rgba32F::new(1, 1, [0.5, 0.5, 0.5, 1.0]);
+        let stored = preprocess_with(img.clone(), &p, SourceTransfer::Stored);
+        let linear = preprocess_with(img, &p, SourceTransfer::Linear);
+        assert!(
+            (stored.img.px[0][0] - srgb_to_linear(0.5)).abs() < 1e-6,
+            "integer: decoded"
+        );
+        assert_eq!(linear.img.px[0][0], 0.5, "float: already linear");
+        assert_eq!(linear.domain, Domain::LinearLight);
+        let info = crate::image::SourceInfo {
+            bit_depth: 32,
+            channels: 3,
+            has_alpha: false,
+            is_float: true,
+        };
+        assert_eq!(SourceTransfer::of(&info), SourceTransfer::Linear);
     }
 
     #[test]
