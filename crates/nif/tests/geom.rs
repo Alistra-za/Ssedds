@@ -215,3 +215,16 @@ fn geom_corpus() {
         println!("FAIL {f}");
     }
 }
+
+#[test]
+fn skin_partition_block_out_of_range_is_an_error_not_a_panic() {
+    use nif::geom::skin_partition::read_skin_partition;
+    let b = read("TestNifFile_Skinned_SE.nif");
+    let h = Header::parse(&b).unwrap();
+    for block in [h.sizes.len(), h.sizes.len() + 5, usize::MAX] {
+        match read_skin_partition(&h, &b, block) {
+            Err(nif::NifError::Geometry { msg, .. }) => assert!(msg.contains("out of range")),
+            other => panic!("block {block}: {other:?}"),
+        }
+    }
+}

@@ -64,6 +64,9 @@ pub fn read_skin_partition(h: &Header, b: &[u8], block: usize) -> Result<SkinPar
         block: block as u32,
         msg,
     };
+    if block >= h.sizes.len() {
+        return Err(geo("block index out of range".into()));
+    }
     if h.kind(block) != b"NiSkinPartition" {
         return Err(geo(format!(
             "expected NiSkinPartition, found {}",
