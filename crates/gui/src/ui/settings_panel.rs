@@ -2,7 +2,8 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    channel_text, field_views, format_label, format_options, group_of, provenance_text, FieldView,
+    channel_text, field_hidden, field_views, format_label, format_options, group_of, levels_view,
+    mips_count, mips_on, provenance_text, FieldView,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -34,11 +35,46 @@ fn opt(v: Value, label: &str) -> (Value, String) {
     (v, label.to_string())
 }
 
-fn subtype_label(st: Subtype) -> String {
+pub fn subtype_label(st: Subtype) -> String {
     st.id().replace('_', " ")
 }
 
-fn alpha_options() -> Options {
+/// The heading of the PBR group in every sub-type dropdown.
+pub const PBR_HEADING: &str = "PBR (Community Shaders)";
+
+/// The sub-types `keep` accepts, grouped for a dropdown: the PBR ones first (every `pbr_*`, `rmaos`, `rfaos` and
+/// `coat_normal`) under `PBR_HEADING`, then the rest by category. Empty groups are left out.
+pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<Subtype>)> {
+    use engine::config::Category;
+    let is_pbr = |s: Subtype| {
+        s.id().starts_with("pbr_")
+            || matches!(s, Subtype::Rmaos | Subtype::Rfaos | Subtype::CoatNormal)
+    };
+    let kept: Vec<Subtype> = Subtype::ALL.into_iter().filter(|s| keep(*s)).collect();
+    let mut groups: Vec<(&'static str, Vec<Subtype>)> = vec![(
+        PBR_HEADING,
+        kept.iter().copied().filter(|s| is_pbr(*s)).collect(),
+    )];
+    for (cat, name) in [
+        (Category::Color, "Colour maps"),
+        (Category::Normal, "Normal maps"),
+        (Category::Grayscale, "Grayscale maps"),
+        (Category::MixedPacked, "Packed and data"),
+        (Category::Hdr, "HDR maps"),
+    ] {
+        groups.push((
+            name,
+            kept.iter()
+                .copied()
+                .filter(|s| !is_pbr(*s) && s.category() == cat)
+                .collect(),
+        ));
+    }
+    groups.retain(|(_, v)| !v.is_empty());
+    groups
+}
+
+pub fn alpha_options() -> Options {
     vec![
         (json!(AlphaPolicy::Remove), "Remove".into()),
         (json!(AlphaPolicy::Cutout), "Cutout".into()),
@@ -59,13 +95,15 @@ fn capitalised(s: &str) -> String {
 fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options> {
     let p = &job.profile;
     Some(match field {
-        "subtype" => Subtype::ALL
-            .into_iter()
-            .filter(|s| {
-                *s == p.subtype || matches!(availability(target, *s), Availability::Available)
-            })
-            .map(|s| (json!(s), subtype_label(s)))
-            .collect(),
+        "subtype" => subtype_groups(|s| {
+            s == p.subtype || matches!(availability(target, s), Availability::Available)
+        })
+        .into_iter()
+        .flat_map(|(heading, members)| {
+            std::iter::once((Value::Null, heading.to_string()))
+                .chain(members.into_iter().map(|s| (json!(s), subtype_label(s))))
+        })
+        .collect(),
         "color.content" => vec![
             opt(json!("srgb"), "sRGB-encoded colour"),
             opt(json!("linear"), "Linear data"),
@@ -149,7 +187,10 @@ fn combo(
         .selected_text(shown)
         .show_ui(ui, |ui| {
             for (v, label) in options {
-                if ui.selectable_label(v == current, label).clicked() {
+                // A null value is a non-selectable group heading.
+                if v.is_null() {
+                    ui.label(egui::RichText::new(label).weak());
+                } else if ui.selectable_label(v == current, label).clicked() {
                     picked = Some(v.clone());
                 }
             }
@@ -267,12 +308,14 @@ fn editor(
 }
 
 /// Everything a group's rows need besides the group name.
-struct Ctx<'a> {
-    key: &'a str,
-    job: &'a ResolvedJob,
-    target: Target,
-    busy: bool,
-    compact: bool,
+pub struct Ctx<'a> {
+    pub key: &'a str,
+    pub job: &'a ResolvedJob,
+    pub target: Target,
+    pub busy: bool,
+    pub compact: bool,
+    /// Why `sdc.toml` cannot be edited, when it is read-only.
+    pub toml_read_only: Option<String>,
 }
 
 /// What a field row asks of the model.
@@ -284,15 +327,7 @@ pub enum RowEdit {
 
 /// One grid row of a field: its label, its editor (disabled with the reason when locked), where the value came from
 /// (or the lock's reason), and a reset when the texture's own entry sets it. `compact` leaves the provenance blank.
-pub fn field_row(
-    ui: &mut egui::Ui,
-    key: &str,
-    target: Target,
-    job: &ResolvedJob,
-    busy: bool,
-    compact: bool,
-    f: &FieldView,
-) -> Option<RowEdit> {
+pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> {
     let mut edit = None;
     ui.label(f.label);
     let (set, r) = ui
@@ -300,16 +335,16 @@ pub fn field_row(
             if f.lock.is_some() {
                 ui.disable();
             }
-            editor(ui, key, target, job, busy, f)
+            editor(ui, cx.key, cx.target, cx.job, cx.busy, f)
         })
         .inner;
-    if let Some(reason) = f.lock {
+    if let Some(reason) = f.lock.map(str::to_string).or(cx.toml_read_only.clone()) {
         r.on_disabled_hover_text(reason);
     }
     if let Some(v) = set {
         edit = Some(RowEdit::Set(v));
     }
-    if compact {
+    if cx.compact {
         ui.label("");
     } else if let Some(reason) = f.lock {
         ui.label(egui::RichText::new(reason).small().weak());
@@ -332,6 +367,54 @@ pub fn field_row(
     edit
 }
 
+/// The basic Mipmaps rows: the on/off tick box (the level count lives in the Advanced drawer), then the filter.
+fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
+    let f = levels_view(cx.target, cx.job);
+    let mut on = mips_on(&f.value);
+    let ticked = ui.add_enabled(
+        cx.toml_read_only.is_none(),
+        egui::Checkbox::new(&mut on, "Mipmaps"),
+    );
+    let ticked = match &cx.toml_read_only {
+        Some(why) => ticked.on_disabled_hover_text(why),
+        None => ticked,
+    };
+    if ticked.changed() {
+        actions.push(Action::Set(
+            f.field,
+            json!(if on { "full" } else { "none" }),
+        ));
+    }
+    match mips_count(&f.value) {
+        Some(n) if !cx.compact => ui.label(format!("({n} levels — see Advanced)")),
+        _ if cx.compact => ui.label(""),
+        _ => ui.label(
+            egui::RichText::new(provenance_text(&f.provenance))
+                .small()
+                .weak(),
+        ),
+    };
+    ui.label("");
+    if f.edited
+        && ui
+            .small_button("↺")
+            .on_hover_text("Use the inherited value")
+            .clicked()
+    {
+        actions.push(Action::Clear(f.field));
+    }
+    ui.end_row();
+    // `box` is the only filter the engine has in v1.
+    ui.add_enabled_ui(false, |ui| {
+        egui::ComboBox::from_id_salt((cx.key, "mips.filter"))
+            .selected_text("Filter: Box")
+            .show_ui(ui, |_| {})
+    })
+    .response
+    .on_disabled_hover_text("More filters (Kaiser, Mitchell, Lanczos) arrive with M6");
+    ui.end_row();
+}
+
 fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Action>) {
     egui::CollapsingHeader::new(name)
         .default_open(true)
@@ -339,11 +422,13 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
             egui::Grid::new((cx.key, name))
                 .num_columns(4)
                 .show(ui, |ui| {
-                    for f in field_views(cx.target, cx.job)
-                        .into_iter()
-                        .filter(|f| group_of(f.field) == name)
-                    {
-                        match field_row(ui, cx.key, cx.target, cx.job, cx.busy, cx.compact, &f) {
+                    if name == "Mipmaps" {
+                        mipmaps_rows(ui, cx, actions);
+                    }
+                    for f in field_views(cx.target, cx.job).into_iter().filter(|f| {
+                        group_of(f.field) == name && !field_hidden(&cx.job.profile, f.field)
+                    }) {
+                        match field_row(ui, cx, &f) {
                             Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
                             Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
                             None => {}
@@ -446,11 +531,13 @@ fn subtype_decision(
         egui::ComboBox::from_id_salt(id)
             .selected_text(subtype_label(chosen))
             .show_ui(ui, |ui| {
-                for st in Subtype::ALL
-                    .into_iter()
-                    .filter(|s| matches!(availability(cx.target, *s), Availability::Available))
-                {
-                    ui.selectable_value(&mut chosen, st, subtype_label(st));
+                for (heading, members) in subtype_groups(|s| {
+                    matches!(availability(cx.target, s), Availability::Available)
+                }) {
+                    ui.label(egui::RichText::new(heading).weak());
+                    for st in members {
+                        ui.selectable_value(&mut chosen, st, subtype_label(st));
+                    }
                 }
             });
         if ui.button("Confirm").clicked() {
@@ -498,6 +585,15 @@ fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
     }
 }
 
+/// Why `sdc.toml` cannot take an edit, when its file is read-only.
+pub fn toml_read_only_reason(model: &AppModel) -> Option<String> {
+    model
+        .project
+        .as_ref()
+        .and_then(|p| p.error())
+        .map(|e| format!("sdc.toml is read-only: {e}"))
+}
+
 /// Draw texture `key`'s settings. `compact` (the preview's strip) keeps the decision box and the Alpha, Mipmaps and
 /// Compression groups, without provenance text.
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
@@ -526,6 +622,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     };
     let (target, busy) = (model.target, model.busy());
     let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
+    let toml_read_only = toml_read_only_reason(model);
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());
@@ -564,6 +661,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 target,
                 busy,
                 compact,
+                toml_read_only: toml_read_only.clone(),
             };
             match &status {
                 ItemStatus::Skipped(r) => {

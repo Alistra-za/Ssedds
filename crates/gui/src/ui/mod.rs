@@ -16,6 +16,9 @@ use crate::model::{AppModel, Selection};
 use eframe::egui;
 use std::cell::RefCell;
 
+/// The badge rule lives in the model (the "Has warnings" filter shares it).
+pub use crate::model::counts_toward_badge;
+
 /// Per-window drawing state that is not part of the model.
 #[derive(Default)]
 pub struct State {

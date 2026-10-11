@@ -62,10 +62,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                 let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
                 let can_export =
                     model.root.is_some() && model.export.running.is_none() && !read_only;
-                if ui
-                    .add_enabled(can_export, egui::Button::new("Export"))
-                    .clicked()
-                {
+                let mut export = egui::Button::new(egui::RichText::new("Export").strong())
+                    .min_size(egui::vec2(120.0, 30.0));
+                if can_export {
+                    export = export.fill(ui.visuals().selection.bg_fill);
+                }
+                if ui.add_enabled(can_export, export).clicked() {
                     model.export_clicked();
                 }
                 if ui

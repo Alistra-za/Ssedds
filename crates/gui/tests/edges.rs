@@ -93,7 +93,7 @@ fn export_after_a_change_plans_again_and_then_exports() {
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert!(!m.item("landscape/rock01.png").unwrap().changed_on_disk);
     // Other textures are undecided, so the export asks first; proceeding exports the fresh plan.
-    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided())));
+    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided_keys())));
     m.proceed_anyway();
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert_eq!(m.export.summary.as_ref().unwrap().failed, 0);
@@ -181,7 +181,7 @@ fn export_during_a_plan_waits_for_it_and_then_asks_about_undecided_textures() {
     assert_eq!(m.dialog, None);
     assert!(m.wait_idle(Duration::from_secs(120)));
     assert!(m.export.running.is_none());
-    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided())));
+    assert_eq!(m.dialog, Some(Dialog::ProceedAnyway(m.undecided_keys())));
     assert!(m.undecided() > 0);
 }
 

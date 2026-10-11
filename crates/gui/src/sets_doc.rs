@@ -254,6 +254,19 @@ impl SetsDoc {
         self.set_project("order", Some(Value::Array(arr)));
     }
 
+    /// Files whose sub-type was switched to its PBR counterpart because their set's diffuse became `pbr_albedo`
+    /// (so a revert finds them). GUI bookkeeping in `[project]`: `sdc.toml` rejects unknown keys.
+    pub fn auto_pbr(&self) -> Vec<String> {
+        strings(self.doc.get("project").and_then(|p| p.get("auto_pbr")))
+    }
+    pub fn set_auto_pbr(&mut self, keys: &[String]) {
+        let mut arr = Array::new();
+        for k in keys {
+            arr.push(k.as_str());
+        }
+        self.set_project("auto_pbr", (!keys.is_empty()).then_some(Value::Array(arr)));
+    }
+
     pub fn entries(&self) -> Vec<SetEntry> {
         self.doc
             .get("sets")

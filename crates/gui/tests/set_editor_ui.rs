@@ -665,3 +665,84 @@ fn a_read_only_sdc_toml_disables_format_and_opaque_and_explains_why() {
         "the reason shows on hover"
     );
 }
+
+#[test]
+fn hovering_a_pills_warning_badge_lists_the_warnings() {
+    use engine::codes::{Code, Warning};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .members[0]
+        .clone();
+    let member = m.items.iter_mut().find(|i| i.key == key).unwrap();
+    let name = member.name.clone();
+    member.warnings = vec![Warning::new(Code::LossAlphaData, "the alpha would be lost")];
+    let total: usize = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .members
+        .iter()
+        .filter_map(|k| m.item(k))
+        .map(|i| i.warnings.len())
+        .sum();
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    assert!(
+        h.query_by_label_contains("the alpha would be lost")
+            .is_none(),
+        "the warning shows only on hover"
+    );
+    h.get_by_label(&format!("⚠ {total}")).hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains(&format!("{name}: LOSS-ALPHA-DATA the alpha would be lost"));
+}
+
+/// Every item of a PBR project carries exactly `ws` as its warnings.
+fn with_only_warnings(ws: &[engine::codes::Warning]) -> (tempfile::TempDir, AppModel) {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    for i in m.items.iter_mut() {
+        i.warnings = vec![];
+    }
+    let key = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .members[0]
+        .clone();
+    m.items.iter_mut().find(|i| i.key == key).unwrap().warnings = ws.to_vec();
+    (d, m)
+}
+
+#[test]
+fn an_info_only_warning_shows_no_badge_on_the_pill_or_the_tile() {
+    use engine::codes::{Code, Warning};
+    let (_d, m) = with_only_warnings(&[Warning::new(Code::AlphaPbrNormalDropped, "dropped")]);
+    let mut h = harness(m);
+    h.run();
+    assert_eq!(
+        h.query_all_by_label_contains("⚠").count(),
+        0,
+        "no amber badge"
+    );
+}
+
+#[test]
+fn a_warning_level_warning_still_shows_the_pill_and_tile_badge() {
+    use engine::codes::{Code, Warning};
+    let (_d, m) = with_only_warnings(&[
+        Warning::new(Code::LossReencode, "re-encoded"),
+        Warning::new(Code::AlphaPbrNormalDropped, "dropped"),
+    ]);
+    let mut h = harness(m);
+    h.run();
+    // The pill counts the Warning only, not the Info beside it; the tile shows the bare badge.
+    h.get_by_label("⚠ 1");
+    h.get_by_label("⚠");
+}

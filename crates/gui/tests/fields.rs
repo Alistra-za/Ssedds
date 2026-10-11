@@ -105,3 +105,16 @@ fn provenance_reads_as_prose() {
     assert_eq!(channel_text("default:0.5"), "default value 0.5");
     assert_eq!(channel_text("fill:255"), "fill value 255");
 }
+
+#[test]
+fn coverage_belongs_to_alpha_and_levels_to_the_drawer() {
+    use sdc_gui::model::fields::{mips_count, mips_on, ADVANCED_FIELDS};
+    assert_eq!(group_of("mips.coverage"), "Alpha");
+    assert_eq!(group_of("mips.normal"), "Mipmaps");
+    assert!(!FIELDS.iter().any(|(f, _)| *f == "mips.levels"));
+    assert!(mips_on(&serde_json::json!("full")) && mips_on(&serde_json::json!(4)));
+    assert!(!mips_on(&serde_json::json!("none")));
+    assert_eq!(mips_count(&serde_json::json!(4)), Some(4));
+    assert_eq!(mips_count(&serde_json::json!("full")), None);
+    assert!(!ADVANCED_FIELDS.iter().any(|(f, _)| *f == "mips.levels"));
+}
