@@ -118,3 +118,20 @@ fn coverage_belongs_to_alpha_and_levels_to_the_drawer() {
     assert_eq!(mips_count(&serde_json::json!("full")), None);
     assert!(!ADVANCED_FIELDS.iter().any(|(f, _)| *f == "mips.levels"));
 }
+
+#[test]
+fn normal_base_level_is_a_normal_map_field() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let n = reg.base_profile(Target::Cs, Subtype::PbrNormal);
+    let d = reg.base_profile(Target::Cs, Subtype::Diffuse);
+    assert!(FIELDS.iter().any(|(f, _)| *f == "mips.normal_base"));
+    assert_eq!(field_lock(Target::Cs, &n, "mips.normal_base"), None);
+    assert_eq!(
+        field_lock(Target::Cs, &d, "mips.normal_base"),
+        Some("normal maps only")
+    );
+    assert_eq!(
+        provenance_text("set"),
+        "decided by the texture set (variance bake)"
+    );
+}

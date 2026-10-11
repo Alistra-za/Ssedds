@@ -308,6 +308,7 @@ impl AppModel {
         let (edits, paths) = sets::engine_inputs(self);
         req.set_edits = edits;
         req.output_paths = paths;
+        req.shared_roughness = sets::shared_roughness(self);
         Some(req)
     }
 

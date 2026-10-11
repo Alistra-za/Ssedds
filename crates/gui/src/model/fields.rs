@@ -4,7 +4,7 @@ use engine::policy::ResolvedJob;
 use serde_json::Value;
 
 /// The editable fields in display order, with the label each row shows.
-pub const FIELDS: [(&str, &str); 12] = [
+pub const FIELDS: [(&str, &str); 13] = [
     ("subtype", "Sub-type"),
     ("color.content", "Content"),
     ("color.tag", "DDS tag"),
@@ -14,6 +14,7 @@ pub const FIELDS: [(&str, &str); 12] = [
     ("mips.coverage", "Coverage"),
     ("alpha.exact_opaque", "Exact opaque alpha"),
     ("mips.normal", "Normal handling"),
+    ("mips.normal_base", "Normal base level"),
     ("format", "Format"),
     ("encoder.effort", "Effort"),
     ("encoder.perceptual", "Perceptual"),
@@ -104,7 +105,9 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
         "alpha.threshold" | "alpha.compare" if !cutout => {
             Some("used only by cutout and cutout + blend")
         }
-        "mips.normal" if p.subtype.category() != Category::Normal => Some("normal maps only"),
+        "mips.normal" | "mips.normal_base" if p.subtype.category() != Category::Normal => {
+            Some("normal maps only")
+        }
         "encoder.bc1_transparent_black" if p.format != Format::Bc1 => Some("BC1 only"),
         "encoder.bc45_search_radius" if !matches!(p.format, Format::Bc4 | Format::Bc5) => {
             Some("BC4 and BC5 only")
@@ -192,6 +195,7 @@ pub fn provenance_text(p: &str) -> String {
         "suggestion" => "suggested".into(),
         "analysis" => "from the image analysis".into(),
         "fallback" => "fallback sub-type".into(),
+        "set" => "decided by the texture set (variance bake)".into(),
         _ => match p.split_once(':') {
             Some(("preset", id)) => format!("from preset {id}"),
             Some(("rule", r)) => format!("from rule {r}"),

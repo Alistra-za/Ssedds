@@ -144,6 +144,10 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             opt(json!("renormalize"), "Renormalise"),
             opt(json!("renormalize_bake"), "Renormalise and bake"),
         ],
+        "mips.normal_base" => vec![
+            opt(json!("renormalize"), "Renormalise to unit length"),
+            opt(json!("keep"), "Keep as authored"),
+        ],
         "mips.coverage" => vec![
             opt(json!("auto"), "Auto"),
             opt(json!("on"), "On"),

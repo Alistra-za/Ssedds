@@ -836,3 +836,37 @@ fn a_created_set_in_a_non_ascii_folder_is_one_set() {
     assert!(same[0].members.contains(&normal));
     assert!(views.iter().all(|v| v.missing.is_empty()), "{views:#?}");
 }
+
+#[test]
+fn a_shared_rmaos_is_sent_to_the_engine_for_owner_and_borrower() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    assert!(shared_roughness(&m).is_empty());
+    let odd = key_of(&m, "odd.png");
+    let id = m.drop_new_set(&odd).unwrap();
+    idle(&mut m);
+    let rmaos = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("rmaos"))
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(
+        m.drop_on_set(&rmaos, &id),
+        DropOutcome::AskChoice {
+            from: "landscape/rock01".into()
+        }
+    );
+    assert_eq!(
+        m.drop_choice(&rmaos, &id, DropChoice::Share),
+        DropOutcome::Joined
+    );
+    idle(&mut m);
+    let shared = shared_roughness(&m);
+    assert!(shared.contains("landscape/rock01"), "{shared:?}");
+    assert!(shared.contains(&id), "{shared:?}");
+    // Plan (`replan`) and export (`start_export`) both build their `BatchRequest` through `request()`.
+    assert_eq!(m.request().unwrap().shared_roughness, shared);
+}

@@ -444,6 +444,28 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
     (edits, paths)
 }
 
+/// Ids of every set whose Rmaos slot (`_rmaos`/`_rfaos`) holds an output another set's Rmaos slot holds too, owner
+/// and borrowers alike (M3b spec §3.3, v1 instruction; DECISIONS R7). The engine bakes no normal variance into a
+/// shared roughness and reports no missing companion for these sets. Empty off `cs`.
+pub fn shared_roughness(m: &AppModel) -> BTreeSet<String> {
+    if m.target != Target::Cs {
+        return BTreeSet::new();
+    }
+    let mut users: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for v in set_views(m) {
+        if let Some(SlotFill::Own { item } | SlotFill::Borrowed { item, .. }) =
+            v.slots.get(&SlotKind::Rmaos)
+        {
+            users.entry(item.clone()).or_default().push(v.id.clone());
+        }
+    }
+    users
+        .into_values()
+        .filter(|ids| ids.len() > 1)
+        .flatten()
+        .collect()
+}
+
 /// Every owned output's explicit path, sorted by its owner's display position: (owner id, key, path relative to
 /// the export root). Duplicate paths are kept here; `engine_inputs` drops them and `path_collisions` reports them.
 /// A path that fails `check_rel_path` is never a candidate: the engine joins these under the export folder as given.
