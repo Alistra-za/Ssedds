@@ -2458,3 +2458,117 @@ fn rgba16f_output_keeps_float_values_and_is_cs_only() {
     let w = warning_of(&o, "lamp.tif", Code::CfgUnavailable);
     assert_eq!(w.severity, Severity::Error);
 }
+
+/// Convert `png` (64 px rgb) with `sets` into a fresh tempdir and return the written DDS bytes.
+fn converted_bytes(target: Target, sets: &[&str]) -> Vec<u8> {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.png", rgb(64));
+    let o = convert(d.path(), target, sets, &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    std::fs::read(d.path().join("out/textures/a/rock.dds")).unwrap()
+}
+
+/// DECISIONS S6: a compressed DDS opted in with `reencode` converts, with LOSS-REENCODE (warning).
+#[test]
+fn an_opted_in_bc7_dds_is_reencoded_with_loss_reencode() {
+    let bc7 = converted_bytes(Target::Vanilla, &["subtype=diffuse"]);
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in/textures/old")).unwrap();
+    std::fs::write(d.path().join("in/textures/old/rock.dds"), &bc7).unwrap();
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &[
+            "file:**/rock.dds.reencode=true",
+            "file:**/rock.dds.subtype=diffuse",
+        ],
+        &[],
+    );
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (1, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    let w = warning_of(&o, "rock.dds", Code::LossReencode);
+    assert!(
+        w.severity == Severity::Warning && w.message.contains("BC7"),
+        "{}",
+        w.message
+    );
+    assert_dds(
+        &dds(d.path(), "textures/old/rock.dds"),
+        DdsPixelFormat::Bc7 { srgb: false },
+        HeaderKind::Dx10,
+        7,
+    );
+}
+
+/// O1 exit test "a re-encode round trip": an uncompressed rgba8 DDS re-encodes to the same BC7 bytes as its PNG
+/// source, and to the same rgba8 mip 0; no LOSS-REENCODE (nothing was compressed).
+#[test]
+fn an_uncompressed_dds_round_trips_through_reencode() {
+    let rgba8 = converted_bytes(Target::Vanilla, &["subtype=diffuse", "format=rgba8"]);
+    let direct_bc7 = converted_bytes(Target::Vanilla, &["subtype=diffuse"]);
+    for (fmt, want) in [("bc7", direct_bc7.clone()), ("rgba8", rgba8.clone())] {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("in/textures/a")).unwrap();
+        std::fs::write(d.path().join("in/textures/a/rock.dds"), &rgba8).unwrap();
+        let o = convert(
+            d.path(),
+            Target::Vanilla,
+            &["reencode=true", "subtype=diffuse", &format!("format={fmt}")],
+            &[],
+        );
+        assert_eq!(o.summary.converted, 1, "{fmt}: {:?}", warnings(&o));
+        assert!(!warnings(&o).contains(&Code::LossReencode), "{fmt}");
+        let got = std::fs::read(d.path().join("out/textures/a/rock.dds")).unwrap();
+        assert_eq!(got, want, "{fmt}: byte-identical to the direct conversion");
+    }
+}
+
+/// Review Focus 1: output root == input folder would overwrite the source: the file fails, the source is untouched.
+#[test]
+fn reencode_into_its_own_folder_fails_and_leaves_the_source_alone() {
+    let rgba8 = converted_bytes(Target::Vanilla, &["subtype=diffuse", "format=rgba8"]);
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("mod");
+    std::fs::create_dir_all(root.join("textures")).unwrap();
+    let src = root.join("textures/rock.dds");
+    std::fs::write(&src, &rgba8).unwrap();
+    // An explicit file input: a folder walk skips everything under the output root, so only an explicit file can
+    // map onto itself (`discover::make` gives `output == path`).
+    let mut req = BatchRequest::new(vec![src.clone()], root.join("textures"), Target::Vanilla);
+    req.overrides = ["reencode=true", "subtype=diffuse"]
+        .iter()
+        .map(|s| parse_set(s).unwrap())
+        .collect();
+    req.on_existing = OnExisting::Overwrite;
+    let o = run(req);
+    assert_eq!(
+        (o.summary.converted, o.summary.failed, o.summary.exit_code()),
+        (0, 1, 1)
+    );
+    assert_eq!(std::fs::read(&src).unwrap(), rgba8);
+}
+
+/// Review Focus 1: an opted-in DDS and a same-stem image map to one output: both are IN-DUPLICATE.
+#[test]
+fn an_opted_in_dds_and_a_same_stem_image_are_duplicates() {
+    let rgba8 = converted_bytes(Target::Vanilla, &["subtype=diffuse", "format=rgba8"]);
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.png", rgb(64));
+    std::fs::write(d.path().join("in/textures/a/rock.dds"), &rgba8).unwrap();
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["reencode=true", "subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(skip_code(&o, "rock.png"), Some(Code::InDuplicate));
+    assert_eq!(skip_code(&o, "rock.dds"), Some(Code::InDuplicate));
+    // Without the opt-in the DDS takes no part, as before.
+    let o = convert(d.path(), Target::Vanilla, &["subtype=diffuse"], &[]);
+    assert_eq!(skip_code(&o, "rock.dds"), Some(Code::InDdsSkipped));
+    assert_eq!(o.summary.converted, 1);
+}

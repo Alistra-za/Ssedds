@@ -176,6 +176,9 @@ impl ConfigFile {
                     .try_fold(&entry, |v, part| v.get(part))
                     .cloned()
                     .unwrap_or(Value::Null);
+                if field == crate::overrides::REENCODE_FIELD && !value.is_boolean() {
+                    return Err(bad("reencode takes true or false".into()));
+                }
                 overrides.push(SetOverride {
                     scope: Scope::Path(key.clone()),
                     field,

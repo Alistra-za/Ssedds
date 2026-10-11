@@ -748,7 +748,11 @@ impl Engine {
                 },
             );
         }
-        let dups = crate::group::duplicate_outputs(&files);
+        let reencode =
+            |f: &InputFile| f.kind == InputKind::Dds && crate::policy::reencode_requested(&ctx, f);
+        let dups = crate::group::duplicate_outputs_with(&files, |f| {
+            f.kind != InputKind::Dds || reencode(f)
+        });
 
         // Spec §6.4 "Set membership", DECISIONS Note M7: a recipe's output joins its set before anything resolves.
         for set in &mut sets {
@@ -776,6 +780,7 @@ impl Engine {
                 reason: "two inputs map to one output; exclude one".into(),
             })
             .collect();
+        let mut self_overwrite: Vec<FailedFile> = vec![];
         let mut work: Vec<(&TextureSet, &InputFile)> = vec![];
         for set in &sets {
             for &i in &set.members {
@@ -783,14 +788,31 @@ impl Engine {
                     continue;
                 }
                 if files[i].kind == InputKind::Dds {
-                    skipped.push(SkippedFile {
-                        path: files[i].path.clone(),
-                        output: files[i].output.clone(),
-                        set: Some(set.key.clone()),
-                        code: Some(Code::InDdsSkipped),
-                        reason: "DDS inputs are not re-encoded by default".into(),
-                    });
-                    continue;
+                    if !reencode(&files[i]) {
+                        skipped.push(SkippedFile {
+                            path: files[i].path.clone(),
+                            output: files[i].output.clone(),
+                            set: Some(set.key.clone()),
+                            code: Some(Code::InDdsSkipped),
+                            reason: "DDS inputs are not re-encoded by default".into(),
+                        });
+                        continue;
+                    }
+                    // DECISIONS S6: never write over the source DDS (output root == input folder).
+                    let same = |p: &Path| {
+                        crate::overrides::absolute_or_same(p)
+                            .to_string_lossy()
+                            .to_lowercase()
+                    };
+                    if same(&files[i].path) == same(&files[i].output) {
+                        self_overwrite.push(FailedFile {
+                            path: files[i].path.clone(),
+                            output: files[i].output.clone(),
+                            stage: Stage::Load,
+                            error: "re-encoding would overwrite the source DDS: choose another output folder".into(),
+                        });
+                        continue;
+                    }
                 }
                 work.push((set, &files[i]));
             }
@@ -890,6 +912,7 @@ impl Engine {
 
         let mut jobs = vec![];
         let mut failed = vec![];
+        failed.extend(self_overwrite);
         let mut cancelled = vec![];
         for (item, slot) in work.iter().zip(slots) {
             let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
@@ -1699,13 +1722,20 @@ fn check_up_front(
                 EngineError::Config(format!("rule {src}#{i}, sub-type {}: {e}", st.id()))
             })?;
         }
-        for o in req.overrides.iter().filter(|o| o.field != "subtype") {
+        for o in req
+            .overrides
+            .iter()
+            .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
+        {
             let mut d = doc.clone();
             merge_json(&mut d, &to_patch(&o.field, &o.value));
             finish_profile(d, target, st)
                 .map_err(|e| usage(format!("--set {}={}: {e}", o.field, o.value)))?;
         }
-        for o in file_overrides.iter().filter(|o| o.field != "subtype") {
+        for o in file_overrides
+            .iter()
+            .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
+        {
             let Scope::Path(key) = &o.scope else { continue };
             let mut d = doc.clone();
             merge_json(&mut d, &to_patch(&o.field, &o.value));

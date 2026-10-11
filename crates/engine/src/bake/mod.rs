@@ -240,6 +240,8 @@ impl BakeJob {
     /// 16-bit RGBA), its `to_rgba32f` copy (16) and the collected `Vec` (16). Everything after is smaller:
     /// `preprocess` and the renormalise work in place on the 16-byte base, and the pyramid build adds one
     /// quarter-size accumulation level (4), the next one (1) and the lengths (1.33), about 22.4 per texel.
+    /// A DDS input (M6) instead holds its file data (every mip) and the decoded RGBA32F mip 0 at once: ~32 per texel
+    /// for a float DDS; not modelled here.
     pub fn peak_bytes(w: u32, h: u32, decoded: u64) -> u64 {
         u64::from(w) * u64::from(h) * (decoded + 16 + 16)
     }

@@ -299,14 +299,22 @@ pub fn join_skin_wet(
     sets.retain(|s| !s.members.is_empty());
 }
 
-/// Groups of two or more inputs that map to one output path, compared case-insensitively. DDS inputs take no part:
-/// they are skipped, not written. Called again after GUI output paths are applied (M3b), so it is separate.
-pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
+/// Groups of two or more inputs that map to one output path, compared case-insensitively, among the inputs
+/// `include` accepts. A DDS takes part only when it is re-encoded (DECISIONS S6).
+pub fn duplicate_outputs_with(
+    files: &[InputFile],
+    include: impl Fn(&InputFile) -> bool,
+) -> Vec<Vec<usize>> {
     let mut outs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, f) in files.iter().enumerate() {
-        if f.kind != InputKind::Dds {
+        if include(f) {
             outs.entry(fold(&f.output)).or_default().push(i);
         }
     }
     outs.into_values().filter(|v| v.len() > 1).collect()
+}
+
+/// `duplicate_outputs_with` over every image input (DDS inputs are skipped, not written).
+pub fn duplicate_outputs(files: &[InputFile]) -> Vec<Vec<usize>> {
+    duplicate_outputs_with(files, |f| f.kind != InputKind::Dds)
 }

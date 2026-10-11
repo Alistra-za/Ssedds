@@ -114,9 +114,11 @@ pub struct SetOverride {
     pub value: Value,
 }
 
-/// Every settable dotted path (Profile fields minus identity fields target/category).
+/// Every settable dotted path (Profile fields minus identity fields target/category), plus `reencode`, a
+/// plan-time selector (DECISIONS S6).
 pub const FIELD_PATHS: &[&str] = &[
     "subtype",
+    "reencode",
     "color.content",
     "color.tag",
     "alpha.policy",
@@ -161,6 +163,8 @@ pub const FIELD_PATHS: &[&str] = &[
     "packing.fill.fuzz",
 ];
 
+pub const REENCODE_FIELD: &str = "reencode";
+
 /// A TOML literal (`100`, `true`, `"x"`) keeps its type; anything else (`bc1`, `none`) is a string.
 fn parse_value(raw: &str) -> Value {
     match toml::from_str::<toml::Table>(&format!("v = {raw}")) {
@@ -186,6 +190,11 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
                 "--set '{s}': a sub-type scope cannot set the sub-type"
             ));
         }
+        if field == REENCODE_FIELD {
+            return Err(format!(
+                "--set '{s}': reencode is decided per file, before the sub-type: use reencode=true or file:<glob>.reencode=true"
+            ));
+        }
         if !known(field) {
             return Err(format!("--set '{s}': unknown field '{field}'"));
         }
@@ -207,6 +216,9 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
     // A sub-type decides the whole profile, so a misspelt one must not be ignored.
     if field == "subtype" && serde_json::from_value::<Subtype>(value.clone()).is_err() {
         return Err(format!("--set '{s}': unknown sub-type '{raw}'"));
+    }
+    if field == REENCODE_FIELD && !value.is_boolean() {
+        return Err(format!("--set '{s}': reencode takes true or false"));
     }
     Ok(SetOverride {
         scope,

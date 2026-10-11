@@ -136,3 +136,14 @@ fn project_rel_keeps_the_folder_case_and_ignores_the_root_case() {
         Some("Landscape/Rock01_N.png")
     );
 }
+
+#[test]
+fn reencode_is_a_boolean_file_or_batch_field_never_subtype_scoped() {
+    assert!(parse_set("reencode=true").is_ok());
+    assert!(parse_set("file:**/old/*.dds.reencode=true").is_ok());
+    let e = parse_set("subtype:diffuse.reencode=true").unwrap_err();
+    assert!(e.contains("before the sub-type"), "{e}");
+    let e = parse_set("reencode=yes").unwrap_err();
+    assert!(e.contains("true or false"), "{e}");
+    assert!(FIELD_PATHS.contains(&REENCODE_FIELD));
+}

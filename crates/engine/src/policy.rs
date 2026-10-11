@@ -131,7 +131,7 @@ fn takes_green(st: Subtype) -> bool {
 /// Case-insensitive glob (Unicode simple lower-casing of the pattern and both paths) over the game path or the
 /// input-relative path. A glob without '/' also matches the file name alone, so `file:*.png` and
 /// `file:wood01.png` work in any folder.
-fn glob_match(glob: &str, f: &FileFacts) -> bool {
+fn glob_match_input(glob: &str, input: &InputFile) -> bool {
     let Ok(g) = globset::GlobBuilder::new(&glob.to_lowercase())
         .literal_separator(true)
         .build()
@@ -139,16 +139,19 @@ fn glob_match(glob: &str, f: &FileFacts) -> bool {
         return false;
     };
     let m = g.compile_matcher();
-    let rel = f
-        .input
+    let rel = input
         .rel
         .to_string_lossy()
         .replace('\\', "/")
         .to_lowercase();
     let name = rel.rsplit('/').next().unwrap_or_default();
-    m.is_match(f.input.game_path.to_lowercase())
+    m.is_match(input.game_path.to_lowercase())
         || m.is_match(&rel)
         || (!glob.contains('/') && m.is_match(name))
+}
+
+fn glob_match(glob: &str, f: &FileFacts) -> bool {
+    glob_match_input(glob, f.input)
 }
 
 pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
@@ -236,6 +239,25 @@ fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
     let mut cli: Vec<&SetOverride> = ctx.overrides.iter().collect();
     cli.sort_by_key(|o| rank(o));
     ctx.files.overrides.iter().chain(cli).collect()
+}
+
+/// DECISIONS S6: whether a DDS input is re-encoded. The highest-precedence `reencode` override that reaches the
+/// file decides: `[files]`, then unscoped, file-glob and path `--set` (a sub-type scope is refused at parse time).
+pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
+    ranked_overrides(ctx)
+        .into_iter()
+        .rev()
+        .filter(|o| o.field == crate::overrides::REENCODE_FIELD)
+        .find(|o| match &o.scope {
+            Scope::All => true,
+            Scope::File(g) => glob_match_input(g, input),
+            Scope::Path(k) => ctx
+                .files
+                .rel_of(input)
+                .is_some_and(|rel| path_key_matches(k, &rel)),
+            Scope::Subtype(_) => false,
+        })
+        .is_some_and(|o| o.value == Value::Bool(true))
 }
 
 pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
@@ -505,7 +527,7 @@ fn layered_profile_with(
     }
     for o in ranked_overrides(ctx)
         .into_iter()
-        .filter(|o| o.field != "subtype")
+        .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
     {
         if override_applies(ctx, o, Some(st), f) {
             let reach = match o.scope {
@@ -1326,6 +1348,25 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             InIccIgnored,
             "embedded ICC profile ignored: values are read as stored (colour content as sRGB)"
                 .into(),
+        );
+    }
+    // DECISIONS S6: a re-encoded block-compressed DDS keeps its compression error and gains a second one [SC §7].
+    if let Some(src) = a
+        .dds_dxgi
+        .and_then(crate::dds::from_dxgi)
+        .filter(|f| f.block_bytes().is_some())
+    {
+        let name = match src.as_format() {
+            Some((fmt, srgb)) => format!(
+                "{}{}",
+                fmt.id().to_uppercase(),
+                if srgb { "_SRGB" } else { "" }
+            ),
+            None => format!("{src:?}"),
+        };
+        add(
+            LossReencode,
+            format!("compressed DDS ({name}) re-encoded: its compression error is kept and a new one is added; convert the source image if you have it"),
         );
     }
     if p.encoder.backend == Backend::Nvtt {

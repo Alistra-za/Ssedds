@@ -1132,3 +1132,36 @@ fn fill_beats_an_unscoped_set_of_the_same_field() {
         "fill:200"
     );
 }
+
+/// DECISIONS S6: `--set reencode=true` passes the up-front check (it is not a profile field) and opts a DDS input in.
+#[test]
+fn set_reencode_true_converts_a_dds_input() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    let o = fx.convert(&["--target", "vanilla", "--set", "subtype=diffuse"]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    std::fs::rename(
+        fx.dds("textures/a/wall.dds"),
+        fx.p("in/textures/a/wall.dds"),
+    )
+    .unwrap();
+    std::fs::remove_file(fx.p("in/textures/a/wall.png")).unwrap();
+    // Without the opt-in the DDS is skipped and nothing is written.
+    let o = fx.convert_to("out2", &["--target", "vanilla", "--set", "subtype=diffuse"]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(!fx.p("out2/textures/a/wall.dds").exists());
+    let o = fx.convert_to(
+        "out2",
+        &[
+            "--target",
+            "vanilla",
+            "--set",
+            "subtype=diffuse",
+            "--set",
+            "reencode=true",
+        ],
+    );
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = read_dds(&std::fs::read(fx.p("out2/textures/a/wall.dds")).unwrap()).unwrap();
+    assert_eq!(out.format, DdsPixelFormat::Bc7 { srgb: false });
+}
