@@ -38,22 +38,24 @@ fn slot_textures_resolve_to_winning_origin_or_missing() {
     }
     let store = scan(&d);
     assert_eq!(
-        store.resolve_texture("textures/a_d.dds"),
+        store.resolve_texture("textures/a_d.dds").unwrap(),
         Found {
             origin: "B".into(),
             n_copies: 2
         }
     );
     assert_eq!(
-        store.resolve_texture("textures/only_a.dds"),
+        store.resolve_texture("textures/only_a.dds").unwrap(),
         Found {
             origin: "A".into(),
             n_copies: 1
         }
     );
-    assert_eq!(store.resolve_texture("textures/nope.dds"), Missing);
+    assert_eq!(store.resolve_texture("textures/nope.dds").unwrap(), Missing);
     assert_eq!(
-        store.resolve_texture("textures/actors/character/facegendata/facegeom/x/y.dds"),
+        store
+            .resolve_texture("textures/actors/character/facegendata/facegeom/x/y.dds")
+            .unwrap(),
         Missing
     );
 }
@@ -64,17 +66,17 @@ fn rescan_drops_removed_textures() {
     put(&d, "A", "textures/gone.dds");
     let store = scan(&d);
     assert!(matches!(
-        store.resolve_texture("textures/gone.dds"),
+        store.resolve_texture("textures/gone.dds").unwrap(),
         Found { .. }
     ));
     drop(store);
     std::fs::remove_file(d.path().join("mods/A/textures/gone.dds")).unwrap();
     let store = scan(&d);
-    assert_eq!(store.resolve_texture("textures/gone.dds"), Missing);
+    assert_eq!(store.resolve_texture("textures/gone.dds").unwrap(), Missing);
 }
 
 #[test]
-fn v1_database_upgrades_to_texture_tables() {
+fn v1_database_is_rebuilt_at_current_schema() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("old.db");
     {
@@ -92,5 +94,5 @@ fn v1_database_upgrades_to_texture_tables() {
         .conn()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 2);
+    assert_eq!(v, modscan::store::SCHEMA_VERSION);
 }
