@@ -11990,8 +11990,20 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - Keep the exact-opaque option for real env masks.
     - **Env-mask sub-types:** offer or force **BC4**, or uncompressed (Note O1), for a single-channel env mask.
     - **To check first:**
-      - which channel the vanilla env-mask shader samples (BC4 stores R only);
+      - ~~which channel the vanilla env-mask shader samples (BC4 stores R only)~~. **Answered (owner, 2026-10-10):** env mask, parallax (`_p`) and advanced-skin `_sk` maps use only the **red** channel, so BC4 (or an uncompressed single channel) fits all three.
       - PGPatcher's own complex-material test on a constant alpha (the "≥50% non-white" rule, DECISIONS line 46, still Open).
+  - **Owner direction (2026-10-10), for a later milestone: two output modes.** This needs its own brainstorm and spec before any plan.
+    - **Community Shaders mode** (the default). PBR is the default material, with all of its options.
+    - **Vanilla/ENB mode.** This is a separate mode, not a material inside CS mode.
+    - **Both modes can write complex material.** Vanilla mode can also write parallax.
+    - **Per texture set, a shader dropdown.** It lists every shader the current mode can write.
+      - The chosen shader accepts or rejects maps and auto-fills the slots.
+      - Anything not given gets a default or an assumed setting. For example, the hair shader probably uses alpha.
+    - **Single-channel maps:** env mask, parallax and `_sk` read red only. That ties in with the BC4 env-mask item above.
+    - **Open when this is brainstormed:**
+      - how this maps onto today's presets and mode;
+      - the exact per-shader slot and channel table;
+      - what the hair shader assumes for alpha.
 - **Carried items** (final review, SDD ledger):
   - Tent, Mitchell and Kaiser mips (mipcheck `RESULTS-2.md` B8):
     - Build each level **directly from mip 0**, with the kernel widened 2^N, and keep float values between levels.
