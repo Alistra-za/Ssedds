@@ -1,0 +1,352 @@
+//! NIF texture slots → CS Lighting registers, 1×1 defaults for every reflected SRV, and DDS → SRV in the
+//! file's own DXGI format (answers.md Q1: the engine passes the file format through, 0 mismatches over 701
+//! slot uses, so no `_SRGB` view is ever forced).
+use crate::compile::SrvKind;
+use crate::device::Gpu;
+use engine::dds::{read_dds, DdsPixelFormat};
+use windows::Win32::Graphics::Direct3D::{
+    D3D11_SRV_DIMENSION_BUFFER, D3D11_SRV_DIMENSION_TEXTURE2D, D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
+    D3D11_SRV_DIMENSION_TEXTURECUBE,
+};
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Buffer, ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_BUFFER_DESC, D3D11_BUFFER_SRV, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,
+    D3D11_RESOURCE_MISC_TEXTURECUBE, D3D11_SHADER_RESOURCE_VIEW_DESC,
+    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_ARRAY_SRV,
+    D3D11_TEX2D_SRV, D3D11_TEXCUBE_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_IMMUTABLE,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN,
+    DXGI_SAMPLE_DESC,
+};
+
+/// The Lighting.hlsl register a NIF texture-set slot (0-based) is bound to, or `None` when this
+/// technique does not read that slot.
+///
+/// Table from 04 §2.3 ([Inference] there). Every row the captures exercise is **confirmed** by joining the
+/// NIF slots of `000A2C8F.nif` with the bound SRVs of frame11178 (`_probe_…11178\nif_000A2C8F.json` +
+/// `state_<ev>.json` resource ids → `texmatch.json` file hits; see the B7 report):
+/// - vanilla slot 0 → t0, slot 1 → t1 (every shape);
+/// - vanilla slot 2 `_sk` → t12 for FACEGEN (type 4, Arch_Head ev4217) and FACEGEN_RGB_TINT (type 5,
+///   Arch_Mouth ev4269);
+/// - vanilla slot 7 → t9 on HAIR + BACK_LIGHTING (type 6, Lashes ev5536 `lash_flow.dds`, Brows ev5614);
+/// - TruePBR slot 0 → t0, 1 → t1, 3 → t4 (`m_p.dds`), 5 → t5 (`*_rmaos.dds`), 6 → t9 (`m_cnr.dds`),
+///   7 → t12 (`teeth_s.dds` ev3924, `m.dds` ev6595).
+///
+/// Not exercised by any capture (kept from 04): glow slot 2 → t6 (type 2) and PBR emissive slot 2 → t6,
+/// parallax slot 3 → t3, cubemap slot 4 → t4, MLP inner slot 6 → t8, MSN slot 7 → t2, FaceGen slot 6 → t3
+/// (the engine binds the FaceTint DDS by FormID there, not the NIF path: Arch_Head's slot 6 is
+/// `textures\lel` while t3 holds `facetint\…\000a2c8f.dds`).
+pub fn register_for_slot(shader_type: u32, pbr: bool, msn: bool, slot: usize) -> Option<u32> {
+    if pbr {
+        return match slot {
+            0 => Some(0),
+            1 => Some(1),
+            2 => Some(6),
+            3 => Some(4),
+            5 => Some(5),
+            6 => Some(9),
+            7 => Some(12),
+            _ => None,
+        };
+    }
+    match slot {
+        0 => Some(0),
+        1 => Some(1),
+        2 if shader_type == 2 => Some(6),
+        2 => Some(12),
+        3 if shader_type == 3 => Some(3),
+        3 if shader_type == 4 => Some(4),
+        4 if matches!(shader_type, 1 | 11 | 16) => Some(4),
+        5 => Some(5),
+        6 if shader_type == 11 => Some(8),
+        6 if shader_type == 4 => Some(3),
+        7 if msn => Some(2),
+        7 => Some(9),
+        _ => None,
+    }
+}
+
+/// Default colour of a register with no texture (brief B7): t0 white, t1 flat normal `(128,128,255,255)`,
+/// t14 (shadow mask) white = unshadowed, every other register black (t5 env mask, t6 glow …).
+pub fn default_for_register(reg: u32) -> [u8; 4] {
+    match reg {
+        0 | 14 => [255, 255, 255, 255],
+        1 => [128, 128, 255, 255],
+        _ => [0, 0, 0, 255],
+    }
+}
+
+/// [`default_for_register`] refined by technique:
+/// - TruePBR t5 RMAOS = `(255,0,255,255)`: roughness 1, metal 0, AO 1, specular 1;
+/// - FACEGEN (type 4) t3 tint = mid grey and t4 detail = 64 grey: `GetFacegenBaseColor` (Lighting.hlsl ~673)
+///   multiplies by `3.984375 × (detail + 1/255)`, so 64/255 ≈ ×1.02 keeps the diffuse, and a 0.5 tint keeps
+///   it close to the base (`raw² + raw − raw²/2`); black would make the face black. [Inference: the engine's
+///   16×16 RGBA8 default at t4 (ev4217) has unknown content.]
+pub fn default_for(reg: u32, shader_type: u32, pbr: bool) -> [u8; 4] {
+    match (reg, pbr, shader_type) {
+        (5, true, _) => [255, 0, 255, 255],
+        (3, false, 4) => [128, 128, 128, 255],
+        (4, false, 4) => [64, 64, 64, 255],
+        _ => default_for_register(reg),
+    }
+}
+
+fn srv_from(
+    gpu: &Gpu,
+    res: &windows::Win32::Graphics::Direct3D11::ID3D11Resource,
+    desc: &D3D11_SHADER_RESOURCE_VIEW_DESC,
+) -> Result<ID3D11ShaderResourceView, String> {
+    let mut v = None;
+    // SAFETY: `res` belongs to `gpu.device`; `desc` and the out-pointer are live locals.
+    unsafe {
+        gpu.device
+            .CreateShaderResourceView(res, Some(desc), Some(&mut v))
+    }
+    .map_err(|e| format!("CreateShaderResourceView: {e}"))?;
+    v.ok_or_else(|| "CreateShaderResourceView returned no view".to_string())
+}
+
+fn tex_desc(w: u32, h: u32, mips: u32, array: u32, format: DXGI_FORMAT) -> D3D11_TEXTURE2D_DESC {
+    D3D11_TEXTURE2D_DESC {
+        Width: w,
+        Height: h,
+        MipLevels: mips,
+        ArraySize: array,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_IMMUTABLE,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: if array == 6 {
+            D3D11_RESOURCE_MISC_TEXTURECUBE.0 as u32
+        } else {
+            0
+        },
+    }
+}
+
+fn create_texture(
+    gpu: &Gpu,
+    desc: &D3D11_TEXTURE2D_DESC,
+    init: &[D3D11_SUBRESOURCE_DATA],
+) -> Result<ID3D11Texture2D, String> {
+    let mut t = None;
+    // SAFETY: `init` holds `MipLevels × ArraySize` entries whose pointers reference memory that outlives the
+    // call (the caller's byte buffers).
+    unsafe {
+        gpu.device
+            .CreateTexture2D(desc, Some(init.as_ptr()), Some(&mut t))
+    }
+    .map_err(|e| format!("CreateTexture2D: {e}"))?;
+    t.ok_or_else(|| "CreateTexture2D returned no texture".to_string())
+}
+
+fn view_2d(format: DXGI_FORMAT, mips: u32) -> D3D11_SHADER_RESOURCE_VIEW_DESC {
+    D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2D: D3D11_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: mips,
+            },
+        },
+    }
+}
+
+fn view_cube(format: DXGI_FORMAT, mips: u32) -> D3D11_SHADER_RESOURCE_VIEW_DESC {
+    D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D11_SRV_DIMENSION_TEXTURECUBE,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            TextureCube: D3D11_TEXCUBE_SRV {
+                MostDetailedMip: 0,
+                MipLevels: mips,
+            },
+        },
+    }
+}
+
+/// A resource of the right dimension for a reflected SRV of `kind`: a 1×1 2D texture, a 1×1 single-slice
+/// 2D array, a 1×1×6 cube (every face `rgba`), or a 1-element zeroed (structured) buffer.
+pub fn default_srv(
+    gpu: &Gpu,
+    kind: SrvKind,
+    rgba: [u8; 4],
+) -> Result<ID3D11ShaderResourceView, String> {
+    let fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+    let px = rgba;
+    let one = D3D11_SUBRESOURCE_DATA {
+        pSysMem: px.as_ptr() as _,
+        SysMemPitch: 4,
+        SysMemSlicePitch: 4,
+    };
+    match kind {
+        SrvKind::Tex2D => {
+            let t = create_texture(gpu, &tex_desc(1, 1, 1, 1, fmt), &[one])?;
+            srv_from(gpu, &t.into(), &view_2d(fmt, 1))
+        }
+        SrvKind::Tex2DArray => {
+            let t = create_texture(gpu, &tex_desc(1, 1, 1, 1, fmt), &[one])?;
+            let d = D3D11_SHADER_RESOURCE_VIEW_DESC {
+                Format: fmt,
+                ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
+                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                    Texture2DArray: D3D11_TEX2D_ARRAY_SRV {
+                        MostDetailedMip: 0,
+                        MipLevels: 1,
+                        FirstArraySlice: 0,
+                        ArraySize: 1,
+                    },
+                },
+            };
+            srv_from(gpu, &t.into(), &d)
+        }
+        SrvKind::Cube => {
+            let t = create_texture(gpu, &tex_desc(1, 1, 1, 6, fmt), &[one; 6])?;
+            srv_from(gpu, &t.into(), &view_cube(fmt, 1))
+        }
+        SrvKind::Buffer | SrvKind::Structured => {
+            let structured = kind == SrvKind::Structured;
+            let zero = [0u8; 16];
+            let bd = D3D11_BUFFER_DESC {
+                ByteWidth: 16,
+                Usage: D3D11_USAGE_IMMUTABLE,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: if structured {
+                    D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32
+                } else {
+                    0
+                },
+                StructureByteStride: if structured { 16 } else { 0 },
+            };
+            let init = D3D11_SUBRESOURCE_DATA {
+                pSysMem: zero.as_ptr() as _,
+                SysMemPitch: 16,
+                SysMemSlicePitch: 16,
+            };
+            let mut b: Option<ID3D11Buffer> = None;
+            // SAFETY: descriptors and `zero` are live locals for the call.
+            unsafe { gpu.device.CreateBuffer(&bd, Some(&init), Some(&mut b)) }
+                .map_err(|e| format!("CreateBuffer: {e}"))?;
+            let b = b.ok_or("CreateBuffer returned no buffer")?;
+            let mut el = D3D11_BUFFER_SRV::default();
+            el.Anonymous2.NumElements = 1;
+            let d = D3D11_SHADER_RESOURCE_VIEW_DESC {
+                Format: if structured {
+                    DXGI_FORMAT_UNKNOWN
+                } else {
+                    DXGI_FORMAT_R32G32B32A32_FLOAT
+                },
+                ViewDimension: D3D11_SRV_DIMENSION_BUFFER,
+                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 { Buffer: el },
+            };
+            srv_from(gpu, &b.into(), &d)
+        }
+    }
+}
+
+/// The DXGI format a DDS is uploaded in: the DX10 header's own value, else the legacy header's only
+/// possible format (FourCC DXT1/DXT5/BC4U/BC5U and the uncompressed masks are always UNORM, answers.md Q1.2).
+pub fn dxgi_format(f: DdsPixelFormat, dx10: Option<u32>) -> DXGI_FORMAT {
+    if let Some(d) = dx10 {
+        return DXGI_FORMAT(d as i32);
+    }
+    use DdsPixelFormat as P;
+    DXGI_FORMAT(match f {
+        P::Bc1 { srgb } => 71 + srgb as i32,
+        P::Bc2 { srgb } => 74 + srgb as i32,
+        P::Bc3 { srgb } => 77 + srgb as i32,
+        P::Bc4 => 80,
+        P::Bc5 => 83,
+        P::Bc6hUf16 => 95,
+        P::Bc6hSf16 => 96,
+        P::Bc7 { srgb } => 98 + srgb as i32,
+        P::Rgba8 { srgb } => 28 + srgb as i32,
+        P::Bgra8 => 87,
+        P::Bgrx8 => 88,
+        P::R8 => 61,
+        P::Rg8 => 49,
+        P::Rgba16f => 10,
+        P::Rgba32f => 2,
+    })
+}
+
+/// A decoded DDS ready for binding.
+pub struct Texture {
+    pub srv: ID3D11ShaderResourceView,
+    pub kind: SrvKind,
+    pub format: DXGI_FORMAT,
+}
+
+/// DDS bytes → immutable texture + SRV in the file's own format (2D, or a cube when the header says so).
+/// Arrays upload slice 0 only. Errors (unsupported header, BC top level not a multiple of 4, …) are text.
+pub fn load_dds(gpu: &Gpu, bytes: &[u8]) -> Result<Texture, String> {
+    let f = read_dds(bytes).map_err(|e| format!("{e:?}"))?;
+    let format = dxgi_format(f.format, f.dx10.map(|d| d.dxgi));
+    let mips = f.levels.len().max(1);
+    let slice_bytes = f.levels.last().map_or(0, |l| l.2.end);
+    let faces = if f.is_cubemap { 6 } else { 1 };
+    let row = |w: u32| match f.format.block_bytes() {
+        Some(b) => w.div_ceil(4) as usize * b,
+        None => f.format.level_size(w, 1),
+    };
+    let mut init = Vec::with_capacity(mips * faces);
+    for face in 0..faces {
+        for (w, h, r) in &f.levels {
+            let start = face * slice_bytes + r.start;
+            let data = f
+                .data
+                .get(start..start + r.len())
+                .ok_or("DDS data shorter than its levels")?;
+            init.push(D3D11_SUBRESOURCE_DATA {
+                pSysMem: data.as_ptr() as _,
+                SysMemPitch: row(*w) as u32,
+                SysMemSlicePitch: f.format.level_size(*w, *h) as u32,
+            });
+        }
+    }
+    let desc = tex_desc(f.width, f.height, mips as u32, faces as u32, format);
+    let t = create_texture(gpu, &desc, &init)?;
+    let (view, kind) = if f.is_cubemap {
+        (view_cube(format, mips as u32), SrvKind::Cube)
+    } else {
+        (view_2d(format, mips as u32), SrvKind::Tex2D)
+    };
+    Ok(Texture {
+        srv: srv_from(gpu, &t.into(), &view)?,
+        kind,
+        format,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_headers_are_unorm_dx10_passes_through() {
+        assert_eq!(dxgi_format(DdsPixelFormat::Bc1 { srgb: false }, None).0, 71);
+        assert_eq!(dxgi_format(DdsPixelFormat::Bc3 { srgb: false }, None).0, 77);
+        assert_eq!(dxgi_format(DdsPixelFormat::Bc4, None).0, 80);
+        assert_eq!(
+            dxgi_format(DdsPixelFormat::Bc7 { srgb: true }, Some(99)).0,
+            99
+        );
+        assert_eq!(dxgi_format(DdsPixelFormat::Bc7 { srgb: true }, None).0, 99);
+        assert_eq!(dxgi_format(DdsPixelFormat::Bgra8, None).0, 87);
+    }
+
+    #[test]
+    fn technique_defaults() {
+        assert_eq!(default_for(5, 0, true), [255, 0, 255, 255]);
+        assert_eq!(default_for(5, 0, false), [0, 0, 0, 255]);
+        assert_eq!(default_for(3, 4, false), [128, 128, 128, 255]);
+        assert_eq!(default_for(14, 0, false), [255, 255, 255, 255]);
+    }
+}

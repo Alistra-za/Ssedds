@@ -13,11 +13,12 @@ use windows::Win32::Graphics::Direct3D::Fxc::{
 use windows::Win32::Graphics::Direct3D::{
     ID3DBlob, D3D_CT_CBUFFER, D3D_SHADER_MACRO, D3D_SIT_CBUFFER, D3D_SIT_SAMPLER,
     D3D_SIT_STRUCTURED, D3D_SIT_TEXTURE, D3D_SRV_DIMENSION_BUFFER,
-    D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE,
+    D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE, D3D_SVC_STRUCT,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11ShaderReflection, D3D11_SHADER_BUFFER_DESC, D3D11_SHADER_DESC,
-    D3D11_SHADER_INPUT_BIND_DESC, D3D11_SHADER_VARIABLE_DESC, D3D11_SIGNATURE_PARAMETER_DESC,
+    ID3D11ShaderReflection, ID3D11ShaderReflectionType, D3D11_SHADER_BUFFER_DESC,
+    D3D11_SHADER_DESC, D3D11_SHADER_INPUT_BIND_DESC, D3D11_SHADER_TYPE_DESC,
+    D3D11_SHADER_VARIABLE_DESC, D3D11_SIGNATURE_PARAMETER_DESC,
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -25,7 +26,8 @@ pub struct CbLayout {
     pub name: String,
     pub slot: u32,
     pub size: u32,
-    /// (name, offset, size) in bytes.
+    /// (name, offset, size) in bytes. Struct members are listed after their struct as `struct.member` (nested:
+    /// `a.b.c`), with the absolute offset and the bytes up to the next member, so `CbWriter` can set them.
     pub vars: Vec<(String, u32, u32)>,
 }
 
@@ -38,7 +40,7 @@ pub struct Reflection {
     pub inputs: Vec<(String, u32, u32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SrvKind {
     Tex2D,
     Tex2DArray,
@@ -54,6 +56,8 @@ pub struct Compiled {
 }
 
 const FLAGS: u32 = D3DCOMPILE_OPTIMIZATION_LEVEL3;
+/// Bumped when the cached `Reflection` gains information (2: struct members flattened), so old entries miss.
+const REFLECT_VERSION: u32 = 2;
 
 fn key(file: &Path, root: &Path, d: &Defines, target: &str, root_hash: &str) -> String {
     let mut sorted = d.0.clone();
@@ -71,6 +75,7 @@ fn key(file: &Path, root: &Path, d: &Defines, target: &str, root_hash: &str) -> 
     h.update([0]);
     h.update(target);
     h.update(FLAGS.to_le_bytes());
+    h.update(REFLECT_VERSION.to_le_bytes());
     hex::encode(h.finalize())
 }
 
@@ -232,6 +237,45 @@ fn srv_kind(b: &D3D11_SHADER_INPUT_BIND_DESC) -> Option<SrvKind> {
     })
 }
 
+/// Appends `prefix.member` entries for a struct-typed variable (recursively). A member's size is the distance
+/// to the next member (the last one runs to the end of the parent), which is all `CbWriter` needs.
+///
+/// # Safety
+/// `t` must be a live reflection type of the reflector being walked.
+unsafe fn struct_members(
+    t: &ID3D11ShaderReflectionType,
+    prefix: &str,
+    base: u32,
+    size: u32,
+    out: &mut Vec<(String, u32, u32)>,
+) {
+    let mut td = D3D11_SHADER_TYPE_DESC::default();
+    // SAFETY: (caller) live type; `td` is a local out-param; indices are bounded by `Members`.
+    unsafe {
+        if t.GetDesc(&mut td).is_err() || td.Class != D3D_SVC_STRUCT || td.Elements > 0 {
+            return;
+        }
+        let mut members = vec![];
+        for i in 0..td.Members {
+            let (Some(mt), name) = (t.GetMemberTypeByIndex(i), pcstr(t.GetMemberTypeName(i)))
+            else {
+                continue;
+            };
+            let mut md = D3D11_SHADER_TYPE_DESC::default();
+            if mt.GetDesc(&mut md).is_ok() {
+                members.push((name, md.Offset, mt));
+            }
+        }
+        for (i, (name, off, mt)) in members.iter().enumerate() {
+            let end = members.get(i + 1).map_or(size, |m| m.1);
+            let full = format!("{prefix}.{name}");
+            let msize = end.saturating_sub(*off);
+            out.push((full.clone(), base + off, msize));
+            struct_members(mt, &full, base + off, msize, out);
+        }
+    }
+}
+
 /// Reflects compiled DXBC into plain data (cbuffer layouts, SRV/sampler slots, input signature).
 pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
     let e = |e: windows::core::Error| e.to_string();
@@ -285,7 +329,11 @@ pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
                 };
                 let mut vd = D3D11_SHADER_VARIABLE_DESC::default();
                 v.GetDesc(&mut vd).map_err(e)?;
-                vars.push((pcstr(vd.Name), vd.StartOffset, vd.Size));
+                let name = pcstr(vd.Name);
+                vars.push((name.clone(), vd.StartOffset, vd.Size));
+                if let Some(t) = v.GetType() {
+                    struct_members(&t, &name, vd.StartOffset, vd.Size, &mut vars);
+                }
             }
             out.cbuffers.push(CbLayout {
                 name,
