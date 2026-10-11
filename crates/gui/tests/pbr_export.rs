@@ -848,3 +848,31 @@ fn a_sharing_set_ordered_first_owns_the_output_and_both_entries_point_at_it() {
         assert_eq!(e["slot6"], json!(shared), "{e}");
     }
 }
+
+/// Final review Minor 5 (parked Task 10/11): an owned output whose path is another texture's mirrored output. The
+/// engine never sees the clash (the owned path is held back), so the plan settles and Export names the clash instead
+/// of failing with "the sets changed while planning".
+#[test]
+fn an_owned_path_on_a_mirrored_output_settles_and_blocks_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    let mirrored = d.path().join("textures/textures/pbr/landscape");
+    std::fs::create_dir_all(&mirrored).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, y| {
+        image::Rgb([(x * 4) as u8, (y * 4) as u8, 40u8])
+    })
+    .save(mirrored.join("rock01.png"))
+    .unwrap();
+    let mut m = ready(d.path());
+    let other = "textures/pbr/landscape/rock01.png";
+    m.set_field(other, "subtype", json!("diffuse"));
+    idle(&mut m);
+    m.export_clicked();
+    match &m.dialog {
+        Some(Dialog::ExportBlocked(b)) => assert!(
+            b.iter()
+                .any(|i| i.text.contains("landscape/rock01") && i.text.contains(other)),
+            "{b:?}"
+        ),
+        d => panic!("expected ExportBlocked naming the clash, got {d:?}"),
+    }
+}

@@ -371,8 +371,31 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
         return (edits, paths);
     }
     let views = set_views(m);
+    let candidates = output_candidates(m, &views);
+    // Mirrored outputs: textures with no explicit path, now or in the plan on screen, write their job key. An owned
+    // path on one is held back too (the engine would skip both as IN-DUPLICATE and the plan would not settle);
+    // `path_collisions` reports it.
+    let explicit = |k: &OutputKey| {
+        candidates.iter().any(|(_, c, _)| c == k)
+            || m.last_inputs
+                .as_ref()
+                .is_some_and(|(_, p)| p.contains_key(k))
+    };
+    let mirrored: BTreeSet<String> = m
+        .items
+        .iter()
+        .filter(|it| !it.job_key.is_empty())
+        .filter(|it| {
+            let k = item_output_key(&views, it).unwrap_or(OutputKey::File(it.key.clone()));
+            !explicit(&k)
+        })
+        .map(|it| it.job_key.replace('\\', "/").to_lowercase())
+        .collect();
     let mut seen = BTreeSet::new();
-    for (_, key, rel) in output_candidates(m, &views) {
+    for (_, key, rel) in candidates {
+        if mirrored.contains(&rel.to_string_lossy().replace('\\', "/").to_lowercase()) {
+            continue;
+        }
         // Two outputs on one path: keep the first in display order. Export is blocked by `path_collisions` (Task 11),
         // and the engine never sees the collision, so the plan is stable. (Sending both would make the engine skip
         // both as IN-DUPLICATE, the sets would stop being PBR sets, the paths would vanish, and the two-pass planning
