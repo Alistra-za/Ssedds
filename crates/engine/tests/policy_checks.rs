@@ -396,6 +396,34 @@ fn bc6h_and_tag_na_must_agree() {
     );
 }
 
+/// Owner, 2026-10-11: a packed map cannot be BC6H, even with the matching tag.
+#[test]
+fn packed_maps_reject_bc6h() {
+    for (game, suffix, subtype) in [
+        ("textures/pbr/x_rmaos.png", "rmaos", "rmaos"),
+        ("textures/a/x_m.png", "m", "complex_material"),
+        ("textures/a/x_flow.png", "flow", "flow"),
+    ] {
+        let set = format!("subtype={subtype}");
+        let j = run(
+            Target::Cs,
+            game,
+            Some(suffix),
+            &[suffix],
+            opaque(),
+            &[&set, "format=bc6h_uf16", "color.tag=n/a"],
+            &[],
+        );
+        assert!(
+            j.warnings
+                .iter()
+                .any(|w| w.code == Code::CfgInvalid && w.message.contains("packed map")),
+            "{subtype}: {:?}",
+            j.warnings
+        );
+    }
+}
+
 /// Carry 2: `_SRGB` and BC6H only under cs; PBR sub-types inherited by cpm/vanilla are caught.
 #[test]
 fn srgb_and_bc6h_are_gated_by_target() {

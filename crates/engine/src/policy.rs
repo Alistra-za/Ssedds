@@ -1054,6 +1054,13 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
         };
         add(CfgInvalid, msg);
     }
+    // Owner, 2026-10-11: a packed map and BC6H are mutually exclusive (packed channels are data, often with alpha).
+    if bc6h && p.category == Category::MixedPacked {
+        add(
+            CfgInvalid,
+            format!("{} is a packed map; BC6H cannot store it, use bc7", st.id()),
+        );
+    }
     let srgb = p.srgb_tag();
     if srgb && p.target != Target::Cs {
         add(
