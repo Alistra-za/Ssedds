@@ -12,7 +12,7 @@ mod text;
 pub use matching::{matched_path, shape_matches};
 pub use nif::material::MaterialState;
 pub use prep::prepare;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub struct SimInput<'a> {
     /// One PGPatcher entry exactly as sdc writes it (`pgp::writer::entry_node(..).to_value()`).
@@ -60,4 +60,23 @@ pub fn simulate(i: &SimInput) -> SimResult {
         (Some(e), Some(mp)) => patch::run(&[(e, mp)], i.source, i.exists),
         _ => SimResult::NoMatch,
     }
+}
+
+/// A whole PGPatcher file (01 §1.4-§1.5): every entry is prepared with `default` (`Value::Null` for a
+/// bare-array file); all entries matching this shape apply in index order, so the last one wins per field.
+/// The §1.4 texture check runs over the slot pass of all of them. `matched_path` = the last applied entry's.
+pub fn simulate_file(
+    entries: &[Value],
+    default: &Value,
+    nif_path: &str,
+    source: &MaterialState,
+    exists: &dyn Fn(&str) -> bool,
+) -> SimResult {
+    let prepared: Vec<Value> = entries.iter().map(|e| prepare(e, default)).collect();
+    let matches: Vec<(&Map<String, Value>, String)> = prepared
+        .iter()
+        .filter(|p| shape_matches(p, nif_path, &source.slots))
+        .filter_map(|p| Some((p.as_object()?, matched_path(p, &source.slots)?)))
+        .collect();
+    patch::run(&matches, source, exists)
 }
