@@ -285,7 +285,7 @@
 ### 5.6 Document shape and validation
 
 - **[Requirement]** The object form: `{ "$schema": "<PGPatcher schema URL>", "default": {…}, "entries": [ … ] }`.
-  - The `default` block is **fixed** (owner, 2026-10-10) and always holds exactly these six keys, written in schema order: `emissive: false`, `parallax: false`, `subsurface: false`, `roughness_scale: 1.0`, `specular_level: 0.04`, `displacement_scale: 1.0`. Users cannot change it.
+  - The `default` block is **fixed** (owner, 2026-10-10) and always holds exactly these six keys, written in schema order: `emissive: false`, `parallax: false`, `displacement_scale: 1.0`, `specular_level: 0.04`, `roughness_scale: 1.0`, `subsurface: false`. Users cannot change it.
   - Entries are in set order; keys are in schema order; indentation is 2 spaces; UTF-8 without a BOM.
   - Paths use single backslashes, escaped as JSON requires.
 - **[Proposal]** Before writing, the document is validated against the vendored schema with the `jsonschema` crate.
