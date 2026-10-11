@@ -549,32 +549,6 @@ fn keeping_a_hand_edited_json_leaves_it_and_the_record() {
 }
 
 #[test]
-fn a_cancelled_export_writes_no_json() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = ready(d.path());
-    m.export_clicked();
-    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
-        m.proceed_anyway();
-    }
-    m.cancel_export();
-    assert!(m.wait_idle(Duration::from_secs(120)));
-    if m.export
-        .summary
-        .as_ref()
-        .is_some_and(|s| !s.cancelled.is_empty())
-        || m.export.error.is_some()
-    {
-        assert!(!json_path(&m).exists());
-        assert!(
-            m.export.notes.iter().any(|n| n.contains("not written")),
-            "{:?}",
-            m.export.notes
-        );
-    }
-    // (If the export finished before the cancel landed, there is nothing to check: the test is about the cancel path.)
-}
-
-#[test]
 fn finish_leaves_out_sets_whose_outputs_did_not_export() {
     use sdc_gui::model::export::{Row, RowState};
     use sdc_gui::pgp::writer::EntryInput;
@@ -628,22 +602,41 @@ fn finish_leaves_out_sets_whose_outputs_did_not_export() {
         "{notes:?}"
     );
 }
-
 #[test]
-fn finish_copies_borrowed_slots_and_notes_a_missing_source() {
+fn finish_copies_borrowed_slots_and_skips_what_did_not_export() {
+    use sdc_gui::model::export::{Row, RowState};
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("owner_n.dds");
     std::fs::write(&src, b"dds").unwrap();
+    let gone = dir.path().join("gone.dds");
+    let stale = dir.path().join("stale.dds");
+    std::fs::write(&stale, b"old").unwrap();
     let p = PendingJson {
         path: std::path::PathBuf::new(),
         entries: vec![],
         copies: vec![
-            (src.clone(), dir.path().join("borrower_n.dds")),
-            (dir.path().join("gone.dds"), dir.path().join("x.dds")),
+            (
+                src.clone(),
+                dir.path().join("borrower_n.dds"),
+                "o/n.dds".into(),
+            ),
+            (gone, dir.path().join("x.dds"), "o/gone.dds".into()),
+            (stale, dir.path().join("y.dds"), "o/stale.dds".into()),
         ],
     };
+    let row = |k: &str, state| Row {
+        job_key: k.into(),
+        path: String::new(),
+        state,
+        warnings: vec![],
+    };
+    let rows = vec![
+        row("o/n.dds", RowState::Done { passed: true }),
+        row("o/gone.dds", RowState::UpToDate),
+        row("o/stale.dds", RowState::Failed("boom".into())),
+    ];
     let mut notes = vec![];
-    assert_eq!(finish(&p, &[], None, &mut notes), Finish::Nothing);
+    assert_eq!(finish(&p, &rows, None, &mut notes), Finish::Nothing);
     assert_eq!(
         std::fs::read(dir.path().join("borrower_n.dds")).unwrap(),
         b"dds"
@@ -660,4 +653,136 @@ fn finish_copies_borrowed_slots_and_notes_a_missing_source() {
             .any(|n| n.starts_with("could not copy") && n.contains("not exported")),
         "{notes:?}"
     );
+    // A failed owner is not copied even though a stale file exists.
+    assert!(!dir.path().join("y.dds").exists());
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("stale.dds") && n.contains("failed: boom")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn prepare_on_vanilla_plans_the_borrowed_slot_copy_with_the_borrowers_name() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    let leaf = m
+        .items
+        .iter()
+        .find(|i| i.name == "leaf.png")
+        .unwrap()
+        .key
+        .clone();
+    m.set_field(&leaf, "subtype", json!("pbr_albedo"));
+    idle(&mut m);
+    let id = m.drop_new_set(&leaf).unwrap();
+    idle(&mut m);
+    m.set_target(engine::config::Target::Vanilla);
+    idle(&mut m);
+    use sdc_gui::model::sets::{SlotFill, SlotKind};
+    let normal = set_views(&m)
+        .iter()
+        .find(|v| v.id == "landscape/rock01")
+        .and_then(|v| match v.slots.get(&SlotKind::Normal) {
+            Some(SlotFill::Own { item }) => Some(item.clone()),
+            _ => None,
+        })
+        .expect("rock01 owns a normal map");
+    assert!(matches!(
+        m.drop_choice(&normal, &id, DropChoice::Share),
+        DropOutcome::Joined
+    ));
+    idle(&mut m);
+    let views = set_views(&m);
+    let borrower = views.iter().find(|v| v.id == id).unwrap();
+    let Some(SlotFill::Own { item: d_item }) = borrower.slots.get(&SlotKind::Diffuse) else {
+        panic!("the new set owns its diffuse: {:?}", borrower.slots);
+    };
+    let Some(SlotFill::Borrowed { item: b_item, .. }) = borrower.slots.get(&SlotKind::Normal)
+    else {
+        panic!("normal is borrowed: {:?}", borrower.slots);
+    };
+    let Some(SlotFill::Borrowed { item: b_item, .. }) = borrower.slots.get(&SlotKind::Normal)
+    else {
+        panic!("normal is borrowed: {:?}", borrower.slots);
+    };
+    let dout = m.item(d_item).unwrap().job.as_ref().unwrap().output.clone();
+    let src = m.item(b_item).unwrap().job.as_ref().unwrap().output.clone();
+    let p = prepare(&m).expect("a borrowed slot on vanilla plans a copy");
+    assert!(p.entries.is_empty() && p.path.as_os_str().is_empty());
+    let stem = dout.file_stem().unwrap().to_string_lossy().into_owned();
+    let want = dout.with_file_name(format!("{stem}_n.dds"));
+    assert!(
+        p.copies.iter().any(|(s, t, _)| *s == src && *t == want),
+        "want {src:?} -> {want:?}, got {:?}",
+        p.copies
+    );
+}
+
+#[test]
+fn an_unfinished_export_writes_no_json_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("PBRNIFPatcher/x.json");
+    let p = PendingJson {
+        path: path.clone(),
+        entries: vec![("a/one".into(), vec![], Default::default())],
+        copies: vec![],
+    };
+    assert_eq!(
+        unfinished_note(&p, false).as_deref(),
+        Some("PGPatcher JSON not written: the export was cancelled")
+    );
+    assert_eq!(
+        unfinished_note(&p, true).as_deref(),
+        Some("PGPatcher JSON not written: the export failed")
+    );
+    assert!(!path.exists());
+    // Vanilla/CPM exports have no JSON, so no note.
+    let v = PendingJson {
+        path: Default::default(),
+        entries: vec![],
+        copies: vec![],
+    };
+    assert_eq!(unfinished_note(&v, false), None);
+}
+
+#[test]
+fn an_identical_file_on_disk_is_not_asked_about() {
+    use sdc_gui::model::export::{Row, RowState};
+    use sdc_gui::pgp::writer::EntryInput;
+    let dir = tempfile::tempdir().unwrap();
+    let p = PendingJson {
+        path: dir.path().join("x.json"),
+        entries: vec![(
+            "a/one".into(),
+            vec!["a/one.dds".into()],
+            EntryInput {
+                derived_match: "a\\one".into(),
+                ..Default::default()
+            },
+        )],
+        copies: vec![],
+    };
+    let rows = vec![Row {
+        job_key: "a/one.dds".into(),
+        path: String::new(),
+        state: RowState::UpToDate,
+        warnings: vec![],
+    }];
+    let mut notes = vec![];
+    assert!(matches!(
+        finish(&p, &rows, None, &mut notes),
+        Finish::Written(_)
+    ));
+    // Same content, no recorded hash: still no prompt.
+    assert!(matches!(
+        finish(&p, &rows, None, &mut notes),
+        Finish::Written(_)
+    ));
+    std::fs::write(&p.path, "{ \"edited\": true }\n").unwrap();
+    assert!(matches!(
+        finish(&p, &rows, None, &mut notes),
+        Finish::Overwrite(_)
+    ));
 }

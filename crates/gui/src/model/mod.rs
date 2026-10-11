@@ -575,14 +575,10 @@ impl AppModel {
                 .as_ref()
                 .is_some_and(|s| s.cancelled.is_empty());
         if !ok {
-            let why = if self.export.error.is_some() {
-                "failed"
-            } else {
-                "cancelled"
-            };
-            self.export
-                .notes
-                .push(format!("PGPatcher JSON not written: the export was {why}"));
+            let failed = self.export.error.is_some();
+            if let Some(n) = pbr_export::unfinished_note(&p, failed) {
+                self.export.notes.push(n);
+            }
             return;
         }
         let last = self.sets_doc.as_ref().and_then(|d| d.last_json_sha256());

@@ -389,8 +389,8 @@ pub struct PendingJson {
     pub path: PathBuf,
     /// Set id, the job keys its entry depends on, and the entry.
     pub entries: Vec<(String, Vec<String>, EntryInput)>,
-    /// Borrowed-slot copies for vanilla/CPM: (owner's output, borrower's path), both absolute (DECISIONS P4).
-    pub copies: Vec<(PathBuf, PathBuf)>,
+    /// Borrowed-slot copies for vanilla/CPM: (owner output, borrower path, owner job key), paths absolute (P4).
+    pub copies: Vec<(PathBuf, PathBuf, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -427,11 +427,11 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
                 let SlotFill::Borrowed { item, .. } = f else {
                     continue;
                 };
-                let Some(src) = m
-                    .item(item)
-                    .and_then(|i| i.job.as_ref())
-                    .map(|j| j.output.clone())
-                else {
+                let Some((src, owner_key)) = m.item(item).and_then(|i| {
+                    i.job
+                        .as_ref()
+                        .map(|j| (j.output.clone(), i.job_key.clone()))
+                }) else {
                     continue;
                 };
                 let name = if kind.suffix().is_empty() {
@@ -439,7 +439,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
                 } else {
                     format!("{stem}_{}.dds", kind.suffix())
                 };
-                copies.push((src, dout.with_file_name(name)));
+                copies.push((src, dout.with_file_name(name), owner_key));
             }
         }
         return (!copies.is_empty()).then(|| PendingJson {
@@ -494,7 +494,9 @@ fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     }
     let tmp = path.with_extension("json.sdc-tmp");
     std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// After a successful export: the copies, then the JSON of the sets that fully exported (spec §6.1, §6.4).
@@ -504,7 +506,13 @@ pub fn finish(
     last_sha: Option<&str>,
     notes: &mut Vec<String>,
 ) -> Finish {
-    for (src, dst) in &p.copies {
+    for (src, dst, owner_key) in &p.copies {
+        if !owner_key.is_empty() {
+            if let Err(why) = exported(rows, owner_key) {
+                notes.push(format!("could not copy {} ({why})", src.display()));
+                continue;
+            }
+        }
         match std::fs::copy(src, dst) {
             Ok(_) => notes.push(format!("copied {} → {}", src.display(), dst.display())),
             Err(e) => notes.push(format!(
@@ -537,7 +545,9 @@ pub fn finish(
     }
     let text = to_text(&doc);
     let on_disk = sha256_of(&p.path);
-    if on_disk.is_some() && on_disk.as_deref() != last_sha {
+    // Identical bytes need no question, even when no hash was recorded.
+    let same = std::fs::read_to_string(&p.path).is_ok_and(|t| t == text);
+    if on_disk.is_some() && on_disk.as_deref() != last_sha && !same {
         return Finish::Overwrite(text);
     }
     match write_atomic(&p.path, &text) {
@@ -568,4 +578,14 @@ pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) ->
             None
         }
     }
+}
+
+/// The note for an export that did not end cleanly: nothing is written then. A vanilla/CPM export has no JSON, so
+/// it gets no note.
+pub fn unfinished_note(p: &PendingJson, failed: bool) -> Option<String> {
+    if p.entries.is_empty() {
+        return None;
+    }
+    let why = if failed { "failed" } else { "was cancelled" };
+    Some(format!("PGPatcher JSON not written: the export {why}"))
 }
