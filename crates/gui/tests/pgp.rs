@@ -128,3 +128,137 @@ fn effective_overlays_own_values_on_defaults() {
     assert_eq!(e["specular_level"], json!(0.04));
     assert_eq!(e["parallax"], json!(false));
 }
+
+use sdc_gui::pgp::prefix::*;
+
+#[test]
+fn derived_match_drops_textures_pbr_and_the_extension() {
+    assert_eq!(
+        derive_match_diffuse("landscape", "rock01"),
+        r"landscape\rock01"
+    );
+    assert_eq!(
+        derive_match_diffuse("textures/landscape", "rock01"),
+        r"landscape\rock01"
+    );
+    assert_eq!(
+        derive_match_diffuse("Textures/PBR/Landscape", "Rock01"),
+        r"Landscape\Rock01"
+    );
+    assert_eq!(derive_match_diffuse("", "rock01"), "rock01");
+}
+
+#[test]
+fn diffuse_mode_prefixes_and_renames() {
+    let p = |pairs: &[(&str, Value)], derived: &str| prefix_of(&s(pairs), derived).unwrap();
+    assert_eq!(
+        p(&[], r"landscape\rock01"),
+        r"textures\pbr\landscape\rock01"
+    );
+    assert_eq!(
+        p(
+            &[("match_diffuse", json!(r"textures\landscape\rock02.dds"))],
+            "x"
+        ),
+        r"textures\pbr\landscape\rock02"
+    );
+    assert_eq!(
+        p(&[("match_diffuse", json!(r"pbr\landscape\rock02"))], "x"),
+        r"textures\pbr\landscape\rock02",
+        "never doubled"
+    );
+    assert_eq!(
+        p(
+            &[("rename", json!(r"landscape\boulder"))],
+            r"landscape\rock01"
+        ),
+        r"textures\pbr\landscape\boulder"
+    );
+    assert_eq!(
+        p(&[("match_normal", json!(r"landscape\rock01_n.dds"))], "x"),
+        r"textures\pbr\landscape\rock01"
+    );
+    assert_eq!(
+        p(&[("path_contains", json!("rock"))], r"landscape\rock01"),
+        r"textures\pbr\landscape\rock01"
+    );
+}
+
+#[test]
+fn slot_modes_strip_the_first_suffix_of_their_own_list() {
+    let p = |key: &str, v: &str| prefix_of(&s(&[(key, json!(v))]), "unused").unwrap();
+    assert_eq!(
+        p("match2", r"architecture\whiterun\wrplank01_n.dds"),
+        r"textures\pbr\architecture\whiterun\wrplank01"
+    );
+    assert_eq!(
+        p("match1", r"actors\facemask.dds"),
+        r"textures\pbr\actors\face",
+        "match1 strips a bare 'mask'"
+    );
+    assert_eq!(
+        p("match1", r"x\rock_n.dds"),
+        r"textures\pbr\x\rock_n",
+        "a suffix on the wrong slot stays"
+    );
+    assert_eq!(
+        p("match8", r"x\leaf_s.dds"),
+        r"textures\pbr\x\leaf_s",
+        "match8 does not strip _s"
+    );
+    assert_eq!(p("match7", r"x\leaf_s.dds"), r"textures\pbr\x\leaf");
+    assert_eq!(p("match6", r"x\iron_m.dds"), r"textures\pbr\x\iron");
+    // rename replaces the whole prefix in slot modes.
+    let r = prefix_of(
+        &s(&[
+            ("match2", json!(r"a\b_n.dds")),
+            ("rename", json!(r"textures\pbr\c\d")),
+        ]),
+        "x",
+    )
+    .unwrap();
+    assert_eq!(r, r"textures\pbr\c\d");
+}
+
+#[test]
+fn bad_paths_block() {
+    for bad in [r"..\up", r"C:\abs", r"\lead", "a|b", r"a\..\b"] {
+        assert!(
+            prefix_of(&s(&[("match_diffuse", json!(bad))]), "x").is_err(),
+            "{bad:?}"
+        );
+        assert!(
+            prefix_of(&s(&[("rename", json!(bad))]), "x").is_err(),
+            "{bad:?}"
+        );
+        assert!(check_rel_path(bad, "slot3").is_err(), "{bad:?}");
+    }
+    assert!(check_rel_path("", "slot3").is_err());
+    // An empty match_diffuse falls back to the derived match; an empty derived match blocks.
+    assert!(prefix_of(&s(&[]), "").is_err());
+    assert!(check_rel_path(r"landscape\white.dds", "slot3").is_ok());
+}
+
+#[test]
+fn pitfalls_are_reported_not_fixed() {
+    let w = pitfalls(&s(&[("match8", json!(r"x\leaf_s.dds"))]));
+    assert!(w.iter().any(|m| m.contains("match8")), "{w:?}");
+    let w = pitfalls(&s(&[
+        ("match2", json!(r"a\b_n.dds")),
+        ("rename", json!(r"c\d")),
+    ]));
+    assert!(w.iter().any(|m| m.contains("full path")), "{w:?}");
+    assert!(pitfalls(&s(&[("match_diffuse", json!("a"))])).is_empty());
+}
+
+#[test]
+fn output_paths_use_the_canonical_suffix() {
+    assert_eq!(
+        output_rel(r"textures\pbr\landscape\rock01", ""),
+        std::path::PathBuf::from("textures/pbr/landscape/rock01.dds")
+    );
+    assert_eq!(
+        output_rel(r"textures\pbr\landscape\rock01", "rmaos"),
+        std::path::PathBuf::from("textures/pbr/landscape/rock01_rmaos.dds")
+    );
+}
