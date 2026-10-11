@@ -2,6 +2,7 @@
 use crate::model::sets::{set_views, SlotCommand, SlotFill, SlotKind};
 use crate::model::AppModel;
 use eframe::egui;
+use engine::sets::same_id;
 use serde_json::Value;
 
 #[derive(Debug, Default)]
@@ -29,10 +30,7 @@ const CHOICES: [&str; 3] = ["From this set", "Path", "Clear"];
 
 /// What the set itself gives at slot `n`: the file names of the slot cards that fill it.
 fn gives(model: &AppModel, set: &str, n: u8) -> String {
-    let Some(v) = set_views(model)
-        .into_iter()
-        .find(|v| v.id.eq_ignore_ascii_case(set))
-    else {
+    let Some(v) = set_views(model).into_iter().find(|v| same_id(&v.id, set)) else {
         return String::new();
     };
     let names: Vec<String> = SlotKind::ALL
@@ -55,11 +53,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
     let settings = model
         .sets_doc
         .as_ref()
-        .and_then(|d| {
-            d.entries()
-                .into_iter()
-                .find(|e| e.id.eq_ignore_ascii_case(&set))
-        })
+        .and_then(|d| d.entries().into_iter().find(|e| same_id(&e.id, &set)))
         .map(|e| e.settings)
         .unwrap_or_default();
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());

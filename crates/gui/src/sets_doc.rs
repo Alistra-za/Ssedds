@@ -4,6 +4,7 @@
 use crate::pgp::settings::Settings;
 use crate::project::{dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError};
 use engine::policy::SourceStamp;
+use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -273,12 +274,12 @@ impl SetsDoc {
 
     /// The table of set `id`, created at the end when missing (ids compare case-insensitively).
     fn table_mut(&mut self, id: &str) -> &mut Table {
-        let lower = id.to_lowercase();
+        let lower = fold_id(id);
         let tables = self.tables_mut();
         let i = tables.iter().position(|t| {
             t.get("id")
                 .and_then(Item::as_str)
-                .is_some_and(|s| s.to_lowercase() == lower)
+                .is_some_and(|s| fold_id(s) == lower)
         });
         let i = match i {
             Some(i) => i,
@@ -305,8 +306,8 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
-        let lower = id.to_lowercase();
-        if !self.entries().iter().any(|e| e.id.to_lowercase() == lower) {
+        let lower = fold_id(id);
+        if !self.entries().iter().any(|e| fold_id(&e.id) == lower) {
             return;
         }
         if let Some(tables) = self
@@ -317,13 +318,13 @@ impl SetsDoc {
             tables.retain(|t| {
                 !t.get("id")
                     .and_then(Item::as_str)
-                    .is_some_and(|s| s.to_lowercase() == lower)
+                    .is_some_and(|s| fold_id(s) == lower)
             });
         }
         let order: Vec<String> = self
             .order()
             .into_iter()
-            .filter(|o| o.to_lowercase() != lower)
+            .filter(|o| fold_id(o) != lower)
             .collect();
         if !self.order().is_empty() {
             self.set_order(&order);
@@ -340,18 +341,18 @@ impl SetsDoc {
         let created = self
             .entries()
             .iter()
-            .any(|e| e.id.eq_ignore_ascii_case(from) && e.created);
+            .any(|e| same_id(&e.id, from) && e.created);
         let already = self
             .entries()
             .iter()
-            .find(|e| e.id.eq_ignore_ascii_case(from))
+            .find(|e| same_id(&e.id, from))
             .and_then(|e| e.renamed_from.clone());
         let t = self.table_mut(from);
         t.insert("id", toml_edit::value(to));
         if !created {
             // Renamed back to the engine's own name: no rename left to apply.
             let original = already.unwrap_or_else(|| from.to_string());
-            if original.eq_ignore_ascii_case(to) {
+            if same_id(&original, to) {
                 t.remove("renamed_from");
             } else {
                 t.insert("renamed_from", toml_edit::value(original));
@@ -360,20 +361,14 @@ impl SetsDoc {
         let order: Vec<String> = self
             .order()
             .into_iter()
-            .map(|o| {
-                if o.eq_ignore_ascii_case(from) {
-                    to.to_string()
-                } else {
-                    o
-                }
-            })
+            .map(|o| if same_id(&o, from) { to.to_string() } else { o })
             .collect();
         if !order.is_empty() {
             self.set_order(&order);
         }
         for e in self.entries() {
             for (slot, src) in &e.borrow {
-                if src.eq_ignore_ascii_case(from) {
+                if same_id(src, from) {
                     self.set_borrow(&e.id, *slot, Some(to));
                 }
             }
@@ -387,7 +382,7 @@ impl SetsDoc {
         }
         let t = self.table_mut(id);
         let mut items = strings(t.get(key));
-        items.retain(|f| !f.eq_ignore_ascii_case(file));
+        items.retain(|f| !same_id(f, file));
         if add {
             items.push(file.to_string());
         }
@@ -406,11 +401,11 @@ impl SetsDoc {
     /// `file` moves into set `id` (a `Move` edit); it is taken out of every other entry's `add` and `remove`.
     pub fn add_member(&mut self, id: &str, file: &str) {
         for e in self.entries() {
-            if !e.id.eq_ignore_ascii_case(id) {
-                if e.add.iter().any(|f| f.eq_ignore_ascii_case(file)) {
+            if !same_id(&e.id, id) {
+                if e.add.iter().any(|f| same_id(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
                 }
-                if e.remove.iter().any(|f| f.eq_ignore_ascii_case(file)) {
+                if e.remove.iter().any(|f| same_id(f, file)) {
                     self.list_edit(&e.id, "remove", file, false);
                 }
             }
@@ -420,9 +415,10 @@ impl SetsDoc {
 
     /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.
     pub fn remove_member(&mut self, id: &str, file: &str) {
-        let moved_in = self.entries().iter().any(|e| {
-            e.id.eq_ignore_ascii_case(id) && e.add.iter().any(|f| f.eq_ignore_ascii_case(file))
-        });
+        let moved_in = self
+            .entries()
+            .iter()
+            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| same_id(f, file)));
         if moved_in {
             self.list_edit(id, "add", file, false);
         } else {

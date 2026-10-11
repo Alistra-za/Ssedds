@@ -9,7 +9,7 @@ use crate::sets_doc::{SetEntry, SetsDoc};
 use engine::config::{Subtype, Target};
 use engine::group::{split_suffix, split_vocab, VocabRole};
 use engine::overrides::path_key_matches;
-use engine::sets::{set_id, OutputKey, SetEdit};
+use engine::sets::{fold_id, same_id, set_id, OutputKey, SetEdit};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -169,7 +169,7 @@ pub fn slot_conflict(existing: &[SlotKind], incoming: SlotKind) -> Option<String
 }
 
 fn entry_of<'a>(entries: &'a [SetEntry], id: &str) -> Option<&'a SetEntry> {
-    entries.iter().find(|e| e.id.eq_ignore_ascii_case(id))
+    entries.iter().find(|e| same_id(&e.id, id))
 }
 
 fn dir_of(key: &str) -> &str {
@@ -220,7 +220,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
     // Created sets that have no members yet, and entries whose files have all gone (spec §7.1: shown as missing,
     // never silently dropped).
     for e in &entries {
-        if !views.iter().any(|v| v.id.eq_ignore_ascii_case(&e.id)) {
+        if !views.iter().any(|v| same_id(&v.id, &e.id)) {
             views.push(SetView::new(String::new(), e.id.clone(), vec![]));
         }
     }
@@ -228,7 +228,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
     let pos = |v: &SetView| {
         order
             .iter()
-            .position(|o| o.eq_ignore_ascii_case(&v.id))
+            .position(|o| same_id(o, &v.id))
             .unwrap_or(usize::MAX)
     };
     views.sort_by(|a, b| pos(a).cmp(&pos(b)).then_with(|| a.id.cmp(&b.id)));
@@ -252,10 +252,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
             }
         }
         for (slot, from) in &e.borrow {
-            let Some((_, src)) = own_slots
-                .iter()
-                .find(|(id, _)| id.eq_ignore_ascii_case(from))
-            else {
+            let Some((_, src)) = own_slots.iter().find(|(id, _)| same_id(id, from)) else {
                 v.missing.push(format!("slot{slot} from {from}"));
                 continue;
             };
@@ -483,9 +480,7 @@ fn clear_slot(s: &mut SetsDoc, id: &str, slot: Option<SlotKind>, existing: &Opti
 
 impl AppModel {
     fn view_of(&self, id: &str) -> Option<SetView> {
-        set_views(self)
-            .into_iter()
-            .find(|v| v.id.eq_ignore_ascii_case(id))
+        set_views(self).into_iter().find(|v| same_id(&v.id, id))
     }
 
     fn set_of_item(&self, item: &str) -> Option<SetView> {
@@ -507,13 +502,13 @@ impl AppModel {
     fn taken_ids(&self) -> BTreeSet<String> {
         let mut ids: BTreeSet<String> = set_views(self)
             .into_iter()
-            .map(|v| v.id.to_lowercase())
+            .map(|v| fold_id(&v.id))
             .collect();
         if let Some(d) = &self.sets_doc {
             ids.extend(
                 d.entries()
                     .into_iter()
-                    .filter_map(|e| e.renamed_from.map(|f| f.to_lowercase())),
+                    .filter_map(|e| e.renamed_from.map(|f| fold_id(&f))),
             );
         }
         ids
@@ -541,7 +536,7 @@ impl AppModel {
                 "that slot holds a packed map ({item}); move its raw maps out of the set first"
             )),
             Some(SlotFill::Borrowed { from, .. })
-                if share_from.is_some_and(|f| f.eq_ignore_ascii_case(&from)) =>
+                if share_from.is_some_and(|f| same_id(f, &from)) =>
             {
                 Ok(None)
             }
@@ -732,7 +727,7 @@ impl AppModel {
         let taken = self.taken_ids();
         let mut id = first.clone();
         let mut n = 2;
-        while taken.contains(&id.to_lowercase()) {
+        while taken.contains(&fold_id(&id)) {
             id = format!("{first}-{n}");
             n += 1;
         }
@@ -827,7 +822,7 @@ impl AppModel {
             return;
         }
         let mut ids: Vec<String> = set_views(self).into_iter().map(|v| v.id).collect();
-        let Some(from) = ids.iter().position(|i| i.eq_ignore_ascii_case(id)) else {
+        let Some(from) = ids.iter().position(|i| same_id(i, id)) else {
             return;
         };
         let moved = ids.remove(from);
@@ -846,16 +841,16 @@ impl AppModel {
         let Some(v) = self.view_of(id) else {
             return Err(format!("no set {id}"));
         };
-        if v.id.eq_ignore_ascii_case(&new_id) {
+        if same_id(&v.id, &new_id) {
             return Err(format!("the set is already named {}", v.id));
         }
         // The set's own original name is free: renaming back undoes the rename.
         let own_original = self.sets_doc.as_ref().is_some_and(|d| {
             entry_of(&d.entries(), &v.id)
                 .and_then(|e| e.renamed_from.as_deref())
-                .is_some_and(|f| f.eq_ignore_ascii_case(&new_id))
+                .is_some_and(|f| same_id(f, &new_id))
         });
-        if !own_original && self.taken_ids().contains(&new_id.to_lowercase()) {
+        if !own_original && self.taken_ids().contains(&fold_id(&new_id)) {
             return Err(format!("a set {new_id} already exists"));
         }
         let (a, b) = (v.id.clone(), new_id);
@@ -899,8 +894,7 @@ impl AppModel {
             return Err(format!("{item} is not in {}", v.id));
         }
         let moved_in = self.sets_doc.as_ref().is_some_and(|d| {
-            entry_of(&d.entries(), &v.id)
-                .is_some_and(|e| e.add.iter().any(|f| f.eq_ignore_ascii_case(item)))
+            entry_of(&d.entries(), &v.id).is_some_and(|e| e.add.iter().any(|f| same_id(f, item)))
         });
         if v.members.len() == 1 && !moved_in {
             return Err(format!("{item} is the only texture in {}", v.id));

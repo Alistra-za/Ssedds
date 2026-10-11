@@ -9,6 +9,7 @@ use crate::pgp::settings::{
 };
 use crate::pgp::writer::FIXED_NUMBERS;
 use eframe::egui;
+use engine::sets::same_id;
 use serde_json::{json, Value};
 
 type Edit = (String, Option<Value>);
@@ -102,9 +103,7 @@ struct Ctx {
 }
 
 fn context(model: &AppModel, set: &str) -> Ctx {
-    let v = set_views(model)
-        .into_iter()
-        .find(|v| v.id.eq_ignore_ascii_case(set));
+    let v = set_views(model).into_iter().find(|v| same_id(&v.id, set));
     let filled =
         |v: &SetView, s: SlotKind| !matches!(v.slots.get(&s), None | Some(SlotFill::Empty));
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());

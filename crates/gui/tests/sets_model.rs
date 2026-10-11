@@ -763,3 +763,68 @@ fn a_packed_entry_stays_matched_after_a_match_edit() {
     assert_eq!(it.job.as_ref().unwrap().profile.format, Format::Bc1);
     assert!(m.unmatched_keys.is_empty(), "{:?}", m.unmatched_keys);
 }
+
+/// Final review I3: set ids fold as the engine folds them (Unicode lower case), so a rename to a name with a
+/// non-ASCII capital stays one set and keeps its settings.
+#[test]
+fn a_rename_with_a_non_ascii_capital_keeps_one_set_and_its_settings() {
+    use sdc_gui::model::pbr_export::json_entries;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.2)));
+    m.rename_set("landscape/rock01", "landscape/Öl").unwrap();
+    idle(&mut m);
+    let views = set_views(&m);
+    let same: Vec<_> = views
+        .iter()
+        .filter(|v| v.id.to_lowercase() == "landscape/öl")
+        .collect();
+    assert_eq!(same.len(), 1, "{views:#?}");
+    assert!(views.iter().all(|v| v.missing.is_empty()), "{views:#?}");
+    assert!(same[0].pbr && !same[0].key.is_empty());
+    assert_eq!(same[0].settings.get("specular_level"), Some(&json!(0.2)));
+    let entries = json_entries(&m);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].1.settings.get("specular_level"),
+        Some(&json!(0.2))
+    );
+}
+
+/// Final review I3: a set created in a folder whose name has a non-ASCII capital is one set (created, no phantom).
+#[test]
+fn a_created_set_in_a_non_ascii_folder_is_one_set() {
+    use image::{ImageBuffer, Rgb};
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let f = root.join("Äpfel");
+    std::fs::create_dir_all(&f).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, (y * 4) as u8, 90u8]))
+        .save(f.join("stein.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 128, 255]))
+        .save(f.join("stein_n.png"))
+        .unwrap();
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..Default::default()
+    };
+    let mut m = sdc_gui::model::AppModel::new(settings, None, session());
+    m.open_folder(root);
+    idle(&mut m);
+    let normal = key_of(&m, "stein_n.png");
+    assert!(normal.starts_with("Äpfel/"), "{normal}");
+    let id = m.drop_new_set(&normal).unwrap();
+    idle(&mut m);
+    let views = set_views(&m);
+    let folded = id.to_lowercase();
+    let same: Vec<_> = views
+        .iter()
+        .filter(|v| v.id.to_lowercase() == folded)
+        .collect();
+    assert_eq!(same.len(), 1, "{id}: {views:#?}");
+    assert!(same[0].created && !same[0].key.is_empty(), "{:#?}", same[0]);
+    assert!(same[0].members.contains(&normal));
+    assert!(views.iter().all(|v| v.missing.is_empty()), "{views:#?}");
+}

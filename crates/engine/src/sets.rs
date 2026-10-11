@@ -44,12 +44,24 @@ pub fn set_id(output_root: &Path, key: &str) -> String {
         .map_or_else(|| key.to_string(), str::to_string)
 }
 
+/// A set id as set keys hold it: '/'-separated, Unicode lower case, no leading or trailing '/'.
+pub fn fold_id(id: &str) -> String {
+    id.replace('\\', "/")
+        .to_lowercase()
+        .trim_matches('/')
+        .to_string()
+}
+
+/// Whether two set ids (or `[files]` keys) name the same thing, as the engine compares them.
+pub fn same_id(a: &str, b: &str) -> bool {
+    fold_id(a) == fold_id(b)
+}
+
 /// The key of the set with id `id`: lower-case, '/'-separated, under the output root (as `group_sets_with` builds
 /// keys).
 pub fn set_key(output_root: &Path, id: &str) -> String {
     let root = fold(output_root);
-    let id = id.replace('\\', "/").to_lowercase();
-    format!("{}/{}", root.trim_end_matches('/'), id.trim_matches('/'))
+    format!("{}/{}", root.trim_end_matches('/'), fold_id(id))
 }
 
 fn stem_lower(f: &InputFile) -> String {

@@ -85,6 +85,17 @@ fn ids_and_keys_round_trip() {
     assert_eq!(set_id(root, "d:/x/y"), "d:/x/y");
 }
 
+/// Ids fold as keys do (Unicode lower case), so the GUI compares them with `same_id` (final review I3).
+#[test]
+fn ids_fold_as_keys_do() {
+    let root = Path::new("C:/Out");
+    assert_eq!(set_key(root, r"Landscape\Öl/"), "c:/out/landscape/öl");
+    assert_eq!(fold_id("/Äpfel/Stein/"), "äpfel/stein");
+    assert!(same_id("landscape/Öl", "landscape/öl"));
+    assert!(same_id(r"Äpfel\stein", "äpfel/Stein"));
+    assert!(!same_id("landscape/öl", "landscape/ol"));
+}
+
 #[test]
 fn no_edits_change_nothing() {
     let d = fixture();
