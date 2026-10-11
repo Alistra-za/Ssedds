@@ -19,10 +19,12 @@ use device::{Gpu, Target};
 use draw::{cbuffers, create_program, Program, ShapeDraw};
 use locate::Fingerprint;
 use material::{perm_material, write_material};
+use nif::material::MaterialState;
 use permutation::{defines, Material, Stage};
 use scene::{Scene, View};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11BlendState, ID3D11Query, ID3D11RasterizerState, ID3D11SamplerState,
@@ -71,6 +73,49 @@ pub struct FrameTiming {
     pub readback_ms: f64,
 }
 
+/// What a loaded shape is doing on screen. P1-B adds `Pending`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeStatus {
+    /// The current material is on screen.
+    Drawing,
+    /// `MaterialState::hidden` (PGPatcher `delete`): not drawn.
+    Hidden,
+    /// The current material could not be built (compile, mesh or GPU error). The previous draw, if there is
+    /// one, stays on screen.
+    Failed(String),
+}
+
+/// One loaded shape as the GUI sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeInfo {
+    pub id: ShapeId,
+    pub name: String,
+    /// The material last loaded or set (even when it failed to build).
+    pub material: MaterialState,
+    pub status: ShapeStatus,
+}
+
+/// One loaded shape: the CPU mesh (kept so an edit rebuilds the draw without re-parsing), the material last
+/// loaded or set, and what is on screen (possibly built from an earlier material, see [`ShapeStatus::Failed`]).
+struct ShapeState {
+    name: String,
+    mesh: Arc<nif::geom::Mesh>,
+    material: MaterialState,
+    draw: Option<ShapeDraw>,
+    status: ShapeStatus,
+}
+
+/// Why a draw could not be built. A permutation compile error is reported in `LoadReport::compile_errors`,
+/// everything else in `errors`.
+enum BuildError {
+    Compile(String),
+    Other(String),
+}
+
+/// A texture resolved once per load: its view and kind, or `None` (the resolver had no bytes, or they did
+/// not decode).
+type TexSlot = Option<(ID3D11ShaderResourceView, SrvKind)>;
+
 /// The 3D preview renderer: message-shaped (load bytes → report, render scene → pixels) so it can later move
 /// into a sidecar process. Single-threaded, like [`Gpu`].
 pub struct Renderer {
@@ -80,7 +125,12 @@ pub struct Renderer {
     features: Vec<String>,
     programs: HashMap<String, Result<Program, String>>,
     defaults: HashMap<(SrvKind, [u8; 4]), ID3D11ShaderResourceView>,
-    shapes: Vec<ShapeDraw>,
+    /// Every Lighting shape of the loaded model, keyed by NIF block index (built-ins: `ShapeId(0)`).
+    shapes: BTreeMap<ShapeId, ShapeState>,
+    /// Shapes with a draw that are not hidden: opaque first, then alpha-blended, block order within each.
+    draw_order: Vec<ShapeId>,
+    /// Textures resolved since the last load, by canonical path.
+    tex_cache: HashMap<String, TexSlot>,
     bounds: Option<([f32; 3], f32)>,
     sampler: ID3D11SamplerState,
     raster: ID3D11RasterizerState,
@@ -94,10 +144,6 @@ fn permutation_key(d: &permutation::Defines, target: &str) -> String {
     let mut v: Vec<String> = d.0.iter().map(|(k, v)| format!("{k}={v}")).collect();
     v.sort();
     format!("{target}|{}", v.join(";"))
-}
-
-fn bit(v: u32, b: u32) -> bool {
-    v & (1 << b) != 0
 }
 
 impl Renderer {
@@ -168,7 +214,9 @@ impl Renderer {
             features: DEFAULT_FEATURES.iter().map(|s| s.to_string()).collect(),
             programs: HashMap::new(),
             defaults: HashMap::new(),
-            shapes: vec![],
+            shapes: BTreeMap::new(),
+            draw_order: vec![],
+            tex_cache: HashMap::new(),
             bounds: None,
             sampler: s.ok_or("no sampler")?,
             raster: r.ok_or("no rasterizer state")?,
@@ -183,7 +231,7 @@ impl Renderer {
         &self.gpu
     }
 
-    /// CS feature defines for the next [`Renderer::load`] (default [`DEFAULT_FEATURES`]).
+    /// CS feature defines for the next load or rebuilt draw (default [`DEFAULT_FEATURES`]).
     pub fn set_features(&mut self, features: Vec<String>) {
         self.features = features;
     }
@@ -214,11 +262,15 @@ impl Renderer {
         self.timing
     }
 
-    /// Bounding sphere (centre, radius) of every drawn shape's `positions × transform` (skinned shapes:
-    /// positions as-is, since the skinned VS ignores World and P0 bones are identity). Parent NiNode
-    /// transforms are not applied in P0.
+    /// Bounding sphere (centre, radius) of every shape drawn at load: `positions × transform` (skinned
+    /// shapes: positions as-is, since the skinned VS ignores World and P0 bones are identity). Parent NiNode
+    /// transforms are not applied in P1-A. Material edits do not move it.
     pub fn bounds(&self) -> Option<([f32; 3], f32)> {
         self.bounds
+    }
+
+    fn linear_lighting(&self) -> bool {
+        self.features.iter().any(|f| f == "ENABLE_LL")
     }
 
     fn program(&mut self, m: &Material) -> Result<Program, String> {
@@ -261,170 +313,230 @@ impl Renderer {
         Ok(v)
     }
 
-    /// Parses the NIF, builds a draw per BSLightingShaderProperty shape and replaces the loaded model.
-    /// `textures` resolves a canonical texture path (`textures/…`, lower case, `/`) to DDS bytes.
+    /// The texture at canonical `norm`, resolved and decoded once per load. A path the resolver does not
+    /// return is listed in `rep.missing_textures`; undecodable bytes are an `rep.errors` line.
+    fn texture(
+        &mut self,
+        norm: &str,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        rep: &mut LoadReport,
+    ) -> TexSlot {
+        if let Some(t) = self.tex_cache.get(norm) {
+            return t.clone();
+        }
+        let loaded = match textures(norm) {
+            None => {
+                if !rep.missing_textures.iter().any(|m| m == norm) {
+                    rep.missing_textures.push(norm.to_string());
+                }
+                None
+            }
+            Some(bytes) => match textures::load_dds(&self.gpu, &bytes) {
+                Ok(t) => Some((t.srv, t.kind)),
+                Err(e) => {
+                    rep.errors.push(format!("{norm}: {e}"));
+                    None
+                }
+            },
+        };
+        self.tex_cache.insert(norm.to_string(), loaded.clone());
+        loaded
+    }
+
+    /// NIF slot → register for every slot the PS reads (a texture is loaded only then), then a 1×1 default for
+    /// every reflected register left without one. Returns `(register, view)` for every reflected SRV and the
+    /// registers bound to a real texture.
+    fn bind_textures(
+        &mut self,
+        name: &str,
+        program: &Program,
+        m: &MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        rep: &mut LoadReport,
+    ) -> Result<(Vec<(u32, ID3D11ShaderResourceView)>, Bound), String> {
+        let pbr = m.is_pbr();
+        let msn = m.slsf1 & (1 << 12) != 0;
+        let mut real: HashMap<u32, ID3D11ShaderResourceView> = HashMap::new();
+        for (slot, path) in m.slots.iter().enumerate() {
+            if path.norm.is_empty() {
+                continue;
+            }
+            let Some(reg) = textures::register_for_slot(m.shader_type, pbr, msn, slot) else {
+                continue;
+            };
+            let Some(kind) = draw::srv_kind_at(&program.ps.reflection, reg) else {
+                continue;
+            };
+            match self.texture(&path.norm, textures, rep) {
+                Some((srv, k)) if k == kind => {
+                    real.insert(reg, srv);
+                }
+                Some(_) => rep.warnings.push(format!(
+                    "{name}: {} is not a {kind:?} texture (t{reg}); default bound",
+                    path.norm
+                )),
+                None => {}
+            }
+        }
+        let mut srvs = vec![];
+        for (_, reg, kind) in &program.ps.reflection.srvs {
+            if let Some(v) = real.get(reg) {
+                srvs.push((*reg, v.clone()));
+                continue;
+            }
+            let rgba = textures::default_for(*reg, m.shader_type, pbr);
+            let v = self
+                .default_srv(*kind, rgba)
+                .map_err(|e| format!("default texture: {e}"))?;
+            srvs.push((*reg, v));
+        }
+        let bound = Bound {
+            regs: real.keys().copied().collect(),
+        };
+        Ok((srvs, bound))
+    }
+
+    /// Builds one shape's draw for material `m`: program (compiled synchronously), textures, vertex streams
+    /// against the VS inputs, zero cbuffers from the reflection, then the material.
+    fn build_draw(
+        &mut self,
+        name: &str,
+        mesh: &nif::geom::Mesh,
+        m: &MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        rep: &mut LoadReport,
+    ) -> Result<ShapeDraw, BuildError> {
+        let program = self
+            .program(&perm_material(m))
+            .map_err(BuildError::Compile)?;
+        let (srvs, bound) = self
+            .bind_textures(name, &program, m, textures, rep)
+            .map_err(BuildError::Other)?;
+        let gpu_mesh = mesh::build(
+            &self.gpu,
+            mesh,
+            &program.vs.reflection.inputs,
+            &program.vs.bytecode,
+        )
+        .map_err(BuildError::Other)?;
+        let (mut vs_cbs, mut ps_cbs) = match (
+            cbuffers(&self.gpu, &program.vs.reflection),
+            cbuffers(&self.gpu, &program.ps.reflection),
+        ) {
+            (Ok(v), Ok(p)) => (v, p),
+            (Err(e), _) | (_, Err(e)) => return Err(BuildError::Other(e)),
+        };
+        let ll = self.linear_lighting();
+        for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
+            write_material(&mut cb.writer, m, &bound, ll);
+        }
+        Ok(ShapeDraw {
+            name: name.to_string(),
+            vs: program.vs_obj.clone(),
+            ps: program.ps_obj.clone(),
+            mesh: gpu_mesh,
+            vs_cbs,
+            ps_cbs,
+            srvs,
+            samplers: program.ps.reflection.samplers.iter().map(|s| s.1).collect(),
+            model: mesh.transform,
+            blend: m.blend(),
+            skinned: m.skinned,
+            bound,
+        })
+    }
+
+    /// Parses the NIF and loads it: `load_parsed(&parse(nif_bytes), textures)`. `textures` resolves a canonical
+    /// texture path (`textures/…`, lower case, `/`) to DDS bytes.
     pub fn load(
         &mut self,
         nif_bytes: &[u8],
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
     ) -> LoadReport {
+        self.load_parsed(&parse(nif_bytes), textures)
+    }
+
+    /// Replaces the loaded model with `parsed`: one draw per shape (compiled synchronously), textures resolved
+    /// through `textures`. A shape whose draw cannot be built stays listed with status `Failed`; a hidden
+    /// material is listed as `Hidden` and not built.
+    pub fn load_parsed(
+        &mut self,
+        parsed: &ParsedNif,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) -> LoadReport {
         self.shapes.clear();
+        self.draw_order.clear();
+        self.tex_cache.clear();
         self.bounds = None;
-        let mut rep = LoadReport::default();
-        let scan = match nif::scan::scan(nif_bytes) {
-            Ok(s) => s,
-            Err(e) => {
-                rep.errors.push(format!("NIF: {e}"));
-                return rep;
-            }
+        let mut rep = LoadReport {
+            le_mesh: parsed.le_mesh,
+            errors: parsed.errors.clone(),
+            warnings: parsed.warnings.clone(),
+            ..LoadReport::default()
         };
-        rep.warnings
-            .extend(scan.problems.iter().map(|p| format!("NIF: {p}")));
-        if scan.le_mesh {
-            rep.le_mesh = true;
+        if parsed.le_mesh {
             return rep;
         }
-        let header = match nif::header::Header::parse(nif_bytes) {
-            Ok(h) => h,
-            Err(e) => {
-                rep.errors.push(format!("NIF header: {e}"));
-                return rep;
-            }
-        };
-        let linear_lighting = self.features.iter().any(|f| f == "ENABLE_LL");
-        let mut tex_cache: HashMap<String, Option<textures::Texture>> = HashMap::new();
+        for s in &parsed.shapes {
+            let (draw, status) = if s.material.hidden {
+                (None, ShapeStatus::Hidden)
+            } else {
+                match self.build_draw(&s.name, &s.mesh, &s.material, textures, &mut rep) {
+                    Ok(d) => (Some(d), ShapeStatus::Drawing),
+                    Err(BuildError::Compile(e)) => {
+                        rep.compile_errors.push(format!("{}: {e}", s.name));
+                        (None, ShapeStatus::Failed(e))
+                    }
+                    Err(BuildError::Other(e)) => {
+                        rep.errors.push(format!("{}: {e}", s.name));
+                        (None, ShapeStatus::Failed(e))
+                    }
+                }
+            };
+            self.shapes.insert(
+                s.id,
+                ShapeState {
+                    name: s.name.clone(),
+                    mesh: s.mesh.clone(),
+                    material: s.material.clone(),
+                    draw,
+                    status,
+                },
+            );
+        }
+        self.bounds = self.compute_bounds();
+        self.warn_missing_fields(&mut rep);
+        self.sort_draw_order();
+        rep.shapes = self
+            .shapes
+            .values()
+            .filter(|s| s.status == ShapeStatus::Drawing)
+            .count();
+        rep
+    }
+
+    /// Every loaded shape in id order, with the material last loaded or set and its status.
+    pub fn shapes(&self) -> Vec<ShapeInfo> {
+        self.shapes
+            .iter()
+            .map(|(id, s)| ShapeInfo {
+                id: *id,
+                name: s.name.clone(),
+                material: s.material.clone(),
+                status: s.status.clone(),
+            })
+            .collect()
+    }
+
+    fn compute_bounds(&self) -> Option<([f32; 3], f32)> {
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
         let mut points: Vec<[f32; 3]> = vec![];
-        for row in &scan.shapes {
-            let label = row
-                .head
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("block {}", row.block));
-            let nif::scan::Shader::Lighting(lighting, slots) = &row.shader else {
-                rep.warnings.push(format!(
-                    "{label}: not a BSLightingShaderProperty shape, not drawn in P0"
-                ));
-                continue;
-            };
-            let mesh = match nif::geom::read_shape(&header, nif_bytes, row.block as usize) {
-                Ok(m) => m,
-                Err(e) => {
-                    rep.errors.push(format!("{label}: {e}"));
-                    continue;
-                }
-            };
-            if let Err(e) = mesh::validate(&mesh) {
-                rep.errors.push(format!("{label}: {e}"));
-                continue;
-            }
-            let state =
-                nif::material::MaterialState::from_lighting(&row.head, lighting, slots, row.alpha);
-            let material = perm_material(&state);
-            let program = match self.program(&material) {
-                Ok(p) => p,
-                Err(e) => {
-                    rep.compile_errors.push(format!("{label}: {e}"));
-                    continue;
-                }
-            };
-            let pbr = bit(lighting.slsf2, 23);
-            let msn = bit(lighting.slsf1, 12);
-            let blend = row.alpha.is_some_and(|a| a.blend());
-            let ps_defines = &program.ps.reflection;
-            // NIF slot → register; a texture is loaded only if the PS reads its register.
-            let mut bound: HashMap<u32, ID3D11ShaderResourceView> = HashMap::new();
-            for (slot, path) in slots.iter().enumerate() {
-                if path.norm.is_empty() {
-                    continue;
-                }
-                let Some(reg) = textures::register_for_slot(lighting.shader_type, pbr, msn, slot)
-                else {
-                    continue;
-                };
-                let Some(kind) = draw::srv_kind_at(ps_defines, reg) else {
-                    continue;
-                };
-                if !tex_cache.contains_key(&path.norm) {
-                    let loaded = match textures(&path.norm) {
-                        None => {
-                            if !rep.missing_textures.contains(&path.norm) {
-                                rep.missing_textures.push(path.norm.clone());
-                            }
-                            None
-                        }
-                        Some(bytes) => match textures::load_dds(&self.gpu, &bytes) {
-                            Ok(t) => Some(t),
-                            Err(e) => {
-                                rep.errors.push(format!("{}: {e}", path.norm));
-                                None
-                            }
-                        },
-                    };
-                    tex_cache.insert(path.norm.clone(), loaded);
-                }
-                match tex_cache.get(&path.norm) {
-                    Some(Some(t)) if t.kind == kind => {
-                        bound.insert(reg, t.srv.clone());
-                    }
-                    Some(Some(_)) => rep.warnings.push(format!(
-                        "{label}: {} is not a {kind:?} texture (t{reg}); default bound",
-                        path.norm
-                    )),
-                    _ => {}
-                }
-            }
-            let mut srvs = vec![];
-            let mut srv_err = None;
-            for (_, reg, kind) in &program.ps.reflection.srvs {
-                if let Some(v) = bound.get(reg) {
-                    srvs.push((*reg, v.clone()));
-                    continue;
-                }
-                let rgba = textures::default_for(*reg, lighting.shader_type, pbr);
-                match self.default_srv(*kind, rgba) {
-                    Ok(v) => srvs.push((*reg, v)),
-                    Err(e) => srv_err = Some(e),
-                }
-            }
-            if let Some(e) = srv_err {
-                rep.errors.push(format!("{label}: default texture: {e}"));
-                continue;
-            }
-            let gpu_mesh = match mesh::build(
-                &self.gpu,
-                &mesh,
-                &program.vs.reflection.inputs,
-                &program.vs.bytecode,
-            ) {
-                Ok(m) => m,
-                Err(e) => {
-                    rep.errors.push(format!("{label}: {e}"));
-                    continue;
-                }
-            };
-            let (mut vs_cbs, mut ps_cbs) = match (
-                cbuffers(&self.gpu, &program.vs.reflection),
-                cbuffers(&self.gpu, &program.ps.reflection),
-            ) {
-                (Ok(v), Ok(p)) => (v, p),
-                (Err(e), _) | (_, Err(e)) => {
-                    rep.errors.push(format!("{label}: {e}"));
-                    continue;
-                }
-            };
-            let bound_regs = Bound {
-                regs: bound.keys().copied().collect(),
-            };
-            for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
-                write_material(&mut cb.writer, &state, &bound_regs, linear_lighting);
-            }
-            let model = mesh.transform;
-            for p in &mesh.positions {
-                let q = if material.skinned {
+        for s in self.shapes.values().filter(|s| s.draw.is_some()) {
+            let t = &s.mesh.transform;
+            for p in &s.mesh.positions {
+                let q = if s.material.skinned {
                     *p
                 } else {
-                    let t = &model;
                     [0, 1, 2].map(|r| t[r][0] * p[0] + t[r][1] * p[1] + t[r][2] * p[2] + t[r][3])
                 };
                 for k in 0..3 {
@@ -433,57 +545,60 @@ impl Renderer {
                 }
                 points.push(q);
             }
-            self.shapes.push(ShapeDraw {
-                name: label,
-                vs: program.vs_obj.clone(),
-                ps: program.ps_obj.clone(),
-                mesh: gpu_mesh,
-                vs_cbs,
-                ps_cbs,
-                srvs,
-                samplers: program.ps.reflection.samplers.iter().map(|s| s.1).collect(),
-                model,
-                blend,
-                skinned: material.skinned,
-            });
         }
-        if !points.is_empty() {
-            let c = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
-            let r = points
+        if points.is_empty() {
+            return None;
+        }
+        let c = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
+        let r = points
+            .iter()
+            .map(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt())
+            .fold(0.0f32, f32::max);
+        Some((c, r))
+    }
+
+    /// A required name no drawn shape's cbuffers have: logged once per load (CS version drift, 03 §6). The
+    /// skinned VS reads neither World nor EyePosition (bones + BonesPivot instead), so those two are only
+    /// expected from non-skinned shapes.
+    fn warn_missing_fields(&self, rep: &mut LoadReport) {
+        let draws: Vec<&ShapeDraw> = self
+            .shapes
+            .values()
+            .filter_map(|s| s.draw.as_ref())
+            .collect();
+        if draws.is_empty() {
+            return;
+        }
+        for n in scene::REQUIRED {
+            let world_only = matches!(*n, "World" | "EyePosition");
+            let candidates: Vec<&&ShapeDraw> = draws
                 .iter()
-                .map(|p| {
-                    ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt()
-                })
-                .fold(0.0f32, f32::max);
-            self.bounds = Some((c, r));
-        }
-        // A required name no drawn shape's cbuffers have: logged once per build (CS version drift, 03 §6).
-        // The skinned VS reads neither World nor EyePosition (bones + BonesPivot instead), so those two are
-        // only expected from non-skinned shapes.
-        if !self.shapes.is_empty() {
-            for n in scene::REQUIRED {
-                let world_only = matches!(*n, "World" | "EyePosition");
-                let candidates: Vec<&ShapeDraw> = self
-                    .shapes
-                    .iter()
-                    .filter(|s| !(world_only && s.skinned))
-                    .collect();
-                if candidates.is_empty() {
-                    continue;
-                }
-                let somewhere = candidates
-                    .iter()
-                    .any(|s| s.vs_cbs.iter().chain(&s.ps_cbs).any(|cb| cb.writer.has(n)));
-                if !somewhere {
-                    rep.warnings
-                        .push(format!("this CS build has no cbuffer field {n:?}"));
-                }
+                .filter(|s| !(world_only && s.skinned))
+                .collect();
+            if candidates.is_empty() {
+                continue;
+            }
+            let somewhere = candidates
+                .iter()
+                .any(|s| s.vs_cbs.iter().chain(&s.ps_cbs).any(|cb| cb.writer.has(n)));
+            if !somewhere {
+                rep.warnings
+                    .push(format!("this CS build has no cbuffer field {n:?}"));
             }
         }
-        // Opaque first, then alpha-blended (P0 does not sort blended shapes by depth).
-        self.shapes.sort_by_key(|s| s.blend);
-        rep.shapes = self.shapes.len();
-        rep
+    }
+
+    /// Opaque first, then alpha-blended (P0 does not sort blended shapes by depth); block order within each.
+    /// Hidden shapes and shapes without a draw are left out.
+    fn sort_draw_order(&mut self) {
+        let mut order: Vec<(bool, ShapeId)> = self
+            .shapes
+            .iter()
+            .filter(|(_, s)| s.status != ShapeStatus::Hidden)
+            .filter_map(|(id, s)| s.draw.as_ref().map(|d| (d.blend, *id)))
+            .collect();
+        order.sort_by_key(|(blend, _)| *blend);
+        self.draw_order = order.into_iter().map(|(_, id)| id).collect();
     }
 
     /// Renders the loaded model into a `w × h` RGBA8 frame (tightly packed, top row first, alpha 255: see
@@ -517,7 +632,10 @@ impl Renderer {
             }]));
             ctx.RSSetState(&self.raster);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            for s in self.shapes.iter_mut() {
+            for id in &self.draw_order {
+                let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
+                    continue;
+                };
                 s.update(gpu, scene, &view);
                 ctx.IASetInputLayout(&s.mesh.layout);
                 for (slot, (b, stride)) in s.mesh.streams.iter().enumerate() {

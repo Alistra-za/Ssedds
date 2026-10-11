@@ -5,6 +5,7 @@
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
+use crate::material::Bound;
 use crate::mesh::GpuMesh;
 use crate::scene::{Mat3x4, Scene, View};
 use windows::Win32::Graphics::Direct3D11::{
@@ -60,6 +61,8 @@ pub struct ShapeDraw {
     pub model: Mat3x4,
     pub blend: bool,
     pub skinned: bool,
+    /// Registers bound to a real texture (not a 1×1 default); the PBR flags and `EnvmapData.y` read it.
+    pub bound: Bound,
 }
 
 /// The VS/PS pair of a permutation, compiled and created once per renderer.
