@@ -96,3 +96,19 @@ fn v1_database_is_rebuilt_at_current_schema() {
         .unwrap();
     assert_eq!(v, modscan::store::SCHEMA_VERSION);
 }
+
+#[test]
+fn texture_and_copy_locations_name_the_winning_origin_root() {
+    let d = instance_fixture("+B\n+A\n");
+    put(&d, "A", "textures/a_d.dds");
+    put(&d, "B", "textures/a_d.dds");
+    let store = scan(&d);
+    let (kind, root) = store.texture_location("textures/a_d.dds").unwrap().unwrap();
+    assert_eq!(kind, modscan::store::KIND_MOD);
+    assert_eq!(std::path::Path::new(&root), d.path().join("mods").join("B"));
+    assert!(store
+        .texture_location("textures/nope.dds")
+        .unwrap()
+        .is_none());
+    assert!(store.copy_location(987_654).unwrap().is_none());
+}

@@ -819,6 +819,34 @@ impl Store {
             .unwrap_or(TexResolution::Missing))
     }
 
+    /// Where the game's copy of texture `norm` lives: (origin kind, origin root). A BSA origin's root is the
+    /// archive file; any other root is a folder holding `norm` as a loose file.
+    pub fn texture_location(&self, norm: &str) -> Result<Option<(i32, String)>, ScanError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT o.kind, o.root FROM tex_winner w JOIN path p ON p.id = w.path_id
+                 JOIN origin o ON o.id = w.origin_id WHERE p.p = ?1 AND o.enabled = 1",
+                [norm],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// A NIF copy's (canonical path, origin kind, origin root), for reading its bytes (see
+    /// [`Store::texture_location`] for the root).
+    pub fn copy_location(&self, copy_id: i64) -> Result<Option<(String, i32, String)>, ScanError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT p.p, o.kind, o.root FROM nif_copy c JOIN path p ON p.id = c.path_id
+                 JOIN origin o ON o.id = c.origin_id WHERE c.id = ?1",
+                [copy_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?)
+    }
+
     /// Replaces `pgp_diff` with path → (crc32original, crc32patched).
     pub fn set_pgp_diff(&mut self, diff: &HashMap<String, (u32, u32)>) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;

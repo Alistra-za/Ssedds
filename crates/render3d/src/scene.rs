@@ -12,7 +12,8 @@ pub type Mat4 = [[f32; 4]; 4];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Camera {
-    /// `centre + radius × 2.5 × normalize(0.3, −1, 0.4)` looking at the bounds centre (Skyrim is Z-up).
+    /// The orbit at [`AUTO_YAW`], [`AUTO_PITCH`] and `radius × AUTO_DISTANCE` around the bounds centre: in front
+    /// of the model (Skyrim actors face +Y; the world is Z-up), a little above, looking at the centre.
     Auto,
     /// Orbit around `target`: yaw about +Z (0 = camera on the −Y side), pitch above the XY plane, both in
     /// radians; `distance` in NIF units.
@@ -23,6 +24,13 @@ pub enum Camera {
         distance: f32,
     },
 }
+
+/// Yaw of [`Camera::Auto`]: the camera on the +Y side, facing the front of an actor.
+pub const AUTO_YAW: f32 = std::f32::consts::PI;
+/// Pitch of [`Camera::Auto`]: `atan(0.25)`, slightly above.
+pub const AUTO_PITCH: f32 = 0.244_978_66;
+/// Distance of [`Camera::Auto`] in bounding radii.
+pub const AUTO_DISTANCE: f32 = 2.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirLight {
@@ -65,7 +73,8 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 
 impl Scene {
     /// Interior-like neutral preview:
-    /// - one directional light from the upper front-left of the auto camera (camera on −Y, so "left" is −X),
+    /// - one directional light from the upper front-left of the auto camera (camera on +Y looking towards −Y, so its
+    ///   left is +X),
     ///   warm white. Non-black on purpose: the captures only had the black `(−1,0,0)` placeholder (Q3);
     /// - ambient from six grey levels (04 §3.2): brighter from above (+Z 0.30), darker from below (−Z 0.12),
     ///   sides 0.20–0.23. Linear values (Linear Lighting on); the captured uniform interior ambient was
@@ -74,7 +83,7 @@ impl Scene {
         Scene {
             camera: Camera::Auto,
             dir_light: DirLight {
-                direction: norm([-0.5, -0.8, 0.9]),
+                direction: norm([0.5, 0.8, 0.9]),
                 color: [2.0, 1.94, 1.84],
             },
             ambient6: [
@@ -196,40 +205,26 @@ impl View {
     pub fn new(camera: &Camera, bounds: Option<([f32; 3], f32)>, width: u32, height: u32) -> View {
         let (centre, radius) = bounds.unwrap_or(([0.0; 3], 1.0));
         let radius = radius.max(1e-3);
-        let (target, eye) = match *camera {
-            Camera::Auto => {
-                let d = norm([0.3, -1.0, 0.4]);
-                let k = radius * 2.5;
-                (
-                    centre,
-                    [
-                        centre[0] + d[0] * k,
-                        centre[1] + d[1] * k,
-                        centre[2] + d[2] * k,
-                    ],
-                )
-            }
+        let orbit = match *camera {
+            Camera::Auto => (centre, AUTO_YAW, AUTO_PITCH, radius * AUTO_DISTANCE),
             Camera::Orbit {
                 target,
                 yaw,
                 pitch,
                 distance,
-            } => {
-                let d = [
-                    pitch.cos() * yaw.sin(),
-                    -pitch.cos() * yaw.cos(),
-                    pitch.sin(),
-                ];
-                (
-                    target,
-                    [
-                        target[0] + d[0] * distance,
-                        target[1] + d[1] * distance,
-                        target[2] + d[2] * distance,
-                    ],
-                )
-            }
+            } => (target, yaw, pitch, distance),
         };
+        let (target, yaw, pitch, distance) = orbit;
+        let d = [
+            pitch.cos() * yaw.sin(),
+            -pitch.cos() * yaw.cos(),
+            pitch.sin(),
+        ];
+        let eye = [
+            target[0] + d[0] * distance,
+            target[1] + d[1] * distance,
+            target[2] + d[2] * distance,
+        ];
         let f = norm(sub(target, eye));
         let up = if f[2].abs() > 0.999 {
             [0.0, 1.0, 0.0]
@@ -531,6 +526,29 @@ mod tests {
             for (c, x) in row.iter().enumerate() {
                 assert!((x - if r == c { 1.0 } else { 0.0 }).abs() < 1e-4);
             }
+        }
+    }
+
+    #[test]
+    fn auto_camera_faces_the_front_from_above_and_light_hits_that_side() {
+        let c = [5.0, 6.0, 7.0];
+        let v = View::new(&Camera::Auto, Some((c, 2.0)), 64, 64);
+        // Skyrim actors face +Y: the default view looks at them from +Y, a little above.
+        assert!(v.eye[1] > c[1] + 3.0, "{:?}", v.eye);
+        assert!(v.eye[2] > c[2], "{:?}", v.eye);
+        assert!((v.eye[0] - c[0]).abs() < 1e-4, "{:?}", v.eye);
+        let to_eye = sub(v.eye, c);
+        assert!(dot(Scene::neutral().dir_light.direction, to_eye) > 0.0);
+        // The orbit at the auto angles is the same camera, so a first drag does not jump.
+        let o = Camera::Orbit {
+            target: c,
+            yaw: AUTO_YAW,
+            pitch: AUTO_PITCH,
+            distance: 2.0 * AUTO_DISTANCE,
+        };
+        let w = View::new(&o, Some((c, 2.0)), 64, 64);
+        for k in 0..3 {
+            assert!((w.eye[k] - v.eye[k]).abs() < 1e-4);
         }
     }
 

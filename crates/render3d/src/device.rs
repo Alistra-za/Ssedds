@@ -21,6 +21,7 @@
 //! call `Release` on drop). Every `unsafe` block below is a plain D3D11/DXGI
 //! call whose pointer arguments are locals that outlive the call.
 
+use std::sync::OnceLock;
 use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::{
@@ -225,7 +226,7 @@ impl Gpu {
 
     /// Error text for a failed `what`. It starts with [`DEVICE_REMOVED`]
     /// when the device is gone, so callers know to rebuild.
-    fn fail(&self, what: &str, e: impl std::fmt::Display) -> String {
+    pub(crate) fn fail(&self, what: &str, e: impl std::fmt::Display) -> String {
         match self.removed_reason() {
             Some(reason) => format!("{DEVICE_REMOVED}: {reason} ({what}: {e})"),
             None => format!("{what}: {e}"),
@@ -276,6 +277,29 @@ fn unorm8(bits: u16) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// half (linear) → u8 sRGB: IEC 61966-2-1 encode of clamp(v, 0, 1), then round (NaN → 0). Encoding before the
+/// 8-bit quantisation keeps the dark steps that a u8-linear → sRGB table would merge.
+fn srgb8(bits: u16) -> u8 {
+    let v = half::f16::from_bits(bits).to_f32();
+    if v.is_nan() {
+        return 0;
+    }
+    let l = v.clamp(0.0, 1.0);
+    let s = if l <= 0.003_130_8 {
+        l * 12.92
+    } else {
+        1.055 * l.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round() as u8
+}
+
+/// `f(bits)` for every half bit pattern, built once: the readback is one table lookup per channel.
+fn table(cell: &'static OnceLock<Vec<u8>>, f: fn(u16) -> u8) -> &'static [u8] {
+    cell.get_or_init(|| (0..=u16::MAX).map(f).collect())
+}
+static UNORM8: OnceLock<Vec<u8>> = OnceLock::new();
+static SRGB8: OnceLock<Vec<u8>> = OnceLock::new();
+
 impl Target {
     /// Creates the colour and depth textures and their views. A removed
     /// device gives an error starting with [`DEVICE_REMOVED`].
@@ -323,6 +347,18 @@ impl Target {
     /// half to u8 with the identity-clamp tonemap of P0. A removed device
     /// (surfaced by `Map`) gives an error starting with [`DEVICE_REMOVED`].
     pub fn readback_rgba8(&self, gpu: &Gpu) -> Result<Vec<u8>, String> {
+        self.readback(gpu, false)
+    }
+
+    /// As [`Target::readback_rgba8`]; with `srgb` the colour channels are sRGB-encoded from the half values
+    /// (alpha stays linear), for display of a frame drawn in linear working space (Linear Lighting on).
+    pub fn readback(&self, gpu: &Gpu, srgb: bool) -> Result<Vec<u8>, String> {
+        let colour = if srgb {
+            table(&SRGB8, srgb8)
+        } else {
+            table(&UNORM8, unorm8)
+        };
+        let alpha = table(&UNORM8, unorm8);
         let mut sd = tex2d_desc(self.width, self.height, DXGI_FORMAT_R16G16B16A16_FLOAT);
         sd.Usage = D3D11_USAGE_STAGING;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -346,12 +382,14 @@ impl Target {
                 let row = unsafe {
                     std::slice::from_raw_parts((mapped.pData as *const u8).add(y * pitch), w * 8)
                 };
-                out.extend(
-                    row.as_chunks::<2>()
-                        .0
-                        .iter()
-                        .map(|c| unorm8(u16::from_le_bytes(*c))),
-                );
+                out.extend(row.as_chunks::<2>().0.iter().enumerate().map(|(i, c)| {
+                    let bits = u16::from_le_bytes(*c) as usize;
+                    if i % 4 == 3 {
+                        alpha[bits]
+                    } else {
+                        colour[bits]
+                    }
+                }));
             }
         }
         // SAFETY: paired with the successful Map above; nothing between
@@ -368,6 +406,22 @@ impl Target {
 mod tests {
     use super::unorm8;
     use half::f16;
+
+    #[test]
+    fn half_to_srgb8_encodes_before_quantising() {
+        use super::srgb8;
+        let b = |v: f32| f16::from_f32(v).to_bits();
+        assert_eq!(srgb8(b(0.0)), 0);
+        assert_eq!(srgb8(b(1.0)), 255);
+        assert_eq!(srgb8(b(4.0)), 255);
+        assert_eq!(srgb8(b(-1.0)), 0);
+        assert_eq!(srgb8(f16::NAN.to_bits()), 0);
+        // 0.5 linear = 0.7354 sRGB.
+        assert_eq!(srgb8(b(0.5)), 188);
+        // Dark tones keep their steps (a u8-linear LUT would collapse 0.001 and 0.002 to 0).
+        assert!(srgb8(b(0.002)) > srgb8(b(0.001)));
+        assert!(srgb8(b(0.001)) > 0);
+    }
 
     #[test]
     fn half_to_unorm8_rounds_and_clamps() {

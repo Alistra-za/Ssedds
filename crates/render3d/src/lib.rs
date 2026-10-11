@@ -19,10 +19,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11BlendState, ID3D11RasterizerState, ID3D11SamplerState, ID3D11ShaderResourceView,
-    D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
-    D3D11_BLEND_SRC_ALPHA, D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_COMPARISON_NEVER, D3D11_CULL_NONE,
-    D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_FLOAT32_MAX, D3D11_RASTERIZER_DESC,
+    ID3D11BlendState, ID3D11Query, ID3D11RasterizerState, ID3D11SamplerState,
+    ID3D11ShaderResourceView, D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE,
+    D3D11_BLEND_OP_ADD, D3D11_BLEND_SRC_ALPHA, D3D11_COLOR_WRITE_ENABLE_ALL,
+    D3D11_COMPARISON_NEVER, D3D11_CULL_NONE, D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+    D3D11_FLOAT32_MAX, D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_RASTERIZER_DESC,
     D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_WRAP, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
@@ -50,6 +51,18 @@ pub struct LoadReport {
     pub warnings: Vec<String>,
 }
 
+/// Where the time of the last [`Renderer::render`] went, in milliseconds.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FrameTiming {
+    /// CPU time to record the draws (cbuffer updates, state, `DrawIndexed`).
+    pub draw_ms: f64,
+    /// Waiting for the GPU to finish the draws (an event query after a flush).
+    pub gpu_ms: f64,
+    /// Copy to a staging texture, `Map`, and the half → RGBA8 conversion; the GPU is idle by then, so this is
+    /// the readback cost alone (the B9 zero-copy gate).
+    pub readback_ms: f64,
+}
+
 /// The 3D preview renderer: message-shaped (load bytes → report, render scene → pixels) so it can later move
 /// into a sidecar process. Single-threaded, like [`Gpu`].
 pub struct Renderer {
@@ -65,6 +78,8 @@ pub struct Renderer {
     raster: ID3D11RasterizerState,
     alpha_blend: ID3D11BlendState,
     target: Option<Target>,
+    encode_srgb: bool,
+    timing: FrameTiming,
 }
 
 fn permutation_key(d: &permutation::Defines, target: &str) -> String {
@@ -151,6 +166,8 @@ impl Renderer {
             raster: r.ok_or("no rasterizer state")?,
             alpha_blend: b.ok_or("no blend state")?,
             target: None,
+            encode_srgb: false,
+            timing: FrameTiming::default(),
         })
     }
 
@@ -165,6 +182,28 @@ impl Renderer {
 
     pub fn features(&self) -> &[String] {
         &self.features
+    }
+
+    /// Replaces the shaders (a moved or updated CS) and drops every compiled program: the in-memory cache is keyed
+    /// by defines only. The loaded model still uses the old programs until the next [`Renderer::load`].
+    pub fn set_shaders(&mut self, shaders: Fingerprint) {
+        self.shaders = shaders;
+        self.programs.clear();
+    }
+
+    pub fn shaders(&self) -> &Fingerprint {
+        &self.shaders
+    }
+
+    /// sRGB-encode the frame on readback (off by default). Turn it on for display when the features include
+    /// `ENABLE_LL`: Linear Lighting draws in linear working space; without it the output is already gamma-space.
+    pub fn set_encode_srgb(&mut self, on: bool) {
+        self.encode_srgb = on;
+    }
+
+    /// Timing of the last successful [`Renderer::render`].
+    pub fn last_timing(&self) -> FrameTiming {
+        self.timing
     }
 
     /// Bounding sphere (centre, radius) of every drawn shape's `positions × transform` (skinned shapes:
@@ -449,6 +488,7 @@ impl Renderer {
     /// Renders the loaded model into a `w × h` RGBA8 frame (tightly packed, top row first). Errors (device
     /// removed, allocation failure) are text; see [`device`] for the device-removed contract.
     pub fn render(&mut self, scene: &Scene, w: u32, h: u32) -> Result<Vec<u8>, String> {
+        let t0 = std::time::Instant::now();
         let (w, h) = (w.max(1), h.max(1));
         if self
             .target
@@ -511,6 +551,59 @@ impl Renderer {
             }
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
         }
-        target.readback_rgba8(gpu)
+        let draw_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let t1 = std::time::Instant::now();
+        wait_idle(gpu)?;
+        let gpu_ms = t1.elapsed().as_secs_f64() * 1000.0;
+        let t2 = std::time::Instant::now();
+        let px = target.readback(gpu, self.encode_srgb)?;
+        self.timing = FrameTiming {
+            draw_ms,
+            gpu_ms,
+            readback_ms: t2.elapsed().as_secs_f64() * 1000.0,
+        };
+        Ok(px)
+    }
+}
+
+/// Flushes and spins on an event query until the GPU has finished every submitted command, so the readback
+/// that follows measures the copy alone. A failing query (removed device) is an error with the device prefix.
+fn wait_idle(gpu: &Gpu) -> Result<(), String> {
+    let desc = D3D11_QUERY_DESC {
+        Query: D3D11_QUERY_EVENT,
+        MiscFlags: 0,
+    };
+    let mut q: Option<ID3D11Query> = None;
+    // SAFETY: `desc` and the out-pointer are locals; the query belongs to `gpu.device`.
+    unsafe {
+        gpu.device
+            .CreateQuery(&desc, Some(&mut q))
+            .map_err(|e| gpu.fail("CreateQuery", e))?;
+    }
+    let q = q.ok_or_else(|| gpu.fail("CreateQuery", "no query returned"))?;
+    // SAFETY: `done` is a live BOOL-sized local, the size passed matches it.
+    unsafe {
+        gpu.ctx.End(&q);
+        gpu.ctx.Flush();
+        let start = std::time::Instant::now();
+        loop {
+            let mut done = windows::core::BOOL(0);
+            gpu.ctx
+                .GetData(
+                    &q,
+                    Some(&mut done as *mut _ as *mut core::ffi::c_void),
+                    std::mem::size_of::<windows::core::BOOL>() as u32,
+                    0,
+                )
+                .map_err(|e| gpu.fail("GetData", e))?;
+            if done.as_bool() {
+                return Ok(());
+            }
+            if start.elapsed().as_secs() > 10 {
+                // The readback's Map waits anyway; the timing is then approximate.
+                return Ok(());
+            }
+            std::thread::yield_now();
+        }
     }
 }

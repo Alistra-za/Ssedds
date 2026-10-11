@@ -16,9 +16,10 @@ fn name_matches(full: &str, var: &str) -> bool {
 
 impl CbWriter {
     /// Zero-initialised: every field the caller does not set reads 0 (no stale values, answers.md §Surprises 3).
+    /// At least one register: D3D11 rejects a zero-byte constant buffer.
     pub fn new(layout: &CbLayout) -> CbWriter {
         // D3D11 constant buffers are sized in 16-byte multiples.
-        let size = (layout.size as usize).div_ceil(16) * 16;
+        let size = (layout.size as usize).div_ceil(16).max(1) * 16;
         CbWriter {
             vars: layout.vars.clone(),
             data: vec![0; size],
@@ -70,6 +71,17 @@ impl CbWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn size_zero_layout_still_gets_one_register() {
+        let layout = CbLayout {
+            name: "Empty".into(),
+            slot: 0,
+            size: 0,
+            vars: vec![],
+        };
+        assert_eq!(CbWriter::new(&layout).bytes().len(), 16);
+    }
 
     #[test]
     fn namespace_tolerant_names() {
