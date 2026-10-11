@@ -918,30 +918,12 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
                 .map_err(|_| EngineError::Usage(format!("--format {f}: unknown format")))?,
         );
     }
-    // DECISIONS S6, as convert does (api.rs): canonical, else lexical; the output may not exist yet, so its folder is.
-    let canon = |p: &Path| {
-        std::fs::canonicalize(p).ok().or_else(|| {
-            let dir = std::fs::canonicalize(p.parent()?).ok()?;
-            Some(dir.join(p.file_name()?))
-        })
-    };
-    let lexical = |p: &Path| {
-        std::path::absolute(p)
-            .unwrap_or_else(|_| p.to_path_buf())
-            .to_string_lossy()
-            .to_lowercase()
-    };
     let mut names = std::collections::BTreeSet::new();
     if let Some(dir) = &a.out_dir {
         for p in &a.dds {
             let out = dir.join(p.file_name().unwrap_or_default());
-            let same = match (canon(p), canon(&out)) {
-                (Some(x), Some(y)) => {
-                    x.to_string_lossy().to_lowercase() == y.to_string_lossy().to_lowercase()
-                }
-                _ => lexical(p) == lexical(&out),
-            };
-            if same {
+            // DECISIONS S6, as convert does (api.rs).
+            if engine::dds::same_file(p, &out) {
                 return Err(EngineError::Usage(format!(
                     "--out-dir would write over the input {}; use --in-place to rewrite it",
                     p.display()

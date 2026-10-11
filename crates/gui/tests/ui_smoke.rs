@@ -962,10 +962,26 @@ fn an_rgba16f_preview_disables_the_srgb_unorm_toggle() {
 
 #[test]
 fn a_dds_with_undeclared_mips_offers_a_header_patch_and_writes_a_copy() {
+    let d = tempfile::tempdir().unwrap();
+    let (src, b) = broken_dds(&mod_folder(d.path()));
+    let mut m = opened(d.path());
+    m.select_item("landscape/broken.dds");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("mip count 1 → 7");
+    press(&mut h, "Patch header…");
+    press(&mut h, "Patch");
+    let out = d.path().join("export/landscape/broken.dds");
+    let patched = std::fs::read(&out).expect("a patched copy in the export folder");
+    assert_eq!(&patched[148..], &b[148..]);
+    assert_eq!(std::fs::read(&src).unwrap(), b, "the source is untouched");
+    h.get_by_label_contains("DDS-HEADER-PATCHED");
+}
+
+/// A full-chain 64x64 BC7 DDS at `<root>/landscape/broken.dds` whose header declares 1 mip; returns (path, bytes).
+fn broken_dds(root: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {
     use engine::config::Format;
     use engine::dds::*;
-    let d = tempfile::tempdir().unwrap();
-    let root = mod_folder(d.path());
     let mut levels = vec![];
     let mut s = 64u32;
     loop {
@@ -989,16 +1005,34 @@ fn a_dds_with_undeclared_mips_offers_a_header_patch_and_writes_a_copy() {
     b[28..32].copy_from_slice(&1u32.to_le_bytes());
     let src = root.join("landscape/broken.dds");
     std::fs::write(&src, &b).unwrap();
-    let mut m = opened(d.path());
-    m.select_item("landscape/broken.dds");
-    let mut h = harness(m);
-    h.run();
-    h.get_by_label_contains("mip count 1 → 7");
-    press(&mut h, "Patch header…");
-    press(&mut h, "Patch");
-    let out = d.path().join("export/landscape/broken.dds");
-    let patched = std::fs::read(&out).expect("a patched copy in the export folder");
-    assert_eq!(&patched[148..], &b[148..]);
-    assert_eq!(std::fs::read(&src).unwrap(), b, "the source is untouched");
-    h.get_by_label_contains("DDS-HEADER-PATCHED");
+    (src, b)
+}
+
+/// Fix round 1: with no export folder set, Patch writes to `<root>/sdc-out` (what the header shows) and ends the
+/// confirmation; the outcome is in `dds_patch.last`.
+#[test]
+fn patch_without_an_export_folder_writes_to_sdc_out() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let (src, b) = broken_dds(&root);
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.dds_patch.confirming = Some("landscape/broken.dds".into());
+    let out = m.patch_dds_header("landscape/broken.dds").unwrap();
+    assert_eq!(out, root.join("sdc-out/landscape/broken.dds"));
+    assert_eq!(&std::fs::read(&out).unwrap()[148..], &b[148..]);
+    assert_eq!(std::fs::read(&src).unwrap(), b);
+    assert!(m.dds_patch.confirming.is_none());
+    assert!(m
+        .dds_patch
+        .last
+        .as_deref()
+        .unwrap()
+        .starts_with("DDS-HEADER-PATCHED"));
+    // A key that is not a DDS item: the error is shown, not dropped.
+    m.dds_patch.confirming = Some("landscape/rock01.png".into());
+    assert!(m.patch_dds_header("landscape/rock01.png").is_err());
+    assert_eq!(m.dds_patch.last.as_deref(), Some("not a DDS item"));
+    assert!(m.dds_patch.confirming.is_none());
 }

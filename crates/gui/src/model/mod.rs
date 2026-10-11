@@ -269,26 +269,23 @@ impl AppModel {
         self.dds_patch.set_tag(key, srgb);
     }
 
-    /// Write the patched copy of DDS item `key` to `<export folder>/<job key>`.
+    /// Write the patched copy of DDS item `key` to `<export root>/<job key>`. Every outcome lands in
+    /// `dds_patch.last` (the panel shows it) and ends the confirmation.
     pub fn patch_dds_header(&mut self, key: &str) -> Result<PathBuf, String> {
-        let item = self
-            .item(key)
-            .filter(|i| i.kind == ItemKind::Dds)
-            .ok_or("not a DDS item")?;
-        let export = self
-            .settings
-            .export_folder
-            .clone()
-            .ok_or("set an export folder first")?;
-        let (src, dest) = (item.input.clone(), export.join(&item.job_key));
-        let tag = self.dds_header(key).and_then(|v| v.tag);
-        let r = dds_patch::write_patch(&src, &dest, tag);
         self.dds_patch.confirming = None;
+        let r = match self.item(key).filter(|i| i.kind == ItemKind::Dds) {
+            None => Err("not a DDS item".to_string()),
+            Some(item) => {
+                let (src, dest) = (item.input.clone(), self.export_root().join(&item.job_key));
+                let tag = self.dds_header(key).and_then(|v| v.tag);
+                dds_patch::write_patch(&src, &dest, tag).map(|m| (m, dest))
+            }
+        };
         self.dds_patch.last = Some(match &r {
-            Ok(m) => m.clone(),
-            Err(e) => format!("DDS-HEADER-UNPATCHABLE: {e}"),
+            Ok((m, _)) => m.clone(),
+            Err(e) => e.clone(),
         });
-        r.map(|_| dest)
+        r.map(|(_, dest)| dest)
     }
 
     pub fn open_folder(&mut self, root: PathBuf) {

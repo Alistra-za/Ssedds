@@ -87,13 +87,7 @@ fn compute(path: &Path, tag: Option<bool>) -> DdsHeaderView {
 
 /// Write the patched copy of `src` to `dest` (DECISIONS S7); the caller has resolved both paths.
 pub(crate) fn write_patch(src: &Path, dest: &Path, tag: Option<bool>) -> Result<String, String> {
-    let same = |p: &Path| {
-        std::path::absolute(p)
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase()
-    };
-    if same(src) == same(dest) {
+    if engine::dds::same_file(src, dest) {
         return Err("the export folder is the mod folder: patching would overwrite the source; choose another export folder".into());
     }
     let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
@@ -110,6 +104,32 @@ pub(crate) fn write_patch(src: &Path, dest: &Path, tag: Option<bool>) -> Result<
             Ok(format!("{}: {}", w.code.as_str(), w.message))
         }
         Ok(None) => Ok("header already valid; nothing to patch".into()),
-        Err(u) => Err(u.warning().message),
+        // Only a header refusal is DDS-HEADER-UNPATCHABLE; I/O and same-file errors stay plain.
+        Err(u) => Err(format!(
+            "{}: {}",
+            u.warning().code.as_str(),
+            u.warning().message
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fix round 1 (DECISIONS S6 parity): a target naming the source, even by another spelling, is refused and the
+    /// source is untouched; the refusal is not labelled DDS-HEADER-UNPATCHABLE.
+    #[test]
+    fn write_patch_refuses_a_target_that_is_its_source() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("a.dds");
+        std::fs::write(&src, b"not read").unwrap();
+        std::fs::create_dir(d.path().join("sub")).unwrap();
+        for dest in [src.clone(), d.path().join("sub/../A.DDS")] {
+            let e = write_patch(&src, &dest, None).unwrap_err();
+            assert!(e.contains("would overwrite the source"), "{e}");
+            assert!(!e.starts_with("DDS-HEADER-UNPATCHABLE"), "{e}");
+        }
+        assert_eq!(std::fs::read(&src).unwrap(), b"not read");
     }
 }

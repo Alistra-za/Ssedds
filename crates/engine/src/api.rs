@@ -799,26 +799,7 @@ impl Engine {
                         continue;
                     }
                     // DECISIONS S6: never write over the source DDS (output root == input folder).
-                    // Canonical (junctions, symlinks, `..` resolved); the output may not exist yet, so its folder is.
-                    let canon = |p: &Path| {
-                        std::fs::canonicalize(p).ok().or_else(|| {
-                            let dir = std::fs::canonicalize(p.parent()?).ok()?;
-                            Some(dir.join(p.file_name()?))
-                        })
-                    };
-                    let lexical = |p: &Path| {
-                        crate::overrides::absolute_or_same(p)
-                            .to_string_lossy()
-                            .to_lowercase()
-                    };
-                    let (src, out) = (&files[i].path, &files[i].output);
-                    let same = match (canon(src), canon(out)) {
-                        (Some(a), Some(b)) => {
-                            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
-                        }
-                        _ => lexical(src) == lexical(out),
-                    };
-                    if same {
+                    if crate::dds::same_file(&files[i].path, &files[i].output) {
                         self_overwrite.push(FailedFile {
                             path: files[i].path.clone(),
                             output: files[i].output.clone(),

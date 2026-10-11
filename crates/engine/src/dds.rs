@@ -329,6 +329,28 @@ impl Drop for TempGuard<'_> {
 ///
 /// Failures surface as `io::Error`: for example the rename fails with access denied when the target is read-only
 /// or open elsewhere without delete sharing, and when it is a directory.
+/// DECISIONS S6: whether writing `out` would overwrite `src`. Canonical (junctions, symlinks, `..` resolved; a missing
+/// `out` by its folder), else lexical; case-insensitive, as Windows paths are.
+pub fn same_file(src: &Path, out: &Path) -> bool {
+    let canon = |p: &Path| {
+        std::fs::canonicalize(p).ok().or_else(|| {
+            let dir = std::fs::canonicalize(p.parent()?).ok()?;
+            Some(dir.join(p.file_name()?))
+        })
+    };
+    let lexical = |p: &Path| {
+        crate::overrides::absolute_or_same(p)
+            .to_string_lossy()
+            .to_lowercase()
+    };
+    match (canon(src), canon(out)) {
+        (Some(a), Some(b)) => {
+            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        }
+        _ => lexical(src) == lexical(out),
+    }
+}
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path
         .parent()
