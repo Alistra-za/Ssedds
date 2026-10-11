@@ -703,10 +703,6 @@ fn prepare_on_vanilla_plans_the_borrowed_slot_copy_with_the_borrowers_name() {
     else {
         panic!("normal is borrowed: {:?}", borrower.slots);
     };
-    let Some(SlotFill::Borrowed { item: b_item, .. }) = borrower.slots.get(&SlotKind::Normal)
-    else {
-        panic!("normal is borrowed: {:?}", borrower.slots);
-    };
     let dout = m.item(d_item).unwrap().job.as_ref().unwrap().output.clone();
     let src = m.item(b_item).unwrap().job.as_ref().unwrap().output.clone();
     let p = prepare(&m).expect("a borrowed slot on vanilla plans a copy");
