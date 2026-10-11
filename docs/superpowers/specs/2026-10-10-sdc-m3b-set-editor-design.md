@@ -85,7 +85,7 @@
 | `model/sets.rs` | The set-edit list, the derived set view (members per slot, owner of each shared slot, derived match), and drop rules (§3) |
 | `pgp/schema.rs` | The vendored `pbr.schema.json` (`crates/gui/assets/pbr.schema.json`, recorded in THIRD_PARTY_NOTICES), the key table, write rules and the mutual-exclusion table (§5) |
 | `pgp/prefix.rs` | Match modes and output prefixes, including PGPatcher's per-slot suffix table (§5.5) |
-| `pgp/writer.rs` | Builds the `{ "$schema", "default", "entries" }` document and validates it (§5.6) |
+| `pgp/writer.rs` | Builds the `{ "$schema", "default", "entries" }` document, with its fixed six-key `default` block, and validates it (§5.6) |
 | `model/history.rs` | The undo/redo command history (§7.2) |
 | `ui/set_editor.rs`, `ui/slot_commands.rs`, `ui/sets_column.rs` | Layout A (§4), the slot-commands dialog, and an editable Sets column |
 
@@ -205,11 +205,11 @@
 - `cubemap`, `lock_cubemap`;
 - `coat_color`.
 
-### 4.5 Project defaults
+### 4.5 The fixed default block
 
-- **[Proposal]** A **Defaults** card pinned at the top of the Sets column opens the same editor. Its values form the JSON `default` block.
-- Inside a set, an inherited value shows greyed as "from defaults", with a reset button.
-- Match fields, `rename` and slot commands are per set only and don't appear on the Defaults card.
+- **[Requirement]** Users cannot edit defaults (owner, 2026-10-10). There is no Defaults card, no `[defaults]` in `sdc-project.toml`, and no inherited value in a set. The JSON `default` block is fixed (§5.6).
+- **[Finding]** PGPatcher copies the `default` block into every entry that does not set a key. A user-editable block made entries depend on it: glint and fuzz could not be switched off, and `hair` needed `false` overrides. A fixed block of neutral values keeps every entry self-describing.
+- Every other key comes only from the set's own settings. A hand-written `[defaults]` table in `sdc-project.toml` is ignored and left untouched.
 
 ---
 
@@ -225,11 +225,12 @@
 
 | Keys | Control | Written |
 |---|---|---|
-| `emissive`, `parallax`, `subsurface` | On/off | **Always**, `true` or `false` (owner: real-world JSON disables unused features explicitly) |
+| `emissive`, `parallax`, `subsurface` | On/off | Only as `true`, when on and not blocked; otherwise left out. The fixed `default` block supplies `false` (owner, 2026-10-10) |
 | `hair`, `multilayer` | On/off | Only when on |
 | glint, fuzz | On/off | Their object is written only when on |
 | `lock_*`, `vertex_colors`, `zbuffer_write` | Three-state: not set / on / off | Only when set (gap review point 4, owner 2026-10-09) |
-| Numbers, colours, strings | Value, or unset | Only when set, in a set or in `default` |
+| `roughness_scale`, `specular_level`, `displacement_scale` | Value, or unset | Only when set to something other than the fixed default (1.0, 0.04, 1.0) |
+| Other numbers, colours, strings | Value, or unset | Only when set in the set |
 
 ### 5.3 Colours
 
@@ -282,6 +283,7 @@
 ### 5.6 Document shape and validation
 
 - **[Requirement]** The object form: `{ "$schema": "<PGPatcher schema URL>", "default": {…}, "entries": [ … ] }`.
+  - The `default` block is **fixed** (owner, 2026-10-10) and always holds exactly these six keys, written in schema order: `emissive: false`, `parallax: false`, `subsurface: false`, `roughness_scale: 1.0`, `specular_level: 0.04`, `displacement_scale: 1.0`. Users cannot change it.
   - Entries are in set order; keys are in schema order; indentation is 2 spaces; UTF-8 without a BOM.
   - Paths use single backslashes, escaped as JSON requires.
 - **[Proposal]** Before writing, the document is validated against the vendored schema with the `jsonschema` crate.
@@ -350,9 +352,6 @@
   [project]
   json_name = "rock-pack"
   last_json_sha256 = "…"
-
-  [defaults]            # the JSON default block (only keys you set)
-  specular_level = 0.04
 
   [[sets]]              # in your order; an untouched automatic set has no entry
   key = "landscape/rock02"
@@ -428,7 +427,7 @@ The regression test: request close, cancel, request open, let the export finish.
   - every `matchN` suffix row, including `facemask` → `face` and `match8` keeping `_s`;
   - `textures\pbr` never doubled.
   - Every written document validates against the vendored schema.
-  - Golden JSON files for: a plain set, a borrowed slot, defaults inheritance, each match mode.
+  - Golden JSON files for: a plain set, a borrowed slot, the fixed default block, each match mode.
 - **GUI (kittest):**
   - drag and drop: join, replace, move, share, duplicate, new set, reorder;
   - greying from mutual exclusion;

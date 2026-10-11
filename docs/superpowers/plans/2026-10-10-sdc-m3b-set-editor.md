@@ -4432,7 +4432,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes:
   - `sets::{set_views, SetView, SlotKind, SlotFill, engine_inputs}`;
-  - `pgp::settings::{effective, feature_on, Feature, Settings}`;
+  - `pgp::settings::{feature_on, Feature, Settings}`;
   - `pgp::prefix::{pitfalls, check_rel_path}`;
   - `pgp::writer::{document, EntryInput}`;
   - `pgp::validate::validate`.
@@ -4459,7 +4459,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
    Text: `"<set>: emissive is on but the set has no emissive texture (_g)"`.
 2. **A slot clash.**
    - The set holds both Coat and Fuzz: `"<set>: _cnr and _f both use slot 7"`.
-   - Two mutually exclusive features are on through defaults plus own values: `"<set>: hair and parallax can't both be on"`. Use `blocked_by` on the effective settings.
+   - Two mutually exclusive features are both on in the set's own settings (only a hand-edited `sdc-project.toml` can do that; the UI greys the second): `"<set>: hair and parallax can't both be on"`. Use `blocked_by` on the set's settings.
 3. **Two outputs with one path.** Two owned outputs (`sets::output_candidates`) map to the same path, compared case-insensitively: `"<set A> and <set B> both write <path> (<key A> and <key B>)"`. `engine_inputs` sends only the first, so the engine never sees the collision (Review focus 2).
 4. **The prefix or a path is unusable.**
    - A PBR set whose prefix is an error: `"<set>: <prefix_error>"`.
@@ -4468,7 +4468,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 5. **The JSON fails schema validation:** `"PGPatcher JSON does not validate: <first error>"`.
 
 **What asks "Proceed anyway / Cancel".**
-- `pitfalls(effective settings)` of every PBR set: `"<set>: <warning>"`.
+- `pitfalls(the set's settings)` of every PBR set: `"<set>: <warning>"`.
 - The existing undecided-texture check (M3a N3) follows as before.
 
 - [ ] **Step 1: Write the failing tests.** Create `crates/gui/tests/pbr_export.rs`:
@@ -4498,7 +4498,7 @@ fn a_clean_project_has_no_blocks() {
 fn a_feature_without_its_texture_blocks() {
     let d = tempfile::tempdir().unwrap();
     let mut m = ready(d.path());
-    m.set_json_value(Some("landscape/rock01"), "emissive", Some(json!(true)));
+    m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
     let b = export_blocks(&m);
     assert!(b.iter().any(|i| i.set_id == "landscape/rock01" && i.text.contains("emissive")), "{b:?}");
     m.export_clicked();
@@ -4506,11 +4506,11 @@ fn a_feature_without_its_texture_blocks() {
 }
 
 #[test]
-fn exclusive_features_through_defaults_block() {
+fn exclusive_features_in_one_set_block() {
     let d = tempfile::tempdir().unwrap();
     let mut m = ready(d.path());
-    m.set_json_value(None, "hair", Some(json!(true)));
-    m.set_json_value(Some("landscape/rock01"), "parallax", Some(json!(true)));
+    m.set_json_value("landscape/rock01", "hair", Some(json!(true)));
+    m.set_json_value("landscape/rock01", "parallax", Some(json!(true)));
     let b = export_blocks(&m);
     assert!(b.iter().any(|i| i.text.contains("hair") && i.text.contains("parallax")), "{b:?}");
 }
@@ -4519,7 +4519,7 @@ fn exclusive_features_through_defaults_block() {
 fn a_bad_rename_blocks_and_names_the_field() {
     let d = tempfile::tempdir().unwrap();
     let mut m = ready(d.path());
-    m.set_json_value(Some("landscape/rock01"), "rename", Some(json!(r"..\escape")));
+    m.set_json_value("landscape/rock01", "rename", Some(json!(r"..\escape")));
     assert!(m.wait_idle(Duration::from_secs(60)));
     let b = export_blocks(&m);
     assert!(b.iter().any(|i| i.text.contains("rename") && i.text.contains("..")), "{b:?}");
@@ -4533,7 +4533,7 @@ fn two_sets_deriving_one_prefix_block() {
     let leaf = m.items.iter().find(|i| i.name == "leaf.png").unwrap().key.clone();
     m.set_field(&leaf, "subtype", json!("pbr_albedo"));
     assert!(m.wait_idle(Duration::from_secs(60)));
-    m.set_json_value(Some("landscape/leaf"), "match_diffuse", Some(json!(r"landscape\rock01")));
+    m.set_json_value("landscape/leaf", "match_diffuse", Some(json!(r"landscape\rock01")));
     assert!(m.wait_idle(Duration::from_secs(60)));
     let b = export_blocks(&m);
     assert!(b.iter().any(|i| i.text.contains("both write")), "{b:?}");
@@ -4543,7 +4543,7 @@ fn two_sets_deriving_one_prefix_block() {
 fn pitfalls_ask_and_proceeding_continues_to_the_undecided_check() {
     let d = tempfile::tempdir().unwrap();
     let mut m = ready(d.path());
-    m.set_json_value(Some("landscape/rock01"), "match8", Some(json!(r"x\leaf_s.dds")));
+    m.set_json_value("landscape/rock01", "match8", Some(json!(r"x\leaf_s.dds")));
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert!(!export_asks(&m).is_empty());
     m.export_clicked();
@@ -4578,7 +4578,7 @@ Expected: compile errors.
 use super::sets::{engine_inputs, set_views, SetView, SlotFill, SlotKind};
 use super::AppModel;
 use crate::pgp::prefix::{check_rel_path, pitfalls};
-use crate::pgp::settings::{blocked_by, effective, feature_on, Feature, Settings};
+use crate::pgp::settings::{blocked_by, feature_on, Feature, Settings};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, EntryInput};
 use engine::config::Target;
@@ -4595,10 +4595,6 @@ pub struct ExportIssue {
 
 fn issue(v: &SetView, text: String) -> ExportIssue {
     ExportIssue { set_id: v.id.clone(), set_key: v.key.clone(), text }
-}
-
-fn defaults(m: &AppModel) -> Settings {
-    m.sets_doc.as_ref().map(|d| d.defaults()).unwrap_or_default()
 }
 
 /// The JSON file name (without `.json`): the project's, else the opened folder's name.
@@ -4672,7 +4668,6 @@ fn has(v: &SetView, s: SlotKind) -> bool {
 
 pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
     let mut out = vec![];
-    let d = defaults(m);
     let views = set_views(m);
     for v in &views {
         if has(v, SlotKind::Coat) && has(v, SlotKind::Fuzz) {
@@ -4681,7 +4676,7 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
         if m.target != Target::Cs || !v.pbr {
             continue;
         }
-        let eff = effective(&d, &v.settings);
+        let eff = &v.settings;
         for (f, slot, name, what) in NEEDS {
             if feature_on(&eff, f) && blocked_by(&eff, f).is_none() && !has(v, slot) {
                 out.push(issue(v, format!("{}: {name} is on but the set has no {what}", v.id)));
@@ -4721,7 +4716,7 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
         }
         let entries: Vec<EntryInput> = json_entries(m).into_iter().map(|(_, e)| e).collect();
         if !entries.is_empty() {
-            if let Err(errs) = validate(&document(&defaults(m), &entries).to_value()) {
+            if let Err(errs) = validate(&document(&entries).to_value()) {
                 out.push(ExportIssue {
                     set_id: String::new(),
                     set_key: String::new(),
@@ -4773,11 +4768,10 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
     if m.target != Target::Cs {
         return vec![];
     }
-    let d = defaults(m);
     set_views(m)
         .iter()
         .filter(|v| v.pbr)
-        .flat_map(|v| pitfalls(&effective(&d, &v.settings)).into_iter().map(move |w| issue(v, format!("{}: {w}", v.id))))
+        .flat_map(|v| pitfalls(&v.settings).into_iter().map(move |w| issue(v, format!("{}: {w}", v.id))))
         .collect()
 }
 ```
@@ -4900,7 +4894,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: Task 11's `json_entries`, `json_name`; `ExportModel::rows`, `RowState`; `history::sha256_of`; `SetsDoc::{last_json_sha256, set_last_json_sha256, save}`.
 - Produces:
-  - `pub struct PendingJson { pub path: PathBuf, pub entries: Vec<(String /*set id*/, Vec<String> /*job keys*/, EntryInput)>, pub defaults: Settings, pub copies: Vec<(PathBuf, PathBuf)> }`;
+  - `pub struct PendingJson { pub path: PathBuf, pub entries: Vec<(String /*set id*/, Vec<String> /*job keys*/, EntryInput)>, pub copies: Vec<(PathBuf, PathBuf)> }`;
   - `fn prepare(m: &AppModel) -> Option<PendingJson>`;
   - `enum Finish { Written(String /*sha*/), Overwrite(String /*text*/), Nothing }`;
   - `fn finish(p: &PendingJson, rows: &[Row], last_sha: Option<&str>, notes: &mut Vec<String>) -> Finish`;
@@ -4937,7 +4931,7 @@ fn json_path(m: &sdc_gui::model::AppModel) -> std::path::PathBuf {
 fn export_writes_a_valid_json_and_records_its_hash() {
     let d = tempfile::tempdir().unwrap();
     let mut m = ready(d.path());
-    m.set_json_value(Some("landscape/rock01"), "specular_level", Some(json!(0.05)));
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
     export_and_wait(&mut m);
     let p = json_path(&m);
     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}; notes {:?}", m.export.notes));
@@ -4958,7 +4952,7 @@ fn a_hand_edited_json_asks_before_overwriting() {
     export_and_wait(&mut m);
     let p = json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
-    m.set_json_value(Some("landscape/rock01"), "specular_level", Some(json!(0.06)));
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
     export_and_wait(&mut m);
     assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
     assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
@@ -4994,7 +4988,6 @@ fn finish_leaves_out_sets_whose_outputs_did_not_export() {
             ("a/one".into(), vec!["a/one.dds".into()], EntryInput { derived_match: "a\\one".into(), ..Default::default() }),
             ("a/two".into(), vec!["a/two.dds".into()], EntryInput { derived_match: "a\\two".into(), ..Default::default() }),
         ],
-        defaults: Default::default(),
         copies: vec![],
     };
     let rows = vec![
@@ -5028,7 +5021,6 @@ pub struct PendingJson {
     pub path: PathBuf,
     /// Set id, the job keys its entry depends on, and the entry.
     pub entries: Vec<(String, Vec<String>, EntryInput)>,
-    pub defaults: Settings,
     /// Vanilla/CPM borrowed-slot copies: (owner's output, borrower's path), absolute (DECISIONS P4).
     pub copies: Vec<(PathBuf, PathBuf)>,
 }
@@ -5067,7 +5059,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
                 copies.push((src, dout.with_file_name(name)));
             }
         }
-        return Some(PendingJson { path: PathBuf::new(), entries: vec![], defaults: Settings::new(), copies });
+        return Some(PendingJson { path: PathBuf::new(), entries: vec![], copies });
     }
     let entries: Vec<_> = json_entries(m).into_iter().map(|(v, e)| (v.id.clone(), deps(&v), e)).collect();
     if entries.is_empty() {
@@ -5076,7 +5068,6 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
     Some(PendingJson {
         path: m.export_root().join("PBRNIFPatcher").join(format!("{}.json", json_name(m))),
         entries,
-        defaults: defaults(m),
         copies,
     })
 }
@@ -5120,7 +5111,7 @@ pub fn finish(p: &PendingJson, rows: &[Row], last_sha: Option<&str>, notes: &mut
         notes.push("PGPatcher JSON not written: no PBR set exported completely".into());
         return Finish::Nothing;
     }
-    let doc = document(&p.defaults, &kept);
+    let doc = document(&kept);
     if let Err(errs) = validate(&doc.to_value()) {
         notes.push(format!("PGPatcher JSON not written: it does not validate ({})", errs[0]));
         return Finish::Nothing;
@@ -5243,8 +5234,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Create: `crates/gui/src/ui/sets_column.rs`, which replaces `columns::sets` (delete that function and its now-unused `Click` enum).
 - Modify:
   - `crates/gui/src/ui/columns.rs`: texture tiles and set members become drag sources;
-  - `crates/gui/src/ui/mod.rs`: `pub mod sets_column;`; `State.drops: sets_column::DropState`; the Sets column calls `sets_column::draw`; `Selection::Defaults` routing;
-  - `crates/gui/src/model/mod.rs`: `Selection::Defaults`.
+  - `crates/gui/src/ui/mod.rs`: `pub mod sets_column;`; `State.drops: sets_column::DropState`; the Sets column calls `sets_column::draw`.
 - Test: `crates/gui/tests/set_editor_ui.rs` (new; Tasks 14–15 append)
 
 **Interfaces:**
@@ -5255,11 +5245,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces:
   - `pub struct DragItem(pub String)` (an item key) and `pub struct DragSet(pub String)` (a set id), the egui drag payloads;
   - `pub struct DropState { pub pending: Option<Pending>, pub renaming: Option<(String, String)> }`;
-  - `pub enum Pending { Choice { item, set, from }, Replace { item, set, existing, choice }, Refused(String) }`;
-  - `Selection::Defaults`.
+  - `pub enum Pending { Choice { item, set, from }, Replace { item, set, existing, choice }, Refused(String) }`.
 
 **Behaviour** (layout from the approved mockup `sets-column.html`):
-- **A "Defaults" card** is pinned at the top. Clicking it selects `Selection::Defaults` (Task 15 draws its editor).
+- **No Defaults card** (owner, 2026-10-10): the PGPatcher `default` block is fixed and has no editor.
 - **Each set pill**, in `set_views` order, shows:
   - a `≡` handle (drag it onto another pill to reorder: `reorder_set(dragged, index_of_target)`);
   - its id, in bold;
@@ -5306,28 +5295,25 @@ fn harness(model: AppModel) -> Harness<'static, AppModel> {
 }
 
 #[test]
-fn the_sets_column_shows_defaults_badges_and_the_new_set_area() {
+fn the_sets_column_shows_badges_and_the_new_set_area() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(pbr_opened(d.path()));
     h.run();
-    h.get_by_label("Defaults");
+    assert!(h.query_by_label("Defaults").is_none(), "the default block is fixed: no Defaults card");
     h.get_by_label("landscape/rock01");
     h.get_by_label_contains("PBR → JSON");
     h.get_by_label_contains("Drop here to start a new set");
-    h.get_by_label("Defaults").click();
-    h.run();
-    assert_eq!(h.state().selection, Selection::Defaults);
 }
 ```
 
-Dragging isn't simulated in kittest. The drop rules are covered by `sets_model.rs` (Task 10). This test covers the drawing and the Defaults selection.
+Dragging isn't simulated in kittest. The drop rules are covered by `sets_model.rs` (Task 10). This test covers the drawing.
 
 - [ ] **Step 2: Run the test and confirm it fails.**
 
 Run: `cargo test -p sdc-gui --test set_editor_ui`
-Expected: FAIL: there is no "Defaults" label, and `Selection::Defaults` doesn't exist.
+Expected: FAIL: the badges and the new-set area don't exist yet.
 
-- [ ] **Step 3: Add `Selection::Defaults`** to `model/mod.rs`. In `apply_plan`'s "gone" check, `Selection::Defaults` is never gone. Fix every exhaustive `match` the compiler flags; in `ui/mod.rs` `centre`, temporarily route `Defaults` to a label "Defaults" (Task 15 replaces it).
+- [ ] **Step 3: Nothing to add to `Selection`.** There is no `Selection::Defaults` (owner, 2026-10-10: the default block is fixed). Skip this step and keep the numbering.
 
 - [ ] **Step 4: Make the tiles and members drag sources.** In `crates/gui/src/ui/columns.rs`:
   - the tile: `.interact(egui::Sense::click_and_drag())`, then `resp.dnd_set_drag_payload(crate::ui::sets_column::DragItem(key.clone()));`;
@@ -5336,7 +5322,7 @@ Expected: FAIL: there is no "Defaults" label, and `Selection::Defaults` doesn't 
 - [ ] **Step 5: Create `crates/gui/src/ui/sets_column.rs`:**
 
 ```rust
-//! The editable Sets column (M3b spec §3.1): a Defaults card, set pills in project order with badges, drag and drop
+//! The editable Sets column (M3b spec §3.1): set pills in project order with badges, drag and drop
 //! of textures onto sets (and onto an empty area for a new set), drag-to-reorder by the ≡ handle, and a context
 //! menu. Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, member, status_text, AMBER, RED};
@@ -5374,7 +5360,6 @@ enum Act {
     Select(String),
     SelectItem(String),
     Expand(String),
-    Defaults,
     Drop(String, String),
     NewSet(String),
     Reorder(String, usize),
@@ -5398,20 +5383,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
     let views = set_views(model);
     let blocked: Vec<String> = export_blocks(model).into_iter().map(|i| i.set_id).collect();
     let mut acts = vec![];
-    let defaults_selected = model.selection == Selection::Defaults;
-    let r = egui::Frame::group(ui.style())
-        .corner_radius(12.0)
-        .stroke(if defaults_selected { ui.visuals().selection.stroke } else { ui.visuals().widgets.noninteractive.bg_stroke })
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("Defaults").strong());
-            ui.label(egui::RichText::new("JSON values every set inherits").small().weak());
-        })
-        .response
-        .interact(egui::Sense::click());
-    if r.clicked() {
-        acts.push(Act::Defaults);
-    }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (index, v) in views.iter().enumerate() {
             pill(ui, model, thumbs, st, v, index, editable, blocked.contains(&v.id), &mut acts);
@@ -5434,7 +5405,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
             Act::Select(k) => model.select_set(&k),
             Act::SelectItem(k) => model.select_item(&k),
             Act::Expand(k) => model.expand(&k),
-            Act::Defaults => model.selection = Selection::Defaults,
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
                 DropOutcome::Joined => {}
                 DropOutcome::AskChoice { from } => st.pending = Some(Pending::Choice { item, set, from }),
@@ -5689,14 +5659,14 @@ Do this before the Sets call, as the borrow checker requires.
 - [ ] **Step 7: Run the tests.**
 
 Run: `cargo test -p sdc-gui --test set_editor_ui && cargo test -p sdc-gui`
-Expected: all pass. Update the M3a `ui_smoke` assertions that named the old set pill only if they now fail because of the new Defaults card or badges. Keep what they check.
+Expected: all pass. Update the M3a `ui_smoke` assertions that named the old set pill only if they now fail because of the new badges. Keep what they check.
 
 - [ ] **Step 8: Run the gates and commit.**
 
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p sdc-gui
 git add crates/gui/src/ui/sets_column.rs crates/gui/src/ui/columns.rs crates/gui/src/ui/mod.rs crates/gui/src/model/mod.rs crates/gui/tests/set_editor_ui.rs
-git commit -m "feat(gui): editable Sets column: drag and drop, new set, reorder, context menu, badges, Defaults card (M3b §3.1)
+git commit -m "feat(gui): editable Sets column: drag and drop, new set, reorder, context menu, badges (M3b §3.1)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -5980,7 +5950,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, thumbs: &mut Thu
         if cols[0].button("Slot commands…").clicked() {
             cmds.open = Some(v.id.clone());
         }
-        super::pgp_fields::panel(&mut cols[1], model, Some(&v.id));
+        super::pgp_fields::panel(&mut cols[1], model, &v.id);
     });
     super::slot_commands::draw(ui.ctx(), model, cmds);
     for a in acts {
@@ -6074,7 +6044,7 @@ Notes:
 - **The right column** calls `super::pgp_fields::panel`. Create `crates/gui/src/ui/pgp_fields.rs` now with a stub:
 
   ```rust
-  pub fn panel(ui: &mut egui::Ui, _m: &mut AppModel, _set: Option<&str>) { ui.label("PGPatcher settings"); }
+  pub fn panel(ui: &mut egui::Ui, _m: &mut AppModel, _set: &str) { ui.label("PGPatcher settings"); }
   ```
 
   Task 15 fills it.
@@ -6106,13 +6076,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 15: PGPatcher settings, the Advanced drawer, the Defaults card and the JSON name (spec §4.3–4.5, §6.1)
+### Task 15: PGPatcher settings, the Advanced drawer and the JSON name (spec §4.3–4.5, §6.1)
 
 **Files:**
 - Modify:
   - `crates/gui/src/ui/pgp_fields.rs` (the full panel);
-  - `crates/gui/src/ui/advanced.rs` (a "PGPatcher (advanced)" section for the selected set or Defaults);
-  - `crates/gui/src/ui/mod.rs` (`Selection::Defaults` → the Defaults editor);
+  - `crates/gui/src/ui/advanced.rs` (a "PGPatcher (advanced)" section for the selected set);
   - `crates/gui/src/ui/header.rs` (a JSON name field on CS);
   - `crates/gui/src/model/mod.rs` (`set_json_name`).
 - Test: `crates/gui/tests/set_editor_ui.rs` (append)
@@ -6120,36 +6089,36 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes:
   - `pgp::schema::{KEYS, KeyKind, Group, spec}`;
-  - `pgp::settings::{Feature, FEATURE_KEYS, feature_key, blocked_by, effective, feature_on, GLINT_DEFAULTS}`;
+  - `pgp::settings::{Feature, FEATURE_KEYS, feature_key, blocked_by, feature_on, GLINT_DEFAULTS}`, `pgp::writer::FIXED_NUMBERS`;
   - `AppModel::set_json_value` (Task 10);
   - `pbr_export::json_name`.
 - Produces:
-  - `pgp_fields::panel(ui, model, set: Option<&str>)`, where `None` means the Defaults card;
-  - `pgp_fields::advanced(ui, model, set: Option<&str>)`;
+  - `pgp_fields::panel(ui, model, set: &str)`;
+  - `pgp_fields::advanced(ui, model, set: &str)`;
   - `AppModel::set_json_name(&mut self, name: &str)`: an undo step, no re-plan.
 
 **Behaviour:**
-- **Groups in the main view, in order:** Match (only for a set, not Defaults), Material, Features, then each enabled feature's group (Emissive, Parallax, Subsurface, Multilayer, Glint, Fuzz). Only keys with `advanced == false` appear; `Slot` keys never do (the dialog owns them).
+- **Groups in the main view, in order:** Match, Material, Features, then each enabled feature's group (Emissive, Parallax, Subsurface, Multilayer, Glint, Fuzz). Only keys with `advanced == false` appear; `Slot` keys never do (the dialog owns them).
 - **Controls per kind:**
 
   | Kind | Control | Writes |
   |---|---|---|
-  | `AlwaysBool`, `OnlyTrue` | Checkbox | `true`, or `false`/remove |
-  | `Object` | Checkbox | `true`, or remove |
+  | `OnlyTrue`, `Object` | Checkbox | `true`, or remove |
   | `Tri` | Three buttons "not set / on / off" | `None` / `true` / `false` |
   | `Number` | `DragValue` | The number |
   | `Text` | Text field, committed on Enter or focus loss | The text, or remove when empty |
   | `Rgb`, `Rgba` | Three `DragValue`s 0–255, labelled R G B | `[r, g, b]` |
 
   Details:
-  - `AlwaysBool` unticked writes `false`; `OnlyTrue` and `Object` unticked remove the key.
+  - `OnlyTrue` and `Object` unticked remove the key (emissive, parallax and subsurface are `OnlyTrue`: the fixed default block supplies `false`).
+  - An unset `Number` shows its value greyed: the fixed default for `roughness_scale` (1.0), `specular_level` (0.04) and `displacement_scale` (1.0), or the glint default. Typing the fixed value is allowed; the writer then omits it.
   - A `Text` field shows "(derived)" with the derived value as hint text for `match_diffuse`.
   - Colours have no 0–1 toggle (owner).
   - Turning glint on writes only `glint = true`; the writer fills the defaults. The four fields show `GLINT_DEFAULTS` as values until edited.
-- **Greying:** a feature checkbox is disabled when `blocked_by(effective, f)` is `Some(b)`, with the hover text `off: <b> is on`. Its dependent group isn't shown while it's off.
-- **Inherited values:** in a set, a key without its own value but present in the defaults shows the default value **greyed**, with "from defaults" and a **reset** button that removes the set's own value (shown only when the set has its own value).
+- **Greying:** a feature checkbox is disabled when `blocked_by(settings, f)` is `Some(b)`, with the hover text `off: <b> is on`. Its dependent group isn't shown while it's off.
+- **Reset:** a **reset** button removes the set's own value (shown only when the set has its own value). There are no inherited values: the `default` block is fixed (owner, 2026-10-10).
 - **Sliders and `DragValue`s** send one `set_json_value` per change. The model merges consecutive changes of the same key into one undo step (Task 10's merge key).
-- **The Advanced drawer** gains a "PGPatcher (advanced)" collapsing section when a set or Defaults is selected. It lists every `advanced == true` key, grouped by Match / Uv / Vertex / Locks / Multilayer, with the same controls.
+- **The Advanced drawer** gains a "PGPatcher (advanced)" collapsing section when a set is selected. It lists every `advanced == true` key, grouped by Match / Uv / Vertex / Locks / Multilayer, with the same controls.
   - Choosing another match mode (setting `match_normal`, `path_contains` or `matchN`) is just setting that key. `match_mode` then omits `match_diffuse`.
   - The Match group shows which mode is active ("Matching by: match2").
 - **The header** shows, on CS, "JSON:" and a text field with `json_name(model)` as hint text. Editing it calls `model.set_json_name(text)`, and an empty field restores the default.
@@ -6178,16 +6147,19 @@ fn feature_toggles_grey_their_exclusions_and_reveal_their_groups() {
 }
 
 #[test]
-fn the_defaults_card_edits_the_default_block() {
+fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
-    m.selection = Selection::Defaults;
-    m.set_json_value(None, "specular_level", Some(serde_json::json!(0.04)));
+    let key = m.sets.iter().find(|s| s.key.ends_with("landscape/rock01")).unwrap().key.clone();
+    m.select_set(&key);
+    m.set_json_value("landscape/rock01", "roughness_scale", Some(serde_json::json!(0.5)));
     let mut h = harness(m);
     h.run();
     h.get_by_label("Specular level");
-    assert!(h.query_by_label("Match diffuse").is_none(), "match fields are per set only");
-    assert_eq!(h.state().sets_doc.as_ref().unwrap().defaults()["specular_level"], serde_json::json!(0.04));
+    assert!(h.query_by_label("Defaults").is_none(), "there is no Defaults editor");
+    let e = h.state().sets_doc.as_ref().unwrap().entries().into_iter().find(|e| e.id == "landscape/rock01").unwrap();
+    assert_eq!(e.settings["roughness_scale"], serde_json::json!(0.5));
+    assert!(!e.settings.contains_key("specular_level"));
 }
 
 #[test]
@@ -6223,12 +6195,13 @@ Expected: FAIL (the stub panel).
 - [ ] **Step 4: Write `crates/gui/src/ui/pgp_fields.rs`:**
 
 ```rust
-//! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set or the Defaults card, and the advanced
+//! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced
 //! keys for the Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
 use crate::model::AppModel;
 use crate::pgp::prefix::{match_mode, MatchMode};
 use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
-use crate::pgp::settings::{blocked_by, effective, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS};
+use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS};
+use crate::pgp::writer::FIXED_NUMBERS;
 use eframe::egui;
 use serde_json::{json, Value};
 
@@ -6283,33 +6256,25 @@ const MAIN: [Group; 9] = [
 const ADVANCED: [Group; 5] = [Group::Match, Group::Uv, Group::Vertex, Group::Locks, Group::Multilayer];
 
 struct Ctx<'a> {
+    /// The set's own settings (there are no inherited ones: the `default` block is fixed).
     own: Settings,
-    eff: Settings,
-    defaults: Settings,
     derived: Option<String>,
-    set: Option<&'a str>,
+    set: &'a str,
 }
 
-fn context<'a>(model: &AppModel, set: Option<&'a str>) -> Ctx<'a> {
-    let defaults = model.sets_doc.as_ref().map(|d| d.defaults()).unwrap_or_default();
-    let (own, derived) = match set {
-        None => (defaults.clone(), None),
-        Some(id) => {
-            let v = crate::model::sets::set_views(model).into_iter().find(|v| v.id.eq_ignore_ascii_case(id));
-            (v.as_ref().map(|v| v.settings.clone()).unwrap_or_default(), v.and_then(|v| v.derived_match))
-        }
-    };
-    let eff = if set.is_some() { effective(&defaults, &own) } else { defaults.clone() };
-    Ctx { own, eff, defaults, derived, set }
+fn context<'a>(model: &AppModel, set: &'a str) -> Ctx<'a> {
+    let v = crate::model::sets::set_views(model).into_iter().find(|v| v.id.eq_ignore_ascii_case(set));
+    let own = v.as_ref().map(|v| v.settings.clone()).unwrap_or_default();
+    Ctx { own, derived: v.and_then(|v| v.derived_match), set }
 }
 
-pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
+pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let mut edits: Vec<Edit> = vec![];
     ui.add_enabled_ui(editable, |ui| {
         for g in MAIN {
-            if (g == Group::Match && set.is_none()) || !group_open(g, &c.eff) {
+            if !group_open(g, &c.own) {
                 continue;
             }
             let keys: Vec<&KeySpec> = KEYS.iter().filter(|k| k.group == g && !k.advanced && k.kind != KeyKind::Slot).collect();
@@ -6317,7 +6282,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
                 continue;
             }
             ui.label(egui::RichText::new(group_title(g)).strong());
-            egui::Grid::new(("pgp", g as u8, set.unwrap_or("defaults"))).num_columns(3).show(ui, |ui| {
+            egui::Grid::new(("pgp", g as u8, set)).num_columns(3).show(ui, |ui| {
                 for k in keys {
                     row(ui, k, &c, &mut edits);
                     ui.end_row();
@@ -6331,13 +6296,13 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
     }
 }
 
-pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
+pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let mut edits: Vec<Edit> = vec![];
     ui.add_enabled_ui(editable, |ui| {
-        if set.is_some() {
-            let mode = match match_mode(&c.eff) {
+        {
+            let mode = match match_mode(&c.own) {
                 MatchMode::Diffuse => "match_diffuse".to_string(),
                 MatchMode::Normal => "match_normal".into(),
                 MatchMode::PathContains => "path_contains".into(),
@@ -6346,7 +6311,7 @@ pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
             ui.label(format!("Matching by: {mode}"));
         }
         for g in ADVANCED {
-            if (g == Group::Match && set.is_none()) || !group_open(g, &c.eff) {
+            if !group_open(g, &c.own) {
                 continue;
             }
             let keys: Vec<&KeySpec> = KEYS.iter().filter(|k| k.group == g && k.advanced).collect();
@@ -6354,7 +6319,7 @@ pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
                 continue;
             }
             ui.label(egui::RichText::new(group_title(g)).strong());
-            egui::Grid::new(("pgp-adv", g as u8, set.unwrap_or("defaults"))).num_columns(3).show(ui, |ui| {
+            egui::Grid::new(("pgp-adv", g as u8, set)).num_columns(3).show(ui, |ui| {
                 for k in keys {
                     row(ui, k, &c, &mut edits);
                     ui.end_row();
@@ -6367,19 +6332,19 @@ pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: Option<&str>) {
     }
 }
 
-/// One row: label, control, and "from defaults" / reset.
+/// One row: label, control, and reset.
 fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
     let own = c.own.get(k.key);
-    let inherited = own.is_none() && c.set.is_some() && c.defaults.contains_key(k.key);
-    let value = own.or_else(|| c.eff.get(k.key)).cloned();
-    let block = feature_of(k.key).and_then(|f| blocked_by(&c.eff, f).filter(|_| !feature_on(&c.eff, f)));
+    let value = own.cloned();
+    let block = feature_of(k.key).and_then(|f| blocked_by(&c.own, f).filter(|_| !feature_on(&c.own, f)));
     ui.label(k.label);
     let r = ui
         .scope(|ui| {
             if block.is_some() {
                 ui.disable();
             }
-            if inherited {
+            if own.is_none() && k.kind == KeyKind::Number {
+                // An unset number shows its fixed default, greyed.
                 ui.style_mut().visuals.override_text_color = Some(ui.visuals().weak_text_color());
             }
             control(ui, k, value, c, edits)
@@ -6388,12 +6353,10 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
     if let (Some(b), Some(r)) = (block, r) {
         r.on_disabled_hover_text(format!("off: {} is on", feature_key(b)));
     }
-    if own.is_some() && c.set.is_some() {
-        if ui.small_button("reset").on_hover_text("Use the default again").clicked() {
+    if own.is_some() {
+        if ui.small_button("reset").on_hover_text("Remove this setting (the default applies)").clicked() {
             edits.push((k.key.to_string(), None));
         }
-    } else if inherited {
-        ui.weak("from defaults");
     } else {
         ui.label("");
     }
@@ -6402,16 +6365,11 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
 fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits: &mut Vec<Edit>) -> Option<egui::Response> {
     let key = k.key.to_string();
     match k.kind {
-        KeyKind::AlwaysBool | KeyKind::OnlyTrue | KeyKind::Object => {
+        KeyKind::OnlyTrue | KeyKind::Object => {
             let mut on = value.and_then(|v| v.as_bool()).unwrap_or(false);
             let r = ui.checkbox(&mut on, "");
             if r.changed() {
-                let v = match (k.kind, on) {
-                    (_, true) => Some(json!(true)),
-                    (KeyKind::AlwaysBool, false) => Some(json!(false)),
-                    _ => None,
-                };
-                edits.push((key, v));
+                edits.push((key, on.then(|| json!(true))));
             }
             Some(r)
         }
@@ -6433,7 +6391,7 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
             Some(r)
         }
         KeyKind::Number => {
-            let default = GLINT_DEFAULTS.iter().find(|(d, _)| *d == k.key).map(|(_, x)| *x);
+            let default = GLINT_DEFAULTS.iter().chain(FIXED_NUMBERS.iter()).find(|(d, _)| *d == k.key).map(|(_, x)| *x);
             let mut x = value.and_then(|v| v.as_f64()).or(default).unwrap_or(0.0);
             let r = ui.add(egui::DragValue::new(&mut x).speed(0.01));
             if r.changed() {
@@ -6442,7 +6400,7 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
             Some(r)
         }
         KeyKind::Text => {
-            let id = egui::Id::new(("pgp-text", k.key, c.set.unwrap_or("defaults")));
+            let id = egui::Id::new(("pgp-text", k.key, c.set));
             let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default());
             let hint = if k.key == "match_diffuse" { c.derived.clone().map(|d| format!("{d} (derived)")).unwrap_or_default() } else { String::new() };
             let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(220.0));
@@ -6480,16 +6438,15 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
 }
 ```
 
-**Checkbox labels:** kittest finds controls by label. The row's first column is the label, and the checkbox carries no text, so the test's `get_by_label("Parallax").click()` clicks the **label**. Make the label the clickable part: draw `AlwaysBool`/`OnlyTrue`/`Object` rows as `ui.checkbox(&mut on, k.label)`, with an empty first column, instead of a separate label plus an empty checkbox. Adapt `row()` for those kinds.
+**Checkbox labels:** kittest finds controls by label. The row's first column is the label, and the checkbox carries no text, so the test's `get_by_label("Parallax").click()` clicks the **label**. Make the label the clickable part: draw `OnlyTrue`/`Object` rows as `ui.checkbox(&mut on, k.label)`, with an empty first column, instead of a separate label plus an empty checkbox. Adapt `row()` for those kinds.
 
-- [ ] **Step 5: Wire the Defaults card, the Advanced section and the header.**
-  - In `ui/mod.rs` `centre`: `Selection::Defaults` → a heading "Defaults" with the subtitle "Values every set's JSON entry inherits (the PGPatcher default block)", then `pgp_fields::panel(ui, model, None)` inside a scroll area.
-  - In `ui/advanced.rs`, after the inspector section, when the selection is a set (find its id with `set_views`) or `Defaults`:
+- [ ] **Step 5: Wire the Advanced section and the header.**
+  - In `ui/advanced.rs`, after the inspector section, when the selection is a set (find its id with `set_views`):
 
     ```rust
     egui::CollapsingHeader::new("PGPatcher (advanced)")
         .default_open(true)
-        .show(ui, |ui| super::pgp_fields::advanced(ui, model, set_id.as_deref()));
+        .show(ui, |ui| super::pgp_fields::advanced(ui, model, &set_id));
     ```
 
     `advanced::draw` holds `&mut AppModel`. Collect `set_id` before the panel closure.
@@ -6518,8 +6475,8 @@ Expected: all pass.
 
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p sdc-gui
-git add crates/gui/src/ui/pgp_fields.rs crates/gui/src/ui/advanced.rs crates/gui/src/ui/mod.rs crates/gui/src/ui/header.rs crates/gui/src/model/mod.rs crates/gui/tests/set_editor_ui.rs
-git commit -m "feat(gui): PGPatcher settings with greying and inheritance, Advanced keys, Defaults card, JSON name (M3b §4.3–4.5)
+git add crates/gui/src/ui/pgp_fields.rs crates/gui/src/ui/advanced.rs crates/gui/src/ui/header.rs crates/gui/src/model/mod.rs crates/gui/tests/set_editor_ui.rs
+git commit -m "feat(gui): PGPatcher settings with greying, Advanced keys, JSON name (M3b §4.3–4.5)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -6559,13 +6516,14 @@ The owner approved the M3b design section by section (spec `docs/superpowers/spe
 - **P13 Invalid path characters block export** (plan) rather than being rewritten: a changed path is not where PGPatcher looks.
 - **P14 GUI = CLI holds for non-PBR sets only** (owner: the JSON is GUI-only): a PBR set on CS is written under `textures\pbr\` by the GUI alone.
 - **P15 "Not in a set" is a clickable count** in the Textures header (plan), not an automatically switched filter.
-- **Owner, in the design conversation:** `emissive`, `parallax`, `subsurface` are binary and always written; `hair` and `multilayer` binary, written only when on; `lock_*`, `vertex_colors`, `zbuffer_write` three-state; mutual exclusion greys (hair excludes multilayer, glint, fuzz, emissive, parallax, subsurface; multilayer excludes subsurface; multilayer/glint/fuzz exclude each other); a set cannot hold both `_cnr` and `_f`; a feature on without its texture blocks export (no lock quick fix); `delete` and hex colour entry are later rounds; Opaque sits on the Diffuse card.
+- **P16 The PGPatcher `default` block is fixed** (owner, 2026-10-10): `emissive`, `parallax`, `subsurface` = `false`, `roughness_scale` = 1.0, `specular_level` = 0.04, `displacement_scale` = 1.0, in schema order. Users cannot edit defaults (no Defaults card, no `[defaults]` in `sdc-project.toml`; a hand-written one is ignored). Entries write `emissive`/`parallax`/`subsurface` only as `true`, and omit the three numbers when unset or equal to the fixed value; everything else comes from the set.
+- **Owner, in the design conversation:** `emissive`, `parallax`, `subsurface` are binary and written only as `true` (the fixed default block supplies `false`); `hair` and `multilayer` binary, written only when on; `lock_*`, `vertex_colors`, `zbuffer_write` three-state; mutual exclusion greys (hair excludes multilayer, glint, fuzz, emissive, parallax, subsurface; multilayer excludes subsurface; multilayer/glint/fuzz exclude each other); a set cannot hold both `_cnr` and `_f`; a feature on without its texture blocks export (no lock quick fix); `delete` and hex colour entry are later rounds; Opaque sits on the Diffuse card.
 ```
 
 - [ ] **Step 2: `docs/gui.md`.** Add a section (keep the file's tone) covering:
   - the editable Sets column: drag a texture onto a set, onto empty space, Share / Duplicate, reorder by ≡, the right-click menu, badges;
   - the set editor: slot cards, the preset dropdown, Opaque, Slot commands;
-  - the PGPatcher settings: greyed features and why, defaults and reset;
+  - the PGPatcher settings: greyed features and why, reset, and the fixed default block (no user-editable defaults);
   - the JSON: `<export>\PBRNIFPatcher\<name>.json`, written after a complete export, only sets that fully exported, the overwrite prompt;
   - `sdc-project.toml` next to `sdc.toml`;
   - undo/redo (Ctrl+Z, Ctrl+Y).
@@ -6667,9 +6625,9 @@ fn build_sets_export_and_reexport_unchanged() {
     m.set_slot_command("landscape/rock01", 3, SlotCommand::Path(r"effects\white.dds".into())).unwrap();
     idle(&mut m);
 
-    m.set_json_value(Some(&second), "parallax", Some(json!(true)));
+    m.set_json_value(&second, "parallax", Some(json!(true)));
     assert!(export_blocks(&m).iter().any(|i| i.text.contains("parallax")));
-    m.set_json_value(Some(&second), "parallax", Some(json!(false)));
+    m.set_json_value(&second, "parallax", Some(json!(false)));
     assert_eq!(export_blocks(&m), vec![]);
 
     export(&mut m);
