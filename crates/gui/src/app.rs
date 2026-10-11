@@ -26,6 +26,8 @@ fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
 
 pub struct SdcApp {
     pub model: AppModel,
+    /// The Meshes view (plan A Task 12).
+    pub meshes: crate::model::meshes::MeshesModel,
     pub state: crate::ui::State,
     /// The GPU state, `None` when eframe found no usable adapter (the preview is then off).
     pub render_state: Option<egui_wgpu::RenderState>,
@@ -35,8 +37,13 @@ pub struct SdcApp {
 
 impl SdcApp {
     pub fn new(model: AppModel) -> SdcApp {
+        let meshes = crate::model::meshes::MeshesModel::new(
+            crate::model::meshes::default_store_path(),
+            model.settings.meshes.clone(),
+        );
         SdcApp {
             model,
+            meshes,
             state: crate::ui::State::default(),
             render_state: None,
             uploaded: Uploaded::default(),
@@ -147,7 +154,10 @@ impl eframe::App for SdcApp {
             let _ = self.model.save();
         }
         // Undo and redo leave a text field's own undo alone and wait while a dialog is open.
-        if self.model.dialog.is_none() && !ctx.egui_wants_keyboard_input() {
+        if self.model.dialog.is_none()
+            && !ctx.egui_wants_keyboard_input()
+            && !crate::ui::header::meshes_view_active(&ctx)
+        {
             let redo = ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
                     || i.consume_key(
@@ -187,10 +197,23 @@ impl eframe::App for SdcApp {
 
         // Upload before drawing: the paint callbacks run after this frame's UI and read what is on the GPU.
         self.sync_renderer();
-        crate::ui::draw_with(ui, &mut self.model, &mut self.state);
+        self.meshes.poll();
+        if crate::ui::header::meshes_view_active(&ctx) {
+            self.meshes.activate();
+            if let Some(req) = self.meshes.take_request() {
+                self.meshes.start(req);
+            }
+            crate::ui::meshes::page(ui, &mut self.meshes);
+            if let Some(s) = self.meshes.take_settings() {
+                self.model.settings.meshes = s;
+                self.model.save_settings();
+            }
+        } else {
+            crate::ui::draw_with(ui, &mut self.model, &mut self.state);
+        }
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
-        if self.model.busy() {
+        if self.model.busy() || self.meshes.scanning() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if self.model.preview.scheduled() {
