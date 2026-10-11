@@ -60,7 +60,8 @@ fn texconv_and_nvddsinfo_read_every_uncompressed_output() {
         let f = d.path().join(format!("out/textures/a/{n}.dds"));
         if let Some(t) = &tex {
             let o = std::process::Command::new(t)
-                .args(["-nologo", "-y", "-ft", "png", "-o"])
+                // texconv cannot write R8G8 as PNG, so convert first; reading the DDS is what is checked.
+                .args(["-nologo", "-y", "-f", "R8G8B8A8_UNORM", "-ft", "png", "-o"])
                 .arg(pngs.path())
                 .arg(&f)
                 .output()
