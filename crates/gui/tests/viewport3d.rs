@@ -280,7 +280,8 @@ fn femalebody_1600x900_frame_times() {
         }
     }
     let shaders = render3d::locate::fingerprint(Path::new(CS_SHADERS), None).unwrap();
-    let mut v = Viewport3d::new(Some(shaders));
+    let mut v = Viewport3d::new(Some(shaders.clone()));
+    v.on_located(Ok(Some(shaders)));
     v.cache_dir = Some(std::env::temp_dir().join("sdc_b8_shader_cache"));
     v.set_mesh(Some(v3::MeshSpec {
         key: 1,
@@ -400,6 +401,7 @@ fn spec(key: i64, le_mesh: bool) -> v3::MeshSpec {
 fn a_render_dropped_by_a_new_load_does_not_keep_busy() {
     let d = tempfile::tempdir().unwrap();
     let mut v = Viewport3d::new(Some(fp(d.path(), "CS", "a")));
+    v.on_located(Ok(Some(fp(d.path(), "CS", "a"))));
     let cmds = v.attach_test_thread();
     v.set_mesh(Some(spec(1, false)));
     v.request_frame(64, 64);
@@ -501,4 +503,142 @@ fn a_stale_locate_after_choose_folder_is_ignored() {
     });
     assert_eq!(v.state, V3State::Ready, "the late answer is ignored");
     assert_eq!(v.shaders.as_ref().unwrap().root, d.path());
+}
+
+// ---- final fix wave ----
+
+fn loaded(v: &mut Viewport3d, id: u64, report: render3d::LoadReport) {
+    v.handle(v3::V3Reply::Loaded {
+        id,
+        report,
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+}
+
+/// The saved fingerprint is not used until this session's first locate confirms it: compiling against it
+/// before then could store new-source bytecode under the old hash.
+#[test]
+fn no_render_thread_before_the_saved_shaders_are_confirmed() {
+    let d = tempfile::tempdir().unwrap();
+    let saved = fp(d.path(), "CS", "a");
+    let mut v = Viewport3d::new(Some(saved.clone()));
+    let cmds = v.attach_test_thread();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "nothing sent before the locate");
+    assert!(!v.busy());
+    v.on_located(Ok(Some(saved)));
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Load { .. })));
+}
+
+#[test]
+fn shaders_are_confirmed_by_update_use_new_keep_old_or_choose_but_not_by_a_pending_popup() {
+    let d = tempfile::tempdir().unwrap();
+    let (a, b) = (d.path().join("CS_a"), d.path().join("CS_b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    // Hash-only update.
+    let mut v = Viewport3d::new(Some(fp(&a, "CS_a", "h")));
+    assert!(!v.shaders_confirmed());
+    v.on_located(Ok(Some(fp(&a, "CS_a", "h2"))));
+    assert!(v.shaders_confirmed());
+    // Moved: not until the user answers.
+    for keep in [false, true] {
+        let mut v = Viewport3d::new(Some(fp(&a, "CS_a", "h")));
+        v.on_located(Ok(Some(fp(&b, "CS_b", "h"))));
+        assert!(v.popup.is_some() && !v.shaders_confirmed());
+        if keep {
+            v.keep_old();
+        } else {
+            v.use_new();
+        }
+        assert!(v.shaders_confirmed());
+    }
+    // Not found / a locate error: still unconfirmed.
+    let mut v = Viewport3d::new(Some(fp(&a, "CS_a", "h")));
+    v.on_located(Err("busy".into()));
+    assert!(!v.shaders_confirmed());
+    v.on_located(Ok(None));
+    assert!(!v.shaders_confirmed());
+    // First find (nothing saved) is adopted and confirmed.
+    let mut v = Viewport3d::new(None);
+    v.on_located(Ok(Some(fp(&a, "CS_a", "h"))));
+    assert!(v.shaders_confirmed());
+}
+
+/// Review Focus #3 (P0 ruling): a reload of the same mesh whose permutations now fail keeps the last frame and
+/// lists the compile errors; a new mesh that draws nothing still clears.
+#[test]
+fn a_reload_with_compile_errors_keeps_the_last_frame() {
+    let d = tempfile::tempdir().unwrap();
+    let saved = fp(d.path(), "CS", "a");
+    let mut v = Viewport3d::new(Some(saved.clone()));
+    v.on_located(Ok(Some(saved)));
+    let cmds = v.attach_test_thread();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Load { id, .. } = cmds.try_recv().unwrap() else {
+        panic!("load")
+    };
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            shapes: 2,
+            ..Default::default()
+        },
+    );
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Render { id: rid, .. } = cmds.try_recv().unwrap() else {
+        panic!("render")
+    };
+    v.handle(v3::V3Reply::Frame {
+        frame: std::sync::Arc::new(v3::Frame {
+            width: 64,
+            height: 64,
+            rgba: vec![9; 64 * 64 * 4],
+            id: rid,
+        }),
+        timing: Default::default(),
+    });
+    // A CS update recompiles; both shapes now fail.
+    v.set_features(false);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::SetFeatures(false))));
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            compile_errors: vec!["a: ps: X3000".into(), "b: ps: X3000".into()],
+            ..Default::default()
+        },
+    );
+    assert!(v.frame.is_some(), "the last frame stays");
+    assert_eq!(v.report.as_ref().unwrap().compile_errors.len(), 2);
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label("Compile error: a: ps: X3000");
+    h.get_by_label(v3::FRAME_LABEL);
+    let mut v = h.into_state();
+    // A different mesh that draws nothing clears the frame as before.
+    v.set_mesh(Some(spec(2, false)));
+    v.frame = Some(std::sync::Arc::new(v3::Frame {
+        width: 1,
+        height: 1,
+        rgba: vec![9; 4],
+        id: 99,
+    }));
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Load { id, .. } = cmds.try_recv().unwrap() else {
+        panic!("load")
+    };
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            compile_errors: vec!["c: ps: X3000".into()],
+            ..Default::default()
+        },
+    );
+    assert!(v.frame.is_none());
 }

@@ -226,6 +226,9 @@ pub struct Viewport3d {
     locate_gen: u64,
     declined: Option<PathBuf>,
     shaders_changed: bool,
+    /// This session's locate (or the user) has confirmed `shaders`: until then the saved fingerprint may be stale,
+    /// and compiling with it would cache new-source bytecode under the old hash.
+    confirmed: bool,
     thread: Option<Sender<V3Cmd>>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
@@ -262,6 +265,7 @@ impl Viewport3d {
             locate_gen: 0,
             declined: None,
             shaders_changed: false,
+            confirmed: false,
             thread: None,
             tx,
             rx,
@@ -286,6 +290,12 @@ impl Viewport3d {
         let (t, r) = channel();
         self.thread = Some(t);
         r
+    }
+
+    /// Whether this session has confirmed the shaders (a locate answer, "Use new", "Keep old" or a chosen folder);
+    /// no render thread starts and nothing is sent before that.
+    pub fn shaders_confirmed(&self) -> bool {
+        self.confirmed
     }
 
     pub fn locating(&self) -> bool {
@@ -356,6 +366,7 @@ impl Viewport3d {
         };
         match locate::compare(self.shaders.as_ref(), found.clone()) {
             Change::Same => {
+                self.confirmed = true;
                 if self.state == V3State::NotFound {
                     self.state = V3State::Ready;
                 }
@@ -398,11 +409,14 @@ impl Viewport3d {
     pub fn keep_old(&mut self) {
         if let Some(Change::Moved { new, .. }) = self.popup.take() {
             self.declined = Some(new.root);
+            // The user accepts the saved fingerprint (Keep old is offered only while the old folder exists).
+            self.confirmed = true;
         }
     }
 
     fn adopt(&mut self, f: Fingerprint) {
         self.popup = None;
+        self.confirmed = true;
         self.shaders = Some(f.clone());
         self.shaders_changed = true;
         if matches!(self.state, V3State::NotFound) {
@@ -481,7 +495,7 @@ impl Viewport3d {
         if self.mesh.as_ref().is_some_and(|m| m.le_mesh) {
             return;
         }
-        if self.mesh.is_none() || w == 0 || h == 0 || !self.ensure_thread() {
+        if self.mesh.is_none() || w == 0 || h == 0 || !self.confirmed || !self.ensure_thread() {
             return;
         }
         let Some(thread) = self.thread.clone() else {
@@ -562,9 +576,14 @@ impl Viewport3d {
             }
             V3Reply::Loaded { id, report, bounds } => {
                 if self.pending_load == Some(id) {
+                    // A reload of the same mesh (shaders or features changed) keeps its id. When its
+                    // permutations now fail, the last frame stays and the panel lists the compile errors
+                    // (Review Focus #3, P0 ruling; keeping the old permutations drawing is P1).
+                    let reload_failed =
+                        self.loaded == Some(id) && !report.compile_errors.is_empty();
                     self.pending_load = None;
                     self.loaded = Some(id);
-                    if report.le_mesh || report.shapes == 0 {
+                    if (report.le_mesh || report.shapes == 0) && !reload_failed {
                         self.frame = None;
                     }
                     self.report = Some(report);
