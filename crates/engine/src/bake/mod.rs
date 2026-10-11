@@ -1,0 +1,379 @@
+//! Normal-variance bake (spec §6.2, DECISIONS #6, Note R): a normal map's footprint length L → κ = (3L − L³)/(1 − L²)
+//! → v = 0.25/κ → α′² = saturate(α² + min(2v, t²)), r′ = (α′²)^¼ [MIP, Unity HDRP `CommonMaterial.hlsl`]. The
+//! footprint lengths come from a box pyramid of the `_n`'s mip 0 as written: unit length unless `mips.normal_base = keep`
+//! (DECISIONS R1, R5).
+use crate::config::{MipKeyword, MipLevels};
+use crate::image::Rgba32F;
+
+/// Lengths at or above this count as unit: no variance (spec §6.2 step 2).
+pub const UNIT_LENGTH: f64 = 1.0 - 1e-6;
+
+/// `min(2v, t²)` for a footprint whose average normal has length `len` (spec §6.2 steps 2 and 4): 0 for a unit or
+/// longer average (or NaN), `t²` for a zero-length one. Computed in f64.
+pub fn variance_add(len: f32, clamp_t: f64) -> f32 {
+    let l = f64::from(len);
+    let cap = clamp_t * clamp_t;
+    if l.is_nan() || l >= UNIT_LENGTH {
+        return 0.0;
+    }
+    if l <= 0.0 {
+        return cap as f32;
+    }
+    let kappa = (3.0 * l - l * l * l) / (1.0 - l * l);
+    let v = 0.25 / kappa;
+    (2.0 * v).min(cap) as f32
+}
+
+/// r′ = (min(α² + add, 1))^¼ from the footprint mean `mean_alpha` of α = r² (spec §6.2 steps 3–4). With nothing to
+/// add it is √α, the plain chain's value.
+pub fn baked_roughness(mean_alpha: f32, add: f32) -> f32 {
+    let a = mean_alpha.max(0.0);
+    if add <= 0.0 {
+        a.sqrt()
+    } else {
+        (a * a + add).min(1.0).powf(0.25)
+    }
+}
+
+/// log2 of the `_n` : roughness-member size ratio (1 for a 2:1 `_n`, −1 for a half-size one), or why the set does
+/// not bake (`SET-BAKE-RATIO`, DECISIONS R5). Both bases must be powers of two with one aspect, so every footprint
+/// is whole texels of one pyramid level.
+pub fn bake_shift(normal: (u32, u32), member: (u32, u32)) -> Result<i32, String> {
+    let pot = |(w, h): (u32, u32)| w.is_power_of_two() && h.is_power_of_two();
+    if !pot(normal) || !pot(member) {
+        return Err(format!(
+            "_n {}x{} and roughness {}x{} must both be powers of two",
+            normal.0, normal.1, member.0, member.1
+        ));
+    }
+    let log = |v: u32| v.trailing_zeros() as i32;
+    let (sx, sy) = (log(normal.0) - log(member.0), log(normal.1) - log(member.1));
+    if sx != sy {
+        return Err(format!(
+            "_n {}x{} and roughness {}x{} differ in aspect, so their size ratio is not one power of two",
+            normal.0, normal.1, member.0, member.1
+        ));
+    }
+    Ok(sx)
+}
+
+/// One pyramid level: the length of the average base normal over each texel's footprint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LengthLevel {
+    pub width: u32,
+    pub height: u32,
+    pub len: Vec<f32>,
+}
+
+/// Footprint lengths of a normal map for every level >= 1 of its full box chain (level `m` at index `m − 1`), from
+/// the `_n`'s mip 0 as written (the caller renormalises it unless `keep`; DECISIONS R1, R5). About 1.33 bytes per base texel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LengthPyramid {
+    /// Base width and height.
+    pub base: (u32, u32),
+    pub levels: Vec<LengthLevel>,
+}
+
+impl LengthPyramid {
+    /// Box-filter `base` (a `Normal`-domain image) down to 1x1, keeping only each level's lengths. Only one
+    /// accumulation level is alive at a time.
+    pub fn build(base: &Rgba32F) -> LengthPyramid {
+        let full = crate::mips::level_count(
+            base.width,
+            base.height,
+            &MipLevels::Keyword(MipKeyword::Full),
+        );
+        let mut levels = Vec::with_capacity(full.saturating_sub(1) as usize);
+        let mut acc: Option<Rgba32F> = None;
+        for _ in 1..full {
+            let next = crate::mips::box_down(acc.as_ref().unwrap_or(base));
+            levels.push(LengthLevel {
+                width: next.width,
+                height: next.height,
+                len: next
+                    .px
+                    .iter()
+                    .map(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+                    .collect(),
+            });
+            acc = Some(next);
+        }
+        LengthPyramid {
+            base: (base.width, base.height),
+            levels,
+        }
+    }
+
+    /// Level `m` (>= 1), or `None` for 0 or past the last level.
+    pub fn level(&self, m: usize) -> Option<&LengthLevel> {
+        m.checked_sub(1).and_then(|i| self.levels.get(i))
+    }
+}
+
+/// The bake of one roughness member: its `_n`'s footprint lengths, the level shift and the clamp `t`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NormalVariance {
+    lengths: LengthPyramid,
+    shift: i32,
+    clamp_t: f64,
+}
+
+impl NormalVariance {
+    /// For a member whose base is `member` (width, height); an error when the sizes cannot bake ([`bake_shift`]).
+    pub fn new(
+        lengths: LengthPyramid,
+        member: (u32, u32),
+        clamp_t: f64,
+    ) -> Result<NormalVariance, String> {
+        let shift = bake_shift(lengths.base, member)?;
+        Ok(NormalVariance {
+            lengths,
+            shift,
+            clamp_t,
+        })
+    }
+
+    pub fn shift(&self) -> i32 {
+        self.shift
+    }
+
+    /// `min(2v, t²)` for texel (x, y) of the member's mip `level`; 0 where the footprint covers at most one `_n`
+    /// texel (`level + shift <= 0`).
+    pub fn add_at(&self, level: usize, x: u32, y: u32) -> f32 {
+        let m = level as i64 + i64::from(self.shift);
+        if m < 1 {
+            return 0.0;
+        }
+        match self.lengths.level(m as usize) {
+            Some(l) if x < l.width && y < l.height => {
+                variance_add(l.len[(y * l.width + x) as usize], self.clamp_t)
+            }
+            _ => 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Profile, Subtype, Target};
+    use crate::mips::{build_chain, build_chain_with};
+    use crate::ops::preprocess;
+    use crate::presets::PresetRegistry;
+
+    fn profile(st: Subtype) -> Profile {
+        PresetRegistry::builtin()
+            .unwrap()
+            .profile("cs-quality", Target::Cs, st)
+            .unwrap()
+    }
+
+    /// An encoded normal map whose unit-length texels change direction from texel to texel.
+    fn bumpy(w: u32) -> Rgba32F {
+        let mut img = Rgba32F::new(w, w, [0.0, 0.0, 0.0, 1.0]);
+        for y in 0..w {
+            for x in 0..w {
+                let nx = 0.6 * (x as f32 * 1.3 + y as f32 * 0.7).sin();
+                let ny = 0.6 * (x as f32 * 0.9 - y as f32 * 1.1).cos();
+                let nz = (1.0 - nx * nx - ny * ny).sqrt();
+                *img.at_mut(x, y) = [nx * 0.5 + 0.5, ny * 0.5 + 0.5, nz * 0.5 + 0.5, 1.0];
+            }
+        }
+        img
+    }
+
+    /// A roughness member: R a ramp in [0.15, 0.85), G/B/A constant.
+    fn ramp(w: u32) -> Rgba32F {
+        let mut img = Rgba32F::new(w, w, [0.0, 0.0, 0.8, 1.0]);
+        for y in 0..w {
+            for x in 0..w {
+                img.at_mut(x, y)[0] = 0.15 + 0.7 * ((x * 3 + y * 2) % w) as f32 / w as f32;
+            }
+        }
+        img
+    }
+
+    /// Spec §6.2 in f64 (test code only, Global Constraints): the stored R of member texel (x, y) at `level`, with
+    /// the `_n` `shift` levels larger (negative: smaller). Square images.
+    fn reference(
+        normals: &Rgba32F,
+        rough: &Rgba32F,
+        level: u32,
+        shift: i32,
+        x: u32,
+        y: u32,
+        t: f64,
+    ) -> f64 {
+        let f = 1u32 << level;
+        let mut alpha = 0.0f64;
+        for j in 0..f {
+            for i in 0..f {
+                let r = f64::from(rough.at(x * f + i, y * f + j)[0]);
+                alpha += r * r;
+            }
+        }
+        alpha /= f64::from(f * f);
+        let m = level as i32 + shift;
+        let add = if m < 1 {
+            0.0
+        } else {
+            let g = 1u32 << m;
+            let mut s = [0.0f64; 3];
+            for j in 0..g {
+                for i in 0..g {
+                    let q = normals.at(x * g + i, y * g + j);
+                    for c in 0..3 {
+                        s[c] += f64::from(q[c]);
+                    }
+                }
+            }
+            let n = f64::from(g * g);
+            let l = ((s[0] / n).powi(2) + (s[1] / n).powi(2) + (s[2] / n).powi(2)).sqrt();
+            if l >= 1.0 - 1e-6 {
+                0.0
+            } else if l <= 0.0 {
+                t * t
+            } else {
+                // 2v = 2 * 0.25 / κ = 0.5 (1 − L²) / (3L − L³)
+                (0.5 * (1.0 - l * l) / (3.0 * l - l * l * l)).min(t * t)
+            }
+        };
+        if add == 0.0 {
+            alpha.sqrt()
+        } else {
+            (alpha * alpha + add).min(1.0).powf(0.25)
+        }
+    }
+
+    /// Mip 0 of a `_n` as its job writes it under the default `normal_base = renormalize` (DECISIONS R1).
+    fn written(w: crate::ops::Work) -> Rgba32F {
+        let mut img = w.img;
+        for px in &mut img.px {
+            crate::mips::normalize_vector(px, w.domain);
+        }
+        img
+    }
+
+    fn close(a: f32, b: f64) -> bool {
+        (f64::from(a) - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn variance_add_follows_the_formula_and_the_clamp() {
+        assert_eq!(variance_add(1.0, 0.25), 0.0);
+        assert_eq!(variance_add(1.2, 0.25), 0.0); // longer than unit: no variance
+        assert_eq!(variance_add(f32::NAN, 0.25), 0.0);
+        assert!(close(variance_add(0.0, 0.25), 0.0625)); // t²
+                                                         // L = 0.9: κ = (2.7 − 0.729) / 0.19 = 10.3737, 2v = 0.0482 < t².
+        let l = 0.9f64;
+        let want = 0.5 * (1.0 - l * l) / (3.0 * l - l * l * l);
+        assert!(close(variance_add(0.9, 0.25), want), "{want}");
+        // L = 0.5: 2v = 0.27, clamped to t² = 0.0625; a wider clamp lets more through.
+        assert!(close(variance_add(0.5, 0.25), 0.0625));
+        assert!(close(variance_add(0.5, 1.0), 0.5 * 0.75 / 1.375));
+    }
+
+    #[test]
+    fn baked_roughness_is_the_plain_sqrt_without_variance_and_saturates() {
+        assert_eq!(baked_roughness(0.25, 0.0), 0.5);
+        assert!((baked_roughness(0.25, 0.0625) - (0.0625f32 + 0.0625).powf(0.25)).abs() < 1e-6);
+        assert!((baked_roughness(0.9, 0.0625) - (0.9f32 * 0.9 + 0.0625).powf(0.25)).abs() < 1e-6);
+        assert_eq!(baked_roughness(1.0, 0.0625), 1.0); // saturate
+    }
+
+    #[test]
+    fn bake_shift_needs_power_of_two_sizes_with_one_aspect() {
+        assert_eq!(bake_shift((128, 128), (64, 64)), Ok(1));
+        assert_eq!(bake_shift((32, 32), (64, 64)), Ok(-1));
+        assert_eq!(bake_shift((64, 64), (64, 64)), Ok(0));
+        assert_eq!(bake_shift((2048, 1024), (1024, 512)), Ok(1));
+        assert!(bake_shift((64, 64), (64, 32)).is_err()); // aspect mismatch
+        assert!(bake_shift((96, 96), (48, 48)).is_err()); // NPOT
+    }
+
+    #[test]
+    fn the_pyramid_holds_footprint_lengths_of_the_base_it_is_given() {
+        // (0.6, 0, 0.8) and (-0.6, 0, 0.8) alternate in x: every level-1 footprint averages to (0, 0, 0.8).
+        let mut base = Rgba32F::new(4, 2, [0.6, 0.0, 0.8, 1.0]);
+        for y in 0..2 {
+            for x in (1..4).step_by(2) {
+                base.at_mut(x, y)[0] = -0.6;
+            }
+        }
+        let p = LengthPyramid::build(&base);
+        assert_eq!(p.base, (4, 2));
+        assert_eq!(p.levels.len(), 2); // 2x1 and 1x1
+        let l1 = p.level(1).unwrap();
+        assert_eq!((l1.width, l1.height), (2, 1));
+        assert!(
+            l1.len.iter().all(|&v| (v - 0.8).abs() < 1e-6),
+            "{:?}",
+            l1.len
+        );
+        assert!(p.level(0).is_none() && p.level(3).is_none());
+    }
+
+    #[test]
+    fn normal_variance_rejects_a_member_whose_size_does_not_line_up() {
+        let flat = Rgba32F::new(16, 16, [0.0, 0.0, 1.0, 1.0]);
+        assert!(NormalVariance::new(LengthPyramid::build(&flat), (16, 8), 0.25).is_err());
+        assert!(NormalVariance::new(LengthPyramid::build(&flat), (8, 8), 0.25).is_ok());
+    }
+
+    #[test]
+    fn roughness_chain_matches_the_f64_reference_at_1_to_1_2_to_1_and_1_to_2() {
+        for (nw, mw, shift) in [(16u32, 16u32, 0i32), (32, 16, 1), (8, 16, -1)] {
+            let normals = written(preprocess(bumpy(nw), &profile(Subtype::PbrNormal)));
+            let pr = profile(Subtype::Rmaos);
+            let rough = preprocess(ramp(mw), &pr);
+            let nv = NormalVariance::new(LengthPyramid::build(&normals), (mw, mw), 0.25).unwrap();
+            assert_eq!(nv.shift(), shift);
+            let baked = build_chain_with(&rough, &pr, Some(&nv));
+            let plain = build_chain(&rough, &pr);
+            let mut widened = 0;
+            for (level, (l, q)) in baked.iter().zip(&plain).enumerate() {
+                for y in 0..l.height {
+                    for x in 0..l.width {
+                        let want = reference(&normals, &rough.img, level as u32, shift, x, y, 0.25);
+                        let got = f64::from(l.at(x, y)[0]);
+                        assert!(
+                            (got - want).abs() < 1e-4,
+                            "{nw}:{mw} level {level} ({x},{y}): {got} vs {want}"
+                        );
+                        if l.at(x, y)[0] > q.at(x, y)[0] + 1e-3 {
+                            widened += 1;
+                        }
+                        // G, B and A are never touched by the bake.
+                        assert_eq!(&l.at(x, y)[1..], &q.at(x, y)[1..]);
+                    }
+                }
+            }
+            assert!(widened > 0, "{nw}:{mw}: the bake must widen something");
+        }
+    }
+
+    #[test]
+    fn a_flat_normal_map_leaves_the_roughness_chain_bit_identical() {
+        let flat = preprocess(
+            Rgba32F::new(32, 32, [0.5, 0.5, 1.0, 1.0]),
+            &profile(Subtype::PbrNormal),
+        )
+        .img;
+        let pr = profile(Subtype::Rmaos);
+        let rough = preprocess(ramp(16), &pr);
+        let nv = NormalVariance::new(LengthPyramid::build(&flat), (16, 16), 0.25).unwrap();
+        assert_eq!(
+            build_chain_with(&rough, &pr, Some(&nv)),
+            build_chain(&rough, &pr)
+        );
+    }
+
+    #[test]
+    fn a_bake_given_to_a_non_roughness_chain_is_ignored() {
+        let normals = written(preprocess(bumpy(16), &profile(Subtype::PbrNormal)));
+        let pn = profile(Subtype::PbrNormal);
+        let w = preprocess(bumpy(16), &pn);
+        let nv = NormalVariance::new(LengthPyramid::build(&normals), (16, 16), 0.25).unwrap();
+        assert_eq!(build_chain_with(&w, &pn, Some(&nv)), build_chain(&w, &pn));
+    }
+}

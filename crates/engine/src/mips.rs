@@ -4,6 +4,7 @@
 //! level is a *finalised* copy (√ back from squared roughness, renormalised vectors, clamps). Mip 0 is the base as
 //! authored, except a normal map's vectors, which are renormalised unless `mips.normal_base = keep` (DECISIONS R1); a
 //! vector chain accumulates from that written mip 0, so its lower levels and the variance bake see the stored vectors.
+use crate::bake::{baked_roughness, NormalVariance};
 use crate::config::*;
 use crate::image::Rgba32F;
 use crate::ops::{Domain, Work};
@@ -70,6 +71,11 @@ fn downsample(prev: &Rgba32F, weighted: bool) -> Rgba32F {
         }
     }
     out
+}
+
+/// One unweighted box step (the bake's length pyramid, `bake::LengthPyramid::build`).
+pub(crate) fn box_down(prev: &Rgba32F) -> Rgba32F {
+    downsample(prev, false)
 }
 
 /// Per-axis area weights: destination texel `i` of `m` covers the source interval
@@ -196,17 +202,30 @@ fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
 /// Finalised mip levels, level 0 first, in the Work's domain.
 ///
 /// Levels >= 1 are finalised and clamped (roughness √, vector renormalisation, domain clamps). Mip 0 is the base as
-/// authored, except a normal map's vectors, renormalised unless `mips.normal_base = keep` (DECISIONS R1); a vector
-/// chain accumulates from that written mip 0. The consumer (Quantise, Task 31) clamps mip 0 for the target format.
+/// authored, except a normal map's vectors, renormalised unless `mips.normal_base = keep` (DECISIONS R1); the
+/// consumer (Quantise, Task 31) clamps it for the target format.
 pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F> {
+    build_chain_with(work, p, None)
+}
+
+/// [`build_chain`] with a roughness member's variance bake (spec §6.2): where `bake` adds variance, R is stored as
+/// `(min(α² + add, 1))^¼`, α the footprint mean of r²; every other value is bit-identical to [`build_chain`].
+/// `bake` is ignored unless the Work is a roughness member.
+pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>) -> Vec<Rgba32F> {
     let n = level_count(work.img.width, work.img.height, &p.mips.levels);
     let weighted = weighted_rgb(work, p);
+    let rough = bake.filter(|_| work.roughness_r_squared);
     let mut out = Vec::with_capacity(n as usize);
-    out.push(base_level(work, p));
-    // `acc` is the unnormalised accumulation level; the first step reads the base directly unless
-    // roughness needs squaring, so the base is not cloned a second time.
+    let mut base = base_level(work, p);
+    if let Some(b) = rough {
+        let src = &work.img;
+        bake_roughness(&mut base, 0, b, |i| src.px[i][0] * src.px[i][0]);
+    }
+    out.push(base);
+    // `acc` is the unnormalised accumulation level; the first step reads the base directly unless roughness needs
+    // squaring, so the base is not cloned a second time.
     let mut acc: Option<Rgba32F> = None;
-    for _ in 1..n {
+    for level in 1..n as usize {
         let next = match &acc {
             Some(prev) => downsample(prev, weighted),
             None if work.roughness_r_squared => {
@@ -222,10 +241,31 @@ pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F> {
             }
             None => downsample(&work.img, weighted),
         };
-        out.push(finalize(&next, work));
+        let mut fin = finalize(&next, work);
+        if let Some(b) = rough {
+            bake_roughness(&mut fin, level, b, |i| next.px[i][0]);
+        }
+        out.push(fin);
         acc = Some(next);
     }
     out
+}
+
+/// Spec §6.2 step 4 on R: a texel whose `_n` footprint adds variance gets `(min(α² + add, 1))^¼`, α = `alpha(i)` (the
+/// footprint mean of r²); the rest keep the plain chain's value bit for bit.
+fn bake_roughness(
+    level: &mut Rgba32F,
+    index: usize,
+    b: &NormalVariance,
+    alpha: impl Fn(usize) -> f32,
+) {
+    let w = level.width;
+    for (i, px) in level.px.iter_mut().enumerate() {
+        let add = b.add_at(index, i as u32 % w, i as u32 / w);
+        if add > 0.0 {
+            px[0] = baked_roughness(alpha(i), add);
+        }
+    }
 }
 
 #[cfg(test)]
