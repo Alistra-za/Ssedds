@@ -95,6 +95,31 @@ pub fn check_rel_path(p: &str, field: &str) -> Result<(), PrefixError> {
     Ok(())
 }
 
+/// A path value written into the PGPatcher JSON as typed: PGPatcher never converts '/', so it must use '\'
+/// (DECISIONS P26).
+pub fn check_json_path(p: &str, field: &str) -> Result<(), PrefixError> {
+    if p.contains('/') {
+        return Err(PrefixError(format!(
+            "{field}: use \\ not /, PGPatcher does not convert / ({p:?})"
+        )));
+    }
+    check_rel_path(p, field)
+}
+
+/// `match_diffuse`/`match_normal`: PGPatcher matches them against paths relative to `textures\`, so a value that
+/// starts with `textures\` never matches (DECISIONS P26).
+fn check_match_value(p: &str, field: &str) -> Result<(), PrefixError> {
+    check_json_path(p, field)?;
+    let t = p.trim();
+    if strip_ci(t, "textures\\").len() != t.len() {
+        return Err(PrefixError(format!(
+            "{field}: PGPatcher matches paths relative to textures\\, so a value starting with textures\\ never \
+             matches; remove textures\\ ({p:?})"
+        )));
+    }
+    Ok(())
+}
+
 /// `rel_dir` (the diffuse's folder under the opened folder, '/'-separated) and its output stem → `match_diffuse`:
 /// without a leading `textures/` and `pbr/`, with backslashes, case kept.
 pub fn derive_match_diffuse(rel_dir: &str, stem: &str) -> String {
@@ -147,9 +172,9 @@ fn strip_slot_suffix(v: &str, n: u8) -> String {
 /// The output prefix (backslashes, no extension) of a set with effective settings `s`; `derived` is the derived
 /// `match_diffuse`.
 pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
-    let rename = text(s, "rename").map(backslash);
+    let rename = text(s, "rename").map(str::trim);
     if let Some(r) = &rename {
-        check_rel_path(r, "rename")?;
+        check_json_path(r, "rename")?;
     }
     let mode = match_mode(s);
     match mode {
@@ -165,10 +190,10 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
                 ),
                 _ => ("match_diffuse", derived.to_string()),
             };
-            let value = backslash(value.trim());
-            check_rel_path(&value, field)?;
+            let value = value.trim().to_string();
+            check_match_value(&value, field)?;
             if let Some(r) = rename {
-                return Ok(under_pbr(&r));
+                return Ok(under_pbr(r));
             }
             let mut v = strip_ext(&value).to_string();
             if mode == MatchMode::Normal {
@@ -178,12 +203,12 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
         }
         MatchMode::Slot(n) => {
             let field = format!("match{n}");
-            let value = backslash(text(s, &field).unwrap_or_default().trim());
-            check_rel_path(&value, &field)?;
+            let value = text(s, &field).unwrap_or_default().trim();
+            check_json_path(value, &field)?;
             if let Some(r) = rename {
-                return Ok(r);
+                return Ok(r.to_string());
             }
-            Ok(under_pbr(&strip_slot_suffix(strip_ext(&value), n)))
+            Ok(under_pbr(&strip_slot_suffix(strip_ext(value), n)))
         }
     }
 }

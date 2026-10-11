@@ -148,10 +148,7 @@ fn diffuse_mode_prefixes_and_renames() {
         r"textures\pbr\landscape\rock01"
     );
     assert_eq!(
-        p(
-            &[("match_diffuse", json!(r"textures\landscape\rock02.dds"))],
-            "x"
-        ),
+        p(&[("match_diffuse", json!(r"landscape\rock02.dds"))], "x"),
         r"textures\pbr\landscape\rock02"
     );
     assert_eq!(
@@ -229,6 +226,45 @@ fn bad_paths_block() {
     // An empty match_diffuse falls back to the derived match; an empty derived match blocks.
     assert!(prefix_of(&s(&[]), "").is_err());
     assert!(check_rel_path(r"landscape\white.dds", "slot3").is_ok());
+}
+
+#[test]
+fn match_values_starting_with_textures_block() {
+    // PGPatcher matches match_diffuse/match_normal relative to textures\, so these never match (DECISIONS P26).
+    for (key, v) in [
+        ("match_diffuse", r"textures\landscape\rock02.dds"),
+        ("match_diffuse", r"Textures\rock02"),
+        ("match_normal", r"TEXTURES\landscape\rock02_n.dds"),
+    ] {
+        let e = prefix_of(&s(&[(key, json!(v))]), "x").unwrap_err();
+        assert!(
+            e.0.contains(key) && e.0.contains(r"remove textures\"),
+            "{e:?}"
+        );
+    }
+    // A folder merely named like it, and matchN (PGPatcher prepends textures\ itself), still pass.
+    assert!(prefix_of(&s(&[("match_diffuse", json!(r"texturesets\rock02"))]), "x").is_ok());
+    assert!(prefix_of(&s(&[("match2", json!(r"textures\a\b_n.dds"))]), "x").is_ok());
+}
+
+#[test]
+fn forward_slashes_in_json_paths_block() {
+    // PGPatcher never converts '/', and the writer writes these values as typed (DECISIONS P26).
+    for key in ["match_diffuse", "match_normal", "match2", "rename"] {
+        let e = prefix_of(&s(&[(key, json!("landscape/rock01"))]), "x").unwrap_err();
+        assert!(e.0.contains(key) && e.0.contains(r"use \ not /"), "{e:?}");
+    }
+    assert!(check_json_path("landscape/white.dds", "slot3").is_err());
+    assert!(check_json_path(r"landscape\white.dds", "slot3").is_ok());
+    // The derived match is built with backslashes, so a nested folder still works.
+    assert_eq!(
+        prefix_of(
+            &s(&[]),
+            &derive_match_diffuse("textures/landscape/rocks", "rock01")
+        )
+        .unwrap(),
+        r"textures\pbr\landscape\rocks\rock01"
+    );
 }
 
 #[test]
@@ -644,10 +680,10 @@ fn failures_name_the_path_and_the_key() {
 #[test]
 fn slot_suffixes_compare_ascii_only() {
     // The Kelvin sign lower-cases to an ASCII 'k'; it is not the `_sk` suffix and must not be cut (nor panic).
-    let p = prefix_of(&s(&[("match3", json!("x/a_s\u{212A}.dds"))]), "unused").unwrap();
+    let p = prefix_of(&s(&[("match3", json!("x\\a_s\u{212A}.dds"))]), "unused").unwrap();
     assert_eq!(p, "textures\\pbr\\x\\a_s\u{212A}");
     let p = prefix_of(
-        &s(&[("match3", json!("x/\u{212A}\u{212A}_SK.dds"))]),
+        &s(&[("match3", json!("x\\\u{212A}\u{212A}_SK.dds"))]),
         "unused",
     )
     .unwrap();

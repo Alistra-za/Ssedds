@@ -5,7 +5,7 @@ use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
 use super::AppModel;
-use crate::pgp::prefix::{check_rel_path, output_rel, pitfalls};
+use crate::pgp::prefix::{check_json_path, check_rel_path, output_rel, pitfalls};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, to_text, EntryInput};
@@ -281,7 +281,7 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
         for n in 1..=8u8 {
             if let Some(Value::String(p)) = s.get(&format!("slot{n}")) {
                 if !p.is_empty() {
-                    if let Err(e) = check_rel_path(p, &format!("slot{n}")) {
+                    if let Err(e) = check_json_path(p, &format!("slot{n}")) {
                         out.push(issue(v, format!("{}: {}", v.id, e.0)));
                     }
                 }
