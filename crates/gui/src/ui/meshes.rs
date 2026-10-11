@@ -181,7 +181,8 @@ fn mods(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 });
             }
         });
-    if let Some(id) = picked {
+    // While a scan runs the store's winner tables are being rewritten: the selection waits for the result.
+    if let Some(id) = picked.filter(|_| !m.scanning()) {
         m.select_mod(id);
     }
 }
@@ -215,7 +216,7 @@ fn nifs(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 });
             }
         });
-    if let Some(c) = picked {
+    if let Some(c) = picked.filter(|_| !m.scanning()) {
         m.select_nif(c);
     }
 }

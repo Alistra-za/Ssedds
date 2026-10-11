@@ -208,6 +208,8 @@ impl eframe::App for SdcApp {
                 self.model.settings.meshes = s;
                 self.model.save_settings();
             }
+            // The Textures model's dialogs (close with unsaved edits, an export error) must show in this view too.
+            crate::ui::dialogs::draw(&ctx, &mut self.model);
         } else {
             crate::ui::draw_with(ui, &mut self.model, &mut self.state);
         }
