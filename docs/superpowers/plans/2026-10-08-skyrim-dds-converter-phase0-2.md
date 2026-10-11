@@ -11949,6 +11949,26 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - a golden `_cnr` case whose alpha widening matches the f64 reference within 1/255;
       - a flat-normal `_cnr` whose alpha is unchanged.
   - B2 confirms the `SignedRg` accumulation path gives the length before normalising (M4's Toksvig input). It also left an owner question: should mip 0 be renormalised? Several real `_n` sources are as short as |n| = 0.34.
+- **Consumed by M4** (built on `feat/m4-variance-bake`, 2026-10-11; plan `docs/superpowers/plans/2026-10-11-sdc-m4-variance-bake.md`; DECISIONS Note R):
+  - The scope above, with the companion decoded by the roughness member itself and a box length pyramid in place of the summed-area table and the scheduler ordering (R4, R5).
+  - Every carried item:
+    - shared roughness never bakes (R7);
+    - `build_chain` reads `p.mips.normal` (the `_cnr` self-bake, Task 6) and `build_chain_with` takes the bake;
+    - the four `SET-*` codes (R8);
+    - no alpha weighting for vector or roughness chains (R11);
+    - the `_n` is stamped, hashed and admitted with its member (R4, R12);
+    - mipcheck B1/B6, with the owner's dithered exact coverage (R13);
+    - the owner's `_cnr` self-bake (R2);
+    - B2's accumulation length (before normalising) is the bake's L, taken from mip 0 as written (R1).
+  - Owner decision 2026-10-11: normal mip 0 is renormalised by default (`mips.normal_base`, `CHAN-NORMAL-SHORT`, R1).
+- **Still open after M4:**
+  - the in-game check of the bake's look at distance (spec §14 #4, t = 0.25);
+  - per-mip angular-error metrics for normals (M7).
+- **Deferred (M4 review follow-ups):**
+  - a real-BC7 round-trip golden for coverage edges (the B6 clearance is asserted on the float chain only), including the edge thresholds c ≤ 2 and c ≥ 254 where the clearance degrades;
+  - an `rfaos` golden at 1:2 (Task 9 review: not exercised);
+  - a golden that reaches `t²` saturation of the bake clamp;
+  - the "Normal base level" row on a `skin_wet` height form is inert (its profile category is Grayscale); key the field lock on `p.category` for that row.
 
 ### M5 — NVTT as an optional external process (spec §7.5)
 

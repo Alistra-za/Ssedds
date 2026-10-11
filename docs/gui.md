@@ -24,6 +24,8 @@ The GUI never decides for you. A texture that needs an answer has an **amber bor
 
 Any field in the centre column can be changed. Changes go into `sdc.toml` as `[files."<path>"]` entries, keyed by the file's path relative to the folder holding `sdc.toml` (packed outputs without an extension, for example `landscape/rock01_rmaos`). The GUI writes only `target`, the `[files.*]` tables and `defaults.packing.fill.*`; comments, ordering, rules and every other table in your `sdc.toml` are left byte for byte as they were.
 
+**Normal base level** (normal maps only) stores mip 0 at unit length by default; choose *Keep as authored* for a normal map whose short normals are deliberate. A PBR set's normal map also bakes its detail into the set's `_rmaos`/`_rfaos` roughness, and a `_cnr` into its own coat roughness; the Normal handling row then reads *decided by the texture set*.
+
 An edited file is marked **●** until you save with **Save** or **Ctrl+S**. Export saves first. If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it or overwrite it. Closing the window or opening another folder with unsaved edits asks first. So does closing or opening a folder while an export is running: the dialog offers **Cancel export and continue** (the export stops, then the window closes or the folder opens) or **Keep running**.
 
 Per-texture `[files]` entries sit above preset and config rules and analysis, and below any `--set` on the command line, so `sdc convert <folder>` honours them.
@@ -55,7 +57,7 @@ The **Sets** column is editable. It changes which textures belong to which mater
 ### Editing sets
 
 - **Drag a texture** from the Textures column onto a set to move it there, or onto empty space to start a new set. Dropping onto a slot that already holds a texture asks **Replace** or **Cancel**.
-- **Share** lets a set borrow a texture from another set; **Duplicate** copies it into the set. Both ask before replacing a filled slot.
+- **Share** lets a set borrow a texture from another set; **Duplicate** copies it into the set. Both ask before replacing a filled slot. A shared `_rmaos` is never variance-baked, because the sets sharing it have different normal maps.
 - **Reorder** sets by dragging the **≡** handle.
 - **Right-click** a set or a member for its menu (move, share, duplicate, rename, delete). Rename opens a dialog. Only a set you created can be deleted; an automatic set would regroup at once. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Badges** on a set show what needs attention: a missing file, a borrowed slot, a blocking problem for export.
