@@ -4,26 +4,25 @@
 //! coverage-preserving mipmap method; see `docs/CREDITS.md`. No code is copied.
 //!
 //! Level 0 defines the target: the fraction `p` of texels whose 8-bit alpha code passes the
-//! alpha test. Each lower level is remapped so that its pass count is the achievable count
-//! nearest `round(p · n)`. The counter ([`coverage_fraction`]) and the solver
+//! alpha test. Each lower level is remapped so that exactly `round(p · n)` of its texels pass.
+//! The counter ([`coverage_fraction`]) and the solver
 //! ([`preserve_coverage`]) share [`passes`] and the engine's [`code8`] rounding, so they
 //! cannot disagree.
 //!
 //! - **Boundary.** `T` is the smallest f32 whose code passes (found by search, not the code
 //!   centre), so only the texels at or above the anchor pass.
-//! - **Ties.** A monotone remap cannot split equal alphas, so the achievable counts are the
-//!   group boundaries `#(alpha >= v)` of the distinct positive values `v`. The nearest one is
-//!   taken, the larger on a tie (coverage loss is the visible failure). A binary base can
-//!   therefore over-cover: one opaque texel per 2×2 gives four tied 0.25s at level 1, and the
-//!   only achievable count for `k = 1` is 4.
-//! - **Remap shape (deviation from Castaño).** Castaño scales alpha uniformly by `T/a`. When
-//!   the anchor's group is 1.0 that halves opaque interiors, which visibly breaks
-//!   `cutout_blend`. This module uses a monotone piecewise-linear remap keeping 0 → 0 and
-//!   1 → 1: `[0, a] → [0, T]`, `[a, 1] → [T, 1]`. The pass set depends only on order and the
-//!   boundary, so coverage is the same (controller ruling, owner check; spec §5.5 note). When
-//!   the anchor is 1.0 and lower alphas already pass, the knot is the next lower distinct alpha
-//!   `b`, mapped to the largest failing float (`[0, b] → [0, T⁻]`, `[b, 1] → [T⁻, 1]`), so the
-//!   1.0 group stays 1.0 and is the only one that passes.
+//! - **Ties, dithered (owner 2026-10-11, DECISIONS R13).** On thin strands every texel touching
+//!   a strand has the same alpha, so whole tied groups cannot reach the target (mipcheck round
+//!   2, B1: up to 32x over). Each level instead passes exactly `k = round(p · n)` texels: those
+//!   above the k-th largest alpha `v`, plus as many texels tied at `v` as are still needed,
+//!   chosen in 8x8 Bayer order of their position. That is deterministic, with no RNG, and spreads
+//!   the passing texels along the strand, so foliage and grass keep their coverage at the low
+//!   mips players mostly see. Zero alpha is never raised.
+//! - **Remap shape (deviation from Castaño).** Castaño scales alpha uniformly by `T/a`, which
+//!   halves opaque interiors and breaks `cutout_blend`. Here passing texels map monotonically
+//!   onto `[T_pass, 1]` (1.0 stays 1.0) and failing ones onto `[0, T_fail]`, each side keeping
+//!   the order of its alphas; only the tied boundary group is split (controller ruling, owner
+//!   check; spec §5.5 note).
 //! - **`k = 0`.** A level whose target rounds to zero is left unchanged (spec). Its "within
 //!   one texel" result relies on the level being a box-filtered descendant of level 0: a box
 //!   average passes only if its footprint holds a passing base texel, so ordinary content
@@ -96,39 +95,81 @@ fn unit_alpha(x: f32) -> f32 {
     }
 }
 
-/// The distinct positive alpha `a` whose pass count `#(w >= a)` is nearest `k` (`1 <= k <= n`),
-/// with that count; on a tie the larger count wins. These counts are the only ones a monotone
-/// remap can reach; zero alphas cannot be raised, so `a = 0` never qualifies. `w` is scratch.
-fn nearest_group(w: &mut [f32], k: usize) -> Option<(f32, usize)> {
-    let (_, &mut v, _) = w.select_nth_unstable_by(k - 1, |x, y| y.total_cmp(x));
-    let (mut at_least, mut above, mut next_larger) = (0usize, 0usize, None::<f32>);
-    for &x in w.iter() {
-        if x >= v {
-            at_least += 1;
-        }
-        if x > v {
-            above += 1;
-            next_larger = Some(next_larger.map_or(x, |m| m.min(x)));
-        }
+/// Rank of texel (x, y) in the 8x8 ordered-dither (Bayer) matrix, 0..64: the order in which texels tied at the
+/// coverage boundary are let through (owner 2026-10-11, DECISIONS R13). The bit-reversed interleave of `x ^ y` and
+/// `y`; deterministic, no RNG.
+fn bayer8(x: u32, y: u32) -> u32 {
+    let (a, b) = ((x ^ y) & 7, y & 7);
+    ((a & 1) << 5)
+        | ((b & 1) << 4)
+        | ((a & 2) << 2)
+        | ((b & 2) << 1)
+        | ((a & 4) >> 1)
+        | ((b & 4) >> 2)
+}
+
+/// Which texels pass so that exactly `k` do: every texel above the k-th largest alpha `v`, plus as many texels tied
+/// at `v` as are still needed, in Bayer order of their position (ties by index). Zero alpha is never raised, so with
+/// fewer than `k` positive texels every positive one passes; `None` when none is positive. `w` is the level's alpha
+/// as [`unit_alpha`] reads it, row-major with `width` texels per row.
+fn exact_pass_set(w: &[f32], width: u32, k: usize) -> Option<Vec<bool>> {
+    let positive = w.iter().filter(|&&a| a > 0.0).count();
+    let k = k.min(positive);
+    if k == 0 {
+        return None;
     }
-    // `at_least >= k > above`: the smallest achievable count at or above `k`, and the largest
-    // below it.
-    let hi = (v > 0.0).then_some((v, at_least));
-    let lo = next_larger.map(|u| (u, above));
-    match (hi, lo) {
-        (Some(h), Some(l)) => Some(if h.1 - k <= k - l.1 { h } else { l }),
-        (h, l) => h.or(l),
+    let mut scratch = w.to_vec();
+    let (_, &mut v, _) = scratch.select_nth_unstable_by(k - 1, |x, y| y.total_cmp(x));
+    let mut pass: Vec<bool> = w.iter().map(|&a| a > v).collect();
+    let above = pass.iter().filter(|&&p| p).count();
+    let mut tied: Vec<usize> = (0..w.len()).filter(|&i| w[i] == v).collect();
+    tied.sort_by_key(|&i| (bayer8(i as u32 % width, i as u32 / width), i));
+    for &i in tied.iter().take(k - above) {
+        pass[i] = true;
+    }
+    Some(pass)
+}
+
+/// Rewrite alpha so exactly the texels in `pass` pass. Passing texels map monotonically onto `[t_pass, 1]` (the
+/// smallest goes to `t_pass`, 1.0 stays 1.0); failing ones onto `[0, t_fail]` (the largest goes to `t_fail`). Each
+/// side keeps the order of its alphas.
+fn remap(level: &mut Rgba32F, w: &[f32], pass: &[bool], t_pass: f32, t_fail: f32) {
+    let lo_pass = w
+        .iter()
+        .zip(pass)
+        .filter(|(_, p)| **p)
+        .map(|(a, _)| *a)
+        .fold(1.0f32, f32::min);
+    let hi_fail = w
+        .iter()
+        .zip(pass)
+        .filter(|(_, p)| !**p)
+        .map(|(a, _)| *a)
+        .fold(0.0f32, f32::max);
+    for (q, (&a, &p)) in level.px.iter_mut().zip(w.iter().zip(pass)) {
+        q[3] = if p {
+            if a >= 1.0 {
+                1.0
+            } else {
+                // a >= lo_pass and a < 1, so lo_pass < 1; the result is >= t_pass, and a = lo_pass gives t_pass.
+                (t_pass + (a - lo_pass) * ((1.0 - t_pass) / (1.0 - lo_pass))).min(1.0)
+            }
+        } else if a <= 0.0 {
+            0.0 // zero alpha stays zero (invisible texels are never lifted toward the threshold)
+        } else if a >= hi_fail {
+            t_fail // the largest failing alpha (an unchosen tied texel included) lands exactly on t_fail
+        } else {
+            // 0 < a < hi_fail here; capped so f32 rounding cannot lift it past t_fail.
+            (a * (t_fail / hi_fail)).min(t_fail)
+        };
     }
 }
 
-/// Rewrite the alpha of every level `>= 1` so its coverage matches level 0 (the reference,
-/// left untouched). Per level the target is `k = round(p · n)`; the anchor `a` is the distinct
-/// alpha whose count `#(alpha >= a)` is nearest `k` (ties to the larger count). Alpha is then
-/// remapped piecewise-linearly, `[0, a] → [0, T]` and `[a, 1] → [T, 1]` with `T` the smallest
-/// float whose code passes, so exactly the texels `>= a` pass. When `a` is 1.0 the knot moves
-/// to the next lower distinct alpha `b`, mapped to the largest failing float, so 1.0 stays 1.0
-/// and `b` and everything below fail. A level is left unchanged when `k = 0`, when it has no
-/// positive alpha, or when its pass count already equals the chosen count.
+/// Rewrite the alpha of every level `>= 1` so it passes exactly `k = round(p · n)` texels, `p` the pass fraction of
+/// level 0 (the reference, left untouched): the texels above the k-th largest alpha, plus texels tied with it in
+/// Bayer order of position (owner 2026-10-11, DECISIONS R13). Passing texels are remapped onto `[T_pass, 1]` and
+/// failing ones onto `[0, T_fail]`. A level is left unchanged when `k = 0`, when it already passes `k`, or when it has
+/// no positive alpha; zero alpha is never raised, so a level with fewer than `k` positive texels passes all of them.
 pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCompare) {
     let Some((base, rest)) = chain.split_first_mut() else {
         return;
@@ -140,7 +181,9 @@ pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCom
     if t == 0.0 {
         return;
     }
-    let t_fail = t.next_down(); // the largest failing float
+    // Where remapped texels land: passing ones at or above `t_pass`, failing ones at or below `t_fail` (Task 2 moves
+    // both clear of the threshold).
+    let (t_pass, t_fail) = (t, t.next_down());
     let p = coverage_fraction(base.px.iter().map(|q| q[3]), threshold, compare);
     let pass_count = |l: &Rgba32F| {
         l.px.iter()
@@ -150,50 +193,17 @@ pub fn preserve_coverage(chain: &mut [Rgba32F], threshold: u8, compare: AlphaCom
     for level in rest {
         let n = level.px.len();
         let k = ((p * n as f64).round() as usize).min(n);
-        if k == 0 {
+        // "No texel passes" is the target: the box alpha is left alone (spec §5.5). So is a level already on target.
+        if k == 0 || pass_count(level) == k {
             continue;
         }
-        let mut w: Vec<f32> = level.px.iter().map(|q| unit_alpha(q[3])).collect();
-        let Some((a, count)) = nearest_group(&mut w, k) else {
+        let w: Vec<f32> = level.px.iter().map(|q| unit_alpha(q[3])).collect();
+        // `None`: no positive alpha to let through, so the dither cannot apply and the box alpha stays.
+        let Some(pass) = exact_pass_set(&w, level.width, k) else {
             continue;
         };
-        // The current pass set is an upper set in alpha order, so an equal count is the same
-        // set: nothing to do.
-        let passing = pass_count(level);
-        if passing == count {
-            continue;
-        }
-        // The knot `(x, y)` of the remap. Normally the anchor `a` goes to `T`. An anchor of 1.0
-        // must stay 1.0, so the next lower distinct alpha `b` goes to the largest failing
-        // float instead (`[0, b] -> [0, T-]`, `[b, 1] -> [T-, 1]`) and only the 1.0 group
-        // passes. `passing > count` here (1.0 always passes), so a lower passing `b` exists.
-        let (x, y) = if a < 1.0 {
-            (a, t)
-        } else {
-            let Some(b) = w.iter().copied().filter(|&v| v < 1.0).reduce(f32::max) else {
-                continue;
-            };
-            if b < f32::MIN_POSITIVE {
-                continue;
-            }
-            (b, t_fail)
-        };
-        let low = y / x; // finite: x >= f32::MIN_POSITIVE
-        let high = (1.0 - y) / (1.0 - x);
-        for q in &mut level.px {
-            let w = unit_alpha(q[3]);
-            q[3] = if w >= 1.0 {
-                1.0
-            } else if w >= x {
-                // Every term is >= 0, so the result is >= y; w = x gives y exactly. With
-                // `y = T-` the only input here is `b` itself (nothing lies in `(b, 1)`).
-                (y + (w - x) * high).min(1.0)
-            } else {
-                // Capped at the largest failing float, so f32 rounding cannot promote it.
-                (w * low).min(t_fail)
-            };
-        }
-        debug_assert_eq!(pass_count(level), count);
+        remap(level, &w, &pass, t_pass, t_fail);
+        debug_assert_eq!(pass_count(level), pass.iter().filter(|&&b| b).count());
     }
 }
 
@@ -347,10 +357,24 @@ mod tests {
     }
 
     #[test]
-    fn binary_tie_takes_the_only_achievable_count() {
-        // One opaque texel per 2x2 footprint: level 1 is four tied 0.25s and k = 1. A monotone
-        // remap cannot split a tie, and count 0 is not considered for k >= 1, so the only
-        // achievable count is 4 (documented limitation: three texels over).
+    fn bayer8_is_the_standard_8x8_ordered_dither() {
+        let mut seen = [false; 64];
+        for y in 0..8 {
+            for x in 0..8 {
+                seen[bayer8(x, y) as usize] = true;
+                assert_eq!(bayer8(x, y), bayer8(x + 8, y + 16), "the matrix tiles");
+            }
+        }
+        assert!(seen.iter().all(|&s| s), "a permutation of 0..64");
+        let row0: Vec<u32> = (0..8).map(|x| bayer8(x, 0)).collect();
+        assert_eq!(row0, [0, 32, 8, 40, 2, 34, 10, 42]);
+        assert_eq!(bayer8(0, 1), 48);
+    }
+
+    #[test]
+    fn binary_tie_lets_exactly_k_through_in_bayer_order() {
+        // One opaque texel per 2x2 footprint: level 1 is four tied 0.25s and k = 1. The old solver passed all four;
+        // now exactly one passes, the texel with the lowest Bayer rank, (0, 0).
         let mut base = Rgba32F::new(4, 4, [0.0; 4]);
         for (x, y) in [(0, 0), (2, 0), (0, 2), (2, 2)] {
             base.at_mut(x, y)[3] = 1.0;
@@ -358,29 +382,97 @@ mod tests {
         let mut c = box_chain(base);
         assert!(alpha_of(&c[1]).all(|a| a == 0.25));
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
-        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 4);
-        // The tied group lands exactly on the first passing float, not the code centre.
-        let t = first_passing_float(127, AlphaCompare::Gt);
-        assert!(alpha_of(&c[1]).all(|a| a == t), "{:?}", c[1].px);
+        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 1);
+        assert!(passes(code8(c[1].px[0][3]), 127, AlphaCompare::Gt));
     }
 
     #[test]
-    fn tie_picks_the_nearer_achievable_group() {
-        // Footprints with 3, 1, 1, 1 opaque texels: level 1 = [0.75, 0.25, 0.25, 0.25].
-        // p = 6/16, k = round(1.5) = 2; achievable counts are 1 (>= 0.75) and 4 (>= 0.25).
+    fn mipcheck_b1_three_texel_repro_gets_exactly_k() {
+        // RESULTS-2 B1, smallest reproduction: alpha 255 at (0,0), (0,2), (2,0). Level 1 holds three tied 0.25s and
+        // k = round(3/16 * 4) = 1; the old solver passed all three.
+        let mut base = Rgba32F::new(4, 4, [0.0; 4]);
+        for (x, y) in [(0, 0), (0, 2), (2, 0)] {
+            base.at_mut(x, y)[3] = 1.0;
+        }
+        let mut c = box_chain(base);
+        preserve_coverage(&mut c, 128, AlphaCompare::Ge);
+        assert_eq!(pass_count(&c[1], 128, AlphaCompare::Ge), 1);
+    }
+
+    #[test]
+    fn ties_are_split_in_bayer_order_to_reach_k_exactly() {
+        // Footprints with 3, 1, 1, 1 opaque texels: level 1 = [0.75, 0.25, 0.25, 0.25], k = round(1.5) = 2. The 0.75
+        // passes, and one of the three tied 0.25s: (1, 1) has the lowest Bayer rank of (1,0), (0,1), (1,1).
         let mut base = Rgba32F::new(4, 4, [0.0; 4]);
         for (x, y) in [(0, 0), (1, 0), (0, 1), (2, 0), (0, 2), (2, 2)] {
             base.at_mut(x, y)[3] = 1.0;
         }
         let mut c = box_chain(base);
-        let before = c[1].clone();
-        assert_eq!(pass_count(&before, 127, AlphaCompare::Gt), 1);
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
-        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 1);
-        assert_eq!(
-            c[1], before,
-            "the nearer group already passes: level unchanged"
-        );
+        assert_eq!(pass_count(&c[1], 127, AlphaCompare::Gt), 2);
+        let pass: Vec<bool> = alpha_of(&c[1])
+            .map(|a| passes(code8(a), 127, AlphaCompare::Gt))
+            .collect();
+        assert_eq!(pass, [true, false, false, true]);
+    }
+
+    /// 64x64 with a one-texel vertical strand every 16 columns (p = 1/16): every level's alphas are tied.
+    fn strands() -> Vec<Rgba32F> {
+        let mut base = Rgba32F::new(64, 64, [0.0; 4]);
+        for y in 0..64 {
+            for x in (0..64).step_by(16) {
+                base.at_mut(x, y)[3] = 1.0;
+            }
+        }
+        box_chain(base)
+    }
+
+    #[test]
+    fn thin_tied_strands_keep_coverage_within_one_texel_down_to_4x4() {
+        let mut c = strands();
+        preserve_coverage(&mut c, 127, AlphaCompare::Gt);
+        let p = coverage_fraction(alpha_of(&c[0]), 127, AlphaCompare::Gt);
+        for l in c.iter().skip(1).filter(|l| l.px.len() >= 16) {
+            let k = p * l.px.len() as f64;
+            let got = pass_count(l, 127, AlphaCompare::Gt) as f64;
+            assert!(
+                (got - k).abs() <= 1.0,
+                "{}x{}: {got} passing for k = {k}",
+                l.width,
+                l.height
+            );
+        }
+    }
+
+    #[test]
+    fn the_dither_is_deterministic() {
+        let (mut a, mut b) = (strands(), strands());
+        preserve_coverage(&mut a, 127, AlphaCompare::Gt);
+        preserve_coverage(&mut b, 127, AlphaCompare::Gt);
+        assert_eq!(a, b);
+        let (mut a, mut b) = (foliage_chain(), foliage_chain());
+        preserve_coverage(&mut a, 64, AlphaCompare::Ge);
+        preserve_coverage(&mut b, 64, AlphaCompare::Ge);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn foliage_every_level_reaches_k_exactly() {
+        let mut c = foliage_chain();
+        preserve_coverage(&mut c, 127, AlphaCompare::Gt);
+        let p = coverage_fraction(alpha_of(&c[0]), 127, AlphaCompare::Gt);
+        for l in &c[1..] {
+            let k = ((p * l.px.len() as f64).round() as usize).min(l.px.len());
+            if k > 0 {
+                assert_eq!(
+                    pass_count(l, 127, AlphaCompare::Gt),
+                    k,
+                    "{}x{}",
+                    l.width,
+                    l.height
+                );
+            }
+        }
     }
 
     #[test]
