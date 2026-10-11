@@ -202,10 +202,8 @@ fn prepare_then<T>(
     // Spec §6.2–6.3 (DECISIONS R4): a roughness member decodes its `_n` first and keeps only the footprint lengths,
     // so the two images are never held together.
     let lengths = match &job.bake {
-        Some(b) => Some(
-            b.load_lengths()
-                .map_err(|e| fail(Stage::Load)(format!("{}: {e}", b.normal.display())))?,
-        ),
+        // `load_image`'s errors already name the `_n`.
+        Some(b) => Some(b.load_lengths().map_err(fail(Stage::Load))?),
         None => None,
     };
     stop()?;
@@ -404,7 +402,7 @@ pub fn process_file(
             if let Some(b) = &job.bake {
                 sources.push(
                     SourceRef::of_bake(&b.normal, b.identity_sha256())
-                        .map_err(|e| fail(Stage::Load)(e.to_string()))?,
+                        .map_err(|e| fail(Stage::Load)(format!("{}: {e}", b.normal.display())))?,
                 );
             }
             Ok((source_sha256, sources))

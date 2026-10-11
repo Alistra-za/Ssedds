@@ -183,7 +183,7 @@ impl BakeJob {
             self.normal_profile.mips.normal_base,
             self.shift,
         ))
-        .unwrap_or_default()
+        .expect("a tuple of plain config values serialises")
     }
 
     /// Decode the `_n` as its own job does (spec §5.4), write its mip 0 as that job does (unit length unless
@@ -200,13 +200,35 @@ impl BakeJob {
         Ok(LengthPyramid::build(&work.img))
     }
 
-    /// Peak bytes the bake holds, for `--mem-budget` admission (DECISIONS R4): the `_n`'s float base (16 per texel),
-    /// one quarter-size accumulation level (4), the pyramid (1.33) and decode slack, so 24 per `_n` texel. 0 when
-    /// the header cannot be read (the load then fails with its own error).
+    /// Peak bytes the bake holds, for `--mem-budget` admission (DECISIONS R4, Task 7 review I2), from the `_n`'s
+    /// header: [`BakeJob::peak_bytes`] of its size and decoded texel width. 0 when the header cannot be read (the
+    /// load then fails with its own error).
     pub fn estimated_bytes(&self) -> u64 {
-        ::image::image_dimensions(&self.normal)
-            .map(|(w, h)| u64::from(w) * u64::from(h) * 24)
-            .unwrap_or(0)
+        use ::image::ImageDecoder;
+        let header = || {
+            let d = ::image::ImageReader::open(&self.normal)
+                .ok()?
+                .with_guessed_format()
+                .ok()?
+                .into_decoder()
+                .ok()?;
+            let (w, h) = d.dimensions();
+            Some(Self::peak_bytes(
+                w,
+                h,
+                u64::from(d.color_type().bytes_per_pixel()),
+            ))
+        };
+        header().unwrap_or(0)
+    }
+
+    /// Peak bytes of baking a `w`×`h` `_n` whose decoded texels are `decoded` bytes wide. The peak is inside
+    /// `load::load_image`, which holds three buffers at once: the decoded image (`decoded`: 3 for 8-bit RGB, 8 for
+    /// 16-bit RGBA), its `to_rgba32f` copy (16) and the collected `Vec` (16). Everything after is smaller:
+    /// `preprocess` and the renormalise work in place on the 16-byte base, and the pyramid build adds one
+    /// quarter-size accumulation level (4), the next one (1) and the lengths (1.33), about 22.4 per texel.
+    pub fn peak_bytes(w: u32, h: u32, decoded: u64) -> u64 {
+        u64::from(w) * u64::from(h) * (decoded + 16 + 16)
     }
 }
 
@@ -435,17 +457,25 @@ mod tests {
     }
 
     #[test]
-    fn a_bake_holds_24_bytes_per_normal_texel() {
+    fn a_bake_is_admitted_for_load_images_decode_peak() {
         let d = tempfile::tempdir().unwrap();
-        let n = d.path().join("iron_n.png");
-        ::image::RgbImage::new(64, 32).save(&n).unwrap();
-        let b = BakeJob {
+        let job = |n: std::path::PathBuf| BakeJob {
             normal: n,
             normal_profile: profile(Subtype::PbrNormal),
             shift: 0,
             stamp: None,
         };
-        assert_eq!(b.estimated_bytes(), 64 * 32 * 24);
+        // 8-bit RGB: the decoded image (3) + `to_rgba32f` (16) + the collected `Vec` (16) per texel.
+        let rgb8 = d.path().join("rgb8_n.png");
+        ::image::RgbImage::new(64, 32).save(&rgb8).unwrap();
+        assert_eq!(job(rgb8).estimated_bytes(), 64 * 32 * (3 + 16 + 16));
+        // 16-bit RGBA: 8 + 16 + 16.
+        let rgba16 = d.path().join("rgba16_n.png");
+        ::image::ImageBuffer::<::image::Rgba<u16>, _>::new(4, 4)
+            .save(&rgba16)
+            .unwrap();
+        assert_eq!(job(rgba16).estimated_bytes(), 4 * 4 * (8 + 16 + 16));
+        assert_eq!(job(d.path().join("missing_n.png")).estimated_bytes(), 0);
     }
 
     #[test]

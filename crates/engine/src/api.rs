@@ -335,8 +335,13 @@ impl Drop for Admitted<'_> {
 /// times for the loaded image, the chain and the encoder inputs, decoded validation levels and output bytes.
 fn estimated_bytes(path: &Path) -> u64 {
     image::image_dimensions(path)
-        .map(|(w, h)| u64::from(w) * u64::from(h) * 16 * 134 / 100 * 3)
+        .map(|(w, h)| input_bytes(w, h))
         .unwrap_or(0)
+}
+
+/// [`estimated_bytes`] of a `w`×`h` input.
+fn input_bytes(w: u32, h: u32) -> u64 {
+    u64::from(w) * u64::from(h) * 16 * 134 / 100 * 3
 }
 
 /// [`estimated_bytes`] of the job's input, plus what its variance bake holds (DECISIONS R4; the M4 carry "the
@@ -1755,6 +1760,20 @@ mod tests {
         b.acquire(4);
         b.acquire(6);
         assert_eq!(*lock(&b.used), (10, 2));
+    }
+
+    /// Review Focus 4 (Task 7 review I2): a 16K `_n` (16-bit RGBA, the widest integer source) baking into a 4K
+    /// roughness member is admitted for at least its peak. The `_n` decode (decoded image 8 + `to_rgba32f` 16 + the
+    /// collected `Vec` 16 per texel) and the member's own conversion (with the 1.33 B/texel pyramid) never overlap.
+    #[test]
+    fn a_16k_normal_baking_into_a_4k_member_is_admitted_for_its_peak() {
+        let (n, m) = (16384u64 * 16384, 4096u64 * 4096);
+        let admitted = input_bytes(4096, 4096) + crate::bake::BakeJob::peak_bytes(16384, 16384, 8);
+        let decode_peak = n * (8 + 16 + 16);
+        let member_peak = input_bytes(4096, 4096) + n * 4 / 3 + 1;
+        assert!(admitted >= decode_peak, "{admitted} < {decode_peak}");
+        assert!(admitted >= member_peak, "{admitted} < {member_peak}");
+        assert!(m * 64 <= input_bytes(4096, 4096));
     }
 
     /// Carry 13, review M2/I2 and ruling O2: only a comparable, matching, passing record is up to date.

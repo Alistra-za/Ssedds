@@ -213,6 +213,21 @@ fn up_to_date_until_the_normal_or_its_decode_settings_change() {
     assert_eq!((s.converted, s.up_to_date), (1, 0));
     let (s, _) = run(keep());
     assert_eq!((s.converted, s.up_to_date), (0, 1));
+    // The member's own `mips.bake_clamp` (in its profile hash) and its own bytes re-encode as for any job.
+    let clamp = || {
+        let mut p = keep();
+        p.jobs[0].profile.mips.bake_clamp = 0.5;
+        p
+    };
+    let (s, _) = run(clamp());
+    assert_eq!((s.converted, s.up_to_date), (1, 0));
+    let (s, _) = run(clamp());
+    assert_eq!((s.converted, s.up_to_date), (0, 1));
+    ImageBuffer::from_fn(32, 32, |_, _| Rgba([140u8, 0, 255, 255]))
+        .save(&r)
+        .unwrap();
+    let (s, _) = run(clamp());
+    assert_eq!((s.converted, s.up_to_date), (1, 0));
     // Turning the bake off re-encodes too.
     let (s, _) = run(plan(d.path(), &r, &n, false, true));
     assert_eq!((s.converted, s.up_to_date), (1, 0));
@@ -249,18 +264,17 @@ fn a_bake_job_on_a_coat_normal_changes_nothing() {
     assert_eq!(bytes(true), bytes(false));
 }
 
-/// Review Focus 3: the `_n` is a source of the member (final review I7).
-#[test]
-fn a_normal_changed_after_planning_fails_the_member() {
+/// Run a planned baking member after `edit` rewrote its `_n`; the member must fail at Load with this error.
+fn fails_after(edit: impl FnOnce(&Path)) -> String {
     let d = tempfile::tempdir().unwrap();
     let n = bumpy_n(d.path(), 32, 0.0);
     let r = rmaos(d.path(), 32);
     let p = plan(d.path(), &r, &n, true, false);
-    bumpy_n(d.path(), 64, 0.0); // another size: the stamp no longer matches
+    edit(d.path());
     let (s, ev) = run(p);
-    assert_eq!((s.converted, s.failed), (0, 1));
-    let err = ev
-        .iter()
+    assert_eq!((s.converted, s.failed), (0, 1), "{ev:#?}");
+    assert!(!d.path().join("out/iron_rmaos.dds").exists());
+    ev.iter()
         .find_map(|e| match &e.kind {
             EventKind::FileFailed {
                 stage: Stage::Load,
@@ -268,10 +282,37 @@ fn a_normal_changed_after_planning_fails_the_member() {
             } => Some(error.clone()),
             _ => None,
         })
-        .unwrap();
+        .unwrap()
+}
+
+/// Review Focus 3: the `_n` is a source of the member (final review I7).
+#[test]
+fn a_normal_changed_after_planning_fails_the_member() {
+    // Another size: the stamp catches it before the shift guard could.
+    let err = fails_after(|d| {
+        bumpy_n(d, 64, 0.0);
+    });
     assert!(
-        err.contains("iron_n.png") && err.contains("changed since planning"),
+        err.ends_with("iron_n.png: source changed since planning; re-run"),
         "{err}"
     );
-    assert!(!d.path().join("out/iron_rmaos.dds").exists());
+}
+
+/// The commonest edit: the `_n` repainted at the same size. Only the stamp (its modification time) can catch it.
+#[test]
+fn a_normal_repainted_at_the_same_size_after_planning_fails_the_member() {
+    let err = fails_after(|d| {
+        let n = bumpy_n(d, 32, 1.0);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(10);
+        std::fs::File::options()
+            .write(true)
+            .open(&n)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+    });
+    assert!(
+        err.ends_with("iron_n.png: source changed since planning; re-run"),
+        "{err}"
+    );
 }
