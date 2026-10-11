@@ -398,7 +398,7 @@
         },
         "recipe": {
           "$ref": "#/$defs/PackRecipe",
-          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Read from the packed\noutput's own entry, so it is set per set with `[files.\"<folder/base>_rfaos\"]`."
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Set per set at either packed key,\n`[files.\"<folder/base>_rfaos\"]` or `..._rmaos\"]`."
         },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",
@@ -623,7 +623,7 @@
         },
         "recipe": {
           "$ref": "#/$defs/PackRecipe",
-          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Read from the packed\noutput's own entry, so it is set per set with `[files.\"<folder/base>_rfaos\"]`."
+          "description": "Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Set per set at either packed key,\n`[files.\"<folder/base>_rfaos\"]` or `..._rmaos\"]`."
         },
         "roughness_default": {
           "description": "Neutral roughness (0..=1) for a channel without a roughness or glossiness source.",

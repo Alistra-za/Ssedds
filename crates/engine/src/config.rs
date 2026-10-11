@@ -88,6 +88,14 @@ pub enum PackRecipe {
 }
 
 impl PackRecipe {
+    pub fn id(self) -> &'static str {
+        match self {
+            PackRecipe::Auto => "auto",
+            PackRecipe::Rmaos => "rmaos",
+            PackRecipe::Rfaos => "rfaos",
+        }
+    }
+
     pub fn is_auto(&self) -> bool {
         *self == PackRecipe::Auto
     }
@@ -143,8 +151,8 @@ pub struct PackingSpec {
     pub prefer: PackPrefer,
     #[serde(default)]
     pub fill: FillSpec,
-    /// Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Read from the packed
-    /// output's own entry, so it is set per set with `[files."<folder/base>_rfaos"]`.
+    /// Which cs recipe this set packs (`auto`, `rmaos`, `rfaos`; DECISIONS Note R-fills-1). Set per set at either packed key,
+    /// `[files."<folder/base>_rfaos"]` or `..._rmaos"]`.
     #[serde(default, skip_serializing_if = "PackRecipe::is_auto")]
     pub recipe: PackRecipe,
 }

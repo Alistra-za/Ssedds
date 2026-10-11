@@ -169,3 +169,77 @@ fn recipe_is_chosen_per_set() {
     assert!(packed(&p, "gold_rfaos.dds").is_none());
     assert!(packed(&p, "iron_rmaos.dds").is_none());
 }
+
+fn conflicts(j: &ResolvedJob) -> Vec<String> {
+    j.warnings
+        .iter()
+        .filter(|w| w.code == Code::PackConflict)
+        .map(|w| w.message.clone())
+        .collect()
+}
+
+#[test]
+fn rfaos_on_the_rmaos_key_builds_rfaos() {
+    let d = fixture(
+        &["iron_roughness.png", "iron_ao.png"],
+        "[files.\"iron_rmaos\".packing]\nrecipe = \"rfaos\"\n",
+    );
+    let p = plan(&d);
+    assert!(packed(&p, "iron_rfaos.dds").is_some());
+    assert!(packed(&p, "iron_rmaos.dds").is_none());
+}
+
+#[test]
+fn rmaos_on_the_rfaos_key_builds_rmaos() {
+    let d = fixture(
+        &["iron_roughness.png", "iron_fuzz.png", "iron_ao.png"],
+        "[files.\"iron_rfaos\".packing]\nrecipe = \"rmaos\"\n",
+    );
+    let p = plan(&d);
+    assert!(packed(&p, "iron_rmaos.dds").is_some());
+    assert!(packed(&p, "iron_rfaos.dds").is_none());
+}
+
+#[test]
+fn a_project_wide_recipe_applies_to_every_set() {
+    let d = fixture(
+        &["iron_roughness.png", "gold_roughness.png"],
+        "[defaults.packing]\nrecipe = \"rfaos\"\n",
+    );
+    let p = plan(&d);
+    assert!(packed(&p, "iron_rfaos.dds").is_some());
+    assert!(packed(&p, "gold_rfaos.dds").is_some());
+}
+
+#[test]
+fn conflicting_keys_follow_the_rfaos_key_and_warn() {
+    let d = fixture(
+        &["iron_roughness.png", "iron_fuzz.png"],
+        concat!(
+            "[files.\"iron_rfaos\".packing]\nrecipe = \"rfaos\"\n",
+            "[files.\"iron_rmaos\".packing]\nrecipe = \"rmaos\"\n"
+        ),
+    );
+    let p = plan(&d);
+    let j = packed(&p, "iron_rfaos.dds").expect("the _rfaos key wins");
+    assert!(packed(&p, "iron_rmaos.dds").is_none());
+    let c = conflicts(j);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert!(
+        c[0].contains("iron_rfaos") && c[0].contains("iron_rmaos"),
+        "{c:?}"
+    );
+}
+
+#[test]
+fn rfaos_on_a_metallic_only_set_says_why_it_builds_rmaos() {
+    let d = fixture(&["iron_metallic.png"], RFAOS);
+    let p = plan(&d);
+    let j = packed(&p, "iron_rmaos.dds").expect("falls back to _rmaos");
+    let c = conflicts(j);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert!(
+        c[0].contains("needs a roughness, glossiness or AO source"),
+        "{c:?}"
+    );
+}

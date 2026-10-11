@@ -92,6 +92,8 @@ pub struct Candidate {
     pub job: PackJob,
     /// Channels that took a neutral default (index, slot): one `PACK-DEFAULTED` each.
     pub defaulted: Vec<(usize, Slot)>,
+    /// A `packing.recipe` notice (`PACK-CONFLICT`): the setting was not followed as written, or two keys disagree.
+    pub notes: Vec<String>,
 }
 
 pub struct PackPlan {
@@ -236,10 +238,12 @@ fn pass1_profile(
         .unwrap_or_else(|_| ctx.registry.base_profile(ctx.target, kind.subtype()))
 }
 
-/// The set's `packing.recipe` (cs only; DECISIONS Note R-fills-1). The packed output's `[files]` key carries its
-/// suffix, which is what the recipe decides, so the setting is read from the key of the output it names: the
-/// `_rfaos` entry saying `rfaos` (checked first) or the `_rmaos` entry saying `rmaos`. A project, preset or
-/// default value applies to both keys alike. Anything else is `auto`.
+/// The set's `packing.recipe` (cs only; DECISIONS Note R-fills-1) and a notice for the packed job when the
+/// setting could not be followed as written. The packed output's `[files]` key carries its suffix, which is what
+/// the recipe decides, so both candidate keys (`<base>_rfaos`, `<base>_rmaos`) are read: an explicit non-auto
+/// value on either wins; if they disagree the `_rfaos` key wins and the notice names both. A project, preset or
+/// `--set` value applies to both keys alike. `rfaos` on a set with only a metallic map cannot build `_rfaos`
+/// (no metallic channel): it falls back to `auto` with a notice.
 fn chosen_recipe(
     ctx: &ResolveCtx,
     set: &TextureSet,
@@ -247,29 +251,57 @@ fn chosen_recipe(
     raw: &[RawInput],
     pa: &Analysis,
     pinfo: &SourceInfo,
-) -> PackRecipe {
+) -> (PackRecipe, Option<String>) {
     if ctx.target != Target::Cs {
-        return PackRecipe::Auto;
+        return (PackRecipe::Auto, None);
     }
-    for pick in [PackRecipe::Rfaos, PackRecipe::Rmaos] {
-        let (recipes, _) = recipes_for_with(ctx.target, raw, pick);
-        let Some(r) = recipes
-            .iter()
-            .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
-        else {
-            continue;
-        };
-        let first = &r.sources()[0].0;
-        let vin = virtual_input(members[first], r.kind);
-        if pass1_profile(ctx, set, &vin, r.kind, pa, pinfo)
-            .packing
-            .recipe
-            == pick
-        {
-            return pick;
+    let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto);
+    let Some(base) = auto
+        .iter()
+        .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
+    else {
+        return (PackRecipe::Auto, None);
+    };
+    let first = &base.sources()[0].0;
+    let read = |kind| {
+        let vin = virtual_input(members[first], kind);
+        (
+            slash(&vin.rel.with_extension("")),
+            pass1_profile(ctx, set, &vin, kind, pa, pinfo)
+                .packing
+                .recipe,
+        )
+    };
+    let (rfaos_key, on_rfaos) = read(RecipeKind::Rfaos);
+    let (rmaos_key, on_rmaos) = read(RecipeKind::Rmaos);
+    let mut note = None;
+    let pick = if on_rfaos != PackRecipe::Auto {
+        if on_rmaos != PackRecipe::Auto && on_rmaos != on_rfaos {
+            note = Some(format!(
+                "packing.recipe disagrees: {rfaos_key} says {}, {rmaos_key} says {}; the _rfaos entry wins",
+                on_rfaos.id(),
+                on_rmaos.id()
+            ));
         }
+        on_rfaos
+    } else {
+        on_rmaos
+    };
+    if pick == PackRecipe::Rfaos
+        && !recipes_for_with(ctx.target, raw, pick)
+            .0
+            .iter()
+            .any(|r| r.kind == RecipeKind::Rfaos)
+    {
+        return (
+            PackRecipe::Auto,
+            Some(format!(
+                "packing.recipe = rfaos needs a roughness, glossiness or AO source; built _{} instead",
+                base.kind.suffix()
+            )),
+        );
     }
-    PackRecipe::Auto
+    (pick, note)
 }
 
 /// Pass 1 over every set. `jobs` holds every resolved job of the batch and is changed in place: consumed raw jobs
@@ -318,7 +350,7 @@ pub fn plan_packing(
         if raw.is_empty() {
             continue;
         }
-        let choice = chosen_recipe(ctx, set, &members, &raw, &pa, &pinfo);
+        let (choice, recipe_note) = chosen_recipe(ctx, set, &members, &raw, &pa, &pinfo);
         let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice);
         let mut unused: Vec<(PathBuf, String)> =
             unused.into_iter().map(|u| (u.path, u.reason)).collect();
@@ -477,6 +509,11 @@ pub fn plan_packing(
                 virtual_input: vin,
                 job,
                 defaulted,
+                notes: recipe_note
+                    .iter()
+                    .filter(|_| matches!(recipe.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
+                    .cloned()
+                    .collect(),
             });
         }
         for (p, reason) in unused {
@@ -550,6 +587,10 @@ pub fn finish_recipe(
                 })),
             );
         }
+    }
+    for note in &c.notes {
+        job.warnings
+            .push(Warning::new(Code::PackConflict, format!("{out}: {note}")));
     }
     for p in non_gray {
         job.warnings.push(Warning::new(
