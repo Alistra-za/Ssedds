@@ -808,6 +808,53 @@ fn nonfinite_source_samples_raise_a_warning() {
         })
         .expect("IN-NONFINITE warning");
     assert_eq!(w.data["samples"], 1);
+    let n = ev
+        .iter()
+        .filter(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::InNonfinite))
+        .count();
+    assert_eq!(n, 1, "reported once, at plan time");
+}
+
+/// DECISIONS S9: `--dry-run` (plan only) reports IN-NONFINITE; alpha samples count only when alpha is kept.
+#[test]
+fn the_plan_reports_nonfinite_samples_before_any_output() {
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures");
+    std::fs::create_dir_all(&t).unwrap();
+    let img = ImageBuffer::from_fn(8, 8, |x, y| {
+        let bad = x == 0 && y == 0;
+        Rgba([
+            if bad { f32::NAN } else { 0.5 },
+            0.25,
+            0.75,
+            if bad { f32::NAN } else { 1.0 },
+        ])
+    });
+    image::DynamicImage::ImageRgba32F(img)
+        .save(t.join("hot.tif"))
+        .unwrap();
+    for (policy, want) in [("remove", 1u64), ("data", 2)] {
+        let mut req = BatchRequest::new(vec![t.clone()], d.path().join("out"), Target::Cs);
+        req.overrides = vec![
+            parse_set("subtype=generic_data").unwrap(),
+            parse_set(&format!("alpha.policy={policy}")).unwrap(),
+        ];
+        let plan = Engine::new()
+            .unwrap()
+            .plan(
+                req,
+                &Reporter::new(Arc::new(NullSink), "t"),
+                &CancelToken::default(),
+            )
+            .unwrap();
+        let w = plan.jobs[0]
+            .warnings
+            .iter()
+            .find(|w| w.code == Code::InNonfinite)
+            .expect("IN-NONFINITE at plan");
+        assert_eq!(w.data["samples"], want, "{policy}");
+        assert!(!d.path().join("out/hot.dds").exists());
+    }
 }
 
 #[test]

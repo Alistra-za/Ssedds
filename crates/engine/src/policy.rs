@@ -1216,6 +1216,19 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     for c in contradictions(p, f) {
         add(SugContradiction, c);
     }
+    // DECISIONS S9: the count Preprocess will replace: R, G, B always, A only when the alpha is kept.
+    let kept_alpha = p.alpha.policy != AlphaPolicy::Remove;
+    let samples: u64 =
+        a.nonfinite[..3].iter().sum::<u64>() + if kept_alpha { a.nonfinite[3] } else { 0 };
+    if samples > 0 {
+        w.push(
+            Warning::new(
+                InNonfinite,
+                format!("{samples} NaN or infinite source samples are replaced before processing"),
+            )
+            .with_data(json!({ "samples": samples })),
+        );
+    }
     if bc6h_outside_cs {
         // Not a "—" cell with a fallback to accept: `--allow CFG-UNAVAILABLE` must not let it through [D#3].
         w.push(Warning {

@@ -164,16 +164,13 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
 }
 
 /// Stamp check → load → preprocess → mips → coverage → quantise, shared by the export and the GUI preview.
-/// `job_key` labels the `IN-NONFINITE` event ("" for a preview, which has no output key).
 pub(crate) fn prepare(
     job: &ResolvedJob,
     cancel: &CancelToken,
-    rep: &Reporter,
-    job_key: &str,
     tracker: &FileTracker,
     keep: Keep,
 ) -> Result<Prepared, FileError> {
-    prepare_then(job, cancel, rep, job_key, tracker, keep, || Ok(())).map(|(prep, ())| prep)
+    prepare_then(job, cancel, tracker, keep, || Ok(())).map(|(prep, ())| prep)
 }
 
 /// `prepare`, running `after_stamps` once the stamp check has passed and before anything is decoded (the export
@@ -181,8 +178,6 @@ pub(crate) fn prepare(
 fn prepare_then<T>(
     job: &ResolvedJob,
     cancel: &CancelToken,
-    rep: &Reporter,
-    job_key: &str,
     tracker: &FileTracker,
     keep: Keep,
     after_stamps: impl FnOnce() -> Result<T, FileError>,
@@ -239,23 +234,6 @@ fn prepare_then<T>(
 
     enter(Stage::Preprocess);
     let work = preprocess(img, p);
-    if work.nonfinite_samples > 0 {
-        rep.emit_job(
-            Some(job_key),
-            Some(job.set_key.as_str()),
-            Some(job.input.as_path()),
-            EventKind::Warning(
-                Warning::new(
-                    Code::InNonfinite,
-                    format!(
-                        "{} NaN or infinite source samples were replaced before processing",
-                        work.nonfinite_samples
-                    ),
-                )
-                .with_data(serde_json::json!({ "samples": work.nonfinite_samples })),
-            ),
-        );
-    }
     stop()?;
 
     enter(Stage::Mipmaps);
@@ -385,7 +363,7 @@ pub fn process_file(
     // The hashes sit between the stamp check and the load, as they always have: a source that cannot be hashed
     // fails here, before it is decoded.
     let (prep, (source_sha256, sources)) =
-        prepare_then(job, cancel, rep, &key, tracker, Keep::Encode, || {
+        prepare_then(job, cancel, tracker, Keep::Encode, || {
             let source_sha256 =
                 sha256_file(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
             // Spec §6.4 "Provenance": a packed output records every source (its first source is `job.input`, Note M8).

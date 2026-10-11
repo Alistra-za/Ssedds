@@ -827,3 +827,21 @@ fn inspect_prints_the_packing_recipes_of_a_set() {
         "{out}"
     );
 }
+
+#[test]
+fn inspect_reports_nonfinite_samples_of_an_image() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("hot.tif");
+    image::DynamicImage::ImageRgb32F(ImageBuffer::from_fn(4, 4, |x, _| {
+        Rgb([if x == 0 { f32::NAN } else { 0.5 }, 0.5, 0.5])
+    }))
+    .save(&p)
+    .unwrap();
+    let o = sdc()
+        .args(["inspect", "--set", "subtype=generic_data"])
+        .arg(&p)
+        .output()
+        .unwrap();
+    let all = format!("{}{}", text(&o.stdout), text(&o.stderr));
+    assert!(all.contains("IN-NONFINITE"), "{all}");
+}

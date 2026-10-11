@@ -58,6 +58,9 @@ pub struct Analysis {
     pub peak_luminance: f32,
     /// The source embeds an ICC profile, which sdc ignores (DECISIONS S8). Set by the caller from `SourceMeta`.
     pub icc_profile: bool,
+    /// NaN and ±∞ samples per channel (R, G, B, A). They are left out of every statistic above; Preprocess replaces
+    /// them (DECISIONS S9).
+    pub nonfinite: [u64; 4],
 }
 
 /// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
@@ -85,12 +88,20 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
     }; 4];
     let mut hist = AlphaHistogram::default();
     let mut len_sum = 0.0f64;
+    let mut nonfinite = [0u64; 4];
+    let mut finite = [0u64; 4];
+    let mut len_n = 0u64;
     let (mut gray, mut len_err, mut bb, mut rh, mut peak) = (true, 0.0f64, 0u64, 0u64, 0f32);
     for p in &img.px {
-        for (s, &v) in ch.iter_mut().zip(p) {
+        for (c, (s, &v)) in ch.iter_mut().zip(p).enumerate() {
+            if !v.is_finite() {
+                nonfinite[c] += 1;
+                continue;
+            }
             s.min = s.min.min(v);
             s.max = s.max.max(v);
             s.mean += f64::from(v);
+            finite[c] += 1;
         }
         let a = code8(p[3]);
         match a {
@@ -107,21 +118,25 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
             i32::from(code8(p[2])),
         );
         gray &= r.max(g).max(b) - r.min(g).min(b) <= 4;
-        let v = [p[0] * 2.0 - 1.0, p[1] * 2.0 - 1.0, p[2] * 2.0 - 1.0];
-        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-        len_err += f64::from((len - 1.0).abs());
-        len_sum += f64::from(len);
         bb += u64::from(p[2] < 0.1);
         rh += u64::from(p[0] > 0.9);
-        peak = peak.max(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]);
-    }
-    for c in &mut ch {
-        if count == 0 {
-            // No pixels: report zeros rather than the fold identities.
-            (c.min, c.max) = (0.0, 0.0);
+        if p[..3].iter().all(|v| v.is_finite()) {
+            let v = [p[0] * 2.0 - 1.0, p[1] * 2.0 - 1.0, p[2] * 2.0 - 1.0];
+            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            len_err += f64::from((len - 1.0).abs());
+            len_sum += f64::from(len);
+            len_n += 1;
+            peak = peak.max(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]);
         }
-        c.mean /= n;
     }
+    for (c, s) in ch.iter_mut().enumerate() {
+        if finite[c] == 0 {
+            // No finite sample: report zeros rather than the fold identities.
+            (s.min, s.max) = (0.0, 0.0);
+        }
+        s.mean /= finite[c].max(1) as f64;
+    }
+    let ln = len_n.max(1) as f64;
     let all_255 = hist.eq255 as usize == count;
     let near_opaque = info.has_alpha && ch[3].min >= NEAR_OPAQUE_ALPHA - NEAR_OPAQUE_EPS;
     let alpha = if !info.has_alpha {
@@ -142,12 +157,13 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         grayscale: gray,
         non_white_share: (count as u64 - hist.eq255) as f64 / n,
         mean_alpha: ch[3].mean,
-        normal_len_err: len_err / n,
-        normal_len_mean: len_sum / n,
+        normal_len_err: len_err / ln,
+        normal_len_mean: len_sum / ln,
         blue_mostly_black: bb as f64 / n > 0.5,
         red_mostly_high: rh as f64 / n > 0.5,
         peak_luminance: peak,
         icc_profile: false,
+        nonfinite,
     }
 }
 
@@ -228,6 +244,38 @@ mod tests {
         assert_eq!(code8(f32::NAN), 0);
         assert_eq!(code8(127.4 / 255.0), 127);
         assert_eq!(code8(127.6 / 255.0), 128);
+    }
+
+    #[test]
+    fn nan_and_infinite_samples_are_counted_and_left_out_of_the_statistics() {
+        let mut img = Rgba32F::new(4, 1, [0.5, 0.5, 1.0, 1.0]);
+        img.px[0] = [f32::NAN, 0.5, 1.0, 1.0];
+        img.px[1] = [0.5, f32::INFINITY, 1.0, f32::NAN];
+        img.px[2] = [f32::NEG_INFINITY, 0.5, 1.0, 1.0];
+        let a = analyse(&img, &RGBA8);
+        assert_eq!(a.nonfinite, [2, 1, 0, 1]);
+        assert_eq!((a.channels[0].min, a.channels[0].max), (0.5, 0.5));
+        assert!(
+            (a.channels[0].mean - 0.5).abs() < 1e-12,
+            "mean over finite samples"
+        );
+        assert!(a.channels[1].mean.is_finite() && a.channels[1].max == 0.5);
+        assert!((a.mean_alpha - 1.0).abs() < 1e-12);
+        // Only the fully finite pixel (index 3) is measured: (0, 0, 1) has unit length.
+        assert!(a.normal_len_err < 1e-6 && (a.normal_len_mean - 1.0).abs() < 1e-6);
+        assert!(a.peak_luminance.is_finite());
+    }
+
+    #[test]
+    fn an_all_nan_channel_reports_zeros_not_nan() {
+        let img = Rgba32F::new(2, 2, [f32::NAN, 0.5, 0.5, 1.0]);
+        let a = analyse(&img, &RGBA8);
+        assert_eq!(a.nonfinite[0], 4);
+        assert_eq!(
+            (a.channels[0].min, a.channels[0].max, a.channels[0].mean),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!((a.normal_len_err, a.normal_len_mean), (0.0, 0.0));
     }
 
     #[test]

@@ -241,12 +241,9 @@ impl Session {
         max_size: u32,
         cancel: &CancelToken,
     ) -> Result<SourcePreview, FileError> {
-        let rep = Reporter::new(Arc::new(NullSink), "preview");
         let prep = prepare(
             job,
             cancel,
-            &rep,
-            "",
             &FileTracker::default(),
             Keep::SourceOnly { max_size },
         )?;
@@ -272,8 +269,6 @@ impl Session {
         let prep = prepare(
             job,
             cancel,
-            &rep,
-            "",
             &FileTracker::default(),
             Keep::Preview { max_size },
         )?;
