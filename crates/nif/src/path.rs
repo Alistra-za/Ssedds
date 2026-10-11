@@ -3,6 +3,7 @@
 use crate::text::lossy;
 
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PathFlags {
     pub empty: bool,
     /// An absolute or `data/`-prefixed path was cut back to `textures/...`.
@@ -13,6 +14,7 @@ pub struct PathFlags {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TexPath {
     pub raw: String,
     pub norm: String,

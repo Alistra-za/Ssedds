@@ -2110,6 +2110,7 @@ name = "nif"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "serde",
  "thiserror 2.0.21",
  "walkdir",
 ]

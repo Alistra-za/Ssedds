@@ -8,6 +8,7 @@ use crate::text::lossy;
 use crate::NifError;
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LightingTrailer {
     None,
     EnvMap {
@@ -34,6 +35,7 @@ pub enum LightingTrailer {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LightingParams {
     pub uv_offset: [f32; 2],
     pub uv_scale: [f32; 2],
@@ -73,6 +75,7 @@ pub struct Lighting {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EffectParams {
     pub uv_offset: [f32; 2],
     pub uv_scale: [f32; 2],

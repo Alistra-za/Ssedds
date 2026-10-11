@@ -16,6 +16,8 @@ pub enum ScanError {
     NoInstance(String),
     #[error("MO2 settings: {0}")]
     Ini(String),
+    #[error("scan cancelled")]
+    Cancelled,
     #[error("PGPatcher is running")]
     PgpRunning,
     #[error(transparent)]

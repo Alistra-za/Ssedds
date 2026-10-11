@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-nif = { path = "../nif" }
+nif = { path = "../nif", features = ["serde"] }
 vfs = { path = "../vfs" }
 rusqlite.workspace = true
 rayon.workspace = true
