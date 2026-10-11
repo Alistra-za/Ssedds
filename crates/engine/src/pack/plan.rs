@@ -12,7 +12,7 @@ use crate::codes::{Code, Warning};
 use crate::config::{GraySource, PackPrefer, PackRecipe, Profile, RawMap, Target};
 use crate::discover::{InputFile, InputKind};
 use crate::events::{RecipeReport, RecipeStatus};
-use crate::group::{split_suffix_with, split_vocab, TextureSet, VocabRole};
+use crate::group::{member_split, split_suffix_with, split_vocab, TextureSet, VocabRole};
 use crate::image::{Rgba32F, SourceInfo};
 use crate::policy::{
     layered_profile_placeholder, resolve_decided, FileFacts, JobStatus, ResolveCtx, ResolvedJob,
@@ -337,14 +337,14 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
         return false;
     }
     let (pa, pinfo) = placeholder();
-    // The packed output's key is built from a raw map's name, so give it one: `this` may be `x_sk` or `x`.
+    // The packed output's key is built from a raw map's name, so give it one: `this` may be `x_sk`, `x_wet` or `x`.
     let stem = this
         .rel
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let base = split_suffix_with(&stem, ctx.registry.alias_table()).base;
+    let base = member_split(&stem, set, ctx.registry.alias_table()).base;
     let ext = this
         .rel
         .extension()

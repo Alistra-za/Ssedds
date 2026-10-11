@@ -77,15 +77,12 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
             High,
             "_sk in an Advanced skin set (red channel only)",
         )],
+        // `wet` is a suffix only for the member `join_skin_wet` joined to a cs Advanced skin set (final review I3);
+        // everywhere else `_wet` stays part of the base name.
         Some("wet") if c.advanced_skin => vec![s(
             SkinWet,
             High,
             "_wet in an Advanced skin set (normal + mask or height)",
-        )],
-        Some("wet") => vec![s(
-            SkinWet,
-            Low,
-            "_wet (only Advanced skin uses it; no _rfaos in the set)",
         )],
         Some("cnr") | Some("crn") => {
             vec![s(CoatNormal, High, "_cnr/_crn coat normal + roughness")]

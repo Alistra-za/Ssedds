@@ -3,10 +3,11 @@ use crate::config::{GreenConvention, RawMap};
 use crate::discover::{InputFile, InputKind};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Spec §6.1 suffix list, longest first so `_msn` wins over `_n` and `_envmask` over `_m`.
-pub const SUFFIXES: [&str; 20] = [
-    "envmask", "rmaos", "rfaos", "flow", "msn", "cnr", "crn", "wet", "em", "bl", "sk", "n", "p",
-    "m", "g", "s", "f", "b", "d", "e",
+/// Spec §6.1 suffix list, longest first so `_msn` wins over `_n` and `_envmask` over `_m`. `_wet` is not on it:
+/// it is a suffix only in a cs Advanced skin set ([`join_skin_wet`], final review I3).
+pub const SUFFIXES: [&str; 19] = [
+    "envmask", "rmaos", "rfaos", "flow", "msn", "cnr", "crn", "em", "bl", "sk", "n", "p", "m", "g",
+    "s", "f", "b", "d", "e",
 ];
 
 /// Splits one recognised suffix off a stem (case-insensitive). The suffix is returned lower-case;
@@ -212,6 +213,90 @@ pub fn group_sets_with(
         }
     }
     (sets.into_values().collect(), duplicate_outputs(files))
+}
+
+/// The skin `_wet` suffix (DECISIONS Note R-skin-1). Not a §6.1 suffix: see [`join_skin_wet`].
+pub const SKIN_WET: &str = "wet";
+
+/// The last segment of a set key (its lower-case base name).
+fn key_base(key: &str) -> &str {
+    key.rsplit_once('/').map_or(key, |(_, b)| b)
+}
+
+/// The skin `_wet` member split of `stem` when it belongs to the set `set_key` as one (it was moved there by
+/// [`join_skin_wet`]): `x_wet` in set `x`. `None` for every other file.
+fn wet_split(stem: &str, set_key: &str) -> Option<SuffixSplit> {
+    let tail = format!("_{SKIN_WET}");
+    let lower = stem.to_ascii_lowercase();
+    let base = lower.strip_suffix(&tail).filter(|b| !b.is_empty())?;
+    (base == key_base(set_key)).then(|| SuffixSplit {
+        // The tail is ASCII, so the cut falls on a char boundary.
+        base: stem[..stem.len() - tail.len()].to_string(),
+        suffix: Some(SKIN_WET.to_string()),
+        alias: None,
+    })
+}
+
+/// [`split_suffix_with`] for a member of `set`: as `split_suffix_with`, except that the skin `_wet` member of a set
+/// [`join_skin_wet`] joined it to (`x_wet` in set `x`, which then lists the suffix `wet`) splits to its base and
+/// the suffix `wet`.
+pub fn member_split(
+    stem: &str,
+    set: &TextureSet,
+    aliases: &BTreeMap<String, String>,
+) -> SuffixSplit {
+    set.suffixes
+        .contains(SKIN_WET)
+        .then(|| wet_split(stem, &set.key))
+        .flatten()
+        .unwrap_or_else(|| split_suffix_with(stem, aliases))
+}
+
+/// Final review I3 (DECISIONS Note R): `_wet` splits off as a suffix only on cs and only when the base is an
+/// Advanced skin set. Grouping cannot see the target or the recipe, so `group_sets_with` keeps `x_wet` as its own
+/// base (as before `_wet` existed) and this pass, run by the caller on cs before set edits, moves the colour member
+/// `x_wet` of set `x_wet` into set `x` when `is_skin(x)`. Members with a suffix of their own (`x_wet_n`) stay. A set
+/// left empty is removed.
+pub fn join_skin_wet(
+    sets: &mut Vec<TextureSet>,
+    files: &[InputFile],
+    aliases: &BTreeMap<String, String>,
+    is_skin: impl Fn(&TextureSet) -> bool,
+) {
+    let tail = format!("_{SKIN_WET}");
+    let mut moves: Vec<(usize, usize, Vec<usize>)> = vec![];
+    for (from, s) in sets.iter().enumerate() {
+        let Some(base_key) = s.key.strip_suffix(&tail) else {
+            continue;
+        };
+        let Some(to) = sets.iter().position(|t| t.key == base_key) else {
+            continue;
+        };
+        let wet: Vec<usize> = s
+            .members
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let stem = files[i]
+                    .rel
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                split_suffix_with(&stem, aliases).suffix.is_none()
+                    && wet_split(&stem, base_key).is_some()
+            })
+            .collect();
+        if !wet.is_empty() && is_skin(&sets[to]) {
+            moves.push((from, to, wet));
+        }
+    }
+    for (from, to, wet) in moves {
+        sets[from].members.retain(|i| !wet.contains(i));
+        sets[to].members.extend(wet);
+        sets[to].members.sort_unstable();
+        sets[to].suffixes.insert(SKIN_WET.to_string());
+    }
+    sets.retain(|s| !s.members.is_empty());
 }
 
 /// Groups of two or more inputs that map to one output path, compared case-insensitively. DDS inputs take no part:

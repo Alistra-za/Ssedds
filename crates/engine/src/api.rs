@@ -10,7 +10,7 @@ use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
 use crate::events::{EventKind, Reporter, SkipKind, Stage};
-use crate::group::{group_sets_with, split_suffix_with, TextureSet};
+use crate::group::{group_sets_with, join_skin_wet, member_split, TextureSet};
 use crate::load::{load_image, LoadError};
 use crate::manifest::{
     bc1_model_id, output_key, sha256_file, sha256_json, EncoderVersions, Manifest, ManifestEntry,
@@ -632,7 +632,8 @@ impl Engine {
         let key = |out: &Path| output_key(&req.output_root, out);
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
         // 1. `discover`, then `canonicalise_outputs` (above).
-        // 2. `group_sets_with` gives the automatic sets; its duplicate-output groups are ignored from now on.
+        // 2. `group_sets_with` gives the automatic sets; its duplicate-output groups are ignored from now on. On cs,
+        //    `join_skin_wet` then moves a skin `_wet` member into its Advanced skin set.
         // 3. `apply_set_edits`. Set keys are fixed from here on: output overrides never change a key.
         // 4. `apply_output_paths` (Task 3).
         // 5. `duplicate_outputs` on the final paths, so two sets writing one file are caught after paths change.
@@ -640,6 +641,41 @@ impl Engine {
         let scope_root =
             project_root(&req).or_else(|| req.inputs.first().filter(|p| p.is_dir()).cloned());
         let (mut sets, _) = group_sets_with(&files, registry.alias_table());
+        let (file_overrides, mut file_allow) = match &project_config {
+            Some(c) => c.file_entries().map_err(config_err)?,
+            None => (vec![], BTreeMap::new()),
+        };
+        for (k, codes) in &req.file_allow {
+            file_allow
+                .entry(k.clone())
+                .or_default()
+                .extend(codes.iter().copied());
+        }
+        let file_scopes = FileScopes {
+            root: scope_root.clone(),
+            overrides: file_overrides,
+            allow: file_allow,
+        };
+        let ctx = ResolveCtx {
+            target,
+            registry: &registry,
+            preset: &preset_id,
+            user_config: user_config.as_ref(),
+            project_config: project_config.as_ref(),
+            overrides: &req.overrides,
+            accept: req.accept,
+            allow: &req.allow,
+            files: &file_scopes,
+        };
+        // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
+        // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
+        if target == Target::Cs {
+            join_skin_wet(&mut sets, &files, registry.alias_table(), |s| {
+                s.members
+                    .first()
+                    .is_some_and(|&i| pack::plan::set_is_advanced_skin(&ctx, s, &files[i]))
+            });
+        }
         let stale = crate::sets::apply_set_edits(
             &mut sets,
             &files,
@@ -726,32 +762,6 @@ impl Engine {
             }
         }
 
-        let (file_overrides, mut file_allow) = match &project_config {
-            Some(c) => c.file_entries().map_err(config_err)?,
-            None => (vec![], BTreeMap::new()),
-        };
-        for (k, codes) in &req.file_allow {
-            file_allow
-                .entry(k.clone())
-                .or_default()
-                .extend(codes.iter().copied());
-        }
-        let file_scopes = FileScopes {
-            root: scope_root.clone(),
-            overrides: file_overrides,
-            allow: file_allow,
-        };
-        let ctx = ResolveCtx {
-            target,
-            registry: &registry,
-            preset: &preset_id,
-            user_config: user_config.as_ref(),
-            project_config: project_config.as_ref(),
-            overrides: &req.overrides,
-            accept: req.accept,
-            allow: &req.allow,
-            files: &file_scopes,
-        };
         // Load and Analyse in parallel under the same memory admission as `run` (spec §5.9, Codex-B I1): the calling
         // thread admits each file's estimated bytes before spawning it, and the bytes are released as soon as its
         // analysis is done (or it unwinds). Only the `Analysis` is kept.
@@ -792,7 +802,7 @@ impl Engine {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            let split = split_suffix_with(&stem, registry.alias_table());
+            let split = member_split(&stem, set, registry.alias_table());
             let facts = FileFacts {
                 input: f,
                 suffix: split.suffix.as_deref(),

@@ -147,9 +147,10 @@ fn a_set_that_builds_rfaos_is_advanced_skin() {
     assert_eq!(top(&p, "x_sk.png").0, Subtype::BacklightTint);
 }
 
-/// (b) Without `_rfaos`: the vanilla `_sk`, and a low-confidence `skin_wet`.
+/// (b) Without `_rfaos`: the vanilla `_sk`, and `x_wet` is its own colour map (final review I3: `_wet` is a suffix
+/// only in an Advanced skin set).
 #[test]
-fn outside_advanced_skin_sk_is_the_vanilla_guess_and_wet_is_low() {
+fn outside_advanced_skin_sk_is_the_vanilla_guess_and_wet_is_a_base_name() {
     let d = tempfile::tempdir().unwrap();
     set_files(&d, false);
     let p = plan(&d, Target::Cs, &[]);
@@ -157,7 +158,7 @@ fn outside_advanced_skin_sk_is_the_vanilla_guess_and_wet_is_low() {
         top(&p, "x_sk.png"),
         (Subtype::BacklightTint, Confidence::Low)
     );
-    assert_eq!(top(&p, "x_wet.png"), (Subtype::SkinWet, Confidence::Low));
+    assert_eq!(top(&p, "x_wet.png"), (Subtype::Diffuse, Confidence::Medium));
     assert_eq!(top(&p, "x.png").0, Subtype::Diffuse);
 }
 
@@ -322,12 +323,12 @@ fn the_old_rfaos_id_loads_as_skin_rfaos() {
     assert_eq!(j.profile.mips.levels, MipLevels::Keyword(MipKeyword::None));
 }
 
-/// `_wet` is a §6.1 suffix and collides with no vocabulary term.
+/// `_wet` is not a §6.1 suffix (only `join_skin_wet` splits it, in a cs Advanced skin set) and is no vocabulary term.
 #[test]
-fn wet_is_a_suffix() {
+fn wet_is_not_a_general_suffix() {
     assert_eq!(
         engine::group::split_suffix("skin_wet"),
-        ("skin".to_string(), Some("wet".to_string()))
+        ("skin_wet".to_string(), None)
     );
     assert!(!engine::group::is_vocabulary("wet"));
 }
@@ -353,4 +354,79 @@ fn a_forced_rmaos_with_a_fuzz_source_is_not_advanced_skin() {
         .any(|j| j.output.file_name().is_some_and(|n| n == "x_rmaos.dds")));
     assert_eq!(top(&p, "x.png").0, Subtype::PbrAlbedo);
     assert_eq!(top(&p, "x_sk.png").0, Subtype::BacklightTint);
+}
+
+fn set_of<'a>(p: &'a Plan, input: &str) -> &'a str {
+    &job(p, input).set_key
+}
+
+/// Final review I3: outside a cs Advanced skin set `_wet` is part of the base name, as it was before `_wet` became
+/// a skin suffix. A landscape `road_wet` is still a landscape diffuse on every target.
+#[test]
+fn a_wet_stem_outside_skin_keeps_its_old_reading() {
+    for target in [Target::Vanilla, Target::Cs] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/landscape/road_wet.png", colour(64));
+        let p = plan(&d, target, &[]);
+        assert_eq!(
+            top(&p, "road_wet.png"),
+            (Subtype::LandscapeDiffuse, Confidence::High),
+            "{target:?}"
+        );
+        assert!(
+            set_of(&p, "road_wet.png").ends_with("/road_wet"),
+            "{target:?}"
+        );
+    }
+}
+
+/// Final review I3: `cobble_wet.png` and `cobble_wet_n.png` stay one set (`cobble_wet`), next to a `cobble` set.
+#[test]
+fn a_wet_colour_map_and_its_normal_are_one_set() {
+    for target in [Target::Vanilla, Target::Cs] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "cobble.png", colour(64));
+        put(d.path(), "cobble_wet.png", colour(64));
+        put(d.path(), "cobble_wet_n.png", wet_normal(64));
+        let p = plan(&d, target, &[]);
+        assert_eq!(
+            set_of(&p, "cobble_wet.png"),
+            set_of(&p, "cobble_wet_n.png"),
+            "{target:?}"
+        );
+        assert!(set_of(&p, "cobble_wet.png").ends_with("/cobble_wet"));
+        assert_ne!(set_of(&p, "cobble.png"), set_of(&p, "cobble_wet.png"));
+        assert_ne!(top(&p, "cobble_wet.png").0, Subtype::SkinWet, "{target:?}");
+    }
+}
+
+/// Final review I3: `_wet` joins its base as a skin member only on cs and only in an Advanced skin set: an `_rfaos`
+/// member, or a raw-map set whose recipe resolves to `rfaos`.
+#[test]
+fn a_wet_member_joins_only_a_cs_advanced_skin_set() {
+    let d = tempfile::tempdir().unwrap();
+    set_files(&d, true);
+    let p = plan(&d, Target::Cs, &[]);
+    assert_eq!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
+    assert_eq!(top(&p, "x_wet.png"), (Subtype::SkinWet, Confidence::High));
+    // A raw-map set with `packing.recipe = rfaos` and no fuzz source.
+    let d = tempfile::tempdir().unwrap();
+    set_files(&d, false);
+    put(d.path(), "x_roughness.png", grey(64));
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[files.\"x_rfaos\".packing]\nrecipe = \"rfaos\"\n",
+    )
+    .unwrap();
+    let p = plan(&d, Target::Cs, &[]);
+    assert_eq!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
+    assert_eq!(top(&p, "x_wet.png"), (Subtype::SkinWet, Confidence::High));
+    // Not on cpm, even with an `_rfaos` beside it.
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "x.png", colour(64));
+    put(d.path(), "x_rfaos.png", colour(64));
+    put(d.path(), "x_wet.png", colour(64));
+    let p = plan(&d, Target::Cpm, &[]);
+    assert_ne!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
+    assert_eq!(top(&p, "x_wet.png").0, Subtype::Diffuse);
 }
