@@ -109,7 +109,7 @@ fn bayer8(x: u32, y: u32) -> u32 {
 }
 
 /// Which texels pass so that exactly `k` do: every texel above the k-th largest alpha `v`, plus as many texels tied
-/// at `v` as are still needed, in Bayer order of their position (ties by index). Zero alpha is never raised, so with
+/// at `v` as are still needed, in hierarchical Bayer order of their position (ties by index). Zero alpha is never raised, so with
 /// fewer than `k` positive texels every positive one passes; `None` when none is positive. `w` is the level's alpha
 /// as [`unit_alpha`] reads it, row-major with `width` texels per row.
 fn exact_pass_set(w: &[f32], width: u32, k: usize) -> Option<Vec<bool>> {
@@ -123,7 +123,18 @@ fn exact_pass_set(w: &[f32], width: u32, k: usize) -> Option<Vec<bool>> {
     let mut pass: Vec<bool> = w.iter().map(|&a| a > v).collect();
     let above = pass.iter().filter(|&&p| p).count();
     let mut tied: Vec<usize> = (0..w.len()).filter(|&i| w[i] == v).collect();
-    tied.sort_by_key(|&i| (bayer8(i as u32 % width, i as u32 / width), i));
+    // Hierarchical Bayer: the 8x8 rank first, then the rank of the 8x8 block, then of the 64x64 block, so a partial
+    // rank class is spread over the whole level (on a grid-aligned tied set the fine rank alone has only 8 values
+    // and the index tie-break would fill it top rows first).
+    tied.sort_by_cached_key(|&i| {
+        let (x, y) = (i as u32 % width, i as u32 / width);
+        (
+            bayer8(x, y),
+            bayer8(x >> 3, y >> 3),
+            bayer8(x >> 6, y >> 6),
+            i,
+        )
+    });
     for &i in tied.iter().take(k - above) {
         pass[i] = true;
     }
@@ -631,5 +642,54 @@ mod tests {
         preserve_coverage(&mut c, 127, AlphaCompare::Gt);
         assert!(passes(code8(c[1].px[0][3]), 127, AlphaCompare::Gt));
         assert_eq!(c[1].px[1][3], 0.0);
+    }
+
+    #[test]
+    fn a_grid_aligned_tied_set_is_spread_over_the_whole_level() {
+        // 256x256, tied alpha only in columns x % 8 == 0 (the fine Bayer rank has just 8 values there), k leaves the last
+        // rank class partly filled. The 32-row bands must get about the same share, not top rows first.
+        let (w, h) = (256u32, 256u32);
+        let a: Vec<f32> = (0..w * h)
+            .map(|i| if (i % w) % 8 == 0 { 0.5 } else { 0.0 })
+            .collect();
+        let k = 5000;
+        let pass = exact_pass_set(&a, w, k).unwrap();
+        assert_eq!(pass.iter().filter(|&&p| p).count(), k);
+        let bands: Vec<usize> = (0..8)
+            .map(|b| {
+                let rows = (b * 32 * w) as usize..((b + 1) * 32 * w) as usize;
+                pass[rows].iter().filter(|&&p| p).count()
+            })
+            .collect();
+        let mean = k as f64 / 8.0;
+        for n in &bands {
+            assert!(
+                (*n as f64 - mean).abs() <= 0.1 * mean,
+                "bands {bands:?} vs mean {mean}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_pass_set_edge_cases() {
+        // k = n with every texel positive: all pass.
+        let all = exact_pass_set(&[0.5; 16], 4, 16).unwrap();
+        assert!(all.iter().all(|&p| p));
+        // Fewer positive texels than k: every positive passes, zero is never raised.
+        let mut w = [0.0f32; 16];
+        w[3] = 0.2;
+        w[9] = 0.7;
+        let pass = exact_pass_set(&w, 4, 5).unwrap();
+        assert_eq!(pass.iter().filter(|&&p| p).count(), 2);
+        assert!(pass[3] && pass[9]);
+        // No positive texel: nothing to do.
+        assert!(exact_pass_set(&[0.0; 4], 2, 2).is_none());
+        // A fully tied 2x2 with k = 2 takes ranks 0 and 16: (0, 0) and (1, 1).
+        assert_eq!(
+            exact_pass_set(&[0.5; 4], 2, 2).unwrap(),
+            [true, false, false, true]
+        );
+        // A fully tied 1x1.
+        assert_eq!(exact_pass_set(&[0.5], 1, 1).unwrap(), [true]);
     }
 }
