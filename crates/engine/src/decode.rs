@@ -154,3 +154,45 @@ pub fn decode_level(
         ),
     })
 }
+
+/// Decode a level to float RGBA: LDR formats as `code / 255`, BC6H as RGB with alpha 1, RGBA16F/RGBA32F with their
+/// own alpha. For the DDS input loader (re-encode, DECISIONS S6) and the GUI preview.
+pub fn decode_level_rgba(
+    fmt: DdsPixelFormat,
+    w: u32,
+    h: u32,
+    data: &[u8],
+    bc1_model: Option<Bc1Model>,
+) -> Result<Vec<[f32; 4]>, DdsError> {
+    use DdsPixelFormat::*;
+    match fmt {
+        Rgba16f | Rgba32f => {
+            let need = level_len(fmt, w, h, data)?;
+            let data = &data[..need];
+            Ok(if fmt == Rgba16f {
+                data.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| {
+                        [0, 1, 2, 3]
+                            .map(|k| half::f16::from_le_bytes([c[k * 2], c[k * 2 + 1]]).to_f32())
+                    })
+                    .collect()
+            } else {
+                data.as_chunks::<16>()
+                    .0
+                    .iter()
+                    .map(|c| {
+                        [0, 1, 2, 3].map(|k| {
+                            f32::from_le_bytes([c[k * 4], c[k * 4 + 1], c[k * 4 + 2], c[k * 4 + 3]])
+                        })
+                    })
+                    .collect()
+            })
+        }
+        _ => Ok(match decode_level(fmt, w, h, data, bc1_model)? {
+            Decoded::Ldr(v) => v.iter().map(|p| p.map(|c| f32::from(c) / 255.0)).collect(),
+            Decoded::Hdr(v) => v.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect(),
+        }),
+    }
+}

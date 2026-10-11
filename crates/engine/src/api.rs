@@ -822,6 +822,7 @@ impl Engine {
                     enter(Stage::Analyse);
                     let mut a = analyse(&img, &info);
                     a.icc_profile = meta.icc_profile;
+                    a.dds_dxgi = meta.dds_dxgi;
                     if let Some(s) = source {
                         cache.put_file(&f.path, s, a.clone(), info, cache.make_thumb(&img, &info));
                     }

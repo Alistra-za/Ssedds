@@ -1171,3 +1171,58 @@ fn dxgi_round_trips_through_the_pixel_format() {
     assert_eq!(from_dxgi(91), Some(DdsPixelFormat::Bgra8 { srgb: true }));
     assert_eq!(from_dxgi(12345), None);
 }
+
+#[test]
+fn decode_level_rgba_keeps_float_alpha_and_scales_ldr() {
+    use engine::decode::decode_level_rgba;
+    let h: Vec<u8> = [2.0f32, 0.5, 0.25, 0.75]
+        .iter()
+        .flat_map(|v| half::f16::from_f32(*v).to_le_bytes())
+        .collect();
+    assert_eq!(
+        decode_level_rgba(DdsPixelFormat::Rgba16f, 1, 1, &h, None).unwrap(),
+        vec![[2.0, 0.5, 0.25, 0.75]]
+    );
+    assert_eq!(
+        decode_level_rgba(DdsPixelFormat::R8, 1, 1, &[51], None).unwrap(),
+        vec![[0.2, 0.2, 0.2, 1.0]]
+    );
+    assert_eq!(
+        decode_level_rgba(DdsPixelFormat::Rgba16f, 2, 2, &h, None).unwrap_err(),
+        DdsError::Truncated
+    );
+}
+
+/// Review Focus 2: a padded row pitch is reported by `check_header`, and the level still decodes as stored.
+#[test]
+fn a_padded_pitch_is_a_header_issue_not_a_panic() {
+    let mut hd = [0u32; 31];
+    hd[0] = 124;
+    hd[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x1000;
+    hd[2] = 2;
+    hd[3] = 3;
+    hd[4] = 16;
+    hd[6] = 1;
+    hd[18] = 32;
+    hd[19] = 0x40 | 0x1;
+    hd[21] = 32;
+    hd[22] = 0xff_0000;
+    hd[23] = 0xff00;
+    hd[24] = 0xff;
+    hd[25] = 0xff00_0000;
+    hd[26] = 0x1000;
+    let mut b = b"DDS ".to_vec();
+    for v in hd {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&[7u8; 3 * 2 * 4]);
+    let f = read_dds(&b).unwrap();
+    assert!(
+        check_header(&f)
+            .iter()
+            .any(|m| m.contains("pitch 16 != row pitch 12")),
+        "{:?}",
+        check_header(&f)
+    );
+    assert!(decode_level(f.format, 3, 2, &f.data[f.levels[0].2.clone()], None).is_ok());
+}

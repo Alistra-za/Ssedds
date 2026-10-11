@@ -887,3 +887,42 @@ fn validate_judges_an_rgba16f_output_with_tag_na() {
         "{v}"
     );
 }
+
+/// DECISIONS S5: sdc's own uncompressed output is judged fully by `validate`, not header-only.
+#[test]
+fn validate_judges_an_uncompressed_sdc_output_in_full() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    std::fs::create_dir_all(&src).unwrap();
+    ImageBuffer::from_fn(16, 16, |x, y| Rgb([x as u8 * 16, y as u8 * 16, 128]))
+        .save(src.join("wall.png"))
+        .unwrap();
+    let out = d.path().join("out");
+    let o = sdc()
+        .args([
+            "convert",
+            "--set",
+            "subtype=diffuse",
+            "--set",
+            "format=rgba8",
+            "-o",
+        ])
+        .arg(&out)
+        .arg(src.join("wall.png"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let o = sdc()
+        .args(["validate", "--json"])
+        .arg(out.join("wall.dds"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let v: serde_json::Value =
+        serde_json::from_str(text(&o.stdout).lines().next().unwrap()).unwrap();
+    assert_eq!(
+        (v["judged"].as_bool(), v["passed"].as_bool()),
+        (Some(true), Some(true)),
+        "{v}"
+    );
+}

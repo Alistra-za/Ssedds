@@ -58,6 +58,8 @@ pub struct Analysis {
     pub peak_luminance: f32,
     /// The source embeds an ICC profile, which sdc ignores (DECISIONS S8). Set by the caller from `SourceMeta`.
     pub icc_profile: bool,
+    /// DXGI format of a DDS input (DECISIONS S6, spec §5.1); `None` for images. Set by the caller from `SourceMeta`.
+    pub dds_dxgi: Option<u32>,
     /// NaN and ±∞ samples per channel (R, G, B, A). They are left out of every statistic above; Preprocess replaces
     /// them (DECISIONS S9).
     pub nonfinite: [u64; 4],
@@ -163,6 +165,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         red_mostly_high: rh as f64 / n > 0.5,
         peak_luminance: peak,
         icc_profile: false,
+        dds_dxgi: None,
         nonfinite,
     }
 }

@@ -33,8 +33,14 @@ pub fn load_image(path: &Path) -> Result<(Rgba32F, SourceInfo), LoadError> {
     load_image_meta(path).map(|(img, info, _)| (img, info))
 }
 
-/// `load_image`, with the ICC flag (and, from Task 7, a DDS input's DXGI format).
+/// `load_image`, with the ICC flag and a DDS input's DXGI format. A `.dds` path is read as a DDS (mip 0).
 pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
+    {
+        return load_dds(path);
+    }
     let err = |e: image::ImageError| LoadError::Decode {
         path: path.to_path_buf(),
         msg: e.to_string(),
@@ -82,6 +88,65 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
         SourceMeta {
             icc_profile,
             dds_dxgi: None,
+        },
+    ))
+}
+
+/// `SourceInfo` of a DDS input's pixel format (DECISIONS S6).
+fn dds_source_info(f: crate::dds::DdsPixelFormat) -> SourceInfo {
+    use crate::dds::DdsPixelFormat::*;
+    let (bit_depth, channels, has_alpha, is_float) = match f {
+        Bc1 { .. } | Bc2 { .. } | Bc3 { .. } | Bc7 { .. } | Rgba8 { .. } | Bgra8 { .. } => {
+            (8, 4, true, false)
+        }
+        Bgrx8 => (8, 3, false, false),
+        Bc4 | R8 => (8, 1, false, false),
+        Bc5 | Rg8 => (8, 2, false, false),
+        Bc6hUf16 | Bc6hSf16 => (16, 3, false, true),
+        Rgba16f => (16, 4, true, true),
+        Rgba32f => (32, 4, true, true),
+    };
+    SourceInfo {
+        bit_depth,
+        channels,
+        has_alpha,
+        is_float,
+    }
+}
+
+/// A DDS input (DECISIONS S6): mip 0 decoded to float RGBA; every other mip is regenerated. 2D only.
+fn load_dds(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta), LoadError> {
+    let bad = |msg: String| LoadError::Decode {
+        path: path.to_path_buf(),
+        msg,
+    };
+    let bytes = std::fs::read(path).map_err(|e| bad(e.to_string()))?;
+    let f = crate::dds::read_dds(&bytes).map_err(|e| bad(e.to_string()))?;
+    drop(bytes);
+    if f.is_cubemap || f.dx10.is_some_and(|d| d.array_size > 1) {
+        return Err(bad(
+            "a cubemap or array DDS cannot be re-encoded (2D only)".into()
+        ));
+    }
+    if f.width.max(f.height) > MAX_DIM {
+        return Err(LoadError::TooLarge {
+            path: path.to_path_buf(),
+            dim: f.width.max(f.height),
+        });
+    }
+    let (w, h, r) = f.levels[0].clone();
+    let px = crate::decode::decode_level_rgba(f.format, w, h, &f.data[r], None)
+        .map_err(|e| bad(e.to_string()))?;
+    Ok((
+        Rgba32F {
+            width: w,
+            height: h,
+            px,
+        },
+        dds_source_info(f.format),
+        SourceMeta {
+            icc_profile: false,
+            dds_dxgi: Some(f.format.dxgi()),
         },
     ))
 }

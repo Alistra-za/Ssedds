@@ -227,3 +227,102 @@ fn a_garbage_exr_is_a_decode_error_not_a_panic() {
     std::fs::write(&p, [0x76, 0x2f, 0x31, 0x01, 2, 0, 0, 0, b'x', b'y']).unwrap();
     assert!(matches!(load_image(&p), Err(LoadError::Decode { .. })));
 }
+
+/// A one-level DX10 DDS with DXGI format `dxgi` and the given level bytes (tight rows).
+fn dx10(w: u32, h: u32, dxgi: u32, pitch: u32, data: &[u8]) -> Vec<u8> {
+    let mut hd = [0u32; 31];
+    hd[0] = 124;
+    hd[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x1000;
+    hd[2] = h;
+    hd[3] = w;
+    hd[4] = pitch;
+    hd[5] = 1;
+    hd[6] = 1;
+    hd[18] = 32;
+    hd[19] = 0x4;
+    hd[20] = u32::from_le_bytes(*b"DX10");
+    hd[26] = 0x1000;
+    let mut b = b"DDS ".to_vec();
+    for v in hd {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [dxgi, 3, 0, 1, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(data);
+    b
+}
+
+/// Review Focus 2: every uncompressed layout of spec §1 loads mip 0 as float RGBA, with its DXGI in `SourceMeta`.
+#[test]
+fn third_party_uncompressed_layouts_load_as_float_rgba() {
+    let d = tempfile::tempdir().unwrap();
+    let half = |v: f32| half::f16::from_f32(v).to_le_bytes();
+    let rgba16: Vec<u8> = [2.0f32, 0.5, 0.25, 0.75]
+        .iter()
+        .flat_map(|v| half(*v))
+        .collect();
+    let rgba32: Vec<u8> = [3.0f32, 0.5, 0.25, 0.5]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    type Case<'a> = (u32, u32, &'a [u8], [f32; 4], (u8, u8, bool, bool));
+    let cases: [Case; 7] = [
+        (
+            28,
+            4,
+            &[10, 20, 30, 40],
+            [10.0, 20.0, 30.0, 40.0].map(|v| v / 255.0),
+            (8, 4, true, false),
+        ),
+        (
+            87,
+            4,
+            &[30, 20, 10, 40],
+            [10.0, 20.0, 30.0, 40.0].map(|v| v / 255.0),
+            (8, 4, true, false),
+        ),
+        (
+            88,
+            4,
+            &[30, 20, 10, 7],
+            [10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0, 1.0],
+            (8, 3, false, false),
+        ),
+        (61, 1, &[51], [0.2, 0.2, 0.2, 1.0], (8, 1, false, false)),
+        (
+            49,
+            2,
+            &[51, 102],
+            [0.2, 0.4, 0.0, 1.0],
+            (8, 2, false, false),
+        ),
+        (10, 8, &rgba16, [2.0, 0.5, 0.25, 0.75], (16, 4, true, true)),
+        (2, 16, &rgba32, [3.0, 0.5, 0.25, 0.5], (32, 4, true, true)),
+    ];
+    for (dxgi, bpp, px, want, (bits, ch, alpha, float)) in cases {
+        let p = d.path().join(format!("f{dxgi}.dds"));
+        std::fs::write(&p, dx10(1, 1, dxgi, bpp, px)).unwrap();
+        let (img, info, meta) = load_image_meta(&p).unwrap_or_else(|e| panic!("{dxgi}: {e}"));
+        assert_eq!(
+            (info.bit_depth, info.channels, info.has_alpha, info.is_float),
+            (bits, ch, alpha, float),
+            "{dxgi}"
+        );
+        for (c, (got, want)) in img.at(0, 0).into_iter().zip(want).enumerate() {
+            assert!((got - want).abs() < 1e-3, "{dxgi} c{c}: {:?}", img.at(0, 0));
+        }
+        assert_eq!(meta.dds_dxgi, Some(dxgi));
+    }
+}
+
+#[test]
+fn a_cubemap_dds_is_a_decode_error() {
+    let d = tempfile::tempdir().unwrap();
+    let mut b = dx10(1, 1, 28, 4, &[0; 4 * 6]);
+    b[136..140].copy_from_slice(&4u32.to_le_bytes()); // DX10 misc: TEXTURECUBE
+    let p = d.path().join("cube.dds");
+    std::fs::write(&p, b).unwrap();
+    let e = load_image(&p).unwrap_err();
+    assert!(e.to_string().contains("cubemap or array"), "{e}");
+}
