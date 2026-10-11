@@ -20,7 +20,7 @@ Plan P1 (live editing) and P2 (deferred + composite parity) get their own plans 
 - `engine`'s DDS reader (read-only use of its public API);
 - RenderDoc 1.43 at `F:\ai\dds\tools\RenderDoc_1.43_64` with Python 3 inside `qrenderdoc.exe`.
 
-**Spec:** (all in `docs/superpowers/specs/nif/`; paths written `converter/crates/...` below mean `crates/...` in worktree `F:iddsnverter-nif-b`) `00-decision.md` §2, §4 and §6 (owner choices 1, 2, 4 and 5), `03-renderer-architecture.md` §5 (P0) and §6, `04-cs-shader-inputs-and-renderdoc.md` §1.2, §2, §3.2 and §5.
+**Spec:** (all in `docs/superpowers/specs/nif/`; paths written `converter/crates/...` below mean `crates/...` in worktree `F:\ai\dds\converter-nif-b`) `00-decision.md` §2, §4 and §6 (owner choices 1, 2, 4 and 5), `03-renderer-architecture.md` §5 (P0) and §6, `04-cs-shader-inputs-and-renderdoc.md` §1.2, §2, §3.2 and §5.
 
 ## Global Constraints
 
