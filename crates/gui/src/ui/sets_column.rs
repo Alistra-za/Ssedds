@@ -355,7 +355,12 @@ fn pill(
                         .members
                         .iter()
                         .filter_map(|k| model.item(k))
-                        .flat_map(|i| i.warnings.iter().map(move |w| (i.name.as_str(), w)))
+                        .flat_map(|i| {
+                            i.warnings
+                                .iter()
+                                .filter(|w| super::counts_toward_badge(w))
+                                .map(move |w| (i.name.as_str(), w))
+                        })
                         .collect();
                     if !rows.is_empty() {
                         badge(ui, &format!("⚠ {}", rows.len()), Some(AMBER))

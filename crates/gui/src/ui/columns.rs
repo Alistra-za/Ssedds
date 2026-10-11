@@ -124,7 +124,7 @@ fn tile(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, idx: u
                 }
                 ui.add(egui::Label::new(egui::RichText::new(&item.name).small()).truncate());
                 let mut badges = vec![];
-                if !item.warnings.is_empty() {
+                if item.warnings.iter().any(super::counts_toward_badge) {
                     badges.push("⚠".to_string());
                 }
                 if let ItemStatus::PackedInto(j) = &item.status {
