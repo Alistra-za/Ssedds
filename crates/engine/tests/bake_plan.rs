@@ -548,3 +548,19 @@ fn an_advanced_skin_rfaos_bakes_from_its_n() {
         assert!(bake_flag(&ev, set), "{set}");
     }
 }
+
+/// A borrowed Normal slot whose owner set has no usable `_n` says so, instead of "no _n in this PBR set".
+#[test]
+fn a_borrowed_n_from_a_set_without_one_is_set_missing_companion() {
+    let d = tempfile::tempdir().unwrap();
+    rough(d.path(), "textures/pbr/iron_rmaos.png", 64, 64);
+    rough(d.path(), "textures/pbr/steel_rmaos.png", 64, 64);
+    let mut r = req(d.path(), &[]);
+    borrow(&mut r, &[("textures/pbr/steel", "textures/pbr/iron")]);
+    let (p, _) = plan(r);
+    let s = job(&p, "steel_rmaos.png");
+    assert!(s.bake.is_none());
+    assert_eq!(set_codes(s), vec![Code::SetMissingCompanion]);
+    let w = s.warnings.last().unwrap();
+    assert!(w.message.contains("borrowed"), "{}", w.message);
+}

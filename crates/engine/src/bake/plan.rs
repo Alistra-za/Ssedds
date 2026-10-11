@@ -157,10 +157,13 @@ fn missing_normal(cx: &BakeCtx, set: &TextureSet, batch: &BTreeSet<PathBuf>, j: 
 fn missing_borrowed_normal(cx: &BakeCtx, owner: &TextureSet, j: &mut ResolvedJob) {
     let file = member_file(cx, owner, InputKind::Image, is_normal_suffix)
         .or_else(|| member_file(cx, owner, InputKind::Dds, is_normal_suffix));
-    let msg = format!(
-        "the set's _n is borrowed from {}, which has no usable pbr_normal job: the roughness is written without the variance bake",
-        owner.key.replace('\\', "/")
-    );
+    let msg = match file {
+        Some(f) => format!(
+            "the set's borrowed _n ({}) has no usable pbr_normal job: the roughness is written without the variance bake",
+            f.path.to_string_lossy().replace('\\', "/")
+        ),
+        None => "the set's _n is borrowed from a set with no usable _n: the roughness is written without the variance bake".into(),
+    };
     note(
         j,
         Code::SetMissingCompanion,
