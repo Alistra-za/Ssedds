@@ -11972,6 +11972,19 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
 - **Entry:** Phase 2 exit.
 - **Exit:** preset tests per target; golden cases for each new input type; preset changelog entries.
 - **Owner additions (2026-10-10, DECISIONS Note O):**
+  - **Owner idea (2026-10-11): patch wrong DDS headers in place, without re-encoding.**
+    - DDS inputs are still skipped (`IN-DDS-SKIPPED`).
+    - Some header faults can be fixed with no pixel change. For each fixable DDS, offer a header-only fix:
+      - a wrong sRGB/UNORM tag, e.g. `BC7_UNORM` ↔ `BC7_UNORM_SRGB` per §5.8 `TAG-*`;
+      - a legacy header that should be DX10;
+      - a missing or wrong mip count or flags;
+      - a missing `DDSCAPS_COMPLEX`/`MIPMAP` cap.
+    - The fix rewrites the header and copies the payload byte for byte. Report it as a new info code (e.g. `DDS-HEADER-PATCHED`). In the GUI it is an explicit choice, never automatic.
+    - Faults that need re-encoding are not patchable. Examples: the wrong block format, BC1 with alpha, missing mips. These keep the `validate` diagnosis only.
+    - Tests:
+      - a patched file's payload is byte-identical to the original;
+      - `sdc validate` passes after patching;
+      - unpatchable faults are refused with a reason.
   - **Uncompressed DDS, as output and input (O1).**
     - Output: new `format` values for uncompressed DDS:
       - `rgba8` (UNORM/SRGB per `color.tag`), written as `B8G8R8A8` (legacy header where `header=auto` allows);
