@@ -5,9 +5,12 @@ pub mod draw;
 pub mod includes;
 pub mod locate;
 pub mod mesh;
+pub mod parse;
 pub mod permutation;
 pub mod scene;
 pub mod textures;
+
+pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
 use compile::{compile, SrvKind};
 use device::{Gpu, Target};
