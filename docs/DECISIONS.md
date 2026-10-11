@@ -250,6 +250,11 @@ The owner split M3 into M3a (converter GUI), M3b (set editor and PGPatcher JSON)
 - **N10 No bundled fonts** (licence ruling): sdc-gui ships no fonts. eframe is built without `default_fonts` and the GUI loads Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at run time, because egui's bundled fonts are OFL-1.1/UFL-1.0.
 - **N11 DDS formats without an engine `Format`** (plan): a DDS input in a format the engine has no `Format` for (uncompressed, BC2, signed BC6H) shows "cannot be previewed" in M3a.
 
+## Note O — roadmap additions (owner, 2026-10-10)
+
+- **O1 Uncompressed DDS** (owner): sdc writes uncompressed DDS (`rgba8` as B8G8R8A8 UNORM/SRGB, `r8`, `rg8`, `rgba16f`) and reads the uncompressed layouts listed in spec §1 for inspect, validate, re-encode and GUI preview. Scheduled in M6; it ends the M3a limit N11.
+- **O2 HDR check before BC6H on emissive** (owner): `pbr_emissive` defaults to BC6H_UF16 only when the source is float **and** peaks above 1.0. Every other source defaults to BC7_UNORM_SRGB. This overrides spec §4.1 and the DECISIONS #3 default for emissive; BC6H stays available by override. Scheduled in M6, and depends on the float-source transfer split.
+
 ## Phase 2 exit — CLI MVP (2026-10-09)
 
 - `sdc-bench --gates`: PASS, exit 0, 13/13 gate reports (target/bench/mvp-gates.txt). Exact opaque gates alpha == 255 and flag-off bit-identity; ΔRGB is info (S5).

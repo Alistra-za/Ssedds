@@ -11924,6 +11924,13 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
   - Normal and roughness channels are alpha-weighted if a cutout policy is forced on them; check Validate and the bake path (Task 29 minor).
   - The source-drift check (size and mtime, final review I7) must also cover the `_n` companion that feeds a bake.
   - The retained `_n` summed-area table counts against the `--mem-budget` admission; see the 16K peak memory carry under M6 (Task 29 minor).
+  - **Coverage defects found by mipcheck round 2** (`F:/ai/dds/mipcheck/RESULTS-2.md` B1/B6; fix first in M4, or earlier if the owner wants):
+    1. **Overshoot on tied alpha.** `coverage::nearest_group` never offers "no texel passes" as a candidate and can only choose whole groups of tied alpha. On thin strands the coverage overshoots up to ×32.
+       - Smallest reproduction: a 4×4 image with alpha 255 at (0,0), (0,2) and (2,0). Mip 1 passes 3 of 4 texels where k = 1.
+       - Fix: add 0 passes as a candidate; leave a level unchanged when the best count is more than 2× off k; optionally break ties spatially (dither) so exact coverage is reachable.
+    2. **Threshold-edge loss after BC7.** The remap puts the anchor exactly on the first passing code (128 for `ge 128`), and BC7 error drops it below. Results: 8² mip 35 → 0 on the sparse image; Fence007A at 16² goes 94 → 78.
+       - Fix: put the anchor 1–2 codes above the threshold, or re-check coverage after encoding.
+  - B2 confirms the `SignedRg` accumulation path gives the length before normalising (M4's Toksvig input). It also left an owner question: should mip 0 be renormalised? Several real `_n` sources are as short as |n| = 0.34.
 
 ### M5 — NVTT as an optional external process (spec §7.5)
 
@@ -11933,6 +11940,11 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
 - **Carried items:**
   - Always pass `-nocuda` for BC7 Production (DECISIONS Spike S7); the finding was hand-measured on one image, so add a repeatable measurement (Task 16 minor).
   - The BC6H half of S7 (`-bc6` on RGBA16F levels) was never run; S7 fed 8-bit levels, M5 feeds the float chain (Task 16 minor).
+  - mipcheck round 2 (`F:/ai/dds/mipcheck/RESULTS-2.md` B3–B5), for nvcompress 3.2.5:
+    - It reads a DX10 `R32G32B32A32_FLOAT` DDS **silently as zeros**. Feed it a legacy-header float DDS or `.hdr`, and add a mip-0 round-trip check.
+    - `-normal` normalises the encoded [0,1] vector, not the signed normal, so never use it for `_n` levels.
+    - Its `kaiser` is not the nvtt_export Kaiser.
+    - It does not produce BC6H black rings.
   - S7's alpha check ran on opaque `rgb_real` only and does not prove the `-noalpha` effect; test it on an image with varying alpha (Task 16 minor).
   - `ENC-NVTT-VERSION` is catalogued but never emitted; `ENC-NVTT-MISSING` fires only when the NVTT backend is selected (final review m11).
 
@@ -11941,7 +11953,33 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
 - **Scope:** built-ins "CS – Compact", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only); `sdc presets diff/export/validate`; `--preset-file` for the `presets` verbs (user presets and their suffix aliases, Task 26a); schema migrations for older `schema_version`; user rule tables; inputs OpenEXR, Radiance HDR, BMP, JPEG, and the float-source transfer split for 32-bit float TIFF (see Carried items); DDS re-encode opt-in (`--set file:<glob>.reencode=true`, `LOSS-REENCODE`); NPOT resize policy (`resize=pot-down`, polyphase in the content's domain); tent/Mitchell/Kaiser filters and `mips.edge`; ICC-profile info event; progress bars.
 - **Entry:** Phase 2 exit.
 - **Exit:** preset tests per target; golden cases for each new input type; preset changelog entries.
+- **Owner additions (2026-10-10, DECISIONS Note O):**
+  - **Uncompressed DDS, as output and input (O1).**
+    - Output: new `format` values for uncompressed DDS:
+      - `rgba8` (UNORM/SRGB per `color.tag`), written as `B8G8R8A8` (legacy header where `header=auto` allows);
+      - `r8`, `rg8`;
+      - `rgba16f` for float content.
+      - No BC encoder backend runs for these; full mips; same validation, minus the BC checks.
+    - Input: read the uncompressed layouts spec §1 already lists (RGBA8, BGRA8, BGRX8, R8, RG8, RGBA16F, RGBA32F) for inspect, validate, re-encode and GUI preview. This also ends the M3a limit N11 ("cannot be previewed").
+    - Tests:
+      - one golden case per format;
+      - texconv and nvddsinfo read every output;
+      - a re-encode round trip.
+  - **HDR check before BC6H for `pbr_emissive` (O2).** BC6H is chosen only for a real HDR source: float (16F/32F EXR, HDR, float TIFF or float DDS) **and** a peak above 1.0 in any colour channel. Otherwise the default is `bc7` with tag `srgb` (`BC7_UNORM_SRGB`).
+    - The choice is an analysis fact (`analysis:hdr-source`). It sits below a suffix fact and `--set`, so `--set file:<glob>.format=bc6h_uf16` still forces BC6H.
+    - Inspect, plan and the GUI show the reason (e.g. "8-bit source, no HDR → BC7 sRGB").
+    - A float source that peaks at or below 1.0 depends on the float-source transfer split (Carried item below).
+    - Tests:
+      - 8-bit `_g` → BC7_UNORM_SRGB;
+      - float `_g` with peak > 1 → BC6H;
+      - float `_g` with peak ≤ 1 → BC7 sRGB;
+      - an explicit `--set` override wins in both directions.
+    - Ask the owner whether `hdr_sky` should get the same check.
 - **Carried items** (final review, SDD ledger):
+  - Tent, Mitchell and Kaiser mips (mipcheck `RESULTS-2.md` B8):
+    - Build each level **directly from mip 0**, with the kernel widened 2^N, and keep float values between levels.
+    - Measured: recursion costs 1.5–2.5 dB (tent), 1–1.5 dB (Mitchell) and ≤ 0.5 dB (Kaiser) against a Lanczos-8 reference. 8-bit levels in between add up to 5 codes of drift with Kaiser.
+    - Box stays recursive; it is identical either way.
   - Float source → LDR colour output needs a source-transfer versus output-encode split (Task 39 carry). It replaces the interim blocking `IN-FLOAT-LDR` guard and its `LOSS-CLAMP-HDR` use added at the final review (I4); keep the golden cases for float TIFF diffuse and float BC6H.
   - `FIELD_PATHS` lacks `reencode` and `resize` (Task 25 carry); spec §8 promises `--set file:<glob>.reencode=true`, which is a usage error today.
   - Double work per file (m16): every converted file is decoded twice (plan, then run) and hashed twice when an output exists; reuse the plan-time load or hash for `is_up_to_date`.
