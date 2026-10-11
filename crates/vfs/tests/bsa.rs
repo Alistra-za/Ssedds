@@ -136,3 +136,60 @@ fn real_bsa() {
     let bytes = bsa.read(nif).unwrap();
     assert!(nif::scan::scan(&bytes).is_ok(), "{}", nif.norm);
 }
+
+fn hostile(
+    entries: &[(&str, &str, &[u8], bool)],
+) -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("h.bsa");
+    (dir, p, build(entries, false))
+}
+
+fn put(b: &mut [u8], at: usize, v: u32) {
+    b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+#[test]
+fn hostile_name_table_length_is_an_error() {
+    let (_d, p, mut b) = hostile(&[("meshes", "a.nif", b"x", false)]);
+    put(&mut b, 28, 0xFFFF_FFFF);
+    std::fs::write(&p, &b).unwrap();
+    assert!(matches!(Bsa::open(&p), Err(vfs::VfsError::Corrupt(_))));
+}
+
+#[test]
+fn entry_past_eof_is_an_error() {
+    let (_d, p, mut b) = hostile(&[("meshes", "a.nif", b"x", false)]);
+    // single folder "meshes": file record at 36+24+1+7 = 68; size at +8, offset at +12
+    put(&mut b, 76, 0x3FFF_FFF0);
+    std::fs::write(&p, &b).unwrap();
+    let bsa = Bsa::open(&p).unwrap();
+    assert!(matches!(
+        bsa.read(&bsa.entries[0]),
+        Err(vfs::VfsError::Corrupt(_))
+    ));
+}
+
+#[test]
+fn huge_declared_decompressed_size_is_an_error() {
+    let (_d, p, mut b) = hostile(&[("meshes", "a.nif", b"hello", true)]);
+    let off = u32::from_le_bytes(b[80..84].try_into().unwrap()) as usize;
+    put(&mut b, off, 0xFFFF_FFF0);
+    std::fs::write(&p, &b).unwrap();
+    let bsa = Bsa::open(&p).unwrap();
+    assert!(matches!(
+        bsa.read(&bsa.entries[0]),
+        Err(vfs::VfsError::Corrupt(_))
+    ));
+}
+
+#[test]
+fn fewer_names_than_records_is_an_error() {
+    let (_d, p, mut b) = hostile(&[
+        ("meshes", "a.nif", b"x", false),
+        ("meshes", "b.nif", b"y", false),
+    ]);
+    put(&mut b, 28, 6); // name table "a.nif\0" only
+    std::fs::write(&p, &b).unwrap();
+    assert!(matches!(Bsa::open(&p), Err(vfs::VfsError::Corrupt(_))));
+}

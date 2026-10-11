@@ -11,6 +11,7 @@ const INCLUDE_DIR_NAMES: u32 = 0x1;
 const INCLUDE_FILE_NAMES: u32 = 0x2;
 const COMPRESSED_DEFAULT: u32 = 0x4;
 const EMBED_NAMES: u32 = 0x100;
+const MAX_ENTRY: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BsaEntry {
@@ -38,7 +39,9 @@ fn u32le(f: &mut impl Read) -> Result<u32, VfsError> {
 
 impl Bsa {
     pub fn open(path: &Path) -> Result<Bsa, VfsError> {
-        let mut f = std::io::BufReader::new(std::fs::File::open(path)?);
+        let file = std::fs::File::open(path)?;
+        let file_total = file.metadata()?.len();
+        let mut f = std::io::BufReader::new(file);
         let magic = rd::<4>(&mut f).map_err(|_| VfsError::NotBsa)?;
         if &magic != b"BSA\0" {
             return Err(VfsError::NotBsa);
@@ -65,12 +68,12 @@ impl Bsa {
         if nfiles > 4_000_000 || nfolders > nfiles.max(1) * 2 {
             return Err(VfsError::Corrupt("implausible counts".into()));
         }
-        let mut counts = Vec::with_capacity(nfolders);
+        let mut counts = Vec::with_capacity(nfolders.min(65536));
         for _ in 0..nfolders {
             let r = rd::<24>(&mut f)?;
             counts.push(u32::from_le_bytes(r[8..12].try_into().unwrap()) as usize);
         }
-        let mut recs = Vec::with_capacity(nfiles);
+        let mut recs = Vec::with_capacity(nfiles.min(65536));
         for &count in &counts {
             let l = rd::<1>(&mut f)?[0] as usize;
             let mut name = vec![0u8; l];
@@ -87,14 +90,25 @@ impl Bsa {
         if recs.len() != nfiles {
             return Err(VfsError::Corrupt("file count mismatch".into()));
         }
+        let pos = f.stream_position()?;
+        if pos.saturating_add(file_len as u64) > file_total {
+            return Err(VfsError::Corrupt("name table past end of file".into()));
+        }
         let mut names = vec![0u8; file_len];
         f.read_exact(&mut names)?;
-        let names: Vec<&[u8]> = names.split(|&c| c == 0).collect();
+        let names: Vec<&[u8]> = names
+            .strip_suffix(&[0])
+            .unwrap_or(&names)
+            .split(|&c| c == 0)
+            .collect();
+        if names.len() < nfiles {
+            return Err(VfsError::Corrupt("fewer file names than records".into()));
+        }
         let entries = recs
             .into_iter()
             .enumerate()
             .map(|(i, (folder, size, offset, compressed))| {
-                let file = names.get(i).map(|n| lossy(n)).unwrap_or_default();
+                let file = lossy(names[i]);
                 BsaEntry {
                     norm: canon_mesh(&format!("{folder}\\{file}")),
                     offset,
@@ -113,6 +127,13 @@ impl Bsa {
 
     pub fn read(&self, e: &BsaEntry) -> Result<Vec<u8>, VfsError> {
         let mut f = std::fs::File::open(&self.path)?;
+        let total = f.metadata()?.len();
+        if e.offset as u64 + e.size as u64 > total {
+            return Err(VfsError::Corrupt(format!(
+                "{}: data past end of file",
+                e.norm
+            )));
+        }
         f.seek(SeekFrom::Start(e.offset as u64))?;
         let mut data = vec![0u8; e.size as usize];
         f.read_exact(&mut data)?;
@@ -133,8 +154,15 @@ impl Bsa {
             .get(p..p + 4)
             .ok_or_else(|| VfsError::Corrupt("entry too short".into()))?;
         let orig = u32::from_le_bytes(orig.try_into().unwrap()) as usize;
+        if orig > MAX_ENTRY {
+            return Err(VfsError::Corrupt(format!(
+                "{}: implausible size {orig}",
+                e.norm
+            )));
+        }
         let mut out = Vec::with_capacity(orig);
         lz4_flex::frame::FrameDecoder::new(&data[p + 4..])
+            .take(orig as u64 + 1)
             .read_to_end(&mut out)
             .map_err(|x| VfsError::Corrupt(x.to_string()))?;
         if out.len() != orig {
