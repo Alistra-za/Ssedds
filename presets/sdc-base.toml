@@ -51,6 +51,7 @@ alpha = { policy = "remove" }
 alpha = { policy = "remove" }
 [subtypes.coat_normal]
 alpha = { policy = "data" }
+mips = { normal = "renormalize_bake" }
 [subtypes.envmask]
 alpha = { policy = "remove", exact_opaque = true }
 format = "bc4"

@@ -4,7 +4,10 @@
 //! level is a *finalised* copy (√ back from squared roughness, renormalised vectors, clamps). Mip 0 is the base as
 //! authored, except a normal map's vectors, which are renormalised unless `mips.normal_base = keep` (DECISIONS R1); a
 //! vector chain accumulates from that written mip 0, so its lower levels and the variance bake see the stored vectors.
-use crate::bake::{baked_roughness, NormalVariance};
+//! A `_cnr` with `mips.normal = renormalize_bake` (the default) widens its own coat roughness (alpha) from its own
+//! footprint lengths (DECISIONS R2); `mips.normal` is inert on every other sub-type here: the `_n` -> `_rmaos` bake
+//! arrives through [`build_chain_with`].
+use crate::bake::{baked_roughness, variance_add, NormalVariance};
 use crate::config::*;
 use crate::image::Rgba32F;
 use crate::ops::{Domain, Work};
@@ -215,6 +218,7 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
     let n = level_count(work.img.width, work.img.height, &p.mips.levels);
     let weighted = weighted_rgb(work, p);
     let rough = bake.filter(|_| work.roughness_r_squared);
+    let coat = coat_self_bake(work, p);
     let mut out = Vec::with_capacity(n as usize);
     let mut base = base_level(work, p);
     if let Some(b) = rough {
@@ -245,6 +249,9 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
         if let Some(b) = rough {
             bake_roughness(&mut fin, level, b, |i| next.px[i][0]);
         }
+        if let Some(t) = coat {
+            bake_coat(&mut fin, &next, t);
+        }
         out.push(fin);
         acc = Some(next);
     }
@@ -264,6 +271,30 @@ fn bake_roughness(
         let add = b.add_at(index, i as u32 % w, i as u32 / w);
         if add > 0.0 {
             px[0] = baked_roughness(alpha(i), add);
+        }
+    }
+}
+
+/// `_cnr` self-bake (owner 2026-10-11, DECISIONS R2): the clamp `t` when a coat normal with
+/// `mips.normal = renormalize_bake` keeps a data alpha (its coat roughness), else `None`.
+fn coat_self_bake(work: &Work, p: &Profile) -> Option<f64> {
+    (p.subtype == Subtype::CoatNormal
+        && work.domain == Domain::Normal
+        && p.mips.normal == NormalMips::RenormalizeBake
+        && work.alpha_present
+        && p.alpha.policy == AlphaPolicy::Data)
+        .then_some(p.mips.bake_clamp)
+}
+
+/// The coat roughness of one level: where the level's own footprint length (`acc`, before renormalising) adds
+/// variance, A = (min(r̄⁴ + add, 1))^¼ with r̄ the plain box mean the level already holds; elsewhere A is unchanged,
+/// so a flat coat normal keeps its alpha bit for bit.
+fn bake_coat(level: &mut Rgba32F, acc: &Rgba32F, clamp_t: f64) {
+    for (px, a) in level.px.iter_mut().zip(&acc.px) {
+        let len = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        let add = variance_add(len, clamp_t);
+        if add > 0.0 {
+            px[3] = baked_roughness(px[3] * px[3], add);
         }
     }
 }
@@ -288,6 +319,62 @@ mod tests {
             roughness_r_squared: false,
             nonfinite_samples: 0,
         }
+    }
+
+    fn coat(img: Rgba32F) -> (Work, Profile) {
+        let p = profile(Subtype::CoatNormal);
+        (preprocess(img, &p), p)
+    }
+
+    #[test]
+    fn cnr_profiles_self_bake_by_default() {
+        assert_eq!(
+            profile(Subtype::CoatNormal).mips.normal,
+            NormalMips::RenormalizeBake
+        );
+        assert_eq!(
+            profile(Subtype::PbrNormal).mips.normal,
+            NormalMips::Renormalize
+        );
+    }
+
+    #[test]
+    fn a_flat_coat_normal_keeps_its_coat_roughness_bit_for_bit() {
+        let mut img = Rgba32F::new(4, 4, [0.5, 0.5, 1.0, 0.0]);
+        for (i, px) in img.px.iter_mut().enumerate() {
+            px[3] = i as f32 / 15.0;
+        }
+        let (w, p) = coat(img);
+        let mut off = p.clone();
+        off.mips.normal = NormalMips::Renormalize;
+        assert_eq!(build_chain(&w, &p), build_chain(&w, &off));
+    }
+
+    #[test]
+    fn a_bumpy_coat_normal_widens_its_own_coat_roughness_by_the_formula() {
+        // (0.6, 0, 0.8) and (-0.6, 0, 0.8): the level-1 footprint length is 0.8.
+        let mut img = Rgba32F::new(2, 1, [0.8, 0.5, 0.9, 0.4]);
+        img.px[1] = [0.2, 0.5, 0.9, 0.2];
+        let (w, p) = coat(img);
+        let c = build_chain(&w, &p);
+        let r = (0.4f64 + 0.2) / 2.0;
+        let l = 0.8f64;
+        let add = (0.5 * (1.0 - l * l) / (3.0 * l - l * l * l)).min(0.0625);
+        let want = (r.powi(4) + add).min(1.0).powf(0.25);
+        let got = f64::from(c[1].px[0][3]);
+        assert!((got - want).abs() < 1e-5, "{got} vs {want}");
+        assert!(got > r + 0.01);
+        assert_eq!(c[0].px[0][3], 0.4); // mip 0 keeps the source coat roughness
+    }
+
+    #[test]
+    fn renormalize_turns_the_coat_self_bake_off() {
+        let mut img = Rgba32F::new(2, 1, [0.8, 0.5, 0.9, 0.4]);
+        img.px[1] = [0.2, 0.5, 0.9, 0.2];
+        let (w, mut p) = coat(img);
+        p.mips.normal = NormalMips::Renormalize;
+        let c = build_chain(&w, &p);
+        assert!((c[1].px[0][3] - 0.3).abs() < 1e-6, "{}", c[1].px[0][3]);
     }
 
     #[test]
