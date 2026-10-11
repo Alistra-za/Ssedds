@@ -4784,6 +4784,8 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
 
 The block "two outputs with one path" names the colliding keys. That is also Review focus 2: the engine reports `IN-DUPLICATE` for the same collision, and this check stops Export before it starts.
 
+`path_collisions` must also block an owned output whose path equals the mirrored output of an item that has no explicit path (compare against each such item's `job_key`, case-folded with `/`). Task 10's `engine_inputs` dedupe compares owned candidates only, and the engine does not re-check redirected packed outputs (Task 10 review, Minor 8).
+
 - [ ] **Step 4: Wire the dialogs.** In `crates/gui/src/model/mod.rs`, add `pub mod pbr_export;` and the `Dialog` variants:
 
 ```rust
@@ -5253,7 +5255,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces:
   - `pub struct DragItem(pub String)` (an item key) and `pub struct DragSet(pub String)` (a set id), the egui drag payloads;
   - `pub struct DropState { pub pending: Option<Pending>, pub renaming: Option<(String, String)> }`;
-  - `pub enum Pending { Choice { item, set, from }, Replace { item, set, existing }, Refused(String) }`;
+  - `pub enum Pending { Choice { item, set, from }, Replace { item, set, existing, choice }, Refused(String) }`;
   - `Selection::Defaults`.
 
 **Behaviour** (layout from the approved mockup `sets-column.html`):
@@ -5274,9 +5276,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - **Dropping a `DragItem` on a pill** calls `drop_on_set`:
   - `Joined`: done.
   - `AskChoice`: a small modal with the choices Move it here / Share (borrow its finished output) / Duplicate the source for this set / Cancel → `drop_choice`. If the result is `AskReplace`, chain to the replace modal.
-  - `AskReplace`: a modal "Replace `<existing name>` / Cancel" → `drop_replace`.
+  - `AskReplace`: a modal "Replace `<existing name>` / Cancel" → `drop_replace(item, set, choice)`, with the choice that led there (`Move` for a plain drop; Share and Duplicate also ask when the slot is filled). Its `Err(why)` opens the `Refused` modal.
   - `Refused(why)`: a modal with the reason.
-- **Dropping a `DragItem` on the dashed "Drop here to start a new set" area** at the bottom calls `drop_new_set`.
+- **Dropping a `DragItem` on the dashed "Drop here to start a new set" area** at the bottom calls `drop_new_set` (it returns `Option<String>`; `None` means nothing was done).
+- **Remove member** calls `remove_member`, which returns `Result<(), String>`; an `Err` opens the `Refused` modal.
 - **Right-clicking a pill** gives:
   - Rename… (an inline text field in the menu; Enter calls `rename_set`, and an error is shown under the field);
   - Edit match… (`select_set`; the editor shows the Match group at the top);
@@ -5354,7 +5357,8 @@ pub struct DragSet(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
     Choice { item: String, set: String, from: String },
-    Replace { item: String, set: String, existing: String },
+    /// `choice` is what the replace answers: `drop_replace(item, set, choice)`.
+    Replace { item: String, set: String, existing: String, choice: DropChoice },
     Refused(String),
 }
 
@@ -5434,11 +5438,14 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
                 DropOutcome::Joined => {}
                 DropOutcome::AskChoice { from } => st.pending = Some(Pending::Choice { item, set, from }),
-                DropOutcome::AskReplace { existing } => st.pending = Some(Pending::Replace { item, set, existing }),
+                DropOutcome::AskReplace { existing } => {
+                    st.pending = Some(Pending::Replace { item, set, existing, choice: DropChoice::Move })
+                }
                 DropOutcome::Refused(why) => st.pending = Some(Pending::Refused(why)),
             },
             Act::NewSet(item) => {
-                model.drop_new_set(&item);
+                // `None`: nothing was done (read-only file, or a packed map, which follows its raw maps).
+                let _ = model.drop_new_set(&item);
             }
             Act::Reorder(id, to) => model.reorder_set(&id, to),
             Act::Rename(id, new) => match model.rename_set(&id, &new) {
@@ -5451,7 +5458,11 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
             Act::Delete(id) => {
                 model.delete_set(&id);
             }
-            Act::RemoveMember(id, item) => model.remove_member(&id, &item),
+            Act::RemoveMember(id, item) => {
+                if let Err(why) = model.remove_member(&id, &item) {
+                    st.pending = Some(Pending::Refused(why));
+                }
+            }
         }
     }
 }
@@ -5575,8 +5586,8 @@ fn pill(
                 }
             }
         });
-        let del = ui.add_enabled(v.created, egui::Button::new("Delete set"));
-        let del = del.on_disabled_hover_text("Only sets you created can be deleted; an automatic set comes back from the file names");
+        let del = ui.add_enabled(v.created || v.key.is_empty(), egui::Button::new("Delete set"));
+        let del = del.on_disabled_hover_text("Only sets you created (or whose files are gone) can be deleted; an automatic set comes back from the file names");
         if del.clicked() {
             acts.push(Act::Delete(v.id.clone()));
             ui.close();
@@ -5646,13 +5657,13 @@ fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
     let Some(answer) = answer else { return };
     st.pending = match (answer, p) {
         (ModalAnswer::Choice(c), Pending::Choice { item, set, .. }) => match model.drop_choice(&item, &set, c) {
-            DropOutcome::AskReplace { existing } => Some(Pending::Replace { item, set, existing }),
+            DropOutcome::AskReplace { existing } => Some(Pending::Replace { item, set, existing, choice: c }),
             DropOutcome::Refused(why) => Some(Pending::Refused(why)),
             _ => None,
         },
-        (ModalAnswer::Replace, Pending::Replace { item, set, .. }) => {
-            model.drop_replace(&item, &set);
-            None
+        // The replace answers the choice that led to it (Move, Share or Duplicate); a refusal shows its reason.
+        (ModalAnswer::Replace, Pending::Replace { item, set, choice, .. }) => {
+            model.drop_replace(&item, &set, choice).err().map(Pending::Refused)
         }
         _ => None,
     };
@@ -5661,6 +5672,7 @@ fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
 
 Implementation notes:
 - **A created set with no members yet** has `key == ""`: it can't be selected (the set editor is keyed by engine key), so its JSON settings can't be edited until a texture is dropped in. Its pill says so in a weak line, "Drop a texture here to start", and clicking it does nothing. This is acceptable for M3b.
+- **An entry whose files have all gone** (Task 10, spec §7.1) also has `key == ""`, with `created == false` and a non-empty `missing`. Its pill is drawn the same way, without the "Drop a texture here" line; its `missing` badges say why. Drops on it come back `Refused`, and "Delete set" is enabled for it (`delete_set` accepts `created || key.is_empty()`).
 - **"Not in a set" (spec §3.1 Proposal, ruling P15):** the Textures column header gets a clickable amber `"<n> not in a set"`, next to the existing "need a decision" count. Clicking it turns on `model.filter.not_in_set`. Switching the filter on automatically would hide textures on open and change M3a's behaviour. Count with the same `in_set` rule `visible_items` uses. Add this to `columns::textures`.
 - **egui API names** (`dnd_drop_zone`, `dnd_set_drag_payload`, `dnd_release_payload`, `ui.close()`, `context_menu`) are egui 0.36's. If one has a different name in 0.36.2, find the current one with `grep -rn "pub fn dnd_" ~/.cargo/registry/src/*/egui-0.36.2/src/`. Keep the behaviour.
 - **`AMBER` and `RED`** must be `pub(super)` in `columns.rs` (`AMBER` is already imported by `advanced.rs`).
@@ -6646,7 +6658,7 @@ fn build_sets_export_and_reexport_unchanged() {
     m.decide(&odd, Answer::Subtype(Subtype::PbrAlbedo));
     m.decide(&odd, Answer::Acknowledge(Code::DimNpot));
     idle(&mut m);
-    let second = m.drop_new_set(&odd);
+    let second = m.drop_new_set(&odd).unwrap();
     idle(&mut m);
     let rmaos = m.items.iter().find(|i| i.name.ends_with("rmaos")).unwrap().key.clone();
     assert_eq!(m.drop_on_set(&rmaos, &second), DropOutcome::AskChoice { from: "landscape/rock01".into() });
