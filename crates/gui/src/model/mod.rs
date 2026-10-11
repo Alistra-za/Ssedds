@@ -330,6 +330,7 @@ impl AppModel {
         if f.config && !from_user_config {
             if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
                 p.set_error(&f.message);
+                self.history.clear();
                 self.refresh_banner();
                 self.ignored_by_plan = true;
                 self.replan();
@@ -713,10 +714,12 @@ impl AppModel {
     }
 
     fn apply_snapshot(&mut self, s: &history::Snapshot) {
-        if let Some(p) = self.project.as_mut() {
+        // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
+        // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
+        if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
             p.restore(&s.sdc_toml);
         }
-        if let Some(d) = self.sets_doc.as_mut() {
+        if let Some(d) = self.sets_doc.as_mut().filter(|d| d.text() != s.project) {
             d.restore(&s.project);
         }
         self.replan();
@@ -865,13 +868,12 @@ impl AppModel {
         self.dialog = None;
         if let Some(p) = self.project.as_mut() {
             p.reload();
-            self.history.clear();
         }
         if let Some(s) = self.sets_doc.as_mut() {
             s.reload();
-            self.history.clear();
         }
         self.ignored_by_plan = false;
+        self.history.clear();
         self.refresh_banner();
         self.replan();
     }

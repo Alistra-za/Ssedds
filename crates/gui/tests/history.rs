@@ -172,3 +172,47 @@ fn sdc_toml_edits_undo_while_the_sets_doc_is_read_only() {
     let s = m.sets_doc.as_ref().unwrap();
     assert!(s.read_only() && !s.is_dirty());
 }
+
+#[test]
+fn undo_of_an_sdc_toml_edit_leaves_the_sets_doc_clean_and_save_writes_no_project_file() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let root = m.root.clone().unwrap();
+    m.set_target(engine::config::Target::Vanilla);
+    m.undo();
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    m.save().unwrap();
+    assert!(!root.join("sdc-project.toml").exists());
+    assert_eq!(m.dialog, None);
+}
+
+#[test]
+fn undo_of_a_sets_only_edit_leaves_sdc_toml_clean() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.edit_docs("hair", None, false, |_, s| {
+        s.set_value("landscape/rock01", "hair", Some(json!(true)))
+    });
+    m.undo();
+    assert!(!m.project.as_ref().unwrap().is_dirty());
+}
+
+#[test]
+fn a_plan_rejection_clears_the_history() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let item = m
+        .items
+        .iter()
+        .find(|i| i.name == "rock01.png")
+        .unwrap()
+        .key
+        .clone();
+    m.set_field(&item, "alpha.threshold", json!(1000));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(
+        m.project.as_ref().unwrap().read_only(),
+        "the engine rejected it"
+    );
+    assert!(!m.can_undo() && !m.can_redo());
+}
