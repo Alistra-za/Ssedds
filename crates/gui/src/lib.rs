@@ -3,8 +3,10 @@
 pub mod app;
 pub mod fonts;
 pub mod model;
+pub mod pgp;
 pub mod project;
 pub mod render;
+pub mod sets_doc;
 pub mod settings;
 pub mod ui;
 pub mod worker;

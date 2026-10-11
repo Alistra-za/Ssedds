@@ -22,10 +22,10 @@ impl std::fmt::Display for SaveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SaveError::ReadOnly => {
-                f.write_str("sdc.toml is read-only until its error is fixed and it is reloaded")
+                f.write_str("the file is read-only until its error is fixed and it is reloaded")
             }
-            SaveError::ChangedOnDisk => f.write_str("sdc.toml changed on disk since it was loaded"),
-            SaveError::Io(e) => write!(f, "could not save sdc.toml: {e}"),
+            SaveError::ChangedOnDisk => f.write_str("the file changed on disk since it was loaded"),
+            SaveError::Io(e) => write!(f, "could not save: {e}"),
         }
     }
 }
@@ -38,7 +38,7 @@ pub struct ProjectDoc {
     error: Option<String>,
 }
 
-fn json_to_toml(v: &Json) -> Option<Value> {
+pub(crate) fn json_to_toml(v: &Json) -> Option<Value> {
     Some(match v {
         Json::Bool(b) => Value::from(*b),
         Json::Number(n) => match n.as_i64() {
@@ -57,7 +57,7 @@ fn json_to_toml(v: &Json) -> Option<Value> {
     })
 }
 
-fn toml_to_json(v: &Item) -> Option<Json> {
+pub(crate) fn toml_to_json(v: &Item) -> Option<Json> {
     let text = match v {
         Item::Value(v) => format!("v = {v}"),
         _ => return None,
@@ -67,7 +67,7 @@ fn toml_to_json(v: &Item) -> Option<Json> {
 }
 
 /// A new table whose keys print as dotted keys (`alpha.policy = ...`) inside their parent.
-fn dotted_table() -> Item {
+pub(crate) fn dotted_table() -> Item {
     let mut t = Table::new();
     t.set_dotted(true);
     Item::Table(t)
@@ -75,7 +75,7 @@ fn dotted_table() -> Item {
 
 /// `t[name]` as a table or inline table, created with `make()` when missing. `None` when it exists but is a
 /// plain value. (`insert` rather than `entry`: inserting a `Table` item into an inline table converts it.)
-fn sub_table<'a>(
+pub(crate) fn sub_table<'a>(
     t: &'a mut dyn TableLike,
     name: &str,
     make: impl FnOnce() -> Item,
@@ -87,7 +87,7 @@ fn sub_table<'a>(
 }
 
 /// Set `t[key] = v`, replacing an existing item in place so the key keeps its comments and position.
-fn set_value(t: &mut dyn TableLike, key: &str, v: Value) {
+pub(crate) fn set_value(t: &mut dyn TableLike, key: &str, v: Value) {
     match t.get_mut(key) {
         Some(slot) => *slot = Item::Value(v),
         None => {
@@ -98,7 +98,7 @@ fn set_value(t: &mut dyn TableLike, key: &str, v: Value) {
 
 /// The spelling `key` has in `t`: an exact match, else a case-insensitive one (the engine matches `[files]` keys
 /// case-insensitively, so a GUI write must reuse a hand-written `Landscape/Rock01_N.png` rather than add a twin).
-fn find_key(t: &dyn TableLike, key: &str) -> Option<String> {
+pub(crate) fn find_key(t: &dyn TableLike, key: &str) -> Option<String> {
     if t.contains_key(key) {
         return Some(key.to_owned());
     }
@@ -167,6 +167,23 @@ impl ProjectDoc {
     }
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// The document as text (undo snapshots, DECISIONS P9).
+    pub fn text(&self) -> String {
+        self.doc.to_string()
+    }
+
+    /// Replace the document with `text` (an undo or redo). It is an unsaved change. A read-only document is left
+    /// alone: its edits never happened.
+    pub fn restore(&mut self, text: &str) {
+        if self.read_only() {
+            return;
+        }
+        if let Ok(doc) = text.parse::<DocumentMut>() {
+            self.doc = doc;
+            self.dirty = true;
+        }
     }
 
     /// The document as the engine parses it.

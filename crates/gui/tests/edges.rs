@@ -3,7 +3,7 @@ mod support;
 use engine::api::CancelToken;
 use engine::config::Subtype;
 use image::{ImageBuffer, Rgb};
-use sdc_gui::model::{AfterExport, Answer, AppModel, Dialog};
+use sdc_gui::model::{AfterExport, Answer, AppModel, Dialog, DocKind};
 use sdc_gui::settings::GuiSettings;
 use sdc_gui::worker::*;
 use std::time::Duration;
@@ -229,7 +229,7 @@ fn assert_rejected_then_fixed(bad: &str, expect_in_banner: &str) {
     assert_eq!(std::fs::read_to_string(&toml).unwrap(), bad);
 
     std::fs::write(&toml, "# fixed\n").unwrap();
-    m.resolve_external_change(false);
+    m.resolve_external_change(DocKind::SdcToml, false);
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(m.banner, None);
     assert_eq!(m.dialog, None);

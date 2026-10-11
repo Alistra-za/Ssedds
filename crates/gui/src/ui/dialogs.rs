@@ -1,5 +1,5 @@
 //! Modal dialogs for `model.dialog` (M3a spec §2.1).
-use crate::model::{AfterExport, AppModel, Dialog};
+use crate::model::{AfterExport, AppModel, Dialog, DocKind};
 use eframe::egui;
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
@@ -10,7 +10,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::CloseUnsaved => close_unsaved(ctx, model),
         Dialog::OpenUnsaved(root) => open_unsaved(ctx, model, root),
         Dialog::ExportRunning(action) => export_running(ctx, model, action),
-        Dialog::ExternalChange => external_change(ctx, model),
+        Dialog::ExternalChange(which) => external_change(ctx, model, which),
         Dialog::Error(msg) => error(ctx, model, &msg),
         Dialog::ProceedAnyway(n) => proceed_anyway(ctx, model, n),
     }
@@ -48,7 +48,7 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
     let (mut save, mut discard, mut cancel) = (false, false, false);
     modal(ctx, "close-unsaved", |ui| {
         ui.heading("Unsaved changes");
-        ui.label("sdc.toml has changes that are not saved.");
+        ui.label("sdc.toml or sdc-project.toml has changes that are not saved.");
         ui.horizontal(|ui| {
             save = ui.button("Save").clicked();
             discard = ui.button("Discard").clicked();
@@ -67,16 +67,19 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         if let Some(p) = model.project.as_mut() {
             p.reload();
         }
+        if let Some(s) = model.sets_doc.as_mut() {
+            s.reload();
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     } else if cancel {
         model.dialog = None;
     }
 }
 
-fn external_change(ctx: &egui::Context, model: &mut AppModel) {
+fn external_change(ctx: &egui::Context, model: &mut AppModel, which: DocKind) {
     let (mut reload, mut overwrite, mut cancel) = (false, false, false);
     modal(ctx, "external-change", |ui| {
-        ui.heading("sdc.toml changed on disk");
+        ui.heading(format!("{} changed on disk", which.file()));
         ui.label("Another program changed the file after it was opened.");
         ui.horizontal(|ui| {
             reload = ui.button("Reload").clicked();
@@ -85,9 +88,9 @@ fn external_change(ctx: &egui::Context, model: &mut AppModel) {
         });
     });
     if reload {
-        model.resolve_external_change(false);
+        model.resolve_external_change(which, false);
     } else if overwrite {
-        model.resolve_external_change(true);
+        model.resolve_external_change(which, true);
     } else if cancel {
         model.dialog = None;
     }
@@ -110,7 +113,7 @@ fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::Path
     modal(ctx, "open-unsaved", |ui| {
         ui.heading("Unsaved changes");
         ui.label(
-            "sdc.toml has changes that are not saved. Opening another folder would lose them.",
+            "sdc.toml or sdc-project.toml has changes that are not saved. Opening another folder would lose them.",
         );
         ui.horizontal(|ui| {
             save = ui.button("Save").clicked();

@@ -37,10 +37,26 @@ pub struct Filter {
     pub not_in_set: bool,
 }
 
+/// Which of the two project files a dialog or save error is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocKind {
+    SdcToml,
+    Project,
+}
+
+impl DocKind {
+    pub fn file(self) -> &'static str {
+        match self {
+            DocKind::SdcToml => "sdc.toml",
+            DocKind::Project => "sdc-project.toml",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialog {
     ProceedAnyway(usize),
-    ExternalChange,
+    ExternalChange(DocKind),
     CloseUnsaved,
     /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
     OpenUnsaved(PathBuf),
@@ -76,6 +92,7 @@ pub struct AppModel {
     pub session: Option<Arc<Session>>,
     pub root: Option<PathBuf>,
     pub project: Option<ProjectDoc>,
+    pub sets_doc: Option<crate::sets_doc::SetsDoc>,
     pub target: Target,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
@@ -135,6 +152,7 @@ impl AppModel {
             session: None,
             root: None,
             project: None,
+            sets_doc: None,
             target: Target::Cs,
             items: vec![],
             sets: vec![],
@@ -174,6 +192,18 @@ impl AppModel {
         let project = ProjectDoc::open(&root);
         self.banner = project.error().map(read_only_banner);
         self.project = Some(project);
+        let sets_doc = crate::sets_doc::SetsDoc::open(&root);
+        if let Some(e) = sets_doc.error() {
+            // P8: a bad sdc-project.toml makes sets and JSON read-only; sdc.toml keeps working.
+            let line = format!(
+                "{e} — sets and PBR JSON settings are read-only until it is fixed and reloaded"
+            );
+            self.banner = Some(match self.banner.take() {
+                Some(b) => format!("{b}\n{line}"),
+                None => line,
+            });
+        }
+        self.sets_doc = Some(sets_doc);
         self.settings.push_recent(root.clone());
         self.save_settings();
         self.root = Some(root);
@@ -711,35 +741,69 @@ impl AppModel {
 
     pub fn is_dirty(&self) -> bool {
         self.project.as_ref().is_some_and(ProjectDoc::is_dirty)
+            || self
+                .sets_doc
+                .as_ref()
+                .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
     }
 
+    /// Raise the dialog for a failed save of `kind`; the error text names the file.
+    fn save_failed(&mut self, kind: DocKind, e: &SaveError) {
+        self.dialog = Some(match e {
+            SaveError::ChangedOnDisk => Dialog::ExternalChange(kind),
+            e => Dialog::Error(format!("{}: {e}", kind.file())),
+        });
+    }
+
+    /// Save `sdc.toml`, then `sdc-project.toml`; the first error is returned (and raises its dialog).
     pub fn save(&mut self) -> Result<(), SaveError> {
-        let Some(p) = self.project.as_mut() else {
-            return Ok(());
-        };
-        let r = p.save(false);
-        match &r {
-            Err(SaveError::ChangedOnDisk) => self.dialog = Some(Dialog::ExternalChange),
-            Err(e) => self.dialog = Some(Dialog::Error(e.to_string())),
-            Ok(()) => {}
+        if let Some(p) = self.project.as_mut() {
+            if let Err(e) = p.save(false) {
+                self.save_failed(DocKind::SdcToml, &e);
+                return Err(e);
+            }
         }
-        r
+        // A read-only sdc-project.toml is skipped: its edits never happened.
+        if let Some(s) = self.sets_doc.as_mut().filter(|s| !s.read_only()) {
+            if let Err(e) = s.save(false) {
+                self.save_failed(DocKind::Project, &e);
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 
-    pub fn resolve_external_change(&mut self, overwrite: bool) {
+    pub fn resolve_external_change(&mut self, which: DocKind, overwrite: bool) {
         self.dialog = None;
-        let Some(p) = self.project.as_mut() else {
-            return;
-        };
-        if overwrite {
-            if let Err(e) = p.save(true) {
-                self.dialog = Some(Dialog::Error(e.to_string()));
+        match which {
+            DocKind::SdcToml => {
+                let Some(p) = self.project.as_mut() else {
+                    return;
+                };
+                if overwrite {
+                    if let Err(e) = p.save(true) {
+                        self.save_failed(which, &e);
+                    }
+                } else {
+                    p.reload();
+                    self.ignored_by_plan = false;
+                    self.banner = p.error().map(str::to_string);
+                    self.replan();
+                }
             }
-        } else {
-            p.reload();
-            self.ignored_by_plan = false;
-            self.banner = p.error().map(str::to_string);
-            self.replan();
+            DocKind::Project => {
+                let Some(s) = self.sets_doc.as_mut() else {
+                    return;
+                };
+                if overwrite {
+                    if let Err(e) = s.save(true) {
+                        self.save_failed(which, &e);
+                    }
+                } else {
+                    s.reload();
+                    self.replan();
+                }
+            }
         }
     }
 
@@ -786,8 +850,13 @@ impl AppModel {
             if self.save().is_err() {
                 return;
             }
-        } else if let Some(p) = self.project.as_mut() {
-            p.reload();
+        } else {
+            if let Some(p) = self.project.as_mut() {
+                p.reload();
+            }
+            if let Some(s) = self.sets_doc.as_mut() {
+                s.reload();
+            }
         }
         self.open_folder(root);
     }

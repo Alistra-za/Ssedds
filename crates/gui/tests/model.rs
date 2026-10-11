@@ -183,8 +183,8 @@ fn an_external_edit_is_not_overwritten_silently() {
     let p = m.root.clone().unwrap().join("sdc.toml");
     std::fs::write(&p, "# written by hand meanwhile\n").unwrap();
     assert!(m.save().is_err());
-    assert_eq!(m.dialog, Some(Dialog::ExternalChange));
-    m.resolve_external_change(false);
+    assert_eq!(m.dialog, Some(Dialog::ExternalChange(DocKind::SdcToml)));
+    m.resolve_external_change(DocKind::SdcToml, false);
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(
         std::fs::read_to_string(&p).unwrap(),

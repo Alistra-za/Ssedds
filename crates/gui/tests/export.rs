@@ -119,7 +119,7 @@ fn export_stops_when_the_save_fails() {
     m.export_clicked();
     assert!(matches!(
         m.dialog,
-        Some(Dialog::Error(_)) | Some(Dialog::ExternalChange)
+        Some(Dialog::Error(_)) | Some(Dialog::ExternalChange(_))
     ));
     assert!(m.export.running.is_none());
     assert!(m.export.summary.is_none());

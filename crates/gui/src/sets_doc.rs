@@ -1,0 +1,512 @@
+//! `sdc-project.toml` (M3b spec §7.1): the user's sets and JSON settings, next to `sdc.toml`. Format-preserving
+//! like `ProjectDoc`; written only on Save or Export. A file that does not parse makes set and JSON editing
+//! read-only (DECISIONS P8); `sdc.toml` editing is unaffected.
+use crate::pgp::settings::Settings;
+use crate::project::{dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError};
+use engine::policy::SourceStamp;
+use serde_json::Value as Json;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
+
+pub const FILE_NAME: &str = "sdc-project.toml";
+/// Keys of a `[[sets]]` table that are not JSON settings.
+const RESERVED: [&str; 6] = ["id", "created", "renamed_from", "add", "remove", "borrow"];
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SetEntry {
+    pub id: String,
+    pub created: bool,
+    pub renamed_from: Option<String>,
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
+    /// Slot number (1–8) → the id of the set whose finished output this set uses.
+    pub borrow: BTreeMap<u8, String>,
+    pub settings: Settings,
+}
+
+pub struct SetsDoc {
+    path: PathBuf,
+    doc: DocumentMut,
+    disk: Option<SourceStamp>,
+    dirty: bool,
+    error: Option<String>,
+}
+
+/// Flatten a table into `prefix.key` paths; values only (nested tables recurse).
+fn flatten(t: &dyn TableLike, prefix: &str, out: &mut Settings) {
+    for (k, item) in t.iter() {
+        let path = if prefix.is_empty() {
+            k.to_string()
+        } else {
+            format!("{prefix}.{k}")
+        };
+        match item.as_table_like() {
+            Some(sub) if !item.is_value() || item.as_inline_table().is_some() => {
+                flatten(sub, &path, out)
+            }
+            _ => {
+                if let Some(v) = toml_to_json(item) {
+                    out.insert(path, v);
+                }
+            }
+        }
+    }
+}
+
+fn strings(item: Option<&Item>) -> Vec<String> {
+    item.and_then(Item::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn entry_of(t: &Table) -> Option<SetEntry> {
+    let id = t.get("id")?.as_str()?.to_string();
+    let mut settings = Settings::new();
+    for (k, item) in t.iter() {
+        if RESERVED.contains(&k) {
+            continue;
+        }
+        match item.as_table_like() {
+            Some(sub) if item.as_value().is_none() || item.as_inline_table().is_some() => {
+                flatten(sub, k, &mut settings)
+            }
+            _ => {
+                if let Some(v) = toml_to_json(item) {
+                    settings.insert(k.to_string(), v);
+                }
+            }
+        }
+    }
+    let borrow = t
+        .get("borrow")
+        .and_then(Item::as_table_like)
+        .map(|b| {
+            b.iter()
+                .filter_map(|(k, v)| {
+                    let n: u8 = k.strip_prefix("slot")?.parse().ok()?;
+                    Some((n, v.as_str()?.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SetEntry {
+        id,
+        created: t.get("created").and_then(Item::as_bool).unwrap_or(false),
+        renamed_from: t
+            .get("renamed_from")
+            .and_then(Item::as_str)
+            .map(str::to_string),
+        add: strings(t.get("add")),
+        remove: strings(t.get("remove")),
+        borrow,
+        settings,
+    })
+}
+
+impl SetsDoc {
+    pub fn open(root: &Path) -> SetsDoc {
+        let mut d = SetsDoc {
+            path: root.join(FILE_NAME),
+            doc: DocumentMut::new(),
+            disk: None,
+            dirty: false,
+            error: None,
+        };
+        d.reload();
+        d
+    }
+
+    pub fn reload(&mut self) {
+        self.dirty = false;
+        self.error = None;
+        self.doc = DocumentMut::new();
+        self.disk = SourceStamp::of(&self.path);
+        match std::fs::read_to_string(&self.path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
+            Ok(text) => match text.parse::<DocumentMut>() {
+                Ok(doc) => self.doc = doc,
+                Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
+            },
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+    pub fn read_only(&self) -> bool {
+        self.error.is_some()
+    }
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+    pub fn changed_on_disk(&self) -> bool {
+        SourceStamp::of(&self.path) != self.disk
+    }
+
+    pub fn text(&self) -> String {
+        self.doc.to_string()
+    }
+
+    /// Replace the document with `text` (undo/redo): an unsaved change. Ignored while read-only.
+    pub fn restore(&mut self, text: &str) {
+        if self.read_only() {
+            return;
+        }
+        if let Ok(doc) = text.parse::<DocumentMut>() {
+            self.doc = doc;
+            self.dirty = true;
+        }
+    }
+
+    pub fn save(&mut self, force: bool) -> Result<(), SaveError> {
+        if self.read_only() {
+            return Err(SaveError::ReadOnly);
+        }
+        if !force && self.changed_on_disk() {
+            return Err(SaveError::ChangedOnDisk);
+        }
+        let tmp = self.path.with_extension("toml.sdc-tmp");
+        std::fs::write(&tmp, self.doc.to_string())
+            .and_then(|_| std::fs::rename(&tmp, &self.path))
+            .map_err(|e| SaveError::Io(e.to_string()))?;
+        self.disk = SourceStamp::of(&self.path);
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn project_str(&self, key: &str) -> Option<String> {
+        self.doc
+            .get("project")?
+            .get(key)?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    fn set_project(&mut self, key: &str, v: Option<Value>) {
+        if self.read_only() {
+            return;
+        }
+        let Some(p) = sub_table(self.doc.as_table_mut(), "project", || {
+            Item::Table(Table::new())
+        }) else {
+            return;
+        };
+        match v {
+            Some(v) => set_value(p, key, v),
+            None => {
+                p.remove(key);
+            }
+        }
+        self.dirty = true;
+    }
+
+    pub fn json_name(&self) -> Option<String> {
+        self.project_str("json_name")
+    }
+    pub fn set_json_name(&mut self, name: Option<&str>) {
+        self.set_project("json_name", name.map(Value::from));
+    }
+    pub fn last_json_sha256(&self) -> Option<String> {
+        self.project_str("last_json_sha256")
+    }
+    pub fn set_last_json_sha256(&mut self, sha: &str) {
+        self.set_project("last_json_sha256", Some(Value::from(sha)));
+    }
+
+    pub fn order(&self) -> Vec<String> {
+        strings(self.doc.get("project").and_then(|p| p.get("order")))
+    }
+    pub fn set_order(&mut self, ids: &[String]) {
+        let mut arr = Array::new();
+        for id in ids {
+            arr.push(id.as_str());
+        }
+        self.set_project("order", Some(Value::Array(arr)));
+    }
+
+    pub fn defaults(&self) -> Settings {
+        let mut out = Settings::new();
+        if let Some(t) = self.doc.get("defaults").and_then(Item::as_table_like) {
+            flatten(t, "", &mut out);
+        }
+        out
+    }
+
+    pub fn set_default(&mut self, key: &str, v: Option<Json>) {
+        if self.read_only() {
+            return;
+        }
+        let Some(t) = sub_table(self.doc.as_table_mut(), "defaults", || {
+            Item::Table(Table::new())
+        }) else {
+            return;
+        };
+        if write_path(t, key, v) {
+            self.dirty = true;
+        }
+        if self
+            .doc
+            .get("defaults")
+            .and_then(Item::as_table_like)
+            .is_some_and(TableLike::is_empty)
+        {
+            self.doc.remove("defaults");
+        }
+    }
+
+    pub fn entries(&self) -> Vec<SetEntry> {
+        self.doc
+            .get("sets")
+            .and_then(Item::as_array_of_tables)
+            .map(|a| a.iter().filter_map(entry_of).collect())
+            .unwrap_or_default()
+    }
+
+    fn tables_mut(&mut self) -> &mut ArrayOfTables {
+        if !self.doc.get("sets").is_some_and(Item::is_array_of_tables) {
+            self.doc
+                .insert("sets", Item::ArrayOfTables(ArrayOfTables::new()));
+        }
+        self.doc["sets"]
+            .as_array_of_tables_mut()
+            .expect("just made")
+    }
+
+    /// The table of set `id`, created at the end when missing (ids compare case-insensitively).
+    fn table_mut(&mut self, id: &str) -> &mut Table {
+        let lower = id.to_lowercase();
+        let tables = self.tables_mut();
+        let i = tables.iter().position(|t| {
+            t.get("id")
+                .and_then(Item::as_str)
+                .is_some_and(|s| s.to_lowercase() == lower)
+        });
+        let i = match i {
+            Some(i) => i,
+            None => {
+                let mut t = Table::new();
+                t.insert("id", toml_edit::value(id));
+                tables.push(t);
+                tables.len() - 1
+            }
+        };
+        tables.get_mut(i).expect("index in range")
+    }
+
+    pub fn create_set(&mut self, id: &str) {
+        if self.read_only() {
+            return;
+        }
+        self.table_mut(id).insert("created", toml_edit::value(true));
+        self.dirty = true;
+    }
+
+    /// Drop set `id`'s entry and remove it from the order list (DECISIONS P2: its files return to automatic grouping).
+    pub fn delete_set(&mut self, id: &str) {
+        if self.read_only() {
+            return;
+        }
+        let lower = id.to_lowercase();
+        if let Some(tables) = self
+            .doc
+            .get_mut("sets")
+            .and_then(Item::as_array_of_tables_mut)
+        {
+            tables.retain(|t| {
+                !t.get("id")
+                    .and_then(Item::as_str)
+                    .is_some_and(|s| s.to_lowercase() == lower)
+            });
+        }
+        let order: Vec<String> = self
+            .order()
+            .into_iter()
+            .filter(|o| o.to_lowercase() != lower)
+            .collect();
+        if !self.order().is_empty() {
+            self.set_order(&order);
+        }
+        self.dirty = true;
+    }
+
+    /// Rename set `from` to `to`. A created set just changes its id; an automatic set records `renamed_from`. Other
+    /// entries that borrow from `from`, and the order list, follow.
+    pub fn rename_set(&mut self, from: &str, to: &str) {
+        if self.read_only() {
+            return;
+        }
+        let created = self
+            .entries()
+            .iter()
+            .any(|e| e.id.eq_ignore_ascii_case(from) && e.created);
+        let already = self
+            .entries()
+            .iter()
+            .find(|e| e.id.eq_ignore_ascii_case(from))
+            .and_then(|e| e.renamed_from.clone());
+        let t = self.table_mut(from);
+        t.insert("id", toml_edit::value(to));
+        if !created {
+            t.insert(
+                "renamed_from",
+                toml_edit::value(already.unwrap_or_else(|| from.to_string())),
+            );
+        }
+        let order: Vec<String> = self
+            .order()
+            .into_iter()
+            .map(|o| {
+                if o.eq_ignore_ascii_case(from) {
+                    to.to_string()
+                } else {
+                    o
+                }
+            })
+            .collect();
+        if !order.is_empty() {
+            self.set_order(&order);
+        }
+        for e in self.entries() {
+            for (slot, src) in &e.borrow {
+                if src.eq_ignore_ascii_case(from) {
+                    self.set_borrow(&e.id, *slot, Some(to));
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn list_edit(&mut self, id: &str, key: &str, file: &str, add: bool) {
+        if self.read_only() {
+            return;
+        }
+        let t = self.table_mut(id);
+        let mut items = strings(t.get(key));
+        items.retain(|f| !f.eq_ignore_ascii_case(file));
+        if add {
+            items.push(file.to_string());
+        }
+        if items.is_empty() {
+            t.remove(key);
+        } else {
+            let mut arr = Array::new();
+            for f in &items {
+                arr.push(f.as_str());
+            }
+            t.insert(key, toml_edit::value(arr));
+        }
+        self.dirty = true;
+    }
+
+    /// `file` moves into set `id` (a `Move` edit); it is taken out of every other entry's `add` and `remove`.
+    pub fn add_member(&mut self, id: &str, file: &str) {
+        for e in self.entries() {
+            if !e.id.eq_ignore_ascii_case(id) {
+                if e.add.iter().any(|f| f.eq_ignore_ascii_case(file)) {
+                    self.list_edit(&e.id, "add", file, false);
+                }
+                if e.remove.iter().any(|f| f.eq_ignore_ascii_case(file)) {
+                    self.list_edit(&e.id, "remove", file, false);
+                }
+            }
+        }
+        self.list_edit(id, "add", file, true);
+    }
+
+    /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.
+    pub fn remove_member(&mut self, id: &str, file: &str) {
+        let moved_in = self.entries().iter().any(|e| {
+            e.id.eq_ignore_ascii_case(id) && e.add.iter().any(|f| f.eq_ignore_ascii_case(file))
+        });
+        if moved_in {
+            self.list_edit(id, "add", file, false);
+        } else {
+            self.list_edit(id, "remove", file, true);
+        }
+    }
+
+    pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {
+        if self.read_only() {
+            return;
+        }
+        let t = self.table_mut(id);
+        let Some(b) = sub_table(t, "borrow", || {
+            Item::Value(Value::InlineTable(Default::default()))
+        }) else {
+            return;
+        };
+        let key = format!("slot{slot}");
+        match from {
+            Some(f) => set_value(b, &key, Value::from(f)),
+            None => {
+                b.remove(&key);
+            }
+        }
+        if t.get("borrow")
+            .and_then(Item::as_table_like)
+            .is_some_and(TableLike::is_empty)
+        {
+            t.remove("borrow");
+        }
+        self.dirty = true;
+    }
+
+    /// Set (or with `None` remove) JSON setting `key` (a dotted schema path) of set `id`.
+    pub fn set_value(&mut self, id: &str, key: &str, v: Option<Json>) {
+        if self.read_only() {
+            return;
+        }
+        let t = self.table_mut(id);
+        if write_path(t, key, v) {
+            self.dirty = true;
+        }
+    }
+}
+
+/// Write `v` at dotted `path` under `t` (sub-tables as dotted keys), or remove it with `None` (and any sub-table it
+/// leaves empty). True when something changed.
+fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
+    let parts: Vec<&str> = path.split('.').collect();
+    let (last, dirs) = parts.split_last().expect("one part at least");
+    match v {
+        Some(v) => {
+            let Some(v) = json_to_toml(&v) else {
+                return false;
+            };
+            let mut cur: &mut dyn TableLike = t;
+            for d in dirs {
+                match sub_table(cur, d, dotted_table) {
+                    Some(next) => cur = next,
+                    None => return false,
+                }
+            }
+            set_value(cur, last, v);
+            true
+        }
+        None => {
+            fn remove(t: &mut dyn TableLike, parts: &[&str]) -> bool {
+                if parts.len() == 1 {
+                    return t.remove(parts[0]).is_some();
+                }
+                let Some(sub) = t.get_mut(parts[0]).and_then(Item::as_table_like_mut) else {
+                    return false;
+                };
+                let hit = remove(sub, &parts[1..]);
+                if sub.is_empty() {
+                    t.remove(parts[0]);
+                }
+                hit
+            }
+            remove(t, &parts)
+        }
+    }
+}
