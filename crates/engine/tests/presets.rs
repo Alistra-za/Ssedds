@@ -206,8 +206,11 @@ fn provenance_serialises_as_spec_strings() {
         Provenance::Suggestion < Provenance::ProjectFile
             && Provenance::ProjectFile < Provenance::User
     );
-    // Spec §5.2's `set` (set-level decisions, milestone M4) is not a value yet (final review m5).
-    assert!(serde_json::from_value::<Provenance>(json!("set")).is_err());
+    // Spec §5.2's `set` (set-level decisions) is a value since M4.
+    assert_eq!(
+        serde_json::from_value::<Provenance>(json!("set")).unwrap(),
+        Provenance::Set
+    );
 }
 
 #[test]

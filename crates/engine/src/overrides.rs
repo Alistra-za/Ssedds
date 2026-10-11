@@ -131,6 +131,8 @@ pub const FIELD_PATHS: &[&str] = &[
     "mips.levels",
     "mips.filter",
     "mips.normal",
+    "mips.normal_base",
+    "mips.bake_clamp",
     "mips.coverage",
     "format",
     "header",

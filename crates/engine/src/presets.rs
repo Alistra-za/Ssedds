@@ -223,6 +223,9 @@ pub enum Provenance {
     Fill(String),
     /// The sub-type of a packed output, set by its recipe: `recipe:<kind>`.
     Recipe(String),
+    /// Decided by the texture set, not by a layer: the variance bake's `mips.normal = renormalize_bake` on a
+    /// `pbr_normal` (spec §5.2, §6.2, DECISIONS R6). Shown as `set`.
+    Set,
 }
 
 impl fmt::Display for Provenance {
@@ -244,6 +247,7 @@ impl fmt::Display for Provenance {
             Provenance::Default(v) => write!(f, "default:{v}"),
             Provenance::Fill(v) => write!(f, "fill:{v}"),
             Provenance::Recipe(k) => write!(f, "recipe:{k}"),
+            Provenance::Set => f.write_str("set"),
         }
     }
 }
@@ -283,6 +287,7 @@ impl std::str::FromStr for Provenance {
             "suggestion" => Provenance::Suggestion,
             "project_file" => Provenance::ProjectFile,
             "user" => Provenance::User,
+            "set" => Provenance::Set,
             "fallback" => Provenance::Fallback,
             other => return Err(format!("unknown provenance '{other}'")),
         })

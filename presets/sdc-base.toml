@@ -1,6 +1,6 @@
 schema_version = 1
 id = "sdc-base"
-version = "1.0.0"
+version = "1.1.0"
 hidden = true
 description = "Per-sub-type defaults from spec §4.1/§4.2. Not selectable; every preset inherits it."
 
@@ -8,7 +8,7 @@ description = "Per-sub-type defaults from spec §4.1/§4.2. Not selectable; ever
 color = { content = "linear", tag = "unorm" }
 alpha = { policy = "remove", threshold = 127, compare = "gt", exact_opaque = false }
 channels = { flip_green = false, reconstruct_z = false, grayscale_source = "r" }
-mips = { levels = "full", filter = "box", normal = "renormalize", coverage = "auto" }
+mips = { levels = "full", filter = "box", normal = "renormalize", normal_base = "renormalize", bake_clamp = 0.25, coverage = "auto" }
 format = "bc7"
 header = "auto"
 encoder = { backend = "bc7e", effort = "veryslow", rgbcx_level = 18, perceptual = false, bc1_transparent_black = false, bc45_search_radius = "default" }

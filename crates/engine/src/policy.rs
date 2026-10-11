@@ -889,6 +889,15 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             ),
         );
     }
+    // Spec §6.2 clamp t (DECISIONS Note E, R2): read where a bake writes, a roughness member or a `_cnr`.
+    if (st.is_roughness_member() || st == Subtype::CoatNormal)
+        && (p.mips.bake_clamp.is_nan() || p.mips.bake_clamp <= 0.0 || p.mips.bake_clamp > 1.0)
+    {
+        add(
+            CfgInvalid,
+            format!("mips.bake_clamp {} outside (0, 1]", p.mips.bake_clamp),
+        );
+    }
     // Only where rgbcx is the resolved backend (BC1/BC3/BC4/BC5): an out-of-range level would trip rgbcx's
     // assert inside an encode task, and no other backend reads the field.
     if p.encoder.backend == Backend::Rgbcx && p.encoder.rgbcx_level > encoders_sys::RGBCX_MAX_LEVEL
@@ -979,6 +988,13 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
         add(
             TagContentMismatch,
             "colour content and DDS tag disagree".into(),
+        );
+    }
+    // DECISIONS R10: roughness is linear data. sRGB content would decode it before the mips and the variance bake.
+    if st.is_roughness_member() && p.color.content == ColorContent::Srgb {
+        add(
+            TagContentMismatch,
+            "roughness member with sRGB content: roughness is linear data, so it is not variance-baked".into(),
         );
     }
     if p.category == Category::Normal && matches!(p.format, Format::Bc4 | Format::Bc5) {

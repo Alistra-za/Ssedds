@@ -72,6 +72,7 @@ cfg_enum!(GraySource, "lowercase" { R, Luma });
 cfg_enum!(MipKeyword, "lowercase" { Full, None });
 cfg_enum!(MipFilter, "lowercase" { Box });
 cfg_enum!(NormalMips, "snake_case" { Renormalize, RenormalizeBake });
+cfg_enum!(NormalBase, "lowercase" { Renormalize, Keep });
 cfg_enum!(CoverageMode, "lowercase" { Auto, On, Off });
 cfg_enum!(Format, "lowercase" { Bc1, Bc3, Bc4, Bc5, Bc6hUf16 = "bc6h_uf16", Bc7 });
 cfg_enum!(HeaderForm, "lowercase" { Auto, Dx10, Legacy });
@@ -345,10 +346,26 @@ pub struct MipSpec {
     pub levels: MipLevels,
     pub filter: MipFilter,
     pub normal: NormalMips,
+    /// Mip 0 of a normal map (spec §5.4, DECISIONS R1): `renormalize` (default) stores every base vector at unit
+    /// length; `keep` stores the source as authored. Read only for the Normal category.
+    #[serde(default = "default_normal_base")]
+    pub normal_base: NormalBase,
+    /// Clamp `t` of the variance bake (spec §6.2, DECISIONS Note E): the added variance is at most `t²`. 0.25;
+    /// allowed (0, 1]. Read from the profile the bake writes into: a roughness member, or a `_cnr`.
+    #[serde(default = "default_bake_clamp")]
+    pub bake_clamp: f64,
     /// Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and
     /// `cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,
     /// `data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity.
     pub coverage: CoverageMode,
+}
+
+fn default_normal_base() -> NormalBase {
+    NormalBase::Renormalize
+}
+
+fn default_bake_clamp() -> f64 {
+    0.25
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -458,6 +475,22 @@ mod tests {
     }
 
     #[test]
+    fn mip_spec_defaults_the_m4_fields() {
+        let m: MipSpec = serde_json::from_str(
+            r#"{"levels":"full","filter":"box","normal":"renormalize","coverage":"auto"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (m.normal_base, m.bake_clamp),
+            (NormalBase::Renormalize, 0.25)
+        );
+        assert_eq!(
+            serde_json::to_string(&NormalBase::Keep).unwrap(),
+            "\"keep\""
+        );
+    }
+
+    #[test]
     fn schema_lists_enum_values() {
         let s = serde_json::to_string(&schemars::schema_for!(Profile)).unwrap();
         for needle in [
@@ -465,6 +498,8 @@ mod tests {
             "n/a",
             "cutout_blend",
             "renormalize_bake",
+            "normal_base",
+            "keep",
             "ispc_bc6h",
         ] {
             assert!(s.contains(needle), "{needle} missing from schema");

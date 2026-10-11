@@ -327,6 +327,12 @@
     "MipSpec": {
       "additionalProperties": false,
       "properties": {
+        "bake_clamp": {
+          "default": 0.25,
+          "description": "Clamp `t` of the variance bake (spec §6.2, DECISIONS Note E): the added variance is at most `t²`. 0.25;\nallowed (0, 1]. Read from the profile the bake writes into: a roughness member, or a `_cnr`.",
+          "format": "double",
+          "type": "number"
+        },
         "coverage": {
           "$ref": "#/$defs/CoverageMode",
           "description": "Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and\n`cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,\n`data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity."
@@ -339,6 +345,11 @@
         },
         "normal": {
           "$ref": "#/$defs/NormalMips"
+        },
+        "normal_base": {
+          "$ref": "#/$defs/NormalBase",
+          "default": "renormalize",
+          "description": "Mip 0 of a normal map (spec §5.4, DECISIONS R1): `renormalize` (default) stores every base vector at unit\nlength; `keep` stores the source as authored. Read only for the Normal category."
         }
       },
       "required": [
@@ -348,6 +359,13 @@
         "coverage"
       ],
       "type": "object"
+    },
+    "NormalBase": {
+      "enum": [
+        "renormalize",
+        "keep"
+      ],
+      "type": "string"
     },
     "NormalMips": {
       "enum": [
