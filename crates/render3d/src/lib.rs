@@ -18,12 +18,12 @@ pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
 use compile::{compile, SrvKind};
 use device::{Gpu, Target};
-use draw::{cbuffers, create_program, Program, ShapeDraw};
+use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
 use material::{perm_material, write_material};
 use nif::material::MaterialState;
 use permutation::{defines, Material, Stage};
-use scene::{Scene, View};
+use scene::{LightValues, Scene, View, ViewValues};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -148,6 +148,14 @@ pub struct Renderer {
     target: Option<Target>,
     encode_srgb: bool,
     timing: FrameTiming,
+    /// The GPU-idle event query, created once (03 §7).
+    query: ID3D11Query,
+    /// Scene and view of the last rendered frame: what changed decides which fields are written.
+    last_frame: Option<(Scene, View)>,
+    /// Cbuffer uploads of the last frame.
+    uploads: usize,
+    /// Test hook: draw with P0's by-name writer (every field, every cbuffer, every frame).
+    reference_writer: bool,
 }
 
 fn permutation_key(d: &permutation::Defines, target: &str) -> String {
@@ -217,7 +225,20 @@ impl Renderer {
                 .CreateBlendState(&bd, Some(&mut b))
                 .map_err(|e| format!("CreateBlendState: {e}"))?;
         }
+        let mut q: Option<ID3D11Query> = None;
+        let qd = D3D11_QUERY_DESC {
+            Query: D3D11_QUERY_EVENT,
+            MiscFlags: 0,
+        };
+        // SAFETY: descriptor and out-pointer are locals.
+        unsafe { gpu.device.CreateQuery(&qd, Some(&mut q)) }
+            .map_err(|e| format!("CreateQuery: {e}"))?;
+        let query = q.ok_or("no event query")?;
         Ok(Renderer {
+            query,
+            last_frame: None,
+            uploads: 0,
+            reference_writer: false,
             gpu,
             shaders,
             cache_dir,
@@ -270,6 +291,19 @@ impl Renderer {
     /// Timing of the last successful [`Renderer::render`].
     pub fn last_timing(&self) -> FrameTiming {
         self.timing
+    }
+
+    /// Cbuffer uploads of the last [`Renderer::render`] (0 when neither the camera, the lights nor any material
+    /// changed).
+    pub fn last_uploads(&self) -> usize {
+        self.uploads
+    }
+
+    /// Test hook: draw with P0's by-name writer (`Scene::write` into every cbuffer and every upload, every
+    /// frame), the reference the resolved path must match pixel for pixel.
+    #[doc(hidden)]
+    pub fn set_reference_writer(&mut self, on: bool) {
+        self.reference_writer = on;
     }
 
     /// Bounding sphere (centre, radius) of every shape drawn at load: `positions × transform` (skinned
@@ -439,6 +473,7 @@ impl Renderer {
         let ll = self.linear_lighting();
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
             write_material(&mut cb.writer, m, &bound, ll);
+            scene::write_static(&mut cb.writer);
         }
         Ok(ShapeDraw {
             name: name.to_string(),
@@ -453,6 +488,7 @@ impl Renderer {
             blend: m.blend(),
             skinned: m.skinned,
             bound,
+            stale: true,
         })
     }
 
@@ -749,6 +785,22 @@ impl Renderer {
             self.target = Some(Target::new(&self.gpu, w, h)?);
         }
         let view = View::new(&scene.camera, self.bounds, w, h);
+        // Taken, so a failed frame leaves "unknown" and the next one writes everything.
+        let (lights_changed, view_changed) = match self.last_frame.take() {
+            Some((s, v)) => (s != *scene, v != view),
+            None => (true, true),
+        };
+        // Once per frame, not per cbuffer (03 §7): the four inverses, the light rows and the SH.
+        let view_values = ViewValues::new(&view);
+        let light_values = LightValues::new(scene);
+        let inputs = FrameInputs {
+            view: &view,
+            view_values: &view_values,
+            lights: &light_values,
+            lights_changed,
+            view_changed,
+        };
+        let mut uploads = 0;
         let gpu = &self.gpu;
         let target = self.target.as_ref().ok_or("no target")?;
         target.clear(gpu, [0.0, 0.0, 0.0, 1.0]);
@@ -770,7 +822,11 @@ impl Renderer {
                 let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
                     continue;
                 };
-                s.update(gpu, scene, &view);
+                uploads += if self.reference_writer {
+                    s.update_by_name(gpu, scene, &view)
+                } else {
+                    s.update(gpu, &inputs)
+                };
                 ctx.IASetInputLayout(&s.mesh.layout);
                 for (slot, (b, stride)) in s.mesh.streams.iter().enumerate() {
                     ctx.IASetVertexBuffers(
@@ -805,9 +861,11 @@ impl Renderer {
             }
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
         }
+        self.last_frame = Some((scene.clone(), view));
+        self.uploads = uploads;
         let draw_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let t1 = std::time::Instant::now();
-        wait_idle(gpu)?;
+        wait_idle(gpu, &self.query)?;
         let gpu_ms = t1.elapsed().as_secs_f64() * 1000.0;
         let t2 = std::time::Instant::now();
         let px = target.readback_display(gpu, self.encode_srgb)?;
@@ -820,31 +878,20 @@ impl Renderer {
     }
 }
 
-/// Flushes and spins on an event query until the GPU has finished every submitted command, so the readback
-/// that follows measures the copy alone. A failing query (removed device) is an error with the device prefix.
-fn wait_idle(gpu: &Gpu) -> Result<(), String> {
-    let desc = D3D11_QUERY_DESC {
-        Query: D3D11_QUERY_EVENT,
-        MiscFlags: 0,
-    };
-    let mut q: Option<ID3D11Query> = None;
-    // SAFETY: `desc` and the out-pointer are locals; the query belongs to `gpu.device`.
+/// Flushes and spins on the renderer's event query until the GPU has finished every submitted command, so the
+/// readback that follows measures the copy alone. A failing query (removed device) is an error with the device
+/// prefix.
+fn wait_idle(gpu: &Gpu, q: &ID3D11Query) -> Result<(), String> {
+    // SAFETY: `done` is a live BOOL-sized local, the size passed matches it; the query belongs to `gpu.device`.
     unsafe {
-        gpu.device
-            .CreateQuery(&desc, Some(&mut q))
-            .map_err(|e| gpu.fail("CreateQuery", e))?;
-    }
-    let q = q.ok_or_else(|| gpu.fail("CreateQuery", "no query returned"))?;
-    // SAFETY: `done` is a live BOOL-sized local, the size passed matches it.
-    unsafe {
-        gpu.ctx.End(&q);
+        gpu.ctx.End(q);
         gpu.ctx.Flush();
         let start = std::time::Instant::now();
         loop {
             let mut done = windows::core::BOOL(0);
             gpu.ctx
                 .GetData(
-                    &q,
+                    q,
                     Some(&mut done as *mut _ as *mut core::ffi::c_void),
                     std::mem::size_of::<windows::core::BOOL>() as u32,
                     0,

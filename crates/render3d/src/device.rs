@@ -243,6 +243,8 @@ pub struct Target {
     pub rtv: ID3D11RenderTargetView,
     pub depth: ID3D11Texture2D,
     pub dsv: ID3D11DepthStencilView,
+    /// CPU-readable copy target for the readback, created with the target (03 §7).
+    pub staging: ID3D11Texture2D,
 }
 
 fn tex2d_desc(w: u32, h: u32, format: DXGI_FORMAT) -> D3D11_TEXTURE2D_DESC {
@@ -310,6 +312,10 @@ impl Target {
         let mut dd = tex2d_desc(w, h, DXGI_FORMAT_D32_FLOAT);
         dd.BindFlags = D3D11_BIND_DEPTH_STENCIL.0 as u32;
         let depth = create_tex(gpu, &dd)?;
+        let mut sd = tex2d_desc(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        let staging = create_tex(gpu, &sd)?;
         let (mut rtv, mut dsv) = (None, None);
         // SAFETY: live resources and local out-pointers.
         unsafe {
@@ -327,6 +333,7 @@ impl Target {
             rtv: rtv.ok_or_else(|| gpu.fail("CreateRenderTargetView", "no view returned"))?,
             depth,
             dsv: dsv.ok_or_else(|| gpu.fail("CreateDepthStencilView", "no view returned"))?,
+            staging,
         })
     }
 
@@ -371,16 +378,12 @@ impl Target {
         };
         let alpha = table(&UNORM8, unorm8);
         let alpha = |bits: usize| if opaque { 255 } else { alpha[bits] };
-        let mut sd = tex2d_desc(self.width, self.height, DXGI_FORMAT_R16G16B16A16_FLOAT);
-        sd.Usage = D3D11_USAGE_STAGING;
-        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        let staging = create_tex(gpu, &sd)?;
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         // SAFETY: both resources belong to `gpu.device`; `mapped` is a local.
         unsafe {
-            gpu.ctx.CopyResource(&staging, &self.color);
+            gpu.ctx.CopyResource(&self.staging, &self.color);
             gpu.ctx
-                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
                 .map_err(|e| gpu.fail("Map", e))?;
         }
         let (w, h) = (self.width as usize, self.height as usize);
@@ -406,7 +409,7 @@ impl Target {
         }
         // SAFETY: paired with the successful Map above; nothing between
         // them can return early.
-        unsafe { gpu.ctx.Unmap(&staging, 0) };
+        unsafe { gpu.ctx.Unmap(&self.staging, 0) };
         if out.len() != w * h * 4 {
             return Err(gpu.fail("Map", "null pointer returned"));
         }

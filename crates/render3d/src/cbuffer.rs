@@ -2,6 +2,13 @@
 //! never needs a hand-written struct.
 use crate::compile::CbLayout;
 
+/// A resolved cbuffer variable: byte offset and size in one writer's layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Field {
+    pub off: u32,
+    pub size: u32,
+}
+
 pub struct CbWriter {
     vars: Vec<(String, u32, u32)>,
     data: Vec<u8>,
@@ -39,16 +46,40 @@ impl CbWriter {
     }
 
     fn put(&mut self, var: &str, words: impl Iterator<Item = [u8; 4]>) -> bool {
-        let Some((off, size)) = self.find(var) else {
+        let Some(f) = self.resolve(var) else {
             return false;
         };
+        self.put_at(f, words);
+        true
+    }
+
+    fn put_at(&mut self, f: Field, words: impl Iterator<Item = [u8; 4]>) {
+        let (off, size) = (f.off as usize, f.size as usize);
         for (i, w) in words.take(size / 4).enumerate() {
             let at = off + 4 * i;
             if let Some(dst) = self.data.get_mut(at..at + 4) {
                 dst.copy_from_slice(&w);
             }
         }
-        true
+    }
+
+    /// Where `var` lives in this layout (namespace-tolerant, see [`name_matches`]); resolve once, then
+    /// [`CbWriter::set_at`] every frame without a name search.
+    pub fn resolve(&self, var: &str) -> Option<Field> {
+        self.find(var).map(|(off, size)| Field {
+            off: off as u32,
+            size: size as u32,
+        })
+    }
+
+    /// As [`CbWriter::set`] at a resolved field.
+    pub fn set_at(&mut self, f: Field, data: &[f32]) {
+        self.put_at(f, data.iter().map(|x| x.to_le_bytes()));
+    }
+
+    /// As [`CbWriter::set_u32`] at a resolved field.
+    pub fn set_u32_at(&mut self, f: Field, data: &[u32]) {
+        self.put_at(f, data.iter().map(|x| x.to_le_bytes()));
     }
 
     /// Writes `data` at `var`'s offset, truncated to the variable's size. False if the variable is not in this

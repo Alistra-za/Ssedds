@@ -3,7 +3,7 @@
 //! Every value the engine would upload and P0 does not model comes from the forward hair draw of the owner's
 //! capture (`tools/rdc-out/p04/Skyrim_AE_1.6.1170_frame11178/state_6544.json`, Linear Lighting on) so a
 //! zero-initialised cbuffer never zeroes a multiplier (directional/ambient light, colour clamp …).
-use crate::cbuffer::CbWriter;
+use crate::cbuffer::{CbWriter, Field};
 
 /// Row-major 3×4 (`row r = [m_r0, m_r1, m_r2, t_r]`).
 pub type Mat3x4 = [[f32; 4]; 3];
@@ -288,7 +288,7 @@ pub fn rows<const R: usize>(m: &[[f32; 4]; R]) -> Vec<f32> {
 /// `state_6544.json` (frame11178).
 ///
 /// These are the owner's CS SettingsUser.json / frame-11178 weather values; P1 reads them per user.
-const FEATURE_FLOATS: &[(&str, &[f32])] = &[
+pub const FEATURE_FLOATS: &[(&str, &[f32])] = &[
     ("linearLightingSettings.diffuseGamma", &[2.2]),
     ("linearLightingSettings.directionalLightMult", &[1.0]),
     (
@@ -339,7 +339,7 @@ const FEATURE_FLOATS: &[(&str, &[f32])] = &[
     ("skinData.wetParams", &[512.0, 0.7, 10.0, 4.0]),
 ];
 /// Owner's CS SettingsUser.json / frame-11178 values (see [`FEATURE_FLOATS`]); P1 reads them per user.
-const FEATURE_UINTS: &[(&str, u32)] = &[
+pub const FEATURE_UINTS: &[(&str, u32)] = &[
     ("vanillaFresnelSettings.Enable", 1),
     ("vanillaFresnelSettings.EnableEyeSpecialHandling", 1),
     ("truePBRSettings.EnableMicroShadows", 1),
@@ -452,6 +452,170 @@ impl Scene {
             w.set_u32(n, &[*d]);
         }
         ok
+    }
+}
+
+/// Camera fields that change with the eye or the target size, in [`ViewValues`] order. `World` and
+/// `PreviousWorld` depend on the shape too and are passed to [`SceneFields::write_view`] separately.
+pub const VIEW_NAMES: [&str; 17] = [
+    "ViewProj",
+    "BonesPivot",
+    "PreviousBonesPivot",
+    "BufferDim",
+    "CameraData",
+    "CameraView",
+    "CameraProj",
+    "CameraProjUnjittered",
+    "CameraViewProj",
+    "CameraViewProjUnjittered",
+    "CameraPreviousViewProjUnjittered",
+    "CameraViewInverse",
+    "CameraProjInverse",
+    "CameraProjUnjitteredInverse",
+    "CameraViewProjInverse",
+    "CameraPosAdjust",
+    "CameraPreviousPosAdjust",
+];
+
+/// Fields that change with the scene's lights, in [`LightValues`] order.
+pub const LIGHT_NAMES: [&str; 6] = [
+    "DirLightDirection",
+    "DirLightColor",
+    "DirectionalAmbient",
+    "AmbientSHR",
+    "AmbientSHG",
+    "AmbientSHB",
+];
+
+/// The values of [`VIEW_NAMES`] for one frame, computed once per frame (the four inverses included) instead of
+/// once per cbuffer (03 §7). Same values as [`Scene::write`].
+pub struct ViewValues {
+    pub values: Vec<Vec<f32>>,
+}
+
+impl ViewValues {
+    pub fn new(v: &View) -> ViewValues {
+        let (fw, fh) = (v.width.max(1) as f32, v.height.max(1) as f32);
+        let vp = rows(&v.view_proj);
+        let eye4 = vec![v.eye[0], v.eye[1], v.eye[2], 0.0];
+        ViewValues {
+            values: vec![
+                vp.clone(),
+                v.eye.to_vec(),
+                v.eye.to_vec(),
+                vec![fw, fh, 1.0 / fw, 1.0 / fh],
+                vec![v.far, v.near, v.far - v.near, v.far * v.near],
+                rows(&v.view),
+                rows(&v.proj),
+                rows(&v.proj),
+                vp.clone(),
+                vp.clone(),
+                vp,
+                rows(&inverse4(&v.view)),
+                rows(&inverse4(&v.proj)),
+                rows(&inverse4(&v.proj)),
+                rows(&inverse4(&v.view_proj)),
+                eye4.clone(),
+                eye4,
+            ],
+        }
+    }
+}
+
+/// The values of [`LIGHT_NAMES`] for one scene. Same values as [`Scene::write`].
+pub struct LightValues {
+    pub values: Vec<Vec<f32>>,
+}
+
+impl LightValues {
+    pub fn new(s: &Scene) -> LightValues {
+        let l = s.dir_light;
+        let sh = dalc_to_sh(&s.ambient6);
+        LightValues {
+            values: vec![
+                vec![l.direction[0], l.direction[1], l.direction[2], 0.0],
+                vec![l.color[0], l.color[1], l.color[2], 0.0],
+                rows(&dalc(&s.ambient6)),
+                sh[0].to_vec(),
+                sh[1].to_vec(),
+                sh[2].to_vec(),
+            ],
+        }
+    }
+}
+
+/// Where one cbuffer keeps the per-frame and light fields, resolved once when the draw is built.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SceneFields {
+    pub world: Option<Field>,
+    pub previous_world: Option<Field>,
+    pub view: Vec<Option<Field>>,
+    pub lights: Vec<Option<Field>>,
+}
+
+impl SceneFields {
+    pub fn resolve(w: &CbWriter) -> SceneFields {
+        SceneFields {
+            world: w.resolve("World"),
+            previous_world: w.resolve("PreviousWorld"),
+            view: VIEW_NAMES.iter().map(|n| w.resolve(n)).collect(),
+            lights: LIGHT_NAMES.iter().map(|n| w.resolve(n)).collect(),
+        }
+    }
+
+    /// Writes `World` / `PreviousWorld` (`world` = `rows(&view.world(model))`) and the camera fields. True if
+    /// this cbuffer has any of them (it must then be uploaded).
+    pub fn write_view(&self, w: &mut CbWriter, v: &ViewValues, world: &[f32]) -> bool {
+        let mut any = false;
+        for f in [self.world, self.previous_world].into_iter().flatten() {
+            w.set_at(f, world);
+            any = true;
+        }
+        for (f, vals) in self.view.iter().zip(&v.values) {
+            if let Some(f) = f {
+                w.set_at(*f, vals);
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// Writes the light fields. True if this cbuffer has any of them.
+    pub fn write_lights(&self, w: &mut CbWriter, l: &LightValues) -> bool {
+        let mut any = false;
+        for (f, vals) in self.lights.iter().zip(&l.values) {
+            if let Some(f) = f {
+                w.set_at(*f, vals);
+                any = true;
+            }
+        }
+        any
+    }
+}
+
+/// Every field [`Scene::write`] writes that depends on neither the camera nor the lights: constants and the
+/// FeatureData block (03 §7 "static"). Written when a draw is built and after every material rewrite (the
+/// rewrite zeroes the whole writer).
+pub fn write_static(w: &mut CbWriter) {
+    // Camera-relative: the eye is the origin.
+    w.set("EyePosition", &[0.0, 0.0, 0.0, 0.0]);
+    // Vertex fog off: FogParam.w (max fog) = 0, and log2 of 0 → exp2(−inf) = 0, no NaN.
+    w.set("FogParam", &[0.0, 0.0, 1.0, 0.0]);
+    w.set("ColourOutputClamp", &[1.0, 1.0, 1.0, 0.0]);
+    w.set("AmbientSpecularTintAndFresnelPower", &[0.0, 0.0, 0.0, 1.0]);
+    w.set("SSRParams", &[0.1, 0.1, 1.0, 1.0]);
+    w.set("Timer", &[1.0]);
+    w.set("WaterSystemHeight", &[f32::MIN]);
+    w.set("WaterData", &[0.58, 0.58, 0.58, f32::MIN].repeat(25));
+    w.set("FrameParams", &[1.0, 0.0, 0.0, 0.0]);
+    w.set("DynamicResolutionParams1", &[1.0; 4]);
+    w.set("DynamicResolutionParams2", &[1.0; 4]);
+    w.set_u32("InInterior", &[1]);
+    for (n, d) in FEATURE_FLOATS {
+        w.set(n, d);
+    }
+    for (n, d) in FEATURE_UINTS {
+        w.set_u32(n, &[*d]);
     }
 }
 
