@@ -418,3 +418,72 @@ fn a_user_config_the_engine_rejects_is_not_blamed_on_sdc_toml() {
     assert_eq!(m.banner, None, "sdc.toml is not the culprit");
     assert!(!m.project.as_ref().unwrap().read_only());
 }
+
+/// Pretend an export is running: a token the model treats as the running export (no engine work starts).
+fn fake_running(m: &mut sdc_gui::model::AppModel) {
+    m.export.running = Some(engine::api::CancelToken::default());
+}
+
+fn finish_export(m: &mut sdc_gui::model::AppModel) {
+    m.sender()
+        .send(WorkerMsg::ExportDone(Ok(
+            engine::api::BatchSummary::default(),
+        )))
+        .unwrap();
+    m.poll();
+}
+
+#[test]
+fn keep_running_after_a_cancelled_close_clears_the_pending_close() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    fake_running(&mut m);
+    assert!(!m.request_close());
+    assert_eq!(m.dialog, Some(Dialog::ExportRunning(AfterExport::Close)));
+    m.resolve_export_running(AfterExport::Close, true); // cancel and close
+                                                        // The export is still winding down; now the user asks to open another folder and keeps the export running.
+    let other = d.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    assert!(!m.request_open(other.clone()));
+    m.resolve_export_running(AfterExport::Open(other), false); // keep running
+    finish_export(&mut m);
+    assert!(!m.take_close_ready(), "the stale close must not fire");
+    assert_ne!(m.root.as_deref(), Some(d.path().join("other").as_path()));
+}
+
+#[test]
+fn a_second_answered_request_replaces_the_first() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    fake_running(&mut m);
+    m.request_close();
+    m.resolve_export_running(AfterExport::Close, true);
+    let other = d.path().join("other2");
+    std::fs::create_dir_all(&other).unwrap();
+    m.request_open(other.clone());
+    m.resolve_export_running(AfterExport::Open(other.clone()), true);
+    finish_export(&mut m);
+    // Exactly the latest action runs: the folder opens, the window does not close.
+    assert!(!m.take_close_ready());
+    assert_eq!(m.root.as_deref(), Some(other.as_path()));
+    // A later export end triggers nothing.
+    fake_running(&mut m);
+    finish_export(&mut m);
+    assert!(!m.take_close_ready());
+    assert_eq!(m.root.as_deref(), Some(other.as_path()));
+}
+
+#[test]
+fn opening_a_folder_clears_a_pending_action() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    fake_running(&mut m);
+    m.request_close();
+    m.resolve_export_running(AfterExport::Close, true);
+    // The export ends without a message (e.g. the worker's channel closed), and the user opens a folder directly.
+    m.export.running = None;
+    m.open_folder(mod_folder(&d.path().join("again")));
+    fake_running(&mut m);
+    finish_export(&mut m);
+    assert!(!m.take_close_ready());
+}

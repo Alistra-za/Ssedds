@@ -165,6 +165,8 @@ impl AppModel {
     }
 
     pub fn open_folder(&mut self, root: PathBuf) {
+        // Whatever was pending for the previous folder no longer applies (spec §8).
+        self.after_export = None;
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
         let same_folder = self.root.as_ref() == Some(&root);
@@ -489,8 +491,12 @@ impl AppModel {
     pub fn resolve_export_running(&mut self, action: AfterExport, cancel_and_continue: bool) {
         self.dialog = None;
         if !cancel_and_continue {
+            // "Keep running" withdraws any earlier "cancel and …": the user now wants the export to finish and
+            // nothing to happen after it (spec §8).
+            self.after_export = None;
             return;
         }
+        // A newer answer replaces an older one; it never stacks.
         self.after_export = Some(action);
         if self.export.running.is_some() {
             self.cancel_export();
