@@ -13,6 +13,61 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ExternalChange(which) => external_change(ctx, model, which),
         Dialog::Error(msg) => error(ctx, model, &msg),
         Dialog::ProceedAnyway(n) => proceed_anyway(ctx, model, n),
+        Dialog::ExportBlocked(issues) => export_issues(ctx, model, &issues, false),
+        Dialog::ExportWarnings(issues) => export_issues(ctx, model, &issues, true),
+    }
+}
+
+fn export_issues(
+    ctx: &egui::Context,
+    model: &mut AppModel,
+    issues: &[crate::model::pbr_export::ExportIssue],
+    can_proceed: bool,
+) {
+    let (mut proceed, mut close, mut select) = (false, false, None);
+    let id = if can_proceed {
+        "export-warnings"
+    } else {
+        "export-blocked"
+    };
+    modal(ctx, id, |ui| {
+        ui.heading(if can_proceed {
+            "Check before exporting"
+        } else {
+            "Export is blocked"
+        });
+        ui.label(if can_proceed {
+            "These may not do what you expect. PGPatcher's rules are applied as written; nothing is changed for you."
+        } else {
+            "Fix these first. Click one to select its set."
+        });
+        egui::ScrollArea::vertical()
+            .max_height(260.0)
+            .show(ui, |ui| {
+                for i in issues {
+                    if i.set_key.is_empty() {
+                        ui.label(&i.text);
+                    } else if ui.link(&i.text).clicked() {
+                        select = Some(i.set_key.clone());
+                    }
+                }
+            });
+        ui.horizontal(|ui| {
+            if can_proceed {
+                proceed = ui.button("Proceed anyway").clicked();
+                close = ui.button("Cancel").clicked();
+            } else {
+                close = ui.button("Close").clicked();
+            }
+        });
+    });
+    if let Some(k) = select {
+        model.dialog = None;
+        model.select_set(&k);
+    } else if proceed {
+        model.proceed_with_warnings();
+    } else if close {
+        model.dialog = None;
     }
 }
 

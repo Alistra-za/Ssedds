@@ -954,3 +954,23 @@ impl AppModel {
         Ok(())
     }
 }
+
+/// The engine key of the output `item` writes: its file, or its set and recipe for a packed output. `None` for an
+/// item that writes no output of its own.
+pub fn item_output_key(views: &[SetView], item: &TextureItem) -> Option<OutputKey> {
+    slot_of(item)?;
+    if item.kind != ItemKind::Packed {
+        return Some(OutputKey::File(item.key.clone()));
+    }
+    let suffix = recipe_suffix(item)?;
+    let set = views
+        .iter()
+        .find(|v| {
+            v.slots
+                .values()
+                .any(|f| matches!(f, SlotFill::Own { item: i } if *i == item.key))
+        })?
+        .id
+        .clone();
+    Some(OutputKey::Packed { set, suffix })
+}

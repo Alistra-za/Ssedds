@@ -4,6 +4,7 @@ pub mod fields;
 pub mod history;
 pub mod inspector;
 pub mod items;
+pub mod pbr_export;
 pub mod preview;
 pub mod sets;
 pub mod view;
@@ -58,6 +59,10 @@ impl DocKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialog {
     ProceedAnyway(usize),
+    /// Export cannot start: these must be fixed first (M3b §6.3).
+    ExportBlocked(Vec<pbr_export::ExportIssue>),
+    /// Export can start after a "Proceed anyway" (M3b §6.3: matchN pitfalls).
+    ExportWarnings(Vec<pbr_export::ExportIssue>),
     ExternalChange(DocKind),
     CloseUnsaved,
     /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
@@ -439,12 +444,33 @@ impl AppModel {
             self.dialog = Some(Dialog::Error(problem));
             return;
         }
+        let blocks = pbr_export::export_blocks(self);
+        if !blocks.is_empty() {
+            self.dialog = Some(Dialog::ExportBlocked(blocks));
+            return;
+        }
+        let asks = pbr_export::export_asks(self);
+        if !asks.is_empty() {
+            self.dialog = Some(Dialog::ExportWarnings(asks));
+            return;
+        }
+        self.undecided_check();
+    }
+
+    /// The undecided-texture question, then the export itself.
+    fn undecided_check(&mut self) {
         let n = self.undecided();
         if n > 0 {
             self.dialog = Some(Dialog::ProceedAnyway(n));
             return;
         }
         self.start_export();
+    }
+
+    /// The answer "Proceed anyway" to `ExportWarnings`: on to the undecided-texture question, then the export.
+    pub fn proceed_with_warnings(&mut self) {
+        self.dialog = None;
+        self.undecided_check();
     }
 
     /// Mark every item whose source file differs from the stamp the plan took (or, for a DDS input, from the stamp
