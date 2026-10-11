@@ -11930,6 +11930,13 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
        - Fix: add 0 passes as a candidate; leave a level unchanged when the best count is more than 2× off k; optionally break ties spatially (dither) so exact coverage is reachable.
     2. **Threshold-edge loss after BC7.** The remap puts the anchor exactly on the first passing code (128 for `ge 128`), and BC7 error drops it below. Results: 8² mip 35 → 0 on the sparse image; Fence007A at 16² goes 94 → 78.
        - Fix: put the anchor 1–2 codes above the threshold, or re-check coverage after encoding.
+  - **Owner addition (2026-10-10): `_cnr` self-bake.**
+    - **Today:** `coat_normal` mips renormalise RGB, and alpha (coat roughness) is mipped separately (spec §5.x `coat_normal` row). No variance reaches alpha.
+    - **Change:** bake the coat normal's own variance into its own alpha roughness, using the same §6.2 formula: footprint average length L → κ → v → α′² = saturate(α² + min(2v, t²)), t = 0.25.
+    - **Simpler than the `_n`→`_rmaos` case:** the source is the same texture, always 1:1, with no companion lookup.
+    - **Exit:**
+      - a golden `_cnr` case whose alpha widening matches the f64 reference within 1/255;
+      - a flat-normal `_cnr` whose alpha is unchanged.
   - B2 confirms the `SignedRg` accumulation path gives the length before normalising (M4's Toksvig input). It also left an owner question: should mip 0 be renormalised? Several real `_n` sources are as short as |n| = 0.34.
 
 ### M5 — NVTT as an optional external process (spec §7.5)
