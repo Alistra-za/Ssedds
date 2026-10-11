@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/encoders-sys", "crates/engine", "crates/cli", "crates/bench", "crates/gui", "crates/nif", "crates/vfs"]
+members = ["crates/encoders-sys", "crates/engine", "crates/cli", "crates/bench", "crates/gui", "crates/nif", "crates/vfs", "crates/modscan"]
 exclude = ["spikes"]
 
 [workspace.package]
