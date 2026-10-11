@@ -9,7 +9,8 @@
   - a level whose nearest reachable pass count is more than 2× off the target keeps its box alpha (B1);
   - remapped texels sit two codes clear of the threshold, so BC7 cannot flip them (B6).
 - **Mips** (`mips.rs`, Tasks 4–6):
-  - Mip 0 of a normal map is renormalised unless `mips.normal_base = keep`. The accumulation chain still starts from the unrenormalised base, so levels ≥ 1 and the bake's footprint lengths do not change.
+  - Mip 0 of a normal map is renormalised unless `mips.normal_base = keep`.
+  - The accumulation chain starts from mip 0 **as written**. Levels ≥ 1, the bake's footprint lengths and the `_cnr` self-bake therefore all average the vectors the file stores. Under the default those are unit length, so the variance reflects real divergence of the normals, not a short exporter.
   - Vector and roughness chains are never alpha-weighted.
   - `build_chain_with(work, profile, Option<&NormalVariance>)` widens a roughness member's R channel.
   - A `_cnr` with `mips.normal = renormalize_bake` widens its own alpha from its own footprint lengths.
@@ -23,7 +24,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-08-skyrim-dds-converter-design.md`. The plan argues from these sections:
 - §6.2 (variance bake) and §6.3 (ordering and edge cases);
-- the §4.1 rows for `normal`, `pbr_normal`, `coat_normal`, `rmaos` and `rfaos`;
+- the §4.1 rows for `normal`, `pbr_normal`, `coat_normal`, `rmaos` and `rfaos` (the sub-type is `skin_rfaos` after the packing-fills plan);
 - §5.5 (mipmaps and coverage), §5.8 (validation) and §10 (`SET-*`).
 
 It also uses:
@@ -49,6 +50,18 @@ It also uses:
 - **Concurrent NIF team:** it works in the worktree `F:/ai/dds/converter-nif` on `nif/*` branches.
   - M4 does not touch `crates/nif`, `crates/vfs` or `crates/modscan`.
   - M4 does not touch DECISIONS Note Q, which is reserved for that team.
+- **Order:** runs after the packing-fills plan (`docs/superpowers/plans/2026-10-11-sdc-packing-fills.md`) is merged; rebase or merge main before Task 1.
+  - That plan renames the sub-type `rfaos` to `skin_rfaos` (`Subtype::SkinRfaos`). The old id stays as a deserialise alias, and the file suffix and output name stay `_rfaos`.
+  - In this plan, a **sub-type** is always `skin_rfaos`, while a **file suffix**, a canonical suffix string (`"rfaos"` in `bake/plan.rs`) or an output name stays `rfaos`/`_rfaos`.
+  - M4 relies on `Subtype::is_roughness_member()` being `Rmaos | SkinRfaos` after that plan.
+- **Files shared with the packing-fills plan:** read each at its merged state before editing, and add to it rather than replace.
+  - `config.rs`: it adds `packing.recipe` and the skin sub-types.
+  - `presets/sdc-base.toml`.
+  - `overrides.rs` `FIELD_PATHS`.
+  - `codes.rs`: it adds `SKIN-WET-FORM`, so the code count is 60 before Task 4.
+  - `policy.rs`.
+  - `crates/gui/src/model/{sets,fields}.rs` and `settings_panel.rs`.
+  - DECISIONS Note R: it adds R-fills-1 and R-skin-1. Task 11 resolves the numbering.
 - **f64 reference:** the reference implementation of the bake formula lives in test code only: `#[cfg(test)]` modules and `crates/*/tests`.
 - **Downloads:** none are needed. If a step seems to need a crate that is not in `Cargo.lock`, stop and report `NEEDS_CONTEXT`.
 - **Formula constants** (spec §6.2, DECISIONS Note E):
@@ -56,13 +69,13 @@ It also uses:
   - v = 0 when L ≥ 1 − 10⁻⁶;
   - α′² = saturate(α² + min(2v, t²)) and r′ = (α′²)^¼;
   - t = **0.25**, tunable per preset.
-- **Normal-map default** (owner, 2026-10-11): mip 0 is renormalised by default, which **changes outputs for existing normal maps with short sources** (mip 0 only).
+- **Normal-map default** (owner, 2026-10-11): mip 0 is renormalised by default, which **changes outputs for existing normal maps with short sources** (mip 0, and the levels averaged from it).
 
 ## Owner decisions (2026-10-11), recorded as DECISIONS Note R in Task 11
 
 | # | Decision | Where |
 |---|---|---|
-| R1 | **Mip 0 of normal maps is renormalised by default.**<br>• Field `mips.normal_base`: `renormalize` (default) or `keep`, settable per preset, rule, `[files]` entry or `--set`.<br>• An Info code, `CHAN-NORMAL-SHORT`, fires when a normal source's mean length at mip 0 is below 0.9 (not for Z-rebuilt sources).<br>• The bake reads lengths from the downsampled footprints of the unrenormalised source, so it is unaffected.<br>• Outputs change for existing normal maps with short sources (mip 0 only). | Tasks 3, 4 |
+| R1 | **Mip 0 of normal maps is renormalised by default.**<br>• Field `mips.normal_base`: `renormalize` (default) or `keep`, settable per preset, rule, `[files]` entry or `--set`.<br>• An Info code, `CHAN-NORMAL-SHORT`, fires when a normal source's mean length at mip 0 is below 0.9 (not for Z-rebuilt sources).<br>• The owner decided only "per-preset option, default renormalise". The controller corrected an earlier wording: the bake averages the mip-0 normals **as they will be written**, unit length under `renormalize` and as authored under `keep`. Variance then reflects real normal divergence, not exporter shortness. The stored chain accumulates from the same written mip 0.<br>• Outputs change for existing normal maps with short sources, at every level (mip 0 rescaled; lower levels average unit vectors). | Tasks 3, 4, 5, 7 |
 | R2 | **`_cnr` self-bake:**<br>• The coat normal's own variance goes into its own alpha (coat roughness), with the same formula, 1:1 and no companion.<br>• It is on by default (`coat_normal` `mips.normal = renormalize_bake`).<br>• The alpha keeps today's plain box filter, so a flat coat normal's alpha is unchanged bit for bit. | Task 6 |
 | R3 | The DDS header-patch idea and the CS/Vanilla two-mode idea are **not** part of M4. | — |
 
@@ -78,9 +91,9 @@ It also uses:
 | R9 | **What counts as a usable `_n`:**<br>• The bake needs the set's `pbr_normal` to be decided: `Ready`, or `Blocked` (for example by `FMT-BC5-NORMAL`; the bake reads the source, not the encoded file).<br>• An `Unresolved` `_n` (for example a green convention not yet stated) gives its members `SET-MISSING-COMPANION` with "not decided yet".<br>• With two `pbr_normal` jobs in one GUI-built set, the first by path is used | The `_n`'s decode settings must be final before they are baked in | None |
 | R10 | **sRGB roughness:** a roughness member with `color.content = srgb` raises `TAG-CONTENT-MISMATCH` (warning) and does not bake | Roughness is linear data. sRGB content would decode it before squaring and baking | None |
 | R11 | **No alpha weighting for vectors or roughness.** Normal, `_msn`, `_flow` and roughness chains are never alpha-weighted, even when a cutout policy is forced on them (Task 29 carry). Preprocess dilation under α = 0 still runs for alpha-tested policies; it only fills invisible texels | Weighting bends vectors, and the bake's lengths, toward opaque texels | None |
-| R12 | **`if-changed`:** the baked `_n` is recorded in the manifest's `sources`. Its `SourceRef.bake` holds the SHA-256 of its decode settings (`channels`, `alpha.policy`) and the level shift. A changed `_n`, changed decode settings, or a bake turned on or off re-encodes the roughness member. `Profile` gains two fields, so every `profile_sha256` changes once and the first M4 run re-encodes every output, as for M2.5 (Note M10) | The output depends on the `_n`, so `if-changed` has to see it | One full re-encode |
+| R12 | **`if-changed`:** the baked `_n` is recorded in the manifest's `sources`. Its `SourceRef.bake` holds the SHA-256 of its decode settings (`channels`, `alpha.policy`, `mips.normal_base`) and the level shift. A changed `_n`, changed decode settings, or a bake turned on or off re-encodes the roughness member. `Profile` gains two fields, so every `profile_sha256` changes once and the first M4 run re-encodes every output, as for M2.5 (Note M10) | The output depends on the `_n`, so `if-changed` has to see it | One full re-encode |
 | R13 | **Coverage fixes (mipcheck B1, B6):**<br>• **B1:** "no texel passes" counts as a candidate. A level whose nearest reachable count is more than 2× off the target (`count > 2k` or `2·count < k`, which includes every case where 0 is nearer) keeps its box alpha.<br>• **B6:** remapped passing texels land at least 2 codes above the first passing code, and failing ones at least 2 codes below the last failing code.<br>• The spatial tie-break (dither) is **not** in M4 | This is the roadmap's fix as written. Dithering trades exactness for speckle and wants an owner look first | Thin tied strands lose coverage from about 256² down (they used to overshoot up to ×32) |
-| R14 | **`sdc-base` goes to 1.1.0:** it gains `mips.normal_base`, `mips.bake_clamp` and the `coat_normal` self-bake default (spec §3.5: changing a built-in default bumps the version) | — | None |
+| R14 | **`sdc-base` gets a minor version bump** from whatever the packing-fills plan left (1.0.0 → 1.1.0, or 1.1.0 → 1.2.0). It gains `mips.normal_base`, `mips.bake_clamp` and the `coat_normal` self-bake default (spec §3.5: changing a built-in default bumps the version) | — | None |
 
 ## Review Focus
 
@@ -106,7 +119,7 @@ Most likely first. Each item's test is in the task named.
 3. **What the bake reads:**
    - a BC5 normal (blocked until allowed): the bake reads the source;
    - an alpha-tested normal (forced cutout): no alpha weighting;
-   - a short source normal (|n| down to 0.34): the bake reads the unrenormalised footprints;
+   - a uniformly short source normal (|n| = 0.5, or down to 0.34): it adds no roughness under the default, because the bake reads mip 0 as written (unit length). It adds roughness under `keep`;
    - an sRGB mistake on the roughness member: `TAG-CONTENT-MISMATCH`, no bake;
    - an `_n` whose green convention changes after a run: `if-changed` re-encodes the roughness member.
 
@@ -138,6 +151,7 @@ Most likely first. Each item's test is in the task named.
 - `pub fn build_chain(work: &Work, p: &Profile) -> Vec<Rgba32F>`: the signature is unchanged; it calls `build_chain_with(work, p, None)`.
 - `pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&crate::bake::NormalVariance>) -> Vec<Rgba32F>`.
 - `pub(crate) fn box_down(prev: &Rgba32F) -> Rgba32F`: an unweighted box step.
+- `pub(crate) fn normalize_vector(px: &mut [f32; 4], domain: Domain)`: Task 4 makes it `pub(crate)` so `BakeJob::load_lengths` (Task 7) writes mip 0 exactly as the `_n`'s own chain does.
 
 **`crates/engine/src/bake/mod.rs`** (Tasks 5, 7):
 - `pub const UNIT_LENGTH: f64 = 1.0 - 1e-6;`
@@ -826,7 +840,7 @@ fn default_bake_clamp() -> f64 {
 ```
 
 `presets/sdc-base.toml`:
-- set `version = "1.1.0"`;
+- bump `version` by one minor step from its merged value (R14);
 - replace the `defaults` `mips` line with:
 
 ```toml
@@ -910,13 +924,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces:
   - `Analysis::normal_len_mean: f64`;
   - `Code::ChanNormalShort` (Info);
-  - private helpers in `mips.rs`: `normalize_vector(px: &mut [f32; 4], domain: Domain)`, `base_level(work: &Work, p: &Profile) -> Rgba32F` and `weighted_rgb(work: &Work, p: &Profile) -> bool`;
+  - in `mips.rs`: `pub(crate) fn normalize_vector(px: &mut [f32; 4], domain: Domain)`, and the private `base_level(work: &Work, p: &Profile) -> Rgba32F` and `weighted_rgb(work: &Work, p: &Profile) -> bool`;
   - `build_chain` keeps its signature.
 
 **Owner decision R1:**
 - Mip 0 of a normal map (the `Normal` and `Msn` domains) is renormalised unless `mips.normal_base = keep`.
-- The accumulation chain still starts from the unrenormalised base. Levels ≥ 1 are unchanged, and the bake (Task 5) reads the same footprints.
-- **Outputs change for every normal map whose source is not unit length, at mip 0 only.**
+- For `Normal` and `Msn`, the accumulation chain starts from mip 0 **as written** (controller correction to R1). Levels ≥ 1 therefore average the vectors the file stores, and so does the bake (Tasks 5–7). With `keep` the chain is the same as before M4.
+- **Outputs change for every normal map whose source is not unit length.** Mip 0 is rescaled, and levels ≥ 1 average unit vectors, so short and long texels weigh the same.
 
 **Golden outputs that change bytes, with no assertion to update:**
 - `normal_maps_are_bc7_under_cs_and_bc5_only_for_flow` (`wall_n`, `iron_n`: `rgb(64)` sources, not unit length). Its new `CHAN-NORMAL-SHORT` infos do not touch its assertions.
@@ -939,7 +953,7 @@ In `crates/engine/src/mips.rs` `mod tests`, add:
     }
 
     #[test]
-    fn keep_stores_mip_0_as_authored_and_the_levels_below_do_not_change() {
+    fn the_chain_accumulates_mip_0_as_written() {
         let mut img = Rgba32F::new(2, 1, [0.6, 0.0, 0.0, 1.0]);
         img.px[1] = [0.0, 0.0, 0.3, 1.0];
         let mut p = profile(Subtype::Normal);
@@ -948,10 +962,13 @@ In `crates/engine/src/mips.rs` `mod tests`, add:
         let kept = build_chain(&work(img.clone(), Domain::Normal, true), &p);
         assert_eq!(kept[0].px, img.px);
         assert_ne!(renormalised[0].px, img.px);
-        // Level 1 averages the unrenormalised base either way: (0.3, 0, 0.15) normalised.
-        assert_eq!(kept[1], renormalised[1]);
-        let len = (0.3f32 * 0.3 + 0.15 * 0.15).sqrt();
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        // Default: level 1 averages the written unit vectors (1,0,0) and (0,0,1).
         let v = renormalised[1].px[0];
+        assert!((v[0] - h).abs() < 1e-5 && (v[2] - h).abs() < 1e-5, "{v:?}");
+        // keep: level 1 averages the authored vectors, (0.3, 0, 0.15) normalised (the pre-M4 chain).
+        let len = (0.3f32 * 0.3 + 0.15 * 0.15).sqrt();
+        let v = kept[1].px[0];
         assert!(
             (v[0] - 0.3 / len).abs() < 1e-5 && (v[2] - 0.15 / len).abs() < 1e-5,
             "{v:?}"
@@ -1026,7 +1043,7 @@ In `crates/engine/src/analyse.rs` `mod tests`, add:
 ```
 
 In `crates/engine/src/codes.rs` `mod tests`:
-- in `codes_serialise_as_their_strings_and_are_unique`, change `assert_eq!(Code::ALL.len(), 59);` to `60`;
+- in `codes_serialise_as_their_strings_and_are_unique`, increase the count in `assert_eq!(Code::ALL.len(), …);` by one (60 → 61 once the packing-fills plan has added `SKIN-WET-FORM`; use the merged value plus one);
 - in `severities_follow_spec_section_10`, add `assert_eq!(Code::ChanNormalShort.severity(), Severity::Info);`.
 
 - [ ] **Step 2: Run the tests to see them fail.**
@@ -1034,18 +1051,18 @@ In `crates/engine/src/codes.rs` `mod tests`:
 Run: `cargo test -p engine --lib -- mips::tests analyse::tests codes::tests`
 Expected:
 - FAIL to compile on `normal_len_mean` and `ChanNormalShort`.
-- With those two temporarily stubbed, `short_normals_at_mip_0_are_renormalised_by_default`, `keep_stores…` and `a_forced_cutout…` fail.
+- With those two temporarily stubbed, `short_normals_at_mip_0_are_renormalised_by_default`, `the_chain_accumulates_mip_0_as_written` and `a_forced_cutout…` fail.
 
 - [ ] **Step 3: Implement.**
 
 `crates/engine/src/mips.rs`:
-- Replace the module doc's last sentence ("Mip 0 is always the base as authored: …") with: "Mip 0 is the base as authored, except a normal map's vectors, which are renormalised unless `mips.normal_base = keep` (DECISIONS R1); the accumulation chain always starts from the unrenormalised base."
+- Replace the module doc's last sentence ("Mip 0 is always the base as authored: …") with: "Mip 0 is the base as authored, except a normal map's vectors, which are renormalised unless `mips.normal_base = keep` (DECISIONS R1); a vector chain accumulates from that written mip 0, so its lower levels and the variance bake see the stored vectors."
 - Add:
 
 ```rust
 /// Rescale an RGB vector to unit length in place (spec §5.5). A zero `Normal` vector becomes flat +Z; a zero
 /// `_msn` vector stays zero (model space has no flat default).
-fn normalize_vector(px: &mut [f32; 4], domain: Domain) {
+pub(crate) fn normalize_vector(px: &mut [f32; 4], domain: Domain) {
     let len = (px[0] * px[0] + px[1] * px[1] + px[2] * px[2]).sqrt();
     if len > 1e-8 {
         for c in &mut px[..3] {
@@ -1057,8 +1074,8 @@ fn normalize_vector(px: &mut [f32; 4], domain: Domain) {
 }
 
 /// Mip 0 as stored (spec §5.4, DECISIONS R1): a normal map's base vectors at unit length unless
-/// `mips.normal_base = keep`; anything else as authored. The accumulation chain is built from the unrenormalised
-/// base either way, so the levels below and the variance bake's footprint lengths do not depend on this.
+/// `mips.normal_base = keep`; anything else as authored. A vector chain accumulates from this level, so the levels
+/// below and the variance bake's footprint lengths average the vectors the file stores (controller correction to R1).
 fn base_level(work: &Work, p: &Profile) -> Rgba32F {
     let mut out = work.img.clone();
     if p.mips.normal_base == NormalBase::Renormalize
@@ -1083,16 +1100,27 @@ fn weighted_rgb(work: &Work, p: &Profile) -> bool {
 ```
 
 - In `finalize`, replace the whole `Domain::Normal | Domain::Msn => { … }` arm with `Domain::Normal | Domain::Msn => normalize_vector(px, work.domain),`.
-- In `build_chain`, replace `let weighted = work.alpha_present && p.alpha_weighted_mips();` with `let weighted = weighted_rgb(work, p);`, and replace `out.push(work.img.clone());` with `out.push(base_level(work, p));`.
+- In `build_chain`:
+  - replace `let weighted = work.alpha_present && p.alpha_weighted_mips();` with `let weighted = weighted_rgb(work, p);`;
+  - replace `out.push(work.img.clone());` with `out.push(base_level(work, p));`;
+  - in the first-step `match`, add this arm directly before the final `None => downsample(&work.img, weighted),` arm:
+
+```rust
+            // A vector chain accumulates from mip 0 as written (unit length unless `normal_base = keep`).
+            None if matches!(work.domain, Domain::Normal | Domain::Msn) => downsample(&out[0], weighted),
+```
+
 - Replace the `build_chain` doc comment with:
 
 ```rust
 /// Finalised mip levels, level 0 first, in the Work's domain.
 ///
 /// Levels >= 1 are finalised and clamped (roughness √, vector renormalisation, domain clamps). Mip 0 is the base as
-/// authored, except a normal map's vectors, renormalised unless `mips.normal_base = keep` (DECISIONS R1); the
-/// consumer (Quantise, Task 31) clamps it for the target format.
+/// authored, except a normal map's vectors, renormalised unless `mips.normal_base = keep` (DECISIONS R1); a vector
+/// chain accumulates from that written mip 0. The consumer (Quantise, Task 31) clamps mip 0 for the target format.
 ```
+
+- **After the packing-fills merge:** `skin_wet`'s normal form is in the Normal category, so it gets the mip-0 renormalise like any normal. Its grey height form must not resolve to `Domain::Normal`. Check `ops::domain_for` for a BC4 `skin_wet`. If it does resolve to `Domain::Normal`, that is a packing-fills defect: report it and do not work around it here.
 
 `crates/engine/src/analyse.rs`:
 - Add the field after `normal_len_err`:
@@ -1204,7 +1232,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```rust
 //! Normal-variance bake (spec §6.2, DECISIONS #6, Note R): a normal map's footprint length L → κ = (3L − L³)/(1 − L²)
 //! → v = 0.25/κ → α′² = saturate(α² + min(2v, t²)), r′ = (α′²)^¼ [MIP, Unity HDRP `CommonMaterial.hlsl`]. The
-//! footprint lengths come from a box pyramid of the unrenormalised, decoded base (DECISIONS R1, R5).
+//! footprint lengths come from a box pyramid of the `_n`'s mip 0 as written: unit length unless `mips.normal_base = keep`
+//! (DECISIONS R1, R5).
 use crate::config::{MipKeyword, MipLevels};
 use crate::image::Rgba32F;
 
@@ -1303,6 +1332,15 @@ mod tests {
         }
     }
 
+    /// Mip 0 of a `_n` as its job writes it under the default `normal_base = renormalize` (DECISIONS R1).
+    fn written(w: crate::ops::Work) -> Rgba32F {
+        let mut img = w.img;
+        for px in &mut img.px {
+            crate::mips::normalize_vector(px, w.domain);
+        }
+        img
+    }
+
     fn close(a: f32, b: f64) -> bool {
         (f64::from(a) - b).abs() < 1e-6
     }
@@ -1341,7 +1379,7 @@ mod tests {
     }
 
     #[test]
-    fn the_pyramid_holds_footprint_lengths_of_the_unrenormalised_base() {
+    fn the_pyramid_holds_footprint_lengths_of_the_base_it_is_given() {
         // (0.6, 0, 0.8) and (-0.6, 0, 0.8) alternate in x: every level-1 footprint averages to (0, 0, 0.8).
         let mut base = Rgba32F::new(4, 2, [0.6, 0.0, 0.8, 1.0]);
         for y in 0..2 {
@@ -1368,7 +1406,7 @@ mod tests {
     #[test]
     fn roughness_chain_matches_the_f64_reference_at_1_to_1_2_to_1_and_1_to_2() {
         for (nw, mw, shift) in [(16u32, 16u32, 0i32), (32, 16, 1), (8, 16, -1)] {
-            let normals = preprocess(bumpy(nw), &profile(Subtype::PbrNormal)).img;
+            let normals = written(preprocess(bumpy(nw), &profile(Subtype::PbrNormal)));
             let pr = profile(Subtype::Rmaos);
             let rough = preprocess(ramp(mw), &pr);
             let nv = NormalVariance::new(LengthPyramid::build(&normals), (mw, mw), 0.25).unwrap();
@@ -1412,7 +1450,7 @@ mod tests {
 
     #[test]
     fn a_bake_given_to_a_non_roughness_chain_is_ignored() {
-        let normals = preprocess(bumpy(16), &profile(Subtype::PbrNormal)).img;
+        let normals = written(preprocess(bumpy(16), &profile(Subtype::PbrNormal)));
         let pn = profile(Subtype::PbrNormal);
         let w = preprocess(bumpy(16), &pn);
         let nv = NormalVariance::new(LengthPyramid::build(&normals), (16, 16), 0.25).unwrap();
@@ -1492,7 +1530,7 @@ pub struct LengthLevel {
 }
 
 /// Footprint lengths of a normal map for every level >= 1 of its full box chain (level `m` at index `m − 1`), from
-/// the decoded, unrenormalised base (DECISIONS R1, R5). About 1.33 bytes per base texel.
+/// the `_n`'s mip 0 as written (the caller renormalises it unless `keep`; DECISIONS R1, R5). About 1.33 bytes per base texel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LengthPyramid {
     /// Base width and height.
@@ -1630,6 +1668,8 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
                 }
                 downsample(&squared, weighted)
             }
+            // A vector chain accumulates from mip 0 as written (unit length unless `normal_base = keep`).
+            None if matches!(work.domain, Domain::Normal | Domain::Msn) => downsample(&out[0], weighted),
             None => downsample(&work.img, weighted),
         };
         let mut fin = finalize(&next, work);
@@ -1697,7 +1737,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `mips.normal = renormalize_bake`;
   - the alpha is present and `alpha.policy = data`.
 - For each level ≥ 1:
-  - L is the length of that level's own accumulation (before renormalising);
+  - L is the length of that level's own accumulation before renormalising. The chain accumulates from mip 0 as written (Task 4), so under the default a uniformly short coat normal adds nothing;
   - `add = variance_add(L, t)`;
   - where `add > 0`, A = `baked_roughness(r̄², add)` = (min(r̄⁴ + add, 1))^¼, with r̄ the plain box mean the chain already holds.
 - Mip 0 is untouched (1:1: a single texel has no variance).
@@ -2023,6 +2063,36 @@ fn a_two_to_one_normal_bakes_into_mip_0_too() {
     assert!(mean_r(d.path(), 0) > 102.0, "{}", mean_r(d.path(), 0));
 }
 
+/// Controller correction to R1: the bake reads the `_n`'s mip 0 as written. A uniformly short flat `_n` (|n| = 0.5,
+/// every texel pointing up) adds no roughness under the default `renormalize`, and adds roughness under `keep`.
+#[test]
+fn a_uniformly_short_flat_normal_adds_roughness_only_under_keep() {
+    let mean_mip_1 = |base: Option<NormalBase>| {
+        let d = tempfile::tempdir().unwrap();
+        let n = d.path().join("in/iron_n.png");
+        std::fs::create_dir_all(n.parent().unwrap()).unwrap();
+        // (128, 128, 191) decodes to about (0.004, 0.004, 0.498): length 0.5, pointing up.
+        ImageBuffer::from_fn(32, 32, |_, _| Rgb([128u8, 128, 191]))
+            .save(&n)
+            .unwrap();
+        let r = rmaos(d.path(), 32);
+        let mut p = plan(d.path(), &r, &n, base.is_some(), false);
+        if let Some(b) = base {
+            p.jobs[0].bake.as_mut().unwrap().normal_profile.mips.normal_base = b;
+        }
+        assert_eq!(run(p).0.converted, 1);
+        mean_r(d.path(), 1)
+    };
+    let plain = mean_mip_1(None);
+    let default = mean_mip_1(Some(NormalBase::Renormalize));
+    let keep = mean_mip_1(Some(NormalBase::Keep));
+    assert!(
+        (default - plain).abs() < 1.0,
+        "default {default} vs unbaked {plain}"
+    );
+    assert!(keep > plain + 2.0, "keep {keep} vs unbaked {plain}");
+}
+
 #[test]
 fn up_to_date_until_the_normal_or_its_decode_settings_change() {
     let d = tempfile::tempdir().unwrap();
@@ -2073,7 +2143,7 @@ fn a_normal_changed_after_planning_fails_the_member() {
 }
 ```
 
-In `crates/engine/src/bake/mod.rs` `mod tests`, add (and `use crate::config::Format;` at the top of `mod tests`):
+In `crates/engine/src/bake/mod.rs` `mod tests`, add (and `use crate::config::{Format, NormalBase};` at the top of `mod tests`):
 
 ```rust
     #[test]
@@ -2106,10 +2176,13 @@ In `crates/engine/src/bake/mod.rs` `mod tests`, add (and `use crate::config::For
         flip.normal_profile.channels.flip_green = true;
         let mut shift = b.clone();
         shift.shift = 1;
+        let mut keep = b.clone();
+        keep.normal_profile.mips.normal_base = NormalBase::Keep;
         assert_eq!(b.identity_sha256(), moved.identity_sha256());
         assert_eq!(b.identity_sha256(), format.identity_sha256());
         assert_ne!(b.identity_sha256(), flip.identity_sha256());
         assert_ne!(b.identity_sha256(), shift.identity_sha256());
+        assert_ne!(b.identity_sha256(), keep.identity_sha256());
     }
 ```
 
@@ -2151,23 +2224,30 @@ pub struct BakeJob {
 }
 
 impl BakeJob {
-    /// What the member's output depends on besides the `_n`'s bytes: the decode settings and the level shift
-    /// (DECISIONS R12). Recorded in the manifest so `if-changed` re-encodes when either changes; the `_n`'s path and
-    /// its own output settings (format, effort) are not part of it.
+    /// What the member's output depends on besides the `_n`'s bytes: the decode settings, how mip 0 is written, and
+    /// the level shift (DECISIONS R12). Recorded in the manifest so `if-changed` re-encodes when any changes; the
+    /// `_n`'s path and its own output settings (format, effort) are not part of it.
     pub fn identity_sha256(&self) -> String {
         crate::manifest::sha256_json(&(
             &self.normal_profile.channels,
             self.normal_profile.alpha.policy,
+            self.normal_profile.mips.normal_base,
             self.shift,
         ))
         .unwrap_or_default()
     }
 
-    /// Decode the `_n` as its own job does (spec §5.4) and keep only its footprint lengths. The image is dropped
-    /// before this returns (DECISIONS R4).
+    /// Decode the `_n` as its own job does (spec §5.4), write its mip 0 as that job does (unit length unless
+    /// `mips.normal_base = keep`, DECISIONS R1) and keep only the footprint lengths of that written base. The image is
+    /// dropped before this returns (DECISIONS R4).
     pub fn load_lengths(&self) -> Result<LengthPyramid, String> {
         let (img, _) = crate::load::load_image(&self.normal).map_err(|e| e.to_string())?;
-        let work = crate::ops::preprocess(img, &self.normal_profile);
+        let mut work = crate::ops::preprocess(img, &self.normal_profile);
+        if self.normal_profile.mips.normal_base == crate::config::NormalBase::Renormalize {
+            for px in &mut work.img.px {
+                crate::mips::normalize_vector(px, work.domain);
+            }
+        }
         Ok(LengthPyramid::build(&work.img))
     }
 
@@ -2424,7 +2504,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - Both apply to jobs that are not `Error` or `PackingInput`.
 - **`cs` only, per set:**
   - **Normals:** the set's `pbr_normal` jobs (not `Error`), sorted by input path.
-  - **Members:** its `rmaos`/`rfaos` jobs, packed or pre-packed (not `Error` or `PackingInput`).
+  - **Members:** its `rmaos`/`skin_rfaos` jobs (`is_roughness_member`), packed or pre-packed (not `Error` or `PackingInput`).
   - **Shared set** (its key is in the shared list): no bake and no missing-companion code.
   - **Members but no normal:** each member gets one of these:
     - `SET-MISSING-COMPANION`: an image `_n` member of the set has no `pbr_normal` job (failed, cancelled, duplicate, or another sub-type);
@@ -2880,7 +2960,8 @@ fn is_normal_suffix(s: &str) -> bool {
     s == "n"
 }
 
-/// `rmaos`, `rfaos`, or a raw map that would pack one (roughness, glossiness, metallic, AO).
+/// Canonical file suffixes (not sub-type ids): `rmaos`, `rfaos` (the `skin_rfaos` output keeps the `_rfaos` suffix),
+/// or a raw map that would pack one (roughness, glossiness, metallic, AO).
 fn is_roughness_suffix(s: &str) -> bool {
     s == "rmaos"
         || s == "rfaos"
@@ -3273,10 +3354,17 @@ fn rough_member(w: u32) -> DynamicImage {
     })
 }
 
-/// A `pbr_normal` texel decoded as spec §5.4 does with the cs defaults (no flip, no Z rebuild, z >= 0).
+/// A normal texel as mip 0 writes it with the cs defaults: decoded as spec §5.4 does (no flip, no Z rebuild,
+/// z >= 0), then renormalised (`mips.normal_base = renormalize`, DECISIONS R1). The bake averages these.
 fn decoded_normal(p: &image::Rgb<u8>) -> [f64; 3] {
     let d = |c: u8| f64::from(c) / 255.0 * 2.0 - 1.0;
-    [d(p[0]), d(p[1]), d(p[2]).max(0.0)]
+    let v = [d(p[0]), d(p[1]), d(p[2]).max(0.0)];
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 1e-8 {
+        v.map(|c| c / len)
+    } else {
+        [0.0, 0.0, 1.0]
+    }
 }
 
 /// Spec §6.2 step 2 in f64 (test code only): `min(2v, t²)` for the mean of `normals`.
@@ -3371,6 +3459,7 @@ fn variance_bake_matches_the_f64_reference() {
         (64u32, 64u32, "rmaos", 0i32),
         (128, 64, "rmaos", 1),
         (32, 64, "rmaos", -1),
+        // File suffixes: `_rfaos` resolves to the sub-type `skin_rfaos` after the packing-fills plan.
         (64, 64, "rfaos", 0),
         (128, 64, "rfaos", 1),
     ] {
@@ -3623,7 +3712,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - **Field row:** "Normal base level" sits after "Normal handling". It is locked "normal maps only" outside the Normal category. Its options are "Renormalise to unit length" and "Keep as authored".
 - **Provenance text:** `set` reads "decided by the texture set (variance bake)".
 
-**Expectations that change:** none. `FIELDS` grows from 12 to 13 entries, and the existing tests iterate over it.
+**Expectations that change:** none. `FIELDS` grows by one entry, and the existing tests iterate over it.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -3721,7 +3810,7 @@ pub fn shared_roughness(m: &AppModel) -> BTreeSet<String> {
 `crates/gui/src/model/mod.rs`, in `request()`: after `req.output_paths = paths;`, add `req.shared_roughness = sets::shared_roughness(self);`.
 
 `crates/gui/src/model/fields.rs`:
-- Change `pub const FIELDS: [(&str, &str); 12]` to `13` and insert `("mips.normal_base", "Normal base level"),` after `("mips.normal", "Normal handling"),`.
+- Increase the length of `pub const FIELDS: [(&str, &str); N]` by one (12 → 13 unless the packing-fills plan changed it) and insert `("mips.normal_base", "Normal base level"),` after `("mips.normal", "Normal handling"),`.
 - In `field_lock`, change the arm `"mips.normal" if p.subtype.category() != Category::Normal => Some("normal maps only"),` to `"mips.normal" | "mips.normal_base" if p.subtype.category() != Category::Normal => Some("normal maps only"),`.
 - In `provenance_text`, add `"set" => "decided by the texture set (variance bake)".into(),` after the `"fallback"` arm.
 
@@ -3764,27 +3853,30 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Interfaces:** none.
 
 - [ ] **Step 1: DECISIONS Note R.**
-  - Insert this block directly after the last bullet of Note P (the "**Owner, in the design conversation:**" bullet) and before `## Phase 2 exit — CLI MVP (2026-10-09)`.
-  - Note Q is reserved for the NIF team: do not write a Note Q.
-  - If a Note Q block is already there when you rebase, put Note R after it.
+  - **Note R already exists** after the packing-fills plan, which writes its entries R-fills-1, R-skin-1 and the `skin_rfaos` rename there.
+    - Do **not** add a second `## Note R` heading.
+    - Append the M4 block below the packing-fills entries. Use the block's heading line as a bold paragraph instead: `**M4 variance bake and coverage fixes (owner and M4 plan, 2026-10-11)**`. Then add its intro line and bullets unchanged.
+    - The labels R1–R14 do not collide with `R-fills-*` and `R-skin-*`, and every reference in the code and spec uses "DECISIONS R<n>".
+  - Only if no Note R exists (the packing-fills plan not merged, which breaks Global Constraints), insert the block as written. Put it directly after the last bullet of Note P (the "**Owner, in the design conversation:**" bullet) and before `## Phase 2 exit — CLI MVP (2026-10-09)`.
+  - Note Q is reserved for the NIF team: do not write a Note Q. If a Note Q block sits between P and R, leave it where it is.
 
 ```markdown
 ## Note R — M4 variance bake and coverage fixes (owner and M4 plan, 2026-10-11)
 
 Owner decisions of 2026-10-11 (R1–R3) and the rulings of `docs/superpowers/plans/2026-10-11-sdc-m4-variance-bake.md` (R4–R14).
 
-- **R1 Normal mip 0 is renormalised by default** (owner): field `mips.normal_base` = `renormalize` (default) or `keep`, settable per preset, rule, `[files]` entry or `--set`, for authors who keep short normals on purpose. `CHAN-NORMAL-SHORT` (info) reports a normal source whose mean length at mip 0 is below 0.9 (not for Z-rebuilt sources). The accumulation chain starts from the unrenormalised base, so levels ≥ 1 and the bake (which reads the downsampled footprints of the source) are unaffected. Outputs change for existing normal maps with short sources, at mip 0 only.
+- **R1 Normal mip 0 is renormalised by default** (owner: "per-preset option, default renormalise"): field `mips.normal_base` = `renormalize` (default) or `keep`, settable per preset, rule, `[files]` entry or `--set`, for authors who keep short normals on purpose. `CHAN-NORMAL-SHORT` (info) reports a normal source whose mean length at mip 0 is below 0.9 (not for Z-rebuilt sources). Controller correction (2026-10-11): the normal chain and the bake average mip 0 **as it is written**, unit length under `renormalize` and as authored under `keep`, so variance reflects real normal divergence rather than exporter shortness; a uniformly short flat `_n` adds no roughness by default. Outputs change for existing normal maps with short sources (mip 0 and the levels averaged from it).
 - **R2 `_cnr` self-bake** (owner): the coat normal's own variance widens its own alpha (coat roughness) with the §6.2 formula, 1:1, no companion; on by default (`coat_normal` `mips.normal = renormalize_bake`), off with `renormalize`. The alpha keeps its plain box filter: A = (min(r̄⁴ + min(2v, t²), 1))^¼ only where the footprint adds variance, so a flat coat normal's alpha is bit-identical to before.
 - **R3 Not in M4** (owner): the DDS header-patch idea and the CS/Vanilla two-mode idea.
 - **R4 The roughness member decodes its own `_n`** (plan): `ResolvedJob::bake` (`BakeJob`) names the `_n` and carries its profile; the member's job decodes it, keeps only the footprint lengths, drops the image, then loads its own source. No cross-job state and no scheduler ordering; replaces spec §6.3's summed-area table kept between jobs. The admission counts 24 bytes per `_n` texel extra.
 - **R5 Footprint lengths are a box pyramid** (plan): exact at power-of-two ratios, 1.33 bytes per `_n` texel. The bake needs both bases to be powers of two with one aspect; anything else is `SET-BAKE-RATIO` and no bake.
 - **R6 The bake decision lives on the `_n`** (plan): a baking set upgrades its `pbr_normal`'s built-in `mips.normal = renormalize` to `renormalize_bake` with the new provenance `set`; an explicit `renormalize` from any other layer opts the set out. The `_n` is renormalised either way. `normal`, `landscape_normal` and `msn` never bake (no bake into vanilla `_n` alpha or `_m` green, spec §6.3).
-- **R7 Shared roughness never bakes** (M3b v1 instruction): `BatchRequest::shared_roughness` lists the ids of every set (owner and borrowers) whose `_rmaos`/`_rfaos` slot is one output used by several sets; those sets renormalise only and raise no missing-companion code. The GUI fills it from its borrows; the CLI leaves it empty.
+- **R7 Shared roughness never bakes** (M3b v1 instruction): `BatchRequest::shared_roughness` lists the ids of every set (owner and borrowers) whose `_rmaos`/`_rfaos` slot (sub-type `rmaos` or `skin_rfaos`) is one output used by several sets; those sets renormalise only and raise no missing-companion code. The GUI fills it from its borrows; the CLI leaves it empty.
 - **R8 `SET-*` triggers** (plan): `SET-MISSING-COMPANION` (info) for a `cs` PBR set with a `pbr_normal` but no roughness member or the reverse, an `_msn` without `_s`, a `_flow` without `_n`; `SET-COMPANION-DDS` (warning) when the missing companion is only a DDS (in the set or on disk); `SET-COMPANION-OUTSIDE` (info) when it is an image on disk next to the file but not in the batch; both directions. The code goes on the job it concerns. A PBR set holding only an albedo raises none.
 - **R9 A usable `_n` is decided** (plan): Ready, or Blocked (e.g. `FMT-BC5-NORMAL`: the bake reads the source). An Unresolved `_n` gives its members `SET-MISSING-COMPANION` ("not decided yet"). With two `pbr_normal` jobs in one GUI-built set, the first by path is used.
 - **R10 sRGB roughness** (plan): a roughness member with `color.content = srgb` raises `TAG-CONTENT-MISMATCH` and does not bake.
 - **R11 No alpha weighting for vectors or roughness** (plan, Task 29 carry): normal, `_msn`, `_flow` and roughness chains are never alpha-weighted, even with a cutout policy forced on them. Preprocess dilation under α = 0 still runs for alpha-tested policies.
-- **R12 `if-changed` and the bake** (plan): the baked `_n` is recorded in the manifest's `sources` with `bake` = the SHA-256 of its decode settings (`channels`, `alpha.policy`) and level shift; a changed `_n`, changed settings, or the bake turning on or off re-encodes the member. `Profile` gains `mips.normal_base` and `mips.bake_clamp`, so every `profile_sha256` changes once and the first M4 run re-encodes every output (as Note M10).
+- **R12 `if-changed` and the bake** (plan): the baked `_n` is recorded in the manifest's `sources` with `bake` = the SHA-256 of its decode settings (`channels`, `alpha.policy`, `mips.normal_base`) and level shift; a changed `_n`, changed settings, or the bake turning on or off re-encodes the member. `Profile` gains `mips.normal_base` and `mips.bake_clamp`, so every `profile_sha256` changes once and the first M4 run re-encodes every output (as Note M10).
 - **R13 Coverage, mipcheck round 2 B1/B6** (plan, the roadmap's fix): "no texel passes" is a candidate, and a level whose nearest achievable count is more than 2× off the target keeps its box alpha (B1); remapped texels sit at least 2 codes clear of the threshold (B6). The 2× test applies to the group the nearest-count rule picks: with k = 10 and groups of 19 and 4, the nearer 4 is picked, found more than 2× off, and the level keeps its box alpha even though 19 was within 2× (the roadmap's "best count" wording; deliberate). A spatial tie-break (dither) for exact coverage on tied alpha is not built.
 - **R14 `sdc-base` 1.1.0** (plan): new defaults `mips.normal_base`, `mips.bake_clamp` (0.25) and the `coat_normal` self-bake.
 ```
@@ -3832,12 +3924,12 @@ and replace
 with
 
 ```
-| Normals | Box only, never alpha-weighted | Vector | Every level renormalised (mip 0 unless `mips.normal_base = keep`), accumulated from the unrenormalised base; `msn` by length only; a `_cnr` self-bakes its alpha (DECISIONS R1, R2, R11) |
+| Normals | Box only, never alpha-weighted | Vector | Every level renormalised (mip 0 unless `mips.normal_base = keep`), accumulated from mip 0 as written; `msn` by length only; a `_cnr` self-bakes its alpha (DECISIONS R1, R2, R11) |
 ```
 
 §5.5 coverage paragraph: after the sentence ending `the §11.5 in-game check watches for thick distant edges.`, insert ` **[Decided]** (M4, DECISIONS R13) mipcheck round 2: a level whose nearest achievable count is more than 2× off the target keeps its box alpha (B1: no ×32 overshoot on thin tied strands), and remapped texels sit at least two codes clear of the threshold so BC7 cannot flip them (B6).`
 
-§6.2: replace the sentence `**[Proposal]** The CLI MVP renormalises `_n` mips and does not bake (owner: the bake arrives in M4); `mips.normal = renormalize_bake` is accepted and behaves as `renormalize` until then.` with `**[Decided]** Shipped in M4 (DECISIONS Note R): the roughness member decodes its `_n` itself (R4); footprint lengths come from a box pyramid of the decoded, unrenormalised base (R1, R5), so step 1 averages the base normals as decoded; a `_cnr` bakes its own variance into its coat roughness (R2).`
+§6.2: replace the sentence `**[Proposal]** The CLI MVP renormalises `_n` mips and does not bake (owner: the bake arrives in M4); `mips.normal = renormalize_bake` is accepted and behaves as `renormalize` until then.` with `**[Decided]** Shipped in M4 (DECISIONS Note R): the roughness member decodes its `_n` itself (R4); footprint lengths come from a box pyramid of the `_n`'s mip 0 as written (R1, R5), so step 1 averages unit normals unless `mips.normal_base = keep`; a `_cnr` bakes its own variance into its coat roughness (R2).`
 
 §6.3: replace `**[Proposal]** In a set, `_n` loads first and its base normals are kept as a summed-area table (O(1) footprint averages) until the roughness member's mips are built, then released. Other members are independent.` with `**[Decided]** (M4, DECISIONS R4, R5) The roughness member's own job decodes the set's `_n` first, keeps a box pyramid of its footprint lengths (exact at power-of-two ratios), drops the image and then loads its own source; no job waits on another. The `_n` counts against `--mem-budget` with the member (24 bytes per `_n` texel).` In the table below it, add the row `| Roughness slot shared with another set (GUI borrow) | Renormalise only | — (DECISIONS R7) |` after the "Non-PBR set" row.
 
@@ -3864,7 +3956,7 @@ with
     - the `_n` is stamped, hashed and admitted with its member (R4, R12);
     - mipcheck B1/B6 (R13);
     - the owner's `_cnr` self-bake (R2);
-    - B2's SignedRg/accumulation length is the bake's L (R1).
+    - B2's accumulation length (before normalising) is the bake's L, taken from mip 0 as written (R1).
   - Owner decision 2026-10-11: normal mip 0 is renormalised by default (`mips.normal_base`, `CHAN-NORMAL-SHORT`, R1).
 - **Still open after M4:**
   - a spatial tie-break (dither) for exact coverage on tied alpha (spec §14 #23);
@@ -3911,7 +4003,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 | §5.2 provenance `set` | 3, 8 |
 | Roadmap exit: golden at 1:1 and 2:1 within 1/255 of an f64 reference; renormalise-only paths unchanged | 9 |
 | Carries: shared roughness, `build_chain` reads `mips.normal`, `SET-*`, forced cutout, `_n` drift, memory, B1/B6, `_cnr`, B2 length | 10/8, 6, 8, 4, 7, 7, 1/2, 6, 5 (R1) |
-| Owner R1 (mip 0, field, info code, the bake unaffected, named expectations) | 3, 4; expectations in 4 and 8 |
+| Owner R1 with the controller correction (mip 0, field, info code, the bake and the chain read mip 0 as written, named expectations) | 3, 4, 5, 7 (`a_uniformly_short_flat_normal_adds_roughness_only_under_keep`); expectations in 4 and 8 |
 | Owner R2 | 6, 9 |
 | Owner R3 | Nothing built; recorded in Note R |
 
@@ -3930,7 +4022,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **4. Review Focus.** Each item has a test in its owning task:
 - **1 (ratios):** `bake_shift_needs_power_of_two_sizes_with_one_aspect` (5), `size_ratios_give_the_level_shift` and `an_aspect_mismatch_is_set_bake_ratio_and_does_not_bake` (8), `variance_bake_matches_the_f64_reference` (9).
 - **2 (companions):** `a_dds_companion_is_set_companion_dds_in_both_directions`, `a_companion_on_disk_but_not_in_the_batch_is_set_companion_outside`, `a_member_from_another_folder_bakes_from_its_own_path` and `a_lone_n_or_a_lone_rmaos_in_a_pbr_set_is_set_missing_companion_info` (8).
-- **3 (what the bake reads):** `a_blocked_bc5_n_still_bakes_from_its_source`, `an_srgb_roughness_member_does_not_bake` (8), `a_forced_cutout_does_not_alpha_weight_normals_or_roughness`, `keep_stores_mip_0_as_authored_and_the_levels_below_do_not_change` (4), `up_to_date_until_the_normal_or_its_decode_settings_change` (7).
+- **3 (what the bake reads):** `a_blocked_bc5_n_still_bakes_from_its_source`, `an_srgb_roughness_member_does_not_bake` (8), `a_forced_cutout_does_not_alpha_weight_normals_or_roughness`, `the_chain_accumulates_mip_0_as_written` (4), `a_uniformly_short_flat_normal_adds_roughness_only_under_keep` (7), `up_to_date_until_the_normal_or_its_decode_settings_change` (7).
 - **4 (memory):** `a_bake_holds_24_bytes_per_normal_texel` (7). Admission adds it through `job_bytes`.
 - **5 (`_rfaos`):** `rmaos_and_rfaos_in_one_set_both_bake`, `a_packed_rmaos_bakes_like_a_prepacked_one` (8), and the `rfaos` rows of `variance_bake_matches_the_f64_reference` (9).
 
@@ -3940,10 +4032,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
    - Question: should a spatial tie-break (dither) make exact coverage reachable on thin tied strands?
    - Shipped: no, per the roadmap's fix (R13). Thin strands now lose coverage from about 256² down instead of overshooting up to ×32.
    - Recommendation: keep it off and look at B1's sparse image in game first.
-2. **What the bake averages.**
-   - Spec §6.2 step 1 says "unit normals". The owner (2026-10-11) says the bake reads the downsampled footprints of the source before any renormalise.
-   - Shipped: the unrenormalised decoded base. A short source (|n| = 0.34) therefore adds a lot of roughness.
-   - Recommendation: keep the owner's rule. Revisit it if short sources come out too rough; the alternative is to normalise each base texel before averaging.
+2. **What the bake averages. Resolved by a controller correction (2026-10-11), no longer open.**
+   - The earlier wording "the bake reads the source before any renormalise" was the controller's, not the owner's. The owner decided only "per-preset option, default renormalise".
+   - The bake averages mip 0 **as written**: unit length under the default, as authored under `mips.normal_base = keep`. This agrees with spec §6.2 step 1 ("unit normals").
+   - A uniformly short flat `_n` adds no roughness by default, and adds roughness under `keep`. Test: `a_uniformly_short_flat_normal_adds_roughness_only_under_keep` (Task 7).
 3. **`_cnr` coat alpha filter.**
    - Shipped: the plain box mean, with the bake on top. A flat coat is then unchanged, as the roadmap exit asks.
    - Alternative: filter it on α = r² like `_rmaos` R. That is closer to "the same formula", but it changes every `_cnr` with varying alpha, flat or not.
