@@ -215,6 +215,8 @@ fn size_mismatch_job(
 /// pre-packed job gets `PACK-CONFLICT` or (with `packing.prefer = raw`) moves to `skipped`, and a recipe whose
 /// sources differ in size becomes an error job. `failed` holds the paths that failed planning and `cancelled` those
 /// whose Load never started because the batch was cancelled: a recipe with a member in either is `Failed` (Note M11).
+/// `packed_outputs` holds explicit GUI output paths of packed outputs by (set key, suffix), M3b.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_packing(
     ctx: &ResolveCtx,
     sets: &[TextureSet],
@@ -223,6 +225,7 @@ pub fn plan_packing(
     failed: &[PathBuf],
     cancelled: &[PathBuf],
     skipped: &mut Vec<SkippedFile>,
+    packed_outputs: &BTreeMap<(String, String), PathBuf>,
 ) -> PackPlan {
     let (pa, pinfo) = placeholder();
     let mut out = PackPlan {
@@ -259,7 +262,12 @@ pub fn plan_packing(
         let mut reports = vec![];
         for recipe in recipes {
             let sources: Vec<PathBuf> = recipe.sources().into_iter().map(|(p, _)| p).collect();
-            let vin = virtual_input(members[&sources[0]], recipe.kind);
+            let mut vin = virtual_input(members[&sources[0]], recipe.kind);
+            if let Some(p) =
+                packed_outputs.get(&(set.key.clone(), recipe.kind.suffix().to_string()))
+            {
+                vin.output = p.clone();
+            }
             let st = recipe.kind.subtype();
             // Pass 1: the packed output's own profile decides `packing.*` (DECISIONS Note M6).
             let facts = FileFacts {

@@ -233,3 +233,101 @@ fn a_stale_edit_is_reported_and_skipped() {
         set_of(&p, "landscape/rock01.png")
     );
 }
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+fn outputs(p: &Plan) -> Vec<String> {
+    let mut v: Vec<String> = p
+        .jobs
+        .iter()
+        .map(|j| j.output.to_string_lossy().replace('\\', "/"))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn output_paths_rewrite_files_and_packed_outputs_but_not_set_keys() {
+    let d = fixture();
+    let (before, _) = plan_events(req(&d));
+    let key_before = set_of(&before, "landscape/rock01.png");
+    let mut r = req(&d);
+    r.set_edits = vec![
+        SetEdit::Move {
+            file: "stone/stone_roughness.png".into(),
+            to: "landscape/rock01".into(),
+        },
+        SetEdit::Move {
+            file: "stone/stone_ao.png".into(),
+            to: "landscape/rock01".into(),
+        },
+    ];
+    r.output_paths = BTreeMap::from([
+        (
+            OutputKey::File("landscape/rock01.png".into()),
+            PathBuf::from("textures/pbr/landscape/rock01.dds"),
+        ),
+        (
+            OutputKey::File("landscape/rock01_n.png".into()),
+            PathBuf::from("textures/pbr/landscape/rock01_n.dds"),
+        ),
+        (
+            OutputKey::Packed {
+                set: "landscape/rock01".into(),
+                suffix: "rmaos".into(),
+            },
+            PathBuf::from("textures/pbr/landscape/rock01_rmaos.dds"),
+        ),
+    ]);
+    let (p, _) = plan_events(r);
+    let o = outputs(&p);
+    for tail in [
+        "out/textures/pbr/landscape/rock01.dds",
+        "out/textures/pbr/landscape/rock01_n.dds",
+        "out/textures/pbr/landscape/rock01_rmaos.dds",
+    ] {
+        assert!(
+            o.iter().any(|x| x.ends_with(tail)),
+            "{tail} missing from {o:?}"
+        );
+    }
+    assert_eq!(
+        set_of(&p, "landscape/rock01.png"),
+        key_before,
+        "keys never follow output paths"
+    );
+}
+
+#[test]
+fn two_files_given_one_output_path_are_duplicates() {
+    let d = fixture();
+    let mut r = req(&d);
+    r.output_paths = BTreeMap::from([
+        (
+            OutputKey::File("landscape/rock01.png".into()),
+            PathBuf::from("textures/pbr/x/rock.dds"),
+        ),
+        (
+            OutputKey::File("landscape/rock02.png".into()),
+            PathBuf::from("textures/pbr/x/rock.dds"),
+        ),
+    ]);
+    let (p, _) = plan_events(r);
+    let dup: Vec<_> = p
+        .skipped
+        .iter()
+        .filter(|s| s.code == Some(Code::InDuplicate))
+        .collect();
+    assert_eq!(dup.len(), 2, "{:?}", p.skipped);
+}
+
+#[test]
+fn an_output_path_for_a_missing_file_is_ignored() {
+    let d = fixture();
+    let (a, _) = plan_events(req(&d));
+    let mut r = req(&d);
+    r.output_paths = BTreeMap::from([(OutputKey::File("gone.png".into()), PathBuf::from("x.dds"))]);
+    let (b, _) = plan_events(r);
+    assert_eq!(outputs(&a), outputs(&b));
+}

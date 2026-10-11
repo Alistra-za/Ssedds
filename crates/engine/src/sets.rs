@@ -6,7 +6,7 @@ use crate::group::{split_suffix_with, TextureSet};
 use crate::overrides::{path_key_matches, project_rel};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// One change to the automatic grouping. Sets are named by id (the set key without the output root in front),
 /// files by their `[files]` key (project-relative, compared case-insensitively).
@@ -169,4 +169,50 @@ pub fn apply_set_edits(
     sets.retain(|s| !s.members.is_empty());
     sets.sort_by(|a, b| a.key.cmp(&b.key));
     stale
+}
+
+/// What an explicit output path applies to (DECISIONS P1).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputKey {
+    /// A source file, by its `[files]` key.
+    File(String),
+    /// A packed output of a set: the set id and the recipe suffix (`rmaos`, `rfaos`, `p`, `m`).
+    Packed { set: String, suffix: String },
+}
+
+/// Give each file named by an `OutputKey::File` the output `output_root/<path>`. Keys that match no file are
+/// ignored (the GUI computes them from the previous plan; a vanished file is reported by its set edit, if any).
+pub fn apply_output_paths(
+    files: &mut [InputFile],
+    root: Option<&Path>,
+    output_root: &Path,
+    paths: &BTreeMap<OutputKey, PathBuf>,
+) {
+    let Some(root) = root else { return };
+    for (k, rel) in paths {
+        let OutputKey::File(key) = k else { continue };
+        for f in files.iter_mut() {
+            if project_rel(root, f).is_some_and(|r| path_key_matches(key, &r)) {
+                f.output = output_root.join(rel);
+            }
+        }
+    }
+}
+
+/// The packed-output paths by (set key, recipe suffix), absolute, for `plan_packing`.
+pub fn packed_outputs(
+    output_root: &Path,
+    paths: &BTreeMap<OutputKey, PathBuf>,
+) -> BTreeMap<(String, String), PathBuf> {
+    paths
+        .iter()
+        .filter_map(|(k, rel)| match k {
+            OutputKey::Packed { set, suffix } => Some((
+                (set_key(output_root, set), suffix.to_lowercase()),
+                output_root.join(rel),
+            )),
+            OutputKey::File(_) => None,
+        })
+        .collect()
 }

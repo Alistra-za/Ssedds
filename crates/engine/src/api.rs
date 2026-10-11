@@ -75,6 +75,8 @@ pub struct BatchRequest {
     pub file_allow: BTreeMap<String, BTreeSet<Code>>,
     /// GUI set edits (M3b spec §2.1): applied in order after the automatic grouping. Empty for the CLI.
     pub set_edits: Vec<crate::sets::SetEdit>,
+    /// GUI output paths (M3b, DECISIONS P1), relative to `output_root`. Empty for the CLI.
+    pub output_paths: BTreeMap<crate::sets::OutputKey, PathBuf>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -103,6 +105,7 @@ impl BatchRequest {
             allow: BTreeSet::new(),
             file_allow: BTreeMap::new(),
             set_edits: vec![],
+            output_paths: BTreeMap::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -627,16 +630,6 @@ impl Engine {
             },
         );
         let key = |out: &Path| output_key(&req.output_root, out);
-        for f in &files {
-            rep.emit_job(
-                Some(&key(&f.output)),
-                None,
-                Some(&f.path),
-                EventKind::FileDiscovered {
-                    output: slash(&f.output),
-                },
-            );
-        }
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
         // 1. `discover`, then `canonicalise_outputs` (above).
         // 2. `group_sets_with` gives the automatic sets; its duplicate-output groups are ignored from now on.
@@ -666,6 +659,23 @@ impl Engine {
                     )
                     .with_data(serde_json::json!({ "edit": s.edit, "reason": s.reason })),
                 ),
+            );
+        }
+        crate::sets::apply_output_paths(
+            &mut files,
+            scope_root.as_deref(),
+            &req.output_root,
+            &req.output_paths,
+        );
+        let packed_outputs = crate::sets::packed_outputs(&req.output_root, &req.output_paths);
+        for f in &files {
+            rep.emit_job(
+                Some(&key(&f.output)),
+                None,
+                Some(&f.path),
+                EventKind::FileDiscovered {
+                    output: slash(&f.output),
+                },
             );
         }
         let dups = crate::group::duplicate_outputs(&files);
@@ -878,6 +888,7 @@ impl Engine {
             &failed_paths,
             &cancelled,
             &mut skipped,
+            &packed_outputs,
         );
         // Pass 1 may add a recipe job it fails at once (sources of different sizes); like every job it records the
         // target's origin (`BatchRequest::target`, ruling W1).
