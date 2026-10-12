@@ -8,6 +8,7 @@ Owner-approved in chat on 2026-10-12. Base: `main` 1b5f571 (Track D and the clou
 - "a confident suffix match e.g. _rfaos _RFAOS _rmaos _RMaos should not need confirmation in the gui; if people don't follow naming conventions they should have to fix it themselves".
 - "a texture set with these maps should also confirm that _n for the same texture set is a pbr normal, diffuse is pbr — etc".
 - "_rfaos is its own thing, advanced skin".
+- "No suffix should equal diffuse by default"; "_coat also gets counted as coat colour + strength".
 - NIF-aware alpha, with these rules:
   - any mesh with alpha beats meshes without it;
   - blend on one mesh and test on another gives `cutout_blend`;
@@ -36,10 +37,19 @@ Owner-approved in chat on 2026-10-12. Base: `main` 1b5f571 (Track D and the clou
 - Any explicit choice the user makes in the GUI still wins, as today. A user who wants to confirm everything can still change a member's sub-type by hand.
 - **Visible "auto" marker:** a member whose sub-type was decided by an accepted suggestion shows "(auto)" next to its sub-type. Hovering shows the suggestion's reason, e.g. "_rmaos", "_n in a PBR set". The engine already records this provenance. The plan finds the exact field (the sub-type provenance for an accepted suggestion) and uses it. No new engine field is added unless none exists.
 
-## 3. Bare colour member of a PBR set is High
+## 3. No suffix means diffuse (High)
 
-- `crates/engine/src/suggest.rs`: the arm `Some("d") | None if pbr` gives `PbrAlbedo` at **High** when the set has a PBR marker member: `_rmaos`, `_cnr`/`_crn` or `_f`, or a raw packing input that starts the `_rmaos` recipe. The reason text is "colour member of a PBR set (the set has _rmaos/_cnr/_f)".
-- A PBR set recognised only by a `pbr` path component keeps today's `colour` confidence: High for `_d`, Medium for a bare stem. A folder name is weaker evidence than a member map.
+- Owner (2026-10-12): "No suffix should equal diffuse by default."
+- In `crates/engine/src/suggest.rs`, the `colour` confidence becomes **High** for a bare stem as well as for `_d`. A file with no suffix is the set's colour member at High:
+  - `Diffuse` in a non-PBR set;
+  - `PbrAlbedo` in a PBR set, whether the set is PBR through `_rmaos`/`_cnr`/`_f`, a packing input or a `pbr` folder;
+  - `UiSky` under `interface/` or `sky/`.
+- This reverses DECISIONS Note H's "a bare stem is only a guess". Note U records the reversal.
+- Unchanged:
+  - `LandscapeDiffuse` is already High.
+  - `HdrSky` stays Medium: a float source under `sky/` may be an HDRI.
+  - `_i` stays Medium.
+- **Consequence:** naming that does not follow the conventions (e.g. a normal map saved without `_n`) now auto-resolves as a colour map. Per the owner, fixing that is the mod author's job.
 - **`_rfaos` is advanced skin, its own thing (owner).** It is not a marker for this rule. An `_rfaos` set's colour member is already `SkinAlbedo` at High through the `advanced_skin` arm, which comes before the `pbr` arm, and this track does not change that. `is_pbr_set` is unchanged.
 - Already High today, and unchanged:
   - `_n` in a PBR set (`PbrNormal`);
@@ -48,6 +58,16 @@ Owner-approved in chat on 2026-10-12. Base: `main` 1b5f571 (Track D and the clou
   - `_rmaos`;
   - `_rfaos`;
   - `_sk` and `_wet` in an advanced skin set.
+
+### 3.1 `_coat` = coat colour + coat strength
+
+- Owner (2026-10-12): "_coat also gets counted as coat colour + strength".
+- `_coat` already canonicalises to `_s`, sub-type `pbr_subsurface`, at High (Track A, S-shader-9). PGPatcher's coat map holds colour in RGB and strength in A.
+- This track makes the strength part explicit:
+  - The `pbr_subsurface` alpha policy stays `data` (`sdc-base`), so a varying alpha is kept exactly as the coat strength.
+  - The `_coat` reason text becomes "exporter suffix _coat (coat colour + strength); the PBR coat map (_s)".
+  - The GUI slot label for `SlotKind::Subsurface` reads "Coat colour + strength" when the member came from `_coat`.
+- A `_coat` with alpha must never be BC1 under Compact. It is already excluded from the constant-255 rule, which T3 records. A test pins it.
 
 ## 4. NIF-aware alpha
 
@@ -99,7 +119,9 @@ Owner-approved in chat on 2026-10-12. Base: `main` 1b5f571 (Track D and the clou
 - **"(auto)":** a GUI test shows it renders, with the reason as hover text.
 - **Suggestions:**
   - bare stem plus `_rmaos` gives High `pbr_albedo`;
-  - bare stem with only a `pbr` folder stays Medium;
+  - bare stem with only a `pbr` folder gives High `pbr_albedo`;
+  - bare stem alone gives High `diffuse`;
+  - `_coat` with varying alpha gives `pbr_subsurface`, alpha `data` with the bytes kept, and stays BC7 under Compact;
   - bare stem plus `_rfaos` gives High `skin_albedo` (unchanged);
   - upper-case `_RMAOS` / `_RFAOS` resolve the same as lower-case.
 - **`mesh_alpha_policy`:** every row of §4.2, plus a mixed set with one shape without alpha and one with blend, which gives `blend`.
