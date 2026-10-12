@@ -459,6 +459,9 @@ pub struct Viewport3d {
     need_load: bool,
     /// The pending load is a reload of the same model (`set_content(.., true)`): a compile failure keeps the frame.
     kept_view: bool,
+    /// A reload failed to compile and the previous frame stays: no render until a shape draws again (a load-time
+    /// Failed shape has no draw, so a render would blank the frame).
+    held_frame: bool,
     loaded: Option<u64>,
     pending_load: Option<u64>,
     last_sent: Option<(Camera, u32, u32, u64, Look)>,
@@ -508,6 +511,7 @@ impl Viewport3d {
             edits_done: 0,
             need_load: false,
             kept_view: false,
+            held_frame: false,
             loaded: None,
             pending_load: None,
             last_sent: None,
@@ -747,6 +751,7 @@ impl Viewport3d {
         self.render_error = None;
         self.last_sent = None;
         self.kept_view = keep_view && !le;
+        self.held_frame = false;
         if self.kept_view {
             return;
         }
@@ -843,7 +848,8 @@ impl Viewport3d {
         let (Some(loaded), None) = (self.loaded, self.pending_load) else {
             return;
         };
-        if self.report.as_ref().is_some_and(|r| r.le_mesh) || !self.renderable() {
+        if self.held_frame || self.report.as_ref().is_some_and(|r| r.le_mesh) || !self.renderable()
+        {
             return;
         }
         let camera = self.orbit.camera(self.bounds);
@@ -934,6 +940,7 @@ impl Viewport3d {
                         && !report.compile_errors.is_empty();
                     self.pending_load = None;
                     self.loaded = Some(id);
+                    self.held_frame = reload_failed && self.frame.is_some();
                     if (report.le_mesh || report.shapes == 0) && !reload_failed {
                         self.frame = None;
                     }
@@ -966,6 +973,9 @@ impl Viewport3d {
             V3Reply::Shapes(s) => {
                 // Only for the loaded content: a reply for content replaced since is dropped.
                 if self.pending_load.is_none() && self.loaded.is_some() {
+                    if s.iter().any(|x| x.status == ShapeStatus::Drawing) {
+                        self.held_frame = false;
+                    }
                     self.shapes = s;
                 }
             }

@@ -1117,6 +1117,21 @@ fn a_keep_view_reload_whose_shapes_all_fail_keeps_the_frame_and_lists_the_errors
     );
     assert!(v.frame.is_some(), "the old image stays");
     assert_eq!(v.report.as_ref().unwrap().compile_errors.len(), 1);
+    // The shapes come back Failed (no draw after a load): a camera change must not render over the kept frame.
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed(
+        "x".into(),
+    ))]));
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(
+        cmds.try_recv().is_err(),
+        "no Render while the frame is held"
+    );
+    assert!(v.frame.is_some());
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
     // New content (not a reload) that draws nothing clears it.
     v.set_content(Some(parsed(3, &nif, &[])), false);
     v.request_frame(64, 64);
