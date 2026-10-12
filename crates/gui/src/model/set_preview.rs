@@ -18,9 +18,13 @@ use engine::policy::ResolvedJob;
 use engine::session::{pack_key, Session};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Memory ids are process-wide: `FileSource::Memory` compares by id, across encoders.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// D5: the preview's encode size cap (`[render3d] set_preview_max` in `gui.toml`, 0 = this).
 pub const DEFAULT_CAP: u32 = 2048;
@@ -85,7 +89,7 @@ pub fn signature(item: &TextureItem) -> String {
             let p = sha256_json(&job.profile).unwrap_or_default();
             match &job.pack {
                 Some(pk) => format!("{p}:{}", pack_key(pk).unwrap_or_default()),
-                None => format!("{p}:{:?}", job.source),
+                None => format!("{p}:{:?}:{:?}", job.input, job.source),
             }
         }
         _ => format!("{:?}:{:?}:{:?}", item.kind, item.input, item.stamp),
@@ -206,13 +210,17 @@ pub struct Member {
     pub state: EncState,
     source: Source,
     due: Option<Instant>,
+    /// The live encode's generation; 0 = none (every change that supersedes an encode zeroes it).
     token: u64,
+    /// The cap the live encode runs at, and the cap the shown bytes were made at.
+    cap: u32,
     cancel: Option<CancelToken>,
 }
 
 struct EncDone {
     kind: SlotKind,
     token: u64,
+    cap: u32,
     result: Result<(Vec<u8>, f64), String>,
 }
 
@@ -224,7 +232,6 @@ pub struct Encoder {
     pub paused: bool,
     pub error: Option<String>,
     next_token: u64,
-    next_id: u64,
     tx: Sender<EncDone>,
     rx: Receiver<EncDone>,
 }
@@ -297,10 +304,49 @@ impl Encoder {
             paused: false,
             error: None,
             next_token: 0,
-            next_id: 0,
             tx,
             rx,
         }
+    }
+
+    /// A new size cap: every member that has something to encode goes stale (old bytes on show), in-flight work
+    /// is cancelled and its late result dropped.
+    pub fn set_cap(&mut self, cap: u32, now: Instant) {
+        self.cap = cap;
+        for mem in self.members.values_mut() {
+            if let Some(c) = mem.cancel.take() {
+                c.cancel();
+            }
+            mem.token = 0;
+            if !matches!(mem.state, EncState::Blocked(_)) {
+                mem.state = EncState::Stale(mem.state.shown().cloned());
+                mem.cap = cap;
+                mem.due = Some(now);
+            }
+        }
+    }
+
+    /// Test seam: the generation of `kind`'s live encode (0 = none).
+    #[doc(hidden)]
+    pub fn token_of(&self, kind: SlotKind) -> u64 {
+        self.members.get(&kind).map_or(0, |m| m.token)
+    }
+
+    /// Test seam: delivers a completion as a worker would, so tests control the order.
+    #[doc(hidden)]
+    pub fn inject(
+        &self,
+        kind: SlotKind,
+        token: u64,
+        cap: u32,
+        result: Result<(Vec<u8>, f64), String>,
+    ) {
+        let _ = self.tx.send(EncDone {
+            kind,
+            token,
+            cap,
+            result,
+        });
     }
 
     /// Another set: cancel and forget every member.
@@ -313,7 +359,19 @@ impl Encoder {
         self.members.clear();
         self.error = None;
     }
+}
 
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        for m in self.members.values() {
+            if let Some(c) = &m.cancel {
+                c.cancel();
+            }
+        }
+    }
+}
+
+impl Encoder {
     /// The set's members now. A new member, or one whose item, status or signature changed, is encoded again: at
     /// once when `immediate` (a new selection), else after [`DEBOUNCE`] (an edit, 02 §2.4), with its old bytes still
     /// on show. A path-only change keeps the bytes. Members that left are cancelled.
@@ -339,11 +397,13 @@ impl Encoder {
                 _ => None,
             };
             match self.members.get_mut(&slot.kind) {
-                Some(mem) if same_bytes(&mem.slot, &slot) => mem.slot = slot,
+                Some(mem) if same_bytes(&mem.slot, &slot) && mem.cap == self.cap => mem.slot = slot,
                 Some(mem) => {
                     if let Some(c) = mem.cancel.take() {
                         c.cancel();
                     }
+                    mem.token = 0;
+                    mem.cap = self.cap;
                     mem.state = match blocked {
                         Some(w) => EncState::Blocked(w),
                         None => EncState::Stale(mem.state.shown().cloned()),
@@ -362,6 +422,7 @@ impl Encoder {
                             due: blocked.is_none().then_some(due),
                             source,
                             token: 0,
+                            cap: self.cap,
                             cancel: None,
                         },
                     );
@@ -388,6 +449,7 @@ impl Encoder {
             self.next_token += 1;
             let token = self.next_token;
             mem.token = token;
+            mem.cap = self.cap;
             let cancel = CancelToken::default();
             mem.cancel = Some(cancel.clone());
             mem.state = EncState::Encoding(mem.state.shown().cloned());
@@ -401,12 +463,14 @@ impl Encoder {
                     EncDone {
                         kind,
                         token,
+                        cap,
                         result,
                     }
                 },
                 move |e| EncDone {
                     kind,
                     token,
+                    cap,
                     result: Err(format!("internal error in a preview encode: {e}")),
                 },
             );
@@ -419,26 +483,25 @@ impl Encoder {
         while let Ok(EncDone {
             kind,
             token,
+            cap,
             result,
         }) = self.rx.try_recv()
         {
             let Some(mem) = self.members.get_mut(&kind) else {
                 continue;
             };
-            // Superseded (a newer edit, possibly still in its debounce).
-            if mem.token != token || mem.due.is_some() {
+            // Superseded: a newer edit, a block, a cap change (all zero or replace the token).
+            if mem.token == 0 || mem.token != token || cap != self.cap {
                 continue;
             }
             mem.cancel = None;
+            mem.token = 0;
             mem.state = match result {
-                Ok((dds, ms)) => {
-                    self.next_id += 1;
-                    EncState::Fresh(Arc::new(Encoded {
-                        id: self.next_id,
-                        dds: Arc::new(dds),
-                        ms,
-                    }))
-                }
+                Ok((dds, ms)) => EncState::Fresh(Arc::new(Encoded {
+                    id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+                    dds: Arc::new(dds),
+                    ms,
+                })),
                 Err(e) => EncState::Failed(e),
             };
             changed = true;
