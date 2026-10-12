@@ -2215,10 +2215,7 @@ fn bmp_diffuse_is_bc7_unorm() {
         &[],
     );
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
-    // File-level: the synthetic gradient trips an unrelated SUG-LOW-CONFIDENCE; no SHADER-* code may appear.
-    assert!(warnings(&o)
-        .iter()
-        .all(|c| !c.as_str().starts_with("SHADER-")));
+    assert_eq!(warnings(&o), vec![]);
     assert_dds(
         &dds(d.path(), "textures/a/rock.dds"),
         DdsPixelFormat::Bc7 { srgb: false },
