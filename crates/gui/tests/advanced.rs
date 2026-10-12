@@ -339,7 +339,8 @@ fn the_advanced_texture_fields_carry_their_locks_and_edit_through_the_model() {
             "encoder.bc1_transparent_black",
             "encoder.bc45_search_radius",
             "encoder.rgbcx_level",
-            "header"
+            "header",
+            "resize"
         ]
     );
     let header = views.iter().find(|v| v.field == "header").unwrap();

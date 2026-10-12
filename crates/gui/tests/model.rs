@@ -274,3 +274,37 @@ fn the_has_warnings_filter_ignores_info_like_the_badge() {
     m.filter.warnings = true;
     assert_eq!(m.visible_items(), vec![1]);
 }
+
+#[test]
+fn npot_resize_choice_clears_the_block() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    // F9: odd.png is undecided in the fixture.
+    m.decide("landscape/odd.png", Answer::Subtype(Subtype::Diffuse));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let odd = m.item("landscape/odd.png").unwrap();
+    assert!(odd
+        .decisions
+        .contains(&Decision::Acknowledge(Code::DimNpot)));
+    m.set_field("landscape/odd.png", "resize", serde_json::json!("pot-down"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let odd = m.item("landscape/odd.png").unwrap();
+    assert!(
+        !odd.decisions
+            .contains(&Decision::Acknowledge(Code::DimNpot)),
+        "{:?}",
+        odd.decisions
+    );
+    assert!(
+        odd.warnings.iter().any(|w| w.code == Code::DimResized),
+        "{:?}",
+        odd.warnings
+    );
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value("landscape/odd.png", "resize"),
+        Some(serde_json::json!("pot-down"))
+    );
+}

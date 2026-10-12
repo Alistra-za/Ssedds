@@ -21,16 +21,20 @@ pub const FIELDS: [(&str, &str); 13] = [
 ];
 
 /// The rarely changed fields the Advanced drawer edits (M3a spec §2.5).
-pub const ADVANCED_FIELDS: [(&str, &str); 5] = [
+pub const ADVANCED_FIELDS: [(&str, &str); 6] = [
     ("encoder.perceptual", "Perceptual"),
     ("encoder.bc1_transparent_black", "BC1 transparent black"),
     ("encoder.bc45_search_radius", "BC4/BC5 search radius"),
     ("encoder.rgbcx_level", "rgbcx level"),
     ("header", "DDS header"),
+    ("resize", "Resize"),
 ];
 
 /// The mip level count: shown as the basic Mipmaps tick box, edited as a count in the Advanced drawer.
 pub const LEVELS_FIELD: (&str, &str) = ("mips.levels", "Levels");
+/// The mip filter: a live combo in the basic Mipmaps group, each option locked by `filter_option_lock`.
+pub const FILTER_FIELD: (&str, &str) = ("mips.filter", "Filter");
+pub const EDGE_FIELD: (&str, &str) = ("mips.edge", "Edge");
 
 pub fn group_of(field: &str) -> &'static str {
     // Coverage only ever applies to the alpha-tested policies, so it sits with the alpha settings.
@@ -130,6 +134,9 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
         "encoder.rgbcx_level" if p.encoder.backend != Backend::Rgbcx => {
             Some("used only by the rgbcx encoder (BC1, BC3, BC4, BC5)")
         }
+        "mips.edge" if p.mips.filter == MipFilter::Box => {
+            Some("only tent, Mitchell and Kaiser read the edge")
+        }
         _ => None,
     }
 }
@@ -152,6 +159,23 @@ pub fn field_views(target: Target, job: &ResolvedJob) -> Vec<FieldView> {
 /// The mip level count's view (value `"full"`, `"none"` or a number).
 pub fn levels_view(target: Target, job: &ResolvedJob) -> FieldView {
     views_of(&[LEVELS_FIELD], target, job).remove(0)
+}
+
+/// The mip filter's view.
+pub fn filter_view(target: Target, job: &ResolvedJob) -> FieldView {
+    views_of(&[FILTER_FIELD], target, job).remove(0)
+}
+
+/// The mip filter's edge handling view.
+pub fn edge_view(target: Target, job: &ResolvedJob) -> FieldView {
+    views_of(&[EDGE_FIELD], target, job).remove(0)
+}
+
+/// Why `f` cannot be picked for this profile, or None (S-mips-2, via `engine::filter::filter_allowed`).
+pub fn filter_option_lock(p: &Profile, f: MipFilter) -> Option<&'static str> {
+    let mut q = p.clone();
+    q.mips.filter = f;
+    engine::filter::filter_allowed(&q).err()
 }
 
 /// Whether the level value means mipmaps are on: anything but `"none"`.
@@ -181,7 +205,12 @@ fn views_of(
             let value = profile
                 .pointer(&format!("/{}", field.replace('.', "/")))
                 .cloned()
-                .unwrap_or(Value::Null);
+                // Defaults the profile does not serialise (F5).
+                .unwrap_or_else(|| match field {
+                    "mips.edge" => Value::from("wrap"),
+                    "resize" => Value::from("none"),
+                    _ => Value::Null,
+                });
             let provenance = job
                 .provenance
                 .get(field)

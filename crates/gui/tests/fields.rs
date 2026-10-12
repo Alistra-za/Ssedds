@@ -184,3 +184,83 @@ fn uncompressed_locks_explain_themselves() {
         Some("float formats have no _SRGB form")
     );
 }
+
+#[test]
+fn filter_and_edge_stay_in_the_basic_mipmaps_group() {
+    assert_eq!(group_of(FILTER_FIELD.0), "Mipmaps");
+    assert_eq!(group_of(EDGE_FIELD.0), "Mipmaps");
+    assert_eq!(group_of("mips.filter"), "Mipmaps");
+    assert_eq!(group_of("mips.edge"), "Mipmaps");
+    assert!(!ADVANCED_FIELDS.iter().any(|f| f.0 == "mips.filter"));
+    assert!(ADVANCED_FIELDS.iter().any(|f| f.0 == "resize"));
+    for f in ["mips.filter", "mips.edge", "resize"] {
+        assert!(engine::overrides::FIELD_PATHS.contains(&f), "{f}");
+    }
+}
+
+#[test]
+fn filter_options_lock_per_s_mips_2() {
+    use MipFilter::*;
+    let reg = PresetRegistry::builtin().unwrap();
+    let mut p = reg.base_profile(Target::Cs, Subtype::Diffuse);
+    p.alpha.policy = AlphaPolicy::Remove;
+    for f in [Box, Tent, Mitchell, Kaiser] {
+        assert_eq!(filter_option_lock(&p, f), None, "diffuse {f:?}");
+    }
+    let n = reg.base_profile(Target::Cs, Subtype::Normal);
+    assert_eq!(filter_option_lock(&n, Box), None);
+    for f in [Tent, Mitchell, Kaiser] {
+        assert!(filter_option_lock(&n, f).is_some(), "normal {f:?}");
+    }
+    let mut c = p.clone();
+    c.alpha.policy = AlphaPolicy::Cutout;
+    assert_eq!(filter_option_lock(&c, Box), None);
+    for f in [Tent, Mitchell, Kaiser] {
+        assert!(
+            filter_option_lock(&c, f).is_some_and(|r| r.contains("alpha-weighted")),
+            "cutout {f:?}"
+        );
+    }
+    let mut e = reg.base_profile(Target::Cs, Subtype::PbrEmissive);
+    e.format = Format::Bc6hUf16;
+    e.alpha.policy = AlphaPolicy::Remove;
+    assert_eq!(filter_option_lock(&e, Tent), None);
+    assert!(filter_option_lock(&e, Mitchell).is_some());
+    assert!(filter_option_lock(&e, Kaiser).is_some());
+    // F2: rgba16f is HDR too; tent only without alpha weighting.
+    let mut r = p.clone();
+    r.format = Format::Rgba16f;
+    assert_eq!(filter_option_lock(&r, Tent), None);
+    assert!(filter_option_lock(&r, Kaiser).is_some());
+    r.alpha.policy = AlphaPolicy::Cutout;
+    assert!(filter_option_lock(&r, Tent).is_some_and(|m| m.contains("alpha-weighted")));
+}
+
+#[test]
+fn edge_is_locked_while_the_filter_is_box() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let mut p = reg.base_profile(Target::Cs, Subtype::Diffuse);
+    p.mips.filter = MipFilter::Box;
+    assert_eq!(
+        field_lock(Target::Cs, &p, "mips.edge"),
+        Some("only tent, Mitchell and Kaiser read the edge")
+    );
+    p.mips.filter = MipFilter::Kaiser;
+    assert_eq!(field_lock(Target::Cs, &p, "mips.edge"), None);
+    assert_eq!(field_lock(Target::Cs, &p, "mips.filter"), None);
+}
+
+/// F5: default `mips.edge` and `resize` are not serialised; the views fall back to their defaults.
+#[test]
+fn filter_edge_and_resize_views_show_their_defaults() {
+    let d = tempfile::tempdir().unwrap();
+    let m = opened(d.path());
+    let job = m.item("landscape/leaf.png").unwrap().job.clone().unwrap();
+    assert_eq!(filter_view(m.target, &job).value, serde_json::json!("box"));
+    assert_eq!(edge_view(m.target, &job).value, serde_json::json!("wrap"));
+    let resize = advanced_field_views(m.target, &job)
+        .into_iter()
+        .find(|v| v.field == "resize")
+        .unwrap();
+    assert_eq!(resize.value, serde_json::json!("none"));
+}

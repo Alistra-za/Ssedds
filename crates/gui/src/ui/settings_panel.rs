@@ -2,15 +2,16 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    channel_text, field_hidden, field_views, format_label, format_options, group_of, levels_view,
-    mips_count, mips_on, provenance_text, FieldView,
+    channel_text, edge_view, field_hidden, field_views, filter_option_lock, filter_view,
+    format_label, format_options, group_of, levels_view, mips_count, mips_on, provenance_text,
+    FieldView,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
 use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
-use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
+use engine::config::{AlphaPolicy, GreenConvention, MipFilter, Subtype, Target};
 use engine::policy::{availability, Availability, ResolvedJob};
 use serde_json::{json, Value};
 
@@ -151,6 +152,11 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
         "mips.normal_base" => vec![
             opt(json!("renormalize"), "Renormalise to unit length"),
             opt(json!("keep"), "Keep as authored"),
+        ],
+        "mips.edge" => vec![opt(json!("wrap"), "Wrap"), opt(json!("clamp"), "Clamp")],
+        "resize" => vec![
+            opt(json!("none"), "None"),
+            opt(json!("pot-down"), "Down to a power of two"),
         ],
         "mips.coverage" => vec![
             opt(json!("auto"), "Auto"),
@@ -429,14 +435,79 @@ fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
         actions.push(Action::Clear(f.field));
     }
     ui.end_row();
-    // `box` is the only filter the engine has in v1.
-    ui.add_enabled_ui(false, |ui| {
-        egui::ComboBox::from_id_salt((cx.key, "mips.filter"))
-            .selected_text("Filter: Box")
-            .show_ui(ui, |_| {})
-    })
-    .response
-    .on_disabled_hover_text("More filters (Kaiser, Mitchell, Lanczos) arrive with M6");
+    filter_row(ui, cx, actions);
+    let e = edge_view(cx.target, cx.job);
+    match field_row(ui, cx, &e) {
+        Some(RowEdit::Set(v)) => actions.push(Action::Set(e.field, v)),
+        Some(RowEdit::Clear) => actions.push(Action::Clear(e.field)),
+        None => {}
+    }
+}
+
+/// The live Filter combo: every option is listed, the ones S-mips-2 bars for this profile disabled with the reason.
+fn filter_row(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
+    const OPTIONS: [(MipFilter, &str); 4] = [
+        (MipFilter::Box, "Box"),
+        (MipFilter::Tent, "Tent"),
+        (MipFilter::Mitchell, "Mitchell"),
+        (MipFilter::Kaiser, "Kaiser"),
+    ];
+    let f = filter_view(cx.target, cx.job);
+    let current = cx.job.profile.mips.filter;
+    let locks = OPTIONS.map(|(m, _)| filter_option_lock(&cx.job.profile, m));
+    ui.label(f.label);
+    let mut picked = None;
+    let r = egui::ComboBox::from_id_salt((cx.key, f.field))
+        .selected_text(OPTIONS.iter().find(|o| o.0 == current).map_or("", |o| o.1))
+        .show_ui(ui, |ui| {
+            for ((m, label), lock) in OPTIONS.into_iter().zip(locks) {
+                let r = ui.add_enabled(
+                    lock.is_none(),
+                    egui::Button::selectable(m == current, label),
+                );
+                match lock {
+                    Some(why) => {
+                        r.on_disabled_hover_text(why);
+                    }
+                    None if r.clicked() && m != current => picked = Some(m),
+                    None => {}
+                }
+            }
+        })
+        .response;
+    // Only Box is open: say why on the combo itself.
+    let r = match locks[1..]
+        .iter()
+        .all(Option::is_some)
+        .then_some(locks[1])
+        .flatten()
+    {
+        Some(why) => r.on_hover_text(why),
+        None => r,
+    };
+    if let Some(why) = &cx.toml_read_only {
+        r.on_disabled_hover_text(why);
+    }
+    if let Some(m) = picked {
+        actions.push(Action::Set(f.field, json!(m)));
+    }
+    if cx.compact {
+        ui.label("");
+    } else {
+        ui.label(
+            egui::RichText::new(provenance_text(&f.provenance))
+                .small()
+                .weak(),
+        );
+    }
+    if f.edited
+        && ui
+            .small_button("↺")
+            .on_hover_text("Use the inherited value")
+            .clicked()
+    {
+        actions.push(Action::Clear(f.field));
+    }
     ui.end_row();
 }
 
@@ -534,9 +605,21 @@ fn decision_box(
                         if let Some(m) = message_of(warnings, *code) {
                             ui.label(m);
                         }
-                        if ui.button("Acknowledge for this texture").clicked() {
-                            actions.push(Action::Decide(Answer::Acknowledge(*code)));
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("Acknowledge for this texture").clicked() {
+                                actions.push(Action::Decide(Answer::Acknowledge(*code)));
+                            }
+                            if *code == Code::DimNpot
+                                && ui
+                                    .button("Resize to a power of two")
+                                    .on_hover_text(
+                                        "writes resize = pot-down for this texture; DIM-RESIZED reports the new size",
+                                    )
+                                    .clicked()
+                            {
+                                actions.push(Action::Set("resize", json!("pot-down")));
+                            }
+                        });
                     }
                 }
                 ui.add_space(4.0);

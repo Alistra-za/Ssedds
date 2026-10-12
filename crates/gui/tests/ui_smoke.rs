@@ -140,6 +140,24 @@ fn selecting_a_texture_shows_its_decisions_and_groups() {
     ] {
         h.get_by_label_contains(label);
     }
+    // One frame with a Kaiser profile selected: the live Filter combo and the Edge row draw.
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.decide(
+        "landscape/rock01.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Diffuse),
+    );
+    model.set_field(
+        "landscape/rock01.png",
+        "mips.filter",
+        serde_json::json!("kaiser"),
+    );
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    model.select_item("landscape/rock01.png");
+    let mut h = harness(model);
+    h.run();
+    h.get_by_value("Kaiser");
+    h.get_by_label("Edge");
 }
 
 #[test]
@@ -888,9 +906,10 @@ fn coverage_sits_under_alpha_for_cutout_policies_only() {
 }
 
 #[test]
-fn the_filter_row_is_box_and_disabled() {
-    let h = leaf_with_policy(engine::config::AlphaPolicy::Cutout);
-    assert!(h.get_by_value("Filter: Box").accesskit_node().is_disabled());
+fn the_filter_row_is_a_live_combo_in_the_mipmaps_group() {
+    let h = leaf_with_policy(engine::config::AlphaPolicy::Remove);
+    h.get_by_label("Filter");
+    assert!(!h.get_by_value("Box").accesskit_node().is_disabled());
 }
 
 #[test]
@@ -1094,4 +1113,27 @@ fn patch_refuses_an_output_key_that_differs_only_in_case() {
     assert_eq!(kd, kp);
     let e = m.patch_dds_header(dds).unwrap_err();
     assert!(e.contains("rock01.png"), "{e}");
+}
+
+#[test]
+fn the_dim_npot_box_offers_a_power_of_two_resize() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.decide(
+        "landscape/odd.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Diffuse),
+    );
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+    model.select_item("landscape/odd.png");
+    let mut h = harness(model);
+    h.run();
+    h.get_by_label("Acknowledge for this texture");
+    press(&mut h, "Resize to a power of two");
+    settle(&mut h);
+    let job = h.state().item("landscape/odd.png").unwrap().job.clone();
+    assert_eq!(
+        job.unwrap().profile.resize,
+        engine::config::ResizeMode::PotDown
+    );
+    assert!(h.query_by_label("Resize to a power of two").is_none());
 }
