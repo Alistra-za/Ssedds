@@ -565,10 +565,11 @@ impl Renderer {
 
     /// The active texture at canonical `norm`, resolved and decoded once per load (stored as the `load_variant`
     /// copy). A path the resolver does not return is listed in `rep.missing_textures`; undecodable bytes are an
-    /// `rep.errors` line.
+    /// `rep.errors` line. `linear`: an `_SRGB` file is uploaded as UNORM (a data map, [`textures::load_dds_as`]).
     fn texture(
         &mut self,
         norm: &str,
+        linear: bool,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> TexSlot {
@@ -586,7 +587,7 @@ impl Renderer {
                     rep.missing_textures.push(norm.to_string());
                 }
             }
-            Some(bytes) => match textures::load_dds(&self.gpu, &bytes) {
+            Some(bytes) => match textures::load_dds_as(&self.gpu, &bytes, linear) {
                 Ok(t) => *entry.slot_mut(v) = Some(t),
                 Err(e) => rep.errors.push(format!("{norm}: {e}")),
             },
@@ -635,7 +636,9 @@ impl Renderer {
                 None => {}
             }
         }
-        // CS_SKIN's t71: the first RFAOS candidate in `tex_cache` with a texture (resolve_textures asked for them).
+        // CS_SKIN's t71: the first RFAOS candidate in `tex_cache` with a texture (resolve_textures asked for them,
+        // linear). A hot-swap does not rebind it: sdc never encodes or swaps an RFAOS file (not a set member), and
+        // a reload picks up an external edit.
         if let Some(kind) = draw::srv_kind_at(&program.ps.reflection, 71) {
             let found = rfaos_candidates(m)
                 .iter()
@@ -677,13 +680,13 @@ impl Renderer {
             if !path.norm.is_empty()
                 && textures::register_for_slot(m.shader_type, pbr, msn, slot).is_some()
             {
-                self.texture(&path.norm, textures, rep);
+                self.texture(&path.norm, false, textures, rep);
             }
         }
         // Derived guesses: a candidate the resolver lacks is not a missing texture (decode errors still count).
         let mut quiet = LoadReport::default();
         for c in rfaos_candidates(m) {
-            if self.texture(&c, textures, &mut quiet).is_some() {
+            if self.texture(&c, true, textures, &mut quiet).is_some() {
                 break;
             }
         }

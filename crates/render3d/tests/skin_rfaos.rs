@@ -1,7 +1,7 @@
 //! P1-C Task 8: the skin RFAOS lookup (pre-October CS rule, 02-skin-rfaos.md §0) on WARP with the stand-in shader.
 //! `STANDIN_SKIN`: pixels = 0.25·diffuse + skinMaterialFlags.x × t71.
 mod common;
-use common::{cache_files, channel, dds_rgba8, fixture, renderer};
+use common::{cache_files, channel, dds_rgba8, dds_rgba8_dx10, fixture, renderer};
 use nif::material::MaterialState;
 use render3d::cs_settings::CsSettings;
 use render3d::scene::Scene;
@@ -26,6 +26,15 @@ fn flags(r: &Renderer, id: ShapeId) -> Vec<f32> {
 /// cylinder_1 of the furniture fixture as a FaceGen (type 4) shape with `_n`, `_sk` and `_s` slots, its RFAOS
 /// candidates resolved by `files`.
 fn skin(cache: &Path, files: &[(&str, [u8; 4])], shader_type: u32) -> Renderer {
+    let files: Vec<(&str, Vec<u8>)> = files
+        .iter()
+        .map(|(p, c)| (*p, dds_rgba8(1, 1, &[*c])))
+        .collect();
+    skin_dds(cache, &files, shader_type)
+}
+
+/// As [`skin`] with the candidates' DDS bytes given.
+fn skin_dds(cache: &Path, files: &[(&str, Vec<u8>)], shader_type: u32) -> Renderer {
     let mut r = renderer(cache, SKIN);
     let rep = r.load(&fixture("TestNifFile_Furniture_Col_SE.nif"), &|_| None);
     assert_eq!(rep.shapes, 2, "{rep:?}");
@@ -39,10 +48,6 @@ fn skin(cache: &Path, files: &[(&str, [u8; 4])], shader_type: u32) -> Renderer {
     m.set_slot_raw(1, r"textures\standin\head_N.dds");
     m.set_slot_raw(2, r"textures\standin\head_sk.dds");
     m.set_slot_raw(7, r"Textures\Standin\Light\head_s.dds");
-    let files: Vec<(String, Vec<u8>)> = files
-        .iter()
-        .map(|(p, c)| (p.to_string(), dds_rgba8(1, 1, &[*c])))
-        .collect();
     let resolve = |p: &str| files.iter().find(|f| f.0 == p).map(|f| f.1.clone());
     assert!(r.set_material(CYL1, m, &resolve).is_ok());
     r
@@ -187,4 +192,23 @@ fn arch_head_resolves_the_light_rfaos() {
         );
         assert_eq!(f[0], 1.0);
     }
+}
+
+/// Fix round 1: t71 is sampled linear. The same 128-grey texels tagged `R8G8B8A8_UNORM_SRGB` and `_UNORM` give the
+/// same frame (an sRGB view would decode 128 to ~55 and darken the added grey).
+#[test]
+fn an_srgb_tagged_rfaos_is_sampled_linear() {
+    let grey = [128, 128, 128, 255];
+    let px = |srgb: bool| {
+        let cache = tempfile::tempdir().unwrap();
+        let mut r = skin_dds(
+            cache.path(),
+            &[(FROM_S, dds_rgba8_dx10(1, 1, &[grey], srgb))],
+            4,
+        );
+        assert_eq!(flags(&r, CYL1)[0], 1.0);
+        frame(&mut r)
+    };
+    let (linear, srgb) = (px(false), px(true));
+    assert_eq!(channel(&srgb, 0), channel(&linear, 0));
 }

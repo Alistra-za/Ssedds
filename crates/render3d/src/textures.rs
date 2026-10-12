@@ -304,6 +304,20 @@ pub fn dxgi_format(f: DdsPixelFormat, dx10: Option<u32>) -> DXGI_FORMAT {
     })
 }
 
+/// The UNORM twin of an `_SRGB` format (R8G8B8A8, BC1-3, B8G8R8A8, B8G8R8X8, BC7); any other format as is.
+pub fn without_srgb(f: DXGI_FORMAT) -> DXGI_FORMAT {
+    DXGI_FORMAT(match f.0 {
+        29 => 28,
+        72 => 71,
+        75 => 74,
+        78 => 77,
+        91 => 87,
+        93 => 88,
+        99 => 98,
+        x => x,
+    })
+}
+
 /// A decoded DDS ready for binding.
 #[derive(Clone)]
 pub struct Texture {
@@ -330,8 +344,15 @@ pub fn view_kind(v: &ID3D11ShaderResourceView) -> Option<SrvKind> {
 /// DDS bytes → immutable texture + SRV in the file's own format (2D, or a cube when the header says so).
 /// Arrays upload slice 0 only. Errors (unsupported header, BC top level not a multiple of 4, …) are text.
 pub fn load_dds(gpu: &Gpu, bytes: &[u8]) -> Result<Texture, String> {
+    load_dds_as(gpu, bytes, false)
+}
+
+/// As [`load_dds`]; `linear` uploads an `_SRGB` file as its UNORM twin (the same bytes, no sRGB decode on
+/// sampling), for data maps such as the skin RFAOS at t71.
+pub fn load_dds_as(gpu: &Gpu, bytes: &[u8], linear: bool) -> Result<Texture, String> {
     let f = read_dds(bytes).map_err(|e| format!("{e:?}"))?;
     let format = dxgi_format(f.format, f.dx10.map(|d| d.dxgi));
+    let format = if linear { without_srgb(format) } else { format };
     let mips = f.levels.len().max(1);
     let slice_bytes = f.levels.last().map_or(0, |l| l.2.end);
     let faces = if f.is_cubemap { 6 } else { 1 };

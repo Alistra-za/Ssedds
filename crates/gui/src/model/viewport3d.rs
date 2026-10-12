@@ -105,6 +105,8 @@ pub enum FileSource {
         id: u64,
         bytes: Arc<Vec<u8>>,
     },
+    /// A guess (a skin RFAOS candidate): a read that fails is no error, the texture is just absent.
+    Optional(Box<FileSource>),
 }
 
 impl PartialEq for FileSource {
@@ -122,6 +124,7 @@ impl PartialEq for FileSource {
                 },
             ) => a == b && n == m,
             (FileSource::Memory { id: a, .. }, FileSource::Memory { id: b, .. }) => a == b,
+            (FileSource::Optional(a), FileSource::Optional(b)) => a == b,
             _ => false,
         }
     }
@@ -141,6 +144,7 @@ impl std::fmt::Debug for FileSource {
                 .field("id", id)
                 .field("len", &bytes.len())
                 .finish(),
+            FileSource::Optional(s) => f.debug_tuple("Optional").field(s).finish(),
         }
     }
 }
@@ -1548,6 +1552,7 @@ fn read_source(
     match src {
         FileSource::Loose(p) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
         FileSource::Memory { bytes, .. } => Ok(bytes.to_vec()),
+        FileSource::Optional(s) => read_source(s, bsas),
         FileSource::Bsa { archive, norm } => {
             let mut map = bsas.borrow_mut();
             let idx = map.entry(archive.clone()).or_insert_with(|| {
@@ -1617,6 +1622,7 @@ fn resolver<'a>(
         let src = map.get(norm)?;
         match read_source(src, bsas) {
             Ok(b) => Some(b),
+            Err(_) if matches!(src, FileSource::Optional(_)) => None,
             Err(e) => {
                 errors.borrow_mut().push(e);
                 None
@@ -2033,5 +2039,42 @@ fn render_loop(
             Err(message) if !refresh => send(V3Reply::RenderError { id, message }),
             Err(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P1-C Task 8 fix 1: an RFAOS candidate whose file is gone is quiet (no load-report error) and the other
+    /// candidate is served; an ordinary source that fails is still an error.
+    #[test]
+    fn a_failed_optional_source_is_quiet() {
+        let gone = || FileSource::Loose(PathBuf::from(r"C:\nope\sdc\gone_rfaos.dds"));
+        let map = HashMap::from([
+            (
+                "a_rfaos".to_string(),
+                FileSource::Optional(Box::new(gone())),
+            ),
+            (
+                "b_rfaos".to_string(),
+                FileSource::Optional(Box::new(FileSource::Memory {
+                    id: 1,
+                    bytes: Arc::new(b"dds".to_vec()),
+                })),
+            ),
+            ("slot".to_string(), gone()),
+        ]);
+        let (bsas, errors) = (RefCell::new(HashMap::new()), RefCell::new(vec![]));
+        let r = resolver(&map, &bsas, &errors);
+        assert_eq!(r("a_rfaos"), None);
+        assert_eq!(r("b_rfaos").as_deref(), Some(&b"dds"[..]));
+        assert!(errors.borrow().is_empty(), "{:?}", errors.borrow());
+        assert_eq!(r("slot"), None);
+        assert_eq!(
+            errors.borrow().len(),
+            1,
+            "a slot texture that fails is reported"
+        );
     }
 }
