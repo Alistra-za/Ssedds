@@ -169,6 +169,56 @@ fn ready(r: &Result<Program, String>) -> Lookup {
 /// not decode).
 type TexSlot = Option<(ID3D11ShaderResourceView, SrvKind)>;
 
+/// Which of a path's two textures the draws use: the one the host's resolver returned at load (or a `Source`
+/// swap), or the converter's encode of it. The set preview maps `PreviewMode` to this one to one (P1-B A/B, 03 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum Variant {
+    #[default]
+    Source,
+    Encoded,
+}
+
+impl Variant {
+    pub fn other(self) -> Variant {
+        match self {
+            Variant::Source => Variant::Encoded,
+            Variant::Encoded => Variant::Source,
+        }
+    }
+}
+
+/// Both textures of one canonical path (`textures/…`) and the one the draws use. GPU textures are immutable, so a
+/// swap makes a new texture and SRV and rebinds. Both `None` = the resolver had nothing (kept so one load asks once).
+#[derive(Clone, Default)]
+struct TexEntry {
+    source: Option<textures::Texture>,
+    encoded: Option<textures::Texture>,
+    active: Variant,
+}
+
+impl TexEntry {
+    fn slot(&self, v: Variant) -> &Option<textures::Texture> {
+        match v {
+            Variant::Source => &self.source,
+            Variant::Encoded => &self.encoded,
+        }
+    }
+
+    fn slot_mut(&mut self, v: Variant) -> &mut Option<textures::Texture> {
+        match v {
+            Variant::Source => &mut self.source,
+            Variant::Encoded => &mut self.encoded,
+        }
+    }
+
+    fn current(&self) -> Option<&textures::Texture> {
+        self.slot(self.active).as_ref()
+    }
+
+    fn any(&self) -> bool {
+        self.source.is_some() || self.encoded.is_some()
+    }
+}
 /// The 3D preview renderer: message-shaped (load bytes → report, render scene → pixels) so it can later move
 /// into a sidecar process. Single-threaded, like [`Gpu`].
 pub struct Renderer {
@@ -194,8 +244,10 @@ pub struct Renderer {
     shapes: BTreeMap<ShapeId, ShapeState>,
     /// Shapes with a draw that are not hidden: opaque first, then alpha-blended, block order within each.
     draw_order: Vec<ShapeId>,
-    /// Textures resolved since the last load, by canonical path.
-    tex_cache: HashMap<String, TexSlot>,
+    /// Textures resolved or swapped in since the last load, by canonical path.
+    tex_cache: HashMap<String, TexEntry>,
+    /// The variant the resolver's bytes of the next loads count as ([`Renderer::set_load_variant`]).
+    load_variant: Variant,
     bounds: Option<([f32; 3], f32)>,
     sampler: ID3D11SamplerState,
     raster: ID3D11RasterizerState,
@@ -306,6 +358,7 @@ impl Renderer {
             shapes: BTreeMap::new(),
             draw_order: vec![],
             tex_cache: HashMap::new(),
+            load_variant: Variant::Source,
             bounds: None,
             sampler: s.ok_or("no sampler")?,
             raster: r.ok_or("no rasterizer state")?,
@@ -388,34 +441,37 @@ impl Renderer {
         Ok(v)
     }
 
-    /// The texture at canonical `norm`, resolved and decoded once per load. A path the resolver does not
-    /// return is listed in `rep.missing_textures`; undecodable bytes are an `rep.errors` line.
+    /// The active texture at canonical `norm`, resolved and decoded once per load (stored as the `load_variant`
+    /// copy). A path the resolver does not return is listed in `rep.missing_textures`; undecodable bytes are an
+    /// `rep.errors` line.
     fn texture(
         &mut self,
         norm: &str,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> TexSlot {
-        if let Some(t) = self.tex_cache.get(norm) {
-            return t.clone();
+        if let Some(e) = self.tex_cache.get(norm) {
+            return e.current().map(|t| (t.srv.clone(), t.kind));
         }
-        let loaded = match textures(norm) {
+        let v = self.load_variant;
+        let mut entry = TexEntry {
+            active: v,
+            ..TexEntry::default()
+        };
+        match textures(norm) {
             None => {
                 if !rep.missing_textures.iter().any(|m| m == norm) {
                     rep.missing_textures.push(norm.to_string());
                 }
-                None
             }
             Some(bytes) => match textures::load_dds(&self.gpu, &bytes) {
-                Ok(t) => Some((t.srv, t.kind)),
-                Err(e) => {
-                    rep.errors.push(format!("{norm}: {e}"));
-                    None
-                }
+                Ok(t) => *entry.slot_mut(v) = Some(t),
+                Err(e) => rep.errors.push(format!("{norm}: {e}")),
             },
-        };
-        self.tex_cache.insert(norm.to_string(), loaded.clone());
-        loaded
+        }
+        let slot = entry.current().map(|t| (t.srv.clone(), t.kind));
+        self.tex_cache.insert(norm.to_string(), entry);
+        slot
     }
 
     /// NIF slot → register for every slot the PS reads (taken from `tex_cache`, which `resolve_textures` filled),
@@ -441,7 +497,12 @@ impl Renderer {
             let Some(kind) = draw::srv_kind_at(&program.ps.reflection, reg) else {
                 continue;
             };
-            match self.tex_cache.get(&path.norm).cloned().flatten() {
+            match self
+                .tex_cache
+                .get(&path.norm)
+                .and_then(TexEntry::current)
+                .map(|t| (t.srv.clone(), t.kind))
+            {
                 Some((srv, k)) if k == kind => {
                     real.insert(reg, srv);
                 }
@@ -895,7 +956,7 @@ impl Renderer {
         if kind == EditKind::Same && !rebuild {
             return Ok(kind);
         }
-        self.tex_cache.retain(|_, t| t.is_some());
+        self.tex_cache.retain(|_, e| e.any());
         let mut scratch = LoadReport::default();
         if rebuild {
             if let Some(s) = self.shapes.get_mut(&id) {
@@ -968,6 +1029,163 @@ impl Renderer {
             .ok_or("no draw")?;
         d.rewrite_material(m, ll);
         Ok(())
+    }
+
+    /// Which variant the resolver's bytes count as for the loads that follow (default `Source`). The set preview
+    /// sets it to its current mode before a scene push, so the loaded textures are that mode's copy and the other
+    /// mode's can be swapped in beside it.
+    pub fn set_load_variant(&mut self, v: Variant) {
+        self.load_variant = v;
+    }
+
+    /// Hot-swaps one texture (03 §2): a new immutable texture + SRV from `dds` is stored as variant `v` of `path`
+    /// (empty `dds`: that copy is dropped). A variant that is the entry's only texture becomes the active one; a
+    /// dropped active copy falls back to the other. When the bound texture changes, every shape still drawing (not hidden)
+    /// that reads `path` gets the new view, and its material is written again where the set of real textures changed
+    /// (`PBRFlags` HasEmissive/…, `EnvmapData.y`). No mesh, shader or cbuffer layout is touched.
+    ///
+    /// Returns the `(shape, register)` pairs rebound. `Err`, with nothing stored or changed, for a DDS that does
+    /// not decode or a texture of another kind than a register reads (a cube into a 2D slot).
+    pub fn replace_texture(
+        &mut self,
+        path: &str,
+        dds: &[u8],
+        v: Variant,
+    ) -> Result<Vec<(ShapeId, u32)>, String> {
+        let fresh = if dds.is_empty() {
+            None
+        } else {
+            Some(textures::load_dds(&self.gpu, dds).map_err(|e| format!("{path}: {e}"))?)
+        };
+        let mut entry = self.tex_cache.get(path).cloned().unwrap_or_default();
+        let was = entry.active;
+        let dropped = fresh.is_none();
+        *entry.slot_mut(v) = fresh;
+        if !dropped && entry.slot(v.other()).is_none() {
+            entry.active = v;
+        } else if dropped && entry.active == v {
+            entry.active = v.other();
+        }
+        if entry.active == v || entry.active != was {
+            self.rebind(path, entry)
+        } else {
+            self.tex_cache.insert(path.to_string(), entry);
+            Ok(vec![])
+        }
+    }
+
+    /// Makes variant `v` of `path` the bound one (the A/B flip): a new view per bound register, no upload, no
+    /// decode. False when `v` is already active, `path` has no `v` copy, no `Drawing` shape reads `path`, or the
+    /// copy's kind does not fit (then nothing changes).
+    pub fn set_texture_variant(&mut self, path: &str, v: Variant) -> bool {
+        let Some(mut entry) = self.tex_cache.get(path).cloned() else {
+            return false;
+        };
+        if entry.active == v || entry.slot(v).is_none() {
+            return false;
+        }
+        entry.active = v;
+        self.rebind(path, entry)
+            .is_ok_and(|touched| !touched.is_empty())
+    }
+
+    /// `(shape, register, kind)` for every register a visible shape with a draw reads `path` through (the same slot →
+    /// register rule as the load). Hidden shapes are left alone (their next build reads the entry). A pending or failed shape
+    /// still draws its previous `ShapeDraw`, so it is rebound too, but its cbuffers are kept (its `material` is the
+    /// newer, unapplied one).
+    fn texture_targets(&self, path: &str) -> Vec<(ShapeId, u32, SrvKind)> {
+        let mut out: Vec<(ShapeId, u32, SrvKind)> = vec![];
+        for (id, s) in &self.shapes {
+            let Some(d) = s.draw.as_ref().filter(|_| s.status != ShapeStatus::Hidden) else {
+                continue;
+            };
+            let m = &s.material;
+            let msn = m.slsf1 & (1 << 12) != 0;
+            for (slot, p) in m.slots.iter().enumerate() {
+                if p.norm != path {
+                    continue;
+                }
+                let Some(reg) = textures::register_for_slot(m.shader_type, m.is_pbr(), msn, slot)
+                else {
+                    continue;
+                };
+                let Some(view) = d.srvs.iter().find(|(r, _)| *r == reg).map(|(_, v)| v) else {
+                    continue;
+                };
+                let Some(kind) = textures::view_kind(view) else {
+                    continue;
+                };
+                if !out.iter().any(|(i, r, _)| i == id && *r == reg) {
+                    out.push((*id, reg, kind));
+                }
+            }
+        }
+        out
+    }
+
+    /// Stores `entry` for `path` and points every draw that reads it at the entry's active texture (a 1×1 default
+    /// when it has none). All kinds are checked before anything changes.
+    fn rebind(&mut self, path: &str, entry: TexEntry) -> Result<Vec<(ShapeId, u32)>, String> {
+        let mut plan = vec![];
+        for (id, reg, kind) in self.texture_targets(path) {
+            let (shader_type, pbr, name) = {
+                let s = &self.shapes[&id];
+                (s.material.shader_type, s.material.is_pbr(), s.name.clone())
+            };
+            let real = match entry.current() {
+                Some(t) if t.kind != kind => {
+                    return Err(format!(
+                        "{path} is a {:?} texture but {name} reads t{reg} as {kind:?}",
+                        t.kind
+                    ))
+                }
+                Some(t) => Some(t.srv.clone()),
+                None => None,
+            };
+            let srv = match &real {
+                Some(v) => v.clone(),
+                None => self.default_srv(kind, textures::default_for(reg, shader_type, pbr))?,
+            };
+            plan.push((id, reg, srv, real.is_some()));
+        }
+        self.tex_cache.insert(path.to_string(), entry);
+        let ll = self.linear_lighting();
+        let mut touched = vec![];
+        for (id, reg, srv, real) in plan {
+            let Some(s) = self.shapes.get_mut(&id) else {
+                continue;
+            };
+            let material = s.material.clone();
+            let applied = s.status == ShapeStatus::Drawing;
+            let Some(d) = s.draw.as_mut() else {
+                continue;
+            };
+            if let Some(slot) = d.srvs.iter_mut().find(|(r, _)| *r == reg) {
+                slot.1 = srv;
+            }
+            let was = d.bound.regs.contains(&reg);
+            if real {
+                d.bound.regs.insert(reg);
+            } else {
+                d.bound.regs.remove(&reg);
+            }
+            if was != real && applied {
+                d.rewrite_material(&material, ll);
+            }
+            touched.push((id, reg));
+        }
+        Ok(touched)
+    }
+
+    /// Test hook: the COM pointer of the shape's index buffer. A hot-swap must leave it alone (no mesh reload).
+    #[doc(hidden)]
+    pub fn draw_identity(&self, id: ShapeId) -> Option<usize> {
+        use windows::core::Interface;
+        self.shapes
+            .get(&id)?
+            .draw
+            .as_ref()
+            .map(|d| d.mesh.index.as_raw() as usize)
     }
 
     fn compute_bounds(&self) -> Option<([f32; 3], f32)> {
