@@ -937,3 +937,30 @@ fn a_failed_edit_on_the_only_shape_keeps_the_camera_live() {
     v.request_frame(64, 64);
     assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
 }
+
+#[test]
+fn the_spinner_needs_300_ms_of_continuous_work_and_resets_when_idle() {
+    use std::time::{Duration, Instant};
+    let d = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::with_state(V3State::NotFound);
+    let t0 = Instant::now();
+    assert!(!v.show_spinner(t0), "idle");
+    v.choose_folder(d.path().to_path_buf()); // busy until its answer is polled
+    assert!(v.busy());
+    assert!(!v.show_spinner(t0), "just started");
+    assert!(!v.show_spinner(t0 + Duration::from_millis(299)));
+    assert!(v.show_spinner(t0 + v3::SPINNER_DELAY));
+    let t = Instant::now();
+    while v.busy() && t.elapsed().as_secs() < 20 {
+        v.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!v.busy());
+    assert!(!v.show_spinner(t0 + Duration::from_secs(5)), "idle: off");
+    // The timer restarted: new work does not inherit the old start.
+    v.choose_folder(d.path().to_path_buf());
+    let t1 = t0 + Duration::from_secs(10);
+    assert!(!v.show_spinner(t1));
+    assert!(!v.show_spinner(t1 + Duration::from_millis(100)));
+    assert!(v.show_spinner(t1 + Duration::from_millis(300)));
+}

@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Panel text when no CS install is found (00 §6.4).
 pub const NOT_FOUND: &str = "Community Shaders not found";
@@ -365,6 +366,9 @@ pub fn default_cache_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("sdc").join("shader-cache"))
 }
 
+/// How long the viewport must be busy without a break before the spinner shows.
+pub const SPINNER_DELAY: Duration = Duration::from_millis(300);
+
 pub struct Viewport3d {
     pub state: V3State,
     pub orbit: Orbit,
@@ -400,6 +404,8 @@ pub struct Viewport3d {
     edits_done: u64,
     next_id: u64,
     locating: bool,
+    /// Since when `busy()` has held without a break (for `show_spinner`).
+    busy_since: Option<Instant>,
     locate_gen: u64,
     declined: Option<PathBuf>,
     shaders_changed: bool,
@@ -443,6 +449,7 @@ impl Viewport3d {
             render_done: 0,
             next_id: 0,
             locating: false,
+            busy_since: None,
             locate_gen: 0,
             declined: None,
             shaders_changed: false,
@@ -489,6 +496,17 @@ impl Viewport3d {
             || self.pending_load.is_some()
             || self.render_done < self.render_sent
             || self.edits_done < self.edits_sent
+    }
+
+    /// Whether to draw the busy spinner at `now`: only after `SPINNER_DELAY` of continuous work, so an ordinary frame
+    /// render does not flash it. Call once per frame; the repaints `busy()` already asks for keep it ticking.
+    pub fn show_spinner(&mut self, now: Instant) -> bool {
+        if !self.busy() {
+            self.busy_since = None;
+            return false;
+        }
+        let since = *self.busy_since.get_or_insert(now);
+        now.duration_since(since) >= SPINNER_DELAY
     }
 
     /// The fingerprint to save in `gui.toml`, when it changed since the last call.

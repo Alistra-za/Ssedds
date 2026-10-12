@@ -27,7 +27,7 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
         if ui.checkbox(&mut on, FEATURES_LABEL).changed() {
             v.set_features(on);
         }
-        if v.busy() {
+        if v.show_spinner(std::time::Instant::now()) {
             ui.spinner();
         }
     });
