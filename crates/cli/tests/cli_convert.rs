@@ -1242,3 +1242,20 @@ fn the_manifest_records_the_shader() {
         serde_json::json!({ "shader": "hair", "provenance": "set" })
     );
 }
+
+/// M6 Track D spec §3: a preset in `%APPDATA%\sdc\presets\` is usable by `--preset <id>` with no other flag.
+#[test]
+fn a_user_folder_preset_is_usable_by_id() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    fx.write(
+        "appdata/sdc/presets/mine.toml",
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n",
+    );
+    let o = fx.convert(&["--preset", "mine", DIFFUSE[0], DIFFUSE[1]]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(
+        fx.format("textures/a/wall.dds"),
+        DdsPixelFormat::Bc1 { srgb: false }
+    );
+}

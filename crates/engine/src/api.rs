@@ -64,6 +64,9 @@ pub struct BatchRequest {
     pub preset_files: Vec<PathBuf>,
     /// User config; skipped when the file does not exist.
     pub user_config: Option<PathBuf>,
+    /// The user presets folder (`%APPDATA%\sdc\presets`, M6 Track D spec §3): every `*.toml` in it is loaded before
+    /// `preset_files`; a bad one is skipped with CFG-PRESET-SKIPPED. `None` (tests) loads nothing.
+    pub user_presets: Option<PathBuf>,
     /// Project config; defaults to `sdc.toml` in the first input folder when that exists.
     pub project_config: Option<PathBuf>,
     /// The project config as edited in memory (DECISIONS N4). When `Some`, it is used instead of
@@ -113,6 +116,7 @@ impl BatchRequest {
             preset: None,
             preset_files: vec![],
             user_config: None,
+            user_presets: None,
             project_config: None,
             project_config_inline: None,
             overrides: vec![],
@@ -572,6 +576,7 @@ struct Setup {
     target: Target,
     target_src: Provenance,
     preset_id: String,
+    preset_skips: Vec<Warning>,
 }
 
 impl Engine {
@@ -595,6 +600,12 @@ impl Engine {
 
     fn setup(&self, req: &BatchRequest) -> Result<Setup, EngineError> {
         let mut registry = self.registry.clone();
+        // Spec §3: the user folder first (bad files skipped), then `--preset-file` (a bad one is an error).
+        let preset_skips = req
+            .user_presets
+            .as_deref()
+            .map(|d| registry.add_dir(d))
+            .unwrap_or_default();
         for f in &req.preset_files {
             registry.add_file(f).map_err(config_err)?;
         }
@@ -661,6 +672,7 @@ impl Engine {
             target,
             target_src,
             preset_id,
+            preset_skips,
         })
     }
 
@@ -694,6 +706,7 @@ impl Engine {
             target,
             target_src,
             preset_id,
+            preset_skips,
         } = self.setup(&req)?;
 
         for i in &req.inputs {
@@ -717,6 +730,9 @@ impl Engine {
                 inputs: files.len(),
             },
         );
+        for w in preset_skips {
+            rep.emit(None, None, EventKind::Warning(w));
+        }
         let key = |out: &Path| output_key(&req.output_root, out);
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
         // 1. `discover`, then `canonicalise_outputs` (above).

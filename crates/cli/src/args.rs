@@ -105,10 +105,11 @@ pub struct BatchArgs {
     /// Target (default: from the configs or the selected preset, finally `cs`).
     #[arg(long, value_enum)]
     pub target: Option<TargetArg>,
-    /// Preset id, or a path to a preset .toml file.
+    /// Preset id (built-in, or from %APPDATA%\sdc\presets\*.toml), or a path to a preset .toml file.
     #[arg(long)]
     pub preset: Option<String>,
-    /// Load a preset .toml without selecting it, e.g. one declaring suffix aliases (repeatable).
+    /// Load a preset .toml without selecting it, after the user presets folder, e.g. one declaring suffix aliases
+    /// (repeatable). An id that is already loaded is an error.
     #[arg(long = "preset-file")]
     pub preset_file: Vec<PathBuf>,
     /// Project config (default: sdc.toml in the first input folder).
@@ -304,6 +305,11 @@ pub fn parse_fill(s: &str) -> Result<SetOverride, String> {
     parse_set(&format!("packing.fill.{role}={code}"))
 }
 
+/// `%APPDATA%\sdc\presets`, the user presets folder (M6 Track D spec §3); `None` when APPDATA is unset.
+pub fn user_presets_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("presets"))
+}
+
 /// Translate the shared batch flags into a `BatchRequest`. Errors are usage or configuration errors (exit 2).
 pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, String> {
     // `BatchRequest::new` takes a target; `--target` is optional, so reset it to "not given".
@@ -327,6 +333,7 @@ pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, Str
     r.project_config = b.config.clone();
     r.user_config =
         std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("config.toml"));
+    r.user_presets = user_presets_dir();
     r.overrides = b
         .set
         .iter()
