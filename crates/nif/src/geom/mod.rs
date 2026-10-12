@@ -1,9 +1,11 @@
 //! LAYER 1: SSE BSTriShape geometry for the 3D preview (plan B5a; 01 §Recommendation). LE meshes are never
 //! rendered (00 §6.5), so NiTriShapeData is not decoded.
+pub mod av;
 mod bstrishape;
 pub mod skin_partition;
 mod vertex_desc;
 
+pub use av::{read_av_head, AvHead};
 pub use bstrishape::read_shape;
 pub use vertex_desc::{Attr, VertexDesc};
 

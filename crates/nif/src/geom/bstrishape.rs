@@ -1,5 +1,6 @@
 //! BSTriShape / BSSubIndexTriShape / BSDynamicTriShape at BSVER 100 (nif.xml 8228-8246, 8450-8453; nifly
 //! Geometry.cpp 449-600 and NifFile.cpp 2029-2058).
+use super::av::read_av_head;
 use super::skin_partition::{block_cursor, read_skin_partition, tris};
 use super::vertex_desc::{read_vertices, VertexDesc};
 use super::Mesh;
@@ -31,18 +32,10 @@ pub fn read_shape(h: &Header, b: &[u8], block: usize) -> Result<Mesh, NifError> 
         other => return Err(geo(format!("{} is not an SSE BSTriShape", lossy(other)))),
     };
     let mut c = block_cursor(h, b, block)?;
-    // NiObjectNET
-    c.i32()?; // name
-    let n = c.u32()? as usize;
-    c.skip(n.saturating_mul(4))?; // extra data refs
-    c.i32()?; // controller
-    c.u32()?; // NiAVObject (nif.xml 3440-3460) flags
-    let t = c.f32s::<3>()?;
-    let r = c.f32s::<9>()?;
-    let s = c.f32()?;
-    c.i32()?; // collision
+    // NiObjectNET + NiAVObject (nif.xml 3440-3460)
+    let av = read_av_head(h, &mut c)?;
     let mut m = Mesh {
-        transform: [0, 1, 2].map(|i| [r[3 * i] * s, r[3 * i + 1] * s, r[3 * i + 2] * s, t[i]]),
+        transform: av.transform,
         ..Mesh::default()
     };
     // BSTriShape
