@@ -7454,3 +7454,26 @@ Notes / surprises:
 - `ui_gap` metric bug: 77 of the 104 lines follow a completion event within 60 ms of the previous frame. The watch was armed before the frame drained its replies, so the owner's pause after the last reply was logged as a freeze. Fixed in 04ac290 (armed at the end of the frame, regression test). The other 27 match the same pattern after a render reply, which the log does not record; a rerun on the fixed exe confirms or refutes.
 - 466.7–484.4 s: 22 reloads of mesh:132418 at about 0.5 s intervals, build ≈ 44 ms, no compiles (memo hits); matches repeated CS-feature toggles.
 - Rerun needed on the fixed exe: Steps 3, 4 (instant flip, background encode), 6, and Step 2 on a set showing ≥ 6 shapes.
+
+## P1-B verification, run 2 (2026-10-12, exe b9db25d/6a6fac5, logs preview-timings-20261012-102313.jsonl + memory-20261012-102306.csv)
+
+Run between (095909.jsonl, exe b9db25d) ended at 03:13:56 with `run_end` and no Windows crash record; the owner saw a crash. Cause not recoverable (no console); panics are logged from 6a6fac5 on.
+
+| Check | Result | Value (from the log unless marked manual) |
+|---|---|---|
+| Step 2 recompile, big NIF: mesh:224049, 6 shapes (Meshes panel) | pass | CS toggle at 599.35 s: 6 `shape_pending`, 6 `shape_ready` ok; first pending → last ready 600 ms; **no `ui_gap` in the whole run**; P1-A would have blocked ≈ 340 ms (226 + 115, miss) |
+| Step 2 glint key only (set preview, `vampire/robesf`, 2 shapes) | pass | 351.52 s: 1 of 2 shapes pending (`showing_previous: true`); `edit` `Permutation` 8.1 ms; compile 670 ms |
+| Step 3 compile failure keeps old image, error listed | not run | no `compile` line with `ok: false` |
+| Step 4 swap on re-encode, no scene push | fail as written (owner decision) | 28.97 / 34.19 / 37.53 / 289.68 / 295.14 s: each `encode` (Encoded) followed by a `load` (build 6–30 ms), no `texture_swap` — plan Task 8 line 4540 behaviour |
+| Step 4 first flip (re-encode) | pass | `encode` (Source) 178 / 504 / 872 / 897 ms; `texture_swap` 16.7–26.3 ms; no `load` |
+| Step 4 instant flip, both variants | pass | `ab_flip` (4 paths) ×8 after the first flip: 11.4, 7.3, 5.8, 21.6, 18.3, 19.5, 22.7, 15.8 ms (all < 50); no `encode` among them; byte-identical flip-back not checked (manual) |
+| Step 4 background encode of the other mode | not run | no settings change while A/B was in use |
+| Step 4 GPU/commit with both variants | — | memory CSV: before the first flip (03:28:19) 602.6 MB dedicated / 890.9 MB commit; after the flips (03:28:39) 641.9 / 1049.4 → +39 MB GPU, +158 MB commit (budget ~340 MB). Run peak 1401 MB dedicated (03:32:59, 6-shape mesh in the Meshes panel). |
+| Step 4 frame cost after the flip | — | not regressed (frame_stats `total_ms_p95` 2–6 ms throughout) |
+| Step 6 cache prune | partial | `.tmp-sdc-verify` removed (run 095909: `removed` 1). `deadbeef.cso` kept: prune deletes only key-shaped files (Task 4 ruling: 64 lowercase hex), so the checklist's artefact name cannot be pruned — expected. Minor: `bytes_before` counts foreign files, `bytes_after` does not (10-byte mismatch). Size 2.0 MB ≪ 512 MB. |
+| Whole run | pass | 0 `ui_gap` (run 1's 104 were the metric bug fixed in 04ac290/6c92b0e/b9db25d); `dropped` 0; `warp: false`; no `device_rebuild`, no `panic` |
+
+Notes:
+- 357.98 s: shape 21 pending twice (two keys) with one `shape_ready`: the first key was superseded by a newer load, as designed.
+- 359.9–366.5 s and 600.2–607.8 s: repeated reloads with memo hits (CS toggles); Meshes-panel reloads of the 6-shape mesh take ~214 ms build on the render thread, UI unaffected (no `ui_gap`).
+- Still open: Step 3; Step 4 background encode; Step 4 swap-vs-push decision.
