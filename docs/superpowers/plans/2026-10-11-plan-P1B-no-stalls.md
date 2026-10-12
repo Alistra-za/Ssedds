@@ -7488,3 +7488,13 @@ Notes:
 | ui_gap | explained | 3.6 s, 10.2 s, 22.6 s gaps each end right before a `load` with new shader keys: the "Shader folder…" dialog blocks the UI thread while open (rfd modal pick). Three 111–127 ms gaps at 22–25 s during the first 5 s encodes. |
 
 Note: the "Shader folder…" button (0f81507) was added for Steps 3/6; the checklist's "Choose folder…" only existed when CS was not found.
+
+## P1-B verification, run 4 (2026-10-12, exe f122cfb, log preview-timings-20261012-105947.jsonl)
+
+| Check | Result | Value |
+|---|---|---|
+| Step 4 background encode of the other mode | pass | 87.51 s settings change with Source shown: Source encode 1466 ms lands first (then a `load`: the Task 8 push), the Encoded copies are re-sent; the owner flipped to Encoded at 89.67 s before its Diffuse copy existed (`ab_flip` paths 3, 50.2 ms) and that copy landed at 92.51 s (2825 ms). Order active → other confirmed. |
+| Step 4 instant flip | pass | `ab_flip` (4 paths) 11.3, 15.7, 23.9, 40.2, 12.4, 16.6 ms; no `encode` among them |
+| Whole run | pass | 1 `ui_gap` (117 ms, 91.6 s, during encodes); `dropped` 0; no `panic` |
+
+Every member-setting change still ends in a `load` (Task 8 line 4540 behaviour); owner asked for the cost of swapping instead.
