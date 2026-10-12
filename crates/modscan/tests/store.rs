@@ -620,3 +620,255 @@ fn the_mesh_query_reports_database_errors() {
         )
         .is_err());
 }
+
+// ---- Task 11 fix round 1 ----
+
+/// One origin, each `(nif, shapes)` its own winning copy; a shape is `(block, skinned, slots)`.
+type Shapes<'a> = Vec<(u32, bool, Vec<&'a str>)>;
+
+fn small_store(nifs: &[(&str, Shapes)]) -> (tempfile::TempDir, Store) {
+    let (d, mut s, a) = store();
+    let mut game = HashMap::new();
+    let paths: Vec<String> = nifs
+        .iter()
+        .map(|(n, _)| format!("meshes/s/{n}.nif"))
+        .collect();
+    let mut ids = vec![];
+    for ((_, shapes), path) in nifs.iter().zip(&paths) {
+        let rows = shapes
+            .iter()
+            .map(|(block, skinned, slots)| ShapeRow {
+                block: *block,
+                head: head(*skinned),
+                shader: lit(slots),
+                alpha: None,
+            })
+            .collect();
+        ids.push(
+            s.upsert_copy(path, a, 1, 1, CopyResult::Scanned(scan_of(rows)), None)
+                .unwrap(),
+        );
+    }
+    let pid = s
+        .path_ids(&paths.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap();
+    for (p, id) in pid.iter().zip(&ids) {
+        game.insert(*p, (*id, 1));
+    }
+    s.set_winners(&game, &HashMap::new()).unwrap();
+    (d, s)
+}
+
+fn q(s: &Store, key: TexKey) -> Vec<(String, u32)> {
+    s.nifs_using_texture(&key, 50)
+        .unwrap()
+        .into_iter()
+        .map(|r| {
+            (
+                r.nif_path
+                    .trim_start_matches("meshes/s/")
+                    .trim_end_matches(".nif")
+                    .to_string(),
+                r.shape_block,
+            )
+        })
+        .collect()
+}
+
+fn hit(n: &str, b: u32) -> (String, u32) {
+    (n.to_string(), b)
+}
+
+#[test]
+fn contains_sees_a_pbr_slot_through_its_stripped_form() {
+    let (_d, s, _) = query_store();
+    let rows = s
+        .nifs_using_texture(
+            &TexKey::Contains {
+                slot: 0,
+                frag: r"textures\xmead".into(),
+            },
+            50,
+        )
+        .unwrap();
+    assert_eq!(
+        nifs(&rows),
+        ["meshes/x/a.nif", "meshes/x/d.nif", "meshes/x/b.nif"]
+    );
+    // The stripped form has no `textures/pbr/`.
+    assert!(s
+        .nifs_using_texture(
+            &TexKey::Contains {
+                slot: 0,
+                frag: r"textures\pbr".into()
+            },
+            50
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn matching_reads_the_raw_slot_string() {
+    let (_d, s) = small_store(&[
+        ("reb", vec![(1, false, vec![r"Data\Textures\Rock.DDS"])]),
+        ("lead", vec![(1, false, vec![r" textures\ws.dds"])]),
+        ("trail", vec![(1, false, vec![r"textures\tw.dds "])]),
+    ]);
+    let suf = |stem: &str| {
+        q(
+            &s,
+            TexKey::Suffix {
+                slot: 0,
+                stem: stem.into(),
+            },
+        )
+    };
+    // A rebased raw string keeps its `data/` prefix, which the whole-component suffix ignores.
+    assert_eq!(suf(r"textures\rock"), [hit("reb", 1)]);
+    assert_eq!(suf("rock"), [hit("reb", 1)]);
+    // Surrounding whitespace is part of the raw string: `\ ws` is not a component boundary, the extension cut is.
+    assert!(suf(r"textures\ws").is_empty());
+    assert_eq!(suf("ws"), [hit("lead", 1)]);
+    assert_eq!(suf("tw"), [hit("trail", 1)]);
+    assert!(suf(r"textures	w").is_empty());
+    // Exact compares the whole raw string: no `data/` prefix, no whitespace.
+    for path in [
+        r"textures\rock.dds",
+        r"data\textures\rock.dds",
+        r"textures\ws.dds",
+        r"textures\tw.dds",
+    ] {
+        assert!(
+            q(
+                &s,
+                TexKey::Exact {
+                    slot: 0,
+                    path: path.into()
+                }
+            )
+            .is_empty(),
+            "{path}"
+        );
+    }
+    assert_eq!(
+        q(
+            &s,
+            TexKey::Contains {
+                slot: 0,
+                frag: "data/textures/rock".into()
+            }
+        ),
+        [hit("reb", 1)]
+    );
+}
+
+#[test]
+fn limit_zero_is_empty() {
+    let (_d, s, _) = query_store();
+    let key = TexKey::Suffix {
+        slot: 0,
+        stem: "reserve".into(),
+    };
+    assert!(s.nifs_using_texture(&key, 0).unwrap().is_empty());
+}
+
+#[test]
+fn like_metacharacters_and_quotes_are_literal() {
+    let (_d, s) = small_store(&[
+        ("pct", vec![(1, false, vec![r"textures\p%q.dds"])]),
+        ("pxq", vec![(1, false, vec![r"textures\pxq.dds"])]),
+        ("und", vec![(1, false, vec![r"textures\a_b.dds"])]),
+        ("axb", vec![(1, false, vec![r"textures\axb.dds"])]),
+        ("quo", vec![(1, false, vec![r"textures\it's.dds"])]),
+    ]);
+    for (stem, want) in [("p%q", "pct"), ("a_b", "und"), ("it's", "quo")] {
+        assert_eq!(
+            q(
+                &s,
+                TexKey::Suffix {
+                    slot: 0,
+                    stem: stem.into()
+                }
+            ),
+            [hit(want, 1)],
+            "{stem}"
+        );
+        assert_eq!(
+            q(
+                &s,
+                TexKey::Contains {
+                    slot: 0,
+                    frag: stem.into()
+                }
+            ),
+            [hit(want, 1)],
+            "{stem}"
+        );
+        let exact = format!("textures/{stem}.dds");
+        assert_eq!(
+            q(
+                &s,
+                TexKey::Exact {
+                    slot: 0,
+                    path: exact
+                }
+            ),
+            [hit(want, 1)],
+            "{stem}"
+        );
+    }
+    // A LIKE that skipped the escaping would only add candidates, which the exact post-filter removes again, so
+    // no fixture can tell a missing escape from a working one at this level; these cover the positives.
+    assert!(q(
+        &s,
+        TexKey::Suffix {
+            slot: 0,
+            stem: "p_q".into()
+        }
+    )
+    .is_empty());
+}
+
+#[test]
+fn a_limited_query_returns_the_best_rows_in_order() {
+    let (_d, s) = small_store(&[
+        (
+            "multi",
+            vec![
+                (1, false, vec![r"textures\m\t.dds"]),
+                (2, false, vec![r"textures\o.dds"]),
+                (3, false, vec![r"textures\m\t.dds"]),
+            ],
+        ),
+        ("one", vec![(4, false, vec![r"textures\m\t.dds"])]),
+        ("skin", vec![(1, true, vec![r"textures\m\t.dds"])]),
+    ]);
+    let key = |_| TexKey::Suffix {
+        slot: 0,
+        stem: r"m\t".into(),
+    };
+    let full = q(&s, key(0));
+    assert_eq!(
+        full,
+        [
+            hit("one", 4),
+            hit("multi", 1),
+            hit("multi", 3),
+            hit("skin", 1)
+        ]
+    );
+    let rows = s.nifs_using_texture(&key(0), 3).unwrap();
+    let got: Vec<_> = rows
+        .iter()
+        .map(|r| (r.nif_path.as_str(), r.shape_block))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("meshes/s/one.nif", 4),
+            ("meshes/s/multi.nif", 1),
+            ("meshes/s/multi.nif", 3)
+        ]
+    );
+}

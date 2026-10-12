@@ -249,7 +249,7 @@ fn keep_raw(p: &TexPath) -> bool {
 }
 
 /// Slot, SQL condition on `tp.p`, its bound argument, and the exact post-filter.
-type TexQuery = (u32, &'static str, String, Box<dyn Fn(&str) -> bool>);
+type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
 
 /// A key value in the stored form: trimmed, `/` separators, lower case, no leading `/`.
 fn key_form(s: &str) -> String {
@@ -672,8 +672,9 @@ impl Store {
         Ok(Store { conn })
     }
 
-    /// A connection that never writes: no folder or file is created, no WAL switch, and another schema version is
-    /// [`ScanError::SchemaVersion`] instead of a rebuild (a scan may be writing the database right now).
+    /// A connection that never writes database content: no folder or file is created, no WAL switch, and another schema version is
+    /// [`ScanError::SchemaVersion`] instead of a rebuild (a scan may be writing the database right now). SQLite may still create `-wal`/`-shm` sidecar files next to a
+    /// WAL-mode database on a read-only open; the database content is never written.
     pub fn open_read_only(path: &Path) -> Result<Store, ScanError> {
         let conn = Connection::open_with_flags(
             path,
@@ -1212,6 +1213,15 @@ impl Store {
         key: &TexKey,
         limit: usize,
     ) -> Result<Vec<MatchRow>, ScanError> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
+        // The slot string PGPatcher sees: the raw one when `tex_raw` keeps it, else the canonical path; lower case, `/`.
+        let eff = "lower(replace(coalesce(tr.raw, tp.p), char(92), '/'))";
+        // `pgp_form` minus the extension and `_n`/`_msn` cuts, which only shorten the tail: a superset prefilter.
+        let pgp = format!(
+            "(CASE WHEN {eff} LIKE 'textures/pbr/%' THEN 'textures/' || substr({eff}, 14) ELSE {eff} END)"
+        );
         let (slot, cond, arg, check): TexQuery = match key {
             TexKey::Suffix { slot, stem } => {
                 let stem = key_form(stem);
@@ -1223,7 +1233,7 @@ impl Store {
                 let normal = *slot == 1;
                 (
                     *slot,
-                    "tp.p LIKE ?2 ESCAPE '\\'",
+                    format!("{pgp} LIKE ?2 ESCAPE '\\'"),
                     pattern,
                     Box::new(move |p: &str| pgp_form(p, normal).ends_with(&want)),
                 )
@@ -1237,7 +1247,7 @@ impl Store {
                 let normal = *slot == 1;
                 (
                     *slot,
-                    "tp.p LIKE ?2 ESCAPE '\\'",
+                    format!("{pgp} LIKE ?2 ESCAPE '\\'"),
                     pattern,
                     Box::new(move |p: &str| pgp_form(p, normal).contains(&frag)),
                 )
@@ -1249,16 +1259,17 @@ impl Store {
                 } else {
                     format!("textures/{p}")
                 };
-                (*slot, "tp.p = ?2", p, Box::new(|_: &str| true))
+                (*slot, format!("{eff} = ?2"), p, Box::new(|_: &str| true))
             }
         };
         let sql = format!(
-            "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, tp.p,
+            "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, {eff},
                     (SELECT count(*) FROM shape s2 WHERE s2.copy_id = c.id) AS n_shapes
              FROM path tp
              JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = ?1
              JOIN shape s ON s.texset_id = tu.texset_id AND s.shader_kind = 1
              JOIN nif_copy c ON c.id = s.copy_id
+             LEFT JOIN tex_raw tr ON tr.copy_id = c.id AND tr.block = s.block AND tr.slot = ?1
              JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
              JOIN nif_winner w ON w.path_id = c.path_id
              JOIN nif_copy wc ON wc.id = w.copy_id
