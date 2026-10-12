@@ -43,10 +43,14 @@ impl SdcApp {
         );
         meshes.v3 =
             crate::model::viewport3d::Viewport3d::new(model.settings.render3d.shaders.clone());
+        let set3d = crate::model::set_preview::SetPreview::from_settings(&model.settings);
         SdcApp {
             model,
             meshes,
-            state: crate::ui::State::default(),
+            state: crate::ui::State {
+                set3d,
+                ..crate::ui::State::default()
+            },
             render_state: None,
             uploaded: Uploaded::default(),
             was_focused: true,
@@ -201,6 +205,7 @@ impl eframe::App for SdcApp {
         // Upload before drawing: the paint callbacks run after this frame's UI and read what is on the GPU.
         self.sync_renderer();
         self.meshes.poll();
+        self.state.set3d.poll(&self.model);
         if crate::ui::header::meshes_view_active(&ctx) {
             self.meshes.activate();
             if let Some(req) = self.meshes.take_request() {
@@ -220,9 +225,17 @@ impl eframe::App for SdcApp {
         } else {
             crate::ui::draw_with(ui, &mut self.model, &mut self.state);
         }
+        if let Some(fp) = self.state.set3d.v3.take_shaders_changed() {
+            self.model.settings.render3d.shaders = Some(fp);
+            self.model.save_settings();
+        }
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
-        if self.model.busy() || self.meshes.scanning() || self.meshes.v3.busy() {
+        if self.model.busy()
+            || self.meshes.scanning()
+            || self.meshes.v3.busy()
+            || self.state.set3d.busy()
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if self.model.preview.scheduled() {
