@@ -159,7 +159,9 @@ fn glob_match(glob: &str, f: &FileFacts) -> bool {
     glob_match_input(glob, f.input)
 }
 
-pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
+/// `st` is the sub-type being resolved, or `None` while it is being decided: a rule with `match.subtypes` then never
+/// matches (DECISIONS Note T2).
+pub fn rule_matches(m: &RuleMatch, f: &FileFacts, st: Option<Subtype>) -> bool {
     m.glob.as_deref().is_none_or(|g| glob_match(g, f))
         && m.suffix
             .as_deref()
@@ -168,6 +170,7 @@ pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
             .as_deref()
             .is_none_or(|s| f.set.suffixes.contains(&s.to_ascii_lowercase()))
         && m.alpha.is_none_or(|a| a == f.analysis.alpha)
+        && (m.subtypes.is_empty() || st.is_some_and(|s| m.subtypes.contains(&s)))
 }
 
 /// Rule sources in precedence order: the file's preset chain (base first; `preset_chain`), user config,
@@ -186,13 +189,18 @@ fn rule_sources<'a>(ctx: &ResolveCtx<'a>, chain: &[&'a PresetFile]) -> Vec<(Stri
     v
 }
 
+/// The first rule of one source that matches. While layering sub-type `st`, a rule that names another sub-type
+/// (`Rule::subtype`) does not match, so a `--set`/`[files]` sub-type drops it (carried fix 3, Note T10).
 fn first_match<'a>(
     rules: &'a [Rule],
     f: &FileFacts,
+    st: Option<Subtype>,
     ignore_alpha_rules: bool,
 ) -> Option<(usize, &'a Rule)> {
     rules.iter().enumerate().find(|(_, r)| {
-        !(ignore_alpha_rules && r.matcher.alpha.is_some()) && rule_matches(&r.matcher, f)
+        !(ignore_alpha_rules && r.matcher.alpha.is_some())
+            && st.is_none_or(|s| r.subtype.is_none_or(|x| x == s))
+            && rule_matches(&r.matcher, f, st)
     })
 }
 
@@ -313,7 +321,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     }
     // rules: highest-precedence source with a matching rule that names a sub-type
     for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
-        if let Some((i, r)) = first_match(rules, f, false) {
+        if let Some((i, r)) = first_match(rules, f, None, false) {
             if let Some(st) = r.subtype {
                 return SubtypeDecision {
                     subtype: st,
@@ -519,7 +527,7 @@ fn layered_profile_with(
         }
     }
     for (src, rules) in rule_sources(ctx, &chain) {
-        if let Some((i, r)) = first_match(rules, f, ignore_alpha_rules) {
+        if let Some((i, r)) = first_match(rules, f, Some(st), ignore_alpha_rules) {
             apply(
                 &mut doc,
                 &mut prov,

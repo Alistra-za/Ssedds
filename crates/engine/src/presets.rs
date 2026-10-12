@@ -80,6 +80,10 @@ pub struct RuleMatch {
     pub set_has: Option<String>,
     #[serde(default)]
     pub alpha: Option<AlphaContent>,
+    /// M6 Track D (DECISIONS Note T2): the sub-type being resolved is one of these; empty = any. Matched only when the
+    /// profile is layered, so a rule that names sub-types here never decides a sub-type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtypes: Vec<Subtype>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -349,16 +353,37 @@ impl<'de> Deserialize<'de> for Provenance {
     }
 }
 
-/// Deep-merge `patch` into `base`: objects merge key by key, other values replace, `null` patches change nothing.
+/// Deep-merge `patch` into `base`: objects merge key by key, other values replace, and a `null` patch changes
+/// nothing: it neither erases a value nor adds an absent key (carried fix 2, DECISIONS Note T10).
 pub fn merge_json(base: &mut Value, patch: &Value) {
     match (base, patch) {
+        (_, Value::Null) => {}
         (Value::Object(b), Value::Object(p)) => {
             for (k, v) in p {
-                merge_json(b.entry(k.clone()).or_insert(Value::Null), v);
+                match b.get_mut(k) {
+                    Some(slot) => merge_json(slot, v),
+                    None => {
+                        if let Some(v) = without_nulls(v) {
+                            b.insert(k.clone(), v);
+                        }
+                    }
+                }
             }
         }
-        (_, Value::Null) => {}
         (b, p) => *b = p.clone(),
+    }
+}
+
+/// `v` without its `null` leaves; `None` for `null` itself.
+fn without_nulls(v: &Value) -> Option<Value> {
+    match v {
+        Value::Null => None,
+        Value::Object(m) => Some(Value::Object(
+            m.iter()
+                .filter_map(|(k, x)| Some((k.clone(), without_nulls(x)?)))
+                .collect(),
+        )),
+        _ => Some(v.clone()),
     }
 }
 

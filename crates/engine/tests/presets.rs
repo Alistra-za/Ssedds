@@ -658,3 +658,23 @@ fn a_newer_preset_is_still_newer_schema() {
         Err(PresetError::Parse(_))
     ));
 }
+
+/// Carried fix 2 (Note T10): a null patch neither erases nor adds a key.
+#[test]
+fn null_patches_never_add_absent_keys() {
+    let mut a = json!({"format": "bc7"});
+    merge_json(
+        &mut a,
+        &json!({"header": null, "alpha": {"policy": null, "threshold": 5}, "format": null}),
+    );
+    assert_eq!(a, json!({"format": "bc7", "alpha": {"threshold": 5}}));
+}
+
+/// Note T2: `match.subtypes` round-trips and is not serialised when empty (existing preset hashes hold).
+#[test]
+fn rule_match_subtypes_is_optional() {
+    let r: Rule = toml::from_str("match = { alpha = \"none\", subtypes = [\"diffuse\", \"glow\"] }\noverrides = { format = \"bc1\" }\n").unwrap();
+    assert_eq!(r.matcher.subtypes, vec![Subtype::Diffuse, Subtype::Glow]);
+    let plain = serde_json::to_value(RuleMatch::default()).unwrap();
+    assert!(plain.get("subtypes").is_none());
+}

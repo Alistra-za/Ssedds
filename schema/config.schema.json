@@ -930,6 +930,13 @@
             "null"
           ]
         },
+        "subtypes": {
+          "description": "M6 Track D (DECISIONS Note T2): the sub-type being resolved is one of these; empty = any. Matched only when the\nprofile is layered, so a rule that names sub-types here never decides a sub-type.",
+          "items": {
+            "$ref": "#/$defs/Subtype"
+          },
+          "type": "array"
+        },
         "suffix": {
           "default": null,
           "description": "Recognised suffix without underscore, e.g. \"n\", \"rmaos\"; \"\" = no suffix.",

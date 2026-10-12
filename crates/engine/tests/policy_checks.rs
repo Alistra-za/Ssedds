@@ -2376,3 +2376,61 @@ fn flow_small_tests_the_resized_size() {
     assert!(codes(&j).contains(&Code::DimFlowSmall), "{:?}", j.warnings);
     assert!(codes(&j).contains(&Code::DimResized), "{:?}", j.warnings);
 }
+
+fn project_rules(rules: &str) -> ConfigFile {
+    ConfigFile::parse(rules, "sdc.toml").unwrap()
+}
+
+/// Carried fix 3 (Note T10): a rule's sub-type then a `--set` sub-type — the rule's overrides no longer apply.
+#[test]
+fn a_set_subtype_drops_the_overrides_of_a_rule_that_named_another_subtype() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let project = project_rules(
+        "[[rules]]\nmatch = { glob = \"**/r/*.png\" }\nsubtype = \"height\"\noverrides = { validation = { min_mip_psnr_db = 31.0 } }\n",
+    );
+    let j = run_with(&reg, "cs-quality", Some(&project), "r/x.png", None, &[]);
+    assert_eq!(j.profile.subtype, Subtype::Height);
+    assert_eq!(j.profile.validation.min_mip_psnr_db, 31.0);
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        Some(&project),
+        "r/x.png",
+        None,
+        &["subtype=diffuse"],
+    );
+    assert_eq!(j.profile.subtype, Subtype::Diffuse);
+    assert_eq!(j.profile.validation.min_mip_psnr_db, 30.0);
+    assert!(!matches!(
+        j.provenance.get("validation.min_mip_psnr_db"),
+        Some(Provenance::Rule(_))
+    ));
+}
+
+/// Carried fix 3: a `--set` sub-type then a rule for the new sub-type — that rule applies, by `subtype` or by
+/// `match.subtypes`; the first rule of a source that names another sub-type is skipped for the next one.
+#[test]
+fn a_rule_for_the_new_subtype_applies_after_a_set_subtype() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let project = project_rules(concat!(
+        "[[rules]]\nmatch = { glob = \"**/r/*.png\" }\nsubtype = \"height\"\noverrides = { validation = { min_mip_psnr_db = 31.0 } }\n",
+        "[[rules]]\nmatch = { glob = \"**/r/*.png\", subtypes = [\"diffuse\"] }\noverrides = { validation = { min_mip_psnr_db = 32.0 } }\n",
+    ));
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        Some(&project),
+        "r/x.png",
+        None,
+        &["subtype=diffuse"],
+    );
+    assert_eq!(j.profile.validation.min_mip_psnr_db, 32.0);
+    assert_eq!(
+        j.provenance["validation.min_mip_psnr_db"].to_string(),
+        "rule:project#1"
+    );
+    // A rule that names sub-types in `match` never decides one.
+    let only = project_rules("[[rules]]\nmatch = { glob = \"**/r/*.png\", subtypes = [\"diffuse\"] }\nsubtype = \"height\"\n");
+    let j = run_with(&reg, "cs-quality", Some(&only), "r/x.png", None, &[]);
+    assert_ne!(j.provenance["subtype"].to_string(), "rule:project#0");
+}

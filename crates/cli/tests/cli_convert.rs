@@ -466,9 +466,9 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     assert_eq!(prov(wall, "subtype"), "rule:project#0");
     assert_eq!(num(wall, "alpha.threshold"), 70.0);
     assert_eq!(prov(wall, "alpha.threshold"), "rule:project#0");
-    // The user rule still supplies what the project rule does not say.
-    assert_eq!(num(wall, "validation.complex_m_warn_alpha"), 200.0);
-    assert_eq!(prov(wall, "validation.complex_m_warn_alpha"), "rule:user#0");
+    // Carried fix 3: the user rule names another sub-type (glow), so none of its overrides apply to a height file.
+    assert_ne!(num(wall, "validation.complex_m_warn_alpha"), 200.0);
+    assert_ne!(prov(wall, "validation.complex_m_warn_alpha"), "rule:user#0");
 
     // `--set` beats the rules, scoped to one file or for everything.
     let o = fx.convert(&[
