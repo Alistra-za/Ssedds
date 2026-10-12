@@ -11,7 +11,9 @@ use nif::material::MaterialState;
 use render3d::builtin::Builtin;
 use render3d::locate::{self, Change, Fingerprint};
 use render3d::scene::{Camera, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
-use render3d::{EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId, ShapeInfo};
+use render3d::{
+    EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId, ShapeInfo, ShapeStatus,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -301,6 +303,8 @@ pub enum V3Cmd {
     /// One shape's new material on the loaded content (a JSON-only edit); applied after the load it follows and
     /// dropped by a later load in the same batch.
     SetMaterial {
+        /// The load id of the content it was made for (replies echo it so stale ones are dropped).
+        content: u64,
         id: ShapeId,
         material: MaterialState,
     },
@@ -340,6 +344,7 @@ pub enum V3Reply {
     /// One `SetMaterial` applied: its kind (`Cbuffer`/`Textures` compile nothing) and render-thread time, or why
     /// it failed (the old draw stays).
     MaterialSet {
+        content: u64,
         id: ShapeId,
         result: Result<EditKind, String>,
         ms: f64,
@@ -685,7 +690,13 @@ impl Viewport3d {
         let Some(t) = &self.thread else {
             return false;
         };
-        if t.send(V3Cmd::SetMaterial { id, material }).is_err() {
+        let content = self.loaded.or(self.pending_load).expect("checked above");
+        let cmd = V3Cmd::SetMaterial {
+            content,
+            id,
+            material,
+        };
+        if t.send(cmd).is_err() {
             return false;
         }
         self.edits_sent += 1;
@@ -747,11 +758,7 @@ impl Viewport3d {
         let (Some(loaded), None) = (self.loaded, self.pending_load) else {
             return;
         };
-        if self
-            .report
-            .as_ref()
-            .is_some_and(|r| r.le_mesh || r.shapes == 0)
-        {
+        if self.report.as_ref().is_some_and(|r| r.le_mesh) || !self.renderable() {
             return;
         }
         let camera = self.orbit.camera(self.bounds);
@@ -764,6 +771,18 @@ impl Viewport3d {
             self.last_sent = Some(want);
             self.render_sent = id;
             self.state = V3State::Rendering;
+        }
+    }
+
+    /// Something is drawn. Parsed/Builtin content follows the current shapes (an edit can un-hide or repair the
+    /// only shape); until the first `Shapes` reply the load report decides. Mesh: the load report.
+    fn renderable(&self) -> bool {
+        let n = self.report.as_ref().map_or(0, |r| r.shapes);
+        match self.content {
+            Some(Content::Parsed { .. } | Content::Builtin { .. }) if !self.shapes.is_empty() => {
+                self.shapes.iter().any(|s| s.status == ShapeStatus::Drawing)
+            }
+            _ => n > 0,
         }
     }
 
@@ -782,6 +801,7 @@ impl Viewport3d {
                         self.thread = None;
                         self.pending_load = None;
                         self.render_done = self.render_sent;
+                        self.edits_done = self.edits_sent;
                         self.state =
                             V3State::Error(format!("internal error in the 3D preview: {message}"));
                     }
@@ -803,6 +823,7 @@ impl Viewport3d {
                 self.thread = None;
                 self.pending_load = None;
                 self.render_done = self.render_sent;
+                self.edits_done = self.edits_sent;
                 self.state = V3State::Error(format!("3D preview unavailable: {e}"));
             }
             V3Reply::Loaded { id, report, bounds } => {
@@ -847,7 +868,16 @@ impl Viewport3d {
                     self.shapes = s;
                 }
             }
-            V3Reply::MaterialSet { result, ms, .. } => {
+            V3Reply::MaterialSet {
+                content,
+                result,
+                ms,
+                ..
+            } => {
+                // A reply for content replaced since: its count was reset with the content.
+                if self.loaded.or(self.pending_load) != Some(content) {
+                    return;
+                }
                 self.edits_done = (self.edits_done + 1).min(self.edits_sent);
                 match result {
                     Ok(kind) => self.last_edit = Some((kind, ms)),
@@ -1104,7 +1134,7 @@ fn render_loop(
     while let Ok(first) = rx.recv() {
         let mut reload = false;
         let mut render = None;
-        let mut pending: Vec<(ShapeId, MaterialState)> = vec![];
+        let mut pending: Vec<(u64, ShapeId, MaterialState)> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
             let content = match c {
                 V3Cmd::SetShaders(f) => {
@@ -1141,8 +1171,12 @@ fn render_loop(
                         textures,
                     },
                 )),
-                V3Cmd::SetMaterial { id, material } => {
-                    pending.push((id, material));
+                V3Cmd::SetMaterial {
+                    content,
+                    id,
+                    material,
+                } => {
+                    pending.push((content, id, material));
                     None
                 }
                 V3Cmd::Render { id, camera, w, h } => {
@@ -1175,14 +1209,18 @@ fn render_loop(
             }
         }
         if !pending.is_empty() {
-            if let Some((_, c)) = &last {
-                for (id, m) in pending {
+            if let Some((lid, c)) = &last {
+                for (content, id, m) in pending {
+                    if content != *lid {
+                        continue;
+                    }
                     let t0 = std::time::Instant::now();
                     let result = edit(&mut r, c, id, m.clone());
                     if result.is_ok() {
                         edits.insert(id, m);
                     }
                     send(V3Reply::MaterialSet {
+                        content,
                         id,
                         result,
                         ms: t0.elapsed().as_secs_f64() * 1000.0,

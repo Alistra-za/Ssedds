@@ -716,7 +716,7 @@ fn parsed_content_loads_once_and_material_edits_follow_the_load() {
     assert!(v.set_material(ShapeId(3), m.clone()));
     assert!(matches!(
         cmds.try_recv(),
-        Ok(v3::V3Cmd::SetMaterial { id: ShapeId(3), material }) if material == m
+        Ok(v3::V3Cmd::SetMaterial { content, id: ShapeId(3), material }) if material == m && content == id
     ));
     assert!(v.busy());
     loaded(
@@ -735,6 +735,7 @@ fn parsed_content_loads_once_and_material_edits_follow_the_load() {
     }]));
     assert_eq!(v.shapes.len(), 1);
     v.handle(v3::V3Reply::MaterialSet {
+        content: id,
         id: ShapeId(3),
         result: Ok(EditKind::Cbuffer),
         ms: 0.2,
@@ -830,5 +831,88 @@ fn an_le_parsed_nif_is_never_loaded() {
     v.request_frame(64, 64);
     assert!(cmds.try_recv().is_err());
     assert!(v.report.as_ref().is_some_and(|r| r.le_mesh));
+    assert!(!v.busy());
+}
+
+// ---- Task 12 fix round 1 ----
+
+fn loaded_parsed(
+    v: &mut Viewport3d,
+    cmds: &std::sync::mpsc::Receiver<v3::V3Cmd>,
+    key: u64,
+    shapes: usize,
+) -> u64 {
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(key, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("load")
+    };
+    loaded(
+        v,
+        id,
+        render3d::LoadReport {
+            shapes,
+            ..Default::default()
+        },
+    );
+    id
+}
+
+fn info(status: ShapeStatus) -> ShapeInfo {
+    ShapeInfo {
+        id: ShapeId(0),
+        name: "S".into(),
+        material: MaterialState::builtin_default(),
+        status,
+    }
+}
+
+#[test]
+fn a_stale_material_reply_does_not_touch_the_new_contents_edits() {
+    let (_d, mut v, cmds) = confirmed();
+    let a = loaded_parsed(&mut v, &cmds, 1, 1);
+    assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+    let _ = cmds.try_recv();
+    let b = loaded_parsed(&mut v, &cmds, 2, 1);
+    assert_ne!(a, b);
+    assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+    // A's late reply (an error) must neither free B's pending edit nor show its error.
+    v.handle(v3::V3Reply::MaterialSet {
+        content: a,
+        id: ShapeId(0),
+        result: Err("old".into()),
+        ms: 1.0,
+    });
+    assert!(v.busy());
+    assert!(v.render_error.is_none());
+    v.handle(v3::V3Reply::MaterialSet {
+        content: b,
+        id: ShapeId(0),
+        result: Ok(EditKind::Same),
+        ms: 1.0,
+    });
+    assert!(!v.busy());
+}
+
+#[test]
+fn a_recovered_shape_is_rendered_although_the_load_drew_nothing() {
+    let (_d, mut v, cmds) = confirmed();
+    loaded_parsed(&mut v, &cmds, 1, 0);
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Hidden)]));
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "nothing drawable");
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+}
+
+#[test]
+fn a_dead_worker_does_not_leave_edits_busy() {
+    let (_d, mut v, cmds) = confirmed();
+    loaded_parsed(&mut v, &cmds, 1, 1);
+    assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+    assert!(v.busy());
+    v.handle(v3::V3Reply::Failed("gone".into()));
     assert!(!v.busy());
 }
