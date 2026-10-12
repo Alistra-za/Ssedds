@@ -3457,6 +3457,35 @@ fn compact_2048_varying_alpha_diffuse_with_a_no_alpha_mesh_stays_2048_bc1() {
     assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
 }
 
+/// Fix round 1 (O1): a project rule that sets the policy beats the mesh `remove`, matched on the source's real alpha
+/// (`alpha = "varying"`) or unconditionally, and Compact's BC1 rule stays out: BC7 at half size, no CFG-INVALID.
+#[test]
+fn compact_mesh_remove_yields_to_a_project_rule_that_sets_the_policy() {
+    for matcher in ["alpha = \"varying\"", "glob = \"**/wall.png\""] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/a/wall.png", varying_2048());
+        std::fs::write(
+            d.path().join("in/sdc.toml"),
+            format!("[[rules]]\nmatch = {{ {matcher} }}\noverrides = {{ alpha = {{ policy = \"blend\" }} }}\n"),
+        )
+        .unwrap();
+        let o = plan_compact_wall_mesh(d.path(), false);
+        assert_profile(&o, "a/wall.png", "diffuse", "blend", false, "bc7");
+        assert_eq!(
+            planned(&o, "a/wall.png")["provenance"]["alpha.policy"].as_str(),
+            Some("rule:project#0"),
+            "{matcher}"
+        );
+        assert_eq!(
+            resized_names(&o),
+            BTreeMap::from([("wall.dds".to_string(), (1024, 1024))]),
+            "{matcher}"
+        );
+        assert_eq!(resize_of(&o, "a/wall.png"), "half", "{matcher}");
+        assert!(!warnings(&o).contains(&Code::CfgInvalid), "{matcher}");
+    }
+}
+
 /// The same diffuse used by a blending mesh keeps its alpha: BC7 at half size.
 #[test]
 fn compact_2048_varying_alpha_diffuse_with_a_blend_mesh_plans_1024_bc7() {

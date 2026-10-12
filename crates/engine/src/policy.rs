@@ -546,18 +546,20 @@ fn layered_profile_with(
         .and_then(|k| ctx.mesh_alpha.get(&k))
         .and_then(|shapes| crate::shader::mesh_alpha_policy(shapes));
     // Owner O1: a varying alpha the meshes drop (and no explicit layer keeps) is opaque colour, so rules match it as
-    // alpha `none` (Compact's BC1 rules). Known before the rules: the mesh layer itself is applied below.
+    // alpha `none` (Compact's BC1 rules). Known before the rules: the mesh layer itself is applied below. A rule that
+    // sets the policy, matched on the source's real alpha, is explicit and keeps the mesh out (fix round 1).
+    let real_alpha = (!ignore_alpha_rules).then_some(f.analysis.alpha);
     let mesh_remove = f.analysis.alpha == AlphaContent::Varying
         && matches!(mesh, Some((AlphaPolicy::Remove, _)))
         && !alpha_policy_explicit(ctx, &prov)
         && !ranked_overrides(ctx)
             .into_iter()
-            .any(|o| o.field == "alpha.policy" && override_applies(ctx, o, Some(st), f));
-    let rule_alpha = (!ignore_alpha_rules).then_some(if mesh_remove {
-        AlphaContent::None
-    } else {
-        f.analysis.alpha
-    });
+            .any(|o| o.field == "alpha.policy" && override_applies(ctx, o, Some(st), f))
+        && !rule_sources(ctx, &chain).into_iter().any(|(_, rules)| {
+            first_match(rules, f, Some(st), real_alpha)
+                .is_some_and(|(_, r)| r.overrides.pointer("/alpha/policy").is_some())
+        });
+    let rule_alpha = real_alpha.map(|a| if mesh_remove { AlphaContent::None } else { a });
     for (src, rules) in rule_sources(ctx, &chain) {
         if let Some((i, r)) = first_match(rules, f, Some(st), rule_alpha) {
             apply(
