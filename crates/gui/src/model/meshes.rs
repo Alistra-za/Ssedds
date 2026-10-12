@@ -953,12 +953,25 @@ fn mesh_spec(
         return Ok(None);
     };
     let mut textures = HashMap::new();
-    for t in shapes.iter().flat_map(|s| s.textures.iter().flatten()) {
-        if textures.contains_key(t) {
+    // The skin RFAOS candidates too: render3d resolves only through this map.
+    let norms = shapes.iter().flat_map(|s| {
+        let slot = |i: usize| s.textures.get(i).cloned().flatten().unwrap_or_default();
+        s.textures
+            .iter()
+            .flatten()
+            .cloned()
+            .chain(render3d::textures::rfaos_candidates(
+                s.shader_type.filter(|_| s.shader_kind == 1).unwrap_or(0),
+                &slot(1),
+                &slot(7),
+            ))
+    });
+    for t in norms {
+        if textures.contains_key(&t) {
             continue;
         }
-        if let Some((k, r)) = store.texture_location(t)? {
-            textures.insert(t.clone(), FileSource::from_store(k, &r, t));
+        if let Some((k, r)) = store.texture_location(&t)? {
+            textures.insert(t.clone(), FileSource::from_store(k, &r, &t));
         }
     }
     Ok(Some(MeshSpec {

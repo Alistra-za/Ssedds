@@ -2027,12 +2027,24 @@ impl SetPreview {
     /// Adds the game's copy of every slot texture of `materials` that `map` lacks (a path PGPatcher wrote that the
     /// source NIF did not name: another mod's `_rmaos`, a `slotN`).
     fn add_vfs(&self, map: &mut HashMap<String, FileSource>, materials: &[&MaterialState]) {
-        for t in materials.iter().flat_map(|m| m.slots.iter()) {
-            if t.norm.is_empty() || map.contains_key(&t.norm) {
+        // The skin RFAOS candidates too: render3d resolves only through this map.
+        let norms = materials.iter().flat_map(|m| {
+            let slot = |i: usize| m.slots.get(i).map_or("", |p| p.norm.as_str());
+            m.slots
+                .iter()
+                .map(|t| t.norm.clone())
+                .chain(render3d::textures::rfaos_candidates(
+                    m.shader_type,
+                    slot(1),
+                    slot(7),
+                ))
+        });
+        for norm in norms {
+            if norm.is_empty() || map.contains_key(&norm) {
                 continue;
             }
-            if let Some(src) = self.vfs_lookup(&t.norm) {
-                map.insert(t.norm.clone(), src);
+            if let Some(src) = self.vfs_lookup(&norm) {
+                map.insert(norm, src);
             }
         }
     }
