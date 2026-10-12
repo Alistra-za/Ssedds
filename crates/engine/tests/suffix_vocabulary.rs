@@ -556,9 +556,13 @@ fn unstated_green_convention_is_in_green_unstated_and_not_allowable() {
 }
 
 fn plan_cs(dir: &Path) -> engine::api::Plan {
+    plan_for(dir, Target::Cs)
+}
+
+fn plan_for(dir: &Path, target: Target) -> engine::api::Plan {
     use engine::api::*;
     use engine::events::*;
-    let mut req = BatchRequest::new(vec![dir.join("in")], dir.join("out"), Target::Cs);
+    let mut req = BatchRequest::new(vec![dir.join("in")], dir.join("out"), target);
     req.recursive = true;
     req.accept = AcceptSuggestions::High;
     let sink = std::sync::Arc::new(VecSink::default());
@@ -605,5 +609,43 @@ fn coat_is_the_s_coat_colour_member() {
         !matches!(j.status, engine::policy::JobStatus::Unresolved { .. }),
         "{:?}",
         j.status
+    );
+}
+
+/// `_coat` is the coat colour whatever the set: High `pbr_subsurface` first (a bare `_s` outside a PBR set is only a
+/// low tint), written `x_s.dds`, and blocked under vanilla like any PBR-only map.
+#[test]
+fn coat_outside_a_pbr_set_is_still_the_high_coat_colour_and_blocked_under_vanilla() {
+    let d = tempfile::tempdir().unwrap();
+    for name in ["x_d.png", "x_coat.png"] {
+        let p = d.path().join("in/textures/a").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb([200u8, 180, 160]))
+            .save(p)
+            .unwrap();
+    }
+    let find = |p: &engine::api::Plan| {
+        p.jobs
+            .iter()
+            .find(|j| j.input.ends_with("x_coat.png"))
+            .unwrap()
+            .clone()
+    };
+    let j = find(&plan_cs(d.path()));
+    let top = &j.suggestions[0];
+    assert_eq!(
+        (top.subtype, top.confidence),
+        (Subtype::PbrSubsurface, Confidence::High)
+    );
+    assert!(
+        j.output.ends_with("textures/a/x_s.dds"),
+        "{}",
+        j.output.display()
+    );
+    let j = find(&plan_for(d.path(), Target::Vanilla));
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::CfgUnavailable),
+        "{:?}",
+        j.warnings
     );
 }

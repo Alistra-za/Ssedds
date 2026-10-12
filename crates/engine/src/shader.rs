@@ -984,4 +984,35 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn subtype_only_triggers_and_plurality_is_no_evidence() {
+        use Subtype::*;
+        let paths = ["textures/a/b.png"];
+        let s = sx(&["n"]);
+        // Skin / PBR sub-types alone (flags false) pick the shader.
+        let st = [SkinAlbedo, Normal];
+        assert_eq!(
+            auto(&pick(&input(Target::Cs, &s, &st, &paths))),
+            (
+                Shader::AdvancedSkin,
+                ShaderOrigin::Auto(AutoRule::AdvancedSkin)
+            )
+        );
+        let st = [PbrAlbedo, Normal];
+        assert_eq!(
+            auto(&pick(&input(Target::Cs, &s, &st, &paths))),
+            (Shader::Pbr, ShaderOrigin::Auto(AutoRule::Pbr))
+        );
+        // 2 of 4 votes is a plurality, not a strict majority: the suffix rules decide.
+        let s = sx(&["n", "g"]);
+        let st = [Diffuse, Normal, Glow];
+        let mut i = input(Target::Vanilla, &s, &st, &paths);
+        let votes = [Shader::Hair, Shader::Hair, Shader::Default, Shader::Glow];
+        i.mesh = &votes;
+        assert_eq!(
+            auto(&pick(&i)),
+            (Shader::Glow, ShaderOrigin::Auto(AutoRule::G))
+        );
+    }
 }
