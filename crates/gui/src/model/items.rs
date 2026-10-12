@@ -79,6 +79,8 @@ pub struct PlanView {
     pub target: Target,
     /// The preset the batch resolved from (the request, the configs, or the target's default).
     pub preset_id: String,
+    /// `(id, file)` of every user preset the plan's registry loaded.
+    pub user_presets: Vec<(String, String)>,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched: Vec<String>,
@@ -299,6 +301,12 @@ impl PlanView {
         PlanView {
             target: plan.target,
             preset_id: plan.preset_id.clone(),
+            user_presets: plan
+                .registry
+                .user_presets()
+                .into_iter()
+                .map(|(id, src)| (id.to_string(), src.to_string()))
+                .collect(),
             items,
             sets,
             unmatched,

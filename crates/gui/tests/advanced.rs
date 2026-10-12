@@ -352,3 +352,29 @@ fn the_advanced_texture_fields_carry_their_locks_and_edit_through_the_model() {
         .unwrap();
     assert!(radius.lock.is_some(), "a colour map is not BC4/BC5");
 }
+
+/// M6 Track D spec §3: the GUI loads the user presets folder and the inspector lists what it loaded.
+#[test]
+fn the_inspector_lists_loaded_user_presets() {
+    let d = tempfile::tempdir().unwrap();
+    let presets = d.path().join("user-presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    std::fs::write(
+        presets.join("mine.toml"),
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n",
+    )
+    .unwrap();
+    let mut m = opened(d.path());
+    assert!(m.loaded_user_presets.is_empty());
+    m.user_presets = Some(presets.clone());
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.loaded_user_presets.len(), 1);
+    assert_eq!(m.loaded_user_presets[0].0, "mine");
+    assert!(m.loaded_user_presets[0].1.ends_with("mine.toml"));
+    m.settings.advanced_open = true;
+    m.select_item("landscape/leaf.png");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("mine.toml");
+}
