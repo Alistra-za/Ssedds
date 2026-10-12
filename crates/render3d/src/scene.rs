@@ -59,10 +59,45 @@ impl Background {
     }
 }
 
+/// The one point light of the preview (white, the vanilla `PointLightPosition` / `PointLightColor` slot 0).
+/// Brightness 0 is off: nothing is written, so the frame is the same as without it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointLight {
+    /// Linear white scale, uploaded as `PointLightColor` (the shader multiplies by `pointLightMult`).
+    pub brightness: f32,
+    /// Falloff radius in NIF units (`PointLightPosition.w`): the light reaches 0 at this distance.
+    pub radius: f32,
+    /// World position (Z-up).
+    pub position: [f32; 3],
+}
+
+impl PointLight {
+    pub const OFF: PointLight = PointLight {
+        brightness: 0.0,
+        radius: 1.0,
+        position: [0.0; 3],
+    };
+
+    /// A light placed relative to the loaded model's bounds `(centre, radius)`: up, in front of and to the right
+    /// of the default camera (which sits on +Y looking towards −Y, so its right is −X), at `radius_scale`
+    /// bounding radii of falloff.
+    pub fn around(bounds: ([f32; 3], f32), brightness: f32, radius_scale: f32) -> PointLight {
+        let (c, r) = bounds;
+        PointLight {
+            brightness,
+            radius: radius_scale * r,
+            position: [c[0] - 1.2 * r, c[1] + 1.6 * r, c[2] + 1.4 * r],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
     pub camera: Camera,
     pub background: Background,
+    /// Multiplier on `dir_light.color` (1 = as is).
+    pub sun_brightness: f32,
+    pub point_light: PointLight,
     pub dir_light: DirLight,
     /// Ambient (DALC) colours seen from +X, −X, +Y, −Y, +Z, −Z, world space.
     pub ambient6: [[f32; 3]; 6],
@@ -92,6 +127,11 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 
 impl Scene {
     /// The six ambient colours the shader gets: `ambient6`, or the HDRI's when it is the background.
+    /// `dir_light.color` with the sun brightness applied.
+    pub fn sun_color(&self) -> [f32; 3] {
+        self.dir_light.color.map(|c| c * self.sun_brightness)
+    }
+
     pub fn ambient(&self) -> [[f32; 3]; 6] {
         match self.background {
             Background::Solid(_) => self.ambient6,
@@ -110,6 +150,8 @@ impl Scene {
         Scene {
             camera: Camera::Auto,
             background: Background::Solid(0.0),
+            sun_brightness: 1.0,
+            point_light: PointLight::OFF,
             dir_light: DirLight {
                 direction: norm([0.5, 0.8, 0.9]),
                 color: [2.0, 1.94, 1.84],
@@ -417,11 +459,8 @@ impl Scene {
             "DirLightDirection",
             &[l.direction[0], l.direction[1], l.direction[2], 0.0],
         );
-        put(
-            w,
-            "DirLightColor",
-            &[l.color[0], l.color[1], l.color[2], 0.0],
-        );
+        let sun = self.sun_color();
+        put(w, "DirLightColor", &[sun[0], sun[1], sun[2], 0.0]);
         let ambient = self.ambient();
         put(w, "DirectionalAmbient", &rows(&dalc(&ambient)));
         let sh = dalc_to_sh(&ambient);
@@ -447,6 +486,9 @@ impl Scene {
         put(w, "Timer", &[1.0]);
         put(w, "WaterSystemHeight", &[f32::MIN]);
         put(w, "WaterData", &[0.58, 0.58, 0.58, f32::MIN].repeat(25));
+        for (n, vals) in POINT_NAMES.iter().zip(PointValues::new(self, v).values) {
+            w.set(n, &vals);
+        }
         put(w, "CameraView", &rows(&v.view));
         put(w, "CameraProj", &rows(&v.proj));
         put(w, "CameraProjUnjittered", &rows(&v.proj));
@@ -560,16 +602,55 @@ impl LightValues {
     pub fn new(s: &Scene) -> LightValues {
         let l = s.dir_light;
         let ambient = s.ambient();
+        let sun = s.sun_color();
         let sh = dalc_to_sh(&ambient);
         LightValues {
             values: vec![
                 vec![l.direction[0], l.direction[1], l.direction[2], 0.0],
-                vec![l.color[0], l.color[1], l.color[2], 0.0],
+                vec![sun[0], sun[1], sun[2], 0.0],
                 rows(&dalc(&ambient)),
                 sh[0].to_vec(),
                 sh[1].to_vec(),
                 sh[2].to_vec(),
             ],
+        }
+    }
+}
+
+/// The vanilla point-light fields of `PerGeometry` (`Lighting.hlsl` ~l.579-581) that the forward permutation
+/// without `LIGHT_LIMIT_FIX` reads: `float4 PointLightPosition[7]` (w = falloff radius), `float4
+/// PointLightColor[7]` and `float2 NumLightNumShadowLight` (x = lights, y = shadow lights). Positions are
+/// camera-relative like `World`, so they depend on the eye as well as the scene.
+pub const POINT_NAMES: [&str; 3] = [
+    "PointLightPosition",
+    "PointLightColor",
+    "NumLightNumShadowLight",
+];
+
+/// The values of [`POINT_NAMES`] for one scene and view: light 0 is the scene's point light, 1-6 are zero.
+pub struct PointValues {
+    pub values: Vec<Vec<f32>>,
+}
+
+impl PointValues {
+    pub fn new(s: &Scene, v: &View) -> PointValues {
+        let p = s.point_light;
+        let mut pos = vec![0.0; 28];
+        let mut col = vec![0.0; 28];
+        let mut num = 0.0;
+        if p.brightness > 0.0 {
+            let e = v.eye;
+            pos[..4].copy_from_slice(&[
+                p.position[0] - e[0],
+                p.position[1] - e[1],
+                p.position[2] - e[2],
+                p.radius,
+            ]);
+            col[..4].copy_from_slice(&[p.brightness, p.brightness, p.brightness, 0.0]);
+            num = 1.0;
+        }
+        PointValues {
+            values: vec![pos, col, vec![num, 0.0]],
         }
     }
 }
@@ -581,6 +662,7 @@ pub struct SceneFields {
     pub previous_world: Option<Field>,
     pub view: Vec<Option<Field>>,
     pub lights: Vec<Option<Field>>,
+    pub point: Vec<Option<Field>>,
 }
 
 impl SceneFields {
@@ -590,6 +672,7 @@ impl SceneFields {
             previous_world: w.resolve("PreviousWorld"),
             view: VIEW_NAMES.iter().map(|n| w.resolve(n)).collect(),
             lights: LIGHT_NAMES.iter().map(|n| w.resolve(n)).collect(),
+            point: POINT_NAMES.iter().map(|n| w.resolve(n)).collect(),
         }
     }
 
@@ -602,6 +685,18 @@ impl SceneFields {
             any = true;
         }
         for (f, vals) in self.view.iter().zip(&v.values) {
+            if let Some(f) = f {
+                w.set_at(*f, vals);
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// Writes the point-light fields. True if this cbuffer has any of them.
+    pub fn write_point(&self, w: &mut CbWriter, p: &PointValues) -> bool {
+        let mut any = false;
+        for (f, vals) in self.point.iter().zip(&p.values) {
             if let Some(f) = f {
                 w.set_at(*f, vals);
                 any = true;

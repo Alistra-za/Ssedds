@@ -15,6 +15,9 @@
 //   is read from the SSE vertex record the way render3d packs it (mesh.rs pack_tbn): row 0 =
 //   (POSITION.w, NORMAL.w, BINORMAL.w) (the file's Bitangent), row 1 = BINORMAL.xyz (the file's Tangent),
 //   row 2 = NORMAL.xyz; the map's x, y, z weight rows 0, 1, 2.
+// - Point lights: the default (lit) branch reads CS's vanilla point-light fields (PointLightPosition[7] with the
+//   radius in w, PointLightColor[7], NumLightNumShadowLight.x) and adds base x colour x (1 - (d/r)^2) x N.L per
+//   light, camera-relative like World. Zero lights add exactly nothing.
 
 struct VsOut
 {
@@ -24,6 +27,7 @@ struct VsOut
     float3 Row0 : TEXCOORD2;
     float3 Row1 : TEXCOORD3;
     float4 Color : TEXCOORD4;
+    float3 WorldPosition : TEXCOORD5;
 };
 
 #if defined(VSHADER)
@@ -56,6 +60,7 @@ VsOut main(VsIn v)
     VsOut o;
     float3 p = mul(World, float4(v.Position.xyz, 1.0)) - EyePosition.xyz;
     o.Position = mul(ViewProj, float4(p, 1.0));
+    o.WorldPosition = p;
     o.Uv = v.Uv * TexcoordOffset.zw + TexcoordOffset.xy;
     o.Normal = mul((float3x3)World, v.Normal.xyz * 2.0 - 1.0);
     o.Row0 = mul((float3x3)World, float3(v.Position.w, v.Normal.w * 2.0 - 1.0, v.Binormal.w * 2.0 - 1.0));
@@ -79,6 +84,9 @@ cbuffer StandinLight : register(b2)
     float4 DirLightDirection;
     float4 DirLightColor;
     row_major float3x4 DirectionalAmbient;
+    float4 PointLightPosition[7];
+    float4 PointLightColor[7];
+    float2 NumLightNumShadowLight;
 };
 
 cbuffer StandinMaterialPs : register(b1)
@@ -107,6 +115,13 @@ float4 main(VsOut i) : SV_Target
     float3 ambient = mul(DirectionalAmbient, float4(n, 1.0));
     // A floor of half the base colour keeps every covered pixel visible whatever the normals are.
     float3 c = base.rgb * (0.5 + 0.5 * ndl * DirLightColor.rgb + ambient);
+    uint numLights = min(7, uint(NumLightNumShadowLight.x));
+    for (uint k = 0; k < numLights; k++)
+    {
+        float3 toLight = PointLightPosition[k].xyz - i.WorldPosition;
+        float f = saturate(length(toLight) / PointLightPosition[k].w);
+        c += base.rgb * PointLightColor[k].rgb * (1.0 - f * f) * saturate(dot(n, normalize(toLight)));
+    }
     // Alpha below 1 on purpose: the display readback must still be opaque.
     return float4(c, base.a * 0.5);
 #endif

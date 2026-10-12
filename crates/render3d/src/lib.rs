@@ -27,7 +27,7 @@ use material::{perm_material, write_material};
 use nif::material::MaterialState;
 use permutation::{defines, Material, Stage};
 pub use scene::Background;
-use scene::{LightValues, Scene, View, ViewValues};
+use scene::{LightValues, PointValues, Scene, View, ViewValues};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -804,10 +804,12 @@ impl Renderer {
         // Once per frame, not per cbuffer (03 §7): the four inverses, the light rows and the SH.
         let view_values = ViewValues::new(&view);
         let light_values = LightValues::new(scene);
+        let point_values = PointValues::new(scene, &view);
         let inputs = FrameInputs {
             view: &view,
             view_values: &view_values,
             lights: &light_values,
+            point: &point_values,
             lights_changed,
             view_changed,
         };

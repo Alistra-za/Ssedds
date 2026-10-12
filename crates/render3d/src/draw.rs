@@ -7,7 +7,9 @@ use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
 use crate::material::{write_material, Bound};
 use crate::mesh::GpuMesh;
-use crate::scene::{rows, write_static, LightValues, Mat3x4, Scene, SceneFields, View, ViewValues};
+use crate::scene::{
+    rows, write_static, LightValues, Mat3x4, PointValues, Scene, SceneFields, View, ViewValues,
+};
 use nif::material::MaterialState;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11PixelShader, ID3D11ShaderResourceView, ID3D11VertexShader,
@@ -112,6 +114,8 @@ pub struct FrameInputs<'a> {
     pub view: &'a View,
     pub view_values: &'a ViewValues,
     pub lights: &'a LightValues,
+    /// Point light, camera-relative: rewritten when the lights or the eye change.
+    pub point: &'a PointValues,
     pub lights_changed: bool,
     pub view_changed: bool,
 }
@@ -138,6 +142,9 @@ impl ShapeDraw {
         let mut uploads = 0;
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
             if lights && cb.fields.write_lights(&mut cb.writer, f.lights) {
+                cb.dirty = true;
+            }
+            if (lights || view) && cb.fields.write_point(&mut cb.writer, f.point) {
                 cb.dirty = true;
             }
             if view && cb.fields.write_view(&mut cb.writer, f.view_values, &world) {
