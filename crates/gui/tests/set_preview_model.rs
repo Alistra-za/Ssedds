@@ -898,3 +898,164 @@ fn every_built_in_is_named_and_the_default_preview_is_disabled_without_io() {
     let s = SetPreview::default();
     assert!(!s.enabled && s.store_path.is_none() && !s.busy());
 }
+
+// ---- Task 14b: Encoded / Source mode
+
+fn job_source(m: &AppModel) -> Source {
+    let item = m
+        .items
+        .iter()
+        .find(|i| i.job.is_some() && i.status == ItemStatus::Ready)
+        .unwrap();
+    source_of(item)
+}
+
+#[test]
+fn default_mode_is_encoded() {
+    assert_eq!(PreviewMode::default(), PreviewMode::Encoded);
+    assert_eq!(Encoder::new(DEFAULT_CAP).mode(), PreviewMode::Encoded);
+    assert_eq!(SetPreview::default().mode(), PreviewMode::Encoded);
+}
+
+#[test]
+fn f16_bits_rounds_clamps_and_survives_non_finite() {
+    assert_eq!(f16_bits(0.0), 0);
+    assert_eq!(f16_bits(1.0), 0x3C00);
+    assert_eq!(f16_bits(0.5), 0x3800);
+    assert_eq!(f16_bits(-2.0), 0xC000);
+    assert_eq!(f16_bits(65504.0), 0x7BFF);
+    assert_eq!(f16_bits(1.0e9), 0x7BFF);
+    assert_eq!(f16_bits(f32::INFINITY), 0x7BFF);
+    assert_eq!(f16_bits(f32::NAN), 0);
+}
+
+#[test]
+fn source_mode_builds_an_uncompressed_dds() {
+    use engine::dds::{read_dds, DdsPixelFormat};
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let session = m.session.as_ref().unwrap();
+    let src = job_source(&m);
+    let cancel = engine::api::CancelToken::default();
+    let enc = encode(session, &src, 32, PreviewMode::Encoded, &cancel).unwrap();
+    let raw = encode(session, &src, 32, PreviewMode::Source, &cancel).unwrap();
+    assert_ne!(enc, raw);
+    let (a, b) = (read_dds(&enc).unwrap(), read_dds(&raw).unwrap());
+    assert!(
+        matches!(b.format, DdsPixelFormat::Rgba8 { .. }),
+        "{:?}",
+        b.format
+    );
+    assert_eq!((b.width, b.height), (a.width, a.height));
+    assert!(b.width <= 32);
+    assert!(!b.levels.is_empty());
+    assert_eq!(b.levels.len(), a.levels.len());
+    // The GPU path takes it: render3d's loader on WARP.
+    let gpu = render3d::device::Gpu::new_warp().unwrap();
+    render3d::textures::load_dds(&gpu, &raw).unwrap();
+    // HDR: a half-float DX10 file with the same parse.
+    let px = |v: f32| engine::image::Rgba32F {
+        width: 2,
+        height: 1,
+        px: vec![[v, 0.5, 0.0, 1.0]; 2],
+    };
+    let hdr = read_dds(&uncompressed_dds(&[px(2.0)], true, false).unwrap()).unwrap();
+    assert_eq!(hdr.format, DdsPixelFormat::Rgba16f);
+    assert_eq!(&hdr.data[..2], &0x4000u16.to_le_bytes());
+    let srgb = read_dds(&uncompressed_dds(&[px(1.0)], false, true).unwrap()).unwrap();
+    assert_eq!(srgb.format, DdsPixelFormat::Rgba8 { srgb: true });
+    assert_eq!(srgb.data[..4], [255, 128, 0, 255]);
+}
+
+#[test]
+fn switching_mode_marks_members_stale_and_reencodes() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let (v, e) = rock(&m);
+    let mut enc = Encoder::new(DEFAULT_CAP);
+    enc.sync(&m, member_slots(&m, &v, Some(&e)), Instant::now(), true);
+    settle(&mut enc, &m);
+    let old = match &enc.members[&SlotKind::Diffuse].state {
+        EncState::Fresh(x) => x.clone(),
+        s => panic!("{s:?}"),
+    };
+    enc.set_mode(PreviewMode::Source, Instant::now());
+    assert_eq!(enc.mode(), PreviewMode::Source);
+    match &enc.members[&SlotKind::Diffuse].state {
+        EncState::Stale(Some(x)) => assert_eq!(x.id, old.id),
+        s => panic!("{s:?}"),
+    }
+    settle(&mut enc, &m);
+    let EncState::Fresh(new) = &enc.members[&SlotKind::Diffuse].state else {
+        panic!()
+    };
+    assert_ne!(new.dds, old.dds);
+    let f = engine::dds::read_dds(&new.dds).unwrap();
+    assert!(matches!(
+        f.format,
+        engine::dds::DdsPixelFormat::Rgba8 { .. }
+    ));
+}
+
+#[test]
+fn a_completion_from_the_old_mode_is_rejected() {
+    let (_d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    let t1 = enc.token_of(SlotKind::Diffuse);
+    assert_ne!(t1, 0);
+    enc.set_mode(PreviewMode::Source, t);
+    assert_eq!(enc.token_of(SlotKind::Diffuse), 0);
+    enc.inject_as(
+        SlotKind::Diffuse,
+        t1,
+        DEFAULT_CAP,
+        PreviewMode::Encoded,
+        fake(),
+    );
+    assert!(!enc.poll());
+    enc.pump(m.session.as_ref(), t, false);
+    let t2 = enc.token_of(SlotKind::Diffuse);
+    assert_ne!(t2, t1);
+    // Same token, but produced under the other mode: rejected and scheduled again under Source.
+    enc.inject_as(
+        SlotKind::Diffuse,
+        t2,
+        DEFAULT_CAP,
+        PreviewMode::Encoded,
+        fake(),
+    );
+    assert!(enc.poll());
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Stale(None)
+    ));
+    enc.pump(m.session.as_ref(), Instant::now(), false);
+    let t3 = enc.token_of(SlotKind::Diffuse);
+    enc.inject(SlotKind::Diffuse, t3, DEFAULT_CAP, fake());
+    assert!(enc.poll());
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Fresh(_)
+    ));
+}
+
+#[test]
+fn dds_inputs_ignore_the_mode() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("x.dds");
+    std::fs::write(&p, b"DDS raw").unwrap();
+    let m = pbr_opened(d.path());
+    let session = m.session.as_ref().unwrap();
+    let src = Source::Dds(p);
+    let cancel = engine::api::CancelToken::default();
+    for mode in [PreviewMode::Encoded, PreviewMode::Source] {
+        assert_eq!(
+            encode(session, &src, 32, mode, &cancel).unwrap(),
+            b"DDS raw"
+        );
+    }
+    let blocked = Source::Blocked("no");
+    assert!(encode(session, &blocked, 32, PreviewMode::Source, &cancel).is_err());
+}

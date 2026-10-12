@@ -19,7 +19,13 @@ use crate::pgp::writer::EntryInput;
 use crate::pgp::writer::{document, entry_node};
 use crate::settings::MeshesSettings;
 use engine::api::CancelToken;
-use engine::dds::{dds_bytes, resolve_header, DdsDesc};
+use engine::config::Format;
+use engine::dds::{
+    dds_bytes, resolve_header, DdsDesc, DDPF_FOURCC, DDSCAPS_COMPLEX, DDSCAPS_MIPMAP,
+    DDSCAPS_TEXTURE, DDSD_CAPS, DDSD_HEIGHT, DDSD_MIPMAPCOUNT, DDSD_PITCH, DDSD_PIXELFORMAT,
+    DDSD_WIDTH,
+};
+use engine::image::Rgba32F;
 use engine::manifest::sha256_json;
 use engine::policy::ResolvedJob;
 use engine::session::{pack_key, Session};
@@ -49,6 +55,17 @@ pub const DEFAULT_CAP: u32 = 2048;
 pub const WAITS_FOR_EXPORT: &str = "Preview encoding waits for the export to finish";
 const BLOCKED_ERROR: &str = "the texture has an error";
 const BLOCKED_NOTHING: &str = "nothing to encode";
+
+/// What a member's bytes are made of: the engine's full export path, or its prepared source chain uncompressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewMode {
+    #[default]
+    Encoded,
+    Source,
+}
+
+pub const MODE_LABEL_ENCODED: &str = "Encoded (exact export)";
+pub const MODE_LABEL_SOURCE: &str = "Source (faster, no compression)";
 
 pub fn cap_text(cap: u32) -> String {
     format!("Preview at {cap} px, export writes full size")
@@ -232,6 +249,8 @@ pub struct Member {
     token: u64,
     /// The cap the live encode runs at, and the cap the shown bytes were made at.
     cap: u32,
+    /// The mode of the live encode, and of the shown bytes (as `cap`).
+    mode: PreviewMode,
     cancel: Option<CancelToken>,
 }
 
@@ -239,6 +258,7 @@ struct EncDone {
     kind: SlotKind,
     token: u64,
     cap: u32,
+    mode: PreviewMode,
     result: Result<(Vec<u8>, f64), String>,
 }
 
@@ -246,6 +266,7 @@ struct EncDone {
 pub struct Encoder {
     pub members: BTreeMap<SlotKind, Member>,
     pub cap: u32,
+    mode: PreviewMode,
     /// An export is running: nothing starts (02 §2.3).
     pub paused: bool,
     pub error: Option<String>,
@@ -282,15 +303,76 @@ pub(crate) fn ms(t0: Instant) -> f64 {
     t0.elapsed().as_secs_f64() * 1000.0
 }
 
-/// One member's bytes: the preview encode within `cap`, made into a DDS exactly as `Session::preview` builds it
-/// (`session.rs:283-290`), or a DDS input's own file.
+/// `v` as IEEE half bits: clamped to the f16 range, round to nearest even, NaN as 0.
+pub fn f16_bits(v: f32) -> u16 {
+    if v.is_nan() {
+        return 0;
+    }
+    half::f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits()
+}
+
+/// An uncompressed DX10 DDS of `levels` (mip 0 first, tightly packed): `R8G8B8A8_UNORM[_SRGB]`, or
+/// `R16G16B16A16_FLOAT` when `hdr`. The engine only writes BCn, so this is the preview's own writer.
+pub fn uncompressed_dds(levels: &[Rgba32F], hdr: bool, srgb: bool) -> Result<Vec<u8>, String> {
+    let first = levels.first().ok_or("no levels to write")?;
+    let (w, h, mips) = (first.width, first.height, levels.len() as u32);
+    let bpp: u32 = if hdr { 8 } else { 4 };
+    let dxgi: u32 = match (hdr, srgb) {
+        (true, _) => 10,
+        (false, false) => 28,
+        (false, true) => 29,
+    };
+    let mut hd = [0u32; 31];
+    hd[0] = 124;
+    hd[1] = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_PITCH;
+    if mips > 1 {
+        hd[1] |= DDSD_MIPMAPCOUNT;
+    }
+    (hd[2], hd[3], hd[4], hd[5], hd[6]) = (h, w, w * bpp, 1, mips);
+    (hd[18], hd[19], hd[20]) = (32, DDPF_FOURCC, u32::from_le_bytes(*b"DX10"));
+    hd[26] = DDSCAPS_TEXTURE
+        | if mips > 1 {
+            DDSCAPS_COMPLEX | DDSCAPS_MIPMAP
+        } else {
+            0
+        };
+    let mut out = b"DDS ".to_vec();
+    for v in hd.into_iter().chain([dxgi, 3, 0, 1, 0]) {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for l in levels {
+        for c in l.px.iter().flatten() {
+            if hdr {
+                out.extend_from_slice(&f16_bits(*c).to_le_bytes());
+            } else {
+                out.push((c.clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// One member's bytes: in `Encoded` mode the preview encode within `cap`, made into a DDS exactly as
+/// `Session::preview` builds it (`session.rs:283-290`); in `Source` mode the prepared source chain, uncompressed (no
+/// BCn encode). A DDS input's own file in both.
 pub fn encode(
     session: &Session,
     source: &Source,
     cap: u32,
+    mode: PreviewMode,
     cancel: &CancelToken,
 ) -> Result<Vec<u8>, String> {
     match source {
+        Source::Job(job) if mode == PreviewMode::Source => {
+            let r = session
+                .preview_source(job, cap, cancel)
+                .map_err(|e| format!("{e:?}"))?;
+            uncompressed_dds(
+                &r.levels,
+                job.profile.format == Format::Bc6hUf16,
+                job.profile.srgb_tag(),
+            )
+        }
         Source::Job(job) => {
             let r = session
                 .preview(job, cap, cancel)
@@ -320,6 +402,7 @@ impl Encoder {
         Encoder {
             members: BTreeMap::new(),
             cap,
+            mode: PreviewMode::default(),
             paused: false,
             error: None,
             next_token: 0,
@@ -333,14 +416,33 @@ impl Encoder {
     /// is cancelled and its late result dropped.
     pub fn set_cap(&mut self, cap: u32, now: Instant) {
         self.cap = cap;
+        self.restart(now, false);
+    }
+
+    pub fn mode(&self) -> PreviewMode {
+        self.mode
+    }
+
+    /// A new mode, handled as a new cap is; a DDS input's bytes do not depend on it, so it is left alone.
+    pub fn set_mode(&mut self, mode: PreviewMode, now: Instant) {
+        self.mode = mode;
+        self.restart(now, true);
+    }
+
+    fn restart(&mut self, now: Instant, skip_dds: bool) {
         for mem in self.members.values_mut() {
+            if skip_dds && matches!(mem.source, Source::Dds(_)) {
+                mem.mode = self.mode;
+                continue;
+            }
             if let Some(c) = mem.cancel.take() {
                 c.cancel();
             }
             mem.token = 0;
             if !matches!(mem.state, EncState::Blocked(_)) {
                 mem.state = EncState::Stale(mem.state.shown().cloned());
-                mem.cap = cap;
+                mem.cap = self.cap;
+                mem.mode = self.mode;
                 mem.due = Some(now);
             }
         }
@@ -367,10 +469,24 @@ impl Encoder {
         cap: u32,
         result: Result<(Vec<u8>, f64), String>,
     ) {
+        self.inject_as(kind, token, cap, self.mode, result);
+    }
+
+    /// Test seam: [`Encoder::inject`] for a completion produced under `mode`.
+    #[doc(hidden)]
+    pub fn inject_as(
+        &self,
+        kind: SlotKind,
+        token: u64,
+        cap: u32,
+        mode: PreviewMode,
+        result: Result<(Vec<u8>, f64), String>,
+    ) {
         let _ = self.tx.send(EncDone {
             kind,
             token,
             cap,
+            mode,
             result,
         });
     }
@@ -423,13 +539,20 @@ impl Encoder {
                 _ => None,
             };
             match self.members.get_mut(&slot.kind) {
-                Some(mem) if same_bytes(&mem.slot, &slot) && mem.cap == self.cap => mem.slot = slot,
+                Some(mem)
+                    if same_bytes(&mem.slot, &slot)
+                        && mem.cap == self.cap
+                        && mem.mode == self.mode =>
+                {
+                    mem.slot = slot
+                }
                 Some(mem) => {
                     if let Some(c) = mem.cancel.take() {
                         c.cancel();
                     }
                     mem.token = 0;
                     mem.cap = self.cap;
+                    mem.mode = self.mode;
                     mem.state = match blocked {
                         Some(w) => EncState::Blocked(w),
                         None => EncState::Stale(mem.state.shown().cloned()),
@@ -449,6 +572,7 @@ impl Encoder {
                             source,
                             token: 0,
                             cap: self.cap,
+                            mode: self.mode,
                             cancel: None,
                         },
                     );
@@ -476,23 +600,30 @@ impl Encoder {
             let token = self.next_token;
             mem.token = token;
             mem.cap = self.cap;
+            mem.mode = self.mode;
             let cancel = CancelToken::default();
             mem.cancel = Some(cancel.clone());
             mem.state = EncState::Encoding(mem.state.shown().cloned());
             if self.hold {
                 continue;
             }
-            let (session, source, cap, kind) =
-                (session.clone(), mem.source.clone(), self.cap, *kind);
+            let (session, source, cap, mode, kind) = (
+                session.clone(),
+                mem.source.clone(),
+                self.cap,
+                self.mode,
+                *kind,
+            );
             spawn(
                 self.tx.clone(),
                 move || {
                     let t0 = Instant::now();
-                    let result = encode(&session, &source, cap, &cancel).map(|b| (b, ms(t0)));
+                    let result = encode(&session, &source, cap, mode, &cancel).map(|b| (b, ms(t0)));
                     EncDone {
                         kind,
                         token,
                         cap,
+                        mode,
                         result,
                     }
                 },
@@ -500,6 +631,7 @@ impl Encoder {
                     kind,
                     token,
                     cap,
+                    mode,
                     result: Err(format!("internal error in a preview encode: {e}")),
                 },
             );
@@ -513,6 +645,7 @@ impl Encoder {
             kind,
             token,
             cap,
+            mode,
             result,
         }) = self.rx.try_recv()
         {
@@ -523,8 +656,8 @@ impl Encoder {
             if mem.token == 0 || mem.token != token {
                 continue;
             }
-            // The live encode ran at another cap than the current one: useless, schedule it again.
-            if cap != self.cap {
+            // The live encode ran at another cap or mode than the current one: useless, schedule it again.
+            if cap != self.cap || mode != self.mode {
                 if let Some(c) = mem.cancel.take() {
                     c.cancel();
                 }
@@ -1204,6 +1337,15 @@ impl SetPreview {
             tx,
             rx,
         }
+    }
+
+    pub fn mode(&self) -> PreviewMode {
+        self.enc.mode()
+    }
+
+    /// Encoded / Source (not persisted): only the encodes change, the meshes stay.
+    pub fn set_mode(&mut self, mode: PreviewMode) {
+        self.enc.set_mode(mode, Instant::now());
     }
 
     /// Encodes, queries, NIF reads, the viewport or a scene to send are in flight.
