@@ -81,6 +81,8 @@ pub struct GuiSettings {
 #[serde(default)]
 pub struct Render3dSettings {
     pub shaders: Option<render3d::locate::Fingerprint>,
+    /// The set preview's encode cap in pixels (D5); 0 = 2048. Edited in `gui.toml` for now.
+    pub set_preview_max: u32,
 }
 
 /// `[meshes]`: the MO2 instance and profile the Meshes view scans, or the folder chosen instead.
