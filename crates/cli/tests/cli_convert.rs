@@ -1274,6 +1274,8 @@ fn cs_compact_writes_bc1_colour_and_half_size_normals() {
         fx.format("textures/a/wall_d.dds"),
         DdsPixelFormat::Bc1 { srgb: false }
     );
+    let c = read_dds(&std::fs::read(fx.dds("textures/a/wall_d.dds")).unwrap()).unwrap();
+    assert_eq!((c.width, c.height), (32, 32));
     let n = read_dds(&std::fs::read(fx.dds("textures/a/wall_n.dds")).unwrap()).unwrap();
     assert_eq!((n.width, n.height), (512, 512));
 }

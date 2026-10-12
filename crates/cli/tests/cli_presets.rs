@@ -330,3 +330,41 @@ fn export_then_validate() {
         "{stdout}"
     );
 }
+
+/// Fix round 1: `export --id <loaded id>` fails (exit 2) and writes no file; neither does the default id when taken.
+#[test]
+fn export_refuses_a_taken_id_and_writes_nothing() {
+    let d = appdata_with_mine();
+    let out = d.path().join("clash.toml");
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "cs-compact",
+            "--id",
+            "cs-quality",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("already loaded"), "{err}");
+    assert!(!out.exists());
+    let first = d.path().join("first.toml");
+    std::fs::write(&first, MINE.replace("\"mine\"", "\"mine-export\"")).unwrap();
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "mine",
+            "--preset-file",
+            first.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(!out.exists());
+}

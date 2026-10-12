@@ -852,3 +852,14 @@ fn validate_file_reports_problems_and_accepts_a_folder_file() {
         assert!(p[0].contains(says), "{name}: {p:?}");
     }
 }
+
+/// Fix round 1: an export under an id that is already loaded is refused, naming that preset's source.
+#[test]
+fn export_refuses_a_loaded_new_id() {
+    let r = PresetRegistry::builtin().unwrap();
+    let e = r
+        .export("cs-compact", "cs-quality")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("already loaded") && e.contains("builtin"), "{e}");
+}

@@ -764,6 +764,11 @@ impl PresetRegistry {
             .get(id)
             .cloned()
             .ok_or_else(|| PresetError::Unknown(id.to_string()))?;
+        if let Some(src) = self.source(new_id) {
+            return Err(PresetError::Invalid(format!(
+                "CFG-INVALID: preset id '{new_id}' is already loaded from {src}"
+            )));
+        }
         t.insert("id".into(), toml::Value::String(new_id.to_string()));
         toml::to_string(&t).map_err(|e| PresetError::Invalid(e.to_string()))
     }
