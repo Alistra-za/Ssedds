@@ -350,22 +350,23 @@ fn estimated_bytes(path: &Path) -> u64 {
     {
         return dds_dimensions(path).map_or(0, |(w, h, len)| input_bytes(w, h) + len);
     }
-    image::image_dimensions(path)
+    // By content and MAX_DIM-checked; a source refused here is refused at load too, so it holds nothing.
+    crate::load::image_size(path)
         .map(|(w, h)| input_bytes(w, h))
         .unwrap_or(0)
 }
 
-/// Width, height and file length of a DDS, from its first 20 bytes (the offsets `dds::read_dds` uses; that reader
-/// needs the whole payload). `None` when the file cannot be read or is not a DDS.
+/// Width, height and file length of a DDS, from its header (`load::dds_header_size`). `None` when the file cannot
+/// be read or is not a DDS.
 fn dds_dimensions(path: &Path) -> Option<(u32, u32, u64)> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut b = [0u8; 20];
-    f.read_exact(&mut b).ok()?;
-    let u = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    let (w, h) = crate::load::dds_header_size(path)?;
     // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
-    let dim = |i| u(i).min(crate::load::MAX_DIM);
-    (&b[..4] == b"DDS ").then(|| (dim(16), dim(12), f.metadata().map_or(0, |m| m.len())))
+    let dim = |v: u32| v.min(crate::load::MAX_DIM);
+    Some((
+        dim(w),
+        dim(h),
+        std::fs::metadata(path).map_or(0, |m| m.len()),
+    ))
 }
 
 /// [`estimated_bytes`] of a `w`×`h` input.
@@ -1011,8 +1012,8 @@ impl Engine {
                                     e
                                 }
                                 None => {
-                                    // `load_image` enforces MAX_DIM per source, so DIM-TOO-LARGE needs nothing in
-                                    // `check_sizes`.
+                                    // `check_sizes` (in `assemble`) enforces MAX_DIM per source before the canvas
+                                    // is allocated; its `TooLarge` maps to DIM-TOO-LARGE like `load_image`'s.
                                     let asm = pack::assemble::assemble(&c.job, c.job.gray)
                                         .map_err(|e| match e {
                                             pack::assemble::PackError::Load(e) => {
@@ -1885,6 +1886,18 @@ mod tests {
         );
         std::fs::write(&p, b"not a dds").unwrap();
         assert_eq!(estimated_bytes(&p), 0);
+    }
+
+    /// Residual fix (re-review minor 1): a non-DDS input's size is read by the decoder its content picks, so a
+    /// PNG named `.bmp` is admitted for its size, not 0.
+    #[test]
+    fn a_non_dds_input_is_admitted_for_its_size_by_content() {
+        let d = tempfile::tempdir().unwrap();
+        let png = d.path().join("a.png");
+        image::GrayImage::new(64, 32).save(&png).unwrap();
+        let lying = d.path().join("a.bmp");
+        std::fs::rename(&png, &lying).unwrap();
+        assert_eq!(estimated_bytes(&lying), input_bytes(64, 32));
     }
 
     /// Carry 13, review M2/I2 and ruling O2: only a comparable, matching, passing record is up to date.

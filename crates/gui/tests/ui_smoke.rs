@@ -1073,3 +1073,25 @@ fn patch_refuses_an_output_key_another_item_exports_to() {
         .starts_with("DDS-HEADER-PATCHED"));
     assert_eq!(m.dds_patch.last_for(dds), None);
 }
+
+/// Residual check (re-review minor 2): output keys that differ only in case name one file on Windows. `job_key` is
+/// `manifest::output_key`, which case-folds (as `dds::same_file` does), so Patch on `Rock01.dds` next to
+/// `rock01.png` is refused like the same-case pair. A regression guard: it passed before this change too.
+#[test]
+fn patch_refuses_an_output_key_that_differs_only_in_case() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let (_, b) = broken_dds(&root);
+    std::fs::write(root.join("landscape/Rock01.dds"), &b).unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let (dds, png) = ("landscape/Rock01.dds", "landscape/rock01.png");
+    let (kd, kp) = (
+        m.item(dds).unwrap().job_key.clone(),
+        m.item(png).unwrap().job_key.clone(),
+    );
+    assert_eq!(kd, kp);
+    let e = m.patch_dds_header(dds).unwrap_err();
+    assert!(e.contains("rock01.png"), "{e}");
+}

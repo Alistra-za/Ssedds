@@ -7,7 +7,7 @@ use super::{ChannelSource, PackJob};
 use crate::analyse::code8;
 use crate::config::GraySource;
 use crate::image::{Rgba32F, SourceInfo};
-use crate::load::{load_image, LoadError};
+use crate::load::{image_size, load_image, LoadError};
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
@@ -39,14 +39,12 @@ pub struct Assembled {
     pub non_gray: Vec<PathBuf>,
 }
 
-/// The width and height every source shares, from the file headers alone.
+/// The width and height every source shares, from the file headers alone (read by content, MAX_DIM-checked, so
+/// the packed canvas is never sized by a file `load_image` would refuse).
 pub fn check_sizes(sources: &[PathBuf]) -> Result<(u32, u32), PackError> {
     let mut found = vec![];
     for p in sources {
-        let (w, h) = image::image_dimensions(p).map_err(|e| LoadError::Decode {
-            path: p.clone(),
-            msg: e.to_string(),
-        })?;
+        let (w, h) = image_size(p)?;
         found.push((p.clone(), w, h));
     }
     let (w, h) = found.first().map_or((0, 0), |f| (f.1, f.2));

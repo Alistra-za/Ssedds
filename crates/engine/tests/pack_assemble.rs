@@ -223,3 +223,41 @@ fn an_unreadable_source_is_a_load_error() {
         Err(PackError::Load(_))
     ));
 }
+
+/// Residual fix (re-review minor 1): the shared size is read by the decoder the file's content picks and is
+/// MAX_DIM-checked before the packed canvas is allocated. A 16385-wide PNG is refused by `check_sizes`, with its
+/// own extension and under a lying `.bmp` one, and `assemble` refuses it the same way.
+#[test]
+fn an_oversized_source_is_refused_before_the_canvas_is_allocated() {
+    let d = tempfile::tempdir().unwrap();
+    let png = d.path().join("wide_rough.png");
+    ImageBuffer::from_fn(16385, 1, |_, _| Luma([0u8]))
+        .save(&png)
+        .unwrap();
+    let too_large = |r: Result<(u32, u32), PackError>| {
+        matches!(
+            r,
+            Err(PackError::Load(engine::load::LoadError::TooLarge {
+                dim: 16385,
+                ..
+            }))
+        )
+    };
+    assert!(too_large(check_sizes(std::slice::from_ref(&png))));
+    let lying = d.path().join("wide_rough.bmp");
+    std::fs::rename(&png, &lying).unwrap();
+    assert!(too_large(check_sizes(std::slice::from_ref(&lying))));
+    let j = job(
+        RecipeKind::Rmaos,
+        [
+            src(&lying, RawMap::Roughness, false),
+            ChannelSource::Default { value: 0.0 },
+            ChannelSource::Default { value: 1.0 },
+            ChannelSource::Default { value: 1.0 },
+        ],
+        &[(&lying, RawMap::Roughness)],
+    );
+    assert!(too_large(
+        assemble(&j, GraySource::R).map(|a| (a.image.width, a.image.height))
+    ));
+}

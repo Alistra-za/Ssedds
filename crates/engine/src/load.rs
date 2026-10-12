@@ -93,6 +93,44 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
     ))
 }
 
+/// Width and height of `path` from its header alone, MAX_DIM-checked: a `.dds` from its DDS header, anything else
+/// from the decoder its content picks (the one `load_image_meta` decodes with), never one its extension names.
+pub fn image_size(path: &Path) -> Result<(u32, u32), LoadError> {
+    let bad = |msg: String| LoadError::Decode {
+        path: path.to_path_buf(),
+        msg,
+    };
+    let (w, h) = if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
+    {
+        dds_header_size(path).ok_or_else(|| bad("not a readable DDS header".into()))?
+    } else {
+        let mut reader = image::ImageReader::open(path)
+            .and_then(image::ImageReader::with_guessed_format)
+            .map_err(|e| bad(e.to_string()))?;
+        reader.no_limits();
+        reader.into_dimensions().map_err(|e| bad(e.to_string()))?
+    };
+    if w.max(h) > MAX_DIM {
+        return Err(LoadError::TooLarge {
+            path: path.to_path_buf(),
+            dim: w.max(h),
+        });
+    }
+    Ok((w, h))
+}
+
+/// Width and height of a DDS from its first 20 bytes (the offsets `dds::read_dds` uses; that reader needs the
+/// whole payload). `None` when the file cannot be read or is not a DDS. Unchecked against MAX_DIM.
+pub(crate) fn dds_header_size(path: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut b = [0u8; 20];
+    std::fs::File::open(path).ok()?.read_exact(&mut b).ok()?;
+    let u = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    (&b[..4] == b"DDS ").then(|| (u(16), u(12)))
+}
+
 /// `SourceInfo` of a DDS input's pixel format (DECISIONS S6).
 fn dds_source_info(f: crate::dds::DdsPixelFormat) -> SourceInfo {
     use crate::dds::DdsPixelFormat::*;
