@@ -75,6 +75,11 @@ fn without_a_scan_db_the_panel_says_so_and_shows_the_simulated_sphere() {
     h.get_by_label_contains("Diffuse: fresh");
     h.get_by_label("Built-in shape: patched as PGPatcher would");
     h.get_by_label_contains("Off in this preview");
+    // One mesh combo, always shown (no scan DB here): Auto, then the built-ins after a separator.
+    h.get_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .click();
+    h.run_steps(4);
+    h.get_by_label("Auto");
     for (_, name) in BUILTINS {
         h.get_by_label(name);
     }
@@ -117,7 +122,7 @@ fn no_matching_mesh_falls_back_to_a_built_in_shape_the_user_can_change() {
             ..
         })
     ));
-    h.get_by_label("Cube").click();
+    pick_mesh(&mut h, "Cube");
     settle(&mut h);
     assert!(matches!(
         h.state().1.v3.content(),
@@ -167,6 +172,15 @@ fn nothing_but_a_hint_without_a_followed_set() {
     h.run_steps(4);
     h.get_by_label("Select a set to preview it in 3D.");
     assert!(!sdc_gui::ui::set_preview::wanted(&h.state().0));
+}
+
+/// Open the mesh ComboBox and pick `name` from its list.
+fn pick_mesh(h: &mut H, name: &str) {
+    h.get_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .click();
+    h.run_steps(4);
+    h.get_all_by_label(name).last().unwrap().click();
+    h.run_steps(4);
 }
 
 fn plain_rock() -> (tempfile::TempDir, H) {
@@ -261,7 +275,7 @@ fn a_member_chip_shows_its_last_encode_time_even_while_stale() {
 fn every_built_in_shape_is_selectable() {
     let (_d, mut h) = plain_rock();
     for (b, name) in BUILTINS {
-        h.get_by_label(name).click();
+        pick_mesh(&mut h, name);
         settle(&mut h);
         assert!(
             matches!(h.state().1.v3.content(), Some(Content::Builtin { shape, .. }) if *shape == b),
@@ -318,4 +332,83 @@ fn the_textures_view_shows_the_panel_for_a_set_only_when_the_app_enables_it() {
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
     assert!(h.query_by_label(PANEL_TITLE).is_none());
+}
+
+const EMISSIVE_TEXT: &str = "Emissive colour is approximate (in game the engine supplies it)";
+
+#[test]
+fn the_emissive_label_ignores_a_hidden_material_and_follows_the_viewport_shapes() {
+    let (_d, mut h) = plain_rock();
+    let mut material = MaterialState::builtin_default();
+    material.slsf1 |= 1 << 29;
+    let mut hidden = material.clone();
+    hidden.hidden = true;
+    h.state_mut().1.rows = vec![ShapeRow {
+        id: ShapeId(4),
+        name: "Lamp".into(),
+        outcome: Outcome::Plain,
+        material: hidden,
+    }];
+    h.run_steps(4);
+    assert!(h.query_by_label(EMISSIVE_TEXT).is_none());
+    h.state_mut().1.rows.clear();
+    h.state_mut().1.v3.shapes = vec![ShapeInfo {
+        id: ShapeId(1),
+        name: "Lamp".into(),
+        material,
+        status: ShapeStatus::Drawing,
+    }];
+    h.run_steps(4);
+    h.get_by_label(EMISSIVE_TEXT);
+}
+
+#[test]
+fn hiding_the_panel_during_work_lets_the_app_go_idle_and_the_scene_lands_on_re_show() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(
+        rock_selected(d.path()),
+        SetPreview::new(None, None, None, DEFAULT_CAP),
+    );
+    h.run_steps(2);
+    {
+        let (m, s) = h.state_mut();
+        s.poll(&*m);
+    }
+    assert!(h.state().1.busy(), "work is in flight");
+    // Hidden: no draw. The worker finishes; nothing may keep the app repainting.
+    let t = Instant::now();
+    while h.state().1.busy() {
+        let (m, s) = h.state_mut();
+        s.poll(&*m);
+        assert!(
+            t.elapsed() < Duration::from_secs(30),
+            "busy() stuck while hidden"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(h.state().1.v3.content().is_none());
+    settle(&mut h);
+    assert!(h.state().1.v3.content().is_some());
+}
+
+#[test]
+fn an_old_gui_toml_without_the_cap_gives_the_default_and_out_of_range_values_clamp() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("gui.toml");
+    std::fs::write(
+        &p,
+        "[render3d]
+",
+    )
+    .unwrap();
+    let (s, _) = sdc_gui::settings::GuiSettings::load(&p);
+    assert_eq!(s.render3d.set_preview_max, 0);
+    assert_eq!(SetPreview::from_settings(&s).enc.cap, DEFAULT_CAP);
+    let cap = |n: u32| {
+        let mut s = sdc_gui::settings::GuiSettings::default();
+        s.render3d.set_preview_max = n;
+        SetPreview::from_settings(&s).enc.cap
+    };
+    assert_eq!((cap(1), cap(255), cap(256)), (256, 256, 256));
+    assert_eq!((cap(8192), cap(8193), cap(u32::MAX)), (8192, 8192, 8192));
 }

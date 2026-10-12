@@ -79,36 +79,42 @@ fn mesh_picker(ui: &mut egui::Ui, s: &mut SetPreview, simulated: bool) {
     let mut chosen = None;
     ui.horizontal_wrapped(|ui| {
         ui.label("Mesh:");
-        if let Candidates::Ready(list) = &s.candidates {
-            if !list.is_empty() {
-                let current = match &pick {
-                    Pick::Nif(c) => c.label(),
-                    Pick::Builtin(b) => builtin_name(*b).to_string(),
-                };
-                egui::ComboBox::from_id_salt("set-3d-mesh")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        for c in list {
-                            let sel =
-                                matches!(&pick, Pick::Nif(p) if p.load_copy_id == c.load_copy_id);
-                            let r = ui
-                                .add_enabled_ui(!c.le_mesh, |ui| {
-                                    ui.selectable_label(sel, c.label())
-                                })
-                                .inner;
-                            if r.clicked() {
-                                chosen = Some(MeshChoice::Nif(c.load_copy_id));
-                            }
+        let pick_name = match &pick {
+            Pick::Nif(c) => c.label(),
+            Pick::Builtin(b) => builtin_name(*b).to_string(),
+        };
+        let current = match s.choice() {
+            MeshChoice::Auto => format!("Auto ({pick_name})"),
+            _ => pick_name,
+        };
+        egui::ComboBox::from_id_salt("set-3d-mesh")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(s.choice() == MeshChoice::Auto, "Auto")
+                    .clicked()
+                {
+                    chosen = Some(MeshChoice::Auto);
+                }
+                if let Candidates::Ready(list) = &s.candidates {
+                    for c in list {
+                        let sel = matches!(&pick, Pick::Nif(p) if p.load_copy_id == c.load_copy_id);
+                        let r = ui
+                            .add_enabled_ui(!c.le_mesh, |ui| ui.selectable_label(sel, c.label()))
+                            .inner;
+                        if r.clicked() {
+                            chosen = Some(MeshChoice::Nif(c.load_copy_id));
                         }
-                    });
-            }
-        }
-        for (b, name) in BUILTINS {
-            let sel = matches!(pick, Pick::Builtin(x) if x == b);
-            if ui.selectable_label(sel, name).clicked() {
-                chosen = Some(MeshChoice::Builtin(b));
-            }
-        }
+                    }
+                }
+                ui.separator();
+                for (b, name) in BUILTINS {
+                    let sel = matches!(pick, Pick::Builtin(x) if x == b);
+                    if ui.selectable_label(sel, name).clicked() {
+                        chosen = Some(MeshChoice::Builtin(b));
+                    }
+                }
+            });
     });
     if let Some(c) = chosen {
         s.choose(c);

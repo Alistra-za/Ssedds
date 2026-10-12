@@ -1295,6 +1295,8 @@ pub struct SetPreview {
     on_screen: Option<Shown>,
     sent: BTreeMap<ShapeId, MaterialState>,
     want_scene: bool,
+    /// The panel was drawn on the last polled frame: a pending scene push only counts as work while it is on screen.
+    visible: bool,
     querying: Option<u64>,
     loading: Option<(u64, i64)>,
     last_check: Option<Instant>,
@@ -1349,6 +1351,7 @@ impl SetPreview {
             on_screen: None,
             sent: BTreeMap::new(),
             want_scene: false,
+            visible: false,
             querying: None,
             loading: None,
             last_check: None,
@@ -1390,7 +1393,7 @@ impl SetPreview {
             || self.enc.busy()
             || self.querying.is_some()
             || self.loading.is_some()
-            || (self.want_scene && !self.enc.paused)
+            || (self.want_scene && !self.enc.paused && (self.shown || self.visible))
     }
 
     /// Window focus: look for CS again (as `MeshesModel::relocate`), once the panel has been shown.
@@ -1413,6 +1416,7 @@ impl SetPreview {
         self.drain();
         let shown = std::mem::take(&mut self.shown);
         let input = std::mem::take(&mut self.input);
+        self.visible = shown;
         if !shown || !self.enabled {
             return;
         }
@@ -1606,6 +1610,14 @@ impl SetPreview {
             MeshChoice::Auto => best(),
         };
         found.map_or(Pick::Builtin(Builtin::Sphere), |c| Pick::Nif(c.clone()))
+    }
+
+    /// The user's mesh choice for the followed set (`Auto` when none).
+    pub fn choice(&self) -> MeshChoice {
+        self.fp
+            .as_ref()
+            .and_then(|fp| self.choice.get(&fp.set_key).copied())
+            .unwrap_or(MeshChoice::Auto)
     }
 
     pub fn choose(&mut self, c: MeshChoice) {
