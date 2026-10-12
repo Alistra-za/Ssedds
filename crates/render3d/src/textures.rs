@@ -83,8 +83,15 @@ pub fn default_for_register(reg: u32) -> [u8; 4] {
 ///   multiplies by `3.984375 × (detail + 1/255)`, so 64/255 ≈ ×1.02 keeps the diffuse, and a 0.5 tint keeps
 ///   it close to the base (`raw² + raw − raw²/2`); black would make the face black. [Inference: the engine's
 ///   16×16 RGBA8 default at t4 (ev4217) has unknown content.]
+///
+/// CS feature registers (P1-C C3; reflected only with CS_SKIN / CS_HAIR): t72 skin detail normal = flat with
+/// detail mask 0; t73 hair tangent shift (`Texture2D<float>`, read `.x - 0.5`) = mid grey, no shift; t71 skin
+/// extra and t74 skin wetness = 0 (gated off by `skinMaterialFlags` = 0).
 pub fn default_for(reg: u32, shader_type: u32, pbr: bool) -> [u8; 4] {
     match (reg, pbr, shader_type) {
+        (72, _, _) => [128, 128, 255, 0],
+        (73, _, _) => [128, 128, 128, 255],
+        (71 | 74, _, _) => [0, 0, 0, 0],
         (5, true, _) => [255, 0, 255, 255],
         (3, false, 4) => [128, 128, 128, 255],
         (4, false, 4) => [64, 64, 64, 255],
@@ -367,5 +374,10 @@ mod tests {
         assert_eq!(default_for(5, 0, false), [0, 0, 0, 255]);
         assert_eq!(default_for(3, 4, false), [128, 128, 128, 255]);
         assert_eq!(default_for(14, 0, false), [255, 255, 255, 255]);
+        // P1-C C3: CS_SKIN / CS_HAIR registers get neutral 1x1 defaults, whatever the technique.
+        assert_eq!(default_for(72, 0, false), [128, 128, 255, 0]); // skin detail normal: flat, mask 0
+        assert_eq!(default_for(73, 6, false), [128, 128, 128, 255]); // hair tangent shift: .x - 0.5 ~ 0
+        assert_eq!(default_for(71, 0, false), [0, 0, 0, 0]); // skin extra (gated off by skinMaterialFlags)
+        assert_eq!(default_for(74, 0, true), [0, 0, 0, 0]); // skin wetness (gated off)
     }
 }

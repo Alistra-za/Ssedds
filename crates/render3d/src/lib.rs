@@ -26,6 +26,7 @@ pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
 
 use background::Backdrop;
 use compile::{cached, program_key, CompiledPair, ProgramKey, SrvKind};
+use cs_settings::CsSettings;
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
@@ -229,7 +230,13 @@ pub struct Renderer {
     gpu: Gpu,
     shaders: Fingerprint,
     cache_dir: PathBuf,
+    /// The CS feature defines every program is compiled with. `set_features` replaces it whole; `set_settings`
+    /// and `set_features_on` replace only the settings defines (`ENABLE_LL` and [`cs_settings::PREVIEW_FEATURES`]).
     features: Vec<String>,
+    /// The user CS settings last applied (P1-C C11); default = no settings files found.
+    settings: CsSettings,
+    /// The "Community Shaders features" toggle (C8): off, the settings add no define.
+    features_on: bool,
     /// One expanded `Lighting.hlsl` per shaders folder (03 §5); dropped with the folder by `set_shaders`.
     sources: SourceSet,
     /// Device objects by pair key; dropped by `set_shaders` and by a device rebuild.
@@ -356,7 +363,10 @@ impl Renderer {
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
             cache_dir,
+            // = preview_defines(&CsSettings::default(), true): the P0 Linear Lighting default.
             features: DEFAULT_FEATURES.iter().map(|s| s.to_string()).collect(),
+            settings: CsSettings::default(),
+            features_on: true,
             programs: HashMap::new(),
             compiled: HashMap::new(),
             inflight: HashSet::new(),
@@ -381,13 +391,111 @@ impl Renderer {
         &self.gpu
     }
 
-    /// CS feature defines for the next load or rebuilt draw (default [`DEFAULT_FEATURES`]).
+    /// The whole CS feature define list for the next load or rebuilt draw (default [`DEFAULT_FEATURES`]): tests
+    /// and P0 callers. A later [`Renderer::set_settings`] / [`Renderer::set_features_on`] replaces only the
+    /// settings defines in it and keeps the rest (the stand-in STANDIN_* hooks) in order.
     pub fn set_features(&mut self, features: Vec<String>) {
         self.features = features;
     }
 
     pub fn features(&self) -> &[String] {
         &self.features
+    }
+
+    /// Applies the user CS settings (P1-C C11). The FeatureData values are recomputed. If the settings
+    /// defines are unchanged, the static block of every drawing shape is rewritten (a cbuffer edit, next
+    /// frame). If they changed, every shape goes through the permutation path, and the old draws keep drawing
+    /// with their old constants until their programs land. The display sRGB encode follows `ENABLE_LL`.
+    pub fn set_settings(&mut self, s: CsSettings) {
+        self.feature_values = cs_settings::feature_data(&s);
+        self.settings = s;
+        self.apply_settings_defines();
+    }
+
+    pub fn settings(&self) -> &CsSettings {
+        &self.settings
+    }
+
+    /// The "Community Shaders features" toggle (C8): off drops every settings define (LL included) and the sRGB
+    /// encode; applied like [`Renderer::set_settings`].
+    pub fn set_features_on(&mut self, on: bool) {
+        self.features_on = on;
+        self.apply_settings_defines();
+    }
+
+    /// Features CS loaded (Info.ini, or the Features inis) that this preview does not compile, in name order, for
+    /// the panel "off in preview" line. TruePBR is never listed: it has no define (TRUE_PBR is per material)
+    /// and its settings are always written.
+    pub fn off_in_preview(&self) -> Vec<String> {
+        self.settings
+            .loaded
+            .iter()
+            .filter(|n| n.as_str() != "TruePBR")
+            .filter(|n| !define_of(n).is_some_and(|d| self.features.iter().any(|f| f == d)))
+            .cloned()
+            .collect()
+    }
+
+    /// `set_settings` / `set_features_on`: the defines the settings do not manage, in their order, then
+    /// `preview_defines`. Unchanged as a set (`program_key` sorts defines) -> the static block of every drawing
+    /// shape is rewritten in place; changed -> every shape through [`Renderer::begin`].
+    fn apply_settings_defines(&mut self) {
+        let mut f: Vec<String> = self
+            .features
+            .iter()
+            .filter(|d| !settings_define(d))
+            .cloned()
+            .collect();
+        f.extend(cs_settings::preview_defines(
+            &self.settings,
+            self.features_on,
+        ));
+        let (mut old, mut new) = (self.features.clone(), f.clone());
+        old.sort();
+        new.sort();
+        // Linear Lighting draws in linear working space: encode for display (was the GUI apply_features).
+        self.encode_srgb = f.iter().any(|d| d == "ENABLE_LL");
+        self.features = f;
+        if old == new {
+            self.rewrite_static();
+        } else {
+            self.begin_all();
+        }
+    }
+
+    /// New FeatureData values on every `Drawing` shape: the cbuffer-edit path of `apply_in_place` with the
+    /// shape current material. Pending/failed shapes keep their old draw constants (P1-B); a pending one gets
+    /// the new values when its program lands.
+    fn rewrite_static(&mut self) {
+        let ll = self.linear_lighting();
+        for s in self.shapes.values_mut() {
+            if s.status != ShapeStatus::Drawing {
+                continue;
+            }
+            if let Some(d) = s.draw.as_mut() {
+                d.rewrite_material(&s.material, ll, &self.feature_values);
+            }
+        }
+    }
+
+    /// Every shape that is not hidden through [`Renderer::begin`] (a define-set change, C11). A program that is at
+    /// hand swaps now; the others queue one job each and stay `Pending { showing_previous }` on their old draw.
+    /// The resolver is never asked: every slot of a shape material is in `tex_cache` since its load or edit.
+    fn begin_all(&mut self) {
+        let todo: Vec<(ShapeId, MaterialState)> = self
+            .shapes
+            .iter()
+            .filter(|(_, s)| s.status != ShapeStatus::Hidden)
+            .map(|(id, s)| (*id, s.material.clone()))
+            .collect();
+        let mut scratch = LoadReport::default();
+        for (id, m) in todo {
+            self.begin(id, &m, &|_| None, &mut scratch);
+        }
+        self.sort_draw_order();
+        if !self.async_compile {
+            self.settle();
+        }
     }
 
     /// Replaces the shaders (a moved or updated CS): the expansion memo and the device programs are dropped (`compiled` is content-addressed and stays valid). The loaded model still uses the old programs until the next [`Renderer::load`].
@@ -799,11 +907,14 @@ impl Renderer {
     }
 
     /// After a device loss: a fresh device (the caller makes it, WARP if need be) with the same shaders, cache
-    /// dir, features, sRGB mode and `compiled` results. Everything that lived on the old device is gone,
+    /// dir, features, CS settings and toggle, sRGB mode and `compiled` results. Everything that lived on the old
+    /// device is gone,
     /// including the loaded model: load it again, and every program comes from `compiled` with no compile.
     pub fn rebuild_device_on(&mut self, gpu: Gpu) -> Result<(), String> {
         let mut n = Renderer::with_gpu(gpu, self.shaders.clone(), self.cache_dir.clone())?;
         n.features = std::mem::take(&mut self.features);
+        n.settings = std::mem::take(&mut self.settings);
+        n.features_on = self.features_on;
         n.encode_srgb = self.encode_srgb;
         n.async_compile = self.async_compile;
         n.load_variant = self.load_variant;
@@ -1426,6 +1537,23 @@ impl Renderer {
         };
         Ok(px)
     }
+}
+
+/// A define the CS settings manage (C8): `ENABLE_LL` or a [`cs_settings::PREVIEW_FEATURES`] define.
+fn settings_define(d: &str) -> bool {
+    d == "ENABLE_LL" || cs_settings::PREVIEW_FEATURES.iter().any(|(_, x)| *x == d)
+}
+
+/// The define a loaded CS feature (Info.ini short name) compiles as, if any: Linear Lighting is setting-driven
+/// (`ENABLE_LL`), the others come from [`cs_settings::PREVIEW_FEATURES`].
+fn define_of(feature: &str) -> Option<&'static str> {
+    if feature == "LinearLighting" {
+        return Some("ENABLE_LL");
+    }
+    cs_settings::PREVIEW_FEATURES
+        .iter()
+        .find(|(n, _)| *n == feature)
+        .map(|(_, d)| *d)
 }
 
 /// Flushes and spins on the renderer's event query until the GPU has finished every submitted command, so the

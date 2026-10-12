@@ -18,6 +18,9 @@
 // - Point lights: the default (lit) branch reads CS's vanilla point-light fields (PointLightPosition[7] with the
 //   radius in w, PointLightColor[7], NumLightNumShadowLight.x) and adds base x colour x (1 - (d/r)^2) x N.L per
 //   light, camera-relative like World. Zero lights add exactly nothing.
+// - STANDIN_FEATURE_DATA (with STANDIN_FLAT): the flat colour is scaled by CS's FeatureData
+//   linearLightingSettings.ambientMult, so a settings change that only rewrites the static cbuffer block shows in
+//   pixels (P1-C settings tests).
 
 struct VsOut
 {
@@ -103,6 +106,19 @@ Texture2D<float4> NormalMap : register(t1);
 Texture2D<float4> EmissiveMap : register(t6);
 SamplerState DiffuseSampler : register(s0);
 
+#if defined(STANDIN_FEATURE_DATA)
+struct StandinLinearLightingSettings
+{
+    float ambientMult;
+    float3 pad;
+};
+
+cbuffer FeatureData : register(b6)
+{
+    StandinLinearLightingSettings linearLightingSettings;
+};
+#endif
+
 float4 main(VsOut i) : SV_Target
 {
     float4 base = DiffuseMap.Sample(DiffuseSampler, i.Uv);
@@ -113,7 +129,11 @@ float4 main(VsOut i) : SV_Target
 #elif defined(STANDIN_FLAT)
     float flagGreen = (PBRFlags & 0xFFFu) != 0 ? 0.5 : 0.0;
     float3 emissive = EmitColor.a < -1.0 ? EmissiveMap.SampleLevel(DiffuseSampler, i.Uv, 0).rgb : float3(0.0, 0.0, 0.0);
-    return float4(0.25 * base.rgb * i.Color.rgb + EmitColor.rgb + emissive + float3(0.0, flagGreen, 0.0), base.a * 0.5);
+    float3 col = 0.25 * base.rgb * i.Color.rgb + EmitColor.rgb + emissive + float3(0.0, flagGreen, 0.0);
+#if defined(STANDIN_FEATURE_DATA)
+    col *= linearLightingSettings.ambientMult;
+#endif
+    return float4(col, base.a * 0.5);
 #else
     float3 n = normalize(i.Normal + 0.001 * bump);
     float ndl = saturate(dot(n, DirLightDirection.xyz));
