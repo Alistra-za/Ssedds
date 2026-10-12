@@ -128,8 +128,13 @@ fn a_drag_to_the_far_right_stops_at_the_maximum() {
     let mut h = harness(d.path(), w);
     // The centre is what lies between the Sets column and the Advanced strip.
     let centre = |h: &H| outer(h, "advanced-strip").left() - outer(h, "sets").right();
-    // Textures stops where Sets keeps its minimum and the centre CENTRE_MIN.
-    let (_, after) = drag(&mut h, "textures", w - 5.0);
+    // Textures stops where Sets keeps its minimum and the centre CENTRE_MIN, mid-drag too.
+    let max =
+        outer(&h, "advanced-strip").left() - outer(&h, "textures").left() - SETS_MIN - CENTRE_MIN;
+    let (during, after) = drag(&mut h, "textures", w - 5.0);
+    for t in during {
+        assert!(t <= max + 2.0, "textures went to {t} mid-drag, max {max}");
+    }
     let s = outer(&h, "sets").width();
     assert!((s - SETS_MIN).abs() <= 1.0, "textures {after}, sets {s}");
     assert!(
@@ -140,7 +145,11 @@ fn a_drag_to_the_far_right_stops_at_the_maximum() {
     // Back to its minimum, then Sets stops where the centre keeps CENTRE_MIN.
     let left = outer(&h, "textures").left();
     drag(&mut h, "textures", left + 10.0);
-    let (_, after) = drag(&mut h, "sets", w - 5.0);
+    let max = outer(&h, "advanced-strip").left() - outer(&h, "sets").left() - CENTRE_MIN;
+    let (during, after) = drag(&mut h, "sets", w - 5.0);
+    for s in during {
+        assert!(s <= max + 2.0, "sets went to {s} mid-drag, max {max}");
+    }
     assert!(after > SETS_MIN + 100.0, "sets did not widen: {after}");
     assert!(
         (centre(&h) - CENTRE_MIN).abs() <= 1.0,

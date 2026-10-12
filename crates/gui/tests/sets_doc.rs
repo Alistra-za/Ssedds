@@ -299,3 +299,35 @@ fn clearing_the_shader_of_a_set_without_a_table_is_a_no_op() {
     assert_eq!(s.text(), before);
     assert!(!s.is_dirty());
 }
+
+#[test]
+fn set_shader_is_a_no_op_while_read_only() {
+    use engine::shader::Shader;
+    let (d, mut s) = doc(Some("[[sets]\nid = "));
+    assert!(s.read_only());
+    let before = s.text();
+    s.set_shader("landscape/leaf", Some(Shader::Hair));
+    s.set_shader("landscape/leaf", None);
+    assert_eq!(s.text(), before);
+    assert!(!s.is_dirty());
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("sdc-project.toml")).unwrap(),
+        "[[sets]\nid = "
+    );
+}
+
+#[test]
+fn an_unknown_shader_id_reads_as_none_and_survives_a_save() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"landscape/leaf\"\nshader = \"toon\"\n",
+    ));
+    assert!(!s.read_only());
+    let e = s.entries().into_iter().next().unwrap();
+    assert_eq!(e.shader, None);
+    assert!(!e.settings.contains_key("shader"), "{:?}", e.settings);
+    s.set_value("landscape/leaf", "hair", Some(json!(true)));
+    s.save(false).unwrap();
+    let text = std::fs::read_to_string(d.path().join("sdc-project.toml")).unwrap();
+    assert!(text.contains("shader = \"toon\""), "{text}");
+    assert!(text.contains("hair = true"), "{text}");
+}

@@ -1046,6 +1046,7 @@ impl Engine {
         // 6a. Explicit shader choices: the GUI map, then `--set set:<id>.shader` (the command line wins).
         let explicit = explicit_shaders(&req, &sets, rep);
         // 6b. One pick per set, from the pass-1 sub-types; later resolves see it through `ctx.shaders`.
+        let index = crate::shader::JobIndex::new(&pass1_jobs);
         let picks: BTreeMap<String, ShaderPick> = sets
             .iter()
             .map(|s| {
@@ -1053,7 +1054,7 @@ impl Engine {
                     &ctx,
                     s,
                     &files,
-                    &pass1_jobs,
+                    &index,
                     explicit.get(&s.key).copied(),
                     &req.mesh_shaders,
                 );
@@ -1329,6 +1330,7 @@ impl Engine {
                 );
             }
         }
+        let index = crate::shader::JobIndex::new(&jobs);
         for set in &sets {
             let Some(&first) = set
                 .members
@@ -1351,7 +1353,7 @@ impl Engine {
             let mut warnings = vec![];
             if let Some(p) = &pick {
                 warnings = crate::shader::pick_notes(p, target);
-                let maps = map_members(set, &files, &jobs, &skipped, registry.alias_table());
+                let maps = map_members(set, &files, &index, &skipped, registry.alias_table());
                 warnings.extend(crate::shader::check_maps(p, &maps));
             }
             rep.emit(
@@ -1813,7 +1815,7 @@ fn explicit_shaders(
 fn map_members(
     set: &TextureSet,
     files: &[InputFile],
-    jobs: &[ResolvedJob],
+    jobs: &crate::shader::JobIndex,
     skipped: &[SkippedFile],
     aliases: &BTreeMap<String, String>,
 ) -> Vec<crate::shader::MemberMap> {
@@ -1833,7 +1835,7 @@ fn map_members(
         if pack::plan::raw_role(f).is_some() {
             continue;
         }
-        if let Some(j) = jobs.iter().find(|j| j.pack.is_none() && j.input == f.path) {
+        if let Some(j) = jobs.by_input(&f.path).find(|j| j.pack.is_none()) {
             out.push(crate::shader::MemberMap {
                 name: name(&j.output),
                 suffix: suffix(f),
@@ -1850,15 +1852,13 @@ fn map_members(
             });
         }
     }
-    out.extend(
-        jobs.iter()
-            .filter(|j| j.set_key == set.key && j.pack.is_some())
-            .map(|j| crate::shader::MemberMap {
-                name: name(&j.output),
-                suffix: None,
-                subtype: Some(j.profile.subtype),
-            }),
-    );
+    out.extend(jobs.in_set(&set.key).filter(|j| j.pack.is_some()).map(|j| {
+        crate::shader::MemberMap {
+            name: name(&j.output),
+            suffix: None,
+            subtype: Some(j.profile.subtype),
+        }
+    }));
     out
 }
 

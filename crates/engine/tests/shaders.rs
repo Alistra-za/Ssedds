@@ -557,3 +557,68 @@ fn a_bare_gui_id_names_only_its_own_set() {
     assert_eq!(shader("/sub/wall"), Shader::Default);
     assert_eq!(shader("out/wall"), Shader::Glow);
 }
+
+/// Rule "landscape" (spec §4.2): a set under `textures/landscape/` picks the landscape shader, and so does one whose
+/// path only has a `landscape` folder deeper in (the path-component fallback). Its members are landscape maps.
+#[test]
+fn landscape_is_auto_picked_by_its_folder_or_a_landscape_path_component() {
+    for base in ["textures/landscape/dirt", "textures/mymod/landscape/dirt"] {
+        let d = tempfile::tempdir().unwrap();
+        put_rgb(d.path(), &format!("{base}.png"), [110, 90, 70]);
+        put_rgb(d.path(), &format!("{base}_n.png"), [128, 128, 255]);
+        let (p, ev) = plan(d.path(), Target::Vanilla, &[], &[]);
+        let pick = p.shaders.values().next().unwrap();
+        assert_eq!(
+            (pick.shader, pick.provenance.to_string().as_str()),
+            (Shader::Landscape, "auto:landscape"),
+            "{base}"
+        );
+        let EventKind::SetResolved { warnings, .. } = set_event(&ev, base) else {
+            unreachable!()
+        };
+        assert_eq!(
+            warnings.iter().map(|w| w.code).collect::<Vec<_>>(),
+            vec![Code::ShaderAuto],
+            "{base}: no extra or missing map"
+        );
+        assert_eq!(
+            job(&p, "dirt.dds").profile.subtype.id(),
+            "landscape_diffuse"
+        );
+        assert_eq!(
+            job(&p, "dirt_n.dds").profile.subtype.id(),
+            "landscape_normal"
+        );
+    }
+}
+
+/// S-shader-4 under `AcceptSuggestions::High`: an auto-picked shader's member sub-type is a high-confidence
+/// suggestion, so the planned run decides it (provenance `suggestion`, the shader named in the reason).
+#[test]
+fn under_accept_high_an_auto_shader_decides_its_member_subtype() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "textures/eyes/eye.png", [90, 60, 30]);
+    put_rgb(d.path(), "textures/eyes/eye_n.png", [128, 128, 255]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    assert_eq!(
+        p.shaders.values().next().unwrap().provenance.to_string(),
+        "auto:eyes_path"
+    );
+    let n = job(&p, "eye_n.dds");
+    assert_eq!(
+        (n.profile.subtype.id().as_str(), prov(n, "subtype").as_str()),
+        ("msn", "suggestion")
+    );
+    assert!(
+        n.suggestions[0]
+            .reason
+            .contains("eye shader (auto:eyes_path)"),
+        "{:?}",
+        n.suggestions
+    );
+    assert!(
+        !matches!(n.status, engine::policy::JobStatus::Unresolved { .. }),
+        "{:?}",
+        n.status
+    );
+}
