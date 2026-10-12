@@ -30,6 +30,11 @@ fn entry(dir: &Path, key: &str, mtime: SystemTime) {
     put(dir, &format!("{key}.json"), 100, mtime);
 }
 
+/// A 64-hex cache key made of one repeated hex digit.
+fn key(c: char) -> String {
+    c.to_string().repeat(64)
+}
+
 fn names(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(dir)
         .unwrap()
@@ -43,15 +48,23 @@ fn names(dir: &Path) -> Vec<String> {
 fn over_the_cap_the_oldest_entries_go_first() {
     let d = tempfile::tempdir().unwrap();
     let now = SystemTime::now();
-    for (i, key) in ["a", "b", "c", "d"].iter().enumerate() {
-        entry(d.path(), key, ago(now, 4 - i as u64)); // a oldest (4 days), d newest (1 day)
+    for (i, c) in ['a', 'b', 'c', 'd'].into_iter().enumerate() {
+        entry(d.path(), &key(c), ago(now, 4 - i as u64)); // a oldest (4 days), d newest (1 day)
     }
     let limits = PruneLimits {
         max_bytes: 2500,
         ..PruneLimits::default()
     };
     let r = prune(d.path(), &limits, now);
-    assert_eq!(names(d.path()), ["c.cso", "c.json", "d.cso", "d.json"]);
+    assert_eq!(
+        names(d.path()),
+        [
+            format!("{}.cso", key('c')),
+            format!("{}.json", key('c')),
+            format!("{}.cso", key('d')),
+            format!("{}.json", key('d'))
+        ]
+    );
     assert_eq!((r.removed, r.bytes_after), (4, 2200));
     // Already under the cap: nothing more.
     assert_eq!(prune(d.path(), &limits, now).removed, 0);
@@ -61,10 +74,13 @@ fn over_the_cap_the_oldest_entries_go_first() {
 fn entries_untouched_for_90_days_expire() {
     let d = tempfile::tempdir().unwrap();
     let now = SystemTime::now();
-    entry(d.path(), "old", ago(now, 91));
-    entry(d.path(), "fresh", ago(now, 89));
+    entry(d.path(), &key('0'), ago(now, 91));
+    entry(d.path(), &key('1'), ago(now, 89));
     let r = prune(d.path(), &PruneLimits::default(), now);
-    assert_eq!(names(d.path()), ["fresh.cso", "fresh.json"]);
+    assert_eq!(
+        names(d.path()),
+        [format!("{}.cso", key('1')), format!("{}.json", key('1'))]
+    );
     assert_eq!((r.removed, r.bytes_after), (2, 1100));
 }
 
@@ -74,13 +90,13 @@ fn stale_temp_files_and_orphan_cso_go_after_a_day_unrelated_files_stay() {
     let now = SystemTime::now();
     put(d.path(), ".tmp-1-0", 50, ago(now, 2));
     put(d.path(), ".tmp-1-1", 50, now);
-    put(d.path(), "orphan_old.cso", 500, ago(now, 2));
-    put(d.path(), "orphan_young.cso", 500, now); // a writer may be between its renames
+    put(d.path(), &format!("{}.cso", key('e')), 500, ago(now, 2));
+    put(d.path(), &format!("{}.cso", key('f')), 500, now); // a writer may be between its renames
     put(d.path(), "notes.txt", 10, ago(now, 400));
     let r = prune(d.path(), &PruneLimits::default(), now);
     assert_eq!(
         names(d.path()),
-        [".tmp-1-1", "notes.txt", "orphan_young.cso"]
+        [".tmp-1-1", &format!("{}.cso", key('f')), "notes.txt"]
     );
     assert_eq!(r.removed, 2);
     assert_eq!(
@@ -93,6 +109,22 @@ fn stale_temp_files_and_orphan_cso_go_after_a_day_unrelated_files_stay() {
         prune(&d.path().join("gone"), &PruneLimits::default(), now).removed,
         0
     );
+}
+
+#[test]
+fn files_that_are_not_cache_keys_survive_a_prune_that_removes_everything() {
+    let d = tempfile::tempdir().unwrap();
+    let now = SystemTime::now();
+    entry(d.path(), &key('a'), ago(now, 400));
+    put(d.path(), "settings.json", 10, ago(now, 400));
+    put(d.path(), "notes.cso", 10, ago(now, 400));
+    let limits = PruneLimits {
+        max_bytes: 0,
+        ..PruneLimits::default()
+    };
+    let r = prune(d.path(), &limits, now);
+    assert_eq!(names(d.path()), ["notes.cso", "settings.json"]);
+    assert_eq!((r.removed, r.bytes_after), (2, 0));
 }
 
 fn tiny() -> (SourceSet, Defines) {

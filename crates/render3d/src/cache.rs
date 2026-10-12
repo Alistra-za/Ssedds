@@ -38,6 +38,11 @@ pub struct PruneReport {
     pub bytes_after: u64,
 }
 
+/// A cache key stem: 64 lowercase hex chars (`hex::encode(sha256)`, see `ProgramKey`). Nothing else is ours.
+fn is_key(stem: &str) -> bool {
+    stem.len() == 64 && stem.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// One entry: `.json` first, then `.cso`, so a reader sees a plain miss. False when the `.json` stayed.
 fn drop_entry(files: &[PathBuf], removed: &mut usize) -> bool {
     let Some((first, rest)) = files.split_first() else {
@@ -57,7 +62,8 @@ fn drop_entry(files: &[PathBuf], removed: &mut usize) -> bool {
 
 /// Removes, in this order: `.tmp-*` older than `stale_tmp_days`; a `.cso` with no `.json` older than
 /// `stale_tmp_days`; entries whose `.json` is older than `max_age_days`; then the oldest entries until the files
-/// left total at most `max_bytes`. Top level of `dir` only; files of other names are left alone.
+/// left total at most `max_bytes`. Top level of `dir` only; only `.tmp-*` and
+/// `<64 lowercase hex>.json|.cso` files are touched or counted, anything else (e.g. `settings.json`) is left alone.
 pub fn prune(dir: &Path, limits: &PruneLimits, now: SystemTime) -> PruneReport {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return PruneReport::default();
@@ -80,9 +86,9 @@ pub fn prune(dir: &Path, limits: &PruneLimits, now: SystemTime) -> PruneReport {
             } else {
                 total += len;
             }
-        } else if let Some(stem) = name.strip_suffix(".json") {
+        } else if let Some(stem) = name.strip_suffix(".json").filter(|s| is_key(s)) {
             parts.entry(stem.to_string()).or_default()[0] = Some((path, len, modified));
-        } else if let Some(stem) = name.strip_suffix(".cso") {
+        } else if let Some(stem) = name.strip_suffix(".cso").filter(|s| is_key(s)) {
             parts.entry(stem.to_string()).or_default()[1] = Some((path, len, modified));
         }
     }
