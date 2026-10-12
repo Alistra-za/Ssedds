@@ -142,7 +142,37 @@ pub fn prune_in_background(dir: PathBuf) {
         let _ = std::thread::Builder::new()
             .name("shader-cache-prune".into())
             .spawn(move || {
-                prune(&dir, &PruneLimits::default(), SystemTime::now());
+                prune_logged(&dir, &PruneLimits::default(), SystemTime::now());
             });
     });
+}
+
+/// Size of the top-level files of `dir` (what `prune` counts).
+fn dir_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter_map(|e| e.metadata().ok())
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// [`prune`] plus one `prune` line in the timing log.
+pub fn prune_logged(dir: &Path, limits: &PruneLimits, now: SystemTime) -> PruneReport {
+    let t0 = std::time::Instant::now();
+    let before = dir_bytes(dir);
+    let rep = prune(dir, limits, now);
+    crate::perf_log::emit(
+        "prune",
+        serde_json::json!({
+            "removed": rep.removed,
+            "bytes_before": before,
+            "bytes_after": rep.bytes_after,
+            "ms": crate::perf_log::ms_since(t0),
+        }),
+    );
+    rep
 }

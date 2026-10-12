@@ -11,6 +11,7 @@ pub mod locate;
 pub mod material;
 pub mod mesh;
 pub mod parse;
+pub mod perf_log;
 pub mod permutation;
 pub mod pool;
 pub mod scene;
@@ -137,6 +138,8 @@ struct Wanted {
     src: Arc<ExpandedSource>,
     vs: Defines,
     ps: Defines,
+    /// When the shape started waiting (the `shape_ready` line's `ms_pending`).
+    since: std::time::Instant,
 }
 
 impl Wanted {
@@ -608,7 +611,13 @@ impl Renderer {
             &program_key(&src, "main", "vs_5_0", &vs.0),
             &program_key(&src, "main", "ps_5_0", &ps.0),
         );
-        Ok(Wanted { key, src, vs, ps })
+        Ok(Wanted {
+            key,
+            src,
+            vs,
+            ps,
+            since: std::time::Instant::now(),
+        })
     }
 
     /// The program if it is at hand without compiling: device objects, a memoised result (made into device
@@ -619,10 +628,15 @@ impl Renderer {
         }
         if !self.compiled.contains_key(&w.key) {
             let dir = &self.cache_dir;
+            let t0 = std::time::Instant::now();
             if let (Some(vs), Some(ps)) = (
                 cached(&w.src, &w.vs, "vs_5_0", dir),
                 cached(&w.src, &w.ps, "ps_5_0", dir),
             ) {
+                perf_log::emit(
+                    "compile",
+                    serde_json::json!({"key": perf_log::short(&w.key.0), "ms": perf_log::ms_since(t0), "cache": "hit", "ok": true}),
+                );
                 self.compiled
                     .insert(w.key.clone(), Ok(Arc::new(CompiledPair { vs, ps })));
             }
@@ -687,6 +701,14 @@ impl Renderer {
             Lookup::Ready(p) => self.swap(id, &p, m, rep),
             Lookup::Failed(e) => self.fail(id, e, true),
             Lookup::Waiting => {
+                perf_log::emit(
+                    "shape_pending",
+                    serde_json::json!({
+                        "shape": id.0,
+                        "key": perf_log::short(&wanted.key.0),
+                        "showing_previous": self.shapes.get(&id).is_some_and(|s| s.draw.is_some()),
+                    }),
+                );
                 if self.inflight.insert(wanted.key.clone()) {
                     self.jobs.push(wanted.job(&self.cache_dir));
                 }
@@ -723,6 +745,7 @@ impl Renderer {
             let Some(w) = self.shapes.get_mut(id).and_then(|s| s.wanted.take()) else {
                 continue;
             };
+            let since = w.since;
             let m = self.shapes[id].material.clone();
             match self.lookup(&w) {
                 Lookup::Ready(p) => self.swap(*id, &p, &m, &mut LoadReport::default()),
@@ -731,6 +754,14 @@ impl Renderer {
                     self.fail(*id, "the program is missing after its compile".into(), true)
                 }
             }
+            perf_log::emit(
+                "shape_ready",
+                serde_json::json!({
+                    "shape": id.0,
+                    "ms_pending": perf_log::ms_since(since),
+                    "ok": self.shapes.get(id).is_some_and(|s| s.status == ShapeStatus::Drawing),
+                }),
+            );
         }
         // A worker panic is not a property of the program: forget it so the next edit retries.
         if matches!(self.compiled.get(&key), Some(Err(e)) if e.starts_with(pool::PANIC_PREFIX)) {
