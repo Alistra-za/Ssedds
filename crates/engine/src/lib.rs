@@ -30,6 +30,7 @@ pub mod resize;
 pub mod schemas;
 pub mod session;
 pub mod sets;
+pub mod shader;
 pub mod suggest;
 pub mod sysmem;
 pub mod validate;
