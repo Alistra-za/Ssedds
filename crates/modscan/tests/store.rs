@@ -904,3 +904,11 @@ fn winning_nifs_wildcards_are_literal_and_limit_plus_one_marks_truncation() {
     assert_eq!(s.winning_nifs("x/", 3).unwrap().len(), 4, "limit + 1 rows");
     assert_eq!(s.winning_nifs("x/", 7).unwrap().len(), 7, "not truncated");
 }
+
+#[test]
+fn winning_nifs_matches_the_path_after_the_meshes_folder() {
+    let (_d, s, _) = query_store();
+    assert!(s.winning_nifs("mes", 100).unwrap().is_empty());
+    assert!(s.winning_nifs("meshes", 100).unwrap().is_empty());
+    assert_eq!(s.winning_nifs("x/d", 100).unwrap().len(), 1);
+}

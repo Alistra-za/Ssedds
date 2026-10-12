@@ -1057,3 +1057,25 @@ fn view_section_offers_background_and_lights() {
     h.run();
     assert_eq!(h.state().look, v3::Look::default());
 }
+
+#[test]
+fn work_that_starts_after_idle_does_not_inherit_the_old_spinner_timer() {
+    use std::time::{Duration, Instant};
+    let d = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::with_state(V3State::NotFound);
+    let t0 = Instant::now();
+    v.choose_folder(d.path().to_path_buf());
+    assert!(!v.show_spinner(t0));
+    assert!(v.show_spinner(t0 + v3::SPINNER_DELAY));
+    let t = Instant::now();
+    while v.busy() && t.elapsed().as_secs() < 20 {
+        v.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // Idle, and nothing drew in between (the viewport was hidden); then new work starts.
+    v.choose_folder(d.path().to_path_buf());
+    assert!(
+        !v.show_spinner(t0 + Duration::from_secs(10)),
+        "a new piece of work starts its own delay"
+    );
+}

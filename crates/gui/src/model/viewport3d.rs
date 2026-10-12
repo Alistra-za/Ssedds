@@ -903,6 +903,10 @@ impl Viewport3d {
         if changed && self.state == V3State::Rendering && !self.busy() {
             self.state = V3State::Ready;
         }
+        // Work ended (replies are applied here): the next work starts its own spinner delay, drawn or not.
+        if !self.busy() {
+            self.busy_since = None;
+        }
         changed
     }
 

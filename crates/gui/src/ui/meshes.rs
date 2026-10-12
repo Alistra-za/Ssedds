@@ -1,7 +1,7 @@
 //! The Meshes view (plan A Task 12): mods | NIFs of the selected mod | shapes of the selected NIF. Draws
 //! `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::{
-    display_path, shader_type_name, slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_LIMIT,
+    display_path, shader_type_name, slot_name, Banner, MeshesModel, ModLine, ScanTarget,
     ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, SEARCH_DEBOUNCE, STALE_CHIP,
 };
 use eframe::egui;
@@ -244,7 +244,8 @@ fn nifs(ui: &mut egui::Ui, m: &mut MeshesModel) {
     ui.label(format!("{} of {} NIFs", visible.len(), m.listed()));
     if m.all_truncated() {
         ui.label(format!(
-            "Showing the first {ALL_LIMIT} matches — type more to narrow it"
+            "Showing the first {} matches — type more to narrow it",
+            m.all_limit
         ));
     }
     let row_h = ui.spacing().interact_size.y;

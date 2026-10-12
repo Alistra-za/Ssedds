@@ -1022,8 +1022,9 @@ impl Store {
         Ok(n)
     }
 
-    /// Origins of the latest run: loose ones and separators by priority (highest first, a separator above its
-    /// group), then BSAs by game rank.
+    /// Origins of the latest run: loose ones and separators by priority (highest first), then BSAs by game rank.
+    /// A separator is listed after the mods it owns: MO2 shows a separator above its mods in ascending priority,
+    /// so in this highest-first order it owns the loose mods listed just above it, up to the previous separator.
     pub fn mods(&self) -> Result<Vec<ModRow>, ScanError> {
         let mut st = self.conn.prepare(
             "SELECT id, name, kind, priority, derived_by IS NOT NULL FROM origin WHERE enabled = 1
@@ -1054,7 +1055,7 @@ impl Store {
         Ok(v)
     }
 
-    /// The game-winning copy of each mesh path that contains `path_contains` (case-insensitive, `\` read as `/`,
+    /// The game-winning copy of each mesh path that contains `path_contains` (the part after a leading `meshes/`; case-insensitive, `\` read as `/`,
     /// no wildcards), by path, with its origin's name. Returns up to `limit + 1` rows: one extra means "truncated".
     pub fn winning_nifs(
         &self,
@@ -1066,7 +1067,7 @@ impl Store {
             like_escape(&path_contains.replace('\\', "/").to_lowercase())
         );
         let mut st = self.conn.prepare(&format!(
-            "{NIF_ROWS} WHERE w.copy_id = c.id AND p.p LIKE ?1 ESCAPE '\\' ORDER BY p.p LIMIT ?2"
+            "{NIF_ROWS} WHERE w.copy_id = c.id AND CASE WHEN p.p LIKE 'meshes/%' THEN substr(p.p, 8) ELSE p.p END LIKE ?1 ESCAPE '\\' ORDER BY p.p LIMIT ?2"
         ))?;
         let v = st
             .query_map(rusqlite::params![pattern, limit as i64 + 1], nif_row)?

@@ -881,3 +881,56 @@ fn all_meshes_shows_the_hint_then_the_matches_and_a_reload_asks_again() {
     h.run();
     assert_eq!(h.state().visible_nifs().len(), 1);
 }
+
+#[test]
+fn the_selected_nif_keeps_its_details_when_the_search_moves_on() {
+    let (_d, mut m) = scanned();
+    m.all_meshes = true;
+    m.path_filter = "oak".into();
+    search(&mut m);
+    let copy = m.nif_at(m.visible_nifs()[0]).0.copy_id;
+    m.select_nif(copy);
+    assert_eq!(
+        m.selected_row().map(|r| r.path.as_str()),
+        Some("meshes/tree/oak.nif")
+    );
+    m.path_filter = "rock".into();
+    search(&mut m);
+    assert_eq!(m.selected_row().map(|r| r.copy_id), Some(copy));
+    m.path_filter = "ro".into();
+    assert!(!m.update_search(Instant::now()));
+    assert_eq!(
+        m.selected_row().map(|r| r.copy_id),
+        Some(copy),
+        "list cleared"
+    );
+    assert!(!m.shapes.is_empty());
+}
+
+#[test]
+fn an_unchanged_search_is_not_asked_again_and_a_cut_list_says_so() {
+    let (_d, mut m) = scanned();
+    m.all_meshes = true;
+    m.path_filter = "nif".into();
+    search(&mut m);
+    assert_eq!(m.searches, 1);
+    let t = Instant::now();
+    for i in 0..5 {
+        assert!(!m.update_search(t + Duration::from_secs(10 + i)));
+    }
+    assert_eq!(m.searches, 1, "same text: no new query");
+    assert!(!m.all_truncated());
+    m.all_limit = 1;
+    m.path_filter = "nif ".into(); // same needle after trimming
+    assert!(!m.update_search(t + Duration::from_secs(30)));
+    assert_eq!(m.searches, 1);
+    m.path_filter = "nif".into();
+    m.reload(); // a rescan asks again, now with the lower limit
+    search(&mut m);
+    assert_eq!(m.searches, 2);
+    assert!(m.all_truncated());
+    assert_eq!(m.visible_nifs().len(), 1);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Showing the first 1 matches — type more to narrow it");
+}

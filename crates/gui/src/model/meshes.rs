@@ -248,6 +248,8 @@ pub struct MeshesModel {
     pub all_meshes: bool,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
+    /// The selected row itself, kept apart from the lists (a new search replaces them).
+    selected_info: Option<NifRow>,
     /// Shapes of the shown copy (`shown_copy`).
     pub shapes: Vec<ShapeView>,
     /// Game resolution of every texture path in `shapes`.
@@ -277,6 +279,10 @@ pub struct MeshesModel {
     /// Result of the All meshes search for `all_query` (winners with their mod), at most `ALL_LIMIT`.
     all_nifs: Vec<(NifRow, String)>,
     all_truncated: bool,
+    /// Rows the search lists (`ALL_LIMIT`; tests lower it).
+    pub all_limit: usize,
+    /// Store searches made so far.
+    pub searches: u32,
     /// The text `all_nifs` answers; `None` = nothing searched yet.
     all_query: Option<String>,
     /// Text waiting out the debounce, and since when.
@@ -314,9 +320,12 @@ impl MeshesModel {
             all_meshes: false,
             all_nifs: vec![],
             all_truncated: false,
+            all_limit: ALL_LIMIT,
+            searches: 0,
             all_query: None,
             all_pending: None,
             selected_nif: None,
+            selected_info: None,
             shapes: vec![],
             resolved: HashMap::new(),
             pair: None,
@@ -599,6 +608,7 @@ impl MeshesModel {
 
     fn clear_nif(&mut self) {
         self.selected_nif = None;
+        self.selected_info = None;
         self.shapes.clear();
         self.resolved.clear();
         self.pair = None;
@@ -625,12 +635,17 @@ impl MeshesModel {
         }
     }
 
-    pub fn selected_row(&self) -> Option<&NifRow> {
-        let id = self.selected_nif?;
+    fn find_row(&self, id: i64) -> Option<&NifRow> {
         self.nifs
             .iter()
             .chain(self.all_nifs.iter().map(|(n, _)| n))
             .find(|n| n.copy_id == id)
+    }
+
+    pub fn selected_row(&self) -> Option<&NifRow> {
+        let id = self.selected_nif?;
+        self.find_row(id)
+            .or_else(|| self.selected_info.as_ref().filter(|n| n.copy_id == id))
     }
 
     /// The Mods panel, top to bottom. MO2 puts a separator above the mods it owns, which are the ones after it in
@@ -766,13 +781,14 @@ impl MeshesModel {
         }
         self.all_pending = None;
         self.all_query = Some(want.clone());
+        self.searches += 1;
         self.all_nifs.clear();
         self.all_truncated = false;
         if let Some(store) = &self.store {
-            match store.winning_nifs(&want, ALL_LIMIT) {
+            match store.winning_nifs(&want, self.all_limit) {
                 Ok(mut rows) => {
-                    self.all_truncated = rows.len() > ALL_LIMIT;
-                    rows.truncate(ALL_LIMIT);
+                    self.all_truncated = rows.len() > self.all_limit;
+                    rows.truncate(self.all_limit);
                     self.all_nifs = rows;
                 }
                 Err(e) => self.error = Some(db_err(e)),
@@ -784,6 +800,7 @@ impl MeshesModel {
     pub fn select_nif(&mut self, copy_id: i64) {
         self.clear_nif();
         self.selected_nif = Some(copy_id);
+        self.selected_info = self.find_row(copy_id).cloned();
         match self.find_pair(copy_id) {
             Ok(p) => self.pair = p,
             Err(e) => self.error = Some(e),
