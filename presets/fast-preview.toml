@@ -6,5 +6,5 @@ description = "Fast preview: bc7e fast, smallest-mip validation only. For checki
 
 # No target: the batch target decides (DECISIONS Note T1).
 [defaults]
-encoder = { effort = "fast" }
+encoder = { effort = "fast", bc45_search_radius = "fast" }
 validation = { mips = "smallest" }

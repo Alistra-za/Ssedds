@@ -6,6 +6,9 @@ pub const RGBCX_MAX_LEVEL: u32 = 18;
 pub const BC45_RADIUS_DEFAULT: u32 = 5;
 /// Spec value `max` (bench `-hr10`).
 pub const BC45_RADIUS_MAX: u32 = 10;
+/// Spec value `fast` (M6 Track D, DECISIONS Note T11): the smallest radius within 0.1 dB of `default` on the bench
+/// corpus (docs/spikes/bc45-search-radius.md).
+pub const BC45_RADIUS_FAST: u32 = 4;
 
 fn bytes(px: &[[u8; 4]; 16]) -> [u8; 64] {
     let mut b = [0u8; 64];

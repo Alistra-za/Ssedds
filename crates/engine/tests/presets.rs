@@ -206,6 +206,23 @@ fn compact_and_fast_preview_resolve_as_designed() {
         assert_eq!(p.validation.mips, ValidationMips::Smallest);
         assert_eq!(p.resize, ResizeMode::None);
     }
+    for id in ["cs-compact", "vanilla-compact", "fast-preview"] {
+        let t = r.get(id).unwrap().target.unwrap_or(Target::Cs);
+        assert_eq!(
+            r.profile(id, t, Subtype::Envmask)
+                .unwrap()
+                .encoder
+                .bc45_search_radius,
+            SearchRadius::Fast
+        );
+    }
+    assert_eq!(
+        r.profile("cs-quality", Target::Cs, Subtype::Envmask)
+            .unwrap()
+            .encoder
+            .bc45_search_radius,
+        SearchRadius::Default
+    );
 }
 
 #[test]

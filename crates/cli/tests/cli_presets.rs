@@ -249,7 +249,10 @@ fn diff_prints_only_differences() {
     let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(
         rows,
-        serde_json::json!([{"subtype": "normal", "field": "resize", "a": null, "b": "half"}])
+        serde_json::json!([
+            {"subtype": "normal", "field": "encoder.bc45_search_radius", "a": "default", "b": "fast"},
+            {"subtype": "normal", "field": "resize", "a": null, "b": "half"}
+        ])
     );
     assert_eq!(
         sdc_in(d.path(), &["presets", "diff", "cs-quality", "nope"]).0,

@@ -621,7 +621,8 @@
     "SearchRadius": {
       "enum": [
         "default",
-        "max"
+        "max",
+        "fast"
       ],
       "type": "string"
     },

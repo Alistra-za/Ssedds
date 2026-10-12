@@ -96,7 +96,7 @@ cfg_enum!(Format, "lowercase" { Bc1, Bc3, Bc4, Bc5, Bc6hUf16 = "bc6h_uf16", Bc7,
 cfg_enum!(HeaderForm, "lowercase" { Auto, Dx10, Legacy });
 cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest });
-cfg_enum!(SearchRadius, "lowercase" { Default, Max });
+cfg_enum!(SearchRadius, "lowercase" { Default, Max, Fast });
 cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
 cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz });
 
