@@ -872,3 +872,35 @@ fn a_limited_query_returns_the_best_rows_in_order() {
         ]
     );
 }
+
+#[test]
+fn winning_nifs_finds_one_winner_per_path_by_substring() {
+    let (_d, s, ids) = query_store();
+    let rows = s.winning_nifs("X\\", 100).unwrap();
+    let paths: Vec<_> = rows.iter().map(|(n, _)| n.path.as_str()).collect();
+    assert_eq!(paths.len(), 7, "one row per path: {paths:?}");
+    assert!(rows.iter().all(|(n, _)| n.wins));
+    let by_copy = |id: i64| rows.iter().find(|(n, _)| n.copy_id == id);
+    assert_eq!(by_copy(ids["e_win"]).map(|r| r.1.as_str()), Some("B"));
+    assert!(
+        by_copy(ids["e_lose"]).is_none(),
+        "the losing copy is excluded"
+    );
+    assert_eq!(
+        by_copy(ids["d"]).map(|r| r.1.as_str()),
+        Some("PGPatcher output")
+    );
+    assert!(by_copy(ids["d_src"]).is_none());
+    // Case-insensitive, either slash, narrower text narrows.
+    assert_eq!(s.winning_nifs("X/D.NIF", 100).unwrap().len(), 1);
+    assert!(s.winning_nifs("nothing", 100).unwrap().is_empty());
+}
+
+#[test]
+fn winning_nifs_wildcards_are_literal_and_limit_plus_one_marks_truncation() {
+    let (_d, s, _) = query_store();
+    assert!(s.winning_nifs("%", 100).unwrap().is_empty());
+    assert!(s.winning_nifs("x/_.nif", 100).unwrap().is_empty());
+    assert_eq!(s.winning_nifs("x/", 3).unwrap().len(), 4, "limit + 1 rows");
+    assert_eq!(s.winning_nifs("x/", 7).unwrap().len(), 7, "not truncated");
+}

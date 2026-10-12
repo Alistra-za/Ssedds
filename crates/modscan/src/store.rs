@@ -1045,64 +1045,31 @@ impl Store {
 
     /// NIF copies of `origin_id`, by path. Empty when the origin is not part of the latest run.
     pub fn nifs_of(&self, origin_id: i64) -> Result<Vec<NifRow>, ScanError> {
-        let mut st = self.conn.prepare(
-            "SELECT c.id, p.p, c.is_derived, c.derive_check, c.le_mesh, c.problem,
-                    w.copy_id, w.n_copies, wc.is_derived, wc.source_copy_id, wc.derive_check, wo.name,
-                    ws.copy_id, so.name
-             FROM nif_copy c JOIN path p ON p.id = c.path_id
-             JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
-             LEFT JOIN nif_winner w ON w.path_id = c.path_id
-             LEFT JOIN nif_copy wc ON wc.id = w.copy_id
-             LEFT JOIN origin wo ON wo.id = wc.origin_id
-             LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
-             LEFT JOIN nif_copy sc ON sc.id = ws.copy_id
-             LEFT JOIN origin so ON so.id = sc.origin_id
-             WHERE c.origin_id = ?1 ORDER BY p.p",
-        )?;
+        let mut st = self
+            .conn
+            .prepare(&format!("{NIF_ROWS} WHERE c.origin_id = ?1 ORDER BY p.p"))?;
         let v = st
-            .query_map([origin_id], |r| {
-                let id: i64 = r.get(0)?;
-                let derived: bool = r.get(2)?;
-                let own_check: Option<i32> = r.get(3)?;
-                let win: Option<i64> = r.get(6)?;
-                let n: Option<i64> = r.get(7)?;
-                let win_derived: Option<bool> = r.get(8)?;
-                let win_source: Option<i64> = r.get(9)?;
-                let win_check: Option<i32> = r.get(10)?;
-                let win_origin: Option<String> = r.get(11)?;
-                let src: Option<i64> = r.get(12)?;
-                let src_origin: Option<String> = r.get(13)?;
-                let wins = win == Some(id);
-                let patched_in_game = !wins && win_derived == Some(true) && win_source == Some(id);
-                let overridden_by = if wins {
-                    None
-                } else if derived {
-                    win_origin
-                } else if src.is_some() && src != Some(id) {
-                    src_origin
-                } else {
-                    None
-                };
-                let check = if derived {
-                    own_check
-                } else if patched_in_game {
-                    win_check
-                } else {
-                    None
-                };
-                Ok(NifRow {
-                    copy_id: id,
-                    path: r.get(1)?,
-                    wins,
-                    overridden_by,
-                    n_copies: n.unwrap_or(0) as u32,
-                    derived,
-                    derive_check: check.and_then(check_name).map(str::to_string),
-                    le_mesh: r.get(4)?,
-                    problem: r.get(5)?,
-                    patched_in_game,
-                })
-            })?
+            .query_map([origin_id], |r| nif_row(r).map(|(n, _)| n))?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// The game-winning copy of each mesh path that contains `path_contains` (case-insensitive, `\` read as `/`,
+    /// no wildcards), by path, with its origin's name. Returns up to `limit + 1` rows: one extra means "truncated".
+    pub fn winning_nifs(
+        &self,
+        path_contains: &str,
+        limit: usize,
+    ) -> Result<Vec<(NifRow, String)>, ScanError> {
+        let pattern = format!(
+            "%{}%",
+            like_escape(&path_contains.replace('\\', "/").to_lowercase())
+        );
+        let mut st = self.conn.prepare(&format!(
+            "{NIF_ROWS} WHERE w.copy_id = c.id AND p.p LIKE ?1 ESCAPE '\\' ORDER BY p.p LIMIT ?2"
+        ))?;
+        let v = st
+            .query_map(rusqlite::params![pattern, limit as i64 + 1], nif_row)?
             .collect::<Result<_, _>>()?;
         Ok(v)
     }
@@ -1311,4 +1278,63 @@ impl Store {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+/// Columns and joins shared by `nifs_of` and `winning_nifs`; each adds its own WHERE and ORDER BY.
+const NIF_ROWS: &str = "SELECT c.id, p.p, c.is_derived, c.derive_check, c.le_mesh, c.problem,
+        w.copy_id, w.n_copies, wc.is_derived, wc.source_copy_id, wc.derive_check, wo.name,
+        ws.copy_id, so.name, co.name
+ FROM nif_copy c JOIN path p ON p.id = c.path_id
+ JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
+ LEFT JOIN nif_winner w ON w.path_id = c.path_id
+ LEFT JOIN nif_copy wc ON wc.id = w.copy_id
+ LEFT JOIN origin wo ON wo.id = wc.origin_id
+ LEFT JOIN nif_winner_src ws ON ws.path_id = c.path_id
+ LEFT JOIN nif_copy sc ON sc.id = ws.copy_id
+ LEFT JOIN origin so ON so.id = sc.origin_id";
+
+/// One `NIF_ROWS` row and the name of the origin that holds the copy.
+fn nif_row(r: &rusqlite::Row) -> rusqlite::Result<(NifRow, String)> {
+    let id: i64 = r.get(0)?;
+    let derived: bool = r.get(2)?;
+    let own_check: Option<i32> = r.get(3)?;
+    let win: Option<i64> = r.get(6)?;
+    let n: Option<i64> = r.get(7)?;
+    let win_derived: Option<bool> = r.get(8)?;
+    let win_source: Option<i64> = r.get(9)?;
+    let win_check: Option<i32> = r.get(10)?;
+    let win_origin: Option<String> = r.get(11)?;
+    let src: Option<i64> = r.get(12)?;
+    let src_origin: Option<String> = r.get(13)?;
+    let wins = win == Some(id);
+    let patched_in_game = !wins && win_derived == Some(true) && win_source == Some(id);
+    let overridden_by = if wins {
+        None
+    } else if derived {
+        win_origin
+    } else if src.is_some() && src != Some(id) {
+        src_origin
+    } else {
+        None
+    };
+    let check = if derived {
+        own_check
+    } else if patched_in_game {
+        win_check
+    } else {
+        None
+    };
+    let row = NifRow {
+        copy_id: id,
+        path: r.get(1)?,
+        wins,
+        overridden_by,
+        n_copies: n.unwrap_or(0) as u32,
+        derived,
+        derive_check: check.and_then(check_name).map(str::to_string),
+        le_mesh: r.get(4)?,
+        problem: r.get(5)?,
+        patched_in_game,
+    };
+    Ok((row, r.get(14)?))
 }
