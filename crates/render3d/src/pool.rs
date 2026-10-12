@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// Spec §2.2: two workers, below-normal priority, not a setting (the encoder shares the CPU).
 pub const WORKERS: usize = 2;
 
+/// Starts the error text of a job whose compiler panicked (not memoised by the renderer).
+pub const PANIC_PREFIX: &str = "internal error:";
+
 pub struct CompileJob {
     /// `ProgramKey::pair` of the two stage keys.
     pub key: ProgramKey,
@@ -37,7 +40,7 @@ fn pair(job: &CompileJob) -> Result<CompiledPair, String> {
 /// so a job is never lost and a shape never stays `Pending` for ever.
 pub fn run_job(job: CompileJob) -> CompileDone {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pair(&job)))
-        .unwrap_or_else(|_| Err("internal error: the shader compiler panicked".to_string()));
+        .unwrap_or_else(|_| Err(format!("{PANIC_PREFIX} the shader compiler panicked")));
     CompileDone {
         key: job.key,
         result: result.map(Arc::new),

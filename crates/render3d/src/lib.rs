@@ -670,6 +670,10 @@ impl Renderer {
                 }
             }
         }
+        // A worker panic is not a property of the program: forget it so the next edit retries.
+        if matches!(self.compiled.get(&key), Some(Err(e)) if e.starts_with(pool::PANIC_PREFIX)) {
+            self.compiled.remove(&key);
+        }
         if !waiting.is_empty() {
             self.sort_draw_order();
         }
@@ -935,6 +939,16 @@ impl Renderer {
             let program = match self.lookup(&w) {
                 Lookup::Ready(p) => p,
                 Lookup::Failed(e) => return Err(e),
+                // Sync mode (no pool) compiles inline, as the old `program()` did, e.g. after `set_shaders`.
+                Lookup::Waiting if !self.async_compile => {
+                    let d = run_job(w.job(&self.cache_dir));
+                    self.compiled.insert(d.key, d.result);
+                    match self.lookup(&w) {
+                        Lookup::Ready(p) => p,
+                        Lookup::Failed(e) => return Err(e),
+                        Lookup::Waiting => return Err("the program is not compiled".into()),
+                    }
+                }
                 Lookup::Waiting => return Err("the program is not compiled".into()),
             };
             let (srvs, bound) = self.bind_textures(&name, &program, m, rep)?;

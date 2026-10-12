@@ -352,3 +352,74 @@ fn device_rebuild_reuses_compiled() {
     assert_eq!(r.render(&scene, 64, 64).unwrap(), before);
     assert_eq!(r.features(), common::FLAT, "features survive the rebuild");
 }
+
+/// Review Focus 1, async path: a not-yet-memoised failing permutation keeps the old pixels, then fails with
+/// `showing_previous`.
+#[test]
+fn an_unmemoised_failing_permutation_keeps_the_old_draw_until_it_fails() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), &["STANDIN_FLAT"]);
+    r.set_async_compile(true);
+    r.load_parsed(&parse(&fixture("TestNifFile_DeepGraph_SE.nif")), &none);
+    drain(&mut r);
+    let peg = ShapeId(103);
+    let scene = Scene::neutral();
+    let before = r.render(&scene, 96, 96).unwrap();
+    // No alpha test fails; Soft_Lighting makes it a permutation shape 143 never asked for.
+    let mut bad = material(&r, peg);
+    bad.alpha = None;
+    bad.slsf2 |= 1 << 25; // Soft_Lighting
+    assert_eq!(
+        r.set_material(peg, bad.clone(), &none),
+        Ok(EditKind::Permutation)
+    );
+    let jobs = r.take_jobs();
+    assert_eq!(jobs.len(), 1, "not memoised: a job is queued");
+    assert_eq!(
+        status(&r, peg),
+        ShapeStatus::Pending {
+            showing_previous: true
+        }
+    );
+    assert_eq!(r.render(&scene, 96, 96).unwrap(), before);
+    assert!(r.apply_compiled(run_job(jobs.into_iter().next().unwrap())));
+    assert!(
+        matches!(status(&r, peg), ShapeStatus::Failed { error, showing_previous: true } if error.starts_with("ps:"))
+    );
+    assert_eq!(material(&r, peg), bad);
+    assert_eq!(r.render(&scene, 96, 96).unwrap(), before, "old pixels stay");
+}
+
+/// A worker panic is not memoised: the next edit queues the job again.
+#[test]
+fn a_panicked_job_is_not_memoised() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.set_async_compile(true);
+    r.load_parsed(&parse(&fixture("TestNifFile_Furniture_Col_SE.nif")), &none);
+    let job = r.take_jobs().into_iter().next().unwrap();
+    let done = render3d::CompileDone {
+        key: job.key,
+        result: Err("internal error: the shader compiler panicked".into()),
+    };
+    assert!(r.apply_compiled(done));
+    assert!(matches!(status(&r, CYL1), ShapeStatus::Failed { .. }));
+    let m = material(&r, CYL1);
+    r.set_material(CYL1, m, &none).unwrap();
+    assert_eq!(r.take_jobs().len(), 1, "retried, not served from the memo");
+}
+
+/// Sync mode compiles inline: a `Textures` edit after `set_shaders` (programs dropped) still works.
+#[test]
+fn a_sync_texture_edit_after_set_shaders_compiles_inline() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.load_parsed(&parse(&fixture("TestNifFile_Furniture_Col_SE.nif")), &none);
+    r.set_shaders(render3d::locate::fingerprint(&common::standin_root(), None).unwrap());
+    let red = common::dds_rgba8(1, 1, &[[255, 0, 0, 255]]);
+    let resolve = |p: &str| (p == "textures/standin/red.dds").then(|| red.clone());
+    let mut m = material(&r, CYL1);
+    m.set_slot_raw(0, r"Textures\Standin\Red.dds");
+    assert_eq!(r.set_material(CYL1, m, &resolve), Ok(EditKind::Textures));
+    assert_eq!(status(&r, CYL1), ShapeStatus::Drawing);
+}
