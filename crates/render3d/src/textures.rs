@@ -278,10 +278,26 @@ pub fn dxgi_format(f: DdsPixelFormat, dx10: Option<u32>) -> DXGI_FORMAT {
 }
 
 /// A decoded DDS ready for binding.
+#[derive(Clone)]
 pub struct Texture {
     pub srv: ID3D11ShaderResourceView,
     pub kind: SrvKind,
     pub format: DXGI_FORMAT,
+}
+
+/// The kind of a bound view, from its dimension. A `ShapeDraw` keeps no reflection, and `bind_textures` only binds a
+/// view whose kind equals the reflected one (defaults are made by reflected kind), so this is the kind the register
+/// reads; the hot-swap checks a new texture against it.
+pub fn view_kind(v: &ID3D11ShaderResourceView) -> Option<SrvKind> {
+    let mut d = D3D11_SHADER_RESOURCE_VIEW_DESC::default();
+    // SAFETY: `d` is a live local the call fills in; `v` is a live view.
+    unsafe { v.GetDesc(&mut d) };
+    match d.ViewDimension {
+        x if x == D3D11_SRV_DIMENSION_TEXTURE2D => Some(SrvKind::Tex2D),
+        x if x == D3D11_SRV_DIMENSION_TEXTURE2DARRAY => Some(SrvKind::Tex2DArray),
+        x if x == D3D11_SRV_DIMENSION_TEXTURECUBE => Some(SrvKind::Cube),
+        _ => None,
+    }
 }
 
 /// DDS bytes → immutable texture + SRV in the file's own format (2D, or a cube when the header says so).

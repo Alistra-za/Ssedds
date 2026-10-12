@@ -9,7 +9,7 @@
 //
 // Pixel hooks for the P1 tests (feature defines):
 // - VC (render3d's vertex-colour define, VS only): the VS reads COLOR0 and passes it on; otherwise white.
-// - STANDIN_FLAT: the PS returns 0.25 x diffuse x vertex colour + EmitColor, plus 0.5 green when PBRFlags is non-zero, with no
+// - STANDIN_FLAT: the PS returns 0.25 x diffuse x vertex colour + EmitColor, plus 0.5 green when PBRFlags is non-zero, plus an unread t6 emissive map (see EmissiveMap), with no
 //   lighting, so cbuffer edits (emissive, PBR flags) and texture edits show in pixels without saturating.
 // - STANDIN_TBN: the PS returns N.L only, N being the normal map turned into the vertex tangent frame. The frame
 //   is read from the SSE vertex record the way render3d packs it (mesh.rs pack_tbn): row 0 =
@@ -97,6 +97,10 @@ cbuffer StandinMaterialPs : register(b1)
 
 Texture2D<float4> DiffuseMap : register(t0);
 Texture2D<float4> NormalMap : register(t1);
+// t6 is where render3d binds a TruePBR emissive map (slot 2). STANDIN_FLAT reads it behind a test that is never true
+// (EmitColor.w is never written), so the register is reflected and bindable but no pixel changes: the hot-swap tests
+// see HasEmissive flip through the PBRFlags green channel.
+Texture2D<float4> EmissiveMap : register(t6);
 SamplerState DiffuseSampler : register(s0);
 
 float4 main(VsOut i) : SV_Target
@@ -108,7 +112,8 @@ float4 main(VsOut i) : SV_Target
     return float4(saturate(dot(nt, DirLightDirection.xyz)).xxx, 1.0);
 #elif defined(STANDIN_FLAT)
     float flagGreen = (PBRFlags & 0xFFFu) != 0 ? 0.5 : 0.0;
-    return float4(0.25 * base.rgb * i.Color.rgb + EmitColor.rgb + float3(0.0, flagGreen, 0.0), base.a * 0.5);
+    float3 emissive = EmitColor.a < -1.0 ? EmissiveMap.SampleLevel(DiffuseSampler, i.Uv, 0).rgb : float3(0.0, 0.0, 0.0);
+    return float4(0.25 * base.rgb * i.Color.rgb + EmitColor.rgb + emissive + float3(0.0, flagGreen, 0.0), base.a * 0.5);
 #else
     float3 n = normalize(i.Normal + 0.001 * bump);
     float ndl = saturate(dot(n, DirLightDirection.xyz));

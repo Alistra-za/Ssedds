@@ -1,6 +1,6 @@
 //! NIF bytes → owned per-shape data (03 §1.1): pure, `Send`, no GPU, so a worker can parse while the render
-//! thread keeps drawing. P1-A places each shape by its own transform (`Mesh.transform`) only; parent NiNode
-//! transforms are P1-B.
+//! thread keeps drawing. A shape's `world` is the root..parent NiNode chain x its own transform (`Mesh.transform`, local); a block
+//! with no parent entry keeps its own transform.
 use nif::material::MaterialState;
 use std::sync::Arc;
 
@@ -16,6 +16,9 @@ pub struct ParsedShape {
     /// The NIF name, or `"block N"` when it has none (P0's label).
     pub name: String,
     pub mesh: Arc<nif::geom::Mesh>,
+    /// Root … parent chain × `mesh.transform` (3×4 row-major, the `Mesh.transform` convention). The draw's model
+    /// matrix and the bounds use it. Skinned shapes carry it too, but their VS ignores World.
+    pub world: [[f32; 4]; 3],
     pub material: MaterialState,
 }
 
@@ -55,6 +58,9 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
             return out;
         }
     };
+    let graph = nif::graph::read_graph(&header, nif_bytes);
+    out.warnings
+        .extend(graph.problems.iter().map(|p| format!("NIF: {p}")));
     for row in &scan.shapes {
         let id = ShapeId(row.block);
         let label = row
@@ -83,9 +89,16 @@ pub fn parse(nif_bytes: &[u8]) -> ParsedNif {
             out.skipped.push((id, why));
             continue;
         }
+        if row.block != 0 && !graph.parent.contains_key(&row.block) {
+            out.warnings.push(format!(
+                "{label}: not under any known node; placed by its own transform"
+            ));
+        }
+        let world = nif::graph::world(&graph, row.block, &mesh.transform);
         out.shapes.push(ParsedShape {
             id,
             name: label,
+            world,
             mesh: Arc::new(mesh),
             material: MaterialState::from_lighting(&row.head, lighting, slots, row.alpha),
         });

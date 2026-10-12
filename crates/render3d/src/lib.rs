@@ -1,5 +1,6 @@
 pub mod background;
 pub mod builtin;
+pub mod cache;
 pub mod cbuffer;
 pub mod compile;
 pub mod device;
@@ -10,26 +11,31 @@ pub mod locate;
 pub mod material;
 pub mod mesh;
 pub mod parse;
+pub mod perf_log;
 pub mod permutation;
+pub mod pool;
 pub mod scene;
+pub mod source;
 pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
 pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
+pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
 
 use background::Backdrop;
-use compile::{compile, SrvKind};
+use compile::{cached, program_key, CompiledPair, ProgramKey, SrvKind};
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
 use material::{perm_material, write_material};
 use nif::material::MaterialState;
-use permutation::{defines, Material, Stage};
+use permutation::{defines, Defines, Stage};
 pub use scene::Background;
 use scene::{LightValues, PointValues, Scene, View, ViewValues};
-use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use source::{ExpandedSource, SourceSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
@@ -55,8 +61,11 @@ pub const DEFAULT_FEATURES: &[&str] = &["ENABLE_LL"];
 pub struct LoadReport {
     /// BSVER 83: nothing is rendered (00 §6.5).
     pub le_mesh: bool,
-    /// Shapes that will be drawn.
+    /// Shapes that are drawing or will draw (waiting for a program counts: an async first load of an uncached
+    /// mesh has none drawing yet, and the GUI must still send a camera, 03 §1.4).
     pub shapes: usize,
+    /// Of `shapes`, how many are waiting for a background compile.
+    pub pending: usize,
     /// Texture paths (canonical `textures/…`) the resolver did not return; their registers get defaults.
     pub missing_textures: Vec<String>,
     /// Per-shape permutation compile errors (the shape is skipped, the others still draw).
@@ -79,16 +88,22 @@ pub struct FrameTiming {
     pub readback_ms: f64,
 }
 
-/// What a loaded shape is doing on screen. P1-B adds `Pending`.
+/// What a loaded shape is doing on screen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShapeStatus {
     /// The current material is on screen.
     Drawing,
     /// `MaterialState::hidden` (PGPatcher `delete`): not drawn.
     Hidden,
-    /// The current material could not be built (compile, mesh or GPU error). The previous draw, if there is
-    /// one, stays on screen.
-    Failed(String),
+    /// Its shader program is compiling in the background. `showing_previous`: the draw of an earlier material
+    /// is still on screen, with its old constants, until the program lands.
+    Pending { showing_previous: bool },
+    /// The current material could not be built (compile, mesh or GPU error). `showing_previous`: the draw of an
+    /// earlier material stays on screen.
+    Failed {
+        error: String,
+        showing_previous: bool,
+    },
 }
 
 /// One loaded shape as the GUI sees it.
@@ -102,27 +117,54 @@ pub struct ShapeInfo {
 }
 
 /// One loaded shape: the CPU mesh (kept so an edit rebuilds the draw without re-parsing), the material last
-/// loaded or set, and what is on screen (possibly built from an earlier material, see [`ShapeStatus::Failed`]).
+/// loaded or set, and what is on screen (possibly built from an earlier material, see [`ShapeStatus`]).
 struct ShapeState {
     name: String,
     mesh: Arc<nif::geom::Mesh>,
+    world: [[f32; 4]; 3],
     material: MaterialState,
     draw: Option<ShapeDraw>,
     status: ShapeStatus,
+    /// The program a `Pending` shape waits for.
+    wanted: Option<Wanted>,
+    /// `Failed` because the program did not compile (a `LoadReport::compile_errors` line), not for a mesh or
+    /// GPU error (an `errors` line).
+    compile_failed: bool,
 }
 
-/// Why a draw could not be built. A permutation compile error is reported in `LoadReport::compile_errors`,
-/// everything else in `errors`.
-enum BuildError {
-    Compile(String),
-    Other(String),
+/// A permutation as the compile pool needs it: its pair key, the shared expanded source, both define sets.
+struct Wanted {
+    key: ProgramKey,
+    src: Arc<ExpandedSource>,
+    vs: Defines,
+    ps: Defines,
+    /// When the shape started waiting (the `shape_ready` line's `ms_pending`).
+    since: std::time::Instant,
 }
 
-impl BuildError {
-    fn into_text(self) -> String {
-        match self {
-            BuildError::Compile(e) | BuildError::Other(e) => e,
+impl Wanted {
+    fn job(&self, cache_dir: &Path) -> CompileJob {
+        CompileJob {
+            key: self.key.clone(),
+            src: self.src.clone(),
+            vs: self.vs.clone(),
+            ps: self.ps.clone(),
+            cache_dir: cache_dir.to_path_buf(),
         }
+    }
+}
+
+#[allow(clippy::large_enum_variant)] // a transient return value, never stored
+enum Lookup {
+    Ready(Program),
+    Failed(String),
+    Waiting,
+}
+
+fn ready(r: &Result<Program, String>) -> Lookup {
+    match r {
+        Ok(p) => Lookup::Ready(p.clone()),
+        Err(e) => Lookup::Failed(e.clone()),
     }
 }
 
@@ -130,6 +172,56 @@ impl BuildError {
 /// not decode).
 type TexSlot = Option<(ID3D11ShaderResourceView, SrvKind)>;
 
+/// Which of a path's two textures the draws use: the one the host's resolver returned at load (or a `Source`
+/// swap), or the converter's encode of it. The set preview maps `PreviewMode` to this one to one (P1-B A/B, 03 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum Variant {
+    #[default]
+    Source,
+    Encoded,
+}
+
+impl Variant {
+    pub fn other(self) -> Variant {
+        match self {
+            Variant::Source => Variant::Encoded,
+            Variant::Encoded => Variant::Source,
+        }
+    }
+}
+
+/// Both textures of one canonical path (`textures/…`) and the one the draws use. GPU textures are immutable, so a
+/// swap makes a new texture and SRV and rebinds. Both `None` = the resolver had nothing (kept so one load asks once).
+#[derive(Clone, Default)]
+struct TexEntry {
+    source: Option<textures::Texture>,
+    encoded: Option<textures::Texture>,
+    active: Variant,
+}
+
+impl TexEntry {
+    fn slot(&self, v: Variant) -> &Option<textures::Texture> {
+        match v {
+            Variant::Source => &self.source,
+            Variant::Encoded => &self.encoded,
+        }
+    }
+
+    fn slot_mut(&mut self, v: Variant) -> &mut Option<textures::Texture> {
+        match v {
+            Variant::Source => &mut self.source,
+            Variant::Encoded => &mut self.encoded,
+        }
+    }
+
+    fn current(&self) -> Option<&textures::Texture> {
+        self.slot(self.active).as_ref()
+    }
+
+    fn any(&self) -> bool {
+        self.source.is_some() || self.encoded.is_some()
+    }
+}
 /// The 3D preview renderer: message-shaped (load bytes → report, render scene → pixels) so it can later move
 /// into a sidecar process. Single-threaded, like [`Gpu`].
 pub struct Renderer {
@@ -137,14 +229,28 @@ pub struct Renderer {
     shaders: Fingerprint,
     cache_dir: PathBuf,
     features: Vec<String>,
-    programs: HashMap<String, Result<Program, String>>,
+    /// One expanded `Lighting.hlsl` per shaders folder (03 §5); dropped with the folder by `set_shaders`.
+    sources: SourceSet,
+    /// Device objects by pair key; dropped by `set_shaders` and by a device rebuild.
+    programs: HashMap<ProgramKey, Result<Program, String>>,
+    /// Plain-data results by pair key (a worker's answer or a disk hit). Content-addressed, so they survive
+    /// `set_shaders` and a device rebuild: a rebuilt device compiles nothing.
+    compiled: HashMap<ProgramKey, Result<Arc<CompiledPair>, String>>,
+    /// Keys whose job was queued and has not been applied yet.
+    inflight: HashSet<ProgramKey>,
+    /// Queued, not yet taken by the host (`take_jobs`).
+    jobs: Vec<CompileJob>,
+    /// Hosts that drive a pool turn this on; the default settles every load and edit before returning.
+    async_compile: bool,
     defaults: HashMap<(SrvKind, [u8; 4]), ID3D11ShaderResourceView>,
     /// Every Lighting shape of the loaded model, keyed by NIF block index (built-ins: `ShapeId(0)`).
     shapes: BTreeMap<ShapeId, ShapeState>,
     /// Shapes with a draw that are not hidden: opaque first, then alpha-blended, block order within each.
     draw_order: Vec<ShapeId>,
-    /// Textures resolved since the last load, by canonical path.
-    tex_cache: HashMap<String, TexSlot>,
+    /// Textures resolved or swapped in since the last load, by canonical path.
+    tex_cache: HashMap<String, TexEntry>,
+    /// The variant the resolver's bytes of the next loads count as ([`Renderer::set_load_variant`]).
+    load_variant: Variant,
     bounds: Option<([f32; 3], f32)>,
     sampler: ID3D11SamplerState,
     raster: ID3D11RasterizerState,
@@ -164,15 +270,10 @@ pub struct Renderer {
     backdrop: Option<Backdrop>,
 }
 
-fn permutation_key(d: &permutation::Defines, target: &str) -> String {
-    let mut v: Vec<String> = d.0.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    v.sort();
-    format!("{target}|{}", v.join(";"))
-}
-
 impl Renderer {
     /// Creates the device (hardware, else WARP; see [`Gpu::new`]) and the fixed pipeline states.
     pub fn new(shaders: Fingerprint, cache_dir: PathBuf) -> Result<Renderer, String> {
+        cache::prune_in_background(cache_dir.clone());
         Renderer::with_gpu(Gpu::new(None)?, shaders, cache_dir)
     }
 
@@ -247,14 +348,20 @@ impl Renderer {
             reference_writer: false,
             backdrop: None,
             gpu,
+            sources: SourceSet::new(shaders.root.clone()),
             shaders,
             cache_dir,
             features: DEFAULT_FEATURES.iter().map(|s| s.to_string()).collect(),
             programs: HashMap::new(),
+            compiled: HashMap::new(),
+            inflight: HashSet::new(),
+            jobs: vec![],
+            async_compile: false,
             defaults: HashMap::new(),
             shapes: BTreeMap::new(),
             draw_order: vec![],
             tex_cache: HashMap::new(),
+            load_variant: Variant::Source,
             bounds: None,
             sampler: s.ok_or("no sampler")?,
             raster: r.ok_or("no rasterizer state")?,
@@ -278,9 +385,9 @@ impl Renderer {
         &self.features
     }
 
-    /// Replaces the shaders (a moved or updated CS) and drops every compiled program: the in-memory cache is keyed
-    /// by defines only. The loaded model still uses the old programs until the next [`Renderer::load`].
+    /// Replaces the shaders (a moved or updated CS): the expansion memo and the device programs are dropped (`compiled` is content-addressed and stays valid). The loaded model still uses the old programs until the next [`Renderer::load`].
     pub fn set_shaders(&mut self, shaders: Fingerprint) {
+        self.sources = SourceSet::new(shaders.root.clone());
         self.shaders = shaders;
         self.programs.clear();
     }
@@ -313,42 +420,15 @@ impl Renderer {
         self.reference_writer = on;
     }
 
-    /// Bounding sphere (centre, radius) of every shape drawn at load: `positions × transform` (skinned
-    /// shapes: positions as-is, since the skinned VS ignores World and P0 bones are identity). Parent NiNode
-    /// transforms are not applied in P1-A. Material edits do not move it.
+    /// Bounding sphere (centre, radius) of every shape drawn at load: `positions × world` (the parent NiNode
+    /// chain × the shape's own transform; skinned shapes: positions as-is, since the skinned VS ignores World and
+    /// P0 bones are identity). Material edits do not move it.
     pub fn bounds(&self) -> Option<([f32; 3], f32)> {
         self.bounds
     }
 
     fn linear_lighting(&self) -> bool {
         self.features.iter().any(|f| f == "ENABLE_LL")
-    }
-
-    fn program(&mut self, m: &Material) -> Result<Program, String> {
-        let f: Vec<&str> = self.features.iter().map(String::as_str).collect();
-        let vd = defines(m, Stage::Vertex, &f, false);
-        let pd = defines(m, Stage::Pixel, &f, false);
-        let key = format!(
-            "{}#{}",
-            permutation_key(&vd, "vs_5_0"),
-            permutation_key(&pd, "ps_5_0")
-        );
-        if let Some(p) = self.programs.get(&key) {
-            return p.clone();
-        }
-        let root = self.shaders.root.clone();
-        let file = root.join("Lighting.hlsl");
-        let (cache, hash) = (&self.cache_dir, &self.shaders.hash);
-        let built = compile(&file, &root, &vd, "vs_5_0", cache, hash)
-            .map_err(|e| format!("vs: {e}"))
-            .and_then(|vs| {
-                compile(&file, &root, &pd, "ps_5_0", cache, hash)
-                    .map_err(|e| format!("ps: {e}"))
-                    .map(|ps| (vs, ps))
-            })
-            .and_then(|(vs, ps)| create_program(&self.gpu, vs, ps));
-        self.programs.insert(key, built.clone());
-        built
     }
 
     fn default_srv(
@@ -364,45 +444,47 @@ impl Renderer {
         Ok(v)
     }
 
-    /// The texture at canonical `norm`, resolved and decoded once per load. A path the resolver does not
-    /// return is listed in `rep.missing_textures`; undecodable bytes are an `rep.errors` line.
+    /// The active texture at canonical `norm`, resolved and decoded once per load (stored as the `load_variant`
+    /// copy). A path the resolver does not return is listed in `rep.missing_textures`; undecodable bytes are an
+    /// `rep.errors` line.
     fn texture(
         &mut self,
         norm: &str,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> TexSlot {
-        if let Some(t) = self.tex_cache.get(norm) {
-            return t.clone();
+        if let Some(e) = self.tex_cache.get(norm) {
+            return e.current().map(|t| (t.srv.clone(), t.kind));
         }
-        let loaded = match textures(norm) {
+        let v = self.load_variant;
+        let mut entry = TexEntry {
+            active: v,
+            ..TexEntry::default()
+        };
+        match textures(norm) {
             None => {
                 if !rep.missing_textures.iter().any(|m| m == norm) {
                     rep.missing_textures.push(norm.to_string());
                 }
-                None
             }
             Some(bytes) => match textures::load_dds(&self.gpu, &bytes) {
-                Ok(t) => Some((t.srv, t.kind)),
-                Err(e) => {
-                    rep.errors.push(format!("{norm}: {e}"));
-                    None
-                }
+                Ok(t) => *entry.slot_mut(v) = Some(t),
+                Err(e) => rep.errors.push(format!("{norm}: {e}")),
             },
-        };
-        self.tex_cache.insert(norm.to_string(), loaded.clone());
-        loaded
+        }
+        let slot = entry.current().map(|t| (t.srv.clone(), t.kind));
+        self.tex_cache.insert(norm.to_string(), entry);
+        slot
     }
 
-    /// NIF slot → register for every slot the PS reads (a texture is loaded only then), then a 1×1 default for
-    /// every reflected register left without one. Returns `(register, view)` for every reflected SRV and the
-    /// registers bound to a real texture.
+    /// NIF slot → register for every slot the PS reads (taken from `tex_cache`, which `resolve_textures` filled),
+    /// then a 1×1 default for every reflected register left without one. Returns `(register, view)` for every
+    /// reflected SRV and the registers bound to a real texture.
     fn bind_textures(
         &mut self,
         name: &str,
         program: &Program,
         m: &MaterialState,
-        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> Result<(Vec<(u32, ID3D11ShaderResourceView)>, Bound), String> {
         let pbr = m.is_pbr();
@@ -418,7 +500,12 @@ impl Renderer {
             let Some(kind) = draw::srv_kind_at(&program.ps.reflection, reg) else {
                 continue;
             };
-            match self.texture(&path.norm, textures, rep) {
+            match self
+                .tex_cache
+                .get(&path.norm)
+                .and_then(TexEntry::current)
+                .map(|t| (t.srv.clone(), t.kind))
+            {
                 Some((srv, k)) if k == kind => {
                     real.insert(reg, srv);
                 }
@@ -447,35 +534,48 @@ impl Renderer {
         Ok((srvs, bound))
     }
 
-    /// Builds one shape's draw for material `m`: program (compiled synchronously), textures, vertex streams
+    /// Resolves every slot of `m` that maps to a register through `textures` into `tex_cache` (once per path
+    /// per load). Done at load/edit time because `apply_compiled` has no resolver.
+    fn resolve_textures(
+        &mut self,
+        m: &MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        rep: &mut LoadReport,
+    ) {
+        let (pbr, msn) = (m.is_pbr(), m.slsf1 & (1 << 12) != 0);
+        for (slot, path) in m.slots.iter().enumerate() {
+            if !path.norm.is_empty()
+                && textures::register_for_slot(m.shader_type, pbr, msn, slot).is_some()
+            {
+                self.texture(&path.norm, textures, rep);
+            }
+        }
+    }
+
+    /// Builds one shape's draw for material `m` on `program`: textures (already in `tex_cache`), vertex streams
     /// against the VS inputs, zero cbuffers from the reflection, then the material.
     fn build_draw(
         &mut self,
         name: &str,
         mesh: &nif::geom::Mesh,
+        world: &[[f32; 4]; 3],
         m: &MaterialState,
-        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        program: &Program,
         rep: &mut LoadReport,
-    ) -> Result<ShapeDraw, BuildError> {
-        let program = self
-            .program(&perm_material(m))
-            .map_err(BuildError::Compile)?;
-        let (srvs, bound) = self
-            .bind_textures(name, &program, m, textures, rep)
-            .map_err(BuildError::Other)?;
+    ) -> Result<ShapeDraw, String> {
+        let (srvs, bound) = self.bind_textures(name, program, m, rep)?;
         let gpu_mesh = mesh::build(
             &self.gpu,
             mesh,
             &program.vs.reflection.inputs,
             &program.vs.bytecode,
-        )
-        .map_err(BuildError::Other)?;
+        )?;
         let (mut vs_cbs, mut ps_cbs) = match (
             cbuffers(&self.gpu, &program.vs.reflection),
             cbuffers(&self.gpu, &program.ps.reflection),
         ) {
             (Ok(v), Ok(p)) => (v, p),
-            (Err(e), _) | (_, Err(e)) => return Err(BuildError::Other(e)),
+            (Err(e), _) | (_, Err(e)) => return Err(e),
         };
         let ll = self.linear_lighting();
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
@@ -491,31 +591,250 @@ impl Renderer {
             ps_cbs,
             srvs,
             samplers: program.ps.reflection.samplers.iter().map(|s| s.1).collect(),
-            model: mesh.transform,
+            model: *world,
             blend: m.blend(),
             skinned: m.skinned,
             bound,
+            built: m.clone(),
             stale: true,
         })
     }
 
-    /// Parses the NIF and loads it: `load_parsed(&parse(nif_bytes), textures)`. `textures` resolves a canonical
-    /// texture path (`textures/…`, lower case, `/`) to DDS bytes.
+    /// The program `m` needs: both stage keys over the shared expansion of `Lighting.hlsl`.
+    fn wanted(&self, m: &MaterialState) -> Result<Wanted, String> {
+        let pm = perm_material(m);
+        let f: Vec<&str> = self.features.iter().map(String::as_str).collect();
+        let vs = defines(&pm, Stage::Vertex, &f, false);
+        let ps = defines(&pm, Stage::Pixel, &f, false);
+        let src = self.sources.get(Path::new("Lighting.hlsl"))?;
+        let key = ProgramKey::pair(
+            &program_key(&src, "main", "vs_5_0", &vs.0),
+            &program_key(&src, "main", "ps_5_0", &ps.0),
+        );
+        Ok(Wanted {
+            key,
+            src,
+            vs,
+            ps,
+            since: std::time::Instant::now(),
+        })
+    }
+
+    /// The program if it is at hand without compiling: device objects, a memoised result (made into device
+    /// objects now), or a disk-cache hit for both stages (~1 ms). Otherwise `Waiting`.
+    fn lookup(&mut self, w: &Wanted) -> Lookup {
+        if let Some(p) = self.programs.get(&w.key) {
+            return ready(p);
+        }
+        if !self.compiled.contains_key(&w.key) {
+            let dir = &self.cache_dir;
+            let t0 = std::time::Instant::now();
+            if let (Some(vs), Some(ps)) = (
+                cached(&w.src, &w.vs, "vs_5_0", dir),
+                cached(&w.src, &w.ps, "ps_5_0", dir),
+            ) {
+                perf_log::emit(
+                    "compile",
+                    serde_json::json!({"key": perf_log::short(&w.key.0), "ms": perf_log::ms_since(t0), "cache": "hit", "ok": true}),
+                );
+                self.compiled
+                    .insert(w.key.clone(), Ok(Arc::new(CompiledPair { vs, ps })));
+            }
+        }
+        match self.compiled.get(&w.key) {
+            None => Lookup::Waiting,
+            Some(Err(e)) => Lookup::Failed(e.clone()),
+            Some(Ok(pair)) => {
+                let built = create_program(&self.gpu, pair.vs.clone(), pair.ps.clone());
+                self.programs.insert(w.key.clone(), built.clone());
+                ready(&built)
+            }
+        }
+    }
+
+    fn fail(&mut self, id: ShapeId, error: String, compile: bool) {
+        if let Some(s) = self.shapes.get_mut(&id) {
+            s.status = ShapeStatus::Failed {
+                error,
+                showing_previous: s.draw.is_some(),
+            };
+            s.wanted = None;
+            s.compile_failed = compile;
+        }
+    }
+
+    /// Replaces shape `id`'s draw with one built for `m` on `p`, only on success (03 §1.3 `swap_program`):
+    /// on error the old draw stays and the status becomes `Failed { showing_previous: true }`.
+    fn swap(&mut self, id: ShapeId, p: &Program, m: &MaterialState, rep: &mut LoadReport) {
+        let (name, mesh, world) = match self.shapes.get(&id) {
+            Some(s) => (s.name.clone(), s.mesh.clone(), s.world),
+            None => return,
+        };
+        match self.build_draw(&name, &mesh, &world, m, p, rep) {
+            Ok(d) => {
+                if let Some(s) = self.shapes.get_mut(&id) {
+                    s.draw = Some(d);
+                    s.status = ShapeStatus::Drawing;
+                    s.wanted = None;
+                    s.compile_failed = false;
+                }
+            }
+            Err(e) => self.fail(id, e, false),
+        }
+    }
+
+    /// Starts building shape `id` for `m` (already stored as its material): swaps now when the program is at
+    /// hand, else queues one job (deduplicated) and marks the shape `Pending`. The old draw, if any, stays.
+    fn begin(
+        &mut self,
+        id: ShapeId,
+        m: &MaterialState,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        rep: &mut LoadReport,
+    ) {
+        self.resolve_textures(m, textures, rep);
+        let wanted = match self.wanted(m) {
+            Ok(w) => w,
+            Err(e) => return self.fail(id, e, true),
+        };
+        match self.lookup(&wanted) {
+            Lookup::Ready(p) => self.swap(id, &p, m, rep),
+            Lookup::Failed(e) => self.fail(id, e, true),
+            Lookup::Waiting => {
+                perf_log::emit(
+                    "shape_pending",
+                    serde_json::json!({
+                        "shape": id.0,
+                        "key": perf_log::short(&wanted.key.0),
+                        "showing_previous": self.shapes.get(&id).is_some_and(|s| s.draw.is_some()),
+                    }),
+                );
+                if self.inflight.insert(wanted.key.clone()) {
+                    self.jobs.push(wanted.job(&self.cache_dir));
+                }
+                if let Some(s) = self.shapes.get_mut(&id) {
+                    s.status = ShapeStatus::Pending {
+                        showing_previous: s.draw.is_some(),
+                    };
+                    s.wanted = Some(wanted);
+                    s.compile_failed = false;
+                }
+            }
+        }
+    }
+
+    /// Hosts that run their own pool: the jobs queued by loads and edits since the last call.
+    pub fn take_jobs(&mut self) -> Vec<CompileJob> {
+        std::mem::take(&mut self.jobs)
+    }
+
+    /// A finished job. Always memoised under its key; applied to every shape that waits for that key (a late
+    /// result for a shape that moved on only warms the memo). True when a shape's draw or status changed (the
+    /// host re-renders and refreshes its shape list).
+    pub fn apply_compiled(&mut self, done: CompileDone) -> bool {
+        let CompileDone { key, result } = done;
+        self.inflight.remove(&key);
+        self.compiled.insert(key.clone(), result);
+        let waiting: Vec<ShapeId> = self
+            .shapes
+            .iter()
+            .filter(|(_, s)| s.wanted.as_ref().is_some_and(|w| w.key == key))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &waiting {
+            let Some(w) = self.shapes.get_mut(id).and_then(|s| s.wanted.take()) else {
+                continue;
+            };
+            let since = w.since;
+            let m = self.shapes[id].material.clone();
+            match self.lookup(&w) {
+                Lookup::Ready(p) => self.swap(*id, &p, &m, &mut LoadReport::default()),
+                Lookup::Failed(e) => self.fail(*id, e, true),
+                Lookup::Waiting => {
+                    self.fail(*id, "the program is missing after its compile".into(), true)
+                }
+            }
+            perf_log::emit(
+                "shape_ready",
+                serde_json::json!({
+                    "shape": id.0,
+                    "ms_pending": perf_log::ms_since(since),
+                    "ok": self.shapes.get(id).is_some_and(|s| s.status == ShapeStatus::Drawing),
+                }),
+            );
+        }
+        // A worker panic is not a property of the program: forget it so the next edit retries.
+        if matches!(self.compiled.get(&key), Some(Err(e)) if e.starts_with(pool::PANIC_PREFIX)) {
+            self.compiled.remove(&key);
+        }
+        if !waiting.is_empty() {
+            self.sort_draw_order();
+        }
+        !waiting.is_empty()
+    }
+
+    /// Runs every queued job on this thread and applies it: the synchronous mode (tests, the Meshes view's
+    /// `load`).
+    pub fn settle(&mut self) {
+        loop {
+            let jobs = self.take_jobs();
+            if jobs.is_empty() {
+                break;
+            }
+            for j in jobs {
+                self.apply_compiled(run_job(j));
+            }
+        }
+    }
+
+    /// Turns the pool-driven mode on or off (default off). On: `load_parsed`, `load_builtin` and
+    /// `set_material` return with `Pending` shapes and jobs for `take_jobs`; off: they settle before returning.
+    pub fn set_async_compile(&mut self, on: bool) {
+        self.async_compile = on;
+    }
+
+    /// After a device loss: a fresh device (the caller makes it, WARP if need be) with the same shaders, cache
+    /// dir, features, sRGB mode and `compiled` results. Everything that lived on the old device is gone,
+    /// including the loaded model: load it again, and every program comes from `compiled` with no compile.
+    pub fn rebuild_device_on(&mut self, gpu: Gpu) -> Result<(), String> {
+        let mut n = Renderer::with_gpu(gpu, self.shaders.clone(), self.cache_dir.clone())?;
+        n.features = std::mem::take(&mut self.features);
+        n.encode_srgb = self.encode_srgb;
+        n.async_compile = self.async_compile;
+        n.load_variant = self.load_variant;
+        n.reference_writer = self.reference_writer;
+        n.compiled = std::mem::take(&mut self.compiled);
+        *self = n;
+        Ok(())
+    }
+
+    /// Parses the NIF and loads it, then settles: `load_parsed` in sync mode whatever the renderer's mode.
+    /// `textures` resolves a canonical texture path (`textures/…`, lower case, `/`) to DDS bytes.
     pub fn load(
         &mut self,
         nif_bytes: &[u8],
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
     ) -> LoadReport {
-        self.load_parsed(&parse(nif_bytes), textures)
+        self.load_inner(&parse(nif_bytes), textures, true)
     }
 
-    /// Replaces the loaded model with `parsed`: one draw per shape (compiled synchronously), textures resolved
-    /// through `textures`. A shape whose draw cannot be built stays listed with status `Failed`; a hidden
-    /// material is listed as `Hidden` and not built.
+    /// Replaces the loaded model with `parsed`: geometry and textures now, one program per distinct
+    /// permutation. A program that is at hand (in memory or a disk-cache hit) is applied now; the others are
+    /// queued (`take_jobs`) and their shapes are `Pending` with no draw. In sync mode (the default) the queue
+    /// is run before returning, so no shape is `Pending` and `LoadReport::compile_errors` is filled.
     pub fn load_parsed(
         &mut self,
         parsed: &ParsedNif,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) -> LoadReport {
+        self.load_inner(parsed, textures, !self.async_compile)
+    }
+
+    fn load_inner(
+        &mut self,
+        parsed: &ParsedNif,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+        sync: bool,
     ) -> LoadReport {
         self.shapes.clear();
         self.draw_order.clear();
@@ -531,40 +850,57 @@ impl Renderer {
             return rep;
         }
         for s in &parsed.shapes {
-            let (draw, status) = if s.material.hidden {
-                (None, ShapeStatus::Hidden)
-            } else {
-                match self.build_draw(&s.name, &s.mesh, &s.material, textures, &mut rep) {
-                    Ok(d) => (Some(d), ShapeStatus::Drawing),
-                    Err(BuildError::Compile(e)) => {
-                        rep.compile_errors.push(format!("{}: {e}", s.name));
-                        (None, ShapeStatus::Failed(e))
-                    }
-                    Err(BuildError::Other(e)) => {
-                        rep.errors.push(format!("{}: {e}", s.name));
-                        (None, ShapeStatus::Failed(e))
-                    }
-                }
-            };
+            let hidden = s.material.hidden;
             self.shapes.insert(
                 s.id,
                 ShapeState {
                     name: s.name.clone(),
                     mesh: s.mesh.clone(),
+                    world: s.world,
                     material: s.material.clone(),
-                    draw,
-                    status,
+                    draw: None,
+                    status: if hidden {
+                        ShapeStatus::Hidden
+                    } else {
+                        ShapeStatus::Pending {
+                            showing_previous: false,
+                        }
+                    },
+                    wanted: None,
+                    compile_failed: false,
                 },
             );
+            if !hidden {
+                self.begin(s.id, &s.material, textures, &mut rep);
+            }
+        }
+        if sync {
+            self.settle();
+        }
+        for s in self.shapes.values() {
+            if let ShapeStatus::Failed { error, .. } = &s.status {
+                let line = format!("{}: {error}", s.name);
+                if s.compile_failed {
+                    rep.compile_errors.push(line);
+                } else {
+                    rep.errors.push(line);
+                }
+            }
         }
         self.bounds = self.compute_bounds();
         self.warn_missing_fields(&mut rep);
         self.sort_draw_order();
-        rep.shapes = self
+        rep.pending = self
             .shapes
             .values()
-            .filter(|s| s.status == ShapeStatus::Drawing)
+            .filter(|s| matches!(s.status, ShapeStatus::Pending { .. }))
             .count();
+        rep.shapes = rep.pending
+            + self
+                .shapes
+                .values()
+                .filter(|s| s.status == ShapeStatus::Drawing)
+                .count();
         rep
     }
 
@@ -579,11 +915,13 @@ impl Renderer {
         let mut material = m;
         material.skinned = false;
         material.has_vertex_colors = false;
+        let mesh = builtin_mesh(b);
         let parsed = ParsedNif {
             shapes: vec![ParsedShape {
                 id: ShapeId(0),
                 name: format!("{b:?}"),
-                mesh: Arc::new(builtin_mesh(b)),
+                world: mesh.transform,
+                mesh: Arc::new(mesh),
                 material,
             }],
             ..ParsedNif::default()
@@ -608,12 +946,14 @@ impl Renderer {
     /// - `Cbuffer`: every cbuffer of the draw back to zero, then the material; on the next frame, no compile;
     /// - `Textures`: the slots resolved again through `textures` and rebound, then the `Cbuffer` path (the PBR
     ///   flags and `EnvmapData.y` depend on what is bound);
-    /// - `Permutation`: a new draw is built now (synchronous compile in P1-A; background compile is P1-B).
+    /// - `Permutation`: the new program at hand is swapped in now; otherwise a job is queued (`take_jobs`) and
+    ///   the shape is `Pending { showing_previous: true }`. The old draw keeps drawing, with its old
+    ///   constants, until the program lands. In sync mode the queue is run before returning.
     ///
-    /// A shape that is not `Drawing` (failed, hidden) is always rebuilt. On any build error the previous draw
-    /// stays on screen and the status is `Failed(error)`; the result is still `Ok(kind)`. A hidden material
-    /// stops drawing the shape and keeps its draw for later. Paths the resolver did not return before are asked
-    /// for again. `Err` only for an id that is not loaded.
+    /// A shape that is not `Drawing` (pending, failed, hidden) is always rebuilt. On any build error the
+    /// previous draw stays on screen and the status is `Failed { showing_previous: true }`; the result is still
+    /// `Ok(kind)`. A hidden material stops drawing the shape and keeps its draw for later. Paths the resolver
+    /// did not return before are asked for again. `Err` only for an id that is not loaded.
     pub fn set_material(
         &mut self,
         id: ShapeId,
@@ -636,6 +976,8 @@ impl Renderer {
             if let Some(state) = self.shapes.get_mut(&id) {
                 state.material = m;
                 state.status = ShapeStatus::Hidden;
+                // A program still compiling for it is memoised when it lands, not applied.
+                state.wanted = None;
                 // Not updated while hidden: whatever returns it to the draw order must rewrite its fields.
                 if let Some(d) = state.draw.as_mut() {
                     d.stale = true;
@@ -647,38 +989,35 @@ impl Renderer {
         if kind == EditKind::Same && !rebuild {
             return Ok(kind);
         }
-        self.tex_cache.retain(|_, t| t.is_some());
+        self.tex_cache.retain(|_, e| e.any());
         let mut scratch = LoadReport::default();
-        let outcome = if rebuild {
-            let (name, mesh) = {
-                let s = &self.shapes[&id];
-                (s.name.clone(), s.mesh.clone())
-            };
-            match self.build_draw(&name, &mesh, &m, textures, &mut scratch) {
-                Ok(d) => {
-                    if let Some(s) = self.shapes.get_mut(&id) {
-                        s.draw = Some(d);
-                    }
-                    Ok(())
-                }
-                Err(e) => Err(e.into_text()),
+        if rebuild {
+            if let Some(s) = self.shapes.get_mut(&id) {
+                s.material = m.clone();
             }
+            self.begin(id, &m, textures, &mut scratch);
         } else {
-            self.apply_in_place(id, kind, &m, textures, &mut scratch)
-        };
-        if let Some(state) = self.shapes.get_mut(&id) {
-            state.status = match outcome {
-                Ok(()) => ShapeStatus::Drawing,
-                Err(e) => ShapeStatus::Failed(e),
-            };
-            state.material = m;
+            let outcome = self.apply_in_place(id, kind, &m, textures, &mut scratch);
+            if let Some(state) = self.shapes.get_mut(&id) {
+                state.status = match outcome {
+                    Ok(()) => ShapeStatus::Drawing,
+                    Err(error) => ShapeStatus::Failed {
+                        error,
+                        showing_previous: state.draw.is_some(),
+                    },
+                };
+                state.material = m;
+            }
         }
         self.sort_draw_order();
+        if !self.async_compile {
+            self.settle();
+        }
         Ok(kind)
     }
 
-    /// A `Cbuffer` or `Textures` edit on the shape's existing draw (same permutation, so the program is an
-    /// in-memory hit).
+    /// A `Cbuffer` or `Textures` edit on the shape's existing draw (same permutation, so the program is at
+    /// hand).
     fn apply_in_place(
         &mut self,
         id: ShapeId,
@@ -688,15 +1027,32 @@ impl Renderer {
         rep: &mut LoadReport,
     ) -> Result<(), String> {
         if kind == EditKind::Textures {
+            self.resolve_textures(m, textures, rep);
             let name = self.shapes[&id].name.clone();
-            let program = self.program(&perm_material(m))?;
-            let (srvs, bound) = self.bind_textures(&name, &program, m, textures, rep)?;
+            let w = self.wanted(m)?;
+            let program = match self.lookup(&w) {
+                Lookup::Ready(p) => p,
+                Lookup::Failed(e) => return Err(e),
+                // Sync mode (no pool) compiles inline, as the old `program()` did, e.g. after `set_shaders`.
+                Lookup::Waiting if !self.async_compile => {
+                    let d = run_job(w.job(&self.cache_dir));
+                    self.compiled.insert(d.key, d.result);
+                    match self.lookup(&w) {
+                        Lookup::Ready(p) => p,
+                        Lookup::Failed(e) => return Err(e),
+                        Lookup::Waiting => return Err("the program is not compiled".into()),
+                    }
+                }
+                Lookup::Waiting => return Err("the program is not compiled".into()),
+            };
+            let (srvs, bound) = self.bind_textures(&name, &program, m, rep)?;
             let d = self
                 .shapes
                 .get_mut(&id)
                 .and_then(|s| s.draw.as_mut())
                 .ok_or("no draw")?;
             d.srvs = srvs;
+            d.built = m.clone();
             d.bound = bound;
         }
         let ll = self.linear_lighting();
@@ -709,11 +1065,173 @@ impl Renderer {
         Ok(())
     }
 
+    /// Which variant the resolver's bytes count as for the loads that follow (default `Source`). The set preview
+    /// sets it to its current mode before a scene push, so the loaded textures are that mode's copy and the other
+    /// mode's can be swapped in beside it.
+    pub fn set_load_variant(&mut self, v: Variant) {
+        self.load_variant = v;
+    }
+
+    /// Hot-swaps one texture (03 §2): a new immutable texture + SRV from `dds` is stored as variant `v` of `path`
+    /// (empty `dds`: that copy is dropped). A variant that is the entry's only texture becomes the active one; a
+    /// dropped active copy falls back to the other. When the bound texture changes, every shape still drawing (not hidden)
+    /// that reads `path` gets the new view, and its material is written again where the set of real textures changed
+    /// (`PBRFlags` HasEmissive/…, `EnvmapData.y`). No mesh, shader or cbuffer layout is touched.
+    ///
+    /// Returns the `(shape, register)` pairs rebound. `Err`, with nothing stored or changed, for a DDS that does
+    /// not decode or a texture of another kind than a register reads (a cube into a 2D slot).
+    pub fn replace_texture(
+        &mut self,
+        path: &str,
+        dds: &[u8],
+        v: Variant,
+    ) -> Result<Vec<(ShapeId, u32)>, String> {
+        let fresh = if dds.is_empty() {
+            None
+        } else {
+            Some(textures::load_dds(&self.gpu, dds).map_err(|e| format!("{path}: {e}"))?)
+        };
+        let mut entry = self.tex_cache.get(path).cloned().unwrap_or_default();
+        let was = entry.active;
+        let dropped = fresh.is_none();
+        *entry.slot_mut(v) = fresh;
+        if !dropped && entry.slot(v.other()).is_none() {
+            entry.active = v;
+        } else if dropped && entry.active == v {
+            entry.active = v.other();
+        }
+        if entry.active == v || entry.active != was {
+            self.rebind(path, entry)
+        } else {
+            self.tex_cache.insert(path.to_string(), entry);
+            Ok(vec![])
+        }
+    }
+
+    /// Makes variant `v` of `path` the bound one (the A/B flip): a new view per bound register, no upload, no
+    /// decode. False when `v` is already active, `path` has no `v` copy, no `Drawing` shape reads `path`, or the
+    /// copy's kind does not fit (then nothing changes).
+    pub fn set_texture_variant(&mut self, path: &str, v: Variant) -> bool {
+        let Some(mut entry) = self.tex_cache.get(path).cloned() else {
+            return false;
+        };
+        if entry.active == v || entry.slot(v).is_none() {
+            return false;
+        }
+        entry.active = v;
+        self.rebind(path, entry)
+            .is_ok_and(|touched| !touched.is_empty())
+    }
+
+    /// `(shape, register, kind)` for every register a visible shape with a draw reads `path` through (the same slot →
+    /// register rule as the load). Hidden shapes are left alone (their next build reads the entry). A pending or failed shape
+    /// still draws its previous `ShapeDraw`, so it is rebound too, but its cbuffers are kept (its `material` is the
+    /// newer, unapplied one).
+    fn texture_targets(&self, path: &str) -> Vec<(ShapeId, u32, SrvKind)> {
+        let mut out: Vec<(ShapeId, u32, SrvKind)> = vec![];
+        for (id, s) in &self.shapes {
+            let Some(d) = s.draw.as_ref().filter(|_| s.status != ShapeStatus::Hidden) else {
+                continue;
+            };
+            let m = &d.built;
+            let msn = m.slsf1 & (1 << 12) != 0;
+            for (slot, p) in m.slots.iter().enumerate() {
+                if p.norm != path {
+                    continue;
+                }
+                let Some(reg) = textures::register_for_slot(m.shader_type, m.is_pbr(), msn, slot)
+                else {
+                    continue;
+                };
+                let Some(view) = d.srvs.iter().find(|(r, _)| *r == reg).map(|(_, v)| v) else {
+                    continue;
+                };
+                let Some(kind) = textures::view_kind(view) else {
+                    continue;
+                };
+                if !out.iter().any(|(i, r, _)| i == id && *r == reg) {
+                    out.push((*id, reg, kind));
+                }
+            }
+        }
+        out
+    }
+
+    /// Stores `entry` for `path` and points every draw that reads it at the entry's active texture (a 1×1 default
+    /// when it has none). All kinds are checked before anything changes.
+    fn rebind(&mut self, path: &str, entry: TexEntry) -> Result<Vec<(ShapeId, u32)>, String> {
+        let mut plan = vec![];
+        for (id, reg, kind) in self.texture_targets(path) {
+            let (shader_type, pbr, name) = {
+                let s = &self.shapes[&id];
+                let b = s.draw.as_ref().map_or(&s.material, |d| &d.built);
+                (b.shader_type, b.is_pbr(), s.name.clone())
+            };
+            let real = match entry.current() {
+                Some(t) if t.kind != kind => {
+                    return Err(format!(
+                        "{path} is a {:?} texture but {name} reads t{reg} as {kind:?}",
+                        t.kind
+                    ))
+                }
+                Some(t) => Some(t.srv.clone()),
+                None => None,
+            };
+            let srv = match &real {
+                Some(v) => v.clone(),
+                None => self.default_srv(kind, textures::default_for(reg, shader_type, pbr))?,
+            };
+            plan.push((id, reg, srv, real.is_some()));
+        }
+        self.tex_cache.insert(path.to_string(), entry);
+        let ll = self.linear_lighting();
+        let mut touched = vec![];
+        for (id, reg, srv, real) in plan {
+            let Some(s) = self.shapes.get_mut(&id) else {
+                continue;
+            };
+            let material = s.material.clone();
+            let applied = s.status == ShapeStatus::Drawing;
+            let Some(d) = s.draw.as_mut() else {
+                continue;
+            };
+            if let Some(slot) = d.srvs.iter_mut().find(|(r, _)| *r == reg) {
+                slot.1 = srv;
+            }
+            let was = d.bound.regs.contains(&reg);
+            if real {
+                d.bound.regs.insert(reg);
+            } else {
+                d.bound.regs.remove(&reg);
+            }
+            if was != real && applied {
+                d.rewrite_material(&material, ll);
+            }
+            touched.push((id, reg));
+        }
+        Ok(touched)
+    }
+
+    /// Test hook: the COM pointer of the shape's index buffer. A hot-swap must leave it alone (no mesh reload).
+    #[doc(hidden)]
+    pub fn draw_identity(&self, id: ShapeId) -> Option<usize> {
+        use windows::core::Interface;
+        self.shapes
+            .get(&id)?
+            .draw
+            .as_ref()
+            .map(|d| d.mesh.index.as_raw() as usize)
+    }
+
     fn compute_bounds(&self) -> Option<([f32; 3], f32)> {
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
         let mut points: Vec<[f32; 3]> = vec![];
-        for s in self.shapes.values().filter(|s| s.draw.is_some()) {
-            let t = &s.mesh.transform;
+        for s in self
+            .shapes
+            .values()
+            .filter(|s| s.draw.is_some() || matches!(s.status, ShapeStatus::Pending { .. }))
+        {
+            let t = &s.world;
             for p in &s.mesh.positions {
                 let q = if s.material.skinned {
                     *p

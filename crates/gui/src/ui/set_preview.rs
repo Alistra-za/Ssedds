@@ -186,10 +186,24 @@ fn emissive_shown(s: &SetPreview) -> bool {
 }
 
 fn shapes(ui: &mut egui::Ui, s: &SetPreview) {
-    // Spec §1 criterion 4: a shader that failed to compile is named here.
+    // Spec §1 criterion 4: a shader that failed to compile is named here, and one still compiling says so.
     for i in &s.v3.shapes {
-        if let ShapeStatus::Failed(e) = &i.status {
-            ui.colored_label(RED, format!("{}: shader failed: {e}", i.name));
+        match &i.status {
+            ShapeStatus::Failed {
+                error,
+                showing_previous,
+            } => {
+                let kept = if *showing_previous {
+                    " (previous look kept)"
+                } else {
+                    ""
+                };
+                ui.colored_label(RED, format!("{}: shader failed: {error}{kept}", i.name));
+            }
+            ShapeStatus::Pending { .. } => {
+                ui.label(format!("{}: compiling…", i.name));
+            }
+            ShapeStatus::Drawing | ShapeStatus::Hidden => {}
         }
     }
     if s.rows.is_empty() {
@@ -233,6 +247,16 @@ fn timings(ui: &mut egui::Ui, s: &SetPreview) {
             }
             if let Some((k, t)) = s.v3.last_edit {
                 ui.label(format!("Last material edit: {k:?}, {t:.2} ms"));
+            }
+            if let Some(p) = render3d::perf_log::path() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Timing log: {}", p.display()));
+                    if ui.button("Copy log path").clicked() {
+                        ui.ctx().copy_text(p.display().to_string());
+                    }
+                });
+            } else {
+                ui.label("Timing log: off (SDC_PREVIEW_LOG=0)");
             }
         });
 }

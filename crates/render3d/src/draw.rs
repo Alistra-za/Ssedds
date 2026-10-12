@@ -71,6 +71,9 @@ pub struct ShapeDraw {
     pub skinned: bool,
     /// Registers bound to a real texture (not a 1×1 default); the PBR flags and `EnvmapData.y` read it.
     pub bound: Bound,
+    /// The material this draw was built (or last rebound) with: the slot -> register map its `srvs` follow. A
+    /// pending edit's newer material lives on the shape, not here.
+    pub built: MaterialState,
     /// New or rewritten since the last frame: the next [`ShapeDraw::update`] writes the light and view fields
     /// whatever changed.
     pub stale: bool,

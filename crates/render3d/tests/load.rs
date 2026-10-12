@@ -19,7 +19,7 @@ fn load_lists_every_lighting_shape_by_block() {
     let skull = shapes.iter().find(|s| s.id == ShapeId(143)).unwrap();
     assert_eq!(skull.name, "SkullPeg01:19");
     assert!(
-        matches!(&skull.status, ShapeStatus::Failed(e) if e.starts_with("ps:")),
+        matches!(&skull.status, ShapeStatus::Failed { error, .. } if error.starts_with("ps:")),
         "{:?}",
         skull.status
     );

@@ -3,9 +3,12 @@
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use render3d::locate::{Change, Fingerprint};
+use render3d::perf_log;
 use sdc_gui::model::meshes::LE_WARNING;
 use sdc_gui::model::viewport3d::{self as v3, V3State, Viewport3d};
+use sdc_gui::worker::WorkerMsg;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 fn harness(v: Viewport3d) -> Harness<'static, Viewport3d> {
     let h = Harness::builder()
@@ -930,9 +933,10 @@ fn a_failed_edit_on_the_only_shape_keeps_the_camera_live() {
         result: Err("compile".into()),
         ms: 1.0,
     });
-    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed(
-        "compile".into(),
-    ))]));
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed {
+        error: "compile".into(),
+        showing_previous: true,
+    })]));
     v.orbit.drag(10.0, 0.0);
     v.request_frame(64, 64);
     assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
@@ -1118,9 +1122,10 @@ fn a_keep_view_reload_whose_shapes_all_fail_keeps_the_frame_and_lists_the_errors
     assert!(v.frame.is_some(), "the old image stays");
     assert_eq!(v.report.as_ref().unwrap().compile_errors.len(), 1);
     // The shapes come back Failed (no draw after a load): a camera change must not render over the kept frame.
-    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed(
-        "x".into(),
-    ))]));
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed {
+        error: "x".into(),
+        showing_previous: false,
+    })]));
     v.orbit.drag(5.0, 0.0);
     v.request_frame(64, 64);
     assert!(
@@ -1163,4 +1168,735 @@ fn a_render_error_for_replaced_content_is_dropped() {
         message: "old".into(),
     });
     assert!(v.render_error.is_none());
+}
+
+// ---- P1-B Task 6: background compiles ----
+
+fn load_with(
+    v: &mut Viewport3d,
+    cmds: &std::sync::mpsc::Receiver<v3::V3Cmd>,
+    key: u64,
+    keep: bool,
+    shapes: usize,
+    pending: usize,
+) -> u64 {
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(key, &nif, &[])), keep);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("load")
+    };
+    loaded(
+        v,
+        id,
+        render3d::LoadReport {
+            shapes,
+            pending,
+            ..Default::default()
+        },
+    );
+    id
+}
+
+fn frame_of(id: u64, px: u8) -> Arc<v3::Frame> {
+    Arc::new(v3::Frame {
+        width: 1,
+        height: 1,
+        rgba: vec![px; 4],
+        id,
+    })
+}
+
+fn pending(previous: bool) -> ShapeStatus {
+    ShapeStatus::Pending {
+        showing_previous: previous,
+    }
+}
+
+/// A first load of an uncached mesh has no drawing shape yet; the camera must still go out so the render
+/// thread has something to redraw with when the programs land (03 §1.4).
+#[test]
+fn a_first_load_with_only_pending_shapes_still_gets_a_camera() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })),
+        "report.shapes counts the pending shape"
+    );
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+}
+
+#[test]
+fn pending_shapes_are_busy_so_a_long_compile_shows_the_spinner_and_idle_does_not() {
+    use std::time::{Duration, Instant};
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    assert!(v.busy(), "report.pending before the first Shapes reply");
+    assert_eq!(v.compiling(), 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    assert!(v.busy());
+    let t0 = Instant::now();
+    assert!(!v.show_spinner(t0));
+    assert!(!v.show_spinner(t0 + Duration::from_millis(299)));
+    assert!(
+        v.show_spinner(t0 + v3::SPINNER_DELAY),
+        "a compile longer than 300 ms spins"
+    );
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert_eq!(v.compiling(), 0);
+    assert!(!v.busy());
+    assert!(!v.show_spinner(t0 + Duration::from_secs(5)));
+    assert!(!v.poll(), "idle: nothing arrives, nothing to repaint for");
+}
+
+#[test]
+fn a_dead_render_thread_does_not_leave_pending_shapes_busy() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    assert!(v.busy());
+    v.handle(v3::V3Reply::Failed("gone".into()));
+    assert!(!v.busy());
+}
+
+#[test]
+fn a_refresh_frame_replaces_the_image_without_touching_the_render_accounting() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::Render { id: rid, .. }) = cmds.try_recv() else {
+        panic!("render")
+    };
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 1),
+        timing: Default::default(),
+    });
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of((1 << 62) + 1, 7),
+        timing: Default::default(),
+    });
+    assert_eq!(v.frame.as_ref().unwrap().rgba, vec![7; 4]);
+    // A real render sent now is still in flight: the refresh id did not advance render_done.
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(v.busy());
+}
+
+/// A reload whose programs are all new has no old draws to keep (load_parsed discards them): the old image
+/// stays until the new content is ready, not replaced by a half-built one.
+#[test]
+fn a_reload_with_pending_shapes_holds_the_old_image_until_they_all_resolve() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 0);
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    v.frame = Some(frame_of(50, 9));
+    load_with(&mut v, &cmds, 2, true, 2, 2);
+    v.handle(v3::V3Reply::Shapes(vec![
+        info(pending(false)),
+        info(pending(false)),
+    ]));
+    assert_eq!(
+        v.frame.as_ref().unwrap().rgba,
+        vec![9; 4],
+        "the old image stays"
+    );
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "no Render over the held image");
+    // One shape lands, one still has no program: still held, refreshes ignored.
+    v.handle(v3::V3Reply::Shapes(vec![
+        info(ShapeStatus::Drawing),
+        info(pending(false)),
+    ]));
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of((1 << 62) + 1, 7),
+        timing: Default::default(),
+    });
+    assert_eq!(v.frame.as_ref().unwrap().rgba, vec![9; 4]);
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err());
+    // Everything resolved: released, the camera goes out, refreshes are taken again.
+    v.handle(v3::V3Reply::Shapes(vec![
+        info(ShapeStatus::Drawing),
+        info(ShapeStatus::Drawing),
+    ]));
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of((1 << 62) + 2, 5),
+        timing: Default::default(),
+    });
+    assert_eq!(v.frame.as_ref().unwrap().rgba, vec![5; 4]);
+}
+
+/// An edit's shapes keep their old draw in the renderer, so camera moves keep rendering while it compiles.
+#[test]
+fn an_edit_waiting_for_its_shader_keeps_the_camera_live_on_the_old_draw() {
+    let (_d, mut v, cmds) = confirmed();
+    let id = load_with(&mut v, &cmds, 1, false, 1, 0);
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+    let _ = cmds.try_recv();
+    v.handle(v3::V3Reply::MaterialSet {
+        content: id,
+        id: ShapeId(0),
+        result: Ok(EditKind::Permutation),
+        ms: 1.0,
+    });
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(true))]));
+    v.orbit.drag(10.0, 0.0);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::Render { id: rid, .. }) = cmds.try_recv() else {
+        panic!("render over the old draw")
+    };
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 3),
+        timing: Default::default(),
+    });
+    assert!(v.busy(), "the compile is still running");
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(!v.busy());
+}
+
+#[test]
+fn dropping_the_viewport_tells_the_render_thread_to_quit() {
+    let (_d, v, cmds) = confirmed();
+    drop(v);
+    assert!(matches!(cmds.try_iter().last(), Some(v3::V3Cmd::Quit)));
+}
+
+// ---- P1-B Task 6: a real render thread, the repo stand-in shader, the real pool ----
+
+fn standin_root() -> PathBuf {
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ))
+}
+
+fn real_viewport(cache: &Path, material: MaterialState) -> Viewport3d {
+    let f = render3d::locate::fingerprint(&standin_root(), None).unwrap();
+    let mut v = Viewport3d::new(Some(f.clone()));
+    v.on_located(Ok(Some(f)));
+    v.cache_dir = Some(cache.to_path_buf());
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 1,
+            shape: Builtin::Sphere,
+            material,
+            textures: Arc::new(HashMap::new()),
+        }),
+        false,
+    );
+    v
+}
+
+/// Drives the UI-thread side until nothing is in flight (the way the app's frames do).
+fn run_idle(v: &mut Viewport3d) {
+    let t = std::time::Instant::now();
+    loop {
+        v.poll();
+        v.request_frame(64, 64);
+        if !v.busy() && !v.shapes.is_empty() {
+            return;
+        }
+        assert!(
+            t.elapsed().as_secs() < 60,
+            "never went idle: {:?}",
+            v.shapes
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_real_load_compiles_in_the_background_then_draws_and_goes_idle() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    }); // DO_ALPHA_TEST: the stand-in's pixel permutation compiles
+    let mut v = real_viewport(cache.path(), m);
+    run_idle(&mut v);
+    assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
+    // The refresh frame follows the Shapes reply on the same queue; wait for the lit image.
+    let lit = |v: &Viewport3d| {
+        v.frame.as_ref().is_some_and(|f| {
+            f.rgba
+                .chunks(4)
+                .any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0)
+        })
+    };
+    let t = std::time::Instant::now();
+    while !lit(&v) && t.elapsed().as_secs() < 10 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(lit(&v), "the compile-triggered refresh drew the sphere");
+    // Idle stays idle: no endless repaints.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    v.poll();
+    for _ in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!v.poll());
+        assert!(!v.busy());
+    }
+}
+
+#[test]
+fn a_real_compile_failure_is_listed_and_the_panel_goes_idle() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut m = MaterialState::builtin_default();
+    m.alpha = None; // the stand-in's pixel permutation without DO_ALPHA_TEST does not compile
+    let mut v = real_viewport(cache.path(), m);
+    run_idle(&mut v);
+    assert!(matches!(
+        &v.shapes[0].status,
+        ShapeStatus::Failed { error, showing_previous: false } if error.starts_with("ps:")
+    ));
+    assert!(
+        v.frame.is_some(),
+        "the background frame was shown meanwhile"
+    );
+    assert!(!v.busy());
+}
+
+// ---- P1-B Task 8a: texture swaps ----
+
+#[test]
+fn texture_swaps_follow_the_load_re_render_and_report_errors() {
+    use render3d::Variant;
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    let p = "textures/a.dds";
+    let bytes = Arc::new(vec![1u8, 2, 3]);
+    assert!(
+        !v.swap_texture(p.into(), bytes.clone(), Variant::Encoded),
+        "no load sent yet: the caller pushes the scene instead"
+    );
+    assert!(!v.set_texture_variant(p.into(), Variant::Encoded));
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed first (the default load variant is never announced)")
+    };
+    assert!(v.swap_texture(p.into(), bytes.clone(), Variant::Encoded));
+    assert!(v.set_texture_variant(p.into(), Variant::Encoded));
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SwapTexture { path, variant: Variant::Encoded, bytes: b }) if path == p && b == bytes
+    ));
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetTextureVariant { path, variant: Variant::Encoded }) if path == p
+    ));
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+    );
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "nothing changed: nothing sent");
+    assert!(v.swap_texture(p.into(), bytes, Variant::Source));
+    cmds.try_recv().unwrap();
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })),
+        "a swap draws on the next request"
+    );
+    // A failed swap is listed; a reply for content replaced since is dropped.
+    v.handle(v3::V3Reply::TextureSwap {
+        content: id,
+        path: p.into(),
+        result: Err("boom".into()),
+    });
+    assert_eq!(v.swap_errors, vec!["textures/a.dds: boom".to_string()]);
+    v.handle(v3::V3Reply::TextureSwap {
+        content: id + 99,
+        path: p.into(),
+        result: Err("stale".into()),
+    });
+    assert_eq!(v.swap_errors.len(), 1);
+}
+
+#[test]
+fn only_parsed_and_builtin_content_takes_swaps_and_the_load_variant_is_announced_once() {
+    use render3d::Variant;
+    let (_d, mut v, cmds) = confirmed();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    cmds.try_recv().unwrap(); // Load
+    assert!(!v.swap_texture("textures/a.dds".into(), Arc::new(vec![1]), Variant::Source));
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_load_variant(Variant::Encoded);
+    v.set_content(Some(parsed(2, &nif, &[])), false);
+    v.request_frame(64, 64);
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetLoadVariant(Variant::Encoded))
+    ));
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::LoadParsed { .. })));
+    // Unchanged for the next load: not announced again.
+    v.set_content(Some(parsed(3, &nif, &[])), false);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::LoadParsed { .. })));
+}
+
+/// A real render thread on WARP with the repo stand-in: a swap shows in the next frame and is applied again after
+/// a reload (here: the features toggle), which loads the content's own bytes again.
+#[test]
+fn a_texture_swap_reaches_the_render_thread_and_survives_a_reload() {
+    use nif::material::MaterialState;
+    use render3d::Variant;
+    use sdc_gui::model::set_preview::uncompressed_dds;
+    const PATH: &str = "textures/ab/t.dds";
+    let standin = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ));
+    let fp = render3d::locate::fingerprint(&standin, None).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::new(Some(fp.clone()));
+    v.cache_dir = Some(cache.path().to_path_buf());
+    v.on_located(Ok(Some(fp)));
+    let tex = |c: [f32; 4]| {
+        uncompressed_dds(
+            &[engine::image::Rgba32F {
+                width: 1,
+                height: 1,
+                px: vec![c],
+            }],
+            false,
+            false,
+        )
+        .unwrap()
+    };
+    let mut material = MaterialState::builtin_default();
+    material.set_slot_raw(0, PATH);
+    // DO_ALPHA_TEST: the stand-in refuses the other permutations.
+    material.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    });
+    let red = v3::FileSource::Memory {
+        id: 1,
+        bytes: Arc::new(tex([1.0, 0.0, 0.0, 1.0])),
+    };
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 1,
+            shape: render3d::builtin::Builtin::Sphere,
+            material,
+            textures: Arc::new(HashMap::from([(PATH.to_string(), red)])),
+        }),
+        false,
+    );
+    let chan = |v: &Viewport3d, c: usize| -> u64 {
+        let f = v.frame.as_ref().expect("a frame");
+        f.rgba.chunks(4).map(|p| p[c] as u64).sum()
+    };
+    // The first frame is blank while the programs compile; the compile-triggered refresh draws the lit one.
+    // Frame ids: refresh frames use a private range, so a new frame is one with a different id.
+    let wait_for = |v: &mut Viewport3d, c: usize, newer_than: u64| {
+        let t = std::time::Instant::now();
+        loop {
+            v.request_frame(64, 64);
+            v.poll();
+            let ok = v
+                .frame
+                .as_ref()
+                .is_some_and(|f| f.id != newer_than && chan(v, c) > chan(v, 1 - c) + 1000);
+            if ok && !v.busy() {
+                break;
+            }
+            assert!(
+                t.elapsed().as_secs() < 60,
+                "no frame dominated by channel {c}: {:?} {:?} {:?}",
+                v.swap_errors,
+                v.frame.as_ref().map(|f| (f.id, chan(v, 0), chan(v, 1))),
+                v.render_error
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait_for(&mut v, 0, 0);
+    assert!(v.render_error.is_none(), "{:?}", v.render_error);
+    let green = Arc::new(tex([0.0, 1.0, 0.0, 1.0]));
+    let id0 = v.frame.as_ref().unwrap().id;
+    assert!(v.swap_texture(PATH.into(), green, Variant::Source));
+    wait_for(&mut v, 1, id0);
+    assert!(v.swap_errors.is_empty(), "{:?}", v.swap_errors);
+    let id1 = v.frame.as_ref().unwrap().id;
+    v.set_features(false);
+    // A new frame after the reload that is green again: the swap was applied again.
+    wait_for(&mut v, 1, id1);
+}
+
+// ---- P1-B Task 9: timing log events ----
+
+fn frame_reply(v: &mut Viewport3d, id: u64) {
+    v.handle(v3::V3Reply::Frame {
+        frame: Arc::new(v3::Frame {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 16],
+            id,
+        }),
+        timing: Default::default(),
+    });
+}
+
+fn named<'a>(ev: &'a [serde_json::Value], n: &str) -> Vec<&'a serde_json::Value> {
+    ev.iter().filter(|e| e["event"] == n).collect()
+}
+
+#[test]
+fn ui_gap_is_logged_only_when_work_was_in_flight() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed")
+    };
+    assert!(v.busy());
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let ((), ev) = perf_log::capture(|| {
+        v.poll_at(at(0));
+        v.poll_at(at(150)); // busy before: a freeze
+        loaded(
+            &mut v,
+            id,
+            render3d::LoadReport {
+                shapes: 1,
+                ..Default::default()
+            },
+        );
+        assert!(!v.busy());
+        v.poll_at(at(200)); // short gap
+        v.poll_at(at(10_000)); // the previous frame found nothing in flight: idle
+    });
+    let gaps = named(&ev, "ui_gap");
+    assert_eq!(gaps.len(), 1, "{ev:?}");
+    assert_eq!(gaps[0]["gap_ms"], 150.0);
+    assert_eq!(gaps[0]["panel"], "meshes");
+}
+
+#[test]
+fn the_frame_that_drains_the_last_reply_does_not_arm_the_gap_watch() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed")
+    };
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let ((), ev) = perf_log::capture(|| {
+        v.poll_at(at(0));
+        v.reply_sender_for_test()
+            .send(WorkerMsg::Viewport3d(v3::V3Reply::Loaded {
+                id,
+                report: render3d::LoadReport {
+                    shapes: 1,
+                    ..Default::default()
+                },
+                bounds: Some(([0.0; 3], 1.0)),
+            }))
+            .unwrap();
+        v.poll_at(at(16)); // takes the reply: nothing left in flight, egui stops asking for frames
+        assert!(!v.busy());
+        v.poll_at(at(2_000)); // the next input, two seconds later: idle, not a freeze
+    });
+    assert!(named(&ev, "ui_gap").is_empty(), "{ev:?}");
+
+    // Drawing after the drain starts a render; the app re-arms with that, so a blocked next frame is a freeze.
+    let ((), ev) = perf_log::capture(|| {
+        v.request_frame(64, 64);
+        assert!(v.busy());
+        v.arm_gap(v.busy());
+        v.poll_at(at(2_500));
+    });
+    let gaps = named(&ev, "ui_gap");
+    assert_eq!(gaps.len(), 1, "{ev:?}");
+    assert_eq!(gaps[0]["gap_ms"], 500.0);
+}
+
+#[test]
+fn the_load_edit_swap_and_flip_lines_are_written_when_the_frame_that_shows_them_arrives() {
+    use render3d::{EditKind, ShapeId, Variant};
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    let ((), ev) = perf_log::capture(|| {
+        v.request_frame(64, 64);
+        let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+            panic!("LoadParsed")
+        };
+        loaded(
+            &mut v,
+            id,
+            render3d::LoadReport {
+                shapes: 1,
+                ..Default::default()
+            },
+        );
+        v.request_frame(64, 64);
+        let Ok(v3::V3Cmd::Render { id: r1, .. }) = cmds.try_recv() else {
+            panic!("Render")
+        };
+        frame_reply(&mut v, r1);
+    });
+    let ff = named(&ev, "first_frame");
+    assert_eq!(ff.len(), 1, "{ev:?}");
+    assert!(ff[0]["ms_since_load"].as_f64().unwrap() >= 0.0);
+    // Commands sent after that frame was requested.
+    let r1 = v.render_sent_for_test();
+    let cid = v.loaded_for_test().unwrap();
+    let ((), early) = perf_log::capture(|| {
+        assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+        assert!(v.swap_texture(
+            "textures/a.dds".into(),
+            Arc::new(vec![1, 2, 3]),
+            Variant::Encoded
+        ));
+        assert!(v.set_texture_variant("textures/a.dds".into(), Variant::Source));
+        assert!(v.set_texture_variant("textures/b.dds".into(), Variant::Source));
+        // The edit's kind arrives with the thread's MaterialSet reply.
+        v.handle(v3::V3Reply::MaterialSet {
+            content: cid,
+            id: ShapeId(0),
+            result: Ok(EditKind::Permutation),
+            ms: 1.0,
+        });
+        // A frame requested before the commands cannot show them.
+        frame_reply(&mut v, r1);
+    });
+    assert!(
+        named(&early, "edit").is_empty() && named(&early, "texture_swap").is_empty(),
+        "{early:?}"
+    );
+    let ((), late) = perf_log::capture(|| {
+        v.request_frame(64, 64);
+        // The edit and texture commands come first; the Render that can show them is the last one.
+        let r2 = std::iter::from_fn(|| cmds.try_recv().ok())
+            .find_map(|c| match c {
+                v3::V3Cmd::Render { id, .. } => Some(id),
+                _ => None,
+            })
+            .expect("a Render for the commands");
+        // Refresh frames (rendered after a compile result) never answer a command.
+        v.handle(v3::V3Reply::Refresh {
+            frame: Arc::new(v3::Frame {
+                width: 2,
+                height: 2,
+                rgba: vec![0; 16],
+                id: 1 << 62,
+            }),
+            timing: Default::default(),
+        });
+        frame_reply(&mut v, r2);
+    });
+    let edit = named(&late, "edit");
+    let swap = named(&late, "texture_swap");
+    let flip = named(&late, "ab_flip");
+    assert_eq!((edit.len(), swap.len(), flip.len()), (1, 1, 1), "{late:?}");
+    assert_eq!(
+        (edit[0]["shape"].as_u64(), edit[0]["kind"].as_str()),
+        (Some(0), Some("Permutation"))
+    );
+    assert_eq!(swap[0]["path"], "textures/a.dds");
+    assert_eq!(
+        (swap[0]["variant"].as_str(), swap[0]["bytes"].as_u64()),
+        (Some("Encoded"), Some(3))
+    );
+    assert_eq!(
+        (flip[0]["paths"].as_u64(), flip[0]["variant"].as_str()),
+        (Some(2), Some("Source"))
+    );
+    for e in [edit[0], swap[0], flip[0]] {
+        assert!(e["ms_to_frame"].as_f64().unwrap() >= 0.0, "{e}");
+    }
+}
+/// The render thread's lines (`gpu`, `compile`, `load`, `frame_stats` aside) reach the log file.
+#[test]
+fn a_real_render_thread_writes_gpu_compile_load_and_first_frame_lines() {
+    use nif::material::MaterialState;
+    let log_dir = tempfile::tempdir().unwrap();
+    let log = perf_log::start_in(log_dir.path()).expect("a log");
+    let path = log.path().to_path_buf();
+    let standin = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ));
+    let fp = render3d::locate::fingerprint(&standin, None).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::new(Some(fp.clone()));
+    v.cache_dir = Some(cache.path().to_path_buf());
+    v.on_located(Ok(Some(fp)));
+    let mut material = MaterialState::builtin_default();
+    material.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    }); // the stand-in refuses the other permutations
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 7,
+            shape: render3d::builtin::Builtin::Sphere,
+            material,
+            textures: Arc::new(std::collections::HashMap::new()),
+        }),
+        false,
+    );
+    let t = Instant::now();
+    loop {
+        v.request_frame(64, 64);
+        v.poll();
+        if !v.busy() {
+            break;
+        }
+        assert!(t.elapsed().as_secs() < 60, "the viewport did not settle");
+        std::thread::yield_now();
+    }
+    assert!(v.frame.is_some());
+    drop(log);
+    // A pool worker may still hold a temporary handle for an instant: wait for `run_end`.
+    let t = Instant::now();
+    let text = loop {
+        let text = std::fs::read_to_string(&path).unwrap();
+        if text.contains("\"run_end\"") || t.elapsed().as_secs() > 10 {
+            break text;
+        }
+        std::thread::yield_now();
+    };
+    let ev: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    for want in ["run_start", "gpu", "compile", "load", "first_frame"] {
+        assert!(
+            ev.iter().any(|e| e["event"] == want),
+            "no {want} line in {text}"
+        );
+    }
+    // Other tests of this binary may have render threads writing to the same live log.
+    assert!(
+        ev.iter()
+            .any(|e| e["event"] == "load" && e["content"] == "builtin:Sphere" && e["shapes"] == 1),
+        "{text}"
+    );
 }
