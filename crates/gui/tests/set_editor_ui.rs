@@ -759,3 +759,36 @@ fn a_warning_level_warning_still_shows_the_pill_and_tile_badge() {
     h.get_by_label("⚠ 1");
     h.get_by_label("⚠");
 }
+
+/// A set's own warnings (`SetView::set_warnings`, the plan's SHADER-* lines) count in its pill's ⚠ badge beside
+/// its members' warnings; an Info set line (SHADER-AUTO) does not.
+#[test]
+fn a_sets_own_warnings_count_in_the_pill_badge() {
+    use engine::codes::{Code, Warning};
+    let (_d, mut m) = with_only_warnings(&[Warning::new(Code::LossReencode, "re-encoded")]);
+    let key = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .key;
+    m.sets.iter_mut().find(|s| s.key == key).unwrap().warnings = vec![
+        Warning::new(Code::ShaderMissingMap, "the pbr shader needs _rmaos"),
+        Warning::new(Code::ShaderAuto, "shader pbr picked automatically (pbr)"),
+    ];
+    let v = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.key == key)
+        .unwrap();
+    assert_eq!(
+        v.set_warnings.len(),
+        2,
+        "the view carries the set's warnings"
+    );
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    h.get_by_label("⚠ 2").hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("landscape/rock01: SHADER-MISSING-MAP the pbr shader needs _rmaos");
+}

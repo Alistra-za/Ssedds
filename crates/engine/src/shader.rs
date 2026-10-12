@@ -1320,6 +1320,42 @@ mod tests {
         assert_eq!(w[0].data["map"], "diffuse");
     }
 
+    /// A role with both lists set matches only when the sub-type AND the suffix match: a wrong or missing value on
+    /// either side fails it.
+    #[test]
+    fn a_role_with_subtypes_and_suffixes_needs_both() {
+        let r = &Shader::Default.spec().optional[0];
+        assert!(!r.subtypes.is_empty() && !r.suffixes.is_empty(), "{r:?}");
+        let bt = Some(Subtype::BacklightTint);
+        assert!(r.matches(Some("b"), bt));
+        assert!(r.matches(Some("bl"), bt));
+        assert!(!r.matches(Some("n"), bt), "mismatched suffix");
+        assert!(!r.matches(None, bt), "missing suffix");
+        assert!(
+            !r.matches(Some("b"), Some(Subtype::Diffuse)),
+            "mismatched sub-type"
+        );
+        assert!(!r.matches(Some("b"), None), "missing sub-type");
+    }
+
+    /// A member without a sub-type (a skipped DDS) still fills a suffix-only role by its recognised suffix.
+    #[test]
+    fn a_member_without_a_subtype_fills_its_role_by_suffix() {
+        let p = ShaderPick {
+            shader: Shader::Envmap,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let ms = [
+            m("a.dds", None, Some(Subtype::Diffuse)),
+            m("a_n.dds", Some("n"), Some(Subtype::Normal)),
+            m("a_e.dds", Some("e"), None),
+        ];
+        let filled = assign(p.shader.spec(), &ms);
+        assert_eq!(filled[2].map(|r| r.label), Some("_e"));
+        assert!(check_maps(&p, &ms).is_empty());
+    }
+
     #[test]
     fn notes_for_auto_and_fallback() {
         use crate::codes::Code::*;
