@@ -2190,9 +2190,10 @@ fn hdr_allows_tent_only() {
             let (s, ff) = (format!("subtype={st}"), format!("format={fmt}"));
             let j = m6_job(&[&s, &ff, "color.tag=n/a", "mips.filter=tent"]);
             assert!(
-                cfg_invalid(&j).iter().any(
-                    |m| m.starts_with("mips.filter = tent: ") && m.contains("sRGB colour only")
-                ),
+                cfg_invalid(&j)
+                    .iter()
+                    .any(|m| m.starts_with("mips.filter = tent: ")
+                        && m.contains("tent only on colour or HDR maps")),
                 "{st} {fmt}: {:?}",
                 j.warnings
             );

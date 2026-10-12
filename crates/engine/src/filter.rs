@@ -5,6 +5,8 @@ use rayon::prelude::*;
 
 const NOT_SRGB_COLOUR: &str =
     "tent, Mitchell and Kaiser are for sRGB colour only; this texture uses box (spec §5.5)";
+const HDR_NOT_COLOUR: &str =
+    "HDR mips use box or tent, and tent only on colour or HDR maps without alpha weighting (spec §5.5)";
 const ALPHA_WEIGHTED: &str =
     "alpha-tested and blended colour uses the alpha-weighted box (spec §5.5)";
 
@@ -23,7 +25,7 @@ pub fn filter_allowed(p: &Profile) -> Result<(), &'static str> {
             return Err("HDR mips use box or tent (spec §5.5)");
         }
         if !matches!(p.category, Category::Color | Category::Hdr) {
-            return Err(NOT_SRGB_COLOUR);
+            return Err(HDR_NOT_COLOUR);
         }
     } else if p.category != Category::Color || domain != Domain::LinearLight {
         return Err(NOT_SRGB_COLOUR);
@@ -165,9 +167,11 @@ pub fn resample_rgb(src: &Rgba32F, (w, h): (u32, u32), f: MipFilter, edge: MipEd
             for &(k, wt) in taps {
                 for (a, v) in acc.iter_mut().zip(line[k as usize]) {
                     *a += wt * f64::from(v);
+                    // Saturate: a huge finite source must not become Inf (then NaN in the vertical pass).
                 }
             }
-            *o = acc.map(|v| v as f32);
+            *o = acc.map(|v| v.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32);
+            // saturate: a huge finite source must not become Inf, then NaN
         }
     });
     let mut out = Rgba32F::new(w, h, [0.0; 4]);
@@ -261,6 +265,28 @@ mod tests {
             "{:?}",
             r(&c)
         );
+    }
+
+    #[test]
+    fn a_huge_finite_value_stays_finite() {
+        // 16 -> 8: output 4 sits at centre 9; its positive lobe (px 7..=10) at +MAX and the rest at -MAX make the
+        // positive weights sum above 1, so an unsaturated f32 cast overflows.
+        let mut img = Rgba32F::new(16, 1, [0.0; 4]);
+        for (x, p) in img.px.iter_mut().enumerate() {
+            let v = if (7..=10).contains(&x) {
+                f32::MAX
+            } else {
+                -f32::MAX
+            };
+            *p = [v, v, v, 1.0];
+        }
+        for f in [MipFilter::Mitchell, MipFilter::Kaiser] {
+            let o = resample_rgb(&img, (8, 1), f, MipEdge::Clamp);
+            assert!(
+                o.px.iter().all(|p| p[..3].iter().all(|v| v.is_finite())),
+                "{f:?}"
+            );
+        }
     }
 
     #[test]
