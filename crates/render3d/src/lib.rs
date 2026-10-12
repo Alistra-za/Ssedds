@@ -592,6 +592,7 @@ impl Renderer {
             blend: m.blend(),
             skinned: m.skinned,
             bound,
+            built: m.clone(),
             stale: true,
         })
     }
@@ -769,6 +770,7 @@ impl Renderer {
         n.features = std::mem::take(&mut self.features);
         n.encode_srgb = self.encode_srgb;
         n.async_compile = self.async_compile;
+        n.load_variant = self.load_variant;
         n.reference_writer = self.reference_writer;
         n.compiled = std::mem::take(&mut self.compiled);
         *self = n;
@@ -1019,6 +1021,7 @@ impl Renderer {
                 .and_then(|s| s.draw.as_mut())
                 .ok_or("no draw")?;
             d.srvs = srvs;
+            d.built = m.clone();
             d.bound = bound;
         }
         let ll = self.linear_lighting();
@@ -1099,7 +1102,7 @@ impl Renderer {
             let Some(d) = s.draw.as_ref().filter(|_| s.status != ShapeStatus::Hidden) else {
                 continue;
             };
-            let m = &s.material;
+            let m = &d.built;
             let msn = m.slsf1 & (1 << 12) != 0;
             for (slot, p) in m.slots.iter().enumerate() {
                 if p.norm != path {
@@ -1130,7 +1133,8 @@ impl Renderer {
         for (id, reg, kind) in self.texture_targets(path) {
             let (shader_type, pbr, name) = {
                 let s = &self.shapes[&id];
-                (s.material.shader_type, s.material.is_pbr(), s.name.clone())
+                let b = s.draw.as_ref().map_or(&s.material, |d| &d.built);
+                (b.shader_type, b.is_pbr(), s.name.clone())
             };
             let real = match entry.current() {
                 Some(t) if t.kind != kind => {

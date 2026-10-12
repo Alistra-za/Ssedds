@@ -213,7 +213,7 @@ fn a_pending_shape_showing_its_previous_draw_receives_the_swap() {
     m.slsf2 |= (1 << 23) | (1 << 26);
     m.params.emissive_color = [0.0; 3];
     assert_eq!(r.set_material(CYL1, m, &resolve), Ok(EditKind::Permutation));
-    let _withheld = r.take_jobs();
+    let withheld = r.take_jobs();
     let status = r
         .shapes()
         .into_iter()
@@ -236,4 +236,69 @@ fn a_pending_shape_showing_its_previous_draw_receives_the_swap() {
         channel(&after, 1) > channel(&before, 1) + 1000,
         "the pending shape's previous draw got the new texture"
     );
+    // The withheld job lands: the new draw reads the entry, so it shows the swapped texture too.
+    for j in withheld {
+        r.apply_compiled(run_job(j));
+    }
+    let landed = frame(&mut r);
+    assert!(
+        channel(&landed, 0) < channel(&before, 0),
+        "no longer the red texture"
+    );
+}
+
+/// A pending edit that changes slot 0's path: the old draw still reads the OLD path until the job lands.
+#[test]
+fn a_pending_shape_follows_the_material_its_draw_was_built_with() {
+    const NEW: &str = "textures/standin/new.dds";
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.set_async_compile(true);
+    r.load_parsed(
+        &parse(&fixture("TestNifFile_Furniture_Col_SE.nif")),
+        &|_| None,
+    );
+    for j in r.take_jobs() {
+        r.apply_compiled(run_job(j));
+    }
+    let red = dds_rgba8(1, 1, &[[255, 0, 0, 255]]);
+    let blue = dds_rgba8(1, 1, &[[0, 0, 255, 255]]);
+    let resolve = |p: &str| match p {
+        PATH => Some(red.clone()),
+        NEW => Some(blue.clone()),
+        _ => None,
+    };
+    let mut m = material(&r);
+    m.set_slot_raw(0, r"Textures\Standin\Swap.dds");
+    r.set_material(CYL1, m.clone(), &resolve).unwrap();
+    m.set_slot_raw(0, r"Textures\Standin\New.dds");
+    m.slsf2 &= !((1 << 12) | (1 << 24) | (1 << 25) | (1 << 26) | (1 << 27));
+    m.slsf2 |= (1 << 23) | (1 << 26);
+    m.params.emissive_color = [0.0; 3];
+    assert_eq!(r.set_material(CYL1, m, &resolve), Ok(EditKind::Permutation));
+    let withheld = r.take_jobs();
+    let before = frame(&mut r);
+    let green = dds_rgba8(1, 1, &[[0, 255, 0, 255]]);
+    // The new path is not what the old draw shows: untouched.
+    assert!(r
+        .replace_texture(NEW, &green, Variant::Source)
+        .unwrap()
+        .is_empty());
+    assert_eq!(frame(&mut r), before);
+    // The old path is.
+    assert_eq!(
+        r.replace_texture(PATH, &green, Variant::Source).unwrap(),
+        vec![(CYL1, 0)]
+    );
+    assert!(channel(&frame(&mut r), 1) > channel(&before, 1) + 1000);
+    for j in withheld {
+        r.apply_compiled(run_job(j));
+    }
+    // The new material with the current texture of the new path (green, not the resolver's blue).
+    let landed = frame(&mut r);
+    assert!(
+        channel(&landed, 0) < channel(&before, 0),
+        "not red any more"
+    );
+    assert!(channel(&landed, 1) > channel(&before, 1) + 1000);
 }
