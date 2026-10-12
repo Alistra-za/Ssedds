@@ -676,6 +676,10 @@ fn hovering_a_pills_warning_badge_lists_the_warnings() {
     use engine::codes::{Code, Warning};
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
+    // The fixture's other sets carry SHADER-MISSING-MAP; only rock01's member warnings are under test.
+    for s in m.sets.iter_mut() {
+        s.warnings.clear();
+    }
     let key = sdc_gui::model::sets::set_views(&m)
         .into_iter()
         .find(|v| v.id == "landscape/rock01")
@@ -714,6 +718,10 @@ fn with_only_warnings(ws: &[engine::codes::Warning]) -> (tempfile::TempDir, AppM
     let mut m = pbr_opened(d.path());
     for i in m.items.iter_mut() {
         i.warnings = vec![];
+    }
+    // Set warnings (SHADER-*) count on the pill too.
+    for s in m.sets.iter_mut() {
+        s.warnings.clear();
     }
     let key = sdc_gui::model::sets::set_views(&m)
         .into_iter()

@@ -1216,3 +1216,29 @@ fn set_resize_pot_down_converts_an_npot_file() {
     let f = read_dds(&std::fs::read(fx.dds("textures/a/odd.dds")).unwrap()).unwrap();
     assert_eq!((f.width, f.height), (32, 32));
 }
+
+#[test]
+fn the_manifest_records_the_shader() {
+    let fx = Fx::new();
+    fx.rgb("wall_d.png");
+    fx.normal("wall_n.png");
+    let o = fx.convert(&[
+        "--target",
+        "vanilla",
+        "--accept-suggestions",
+        "high",
+        "--set",
+        "set:wall.shader=hair",
+    ]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let manifest = std::fs::read_to_string(fx.dds("_sdc/manifest.jsonl")).unwrap();
+    let rec: Value = manifest
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|v| v["output"].as_str().unwrap().ends_with("wall_d.dds"))
+        .expect("a wall_d.dds record");
+    assert_eq!(
+        rec["shader"],
+        serde_json::json!({ "shader": "hair", "provenance": "set" })
+    );
+}

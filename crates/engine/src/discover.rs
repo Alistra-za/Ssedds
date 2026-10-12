@@ -154,7 +154,7 @@ pub fn canonicalise_outputs(files: &mut [InputFile], aliases: &BTreeMap<String, 
             (None, Some(v)) => match v.role {
                 VocabRole::PackingInput(_) => None,
                 VocabRole::Colour => Some(format!("{}.dds", split.base)),
-                VocabRole::Normal(_) | VocabRole::Emissive => suffixed(),
+                VocabRole::Normal(_) | VocabRole::Emissive | VocabRole::CoatColour => suffixed(),
             },
             (None, None) => None,
         };

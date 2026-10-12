@@ -12,7 +12,15 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value
 
 pub const FILE_NAME: &str = "sdc-project.toml";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 6] = ["id", "created", "renamed_from", "add", "remove", "borrow"];
+const RESERVED: [&str; 7] = [
+    "id",
+    "created",
+    "renamed_from",
+    "add",
+    "remove",
+    "borrow",
+    "shader",
+];
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SetEntry {
@@ -23,6 +31,8 @@ pub struct SetEntry {
     pub remove: Vec<String>,
     /// Slot number (1–8) → the id of the set whose finished output this set uses.
     pub borrow: BTreeMap<u8, String>,
+    /// M6: the explicit shader choice (`shader = "<id>"`); an unknown id reads as `None` and stays in the file.
+    pub shader: Option<engine::shader::Shader>,
     pub settings: Settings,
 }
 
@@ -105,6 +115,10 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
         add: strings(t.get("add")),
         remove: strings(t.get("remove")),
         borrow,
+        shader: t
+            .get("shader")
+            .and_then(Item::as_str)
+            .and_then(|s| serde_json::from_value(Json::String(s.to_string())).ok()),
         settings,
     })
 }
@@ -461,6 +475,39 @@ impl SetsDoc {
             .is_some_and(TableLike::is_empty)
         {
             t.remove("borrow");
+        }
+        self.dirty = true;
+    }
+
+    /// Set (or with `None` remove) set `id`'s explicit shader (M6 spec §7).
+    pub fn set_shader(&mut self, id: &str, shader: Option<engine::shader::Shader>) {
+        if self.read_only() {
+            return;
+        }
+        // Clearing a set with no table changes nothing (no table, no dirty, no undo step).
+        let lower = fold_id(id);
+        let has_table = self
+            .doc
+            .get("sets")
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(|ts| {
+                ts.iter().any(|t| {
+                    t.get("id")
+                        .and_then(Item::as_str)
+                        .is_some_and(|s| fold_id(s) == lower)
+                })
+            });
+        if shader.is_none() && !has_table {
+            return;
+        }
+        let t = self.table_mut(id);
+        match shader {
+            Some(s) => {
+                t.insert("shader", toml_edit::value(s.id()));
+            }
+            None => {
+                t.remove("shader");
+            }
         }
         self.dirty = true;
     }

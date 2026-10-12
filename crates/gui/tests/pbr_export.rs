@@ -962,3 +962,20 @@ fn a_borrowed_skin_sk_is_written_to_slot3() {
     let p = e.slots.get(&3).expect("slot3 is written");
     assert!(p.ends_with("_sk.dds"), "{p}");
 }
+
+#[test]
+fn an_explicit_shader_does_not_change_which_sets_get_json() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    let before: Vec<String> = json_entries(&m).into_iter().map(|(v, _)| v.id).collect();
+    m.set_shader("landscape/rock01", Some(Shader::Glow));
+    m.set_shader("landscape/leaf", Some(Shader::Pbr));
+    idle(&mut m);
+    let after: Vec<String> = json_entries(&m).into_iter().map(|(v, _)| v.id).collect();
+    assert_eq!(before, after);
+    assert!(
+        after.contains(&"landscape/rock01".to_string())
+            && !after.contains(&"landscape/leaf".to_string())
+    );
+}

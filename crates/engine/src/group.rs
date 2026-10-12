@@ -3,11 +3,11 @@ use crate::config::{GreenConvention, RawMap};
 use crate::discover::{InputFile, InputKind};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Spec §6.1 suffix list, longest first so `_msn` wins over `_n` and `_envmask` over `_m`. `_wet` is not on it:
+/// Spec §6.1 suffix list, longest first so `_msn` wins over `_n` and `_envmask` over `_m`. `_i` (multilayer inner layer) added in M6 (DECISIONS Note S-shader-6). `_wet` is not on it:
 /// it is a suffix only in a cs Advanced skin set ([`join_skin_wet`], final review I3).
-pub const SUFFIXES: [&str; 19] = [
+pub const SUFFIXES: [&str; 20] = [
     "envmask", "rmaos", "rfaos", "flow", "msn", "cnr", "crn", "em", "bl", "sk", "n", "p", "m", "g",
-    "s", "f", "b", "d", "e",
+    "s", "f", "b", "d", "e", "i",
 ];
 
 /// Splits one recognised suffix off a stem (case-insensitive). The suffix is returned lower-case;
@@ -38,6 +38,8 @@ pub enum VocabRole {
     Emissive,
     /// A raw single-channel map for channel packing (spec §6.4); never written on its own.
     PackingInput(RawMap),
+    /// `_coat`: the PBR coat colour, the `_s` member (`pbr_subsurface`; DECISIONS Note S-shader-9).
+    CoatColour,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +56,7 @@ impl Vocab {
             VocabRole::Colour => None,
             VocabRole::Normal(_) => Some("n".into()),
             VocabRole::Emissive => Some("g".into()),
+            VocabRole::CoatColour => Some("s".into()),
             VocabRole::PackingInput(r) => Some(r.id()),
         }
     }
@@ -65,7 +68,7 @@ const fn term(term: &'static str, role: VocabRole) -> Vocab {
 
 /// Spec §4.4 exporter vocabulary, longest term first so `_base_color` wins over `_color`. None of these is a
 /// §6.1 suffix, and none ends in `_<§6.1 suffix>`, so a stem has at most one reading.
-pub static VOCABULARY: [Vocab; 31] = {
+pub static VOCABULARY: [Vocab; 32] = {
     use GreenConvention::*;
     use RawMap::*;
     use VocabRole::*;
@@ -98,6 +101,7 @@ pub static VOCABULARY: [Vocab; 31] = {
         term("spec", PackingInput(Specular)),
         term("disp", PackingInput(Height)),
         term("fuzz", PackingInput(Fuzz)),
+        term("coat", CoatColour),
         term("nrm", Normal(None)),
         term("col", Colour),
         term("ao", PackingInput(Ao)),

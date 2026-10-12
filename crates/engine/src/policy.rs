@@ -43,7 +43,12 @@ pub struct ResolveCtx<'a> {
     pub allow: &'a BTreeSet<Code>,
     /// The `[files]` layer and per-file acknowledgements (DECISIONS N2).
     pub files: &'a FileScopes,
+    /// M6 (DECISIONS Note S): set key → the set's shader pick. Empty during pass 1 (`NO_SHADERS`).
+    pub shaders: &'a BTreeMap<String, crate::shader::ShaderPick>,
 }
+
+/// For `ResolveCtx` literals made before the shaders are picked (pass 1, tests, `inspect`).
+pub static NO_SHADERS: BTreeMap<String, crate::shader::ShaderPick> = BTreeMap::new();
 
 pub struct FileFacts<'a> {
     pub input: &'a InputFile,
@@ -216,6 +221,7 @@ fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &
             .files
             .rel_of(f.input)
             .is_some_and(|rel| path_key_matches(k, &rel)),
+        Scope::Set(_) => false,
     }
 }
 
@@ -235,6 +241,7 @@ fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
         Scope::Subtype(_) => 1,
         Scope::File(_) => 2,
         Scope::Path(_) => 3,
+        Scope::Set(_) => 4,
     };
     let mut cli: Vec<&SetOverride> = ctx.overrides.iter().collect();
     cli.sort_by_key(|o| rank(o));
@@ -255,7 +262,7 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
                 .files
                 .rel_of(input)
                 .is_some_and(|rel| path_key_matches(k, &rel)),
-            Scope::Subtype(_) => false,
+            Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
@@ -315,6 +322,31 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
                     suggestions,
                 };
             }
+        }
+    }
+    // S-shader-4: the set's shader re-types a member (eye `_n` → msn, landscape colour → landscape_diffuse).
+    if let Some(p) = ctx.shaders.get(&f.set.key) {
+        let id = p.shader.id();
+        if let Some((st, why)) = suggestions
+            .first()
+            .and_then(|s| crate::shader::member_subtype(p.shader, s.subtype))
+        {
+            if p.provenance == crate::shader::ShaderOrigin::Set {
+                return SubtypeDecision {
+                    subtype: st,
+                    provenance: Provenance::Shader(id.into()),
+                    decided: true,
+                    suggestions,
+                };
+            }
+            suggestions.insert(
+                0,
+                Suggestion {
+                    subtype: st,
+                    confidence: Confidence::High,
+                    reason: format!("{id} shader ({}): {why}", p.provenance),
+                },
+            );
         }
     }
     match suggestions.first() {
@@ -516,6 +548,9 @@ fn layered_profile_with(
     if st == Subtype::SkinWet {
         skin_wet_form(ctx, f, &mut doc, &mut prov, &mut sources);
     }
+    if let Some(p) = ctx.shaders.get(&f.set.key) {
+        shader_layer(ctx, p.shader, st, &mut doc, &mut prov, &mut sources);
+    }
     // Spec §4.4: `_normalgl`/`_normaldx` state the green convention, a fact at the analysis position (--set wins).
     if let Some(Vocab {
         term,
@@ -543,6 +578,7 @@ fn layered_profile_with(
                 Scope::All => GENERIC,
                 Scope::Subtype(_) => SUBTYPE_SET,
                 Scope::File(_) | Scope::Path(_) => FILE,
+                Scope::Set(_) => unreachable!("set scopes never apply to a file"),
             };
             apply(
                 &mut doc,
@@ -611,6 +647,29 @@ fn filter_ignored_notice(p: &Profile, f: &FileFacts, (dropped, why): (MipFilter,
     }
     Warning::new(Code::CfgFilterIgnored, msg)
         .with_data(json!({ "filter": dropped, "used": MipFilter::Box, "reason": why }))
+}
+
+/// M6 spec §5: the shader's member defaults, written only where the field still holds a built-in value.
+fn shader_layer(
+    ctx: &ResolveCtx,
+    shader: crate::shader::Shader,
+    st: Subtype,
+    doc: &mut Value,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
+) {
+    for (field, value) in crate::shader::member_defaults(shader, st) {
+        if !field_explicit(ctx, prov, field) {
+            apply(
+                doc,
+                prov,
+                sources,
+                &to_patch(field, &value),
+                Provenance::Shader(shader.id().into()),
+                GENERIC,
+            );
+        }
+    }
 }
 
 /// `skin_wet` has two forms (DECISIONS Note R-skin-1): a tangent-space normal with a binary mask in alpha (BC7, the
@@ -946,6 +1005,9 @@ pub struct ResolvedJob {
     /// every other job and for a member that does not bake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bake: Option<crate::bake::BakeJob>,
+    /// M6 (DECISIONS Note S): the shader picked for this job's set; `None` for a job not made by `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<crate::shader::ShaderPick>,
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1513,6 +1575,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }
 
@@ -1601,6 +1664,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     source: None,
                     pack: None,
                     bake: None,
+                    shader: None,
                 };
             }
         };
@@ -1712,5 +1776,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }

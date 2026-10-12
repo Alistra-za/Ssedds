@@ -437,6 +437,7 @@ pub fn process_file(
         output: output_key(&req.output_root, &job.output),
         validation: report.summary.clone(),
         bc1_model: Some(bc1_model_id(req.bc1_model).into()),
+        shader: job.shader.clone(),
     };
     let sidecar = req
         .sidecar

@@ -1,8 +1,10 @@
-//! `--set` overrides (spec §8): `field=value`, `subtype:<id>.field=value`, `file:<glob>.field=value`.
+//! `--set` overrides (spec §8): `field=value`, `subtype:<id>.field=value`, `file:<glob>.field=value`, and
+//! `set:<id>.shader=<shader>` (M6, DECISIONS Note S-shader-1: a set's shader, the only field a set scope takes).
 //! `Scope::Path` is never parsed from `--set`; it comes only from `sdc.toml`'s `[files]` table.
 use crate::codes::Code;
 use crate::config::Subtype;
 use crate::discover::InputFile;
+use crate::shader::Shader;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -14,6 +16,9 @@ pub enum Scope {
     File(String),
     /// A `[files]` key (DECISIONS N2): '/'-separated, relative to the project root, matched by `path_key_matches`.
     Path(String),
+    /// `set:<id>`: a set id as `sets::set_id` prints it, or a bare base (M6, DECISIONS Note S-shader-1). Sets only
+    /// `shader`; it never reaches a file's profile.
+    Set(String),
 }
 
 /// Whether a `[files]` key names the file at project-relative path `rel` (DECISIONS N2): case-insensitively,
@@ -201,6 +206,28 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
             return Err(format!("--set '{s}': unknown field '{field}'"));
         }
         (Scope::Subtype(st), field)
+    } else if let Some(rest) = key.strip_prefix("set:") {
+        // Set ids may contain dots, so only the `.shader` suffix splits the key (DECISIONS Note S-shader-1).
+        let id = match rest.strip_suffix(".shader") {
+            Some(id) if !id.is_empty() => id,
+            _ if rest.contains('.') && !rest.starts_with('.') => {
+                return Err(format!("--set '{s}': a set scope sets only `shader`"))
+            }
+            _ => return Err(format!("--set '{s}': expected set:<id>.shader=<shader>")),
+        };
+        let raw = raw.trim();
+        if serde_json::from_value::<Shader>(Value::String(raw.to_string())).is_err() {
+            let ids: Vec<&str> = Shader::ALL.iter().map(|s| s.id()).collect();
+            return Err(format!(
+                "--set '{s}': unknown shader '{raw}' (one of: {})",
+                ids.join(", ")
+            ));
+        }
+        return Ok(SetOverride {
+            scope: Scope::Set(id.to_string()),
+            field: "shader".to_string(),
+            value: Value::String(raw.to_string()),
+        });
     } else if let Some(rest) = key.strip_prefix("file:") {
         // The glob may itself contain dots, so take the longest known field the key ends with.
         let field = FIELD_PATHS

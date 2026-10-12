@@ -230,8 +230,20 @@ fn print_event(ev: &EngineEvent) {
             code.map(|c| format!("{} ", c.as_str())).unwrap_or_default()
         ),
         EventKind::FileFailed { error, .. } => println!("{path}\n  cannot be read: {error}"),
-        EventKind::SetResolved { recipes, .. } if !recipes.is_empty() => {
-            println!("set {}", ev.set.as_deref().unwrap_or(""));
+        EventKind::SetResolved {
+            recipes,
+            shader,
+            warnings,
+            ..
+        } => {
+            let shown = shader
+                .as_ref()
+                .map(|p| format!("  shader {} ({})", p.shader.id(), p.provenance))
+                .unwrap_or_default();
+            println!("set {}{shown}", ev.set.as_deref().unwrap_or(""));
+            for w in warnings {
+                println!("  {} {} {}", tag!(&w.severity), w.code.as_str(), w.message);
+            }
             for r in recipes {
                 let status = serde_json::to_value(r.status)
                     .ok()

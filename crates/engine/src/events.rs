@@ -97,6 +97,12 @@ pub enum EventKind {
         /// The set's channel-packing recipes (spec §6.4); absent when it packs nothing.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         recipes: Vec<RecipeReport>,
+        /// M6 (DECISIONS Note S): the set's shader and why it was chosen.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shader: Option<crate::shader::ShaderPick>,
+        /// SHADER-AUTO / SHADER-UNAVAILABLE, then SHADER-EXTRA-MAP / SHADER-MISSING-MAP for the set.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<crate::codes::Warning>,
     },
     FilePlanned {
         job: Box<ResolvedJob>,

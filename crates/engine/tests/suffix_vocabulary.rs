@@ -59,6 +59,7 @@ fn resolve_img(
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let stem = Path::new(name)
         .file_stem()
@@ -176,9 +177,9 @@ fn vocabulary_splits_to_skyrim_roles() {
         split_suffix("iron_basecolor"),
         ("iron_basecolor".into(), None)
     );
-    assert_eq!(SUFFIXES.len(), 19);
+    assert_eq!(SUFFIXES.len(), 20);
     // longest first, so `_base_color` is one term
-    assert_eq!(VOCABULARY.len(), 31);
+    assert_eq!(VOCABULARY.len(), 32);
     assert!(VOCABULARY
         .windows(2)
         .all(|w| w[0].term.len() >= w[1].term.len()));
@@ -553,4 +554,99 @@ fn unstated_green_convention_is_in_green_unstated_and_not_allowable() {
         &RGB8,
     );
     assert!(!j.warnings.iter().any(|w| w.code == Code::InGreenUnstated));
+}
+
+fn plan_cs(dir: &Path) -> engine::api::Plan {
+    plan_for(dir, Target::Cs)
+}
+
+fn plan_for(dir: &Path, target: Target) -> engine::api::Plan {
+    use engine::api::*;
+    use engine::events::*;
+    let mut req = BatchRequest::new(vec![dir.join("in")], dir.join("out"), target);
+    req.recursive = true;
+    req.accept = AcceptSuggestions::High;
+    let sink = std::sync::Arc::new(VecSink::default());
+    Engine::new()
+        .unwrap()
+        .plan(req, &Reporter::new(sink, "t"), &CancelToken::default())
+        .unwrap()
+}
+
+#[test]
+fn coat_is_the_s_coat_colour_member() {
+    let s = split_suffix_with("rock_coat", &Default::default());
+    assert_eq!((s.base.as_str(), s.suffix.as_deref()), ("rock", Some("s")));
+    assert_eq!(vocab_of("rock_coat").unwrap().role, VocabRole::CoatColour);
+    // Plan: rock_coat.png joins set `rock`, resolves pbr_subsurface (High, decided) and is written rock_s.dds,
+    // exactly as rock_s.png would be in the same PBR set.
+    let d = tempfile::tempdir().unwrap();
+    for (name, px) in [
+        ("rock.png", [120u8, 90, 60]),
+        ("rock_n.png", [128, 128, 255]),
+        ("rock_rmaos.png", [128, 0, 255]),
+        ("rock_coat.png", [200, 180, 160]),
+    ] {
+        let p = d.path().join("in/textures/a").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb(px))
+            .save(p)
+            .unwrap();
+    }
+    let p = plan_cs(d.path());
+    let j = p
+        .jobs
+        .iter()
+        .find(|j| j.input.ends_with("rock_coat.png"))
+        .unwrap();
+    assert_eq!(j.profile.subtype.id(), "pbr_subsurface");
+    assert!(
+        j.output.ends_with("textures/a/rock_s.dds"),
+        "{}",
+        j.output.display()
+    );
+    assert!(j.set_key.ends_with("textures/a/rock"));
+    assert!(
+        !matches!(j.status, engine::policy::JobStatus::Unresolved { .. }),
+        "{:?}",
+        j.status
+    );
+}
+
+/// `_coat` is the coat colour whatever the set: High `pbr_subsurface` first (a bare `_s` outside a PBR set is only a
+/// low tint), written `x_s.dds`, and blocked under vanilla like any PBR-only map.
+#[test]
+fn coat_outside_a_pbr_set_is_still_the_high_coat_colour_and_blocked_under_vanilla() {
+    let d = tempfile::tempdir().unwrap();
+    for name in ["x_d.png", "x_coat.png"] {
+        let p = d.path().join("in/textures/a").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb([200u8, 180, 160]))
+            .save(p)
+            .unwrap();
+    }
+    let find = |p: &engine::api::Plan| {
+        p.jobs
+            .iter()
+            .find(|j| j.input.ends_with("x_coat.png"))
+            .unwrap()
+            .clone()
+    };
+    let j = find(&plan_cs(d.path()));
+    let top = &j.suggestions[0];
+    assert_eq!(
+        (top.subtype, top.confidence),
+        (Subtype::PbrSubsurface, Confidence::High)
+    );
+    assert!(
+        j.output.ends_with("textures/a/x_s.dds"),
+        "{}",
+        j.output.display()
+    );
+    let j = find(&plan_for(d.path(), Target::Vanilla));
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::CfgUnavailable),
+        "{:?}",
+        j.warnings
+    );
 }

@@ -959,3 +959,49 @@ fn inspect_reports_an_opted_in_dds_once() {
         1
     ); // rock_n.png
 }
+
+#[test]
+fn inspect_prints_the_set_shader_and_its_warnings() {
+    let d = tempfile::tempdir().unwrap();
+    let a = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&a).unwrap();
+    ImageBuffer::from_fn(16, 16, |_, _| Rgb([120u8, 90, 60]))
+        .save(a.join("wall.png"))
+        .unwrap();
+    ImageBuffer::from_fn(16, 16, |_, _| Rgb([128u8, 128, 255]))
+        .save(a.join("wall_n.png"))
+        .unwrap();
+    let o = sdc()
+        .args([
+            "inspect",
+            "--recursive",
+            "--target",
+            "vanilla",
+            "--set",
+            "set:wall.shader=glow",
+        ])
+        .arg(d.path().join("in"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("shader glow (set)"), "{out}");
+    assert!(out.contains("SHADER-MISSING-MAP"), "{out}");
+}
+
+#[test]
+fn a_bad_set_scope_is_a_usage_error() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in")).unwrap();
+    let o = sdc()
+        .args(["inspect", "--set", "set:wall.shader=nope"])
+        .arg(d.path().join("in"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2);
+    assert!(
+        text(&o.stderr).contains("unknown shader"),
+        "{}",
+        text(&o.stderr)
+    );
+}

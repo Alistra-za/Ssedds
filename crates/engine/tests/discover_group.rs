@@ -51,7 +51,7 @@ fn rfaos_and_envmask_are_recognised() {
         split_suffix("rock_envmask"),
         ("rock".into(), Some("envmask".into()))
     );
-    assert_eq!(SUFFIXES.len(), 19);
+    assert_eq!(SUFFIXES.len(), 20);
 }
 
 #[test]
@@ -215,4 +215,11 @@ fn folders_discover_every_supported_image_extension() {
         .collect();
     assert_eq!(names.len(), 10, "{names:?}");
     assert!(!names.iter().any(|n| n.ends_with(".txt")));
+}
+
+#[test]
+fn an_i_member_joins_its_set() {
+    let (base, suffix) = engine::group::split_suffix("glass_i");
+    assert_eq!((base.as_str(), suffix.as_deref()), ("glass", Some("i")));
+    assert!(!engine::group::is_vocabulary("i"));
 }

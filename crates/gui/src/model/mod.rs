@@ -122,6 +122,8 @@ struct EngineInputs {
     output_paths: std::collections::BTreeMap<engine::sets::OutputKey, PathBuf>,
     shared_roughness: std::collections::BTreeSet<String>,
     borrowed_normal: std::collections::BTreeMap<String, String>,
+    set_shaders: std::collections::BTreeMap<String, engine::shader::Shader>,
+    mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
 }
 
 impl EngineInputs {
@@ -132,6 +134,8 @@ impl EngineInputs {
             output_paths,
             shared_roughness: sets::shared_roughness(m),
             borrowed_normal: sets::borrowed_normal(m),
+            set_shaders: sets::set_shaders(m),
+            mesh_votes: m.mesh_votes.clone(),
         }
     }
 }
@@ -145,6 +149,11 @@ pub struct AppModel {
     pub settings_path: Option<PathBuf>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
+    /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
+    /// developer's scan cannot leak in.
+    pub scan_db: Option<PathBuf>,
+    /// S-shader-10: `shader::mesh_key` → what the scanned meshes report; sent as `BatchRequest::mesh_shaders`.
+    pub mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     pub session: Option<Arc<Session>>,
     pub root: Option<PathBuf>,
     pub project: Option<ProjectDoc>,
@@ -220,6 +229,8 @@ impl AppModel {
             settings,
             settings_path: None,
             user_config: None,
+            scan_db: None,
+            mesh_votes: Default::default(),
             session: None,
             root: None,
             project: None,
@@ -377,7 +388,32 @@ impl AppModel {
         req.output_paths = paths;
         req.shared_roughness = sets::shared_roughness(self);
         req.borrowed_normal = sets::borrowed_normal(self);
+        req.set_shaders = sets::set_shaders(self);
+        req.mesh_shaders = self.mesh_votes.clone();
         Some(req)
+    }
+
+    /// S-shader-10: read the mesh votes for the plan's sets (keys from the colour-member jobs only, by
+    /// `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no votes: the suffix
+    /// rules decide, and the Meshes view reports database errors. True when the votes changed.
+    // shortcut: reads SQLite on the UI thread after each plan; move to a background read or cache by db mtime + key set if it hitches on large load orders
+    pub fn refresh_mesh_votes(&mut self) -> bool {
+        let keys: std::collections::BTreeSet<String> = self
+            .items
+            .iter()
+            .filter_map(|i| i.job.as_ref())
+            .filter(|j| j.pack.is_none())
+            .filter_map(|j| {
+                engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
+            })
+            .collect();
+        let votes = match &self.scan_db {
+            Some(db) if db.is_file() => meshes::mesh_votes(db, &keys).unwrap_or_default(),
+            _ => Default::default(),
+        };
+        let changed = votes != self.mesh_votes;
+        self.mesh_votes = votes;
+        changed
     }
 
     /// Plan again on a worker; a newer plan supersedes (cancels) an older one.
@@ -399,6 +435,8 @@ impl AppModel {
             output_paths: req.output_paths.clone(),
             shared_roughness: req.shared_roughness.clone(),
             borrowed_normal: req.borrowed_normal.clone(),
+            set_shaders: req.set_shaders.clone(),
+            mesh_votes: req.mesh_shaders.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
@@ -986,6 +1024,7 @@ impl AppModel {
         }
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
+        self.refresh_mesh_votes();
         let now = EngineInputs::of(self);
         if self.last_inputs.as_ref() != Some(&now) && self.auto_replans < 2 {
             self.auto_replans += 1;

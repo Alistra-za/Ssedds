@@ -10,7 +10,8 @@ use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
 use crate::events::{EventKind, Reporter, SkipKind, Stage};
-use crate::group::{group_sets_with, join_skin_wet, member_split, TextureSet};
+use crate::group::{group_sets_with, join_skin_wet, member_split, SuffixSplit, TextureSet};
+use crate::image::SourceInfo;
 use crate::load::{load_image_meta, LoadError};
 use crate::manifest::{
     bc1_model_id, output_key, profile_sha256, sha256_file, EncoderVersions, Manifest,
@@ -22,6 +23,7 @@ use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
 use crate::presets::*;
 use crate::session::{pack_cache_key, AnalysisCache, PackEntry};
+use crate::shader::{Shader, ShaderPick};
 use crate::suggest::{is_pbr_set, SuggestContext};
 use encoders_sys::Bc1Model;
 use serde::{Deserialize, Serialize};
@@ -84,6 +86,12 @@ pub struct BatchRequest {
     /// GUI (DECISIONS Note R M4-final-1): borrower set id → the id of the set whose `_n` its Normal slot borrows. The
     /// engine bakes the borrower's own roughness member from that `_n`, under every usual bake rule. Empty for the CLI.
     pub borrowed_normal: BTreeMap<String, String>,
+    /// GUI (M6, DECISIONS Note S-shader-2): set id → explicit shader. Empty for the CLI; `--set set:<id>.shader`
+    /// beats it.
+    pub set_shaders: BTreeMap<String, Shader>,
+    /// GUI (M6, DECISIONS Note S-shader-10): `shader::mesh_key` → the shader each scanned lighting shape that uses
+    /// `<key>.dds` as its diffuse reports. Empty for the CLI and when no scan exists: the suffix rules decide.
+    pub mesh_shaders: BTreeMap<String, Vec<Shader>>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -115,6 +123,8 @@ impl BatchRequest {
             output_paths: BTreeMap::new(),
             shared_roughness: BTreeSet::new(),
             borrowed_normal: BTreeMap::new(),
+            set_shaders: BTreeMap::new(),
+            mesh_shaders: BTreeMap::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -194,6 +204,8 @@ pub struct Plan {
     /// Files whose Load/Analyse never ran because the batch was cancelled while planning. `run` lists them as
     /// cancelled in `batch_done` (exit 1).
     pub cancelled: Vec<PathBuf>,
+    /// M6 (DECISIONS Note S): set key → the set's shader pick.
+    pub shaders: BTreeMap<String, ShaderPick>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -713,7 +725,10 @@ impl Engine {
         // 3. `apply_set_edits`. Set keys are fixed from here on: output overrides never change a key.
         // 4. `apply_output_paths` (Task 3).
         // 5. `duplicate_outputs_with` on the final paths, so two sets writing one file are caught after paths change.
-        // 6. Predicted packing suffixes, the skip/work loop, then packing.
+        // 6. Predicted packing suffixes, the skip/work loop, then pass 1 (Load, Analyse, Resolve with no shaders).
+        // 6a. Explicit shader choices (`explicit_shaders`): `BatchRequest::set_shaders`, then `--set set:<id>.shader`.
+        // 6b. One `ShaderPick` per set (`shader::pick_for_set`) from the pass-1 sub-types; `ctx.shaders` holds them.
+        // 6c. Members of a set whose shader has member defaults are resolved again with the picks; then packing.
         let scope_root =
             project_root(&req).or_else(|| req.inputs.first().filter(|p| p.is_dir()).cloned());
         let (mut sets, _) = group_sets_with(&files, registry.alias_table());
@@ -742,6 +757,7 @@ impl Engine {
             accept: req.accept,
             allow: &req.allow,
             files: &file_scopes,
+            shaders: &NO_SHADERS,
         };
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
@@ -858,10 +874,23 @@ impl Engine {
         // Load and Analyse in parallel under the same memory admission as `run` (spec §5.9, Codex-B I1): the calling
         // thread admits each file's estimated bytes before spawning it, and the bytes are released as soon as its
         // analysis is done (or it unwinds). Only the `Analysis` is kept.
+        // Shared by pass 1 and the 6c re-resolve; each call site builds `FileFacts` from its own split (it borrows it).
+        let split_for = |(set, f): (&TextureSet, &InputFile)| -> SuffixSplit {
+            let stem = f
+                .rel
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            member_split(&stem, set, registry.alias_table())
+        };
         let resolve_one = |&(set, f): &(&TextureSet, &InputFile),
                            admitted: Admitted<'_>,
                            stage: &Cell<Stage>|
-         -> Result<ResolvedJob, LoadError> {
+         -> Result<
+            (ResolvedJob, crate::analyse::Analysis, SourceInfo),
+            LoadError,
+        > {
             let enter = |st: Stage| {
                 stage.set(st);
                 #[cfg(feature = "test-hooks")]
@@ -891,13 +920,7 @@ impl Engine {
                 }
             };
             enter(Stage::Resolve);
-            let stem = f
-                .rel
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let split = member_split(&stem, set, registry.alias_table());
+            let split = split_for((set, f));
             let facts = FileFacts {
                 input: f,
                 suffix: split.suffix.as_deref(),
@@ -909,7 +932,7 @@ impl Engine {
             let mut job = resolve_file(&ctx, &facts);
             job.provenance.insert("target".into(), target_src.clone());
             job.source = source;
-            Ok(job)
+            Ok((job, a, info))
         };
         let pool = thread_pool(req.jobs)?;
         let budget = Budget::new(budget_limit(&req), pool.current_num_threads());
@@ -947,11 +970,13 @@ impl Engine {
             }
         });
 
-        let mut jobs = vec![];
+        // Pass-1 jobs, with the work index, analysis and source info each one needs to be re-resolved (6c).
+        let mut pass1_jobs: Vec<ResolvedJob> = vec![];
+        let mut pass1 = vec![];
         let mut failed = vec![];
         failed.extend(self_overwrite);
         let mut cancelled = vec![];
-        for (item, slot) in work.iter().zip(slots) {
+        for (wi, (item, slot)) in work.iter().zip(slots).enumerate() {
             let Some(r) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
                 cancelled.push(item.1.path.clone());
                 continue;
@@ -959,7 +984,10 @@ impl Engine {
             let path = item.1.path.clone();
             let output = item.1.output.clone();
             match r {
-                Ok(job) => jobs.push(job),
+                Ok((job, a, info)) => {
+                    pass1_jobs.push(job);
+                    pass1.push((wi, a, info));
+                }
                 Err(PlanFailure::Load(e)) => {
                     rep.emit_job(
                         Some(&key(&output)),
@@ -981,6 +1009,64 @@ impl Engine {
                     error,
                 }),
                 Err(PlanFailure::Pack(_)) => unreachable!("pass 1 never assembles"),
+            }
+        }
+        // 6a. Explicit shader choices: the GUI map, then `--set set:<id>.shader` (the command line wins).
+        let explicit = explicit_shaders(&req, &sets, rep);
+        // 6b. One pick per set, from the pass-1 sub-types; later resolves see it through `ctx.shaders`.
+        let picks: BTreeMap<String, ShaderPick> = sets
+            .iter()
+            .map(|s| {
+                let pick = crate::shader::pick_for_set(
+                    &ctx,
+                    s,
+                    &files,
+                    &pass1_jobs,
+                    explicit.get(&s.key).copied(),
+                    &req.mesh_shaders,
+                );
+                (s.key.clone(), pick)
+            })
+            .collect();
+        let ctx = ResolveCtx {
+            shaders: &picks,
+            ..ctx
+        };
+        // 6c. Re-resolve the members of a set whose shader changes member defaults.
+        let mut jobs = vec![];
+        for (old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
+            if !picks
+                .get(&old.set_key)
+                .is_some_and(|p| p.shader.has_member_defaults())
+            {
+                jobs.push(old);
+                continue;
+            }
+            let (set, f) = work[wi];
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let split = split_for((set, f));
+                let facts = FileFacts {
+                    input: f,
+                    suffix: split.suffix.as_deref(),
+                    alias: split.alias.as_deref(),
+                    set,
+                    analysis: &a,
+                    info: &info,
+                };
+                resolve_file(&ctx, &facts)
+            }));
+            match r {
+                Ok(mut job) => {
+                    job.source = old.source;
+                    job.provenance.insert("target".into(), target_src.clone());
+                    jobs.push(job);
+                }
+                Err(p) => failed.push(FailedFile {
+                    path: f.path.clone(),
+                    output: f.output.clone(),
+                    stage: Stage::Resolve,
+                    error: format!("internal error: {}", panic_message(&*p)),
+                }),
             }
         }
         // Spec §6.4 (M2.5): channel packing. Pass 1 decides the recipes; pass 2 assembles, analyses and resolves
@@ -1152,6 +1238,9 @@ impl Engine {
             },
             &mut jobs,
         );
+        for j in &mut jobs {
+            j.shader = picks.get(&j.set_key).cloned();
+        }
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];
@@ -1226,6 +1315,13 @@ impl Engine {
                 advanced_skin: false,
             });
             let members = set.members.iter().map(|&m| slash(&files[m].path)).collect();
+            let pick = picks.get(&set.key).cloned();
+            let mut warnings = vec![];
+            if let Some(p) = &pick {
+                warnings = crate::shader::pick_notes(p, target);
+                let maps = map_members(set, &files, &jobs, &skipped, registry.alias_table());
+                warnings.extend(crate::shader::check_maps(p, &maps));
+            }
             rep.emit(
                 Some(&set.key),
                 None,
@@ -1234,6 +1330,8 @@ impl Engine {
                     pbr,
                     bake: baking.contains(&set.key),
                     recipes: packed.reports.remove(&set.key).unwrap_or_default(),
+                    shader: pick,
+                    warnings,
                 },
             );
         }
@@ -1265,6 +1363,7 @@ impl Engine {
             failed,
             peak_admitted_bytes,
             cancelled,
+            shaders: picks,
         })
     }
 
@@ -1628,6 +1727,109 @@ fn run_one(
     emit(EventKind::FileFailed { stage, error });
 }
 
+/// Planning step 6a (DECISIONS Note S-shader-1/-2): set key → explicit shader, from `req.set_shaders` then the
+/// `set:` overrides in command-line order (later wins). An id names a set by `sets::set_id`; a command-line id
+/// without `/` also names every set whose key ends in `/<id>`. GUI ids are canonical and match exactly (final
+/// review I2). Each id that names no set is one SET-EDIT-STALE.
+fn explicit_shaders(
+    req: &BatchRequest,
+    sets: &[TextureSet],
+    rep: &Reporter,
+) -> BTreeMap<String, Shader> {
+    let gui = req.set_shaders.iter().map(|(k, s)| (k, *s, false));
+    let cli = req.overrides.iter().filter_map(|o| match &o.scope {
+        Scope::Set(id) => Some((
+            id,
+            serde_json::from_value::<Shader>(o.value.clone()).ok()?,
+            true,
+        )),
+        _ => None,
+    });
+    let mut out = BTreeMap::new();
+    let mut stale = BTreeSet::new();
+    for (id, shader, tail_match) in gui.chain(cli) {
+        let tail = format!("/{}", crate::sets::fold_id(id));
+        let mut hit = false;
+        for s in sets {
+            if crate::sets::same_id(&crate::sets::set_id(&req.output_root, &s.key), id)
+                || (tail_match && !id.contains('/') && s.key.ends_with(&tail))
+            {
+                out.insert(s.key.clone(), shader);
+                hit = true;
+            }
+        }
+        if !hit && stale.insert(id.clone()) {
+            rep.emit(
+                None,
+                None,
+                EventKind::Warning(
+                    Warning::new(
+                        Code::SetEditStale,
+                        format!("shader choice skipped: no set '{id}'"),
+                    )
+                    .with_data(serde_json::json!({ "set": id })),
+                ),
+            );
+        }
+    }
+    out
+}
+
+/// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a skipped DDS
+/// input, without a sub-type), then each packed output of the set. Raw maps are left out by role, because
+/// `plan_packing` re-tags an unused one; duplicates and failed files are left out.
+fn map_members(
+    set: &TextureSet,
+    files: &[InputFile],
+    jobs: &[ResolvedJob],
+    skipped: &[SkippedFile],
+    aliases: &BTreeMap<String, String>,
+) -> Vec<crate::shader::MemberMap> {
+    let name = |p: &Path| {
+        p.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let suffix = |f: &InputFile| {
+        let stem = f.rel.file_stem().unwrap_or_default().to_string_lossy();
+        member_split(&stem, set, aliases).suffix
+    };
+    let mut out = vec![];
+    for &i in &set.members {
+        let f = &files[i];
+        if pack::plan::raw_role(f).is_some() {
+            continue;
+        }
+        if let Some(j) = jobs.iter().find(|j| j.pack.is_none() && j.input == f.path) {
+            out.push(crate::shader::MemberMap {
+                name: name(&j.output),
+                suffix: suffix(f),
+                subtype: Some(j.profile.subtype),
+            });
+        } else if let Some(s) = skipped
+            .iter()
+            .find(|s| s.path == f.path && s.code == Some(Code::InDdsSkipped))
+        {
+            out.push(crate::shader::MemberMap {
+                name: name(&s.output),
+                suffix: suffix(f),
+                subtype: None,
+            });
+        }
+    }
+    out.extend(
+        jobs.iter()
+            .filter(|j| j.set_key == set.key && j.pack.is_some())
+            .map(|j| crate::shader::MemberMap {
+                name: name(&j.output),
+                suffix: None,
+                subtype: Some(j.profile.subtype),
+            }),
+    );
+    out
+}
+
 /// The text of a caught panic's payload (`panic!` with a literal or a formatted message), or `panic`.
 fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
     panic
@@ -1759,11 +1961,11 @@ fn check_up_front(
                 EngineError::Config(format!("rule {src}#{i}, sub-type {}: {e}", st.id()))
             })?;
         }
-        for o in req
-            .overrides
-            .iter()
-            .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
-        {
+        for o in req.overrides.iter().filter(|o| {
+            o.field != "subtype"
+                && o.field != crate::overrides::REENCODE_FIELD
+                && !matches!(o.scope, Scope::Set(_))
+        }) {
             let mut d = doc.clone();
             merge_json(&mut d, &to_patch(&o.field, &o.value));
             finish_profile(d, target, st)
@@ -1944,6 +2146,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            shader: None,
         };
         let texels = 48 * 40;
         assert_eq!(job_bytes(&job), input_bytes(48, 40));
@@ -1993,6 +2196,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            shader: None,
         };
         let enc = EncoderVersions::current();
         let entry_for = |job: &ResolvedJob| ManifestEntry {

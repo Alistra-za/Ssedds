@@ -6,10 +6,12 @@ use super::AppModel;
 use crate::pgp::prefix::{check_rel_path, derive_match_diffuse, output_rel, prefix_of};
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
+use engine::codes::Warning;
 use engine::config::{Subtype, Target};
 use engine::group::{split_suffix, split_vocab, VocabRole};
 use engine::overrides::path_key_matches;
 use engine::sets::{fold_id, same_id, set_id, OutputKey, SetEdit};
+use engine::shader::{Shader, ShaderPick};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -120,6 +122,11 @@ pub struct SetView {
     pub prefix_error: Option<String>,
     /// The set's own JSON settings.
     pub settings: Settings,
+    /// M6: the engine's shader pick (from the plan), the saved choice (from `sdc-project.toml`), and the set's
+    /// SHADER-* warnings.
+    pub shader: Option<ShaderPick>,
+    pub shader_choice: Option<Shader>,
+    pub set_warnings: Vec<Warning>,
 }
 
 impl SetView {
@@ -139,6 +146,9 @@ impl SetView {
             prefix: None,
             prefix_error: None,
             settings: Settings::new(),
+            shader: None,
+            shader_choice: None,
+            set_warnings: vec![],
         }
     }
 }
@@ -231,6 +241,8 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
         .iter()
         .map(|s| {
             let mut v = SetView::new(s.key.clone(), set_id(&root, &s.key), s.members.clone());
+            v.shader = s.shader.clone();
+            v.set_warnings = s.warnings.clone();
             for mk in &s.members {
                 if let Some(slot) = m.item(mk).and_then(slot_of) {
                     v.slots
@@ -267,6 +279,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
         };
         v.created = e.created;
         v.settings = e.settings.clone();
+        v.shader_choice = e.shader;
         if v.key.is_empty() && !e.created {
             v.missing.push(NO_FILES_LEFT.into());
         }
@@ -484,6 +497,20 @@ pub fn borrowed_normal(m: &AppModel) -> BTreeMap<String, String> {
             _ => None,
         })
         .collect()
+}
+
+/// Entry id → the saved shader choice (M6, `BatchRequest::set_shaders`).
+pub fn set_shaders(m: &AppModel) -> BTreeMap<String, Shader> {
+    let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
+    entries
+        .into_iter()
+        .filter_map(|e| Some((e.id, e.shader?)))
+        .collect()
+}
+
+/// The Shader dropdown's choices for `target` (after "Auto").
+pub fn shader_options(target: Target) -> Vec<Shader> {
+    Shader::available(target).to_vec()
 }
 
 /// Every owned output's explicit path, sorted by its owner's display position: (owner id, key, path relative to
@@ -1006,6 +1033,15 @@ impl AppModel {
             s.remove_member(&i, &it)
         });
         Ok(())
+    }
+
+    /// Choose set `set`'s shader, or with `None` go back to Auto (M6 spec §7). Plans again.
+    pub fn set_shader(&mut self, set: &str, shader: Option<Shader>) {
+        if !self.sets_editable() {
+            return;
+        }
+        let id = set.to_string();
+        self.edit_docs("Shader", None, true, move |_, d| d.set_shader(&id, shader));
     }
 
     /// A JSON value of set `set`. Material values do not plan; match fields do (P7).

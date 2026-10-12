@@ -6,6 +6,7 @@
 use crate::model::viewport3d::{FileSource, MeshSpec, Viewport3d};
 use crate::settings::MeshesSettings;
 use crate::worker::{start_scan, WorkerMsg};
+use engine::shader::Shader;
 use modscan::mo2::Instance;
 use modscan::pgp::DeriveCheck;
 use modscan::scan::{Report, Source};
@@ -15,8 +16,8 @@ use modscan::store::{
 };
 use modscan::ScanError;
 use rusqlite::OptionalExtension;
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -229,6 +230,48 @@ fn system_procs() -> Vec<String> {
 
 fn db_err(e: impl std::fmt::Display) -> String {
     format!("Scan database: {e}")
+}
+
+/// M6 Track A (DECISIONS S-shader-10): for each key (`engine::shader::mesh_key`), the shader of every lighting shape
+/// that uses `<key>.dds` in slot 0, in non-derived copies of enabled origins. PGPatcher's output copies and TruePBR
+/// shapes (SLSF2 bit 23) do not vote: sdc's own rules decide PBR. Types outside the 12 shaders do not vote
+/// (`Shader::from_lighting_type`). Keys without a vote are left out.
+pub fn mesh_votes(
+    db: &Path,
+    keys: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<Shader>>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    // shortcut: raw SQL on `Store::conn()` against modscan's schema (breaks silently if `SCHEMA_VERSION` changes
+    // these tables), one query per key; move it into `modscan::store` as a typed query when modscan is next edited.
+    // `DISTINCT` per NIF path and block: the same mesh in two mods votes once.
+    let mut st = store
+        .conn()
+        .prepare(
+            "SELECT DISTINCT c.path_id, s.block, s.shader_type FROM path tp
+             JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = 0
+             JOIN shape s ON s.texset_id = tu.texset_id AND s.shader_kind = 1
+                          AND (ifnull(s.slsf2, 0) & 8388608) = 0
+             JOIN nif_copy c ON c.id = s.copy_id AND c.is_derived = 0
+             JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
+             WHERE tp.p = ?1",
+        )
+        .map_err(db_err)?;
+    let mut out = BTreeMap::new();
+    for k in keys {
+        let types = st
+            .query_map([format!("{k}.dds")], |r| r.get::<_, Option<i64>>(2))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(db_err)?;
+        let v: Vec<Shader> = types
+            .into_iter()
+            .flatten()
+            .filter_map(|t| u32::try_from(t).ok().and_then(Shader::from_lighting_type))
+            .collect();
+        if !v.is_empty() {
+            out.insert(k.clone(), v);
+        }
+    }
+    Ok(out)
 }
 
 pub struct MeshesModel {
