@@ -17,7 +17,7 @@ The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `s
   - A DDS file shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder; the DDS itself is never changed.
 - **Sets** (right): textures grouped into material sets, with the recipe status (run, conflict, disabled, failed) of each packed output.
 
-The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector, batch settings (worker threads, memory budget, BC1 decoder), packing fill values, the preview settings and a list of unmatched `[files]` entries.
+The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector (with the loaded user presets), batch settings (worker threads, memory budget, BC1 decoder), packing fill values, the preview settings and a list of unmatched `[files]` entries.
 
 ## Deciding
 
@@ -27,7 +27,7 @@ The GUI never decides for you. A texture that needs an answer has an **amber bor
 
 Any field in the centre column can be changed. Changes go into `sdc.toml` as `[files."<path>"]` entries, keyed by the file's path relative to the folder holding `sdc.toml` (packed outputs without an extension, for example `landscape/rock01_rmaos`). The GUI writes only `target`, the `[files.*]` tables and `defaults.packing.fill.*`; comments, ordering, rules and every other table in your `sdc.toml` are left byte for byte as they were.
 
-**Mipmaps: Filter and Edge.** The *Filter* row in the Mipmaps group picks *Box* (the default), *Tent*, *Mitchell* or *Kaiser*. Options the texture cannot use are greyed out and their hover text says why: tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting (not cutout or blend), and an HDR texture (BC6H or RGBA16F) may use box or tent only. The *Edge* row under it (*Wrap*, the default, or *Clamp*) is locked while the filter is box, because only tent, Mitchell and Kaiser read past the edge. **Resize** (*None* or *Down to a power of two*) is the last of the *Advanced texture fields* in the Advanced drawer; it shrinks each side to the largest power of two that fits (1000×600 becomes 512×512) and the texture then shows a `DIM-RESIZED` note.
+**Mipmaps: Filter and Edge.** The *Filter* row in the Mipmaps group picks *Box* (the default), *Tent*, *Mitchell* or *Kaiser*. Options the texture cannot use are greyed out and their hover text says why: tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting (not cutout or blend), and an HDR texture (BC6H or RGBA16F) may use box or tent only. The *Edge* row under it (*Wrap*, the default, or *Clamp*) is locked while the filter is box, because only tent, Mitchell and Kaiser read past the edge. **Resize** (*None*, *Down to a power of two* or *Half size (larger side above 512)*) is the last of the *Advanced texture fields* in the Advanced drawer. *Down to a power of two* shrinks each side to the largest power of two that fits (1000×600 becomes 512×512); *Half size* halves both sides when the larger is above 512 (1024×512 becomes 512×256). A resized texture shows a `DIM-RESIZED` note. The BC4/BC5 search radius field in the same list offers *Default*, *Maximum* and *Fast (preview)*.
 
 A texture with a non-power-of-two size gets the blocking `DIM-NPOT` warning. Its decision box offers **Resize to a power of two** next to **Acknowledge for this texture**; the button writes `resize = "pot-down"` on that file's `[files]` entry and clears the block.
 
@@ -95,7 +95,7 @@ The test harness cannot simulate drags. Reordering sets by dragging the **≡** 
 
 ## Where settings live
 
-GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI.
+GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.
 
 sdc-gui ships no fonts. It loads the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at start-up and refuses to start, with a message, if they are missing.
 

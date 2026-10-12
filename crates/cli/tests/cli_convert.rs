@@ -466,9 +466,9 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     assert_eq!(prov(wall, "subtype"), "rule:project#0");
     assert_eq!(num(wall, "alpha.threshold"), 70.0);
     assert_eq!(prov(wall, "alpha.threshold"), "rule:project#0");
-    // The user rule still supplies what the project rule does not say.
-    assert_eq!(num(wall, "validation.complex_m_warn_alpha"), 200.0);
-    assert_eq!(prov(wall, "validation.complex_m_warn_alpha"), "rule:user#0");
+    // Carried fix 3: the user rule names another sub-type (glow), so none of its overrides apply to a height file.
+    assert_ne!(num(wall, "validation.complex_m_warn_alpha"), 200.0);
+    assert_ne!(prov(wall, "validation.complex_m_warn_alpha"), "rule:user#0");
 
     // `--set` beats the rules, scoped to one file or for everything.
     let o = fx.convert(&[
@@ -1241,4 +1241,46 @@ fn the_manifest_records_the_shader() {
         rec["shader"],
         serde_json::json!({ "shader": "hair", "provenance": "set" })
     );
+}
+
+/// M6 Track D spec §3: a preset in `%APPDATA%\sdc\presets\` is usable by `--preset <id>` with no other flag.
+#[test]
+fn a_user_folder_preset_is_usable_by_id() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    fx.write(
+        "appdata/sdc/presets/mine.toml",
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n",
+    );
+    let o = fx.convert(&["--preset", "mine", DIFFUSE[0], DIFFUSE[1]]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(
+        fx.format("textures/a/wall.dds"),
+        DdsPixelFormat::Bc1 { srgb: false }
+    );
+}
+
+/// M6 Track D spec §1: `--preset cs-compact` writes an opaque colour map as BC1 and halves a data map (larger side
+/// above 512). A packed `_rmaos` halves once after assembly, beside its halved `_n` (Review Focus 3).
+#[test]
+fn cs_compact_writes_bc1_colour_and_half_size_normals() {
+    let fx = Fx::new();
+    fx.rgb("trim_d.png");
+    ImageBuffer::from_fn(1024, 1024, |_, _| Rgb([128u8, 128, 255]))
+        .save(fx.p("in/textures/a/wall_n.png"))
+        .unwrap();
+    fx.rgb_sized("wall_roughness.png", 1024, 90);
+    fx.rgb_sized("wall_ao.png", 1024, 200);
+    let o = fx.convert(&["--preset", "cs-compact", "--accept-suggestions", "high"]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(
+        fx.format("textures/a/trim_d.dds"),
+        DdsPixelFormat::Bc1 { srgb: false }
+    );
+    let c = read_dds(&std::fs::read(fx.dds("textures/a/trim_d.dds")).unwrap()).unwrap();
+    assert_eq!((c.width, c.height), (32, 32));
+    let n = read_dds(&std::fs::read(fx.dds("textures/a/wall_n.dds")).unwrap()).unwrap();
+    assert_eq!((n.width, n.height), (512, 512));
+    let p = read_dds(&std::fs::read(fx.dds("textures/a/wall_rmaos.dds")).unwrap()).unwrap();
+    assert_eq!((p.width, p.height), (512, 512));
 }

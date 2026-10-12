@@ -156,6 +156,7 @@ pub const FIELD_PATHS: &[&str] = &[
     "validation.complex_m_warn_alpha",
     "validation.bc6h_min_peak_ratio",
     "validation.pgpatcher_non_white_share",
+    "validation.mips",
     "packing.enabled",
     "packing.roughness_default",
     "packing.prefer",

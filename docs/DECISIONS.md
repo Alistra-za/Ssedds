@@ -482,3 +482,55 @@ Rulings of `docs/superpowers/plans/2026-10-11-sdc-m6-shader-modes.md`. The owner
 - **S-shader-10 Mesh-reported shader (owner, 2026-10-11: "map wins, assume the user runs PGPatcher").** Auto-pick order: explicit → advanced skin → PBR → complex `_m` → `_p` → mesh majority (`auto:mesh`) → envmap `_m`, `_g`, `_i`, `_sk`, hair path, eyes path, landscape, default. Only the maps PGPatcher can patch a mesh for (complex `_m`, `_p`) beat the mesh. Evidence is `BatchRequest::mesh_shaders`, keyed by `shader::mesh_key` (diffuse game folder + stem, lower case) and filled by the GUI from the scan database. Votes: lighting shapes using `<key>.dds` in slot 0, from the whole load order (every enabled origin), not TruePBR shapes (SLSF2 bit 23), not PGPatcher-derived copies; one vote per NIF path and block. `Shader::from_lighting_type`: 0 default, 1 envmap, 2 glow, 3 parallax, 5 skin, 6 hair, 7 parallax (Parallax Occlusion; owner-provisional), 8 landscape, 11 multilayer, 16 eye; any other type is no vote. A strict majority is required, else the suffix rules decide. PBR is never read from a NIF (the TruePBR bit is PGPatcher's output marker), so a PBR or skin member always wins. The CLI sends no votes. `modscan` is untouched: `crates/gui/src/model/meshes.rs` reads it with raw SQL on `Store::conn()` (a `shortcut:` comment there; move it into a typed `modscan::store` query when modscan is next edited). There is no envmap-to-complex refinement: complex `_m` (rule 3) fires before the mesh.
 - **S-shader-11 Owner answers and Track C interaction (2026-10-11).** The owner's four answers on the mesh evidence: the map wins over the mesh for complex `_m` and `_p` (PGPatcher patches the mesh for them); the votes come from the whole load order; lighting type 7 maps to `parallax` (provisional); the scan database is read with raw SQL now. Track C (S-mips-0/-13): the shader layer runs before `unscoped_filter_falls_back`, so a hair diffuse's `cutout` makes an unscoped non-box filter box + `CFG-FILTER-IGNORED` and a scoped one `CFG-INVALID`. Catalogue count 69 → 73; workspace version 0.3.0 → 0.4.0 (`if-changed` re-encodes).
 - **Also (Track A).** A landscape set without `_n` shows `SHADER-MISSING-MAP` (Warning) on its card.
+
+## Note T — M6 Track D: presets (plan rulings, 2026-10-12)
+
+Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/superpowers/specs/2026-10-12-sdc-m6-presets-design.md` (owner-approved 2026-10-12; §2.2 corrected by the owner in 956da58).
+
+- **T1 Preset ids (owner / plan, 2026-10-12).** `cs-compact` (base `cs-quality`, target cs) and `vanilla-compact` (base `vanilla-quality`, target vanilla). There is one `fast-preview` (base `sdc-base`, no target): the registry needs no target, and the batch target decides. It does not inherit later `*-quality` settings.
+- **T2 BC1 rule mechanics (plan, 2026-10-12).**
+  - `RuleMatch` had no sub-type matcher, so it gained `match.subtypes` (matched while layering, never while deciding a sub-type).
+  - `match.alpha` matches the source's alpha content, so there are two rules: `none`, and `constant255` for sub-types whose policy resolves to `remove`.
+  - No resolved-policy matcher was added (it would be circular).
+  - An explicit non-`remove` policy on an opaque colour map under compact is `FMT-BC1-ALPHA`.
+  - `bc1_transparent_black` stays false.
+- **T3 The colour and data lists (owner / plan, 2026-10-12).** Exactly as in the plan.
+  - Opaque colour becomes BC1 at full size (its rules set `resize = "none"`). Colour that stays BC7 (colour with alpha) halves, like every BC7 colour sub-type (owner).
+  - `landscape_diffuse` is excluded from BC1 (`FMT-LANDSCAPE-BC1`); as BC7 colour it halves (owner).
+  - `pbr_emissive` (BC6H) and `hdr_sky` stay full size. `hdr_sky` is excluded from resize (owner).
+  - `pbr_subsurface` and `pbr_fuzz` are BC1 only without alpha.
+- **T4 `resize = half` (owner, 2026-10-12).** Both sides halve together when the larger is above 512 (`HALF_FLOOR`); the aspect ratio is kept and the larger side floors (1024×512 becomes 512×256); there is no POT step; each side is at least 1 px; `DIM-RESIZED` names the mode; admission counts it like `pot-down`.
+- **T5 `validation.mips = smallest` (plan, 2026-10-12).** PSNR and coverage on the last mip only. The default `all` is not serialised.
+- **T6 The user presets folder (plan, 2026-10-12).**
+  - Location: `%APPDATA%\sdc\presets\*.toml`, non-recursive, in file-name order.
+  - Load order: all files load first, then each preset is checked, so a base may come later in the order. Failures are skipped with `CFG-PRESET-SKIPPED`, repeatedly, so orphans go too.
+  - Path: `BatchRequest::user_presets`, set by the CLI and the GUI, `None` in tests.
+  - The same file reached twice loads once.
+- **T7 Duplicate ids are refused (plan, 2026-10-12).** Carried fix 1, naming both sources: `CFG-PRESET-SKIPPED` in the folder, an error from `--preset-file`. `is_builtin` means "loaded from the embedded list".
+- **T8 Verbs (owner / plan, 2026-10-12).**
+  - `diff` compares profiles from presets alone (rules are not shown: spec gap).
+  - `export` writes the preset's own TOML under a new id (`<id>-export` or `--id`); `base` stays a link, and there is no `--flat` (owner).
+  - `export` writes the parsed table re-serialised, not the original text: comments are dropped and keys may be reordered (final review Minor 9). The output is equivalent and validates.
+  - `export` copies `suffix_aliases` as they are and does not strip them. A copy of a preset with suffix aliases therefore cannot load beside the original (the aliases conflict, `CFG-PRESET-SKIPPED`); rename or remove the aliases before putting the copy in the user presets folder. The `export` help says so (final review Minor 8).
+  - `export --out` refuses to overwrite the source file of any loaded preset (final review Minor 10).
+  - `diff` help and its human output footer say "rules are not compared" (final review Minor 13).
+  - `validate` reports the first problem per file, and validates a folder file in place of itself.
+- **T9 Migration table (plan, 2026-10-12).** Presets none, config none, manifest records v1 → v2 (`schema` set to 2; the manifest's key is `schema`). Version 0 is refused. `PresetError::NewerConfigSchema(file, v)` is the spec's `ConfigError::NewerSchema`. Config files accept an optional `schema_version`.
+- **T10 Carried fixes (plan, 2026-10-12).**
+  - #2: `merge_json`, where a `null` patch never adds a key (the spec's two sentences disagreed; the function's contract won).
+  - #3: a rule whose `subtype` is not the final sub-type does not apply. This includes a `CFG-UNAVAILABLE` fallback.
+  - #4: `CFG-GREEN-CONFLICT`; the explicit `flip_green` wins.
+  - #5: the landscape match was already whole-component; pinned by tests.
+  - #6: `hdr_sky` only under a `sky` component.
+- **T11 BC4/BC5 search radius (plan / owner, 2026-10-12).** Measured in `docs/spikes/bc45-search-radius.md`, re-run after T13.
+  - Rule Q (quality default becomes `max` if +0.10 dB at ≤ 1.5× time on both formats) did not fire. BC4 at radius 10 gains +0.1231 dB at 2.80× the time; BC5 gains +0.0599 dB at 2.96×. `sdc-base` keeps `"default"` and stays 1.1.0.
+  - Rule F (smallest radius below 5 within 0.10 dB of 5 on both formats) gives 4: −0.0591 dB (BC4) and −0.0362 dB (BC5) against 5, at 0.73× and 0.71× the time. It is `SearchRadius::Fast` (`"fast"`), used by `cs-compact`, `vanilla-compact` and `fast-preview`.
+  - Mean PSNR (dB) at radius 0 / 4 / 5 (`default`) / 10 (`max`): BC4 55.79 / 57.20 / 57.26 / 57.38; BC5 58.94 / 60.57 / 60.60 / 60.66.
+  - No warning on the `max` radius (owner, 2026-10-12); `ENC-RADIUS-MAX` was not added.
+- **T12 Versions (plan, 2026-10-12).** Codes 73 → 75 (`CFG-PRESET-SKIPPED`, `CFG-GREEN-CONFLICT`). `sdc-base` stays 1.1.0 (rule Q did not fire). Workspace 0.4.0 → 0.5.0 so `if-changed` re-encodes.
+- **T13 rgbcx rounding patch (owner, 2026-10-12).**
+  - The vendored rgbcx's BC4/BC5/BC3-alpha decode model now rounds to nearest like bcdec. It used to floor the interpolants, so a wider search found endpoint pairs that were exact only under the floor.
+  - Gain at the default radius: BC4 +3.07 dB, BC5 +2.61 dB (mean PSNR under bcdec, bench corpus). PSNR now rises monotonically with the radius.
+  - A new manifest `rgbcx_patch` field makes old BC3/BC4/BC5 outputs re-encode. Like `bc7e_patch` it is a content tag, `bc4-round-to-nearest@sha256:<hash of the patched vendor/bc7enc_rdo/rgbcx.h>` (final review Minor 11), so an in-place change to the patched header also re-encodes them.
+  - Two bench gates moved from byte-exact to never-worse (per-block bcdec SSE for BC3 alpha, BC4, BC5); BC1 and BC3 colour stay byte-exact.
+  - Known quirk: sdc's own BC3 alpha validation decodes through `bcdec_rs::bc3`, which uses `(6a0+a1+1)/7` and matches neither model.

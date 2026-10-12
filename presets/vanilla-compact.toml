@@ -1,0 +1,74 @@
+schema_version = 1
+id = "vanilla-compact"
+version = "1.0.0"
+base = "vanilla-quality"
+target = "vanilla"
+description = "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (larger side above 512)."
+
+[defaults]
+encoder = { bc45_search_radius = "fast" }
+
+# BC1 for opaque colour maps (DECISIONS Note T2/T3). BC3 is never used: it is the size of BC7.
+# Colour with no alpha channel. Not landscape_diffuse (FMT-LANDSCAPE-BC1) nor pbr_emissive (BC6H). BC1 colour stays full size (resize none beats the sub-type table below).
+[[rules]]
+match = { alpha = "none", subtypes = ["diffuse", "pbr_albedo", "glow", "pbr_subsurface", "pbr_fuzz", "subsurface_tint", "backlight_tint", "ui_sky", "skin_albedo"] }
+overrides = { format = "bc1", resize = "none" }
+
+# Colour whose alpha is constant 255 and whose policy resolves to remove (pbr_subsurface and pbr_fuzz keep data).
+[[rules]]
+match = { alpha = "constant255", subtypes = ["diffuse", "pbr_albedo", "glow", "subsurface_tint", "backlight_tint", "ui_sky", "skin_albedo"] }
+overrides = { format = "bc1", resize = "none" }
+
+# Data maps and BC7 colour at half size: both sides halve when the larger is above 512 (spec §2.2).
+[subtypes.normal]
+resize = "half"
+[subtypes.landscape_normal]
+resize = "half"
+[subtypes.pbr_normal]
+resize = "half"
+[subtypes.msn]
+resize = "half"
+[subtypes.coat_normal]
+resize = "half"
+[subtypes.skin_wet]
+resize = "half"
+[subtypes.envmask]
+resize = "half"
+[subtypes.height]
+resize = "half"
+[subtypes.msn_specular]
+resize = "half"
+[subtypes.skin_sk]
+resize = "half"
+[subtypes.complex_material]
+resize = "half"
+[subtypes.rmaos]
+resize = "half"
+[subtypes.skin_rfaos]
+resize = "half"
+[subtypes.flow]
+resize = "half"
+[subtypes.generic_two_channel]
+resize = "half"
+[subtypes.generic_data]
+resize = "half"
+[subtypes.diffuse]
+resize = "half"
+[subtypes.landscape_diffuse]
+resize = "half"
+[subtypes.pbr_albedo]
+resize = "half"
+[subtypes.glow]
+resize = "half"
+[subtypes.pbr_subsurface]
+resize = "half"
+[subtypes.pbr_fuzz]
+resize = "half"
+[subtypes.subsurface_tint]
+resize = "half"
+[subtypes.backlight_tint]
+resize = "half"
+[subtypes.ui_sky]
+resize = "half"
+[subtypes.skin_albedo]
+resize = "half"

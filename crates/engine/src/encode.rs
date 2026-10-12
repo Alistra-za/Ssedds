@@ -52,6 +52,7 @@ pub fn radius(r: SearchRadius) -> u32 {
     match r {
         SearchRadius::Default => BC45_RADIUS_DEFAULT,
         SearchRadius::Max => BC45_RADIUS_MAX,
+        SearchRadius::Fast => BC45_RADIUS_FAST,
     }
 }
 

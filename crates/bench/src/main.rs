@@ -33,6 +33,13 @@ enum Cmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
+    /// M6 Track D spec §7: BC4/BC5 search radius against PSNR and encode time (images2 mask_real, normal_real;
+    /// read-only). Writes <out>/radius45.csv.
+    Radius45 {
+        /// A scratch folder outside the bench root.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
 }
 
 /// S2: 200 varied 16-128 px sources; S8: constant-alpha `_m` variants plus a height-mask gradient.
@@ -162,6 +169,22 @@ fn main() -> ExitCode {
             Err(e) => {
                 eprintln!("error: {e:#}");
                 ExitCode::from(3)
+            }
+        },
+        Cmd::Radius45 { out } => match sdc_bench::radius::measure(&root, &out) {
+            Ok(rows) => {
+                let s = sdc_bench::radius::summary(&rows);
+                println!("format radius mean_psnr_db total_secs");
+                for (f, r, p, t) in &s {
+                    println!("{f} {r} {p:.4} {t:.4}");
+                }
+                let (q, fast) = sdc_bench::radius::decide(&s);
+                println!("rule Q (quality default -> max): {q}; rule F (fast radius): {fast:?}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("radius45: {e:#}");
+                ExitCode::FAILURE
             }
         },
     }

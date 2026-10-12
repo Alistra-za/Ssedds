@@ -159,7 +159,9 @@ fn glob_match(glob: &str, f: &FileFacts) -> bool {
     glob_match_input(glob, f.input)
 }
 
-pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
+/// `st` is the sub-type being resolved, or `None` while it is being decided: a rule with `match.subtypes` then never
+/// matches (DECISIONS Note T2).
+pub fn rule_matches(m: &RuleMatch, f: &FileFacts, st: Option<Subtype>) -> bool {
     m.glob.as_deref().is_none_or(|g| glob_match(g, f))
         && m.suffix
             .as_deref()
@@ -168,6 +170,7 @@ pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
             .as_deref()
             .is_none_or(|s| f.set.suffixes.contains(&s.to_ascii_lowercase()))
         && m.alpha.is_none_or(|a| a == f.analysis.alpha)
+        && (m.subtypes.is_empty() || st.is_some_and(|s| m.subtypes.contains(&s)))
 }
 
 /// Rule sources in precedence order: the file's preset chain (base first; `preset_chain`), user config,
@@ -186,13 +189,18 @@ fn rule_sources<'a>(ctx: &ResolveCtx<'a>, chain: &[&'a PresetFile]) -> Vec<(Stri
     v
 }
 
+/// The first rule of one source that matches. While layering sub-type `st`, a rule that names another sub-type
+/// (`Rule::subtype`) does not match, so a `--set`/`[files]` sub-type drops it (carried fix 3, Note T10).
 fn first_match<'a>(
     rules: &'a [Rule],
     f: &FileFacts,
+    st: Option<Subtype>,
     ignore_alpha_rules: bool,
 ) -> Option<(usize, &'a Rule)> {
     rules.iter().enumerate().find(|(_, r)| {
-        !(ignore_alpha_rules && r.matcher.alpha.is_some()) && rule_matches(&r.matcher, f)
+        !(ignore_alpha_rules && r.matcher.alpha.is_some())
+            && st.is_none_or(|s| r.subtype.is_none_or(|x| x == s))
+            && rule_matches(&r.matcher, f, st)
     })
 }
 
@@ -313,7 +321,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     }
     // rules: highest-precedence source with a matching rule that names a sub-type
     for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
-        if let Some((i, r)) = first_match(rules, f, false) {
+        if let Some((i, r)) = first_match(rules, f, None, false) {
             if let Some(st) = r.subtype {
                 return SubtypeDecision {
                     subtype: st,
@@ -519,7 +527,7 @@ fn layered_profile_with(
         }
     }
     for (src, rules) in rule_sources(ctx, &chain) {
-        if let Some((i, r)) = first_match(rules, f, ignore_alpha_rules) {
+        if let Some((i, r)) = first_match(rules, f, Some(st), ignore_alpha_rules) {
             apply(
                 &mut doc,
                 &mut prov,
@@ -598,8 +606,12 @@ fn layered_profile_with(
     backend_follows_format(&mut profile, &mut prov, &sources);
     emissive_hdr_choice(ctx, &mut profile, &mut prov, f);
     float_source_is_linear(&mut profile, &mut prov, f);
-    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
-    if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
+    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green). An
+    // explicit `flip_green` wins; `resolve_decided` reports a contradiction as CFG-GREEN-CONFLICT (carried fix 4).
+    if takes_green(st)
+        && profile.channels.green_convention == Some(GreenConvention::Opengl)
+        && !field_explicit(ctx, &prov, "channels.flip_green")
+    {
         profile.channels.flip_green = true;
         if let Some(src) = prov.get("channels.green_convention").cloned() {
             prov.insert("channels.flip_green".into(), src);
@@ -628,6 +640,34 @@ fn unscoped_filter_falls_back(
     p.mips.filter = MipFilter::Box;
     prov.insert("mips.filter".into(), Provenance::Fallback);
     Some((dropped, why))
+}
+
+/// Carried fix 4 (DECISIONS Note T10): an explicit `channels.flip_green` that contradicts the resolved
+/// `green_convention` (OpenGL needs the flip, DirectX does not). The explicit field is kept.
+fn green_conflict(
+    ctx: &ResolveCtx,
+    p: &Profile,
+    prov: &BTreeMap<String, Provenance>,
+) -> Option<Warning> {
+    let convention = p.channels.green_convention?;
+    if !takes_green(p.subtype) || !field_explicit(ctx, prov, "channels.flip_green") {
+        return None;
+    }
+    let wants = convention == GreenConvention::Opengl;
+    (p.channels.flip_green != wants).then(|| {
+        let id = serde_json::to_value(convention).unwrap_or_default();
+        Warning::new(
+            Code::CfgGreenConflict,
+            format!(
+                "channels.flip_green = {} contradicts green_convention = {} (from {}); flip_green is kept",
+                p.channels.flip_green,
+                id.as_str().unwrap_or("?"),
+                prov.get("channels.green_convention")
+                    .map_or("builtin".to_string(), ToString::to_string)
+            ),
+        )
+        .with_data(json!({ "flip_green": p.channels.flip_green, "convention": convention }))
+    })
 }
 
 /// The CFG-FILTER-IGNORED notice (S-mips-13): the owner's line, plus the reason when the texture is a colour map.
@@ -1449,12 +1489,15 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     }
     // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).
     let (ow, oh) = crate::resize::target_dims((a.width, a.height), p.resize);
+    let mode = serde_json::to_value(p.resize).unwrap_or_default();
     let resized = ((ow, oh) != (a.width, a.height)).then(|| {
         Warning::new(
             DimResized,
             format!(
-                "{}x{} resized to {ow}x{oh} (resize = pot-down)",
-                a.width, a.height
+                "{}x{} resized to {ow}x{oh} (resize = {})",
+                a.width,
+                a.height,
+                mode.as_str().unwrap_or("?")
             ),
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
@@ -1718,6 +1761,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         f,
         alpha_policy_explicit(ctx, &provenance),
     ));
+    warnings.extend(green_conflict(ctx, &profile, &provenance));
     if available && profile.subtype == Subtype::SkinWet {
         warnings.push(skin_wet_notice(&profile, f, &provenance));
     }

@@ -291,3 +291,25 @@ fn a_rule_loses_to_a_files_entry_which_loses_to_the_command_line() {
     r.overrides = vec![set()];
     assert_eq!(threshold(&plan(r)), (150, "user".to_string()));
 }
+
+/// Carried fix 3: a `[files]` sub-type beats a rule's sub-type, and that rule's overrides then do not apply; a
+/// `[files]` field beats a rule's field for the same sub-type.
+#[test]
+fn files_entries_beat_rules_and_drop_rules_for_another_subtype() {
+    let d = fixture(concat!(
+        "[[rules]]\nmatch = { glob = \"**/landscape/rock01.png\" }\nsubtype = \"glow\"\noverrides = { alpha = { threshold = 90 } }\n",
+        "[files.\"landscape/rock01.png\"]\nsubtype = \"diffuse\"\n",
+    ));
+    let p = plan(req(&d));
+    let j = job(&p, "landscape/rock01.dds");
+    assert_eq!(prov(j, "subtype"), "project_file");
+    assert_eq!(j.profile.alpha.threshold, 127);
+    let d = fixture(concat!(
+        "[[rules]]\nmatch = { glob = \"**/landscape/rock01.png\" }\nsubtype = \"diffuse\"\noverrides = { alpha = { threshold = 90 } }\n",
+        "[files.\"landscape/rock01.png\"]\nalpha.threshold = 100\n",
+    ));
+    let p = plan(req(&d));
+    let j = job(&p, "landscape/rock01.dds");
+    assert_eq!(j.profile.alpha.threshold, 100);
+    assert_eq!(prov(j, "alpha.threshold"), "project_file");
+}

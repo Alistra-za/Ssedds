@@ -7,8 +7,8 @@ fn s3_bc7e_u5_reproduces_bench_within_0_01_db() {
 }
 
 #[test]
-fn s3_rgbcx_bc4_mask_real_is_bit_exact() {
-    let r = gates::rgbcx_bit_exact(
+fn s3_rgbcx_bc4_mask_real_never_worse_than_bench() {
+    let r = gates::rgbcx_vs_bench(
         &bench_root(),
         "out2/bc4_rgbcx",
         "images2",
@@ -20,7 +20,7 @@ fn s3_rgbcx_bc4_mask_real_is_bit_exact() {
 }
 
 #[test]
-fn rgbcx_bc1_bc3_bc4_bc5_bit_exact_in_bench_configuration() {
+fn rgbcx_bc1_bit_exact_and_bc3_bc4_bc5_never_worse_in_bench_configuration() {
     for r in gates::rgbcx_all(&bench_root()).unwrap() {
         assert!(r.pass, "{r}");
     }

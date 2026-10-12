@@ -5,4 +5,5 @@ pub mod ddsraw;
 pub mod engine_gates;
 pub mod gates;
 pub mod metrics;
+pub mod radius;
 pub mod s7;

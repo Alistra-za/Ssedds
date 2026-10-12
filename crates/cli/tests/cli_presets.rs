@@ -117,6 +117,7 @@ fn encoders_reports_versions_isa_model_and_nvtt() {
         "79ddbc9",
         "1.31.0",
         "0001-exact-opaque-alpha@sha256:",
+        "patch bc4-round-to-nearest@sha256:",
         "dispatched ISA",
         "BC1 decoder model: ideal",
     ] {
@@ -136,6 +137,10 @@ fn encoders_json_is_one_object_and_nvtt_comes_from_the_flag() {
     assert_eq!(v["ispc"], "1.31.0");
     assert_eq!(v["bc1_model"], "ideal");
     assert!(v["bc7e_patch"].as_str().unwrap().contains("@sha256:"));
+    assert!(v["rgbcx_patch"]
+        .as_str()
+        .unwrap()
+        .starts_with("bc4-round-to-nearest@sha256:"));
     assert!(["sse2", "sse4", "avx", "avx2"].contains(&v["isa"].as_str().unwrap()));
     assert_eq!(v["nvtt"]["found"], false);
     assert_eq!(v["nvtt"]["source"], "--nvtt");
@@ -145,4 +150,279 @@ fn encoders_json_is_one_object_and_nvtt_comes_from_the_flag() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["nvtt"]["found"], true);
     assert!(v["nvtt"]["path"].as_str().unwrap().ends_with("sdc.exe"));
+}
+
+fn sdc_in(appdata: &std::path::Path, args: &[&str]) -> (i32, String, String) {
+    let o = Command::new(env!("CARGO_BIN_EXE_sdc"))
+        .env("APPDATA", appdata)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        o.status.code().unwrap(),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+const MINE: &str = "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n";
+
+fn appdata_with_mine() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("sdc/presets")).unwrap();
+    std::fs::write(d.path().join("sdc/presets/mine.toml"), MINE).unwrap();
+    std::fs::write(d.path().join("sdc/presets/broken.toml"), "nope").unwrap();
+    d
+}
+
+/// Spec §4: `list` shows a folder preset with its source; `--json` has `source` on every row.
+#[test]
+fn list_shows_user_presets_with_their_source() {
+    let d = appdata_with_mine();
+    let (code, out, err) = sdc_in(d.path(), &["presets", "list"]);
+    assert_eq!(code, 0, "{err}");
+    let line = out.lines().find(|l| l.starts_with("mine")).unwrap();
+    assert!(line.contains("mine.toml"), "{line}");
+    assert!(
+        out.contains("cs-compact") && out.contains("fast-preview"),
+        "{out}"
+    );
+    assert!(
+        err.contains("CFG-PRESET-SKIPPED") && err.contains("broken.toml"),
+        "{err}"
+    );
+    let (_, out, _) = sdc_in(d.path(), &["presets", "list", "--json"]);
+    let rows: Vec<serde_json::Value> = out
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let src = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap()["source"].clone();
+    assert_eq!(src("cs-quality"), "builtin");
+    assert!(src("mine").as_str().unwrap().ends_with("mine.toml"));
+}
+
+/// Spec §3: `--preset-file` works on every verb, and a duplicate id is an error (exit 2).
+#[test]
+fn preset_file_on_the_verbs_and_duplicates() {
+    let d = appdata_with_mine();
+    let extra = d.path().join("extra.toml");
+    std::fs::write(&extra, MINE.replace("\"mine\"", "\"extra\"")).unwrap();
+    let (code, out, _) = sdc_in(
+        d.path(),
+        &["presets", "list", "--preset-file", extra.to_str().unwrap()],
+    );
+    assert_eq!(code, 0);
+    assert!(out.lines().any(|l| l.starts_with("extra")), "{out}");
+    let dup = d.path().join("dup.toml");
+    std::fs::write(&dup, MINE).unwrap();
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "show",
+            "mine",
+            "--preset-file",
+            dup.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("already loaded"), "{err}");
+}
+
+/// Spec §4: `diff` prints `<subtype>.<field>: a → b`, `no differences`, or JSON rows.
+#[test]
+fn diff_prints_only_differences() {
+    let d = appdata_with_mine();
+    let (code, out, err) = sdc_in(d.path(), &["presets", "diff", "cs-quality", "mine"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out.trim(),
+        "diffuse.format: \"bc7\" → \"bc1\"\n(rules are not compared)"
+    );
+    let (code, out, _) = sdc_in(d.path(), &["presets", "diff", "cs-quality", "cs-quality"]);
+    assert_eq!(
+        (code, out.trim()),
+        (0, "no differences\n(rules are not compared)")
+    );
+    let (code, out, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "diff",
+            "cs-quality",
+            "cs-compact",
+            "--subtype",
+            "normal",
+            "--json",
+        ],
+    );
+    assert_eq!(code, 0);
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        rows,
+        serde_json::json!([
+            {"subtype": "normal", "field": "encoder.bc45_search_radius", "a": "default", "b": "fast"},
+            {"subtype": "normal", "field": "resize", "a": null, "b": "half"}
+        ])
+    );
+    assert_eq!(
+        sdc_in(d.path(), &["presets", "diff", "cs-quality", "nope"]).0,
+        2
+    );
+}
+
+/// Spec §4: export writes files that validate; validate exits 1 on a bad file.
+#[test]
+fn export_then_validate() {
+    let d = appdata_with_mine();
+    let out = d.path().join("x.toml");
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &["presets", "export", "mine", "--out", out.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{err}");
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        text.contains("id = \"mine-export\"") && text.contains("base = \"cs-quality\""),
+        "{text}"
+    );
+    let renamed = d.path().join("packed.toml");
+    let (code, _, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "cs-compact",
+            "--id",
+            "packed",
+            "--out",
+            renamed.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert!(std::fs::read_to_string(&renamed)
+        .unwrap()
+        .contains("id = \"packed\""));
+    let (code, stdout, _) = sdc_in(d.path(), &["presets", "export", "fast-preview"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("id = \"fast-preview-export\""), "{stdout}");
+    let (code, stdout, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "validate",
+            out.to_str().unwrap(),
+            renamed.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        stdout.lines().filter(|l| l.starts_with("ok ")).count(),
+        2,
+        "{stdout}"
+    );
+    let bad = d.path().join("bad.toml");
+    std::fs::write(
+        &bad,
+        "schema_version = 1\nid = \"b\"\nversion = \"1\"\nbase = \"nope\"\n",
+    )
+    .unwrap();
+    let (code, stdout, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "validate",
+            out.to_str().unwrap(),
+            bad.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 1);
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with(bad.to_str().unwrap()) && l.contains("nope")),
+        "{stdout}"
+    );
+}
+
+/// Fix round 1: `export --id <loaded id>` fails (exit 2) and writes no file; neither does the default id when taken.
+#[test]
+fn export_refuses_a_taken_id_and_writes_nothing() {
+    let d = appdata_with_mine();
+    let out = d.path().join("clash.toml");
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "cs-compact",
+            "--id",
+            "cs-quality",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("already loaded"), "{err}");
+    assert!(!out.exists());
+    let first = d.path().join("first.toml");
+    std::fs::write(&first, MINE.replace("\"mine\"", "\"mine-export\"")).unwrap();
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "mine",
+            "--preset-file",
+            first.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(!out.exists());
+}
+
+/// M6 Track D spec §8: the CLI help names the user presets folder.
+#[test]
+fn help_names_the_user_presets_folder() {
+    for args in [&["presets", "--help"][..], &["convert", "--help"]] {
+        let (code, out, _) = stdout_of(args);
+        assert_eq!(code, 0);
+        assert!(out.contains(r"%APPDATA%\sdc\presets"), "{args:?}: {out}");
+    }
+}
+
+/// Final review Minor 10: `export --out` refuses to overwrite the source file of a loaded preset.
+#[test]
+fn export_refuses_to_overwrite_a_loaded_preset_file() {
+    let d = appdata_with_mine();
+    let src = d.path().join("sdc/presets/mine.toml");
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "cs-compact",
+            "--out",
+            src.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("is the source of loaded preset 'mine'"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read_to_string(&src).unwrap(), MINE);
+}
+
+/// Final review Minors 8 and 13: `diff --help` says rules are not compared; `export --help` warns about aliases.
+#[test]
+fn diff_and_export_help_state_their_limits() {
+    let (code, out, _) = stdout_of(&["presets", "diff", "--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("rules are not compared"), "{out}");
+    let (code, out, _) = stdout_of(&["presets", "export", "--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("suffix aliases"), "{out}");
 }

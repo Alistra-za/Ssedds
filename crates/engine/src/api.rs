@@ -64,6 +64,9 @@ pub struct BatchRequest {
     pub preset_files: Vec<PathBuf>,
     /// User config; skipped when the file does not exist.
     pub user_config: Option<PathBuf>,
+    /// The user presets folder (`%APPDATA%\sdc\presets`, M6 Track D spec §3): every `*.toml` in it is loaded before
+    /// `preset_files`; a bad one is skipped with CFG-PRESET-SKIPPED. `None` (tests) loads nothing.
+    pub user_presets: Option<PathBuf>,
     /// Project config; defaults to `sdc.toml` in the first input folder when that exists.
     pub project_config: Option<PathBuf>,
     /// The project config as edited in memory (DECISIONS N4). When `Some`, it is used instead of
@@ -113,6 +116,7 @@ impl BatchRequest {
             preset: None,
             preset_files: vec![],
             user_config: None,
+            user_presets: None,
             project_config: None,
             project_config_inline: None,
             overrides: vec![],
@@ -522,7 +526,22 @@ fn is_up_to_date(
     encoders: &EncoderVersions,
     bc1_model: Bc1Model,
 ) -> bool {
-    if e.is_newer_schema() || e.preset.is_none() || e.encoders.as_ref() != Some(encoders) {
+    let Some(rec) = e.encoders.as_ref() else {
+        return false;
+    };
+    // The rgbcx patch only changes BC4 blocks (BC3 alpha, BC4, BC5), so other formats ignore it.
+    let rgbcx = matches!(job.profile.format, Format::Bc3 | Format::Bc4 | Format::Bc5);
+    if e.is_newer_schema()
+        || e.preset.is_none()
+        || (&rec.bc7enc_rdo, &rec.ispctc, &rec.ispc, &rec.bc7e_patch)
+            != (
+                &encoders.bc7enc_rdo,
+                &encoders.ispctc,
+                &encoders.ispc,
+                &encoders.bc7e_patch,
+            )
+        || (rgbcx && rec.rgbcx_patch != encoders.rgbcx_patch)
+    {
         return false;
     }
     if matches!(job.profile.format, Format::Bc1 | Format::Bc3)
@@ -572,6 +591,7 @@ struct Setup {
     target: Target,
     target_src: Provenance,
     preset_id: String,
+    preset_skips: Vec<Warning>,
 }
 
 impl Engine {
@@ -589,12 +609,19 @@ impl Engine {
     /// config, `--config` or the first input folder's `sdc.toml`), resolve the target and preset, and build every
     /// profile with each rule and `--set` value. An invalid one is an error (exit 2). `plan` runs the same checks
     /// first; `inspect` calls this on its own so a DDS-only or empty input is held to them too (Codex-CLI 2).
-    pub fn preflight(&self, req: &BatchRequest) -> Result<(), EngineError> {
-        self.setup(req).map(|_| ())
+    /// Returns the CFG-PRESET-SKIPPED warnings for the caller to report when it does not go on to `plan`.
+    pub fn preflight(&self, req: &BatchRequest) -> Result<Vec<Warning>, EngineError> {
+        self.setup(req).map(|s| s.preset_skips)
     }
 
     fn setup(&self, req: &BatchRequest) -> Result<Setup, EngineError> {
         let mut registry = self.registry.clone();
+        // Spec §3: the user folder first (bad files skipped), then `--preset-file` (a bad one is an error).
+        let preset_skips = req
+            .user_presets
+            .as_deref()
+            .map(|d| registry.add_dir(d))
+            .unwrap_or_default();
         for f in &req.preset_files {
             registry.add_file(f).map_err(config_err)?;
         }
@@ -661,6 +688,7 @@ impl Engine {
             target,
             target_src,
             preset_id,
+            preset_skips,
         })
     }
 
@@ -694,6 +722,7 @@ impl Engine {
             target,
             target_src,
             preset_id,
+            preset_skips,
         } = self.setup(&req)?;
 
         for i in &req.inputs {
@@ -717,6 +746,9 @@ impl Engine {
                 inputs: files.len(),
             },
         );
+        for w in preset_skips {
+            rep.emit(None, None, EventKind::Warning(w));
+        }
         let key = |out: &Path| output_key(&req.output_root, out);
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
         // 1. `discover`, then `canonicalise_outputs` (above).
@@ -2267,6 +2299,26 @@ mod tests {
             assert!(
                 !up(&old, &job, Bc1Model::Ideal),
                 "{format:?} unrecorded model"
+            );
+        }
+        // The rgbcx BC4 patch only changes BC3/BC4/BC5 output; a record from before it stays current for the rest.
+        for format in [
+            Format::Bc1,
+            Format::Bc3,
+            Format::Bc4,
+            Format::Bc5,
+            Format::Bc6hUf16,
+            Format::Bc7,
+            Format::Rgba8,
+        ] {
+            job.profile.format = format;
+            let mut old = entry_for(&job);
+            old.encoders.as_mut().unwrap().rgbcx_patch = None;
+            let stale = matches!(format, Format::Bc3 | Format::Bc4 | Format::Bc5);
+            assert_eq!(
+                up(&old, &job, Bc1Model::Ideal),
+                !stale,
+                "{format:?} pre-patch record"
             );
         }
     }

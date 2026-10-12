@@ -15,6 +15,7 @@ use engine::policy::AcceptSuggestions;
 use engine::session::Session;
 use engine::validate::ValidationSummary;
 use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -2843,6 +2844,7 @@ fn default_profiles_hash_as_before() {
         assert!(p["mips"].is_object(), "{id}: {p}");
         assert!(p.get("resize").is_none(), "{id}: {p}");
         assert!(p["mips"].get("edge").is_none(), "{id}: {p}");
+        assert!(p["validation"].get("mips").is_none(), "{id}: {p}");
     }
 }
 
@@ -2888,6 +2890,70 @@ fn plan_shader(
         shader,
         prov,
         codes,
+    )
+}
+
+/// Plan only, under `preset`.
+fn plan_preset(dir: &Path, target: Target, preset: &str, sets: &[&str]) -> Out {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    let mut req = request(dir, target, sets, &[]);
+    req.preset = Some(preset.into());
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    Out {
+        summary: BatchSummary::default(),
+        events: sink.take(),
+    }
+}
+
+fn rgb_wh(w: u32, h: u32) -> DynamicImage {
+    DynamicImage::ImageRgb8(ImageBuffer::from_fn(w, h, |x, y| {
+        Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+    }))
+}
+
+/// `DIM-RESIZED`'s `to` of every planned job, by output path (`/` separators).
+fn resized(o: &Out) -> BTreeMap<String, (u64, u64)> {
+    o.events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FilePlanned { job } => {
+                let w = job.warnings.iter().find(|w| w.code == Code::DimResized)?;
+                let to = &w.data["to"];
+                Some((
+                    job.output.to_string_lossy().replace('\\', "/"),
+                    (to[0].as_u64()?, to[1].as_u64()?),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`resized`] keyed by the output file name only.
+fn resized_names(o: &Out) -> BTreeMap<String, (u64, u64)> {
+    resized(o)
+        .into_iter()
+        .map(|(k, v)| (k.rsplit('/').next().unwrap().to_string(), v))
+        .collect()
+}
+
+/// The planned profile's `resize` (`none` when not serialised).
+fn resize_of(o: &Out, suffix: &str) -> String {
+    planned(o, suffix)["profile"]["resize"]
+        .as_str()
+        .unwrap_or("none")
+        .to_string()
+}
+
+fn format_prov(o: &Out, suffix: &str) -> (String, String) {
+    let j = planned(o, suffix);
+    (
+        j["profile"]["format"].as_str().unwrap().to_string(),
+        j["provenance"]["format"].as_str().unwrap_or("").to_string(),
     )
 }
 
@@ -3204,4 +3270,264 @@ fn shader_coat_alias_is_the_s_coat_colour() {
     assert!(planned(&o, "rock_coat.png")
         .to_string()
         .contains("rock_s.dds"));
+}
+
+// M6 Track D (spec §2): the Compact and Fast-preview presets.
+
+fn constant_255(w: u32) -> DynamicImage {
+    rgba(w, |x, y| [(x * 4) as u8, (y * 4) as u8, 90, 255])
+}
+
+#[test]
+fn compact_opaque_diffuse_is_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(64));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(
+        planned(&o, "a/wall.png")["provenance"]["format"].as_str(),
+        Some("rule:cs-compact#0")
+    );
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+#[test]
+fn compact_constant_255_diffuse_is_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", constant_255(64));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(format_prov(&o, "a/wall.png").1, "rule:cs-compact#1");
+}
+
+#[test]
+fn compact_diffuse_with_alpha_stays_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/glass.png",
+        rgba(64, |x, _| [90, 90, 90, (x * 4) as u8]),
+    );
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/glass.png.alpha.policy=blend"],
+    );
+    assert_profile(&o, "a/glass.png", "diffuse", "blend", false, "bc7");
+    assert!(!format_prov(&o, "a/glass.png")
+        .1
+        .starts_with("rule:cs-compact#"));
+}
+
+#[test]
+fn compact_cutout_diffuse_stays_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/leaf.png",
+        rgba(64, |x, _| [40, 120, 40, if x < 32 { 0 } else { 255 }]),
+    );
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/leaf.png.alpha.policy=cutout"],
+    );
+    assert_profile(&o, "a/leaf.png", "diffuse", "cutout", false, "bc7");
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+#[test]
+fn compact_constant_255_subsurface_stays_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/skin_s.png", constant_255(64));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/skin_s.png.subtype=pbr_subsurface"],
+    );
+    let j = planned(&o, "a/skin_s.png");
+    assert_eq!(
+        (
+            j["profile"]["alpha"]["policy"].as_str(),
+            j["profile"]["format"].as_str()
+        ),
+        (Some("data"), Some("bc7"))
+    );
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+#[test]
+fn compact_landscape_diffuse_stays_bc7_and_halves() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/landscape/dirt.png", rgb(1024));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    let j = planned(&o, "landscape/dirt.png");
+    assert_eq!(
+        (
+            j["profile"]["subtype"].as_str(),
+            j["profile"]["format"].as_str()
+        ),
+        (Some("landscape_diffuse"), Some("bc7"))
+    );
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("dirt.dds".to_string(), (512, 512))])
+    );
+    assert!(!warnings(&o).contains(&Code::FmtLandscapeBc1));
+}
+
+#[test]
+fn compact_2048_diffuse_with_alpha_plans_1024_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/glass.png",
+        rgba(2048, |x, _| [90, 90, 90, (x % 256) as u8]),
+    );
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/glass.png.alpha.policy=blend"],
+    );
+    assert_eq!(format_prov(&o, "a/glass.png").0, "bc7");
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("glass.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/glass.png"), "half");
+}
+
+#[test]
+fn compact_2048_opaque_diffuse_stays_2048_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(2048));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:cs-compact#0".to_string())
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall.png"), "none");
+}
+
+#[test]
+fn compact_2048_normal_plans_1024() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall_n.png", flat_normal(2048));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wall_n.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/wall_n.png"), "half");
+}
+
+#[test]
+fn compact_512_mask_stays_512() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall_m.png", gray_ramp(512));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/wall_m.png.subtype=envmask"],
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall_m.png"), "half");
+    assert_eq!(format_prov(&o, "a/wall_m.png").0, "bc4");
+}
+
+#[test]
+fn compact_1024x512_plans_512x256() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wide_n.png", rgb_wh(1024, 512));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/wide_n.png.subtype=normal"],
+    );
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wide_n.dds".to_string(), (512, 256))])
+    );
+    assert!(!warnings(&o).contains(&Code::DimNpot));
+}
+
+#[test]
+fn compact_512x256_stays_512x256() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wide_n.png", rgb_wh(512, 256));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/wide_n.png.subtype=normal"],
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+}
+
+#[test]
+fn compact_packed_rmaos_halves_as_one_image() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/p/rock.png", rgb(64));
+    put(d.path(), "textures/p/rock_n.png", flat_normal(1024));
+    put(d.path(), "textures/p/rock_roughness.png", gray_ramp(1024));
+    put(d.path(), "textures/p/rock_ao.png", gray_ramp(1024));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    let r = resized(&o);
+    let mut tails: Vec<&str> = r.keys().map(|k| k.rsplit('/').next().unwrap()).collect();
+    tails.sort();
+    assert_eq!(tails, ["rock_n.dds", "rock_rmaos.dds"], "{r:?}");
+    assert!(r.values().all(|&to| to == (512, 512)), "{r:?}");
+    // The packed job's input is its first member (`rock_roughness.png`); only an unpacked raw-map job would be wrong.
+    let bad: Vec<_> = o
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FilePlanned { job }
+                if job.pack.is_none()
+                    && (is_of(e, "_roughness.png") || is_of(e, "_ao.png"))
+                    && job.warnings.iter().any(|w| w.code == Code::DimResized) =>
+            {
+                Some((e.path.clone(), job.input.clone(), job.output.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
+#[test]
+fn vanilla_compact_opaque_diffuse_is_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(64));
+    let o = plan_preset(d.path(), Target::Vanilla, "vanilla-compact", &[]);
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:vanilla-compact#0".to_string())
+    );
+}
+
+#[test]
+fn fast_preview_is_fast_with_smallest_mip_validation() {
+    for t in [Target::Cs, Target::Vanilla] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/a/wall.png", rgb(64));
+        let o = plan_preset(d.path(), t, "fast-preview", &[]);
+        let p = &planned(&o, "a/wall.png")["profile"];
+        assert_eq!(
+            (
+                p["encoder"]["effort"].as_str(),
+                p["validation"]["mips"].as_str(),
+                p["format"].as_str()
+            ),
+            (Some("fast"), Some("smallest"), Some("bc7")),
+            "{t:?}"
+        );
+    }
 }

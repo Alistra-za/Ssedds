@@ -392,10 +392,11 @@ namespace rgbcx
 		{
 			pDst[0] = static_cast<uint8_t>(l);
 			pDst[1] = static_cast<uint8_t>(h);
-			pDst[2] = static_cast<uint8_t>((l * 4 + h) / 5);
-			pDst[3] = static_cast<uint8_t>((l * 3 + h * 2) / 5);
-			pDst[4] = static_cast<uint8_t>((l * 2 + h * 3) / 5);
-			pDst[5] = static_cast<uint8_t>((l + h * 4) / 5);
+			// sdc patch (M6 Track D): round to nearest to match hardware/bcdec (bcdec_rs 0.2.0 bc4_block weights, verbatim).
+			pDst[2] = static_cast<uint8_t>((52429 * l + 13107 * h + 32768) >> 16);
+			pDst[3] = static_cast<uint8_t>((39321 * l + 26215 * h + 32768) >> 16);
+			pDst[4] = static_cast<uint8_t>((26215 * l + 39321 * h + 32768) >> 16);
+			pDst[5] = static_cast<uint8_t>((13107 * l + 52429 * h + 32768) >> 16);
 			pDst[6] = 0;
 			pDst[7] = 255;
 			return 6;
@@ -405,12 +406,13 @@ namespace rgbcx
 		{
 			pDst[0] = static_cast<uint8_t>(l);
 			pDst[1] = static_cast<uint8_t>(h);
-			pDst[2] = static_cast<uint8_t>((l * 6 + h) / 7);
-			pDst[3] = static_cast<uint8_t>((l * 5 + h * 2) / 7);
-			pDst[4] = static_cast<uint8_t>((l * 4 + h * 3) / 7);
-			pDst[5] = static_cast<uint8_t>((l * 3 + h * 4) / 7);
-			pDst[6] = static_cast<uint8_t>((l * 2 + h * 5) / 7);
-			pDst[7] = static_cast<uint8_t>((l + h * 6) / 7);
+			// sdc patch (M6 Track D): round to nearest to match hardware/bcdec (bcdec_rs 0.2.0 bc4_block weights, verbatim).
+			pDst[2] = static_cast<uint8_t>((56173 * l + 9363 * h + 32768) >> 16);
+			pDst[3] = static_cast<uint8_t>((46812 * l + 18724 * h + 32768) >> 16);
+			pDst[4] = static_cast<uint8_t>((37450 * l + 28086 * h + 32768) >> 16);
+			pDst[5] = static_cast<uint8_t>((28086 * l + 37450 * h + 32768) >> 16);
+			pDst[6] = static_cast<uint8_t>((18724 * l + 46812 * h + 32768) >> 16);
+			pDst[7] = static_cast<uint8_t>((9363 * l + 56173 * h + 32768) >> 16);
 			return 8;
 		}
 

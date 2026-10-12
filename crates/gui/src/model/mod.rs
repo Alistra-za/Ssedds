@@ -149,6 +149,12 @@ pub struct AppModel {
     pub settings_path: Option<PathBuf>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
+    /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
+    pub user_presets: Option<PathBuf>,
+    /// `(id, file)` of the user presets the last plan loaded (the preset inspector lists them).
+    pub loaded_user_presets: Vec<(String, String)>,
+    /// `(file, reason)` of the user preset files the last plan skipped (CFG-PRESET-SKIPPED; the inspector lists them).
+    pub skipped_user_presets: Vec<(String, String)>,
     /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
     /// developer's scan cannot leak in.
     pub scan_db: Option<PathBuf>,
@@ -229,6 +235,9 @@ impl AppModel {
             settings,
             settings_path: None,
             user_config: None,
+            user_presets: None,
+            loaded_user_presets: vec![],
+            skipped_user_presets: vec![],
             scan_db: None,
             mesh_votes: Default::default(),
             session: None,
@@ -381,6 +390,7 @@ impl AppModel {
             project.config().unwrap_or_default()
         });
         req.user_config = self.user_config.clone();
+        req.user_presets = self.user_presets.clone();
         req.jobs = self.settings.jobs;
         req.mem_budget = self.settings.mem_budget_mb * 1024 * 1024;
         let (edits, paths) = sets::engine_inputs(self);
@@ -996,6 +1006,8 @@ impl AppModel {
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
         self.batch_preset = view.preset_id;
+        self.loaded_user_presets = view.user_presets;
+        self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // Keep the selection when its item or set still exists; else nothing.

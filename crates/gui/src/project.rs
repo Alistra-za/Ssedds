@@ -186,9 +186,9 @@ impl ProjectDoc {
         }
     }
 
-    /// The document as the engine parses it.
+    /// The document as the engine parses it (migration hook included, spec §5).
     pub fn config(&self) -> Result<ConfigFile, String> {
-        toml::from_str(&self.doc.to_string()).map_err(|e| e.to_string())
+        ConfigFile::parse(&self.doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
     }
 
     pub fn target(&self) -> Option<Target> {

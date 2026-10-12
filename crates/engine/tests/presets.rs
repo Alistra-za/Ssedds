@@ -3,6 +3,7 @@ use engine::config::*;
 use engine::overrides::to_patch;
 use engine::presets::*;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn merge_is_deep_and_leaf_paths_are_dotted() {
@@ -109,8 +110,119 @@ fn preset_targets_and_default_preset_agree() {
     assert_eq!(default_preset_for(Target::Cs), DEFAULT_PRESET);
     assert!(r.get(BASE_ID).unwrap().hidden);
     let ids: Vec<_> = r.selectable().iter().map(|p| p.id.clone()).collect();
-    assert_eq!(ids, ["cpm-quality", "cs-quality", "vanilla-quality"]);
+    assert_eq!(
+        ids,
+        [
+            "cpm-quality",
+            "cs-compact",
+            "cs-quality",
+            "fast-preview",
+            "vanilla-compact",
+            "vanilla-quality"
+        ]
+    );
     assert_eq!(r.get(BASE_ID).unwrap().rules.len(), 2);
+}
+
+/// M6 Track D spec §2 (Notes T1–T3): the three new presets as profiles from presets alone (rules are not applied by
+/// `profile`; the BC1 rules are checked by the goldens).
+#[test]
+fn compact_and_fast_preview_resolve_as_designed() {
+    let r = PresetRegistry::builtin().unwrap();
+    for (id, target) in [
+        ("cs-compact", Some(Target::Cs)),
+        ("vanilla-compact", Some(Target::Vanilla)),
+        ("fast-preview", None),
+    ] {
+        let p = r.get(id).unwrap();
+        assert_eq!(
+            (p.schema_version, p.version.as_str(), p.hidden, p.target),
+            (1, "1.0.0", false, target)
+        );
+        r.check_preset(id).unwrap();
+    }
+    // Owner rules (2026-10-12): data maps and colour that stays BC7 halve; pbr_emissive and hdr_sky keep full size.
+    let halved = [
+        Subtype::Normal,
+        Subtype::LandscapeNormal,
+        Subtype::PbrNormal,
+        Subtype::Msn,
+        Subtype::CoatNormal,
+        Subtype::SkinWet,
+        Subtype::Envmask,
+        Subtype::Height,
+        Subtype::MsnSpecular,
+        Subtype::SkinSk,
+        Subtype::ComplexMaterial,
+        Subtype::Rmaos,
+        Subtype::SkinRfaos,
+        Subtype::Flow,
+        Subtype::GenericTwoChannel,
+        Subtype::GenericData,
+        Subtype::Diffuse,
+        Subtype::LandscapeDiffuse,
+        Subtype::PbrAlbedo,
+        Subtype::Glow,
+        Subtype::PbrSubsurface,
+        Subtype::PbrFuzz,
+        Subtype::SubsurfaceTint,
+        Subtype::BacklightTint,
+        Subtype::UiSky,
+        Subtype::SkinAlbedo,
+    ];
+    for st in Subtype::ALL {
+        let p = r.profile("cs-compact", Target::Cs, st).unwrap();
+        let want = if halved.contains(&st) {
+            ResizeMode::Half
+        } else {
+            ResizeMode::None
+        };
+        assert_eq!(p.resize, want, "{st:?}");
+        // Formats are the quality preset's: BC1 comes from the rules only.
+        assert_eq!(
+            p.format,
+            r.profile("cs-quality", Target::Cs, st).unwrap().format,
+            "{st:?}"
+        );
+    }
+    let compact = r.get("cs-compact").unwrap();
+    assert_eq!(compact.rules.len(), 2);
+    assert_eq!(compact.rules[0].matcher.alpha, Some(AlphaContent::None));
+    assert_eq!(compact.rules[0].matcher.subtypes.len(), 9);
+    assert_eq!(
+        compact.rules[1].matcher.alpha,
+        Some(AlphaContent::Constant255)
+    );
+    assert_eq!(compact.rules[1].matcher.subtypes.len(), 7);
+    for rule in &compact.rules {
+        assert!(!rule.matcher.subtypes.contains(&Subtype::LandscapeDiffuse));
+        assert!(!rule.matcher.subtypes.contains(&Subtype::PbrEmissive));
+        assert_eq!(rule.overrides, json!({"format": "bc1", "resize": "none"}));
+    }
+    assert_eq!(r.get("vanilla-compact").unwrap().rules, compact.rules);
+    for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+        let p = r.profile("fast-preview", t, Subtype::Diffuse).unwrap();
+        assert_eq!(p.encoder.effort, Effort::Fast);
+        assert_eq!(p.validation.mips, ValidationMips::Smallest);
+        assert_eq!(p.resize, ResizeMode::None);
+    }
+    for id in ["cs-compact", "vanilla-compact", "fast-preview"] {
+        let t = r.get(id).unwrap().target.unwrap_or(Target::Cs);
+        assert_eq!(
+            r.profile(id, t, Subtype::Envmask)
+                .unwrap()
+                .encoder
+                .bc45_search_radius,
+            SearchRadius::Fast
+        );
+    }
+    assert_eq!(
+        r.profile("cs-quality", Target::Cs, Subtype::Envmask)
+            .unwrap()
+            .encoder
+            .bc45_search_radius,
+        SearchRadius::Default
+    );
 }
 
 #[test]
@@ -382,4 +494,389 @@ fn pack_codes_are_in_the_catalogue() {
         let c = Code::parse(s).unwrap();
         assert_eq!((c.as_str(), c.severity()), (s, sev));
     }
+}
+
+const MINE: &str =
+    "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n";
+
+fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, text).unwrap();
+    p
+}
+
+/// Carried fix 1 (M6 Track D, Note T7): a second preset under a loaded id is refused, naming both sources.
+#[test]
+fn duplicate_and_builtin_ids_are_refused_naming_both_sources() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml(MINE).unwrap();
+    let e = r.add_toml(MINE).unwrap_err().to_string();
+    assert!(
+        e.starts_with("CFG-INVALID") && e.contains("'mine'") && e.contains("inline"),
+        "{e}"
+    );
+    let e = r
+        .add_toml("schema_version = 1\nid = \"cs-quality\"\nversion = \"9\"\nbase = \"sdc-base\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("already loaded from builtin"), "{e}");
+    assert!(r.is_builtin("cs-quality"));
+    assert!(!r.is_builtin("mine"));
+    assert_eq!(r.source("mine"), Some("inline"));
+    assert_eq!(r.source("cs-quality"), Some("builtin"));
+    assert_eq!(r.user_presets(), vec![("mine", "inline")]);
+    assert_eq!(
+        r.table("mine").unwrap()["base"].as_str(),
+        Some("cs-quality")
+    );
+}
+
+/// Review Focus 1: a Windows BOM and CRLF line endings load.
+#[test]
+fn a_preset_with_a_bom_and_crlf_loads() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    let text = "\u{feff}schema_version = 1\r\nid = \"crlf\"\r\nversion = \"1.0.0\"\r\nbase = \"cs-quality\"\r\n[subtypes.diffuse]\r\nformat = \"bc1\"\r\n";
+    assert_eq!(r.add_toml(text).unwrap(), "crlf");
+    assert_eq!(
+        r.profile("crlf", Target::Cs, Subtype::Diffuse)
+            .unwrap()
+            .format,
+        Format::Bc1
+    );
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "bom.toml",
+        &text.replace("\"crlf\"", "\"bomfile\""),
+    );
+    assert!(r.add_dir(d.path()).is_empty());
+    assert!(r.get("bomfile").is_some());
+}
+
+/// Spec §3 and Review Focus 2: everything loads first, then every user preset is checked; a bad one is skipped
+/// with CFG-PRESET-SKIPPED, and so is a preset based on a skipped one.
+#[test]
+fn the_user_folder_loads_everything_then_checks_and_skips_bad_files() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    write(
+        dir,
+        "a_child.toml",
+        "schema_version = 1\nid = \"child\"\nversion = \"1\"\nbase = \"zbase\"\n",
+    );
+    write(dir, "b_bad.toml", "this is not toml");
+    write(
+        dir,
+        "c_dup.toml",
+        "schema_version = 1\nid = \"cs-quality\"\nversion = \"1\"\nbase = \"sdc-base\"\n",
+    );
+    write(
+        dir,
+        "d_orphan.toml",
+        "schema_version = 1\nid = \"orphan\"\nversion = \"1\"\nbase = \"missing\"\n",
+    );
+    write(dir, "e_badfield.toml", "schema_version = 1\nid = \"badfield\"\nversion = \"1\"\nbase = \"cs-quality\"\n[defaults]\nformat = \"bc9\"\n");
+    write(
+        dir,
+        "f_on_orphan.toml",
+        "schema_version = 1\nid = \"grandchild\"\nversion = \"1\"\nbase = \"orphan\"\n",
+    );
+    write(dir, "notes.txt", "not a preset");
+    write(
+        &dir.join("sub"),
+        "deep.toml",
+        "schema_version = 1\nid = \"deep\"\nversion = \"1\"\nbase = \"cs-quality\"\n",
+    );
+    write(dir, "z_base.toml", "schema_version = 1\nid = \"zbase\"\nversion = \"1\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n");
+    let mut r = PresetRegistry::builtin().unwrap();
+    let w = r.add_dir(dir);
+    assert_eq!(
+        r.profile("child", Target::Cs, Subtype::Diffuse)
+            .unwrap()
+            .format,
+        Format::Bc1
+    );
+    let mut skipped: Vec<String> = w
+        .iter()
+        .map(|w| {
+            assert_eq!(
+                (w.code, w.severity),
+                (Code::CfgPresetSkipped, Severity::Warning)
+            );
+            assert!(
+                w.data["reason"].as_str().is_some_and(|s| !s.is_empty()),
+                "{w:?}"
+            );
+            let file = w.data["file"].as_str().unwrap();
+            file.rsplit(['/', '\\']).next().unwrap().to_string()
+        })
+        .collect();
+    skipped.sort();
+    assert_eq!(
+        skipped,
+        [
+            "b_bad.toml",
+            "c_dup.toml",
+            "d_orphan.toml",
+            "e_badfield.toml",
+            "f_on_orphan.toml"
+        ]
+    );
+    for id in ["orphan", "grandchild", "badfield", "deep"] {
+        assert!(r.get(id).is_none(), "{id}");
+    }
+    assert!(r.is_builtin("cs-quality"));
+    assert!(r.source("zbase").unwrap().ends_with("z_base.toml"));
+    assert!(PresetRegistry::builtin()
+        .unwrap()
+        .add_dir(&dir.join("nope"))
+        .is_empty());
+}
+
+/// Note T6: one file reached twice (the folder and --preset-file) loads once; a copy under the same id does not.
+#[test]
+fn the_same_file_twice_loads_once() {
+    let d = tempfile::tempdir().unwrap();
+    let p = write(d.path(), "mine.toml", MINE);
+    let mut r = PresetRegistry::builtin().unwrap();
+    assert!(r.add_dir(d.path()).is_empty());
+    assert_eq!(r.add_file(&p).unwrap(), "mine");
+    let copy = write(&d.path().join("copy"), "mine.toml", MINE);
+    assert!(r
+        .add_file(&copy)
+        .unwrap_err()
+        .to_string()
+        .contains("already loaded from"));
+}
+
+#[test]
+fn every_builtin_preset_passes_check_preset() {
+    let r = PresetRegistry::builtin().unwrap();
+    for p in r.selectable() {
+        r.check_preset(&p.id).unwrap();
+    }
+    r.check_preset(BASE_ID).unwrap();
+    let mut r = r;
+    r.add_toml("schema_version = 1\nid = \"badrule\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { glob = \"**\" }\noverrides = { bogus = 1 }\n")
+        .unwrap();
+    assert!(r
+        .check_preset("badrule")
+        .unwrap_err()
+        .to_string()
+        .contains("bogus"));
+}
+
+/// Fix round 1: the reserved-id refusal names the incoming source and the built-in one.
+#[test]
+fn the_reserved_id_refusal_names_both_sources() {
+    let base = "schema_version = 1\nid = \"sdc-base\"\nversion = \"1\"\n";
+    let mut r = PresetRegistry::builtin().unwrap();
+    let e = r.add_toml(base).unwrap_err().to_string();
+    assert!(
+        e.starts_with("CFG-INVALID")
+            && e.contains("from inline")
+            && e.contains("already loaded from builtin"),
+        "{e}"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let p = write(d.path(), "base.toml", base);
+    let e = r.add_file(&p).unwrap_err().to_string();
+    assert!(
+        e.contains(&format!("from {}", p.display())) && e.contains("already loaded from builtin"),
+        "{e}"
+    );
+}
+
+/// Fix round 1: a folder that cannot be read is one CFG-PRESET-SKIPPED naming it (a missing one is silent).
+#[test]
+fn an_unreadable_preset_folder_warns_naming_it() {
+    let d = tempfile::tempdir().unwrap();
+    let not_a_dir = write(d.path(), "file.toml", MINE);
+    let w = PresetRegistry::builtin().unwrap().add_dir(&not_a_dir);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].code, Code::CfgPresetSkipped);
+    assert_eq!(
+        w[0].data["file"].as_str(),
+        Some(not_a_dir.display().to_string().as_str())
+    );
+}
+
+/// Fix round 1: a `*.toml` entry whose metadata cannot be read (a dangling link) is skipped with a warning naming it.
+#[test]
+fn a_dangling_preset_link_warns_naming_it() {
+    let d = tempfile::tempdir().unwrap();
+    let link = d.path().join("dangling.toml");
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(d.path().join("gone.toml"), &link);
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(d.path().join("gone.toml"), &link);
+    if made.is_err() {
+        eprintln!("skipped: cannot create a symlink here (Windows without Developer Mode)");
+        return;
+    }
+    let w = PresetRegistry::builtin().unwrap().add_dir(d.path());
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].code, Code::CfgPresetSkipped);
+    assert_eq!(
+        w[0].data["file"].as_str(),
+        Some(link.display().to_string().as_str())
+    );
+}
+
+/// Spec §5: a config's schema_version is optional (1), a newer one is refused naming the file.
+#[test]
+fn config_schema_version_is_optional_and_a_newer_one_names_the_file() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc.toml");
+    std::fs::write(&p, "schema_version = 1\npreset = \"cs-quality\"\n").unwrap();
+    assert_eq!(ConfigFile::load(&p).unwrap().schema_version, Some(1));
+    std::fs::write(&p, "schema_version = 2\n").unwrap();
+    match ConfigFile::load(&p) {
+        Err(e @ PresetError::NewerConfigSchema(_, 2)) => {
+            assert!(e.to_string().contains("sdc.toml"), "{e}")
+        }
+        other => panic!("{other:?}"),
+    }
+    // Absent: not serialised back.
+    let c = ConfigFile::parse("preset = \"cs-quality\"\n", "x").unwrap();
+    assert!(serde_json::to_value(&c)
+        .unwrap()
+        .get("schema_version")
+        .is_none());
+}
+
+/// Review Focus 1, config twin.
+#[test]
+fn a_config_with_a_bom_and_crlf_loads() {
+    let c = ConfigFile::parse(
+        "\u{feff}preset = \"cs-quality\"\r\n[defaults]\r\nformat = \"bc7\"\r\n",
+        "user config",
+    )
+    .unwrap();
+    assert_eq!(c.preset.as_deref(), Some("cs-quality"));
+}
+
+#[test]
+fn a_newer_preset_is_still_newer_schema() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    assert_eq!(
+        r.add_toml("schema_version = 3\nid = \"x\"\n"),
+        Err(PresetError::NewerSchema(3))
+    );
+    assert!(matches!(
+        r.add_toml("id = \"x\"\nversion = \"1\"\n"),
+        Err(PresetError::Parse(_))
+    ));
+}
+
+/// Carried fix 2 (Note T10): a null patch neither erases nor adds a key.
+#[test]
+fn null_patches_never_add_absent_keys() {
+    let mut a = json!({"format": "bc7"});
+    merge_json(
+        &mut a,
+        &json!({"header": null, "alpha": {"policy": null, "threshold": 5}, "format": null}),
+    );
+    assert_eq!(a, json!({"format": "bc7", "alpha": {"threshold": 5}}));
+    // A patch object replacing a null or scalar base is filtered the same way.
+    for base in [json!({"alpha": null}), json!({"alpha": 5})] {
+        let mut a = base;
+        merge_json(&mut a, &json!({"alpha": {"policy": null, "threshold": 5}}));
+        assert_eq!(a, json!({"alpha": {"threshold": 5}}));
+    }
+}
+
+/// Note T2: `match.subtypes` round-trips and is not serialised when empty (existing preset hashes hold).
+#[test]
+fn rule_match_subtypes_is_optional() {
+    let r: Rule = toml::from_str("match = { alpha = \"none\", subtypes = [\"diffuse\", \"glow\"] }\noverrides = { format = \"bc1\" }\n").unwrap();
+    assert_eq!(r.matcher.subtypes, vec![Subtype::Diffuse, Subtype::Glow]);
+    let plain = serde_json::to_value(RuleMatch::default()).unwrap();
+    assert!(plain.get("subtypes").is_none());
+}
+
+const ULTRA_ALIASES: &str = "schema_version = 1\nid = \"ultra\"\nversion = \"2.0.0\"\nbase = \"cs-compact\"\n[subtypes.diffuse]\nalpha = { threshold = 100 }\n[suffix_aliases]\nrmaosultrahigh = \"rmaos\"\n";
+
+/// Spec §4 and Review Focus 4: an export keeps its `base` link and aliases, validates where the original's base is loaded,
+/// and resolves equal to the original for every sub-type.
+#[test]
+fn export_round_trips_and_keeps_aliases() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml(ULTRA_ALIASES).unwrap();
+    let text = r.export("ultra", "ultra-export").unwrap();
+    let out: PresetFile = toml::from_str(&text).unwrap();
+    assert_eq!(out.id, "ultra-export");
+    assert_eq!(out.base.as_deref(), Some("cs-compact"));
+    assert_eq!(
+        out.suffix_aliases.get("rmaosultrahigh").map(String::as_str),
+        Some("rmaos")
+    );
+    // Validate beside the built-ins only: the original's alias would conflict (Note T8).
+    let d = tempfile::tempdir().unwrap();
+    let f = write(d.path(), "export.toml", &text);
+    let clean = PresetRegistry::builtin().unwrap();
+    assert_eq!(clean.validate_file(&f), Vec::<String>::new());
+    let mut both = PresetRegistry::builtin().unwrap();
+    let id = both.add_file(&f).unwrap();
+    for st in Subtype::ALL {
+        assert_eq!(
+            both.profile(&id, Target::Cs, st).unwrap(),
+            r.profile("ultra", Target::Cs, st).unwrap(),
+            "{st:?}"
+        );
+    }
+}
+
+/// Spec §4: the default export is the preset's own table (base stays a link) under the new id.
+#[test]
+fn default_export_keeps_the_base_link_under_a_new_id() {
+    let r = PresetRegistry::builtin().unwrap();
+    let text = r.export("cs-compact", "my-compact").unwrap();
+    let p: PresetFile = toml::from_str(&text).unwrap();
+    assert_eq!(
+        (p.id.as_str(), p.base.as_deref()),
+        ("my-compact", Some("cs-quality"))
+    );
+    assert_eq!(p.rules, r.get("cs-compact").unwrap().rules);
+    assert!(matches!(
+        r.export("nope", "x"),
+        Err(PresetError::Unknown(_))
+    ));
+}
+
+/// Spec §4: validate names the first problem; a folder file validates in place of its own copy.
+#[test]
+fn validate_file_reports_problems_and_accepts_a_folder_file() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = PresetRegistry::builtin().unwrap();
+    let mine = write(d.path(), "mine.toml", MINE);
+    assert!(r.add_dir(d.path()).is_empty());
+    assert!(
+        r.validate_file(&mine).is_empty(),
+        "a folder file validates against itself"
+    );
+    for (name, text, says) in [
+        ("dup.toml", "schema_version = 1\nid = \"cs-quality\"\nversion = \"1\"\n", "already loaded"),
+        ("nobase.toml", "schema_version = 1\nid = \"x\"\nversion = \"1\"\nbase = \"nope\"\n", "nope"),
+        ("unknown.toml", "schema_version = 1\nid = \"y\"\nversion = \"1\"\nbogus = 1\n", "bogus"),
+        ("newer.toml", "schema_version = 9\nid = \"z\"\n", "newer"),
+        ("rule.toml", "schema_version = 1\nid = \"w\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { subtypes = [\"nope\"] }\n", "nope"),
+    ] {
+        let f = write(&d.path().join("v"), name, text);
+        let p = r.validate_file(&f);
+        assert_eq!(p.len(), 1, "{name}: {p:?}");
+        assert!(p[0].contains(says), "{name}: {p:?}");
+    }
+}
+
+/// Fix round 1: an export under an id that is already loaded is refused, naming that preset's source.
+#[test]
+fn export_refuses_a_loaded_new_id() {
+    let r = PresetRegistry::builtin().unwrap();
+    let e = r
+        .export("cs-compact", "cs-quality")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("already loaded") && e.contains("builtin"), "{e}");
 }
