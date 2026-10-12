@@ -326,6 +326,8 @@
         "CFG-INVALID",
         "CFG-FILE-UNMATCHED",
         "CFG-FILTER-IGNORED",
+        "CFG-PRESET-SKIPPED",
+        "CFG-GREEN-CONFLICT",
         "DIM-NPOT",
         "DIM-SMALL",
         "DIM-FLOW-SMALL",

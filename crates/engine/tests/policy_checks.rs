@@ -1233,15 +1233,22 @@ fn builtin_presets_never_confirm_mesh_alpha() {
             }
         }
     }
-    // a user preset loaded under a built-in id is not built in
+    // A user preset may not reuse a built-in id (M6 Track D, Note T7) …
     let mut reg = PresetRegistry::builtin().unwrap();
-    reg.add_toml("schema_version = 1\nid = \"cs-quality\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n[subtypes.diffuse]\nalpha = { policy = \"blend\" }\n").unwrap();
-    assert!(!reg.is_builtin("cs-quality"));
+    assert!(reg
+        .add_toml(
+            "schema_version = 1\nid = \"cs-quality\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n"
+        )
+        .is_err());
+    assert!(reg.is_builtin("cs-quality"));
+    // … and a user preset's alpha policy is a choice.
+    reg.add_toml("schema_version = 1\nid = \"mine\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n[subtypes.diffuse]\nalpha = { policy = \"blend\" }\n").unwrap();
+    assert!(!reg.is_builtin("mine"));
     let overrides = sets(&["subtype=diffuse"]);
     let ctx = ResolveCtx {
         target: Target::Cs,
         registry: &reg,
-        preset: "cs-quality",
+        preset: "mine",
         user_config: None,
         project_config: None,
         overrides: &overrides,

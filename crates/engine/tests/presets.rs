@@ -3,6 +3,7 @@ use engine::config::*;
 use engine::overrides::to_patch;
 use engine::presets::*;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn merge_is_deep_and_leaf_paths_are_dotted() {
@@ -382,4 +383,175 @@ fn pack_codes_are_in_the_catalogue() {
         let c = Code::parse(s).unwrap();
         assert_eq!((c.as_str(), c.severity()), (s, sev));
     }
+}
+
+const MINE: &str =
+    "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n";
+
+fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, text).unwrap();
+    p
+}
+
+/// Carried fix 1 (M6 Track D, Note T7): a second preset under a loaded id is refused, naming both sources.
+#[test]
+fn duplicate_and_builtin_ids_are_refused_naming_both_sources() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml(MINE).unwrap();
+    let e = r.add_toml(MINE).unwrap_err().to_string();
+    assert!(
+        e.starts_with("CFG-INVALID") && e.contains("'mine'") && e.contains("inline"),
+        "{e}"
+    );
+    let e = r
+        .add_toml("schema_version = 1\nid = \"cs-quality\"\nversion = \"9\"\nbase = \"sdc-base\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("already loaded from builtin"), "{e}");
+    assert!(r.is_builtin("cs-quality"));
+    assert!(!r.is_builtin("mine"));
+    assert_eq!(r.source("mine"), Some("inline"));
+    assert_eq!(r.source("cs-quality"), Some("builtin"));
+    assert_eq!(r.user_presets(), vec![("mine", "inline")]);
+    assert_eq!(
+        r.table("mine").unwrap()["base"].as_str(),
+        Some("cs-quality")
+    );
+}
+
+/// Review Focus 1: a Windows BOM and CRLF line endings load.
+#[test]
+fn a_preset_with_a_bom_and_crlf_loads() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    let text = "\u{feff}schema_version = 1\r\nid = \"crlf\"\r\nversion = \"1.0.0\"\r\nbase = \"cs-quality\"\r\n[subtypes.diffuse]\r\nformat = \"bc1\"\r\n";
+    assert_eq!(r.add_toml(text).unwrap(), "crlf");
+    assert_eq!(
+        r.profile("crlf", Target::Cs, Subtype::Diffuse)
+            .unwrap()
+            .format,
+        Format::Bc1
+    );
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "bom.toml",
+        &text.replace("\"crlf\"", "\"bomfile\""),
+    );
+    assert!(r.add_dir(d.path()).is_empty());
+    assert!(r.get("bomfile").is_some());
+}
+
+/// Spec §3 and Review Focus 2: everything loads first, then every user preset is checked; a bad one is skipped
+/// with CFG-PRESET-SKIPPED, and so is a preset based on a skipped one.
+#[test]
+fn the_user_folder_loads_everything_then_checks_and_skips_bad_files() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    write(
+        dir,
+        "a_child.toml",
+        "schema_version = 1\nid = \"child\"\nversion = \"1\"\nbase = \"zbase\"\n",
+    );
+    write(dir, "b_bad.toml", "this is not toml");
+    write(
+        dir,
+        "c_dup.toml",
+        "schema_version = 1\nid = \"cs-quality\"\nversion = \"1\"\nbase = \"sdc-base\"\n",
+    );
+    write(
+        dir,
+        "d_orphan.toml",
+        "schema_version = 1\nid = \"orphan\"\nversion = \"1\"\nbase = \"missing\"\n",
+    );
+    write(dir, "e_badfield.toml", "schema_version = 1\nid = \"badfield\"\nversion = \"1\"\nbase = \"cs-quality\"\n[defaults]\nformat = \"bc9\"\n");
+    write(
+        dir,
+        "f_on_orphan.toml",
+        "schema_version = 1\nid = \"grandchild\"\nversion = \"1\"\nbase = \"orphan\"\n",
+    );
+    write(dir, "notes.txt", "not a preset");
+    write(
+        &dir.join("sub"),
+        "deep.toml",
+        "schema_version = 1\nid = \"deep\"\nversion = \"1\"\nbase = \"cs-quality\"\n",
+    );
+    write(dir, "z_base.toml", "schema_version = 1\nid = \"zbase\"\nversion = \"1\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n");
+    let mut r = PresetRegistry::builtin().unwrap();
+    let w = r.add_dir(dir);
+    assert_eq!(
+        r.profile("child", Target::Cs, Subtype::Diffuse)
+            .unwrap()
+            .format,
+        Format::Bc1
+    );
+    let mut skipped: Vec<String> = w
+        .iter()
+        .map(|w| {
+            assert_eq!(
+                (w.code, w.severity),
+                (Code::CfgPresetSkipped, Severity::Warning)
+            );
+            assert!(
+                w.data["reason"].as_str().is_some_and(|s| !s.is_empty()),
+                "{w:?}"
+            );
+            let file = w.data["file"].as_str().unwrap();
+            file.rsplit(['/', '\\']).next().unwrap().to_string()
+        })
+        .collect();
+    skipped.sort();
+    assert_eq!(
+        skipped,
+        [
+            "b_bad.toml",
+            "c_dup.toml",
+            "d_orphan.toml",
+            "e_badfield.toml",
+            "f_on_orphan.toml"
+        ]
+    );
+    for id in ["orphan", "grandchild", "badfield", "deep"] {
+        assert!(r.get(id).is_none(), "{id}");
+    }
+    assert!(r.is_builtin("cs-quality"));
+    assert!(r.source("zbase").unwrap().ends_with("z_base.toml"));
+    assert!(PresetRegistry::builtin()
+        .unwrap()
+        .add_dir(&dir.join("nope"))
+        .is_empty());
+}
+
+/// Note T6: one file reached twice (the folder and --preset-file) loads once; a copy under the same id does not.
+#[test]
+fn the_same_file_twice_loads_once() {
+    let d = tempfile::tempdir().unwrap();
+    let p = write(d.path(), "mine.toml", MINE);
+    let mut r = PresetRegistry::builtin().unwrap();
+    assert!(r.add_dir(d.path()).is_empty());
+    assert_eq!(r.add_file(&p).unwrap(), "mine");
+    let copy = write(&d.path().join("copy"), "mine.toml", MINE);
+    assert!(r
+        .add_file(&copy)
+        .unwrap_err()
+        .to_string()
+        .contains("already loaded from"));
+}
+
+#[test]
+fn every_builtin_preset_passes_check_preset() {
+    let r = PresetRegistry::builtin().unwrap();
+    for p in r.selectable() {
+        r.check_preset(&p.id).unwrap();
+    }
+    r.check_preset(BASE_ID).unwrap();
+    let mut r = r;
+    r.add_toml("schema_version = 1\nid = \"badrule\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { glob = \"**\" }\noverrides = { bogus = 1 }\n")
+        .unwrap();
+    assert!(r
+        .check_preset("badrule")
+        .unwrap_err()
+        .to_string()
+        .contains("bogus"));
 }
