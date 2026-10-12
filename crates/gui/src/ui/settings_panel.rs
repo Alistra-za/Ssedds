@@ -712,7 +712,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let toml_read_only = toml_read_only_reason(model);
     let header = model.dds_header(key);
     let confirming = model.dds_patch.confirming.as_deref() == Some(key);
-    let last = model.dds_patch.last.clone();
+    let last = model.dds_patch.last_for(key).map(str::to_string);
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());

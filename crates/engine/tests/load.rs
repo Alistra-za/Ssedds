@@ -326,3 +326,20 @@ fn a_cubemap_dds_is_a_decode_error() {
     let e = load_image(&p).unwrap_err();
     assert!(e.to_string().contains("cubemap or array"), "{e}");
 }
+
+/// Fix wave (final review I3): the dimension limit is read from the decoder chosen by the file's content, the one
+/// that allocates, not from the decoder its extension names. A 16385-wide PNG named `.bmp` is `TooLarge`.
+#[test]
+fn dimension_limit_follows_the_content_not_the_extension() {
+    let d = tempfile::tempdir().unwrap();
+    let png = d.path().join("wide.png");
+    ImageBuffer::from_fn(16385, 1, |_, _| Luma([0u8]))
+        .save(&png)
+        .unwrap();
+    let lying = d.path().join("wide.bmp");
+    std::fs::rename(&png, &lying).unwrap();
+    assert!(matches!(
+        load_image(&lying),
+        Err(LoadError::TooLarge { dim: 16385, .. })
+    ));
+}

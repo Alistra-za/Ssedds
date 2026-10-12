@@ -277,14 +277,28 @@ impl AppModel {
             None => Err("not a DDS item".to_string()),
             Some(item) => {
                 let (src, dest) = (item.input.clone(), self.export_root().join(&item.job_key));
-                let tag = self.dds_header(key).and_then(|v| v.tag);
-                dds_patch::write_patch(&src, &dest, tag).map(|m| (m, dest))
+                // Amended S7: never write over another item's output; the DDS's own copy may be re-patched.
+                match self
+                    .items
+                    .iter()
+                    .find(|o| o.key != key && o.job_key == item.job_key)
+                {
+                    Some(other) => Err(format!(
+                        "{} already exports to {}; patch this DDS with `sdc patch-header --out-dir` into another folder",
+                        other.key, item.job_key
+                    )),
+                    None => {
+                        let tag = self.dds_header(key).and_then(|v| v.tag);
+                        dds_patch::write_patch(&src, &dest, tag).map(|m| (m, dest))
+                    }
+                }
             }
         };
-        self.dds_patch.last = Some(match &r {
+        let line = match &r {
             Ok((m, _)) => m.clone(),
             Err(e) => e.clone(),
-        });
+        };
+        self.dds_patch.last = Some((key.to_string(), line));
         r.map(|(_, dest)| dest)
     }
 

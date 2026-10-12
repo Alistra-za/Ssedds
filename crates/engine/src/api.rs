@@ -342,10 +342,30 @@ impl Drop for Admitted<'_> {
 
 /// Peak bytes one file holds while converting: the float base plus its mip chain (about 1.34x), counted three
 /// times for the loaded image, the chain and the encoder inputs, decoded validation levels and output bytes.
+/// A DDS input (`image` cannot read its size) also holds its file data while mip 0 decodes (`load::load_dds`).
 fn estimated_bytes(path: &Path) -> u64 {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
+    {
+        return dds_dimensions(path).map_or(0, |(w, h, len)| input_bytes(w, h) + len);
+    }
     image::image_dimensions(path)
         .map(|(w, h)| input_bytes(w, h))
         .unwrap_or(0)
+}
+
+/// Width, height and file length of a DDS, from its first 20 bytes (the offsets `dds::read_dds` uses; that reader
+/// needs the whole payload). `None` when the file cannot be read or is not a DDS.
+fn dds_dimensions(path: &Path) -> Option<(u32, u32, u64)> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut b = [0u8; 20];
+    f.read_exact(&mut b).ok()?;
+    let u = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
+    let dim = |i| u(i).min(crate::load::MAX_DIM);
+    (&b[..4] == b"DDS ").then(|| (dim(16), dim(12), f.metadata().map_or(0, |m| m.len())))
 }
 
 /// [`estimated_bytes`] of a `w`×`h` input.
@@ -1837,6 +1857,34 @@ mod tests {
         assert!(admitted >= decode_peak, "{admitted} < {decode_peak}");
         assert!(admitted >= member_peak, "{admitted} < {member_peak}");
         assert!(m * 64 <= input_bytes(4096, 4096));
+    }
+
+    /// Fix wave (final review I2): a re-encoded DDS is admitted for its size, read from its header, plus its file
+    /// bytes; a non-DDS `.dds` and a hostile size do not panic.
+    #[test]
+    fn a_dds_input_is_admitted_for_its_header_size_plus_its_file() {
+        use crate::dds::*;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.DDS");
+        let desc = DdsDesc {
+            width: 64,
+            height: 32,
+            format: crate::config::Format::Bc7,
+            srgb: false,
+            header: ResolvedHeader::Dx10,
+        };
+        let b = dds_bytes(&desc, &[vec![0; 64 * 32]]).unwrap();
+        std::fs::write(&p, &b).unwrap();
+        assert_eq!(estimated_bytes(&p), input_bytes(64, 32) + b.len() as u64);
+        let mut huge = b.clone();
+        huge[12..20].fill(0xff);
+        std::fs::write(&p, &huge).unwrap();
+        assert_eq!(
+            estimated_bytes(&p),
+            input_bytes(crate::load::MAX_DIM, crate::load::MAX_DIM) + b.len() as u64
+        );
+        std::fs::write(&p, b"not a dds").unwrap();
+        assert_eq!(estimated_bytes(&p), 0);
     }
 
     /// Carry 13, review M2/I2 and ruling O2: only a comparable, matching, passing record is up to date.

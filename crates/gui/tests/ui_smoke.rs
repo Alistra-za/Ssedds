@@ -1026,13 +1026,50 @@ fn patch_without_an_export_folder_writes_to_sdc_out() {
     assert!(m.dds_patch.confirming.is_none());
     assert!(m
         .dds_patch
-        .last
-        .as_deref()
+        .last_for("landscape/broken.dds")
         .unwrap()
         .starts_with("DDS-HEADER-PATCHED"));
     // A key that is not a DDS item: the error is shown, not dropped.
     m.dds_patch.confirming = Some("landscape/rock01.png".into());
     assert!(m.patch_dds_header("landscape/rock01.png").is_err());
-    assert_eq!(m.dds_patch.last.as_deref(), Some("not a DDS item"));
+    assert_eq!(
+        m.dds_patch.last_for("landscape/rock01.png"),
+        Some("not a DDS item")
+    );
     assert!(m.dds_patch.confirming.is_none());
+}
+
+/// Fix wave (final review I1, amended S7): Patch on `rock01.dds` next to `rock01.png` would write over rock01.png's
+/// converted output (same output key). It is refused with a visible error and the exported bytes are unchanged.
+/// The result line belongs to the item it was pressed on only (final review minor 8).
+#[test]
+fn patch_refuses_an_output_key_another_item_exports_to() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let (_, b) = broken_dds(&root);
+    std::fs::write(root.join("landscape/rock01.dds"), &b).unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let (dds, png) = ("landscape/rock01.dds", "landscape/rock01.png");
+    let job_key = m.item(dds).unwrap().job_key.clone();
+    assert_eq!(m.item(png).unwrap().job_key, job_key);
+    let dest = m.export_root().join(&job_key);
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    std::fs::write(&dest, b"rock01.png's output").unwrap();
+    let e = m.patch_dds_header(dds).unwrap_err();
+    assert!(e.contains("rock01.png"), "{e}");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"rock01.png's output");
+    assert_eq!(m.dds_patch.last_for(dds), Some(e.as_str()));
+    assert_eq!(m.dds_patch.last_for("landscape/broken.dds"), None);
+    // Re-patching a DDS whose own copy already exists is not refused.
+    for _ in 0..2 {
+        m.patch_dds_header("landscape/broken.dds").unwrap();
+    }
+    assert!(m
+        .dds_patch
+        .last_for("landscape/broken.dds")
+        .unwrap()
+        .starts_with("DDS-HEADER-PATCHED"));
+    assert_eq!(m.dds_patch.last_for(dds), None);
 }

@@ -45,14 +45,7 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
         path: path.to_path_buf(),
         msg: e.to_string(),
     };
-    let (w, h) = image::image_dimensions(path).map_err(err)?;
-    if w.max(h) > MAX_DIM {
-        return Err(LoadError::TooLarge {
-            path: path.to_path_buf(),
-            dim: w.max(h),
-        });
-    }
-    // The explicit MAX_DIM header check bounds the size, so the crate's default
+    // The explicit MAX_DIM header check below bounds the size, so the crate's default
     // 512 MiB allocation cap (which rejects valid 16384 px images) is lifted.
     let mut reader = image::ImageReader::open(path)
         .and_then(image::ImageReader::with_guessed_format)
@@ -62,6 +55,14 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
         })?;
     reader.no_limits();
     let mut decoder = reader.into_decoder().map_err(err)?;
+    // Checked on the decoder chosen by content (the one that allocates), not one chosen by extension.
+    let (w, h) = decoder.dimensions();
+    if w.max(h) > MAX_DIM {
+        return Err(LoadError::TooLarge {
+            path: path.to_path_buf(),
+            dim: w.max(h),
+        });
+    }
     // A decoder that cannot read a profile, or finds none, is not an error: the profile is ignored either way.
     let icc_profile = decoder
         .icc_profile()

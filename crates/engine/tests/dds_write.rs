@@ -401,6 +401,7 @@ fn parallel_writes_into_one_directory_do_not_collide() {
 }
 
 #[test]
+#[cfg(windows)] // POSIX `rename` replaces a read-only target.
 fn atomic_write_to_a_read_only_target_is_an_io_error_and_leaves_no_temp() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ro.dds");

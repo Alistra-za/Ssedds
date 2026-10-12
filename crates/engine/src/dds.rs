@@ -605,7 +605,7 @@ pub fn from_dxgi(d: u32) -> Option<DdsPixelFormat> {
 /// full chain for the dimensions) and the only large allocation is the copy of `bytes` itself. Sizes use checked
 /// arithmetic and are compared with the bytes actually present, so an absurd dimension reports `Truncated`.
 /// Zero dimensions, a wrong header size, unknown FourCC / DXGI values and a legacy volume declaration
-/// (`DDSD_DEPTH` with a depth above 1, or `DDSCAPS2_VOLUME`) report `Unsupported`; the volume check comes before
+/// (`DDSD_DEPTH` with a depth above 1, or `DDSCAPS2_VOLUME`) or a DX10 3D dimension report `Unsupported`; the volume check comes before
 /// the length check, so a volume missing depth slices is unsupported too. Cubemaps count six faces and DX10
 /// arrays `array_size` slices when checking the length.
 pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
@@ -656,6 +656,10 @@ pub fn read_dds(bytes: &[u8]) -> Result<DdsFile, DdsError> {
                     array_size: u(140),
                     misc2: u(144),
                 };
+                // D3D10_RESOURCE_DIMENSION_TEXTURE3D: a volume even without the legacy flags.
+                if f.dimension == 4 {
+                    return Err(DdsError::Unsupported("volume texture".into()));
+                }
                 off = DX10_END;
                 dx10 = Some(f);
                 from_dxgi(f.dxgi)

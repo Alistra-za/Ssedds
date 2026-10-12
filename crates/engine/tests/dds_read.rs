@@ -530,7 +530,7 @@ fn header_check_catches_violations() {
     }
 
     let mut b = good.clone();
-    put(&mut b, 132, 4); // dimension: 3D
+    put(&mut b, 132, 2); // dimension: 1D
     put(&mut b, 140, 2); // array size
     put(&mut b, 144, 1); // misc2
     let tail = vec![0u8; 112]; // room for the second array slice
@@ -1225,4 +1225,29 @@ fn a_padded_pitch_is_a_header_issue_not_a_panic() {
         check_header(&f)
     );
     assert!(decode_level(f.format, 3, 2, &f.data[f.levels[0].2.clone()], None).is_ok());
+}
+
+/// Fix wave (final review minor 1): a DX10 header with `D3D10_RESOURCE_DIMENSION_TEXTURE3D` is a volume even without
+/// the legacy volume flags. It is refused, not relabelled 2D (so `plan_patch` refuses it too).
+#[test]
+fn dx10_texture3d_without_volume_flags_is_unsupported() {
+    let good = dds_bytes(
+        &DdsDesc {
+            width: 8,
+            height: 8,
+            format: Format::Bc7,
+            srgb: false,
+            header: ResolvedHeader::Dx10,
+        },
+        &[vec![0; 64]],
+    )
+    .unwrap();
+    let mut b = good.clone();
+    put(&mut b, 132, 4); // D3D10_RESOURCE_DIMENSION_TEXTURE3D
+    assert!(
+        matches!(read_dds(&b), Err(DdsError::Unsupported(s)) if s == "volume texture"),
+        "{:?}",
+        read_dds(&b)
+    );
+    assert!(engine::dds_patch::plan_patch(&b, &Default::default()).is_err());
 }

@@ -22,11 +22,19 @@ pub struct DdsPatchState {
     cache: BTreeMap<String, (Option<SourceStamp>, Option<bool>, DdsHeaderView)>,
     /// The key whose "Patch header…" was pressed and awaits "Patch" or "Cancel".
     pub confirming: Option<String>,
-    /// The last result line, shown under the panel.
-    pub last: Option<String>,
+    /// The last result line and the key it belongs to; shown under that item's panel only.
+    pub last: Option<(String, String)>,
 }
 
 impl DdsPatchState {
+    /// The last result line, if it belongs to item `key`.
+    pub fn last_for(&self, key: &str) -> Option<&str> {
+        self.last
+            .as_ref()
+            .filter(|(k, _)| k == key)
+            .map(|(_, l)| l.as_str())
+    }
+
     pub(crate) fn view(&mut self, key: &str, path: &Path) -> DdsHeaderView {
         let stamp = SourceStamp::of(path);
         let tag = self.cache.get(key).and_then(|(_, t, _)| *t);
