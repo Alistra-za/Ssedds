@@ -7432,3 +7432,25 @@ One JSON object per line; `t_ms` = milliseconds since the app started its log. W
 | Step 6: prune | `prune` | `removed` ≥ 2 (the two artefacts), `bytes_after` ≤ 536870912; `ms` informational |
 | Step 6: hits and moved root | `compile` `cache: "hit"`; `shape_pending` | after "Choose folder…" to the same sources: every `compile` is `hit`, no `shape_pending` |
 | Always | `ui_gap`, `run_end.dropped`, `log_capped`, `device_rebuild`, `gpu` (`adapter`, `warp`) | `ui_gap` outside the Step 2 and 3 windows is worth a look (a freeze elsewhere); `dropped` 0; `warp: false` on the owner's machine; `device_rebuild` should be absent |
+
+## P1-B verification, run 1 (2026-10-12, exe d23063a, log file preview-timings-20261012-091950.jsonl)
+
+| Check | Result | Value (from the log unless marked manual) |
+|---|---|---|
+| Step 2 recompile, big NIF (owner: the first example, `vampirerobesfkha_1.nif`) | pass (N short) | Set preview burst at 623.42 s: 2 shapes (the set showed 2), `showing_previous: true`; first `shape_pending` → last `shape_ready` 731 ms; no `ui_gap` in the burst; P1-A would have blocked ≈ 1430 ms (702 + 728, cache miss). Meshes-panel CS toggle at 465.91 s: 3 shapes, 750 ms, no `ui_gap`, P1-A ≈ 731 ms. N was below the ≥ 6 the step asks for. |
+| Step 2 glint key only | inconclusive | `edit` kind `Permutation`, `ms_to_frame` 31.8 ms (later toggles 3–18 ms, memo hits); both shapes take glint, so "fewer than N" cannot show at N = 2 |
+| Step 3 compile failure keeps old image, error listed | not run | no `compile` line with `ok: false` in the log; no screenshot |
+| Step 4 swap on re-encode, no scene push | fail as written | 100.5 / 103.3 / 106.1 s: `encode` (Encoded) ≈ 1000 ms each, each followed by a `load` (build 5–6 ms, first frame 32–33 ms, all shader hits), no `texture_swap`. The code follows plan Task 8 (line 4540: `Delta.encode` → `want_scene` → full push); the Goal line and this step expect a swap. Owner decision. |
+| Step 4 first flip (re-encode) | pass | `encode` (Source) 188 / 236 / 273 ms; `texture_swap` `ms_to_frame` 12.6 / 24.1 / 16.8 ms; no `load` |
+| Step 4 instant flip, both variants | not run | only the 3 `ab_flip` lines of the first flip (12.6 / 24.1 / 16.9 ms) |
+| Step 4 background encode of the other mode | not run | no settings change after the first flip |
+| Step 4 GPU/commit with both variants | — | not recorded (manual) |
+| Step 4 frame cost after the flip | — | `frame_stats` at 280 s: `draw_ms_p95` 0.054, `total_ms_p95` 2.235 ms (2.306 before): no rise |
+| Step 5 multi-node NIF vs NifSkope: `lighttrap01.nif` | pass (manual) | owner: every mesh in the correct spot; no screenshot; P1-A comparison not done |
+| Step 6 cache prune | not run | `prune` removed 0, 993,512 bytes before and after (the artefacts were not created); disk cache hits seen (84.8 s) |
+| Whole run | see note | 104 `ui_gap` lines, max 2481 ms, none inside a compile burst; `dropped` 0; `warp: false` (RTX 4090); no `device_rebuild`, no `log_capped` |
+
+Notes / surprises:
+- `ui_gap` metric bug: 77 of the 104 lines follow a completion event within 60 ms of the previous frame. The watch was armed before the frame drained its replies, so the owner's pause after the last reply was logged as a freeze. Fixed in 04ac290 (armed at the end of the frame, regression test). The other 27 match the same pattern after a render reply, which the log does not record; a rerun on the fixed exe confirms or refutes.
+- 466.7–484.4 s: 22 reloads of mesh:132418 at about 0.5 s intervals, build ≈ 44 ms, no compiles (memo hits); matches repeated CS-feature toggles.
+- Rerun needed on the fixed exe: Steps 3, 4 (instant flip, background encode), 6, and Step 2 on a set showing ≥ 6 shapes.
