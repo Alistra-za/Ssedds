@@ -993,7 +993,7 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
             json!({
                 "kind": "encoders",
                 "bc7enc_rdo": v.bc7enc_rdo, "ispc_texture_compressor": v.ispctc, "ispc": v.ispc,
-                "bc7e_patch": v.bc7e_patch, "isa": isa, "bc1_model": model,
+                "bc7e_patch": v.bc7e_patch, "rgbcx_patch": v.rgbcx_patch, "isa": isa, "bc1_model": model,
                 "nvtt": { "found": nvtt.path.is_some(), "path": nvtt_path, "source": nvtt.source },
             })
         );
@@ -1004,7 +1004,11 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
         v.bc7enc_rdo,
         v.bc7e_patch.as_deref().unwrap_or("none")
     );
-    println!("rgbcx (bc7enc_rdo {})", v.bc7enc_rdo);
+    println!(
+        "rgbcx (bc7enc_rdo {}) patch {}",
+        v.bc7enc_rdo,
+        v.rgbcx_patch.as_deref().unwrap_or("none")
+    );
     println!("ISPC Texture Compressor {} (BC6H)", v.ispctc);
     println!("ISPC {} objects; dispatched ISA on this CPU: {isa}", v.ispc);
     println!("BC1 decoder model: {model}");

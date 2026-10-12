@@ -60,6 +60,9 @@ pub struct EncoderVersions {
     pub ispc: String,
     /// `<patch name>@sha256:<hash of the patch file>`; `None` when the vendored bc7e is unpatched.
     pub bc7e_patch: Option<String>,
+    /// The rgbcx patch name; `None` in manifests written before it, so those BC3/BC4/BC5 outputs re-encode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgbcx_patch: Option<String>,
 }
 
 impl EncoderVersions {
@@ -69,6 +72,7 @@ impl EncoderVersions {
             bc7enc_rdo: v.bc7enc_rdo.into(),
             ispctc: v.ispctc.into(),
             ispc: v.ispc.into(),
+            rgbcx_patch: v.rgbcx_patch.map(Into::into),
             bc7e_patch: v
                 .bc7e_patch
                 .map(|name| format!("{name}@sha256:{}", hex::encode(Sha256::digest(BC7E_PATCH)))),

@@ -2237,7 +2237,11 @@ mod tests {
             f(&mut e);
             e
         };
-        let not_up: [(&str, ManifestEntry); 10] = [
+        let not_up: [(&str, ManifestEntry); 11] = [
+            (
+                "encoded before the rgbcx round-to-nearest patch",
+                with(&|e| e.encoders.as_mut().unwrap().rgbcx_patch = None),
+            ),
             ("no encoders", with(&|e| e.encoders = None)),
             (
                 "other encoders",

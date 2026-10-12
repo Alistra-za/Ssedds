@@ -244,6 +244,13 @@
         },
         "ispctc": {
           "type": "string"
+        },
+        "rgbcx_patch": {
+          "description": "The rgbcx patch name; `None` in manifests written before it, so those BC3/BC4/BC5 outputs re-encode.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

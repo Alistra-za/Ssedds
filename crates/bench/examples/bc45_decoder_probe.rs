@@ -1,30 +1,11 @@
 //! Task 10 fix round 1: why BC4/BC5 PSNR is not monotonic in the rgbcx search radius. Decodes every block with
 //! bcdec (the engine/bench decoder: interpolants rounded to nearest) and with rgbcx's own model
-//! (`bc4_block::get_block_values`: interpolants floored), prints the radius table under both, and dumps one
-//! Wood094 BC5 block whose bcdec error rises from radius 5 to 10. Reads images2 only; prints to stdout.
+//! (`bc4_block::get_block_values` through the shim; floored before the M6 Track D rgbcx patch, rounded since), prints the
+//! radius table under both, and dumps one Wood094 BC5 block whose bcdec error rises from radius 5 to 10 (if any).
+//! Reads images2 only; prints to stdout.
 use sdc_bench::corpus::{bench_root, load_png_rgba8, set_files, stem};
 use sdc_bench::metrics::{mean, psnr_from_mse};
 use sdc_bench::radius::{encode, RADII};
-
-/// rgbcx.h `get_block_values8/6`: integer division, i.e. floor.
-fn rgbcx_vals(l: u32, h: u32) -> [u8; 8] {
-    if l > h {
-        let f = |a: u32, b: u32| ((l * a + h * b) / 7) as u8;
-        [
-            l as u8,
-            h as u8,
-            f(6, 1),
-            f(5, 2),
-            f(4, 3),
-            f(3, 4),
-            f(2, 5),
-            f(1, 6),
-        ]
-    } else {
-        let f = |a: u32, b: u32| ((l * a + h * b) / 5) as u8;
-        [l as u8, h as u8, f(4, 1), f(3, 2), f(2, 3), f(1, 4), 0, 255]
-    }
-}
 
 fn sels(b: &[u8]) -> [usize; 16] {
     let bits = u64::from_le_bytes(b[..8].try_into().unwrap()) >> 16;
@@ -35,7 +16,7 @@ fn sels(b: &[u8]) -> [usize; 16] {
 fn dec(b: &[u8]) -> ([u8; 16], [u8; 16]) {
     let mut bc = [0u8; 16];
     bcdec_rs::bc4(b, &mut bc, 4, false);
-    let v = rgbcx_vals(b[0] as u32, b[1] as u32);
+    let v = encoders_sys::bc4_block_values(b[0], b[1]);
     let s = sels(b);
     (bc, std::array::from_fn(|i| v[s[i]]))
 }

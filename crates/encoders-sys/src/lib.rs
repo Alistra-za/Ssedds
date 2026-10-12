@@ -65,6 +65,8 @@ pub struct Versions {
     pub ispctc: &'static str,
     pub ispc: &'static str,
     pub bc7e_patch: Option<&'static str>,
+    /// The sdc patch in the vendored `rgbcx.h` (BC4 palette rounded to nearest, M6 Track D); README-VENDOR.md.
+    pub rgbcx_patch: Option<&'static str>,
 }
 
 pub fn versions() -> Versions {
@@ -73,6 +75,7 @@ pub fn versions() -> Versions {
     debug_assert_eq!(patched, cfg!(sdc_bc7e_patched));
     Versions {
         bc7enc_rdo: "b943862",
+        rgbcx_patch: Some("bc4-round-to-nearest"),
         ispctc: "79ddbc9",
         ispc: "1.31.0",
         bc7e_patch: if patched {

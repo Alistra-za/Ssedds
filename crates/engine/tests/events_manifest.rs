@@ -315,6 +315,9 @@ fn encoder_versions_come_from_the_encoders_crate() {
     )))
     .unwrap();
     assert_eq!(patch, format!("{}@sha256:{hash}", v.bc7e_patch.unwrap()));
+    // A manifest from before the rgbcx BC4 round-to-nearest patch must not match, so its BC3/BC4/BC5 re-encode.
+    assert_eq!(e.rgbcx_patch.as_deref(), Some("bc4-round-to-nearest"));
+    assert_eq!(e.rgbcx_patch.as_deref(), v.rgbcx_patch);
 }
 
 #[test]

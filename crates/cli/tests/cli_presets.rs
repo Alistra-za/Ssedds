@@ -117,6 +117,7 @@ fn encoders_reports_versions_isa_model_and_nvtt() {
         "79ddbc9",
         "1.31.0",
         "0001-exact-opaque-alpha@sha256:",
+        "patch bc4-round-to-nearest",
         "dispatched ISA",
         "BC1 decoder model: ideal",
     ] {
@@ -136,6 +137,7 @@ fn encoders_json_is_one_object_and_nvtt_comes_from_the_flag() {
     assert_eq!(v["ispc"], "1.31.0");
     assert_eq!(v["bc1_model"], "ideal");
     assert!(v["bc7e_patch"].as_str().unwrap().contains("@sha256:"));
+    assert_eq!(v["rgbcx_patch"], "bc4-round-to-nearest");
     assert!(["sse2", "sse4", "avx", "avx2"].contains(&v["isa"].as_str().unwrap()));
     assert_eq!(v["nvtt"]["found"], false);
     assert_eq!(v["nvtt"]["source"], "--nvtt");
