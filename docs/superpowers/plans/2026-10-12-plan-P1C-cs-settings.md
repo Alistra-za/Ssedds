@@ -4124,3 +4124,20 @@ One JSON object per line; `t_ms` = milliseconds since the app started its log. E
 
 ---
 
+
+## P1-C verification (2026-10-12, exe 9b0c5d5 built 15:44 (fix round 3 58c8fd2 is tests only), log preview-timings-20261012-224435.jsonl)
+
+Run 1 (exe f43e3cd) found the head mirror-glossy and the scalp flow map tinting colour. Root cause (Task 8 diagnosis, 6c3fcb6): the owner's settings were never applied (saved shaders path is a chosen folder → MO2 overwrite not searched; features-only read hashed as default → dropped), so every run compiled only ENABLE_LL. Fixed in 9b0c5d5; Task 8 also added the pre-October CS skin RFAOS lookup (owner rule: slot 7 `_s` → `_rfaos`, else slot 1 `_n`/`_msn` → `_rfaos`), per-shape `skinMaterialFlags`, linear t71.
+
+| Check | Result | Value (from the log unless marked manual) |
+|---|---|---|
+| Step 2 settings read at start | pass | `settings` defines `[CS_HAIR, CS_SKIN, ENABLE_LL, EXTENDED_MATERIALS, EXTENDED_TRANSLUCENCY, VANILLA_FRESNEL]`, hash `0f9846645d7b`, notes 0; off line lists loaded-but-uncompiled features, no Unified Water (manual, screenshot); also lists non-visual features (cosmetic) |
+| Step 3 LL / Fresnel / hair / skin vs game | pass (manual) | owner: head, body, hair and armour look correct (Arch head uses `light/head_rfaos.dds`) |
+| Step 4 value-only change | pass | 509.25 s: new hash `139f130f4c51`, same defines, no `load`, no `shape_pending` (owner edited HairGlossiness by hand with a backup, game closed) |
+| Step 4 define change (Hair Specular off) | pass | 533.14 s: defines without CS_HAIR; shape 3 `shape_pending` showing_previous true → `shape_ready` ok in 283 ms; no `load`; off line lists Hair Specular (manual) |
+| Step 4 restore | pass | 558.42 s: hash back to `0f9846645d7b` |
+| Step 5 no Info.ini / no JSON / malformed | covered by tests | with an MO2 target the settings now always come from the MO2 origins, so the scratch-folder procedure cannot reach these cases; pinned by Task 1 (T-S2 fallback, malformed), Task 5 (malformed keeps previous), Task 8 fix rounds (fallback precedence) |
+| Step 6 installed-CS gate (T-S5) | pass | Task 6: 3 meshes × 7 cases, 0 black px |
+| Whole run | pass | `dropped` 0; no `panic`; ui_gap lines (4.8–16.8 s) each end at a "Shader folder…" pick (modal dialog) |
+
+Follow-ups offered: a "settings coverage" log/notes line (fields no setting wrote, keys that matched no field) to catch CS key drift after updates; filter non-visual features from the off line.
