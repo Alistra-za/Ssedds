@@ -1,6 +1,7 @@
 //! M6 Track A (spec 2026-10-11-sdc-m6-shader-modes-design.md, DECISIONS Note S): the per-set shader table as data, auto-pick, member defaults and the extra/missing map check. The CLI and GUI read it; neither duplicates it.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 
 use schemars::JsonSchema;
@@ -544,13 +545,60 @@ pub fn pick(i: &PickInput) -> ShaderPick {
     }
 }
 
+/// The plan's jobs indexed once by input path and by set key, so the per-set shader pick and map check look up a
+/// set's jobs instead of scanning every job per set. Both lookups keep plan order.
+pub struct JobIndex<'a> {
+    jobs: &'a [crate::policy::ResolvedJob],
+    by_input: HashMap<&'a Path, Vec<usize>>,
+    by_set: HashMap<&'a str, Vec<usize>>,
+}
+
+impl<'a> JobIndex<'a> {
+    pub fn new(jobs: &'a [crate::policy::ResolvedJob]) -> Self {
+        let mut by_input: HashMap<&Path, Vec<usize>> = HashMap::new();
+        let mut by_set: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, j) in jobs.iter().enumerate() {
+            by_input.entry(j.input.as_path()).or_default().push(i);
+            by_set.entry(j.set_key.as_str()).or_default().push(i);
+        }
+        Self {
+            jobs,
+            by_input,
+            by_set,
+        }
+    }
+
+    fn get<'s>(
+        &'s self,
+        ix: Option<&'s Vec<usize>>,
+    ) -> impl Iterator<Item = &'a crate::policy::ResolvedJob> + 's {
+        ix.into_iter().flatten().map(|&i| &self.jobs[i])
+    }
+
+    /// The jobs whose input is `path` (a packed job's input is its first source's path).
+    pub fn by_input<'s>(
+        &'s self,
+        path: &Path,
+    ) -> impl Iterator<Item = &'a crate::policy::ResolvedJob> + 's {
+        self.get(self.by_input.get(path))
+    }
+
+    /// The jobs of the set `key`.
+    pub fn in_set<'s>(
+        &'s self,
+        key: &str,
+    ) -> impl Iterator<Item = &'a crate::policy::ResolvedJob> + 's {
+        self.get(self.by_set.get(key))
+    }
+}
+
 /// `pick` for one set at plan time (spec §4): pass-1 `jobs` give the member sub-types (packing inputs excluded),
 /// `mesh` the scanned votes keyed by `mesh_key`.
 pub fn pick_for_set(
     ctx: &crate::policy::ResolveCtx,
     set: &crate::group::TextureSet,
     files: &[crate::discover::InputFile],
-    jobs: &[crate::policy::ResolvedJob],
+    jobs: &JobIndex,
     explicit: Option<Shader>,
     mesh: &BTreeMap<String, Vec<Shader>>,
 ) -> ShaderPick {
@@ -564,18 +612,15 @@ pub fn pick_for_set(
         .iter()
         .filter_map(|&i| {
             let f = &files[i];
-            let job = jobs.iter().find(|j| j.input == f.path);
+            let job = jobs.by_input(&f.path).next();
             let output = job.map_or(f.output.as_path(), |j| j.output.as_path());
             colour_mesh_key(&f.game_path, output, job.map(|j| j.profile.subtype))
         })
         .find_map(|k| mesh.get(&k))
         .map_or(&[][..], Vec::as_slice);
     let subtypes: Vec<Subtype> = jobs
-        .iter()
-        .filter(|j| {
-            j.set_key == set.key
-                && !matches!(j.status, crate::policy::JobStatus::PackingInput { .. })
-        })
+        .in_set(&set.key)
+        .filter(|j| !matches!(j.status, crate::policy::JobStatus::PackingInput { .. }))
         .map(|j| j.profile.subtype)
         .collect();
     let game_paths: Vec<&str> = set
@@ -1301,6 +1346,57 @@ mod tests {
             wanted: None,
         };
         assert!(pick_notes(&s, Target::Cs).is_empty());
+    }
+
+    fn rj(input: &str, set: &str, output: &str) -> crate::policy::ResolvedJob {
+        crate::policy::ResolvedJob {
+            input: input.into(),
+            output: output.into(),
+            game_path: input.into(),
+            set_key: set.into(),
+            profile: crate::presets::PresetRegistry::builtin()
+                .unwrap()
+                .base_profile(Target::Cs, Subtype::Diffuse),
+            provenance: Default::default(),
+            suggestions: vec![],
+            warnings: vec![],
+            status: crate::policy::JobStatus::Ready,
+            suffix_alias: None,
+            source: None,
+            pack: None,
+            bake: None,
+            shader: None,
+        }
+    }
+
+    /// One index per plan replaces a scan of every job per set: lookups by input and by set keep plan order.
+    #[test]
+    fn job_index_keeps_plan_order_by_input_and_by_set() {
+        let jobs = [
+            rj("a/x.png", "a/x", "x.dds"),
+            rj("b/y.png", "b/y", "y.dds"),
+            rj("a/x.png", "a/x", "x_rmaos.dds"),
+            rj("a/x_n.png", "a/x", "x_n.dds"),
+        ];
+        let ix = JobIndex::new(&jobs);
+        let outs = |it: &mut dyn Iterator<Item = &crate::policy::ResolvedJob>| {
+            it.map(|j| j.output.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            outs(&mut ix.by_input(std::path::Path::new("a/x.png"))),
+            ["x.dds", "x_rmaos.dds"]
+        );
+        assert_eq!(
+            outs(&mut ix.in_set("a/x")),
+            ["x.dds", "x_rmaos.dds", "x_n.dds"]
+        );
+        assert_eq!(outs(&mut ix.in_set("b/y")), ["y.dds"]);
+        assert!(ix.in_set("c/z").next().is_none());
+        assert!(ix
+            .by_input(std::path::Path::new("c/z.png"))
+            .next()
+            .is_none());
     }
 
     #[test]
