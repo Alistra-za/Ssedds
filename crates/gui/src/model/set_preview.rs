@@ -2170,6 +2170,8 @@ impl SetPreview {
                 }
             }
         }
+        // Another member sharing the path may hold the copy: never drop what is also wanted.
+        stale.retain(|k| !want.contains_key(k));
         let mut flip: HashSet<String> = HashSet::new();
         for ((p, label), e) in want.iter().filter(|(k, _)| k.1 == mode) {
             if self.tex_sent.get(&(p.clone(), *label)) == Some(&e.id) {

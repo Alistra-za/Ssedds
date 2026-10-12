@@ -1793,3 +1793,34 @@ fn a_flip_before_the_other_variant_exists_falls_back_to_the_re_encode() {
         .iter()
         .all(|c| !matches!(c, V3Cmd::SetTextureVariant { .. })));
 }
+
+#[test]
+fn members_sharing_a_path_with_one_other_copy_do_not_swap_and_drop_every_frame() {
+    let mut t = live();
+    let ks = kinds(&t.s);
+    let shared = t.s.enc.members[&ks[0]].slot.paths.clone();
+    t.s.enc.members.get_mut(&ks[1]).unwrap().slot.paths = shared;
+    t.s.enc.set_cap(1024, Instant::now()); // no other copies anywhere
+    t.s.set_mode(PreviewMode::Source);
+    poll_once(&mut t.s, &t.m);
+    finish(&mut t.s, 1024);
+    poll_once(&mut t.s, &t.m);
+    poll_once(&mut t.s, &t.m); // the other-mode encodes are started
+    let at = t.s.enc.alt_token_of(ks[0]);
+    assert_ne!(at, 0);
+    t.s.enc
+        .inject_as(ks[0], at, 1024, PreviewMode::Encoded, fake());
+    for _ in 0..3 {
+        poll_once(&mut t.s, &t.m);
+    }
+    drain(&t);
+    for _ in 0..5 {
+        poll_once(&mut t.s, &t.m);
+    }
+    let c = drain(&t);
+    assert!(
+        c.is_empty(),
+        "nothing changed: no swap or drop is sent again ({} cmds)",
+        c.len()
+    );
+}
