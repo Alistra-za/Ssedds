@@ -114,7 +114,8 @@ pub struct BatchArgs {
     /// Project config (default: sdc.toml in the first input folder).
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// Field override: field=value, subtype:<id>.field=value, file:<glob>.field=value.
+    /// Field override: field=value, subtype:<id>.field=value, file:<glob>.field=value. `set:<id>.shader=<shader>`
+    /// picks a set's shader (ids as `inspect` prints them after `set`).
     #[arg(long = "set")]
     pub set: Vec<String>,
     /// Fill value for a packed channel without a source map: <role>=<0..255>, e.g. metallic=255 (repeatable). Same

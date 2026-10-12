@@ -4,6 +4,7 @@ use engine::events::*;
 use engine::manifest::*;
 use engine::policy::{JobStatus, ResolvedJob};
 use engine::presets::PresetRegistry;
+use engine::shader::{Shader, ShaderOrigin, ShaderPick};
 use std::sync::Arc;
 
 fn record(
@@ -29,6 +30,11 @@ fn record(
         output: output.into(),
         validation: Default::default(),
         bc1_model: Some("ideal".into()),
+        shader: Some(ShaderPick {
+            shader: Shader::Default,
+            provenance: ShaderOrigin::Fallback,
+            wanted: Some(Shader::Pbr),
+        }),
     }
 }
 
@@ -570,4 +576,15 @@ fn a_job_key_and_a_skip_kind_have_an_exact_json_layout() {
         r#"{"schema":2,"seq":1,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","path":"in/a_ao.png","job_key":"a_rmaos.dds","kind":"file_skipped","skip":"packed_source","code":null,"reason":"packed into a_rmaos.dds"}"#
     );
     assert_eq!(serde_json::from_str::<EngineEvent>(&text).unwrap(), ev);
+}
+
+#[test]
+fn the_shader_pick_round_trips_through_the_manifest_json() {
+    let (profile, preset) = cs_quality();
+    let r = record("x.dds", "ab", profile, preset);
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["shader"]["wanted"], "pbr");
+    assert_eq!(serde_json::from_value::<ManifestRecord>(v).unwrap(), r);
+    let none = ManifestRecord { shader: None, ..r };
+    assert!(serde_json::to_value(&none).unwrap().get("shader").is_none());
 }

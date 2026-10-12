@@ -181,6 +181,9 @@ pub struct ManifestRecord {
     /// BC3) and that validation decoded BC1 with. `None` in records written before the field existed.
     #[serde(default)]
     pub bc1_model: Option<String>,
+    /// The set's shader and why (M6 spec §4.4); `None` in records written before shaders existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<crate::shader::ShaderPick>,
 }
 
 /// The stable id of a BC1 decoder model, as `--bc1-decoder` spells it (spec §8).

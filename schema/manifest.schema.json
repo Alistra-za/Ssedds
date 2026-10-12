@@ -624,6 +624,54 @@
       ],
       "type": "string"
     },
+    "Shader": {
+      "description": "A Skyrim shader a texture set is made for (spec §3).",
+      "enum": [
+        "pbr",
+        "advanced_skin",
+        "default",
+        "envmap",
+        "complex_material",
+        "glow",
+        "parallax",
+        "skin",
+        "hair",
+        "eye",
+        "multilayer",
+        "landscape"
+      ],
+      "type": "string"
+    },
+    "ShaderOrigin": {
+      "description": "Why a set has its shader (spec §4.4). Serialises as a string: `set`, `auto:<rule id>`, `fallback`.",
+      "type": "string"
+    },
+    "ShaderPick": {
+      "description": "A set's shader, why it was chosen, and the shader asked for when that one was not available (`wanted`).",
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/ShaderOrigin"
+        },
+        "shader": {
+          "$ref": "#/$defs/Shader"
+        },
+        "wanted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shader"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "shader",
+        "provenance"
+      ],
+      "type": "object"
+    },
     "SourceRef": {
       "description": "One source file of a record: its path and SHA-256. A recipe built from several sources (`_rmaos`, `_p`) lists\nthem all so `if-changed` can re-encode when any of them changes.",
       "properties": {
@@ -836,6 +884,17 @@
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
+    },
+    "shader": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ShaderPick"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The set's shader and why (M6 spec §4.4); `None` in records written before shaders existed."
     },
     "source": {
       "type": "string"
