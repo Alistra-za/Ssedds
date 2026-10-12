@@ -33,6 +33,8 @@ pub struct State {
     pub slot_cmds: slot_commands::SlotCmdState,
     /// What is on the GPU; set by the app, empty in tests.
     pub gpu: preview::GpuStatus,
+    /// The set preview (P1-A). `Default` is disabled and does no IO; `SdcApp::new` builds the enabled one.
+    pub set3d: crate::model::set_preview::SetPreview,
 }
 
 thread_local! {
@@ -71,6 +73,11 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
+    if state.set3d.enabled && set_preview::wanted(model) {
+        egui::Panel::right("set-3d")
+            .default_size(380.0)
+            .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
+    }
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
     dialogs::draw(ui.ctx(), model);
 }
