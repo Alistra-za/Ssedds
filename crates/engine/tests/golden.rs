@@ -2637,3 +2637,169 @@ fn reencode_through_a_junction_into_its_own_folder_fails() {
     assert_eq!((o.summary.converted, o.summary.failed), (0, 1));
     assert_eq!(std::fs::read(real.join("rock.dds")).unwrap(), rgba8);
 }
+
+/// S-mips-6/7 (M6 exit): a 48x40 diffuse under `resize = pot-down` is written at 32x32 (6 mips) with no
+/// acknowledgement; DIM-RESIZED reports the size it was written at.
+#[test]
+fn npot_diffuse_with_pot_down_converts_without_acknowledgement() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "d/odd.png",
+        DynamicImage::ImageRgb8(image::RgbImage::from_fn(48, 40, |x, y| {
+            Rgb([(x * 5) as u8, (y * 6) as u8, 90])
+        })),
+    );
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["resize=pot-down", "file:**/odd.png.subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(
+        (
+            o.summary.converted,
+            o.summary.skipped,
+            o.summary.exit_code()
+        ),
+        (1, 0, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    assert_eq!(
+        warning_of(&o, "odd.png", Code::DimResized).data["to"],
+        serde_json::json!([32, 32])
+    );
+    let f = dds(d.path(), "d/odd.dds");
+    assert_eq!((f.width, f.height, f.mip_count), (32, 32, 6));
+}
+
+/// S-mips-3 (M6 exit): Kaiser changes the RGB of mips >= 1 of an sRGB colour map and leaves mip 0 and the
+/// box-filtered data alpha alone. Unscoped sets on a one-file batch; ruling M2: `alpha.policy = data` in both runs,
+/// else the varying alpha leaves the file unresolved.
+#[test]
+fn kaiser_diffuse_differs_from_box_and_its_alpha_does_not() {
+    let d = tempfile::tempdir().unwrap();
+    // 3 px checker: high frequency below Nyquist, where box and Kaiser disagree.
+    put(
+        d.path(),
+        "textures/a/rock.png",
+        rgba(64, |x, y| {
+            let c = if (x / 3 + y / 3) % 2 == 0 { 230 } else { 20 };
+            [c, 255 - c, 90, (y * 4) as u8]
+        }),
+    );
+    // A file-scoped sub-type, not `subtype:diffuse` (which may silently miss): a suffixless file is otherwise
+    // unresolved (SUG-LOW-CONFIDENCE).
+    const DIFFUSE: &str = "file:**/rock.png.subtype=diffuse";
+    // Uncompressed: under BC7 a block holding this checker and an alpha ramp trades alpha for RGB, differently per
+    // filter (measured: box 16 / Kaiser 10 at mip 1 texel 0 vs 2 in the source), which would hide the filter's alpha.
+    const LOSSLESS: &str = "format=rgba8";
+    let out = |sets: &[&str]| {
+        let o = convert(d.path(), Target::Cs, sets, &[]);
+        assert_eq!(
+            (o.summary.converted, o.summary.exit_code()),
+            (1, 0),
+            "{:?}",
+            warnings(&o)
+        );
+        let p = planned(&o, "rock.png")["profile"].clone();
+        assert_eq!(
+            (p["category"].as_str(), p["color"]["content"].as_str()),
+            (Some("color"), Some("srgb")),
+            "{p}"
+        );
+        levels(&dds(d.path(), "textures/a/rock.dds"))
+    };
+    let kaiser = out(&["mips.filter=kaiser", "alpha.policy=data", DIFFUSE, LOSSLESS]);
+    let boxed = out(&["alpha.policy=data", DIFFUSE, LOSSLESS]);
+    assert_eq!((kaiser.len(), boxed.len()), (7, 7));
+    assert_eq!(kaiser[0], boxed[0], "mip 0 is not filtered");
+    // Every level from 32x32 to 2x2. The 1x1 tail is left out: a wrapped Kaiser over the whole image is
+    // (to 8 bits) its mean, as is box.
+    for (i, (k, b)) in kaiser.iter().zip(&boxed).enumerate().take(6).skip(1) {
+        assert!(
+            k.iter().zip(b).any(|(k, b)| k[..3] != b[..3]),
+            "mip {i}: Kaiser RGB equals box"
+        );
+    }
+    for (i, (k, b)) in kaiser.iter().zip(&boxed).enumerate() {
+        for (j, (k, b)) in k.iter().zip(b).enumerate() {
+            assert!(
+                (k[3] as i32 - b[3] as i32).abs() <= 2,
+                "mip {i} texel {j}: alpha {} vs box {}",
+                k[3],
+                b[3]
+            );
+        }
+    }
+}
+
+/// Spec §5.5 (M6 exit): Kaiser is for sRGB colour only; an unscoped set blocks the `_n` with CFG-INVALID and the
+/// diffuse of the same set still converts.
+#[test]
+fn kaiser_on_a_normal_map_is_cfg_invalid() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(64));
+    put(d.path(), "textures/a/wall_n.png", bumpy_normal(64));
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["mips.filter=kaiser", "file:**/wall.png.subtype=diffuse"],
+        &[],
+    );
+    assert_eq!(
+        (o.summary.converted, o.summary.failed),
+        (1, 1),
+        "{:?}",
+        warnings(&o)
+    );
+    assert!(
+        warning_of(&o, "wall_n.png", Code::CfgInvalid)
+            .message
+            .starts_with("mips.filter = kaiser: "),
+        "{:?}",
+        warning_of(&o, "wall_n.png", Code::CfgInvalid)
+    );
+    assert!(!d.path().join("out/textures/a/wall_n.dds").exists());
+    assert!(d.path().join("out/textures/a/wall.dds").exists());
+}
+
+/// M6 exit: `resize` and `mips.edge` serialise only off their defaults, so no built-in profile's hash moves.
+#[test]
+fn default_profiles_hash_as_before() {
+    let d = tempfile::tempdir().unwrap();
+    let ids: Vec<String> = engine::config::Subtype::ALL
+        .iter()
+        .map(|s| s.id())
+        .collect();
+    let sets: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            put(d.path(), &format!("textures/h/{id}.png"), rgb(64));
+            format!("file:**/h/{id}.png.subtype={id}")
+        })
+        .collect();
+    let sets: Vec<&str> = sets.iter().map(String::as_str).collect();
+    // Plan only: `file_planned` carries the resolved profile, and nothing needs encoding.
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    Engine::new()
+        .unwrap()
+        .plan(
+            request(d.path(), Target::Cs, &sets, &[]),
+            &rep,
+            &CancelToken::default(),
+        )
+        .unwrap();
+    let o = Out {
+        summary: BatchSummary::default(),
+        events: sink.take(),
+    };
+    for id in &ids {
+        let p = &planned(&o, &format!("h/{id}.png"))["profile"];
+        assert_eq!(p["subtype"].as_str(), Some(id.as_str()));
+        assert!(p.get("resize").is_none(), "{id}: {p}");
+        assert!(p["mips"].get("edge").is_none(), "{id}: {p}");
+    }
+}

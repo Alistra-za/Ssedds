@@ -2235,22 +2235,20 @@ fn pot_down_turns_dim_npot_into_dim_resized() {
     assert!(!codes(&j).contains(&Code::DimResized), "{:?}", j.warnings);
 }
 
+/// S-mips-7: a power-of-two input is not resized, so pot-down reports nothing.
 #[test]
-fn dim_small_tests_the_resized_size() {
-    let small = |w, h| {
-        let j = run(
-            Target::Cs,
-            "textures/a/x.png",
-            None,
-            &[],
-            Rgba32F::new(w, h, [0.5, 0.5, 0.5, 1.0]),
-            &["subtype=diffuse", "resize=pot-down"],
-            &[],
-        );
-        codes(&j).contains(&Code::DimSmall)
-    };
-    assert!(!small(7, 5)); // -> 4x4
-    assert!(small(7, 3)); // -> 4x2
+fn pot_down_on_a_power_of_two_input_reports_no_resize() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        Rgba32F::new(64, 32, [0.5, 0.5, 0.5, 1.0]),
+        &["subtype=diffuse", "resize=pot-down"],
+        &[],
+    );
+    assert!(!codes(&j).contains(&Code::DimResized), "{:?}", j.warnings);
+    assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
 }
 
 #[test]

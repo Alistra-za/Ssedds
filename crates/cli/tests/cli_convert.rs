@@ -1165,3 +1165,28 @@ fn set_reencode_true_converts_a_dds_input() {
     let out = read_dds(&std::fs::read(fx.p("out2/textures/a/wall.dds")).unwrap()).unwrap();
     assert_eq!(out.format, DdsPixelFormat::Bc7 { srgb: false });
 }
+
+/// S-mips-6/7: `resize = pot-down` set on one NPOT file converts it at 32x32; without it DIM-NPOT blocks (exit 1).
+#[test]
+fn set_resize_pot_down_converts_an_npot_file() {
+    let fx = Fx::new();
+    ImageBuffer::from_fn(48, 40, |x, y| Rgb([x as u8 * 5, y as u8 * 6, 90]))
+        .save(fx.p("in/textures/a/odd.png"))
+        .unwrap();
+    let o = fx.convert(&DIFFUSE);
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr));
+    assert_eq!(
+        skips(&o),
+        vec![("odd.png".to_string(), Some("DIM-NPOT".to_string()))]
+    );
+    assert!(!fx.dds("textures/a/odd.dds").exists());
+    let o = fx.convert(&[
+        DIFFUSE[0],
+        DIFFUSE[1],
+        "--set",
+        "file:odd.png.resize=pot-down",
+    ]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let f = read_dds(&std::fs::read(fx.dds("textures/a/odd.dds")).unwrap()).unwrap();
+    assert_eq!((f.width, f.height), (32, 32));
+}
