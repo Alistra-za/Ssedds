@@ -124,6 +124,7 @@ struct EngineInputs {
     borrowed_normal: std::collections::BTreeMap<String, String>,
     set_shaders: std::collections::BTreeMap<String, engine::shader::Shader>,
     mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
+    mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
 }
 
 impl EngineInputs {
@@ -136,6 +137,7 @@ impl EngineInputs {
             borrowed_normal: sets::borrowed_normal(m),
             set_shaders: sets::set_shaders(m),
             mesh_votes: m.mesh_votes.clone(),
+            mesh_alpha: m.mesh_alpha.clone(),
         }
     }
 }
@@ -160,6 +162,9 @@ pub struct AppModel {
     pub scan_db: Option<PathBuf>,
     /// S-shader-10: `shader::mesh_key` → what the scanned meshes report; sent as `BatchRequest::mesh_shaders`.
     pub mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
+    /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
+    /// the colour member; sent as `BatchRequest::mesh_alpha`.
+    pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     pub session: Option<Arc<Session>>,
     pub root: Option<PathBuf>,
     pub project: Option<ProjectDoc>,
@@ -240,6 +245,7 @@ impl AppModel {
             skipped_user_presets: vec![],
             scan_db: None,
             mesh_votes: Default::default(),
+            mesh_alpha: Default::default(),
             session: None,
             root: None,
             project: None,
@@ -400,12 +406,14 @@ impl AppModel {
         req.borrowed_normal = sets::borrowed_normal(self);
         req.set_shaders = sets::set_shaders(self);
         req.mesh_shaders = self.mesh_votes.clone();
+        req.mesh_alpha = self.mesh_alpha.clone();
         Some(req)
     }
 
-    /// S-shader-10: read the mesh votes for the plan's sets (keys from the colour-member jobs only, by
-    /// `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no votes: the suffix
-    /// rules decide, and the Meshes view reports database errors. True when the votes changed.
+    /// S-shader-10, M6 Track E: read the mesh votes and the mesh alpha for the plan's sets (keys from the colour-member
+    /// jobs only, by `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no evidence:
+    /// the suffix rules decide and the alpha is asked, and the Meshes view reports database errors. True when either
+    /// changed.
     // shortcut: reads SQLite on the UI thread after each plan; move to a background read or cache by db mtime + key set if it hitches on large load orders
     pub fn refresh_mesh_votes(&mut self) -> bool {
         let keys: std::collections::BTreeSet<String> = self
@@ -417,12 +425,16 @@ impl AppModel {
                 engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
             })
             .collect();
-        let votes = match &self.scan_db {
-            Some(db) if db.is_file() => meshes::mesh_votes(db, &keys).unwrap_or_default(),
+        let (votes, alpha) = match &self.scan_db {
+            Some(db) if db.is_file() => (
+                meshes::mesh_votes(db, &keys).unwrap_or_default(),
+                meshes::mesh_alpha(db, &keys).unwrap_or_default(),
+            ),
             _ => Default::default(),
         };
-        let changed = votes != self.mesh_votes;
+        let changed = votes != self.mesh_votes || alpha != self.mesh_alpha;
         self.mesh_votes = votes;
+        self.mesh_alpha = alpha;
         changed
     }
 
@@ -447,6 +459,7 @@ impl AppModel {
             borrowed_normal: req.borrowed_normal.clone(),
             set_shaders: req.set_shaders.clone(),
             mesh_votes: req.mesh_shaders.clone(),
+            mesh_alpha: req.mesh_alpha.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }

@@ -1180,3 +1180,131 @@ fn a_scan_database_picks_the_set_shader() {
         Shader::Landscape
     );
 }
+
+/// A scan database where `tex` is slot 0 of these lighting shapes:
+/// (shader type, `alpha_flags`, `alpha_threshold`, SLSF2, derived copy). Every origin is enabled.
+type AlphaShape = (u32, Option<i64>, Option<i64>, u32, bool);
+
+fn scan_db_alpha(db: &std::path::Path, tex: &str, shapes: &[AlphaShape]) {
+    let s = modscan::store::Store::open(db).unwrap();
+    let c = s.conn();
+    c.execute("INSERT INTO path(id, p) VALUES (1, ?1)", [tex])
+        .unwrap();
+    c.execute_batch(
+        "INSERT INTO texset(id, n, t0) VALUES (1, 1, 1);
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0);",
+    )
+    .unwrap();
+    for (i, (ty, flags, threshold, slsf2, derived)) in shapes.iter().enumerate() {
+        let id = i as i64 + 2;
+        c.execute(
+            "INSERT INTO path(id, p) VALUES (?1, ?2)",
+            rusqlite::params![id, format!("meshes/m{id}.nif")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (?1, 1, ?2, ?2, ?1, 1)",
+            rusqlite::params![id, format!("mod{id}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES (?1, ?1, ?1, 0, ?2)",
+            rusqlite::params![id, derived],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id, alpha_flags, alpha_threshold) VALUES (?1, 0, 'BSTriShape', 1, ?2, ?3, 1, ?4, ?5)",
+            rusqlite::params![id, ty, slsf2, flags, threshold],
+        )
+        .unwrap();
+    }
+}
+
+/// M6 Track E spec §4.1, §6 (Note U5): one entry per source lighting shape, from NiAlphaProperty bit 0 (blend) and bit
+/// 9 (test). No property is no alpha. TruePBR shapes and PGPatcher's output copies are left out; a shader type that
+/// is no vote (Face Tint, 4) still counts.
+#[test]
+fn mesh_alpha_reads_the_alpha_property_of_each_source_lighting_shape() {
+    use engine::shader::MeshAlpha;
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("scan.db");
+    scan_db_alpha(
+        &db,
+        "textures/a/wall.dds",
+        &[
+            (0, Some(1), Some(0), 0, false),
+            (0, Some(1 << 9), Some(128), 0, false),
+            (4, Some(1 | 1 << 9), Some(90), 0, false),
+            (0, None, None, 0, false),
+            (0, Some(1 << 9), Some(200), 1 << 23, false),
+            (0, Some(1), Some(0), 0, true),
+        ],
+    );
+    let keys = ["textures/a/wall".to_string(), "textures/a/none".to_string()]
+        .into_iter()
+        .collect();
+    let v = sdc_gui::model::meshes::mesh_alpha(&db, &keys).unwrap();
+    let mut got = v["textures/a/wall"].clone();
+    got.sort_by_key(|a| (a.blend, a.test, a.threshold));
+    let ma = |blend, test, threshold| MeshAlpha {
+        blend,
+        test,
+        threshold,
+    };
+    assert_eq!(
+        got,
+        vec![
+            ma(false, false, 0),
+            ma(false, true, 128),
+            ma(true, false, 0),
+            ma(true, true, 90),
+        ]
+    );
+    assert!(!v.contains_key("textures/a/none"));
+}
+
+/// M6 Track E spec §1 success, plan Review Focus 3 and 4: the scan's alpha evidence reaches the plan. A refresh that
+/// changes only the alpha (a Face Tint shape is no shader vote) still reports a change, and a varying-alpha diffuse
+/// is then no longer asked its alpha meaning.
+#[test]
+fn a_scan_database_decides_a_diffuse_alpha() {
+    use engine::config::AlphaPolicy;
+    use sdc_gui::model::items::Decision;
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures/a");
+    std::fs::create_dir_all(&t).unwrap();
+    image::ImageBuffer::from_fn(16, 16, |x, _| image::Rgba([90u8, 60, 30, (x * 16) as u8]))
+        .save(t.join("glass.png"))
+        .unwrap();
+    let mut m = opened_as_the_app(d.path().join("textures"), d.path().join("export"));
+    let asked = |m: &sdc_gui::model::AppModel| {
+        m.item("a/glass.png")
+            .unwrap()
+            .decisions
+            .contains(&Decision::AlphaMeaning)
+    };
+    assert!(asked(&m));
+    let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
+    let key = engine::shader::mesh_key(&j.game_path, "glass");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db_alpha(
+        &db,
+        &format!("{key}.dds"),
+        &[(4, Some(1), Some(0), 0, false)],
+    );
+    m.scan_db = Some(db);
+    assert!(m.refresh_mesh_votes(), "only the alpha evidence changed");
+    assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
+    assert_eq!(
+        (
+            j.profile.alpha.policy,
+            j.provenance["alpha.policy"].to_string()
+        ),
+        (AlphaPolicy::Blend, "mesh:alpha".to_string())
+    );
+    assert!(!asked(&m));
+}
