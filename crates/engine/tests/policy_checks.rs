@@ -936,7 +936,7 @@ fn resolved_job_json_shape() {
     assert_eq!(v["profile"]["format"], "bc7");
     assert_eq!(v["profile"]["color"]["tag"], "unorm");
     assert_eq!(v["profile"]["alpha"]["policy"], "remove");
-    assert_eq!(v["suggestions"][0]["confidence"], "medium");
+    assert_eq!(v["suggestions"][0]["confidence"], "high");
     assert!(v["suggestions"][0]["reason"].is_string());
     assert_eq!(v["status"]["state"], "unresolved");
     assert!(v["status"]["reasons"].is_array());

@@ -2690,8 +2690,7 @@ fn kaiser_diffuse_differs_from_box_and_its_alpha_does_not() {
             [c, 255 - c, 90, (y * 4) as u8]
         }),
     );
-    // A file-scoped sub-type, not `subtype:diffuse` (which may silently miss): a suffixless file is otherwise
-    // unresolved (SUG-LOW-CONFIDENCE).
+    // A file-scoped sub-type pins the diffuse whatever the suggestion; `subtype:diffuse` would only scope fields.
     const DIFFUSE: &str = "file:**/rock.png.subtype=diffuse";
     // Uncompressed: under BC7 a block holding this checker and an alpha ramp trades alpha for RGB, differently per
     // filter (measured: box 16 / Kaiser 10 at mip 1 texel 0 vs 2 in the source), which would hide the filter's alpha.
@@ -3242,7 +3241,7 @@ fn cs_plain_set_is_default_not_pbr() {
         ("default", "auto:default"),
         &[Code::ShaderAuto],
     );
-    // File-level: the synthetic gradient trips an unrelated SUG-LOW-CONFIDENCE; no SHADER-* code may appear.
+    // File-level: no SHADER-* code may appear.
     assert!(warnings(&o)
         .iter()
         .all(|c| !c.as_str().starts_with("SHADER-")));
@@ -3530,4 +3529,43 @@ fn fast_preview_is_fast_with_smallest_mip_validation() {
             "{t:?}"
         );
     }
+}
+
+/// M6 Track E spec §3.1 (DECISIONS Note U2): `_coat` is the coat colour + strength. Its varying alpha is the strength:
+/// policy `data`, kept, and BC7 under cs-compact (never BC1).
+#[test]
+fn compact_coat_keeps_its_strength_alpha_as_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.png", rgb(64));
+    put(d.path(), "textures/a/rock_n.png", flat_normal(64));
+    put(d.path(), "textures/a/rock_rmaos.png", rgb(64));
+    put(
+        d.path(),
+        "textures/a/rock_coat.png",
+        rgba(64, |x, _| [200, 180, 160, (x * 4) as u8]),
+    );
+    let mut req = request(d.path(), Target::Cs, &[], &[]);
+    req.preset = Some("cs-compact".into());
+    let o = run(req);
+    assert_profile(&o, "rock_coat.png", "pbr_subsurface", "data", false, "bc7");
+    assert_eq!(
+        planned(&o, "rock_coat.png")["status"]["state"],
+        "ready",
+        "{:?}",
+        warnings(&o)
+    );
+    assert_eq!(o.summary.failed, 0, "{:?}", warnings(&o));
+    let reason = planned(&o, "rock_coat.png")["suggestions"][0]["reason"].clone();
+    assert!(
+        reason
+            .as_str()
+            .unwrap()
+            .starts_with("exporter suffix _coat (coat colour + strength)"),
+        "{reason}"
+    );
+    assert_alpha_kept(
+        &dds(d.path(), "textures/a/rock_s.dds"),
+        |x, _| (x * 4) as u8,
+        8,
+    );
 }

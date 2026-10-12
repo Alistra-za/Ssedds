@@ -275,13 +275,15 @@ fn colour_terms_and_d_are_high_confidence_but_alpha_meaning_is_never_assumed() {
         ),
         (Subtype::Diffuse, Confidence::High, JobStatus::Ready)
     );
-    // a bare stem stays medium
+    // a bare stem is the colour member at High too (M6 Track E, DECISIONS Note U1)
     let j = resolve_img("iron.png", &[], &[], &[], &grey(), &RGB8);
-    assert_eq!(j.suggestions[0].confidence, Confidence::Medium);
-    assert!(
-        matches!(j.status, JobStatus::Unresolved { .. }),
-        "{:?}",
-        j.status
+    assert_eq!(
+        (
+            j.profile.subtype,
+            j.suggestions[0].confidence,
+            j.status.clone()
+        ),
+        (Subtype::Diffuse, Confidence::High, JobStatus::Ready)
     );
     // the set still picks the sub-type: a raw roughness companion makes the cs set PBR
     let j = resolve_img(
@@ -649,4 +651,49 @@ fn coat_outside_a_pbr_set_is_still_the_high_coat_colour_and_blocked_under_vanill
         "{:?}",
         j.warnings
     );
+}
+
+/// M6 Track E (owner: "_rfaos _RFAOS _rmaos _RMaos should not need confirmation"; Note U1): with acceptance, every
+/// member of a correctly named PBR or Advanced skin set decides itself, whatever the case of its suffix. The bare
+/// stem is the colour member at High: `pbr_albedo` beside `_RMAOS`, `skin_albedo` beside `_RFAOS`.
+#[test]
+fn upper_case_suffixes_resolve_like_lower_case_and_nothing_asks_a_sub_type() {
+    let d = tempfile::tempdir().unwrap();
+    for (name, px) in [
+        ("IRON.png", [120u8, 90, 60]),
+        ("IRON_N.png", [128, 128, 255]),
+        ("IRON_RMAOS.png", [128, 0, 255]),
+        ("Body.png", [200, 160, 140]),
+        ("Body_RFAOS.png", [128, 0, 255]),
+    ] {
+        let p = d.path().join("in/textures/a").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb(px))
+            .save(p)
+            .unwrap();
+    }
+    let p = plan_cs(d.path());
+    for (input, want) in [
+        ("IRON.png", Subtype::PbrAlbedo),
+        ("IRON_N.png", Subtype::PbrNormal),
+        ("IRON_RMAOS.png", Subtype::Rmaos),
+        ("Body.png", Subtype::SkinAlbedo),
+        ("Body_RFAOS.png", Subtype::SkinRfaos),
+    ] {
+        let j = p
+            .jobs
+            .iter()
+            .find(|j| j.input.ends_with(input))
+            .unwrap_or_else(|| panic!("no job for {input}"));
+        assert_eq!(
+            (j.profile.subtype, j.suggestions[0].confidence),
+            (want, Confidence::High),
+            "{input}"
+        );
+        assert!(
+            !matches!(&j.status, JobStatus::Unresolved { needs, .. } if needs.contains(&Need::Subtype)),
+            "{input}: {:?}",
+            j.status
+        );
+    }
 }

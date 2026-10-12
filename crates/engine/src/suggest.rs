@@ -63,8 +63,8 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
     let landscape =
         c.game_path.starts_with("textures/landscape/") || has_component(c.game_path, "landscape");
     let ui_or_sky = has_component(c.game_path, "interface") || has_component(c.game_path, "sky");
-    // Spec §4.4 (DECISIONS Note H): `_d` declares the colour role; a bare stem is only a guess.
-    let colour = if c.suffix == Some("d") { High } else { Medium };
+    // M6 Track E (owner, 2026-10-12; DECISIONS Note U1, reversing Note H's "a bare stem is only a guess"): no suffix
+    // is the colour member, at High like `_d`. `hdr_sky` and `_i` stay Medium.
     match c.suffix {
         Some("n") if landscape => vec![s(LandscapeNormal, High, "_n under textures/landscape")],
         Some("n") if pbr => vec![s(PbrNormal, High, "_n in a PBR set"), s(Normal, Low, "_n")],
@@ -127,7 +127,7 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
         Some("d") | None if has_component(c.game_path, "sky") && c.is_float => {
             vec![s(HdrSky, Medium, "float source under sky/")]
         }
-        Some("d") | None if ui_or_sky => vec![s(UiSky, colour, "colour under interface/ or sky/")],
+        Some("d") | None if ui_or_sky => vec![s(UiSky, High, "colour under interface/ or sky/")],
         Some("d") | None if c.advanced_skin => {
             vec![s(
                 SkinAlbedo,
@@ -135,47 +135,40 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
                 "colour member of an Advanced skin set (UNORM)",
             )]
         }
-        Some("d") | None if pbr => vec![s(PbrAlbedo, colour, "colour member of a PBR set")],
-        Some("d") | None => vec![s(Diffuse, colour, "colour member, non-PBR set")],
+        Some("d") | None if pbr => vec![s(PbrAlbedo, High, "colour member of a PBR set")],
+        Some("d") | None => vec![s(Diffuse, High, "colour member, non-PBR set")],
         Some(_) => vec![],
     }
 }
 
-/// Spec §4.3 item 7, §4.4 (DECISIONS Note H): an exporter vocabulary term declares the file's role. Every reason
-/// is prefixed `exporter suffix _<term> (<role>)`; a colour term raises a colour-member top suggestion to high
-/// confidence (not `hdr_sky`: a float source under sky/ may be an HDRI). Alpha meaning is untouched.
+/// Spec §4.3 item 7, §4.4 (DECISIONS Notes H, U1, U2): an exporter vocabulary term declares the file's role. Every
+/// reason is prefixed `exporter suffix _<term> (<role>)`, and `_coat` puts the coat map first at High. A colour term
+/// needs no raise: its colour member is already High (Note U1), and `hdr_sky` stays Medium. Alpha meaning is
+/// untouched.
 pub fn apply_vocabulary(suggestions: &mut Vec<Suggestion>, v: &Vocab) {
     let role = match v.role {
         VocabRole::Colour => "colour",
         VocabRole::Normal(_) => "normal",
         VocabRole::Emissive => "emissive",
         VocabRole::PackingInput(_) => "packing input",
-        VocabRole::CoatColour => "coat colour",
+        VocabRole::CoatColour => "coat colour + strength",
     };
     for s in suggestions.iter_mut() {
         s.reason = format!("exporter suffix _{} ({role}); {}", v.term, s.reason);
     }
     if v.role == VocabRole::CoatColour {
-        // The owner states it is the coat colour: High, whatever the set (a bare `_s` outside a PBR set is only a tint).
+        // The owner states it is the coat map (colour in RGB, strength in A): High, whatever the set (a bare `_s`
+        // outside a PBR set is only a tint).
         suggestions.retain(|s| s.subtype != Subtype::PbrSubsurface);
         suggestions.insert(
             0,
             Suggestion {
                 subtype: Subtype::PbrSubsurface,
                 confidence: Confidence::High,
-                reason: "exporter suffix _coat (coat colour); the PBR coat colour (_s)".into(),
+                reason: "exporter suffix _coat (coat colour + strength); the PBR coat map (_s)"
+                    .into(),
             },
         );
-    }
-    if v.role == VocabRole::Colour {
-        if let Some(top) = suggestions.first_mut().filter(|t| {
-            matches!(
-                t.subtype,
-                Subtype::Diffuse | Subtype::PbrAlbedo | Subtype::LandscapeDiffuse | Subtype::UiSky
-            )
-        }) {
-            top.confidence = Confidence::High;
-        }
     }
 }
 
@@ -291,7 +284,7 @@ mod tests {
         ));
         assert_eq!(
             (d.subtype, d.confidence),
-            (Subtype::Diffuse, Confidence::Medium)
+            (Subtype::Diffuse, Confidence::High)
         );
         assert_eq!(
             top(&ctx(
@@ -529,24 +522,108 @@ mod tests {
         );
     }
 
+    /// M6 Track E (owner, 2026-10-12: "No suffix should equal diffuse by default"; DECISIONS Note U1): a bare stem is
+    /// the set's colour member at High, like `_d`: diffuse, pbr_albedo in a PBR set (by `_rmaos`, `_cnr`, `_f`, a
+    /// packing input or a `pbr` folder), ui_sky under interface/ or sky/. `hdr_sky` and `_i` stay Medium; Advanced
+    /// skin (`_rfaos`) is its own thing.
     #[test]
-    fn diffuse_is_never_high_confidence() {
+    fn a_bare_stem_is_the_colour_member_at_high() {
         let none = BTreeSet::new();
-        let pbr = set_of(&["rmaos"]);
-        for (set, path) in [
-            (&none, "textures/a/x.png"),
-            (&pbr, "textures/a/x.png"),
-            (&none, "textures/pbr/x.png"),
+        let top = |set: &BTreeSet<String>, path: &str, alpha: AlphaContent| {
+            let s = suggest(&ctx(Target::Cs, None, path, set, alpha))[0].clone();
+            (s.subtype, s.confidence)
+        };
+        for alpha in [
+            AlphaContent::None,
+            AlphaContent::Constant255,
+            AlphaContent::Varying,
         ] {
-            for alpha in [
-                AlphaContent::None,
-                AlphaContent::Constant255,
-                AlphaContent::Varying,
-            ] {
-                let sg = suggest(&ctx(Target::Cs, None, path, set, alpha));
-                assert!(sg[0].confidence < Confidence::High, "{path} {alpha:?}");
+            assert_eq!(
+                top(&none, "textures/a/x.png", alpha),
+                (Subtype::Diffuse, Confidence::High)
+            );
+            for marker in ["rmaos", "cnr", "f", "roughness"] {
+                assert_eq!(
+                    top(&set_of(&[marker]), "textures/a/x.png", alpha),
+                    (Subtype::PbrAlbedo, Confidence::High),
+                    "{marker}"
+                );
             }
+            assert_eq!(
+                top(&none, "textures/pbr/x.png", alpha),
+                (Subtype::PbrAlbedo, Confidence::High)
+            );
+            assert_eq!(
+                top(&none, "textures/interface/x.png", alpha),
+                (Subtype::UiSky, Confidence::High)
+            );
+            assert_eq!(
+                top(&none, "textures/sky/x.png", alpha),
+                (Subtype::UiSky, Confidence::High)
+            );
         }
+        let mut f = ctx(
+            Target::Cs,
+            None,
+            "textures/sky/x.exr",
+            &none,
+            AlphaContent::None,
+        );
+        f.is_float = true;
+        assert_eq!(
+            (suggest(&f)[0].subtype, suggest(&f)[0].confidence),
+            (Subtype::HdrSky, Confidence::Medium)
+        );
+        let i = suggest(&ctx(
+            Target::Cs,
+            Some("i"),
+            "textures/a/x_i.png",
+            &none,
+            AlphaContent::None,
+        ))[0]
+            .clone();
+        assert_eq!(
+            (i.subtype, i.confidence),
+            (Subtype::Diffuse, Confidence::Medium)
+        );
+        let mut skin = ctx(
+            Target::Cs,
+            None,
+            "textures/a/x.png",
+            &none,
+            AlphaContent::None,
+        );
+        skin.advanced_skin = true;
+        let s = suggest(&skin)[0].clone();
+        assert_eq!(
+            (s.subtype, s.confidence),
+            (Subtype::SkinAlbedo, Confidence::High)
+        );
+    }
+
+    /// M6 Track E spec §3.1 (Note U2): `_coat` is the coat colour (RGB) and strength (A).
+    #[test]
+    fn coat_is_coat_colour_and_strength() {
+        let none = BTreeSet::new();
+        let mut sg = suggest(&ctx(
+            Target::Cs,
+            Some("s"),
+            "textures/a/x_coat.png",
+            &none,
+            AlphaContent::Varying,
+        ));
+        apply_vocabulary(&mut sg, crate::group::vocab_of("x_coat").unwrap());
+        assert_eq!(
+            (sg[0].subtype, sg[0].confidence, sg[0].reason.as_str()),
+            (
+                Subtype::PbrSubsurface,
+                Confidence::High,
+                "exporter suffix _coat (coat colour + strength); the PBR coat map (_s)"
+            )
+        );
+        assert!(sg[1..].iter().all(|s| s
+            .reason
+            .starts_with("exporter suffix _coat (coat colour + strength); ")));
     }
 
     #[test]
