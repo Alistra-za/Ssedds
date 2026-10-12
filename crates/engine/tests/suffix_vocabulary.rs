@@ -60,6 +60,7 @@ fn resolve_img(
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let stem = Path::new(name)
         .file_stem()

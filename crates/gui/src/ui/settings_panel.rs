@@ -299,7 +299,7 @@ fn threshold(
     current: u8,
 ) -> (Option<Value>, egui::Response) {
     let id = egui::Id::new(("threshold", key));
-    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 5..=200);
+    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 1..=254);
     (out.map(|v| json!(v)), r)
 }
 
@@ -313,7 +313,7 @@ fn editor(
 ) -> (Option<Value>, egui::Response) {
     match f.field {
         "alpha.threshold" => {
-            let cur = f.value.as_u64().unwrap_or(128).clamp(5, 200) as u8;
+            let cur = f.value.as_u64().unwrap_or(128).clamp(1, 254) as u8;
             threshold(ui, busy, key, cur)
         }
         "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {

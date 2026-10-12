@@ -103,6 +103,7 @@ fn resolve_img(
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let stem = Path::new(name)
         .file_stem()
@@ -487,6 +488,7 @@ fn accepted_fallback_keeps_the_alias_preset() {
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let split = split_suffix_with("iron_normalhq", reg.alias_table());
     let f = InputFile {

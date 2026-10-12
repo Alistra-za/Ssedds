@@ -23,7 +23,7 @@ use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
 use crate::presets::*;
 use crate::session::{pack_cache_key, AnalysisCache, PackEntry};
-use crate::shader::{Shader, ShaderPick};
+use crate::shader::{MeshAlpha, Shader, ShaderPick};
 use crate::suggest::{is_pbr_set, SuggestContext};
 use encoders_sys::Bc1Model;
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,10 @@ pub struct BatchRequest {
     /// GUI (M6, DECISIONS Note S-shader-10): `shader::mesh_key` → the shader each scanned lighting shape that uses
     /// `<key>.dds` as its diffuse reports. Empty for the CLI and when no scan exists: the suffix rules decide.
     pub mesh_shaders: BTreeMap<String, Vec<Shader>>,
+    /// GUI (M6 Track E, DECISIONS Note U5): `shader::colour_mesh_key` → the NiAlphaProperty of each scanned lighting
+    /// shape that uses `<key>.dds` in slot 0. The GUI fills it from the scan database; the CLI sends none (empty: no
+    /// evidence, and the alpha question is asked as before).
+    pub mesh_alpha: BTreeMap<String, Vec<MeshAlpha>>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -129,6 +133,7 @@ impl BatchRequest {
             borrowed_normal: BTreeMap::new(),
             set_shaders: BTreeMap::new(),
             mesh_shaders: BTreeMap::new(),
+            mesh_alpha: BTreeMap::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -790,6 +795,7 @@ impl Engine {
             allow: &req.allow,
             files: &file_scopes,
             shaders: &NO_SHADERS,
+            mesh_alpha: &req.mesh_alpha,
         };
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.

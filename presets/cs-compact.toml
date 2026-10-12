@@ -9,7 +9,7 @@ description = "CS – Compact: BC1 for opaque colour, every other map except emi
 encoder = { bc45_search_radius = "fast" }
 
 # BC1 for opaque colour maps (DECISIONS Note T2/T3). BC3 is never used: it is the size of BC7.
-# Colour with no alpha channel. Not landscape_diffuse (FMT-LANDSCAPE-BC1) nor pbr_emissive (BC6H). BC1 colour stays full size (resize none beats the sub-type table below).
+# Colour with no alpha channel, or varying alpha its meshes drop (mesh evidence decided remove; owner O1, M6 Track E). Not landscape_diffuse (FMT-LANDSCAPE-BC1) nor pbr_emissive (BC6H). BC1 colour stays full size (resize none beats the sub-type table below).
 [[rules]]
 match = { alpha = "none", subtypes = ["diffuse", "pbr_albedo", "glow", "pbr_subsurface", "pbr_fuzz", "subsurface_tint", "backlight_tint", "ui_sky", "skin_albedo"] }
 overrides = { format = "bc1", resize = "none" }

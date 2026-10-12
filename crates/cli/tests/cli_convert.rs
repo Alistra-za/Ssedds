@@ -900,12 +900,12 @@ fn a_file_that_fails_to_resolve_exits_1_and_the_rest_are_converted() {
     let fx = Fx::new();
     fx.rgb("wall.png");
     fx.rgb("floor.png");
-    // alpha.threshold 3 is outside 5..=200: a per-file CFG-INVALID error, not a usage error.
+    // alpha.threshold 0 is outside 1..=254: a per-file CFG-INVALID error, not a usage error.
     let o = fx.convert(&[
         "--set",
         "subtype=diffuse",
         "--set",
-        "file:**/wall.png.alpha.threshold=3",
+        "file:**/wall.png.alpha.threshold=0",
     ]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert!(text(&o.stderr).contains("CFG-INVALID"));
@@ -951,7 +951,7 @@ fn invalid_configs_are_exit_2_and_valid_ones_are_really_read() {
     assert_eq!(code(&fx.convert(&with_missing)), 2);
 
     // An invalid layer value that parses is a per-file CFG-INVALID (exit 1), not a config error.
-    fx.project_config("[subtypes.diffuse]\nalpha = { threshold = 250 }\n");
+    fx.project_config("[subtypes.diffuse]\nalpha = { threshold = 255 }\n");
     let o = fx.convert(&args);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(planned(&o)["wall.png"]["status"]["state"], "error");
@@ -1068,7 +1068,7 @@ fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
 
     // Partial (exit 1) outranks validation failed (exit 4).
     fx.rgb("bad.png");
-    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=3"]);
+    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=0"]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["validation_failed"], 1);
 }

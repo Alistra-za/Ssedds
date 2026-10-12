@@ -3413,6 +3413,64 @@ fn compact_2048_opaque_diffuse_stays_2048_bc1() {
     assert_eq!(resize_of(&o, "a/wall.png"), "none");
 }
 
+/// `plan_preset` with `BatchRequest::mesh_alpha` evidence for `textures/a/wall` (M6 Track E).
+fn plan_compact_wall_mesh(dir: &Path, blend: bool) -> Out {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    let mut req = request(dir, Target::Cs, &[], &[]);
+    req.preset = Some("cs-compact".into());
+    let shape = engine::shader::MeshAlpha {
+        blend,
+        test: false,
+        threshold: 0,
+    };
+    req.mesh_alpha = BTreeMap::from([("textures/a/wall".to_string(), vec![shape])]);
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    Out {
+        summary: BatchSummary::default(),
+        events: sink.take(),
+    }
+}
+
+fn varying_2048() -> DynamicImage {
+    rgba(2048, |x, _| [90, 60, 30, (x % 256) as u8])
+}
+
+/// Owner O1 (M6 Track E): a varying-alpha diffuse whose meshes neither blend nor test is opaque colour, so Compact
+/// gives it BC1 at full size.
+#[test]
+fn compact_2048_varying_alpha_diffuse_with_a_no_alpha_mesh_stays_2048_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", varying_2048());
+    let o = plan_compact_wall_mesh(d.path(), false);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:cs-compact#0".to_string())
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall.png"), "none");
+    assert!(!warnings(&o).contains(&Code::LossAlphaData));
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+/// The same diffuse used by a blending mesh keeps its alpha: BC7 at half size.
+#[test]
+fn compact_2048_varying_alpha_diffuse_with_a_blend_mesh_plans_1024_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", varying_2048());
+    let o = plan_compact_wall_mesh(d.path(), true);
+    assert_profile(&o, "a/wall.png", "diffuse", "blend", false, "bc7");
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wall.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/wall.png"), "half");
+}
+
 #[test]
 fn compact_2048_normal_plans_1024() {
     let d = tempfile::tempdir().unwrap();

@@ -365,7 +365,7 @@ pub struct ColorSpec {
 #[serde(deny_unknown_fields)]
 pub struct AlphaSpec {
     pub policy: AlphaPolicy,
-    /// 8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).
+    /// 8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).
     pub threshold: u8,
     pub compare: AlphaCompare,
     pub exact_opaque: bool,

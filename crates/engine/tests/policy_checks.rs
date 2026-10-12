@@ -40,6 +40,7 @@ fn run(
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let name = game.rsplit('/').next().unwrap();
     let f = InputFile {
@@ -205,10 +206,24 @@ fn threshold_range_and_npot() {
         Some("n"),
         &["n"],
         opaque(),
-        &["alpha.threshold=250"],
+        &["alpha.threshold=255"],
         &[],
     );
     assert!(codes(&j).contains(&Code::CfgInvalid));
+    // Owner O2 (M6 Track E): 1..=254 is valid.
+    for t in ["1", "254"] {
+        let set = format!("alpha.threshold={t}");
+        let j = run(
+            Target::Cs,
+            "textures/a/x_n.png",
+            Some("n"),
+            &["n"],
+            opaque(),
+            &[set.as_str()],
+            &[],
+        );
+        assert!(!codes(&j).contains(&Code::CfgInvalid), "{t}");
+    }
     let j = run(
         Target::Cs,
         "textures/a/x_n.png",
@@ -308,6 +323,7 @@ fn run_with(
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let f = InputFile {
         path: rel.into(),
@@ -814,6 +830,7 @@ fn preset_alpha_policy_counts_as_explicit() {
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_file(&ctx("mine"), &facts);
     assert_eq!(
@@ -1069,6 +1086,7 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
         allow: &allow_set,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_in(&ctx, "a/x_m.png", Some("m"), &m);
     assert_eq!(
@@ -1144,6 +1162,7 @@ fn table_backends_follow_more_specific_formats() {
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_in(&c, "a/x_m.png", Some("m"), &opaque());
     assert_eq!(
@@ -1220,6 +1239,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
                 allow: &allow,
                 files: &NO_FILE_SCOPES,
                 shaders: &NO_SHADERS,
+                mesh_alpha: &NO_MESH_ALPHA,
             };
             let j = resolve_in(&ctx, "a/x.png", None, &img);
             match &j.status {
@@ -1256,6 +1276,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
         allow: &allow,
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_in(&ctx, "a/x.png", None, &img);
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
