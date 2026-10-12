@@ -3,6 +3,7 @@ pub mod cbuffer;
 pub mod compile;
 pub mod device;
 pub mod draw;
+pub mod hdri;
 pub mod includes;
 pub mod locate;
 pub mod material;
