@@ -324,6 +324,31 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
             }
         }
     }
+    // S-shader-4: the set's shader re-types a member (eye `_n` → msn, landscape colour → landscape_diffuse).
+    if let Some(p) = ctx.shaders.get(&f.set.key) {
+        let id = p.shader.id();
+        if let Some((st, why)) = suggestions
+            .first()
+            .and_then(|s| crate::shader::member_subtype(p.shader, s.subtype))
+        {
+            if p.provenance == crate::shader::ShaderOrigin::Set {
+                return SubtypeDecision {
+                    subtype: st,
+                    provenance: Provenance::Shader(id.into()),
+                    decided: true,
+                    suggestions,
+                };
+            }
+            suggestions.insert(
+                0,
+                Suggestion {
+                    subtype: st,
+                    confidence: Confidence::High,
+                    reason: format!("{id} shader ({}): {why}", p.provenance),
+                },
+            );
+        }
+    }
     match suggestions.first() {
         Some(s) => {
             let decided = ctx.accept == AcceptSuggestions::High && s.confidence == Confidence::High;
@@ -523,6 +548,9 @@ fn layered_profile_with(
     if st == Subtype::SkinWet {
         skin_wet_form(ctx, f, &mut doc, &mut prov, &mut sources);
     }
+    if let Some(p) = ctx.shaders.get(&f.set.key) {
+        shader_layer(ctx, p.shader, st, &mut doc, &mut prov, &mut sources);
+    }
     // Spec §4.4: `_normalgl`/`_normaldx` state the green convention, a fact at the analysis position (--set wins).
     if let Some(Vocab {
         term,
@@ -619,6 +647,29 @@ fn filter_ignored_notice(p: &Profile, f: &FileFacts, (dropped, why): (MipFilter,
     }
     Warning::new(Code::CfgFilterIgnored, msg)
         .with_data(json!({ "filter": dropped, "used": MipFilter::Box, "reason": why }))
+}
+
+/// M6 spec §5: the shader's member defaults, written only where the field still holds a built-in value.
+fn shader_layer(
+    ctx: &ResolveCtx,
+    shader: crate::shader::Shader,
+    st: Subtype,
+    doc: &mut Value,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
+) {
+    for (field, value) in crate::shader::member_defaults(shader, st) {
+        if !field_explicit(ctx, prov, field) {
+            apply(
+                doc,
+                prov,
+                sources,
+                &to_patch(field, &value),
+                Provenance::Shader(shader.id().into()),
+                GENERIC,
+            );
+        }
+    }
 }
 
 /// `skin_wet` has two forms (DECISIONS Note R-skin-1): a tangent-space normal with a binary mask in alpha (BC7, the

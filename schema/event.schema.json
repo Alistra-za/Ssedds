@@ -962,7 +962,7 @@
       "type": "object"
     },
     "Provenance": {
-      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,\n`recipe:<kind>`, and the snake_case variant name for the rest.",
+      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,\n`recipe:<kind>`, and the snake_case variant name for the rest.",
       "type": "string"
     },
     "RawMap": {

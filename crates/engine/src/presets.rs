@@ -193,7 +193,7 @@ impl ConfigFile {
 /// Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.
 ///
 /// Serialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the
-/// `<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,
+/// `<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,
 /// `recipe:<kind>`, and the snake_case variant name for the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[schemars(with = "String")]
@@ -207,6 +207,9 @@ pub enum Provenance {
     /// A named fact derived from the source's analysis, applied at the analysis position. Shown as
     /// `analysis:<fact>`, e.g. `analysis:float-source`.
     AnalysisFact(String),
+    /// A member default of the set's shader (M6 spec §5): above built-in profiles, below every explicit layer and
+    /// analysis fact. Shown as `shader:<id>`.
+    Shader(String),
     /// A fact stated by an exporter vocabulary term, e.g. `_normalgl` (spec §4.4); applied at the analysis
     /// position. Shown as `suffix:<term>`.
     Suffix(String),
@@ -242,6 +245,7 @@ impl fmt::Display for Provenance {
             Provenance::Rule(src) => write!(f, "rule:{src}"),
             Provenance::Analysis => f.write_str("analysis"),
             Provenance::AnalysisFact(t) => write!(f, "analysis:{t}"),
+            Provenance::Shader(id) => write!(f, "shader:{id}"),
             Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::ProjectFile => f.write_str("project_file"),
@@ -267,6 +271,9 @@ impl std::str::FromStr for Provenance {
         }
         if let Some(t) = s.strip_prefix("analysis:") {
             return Ok(Provenance::AnalysisFact(t.to_string()));
+        }
+        if let Some(id) = s.strip_prefix("shader:") {
+            return Ok(Provenance::Shader(id.to_string()));
         }
         if let Some(t) = s.strip_prefix("suffix:") {
             return Ok(Provenance::Suffix(t.to_string()));

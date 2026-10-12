@@ -6,7 +6,7 @@ use engine::events::*;
 use engine::overrides::{parse_set, Scope};
 use engine::policy::AcceptSuggestions;
 use engine::shader::{Shader, ShaderOrigin};
-use image::{ImageBuffer, Rgb};
+use image::{ImageBuffer, Rgb, Rgba};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -274,4 +274,253 @@ fn meshes_pick_the_shader_unless_a_patchable_map_a_pbr_member_or_a_choice_says_o
         p.shaders.values().next().unwrap().provenance.to_string(),
         "auto:pbr"
     );
+}
+
+fn put_rgba(dir: &Path, rel: &str, f: impl Fn(u32, u32) -> [u8; 4]) {
+    let p = dir.join("in").join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    ImageBuffer::from_fn(16, 16, |x, y| Rgba(f(x, y)))
+        .save(p)
+        .unwrap();
+}
+fn job<'a>(p: &'a Plan, tail: &str) -> &'a engine::policy::ResolvedJob {
+    p.jobs
+        .iter()
+        .find(|j| {
+            j.output
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with(tail)
+        })
+        .unwrap_or_else(|| panic!("no job {tail}"))
+}
+fn prov(j: &engine::policy::ResolvedJob, f: &str) -> String {
+    j.provenance[f].to_string()
+}
+
+#[test]
+fn hair_diffuse_is_cutout_with_coverage() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgba(d.path(), "textures/hair/braid.png", |x, _| {
+        [90, 60, 30, if x < 8 { 255 } else { 0 }]
+    });
+    put_rgb(d.path(), "textures/hair/braid_n.png", [128, 128, 255]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    let j = job(&p, "braid.dds");
+    assert_eq!(
+        serde_json::to_value(j.profile.alpha.policy).unwrap(),
+        "cutout"
+    );
+    assert_eq!(serde_json::to_value(j.profile.mips.coverage).unwrap(), "on");
+    assert_eq!(prov(j, "alpha.policy"), "shader:hair");
+    // The shader answered the alpha meaning, whatever else the job waits for.
+    if let engine::policy::JobStatus::Unresolved { needs, .. } = &j.status {
+        assert!(
+            !needs.contains(&engine::policy::Need::AlphaMeaning),
+            "{needs:?}"
+        );
+    }
+}
+
+/// Task 4's 6c re-resolve is what applies the pick: an explicit `--set set:wall.shader=hair` changes the member's
+/// profile, and without it the same files keep the built-in policy.
+#[test]
+fn the_set_pick_changes_a_members_profile_through_the_re_resolve() {
+    let make = || {
+        let d = tempfile::tempdir().unwrap();
+        put_rgba(d.path(), "textures/a/wall.png", |x, _| {
+            [90, 60, 30, (x * 16) as u8]
+        });
+        put_rgb(d.path(), "textures/a/wall_n.png", [128, 128, 255]);
+        d
+    };
+    let d = make();
+    let (p, _) = plan(d.path(), Target::Vanilla, &["set:wall.shader=hair"], &[]);
+    let j = job(&p, "wall.dds");
+    assert_eq!(prov(j, "alpha.policy"), "shader:hair");
+    assert_eq!(
+        serde_json::to_value(j.profile.alpha.policy).unwrap(),
+        "cutout"
+    );
+    let d = make();
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    assert_ne!(prov(job(&p, "wall.dds"), "alpha.policy"), "shader:hair");
+}
+
+#[test]
+fn hair_without_alpha_keeps_remove() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "textures/hair/braid.png", [90, 60, 30]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    let j = job(&p, "braid.dds");
+    assert_eq!(
+        serde_json::to_value(j.profile.alpha.policy).unwrap(),
+        "remove"
+    );
+    assert_eq!(prov(j, "alpha.policy"), "analysis");
+}
+
+#[test]
+fn eye_n_is_model_space() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "textures/eyes/eye.png", [90, 60, 30]);
+    put_rgb(d.path(), "textures/eyes/eye_n.png", [128, 128, 255]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    assert_eq!(job(&p, "eye_n.dds").profile.subtype.id(), "msn");
+    // Explicit choice: decided with shader provenance.
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    let (p, _) = plan(d.path(), Target::Vanilla, &["set:wall.shader=eye"], &[]);
+    let n = job(&p, "wall_n.dds");
+    assert_eq!(
+        (n.profile.subtype.id().as_str(), prov(n, "subtype").as_str()),
+        ("msn", "shader:eye")
+    );
+}
+
+#[test]
+fn explicit_landscape_makes_the_diffuse_landscape_diffuse() {
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    let (p, _) = plan(
+        d.path(),
+        Target::Vanilla,
+        &["set:wall.shader=landscape"],
+        &[],
+    );
+    assert_eq!(
+        job(&p, "wall.dds").profile.subtype.id(),
+        "landscape_diffuse"
+    );
+}
+
+#[test]
+fn multilayer_diffuse_keeps_alpha() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgba(d.path(), "textures/a/glass.png", |x, _| {
+        [90, 90, 90, (x * 16) as u8]
+    });
+    put_rgb(d.path(), "textures/a/glass_n.png", [128, 128, 255]);
+    put_rgb(d.path(), "textures/a/glass_i.png", [40, 40, 90]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    let j = job(&p, "glass.dds");
+    assert_eq!(
+        serde_json::to_value(j.profile.alpha.policy).unwrap(),
+        "data"
+    );
+    assert_eq!(prov(j, "alpha.policy"), "shader:multilayer");
+}
+
+#[test]
+fn env_m_and_parallax_p_are_bc4_by_shader() {
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    put_rgb(d.path(), "textures/a/wall_m.png", [200, 200, 200]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    let m = job(&p, "wall_m.dds");
+    assert_eq!(
+        (
+            serde_json::to_value(m.profile.format).unwrap(),
+            prov(m, "format")
+        ),
+        ("bc4".into(), "shader:envmap".to_string())
+    );
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    put_rgb(d.path(), "textures/a/wall_p.png", [128, 128, 128]);
+    let (p, _) = plan(d.path(), Target::Cs, &[], &[]);
+    let h = job(&p, "wall_p.dds");
+    assert_eq!(
+        (
+            serde_json::to_value(h.profile.format).unwrap(),
+            prov(h, "format")
+        ),
+        ("bc4".into(), "shader:parallax".to_string())
+    );
+}
+
+#[test]
+fn explicit_layers_beat_the_shader_default() {
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    put_rgb(d.path(), "textures/a/wall_p.png", [128, 128, 128]);
+    // --set format
+    let (p, _) = plan(
+        d.path(),
+        Target::Cs,
+        &["file:**/wall_p.png.format=bc7"],
+        &[],
+    );
+    let h = job(&p, "wall_p.dds");
+    assert_eq!(
+        (
+            serde_json::to_value(h.profile.format).unwrap(),
+            prov(h, "format")
+        ),
+        ("bc7".into(), "user".to_string())
+    );
+    // a project config [subtypes.height] table
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[subtypes.height]\nformat = \"bc7\"\n",
+    )
+    .unwrap();
+    let (p, _) = plan(d.path(), Target::Cs, &[], &[]);
+    assert_eq!(prov(job(&p, "wall_p.dds"), "format"), "project_config");
+    // a rule that names the sub-type beats the eye sub-type effect
+    std::fs::write(
+        d.path().join("in/sdc.toml"),
+        "[[rules]]\nmatch = { glob = \"**/wall_n.png\" }\nsubtype = \"normal\"\n",
+    )
+    .unwrap();
+    let (p, _) = plan(d.path(), Target::Cs, &["set:wall.shader=eye"], &[]);
+    assert_eq!(job(&p, "wall_n.dds").profile.subtype.id(), "normal");
+}
+
+/// S-mips-0 / S-mips-13 (Track C): the hair `cutout` bars a non-box filter. Unscoped, the filter falls back to box
+/// with CFG-FILTER-IGNORED (Info); file-scoped, it stays and is CFG-INVALID.
+#[test]
+fn hair_cutout_and_a_non_box_filter() {
+    let soft = |x: u32, _| [90, 60, 30, (x * 16) as u8];
+    let d = tempfile::tempdir().unwrap();
+    put_rgba(d.path(), "textures/hair/braid.png", soft);
+    let (p, _) = plan(d.path(), Target::Vanilla, &["mips.filter=kaiser"], &[]);
+    let j = job(&p, "braid.dds");
+    assert_eq!(prov(j, "alpha.policy"), "shader:hair");
+    assert_eq!(
+        (
+            serde_json::to_value(j.profile.mips.filter).unwrap(),
+            prov(j, "mips.filter")
+        ),
+        ("box".into(), "fallback".to_string())
+    );
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::CfgFilterIgnored),
+        "{:?}",
+        j.warnings
+    );
+    let (p, _) = plan(
+        d.path(),
+        Target::Vanilla,
+        &["file:**/braid.png.mips.filter=kaiser"],
+        &[],
+    );
+    let j = job(&p, "braid.dds");
+    assert!(
+        j.warnings.iter().any(|w| w.code == Code::CfgInvalid),
+        "{:?}",
+        j.warnings
+    );
+}
+
+#[test]
+fn shader_provenance_round_trips_and_orders() {
+    use engine::presets::Provenance;
+    assert_eq!(Provenance::Shader("hair".into()).to_string(), "shader:hair");
+    assert_eq!(
+        "shader:hair".parse::<Provenance>().unwrap(),
+        Provenance::Shader("hair".into())
+    );
+    assert!(Provenance::Shader(String::new()) < Provenance::Suffix(String::new()));
+    assert!(Provenance::Shader(String::new()) > Provenance::AnalysisFact(String::new()));
 }

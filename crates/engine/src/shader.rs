@@ -655,6 +655,40 @@ pub fn pick_notes(pick: &ShaderPick, target: Target) -> Vec<Warning> {
         _ => vec![],
     }
 }
+
+/// The settings `shader` gives a member of sub-type `st` (M6 spec §6): field path → value. The `bc4` rows restate
+/// the built-in `envmask`/`height` format so a later built-in change cannot undo them.
+pub fn member_defaults(shader: Shader, st: Subtype) -> Vec<(&'static str, serde_json::Value)> {
+    use serde_json::json;
+    match (shader, st) {
+        (Shader::Hair, Subtype::Diffuse) => {
+            vec![
+                ("alpha.policy", json!("cutout")),
+                ("mips.coverage", json!("on")),
+            ]
+        }
+        (Shader::Multilayer, Subtype::Diffuse) => vec![("alpha.policy", json!("data"))],
+        (Shader::Envmap | Shader::Eye, Subtype::Envmask) | (Shader::Parallax, Subtype::Height) => {
+            vec![("format", json!("bc4"))]
+        }
+        _ => vec![],
+    }
+}
+
+/// The sub-type `shader` gives a member whose top suggestion is `suggested`, with why (S-shader-4).
+pub fn member_subtype(shader: Shader, suggested: Subtype) -> Option<(Subtype, &'static str)> {
+    match (shader, suggested) {
+        (Shader::Eye, Subtype::Normal | Subtype::PbrNormal | Subtype::LandscapeNormal) => {
+            Some((Subtype::Msn, "model-space `_n`"))
+        }
+        (Shader::Landscape, Subtype::Diffuse | Subtype::PbrAlbedo) => Some((
+            Subtype::LandscapeDiffuse,
+            "landscape diffuse (alpha = snow mask)",
+        )),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
