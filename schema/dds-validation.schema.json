@@ -118,6 +118,10 @@
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
         "SKIN-WET-FORM",
+        "SHADER-AUTO",
+        "SHADER-UNAVAILABLE",
+        "SHADER-EXTRA-MAP",
+        "SHADER-MISSING-MAP",
         "DDS-HEADER-PATCHED",
         "DDS-HEADER-UNPATCHABLE"
       ],

@@ -6,6 +6,7 @@ use std::str::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::codes::{Code, Warning};
 use crate::config::{Subtype, Target};
 use crate::suggest::has_component;
 
@@ -522,6 +523,87 @@ pub fn pick(i: &PickInput) -> ShaderPick {
     }
 }
 
+/// One member of a set as the map check sees it. A skipped DDS member has no sub-type.
+pub struct MemberMap {
+    pub name: String,
+    pub suffix: Option<String>,
+    pub subtype: Option<Subtype>,
+}
+
+/// The role each member fills, in `members` order. Roles keyed by suffix are tried first, so an `_i` that resolves
+/// `diffuse` fills `_i`, not `diffuse`. `None` = the shader does not use the member.
+pub fn assign<'s>(spec: &'s ShaderSpec, members: &[MemberMap]) -> Vec<Option<&'s MapRole>> {
+    let roles = || spec.required.iter().chain(spec.optional);
+    members
+        .iter()
+        .map(|m| {
+            let hit = |r: &&MapRole| r.matches(m.suffix.as_deref(), m.subtype);
+            roles()
+                .filter(|r| !r.suffixes.is_empty())
+                .find(hit)
+                .or_else(|| roles().filter(|r| r.suffixes.is_empty()).find(hit))
+        })
+        .collect()
+}
+
+/// SHADER-EXTRA-MAP per unused member (data `{"member", "shader"}`) and SHADER-MISSING-MAP per required role no
+/// member fills (data `{"map", "shader"}`), members first, then roles in table order.
+pub fn check_maps(pick: &ShaderPick, members: &[MemberMap]) -> Vec<Warning> {
+    let id = pick.shader.id();
+    let spec = pick.shader.spec();
+    let filled = assign(spec, members);
+    let extra = members
+        .iter()
+        .zip(&filled)
+        .filter(|(_, r)| r.is_none())
+        .map(|(m, _)| {
+            Warning::new(
+                Code::ShaderExtraMap,
+                format!(
+                    "{} is not used by the {id} shader; it is still converted",
+                    m.name
+                ),
+            )
+            .with_data(serde_json::json!({"member": m.name, "shader": id}))
+        });
+    let missing = spec
+        .required
+        .iter()
+        .filter(|r| !filled.iter().flatten().any(|f| std::ptr::eq(*f, *r)))
+        .map(|r| {
+            Warning::new(
+                Code::ShaderMissingMap,
+                format!(
+                    "the {id} shader needs {}; none is in the set (nothing is generated)",
+                    r.label
+                ),
+            )
+            .with_data(serde_json::json!({"map": r.label, "shader": id}))
+        });
+    extra.chain(missing).collect()
+}
+
+/// SHADER-AUTO for an `auto:` pick (data `{"shader", "rule"}`); SHADER-UNAVAILABLE for a fallback (data
+/// `{"wanted", "shader"}`); nothing for `set`.
+pub fn pick_notes(pick: &ShaderPick, target: Target) -> Vec<Warning> {
+    let id = pick.shader.id();
+    match (&pick.provenance, pick.wanted) {
+        (ShaderOrigin::Auto(r), _) => vec![Warning::new(
+            Code::ShaderAuto,
+            format!("shader {id} picked automatically ({})", r.id()),
+        )
+        .with_data(serde_json::json!({"shader": id, "rule": r.id()}))],
+        (ShaderOrigin::Fallback, Some(w)) => vec![Warning::new(
+            Code::ShaderUnavailable,
+            format!(
+                "shader {} is not available under {target:?}; using {id}",
+                w.id()
+            ),
+        )
+        .with_data(serde_json::json!({"wanted": w.id(), "shader": id}))],
+        _ => vec![],
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1013,6 +1095,110 @@ mod tests {
         assert_eq!(
             auto(&pick(&i)),
             (Shader::Glow, ShaderOrigin::Auto(AutoRule::G))
+        );
+    }
+
+    fn m(name: &str, suffix: Option<&str>, st: Option<Subtype>) -> MemberMap {
+        MemberMap {
+            name: name.into(),
+            suffix: suffix.map(str::to_string),
+            subtype: st,
+        }
+    }
+    fn codes(w: &[crate::codes::Warning]) -> Vec<crate::codes::Code> {
+        w.iter().map(|w| w.code).collect()
+    }
+
+    #[test]
+    fn extra_and_missing_maps() {
+        use crate::codes::Code::*;
+        let glow = ShaderPick {
+            shader: Shader::Glow,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let ms = [
+            m("lamp.dds", None, Some(Subtype::Diffuse)),
+            m("lamp_p.dds", Some("p"), Some(Subtype::Height)),
+        ];
+        let w = check_maps(&glow, &ms);
+        assert_eq!(
+            codes(&w),
+            vec![ShaderExtraMap, ShaderMissingMap, ShaderMissingMap]
+        );
+        assert_eq!(w[0].data["member"], "lamp_p.dds");
+        assert_eq!(w[1].data["map"], "_n");
+        assert_eq!(w[2].data["map"], "_g");
+    }
+
+    #[test]
+    fn envmap_without_m_is_complete() {
+        let p = ShaderPick {
+            shader: Shader::Envmap,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let ms = [
+            m("a.dds", None, Some(Subtype::Diffuse)),
+            m("a_n.dds", Some("n"), Some(Subtype::Normal)),
+        ];
+        assert!(check_maps(&p, &ms).is_empty());
+    }
+
+    #[test]
+    fn an_i_that_resolves_diffuse_fills_i_not_diffuse() {
+        let p = ShaderPick {
+            shader: Shader::Multilayer,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let ms = [
+            m("g_i.dds", Some("i"), Some(Subtype::Diffuse)),
+            m("g_n.dds", Some("n"), Some(Subtype::Normal)),
+        ];
+        let w = check_maps(&p, &ms);
+        assert_eq!(codes(&w), vec![crate::codes::Code::ShaderMissingMap]);
+        assert_eq!(w[0].data["map"], "diffuse");
+    }
+
+    #[test]
+    fn notes_for_auto_and_fallback() {
+        use crate::codes::Code::*;
+        let a = ShaderPick {
+            shader: Shader::Hair,
+            provenance: ShaderOrigin::Auto(AutoRule::HairPath),
+            wanted: None,
+        };
+        assert_eq!(codes(&pick_notes(&a, Target::Cs)), vec![ShaderAuto]);
+        let f = ShaderPick {
+            shader: Shader::Default,
+            provenance: ShaderOrigin::Fallback,
+            wanted: Some(Shader::Pbr),
+        };
+        let w = pick_notes(&f, Target::Vanilla);
+        assert_eq!(codes(&w), vec![ShaderUnavailable]);
+        assert_eq!(
+            w[0].message,
+            "shader pbr is not available under Vanilla; using default"
+        );
+        let s = ShaderPick {
+            shader: Shader::Hair,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        assert!(pick_notes(&s, Target::Cs).is_empty());
+    }
+
+    #[test]
+    fn auto_mesh_label_is_mesh() {
+        let a = ShaderPick {
+            shader: Shader::Hair,
+            provenance: ShaderOrigin::Auto(AutoRule::Mesh),
+            wanted: None,
+        };
+        assert_eq!(
+            pick_notes(&a, Target::Cs)[0].message,
+            "shader hair picked automatically (mesh)"
         );
     }
 }
