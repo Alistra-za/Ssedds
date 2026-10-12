@@ -732,11 +732,21 @@ fn policy_id(p: AlphaPolicy) -> String {
     }
 }
 
-/// `sdc presets list|show|schema`. Result verb: the report goes to stdout (DECISIONS Note J).
-pub fn presets(cmd: PresetsCmd) -> Result<i32, EngineError> {
+/// `sdc presets …`. Result verb: the report goes to stdout (DECISIONS Note J); skipped user presets go to stderr.
+pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
     let engine = Engine::new()?;
-    let reg = engine.registry();
-    match cmd {
+    let mut reg = engine.registry().clone();
+    if let Some(dir) = user_presets_dir() {
+        for w in reg.add_dir(&dir) {
+            eprintln!("{}: {}", w.code.as_str(), w.message);
+        }
+    }
+    for f in &args.preset_file {
+        reg.add_file(f)
+            .map_err(|e| EngineError::Config(e.to_string()))?;
+    }
+    let reg = &reg;
+    match args.cmd {
         PresetsCmd::List { json } => {
             for p in reg.selectable() {
                 if json {
@@ -745,14 +755,19 @@ pub fn presets(cmd: PresetsCmd) -> Result<i32, EngineError> {
                         json!({
                             "id": p.id, "version": p.version, "target": p.target,
                             "description": p.description, "suffix_aliases": p.suffix_aliases,
+                            "source": reg.source(&p.id).unwrap_or("builtin"),
                         })
                     );
                 } else {
+                    let from = match reg.source(&p.id) {
+                        Some(s) if s != engine::presets::SOURCE_BUILTIN => format!("  from {s}"),
+                        _ => String::new(),
+                    };
                     let aliases = alias_list(&p.suffix_aliases)
                         .map(|a| format!("  aliases: {a}"))
                         .unwrap_or_default();
                     println!(
-                        "{:<18} {:<8} {:<8} {}{aliases}",
+                        "{:<18} {:<8} {:<8} {}{aliases}{from}",
                         p.id,
                         p.version,
                         p.target
@@ -803,6 +818,93 @@ pub fn presets(cmd: PresetsCmd) -> Result<i32, EngineError> {
                 );
             }
             Ok(0)
+        }
+        PresetsCmd::Diff {
+            a,
+            b,
+            subtype,
+            target,
+            json,
+        } => {
+            let usage = |e: engine::presets::PresetError| EngineError::Usage(e.to_string());
+            reg.chain(&a).map_err(usage)?;
+            reg.chain(&b).map_err(usage)?;
+            let target = target
+                .map(Target::from)
+                .or_else(|| reg.chain(&a).ok()?.iter().rev().find_map(|p| p.target))
+                .or_else(|| reg.chain(&b).ok()?.iter().rev().find_map(|p| p.target))
+                .unwrap_or(Target::Cs);
+            let subtypes: Vec<Subtype> = match subtype {
+                Some(s) => vec![serde_json::from_value(Value::String(s.clone()))
+                    .map_err(|_| EngineError::Usage(format!("--subtype {s}: unknown sub-type")))?],
+                None => Subtype::ALL.to_vec(),
+            };
+            let mut rows = vec![];
+            for st in subtypes {
+                let pa = serde_json::to_value(reg.profile(&a, target, st).map_err(usage)?)
+                    .unwrap_or_default();
+                let pb = serde_json::to_value(reg.profile(&b, target, st).map_err(usage)?)
+                    .unwrap_or_default();
+                let mut fields = vec![];
+                engine::presets::leaf_paths(&pa, "", &mut fields);
+                engine::presets::leaf_paths(&pb, "", &mut fields);
+                fields.sort();
+                fields.dedup();
+                let at = |v: &Value, f: &str| {
+                    f.split('.')
+                        .try_fold(v, |v, k| v.get(k))
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                };
+                for f in fields {
+                    let (va, vb) = (at(&pa, &f), at(&pb, &f));
+                    if va != vb {
+                        rows.push(json!({ "subtype": st, "field": f, "a": va, "b": vb }));
+                    }
+                }
+            }
+            if json {
+                println!("{}", Value::Array(rows));
+            } else if rows.is_empty() {
+                println!("no differences");
+            } else {
+                for r in &rows {
+                    println!(
+                        "{}.{}: {} \u{2192} {}",
+                        r["subtype"].as_str().unwrap_or_default(),
+                        r["field"].as_str().unwrap_or_default(),
+                        r["a"],
+                        r["b"]
+                    );
+                }
+            }
+            Ok(0)
+        }
+        PresetsCmd::Export { id, out, new_id } => {
+            let new_id = new_id.unwrap_or_else(|| format!("{id}-export"));
+            let text = reg
+                .export(&id, &new_id)
+                .map_err(|e| EngineError::Usage(e.to_string()))?;
+            match out {
+                Some(p) => std::fs::write(&p, &text)
+                    .map_err(|e| EngineError::Fatal(format!("{}: {e}", p.display())))?,
+                None => print!("{text}"),
+            }
+            Ok(0)
+        }
+        PresetsCmd::Validate { files } => {
+            let mut bad = false;
+            for f in &files {
+                let problems = reg.validate_file(f);
+                if problems.is_empty() {
+                    println!("ok {}", f.display());
+                }
+                for p in &problems {
+                    println!("{}: {p}", f.display());
+                }
+                bad |= !problems.is_empty();
+            }
+            Ok(i32::from(bad))
         }
         PresetsCmd::Schema { which, out } => {
             match (SchemaKind::from(which), out) {

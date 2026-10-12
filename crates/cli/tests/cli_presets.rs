@@ -146,3 +146,187 @@ fn encoders_json_is_one_object_and_nvtt_comes_from_the_flag() {
     assert_eq!(v["nvtt"]["found"], true);
     assert!(v["nvtt"]["path"].as_str().unwrap().ends_with("sdc.exe"));
 }
+
+fn sdc_in(appdata: &std::path::Path, args: &[&str]) -> (i32, String, String) {
+    let o = Command::new(env!("CARGO_BIN_EXE_sdc"))
+        .env("APPDATA", appdata)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        o.status.code().unwrap(),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+const MINE: &str = "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n";
+
+fn appdata_with_mine() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("sdc/presets")).unwrap();
+    std::fs::write(d.path().join("sdc/presets/mine.toml"), MINE).unwrap();
+    std::fs::write(d.path().join("sdc/presets/broken.toml"), "nope").unwrap();
+    d
+}
+
+/// Spec §4: `list` shows a folder preset with its source; `--json` has `source` on every row.
+#[test]
+fn list_shows_user_presets_with_their_source() {
+    let d = appdata_with_mine();
+    let (code, out, err) = sdc_in(d.path(), &["presets", "list"]);
+    assert_eq!(code, 0, "{err}");
+    let line = out.lines().find(|l| l.starts_with("mine")).unwrap();
+    assert!(line.contains("mine.toml"), "{line}");
+    assert!(
+        out.contains("cs-compact") && out.contains("fast-preview"),
+        "{out}"
+    );
+    assert!(
+        err.contains("CFG-PRESET-SKIPPED") && err.contains("broken.toml"),
+        "{err}"
+    );
+    let (_, out, _) = sdc_in(d.path(), &["presets", "list", "--json"]);
+    let rows: Vec<serde_json::Value> = out
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let src = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap()["source"].clone();
+    assert_eq!(src("cs-quality"), "builtin");
+    assert!(src("mine").as_str().unwrap().ends_with("mine.toml"));
+}
+
+/// Spec §3: `--preset-file` works on every verb, and a duplicate id is an error (exit 2).
+#[test]
+fn preset_file_on_the_verbs_and_duplicates() {
+    let d = appdata_with_mine();
+    let extra = d.path().join("extra.toml");
+    std::fs::write(&extra, MINE.replace("\"mine\"", "\"extra\"")).unwrap();
+    let (code, out, _) = sdc_in(
+        d.path(),
+        &["presets", "list", "--preset-file", extra.to_str().unwrap()],
+    );
+    assert_eq!(code, 0);
+    assert!(out.lines().any(|l| l.starts_with("extra")), "{out}");
+    let dup = d.path().join("dup.toml");
+    std::fs::write(&dup, MINE).unwrap();
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "show",
+            "mine",
+            "--preset-file",
+            dup.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("already loaded"), "{err}");
+}
+
+/// Spec §4: `diff` prints `<subtype>.<field>: a → b`, `no differences`, or JSON rows.
+#[test]
+fn diff_prints_only_differences() {
+    let d = appdata_with_mine();
+    let (code, out, err) = sdc_in(d.path(), &["presets", "diff", "cs-quality", "mine"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "diffuse.format: \"bc7\" → \"bc1\"");
+    let (code, out, _) = sdc_in(d.path(), &["presets", "diff", "cs-quality", "cs-quality"]);
+    assert_eq!((code, out.trim()), (0, "no differences"));
+    let (code, out, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "diff",
+            "cs-quality",
+            "cs-compact",
+            "--subtype",
+            "normal",
+            "--json",
+        ],
+    );
+    assert_eq!(code, 0);
+    let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        rows,
+        serde_json::json!([{"subtype": "normal", "field": "resize", "a": null, "b": "half"}])
+    );
+    assert_eq!(
+        sdc_in(d.path(), &["presets", "diff", "cs-quality", "nope"]).0,
+        2
+    );
+}
+
+/// Spec §4: export writes files that validate; validate exits 1 on a bad file.
+#[test]
+fn export_then_validate() {
+    let d = appdata_with_mine();
+    let out = d.path().join("x.toml");
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &["presets", "export", "mine", "--out", out.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{err}");
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        text.contains("id = \"mine-export\"") && text.contains("base = \"cs-quality\""),
+        "{text}"
+    );
+    let renamed = d.path().join("packed.toml");
+    let (code, _, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "cs-compact",
+            "--id",
+            "packed",
+            "--out",
+            renamed.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert!(std::fs::read_to_string(&renamed)
+        .unwrap()
+        .contains("id = \"packed\""));
+    let (code, stdout, _) = sdc_in(d.path(), &["presets", "export", "fast-preview"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("id = \"fast-preview-export\""), "{stdout}");
+    let (code, stdout, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "validate",
+            out.to_str().unwrap(),
+            renamed.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        stdout.lines().filter(|l| l.starts_with("ok ")).count(),
+        2,
+        "{stdout}"
+    );
+    let bad = d.path().join("bad.toml");
+    std::fs::write(
+        &bad,
+        "schema_version = 1\nid = \"b\"\nversion = \"1\"\nbase = \"nope\"\n",
+    )
+    .unwrap();
+    let (code, stdout, _) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "validate",
+            out.to_str().unwrap(),
+            bad.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 1);
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with(bad.to_str().unwrap()) && l.contains("nope")),
+        "{stdout}"
+    );
+}

@@ -732,6 +732,42 @@ impl PresetRegistry {
         warnings
     }
 
+    /// `sdc presets validate` (spec §4): load `path` into a copy of this registry (without a preset already loaded
+    /// from that same file, so a user folder file validates in place of itself) and check it. One line per problem;
+    /// loading stops at the first, so a file has at most one (Note T8). Empty = clean.
+    pub fn validate_file(&self, path: &Path) -> Vec<String> {
+        let mut r = self.clone();
+        let own = r
+            .sources
+            .iter()
+            .find(|(_, s)| same_file(s, path))
+            .map(|(id, _)| id.clone());
+        if let Some(id) = own {
+            r.remove(&id);
+        }
+        match r.add_file(path) {
+            Ok(id) => r
+                .check_preset(&id)
+                .err()
+                .map(|e| e.to_string())
+                .into_iter()
+                .collect(),
+            Err(e) => vec![e.to_string()],
+        }
+    }
+
+    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded (`base` stays a link) under `new_id`, so it
+    /// loads beside the original.
+    pub fn export(&self, id: &str, new_id: &str) -> Result<String, PresetError> {
+        let mut t = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| PresetError::Unknown(id.to_string()))?;
+        t.insert("id".into(), toml::Value::String(new_id.to_string()));
+        toml::to_string(&t).map_err(|e| PresetError::Invalid(e.to_string()))
+    }
+
     /// The inheritance chain, root base first.
     pub fn chain(&self, id: &str) -> Result<Vec<&PresetFile>, PresetError> {
         let mut out: Vec<&PresetFile> = vec![];

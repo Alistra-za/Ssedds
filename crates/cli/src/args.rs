@@ -29,9 +29,9 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Run the spec §5.8 checks on existing DDS files.
     Validate(ValidateArgs),
-    /// Inspect presets and print schemas.
-    #[command(subcommand)]
-    Presets(PresetsCmd),
+    /// Inspect, compare, export and validate presets, and print schemas. User presets in %APPDATA%\sdc\presets\*.toml
+    /// are always loaded.
+    Presets(PresetsArgs),
     /// Built-in encoder versions and NVTT detection.
     Encoders(EncodersArgs),
     /// Fix DDS header faults that need no pixel change (mip count, flags, caps, legacy/DX10, an explicit tag).
@@ -237,9 +237,18 @@ impl From<SchemaArg> for SchemaKind {
     }
 }
 
+#[derive(Args)]
+pub struct PresetsArgs {
+    /// Load a preset .toml after the user presets folder (repeatable). An id that is already loaded is an error.
+    #[arg(long = "preset-file", global = true)]
+    pub preset_file: Vec<PathBuf>,
+    #[command(subcommand)]
+    pub cmd: PresetsCmd,
+}
+
 #[derive(Subcommand)]
 pub enum PresetsCmd {
-    /// List selectable presets.
+    /// List selectable presets, built-in and user (with their source file).
     List {
         #[arg(long)]
         json: bool,
@@ -251,6 +260,31 @@ pub enum PresetsCmd {
         subtype: Option<String>,
         #[arg(long, value_enum)]
         target: Option<TargetArg>,
+    },
+    /// Print the fields where two presets resolve differently: `<subtype>.<field>: <a> → <b>`.
+    Diff {
+        a: String,
+        b: String,
+        #[arg(long)]
+        subtype: Option<String>,
+        #[arg(long, value_enum)]
+        target: Option<TargetArg>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a preset's own TOML (keeping its `base` link) under a new id (default `<id>-export`).
+    Export {
+        id: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Id of the exported preset.
+        #[arg(long = "id")]
+        new_id: Option<String>,
+    },
+    /// Check preset files (migration, parse, ids, base, aliases, rules, every profile). Exit 1 if any has a problem.
+    Validate {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
     },
     /// Print a JSON Schema (profile, preset, config, event, manifest, dds-info, dds-validation) or write all to a folder.
     Schema {

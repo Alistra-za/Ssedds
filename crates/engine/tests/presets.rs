@@ -778,3 +778,77 @@ fn rule_match_subtypes_is_optional() {
     let plain = serde_json::to_value(RuleMatch::default()).unwrap();
     assert!(plain.get("subtypes").is_none());
 }
+
+const ULTRA_ALIASES: &str = "schema_version = 1\nid = \"ultra\"\nversion = \"2.0.0\"\nbase = \"cs-compact\"\n[subtypes.diffuse]\nalpha = { threshold = 100 }\n[suffix_aliases]\nrmaosultrahigh = \"rmaos\"\n";
+
+/// Spec §4 and Review Focus 4: an export keeps its `base` link and aliases, validates where the original's base is loaded,
+/// and resolves equal to the original for every sub-type.
+#[test]
+fn export_round_trips_and_keeps_aliases() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml(ULTRA_ALIASES).unwrap();
+    let text = r.export("ultra", "ultra-export").unwrap();
+    let out: PresetFile = toml::from_str(&text).unwrap();
+    assert_eq!(out.id, "ultra-export");
+    assert_eq!(out.base.as_deref(), Some("cs-compact"));
+    assert_eq!(
+        out.suffix_aliases.get("rmaosultrahigh").map(String::as_str),
+        Some("rmaos")
+    );
+    // Validate beside the built-ins only: the original's alias would conflict (Note T8).
+    let d = tempfile::tempdir().unwrap();
+    let f = write(d.path(), "export.toml", &text);
+    let clean = PresetRegistry::builtin().unwrap();
+    assert_eq!(clean.validate_file(&f), Vec::<String>::new());
+    let mut both = PresetRegistry::builtin().unwrap();
+    let id = both.add_file(&f).unwrap();
+    for st in Subtype::ALL {
+        assert_eq!(
+            both.profile(&id, Target::Cs, st).unwrap(),
+            r.profile("ultra", Target::Cs, st).unwrap(),
+            "{st:?}"
+        );
+    }
+}
+
+/// Spec §4: the default export is the preset's own table (base stays a link) under the new id.
+#[test]
+fn default_export_keeps_the_base_link_under_a_new_id() {
+    let r = PresetRegistry::builtin().unwrap();
+    let text = r.export("cs-compact", "my-compact").unwrap();
+    let p: PresetFile = toml::from_str(&text).unwrap();
+    assert_eq!(
+        (p.id.as_str(), p.base.as_deref()),
+        ("my-compact", Some("cs-quality"))
+    );
+    assert_eq!(p.rules, r.get("cs-compact").unwrap().rules);
+    assert!(matches!(
+        r.export("nope", "x"),
+        Err(PresetError::Unknown(_))
+    ));
+}
+
+/// Spec §4: validate names the first problem; a folder file validates in place of its own copy.
+#[test]
+fn validate_file_reports_problems_and_accepts_a_folder_file() {
+    let d = tempfile::tempdir().unwrap();
+    let mut r = PresetRegistry::builtin().unwrap();
+    let mine = write(d.path(), "mine.toml", MINE);
+    assert!(r.add_dir(d.path()).is_empty());
+    assert!(
+        r.validate_file(&mine).is_empty(),
+        "a folder file validates against itself"
+    );
+    for (name, text, says) in [
+        ("dup.toml", "schema_version = 1\nid = \"cs-quality\"\nversion = \"1\"\n", "already loaded"),
+        ("nobase.toml", "schema_version = 1\nid = \"x\"\nversion = \"1\"\nbase = \"nope\"\n", "nope"),
+        ("unknown.toml", "schema_version = 1\nid = \"y\"\nversion = \"1\"\nbogus = 1\n", "bogus"),
+        ("newer.toml", "schema_version = 9\nid = \"z\"\n", "newer"),
+        ("rule.toml", "schema_version = 1\nid = \"w\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { subtypes = [\"nope\"] }\n", "nope"),
+    ] {
+        let f = write(&d.path().join("v"), name, text);
+        let p = r.validate_file(&f);
+        assert_eq!(p.len(), 1, "{name}: {p:?}");
+        assert!(p[0].contains(says), "{name}: {p:?}");
+    }
+}
