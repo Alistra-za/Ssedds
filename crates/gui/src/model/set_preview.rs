@@ -1858,3 +1858,19 @@ impl SetPreview {
         self.rows = rows;
     }
 }
+
+impl SetPreview {
+    /// The app's instance: the saved shaders, the `[meshes]` target, the scan DB path and the D5 cap. No IO.
+    pub fn from_settings(s: &crate::settings::GuiSettings) -> SetPreview {
+        let cap = match s.render3d.set_preview_max {
+            0 => DEFAULT_CAP,
+            n => n.clamp(256, 8192),
+        };
+        SetPreview::new(
+            s.render3d.shaders.clone(),
+            target_of(&s.meshes),
+            crate::model::meshes::default_store_path(),
+            cap,
+        )
+    }
+}
