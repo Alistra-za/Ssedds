@@ -95,11 +95,17 @@ pub fn decode_rgbe(b: &[u8]) -> Result<Hdr, String> {
     // least a 4-byte header per scanline plus one run byte-pair per channel).
     let payload = b.len() - pos;
     let rle_ok = (8..32768).contains(&w) && b[pos..].starts_with(&[2, 2]);
-    let min = if rle_ok { h * (4 + 8) } else { w * h * 4 };
+    let min = if rle_ok {
+        h * (4 + 4 * w.div_ceil(127) * 2) // a run packet covers at most 127 pixels
+    } else {
+        w * h * 4
+    };
     if payload < min {
         return Err(format!("HDR payload too short for {w}x{h}"));
     }
-    let mut rgb = Vec::with_capacity(w * h * 3);
+    let mut rgb = Vec::new();
+    rgb.try_reserve_exact(w * h * 3)
+        .map_err(|e| format!("HDR {w}x{h}: {e}"))?;
     let mut scan = vec![0u8; w * 4];
     for y in 0..h {
         let data = &b[pos..];
@@ -271,6 +277,11 @@ mod tests {
         assert!(decode_rgbe(&[header(16384, 16384), vec![0; 16]].concat()).is_err());
         // Declared 4096x4096 flat, a few bytes of payload: rejected before allocating.
         assert!(decode_rgbe(&[header(4096, 4096), vec![1; 64]].concat()).is_err());
+        // RLE header claiming 16384x4096 with 49152 bytes: too short for its runs, rejected before allocating.
+        let mut b = header(16384, 4096);
+        b.extend([2, 2, 0x40, 0]);
+        b.resize(b.len() + 49_152 - 4, 0);
+        assert!(decode_rgbe(&b).is_err());
         // RLE: truncated mid-scanline, and a zero-length run.
         let mut b = header(8, 1);
         b.extend([2, 2, 0, 8, 128 + 8, 1, 128 + 8, 1, 128 + 8, 1, 128 + 4, 1]);
