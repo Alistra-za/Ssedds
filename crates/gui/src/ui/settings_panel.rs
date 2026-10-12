@@ -183,6 +183,7 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             vec![
                 opt(json!("default"), "Default"),
                 opt(json!("max"), "Maximum"),
+                opt(json!("fast"), "Fast (preview)"),
             ]
         }
         "header" => vec![

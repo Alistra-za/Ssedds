@@ -24,12 +24,16 @@ pub struct Row {
 }
 
 /// Refuse an output folder inside the bench root (spec §7: nothing is written there). Windows paths are
-/// case-insensitive, so both are compared lower-cased, component by component.
+/// case-insensitive, so both are compared lower-cased, component by component. The nearest existing ancestor is
+/// canonicalised, so a junction or symlink that points into the root is caught.
 pub fn check_out(root: &Path, out: &Path) -> Result<()> {
     let norm = |p: &Path| -> Result<PathBuf> {
-        Ok(PathBuf::from(
-            std::path::absolute(p)?.to_string_lossy().to_lowercase(),
-        ))
+        let abs = std::path::absolute(p)?;
+        let real = abs
+            .ancestors()
+            .find_map(|a| Some(a.canonicalize().ok()?.join(abs.strip_prefix(a).ok()?)))
+            .unwrap_or(abs);
+        Ok(PathBuf::from(real.to_string_lossy().to_lowercase()))
     };
     if norm(out)?.starts_with(norm(root)?) {
         bail!(
@@ -41,7 +45,7 @@ pub fn check_out(root: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
-fn encode(format: &str, blocks: &[[u8; 4]], r: u32) -> Vec<u8> {
+pub fn encode(format: &str, blocks: &[[u8; 4]], r: u32) -> Vec<u8> {
     blocks
         .par_chunks(16)
         .flat_map_iter(|b| {
@@ -187,5 +191,82 @@ mod tests {
         c.retain(|s| !(s.0 == "bc5" && s.1 == 10));
         c.push(("bc5", 10, 41.05, 1.0));
         assert!(!decide(&c).0, "BC5 gains only 0.05 dB");
+    }
+
+    /// Thresholds are inclusive: +0.10 dB at exactly 1.5x fires Q; -0.10 dB is within F. PSNRs 0.0 and 0.1 keep
+    /// the differences exactly equal to the 0.10 literal in f64.
+    #[test]
+    fn decision_thresholds_are_inclusive() {
+        let at = |t10: f64, p10: f64| {
+            both(&[
+                (0, 0.0, 1.0),
+                (1, 0.0, 1.0),
+                (2, 0.0, 1.0),
+                (3, 0.0, 1.0),
+                (4, 0.0, 1.0),
+                (5, 0.0, 2.0),
+                (10, p10, t10),
+            ])
+        };
+        assert!(decide(&at(3.0, 0.1)).0);
+        assert!(!decide(&at(3.0001, 0.1)).0, "over 1.5x the time");
+        assert!(!decide(&at(3.0, 0.0999)).0, "under +0.10 dB");
+        let f = |p5: f64| {
+            both(&[
+                (0, 0.0, 1.0),
+                (1, 0.0, 1.0),
+                (2, 0.0, 1.0),
+                (3, 0.0, 1.0),
+                (4, 0.0, 1.0),
+                (5, p5, 1.0),
+                (10, p5, 1.0),
+            ])
+        };
+        assert_eq!(decide(&f(0.1)).1, Some(0), "-0.10 dB is within");
+        assert_eq!(decide(&f(0.1001)).1, None, "-0.1001 dB is not");
+    }
+
+    /// F needs both formats: radius 2 passes BC4 only, radius 3 passes both.
+    #[test]
+    fn rule_f_needs_both_formats() {
+        let mut s = both(&[
+            (0, 30.0, 1.0),
+            (1, 30.0, 1.0),
+            (2, 40.95, 1.0),
+            (3, 40.95, 1.0),
+            (4, 41.0, 1.0),
+            (5, 41.0, 1.0),
+            (10, 41.0, 1.0),
+        ]);
+        for x in s.iter_mut().filter(|x| x.0 == "bc5" && x.1 == 2) {
+            x.2 = 40.0;
+        }
+        assert_eq!(decide(&s).1, Some(3));
+    }
+
+    /// A junction or symlink outside the bench root that points into it is still inside it.
+    #[test]
+    fn an_alias_into_the_bench_root_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("bench");
+        std::fs::create_dir(&root).unwrap();
+        let link = d.path().join("alias");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&root, &link).is_ok()
+            || std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&root)
+                .output()
+                .is_ok_and(|o| o.status.success());
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&root, &link).is_ok();
+        if !made {
+            eprintln!("skipped: cannot create a junction or symlink here");
+            return;
+        }
+        assert!(check_out(&root, &link.join("out3/x")).is_err());
+        assert!(check_out(&root, &link).is_err());
+        assert!(check_out(&root, &d.path().join("elsewhere/x")).is_ok());
     }
 }

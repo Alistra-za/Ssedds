@@ -31,16 +31,57 @@ Per-image rows: `target/bench/radius45/radius45.csv` (not committed).
   +0.0944 dB (bc5) against 5, while radius 3 is −0.3189 dB (bc4) and −2.1678 dB (bc5). Radius 4 takes 0.72× the time
   of 5 on both formats.
 - Applied: `SearchRadius::Fast` (`"fast"`) = `BC45_RADIUS_FAST` = 4; `cs-compact`, `vanilla-compact` and
-  `fast-preview` use `bc45_search_radius = "fast"`; schemas regenerated. `sdc-base` keeps `"default"` (rule Q holds).
-  The GUI dropdown entry (`crates/gui/src/ui/settings_panel.rs`, `opt(json!("fast"), "Fast (preview)")` after
-  `Maximum`) is deferred: `crates/gui` was frozen for another task's review when this ran.
+  `fast-preview` use `bc45_search_radius = "fast"`; schemas regenerated; the GUI offers "Fast (preview)" after
+  "Maximum". `sdc-base` keeps `"default"` (rule Q holds).
+
+## Why PSNR is not monotonic in the radius: the encoder and the decoder round differently
+rgbcx's `encode_bc4_hq` (used for BC4, both BC5 halves and BC3 alpha) picks endpoints by the lowest squared error under
+its own decode model, `bc4_block::get_block_values` (rgbcx.h): interpolants are floored, `(6·e0 + e1) / 7` and
+`(4·e0 + e1) / 5` in integer division. bcdec (the bench and `crates/engine/src/decode.rs`) rounds to nearest:
+fixed point `(w·e0 + w'·e1 + 32768) >> 16`, about `round(x)`. So the interpolants differ by 1 whenever the exact
+fraction is ≥ .5 — in both the 8-value and the 6-value mode; the endpoints and the 6-value mode's 0/255 agree.
+The search sets are nested (radius r ⊂ r+1, ties keep the first), so under rgbcx's own model the error cannot grow
+with the radius, and it does not. A wider search finds more endpoint pairs that hit the source exactly only because
+of the floor, and those miss by 1 under a rounding decoder.
+
+`cargo run -p sdc-bench --release --offline --example bc45_decoder_probe` (output in
+`target/bench/radius45/decoder-probe.txt`), mean PSNR (dB) of the same encodings decoded both ways:
+
+| radius | bc4 bcdec | bc4 rgbcx model | bc5 bcdec | bc5 rgbcx model |
+|---|---|---|---|---|
+| 0 | 52.1310 | 55.7692 | 53.6305 | 58.9575 |
+| 1 | 52.0335 | 56.5367 | 46.4010 | 59.9650 |
+| 2 | 52.7307 | 56.8836 | 47.1085 | 60.3017 |
+| 3 | 53.8712 | 57.0661 | 55.8233 | 60.4487 |
+| 4 | 54.1446 | 57.1679 | 58.0855 | 60.5178 |
+| 5 | 54.1901 | 57.2283 | 57.9911 | 60.5528 |
+| 10 | 53.9772 | 57.3496 | 47.9202 | 60.6121 |
+
+The bcdec column equals the radius45 run exactly. The rgbcx-model column rises monotonically.
+
+Example, Wood094 normal BC5, block 1, channel R. Source: 127 and 128 only.
+- Radius 5: e0 = 128, e1 = 122 (8-value), selectors 0 and 2. Value 2 = 6·128 + 122 = 890 / 7 = 127.14, which is 127
+  under both decoders. SSE 0 under both.
+- Radius 10: e0 = 130, e1 = 120, selectors 2 and 3. Value 2 = 900 / 7 = 128.57: rgbcx gives 128 and bcdec 129.
+  Value 3 = 890 / 7 = 127.14: both give 127. SSE is 0 under rgbcx and 7 under bcdec. rgbcx picks this block because,
+  the search keeps the first zero-error pair it reaches, and (130, 120) comes before (128, 122).
+- In Wood094 BC5, 77 621 of 131 072 channel-blocks have a higher bcdec SSE at radius 10 than at radius 5.
+
+Which decoder the game uses cannot be settled from code: the GPU decodes. D3D's BC4 definition interpolates in
+higher precision (a fraction of 7 or 5), so a rounding decoder (bcdec) is the closer model and a flooring one is not.
+The radius table and the decisions above therefore stay on bcdec. Rule F is unchanged at 4 and rule Q still holds.
+Under rgbcx's own model the decisions would be the same: radius 4 is −0.0604 dB (bc4) and −0.0350 dB (bc5) against 5
+and radius 3 is −0.1622 dB on bc4, so F = 4; radius 10 gains +0.1213 dB (bc4) but only +0.0593 dB (bc5), so Q fails.
+
+Effect on shipped output (not changed here): every rgbcx BC4/BC5 (and BC3 alpha) block is tuned for the floor model.
+On this corpus at the shipped `default` (radius 5), the mean PSNR under bcdec is 3.04 dB (BC4) and 2.56 dB (BC5)
+below what rgbcx believes it achieved. At `max` (radius 10) the BC5 gap is 12.69 dB. Fixing it means changing
+rgbcx's `get_block_values` to round (or adding a rounding search), which is an encoder change for the owner.
 
 ## Caveats
-- The PSNR is not monotonic in the radius. On BC5, radius 10 is far worse than 5 on Wood094 (71.89 → 53.36 dB),
-  Tiles141 (59.37 → 54.78) and Metal049A (99.0 → 51.36), and radii 1–2 are worse than 0 on Metal049A, Tiles141 and
-  Wood094. BC4 Tiles141 drops 56.35 → 54.54 at radius 10. Metal049A reaches bit-exact output (the 99 dB clamp) at
-  radii 0, 3, 4 and 5, so the gather/encode/decode/compare path is sound; this is rgbcx behaviour on near-flat or
-  few-valued blocks. It bears on the shipped `max` value (radius 10), which this corpus shows as worse than `default`.
+- Per image, BC5 radius 10 vs 5 under bcdec: Wood094 71.89 → 53.36 dB, Tiles141 59.37 → 54.78, Metal049A
+  99.0 → 51.36; BC4 Tiles141 56.35 → 54.54. All follow from the rounding mismatch above. The shipped `max` value
+  (radius 10) is worse than `default` on this corpus.
 - The means average PSNR, including 99 dB clamps (Metal049A), so a few near-lossless images dominate the BC5 means.
   The rule F outcome holds per image on BC5 (every image within 0.07 dB or better at radius 4). On BC4 one image,
   Tiles141_Displacement, loses 0.12 dB at radius 4 (56.23 vs 56.35); the others lose ≤ 0.10 dB.
