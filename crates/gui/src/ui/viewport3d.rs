@@ -27,15 +27,17 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
         if ui.checkbox(&mut on, FEATURES_LABEL).changed() {
             v.set_features(on);
         }
-        if let Some(root) = v.shaders.as_ref().map(|f| f.root.display().to_string()) {
-            if ui
-                .small_button("Shader folder…")
-                .on_hover_text(format!("Community Shaders in use: {root}"))
-                .clicked()
-            {
-                if let Some(p) = pick_folder() {
-                    v.choose_folder(p);
-                }
+        let used = v
+            .shaders
+            .as_ref()
+            .map_or("none yet".into(), |f| f.root.display().to_string());
+        if ui
+            .small_button("Shader folder…")
+            .on_hover_text(format!("Community Shaders in use: {used}"))
+            .clicked()
+        {
+            if let Some(p) = pick_folder() {
+                v.choose_folder(p);
             }
         }
         if v.show_spinner(std::time::Instant::now()) {

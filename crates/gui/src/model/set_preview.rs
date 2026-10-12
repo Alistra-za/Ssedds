@@ -19,8 +19,9 @@ use crate::pgp::writer::EntryInput;
 use crate::pgp::writer::{document, entry_node};
 use crate::settings::MeshesSettings;
 use engine::api::CancelToken;
+use engine::config::Format;
 use engine::dds::{
-    dds_bytes, resolve_header, DdsDesc, DDPF_FOURCC, DDSCAPS_COMPLEX, DDSCAPS_MIPMAP,
+    dds_bytes, dxgi_format, resolve_header, DdsDesc, DDPF_FOURCC, DDSCAPS_COMPLEX, DDSCAPS_MIPMAP,
     DDSCAPS_TEXTURE, DDSD_CAPS, DDSD_HEIGHT, DDSD_MIPMAPCOUNT, DDSD_PITCH, DDSD_PIXELFORMAT,
     DDSD_WIDTH,
 };
@@ -477,7 +478,19 @@ fn stored_levels(levels: &[Rgba32F], p: &engine::config::Profile) -> Vec<Rgba32F
             width: l.width,
             height: l.height,
             px: match engine::quantize::to_encoder_input(l, &work, p) {
-                EncoderInput::Ldr(v) => v.iter().map(|c| c.map(|b| f32::from(b) / 255.0)).collect(),
+                EncoderInput::Ldr(v) => v
+                    .iter()
+                    .map(|c| {
+                        let mut f = c.map(|b| f32::from(b) / 255.0);
+                        // What the GPU samples from a one- or two-channel format: (r, 0, 0, 1) / (r, g, 0, 1).
+                        match p.format {
+                            Format::Bc4 | Format::R8 => f = [f[0], 0.0, 0.0, 1.0],
+                            Format::Bc5 | Format::Rg8 => f = [f[0], f[1], 0.0, 1.0],
+                            _ => {}
+                        }
+                        f
+                    })
+                    .collect(),
                 EncoderInput::Hdr(v) => v
                     .iter()
                     .map(|c| c.map(|h| half::f16::from_bits(h).to_f32()))
@@ -546,7 +559,10 @@ pub fn encode(
             uncompressed_dds(
                 &stored_levels(&r.levels, &job.profile),
                 job.profile.format.is_hdr(),
-                job.profile.srgb_tag(),
+                // As the Encoded file: formats without an _SRGB form (BC4/BC5/R8/RG8) are written UNORM.
+                job.profile.srgb_tag()
+                    && dxgi_format(job.profile.format, true)
+                        != dxgi_format(job.profile.format, false),
             )
         }
         Source::Job(job) => {
