@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod cache;
 pub mod cbuffer;
 pub mod compile;
+pub mod cs_settings;
 pub mod device;
 pub mod draw;
 pub mod hdri;
