@@ -1723,6 +1723,13 @@ impl SetPreview {
         self.poll_at(m, Instant::now())
     }
 
+    /// Window focus (`app.rs`): look for CS and re-read its settings again, once this panel has located it.
+    pub fn relocate(&mut self) {
+        if self.located {
+            self.v3.locate(self.target.clone());
+        }
+    }
+
     /// `poll` at a given time (tests drive the debounce and the throttle). Call once per frame.
     pub fn poll_at(&mut self, m: &AppModel, now: Instant) {
         self.v3.poll_at(now);

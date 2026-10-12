@@ -2,8 +2,8 @@
 //! orbit changes and uploads a new frame into an egui texture when its id changes (P0 CPU path).
 use crate::model::meshes::LE_WARNING;
 use crate::model::viewport3d::{
-    moved_text, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER, FEATURES_LABEL,
-    FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
+    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
+    FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
 use render3d::locate::Change;
@@ -230,7 +230,7 @@ fn problems(ui: &mut egui::Ui, v: &Viewport3d) {
 
 fn footer(ui: &mut egui::Ui, v: &Viewport3d) {
     ui.horizontal_wrapped(|ui| {
-        ui.weak(CUBEMAPS_FOOTER);
+        ui.weak(off_line(&v.off_in_preview, CUBEMAPS_FOOTER));
         if let Some(t) = v.timing {
             let up = v.upload_ms.unwrap_or(0.0);
             ui.weak(format!(

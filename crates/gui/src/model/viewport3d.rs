@@ -9,6 +9,7 @@ use crate::model::meshes::ScanTarget;
 use crate::worker::{spawn_guarded, WorkerMsg};
 use nif::material::MaterialState;
 use render3d::builtin::Builtin;
+use render3d::cs_settings::{self, CsSettings};
 use render3d::device::Gpu;
 use render3d::locate::{self, Change, Fingerprint};
 use render3d::perf_log::{self, FrameStats, GapWatch};
@@ -34,7 +35,37 @@ pub const KEEP_OLD: &str = "Keep old";
 pub const UPDATED_NOTICE: &str = "Community Shaders updated — recompiling shaders…";
 /// The CS-features toggle (on by default). Off compiles without CS feature defines (P0: no `ENABLE_LL`).
 pub const FEATURES_LABEL: &str = "Community Shaders features";
+/// The footer's off-in-preview line until the user's CS settings have been read (P0 wording).
 pub const CUBEMAPS_FOOTER: &str = "Dynamic Cubemaps: off in preview";
+/// Notice prefix when a CS settings file did not parse (CS may be writing it): the previous settings stay (C10).
+pub const SETTINGS_KEPT: &str = "Community Shaders settings not read, keeping the previous ones";
+
+/// `DynamicCubemaps` → `Dynamic Cubemaps`, `LODBlending` → `LOD Blending` (Info.ini short names as CS's menu
+/// spells them).
+fn spaced(name: &str) -> String {
+    let c: Vec<char> = name.chars().collect();
+    let mut out = String::new();
+    for (i, &ch) in c.iter().enumerate() {
+        let after_lower = i > 0 && c[i - 1].is_lowercase();
+        let acronym_end =
+            i > 0 && c[i - 1].is_uppercase() && c.get(i + 1).is_some_and(|n| n.is_lowercase());
+        if ch.is_uppercase() && (after_lower || acronym_end) {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The panel's off-in-preview line: the user's loaded CS features this preview does not compile
+/// (`Renderer::off_in_preview`); `fallback` until the thread has reported them (no settings read yet).
+pub fn off_line(off: &[String], fallback: &str) -> String {
+    if off.is_empty() {
+        return fallback.to_string();
+    }
+    let names: Vec<String> = off.iter().map(|n| spaced(n)).collect();
+    format!("Off in this preview: {}", names.join(", "))
+}
 /// Accessible name of the drawn frame.
 pub const FRAME_LABEL: &str = "3D preview";
 
@@ -356,7 +387,11 @@ impl Default for Look {
 /// Commands to the render thread.
 pub enum V3Cmd {
     SetShaders(Fingerprint),
+    /// The "Community Shaders features" toggle (`Renderer::set_features_on`): no reload, changed shapes recompile.
     SetFeatures(bool),
+    /// New user CS settings (`Renderer::set_settings`, C11): a cbuffer rewrite, recompiles only when the defines
+    /// change, never a reload.
+    SetSettings(CsSettings),
     Load {
         id: u64,
         spec: Arc<MeshSpec>,
@@ -455,14 +490,19 @@ pub enum V3Reply {
         result: Result<(), String>,
     },
     /// A locate answer; `generation` tells a stale one (started before a later locate or "Choose folder…").
+    /// `settings`: the user's CS settings read in the same worker, whenever a `Shaders` folder was found.
     Located {
         generation: u64,
         result: Result<Option<Fingerprint>, String>,
+        settings: Option<CsSettings>,
     },
     Chosen {
         generation: u64,
         result: Result<Fingerprint, String>,
+        settings: Option<CsSettings>,
     },
+    /// `Renderer::off_in_preview()`, after the thread starts and after each settings or features change.
+    OffInPreview(Vec<String>),
 }
 
 /// `%LOCALAPPDATA%\sdc\shader-cache`.
@@ -506,6 +546,8 @@ pub struct Viewport3d {
     /// The moved/renamed question (`Change::Moved`).
     pub popup: Option<Change>,
     pub features_on: bool,
+    /// The user's loaded CS features this preview leaves off (`V3Reply::OffInPreview`), for the panel line.
+    pub off_in_preview: Vec<String>,
     pub notice: Option<String>,
     /// The CS shaders in use (the `Shaders` folder), as saved in `gui.toml`.
     pub shaders: Option<Fingerprint>,
@@ -554,6 +596,8 @@ pub struct Viewport3d {
     /// This session's locate (or the user) has confirmed `shaders`: until then the saved fingerprint may be stale,
     /// and compiling with it would cache new-source bytecode under the old hash.
     confirmed: bool,
+    /// The CS settings last applied: sent to the render thread, or given to it when it starts.
+    settings: CsSettings,
     thread: Option<Sender<V3Cmd>>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
@@ -573,6 +617,7 @@ impl Viewport3d {
             report: None,
             popup: None,
             features_on: true,
+            off_in_preview: vec![],
             notice: None,
             shaders: saved,
             frame: None,
@@ -606,6 +651,7 @@ impl Viewport3d {
             declined: None,
             shaders_changed: false,
             confirmed: false,
+            settings: CsSettings::default(),
             thread: None,
             tx,
             rx,
@@ -625,6 +671,11 @@ impl Viewport3d {
     /// The generation of the latest locate or "Choose folder…" (older answers are ignored).
     pub fn locate_generation(&self) -> u64 {
         self.locate_gen
+    }
+
+    /// The CS settings last applied.
+    pub fn settings(&self) -> &CsSettings {
+        &self.settings
     }
 
     /// Test seam: stands in for the render thread; the returned receiver gets the commands.
@@ -719,9 +770,15 @@ impl Viewport3d {
         let saved = self.shaders.clone();
         spawn_guarded(self.tx.clone(), "locate", move |tx| {
             let result = locate_shaders(target.as_ref(), saved.as_ref());
+            // Small files (~60 KB): a full re-read and hash on every locate (03 §3.4), same generation.
+            let settings = match &result {
+                Ok(Some(f)) => Some(read_cs_settings(target.as_ref(), f)),
+                _ => None,
+            };
             let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Located {
                 generation,
                 result,
+                settings,
             }));
         });
     }
@@ -734,9 +791,11 @@ impl Viewport3d {
         spawn_guarded(self.tx.clone(), "locate", move |tx| {
             let result = chosen_root(&folder)
                 .and_then(|root| locate::fingerprint(&root, None).map_err(|e| e.to_string()));
+            let settings = result.as_ref().ok().map(|f| read_cs_settings(None, f));
             let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Chosen {
                 generation,
                 result,
+                settings,
             }));
         });
     }
@@ -773,6 +832,29 @@ impl Viewport3d {
                 }
             }
             Change::NotFound { .. } => self.state = V3State::NotFound,
+        }
+    }
+
+    /// The CS settings read with a locate answer (C10). If a file did not parse, the previous settings stay and
+    /// the notice says why. A new hash goes to the render thread; with no thread yet, it starts with these.
+    pub fn on_settings(&mut self, s: CsSettings) {
+        if s.parse_failed {
+            self.notice = Some(format!("{SETTINGS_KEPT}: {}", s.notes.join("; ")));
+            return;
+        }
+        if self
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.starts_with(SETTINGS_KEPT))
+        {
+            self.notice = None;
+        }
+        if s.hash == self.settings.hash {
+            return;
+        }
+        self.settings = s.clone();
+        if let Some(t) = &self.thread {
+            let _ = t.send(V3Cmd::SetSettings(s));
         }
     }
 
@@ -825,7 +907,8 @@ impl Viewport3d {
         self.last_sent = None;
     }
 
-    /// The "Community Shaders features" toggle.
+    /// The "Community Shaders features" toggle (C8). The render thread recomputes the defines. Shapes whose
+    /// permutation changes recompile in the background while their old draw stays. Nothing reloads.
     pub fn set_features(&mut self, on: bool) {
         if self.features_on == on {
             return;
@@ -833,7 +916,6 @@ impl Viewport3d {
         self.features_on = on;
         if let Some(t) = &self.thread {
             let _ = t.send(V3Cmd::SetFeatures(on));
-            self.reload_pending();
         }
     }
 
@@ -1055,9 +1137,10 @@ impl Viewport3d {
         };
         let (ctx, crx) = channel();
         let features = self.features_on;
+        let settings = self.settings.clone();
         let me = ctx.clone();
         spawn_guarded(self.tx.clone(), "viewport3d", move |tx| {
-            render_loop(crx, me, tx, shaders, cache, features)
+            render_loop(crx, me, tx, shaders, cache, features, settings)
         });
         self.load_variant_sent = Variant::Source; // a new thread starts at the default
         self.thread = Some(ctx);
@@ -1328,13 +1411,28 @@ impl Viewport3d {
                     self.swap_errors.push(format!("{path}: {e}"));
                 }
             }
-            V3Reply::Located { generation, result } if generation == self.locate_gen => {
-                self.on_located(result)
+            V3Reply::Located {
+                generation,
+                result,
+                settings,
+            } if generation == self.locate_gen => {
+                self.on_located(result);
+                if let Some(s) = settings {
+                    self.on_settings(s);
+                }
             }
-            V3Reply::Chosen { generation, result } if generation == self.locate_gen => {
-                self.on_chosen(result)
+            V3Reply::Chosen {
+                generation,
+                result,
+                settings,
+            } if generation == self.locate_gen => {
+                self.on_chosen(result);
+                if let Some(s) = settings {
+                    self.on_settings(s);
+                }
             }
             V3Reply::Located { .. } | V3Reply::Chosen { .. } => {}
+            V3Reply::OffInPreview(off) => self.off_in_preview = off,
         }
     }
 }
@@ -1355,24 +1453,10 @@ pub fn chosen_root(folder: &Path) -> Result<PathBuf, String> {
     ))
 }
 
-/// Finds the CS `Shaders` folder: a folder the user chose (no owning mod) while it still holds `Lighting.hlsl`;
-/// else the highest-priority mod of the target providing `Shaders/Lighting.hlsl`; else the saved folder if it is
-/// still there. Fingerprints it (reads every shader file).
-pub fn locate_shaders(
-    target: Option<&ScanTarget>,
-    saved: Option<&Fingerprint>,
-) -> Result<Option<Fingerprint>, String> {
-    let fp = |root: &Path, owner: Option<String>| {
-        locate::fingerprint(root, owner)
-            .map(Some)
-            .map_err(|e| e.to_string())
-    };
-    if let Some(s) = saved.filter(|s| s.owner_mod.is_none()) {
-        if s.root.join("Lighting.hlsl").is_file() {
-            return fp(&s.root, None);
-        }
-    }
-    let origins: Vec<(String, PathBuf, i32)> = match target {
+/// The target's loose origins as `(name, root, priority)`: MO2 = game Data −1, mods by modlist order, overwrite
+/// `i32::MAX`; a folder target is one origin.
+fn target_origins(target: Option<&ScanTarget>) -> Vec<(String, PathBuf, i32)> {
+    match target {
         Some(ScanTarget::Mo2 { root, profile }) => {
             modscan::mo2::Instance::load(root, Some(profile))
                 .ok()
@@ -1392,7 +1476,40 @@ pub fn locate_shaders(
             vec![(name, f.clone(), 0)]
         }
         None => vec![],
+    }
+}
+
+/// The user's CS settings for the located `Shaders` folder (03 §3.4, C12). They come through the target's
+/// origins when CS was found there (overwrite wins). For a chosen folder, or a saved one with no origins, they come
+/// from the Data folder above `Shaders`. Never fails: problems become notes.
+pub fn read_cs_settings(target: Option<&ScanTarget>, found: &Fingerprint) -> CsSettings {
+    let origins = if found.owner_mod.is_some() {
+        target_origins(target)
+    } else {
+        vec![]
     };
+    let origins = (!origins.is_empty()).then_some(origins.as_slice());
+    cs_settings::read_settings(&locate::settings_paths(origins, &found.root))
+}
+
+/// Finds the CS `Shaders` folder: a folder the user chose (no owning mod) while it still holds `Lighting.hlsl`;
+/// else the highest-priority mod of the target providing `Shaders/Lighting.hlsl`; else the saved folder if it is
+/// still there. Fingerprints it (reads every shader file).
+pub fn locate_shaders(
+    target: Option<&ScanTarget>,
+    saved: Option<&Fingerprint>,
+) -> Result<Option<Fingerprint>, String> {
+    let fp = |root: &Path, owner: Option<String>| {
+        locate::fingerprint(root, owner)
+            .map(Some)
+            .map_err(|e| e.to_string())
+    };
+    if let Some(s) = saved.filter(|s| s.owner_mod.is_none()) {
+        if s.root.join("Lighting.hlsl").is_file() {
+            return fp(&s.root, None);
+        }
+    }
+    let origins = target_origins(target);
     if let Some((name, root)) = locate::find_in_mods(&origins) {
         return fp(&root.join("Shaders"), Some(name));
     }
@@ -1452,21 +1569,6 @@ impl Drop for Viewport3d {
             let _ = t.send(V3Cmd::Quit);
         }
     }
-}
-
-fn apply_features(r: &mut Renderer, on: bool) {
-    let f = if on {
-        render3d::DEFAULT_FEATURES
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        vec![]
-    };
-    // Linear Lighting draws in linear space: encode for display. Without it the output is gamma-space already.
-    let ll = f.iter().any(|s: &String| s == "ENABLE_LL");
-    r.set_features(f);
-    r.set_encode_srgb(ll);
 }
 
 /// The texture resolver over `map` (canonical path → bytes); read errors are collected in `errors`.
@@ -1592,6 +1694,7 @@ fn render_loop(
     shaders: Fingerprint,
     cache: PathBuf,
     features: bool,
+    settings: CsSettings,
 ) {
     let send = |r: V3Reply| {
         let _ = tx.send(WorkerMsg::Viewport3d(r));
@@ -1599,7 +1702,8 @@ fn render_loop(
     let make = |shaders: Fingerprint, features: bool| -> Result<Renderer, String> {
         let mut r = Renderer::new(shaders, cache.clone())?;
         r.set_async_compile(true);
-        apply_features(&mut r, features);
+        r.set_features_on(features);
+        r.set_settings(settings.clone());
         Ok(r)
     };
     let loaded = |r: &Renderer, id: u64, c: &Content, report: LoadReport| {
@@ -1620,6 +1724,7 @@ fn render_loop(
         adapter: r.gpu().adapter.clone(),
         warp: r.gpu().warp,
     });
+    send(V3Reply::OffInPreview(r.off_in_preview()));
     let pool = CompilePool::new(render3d::pool::WORKERS, move |d| {
         let _ = self_tx.send(V3Cmd::Compiled(d));
     });
@@ -1662,6 +1767,8 @@ fn render_loop(
         let mut reload = false;
         let mut render = None;
         let mut compiled_changed = false;
+        // A settings or features change: cbuffers rewritten, programs maybe swapped or queued; no reload.
+        let mut restyled = false;
         let mut pending: Vec<(u64, ShapeId, MaterialState)> = vec![];
         let mut tex_cmds: Vec<TexCmd> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
@@ -1677,8 +1784,13 @@ fn render_loop(
                     None
                 }
                 V3Cmd::SetFeatures(on) => {
-                    apply_features(&mut r, on);
-                    reload = true;
+                    r.set_features_on(on);
+                    restyled = true;
+                    None
+                }
+                V3Cmd::SetSettings(s) => {
+                    r.set_settings(s);
+                    restyled = true;
                     None
                 }
                 V3Cmd::Load { id, spec } => Some((id, Content::Mesh(spec))),
@@ -1825,6 +1937,11 @@ fn render_loop(
             }
         }
         pump(&mut r);
+        if restyled {
+            send(V3Reply::OffInPreview(r.off_in_preview()));
+        }
+        // Redraw from the last camera, and report the shapes (now pending or swapped) like a landed program.
+        compiled_changed |= restyled;
         // A landed program changed a shape and nothing above reported it: tell the panel.
         if compiled_changed
             && !reload

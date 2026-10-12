@@ -72,7 +72,10 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     for n in &s.notices {
         ui.colored_label(AMBER, n);
     }
-    ui.label(egui::RichText::new(OFF_FEATURES).small());
+    // Until the CS settings are read the shared footer names only Dynamic Cubemaps: keep the P0 list here.
+    if s.v3.off_in_preview.is_empty() {
+        ui.label(egui::RichText::new(OFF_FEATURES).small());
+    }
     timings(ui, s);
     ui.separator();
     crate::ui::viewport3d::show(ui, &mut s.v3);
