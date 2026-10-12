@@ -270,3 +270,52 @@ fn every_built_in_shape_is_selectable() {
     }
     assert!(BUILTINS.iter().any(|(_, n)| *n == "Material ball"));
 }
+
+// ---- Task 16: hooks ----
+
+#[test]
+fn the_cap_setting_defaults_to_2048_and_round_trips() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = sdc_gui::settings::GuiSettings::default();
+    assert_eq!(s.render3d.set_preview_max, 0);
+    assert_eq!(SetPreview::from_settings(&s).enc.cap, DEFAULT_CAP);
+    s.render3d.set_preview_max = 1024;
+    assert_eq!(SetPreview::from_settings(&s).enc.cap, 1024);
+    assert!(SetPreview::from_settings(&s).enabled);
+    let p = d.path().join("gui.toml");
+    s.save(&p).unwrap();
+    assert_eq!(sdc_gui::settings::GuiSettings::load(&p), (s, None));
+}
+
+#[test]
+fn the_textures_view_shows_the_panel_for_a_set_only_when_the_app_enables_it() {
+    use sdc_gui::ui::State;
+    let d = tempfile::tempdir().unwrap();
+    let m = rock_selected(d.path());
+    let state = State {
+        set3d: SetPreview::new(None, None, None, DEFAULT_CAP),
+        ..State::default()
+    };
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1800.0, 900.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+            (m, state),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label(PANEL_TITLE);
+    h.state_mut().0.selection = sdc_gui::model::Selection::None;
+    h.run();
+    assert!(h.query_by_label(PANEL_TITLE).is_none());
+    // `ui::draw` (every existing kittest) uses `State::default()`: the panel stays off.
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m),
+            rock_selected(d.path()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    assert!(h.query_by_label(PANEL_TITLE).is_none());
+}
