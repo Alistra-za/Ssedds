@@ -1,11 +1,11 @@
 //! The Meshes view (plan A Task 12): mods | NIFs of the selected mod | shapes of the selected NIF. Draws
 //! `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::{
-    shader_type_name, slot_name, Banner, MeshesModel, ScanTarget, DERIVED_CHIP, LE_WARNING,
-    STALE_CHIP,
+    display_path, shader_type_name, slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_LIMIT,
+    ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, SEARCH_DEBOUNCE, STALE_CHIP,
 };
 use eframe::egui;
-use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA, KIND_SEPARATOR};
+use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA};
 
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
@@ -150,19 +150,38 @@ fn mods(ui: &mut egui::Ui, m: &mut MeshesModel) {
         ui.label("No scan yet.");
         return;
     }
+    ui.add(
+        egui::TextEdit::singleline(&mut m.mod_filter)
+            .hint_text("Filter mods")
+            .desired_width(f32::INFINITY),
+    );
+    let lines = m.mod_lines();
     let row_h = ui.spacing().interact_size.y;
     let mut picked = None;
+    let mut toggled = None;
     egui::ScrollArea::vertical()
         .id_salt("meshes-mods-scroll")
         .auto_shrink([false, false])
-        .show_rows(ui, row_h, m.mods.len(), |ui, range| {
-            for r in &m.mods[range] {
+        .show_rows(ui, row_h, lines.len(), |ui, range| {
+            for line in &lines[range] {
+                let ModLine::Mod(i) = *line else {
+                    let ModLine::Header { idx, count, open } = *line else {
+                        continue;
+                    };
+                    let r = &m.mods[idx];
+                    let name = r.name.strip_suffix("_separator").unwrap_or(&r.name);
+                    ui.horizontal(|ui| {
+                        let arrow = if open { "▾" } else { "▸" };
+                        let text = egui::RichText::new(format!("{arrow} {name}")).strong();
+                        if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                            toggled = Some(r.id);
+                        }
+                        ui.weak(count.to_string());
+                    });
+                    continue;
+                };
+                let r = &m.mods[i];
                 ui.horizontal(|ui| {
-                    if r.kind == KIND_SEPARATOR {
-                        let name = r.name.strip_suffix("_separator").unwrap_or(&r.name);
-                        ui.label(egui::RichText::new(name).strong());
-                        return;
-                    }
                     let label = ui.add_enabled(
                         !r.derived,
                         egui::Button::selectable(m.selected_mod == Some(r.id), &r.name),
@@ -187,6 +206,9 @@ fn mods(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 });
             }
         });
+    if let Some(id) = toggled {
+        m.toggle_group(id);
+    }
     // While a scan runs the store's winner tables are being rewritten: the selection waits for the result.
     if let Some(id) = picked.filter(|_| !m.scanning()) {
         m.select_mod(id);
@@ -201,8 +223,30 @@ fn nifs(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         }
     });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut m.all_meshes, "All meshes");
+        ui.add(
+            egui::TextEdit::singleline(&mut m.path_filter)
+                .hint_text("Filter paths")
+                .desired_width(f32::INFINITY),
+        );
+    });
+    if m.update_search(std::time::Instant::now()) {
+        ui.ctx().request_repaint_after(SEARCH_DEBOUNCE);
+    }
+    if m.all_needs_text() {
+        ui.label(format!(
+            "Type at least {ALL_MIN_CHARS} characters of a path to search all meshes"
+        ));
+        return;
+    }
     let visible = m.visible_nifs();
-    ui.label(format!("{} of {} NIFs", visible.len(), m.nifs.len()));
+    ui.label(format!("{} of {} NIFs", visible.len(), m.listed()));
+    if m.all_truncated() {
+        ui.label(format!(
+            "Showing the first {ALL_LIMIT} matches — type more to narrow it"
+        ));
+    }
     let row_h = ui.spacing().interact_size.y;
     let mut picked = None;
     egui::ScrollArea::vertical()
@@ -210,13 +254,16 @@ fn nifs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         .auto_shrink([false, false])
         .show_rows(ui, row_h, visible.len(), |ui, range| {
             for &i in &visible[range] {
-                let n = &m.nifs[i];
+                let (n, origin) = m.nif_at(i);
                 ui.horizontal(|ui| {
                     if ui
-                        .selectable_label(m.selected_nif == Some(n.copy_id), &n.path)
+                        .selectable_label(m.selected_nif == Some(n.copy_id), display_path(&n.path))
                         .clicked()
                     {
                         picked = Some(n.copy_id);
+                    }
+                    if let Some(o) = origin {
+                        ui.weak(o);
                     }
                     badges(ui, n);
                 });
@@ -265,7 +312,7 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         return;
     }
     if let Some(n) = &row {
-        ui.heading(&n.path);
+        ui.heading(display_path(&n.path));
         if n.le_mesh {
             ui.colored_label(AMBER, LE_WARNING);
         }
@@ -314,7 +361,8 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     }
                     for (nif, slot, kind) in users.iter().take(MAX_LISTED) {
                         ui.label(format!(
-                            "{nif} · slot {slot} ({})",
+                            "{} · slot {slot} ({})",
+                            display_path(nif),
                             slot_name(*kind, *slot as usize)
                         ));
                     }
@@ -471,7 +519,7 @@ fn dialogs(ctx: &egui::Context, m: &mut MeshesModel) {
                 .max_height(320.0)
                 .show(ui, |ui| {
                     for (path, origin) in list {
-                        ui.label(format!("{path} ({origin})"));
+                        ui.label(format!("{} ({origin})", display_path(path)));
                     }
                 });
             close = ui.button("Close").clicked();

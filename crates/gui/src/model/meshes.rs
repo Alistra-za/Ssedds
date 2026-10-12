@@ -9,14 +9,18 @@ use crate::worker::{start_scan, WorkerMsg};
 use modscan::mo2::Instance;
 use modscan::pgp::DeriveCheck;
 use modscan::scan::{Report, Source};
-use modscan::store::{check_code, DerivedState, ModRow, NifRow, ShapeView, Store, TexResolution};
+use modscan::store::{
+    check_code, DerivedState, ModRow, NifRow, ShapeView, Store, TexResolution, KIND_MOD,
+    KIND_SEPARATOR,
+};
 use modscan::ScanError;
 use rusqlite::OptionalExtension;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// BSLightingShaderProperty shader type names, by number (`skyrim_conventions.md` §8, from nif.xml).
 pub const SHADER_TYPES: [&str; 21] = [
@@ -140,6 +144,36 @@ impl NifFilter {
     }
 }
 
+/// `p` without a leading `meshes/` or `meshes\` (any case): how mesh paths are shown. Display only.
+pub fn display_path(p: &str) -> &str {
+    let b = p.as_bytes();
+    if b.len() >= 7 && b[..6].eq_ignore_ascii_case(b"meshes") && matches!(b[6], b'/' | b'\\') {
+        &p[7..]
+    } else {
+        p
+    }
+}
+
+/// Fewest typed characters before All meshes searches the store.
+pub const ALL_MIN_CHARS: usize = 3;
+/// Most rows All meshes shows; the store is asked for one more to tell that it was cut.
+pub const ALL_LIMIT: usize = 2000;
+/// How long the path filter must be left alone before All meshes queries the store.
+pub const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
+
+/// One line of the Mods panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModLine {
+    /// A separator (index into `mods`), its mod count, and whether its mods are listed below it.
+    Header {
+        idx: usize,
+        count: usize,
+        open: bool,
+    },
+    /// A mod, the game Data row, Overwrite or a BSA (index into `mods`).
+    Mod(usize),
+}
+
 /// The MO2 first-run question.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeshesDialog {
@@ -204,6 +238,14 @@ pub struct MeshesModel {
     pub selected_mod: Option<i64>,
     pub nifs: Vec<NifRow>,
     pub filter: NifFilter,
+    /// Mod list filter: case-insensitive substring of the mod name. Only changes which rows are listed.
+    pub mod_filter: String,
+    /// Ids of the separators whose mods are listed; empty = all collapsed. Not persisted.
+    pub expanded: HashSet<i64>,
+    /// NIF list filter: case-insensitive substring of the shown path (`\` or `/`).
+    pub path_filter: String,
+    /// "All meshes": search the game-winning copy of every path instead of the selected mod's NIFs.
+    pub all_meshes: bool,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
     /// Shapes of the shown copy (`shown_copy`).
@@ -232,6 +274,13 @@ pub struct MeshesModel {
     pub v3: Viewport3d,
     /// Process lister for the PGPatcher gate; tests replace it.
     pub procs: fn() -> Vec<String>,
+    /// Result of the All meshes search for `all_query` (winners with their mod), at most `ALL_LIMIT`.
+    all_nifs: Vec<(NifRow, String)>,
+    all_truncated: bool,
+    /// The text `all_nifs` answers; `None` = nothing searched yet.
+    all_query: Option<String>,
+    /// Text waiting out the debounce, and since when.
+    all_pending: Option<(String, Instant)>,
     settings: MeshesSettings,
     settings_changed: bool,
     activated: bool,
@@ -259,6 +308,14 @@ impl MeshesModel {
             selected_mod: None,
             nifs: vec![],
             filter: NifFilter::All,
+            mod_filter: String::new(),
+            expanded: HashSet::new(),
+            path_filter: String::new(),
+            all_meshes: false,
+            all_nifs: vec![],
+            all_truncated: false,
+            all_query: None,
+            all_pending: None,
             selected_nif: None,
             shapes: vec![],
             resolved: HashMap::new(),
@@ -513,6 +570,10 @@ impl MeshesModel {
                 return;
             }
         }
+        // The winners may have changed: ask again.
+        self.all_nifs.clear();
+        self.all_query = None;
+        self.all_pending = None;
         let keep = self
             .selected_mod
             .filter(|id| self.mods.iter().any(|m| m.id == *id));
@@ -566,14 +627,158 @@ impl MeshesModel {
 
     pub fn selected_row(&self) -> Option<&NifRow> {
         let id = self.selected_nif?;
-        self.nifs.iter().find(|n| n.copy_id == id)
+        self.nifs
+            .iter()
+            .chain(self.all_nifs.iter().map(|(n, _)| n))
+            .find(|n| n.copy_id == id)
     }
 
-    /// Indices into `nifs` that pass the filter.
+    /// The Mods panel, top to bottom. MO2 puts a separator above the mods it owns, which are the ones after it in
+    /// ascending priority; this list is highest priority first, so a separator owns the mods listed *before* it, up to
+    /// the previous separator. Its header is moved above them. Mods below the last separator, Data, Overwrite and BSAs
+    /// are not grouped. A group is collapsed unless in `expanded`. With a mod filter, only matching mods are listed
+    /// and every group with a match is open.
+    pub fn mod_lines(&self) -> Vec<ModLine> {
+        let needle = self.mod_filter.trim().to_lowercase();
+        let filtering = !needle.is_empty();
+        let hit = |i: usize| !filtering || self.mods[i].name.to_lowercase().contains(&needle);
+        let mut out = vec![];
+        let mut run: Vec<usize> = vec![];
+        for (i, r) in self.mods.iter().enumerate() {
+            match r.kind {
+                KIND_MOD => run.push(i),
+                KIND_SEPARATOR => {
+                    let total = run.len();
+                    let shown: Vec<usize> = run.drain(..).filter(|&j| hit(j)).collect();
+                    if filtering && shown.is_empty() {
+                        continue;
+                    }
+                    let open = filtering || self.expanded.contains(&r.id);
+                    out.push(ModLine::Header {
+                        idx: i,
+                        count: if filtering { shown.len() } else { total },
+                        open,
+                    });
+                    if open {
+                        out.extend(shown.into_iter().map(ModLine::Mod));
+                    }
+                }
+                _ => {
+                    out.extend(run.drain(..).filter(|&j| hit(j)).map(ModLine::Mod));
+                    if hit(i) {
+                        out.push(ModLine::Mod(i));
+                    }
+                }
+            }
+        }
+        out.extend(run.into_iter().filter(|&j| hit(j)).map(ModLine::Mod));
+        out
+    }
+
+    /// Click on a separator header.
+    pub fn toggle_group(&mut self, separator_id: i64) {
+        if !self.expanded.remove(&separator_id) {
+            self.expanded.insert(separator_id);
+        }
+    }
+
+    /// The path filter as compared with stored paths: `/` slashes, lower case, no `meshes/` prefix.
+    fn path_needle(&self) -> String {
+        let t = self.path_filter.trim().replace('\\', "/").to_lowercase();
+        display_path(&t).to_string()
+    }
+
+    /// All meshes is on but the filter is too short to search.
+    pub fn all_needs_text(&self) -> bool {
+        self.all_meshes && self.path_needle().chars().count() < ALL_MIN_CHARS
+    }
+
+    /// The All meshes search found more than `ALL_LIMIT` paths; the extra ones are not listed.
+    pub fn all_truncated(&self) -> bool {
+        self.all_meshes && self.all_truncated
+    }
+
+    /// Rows the list draws from, before the chips and the path filter: the selected mod's NIFs, or the search result.
+    pub fn listed(&self) -> usize {
+        if self.all_meshes {
+            self.all_nifs.len()
+        } else {
+            self.nifs.len()
+        }
+    }
+
+    /// Row `i` of the list (an index from `visible_nifs`) and, in All meshes, the winning mod.
+    pub fn nif_at(&self, i: usize) -> (&NifRow, Option<&str>) {
+        if self.all_meshes {
+            let (n, o) = &self.all_nifs[i];
+            (n, Some(o))
+        } else {
+            (&self.nifs[i], None)
+        }
+    }
+
+    /// Indices into the list (`nif_at`) that pass the chips and the path filter.
     pub fn visible_nifs(&self) -> Vec<usize> {
-        (0..self.nifs.len())
-            .filter(|&i| self.filter.matches(&self.nifs[i]))
+        let needle = self.path_needle();
+        let n = needle.as_bytes();
+        (0..self.listed())
+            .filter(|&i| {
+                let row = self.nif_at(i).0;
+                self.filter.matches(row)
+                    && (self.all_meshes // the store already matched the text
+                        || n.is_empty()
+                        || display_path(&row.path)
+                            .as_bytes()
+                            .windows(n.len())
+                            .any(|w| w.eq_ignore_ascii_case(n)))
+            })
             .collect()
+    }
+
+    /// Per frame while All meshes is on: asks the store for the winners matching the path filter, once the text has
+    /// been left alone for `SEARCH_DEBOUNCE` and only when it differs from the last answer. True while a search is
+    /// waiting (the caller repaints after the debounce). Nothing is read for fewer than `ALL_MIN_CHARS` characters.
+    pub fn update_search(&mut self, now: Instant) -> bool {
+        if !self.all_meshes {
+            return false;
+        }
+        let want = self.path_needle();
+        if want.chars().count() < ALL_MIN_CHARS {
+            self.all_nifs.clear();
+            self.all_truncated = false;
+            self.all_query = None;
+            self.all_pending = None;
+            return false;
+        }
+        if self.all_query.as_deref() == Some(&want) {
+            self.all_pending = None;
+            return false;
+        }
+        let since = match &self.all_pending {
+            Some((t, since)) if *t == want => *since,
+            _ => {
+                self.all_pending = Some((want, now));
+                return true;
+            }
+        };
+        if self.scanning() || now.duration_since(since) < SEARCH_DEBOUNCE {
+            return true;
+        }
+        self.all_pending = None;
+        self.all_query = Some(want.clone());
+        self.all_nifs.clear();
+        self.all_truncated = false;
+        if let Some(store) = &self.store {
+            match store.winning_nifs(&want, ALL_LIMIT) {
+                Ok(mut rows) => {
+                    self.all_truncated = rows.len() > ALL_LIMIT;
+                    rows.truncate(ALL_LIMIT);
+                    self.all_nifs = rows;
+                }
+                Err(e) => self.error = Some(db_err(e)),
+            }
+        }
+        false
     }
 
     pub fn select_nif(&mut self, copy_id: i64) {
