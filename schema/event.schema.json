@@ -325,6 +325,7 @@
         "CFG-UNAVAILABLE",
         "CFG-INVALID",
         "CFG-FILE-UNMATCHED",
+        "CFG-FILTER-IGNORED",
         "DIM-NPOT",
         "DIM-SMALL",
         "DIM-FLOW-SMALL",

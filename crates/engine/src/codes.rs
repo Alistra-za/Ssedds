@@ -7,7 +7,8 @@
 //! could not follow, packing-fills Task 1) and SKIN-WET-FORM (which form `skin_wet` was read as, Task 1b) and
 //! IN-ICC-IGNORED (an embedded ICC profile, M6) and FMT-HDR-SOURCE (why `pbr_emissive` is or is not BC6H, O2) and
 //! DDS-HEADER-PATCHED / DDS-HEADER-UNPATCHABLE (a header-only DDS fix applied or refused, M6 DECISIONS S7) and
-//! DIM-RESIZED (`resize = pot-down` changed the base size, S-mips-7).
+//! DIM-RESIZED (`resize = pot-down` changed the base size, S-mips-7) and CFG-FILTER-IGNORED (an unscoped non-box
+//! `mips.filter` a texture cannot use, which then uses box, S-mips-13).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,7 @@ codes! {
     CfgUnavailable = "CFG-UNAVAILABLE" => Blocking,
     CfgInvalid = "CFG-INVALID" => Error,
     CfgFileUnmatched = "CFG-FILE-UNMATCHED" => Info,
+    CfgFilterIgnored = "CFG-FILTER-IGNORED" => Info,
     DimNpot = "DIM-NPOT" => Blocking,
     DimSmall = "DIM-SMALL" => Blocking,
     DimFlowSmall = "DIM-FLOW-SMALL" => Warning,
@@ -152,6 +154,7 @@ mod tests {
         assert_eq!(Code::ValMipError.severity(), Severity::Warning);
         assert_eq!(Code::CfgInvalid.severity(), Severity::Error);
         assert_eq!(Code::DimResized.severity(), Severity::Info);
+        assert_eq!(Code::CfgFilterIgnored.severity(), Severity::Info);
         assert_eq!(Code::InPackingInput.severity(), Severity::Warning);
         assert_eq!(Code::InGreenUnstated.severity(), Severity::Blocking);
         assert_eq!(
@@ -170,7 +173,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 68);
+        assert_eq!(Code::ALL.len(), 69);
         assert_eq!(Code::InIccIgnored.severity(), Severity::Info);
     }
 }

@@ -363,12 +363,13 @@ const FILE: Reach = Reach {
     pins: true,
 };
 
-/// Which patch last set `format` and `encoder.backend`, and how specifically.
+/// Which patch last set `format` and `encoder.backend`, and how specifically; how specifically `mips.filter` was set.
 #[derive(Debug, Default)]
 struct FormatSources {
     patches: usize,
     format: Option<(Reach, usize)>,
     backend: Option<(Reach, usize)>,
+    filter: Option<Reach>,
 }
 
 fn apply(
@@ -388,6 +389,7 @@ fn apply(
         match p.as_str() {
             "format" => sources.format = Some((reach, id)),
             "encoder.backend" => sources.backend = Some((reach, id)),
+            "mips.filter" => sources.filter = Some(reach),
             _ => {}
         }
         prov.insert(p, source.clone());
@@ -427,7 +429,7 @@ pub fn layered_profile(
     f: &FileFacts,
     st: Subtype,
 ) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
-    layered_profile_with(ctx, f, st, false)
+    layered_profile_with(ctx, f, st, false).map(|(p, prov, _)| (p, prov))
 }
 
 /// `layered_profile` for a packed output whose image does not exist yet (DECISIONS Note M6): `f.analysis` is a
@@ -437,15 +439,22 @@ pub fn layered_profile_placeholder(
     f: &FileFacts,
     st: Subtype,
 ) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
-    layered_profile_with(ctx, f, st, true)
+    layered_profile_with(ctx, f, st, true).map(|(p, prov, _)| (p, prov))
 }
+
+/// The profile, its provenance and the filter dropped by `unscoped_filter_falls_back` (with why), if any.
+type Layered = (
+    Profile,
+    BTreeMap<String, Provenance>,
+    Option<(MipFilter, &'static str)>,
+);
 
 fn layered_profile_with(
     ctx: &ResolveCtx,
     f: &FileFacts,
     st: Subtype,
     ignore_alpha_rules: bool,
-) -> Result<(Profile, BTreeMap<String, Provenance>), PresetError> {
+) -> Result<Layered, PresetError> {
     // The alias preset's chain for an aliased file (spec §3.7), else the batch preset's.
     let chain = preset_chain(ctx, f)?;
     let mut doc = Value::Object(Map::new());
@@ -560,7 +569,48 @@ fn layered_profile_with(
             prov.insert("channels.flip_green".into(), src);
         }
     }
-    Ok((profile, prov))
+    // Last: `filter_allowed` reads the final format, content, category and alpha policy.
+    let dropped = unscoped_filter_falls_back(&mut profile, &mut prov, &sources);
+    Ok((profile, prov, dropped))
+}
+
+/// DECISIONS S-mips-13 (owner, 2026-10-11): a non-box `mips.filter` this profile may not use
+/// ([`crate::filter::filter_allowed`]) becomes box when the last layer that set it was unscoped (an unscoped `--set`,
+/// a preset or config `defaults` table); `resolve_decided` reports it as CFG-FILTER-IGNORED (Info). Set at sub-type
+/// or file scope (a `subtypes.<st>` table, a sub-type- or file-scoped `--set`, a rule, `[files]`) it is kept and
+/// `check_profile` reports CFG-INVALID. Returns the dropped filter and why.
+fn unscoped_filter_falls_back(
+    p: &mut Profile,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &FormatSources,
+) -> Option<(MipFilter, &'static str)> {
+    let why = crate::filter::filter_allowed(p).err()?;
+    if sources.filter?.level != GENERIC.level {
+        return None;
+    }
+    let dropped = p.mips.filter;
+    p.mips.filter = MipFilter::Box;
+    prov.insert("mips.filter".into(), Provenance::Fallback);
+    Some((dropped, why))
+}
+
+/// The CFG-FILTER-IGNORED notice (S-mips-13): the owner's line, plus the reason when the texture is a colour map.
+fn filter_ignored_notice(p: &Profile, f: &FileFacts, (dropped, why): (MipFilter, &str)) -> Warning {
+    let id = serde_json::to_value(dropped).unwrap_or_default();
+    let id = id.as_str().unwrap_or("?");
+    let file = f
+        .input
+        .rel
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let mut msg = format!("mips.filter = {id} only affects colour maps; {file} uses box");
+    // A cutout, linear or HDR colour map is a colour map: say what bars the filter there.
+    if matches!(p.category, Category::Color | Category::Hdr) {
+        msg = format!("{msg}: {why}");
+    }
+    Warning::new(Code::CfgFilterIgnored, msg)
+        .with_data(json!({ "filter": dropped, "used": MipFilter::Box, "reason": why }))
 }
 
 /// `skin_wet` has two forms (DECISIONS Note R-skin-1): a tangent-space normal with a binary mask in alpha (BC7, the
@@ -1528,31 +1578,32 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
             subtype_prov = Provenance::Fallback;
         }
     }
-    let (profile, mut provenance) = match layered_profile(ctx, f, subtype) {
-        Ok(v) => v,
-        Err(e) => {
-            // Engine::plan (Task 37) validates presets, configs and rules up front, so this path is rare. The
-            // placeholder profile comes from `sdc-base`, which user presets cannot replace.
-            let fallback = ctx.registry.base_profile(ctx.target, subtype);
-            return ResolvedJob {
-                input: f.input.path.clone(),
-                output: f.input.output.clone(),
-                game_path: f.input.game_path.clone(),
-                set_key: f.set.key.clone(),
-                profile: fallback,
-                provenance: BTreeMap::new(),
-                suggestions: d.suggestions,
-                warnings: vec![Warning::new(Code::CfgInvalid, e.to_string())],
-                status: JobStatus::Error {
-                    codes: vec![Code::CfgInvalid],
-                },
-                suffix_alias,
-                source: None,
-                pack: None,
-                bake: None,
-            };
-        }
-    };
+    let (profile, mut provenance, dropped_filter) =
+        match layered_profile_with(ctx, f, subtype, false) {
+            Ok(v) => v,
+            Err(e) => {
+                // Engine::plan (Task 37) validates presets, configs and rules up front, so this path is rare. The
+                // placeholder profile comes from `sdc-base`, which user presets cannot replace.
+                let fallback = ctx.registry.base_profile(ctx.target, subtype);
+                return ResolvedJob {
+                    input: f.input.path.clone(),
+                    output: f.input.output.clone(),
+                    game_path: f.input.game_path.clone(),
+                    set_key: f.set.key.clone(),
+                    profile: fallback,
+                    provenance: BTreeMap::new(),
+                    suggestions: d.suggestions,
+                    warnings: vec![Warning::new(Code::CfgInvalid, e.to_string())],
+                    status: JobStatus::Error {
+                        codes: vec![Code::CfgInvalid],
+                    },
+                    suffix_alias,
+                    source: None,
+                    pack: None,
+                    bake: None,
+                };
+            }
+        };
     // The category follows the sub-type.
     provenance.insert("subtype".into(), subtype_prov.clone());
     provenance.insert("category".into(), subtype_prov);
@@ -1597,6 +1648,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         }
     }
     let mut warnings: Vec<Warning> = fallback_note.into_iter().collect();
+    warnings.extend(dropped_filter.map(|d| filter_ignored_notice(&profile, f, d)));
     warnings.extend(check_profile(
         &profile,
         f,

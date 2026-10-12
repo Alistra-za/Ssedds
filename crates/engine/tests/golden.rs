@@ -2735,8 +2735,8 @@ fn kaiser_diffuse_differs_from_box_and_its_alpha_does_not() {
     }
 }
 
-/// Spec §5.5 (M6 exit): Kaiser is for sRGB colour only; an unscoped set blocks the `_n` with CFG-INVALID and the
-/// diffuse of the same set still converts.
+/// Spec §5.5 (M6 exit): Kaiser is for sRGB colour only; a file-scoped set blocks the `_n` with CFG-INVALID and the
+/// diffuse of the same set still converts (an unscoped set falls back to box instead, S-mips-13).
 #[test]
 fn kaiser_on_a_normal_map_is_cfg_invalid() {
     let d = tempfile::tempdir().unwrap();
@@ -2745,7 +2745,10 @@ fn kaiser_on_a_normal_map_is_cfg_invalid() {
     let o = convert(
         d.path(),
         Target::Cs,
-        &["mips.filter=kaiser", "file:**/wall.png.subtype=diffuse"],
+        &[
+            "file:**/wall_n.png.mips.filter=kaiser",
+            "file:**/wall.png.subtype=diffuse",
+        ],
         &[],
     );
     assert_eq!(
@@ -2763,6 +2766,44 @@ fn kaiser_on_a_normal_map_is_cfg_invalid() {
     );
     assert!(!d.path().join("out/textures/a/wall_n.dds").exists());
     assert!(d.path().join("out/textures/a/wall.dds").exists());
+}
+
+/// S-mips-13 (owner, 2026-10-11): an unscoped `--set mips.filter=kaiser` filters the diffuse and writes the `_n` with
+/// box, with a CFG-FILTER-IGNORED Info naming it. The fallback is in the resolved profile, so the `_n` hashes as a
+/// default box run: an if-changed re-run with or without the set keeps it up to date.
+#[test]
+fn unscoped_kaiser_leaves_the_normal_on_box() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(64));
+    put(d.path(), "textures/a/wall_n.png", bumpy_normal(64));
+    const DIFFUSE: &str = "file:**/wall.png.subtype=diffuse";
+    let o = convert(d.path(), Target::Cs, &["mips.filter=kaiser", DIFFUSE], &[]);
+    assert_eq!(
+        (o.summary.converted, o.summary.exit_code()),
+        (2, 0),
+        "{:?}",
+        warnings(&o)
+    );
+    let filter = |o: &Out, f: &str| planned(o, f)["profile"]["mips"]["filter"].clone();
+    assert_eq!(filter(&o, "a/wall.png"), "kaiser");
+    assert_eq!(filter(&o, "wall_n.png"), "box");
+    let w = warning_of(&o, "wall_n.png", Code::CfgFilterIgnored);
+    assert_eq!(w.severity, Severity::Info);
+    assert_eq!(
+        w.message,
+        "mips.filter = kaiser only affects colour maps; wall_n.png uses box"
+    );
+    assert!(!warnings(&o).contains(&Code::CfgInvalid));
+    let again = |sets: &[&str]| {
+        let mut req = request(d.path(), Target::Cs, sets, &[]);
+        req.on_existing = OnExisting::IfChanged;
+        run(req).summary
+    };
+    let s = again(&["mips.filter=kaiser", DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (0, 2));
+    // Without the set only the diffuse changes.
+    let s = again(&[DIFFUSE]);
+    assert_eq!((s.converted, s.up_to_date), (1, 1));
 }
 
 /// M6 exit: `resize` and `mips.edge` serialise only off their defaults, so no built-in profile's hash moves.

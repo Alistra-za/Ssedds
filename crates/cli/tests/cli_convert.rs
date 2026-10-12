@@ -656,6 +656,32 @@ fn unresolved_files_are_skipped_with_exit_1() {
     assert!(fx.dds("textures/a/wall.dds").exists());
 }
 
+/// DECISIONS S-mips-13: an unscoped filter the `_n` cannot use is an Info line on the console, not an error.
+#[test]
+fn unscoped_kaiser_prints_a_colour_only_line() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    fx.normal("wall_n.png");
+    let o = fx.convert(&[
+        "--set",
+        "mips.filter=kaiser",
+        "--set",
+        "file:**/wall.png.subtype=diffuse",
+        "--accept-suggestions",
+        "high",
+    ]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let log = text(&o.stderr);
+    assert!(
+        log.lines().any(|l| l.starts_with("info ")
+            && l.ends_with(
+                "wall_n.png: CFG-FILTER-IGNORED mips.filter = kaiser only affects colour maps; wall_n.png uses box"
+            )),
+        "{log}"
+    );
+    assert!(fx.dds("textures/a/wall_n.dds").exists());
+}
+
 #[test]
 fn if_changed_skip_and_unknown_existing() {
     let fx = Fx::new();

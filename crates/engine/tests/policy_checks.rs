@@ -2111,7 +2111,10 @@ fn non_box_filters_are_cfg_invalid_outside_srgb_colour() {
         "envmask",
     ] {
         for f in ["tent", "mitchell", "kaiser"] {
-            let (s, m) = (format!("subtype={st}"), format!("mips.filter={f}"));
+            let (s, m) = (
+                format!("subtype={st}"),
+                format!("file:**/x.png.mips.filter={f}"),
+            );
             let j = m6_job(&[&s, &m]);
             let id = format!("mips.filter = {f}: ");
             assert!(
@@ -2129,7 +2132,7 @@ fn non_box_filters_are_cfg_invalid_outside_srgb_colour() {
 fn alpha_weighted_colour_keeps_box() {
     for alpha in ["cutout", "blend", "cutout_blend"] {
         let a = format!("alpha.policy={alpha}");
-        let j = m6_job(&["subtype=diffuse", &a, "mips.filter=kaiser"]);
+        let j = m6_job(&["subtype=diffuse", &a, "file:**/x.png.mips.filter=kaiser"]);
         assert!(
             cfg_invalid(&j)
                 .iter()
@@ -2150,7 +2153,7 @@ fn hdr_allows_tent_only() {
                 let (s, ff, m) = (
                     format!("subtype={st}"),
                     format!("format={fmt}"),
-                    format!("mips.filter={f}"),
+                    format!("file:**/x.png.mips.filter={f}"),
                 );
                 let j = m6_job(&[&s, &ff, "color.tag=n/a", "alpha.policy=remove", &m]);
                 let bad = cfg_invalid(&j);
@@ -2174,7 +2177,7 @@ fn hdr_allows_tent_only() {
             "format=rgba16f",
             "color.tag=n/a",
             &a,
-            "mips.filter=tent",
+            "file:**/x.png.mips.filter=tent",
         ]);
         assert!(
             cfg_invalid(&j)
@@ -2188,7 +2191,7 @@ fn hdr_allows_tent_only() {
     for st in ["normal", "height", "envmask"] {
         for fmt in ["bc6h_uf16", "rgba16f"] {
             let (s, ff) = (format!("subtype={st}"), format!("format={fmt}"));
-            let j = m6_job(&[&s, &ff, "color.tag=n/a", "mips.filter=tent"]);
+            let j = m6_job(&[&s, &ff, "color.tag=n/a", "file:**/x.png.mips.filter=tent"]);
             assert!(
                 cfg_invalid(&j)
                     .iter()
@@ -2206,7 +2209,7 @@ fn linear_content_colour_keeps_box() {
     let j = m6_job(&[
         "subtype=diffuse",
         "color.content=linear",
-        "mips.filter=kaiser",
+        "file:**/x.png.mips.filter=kaiser",
     ]);
     assert!(
         cfg_invalid(&j)
@@ -2215,6 +2218,63 @@ fn linear_content_colour_keeps_box() {
         "{:?}",
         j.warnings
     );
+}
+
+/// S-mips-13 (owner, 2026-10-11): an unscoped non-box filter the texture cannot use resolves box, with a
+/// CFG-FILTER-IGNORED Info naming the file; set at sub-type or file scope it stays CFG-INVALID.
+#[test]
+fn unscoped_filter_falls_back_to_box() {
+    let j = m6_job(&["subtype=normal", "mips.filter=kaiser"]);
+    assert!(cfg_invalid(&j).is_empty(), "{:?}", j.warnings);
+    assert_eq!(j.profile.mips.filter, MipFilter::Box);
+    assert_eq!(j.provenance["mips.filter"], Provenance::Fallback);
+    let w = warning(&j, Code::CfgFilterIgnored);
+    assert_eq!(w.severity, engine::codes::Severity::Info);
+    assert_eq!(
+        w.message,
+        "mips.filter = kaiser only affects colour maps; x.png uses box"
+    );
+    assert!(matches!(j.status, JobStatus::Ready), "{:?}", j.status);
+    // A colour map that cannot take it says why.
+    let j = m6_job(&[
+        "subtype=diffuse",
+        "alpha.policy=cutout",
+        "mips.filter=kaiser",
+    ]);
+    assert_eq!(j.profile.mips.filter, MipFilter::Box);
+    assert!(
+        warning(&j, Code::CfgFilterIgnored).message.ends_with(
+            "uses box: alpha-tested and blended colour uses the alpha-weighted box (spec §5.5)"
+        ),
+        "{:?}",
+        j.warnings
+    );
+    // An allowed filter is kept, with no notice.
+    let j = m6_job(&[
+        "subtype=diffuse",
+        "alpha.policy=remove",
+        "mips.filter=kaiser",
+    ]);
+    assert_eq!(j.profile.mips.filter, MipFilter::Kaiser);
+    assert!(
+        !codes(&j).contains(&Code::CfgFilterIgnored),
+        "{:?}",
+        j.warnings
+    );
+    // Scoped: sub-type `--set`, and a file-scoped one over an unscoped one.
+    for sets in [
+        &["subtype=normal", "subtype:normal.mips.filter=kaiser"][..],
+        &[
+            "subtype=normal",
+            "mips.filter=tent",
+            "file:**/x.png.mips.filter=kaiser",
+        ][..],
+    ] {
+        let j = m6_job(sets);
+        assert_eq!(j.profile.mips.filter, MipFilter::Kaiser, "{sets:?}");
+        assert!(!cfg_invalid(&j).is_empty(), "{sets:?}: {:?}", j.warnings);
+        assert!(!codes(&j).contains(&Code::CfgFilterIgnored), "{sets:?}");
+    }
 }
 
 /// S-mips-7: `resize = pot-down` turns DIM-NPOT into DIM-RESIZED (Info) with the sizes in its data.
