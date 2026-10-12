@@ -12,6 +12,7 @@ pub mod mesh;
 pub mod parse;
 pub mod permutation;
 pub mod scene;
+pub mod source;
 pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
@@ -19,7 +20,7 @@ pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
 use background::Backdrop;
-use compile::{compile, SrvKind};
+use compile::{compile, program_key, ProgramKey, SrvKind};
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
@@ -28,8 +29,9 @@ use nif::material::MaterialState;
 use permutation::{defines, Material, Stage};
 pub use scene::Background;
 use scene::{LightValues, PointValues, Scene, View, ViewValues};
+use source::SourceSet;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
@@ -138,7 +140,9 @@ pub struct Renderer {
     shaders: Fingerprint,
     cache_dir: PathBuf,
     features: Vec<String>,
-    programs: HashMap<String, Result<Program, String>>,
+    /// One expanded `Lighting.hlsl` per shaders folder (03 §5); dropped with the folder by `set_shaders`.
+    sources: SourceSet,
+    programs: HashMap<ProgramKey, Result<Program, String>>,
     defaults: HashMap<(SrvKind, [u8; 4]), ID3D11ShaderResourceView>,
     /// Every Lighting shape of the loaded model, keyed by NIF block index (built-ins: `ShapeId(0)`).
     shapes: BTreeMap<ShapeId, ShapeState>,
@@ -163,12 +167,6 @@ pub struct Renderer {
     reference_writer: bool,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
     backdrop: Option<Backdrop>,
-}
-
-fn permutation_key(d: &permutation::Defines, target: &str) -> String {
-    let mut v: Vec<String> = d.0.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    v.sort();
-    format!("{target}|{}", v.join(";"))
 }
 
 impl Renderer {
@@ -248,6 +246,7 @@ impl Renderer {
             reference_writer: false,
             backdrop: None,
             gpu,
+            sources: SourceSet::new(shaders.root.clone()),
             shaders,
             cache_dir,
             features: DEFAULT_FEATURES.iter().map(|s| s.to_string()).collect(),
@@ -279,9 +278,9 @@ impl Renderer {
         &self.features
     }
 
-    /// Replaces the shaders (a moved or updated CS) and drops every compiled program: the in-memory cache is keyed
-    /// by defines only. The loaded model still uses the old programs until the next [`Renderer::load`].
+    /// Replaces the shaders (a moved or updated CS): the expansion memo and every compiled program are dropped. The loaded model still uses the old programs until the next [`Renderer::load`].
     pub fn set_shaders(&mut self, shaders: Fingerprint) {
+        self.sources = SourceSet::new(shaders.root.clone());
         self.shaders = shaders;
         self.programs.clear();
     }
@@ -329,21 +328,19 @@ impl Renderer {
         let f: Vec<&str> = self.features.iter().map(String::as_str).collect();
         let vd = defines(m, Stage::Vertex, &f, false);
         let pd = defines(m, Stage::Pixel, &f, false);
-        let key = format!(
-            "{}#{}",
-            permutation_key(&vd, "vs_5_0"),
-            permutation_key(&pd, "ps_5_0")
+        let src = self.sources.get(Path::new("Lighting.hlsl"))?;
+        let key = ProgramKey::pair(
+            &program_key(&src, "main", "vs_5_0", &vd.0),
+            &program_key(&src, "main", "ps_5_0", &pd.0),
         );
         if let Some(p) = self.programs.get(&key) {
             return p.clone();
         }
-        let root = self.shaders.root.clone();
-        let file = root.join("Lighting.hlsl");
-        let (cache, hash) = (&self.cache_dir, &self.shaders.hash);
-        let built = compile(&file, &root, &vd, "vs_5_0", cache, hash)
+        let cache = &self.cache_dir;
+        let built = compile(&src, &vd, "vs_5_0", cache)
             .map_err(|e| format!("vs: {e}"))
             .and_then(|vs| {
-                compile(&file, &root, &pd, "ps_5_0", cache, hash)
+                compile(&src, &pd, "ps_5_0", cache)
                     .map_err(|e| format!("ps: {e}"))
                     .map(|ps| (vs, ps))
             })

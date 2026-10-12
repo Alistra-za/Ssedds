@@ -1,5 +1,22 @@
-use render3d::compile::compile;
-use render3d::permutation::{defines, runtime_bits, Material, Stage};
+use render3d::compile::Compiled;
+use render3d::permutation::{defines, runtime_bits, Defines, Material, Stage};
+use render3d::source::SourceSet;
+use std::path::Path;
+
+/// The pre-P1-B call shape (file, root, defines, target, cache, hash): expand `file` under `root`, then
+/// `render3d::compile::compile`. The hash argument is ignored: the key is the content now.
+fn compile(
+    file: &Path,
+    root: &Path,
+    d: &Defines,
+    target: &str,
+    cache: &Path,
+    _hash: &str,
+) -> Result<Compiled, String> {
+    let rel = file.strip_prefix(root).unwrap_or(file);
+    let src = SourceSet::new(root.to_path_buf()).get(rel)?;
+    render3d::compile::compile(&src, d, target, cache)
+}
 
 fn m(shader_type: u32, slsf1: u32, slsf2: u32, skinned: bool) -> Material {
     Material {

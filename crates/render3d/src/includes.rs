@@ -23,6 +23,12 @@ fn slash(p: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
+/// The name written into `#line`: relative to `root` when `p` is under it, so the expansion (and the hash of
+/// it) is the same wherever the folder sits on disk.
+fn shown(p: &Path, root: Option<&Path>) -> String {
+    slash(root.and_then(|r| p.strip_prefix(r).ok()).unwrap_or(p))
+}
+
 fn go(file: &Path, search: &[PathBuf], depth: u32, out: &mut Expanded) -> std::io::Result<()> {
     if depth > 64 {
         return Err(std::io::Error::other(format!(
@@ -34,7 +40,8 @@ fn go(file: &Path, search: &[PathBuf], depth: u32, out: &mut Expanded) -> std::i
     let text = String::from_utf8_lossy(&bytes);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     out.files.push(file.to_path_buf());
-    let fname = slash(file);
+    let root = search.first().map(PathBuf::as_path);
+    let fname = shown(file, root);
     for (n, line) in text.lines().enumerate() {
         if let Some(t) = target(line) {
             let dirs = file
@@ -44,7 +51,7 @@ fn go(file: &Path, search: &[PathBuf], depth: u32, out: &mut Expanded) -> std::i
                 .chain(search.iter().cloned());
             if let Some(found) = dirs.map(|d| d.join(t)).find(|p| p.is_file()) {
                 out.text
-                    .push_str(&format!("#line 1 \"{}\"\n", slash(&found)));
+                    .push_str(&format!("#line 1 \"{}\"\n", shown(&found, root)));
                 go(&found, search, depth + 1, out)?;
                 out.text.push_str(&format!("#line {} \"{fname}\"\n", n + 2));
                 continue;
