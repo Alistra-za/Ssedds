@@ -34,7 +34,7 @@ use nif::material::MaterialState;
 use nif::path::TexPath;
 use pgpsim::{Badge, SimInput, SimResult};
 use render3d::builtin::Builtin;
-use render3d::{ParsedNif, ShapeId};
+use render3d::{ParsedNif, ShapeId, Variant};
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -66,6 +66,23 @@ pub enum PreviewMode {
 
 pub const MODE_LABEL_ENCODED: &str = "Encoded (exact export)";
 pub const MODE_LABEL_SOURCE: &str = "Source (faster, no compression)";
+
+impl PreviewMode {
+    pub fn other(self) -> PreviewMode {
+        match self {
+            PreviewMode::Encoded => PreviewMode::Source,
+            PreviewMode::Source => PreviewMode::Encoded,
+        }
+    }
+}
+
+/// The renderer's variant for a mode (P1-B contract: `Encoded` <-> `Variant::Encoded`, `Source` <-> `Variant::Source`).
+pub fn variant_of(m: PreviewMode) -> Variant {
+    match m {
+        PreviewMode::Encoded => Variant::Encoded,
+        PreviewMode::Source => Variant::Source,
+    }
+}
 
 pub fn cap_text(cap: u32) -> String {
     format!("Preview at {cap} px, export writes full size")
@@ -252,6 +269,13 @@ pub struct Member {
     /// The mode of the live encode, and of the shown bytes (as `cap`).
     mode: PreviewMode,
     cancel: Option<CancelToken>,
+    /// A/B: the other mode's Fresh bytes at the current cap and signature (a DDS input: the same bytes).
+    alt: Option<Arc<Encoded>>,
+    /// The other mode's background encode: its generation (0 = none) and cancel, and whether it failed (not retried
+    /// until the member changes).
+    alt_token: u64,
+    alt_cancel: Option<CancelToken>,
+    alt_err: bool,
 }
 
 struct EncDone {
@@ -260,6 +284,109 @@ struct EncDone {
     cap: u32,
     mode: PreviewMode,
     result: Result<(Vec<u8>, f64), String>,
+}
+
+/// What one encode run is for.
+#[derive(Clone, Copy)]
+struct Run {
+    kind: SlotKind,
+    token: u64,
+    cap: u32,
+    mode: PreviewMode,
+}
+
+fn spawn_encode(
+    tx: Sender<EncDone>,
+    session: Arc<Session>,
+    source: Source,
+    run: Run,
+    cancel: CancelToken,
+) {
+    spawn(
+        tx,
+        move || {
+            let t0 = Instant::now();
+            let result = encode(&session, &source, run.cap, run.mode, &cancel).map(|b| (b, ms(t0)));
+            EncDone {
+                kind: run.kind,
+                token: run.token,
+                cap: run.cap,
+                mode: run.mode,
+                result,
+            }
+        },
+        move |e| EncDone {
+            kind: run.kind,
+            token: run.token,
+            cap: run.cap,
+            mode: run.mode,
+            result: Err(format!("internal error in a preview encode: {e}")),
+        },
+    );
+}
+
+impl Member {
+    fn cancel_all(&self) {
+        for c in [&self.cancel, &self.alt_cancel].into_iter().flatten() {
+            c.cancel();
+        }
+    }
+
+    /// The other mode's copy and encode are void (source, settings or cap changed).
+    fn clear_alt(&mut self) {
+        if let Some(c) = self.alt_cancel.take() {
+            c.cancel();
+        }
+        self.alt = None;
+        self.alt_token = 0;
+        self.alt_err = false;
+    }
+
+    /// The mode flips. The other copy is Fresh: swap the two states, no work. Otherwise as before the A/B (the
+    /// member goes stale, old bytes on show, encodes again), except that the old Fresh bytes are kept as the other
+    /// copy and an other-mode encode already running becomes the live one.
+    fn flip(&mut self, mode: PreviewMode, cap: u32, now: Instant) {
+        if let Some(alt) = self.alt.take() {
+            if let Some(c) = self.cancel.take() {
+                c.cancel();
+            }
+            self.token = 0;
+            self.due = None;
+            let old = std::mem::replace(&mut self.state, EncState::Fresh(alt));
+            self.alt = match old {
+                EncState::Fresh(e) => Some(e),
+                _ => None,
+            };
+            self.mode = mode;
+            self.cap = cap;
+            return;
+        }
+        let kept = match &self.state {
+            EncState::Fresh(e) => Some(e.clone()),
+            _ => None,
+        };
+        if let Some(c) = self.cancel.take() {
+            c.cancel();
+        }
+        self.token = 0;
+        if matches!(self.state, EncState::Blocked(_)) {
+            return;
+        }
+        let shown = self.state.shown().cloned();
+        self.cap = cap;
+        self.mode = mode;
+        if self.alt_token != 0 {
+            self.token = std::mem::take(&mut self.alt_token);
+            self.cancel = self.alt_cancel.take();
+            self.due = None;
+            self.state = EncState::Encoding(shown);
+        } else {
+            self.state = EncState::Stale(shown);
+            self.due = Some(now);
+        }
+        self.alt = kept;
+        self.alt_err = false;
+    }
 }
 
 /// The selected set's encodes, one per filled slot.
@@ -271,6 +398,12 @@ pub struct Encoder {
     pub paused: bool,
     next_token: u64,
     hold: bool,
+    /// A/B is in use: the user has flipped the mode once this session (kept across sets). Until then only the
+    /// shown mode encodes.
+    ab: bool,
+    /// A member failed since the last drain: the scene must be pushed again so the game's copy of its texture
+    /// comes back (a Fresh result needs no push, it is swapped in).
+    pub scene_dirty: bool,
     tx: Sender<EncDone>,
     rx: Receiver<EncDone>,
 }
@@ -405,6 +538,8 @@ impl Encoder {
             paused: false,
             next_token: 0,
             hold: false,
+            ab: false,
+            scene_dirty: false,
             tx,
             rx,
         }
@@ -424,13 +559,39 @@ impl Encoder {
         self.mode
     }
 
-    /// A new mode, handled as a new cap is; a DDS input's bytes do not depend on it, so it is left alone.
+    /// A new mode. The first change puts A/B in use. A member whose other copy is Fresh just swaps (no encode, no
+    /// scene push); the rest re-encode as before and keep their old bytes as the other copy. A DDS input has the same
+    /// bytes in both modes, so it is left alone.
     pub fn set_mode(&mut self, mode: PreviewMode, now: Instant) {
         if mode == self.mode {
             return;
         }
         self.mode = mode;
-        self.restart(now, true);
+        self.ab = true;
+        for mem in self.members.values_mut() {
+            if matches!(mem.source, Source::Dds(_)) {
+                mem.mode = mode;
+                continue;
+            }
+            mem.flip(mode, self.cap, now);
+        }
+    }
+
+    /// A/B is in use (the mode has been flipped this session).
+    pub fn ab_active(&self) -> bool {
+        self.ab
+    }
+
+    /// Test seam: `kind` has the other mode's Fresh bytes.
+    #[doc(hidden)]
+    pub fn has_alt(&self, kind: SlotKind) -> bool {
+        self.members.get(&kind).is_some_and(|m| m.alt.is_some())
+    }
+
+    /// Test seam: the generation of `kind`'s other-mode background encode (0 = none).
+    #[doc(hidden)]
+    pub fn alt_token_of(&self, kind: SlotKind) -> u64 {
+        self.members.get(&kind).map_or(0, |m| m.alt_token)
     }
 
     fn restart(&mut self, now: Instant, skip_dds: bool) {
@@ -442,6 +603,7 @@ impl Encoder {
             if let Some(c) = mem.cancel.take() {
                 c.cancel();
             }
+            mem.clear_alt();
             mem.token = 0;
             if !matches!(mem.state, EncState::Blocked(_)) {
                 mem.state = EncState::Stale(mem.state.shown().cloned());
@@ -498,9 +660,7 @@ impl Encoder {
     /// Another set: cancel and forget every member.
     pub fn reset(&mut self) {
         for m in self.members.values() {
-            if let Some(c) = &m.cancel {
-                c.cancel();
-            }
+            m.cancel_all();
         }
         self.members.clear();
     }
@@ -509,9 +669,7 @@ impl Encoder {
 impl Drop for Encoder {
     fn drop(&mut self) {
         for m in self.members.values() {
-            if let Some(c) = &m.cancel {
-                c.cancel();
-            }
+            m.cancel_all();
         }
     }
 }
@@ -525,9 +683,7 @@ impl Encoder {
         self.members.retain(|k, mem| {
             let stay = keep.contains(k);
             if !stay {
-                if let Some(c) = &mem.cancel {
-                    c.cancel();
-                }
+                mem.cancel_all();
             }
             stay
         });
@@ -554,6 +710,7 @@ impl Encoder {
                         c.cancel();
                     }
                     mem.token = 0;
+                    mem.clear_alt();
                     mem.cap = self.cap;
                     mem.mode = self.mode;
                     mem.state = match blocked {
@@ -577,6 +734,10 @@ impl Encoder {
                             cap: self.cap,
                             mode: self.mode,
                             cancel: None,
+                            alt: None,
+                            alt_token: 0,
+                            alt_cancel: None,
+                            alt_err: false,
                         },
                     );
                 }
@@ -585,7 +746,8 @@ impl Encoder {
     }
 
     /// Starts every due encode, one thread each (a set has at most 9 members). Nothing starts while an export
-    /// runs or without a session.
+    /// runs or without a session. With A/B in use and every member settled, the missing other-mode copies encode
+    /// next (a DDS input has none to make).
     pub fn pump(&mut self, session: Option<&Arc<Session>>, now: Instant, export_running: bool) {
         self.paused = export_running;
         let Some(session) = session else {
@@ -610,38 +772,60 @@ impl Encoder {
             if self.hold {
                 continue;
             }
-            let (session, source, cap, mode, kind) = (
+            let run = Run {
+                kind: *kind,
+                token,
+                cap: self.cap,
+                mode: self.mode,
+            };
+            spawn_encode(
+                self.tx.clone(),
                 session.clone(),
                 mem.source.clone(),
-                self.cap,
-                self.mode,
-                *kind,
+                run,
+                cancel,
             );
-            spawn(
+        }
+        if !self.ab || !self.members.values().all(|m| m.state.settled()) {
+            return;
+        }
+        let other = self.mode.other();
+        for (kind, mem) in self.members.iter_mut() {
+            if mem.alt.is_some()
+                || mem.alt_token != 0
+                || mem.alt_err
+                || !matches!(mem.state, EncState::Fresh(_))
+                || matches!(mem.source, Source::Dds(_))
+            {
+                continue;
+            }
+            self.next_token += 1;
+            let token = self.next_token;
+            mem.alt_token = token;
+            let cancel = CancelToken::default();
+            mem.alt_cancel = Some(cancel.clone());
+            if self.hold {
+                continue;
+            }
+            let run = Run {
+                kind: *kind,
+                token,
+                cap: self.cap,
+                mode: other,
+            };
+            spawn_encode(
                 self.tx.clone(),
-                move || {
-                    let t0 = Instant::now();
-                    let result = encode(&session, &source, cap, mode, &cancel).map(|b| (b, ms(t0)));
-                    EncDone {
-                        kind,
-                        token,
-                        cap,
-                        mode,
-                        result,
-                    }
-                },
-                move |e| EncDone {
-                    kind,
-                    token,
-                    cap,
-                    mode,
-                    result: Err(format!("internal error in a preview encode: {e}")),
-                },
+                session.clone(),
+                mem.source.clone(),
+                run,
+                cancel,
             );
         }
     }
 
-    /// Drains finished encodes. True when a member's bytes changed or it failed.
+    /// Drains finished encodes. True when a member's bytes changed or it failed. An other-mode copy arriving is not
+    /// a change of what is on show (the set preview sends it to the renderer on its own); a failure sets
+    /// `scene_dirty`.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         while let Ok(EncDone {
@@ -655,6 +839,23 @@ impl Encoder {
             let Some(mem) = self.members.get_mut(&kind) else {
                 continue;
             };
+            // The other mode's background encode.
+            if token != 0 && mem.alt_token == token {
+                mem.alt_cancel = None;
+                mem.alt_token = 0;
+                match result {
+                    Ok((dds, ms)) if cap == self.cap && mode != self.mode => {
+                        mem.alt = Some(Arc::new(Encoded {
+                            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+                            dds: Arc::new(dds),
+                            ms,
+                        }));
+                    }
+                    Ok(_) => {} // made at another cap or mode than now: the next pump encodes it again
+                    Err(_) => mem.alt_err = true,
+                }
+                continue;
+            }
             // Superseded: a newer edit, a block, a cap change (all zero or replace the token).
             if mem.token == 0 || mem.token != token {
                 continue;
@@ -675,12 +876,22 @@ impl Encoder {
             mem.cancel = None;
             mem.token = 0;
             mem.state = match result {
-                Ok((dds, ms)) => EncState::Fresh(Arc::new(Encoded {
-                    id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-                    dds: Arc::new(dds),
-                    ms,
-                })),
-                Err(e) => EncState::Failed(e),
+                Ok((dds, ms)) => {
+                    let e = Arc::new(Encoded {
+                        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+                        dds: Arc::new(dds),
+                        ms,
+                    });
+                    // A DDS input is the same file in both modes.
+                    if matches!(mem.source, Source::Dds(_)) {
+                        mem.alt = Some(e.clone());
+                    }
+                    EncState::Fresh(e)
+                }
+                Err(e) => {
+                    self.scene_dirty = true;
+                    EncState::Failed(e)
+                }
             };
             changed = true;
         }
@@ -691,14 +902,31 @@ impl Encoder {
         self.members.values().all(|m| m.state.settled())
     }
 
-    /// Work is waiting or running (false while paused: the export keeps the app repainting).
+    /// Work is waiting or running (false while paused: the export keeps the app repainting). Includes the other
+    /// mode's background encodes once A/B is in use.
     pub fn busy(&self) -> bool {
-        !self.paused && !self.settled()
+        !self.paused && (!self.settled() || self.alt_pending())
+    }
+
+    /// An other-mode copy is running or still to be started.
+    fn alt_pending(&self) -> bool {
+        self.ab
+            && self.members.values().any(|m| {
+                m.alt_token != 0
+                    || (m.alt.is_none()
+                        && !m.alt_err
+                        && matches!(m.state, EncState::Fresh(_))
+                        && !matches!(m.source, Source::Dds(_)))
+            })
     }
 
     /// An encode is running (its completion is still to drain).
     fn in_flight(&self) -> bool {
-        !self.paused && self.members.values().any(|m| m.token != 0)
+        !self.paused
+            && self
+                .members
+                .values()
+                .any(|m| m.token != 0 || m.alt_token != 0)
     }
 
     /// Whether sdc will produce `norm` for this set (a member that can be encoded serves it): PGPatcher's

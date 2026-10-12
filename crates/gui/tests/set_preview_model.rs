@@ -1358,3 +1358,192 @@ fn a_material_edit_naming_a_new_slot_path_pushes_the_scene_instead_of_set_materi
     assert_eq!(sets(&cmds), 0, "no SetMaterial for a path the worker lacks");
     assert_ne!(builtin_key(&s), k0, "the scene was pushed");
 }
+
+// ---- P1-B Task 8b: A/B variants in the encoder ----
+
+fn started_ab() -> (tempfile::TempDir, AppModel, Encoder) {
+    let (d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    for k in enc.members.keys().copied().collect::<Vec<_>>() {
+        let tok = enc.token_of(k);
+        assert_ne!(tok, 0);
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+    }
+    assert!(enc.poll());
+    assert!(enc.settled());
+    (d, m, enc)
+}
+
+fn kinds_of(e: &Encoder) -> Vec<SlotKind> {
+    e.members.keys().copied().collect()
+}
+
+#[test]
+fn the_first_flip_keeps_the_old_bytes_for_the_way_back_and_the_second_flip_is_free() {
+    let (_d, m, mut enc) = started_ab();
+    assert!(!enc.ab_active());
+    let old: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    let t = Instant::now();
+    enc.set_mode(PreviewMode::Source, t);
+    assert!(enc.ab_active());
+    for k in kinds_of(&enc) {
+        assert!(enc.has_alt(k), "the old Fresh bytes are the other copy");
+        assert!(
+            matches!(enc.members[&k].state, EncState::Stale(Some(_))),
+            "as before the change"
+        );
+    }
+    // The re-encode of the new mode as today.
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        let tok = enc.token_of(k);
+        assert_ne!(tok, 0);
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+    }
+    assert!(enc.poll());
+    for k in kinds_of(&enc) {
+        assert!(matches!(enc.members[&k].state, EncState::Fresh(_)));
+        assert_eq!(
+            enc.alt_token_of(k),
+            0,
+            "nothing to encode: the other copy exists"
+        );
+    }
+    // Back: no encode, the old bytes are on show again, and the Source bytes are the other copy.
+    let shown_source: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    enc.set_mode(PreviewMode::Encoded, t);
+    enc.pump(m.session.as_ref(), t, false);
+    let back: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    assert_eq!(back, old);
+    for k in kinds_of(&enc) {
+        assert_eq!(
+            enc.token_of(k),
+            0,
+            "a flip with both variants starts no encode"
+        );
+        assert_eq!(enc.alt_token_of(k), 0);
+        assert!(enc.has_alt(k));
+        assert!(matches!(enc.members[&k].state, EncState::Fresh(_)));
+    }
+    enc.set_mode(PreviewMode::Source, t);
+    let again: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    assert_eq!(again, shown_source);
+}
+
+#[test]
+fn a_cap_change_drops_both_variants_and_the_other_one_encodes_after_the_shown_one_is_fresh() {
+    let (_d, m, mut enc) = started_ab();
+    let t = Instant::now();
+    enc.set_mode(PreviewMode::Source, t); // A/B in use; Encoded kept as the other copy
+    enc.set_cap(1024, t);
+    for k in kinds_of(&enc) {
+        assert!(!enc.has_alt(k), "the other copy was made at the old cap");
+        assert_eq!(enc.alt_token_of(k), 0);
+    }
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        let tok = enc.token_of(k);
+        assert_ne!(tok, 0);
+        assert_eq!(enc.alt_token_of(k), 0, "the shown mode first");
+        enc.inject(k, tok, 1024, fake());
+    }
+    assert!(enc.poll());
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        assert_ne!(enc.alt_token_of(k), 0, "now the inactive mode encodes");
+    }
+    // Its result becomes the other copy; the shown bytes do not move and nothing is reported as changed.
+    let shown: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    for k in kinds_of(&enc) {
+        let at = enc.alt_token_of(k);
+        enc.inject_as(k, at, 1024, PreviewMode::Encoded, fake());
+    }
+    assert!(
+        !enc.poll(),
+        "an inactive copy is not a change of what is on show"
+    );
+    for k in kinds_of(&enc) {
+        assert!(enc.has_alt(k));
+        assert_eq!(enc.alt_token_of(k), 0);
+    }
+    assert_eq!(
+        enc.members
+            .values()
+            .map(|x| x.state.shown().unwrap().id)
+            .collect::<Vec<_>>(),
+        shown
+    );
+    // A late result of the superseded other-mode encode never lands.
+    let k = kinds_of(&enc)[0];
+    enc.inject_as(k, 1, 1024, PreviewMode::Encoded, fake());
+    assert!(!enc.poll());
+}
+
+#[test]
+fn a_source_change_clears_the_other_variant_and_nothing_encodes_before_the_first_flip() {
+    let (_d, m, mut enc, mut slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots.clone(), t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        let tok = enc.token_of(k);
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+    }
+    assert!(enc.poll());
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        assert_eq!(enc.alt_token_of(k), 0, "A/B is not in use: no doubled CPU");
+    }
+    enc.set_mode(PreviewMode::Source, t);
+    assert!(kinds_of(&enc).iter().all(|k| enc.has_alt(*k)));
+    edit(&mut slots);
+    enc.sync(&m, slots, t, true);
+    let diffuse = SlotKind::Diffuse;
+    assert!(
+        !enc.has_alt(diffuse),
+        "the edited member's other copy is gone"
+    );
+    assert_eq!(enc.alt_token_of(diffuse), 0);
+}
+
+#[test]
+fn a_flip_before_the_other_variant_exists_re_encodes_as_before() {
+    let (_d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    let t1 = enc.token_of(SlotKind::Diffuse); // still encoding the first mode
+    enc.set_mode(PreviewMode::Source, t);
+    assert!(!enc.has_alt(SlotKind::Diffuse), "nothing Fresh to keep");
+    assert_eq!(
+        enc.token_of(SlotKind::Diffuse),
+        0,
+        "the old encode is cancelled"
+    );
+    enc.pump(m.session.as_ref(), t, false);
+    let t2 = enc.token_of(SlotKind::Diffuse);
+    assert_ne!(t2, 0);
+    assert_ne!(t2, t1);
+}
