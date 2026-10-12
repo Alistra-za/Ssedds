@@ -373,3 +373,13 @@ fn export_refuses_a_taken_id_and_writes_nothing() {
     assert_eq!(code, 2, "{err}");
     assert!(!out.exists());
 }
+
+/// M6 Track D spec §8: the CLI help names the user presets folder.
+#[test]
+fn help_names_the_user_presets_folder() {
+    for args in [&["presets", "--help"][..], &["convert", "--help"]] {
+        let (code, out, _) = stdout_of(args);
+        assert_eq!(code, 0);
+        assert!(out.contains(r"%APPDATA%\sdc\presets"), "{args:?}: {out}");
+    }
+}

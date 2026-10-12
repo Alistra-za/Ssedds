@@ -149,7 +149,7 @@ pub struct AppModel {
     pub settings_path: Option<PathBuf>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
-    /// `%APPDATA%sdcpresets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
+    /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
     pub user_presets: Option<PathBuf>,
     /// `(id, file)` of the user presets the last plan loaded (the preset inspector lists them).
     pub loaded_user_presets: Vec<(String, String)>,
