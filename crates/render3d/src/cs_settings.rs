@@ -62,10 +62,11 @@ pub const PREVIEW_FEATURES: &[(&str, &str)] = &[
 /// and `parse_failed`, but its bytes still count in the hash.
 pub fn read_settings(p: &SettingsPaths) -> CsSettings {
     let mut notes = vec![];
-    let user = read(p.user.as_deref(), &mut notes);
-    let default = read(p.default.as_deref(), &mut notes);
-    let info = read(p.info_ini.as_deref(), &mut notes);
     let mut parse_failed = false;
+    let user = read(p.user.as_deref(), &mut notes, &mut parse_failed);
+    let default = read(p.default.as_deref(), &mut notes, &mut parse_failed);
+    // An unreadable Info.ini is a note only: the Features inis stand in for it.
+    let info = read(p.info_ini.as_deref(), &mut notes, &mut false);
     let mut merged = Map::new();
     for (file, bytes) in [
         ("SettingsDefault.json", &default),
@@ -157,12 +158,14 @@ fn overlay(base: &mut Map<String, Value>, top: Map<String, Value>) {
     }
 }
 
-fn read(p: Option<&Path>, notes: &mut Vec<String>) -> Option<Vec<u8>> {
+/// A file that exists but cannot be read sets `failed` (the caller keeps its previous settings); absent is `None`.
+fn read(p: Option<&Path>, notes: &mut Vec<String>, failed: &mut bool) -> Option<Vec<u8>> {
     let p = p?;
     match std::fs::read(p) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
+            *failed = true;
             notes.push(format!("{}: {e}", p.display()));
             None
         }

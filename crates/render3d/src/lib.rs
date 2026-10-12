@@ -453,7 +453,7 @@ impl Renderer {
         let (mut old, mut new) = (self.features.clone(), f.clone());
         old.sort();
         new.sort();
-        // Linear Lighting draws in linear working space: encode for display (was the GUI apply_features).
+        // Linear Lighting draws in linear working space: encode for display (was the GUI's apply_features).
         self.encode_srgb = f.iter().any(|d| d == "ENABLE_LL");
         self.features = f;
         if old == new {
@@ -464,7 +464,7 @@ impl Renderer {
     }
 
     /// New FeatureData values on every `Drawing` shape: the cbuffer-edit path of `apply_in_place` with the
-    /// shape current material. Pending/failed shapes keep their old draw constants (P1-B); a pending one gets
+    /// shape's current material. Pending/failed shapes keep their old draw constants (P1-B); a pending one gets
     /// the new values when its program lands.
     fn rewrite_static(&mut self) {
         let ll = self.linear_lighting();
@@ -480,7 +480,7 @@ impl Renderer {
 
     /// Every shape that is not hidden through [`Renderer::begin`] (a define-set change, C11). A program that is at
     /// hand swaps now; the others queue one job each and stay `Pending { showing_previous }` on their old draw.
-    /// The resolver is never asked: every slot of a shape material is in `tex_cache` since its load or edit.
+    /// The resolver is never asked: every slot of a shape's material is in `tex_cache` since its load or edit.
     fn begin_all(&mut self) {
         let todo: Vec<(ShapeId, MaterialState)> = self
             .shapes
@@ -908,8 +908,7 @@ impl Renderer {
 
     /// After a device loss: a fresh device (the caller makes it, WARP if need be) with the same shaders, cache
     /// dir, features, CS settings and toggle, sRGB mode and `compiled` results. Everything that lived on the old
-    /// device is gone,
-    /// including the loaded model: load it again, and every program comes from `compiled` with no compile.
+    /// device is gone, including the loaded model: load it again, and every program comes from `compiled` with no compile.
     pub fn rebuild_device_on(&mut self, gpu: Gpu) -> Result<(), String> {
         let mut n = Renderer::with_gpu(gpu, self.shaders.clone(), self.cache_dir.clone())?;
         n.features = std::mem::take(&mut self.features);

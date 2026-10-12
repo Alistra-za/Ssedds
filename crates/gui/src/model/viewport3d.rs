@@ -598,6 +598,10 @@ pub struct Viewport3d {
     confirmed: bool,
     /// The CS settings last applied: sent to the render thread, or given to it when it starts.
     settings: CsSettings,
+    /// Hash of the malformed-settings failure already shown: a dismissed notice stays gone while the file is unchanged.
+    failed_hash: Option<String>,
+    /// The new location's settings, held while a Moved popup is open and applied by "Use new".
+    popup_settings: Option<CsSettings>,
     thread: Option<Sender<V3Cmd>>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
@@ -652,6 +656,8 @@ impl Viewport3d {
             shaders_changed: false,
             confirmed: false,
             settings: CsSettings::default(),
+            failed_hash: None,
+            popup_settings: None,
             thread: None,
             tx,
             rx,
@@ -839,9 +845,14 @@ impl Viewport3d {
     /// the notice says why. A new hash goes to the render thread; with no thread yet, it starts with these.
     pub fn on_settings(&mut self, s: CsSettings) {
         if s.parse_failed {
+            if self.failed_hash.as_ref() == Some(&s.hash) {
+                return;
+            }
+            self.failed_hash = Some(s.hash.clone());
             self.notice = Some(format!("{SETTINGS_KEPT}: {}", s.notes.join("; ")));
             return;
         }
+        self.failed_hash = None;
         if self
             .notice
             .as_deref()
@@ -872,7 +883,11 @@ impl Viewport3d {
     /// "Use new" in the popup.
     pub fn use_new(&mut self) {
         if let Some(Change::Moved { new, .. }) = self.popup.take() {
+            let s = self.popup_settings.take();
             self.adopt(new);
+            if let Some(s) = s {
+                self.on_settings(s);
+            }
         }
     }
 
@@ -880,6 +895,7 @@ impl Viewport3d {
     pub fn keep_old(&mut self) {
         if let Some(Change::Moved { new, .. }) = self.popup.take() {
             self.declined = Some(new.root);
+            self.popup_settings = None;
             // The user accepts the saved fingerprint (Keep old is offered only while the old folder exists).
             self.confirmed = true;
         }
@@ -887,6 +903,7 @@ impl Viewport3d {
 
     fn adopt(&mut self, f: Fingerprint) {
         self.popup = None;
+        self.popup_settings = None;
         self.confirmed = true;
         self.shaders = Some(f.clone());
         self.shaders_changed = true;
@@ -1418,7 +1435,12 @@ impl Viewport3d {
             } if generation == self.locate_gen => {
                 self.on_located(result);
                 if let Some(s) = settings {
-                    self.on_settings(s);
+                    // A Moved popup is still open: the new location's settings wait for "Use new".
+                    if self.popup.is_none() {
+                        self.on_settings(s);
+                    } else {
+                        self.popup_settings = Some(s);
+                    }
                 }
             }
             V3Reply::Chosen {

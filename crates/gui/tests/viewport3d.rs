@@ -2085,3 +2085,76 @@ fn applying_settings_writes_a_settings_line() {
     assert_eq!(e[0]["notes"], 1);
     assert!(e[0]["ms"].as_f64().unwrap() >= 0.0, "{}", e[0]);
 }
+
+#[test]
+fn a_dismissed_malformed_notice_stays_gone_until_the_failure_changes() {
+    let (_d, target, file) = cs_folder(GOOD);
+    let mut v = Viewport3d::new(None);
+    let _cmds = v.attach_test_thread();
+    relocated(&mut v, &target);
+    std::fs::write(&file, r#"{"a": "#).unwrap();
+    relocated(&mut v, &target);
+    assert!(v.notice.is_some());
+    v.notice = None; // Dismiss
+    relocated(&mut v, &target); // focus, same bad file
+    assert!(v.notice.is_none(), "{:?}", v.notice);
+    std::fs::write(&file, r#"{"b": "#).unwrap();
+    relocated(&mut v, &target); // a different failure shows
+    assert!(v.notice.is_some());
+    v.notice = None;
+    std::fs::write(&file, CHANGED).unwrap();
+    relocated(&mut v, &target); // a good read clears it
+    std::fs::write(&file, r#"{"a": "#).unwrap();
+    relocated(&mut v, &target);
+    assert!(
+        v.notice.is_some(),
+        "the same bad file shows again after a good read"
+    );
+}
+
+#[test]
+fn keep_old_keeps_the_old_settings_and_use_new_applies_the_new_ones() {
+    let d = tempfile::tempdir().unwrap();
+    let (a, b) = (d.path().join("CS_a"), d.path().join("CS_b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    for keep in [true, false] {
+        let mut v = Viewport3d::new(Some(fp(&a, "CS_a", "h")));
+        let cmds = v.attach_test_thread();
+        let old = CsSettings::default();
+        let new = read_json_settings(CHANGED);
+        v.on_settings(old.clone());
+        let _ = settings_sent(&cmds);
+        v.handle(v3::V3Reply::Located {
+            generation: v.locate_generation(),
+            result: Ok(Some(fp(&b, "CS_b", "h"))),
+            settings: Some(new.clone()),
+        });
+        assert!(matches!(v.popup, Some(Change::Moved { .. })));
+        assert!(
+            settings_sent(&cmds).is_empty(),
+            "nothing applied while asking"
+        );
+        assert_eq!(v.settings(), &old);
+        if keep {
+            v.keep_old();
+            assert_eq!(v.settings(), &old);
+        } else {
+            v.use_new();
+            assert_eq!(v.settings(), &new);
+            assert_eq!(settings_sent(&cmds).len(), 1);
+        }
+    }
+}
+
+fn read_json_settings(json: &str) -> CsSettings {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("SettingsUser.json");
+    std::fs::write(&f, json).unwrap();
+    render3d::cs_settings::read_settings(&render3d::cs_settings::SettingsPaths {
+        user: Some(f),
+        default: None,
+        info_ini: None,
+        features_dir: None,
+    })
+}

@@ -370,3 +370,24 @@ fn owner_section_keys_map_to_struct_fields() {
     let d = feature_data(&read_settings(&paths(false, true, false, None)));
     assert_eq!(value(&d, "skinData.skinDetailParams")[3], 1.0);
 }
+
+#[test]
+fn an_unreadable_settings_file_is_parse_failed_with_a_note() {
+    // A directory where the file should be: a read error that is not NotFound.
+    let d = tempfile::tempdir().unwrap();
+    let mut p = paths(false, true, true, None);
+    p.user = Some(d.path().to_path_buf());
+    let s = read_settings(&p);
+    assert!(s.parse_failed);
+    assert!(
+        s.notes
+            .iter()
+            .any(|n| n.contains(&d.path().display().to_string())),
+        "{:?}",
+        s.notes
+    );
+    // Info.ini unreadable stays a note only.
+    let mut p = paths(true, true, false, None);
+    p.info_ini = Some(d.path().to_path_buf());
+    assert!(!read_settings(&p).parse_failed);
+}
