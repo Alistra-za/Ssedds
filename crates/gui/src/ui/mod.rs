@@ -8,6 +8,7 @@ pub mod meshes;
 pub mod pgp_fields;
 pub mod preview;
 pub mod set_editor;
+pub mod set_preview;
 pub mod sets_column;
 pub mod settings_panel;
 pub mod slot_commands;

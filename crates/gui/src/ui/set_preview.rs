@@ -2,9 +2,9 @@
 //! is selected. Draws `SetPreview`; the frame, the CS toggle and the problem lists are the shared
 //! `ui::viewport3d::show`. No logic beyond mapping input to model calls.
 use crate::model::set_preview::{
-    badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice, Outcome, Pick,
-    PreviewMode, SetPreview, BUILTINS, JSON_WINS, MODE_LABEL_ENCODED, MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH,
-    OFF_FEATURES, PANEL_TITLE, WAITS_FOR_EXPORT,
+    badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
+    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, JSON_WINS, MODE_LABEL_ENCODED,
+    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, PANEL_TITLE, WAITS_FOR_EXPORT,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -89,9 +89,12 @@ fn mesh_picker(ui: &mut egui::Ui, s: &mut SetPreview, simulated: bool) {
                     .selected_text(current)
                     .show_ui(ui, |ui| {
                         for c in list {
-                            let sel = matches!(&pick, Pick::Nif(p) if p.load_copy_id == c.load_copy_id);
+                            let sel =
+                                matches!(&pick, Pick::Nif(p) if p.load_copy_id == c.load_copy_id);
                             let r = ui
-                                .add_enabled_ui(!c.le_mesh, |ui| ui.selectable_label(sel, c.label()))
+                                .add_enabled_ui(!c.le_mesh, |ui| {
+                                    ui.selectable_label(sel, c.label())
+                                })
                                 .inner;
                             if r.clicked() {
                                 chosen = Some(MeshChoice::Nif(c.load_copy_id));
