@@ -19,7 +19,6 @@ use crate::pgp::writer::EntryInput;
 use crate::pgp::writer::{document, entry_node};
 use crate::settings::MeshesSettings;
 use engine::api::CancelToken;
-use engine::config::Format;
 use engine::dds::{
     dds_bytes, resolve_header, DdsDesc, DDPF_FOURCC, DDSCAPS_COMPLEX, DDSCAPS_MIPMAP,
     DDSCAPS_TEXTURE, DDSD_CAPS, DDSD_HEIGHT, DDSD_MIPMAPCOUNT, DDSD_PITCH, DDSD_PIXELFORMAT,
@@ -28,6 +27,7 @@ use engine::dds::{
 use engine::image::Rgba32F;
 use engine::manifest::sha256_json;
 use engine::policy::ResolvedJob;
+use engine::quantize::EncoderInput;
 use engine::session::{pack_key, Session};
 use modscan::store::{MatchRow, ShapeView, Store, TexKey};
 use nif::material::MaterialState;
@@ -457,6 +457,36 @@ pub fn f16_bits(v: f32) -> u16 {
     half::f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits()
 }
 
+/// The prepared chain is in the engine's working space (linear light for sRGB colour, signed vectors for normals):
+/// quantise it as the export does before its BCn encode, so Source differs from Encoded only by the compression.
+fn stored_levels(levels: &[Rgba32F], p: &engine::config::Profile) -> Vec<Rgba32F> {
+    let work = engine::ops::Work {
+        img: Rgba32F {
+            width: 0,
+            height: 0,
+            px: vec![],
+        },
+        alpha_present: p.alpha.policy != engine::config::AlphaPolicy::Remove,
+        domain: engine::ops::domain_for(p),
+        roughness_r_squared: false,
+        nonfinite_samples: 0,
+    };
+    levels
+        .iter()
+        .map(|l| Rgba32F {
+            width: l.width,
+            height: l.height,
+            px: match engine::quantize::to_encoder_input(l, &work, p) {
+                EncoderInput::Ldr(v) => v.iter().map(|c| c.map(|b| f32::from(b) / 255.0)).collect(),
+                EncoderInput::Hdr(v) => v
+                    .iter()
+                    .map(|c| c.map(|h| half::f16::from_bits(h).to_f32()))
+                    .collect(),
+            },
+        })
+        .collect()
+}
+
 /// An uncompressed DX10 DDS of `levels` (mip 0 first, tightly packed): `R8G8B8A8_UNORM[_SRGB]`, or
 /// `R16G16B16A16_FLOAT` when `hdr`. The engine only writes BCn, so this is the preview's own writer.
 pub fn uncompressed_dds(levels: &[Rgba32F], hdr: bool, srgb: bool) -> Result<Vec<u8>, String> {
@@ -514,8 +544,8 @@ pub fn encode(
                 .preview_source(job, cap, cancel)
                 .map_err(|e| format!("{e:?}"))?;
             uncompressed_dds(
-                &r.levels,
-                job.profile.format == Format::Bc6hUf16,
+                &stored_levels(&r.levels, &job.profile),
+                job.profile.format.is_hdr(),
                 job.profile.srgb_tag(),
             )
         }

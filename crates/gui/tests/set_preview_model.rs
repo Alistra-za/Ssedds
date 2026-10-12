@@ -972,6 +972,42 @@ fn source_mode_builds_an_uncompressed_dds() {
     assert_eq!(srgb.data[..4], [255, 128, 0, 255]);
 }
 
+/// Source is the export's input uncompressed: its texels match the Encoded (BCn) texels up to compression error,
+/// for colour (sRGB-encoded, not linear light) and normal maps (signed vectors stored as v * 0.5 + 0.5).
+#[test]
+fn source_mode_texels_match_the_encoded_texels() {
+    use engine::dds::read_dds;
+    use engine::decode::decode_level_rgba;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let session = m.session.as_ref().unwrap();
+    let cancel = engine::api::CancelToken::default();
+    let mut checked = 0;
+    for item in m
+        .items
+        .iter()
+        .filter(|i| i.job.is_some() && i.status == ItemStatus::Ready)
+    {
+        let src = source_of(item);
+        let texels = |mode| {
+            let f = read_dds(&encode(session, &src, 32, mode, &cancel).unwrap()).unwrap();
+            let (w, h, r) = f.levels[0].clone();
+            decode_level_rgba(f.format, w, h, &f.data[r], None).unwrap()
+        };
+        let (enc, raw) = (texels(PreviewMode::Encoded), texels(PreviewMode::Source));
+        assert_eq!(enc.len(), raw.len());
+        let diff: f32 = enc
+            .iter()
+            .zip(&raw)
+            .map(|(a, b)| (0..3).map(|k| (a[k] - b[k]).abs()).sum::<f32>() / 3.0)
+            .sum::<f32>()
+            / enc.len() as f32;
+        assert!(diff < 0.03, "{}: mean RGB difference {diff}", item.key);
+        checked += 1;
+    }
+    assert!(checked >= 2, "a colour and a normal map at least");
+}
+
 #[test]
 fn switching_mode_marks_members_stale_and_reencodes() {
     let d = tempfile::tempdir().unwrap();
