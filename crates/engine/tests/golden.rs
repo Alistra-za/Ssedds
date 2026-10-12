@@ -2799,6 +2799,7 @@ fn default_profiles_hash_as_before() {
     for id in &ids {
         let p = &planned(&o, &format!("h/{id}.png"))["profile"];
         assert_eq!(p["subtype"].as_str(), Some(id.as_str()));
+        assert!(p["mips"].is_object(), "{id}: {p}");
         assert!(p.get("resize").is_none(), "{id}: {p}");
         assert!(p["mips"].get("edge").is_none(), "{id}: {p}");
     }

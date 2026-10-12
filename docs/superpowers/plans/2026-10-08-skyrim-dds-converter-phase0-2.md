@@ -11988,7 +11988,7 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
 
 ### M6 — Presets completion and remaining inputs
 
-- **Scope:** built-ins "CS – Compact", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only); `sdc presets diff/export/validate`; `--preset-file` for the `presets` verbs (user presets and their suffix aliases, Task 26a); schema migrations for older `schema_version`; user rule tables; inputs OpenEXR, Radiance HDR, BMP, JPEG, and the float-source transfer split for 32-bit float TIFF (see Carried items); DDS re-encode opt-in (`--set file:<glob>.reencode=true`, `LOSS-REENCODE`); NPOT resize policy (`resize=pot-down`, polyphase in the content's domain); tent/Mitchell/Kaiser filters and `mips.edge`; ICC-profile info event; progress bars.
+- **Scope:** built-ins "CS – Compact", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only); `sdc presets diff/export/validate`; `--preset-file` for the `presets` verbs (user presets and their suffix aliases, Task 26a); schema migrations for older `schema_version`; user rule tables; inputs OpenEXR, Radiance HDR, BMP, JPEG, and the float-source transfer split for 32-bit float TIFF (see Carried items); DDS re-encode opt-in (`--set file:<glob>.reencode=true`, `LOSS-REENCODE`); ~~NPOT resize policy (`resize=pot-down`, polyphase in the content's domain)~~ **Done (M6 Track C, Note S S-mips-6)**; ~~tent/Mitchell/Kaiser filters and `mips.edge`~~ **Done (M6 Track C, Note S S-mips-2..5)**; ICC-profile info event; progress bars.
 - **Entry:** Phase 2 exit.
 - **Exit:** preset tests per target; golden cases for each new input type; preset changelog entries.
 - **Owner additions (2026-10-10, DECISIONS Note O):**
@@ -12056,18 +12056,18 @@ Owner timing: its own milestone **right after the CLI MVP**, before the GUI. Thi
       - the exact per-shader slot and channel table;
       - what the hair shader assumes for alpha.
 - **Carried items** (final review, SDD ledger):
-  - **GUI filter dropdown (owner, 2026-10-11):** when `MipFilter` gains more than `box`, the "Filter" row in the sdc-gui Mipmaps group (basic panel, M3b polish Task 5) becomes a live dropdown. It must not move to Advanced.
-  - Tent, Mitchell and Kaiser mips (mipcheck `RESULTS-2.md` B8):
+  - **GUI filter dropdown (owner, 2026-10-11):** when `MipFilter` gains more than `box`, the "Filter" row in the sdc-gui Mipmaps group (basic panel, M3b polish Task 5) becomes a live dropdown. It must not move to Advanced. **Done (M6 Track C, Note S S-mips-10).**
+  - Tent, Mitchell and Kaiser mips (mipcheck `RESULTS-2.md` B8): **Done (M6 Track C, Note S S-mips-3).**
     - Build each level **directly from mip 0**, with the kernel widened 2^N, and keep float values between levels.
     - Measured: recursion costs 1.5–2.5 dB (tent), 1–1.5 dB (Mitchell) and ≤ 0.5 dB (Kaiser) against a Lanczos-8 reference. 8-bit levels in between add up to 5 codes of drift with Kaiser.
     - Box stays recursive; it is identical either way.
   - Float source → LDR colour output needs a source-transfer versus output-encode split (Task 39 carry). It replaces the interim blocking `IN-FLOAT-LDR` guard and its `LOSS-CLAMP-HDR` use added at the final review (I4); keep the golden cases for float TIFF diffuse and float BC6H. **Done (M6 Track B, Note S).**
-  - `FIELD_PATHS` lacks `reencode` and `resize` (Task 25 carry); spec §8 promises `--set file:<glob>.reencode=true`, which is a usage error today. **`reencode` done (M6 Track B, Note S); the `resize` half stays open.**
+  - `FIELD_PATHS` lacks `reencode` and `resize` (Task 25 carry); spec §8 promises `--set file:<glob>.reencode=true`, which is a usage error today. **`reencode` done (M6 Track B, Note S); `resize` done (M6 Track C, Note S S-mips-6).**
   - Double work per file (m16): every converted file is decoded twice (plan, then run) and hashed twice when an output exists; reuse the plan-time load or hash for `is_up_to_date`.
   - Serial hashing on reruns (Task 37 M8): hash the sources of an `if-changed` rerun in parallel.
   - `IN-NONFINITE` is not reported by `--dry-run` or `inspect` (m7, Task 37 M5); `analyse` already visits every sample and can count them. Its mean and `normal_len_err` are also poisoned by NaN (Task 23 minor). **Done (M6 Track B, Note S).**
   - Project config discovery reads `sdc.toml` from the first input only, and only when it is a folder (m10): document it or warn when another input root contains an `sdc.toml`.
-  - 16K peak memory is about 13 GiB (Task 29 minor), and Preprocess is single-threaded with a per-channel `powf` (Task 28 minor); revisit admission and the scheduler together.
+  - 16K peak memory is about 13 GiB (Task 29 minor), and Preprocess is single-threaded with a per-channel `powf` (Task 28 minor); revisit admission and the scheduler together. Admission counts the new intermediates (S-mips-11); scheduler revisit still open.
   - Discovery (m6, Task 21 minors): one unreadable subfolder aborts the whole `convert` as a usage error where spec §8 says `file_failed` and continue; the same file given twice, or a folder plus a file at its top level, becomes `IN-DUPLICATE` for both copies (dedupe on the canonical path, add a test); symlinks are skipped silently.
   - Load: record the DXGI format of a DDS input in `Analysis` for the DDS re-encode opt-in (Task 23 carry). **Done (M6 Track B, Note S).**
   - Revisit the BC4/BC5 search radius default (5, as the bench ran; 10 gains about 0.09 dB on real masks) when the presets are completed (Task 6 ruling).

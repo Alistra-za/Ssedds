@@ -115,8 +115,9 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `channels` | `swizzle`, `flip_green`, `reconstruct_z`, `grayscale_source: r / luma` | Sub-type | Preprocess (§5.4) |
 | `channels.green_convention` | `directx` / `opengl` / unset | Unset; a `_normalgl`/`_normaldx` suffix states it (§4.4) | Green (Y) convention of a normal source. `opengl` makes Resolve set `flip_green = true` (OpenGL → DirectX in Preprocess, §5.4). A plain `_normal`/`_nrm` source stays unresolved until a preset, config, rule or `--set` states it [D-H]. Ignored for `msn` and non-Normal sub-types |
 | `mips.levels` | `full` / `none` / `n` | `full`; `none` for `interface/`, `sky/` | Full chain to 1×1 |
-| `mips.filter` | `box` / `tent` / `mitchell` / `kaiser{width,alpha,stretch}` | `box` | Mitchell and Kaiser for Color only. Only `box` exists in the engine so far; the others arrive in M6 |
-| `mips.edge` | `clamp` / `wrap` | `wrap` | Irrelevant to box at power-of-two [MIP]. Not a `Profile` field yet; it arrives with the other filters in M6 |
+| `mips.filter` | `box` / `tent` / `mitchell` / `kaiser` (the `kaiser{width,alpha,stretch}` syntax is deferred, DECISIONS S-mips-4) | `box` | Tent/Mitchell/Kaiser for sRGB colour without alpha weighting; tent also for HDR (`format.is_hdr()`: `bc6h_uf16` or `rgba16f`) with category Color or Hdr and alpha that is not weighting; else `CFG-INVALID` (DECISIONS S-mips-2). Kaiser fixed at w3 α4 s1 (DECISIONS S-mips-4) |
+| `mips.edge` | `clamp` / `wrap` | `wrap` | Irrelevant to box at power-of-two [MIP]; read only by tent, Mitchell and Kaiser (DECISIONS S-mips-5) |
+| `resize` | `none` / `pot-down` | `none` | `pot-down`: each axis to the largest power of two ≤ its size, in Preprocess (§5.4 step 6); `DIM-RESIZED` reports it (DECISIONS S-mips-6) |
 | `mips.normal` | `renormalize` / `renormalize_bake` | `renormalize`; a baking set upgrades its `pbr_normal` (provenance `set`); `renormalize_bake` for `coat_normal` (self-bake) (§6.2, DECISIONS R2, R6) | Normal category |
 | `mips.normal_base` | `renormalize` / `keep` | `renormalize` (owner 2026-10-11, DECISIONS R1) | Normal category: mip 0 stored at unit length unless `keep` |
 | `mips.bake_clamp` | (0, 1] | 0.25 (DECISIONS Note E) | Clamp *t* of the variance bake (§6.2), read from the profile the bake writes into |
@@ -367,7 +368,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 3. Normals (never `msn`): `*2 − 1` decode; OpenGL→DirectX green flip when `channels.flip_green` is set (**[Proposal]** Resolve sets it, with the provenance of `channels.green_convention`, when that field is `opengl`, §3.2, §4.4); Z rebuild `z = √(1 − x² − y²)` for two-channel sources; clamp z ≥ 0. Mip 0 is renormalised in Mipmaps unless `mips.normal_base = keep` (owner 2026-10-11, DECISIONS R1).
 4. Push-pull RGB dilation under α = 0 for `cutout`, `blend`, `cutout_blend`.
 5. `srgb` content decoded to linear with the exact sRGB curve, not a 2.2 power.
-6. Resize only on request (NPOT policy or size cap), polyphase, in the content's filtering domain.
+6. Resize only on request (NPOT policy or size cap), polyphase, in the content's filtering domain. **[Decided]** (M6, DECISIONS S-mips-6) `resize = pot-down` maps each axis independently to the largest power of two ≤ its size (1000×600 → 512×512; a power-of-two axis is kept), with the effective mip filter and edge: box is area-exact, tent/Mitchell/Kaiser are polyphase on RGB, alpha is always area box. It runs last in Preprocess; upscaling and a size cap are not implemented.
 
 ### 5.5 Mipmaps
 
@@ -382,6 +383,8 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 | `_flow` | Box after `*2 − 1` | Signed vector | Not normalised [MIP] |
 | Normals | Box only, never alpha-weighted | Vector | Every level renormalised (mip 0 unless `mips.normal_base = keep`), accumulated from mip 0 as written; `msn` by length only; a `_cnr` self-bakes its alpha (DECISIONS R1, R2, R11) |
 | HDR | Box (tent at most) | Linear float | Negatives clamped [MIP] |
+
+**[Decided]** (M6, DECISIONS S-mips-3): tent, Mitchell and Kaiser build each level directly from mip 0; box stays recursive; alpha always box.
 
 **[Finding]** Averaging gamma-encoded values darkens thin bright detail; box is area-exact and never overshoots; sinc kernels help only LDR colour [MIP §1, §"Averaging sRGB"].
 
@@ -657,7 +660,8 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a packed map with BC6H or `rgba16f` (DECISIONS S12), `srgb` on `r8`/`rg8`, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |
 | `CFG-FILE-UNMATCHED` | info | A `[files]` key in `sdc.toml` matches no file (M3a, DECISIONS N2); the key stays in the file | Fix the key or remove the entry |
 | `CFG-UNAVAILABLE` | blocking | Sub-type or format unavailable under the target (BC6H outside `cs`, `flow` under `vanilla`) | Accept fallback or change target |
-| `DIM-NPOT` | blocking | Non-power-of-two dimension [SC §5] | Resize policy, e.g. `--set resize=pot-down` (M6) |
+| `DIM-NPOT` | blocking | Non-power-of-two dimension [SC §5], tested on the post-resize size (DECISIONS S-mips-7) | `--set resize=pot-down` (DECISIONS S-mips-6), or the GUI's *Resize to a power of two* |
+| `DIM-RESIZED` | info | The input was resized, e.g. "1000x600 resized to 512x512 (resize = pot-down)"; data `{"from":[w,h],"to":[w',h']}` (DECISIONS S-mips-7) | — |
 | `DIM-SMALL` | blocking | Base dimension < 4 px [SC §5] | Resize or acknowledge |
 | `DIM-FLOW-SMALL` | warning | `_flow` dimension ≤ 32 → CS ignores it [SC §3] | ≥ 64 px |
 | `DIM-TOO-LARGE` | error | Dimension > 16384 | Downscale |
