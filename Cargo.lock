@@ -3151,6 +3151,7 @@ dependencies = [
  "image",
  "modscan",
  "nif",
+ "pgpsim",
  "render3d",
  "rfd",
  "rusqlite",

@@ -33,6 +33,7 @@ modscan = { path = "../modscan" }
 nif = { path = "../nif" }
 render3d = { path = "../render3d" }
 vfs = { path = "../vfs" }
+pgpsim = { path = "../pgpsim" }
 rusqlite.workspace = true
 
 [dev-dependencies]
