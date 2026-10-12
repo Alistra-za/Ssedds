@@ -69,6 +69,9 @@ pub struct SetItem {
     pub members: Vec<String>,
     pub recipes: Vec<RecipeReport>,
     pub pbr: bool,
+    /// M6: the engine's shader pick and the set's SHADER-* warnings (`SetResolved`).
+    pub shader: Option<engine::shader::ShaderPick>,
+    pub warnings: Vec<Warning>,
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +260,8 @@ impl PlanView {
                     members,
                     pbr,
                     recipes,
+                    shader,
+                    warnings,
                     ..
                 } => {
                     let key = e.set.clone().unwrap_or_default();
@@ -279,6 +284,8 @@ impl PlanView {
                         members: keys,
                         recipes: recipes.clone(),
                         pbr: *pbr,
+                        shader: shader.clone(),
+                        warnings: warnings.clone(),
                     });
                 }
                 EventKind::Warning(w) if w.code == Code::CfgFileUnmatched => {

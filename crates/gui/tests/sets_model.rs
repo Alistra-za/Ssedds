@@ -978,3 +978,205 @@ fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
         "the plan on screen still bakes the shared rmaos"
     );
 }
+
+#[test]
+fn shader_dropdown_lists_match_the_mode() {
+    use engine::{config::Target, shader::Shader};
+    assert_eq!(shader_options(Target::Cs).len(), 12);
+    assert!(!shader_options(Target::Vanilla).contains(&Shader::Pbr));
+    assert_eq!(shader_options(Target::Cpm), shader_options(Target::Vanilla));
+}
+
+#[test]
+fn choosing_and_clearing_a_shader_round_trips_in_sdc_project_toml() {
+    use engine::shader::{Shader, ShaderOrigin};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let v = set_views(&m);
+    assert_eq!(
+        view(&v, "landscape/leaf").shader.as_ref().unwrap().shader,
+        Shader::Landscape
+    );
+    assert!(matches!(
+        view(&v, "landscape/leaf")
+            .shader
+            .as_ref()
+            .unwrap()
+            .provenance,
+        ShaderOrigin::Auto(_)
+    ));
+    m.set_shader("landscape/leaf", Some(Shader::Hair));
+    idle(&mut m);
+    let v = set_views(&m);
+    let leaf = view(&v, "landscape/leaf");
+    assert_eq!(
+        (
+            leaf.shader_choice,
+            leaf.shader.as_ref().unwrap().provenance.clone()
+        ),
+        (Some(Shader::Hair), ShaderOrigin::Set)
+    );
+    assert!(m
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .text()
+        .contains("shader = \"hair\""));
+    assert_eq!(set_shaders(&m).get("landscape/leaf"), Some(&Shader::Hair));
+    m.set_shader("landscape/leaf", None);
+    idle(&mut m);
+    assert!(!m.sets_doc.as_ref().unwrap().text().contains("shader"));
+    assert_eq!(view(&set_views(&m), "landscape/leaf").shader_choice, None);
+}
+
+#[test]
+fn switching_mode_falls_back_and_back() {
+    use engine::{
+        codes::Code,
+        config::Target,
+        shader::{Shader, ShaderOrigin},
+    };
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_shader("landscape/rock01", Some(Shader::Pbr));
+    idle(&mut m);
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    let v = set_views(&m);
+    let rock = view(&v, "landscape/rock01");
+    let pick = rock.shader.as_ref().unwrap();
+    assert_eq!(
+        (pick.shader, &pick.provenance),
+        (Shader::Default, &ShaderOrigin::Fallback)
+    );
+    assert!(rock
+        .set_warnings
+        .iter()
+        .any(|w| w.code == Code::ShaderUnavailable));
+    assert_eq!(
+        rock.shader_choice,
+        Some(Shader::Pbr),
+        "the saved choice stays"
+    );
+    m.set_target(Target::Cs);
+    idle(&mut m);
+    assert_eq!(
+        view(&set_views(&m), "landscape/rock01")
+            .shader
+            .as_ref()
+            .unwrap()
+            .shader,
+        Shader::Pbr
+    );
+}
+
+/// A scan database where `tex` (a `textures/…` path with `.dds`) is slot 0 of these shapes:
+/// (lighting shader type, SLSF2, shader kind, derived copy, enabled origin).
+fn scan_db(db: &std::path::Path, tex: &str, shapes: &[(u32, u32, i32, bool, bool)]) {
+    let s = modscan::store::Store::open(db).unwrap();
+    let c = s.conn();
+    c.execute("INSERT INTO path(id, p) VALUES (1, ?1)", [tex])
+        .unwrap();
+    c.execute_batch(
+        "INSERT INTO texset(id, n, t0) VALUES (1, 1, 1);
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0);",
+    )
+    .unwrap();
+    for (i, (ty, slsf2, kind, derived, enabled)) in shapes.iter().enumerate() {
+        let id = i as i64 + 2;
+        c.execute(
+            "INSERT INTO path(id, p) VALUES (?1, ?2)",
+            rusqlite::params![id, format!("meshes/m{id}.nif")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (?1, 1, ?2, ?2, ?1, ?3)",
+            rusqlite::params![id, format!("mod{id}"), enabled],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES (?1, ?1, ?1, 0, ?2)",
+            rusqlite::params![id, derived],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id) VALUES (?1, 0, 'BSTriShape', ?2, ?3, ?4, 1)",
+            rusqlite::params![id, kind, ty, slsf2],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn mesh_votes_count_enabled_source_lighting_shapes_only() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("scan.db");
+    scan_db(
+        &db,
+        "textures/a/wall.dds",
+        &[
+            (6, 0, 1, false, true),       // votes hair
+            (6, 1 << 23, 1, false, true), // TruePBR: no vote
+            (0, 0, 2, false, true),       // an effect shader: no vote
+            (0, 0, 1, true, true),        // PGPatcher's output copy: no vote
+            (0, 0, 1, false, false),      // a disabled mod: no vote
+            (4, 0, 1, false, true),       // Face Tint: not one of the 12, no vote
+        ],
+    );
+    let keys = ["textures/a/wall".to_string(), "textures/a/none".to_string()]
+        .into_iter()
+        .collect();
+    let v = sdc_gui::model::meshes::mesh_votes(&db, &keys).unwrap();
+    assert_eq!(v.get("textures/a/wall"), Some(&vec![Shader::Hair]));
+    assert!(!v.contains_key("textures/a/none"));
+}
+
+#[test]
+fn a_scan_database_picks_the_set_shader() {
+    use engine::shader::{AutoRule, Shader, ShaderOrigin};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    // The key the GUI asks for, taken from the plan: the leaf diffuse's game folder and output stem.
+    let j = m
+        .items
+        .iter()
+        .filter_map(|i| i.job.as_ref())
+        .find(|j| {
+            j.set_key.ends_with("landscape/leaf")
+                && j.output.file_stem().is_some_and(|s| s == "leaf")
+        })
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db);
+    assert!(m.refresh_mesh_votes());
+    m.replan();
+    idle(&mut m);
+    let leaf = view(&set_views(&m), "landscape/leaf")
+        .shader
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (leaf.shader, leaf.provenance),
+        (Shader::Hair, ShaderOrigin::Auto(AutoRule::Mesh))
+    );
+    // No database: the suffix rules again (the leaf is under textures/landscape).
+    m.scan_db = None;
+    assert!(m.refresh_mesh_votes());
+    m.replan();
+    idle(&mut m);
+    assert_eq!(
+        view(&set_views(&m), "landscape/leaf")
+            .shader
+            .as_ref()
+            .unwrap()
+            .shader,
+        Shader::Landscape
+    );
+}

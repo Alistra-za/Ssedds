@@ -22,6 +22,7 @@ fn build_model() -> AppModel {
         Ok(session) => {
             let mut m = AppModel::new(s, path, Arc::new(session));
             m.user_config = user_config_path();
+            m.scan_db = sdc_gui::model::meshes::default_store_path();
             m
         }
         Err(e) => {
