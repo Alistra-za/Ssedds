@@ -289,3 +289,13 @@ fn shader_is_reserved_not_a_json_setting() {
     s.set_shader("landscape/leaf", None);
     assert!(!s.text().contains("shader"), "{}", s.text());
 }
+
+// Final review M1: clearing a shader of a set with no table changes nothing.
+#[test]
+fn clearing_the_shader_of_a_set_without_a_table_is_a_no_op() {
+    let (_d, mut s) = doc(None);
+    let before = s.text();
+    s.set_shader("landscape/leaf", None);
+    assert_eq!(s.text(), before);
+    assert!(!s.is_dirty());
+}

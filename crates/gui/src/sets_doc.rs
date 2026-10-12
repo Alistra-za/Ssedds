@@ -484,6 +484,22 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
+        // Clearing a set with no table changes nothing (no table, no dirty, no undo step).
+        let lower = fold_id(id);
+        let has_table = self
+            .doc
+            .get("sets")
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(|ts| {
+                ts.iter().any(|t| {
+                    t.get("id")
+                        .and_then(Item::as_str)
+                        .is_some_and(|s| fold_id(s) == lower)
+                })
+            });
+        if shader.is_none() && !has_table {
+            return;
+        }
         let t = self.table_mut(id);
         match shader {
             Some(s) => {

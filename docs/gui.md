@@ -70,7 +70,7 @@ The **Sets** column is editable. It changes which textures belong to which mater
 - **Badges** on a set show what needs attention: a missing file, a borrowed slot, a blocking problem for export.
 - **Ctrl+Z** undoes and **Ctrl+Y** redoes (200 steps).
 
-Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set order, created sets, moves, borrows and the PGPatcher settings, and nothing else. If it cannot be parsed, the sets and the JSON go read-only (a banner says why) while `sdc.toml` editing carries on.
+Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set order, created sets, moves, borrows, the PGPatcher settings and each set's shader choice, and nothing else. If it cannot be parsed, the sets and the JSON go read-only (a banner says why) while `sdc.toml` editing carries on.
 
 ### The set editor
 

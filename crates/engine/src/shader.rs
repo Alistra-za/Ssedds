@@ -310,6 +310,27 @@ pub fn mesh_key(game_path: &str, stem: &str) -> String {
     .to_lowercase()
 }
 
+/// The `mesh_key` of a set's colour member (final review I1), or `None` for any other member. A colour member has
+/// a diffuse/colour sub-type, or an output stem with no suffix or `_d`; the key uses that output stem (`wall_d`),
+/// which is the name the meshes reference. `subtype` is `None` for a member with no job (a skipped DDS input).
+pub fn colour_mesh_key(
+    game_path: &str,
+    output: &std::path::Path,
+    subtype: Option<Subtype>,
+) -> Option<String> {
+    let stem = output.file_stem()?.to_str()?;
+    let colour = matches!(
+        subtype,
+        Some(
+            Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::PbrAlbedo | Subtype::SkinAlbedo
+        )
+    ) || matches!(
+        crate::group::split_suffix(stem).1.as_deref(),
+        None | Some("d")
+    );
+    colour.then(|| mesh_key(game_path, stem))
+}
+
 /// The auto-pick rule that chose a shader (spec §4.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoRule {
@@ -535,11 +556,19 @@ pub fn pick_for_set(
 ) -> ShaderPick {
     let first = set.members.first().map(|&i| &files[i]);
     let first_path = first.map_or("", |f| f.game_path.as_str());
-    // The colour member's output stem: set members share one folder.
-    let base = set.key.rsplit('/').next().unwrap_or(&set.key);
-    // shortcut: a set whose first member was added from another folder (set edits) looks up that folder; key by the colour member if that bites
-    let votes = first
-        .and_then(|f| mesh.get(&mesh_key(&f.game_path, base)))
+    // Keyed by the colour member (its job's output, else the file's); the first colour key with votes wins.
+    // shortcut: a GUI output-path override that renames the colour member moves its key away from the mesh's
+    // texture path; look the votes up by the mesh-side path if that bites
+    let votes = set
+        .members
+        .iter()
+        .filter_map(|&i| {
+            let f = &files[i];
+            let job = jobs.iter().find(|j| j.input == f.path);
+            let output = job.map_or(f.output.as_path(), |j| j.output.as_path());
+            colour_mesh_key(&f.game_path, output, job.map(|j| j.profile.subtype))
+        })
+        .find_map(|k| mesh.get(&k))
         .map_or(&[][..], Vec::as_slice);
     let subtypes: Vec<Subtype> = jobs
         .iter()

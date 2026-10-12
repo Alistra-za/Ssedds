@@ -524,3 +524,36 @@ fn shader_provenance_round_trips_and_orders() {
     assert!(Provenance::Shader(String::new()) < Provenance::Suffix(String::new()));
     assert!(Provenance::Shader(String::new()) > Provenance::AnalysisFact(String::new()));
 }
+
+// Final review I1: a colour member that keeps its `_d` in the output name is looked up by that stem.
+#[test]
+fn a_suffixed_colour_member_finds_its_mesh_votes() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "textures/a/wall_d.png", [120, 90, 60]);
+    put_rgb(d.path(), "textures/a/wall_n.png", [128, 128, 255]);
+    let hair = [("textures/a/wall_d", vec![Shader::Hair, Shader::Hair])];
+    let (p, _) = plan_with(d.path(), Target::Vanilla, &[], &[], &hair);
+    assert_eq!(
+        p.shaders.values().next().unwrap().provenance.to_string(),
+        "auto:mesh"
+    );
+}
+
+// Final review I2: a GUI id is canonical, so a bare one names only the set at the root.
+#[test]
+fn a_bare_gui_id_names_only_its_own_set() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "wall.png", [120, 90, 60]);
+    put_rgb(d.path(), "sub/wall.png", [120, 90, 60]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[("wall", Shader::Glow)]);
+    let shader = |tail: &str| {
+        p.shaders
+            .iter()
+            .find(|(k, _)| k.ends_with(tail))
+            .unwrap()
+            .1
+            .shader
+    };
+    assert_eq!(shader("/sub/wall"), Shader::Default);
+    assert_eq!(shader("out/wall"), Shader::Glow);
+}

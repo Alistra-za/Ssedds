@@ -393,9 +393,10 @@ impl AppModel {
         Some(req)
     }
 
-    /// S-shader-10: read the mesh votes for the plan's sets (keys from every item job that is not a packing
-    /// source). No database, or a read error, means no votes: the suffix rules decide, and the Meshes view reports
-    /// database errors. True when the votes changed.
+    /// S-shader-10: read the mesh votes for the plan's sets (keys from the colour-member jobs only, by
+    /// `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no votes: the suffix
+    /// rules decide, and the Meshes view reports database errors. True when the votes changed.
+    // shortcut: reads SQLite on the UI thread after each plan; move to a background read or cache by db mtime + key set if it hitches on large load orders
     pub fn refresh_mesh_votes(&mut self) -> bool {
         let keys: std::collections::BTreeSet<String> = self
             .items
@@ -403,8 +404,7 @@ impl AppModel {
             .filter_map(|i| i.job.as_ref())
             .filter(|j| j.pack.is_none())
             .filter_map(|j| {
-                let stem = j.output.file_stem()?.to_str()?;
-                Some(engine::shader::mesh_key(&j.game_path, stem))
+                engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
             })
             .collect();
         let votes = match &self.scan_db {

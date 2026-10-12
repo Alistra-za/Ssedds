@@ -1728,25 +1728,31 @@ fn run_one(
 }
 
 /// Planning step 6a (DECISIONS Note S-shader-1/-2): set key → explicit shader, from `req.set_shaders` then the
-/// `set:` overrides in command-line order (later wins). An id names a set by `sets::set_id`; one without `/` also
-/// names every set whose key ends in `/<id>`. Each id that names no set is one SET-EDIT-STALE.
+/// `set:` overrides in command-line order (later wins). An id names a set by `sets::set_id`; a command-line id
+/// without `/` also names every set whose key ends in `/<id>`. GUI ids are canonical and match exactly (final
+/// review I2). Each id that names no set is one SET-EDIT-STALE.
 fn explicit_shaders(
     req: &BatchRequest,
     sets: &[TextureSet],
     rep: &Reporter,
 ) -> BTreeMap<String, Shader> {
+    let gui = req.set_shaders.iter().map(|(k, s)| (k, *s, false));
     let cli = req.overrides.iter().filter_map(|o| match &o.scope {
-        Scope::Set(id) => Some((id, serde_json::from_value::<Shader>(o.value.clone()).ok()?)),
+        Scope::Set(id) => Some((
+            id,
+            serde_json::from_value::<Shader>(o.value.clone()).ok()?,
+            true,
+        )),
         _ => None,
     });
     let mut out = BTreeMap::new();
     let mut stale = BTreeSet::new();
-    for (id, shader) in req.set_shaders.iter().map(|(k, s)| (k, *s)).chain(cli) {
+    for (id, shader, tail_match) in gui.chain(cli) {
         let tail = format!("/{}", crate::sets::fold_id(id));
         let mut hit = false;
         for s in sets {
             if crate::sets::same_id(&crate::sets::set_id(&req.output_root, &s.key), id)
-                || (!id.contains('/') && s.key.ends_with(&tail))
+                || (tail_match && !id.contains('/') && s.key.ends_with(&tail))
             {
                 out.insert(s.key.clone(), shader);
                 hit = true;
