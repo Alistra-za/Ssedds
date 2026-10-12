@@ -10,7 +10,7 @@ use crate::worker::{spawn_guarded, WorkerMsg};
 use nif::material::MaterialState;
 use render3d::builtin::Builtin;
 use render3d::locate::{self, Change, Fingerprint};
-use render3d::scene::{Camera, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
+use render3d::scene::{Background, Camera, PointLight, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
 use render3d::{
     EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId, ShapeInfo, ShapeStatus,
 };
@@ -281,6 +281,65 @@ impl Orbit {
     }
 }
 
+/// The "View" controls of the panel: background and lights. Not saved; every start begins at the defaults (the
+/// look the preview always had).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    /// The studio HDRI behind the model (and as ambient light) instead of a flat grey.
+    pub hdri: bool,
+    /// The flat background grey in 0..=1, perceptual (sRGB): 0 = black.
+    pub grey: f32,
+    /// Multiplier on the directional light, 0..=4.
+    pub sun: f32,
+    /// Point light brightness, 0..=4; 0 is off.
+    pub point: f32,
+    /// Point light falloff radius in multiples of the model's bounding radius, [`Look::RADIUS_RANGE`].
+    pub radius: f32,
+}
+
+impl Look {
+    pub const SUN_RANGE: (f32, f32) = (0.0, 4.0);
+    pub const POINT_RANGE: (f32, f32) = (0.0, 4.0);
+    pub const RADIUS_RANGE: (f32, f32) = (0.1, 10.0);
+
+    /// The scene for this look: `camera`, and the point light placed around `bounds` (none loaded: off).
+    pub fn scene(&self, camera: Camera, bounds: Option<([f32; 3], f32)>) -> Scene {
+        let mut s = Scene {
+            camera,
+            background: if self.hdri {
+                Background::Hdri
+            } else {
+                Background::grey(self.grey)
+            },
+            sun_brightness: self.sun.clamp(Self::SUN_RANGE.0, Self::SUN_RANGE.1),
+            ..Scene::neutral()
+        };
+        if let Some(b) = bounds {
+            let radius = self
+                .radius
+                .clamp(Self::RADIUS_RANGE.0, Self::RADIUS_RANGE.1);
+            s.point_light = PointLight::around(
+                b,
+                self.point.clamp(Self::POINT_RANGE.0, Self::POINT_RANGE.1),
+                radius,
+            );
+        }
+        s
+    }
+}
+
+impl Default for Look {
+    fn default() -> Look {
+        Look {
+            hdri: false,
+            grey: 0.0,
+            sun: 1.0,
+            point: 0.0,
+            radius: 2.0,
+        }
+    }
+}
+
 /// Commands to the render thread.
 pub enum V3Cmd {
     SetShaders(Fingerprint),
@@ -314,6 +373,7 @@ pub enum V3Cmd {
         camera: Camera,
         w: u32,
         h: u32,
+        look: Look,
     },
 }
 
@@ -372,6 +432,8 @@ pub const SPINNER_DELAY: Duration = Duration::from_millis(300);
 pub struct Viewport3d {
     pub state: V3State,
     pub orbit: Orbit,
+    /// Background and light controls; changing one re-renders (never reloads).
+    pub look: Look,
     pub report: Option<LoadReport>,
     /// The moved/renamed question (`Change::Moved`).
     pub popup: Option<Change>,
@@ -397,7 +459,7 @@ pub struct Viewport3d {
     need_load: bool,
     loaded: Option<u64>,
     pending_load: Option<u64>,
-    last_sent: Option<(Camera, u32, u32, u64)>,
+    last_sent: Option<(Camera, u32, u32, u64, Look)>,
     render_sent: u64,
     render_done: u64,
     edits_sent: u64,
@@ -424,6 +486,7 @@ impl Viewport3d {
         Viewport3d {
             state: V3State::Ready,
             orbit: Orbit::default(),
+            look: Look::default(),
             report: None,
             popup: None,
             features_on: true,
@@ -780,12 +843,22 @@ impl Viewport3d {
             return;
         }
         let camera = self.orbit.camera(self.bounds);
-        let want = (camera, w, h, loaded);
+        let look = self.look;
+        let want = (camera, w, h, loaded, look);
         if self.last_sent == Some(want) {
             return;
         }
         let id = self.id();
-        if thread.send(V3Cmd::Render { id, camera, w, h }).is_ok() {
+        if thread
+            .send(V3Cmd::Render {
+                id,
+                camera,
+                w,
+                h,
+                look,
+            })
+            .is_ok()
+        {
             self.last_sent = Some(want);
             self.render_sent = id;
             self.state = V3State::Rendering;
@@ -1197,8 +1270,14 @@ fn render_loop(
                     pending.push((content, id, material));
                     None
                 }
-                V3Cmd::Render { id, camera, w, h } => {
-                    render = Some((id, camera, w, h));
+                V3Cmd::Render {
+                    id,
+                    camera,
+                    w,
+                    h,
+                    look,
+                } => {
+                    render = Some((id, camera, w, h, look));
                     None
                 }
             };
@@ -1247,13 +1326,10 @@ fn render_loop(
                 send(V3Reply::Shapes(r.shapes()));
             }
         }
-        let Some((id, camera, w, h)) = render else {
+        let Some((id, camera, w, h, look)) = render else {
             continue;
         };
-        let scene = Scene {
-            camera,
-            ..Scene::neutral()
-        };
+        let scene = look.scene(camera, r.bounds());
         let mut result = r.render(&scene, w, h);
         if let Err(e) = &result {
             if e.starts_with(render3d::device::DEVICE_REMOVED) {

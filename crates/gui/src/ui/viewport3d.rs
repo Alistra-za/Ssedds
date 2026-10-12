@@ -2,8 +2,8 @@
 //! orbit changes and uploads a new frame into an egui texture when its id changes (P0 CPU path).
 use crate::model::meshes::LE_WARNING;
 use crate::model::viewport3d::{
-    moved_text, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER, FEATURES_LABEL, FRAME_LABEL,
-    KEEP_OLD, NOT_FOUND, USE_NEW,
+    moved_text, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER, FEATURES_LABEL,
+    FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
 use render3d::locate::Change;
@@ -31,6 +31,7 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
             ui.spinner();
         }
     });
+    look_controls(ui, &mut v.look);
     if let Some(n) = v.notice.clone() {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(AMBER, n);
@@ -68,6 +69,53 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
     }
+}
+
+/// The "View" section: background and lights. Each change only re-renders (the model sends a new `Render`).
+fn look_controls(ui: &mut egui::Ui, l: &mut Look) {
+    egui::CollapsingHeader::new("View")
+        .id_salt("viewport3d-look")
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Background");
+                ui.radio_value(&mut l.hdri, false, "Solid");
+                ui.radio_value(&mut l.hdri, true, "Studio HDRI");
+                if !l.hdri {
+                    let mut pct = l.grey * 100.0;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut pct, 0.0..=100.0)
+                                .suffix(" %")
+                                .text("Grey"),
+                        )
+                        .changed()
+                    {
+                        l.grey = pct / 100.0;
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::Slider::new(&mut l.sun, Look::SUN_RANGE.0..=Look::SUN_RANGE.1)
+                        .text("Sun brightness"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut l.point, Look::POINT_RANGE.0..=Look::POINT_RANGE.1)
+                        .text("Point light brightness"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut l.radius, Look::RADIUS_RANGE.0..=Look::RADIUS_RANGE.1)
+                        .logarithmic(true)
+                        .text("Point light radius (x model size)"),
+                );
+                if ui.small_button("Reset view").clicked() {
+                    *l = Look::default();
+                }
+            });
+            if l.hdri {
+                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light");
+            }
+        });
 }
 
 /// The frame, sized to the space left; asks the model for a frame of that size (physical pixels).

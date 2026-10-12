@@ -964,3 +964,96 @@ fn the_spinner_needs_300_ms_of_continuous_work_and_resets_when_idle() {
     assert!(!v.show_spinner(t1 + Duration::from_millis(100)));
     assert!(v.show_spinner(t1 + Duration::from_millis(300)));
 }
+
+// ---- M2: background and light controls ----
+
+/// A viewport with a loaded mesh and its first Render already sent and drained.
+fn rendered() -> (Viewport3d, std::sync::mpsc::Receiver<v3::V3Cmd>) {
+    let d = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::new(Some(fp(d.path(), "CS", "a")));
+    v.on_located(Ok(Some(fp(d.path(), "CS", "a"))));
+    let cmds = v.attach_test_thread();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Load { id, .. } = cmds.try_recv().unwrap() else {
+        panic!("load first")
+    };
+    v.handle(v3::V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 2.0)),
+    });
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    (v, cmds)
+}
+
+#[test]
+fn changing_the_look_sends_a_render_and_no_load() {
+    let (mut v, cmds) = rendered();
+    // Nothing changed: nothing is sent.
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err());
+    for change in [
+        (|l: &mut v3::Look| l.hdri = true) as fn(&mut v3::Look),
+        |l| l.grey = 0.5,
+        |l| l.sun = 2.0,
+        |l| l.point = 1.5,
+        |l| l.radius = 4.0,
+    ] {
+        change(&mut v.look);
+        let want = v.look;
+        v.request_frame(64, 64);
+        match cmds.try_recv() {
+            Ok(v3::V3Cmd::Render { look, .. }) => assert_eq!(look, want),
+            Ok(_) => panic!("a look change must only render"),
+            Err(e) => panic!("no command for {want:?}: {e}"),
+        }
+        assert!(cmds.try_recv().is_err(), "exactly one command");
+    }
+    assert!(v.busy(), "the render is in flight");
+}
+
+#[test]
+fn the_default_look_is_the_unchanged_scene() {
+    use render3d::scene::{Background, Camera, Scene};
+    let l = v3::Look::default();
+    assert_eq!(l.scene(Camera::Auto, None), Scene::neutral());
+    // With bounds the point light is placed but off.
+    let s = l.scene(Camera::Auto, Some(([1.0, 2.0, 3.0], 2.0)));
+    assert_eq!(s.point_light.brightness, 0.0);
+    assert_eq!(s.background, Background::Solid(0.0));
+    let on = v3::Look {
+        hdri: true,
+        sun: 9.0,
+        point: 1.0,
+        radius: 2.0,
+        ..l
+    }
+    .scene(Camera::Auto, Some(([1.0, 2.0, 3.0], 2.0)));
+    assert_eq!(on.background, Background::Hdri);
+    assert_eq!(on.sun_brightness, 4.0, "clamped to the slider range");
+    assert_eq!(on.point_light.brightness, 1.0);
+    assert!(
+        (on.point_light.radius - 4.0).abs() < 1e-5,
+        "2 x bounds radius 2"
+    );
+}
+
+#[test]
+fn view_section_offers_background_and_lights() {
+    let mut h = harness(Viewport3d::with_state(V3State::Ready));
+    h.run();
+    h.get_by_label("View").click();
+    h.run();
+    h.get_by_label("Solid");
+    h.get_by_label("Studio HDRI").click();
+    h.run();
+    assert!(h.state().look.hdri);
+    h.get_by_label("Reset view").click();
+    h.run();
+    assert_eq!(h.state().look, v3::Look::default());
+}
