@@ -2064,3 +2064,154 @@ fn packed_maps_reject_rgba16f() {
         j.warnings
     );
 }
+
+/// Resolve `textures/a/x.png` (opaque RGBA8) under cs with the given `--set`s.
+fn m6_job(sets_cli: &[&str]) -> ResolvedJob {
+    run(
+        Target::Cs,
+        "textures/a/x.png",
+        None,
+        &[],
+        opaque(),
+        sets_cli,
+        &[],
+    )
+}
+
+fn cfg_invalid(j: &ResolvedJob) -> Vec<&str> {
+    j.warnings
+        .iter()
+        .filter(|w| w.code == Code::CfgInvalid)
+        .map(|w| w.message.as_str())
+        .collect()
+}
+
+/// S-mips-2: tent, Mitchell and Kaiser on sRGB colour without alpha weighting.
+#[test]
+fn kaiser_on_srgb_diffuse_without_alpha_is_allowed() {
+    for alpha in ["remove", "data"] {
+        for f in ["tent", "mitchell", "kaiser"] {
+            let (a, m) = (format!("alpha.policy={alpha}"), format!("mips.filter={f}"));
+            let j = m6_job(&["subtype=diffuse", &a, &m]);
+            assert!(cfg_invalid(&j).is_empty(), "{alpha} {f}: {:?}", j.warnings);
+        }
+    }
+}
+
+#[test]
+fn non_box_filters_are_cfg_invalid_outside_srgb_colour() {
+    for st in [
+        "normal",
+        "pbr_normal",
+        "msn",
+        "flow",
+        "rmaos",
+        "generic_data",
+        "height",
+        "envmask",
+    ] {
+        for f in ["tent", "mitchell", "kaiser"] {
+            let (s, m) = (format!("subtype={st}"), format!("mips.filter={f}"));
+            let j = m6_job(&[&s, &m]);
+            let id = format!("mips.filter = {f}: ");
+            assert!(
+                cfg_invalid(&j)
+                    .iter()
+                    .any(|m| m.starts_with(&id) && m.contains("sRGB colour only")),
+                "{st} {f}: {:?}",
+                j.warnings
+            );
+        }
+    }
+}
+
+#[test]
+fn alpha_weighted_colour_keeps_box() {
+    for alpha in ["cutout", "blend", "cutout_blend"] {
+        let a = format!("alpha.policy={alpha}");
+        let j = m6_job(&["subtype=diffuse", &a, "mips.filter=kaiser"]);
+        assert!(
+            cfg_invalid(&j)
+                .iter()
+                .any(|m| m.contains("alpha-weighted box")),
+            "{alpha}: {:?}",
+            j.warnings
+        );
+    }
+}
+
+/// S-mips-2 with F2/M9: an HDR format (`is_hdr()`, set explicitly so the source rule does not pick BC7) on a
+/// colour or HDR sub-type without alpha weighting takes tent; every other non-box case is CFG-INVALID.
+#[test]
+fn hdr_allows_tent_only() {
+    for fmt in ["bc6h_uf16", "rgba16f"] {
+        for st in ["pbr_emissive", "hdr_sky"] {
+            for f in ["tent", "mitchell", "kaiser"] {
+                let (s, ff, m) = (
+                    format!("subtype={st}"),
+                    format!("format={fmt}"),
+                    format!("mips.filter={f}"),
+                );
+                let j = m6_job(&[&s, &ff, "color.tag=n/a", "alpha.policy=remove", &m]);
+                let bad = cfg_invalid(&j);
+                if f == "tent" {
+                    assert!(bad.is_empty(), "{fmt} {st} {f}: {:?}", j.warnings);
+                } else {
+                    assert!(
+                        bad.iter().any(|m| m.contains("box or tent")),
+                        "{fmt} {st} {f}: {:?}",
+                        j.warnings
+                    );
+                }
+            }
+        }
+    }
+    // F2: alpha-weighted HDR colour keeps the alpha-weighted box.
+    for alpha in ["cutout", "blend", "cutout_blend"] {
+        let a = format!("alpha.policy={alpha}");
+        let j = m6_job(&[
+            "subtype=pbr_emissive",
+            "format=rgba16f",
+            "color.tag=n/a",
+            &a,
+            "mips.filter=tent",
+        ]);
+        assert!(
+            cfg_invalid(&j)
+                .iter()
+                .any(|m| m.contains("alpha-weighted box")),
+            "{alpha}: {:?}",
+            j.warnings
+        );
+    }
+    // F2: HDR-format normals and grayscale keep box (spec §5.5).
+    for st in ["normal", "height", "envmask"] {
+        for fmt in ["bc6h_uf16", "rgba16f"] {
+            let (s, ff) = (format!("subtype={st}"), format!("format={fmt}"));
+            let j = m6_job(&[&s, &ff, "color.tag=n/a", "mips.filter=tent"]);
+            assert!(
+                cfg_invalid(&j).iter().any(
+                    |m| m.starts_with("mips.filter = tent: ") && m.contains("sRGB colour only")
+                ),
+                "{st} {fmt}: {:?}",
+                j.warnings
+            );
+        }
+    }
+}
+
+#[test]
+fn linear_content_colour_keeps_box() {
+    let j = m6_job(&[
+        "subtype=diffuse",
+        "color.content=linear",
+        "mips.filter=kaiser",
+    ]);
+    assert!(
+        cfg_invalid(&j)
+            .iter()
+            .any(|m| m.starts_with("mips.filter = kaiser: ")),
+        "{:?}",
+        j.warnings
+    );
+}

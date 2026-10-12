@@ -1115,6 +1115,13 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             ),
         );
     }
+    if let Err(why) = crate::filter::filter_allowed(p) {
+        let id = serde_json::to_value(p.mips.filter).unwrap_or_default();
+        add(
+            CfgInvalid,
+            format!("mips.filter = {}: {why}", id.as_str().unwrap_or("?")),
+        );
+    }
     let srgb = p.srgb_tag();
     if srgb && p.target != Target::Cs {
         add(

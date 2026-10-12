@@ -304,9 +304,19 @@
       ],
       "type": "string"
     },
+    "MipEdge": {
+      "enum": [
+        "wrap",
+        "clamp"
+      ],
+      "type": "string"
+    },
     "MipFilter": {
       "enum": [
-        "box"
+        "box",
+        "tent",
+        "mitchell",
+        "kaiser"
       ],
       "type": "string"
     },
@@ -341,6 +351,10 @@
         "coverage": {
           "$ref": "#/$defs/CoverageMode",
           "description": "Coverage preservation (spec §5.5). It only ever applies to the alpha-tested policies `cutout` and\n`cutout_blend`: `auto` and `on` both enable it there, `off` disables it, and on any other policy (`blend`,\n`data`, `remove`) every mode is a no-op, because blended alpha must keep box-averaged opacity."
+        },
+        "edge": {
+          "$ref": "#/$defs/MipEdge",
+          "description": "Edge handling of the mip filter taps: read only by tent, Mitchell and Kaiser (spec §3.2)."
         },
         "filter": {
           "$ref": "#/$defs/MipFilter"
@@ -427,6 +441,13 @@
         "prefer"
       ],
       "type": "object"
+    },
+    "ResizeMode": {
+      "enum": [
+        "none",
+        "pot-down"
+      ],
+      "type": "string"
     },
     "SearchRadius": {
       "enum": [
@@ -543,6 +564,10 @@
     },
     "packing": {
       "$ref": "#/$defs/PackingSpec"
+    },
+    "resize": {
+      "$ref": "#/$defs/ResizeMode",
+      "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
     },
     "subtype": {
       "$ref": "#/$defs/Subtype"

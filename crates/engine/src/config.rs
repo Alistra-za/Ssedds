@@ -3,11 +3,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 macro_rules! cfg_enum {
-    ($(#[$m:meta])* $name:ident, $case:literal { $($v:ident $(= $ren:literal)?),+ $(,)? }) => {
+    ($(#[$m:meta])* $name:ident, $case:literal { $($(#[$vm:meta])* $v:ident $(= $ren:literal)?),+ $(,)? }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
         #[serde(rename_all = $case)]
         $(#[$m])*
-        pub enum $name { $($(#[serde(rename = $ren)])? $v),+ }
+        pub enum $name { $($(#[$vm])* $(#[serde(rename = $ren)])? $v),+ }
     };
 }
 
@@ -70,7 +70,19 @@ cfg_enum!(AlphaPolicy, "snake_case" { Remove, Cutout, Blend, CutoutBlend, Data }
 cfg_enum!(AlphaCompare, "lowercase" { Gt, Ge });
 cfg_enum!(GraySource, "lowercase" { R, Luma });
 cfg_enum!(MipKeyword, "lowercase" { Full, None });
-cfg_enum!(MipFilter, "lowercase" { Box });
+cfg_enum!(MipFilter, "lowercase" { Box, Tent, Mitchell, Kaiser });
+cfg_enum!(#[derive(Default)] MipEdge, "lowercase" { #[default] Wrap, Clamp });
+cfg_enum!(#[derive(Default)] ResizeMode, "kebab-case" { #[default] None, PotDown });
+impl MipEdge {
+    pub fn is_wrap(&self) -> bool {
+        *self == MipEdge::Wrap
+    }
+}
+impl ResizeMode {
+    pub fn is_none(&self) -> bool {
+        *self == ResizeMode::None
+    }
+}
 cfg_enum!(NormalMips, "snake_case" { Renormalize, RenormalizeBake });
 cfg_enum!(NormalBase, "lowercase" { Renormalize, Keep });
 cfg_enum!(CoverageMode, "lowercase" { Auto, On, Off });
@@ -373,6 +385,9 @@ pub struct ChannelSpec {
 pub struct MipSpec {
     pub levels: MipLevels,
     pub filter: MipFilter,
+    /// Edge handling of the mip filter taps: read only by tent, Mitchell and Kaiser (spec §3.2).
+    #[serde(default, skip_serializing_if = "MipEdge::is_wrap")]
+    pub edge: MipEdge,
     pub normal: NormalMips,
     /// Mip 0 of a normal map (spec §5.4, DECISIONS R1): `renormalize` (default) stores every base vector at unit
     /// length; `keep` stores the source as authored. Read only for the Normal category.
@@ -429,6 +444,9 @@ pub struct Profile {
     pub mips: MipSpec,
     pub format: Format,
     pub header: HeaderForm,
+    /// Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis.
+    #[serde(default, skip_serializing_if = "ResizeMode::is_none")]
+    pub resize: ResizeMode,
     pub encoder: EncoderSpec,
     pub validation: ValidationSpec,
     pub packing: PackingSpec,
@@ -608,5 +626,47 @@ mod tests {
             ),
             (4, 8)
         );
+    }
+
+    #[test]
+    fn m6_mip_and_resize_ids_match_the_spec() {
+        for (f, id) in [
+            (MipFilter::Box, "box"),
+            (MipFilter::Tent, "tent"),
+            (MipFilter::Mitchell, "mitchell"),
+            (MipFilter::Kaiser, "kaiser"),
+        ] {
+            assert_eq!(serde_json::to_value(f).unwrap(), id);
+        }
+        assert_eq!(serde_json::to_value(MipEdge::Clamp).unwrap(), "clamp");
+        assert_eq!(
+            serde_json::to_value(ResizeMode::PotDown).unwrap(),
+            "pot-down"
+        );
+        assert_eq!(serde_json::to_value(ResizeMode::None).unwrap(), "none");
+    }
+
+    #[test]
+    fn default_edge_and_resize_are_not_serialised() {
+        // S-mips-9: profile_sha256 must not change for unchanged settings.
+        let p = crate::presets::PresetRegistry::builtin()
+            .unwrap()
+            .profile("cs-quality", Target::Cs, Subtype::Diffuse)
+            .unwrap();
+        assert_eq!((p.mips.edge, p.resize), (MipEdge::Wrap, ResizeMode::None));
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(
+            v.get("resize").is_none() && v["mips"].get("edge").is_none(),
+            "{v}"
+        );
+        let mut q = p.clone();
+        q.resize = ResizeMode::PotDown;
+        q.mips.edge = MipEdge::Clamp;
+        let v = serde_json::to_value(&q).unwrap();
+        assert_eq!(
+            (v["resize"].as_str(), v["mips"]["edge"].as_str()),
+            (Some("pot-down"), Some("clamp"))
+        );
+        assert_eq!(serde_json::from_value::<Profile>(v).unwrap(), q);
     }
 }

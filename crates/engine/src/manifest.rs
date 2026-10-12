@@ -365,3 +365,23 @@ pub fn profile_sha256(p: &Profile) -> Result<String, serde_json::Error> {
     }
     sha256_json(p)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Target;
+
+    #[test]
+    fn profile_hash_is_unchanged_by_the_m6_fields() {
+        let p = PresetRegistry::builtin()
+            .unwrap()
+            .profile("cs-quality", Target::Cs, Subtype::Diffuse)
+            .unwrap();
+        let mut v = serde_json::to_value(&p).unwrap();
+        v["resize"] = "none".into();
+        v["mips"]["edge"] = "wrap".into();
+        let q: Profile = serde_json::from_value(v).unwrap();
+        assert_eq!(q, p);
+        assert_eq!(profile_sha256(&p).unwrap(), profile_sha256(&q).unwrap());
+    }
+}
