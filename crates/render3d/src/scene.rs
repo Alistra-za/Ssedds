@@ -4,6 +4,7 @@
 //! capture (`tools/rdc-out/p04/Skyrim_AE_1.6.1170_frame11178/state_6544.json`, Linear Lighting on) so a
 //! zero-initialised cbuffer never zeroes a multiplier (directional/ambient light, colour clamp …).
 use crate::cbuffer::{CbWriter, Field};
+use crate::cs_settings::write_feature_data;
 
 /// Row-major 3×4 (`row r = [m_r0, m_r1, m_r2, t_r]`).
 pub type Mat3x4 = [[f32; 4]; 3];
@@ -367,7 +368,8 @@ pub fn rows<const R: usize>(m: &[[f32; 4]; R]) -> Vec<f32> {
 /// TruePBR micro-shadows) plus the CS Skin / Hair blocks for when those features are compiled. Values from
 /// `state_6544.json` (frame11178).
 ///
-/// These are the owner's CS SettingsUser.json / frame-11178 weather values; P1 reads them per user.
+/// CS 1.9 values observed in capture 11178: the fallback for every setting the user's files lack (C7,
+/// [`crate::cs_settings::feature_data`]).
 pub const FEATURE_FLOATS: &[(&str, &[f32])] = &[
     ("linearLightingSettings.diffuseGamma", &[2.2]),
     ("linearLightingSettings.directionalLightMult", &[1.0]),
@@ -418,7 +420,7 @@ pub const FEATURE_FLOATS: &[(&str, &[f32])] = &[
     ("skinData.physicalParams", &[1.3, 0.75, 1.0, 1.0]),
     ("skinData.wetParams", &[512.0, 0.7, 10.0, 4.0]),
 ];
-/// Owner's CS SettingsUser.json / frame-11178 values (see [`FEATURE_FLOATS`]); P1 reads them per user.
+/// CS 1.9 values observed in capture 11178 (see [`FEATURE_FLOATS`]).
 pub const FEATURE_UINTS: &[(&str, u32)] = &[
     ("vanillaFresnelSettings.Enable", 1),
     ("vanillaFresnelSettings.EnableEyeSpecialHandling", 1),
@@ -444,8 +446,15 @@ pub const REQUIRED: &[&str] = &[
 
 impl Scene {
     /// Writes the scene and camera into one cbuffer (any stage, any slot); fields the layout lacks are
-    /// skipped. `model` is the shape's `Mesh.transform`. Returns the names this writer accepted.
-    pub fn write(&self, w: &mut CbWriter, v: &View, model: &Mat3x4) -> Vec<&'static str> {
+    /// skipped. `model` is the shape's `Mesh.transform`; `feature_values` the FeatureData values
+    /// ([`crate::cs_settings::feature_data`]). Returns the names this writer accepted.
+    pub fn write(
+        &self,
+        w: &mut CbWriter,
+        v: &View,
+        model: &Mat3x4,
+        feature_values: &[(String, Vec<f64>)],
+    ) -> Vec<&'static str> {
         let mut ok = vec![];
         let mut put = |w: &mut CbWriter, name: &'static str, data: &[f32]| {
             if w.set(name, data) {
@@ -526,12 +535,7 @@ impl Scene {
         if w.set_u32("InInterior", &[1]) {
             ok.push("InInterior");
         }
-        for (n, d) in FEATURE_FLOATS {
-            w.set(n, d);
-        }
-        for (n, d) in FEATURE_UINTS {
-            w.set_u32(n, &[*d]);
-        }
+        write_feature_data(w, feature_values);
         ok
     }
 }
@@ -731,7 +735,7 @@ impl SceneFields {
 /// Every field [`Scene::write`] writes that depends on neither the camera nor the lights: constants and the
 /// FeatureData block (03 §7 "static"). Written when a draw is built and after every material rewrite (the
 /// rewrite zeroes the whole writer).
-pub fn write_static(w: &mut CbWriter) {
+pub fn write_static(w: &mut CbWriter, feature_values: &[(String, Vec<f64>)]) {
     // Camera-relative: the eye is the origin.
     w.set("EyePosition", &[0.0, 0.0, 0.0, 0.0]);
     // Vertex fog off: FogParam.w (max fog) = 0, and log2 of 0 → exp2(−inf) = 0, no NaN.
@@ -746,12 +750,7 @@ pub fn write_static(w: &mut CbWriter) {
     w.set("DynamicResolutionParams1", &[1.0; 4]);
     w.set("DynamicResolutionParams2", &[1.0; 4]);
     w.set_u32("InInterior", &[1]);
-    for (n, d) in FEATURE_FLOATS {
-        w.set(n, d);
-    }
-    for (n, d) in FEATURE_UINTS {
-        w.set_u32(n, &[*d]);
-    }
+    write_feature_data(w, feature_values);
 }
 
 #[cfg(test)]
@@ -811,7 +810,7 @@ mod tests {
             [0.0, 2.0, 0.0, 20.0],
             [0.0, 0.0, 2.0, 30.0],
         ];
-        Scene::neutral().write(&mut w, &v, &model);
+        Scene::neutral().write(&mut w, &v, &model, &[]);
         let f = |o: usize| f32::from_le_bytes(w.bytes()[o..o + 4].try_into().unwrap());
         // Row r of the nifly transform is register c<r>: [m_r0, m_r1, m_r2, t_r − eye_r].
         assert_eq!([f(0), f(4), f(8), f(12)], [2.0, 0.0, 0.0, 9.0]);

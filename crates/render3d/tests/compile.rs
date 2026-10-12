@@ -446,3 +446,36 @@ fn reflection_reports_member_kinds() {
     assert_eq!(w.kind("hairSpecularSettings.Enabled"), Some(VarKind::Uint));
     assert_eq!(w.kind("notInThisBuild"), None);
 }
+
+/// C6, read back from the writer's bytes: a `uint` member gets the integer's bit pattern (1, not 0x3F800000), a
+/// `float` member the f32's, `int` two's complement, `bool` 1; a name the layout lacks is skipped.
+#[test]
+fn feature_data_writes_reflected_kinds() {
+    let cache = tempfile::tempdir().unwrap();
+    let l = feature_kinds_layout(cache.path());
+    let mut w = render3d::cbuffer::CbWriter::new(&l);
+    render3d::cs_settings::write_feature_data(
+        &mut w,
+        &[
+            ("hairSpecularSettings.Enabled".into(), vec![1.0]),
+            ("hairSpecularSettings.HairGlossiness".into(), vec![70.0]),
+            ("hairSpecularSettings.Signed".into(), vec![-2.0]),
+            ("hairSpecularSettings.Flag".into(), vec![1.0]),
+            ("skinParams".into(), vec![0.7, 0.35, 1.0, 1.0]),
+            ("notInThisBuild".into(), vec![5.0]),
+        ],
+    );
+    let word = |n: &str, i: usize| {
+        let at = w.resolve(n).unwrap().off as usize + 4 * i;
+        u32::from_le_bytes(w.bytes()[at..at + 4].try_into().unwrap())
+    };
+    assert_eq!(word("hairSpecularSettings.Enabled", 0), 1);
+    assert_eq!(
+        word("hairSpecularSettings.HairGlossiness", 0),
+        70.0f32.to_bits()
+    );
+    assert_eq!(word("hairSpecularSettings.Signed", 0), (-2i32) as u32);
+    assert_eq!(word("hairSpecularSettings.Flag", 0), 1);
+    assert_eq!(word("skinParams", 0), 0.7f32.to_bits());
+    assert_eq!(word("skinParams", 3), 1.0f32.to_bits());
+}

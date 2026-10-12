@@ -164,10 +164,16 @@ impl ShapeDraw {
 
     /// P0's writer, kept as the reference for the pixel-identity test: the whole scene by name into every
     /// cbuffer, every frame, and every cbuffer uploaded. Returns the number of uploads.
-    pub fn update_by_name(&mut self, gpu: &Gpu, scene: &Scene, view: &View) -> usize {
+    pub fn update_by_name(
+        &mut self,
+        gpu: &Gpu,
+        scene: &Scene,
+        view: &View,
+        feature_values: &[(String, Vec<f64>)],
+    ) -> usize {
         let mut uploads = 0;
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
-            scene.write(&mut cb.writer, view, &self.model);
+            scene.write(&mut cb.writer, view, &self.model, feature_values);
             upload(gpu, cb);
             cb.dirty = false;
             uploads += 1;
@@ -178,11 +184,16 @@ impl ShapeDraw {
 
     /// A cbuffer edit (03 §1.3): every writer back to zero, then the material and the static block, so no field
     /// of the previous material survives. The light and view fields come back with the next update (`stale`).
-    pub fn rewrite_material(&mut self, m: &MaterialState, linear_lighting: bool) {
+    pub fn rewrite_material(
+        &mut self,
+        m: &MaterialState,
+        linear_lighting: bool,
+        feature_values: &[(String, Vec<f64>)],
+    ) {
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
             cb.writer.zero();
             write_material(&mut cb.writer, m, &self.bound, linear_lighting);
-            write_static(&mut cb.writer);
+            write_static(&mut cb.writer, feature_values);
             cb.dirty = true;
         }
         self.blend = m.blend();

@@ -1,6 +1,9 @@
 //! The user's Community Shaders settings (03 §3): `SettingsUser.json` over `SettingsDefault.json` per key, which
 //! features CS loaded (`ShaderCache/Info.ini`, else `Shaders/Features/*.ini` minus "Disable at Boot"), a change
 //! hash, and the feature defines the preview compiles. Never fails: problems become notes and fallbacks.
+use crate::cbuffer::CbWriter;
+use crate::compile::VarKind;
+use crate::scene::{FEATURE_FLOATS, FEATURE_UINTS};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -235,4 +238,230 @@ fn settings_hash(user: Option<&[u8]>, default: Option<&[u8]>, info: Option<&[u8]
         }
     }
     hex::encode(h.finalize())
+}
+
+/// JSON section → FeatureData struct prefix, with the keys whose struct field is named differently (C5).
+type Section = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+const SECTIONS: &[Section] = &[
+    ("Linear Lighting", "linearLightingSettings", &[]),
+    ("Hair Specular", "hairSpecularSettings", &[]),
+    ("Vanilla Fresnel", "vanillaFresnelSettings", &[]),
+    ("True PBR", "truePBRSettings", &[]),
+    (
+        "Extended Materials",
+        "extendedMaterialSettings",
+        &[("EnableTerrain", "EnableTerrainParallax")],
+    ),
+    (
+        "Extended Translucency",
+        "extendedTranslucencySettings",
+        &[
+            ("AlphaMode", "MaterialModel"),
+            ("AlphaReduction", "Reduction"),
+            ("AlphaSoftness", "Softness"),
+            ("AlphaStrength", "Strength"),
+        ],
+    ),
+];
+
+/// Linear Lighting's `diffuseCurve` (C4, no settings key): the inverse of CS's DiffuseToWorking curve at mid
+/// grey. `x = 0.5^gamma; mid·(1−x) / (x·(white−mid))`.
+pub fn diffuse_curve(gamma: f64, mid: f64, white: f64) -> f64 {
+    let x = 0.5f64.powf(gamma);
+    mid * (1.0 - x) / (x * (white - mid))
+}
+
+/// FeatureData values by cbuffer name, raw numbers (the writer types them from the reflection): the
+/// capture-11178 constants, overwritten by every number the settings have (C7: a missing file or key keeps the
+/// constant). Names this CS build lacks are dropped at write time.
+pub fn feature_data(s: &CsSettings) -> Vec<(String, Vec<f64>)> {
+    let mut out: Vec<(String, Vec<f64>)> = FEATURE_FLOATS
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.iter().map(|x| f64::from(*x)).collect()))
+        .chain(
+            FEATURE_UINTS
+                .iter()
+                .map(|(n, u)| (n.to_string(), vec![f64::from(*u)])),
+        )
+        .collect();
+    for (section, prefix, renames) in SECTIONS {
+        let Some(Value::Object(m)) = s.merged.get(*section) else {
+            continue;
+        };
+        for (key, v) in m {
+            let field = renames
+                .iter()
+                .find(|r| r.0 == key.as_str())
+                .map_or(key.as_str(), |r| r.1);
+            let vals: Vec<f64> = match v {
+                Value::Array(a) => a.iter().filter_map(num).collect(),
+                v => num(v).into_iter().collect(),
+            };
+            if !vals.is_empty() {
+                put(&mut out, &format!("{prefix}.{field}"), vals);
+            }
+        }
+    }
+    let ll = |k: &str| setting(&s.merged, "Linear Lighting", k);
+    if let (Some(gamma), Some(mid)) = (ll("diffuseGamma"), ll("diffuseMidReflectance")) {
+        let white = ll("diffuseWhiteReflectance").unwrap_or(1.0);
+        put(
+            &mut out,
+            "linearLightingSettings.diffuseCurve",
+            vec![diffuse_curve(gamma, mid, white)],
+        );
+    }
+    // C4 / spec §2.2: the installed CS uploads π whatever the setting says (capture 11178).
+    put(
+        &mut out,
+        "linearLightingSettings.pointLightMult",
+        vec![f64::from(std::f32::consts::PI)],
+    );
+    put(
+        &mut out,
+        "linearLightingSettings.isMainOrLoadingMenu",
+        vec![0.0],
+    );
+    if let Some(Value::Object(skin)) = s.merged.get("Advanced Skin") {
+        pack_skin(skin, &mut out);
+    }
+    // C2: the PS reads the profile from `SkinPerGeometry` (b7), not FeatureData (Skin.hlsli:21-31). No skin
+    // extra / wetness / sk textures in the preview: flags 0; per-geometry wetness 0 (Skin.hlsli:254 returns 0).
+    let profile: Vec<(String, Vec<f64>)> = out
+        .iter()
+        .filter_map(|(n, v)| {
+            n.strip_prefix("skinData.")
+                .map(|f| (format!("skinPerGeometryProfile.{f}"), v.clone()))
+        })
+        .collect();
+    out.extend(profile);
+    out.push(("skinPerGeometry".into(), vec![0.0; 4]));
+    out.push(("skinMaterialFlags".into(), vec![0.0; 4]));
+    out
+}
+
+fn put(out: &mut Vec<(String, Vec<f64>)>, name: &str, vals: Vec<f64>) {
+    match out.iter_mut().find(|(n, _)| n == name) {
+        Some(slot) => slot.1 = vals,
+        None => out.push((name.to_string(), vals)),
+    }
+}
+
+/// `"Advanced Skin"` → `skinData.*` (C5). Source keys follow how the installed CS Lighting.hlsl / Skin.hlsli read
+/// each component (line refs: CS 2026-10-03); a key the files lack keeps the capture-11178 component.
+fn pack_skin(skin: &Map<String, Value>, out: &mut [(String, Vec<f64>)]) {
+    let profile = skin.get("DefaultProfile");
+    let p = |k: &str| profile.and_then(|d| d.get(k)).and_then(num);
+    let top = |k: &str| skin.get(k).and_then(num);
+    // shortcut: tiling × body multiplier is inferred from the captured 20 = 10 × 2 (the shader only reads the
+    // product, :1673); revisit if a capture with BodyTilingMultiplier ≠ 2 disagrees.
+    let tiling = p("SkinDetailTiling")
+        .zip(p("BodyTilingMultiplier"))
+        .map(|(t, b)| t * b);
+    let packed = [
+        // x roughness, y secondary roughness (:1969-1970), z × glossiness (:1969), w skin on (:1365).
+        (
+            "skinParams",
+            [
+                p("SkinMainRoughness"),
+                p("SkinSecondRoughness"),
+                p("SkinSpecularTexMultiplier"),
+                top("EnableSkin"),
+            ],
+        ),
+        // x secondary specular (:1977), y extra wetness (:1666, :2190), z F0 (:1979), w base colour × (:1555).
+        (
+            "skinParams2",
+            [
+                p("SecondarySpecularStrength"),
+                top("ExtraSkinWetness"),
+                p("F0"),
+                p("BaseColorMultiplier"),
+            ],
+        ),
+        // x detail UV tiling (:1673), y wet UV tiling (:1663), z detail strength (:1688), w detail on (:1682).
+        (
+            "skinDetailParams",
+            [
+                tiling,
+                p("BodyTilingMultiplier"),
+                p("SkinDetailStrength"),
+                p("EnableSkinDetail"),
+            ],
+        ),
+        // x·w translucency (Skin.hlsli:166), y width (Skin.hlsli:162), z amount (:3159).
+        (
+            "sssParams",
+            [
+                p("Translucency"),
+                p("sssWidth"),
+                p("SSSAmount"),
+                p("UseSSS"),
+            ],
+        ),
+        // x weight (:1982), y roughness (:1983), z colour (:1984), w edge roughness (:1968).
+        (
+            "fuzzParams",
+            [
+                p("FuzzStrength"),
+                p("FuzzRoughness"),
+                p("FuzzF0"),
+                p("ExtraEdgeRoughness"),
+            ],
+        ),
+        // x, y roughness multipliers (:1972-1973), z specular with a skin-extra map (:1979), w wet response (:2216).
+        (
+            "physicalParams",
+            [
+                p("PhysicalMainRoughnessMultiplier"),
+                p("PhysicalSecondRoughnessMultiplier"),
+                p("PhysicalSpecularStrength"),
+                p("WetResponse"),
+            ],
+        ),
+    ];
+    for (field, comps) in packed {
+        let name = format!("skinData.{field}");
+        if let Some((_, v)) = out.iter_mut().find(|(n, _)| *n == name) {
+            for (dst, c) in v.iter_mut().zip(comps) {
+                if let Some(c) = c {
+                    *dst = c;
+                }
+            }
+        }
+    }
+    if let Some(Value::Array(a)) = skin.get("WetParams") {
+        let w: Vec<f64> = a.iter().filter_map(num).collect();
+        if w.len() == 4 {
+            if let Some(slot) = out.iter_mut().find(|(n, _)| n == "skinData.wetParams") {
+                slot.1 = w;
+            }
+        }
+    }
+}
+
+/// Writes `values` by name, each as its reflected type (C6): float (and unknown) fields as f32, uint and bool
+/// fields as u32, int fields as i32 bits. Names this build's layout lacks are skipped.
+pub fn write_feature_data(w: &mut CbWriter, values: &[(String, Vec<f64>)]) {
+    for (name, v) in values {
+        match w.kind(name) {
+            None => {}
+            Some(VarKind::Float | VarKind::Other) => {
+                let f: Vec<f32> = v.iter().map(|x| *x as f32).collect();
+                w.set(name, &f);
+            }
+            Some(VarKind::Uint | VarKind::Bool) => {
+                let u: Vec<u32> = v.iter().map(|x| *x as u32).collect();
+                w.set_u32(name, &u);
+            }
+            Some(VarKind::Int) => {
+                let u: Vec<u32> = v.iter().map(|x| *x as i32 as u32).collect();
+                w.set_u32(name, &u);
+            }
+        }
+    }
 }

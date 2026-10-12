@@ -1,6 +1,9 @@
 //! P1-C (03 §3, T-S1/T-S2): the user's CS settings files → merged settings, loaded features, change hash and
 //! preview defines. File I/O on fixtures and tempdirs only: never the owner's real files, no GPU.
-use render3d::cs_settings::{preview_defines, read_settings, CsSettings, SettingsPaths};
+use render3d::cs_settings::{
+    diffuse_curve, feature_data, preview_defines, read_settings, CsSettings, SettingsPaths,
+};
+use render3d::scene::{FEATURE_FLOATS, FEATURE_UINTS};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -82,6 +85,14 @@ fn settings_overlay_user_over_default_over_builtin() {
         !s.parse_failed && s.notes.is_empty(),
         "T-S1 notes: {:?}",
         s.notes
+    );
+    let fd = feature_data(&s);
+    assert_eq!(value(&fd, "linearLightingSettings.glowmapMult"), [0.5]);
+    assert_eq!(value(&fd, "linearLightingSettings.ambientMult"), [2.0]);
+    assert_eq!(
+        value(&fd, "linearLightingSettings.directionalLightMult"),
+        [1.0],
+        "built-in (capture 11178) when neither file has it"
     );
     // Owner shape: the nested DefaultProfile merges per key; User's "Disable at Boot" object replaces Default's null.
     let o = read_settings(&paths(true, true, false, None));
@@ -257,4 +268,105 @@ fn preview_defines_follow_loaded_and_switches() {
     });
     assert!(!ll_off.linear_lighting);
     assert!(preview_defines(&ll_off, true).is_empty());
+}
+
+fn value<'a>(fd: &'a [(String, Vec<f64>)], name: &str) -> &'a [f64] {
+    &fd.iter()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("{name} missing"))
+        .1
+}
+
+fn bits(v: &[f64]) -> Vec<u32> {
+    v.iter().map(|x| (*x as f32).to_bits()).collect()
+}
+
+/// Every FEATURE_FLOATS / FEATURE_UINTS value, bit-exact as written to the cbuffer.
+fn assert_constants(fd: &[(String, Vec<f64>)]) {
+    for (n, v) in FEATURE_FLOATS {
+        let want: Vec<u32> = v.iter().map(|x| x.to_bits()).collect();
+        assert_eq!(bits(value(fd, n)), want, "{n}");
+    }
+    for (n, u) in FEATURE_UINTS {
+        assert_eq!(value(fd, n), [f64::from(*u)], "{n}");
+    }
+}
+
+/// T-S3 (C4): the derived diffuseCurve from the owner's diffuseGamma / mid / white reflectance.
+#[test]
+fn diffuse_curve_derivation() {
+    let c = diffuse_curve(2.200000047683716, 0.28717461228370667, 1.0);
+    assert!((c - 1.448_227_7).abs() < 1e-6, "{c}");
+}
+
+/// T-S3: the owner-shaped files reproduce every capture-11178 value; pointLightMult stays π although the file says 1.
+#[test]
+fn owner_settings_reproduce_capture_values() {
+    let s = read_settings(&paths(true, true, true, None));
+    assert_eq!(
+        s.merged["Linear Lighting"]["pointLightMult"].as_f64(),
+        Some(1.0)
+    );
+    let fd = feature_data(&s);
+    assert_constants(&fd);
+    assert_eq!(
+        bits(value(&fd, "linearLightingSettings.pointLightMult")),
+        [std::f32::consts::PI.to_bits()]
+    );
+}
+
+/// No files: exactly today's constants, plus the C2 per-geometry copy and zeros.
+#[test]
+fn default_settings_reproduce_todays_constants() {
+    let fd = feature_data(&CsSettings::default());
+    assert_constants(&fd);
+    for f in [
+        "skinParams",
+        "skinParams2",
+        "skinDetailParams",
+        "sssParams",
+        "fuzzParams",
+        "physicalParams",
+        "wetParams",
+    ] {
+        assert_eq!(
+            value(&fd, &format!("skinPerGeometryProfile.{f}")),
+            value(&fd, &format!("skinData.{f}")),
+            "{f}"
+        );
+    }
+    assert_eq!(value(&fd, "skinPerGeometry"), [0.0; 4]);
+    assert_eq!(value(&fd, "skinMaterialFlags"), [0.0; 4]);
+    assert_eq!(
+        value(&fd, "linearLightingSettings.isMainOrLoadingMenu"),
+        [0.0]
+    );
+}
+
+/// C5: section → struct prefix with the renamed keys; skin packing from the profile.
+#[test]
+fn owner_section_keys_map_to_struct_fields() {
+    let fd = feature_data(&read_settings(&paths(true, true, false, None)));
+    assert_eq!(
+        value(&fd, "extendedTranslucencySettings.MaterialModel"),
+        [3.0]
+    );
+    assert_eq!(
+        bits(value(&fd, "extendedTranslucencySettings.Reduction")),
+        [0.15f32.to_bits()]
+    );
+    assert_eq!(value(&fd, "extendedTranslucencySettings.Strength"), [0.0]);
+    assert_eq!(
+        value(&fd, "extendedMaterialSettings.EnableTerrainParallax"),
+        [0.0]
+    );
+    assert_eq!(value(&fd, "extendedMaterialSettings.EnableParallax"), [1.0]);
+    assert!(!fd.iter().any(|(n, _)| n.ends_with("AlphaMode")));
+    assert_eq!(
+        value(&fd, "skinData.skinDetailParams"),
+        [20.0, 2.0, 0.25, 0.0]
+    );
+    // Default alone has EnableSkinDetail true: detail on.
+    let d = feature_data(&read_settings(&paths(false, true, false, None)));
+    assert_eq!(value(&d, "skinData.skinDetailParams")[3], 1.0);
 }

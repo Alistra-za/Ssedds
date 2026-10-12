@@ -267,6 +267,9 @@ pub struct Renderer {
     uploads: usize,
     /// Test hook: draw with P0's by-name writer (every field, every cbuffer, every frame).
     reference_writer: bool,
+    /// FeatureData values every static block writes ([`cs_settings::feature_data`]); typed at write time from
+    /// the reflection. Default: the capture-11178 constants.
+    feature_values: Vec<(String, Vec<f64>)>,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
     backdrop: Option<Backdrop>,
 }
@@ -347,6 +350,7 @@ impl Renderer {
             last_frame: None,
             uploads: 0,
             reference_writer: false,
+            feature_values: cs_settings::feature_data(&cs_settings::CsSettings::default()),
             backdrop: None,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
@@ -581,7 +585,7 @@ impl Renderer {
         let ll = self.linear_lighting();
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
             write_material(&mut cb.writer, m, &bound, ll);
-            scene::write_static(&mut cb.writer);
+            scene::write_static(&mut cb.writer, &self.feature_values);
         }
         Ok(ShapeDraw {
             name: name.to_string(),
@@ -804,6 +808,7 @@ impl Renderer {
         n.async_compile = self.async_compile;
         n.load_variant = self.load_variant;
         n.reference_writer = self.reference_writer;
+        n.feature_values = std::mem::take(&mut self.feature_values);
         n.compiled = std::mem::take(&mut self.compiled);
         *self = n;
         Ok(())
@@ -1062,7 +1067,7 @@ impl Renderer {
             .get_mut(&id)
             .and_then(|s| s.draw.as_mut())
             .ok_or("no draw")?;
-        d.rewrite_material(m, ll);
+        d.rewrite_material(m, ll, &self.feature_values);
         Ok(())
     }
 
@@ -1206,7 +1211,7 @@ impl Renderer {
                 d.bound.regs.remove(&reg);
             }
             if was != real && applied {
-                d.rewrite_material(&material, ll);
+                d.rewrite_material(&material, ll, &self.feature_values);
             }
             touched.push((id, reg));
         }
@@ -1367,7 +1372,7 @@ impl Renderer {
                     continue;
                 };
                 uploads += if self.reference_writer {
-                    s.update_by_name(gpu, scene, &view)
+                    s.update_by_name(gpu, scene, &view, &self.feature_values)
                 } else {
                     s.update(gpu, &inputs)
                 };
