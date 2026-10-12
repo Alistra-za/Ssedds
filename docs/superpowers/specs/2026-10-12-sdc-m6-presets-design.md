@@ -16,7 +16,7 @@ Owner-approved in chat on 2026-10-12, section by section. Base: `main` 2666bd1 (
 - The GUI gets no preset picker in this track.
 
 **Success:**
-- `sdc convert --preset cs-compact` writes opaque colour maps as BC1 and data maps at half size (never below 512).
+- `sdc convert --preset cs-compact` writes opaque colour maps as BC1 at full size, and every other map except `pbr_emissive` and `hdr_sky` (data maps and colour maps that stay BC7) at half size (never below 512).
 - A preset dropped into `%APPDATA%\sdc\presets\` appears in `sdc presets list` and is usable by `--preset <id>` and in the GUI with no flag.
 - `presets diff`, `presets export` and `presets validate` work on built-in and user presets.
 - Every schema family goes through a migration step before deserialising.
@@ -34,8 +34,8 @@ The new files sit in `presets/` and are embedded with the existing `include_str!
 
 | id | base | target | Description |
 |---|---|---|---|
-| `cs-compact` | `cs-quality` | `cs` | "CS – Compact: BC1 for opaque colour, data maps at half size (min 512)." |
-| `vanilla-compact` | `vanilla-quality` | `vanilla` | "Vanilla – Compact: BC1 for opaque colour, data maps at half size (min 512)." |
+| `cs-compact` | `cs-quality` | `cs` | "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)." |
+| `vanilla-compact` | `vanilla-quality` | `vanilla` | "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)." |
 | `fast-preview` | `sdc-base` | none (any target) | "Fast preview: bc7e fast, smallest-mip validation only. For checking a mod quickly, not for release." |
 
 `fast-preview` gets no `target`, so the batch target decides availability. If the registry requires a target, add one `fast-preview` per target instead (`cs-fast-preview`, `vanilla-fast-preview`) and record that in Note T. The plan checks this first.
@@ -44,11 +44,12 @@ The new files sit in `presets/` and are embedded with the existing `include_str!
 
 - **Colour sub-types:** every sub-type whose `color.content` resolves to `srgb` in `sdc-base`, except `pbr_emissive`, which stays BC6H.
 - **The rule:** preset `[[rules]]` matching `alpha = "none"` (the existing `RuleMatch::alpha`: the source has no alpha, or analysis decided `remove`) and each colour sub-type set `format = "bc1"`.
-- **Colour with alpha:** stays at the inherited `bc7`. BC3 is never used, because it is the same size as BC7.
+- **Colour with alpha:** stays at the inherited `bc7` and halves like a data map (owner, 2026-10-12). BC3 is never used, because it is the same size as BC7. `landscape_diffuse` (which cannot be BC1) is the same.
+- **Opaque colour that goes to BC1 stays full size:** the BC1 rules also set `resize = "none"`, and every BC7 colour sub-type has `resize = "half"` in its `[subtypes.<st>]` table. No new engine logic.
 - **No new engine logic,** unless the plan finds that `RuleMatch::alpha` cannot express "resolved alpha policy is `remove`". In that case the smallest extension to `RuleMatch` is allowed and recorded in Note T.
 - **`bc1_transparent_black`** stays `false`.
 
-### 2.2 Compact: data maps at half size
+### 2.2 Compact: data maps and BC7 colour at half size
 
 - **The new mode:** `ResizeMode::Half`, serialised as `"half"`, alongside Track C's `none` / `pot-down`.
 - **Behaviour:**
@@ -56,7 +57,7 @@ The new files sit in `presets/` and are embedded with the existing `include_str!
   - the 512 floor applies to the **larger** side: a map halves only when its larger side is above 512 (so 1024×512 → 512×256, 512×256 stays, 2048×2048 → 1024×1024);
   - no POT step: a non-POT source halves with integer division per side and keeps its shape (owner, 2026-10-12). `pot-down` stays a separate, explicit setting.
 - **The path:** it reuses Track C's resize in `preprocess_with` and emits `DIM-RESIZED`. It also counts in `api::job_bytes` admission like `pot-down`.
-- **Data sub-types:** every sub-type that is not a colour sub-type (§2.1) and not `pbr_emissive`. This covers normals (`normal`, `landscape_normal`, `pbr_normal`, `msn`, `coat_normal`), `envmask`, `complex_material`, `height`, `rmaos`, skin data maps and the other single-channel or packed maps.
+- **Half-size sub-types:** every sub-type that is not BC1 colour (§2.1), not `pbr_emissive` and not `hdr_sky` (owner, 2026-10-12). This includes every BC7 colour sub-type (`diffuse` with alpha, `landscape_diffuse`, `pbr_albedo`, `glow`, `pbr_subsurface`, `pbr_fuzz`, `subsurface_tint`, `backlight_tint`, `ui_sky`, `skin_albedo`), whose BC1 case resets to `resize = "none"`. This covers normals (`normal`, `landscape_normal`, `pbr_normal`, `msn`, `coat_normal`), `envmask`, `complex_material`, `height`, `rmaos`, skin data maps and the other single-channel or packed maps.
 - **Packed outputs** (channel packing, §6.4 of the main spec) follow their recipe's output sub-type.
 - **Where it is set:** in the compact preset's `[subtypes.<st>] resize = "half"`.
 
@@ -86,9 +87,8 @@ The new files sit in `presets/` and are embedded with the existing `include_str!
   - resolves both presets through their chains, as `show` does, for every sub-type (or the one given), and prints only the fields that differ: `<subtype>.<field.path>: <a value> → <b value>`;
   - with no difference, prints `no differences` and exits 0;
   - `--json` gives `[{"subtype", "field", "a", "b"}]`.
-- **`export <id> [--out <file>] [--flat]`:**
+- **`export <id> [--out <file>]`:**
   - **Default:** the preset's own TOML as loaded. For a built-in, that is its embedded text, so `base =` stays a link.
-  - **`--flat`:** a standalone file. It has no `base`, `[defaults]` is the resolved defaults, `[subtypes.*]` holds each sub-type's resolved difference from those defaults, and the rules and aliases come from the chain in order.
   - The new id is `<id>-export` unless `--id <new>` is given. The file must pass `validate`.
   - Without `--out`, it writes to stdout.
 - **`validate <file>…`:**
@@ -156,7 +156,7 @@ New codes: `CFG-PRESET-SKIPPED`, `CFG-GREEN-CONFLICT`. Code count 73 → 75.
   - `--preset-file` duplicate error;
   - the `list` source key;
   - `diff` output and JSON;
-  - `export` default and `--flat` round-trip, which validates and resolves equal to the original;
+  - `export` round-trip, which validates and resolves equal to the original;
   - `validate` exit codes.
 - **Migrate:** one test per family, where an old or absent version passes through the hook and a newer one is refused or kept raw as today.
 - **Carried:** one regression test per item in §6.
@@ -167,5 +167,5 @@ New codes: `CFG-PRESET-SKIPPED`, `CFG-GREEN-CONFLICT`. Code count 73 → 75.
 1. A user preset folder with a file that has a Windows BOM or CRLF line endings must load.
 2. A preset that bases on a user preset loaded later in file-name order must resolve. Load everything first, then resolve chains.
 3. A Compact run on a set with a packed output must not downscale one packing input and not another.
-4. `presets export --flat` of a preset with aliases must keep its aliases.
+4. `presets export` of a preset with aliases keeps its aliases.
 5. A `cs-compact` diffuse whose alpha is analysed as `cutout` must stay BC7 and never become BC1 with 1-bit alpha.

@@ -63,8 +63,8 @@ Background:
   - So Tasks 3 and 4 do not change `PresetRegistry::sha256` of any existing preset, `profile_sha256` of any existing profile, or the manifest up-to-date check.
   - `RuleMatch::subtypes` is skipped when empty, for the same reason.
 - **The three new presets** are `schema_version = 1`, `version = "1.0.0"`, and visible (not `hidden`). Their descriptions, verbatim from spec §2:
-  - `cs-compact`: "CS – Compact: BC1 for opaque colour, data maps at half size (min 512)."
-  - `vanilla-compact`: "Vanilla – Compact: BC1 for opaque colour, data maps at half size (min 512)."
+  - `cs-compact`: "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)."
+  - `vanilla-compact`: "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)."
   - `fast-preview`: "Fast preview: bc7e fast, smallest-mip validation only. For checking a mod quickly, not for release."
 - **Out of scope (spec §1).**
   - There is no GUI preset picker, no CLI progress bar, and no scheduler or admission revisit.
@@ -106,10 +106,10 @@ These settle the questions the spec left to the plan. Each one becomes a Note T 
     - So BC1 on them would be `FMT-BC1-ALPHA` (Blocking).
   - **Excluded from BC1:**
     - `pbr_emissive`: the spec keeps it BC6H.
-    - `landscape_diffuse`: `check_profile` blocks BC1 on it with `FMT-LANDSCAPE-BC1` (`policy.rs:1286-1290`), because BC1 destroys the snow/height alpha. It stays BC7 at full size; it is a colour sub-type, so it is not halved either. This is a spec gap, recorded.
-  - **Data, `resize = "half"` (17):** every other sub-type: `normal`, `landscape_normal`, `pbr_normal`, `msn`, `coat_normal`, `skin_wet`, `envmask`, `height`, `msn_specular`, `skin_sk`, `complex_material`, `rmaos`, `skin_rfaos`, `flow`, `generic_two_channel`, `generic_data`, `hdr_sky`.
-    - `hdr_sky` has linear content, so the spec's definition makes it data and it halves.
-    - Note T flags this for the owner: `hdr_sky` is a sky colour map, like the excluded `pbr_emissive`.
+    - `landscape_diffuse`: `check_profile` blocks BC1 on it with `FMT-LANDSCAPE-BC1` (`policy.rs:1286-1290`), because BC1 destroys the snow/height alpha. It stays BC7 and, as BC7 colour, is halved (owner, 2026-10-12). This is a spec gap, recorded.
+  - **BC7 colour also halves (owner, 2026-10-12):** every colour sub-type except `pbr_emissive` (BC6H) gets `resize = "half"` in its `[subtypes.<st>]` table: `diffuse`, `landscape_diffuse`, `pbr_albedo`, `glow`, `pbr_subsurface`, `pbr_fuzz`, `subsurface_tint`, `backlight_tint`, `ui_sky`, `skin_albedo` (10). Both BC1 rules also set `resize = "none"`, so opaque colour that goes to BC1 stays full size. Colour with alpha, `landscape_diffuse` and a constant-255 `pbr_subsurface` or `pbr_fuzz` stay BC7 and halve. `pbr_emissive` and `hdr_sky` stay full size. No new engine logic: a rule override beats the sub-type table.
+  - **Data, `resize = "half"` (16):** every other sub-type: `normal`, `landscape_normal`, `pbr_normal`, `msn`, `coat_normal`, `skin_wet`, `envmask`, `height`, `msn_specular`, `skin_sk`, `complex_material`, `rmaos`, `skin_rfaos`, `flow`, `generic_two_channel`, `generic_data`.
+    - `hdr_sky` is excluded from resize (owner, 2026-10-12): it is a visible sky colour image, treated like `pbr_emissive` (in neither the BC1 list nor the resize list).
 - **T4 `half` (owner correction, 956da58).**
   - **The rule:** `target_dims((w, h), Half)` = `(max(w/2, 1), max(h/2, 1))` when `max(w, h) > 512`, else `(w, h)`.
   - **Shape:** both sides halve together, so the shape never changes.
@@ -145,13 +145,8 @@ These settle the questions the spec left to the plan. Each one becomes a Note T 
     - It compares profiles from presets alone, as `show` does. Rules are not part of the diff, so `cs-compact` vs `cs-quality` lists only the `resize` rows, not the BC1 rules. This is a spec gap, recorded.
     - Target: `--target`, else `a`'s chain target, else `b`'s, else `cs`.
   - **`export`:**
-    - It writes under a new id in **both** modes (`<id>-export`, or `--id`). The original id is always loaded beside it, so `validate` would refuse the original id as a duplicate.
-    - The default form is the preset's own table as loaded (after migration), re-serialised by `toml`. Comments are not kept; `base` stays a link.
-  - **`export --flat`:**
-    - **How rules combine:** rules from every chain level are concatenated, root first.
-    - **First limit, rules:** rules match first-match *per source* (`policy.rs:521-532`), so overlapping rules from two levels collapse to first-match in one list. For example, `sdc-base`'s `**/interface/**` rule now shadows `cs-compact`'s BC1 rule for an interface diffuse.
-    - **Second limit, explicit values:** every flattened value now comes from a user preset, so it counts as explicit (`field_explicit`). Analysis defaults, such as the no-alpha `remove`, no longer apply over it.
-    - Note T records both limits as known limits of `--flat`.
+    - It writes under a new id (`<id>-export`, or `--id`). The original id is always loaded beside it, so `validate` would refuse the original id as a duplicate.
+    - The output is the preset's own table as loaded (after migration), re-serialised by `toml`. Comments are not kept; `base` stays a link.
   - **`validate`:**
     - It reports the first problem per file, because the loader stops at the first.
     - A file that is also in the user folder is validated in place of its folder copy.
@@ -202,14 +197,14 @@ These settle the questions the spec left to the plan. Each one becomes a Note T 
    - Task 1 pins it: `the_user_folder_loads_everything_then_checks_and_skips_bad_files` (`a_child.toml` bases on `z_base.toml`).
 3. **A compact run on a set with a packed output** must halve the assembled packed image as one image. It must never halve one packing input and not another.
    - Task 7 pins it: `compact_packed_rmaos_halves_as_one_image`. Only `rock_n.dds` and `rock_rmaos.dds` report `DIM-RESIZED`; the raw inputs never do.
-4. **`presets export --flat` of a preset with aliases** keeps its aliases and validates, in a registry without the original.
-   - Task 8 pins it: `flat_export_round_trips_and_keeps_aliases`.
+4. **`presets export` of a preset with aliases** keeps its aliases and validates, in a registry where the original's base is loaded.
+   - Task 8 pins it: `export_round_trips_and_keeps_aliases`.
 5. **A `cs-compact` diffuse whose alpha is a cutout** stays BC7 and never becomes BC1.
    - Task 7 pins it: `compact_cutout_diffuse_stays_bc7`.
 6. **A fully opaque RGBA colour map** (alpha constant 255, the common exporter output) becomes BC1 under compact. An opaque `pbr_subsurface` with alpha constant 255 is not blocked by `FMT-BC1-ALPHA`.
    - Task 7 pins both: `compact_constant_255_diffuse_is_bc1` and `compact_constant_255_subsurface_stays_bc7`.
-7. **A landscape diffuse under compact** stays BC7 at full size: no `FMT-LANDSCAPE-BC1` and no halving.
-   - Task 7 pins it: `compact_landscape_diffuse_stays_bc7_full_size`.
+7. **A landscape diffuse under compact** stays BC7 and halves (owner, 2026-10-12): no `FMT-LANDSCAPE-BC1`.
+   - Task 7 pins it: `compact_landscape_diffuse_stays_bc7_and_halves`.
 
 ---
 
@@ -2093,7 +2088,9 @@ The cases. Each is its own `#[test]`. "fmt" is the planned profile's `format` an
 | `compact_diffuse_with_alpha_stays_bc7` | cs, `cs-compact` | `textures/a/glass.png` `rgba(64, \|x, _\| [90, 90, 90, (x * 4) as u8])`; `--set file:**/glass.png.alpha.policy=blend` | `assert_profile(.., "a/glass.png", "diffuse", "blend", false, "bc7")`; prov is not a `rule:cs-compact#…` (a `FilePlanned` event is emitted whatever the status, `api.rs:1338-1346`) |
 | `compact_cutout_diffuse_stays_bc7` (RF5) | cs, `cs-compact` | `textures/a/leaf.png` `rgba(64, \|x, _\| [40, 120, 40, if x < 32 { 0 } else { 255 }])`; `--set file:**/leaf.png.alpha.policy=cutout` | `assert_profile(.., "a/leaf.png", "diffuse", "cutout", false, "bc7")`; no `FmtBc1Alpha` |
 | `compact_constant_255_subsurface_stays_bc7` (RF6) | cs, `cs-compact` | `textures/a/skin_s.png` constant-255 RGBA as above; `--set file:**/skin_s.png.subtype=pbr_subsurface` | policy `data`, fmt `bc7`, no `FmtBc1Alpha` |
-| `compact_landscape_diffuse_stays_bc7_full_size` (RF7) | cs, `cs-compact` | `textures/landscape/dirt.png` `rgb(1024)` | sub-type `landscape_diffuse`, fmt `bc7`; `resized(&o)` is empty; no `FmtLandscapeBc1` |
+| `compact_landscape_diffuse_stays_bc7_and_halves` (RF7) | cs, `cs-compact` | `textures/landscape/dirt.png` `rgb(1024)` | sub-type `landscape_diffuse`, fmt `bc7`; `resized(&o)` = `{"./dirt.dds": (512, 512)}`; no `FmtLandscapeBc1` |
+| `compact_2048_diffuse_with_alpha_plans_1024_bc7` | cs, `cs-compact` | `textures/a/glass.png` `rgba(2048, |x, _| [90, 90, 90, (x % 256) as u8])`; `--set file:**/glass.png.alpha.policy=blend` | fmt `bc7`; `resized(&o)` = `{"./glass.dds": (1024, 1024)}`; profile `resize` = `"half"` |
+| `compact_2048_opaque_diffuse_stays_2048_bc1` | cs, `cs-compact` | `textures/a/wall.png` `rgb(2048)` | fmt `bc1`, prov `rule:cs-compact#0`; `resized(&o)` is empty; profile `resize` = `"none"` |
 | `compact_2048_normal_plans_1024` | cs, `cs-compact` | `textures/a/wall_n.png` `flat_normal(2048)` | `resized(&o)` = `{".../wall_n.dds": (1024, 1024)}`; profile `resize` = `"half"` |
 | `compact_512_mask_stays_512` | cs, `cs-compact` | `textures/a/wall_m.png` `gray_ramp(512)`; `--set file:**/wall_m.png.subtype=envmask` | `resized(&o)` empty; profile `resize` = `"half"`; fmt `bc4` |
 | `compact_1024x512_plans_512x256` | cs, `cs-compact` | `textures/a/wide_n.png` `rgb_wh(1024, 512)`; `--set file:**/wide_n.png.subtype=normal` | `resized` = `(512, 256)`; no `DimNpot` |
@@ -2154,20 +2151,20 @@ id = "cs-compact"
 version = "1.0.0"
 base = "cs-quality"
 target = "cs"
-description = "CS – Compact: BC1 for opaque colour, data maps at half size (min 512)."
+description = "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)."
 
 # BC1 for opaque colour maps (DECISIONS Note T2/T3). BC3 is never used: it is the size of BC7.
-# Colour with no alpha channel. Not landscape_diffuse (FMT-LANDSCAPE-BC1) nor pbr_emissive (BC6H).
+# Colour with no alpha channel. Not landscape_diffuse (FMT-LANDSCAPE-BC1) nor pbr_emissive (BC6H). BC1 colour stays full size (resize none beats the sub-type table below).
 [[rules]]
 match = { alpha = "none", subtypes = ["diffuse", "pbr_albedo", "glow", "pbr_subsurface", "pbr_fuzz", "subsurface_tint", "backlight_tint", "ui_sky", "skin_albedo"] }
-overrides = { format = "bc1" }
+overrides = { format = "bc1", resize = "none" }
 
 # Colour whose alpha is constant 255 and whose policy resolves to remove (pbr_subsurface and pbr_fuzz keep data).
 [[rules]]
 match = { alpha = "constant255", subtypes = ["diffuse", "pbr_albedo", "glow", "subsurface_tint", "backlight_tint", "ui_sky", "skin_albedo"] }
-overrides = { format = "bc1" }
+overrides = { format = "bc1", resize = "none" }
 
-# Data maps at half size: both sides halve when the larger is above 512 (spec §2.2).
+# Data maps and BC7 colour at half size: both sides halve when the larger is above 512 (spec §2.2).
 [subtypes.normal]
 resize = "half"
 [subtypes.landscape_normal]
@@ -2200,7 +2197,25 @@ resize = "half"
 resize = "half"
 [subtypes.generic_data]
 resize = "half"
-[subtypes.hdr_sky]
+[subtypes.diffuse]
+resize = "half"
+[subtypes.landscape_diffuse]
+resize = "half"
+[subtypes.pbr_albedo]
+resize = "half"
+[subtypes.glow]
+resize = "half"
+[subtypes.pbr_subsurface]
+resize = "half"
+[subtypes.pbr_fuzz]
+resize = "half"
+[subtypes.subsurface_tint]
+resize = "half"
+[subtypes.backlight_tint]
+resize = "half"
+[subtypes.ui_sky]
+resize = "half"
+[subtypes.skin_albedo]
 resize = "half"
 ```
 
@@ -2210,10 +2225,10 @@ resize = "half"
 id = "vanilla-compact"
 base = "vanilla-quality"
 target = "vanilla"
-description = "Vanilla – Compact: BC1 for opaque colour, data maps at half size (min 512)."
+description = "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)."
 ```
 
-(Write the whole file, rules and all 17 `[subtypes.*]` tables included. The PBR and skin sub-types are unavailable under vanilla, but the tables are harmless and keep the two files in step.)
+(Write the whole file, rules and all 26 `[subtypes.*]` tables (16 data, 10 colour) included. The PBR and skin sub-types are unavailable under vanilla, but the tables are harmless and keep the two files in step.)
 
 `presets/fast-preview.toml`:
 
@@ -2254,7 +2269,7 @@ Expected: PASS. Existing goldens are unchanged, because the quality presets did 
 
 ```bash
 git add presets/cs-compact.toml presets/vanilla-compact.toml presets/fast-preview.toml crates/engine/src/presets.rs crates/engine/tests/presets.rs crates/engine/tests/golden.rs
-git commit -m "feat(presets): cs-compact, vanilla-compact (BC1 opaque colour, half-size data) and fast-preview (bc7e fast, smallest-mip validation) (M6 Track D spec §2)
+git commit -m "feat(presets): cs-compact, vanilla-compact (BC1 opaque colour, every other map but emissive and sky at half size) and fast-preview (bc7e fast, smallest-mip validation) (M6 Track D spec §2)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2266,7 +2281,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Spec:** §4. §1's success criteria for the verbs and for `convert --preset cs-compact`. Review Focus 4. Ruling T8.
 
 **Files:**
-- Modify: `crates/engine/src/presets.rs`: new `PresetRegistry::validate_file` and `PresetRegistry::export`, and the private `flat_table` and `json_diff`.
+- Modify: `crates/engine/src/presets.rs`: new `PresetRegistry::validate_file` and `PresetRegistry::export`.
 - Modify: `crates/cli/src/args.rs`:
   - `Command::Presets` (`:32-34`);
   - `PresetsCmd` (`:239-259`);
@@ -2281,32 +2296,29 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `args::user_presets_dir` (Task 5).
 - Produces:
   - `pub fn PresetRegistry::validate_file(&self, path: &Path) -> Vec<String>`: empty means clean.
-  - `pub fn PresetRegistry::export(&self, id: &str, new_id: &str, flat: bool) -> Result<String, PresetError>`.
+  - `pub fn PresetRegistry::export(&self, id: &str, new_id: &str) -> Result<String, PresetError>`.
   - `pub struct args::PresetsArgs { pub preset_file: Vec<PathBuf>, pub cmd: PresetsCmd }`.
-  - `PresetsCmd::Diff { a, b, subtype, target, json }`, `PresetsCmd::Export { id, out, flat, new_id }` and `PresetsCmd::Validate { files }`.
+  - `PresetsCmd::Diff { a, b, subtype, target, json }`, `PresetsCmd::Export { id, out, new_id }` and `PresetsCmd::Validate { files }`.
 
 - [ ] **Step 1: Write the failing engine tests** (`crates/engine/tests/presets.rs`)
 
 ```rust
 const ULTRA_ALIASES: &str = "schema_version = 1\nid = \"ultra\"\nversion = \"2.0.0\"\nbase = \"cs-compact\"\n[subtypes.diffuse]\nalpha = { threshold = 100 }\n[suffix_aliases]\nrmaosultrahigh = \"rmaos\"\n";
 
-/// Spec §4 and Review Focus 4: a flat export has no base, validates, resolves equal to the original for every
-/// sub-type, and keeps the chain's rules and aliases.
+/// Spec §4 and Review Focus 4: an export keeps its `base` link and aliases, validates where the original's base is loaded,
+/// and resolves equal to the original for every sub-type.
 #[test]
-fn flat_export_round_trips_and_keeps_aliases() {
+fn export_round_trips_and_keeps_aliases() {
     let mut r = PresetRegistry::builtin().unwrap();
     r.add_toml(ULTRA_ALIASES).unwrap();
-    let text = r.export("ultra", "ultra-export", true).unwrap();
-    let flat: PresetFile = toml::from_str(&text).unwrap();
-    assert_eq!(flat.id, "ultra-export");
-    assert_eq!(flat.base, None);
-    assert_eq!(flat.target, Some(Target::Cs));
-    assert_eq!(flat.suffix_aliases.get("rmaosultrahigh").map(String::as_str), Some("rmaos"));
-    let chain_rules: Vec<Rule> = r.chain("ultra").unwrap().iter().flat_map(|p| p.rules.clone()).collect();
-    assert_eq!(flat.rules, chain_rules);
+    let text = r.export("ultra", "ultra-export").unwrap();
+    let out: PresetFile = toml::from_str(&text).unwrap();
+    assert_eq!(out.id, "ultra-export");
+    assert_eq!(out.base.as_deref(), Some("cs-compact"));
+    assert_eq!(out.suffix_aliases.get("rmaosultrahigh").map(String::as_str), Some("rmaos"));
     // Validate beside the built-ins only: the original's alias would conflict (Note T8).
     let d = tempfile::tempdir().unwrap();
-    let f = write(d.path(), "flat.toml", &text);
+    let f = write(d.path(), "export.toml", &text);
     let clean = PresetRegistry::builtin().unwrap();
     assert_eq!(clean.validate_file(&f), Vec::<String>::new());
     let mut both = PresetRegistry::builtin().unwrap();
@@ -2324,11 +2336,11 @@ fn flat_export_round_trips_and_keeps_aliases() {
 #[test]
 fn default_export_keeps_the_base_link_under_a_new_id() {
     let r = PresetRegistry::builtin().unwrap();
-    let text = r.export("cs-compact", "my-compact", false).unwrap();
+    let text = r.export("cs-compact", "my-compact").unwrap();
     let p: PresetFile = toml::from_str(&text).unwrap();
     assert_eq!((p.id.as_str(), p.base.as_deref()), ("my-compact", Some("cs-quality")));
     assert_eq!(p.rules, r.get("cs-compact").unwrap().rules);
-    assert!(matches!(r.export("nope", "x", false), Err(PresetError::Unknown(_))));
+    assert!(matches!(r.export("nope", "x"), Err(PresetError::Unknown(_))));
 }
 
 /// Spec §4: validate names the first problem; a folder file validates in place of its own copy.
@@ -2381,101 +2393,17 @@ Expected: a compile error (`export`, `validate_file` not found).
         }
     }
 
-    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded, or with `flat` a standalone preset (no
-    /// `base`; `[defaults]` = the chain's merged defaults; `[subtypes.<st>]` = each sub-type's resolved difference from
-    /// them; the chain's rules and aliases in chain order). Either way under `new_id`, so it loads beside the original.
-    pub fn export(&self, id: &str, new_id: &str, flat: bool) -> Result<String, PresetError> {
-        let chain = self.chain(id)?;
-        let mut t = if flat {
-            self.flat_table(&chain)?
-        } else {
-            self.tables
-                .get(id)
-                .cloned()
-                .ok_or_else(|| PresetError::Unknown(id.to_string()))?
-        };
+    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded (`base` stays a link) under `new_id`, so it
+    /// loads beside the original.
+    pub fn export(&self, id: &str, new_id: &str) -> Result<String, PresetError> {
+        let mut t = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| PresetError::Unknown(id.to_string()))?;
         t.insert("id".into(), toml::Value::String(new_id.to_string()));
         toml::to_string(&t).map_err(|e| PresetError::Invalid(e.to_string()))
     }
-
-    fn flat_table(&self, chain: &[&PresetFile]) -> Result<toml::Table, PresetError> {
-        let own = *chain.last().expect("a chain holds its own preset");
-        let to_toml =
-            |v: &Value| toml::Value::try_from(v).map_err(|e| PresetError::Invalid(e.to_string()));
-        let mut defaults = Value::Object(Map::new());
-        for p in chain {
-            merge_json(&mut defaults, &p.defaults);
-        }
-        let mut subtypes = toml::Table::new();
-        for st in Subtype::ALL {
-            let mut doc = defaults.clone();
-            for p in chain {
-                if let Some(s) = p.subtypes.get(&st) {
-                    merge_json(&mut doc, s);
-                }
-            }
-            let diff = json_diff(&defaults, &doc);
-            if diff.as_object().is_some_and(|m| !m.is_empty()) {
-                subtypes.insert(st.id(), to_toml(&diff)?);
-            }
-        }
-        let mut rules = vec![];
-        let mut aliases = toml::Table::new();
-        for p in chain {
-            let t = &self.tables[&p.id];
-            if let Some(toml::Value::Array(r)) = t.get("rules") {
-                rules.extend(r.iter().cloned());
-            }
-            if let Some(toml::Value::Table(a)) = t.get("suffix_aliases") {
-                aliases.extend(a.clone());
-            }
-        }
-        let mut t = toml::Table::new();
-        t.insert("schema_version".into(), toml::Value::Integer(i64::from(SCHEMA_VERSION)));
-        t.insert("id".into(), toml::Value::String(own.id.clone()));
-        t.insert("version".into(), toml::Value::String(own.version.clone()));
-        if let Some(target) = chain.iter().rev().find_map(|p| p.target) {
-            t.insert("target".into(), toml::Value::try_from(target).map_err(|e| PresetError::Invalid(e.to_string()))?);
-        }
-        t.insert("description".into(), toml::Value::String(format!("{} (flattened)", own.description)));
-        if defaults.as_object().is_some_and(|m| !m.is_empty()) {
-            t.insert("defaults".into(), to_toml(&defaults)?);
-        }
-        if !subtypes.is_empty() {
-            t.insert("subtypes".into(), toml::Value::Table(subtypes));
-        }
-        if !rules.is_empty() {
-            t.insert("rules".into(), toml::Value::Array(rules));
-        }
-        if !aliases.is_empty() {
-            t.insert("suffix_aliases".into(), toml::Value::Table(aliases));
-        }
-        Ok(t)
-    }
-```
-
-At module level, next to `without_nulls`:
-
-```rust
-/// The leaves of `to` that differ from `from`, as a nested object (`Null` when nothing differs).
-fn json_diff(from: &Value, to: &Value) -> Value {
-    match (from, to) {
-        (Value::Object(a), Value::Object(b)) => Value::Object(
-            b.iter()
-                .filter_map(|(k, v)| {
-                    let d = match a.get(k) {
-                        Some(x) => json_diff(x, v),
-                        None => v.clone(),
-                    };
-                    let empty = d.is_null() || d.as_object().is_some_and(Map::is_empty);
-                    (!empty).then(|| (k.clone(), d))
-                })
-                .collect(),
-        ),
-        (a, b) if a == b => Value::Null,
-        (_, b) => b.clone(),
-    }
-}
 ```
 
 Run `cargo test -p engine --offline --test presets` and check that it passes (PASS).
@@ -2560,7 +2488,7 @@ fn diff_prints_only_differences() {
     assert_eq!(sdc_in(d.path(), &["presets", "diff", "cs-quality", "nope"]).0, 2);
 }
 
-/// Spec §4: export (default and --flat) writes files that validate; validate exits 1 on a bad file.
+/// Spec §4: export writes files that validate; validate exits 1 on a bad file.
 #[test]
 fn export_then_validate() {
     let d = appdata_with_mine();
@@ -2569,14 +2497,14 @@ fn export_then_validate() {
     assert_eq!(code, 0, "{err}");
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(text.contains("id = \"mine-export\"") && text.contains("base = \"cs-quality\""), "{text}");
-    let flat = d.path().join("flat.toml");
-    let (code, _, _) = sdc_in(d.path(), &["presets", "export", "cs-compact", "--flat", "--id", "packed", "--out", flat.to_str().unwrap()]);
+    let renamed = d.path().join("packed.toml");
+    let (code, _, _) = sdc_in(d.path(), &["presets", "export", "cs-compact", "--id", "packed", "--out", renamed.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert!(!std::fs::read_to_string(&flat).unwrap().contains("base ="));
+    assert!(std::fs::read_to_string(&renamed).unwrap().contains("id = \"packed\""));
     let (code, stdout, _) = sdc_in(d.path(), &["presets", "export", "fast-preview"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("id = \"fast-preview-export\""), "{stdout}");
-    let (code, stdout, _) = sdc_in(d.path(), &["presets", "validate", out.to_str().unwrap(), flat.to_str().unwrap()]);
+    let (code, stdout, _) = sdc_in(d.path(), &["presets", "validate", out.to_str().unwrap(), renamed.to_str().unwrap()]);
     assert_eq!(code, 0, "{stdout}");
     assert_eq!(stdout.lines().filter(|l| l.starts_with("ok ")).count(), 2, "{stdout}");
     let bad = d.path().join("bad.toml");
@@ -2648,14 +2576,11 @@ pub struct PresetsArgs {
         #[arg(long)]
         json: bool,
     },
-    /// Write a preset as TOML under a new id (default `<id>-export`): its own file, or with --flat a standalone
-    /// file with every inherited value, rule and alias.
+    /// Write a preset's own TOML (keeping its `base` link) under a new id (default `<id>-export`).
     Export {
         id: String,
         #[arg(long)]
         out: Option<PathBuf>,
-        #[arg(long)]
-        flat: bool,
         /// Id of the exported preset.
         #[arg(long = "id")]
         new_id: Option<String>,
@@ -2752,10 +2677,10 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
             }
             Ok(0)
         }
-        PresetsCmd::Export { id, out, flat, new_id } => {
+        PresetsCmd::Export { id, out, new_id } => {
             let new_id = new_id.unwrap_or_else(|| format!("{id}-export"));
             let text = reg
-                .export(&id, &new_id, flat)
+                .export(&id, &new_id)
                 .map_err(|e| EngineError::Usage(e.to_string()))?;
             match out {
                 Some(p) => std::fs::write(&p, &text)
@@ -2795,7 +2720,7 @@ Expected: PASS.
 
 ```bash
 git add crates/engine/src/presets.rs crates/engine/tests/presets.rs crates/cli/src/args.rs crates/cli/src/verbs.rs crates/cli/src/main.rs crates/cli/tests/cli_presets.rs crates/cli/tests/cli_convert.rs
-git commit -m "feat(cli): sdc presets diff, export [--flat], validate; list shows user preset sources; --preset-file on every presets verb (M6 Track D spec §4)
+git commit -m "feat(cli): sdc presets diff, export, validate; list shows user preset sources; --preset-file on every presets verb (M6 Track D spec §4)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3310,9 +3235,10 @@ Fill in the commit subject's `<…>` with the outcome. Report the 14 summary row
     - An explicit non-`remove` policy on an opaque colour map under compact is `FMT-BC1-ALPHA`.
     - `bc1_transparent_black` stays false.
   - **T3 The colour and data lists**, exactly as in the plan.
-    - `landscape_diffuse` is excluded from BC1 (`FMT-LANDSCAPE-BC1`) and not halved.
+    - `landscape_diffuse` is excluded from BC1 (`FMT-LANDSCAPE-BC1`); like every BC7 colour sub-type it halves (owner, 2026-10-12). BC1 colour stays full size (its rules set `resize = "none"`).
+    - `pbr_emissive` (BC6H) and `hdr_sky` stay full size.
     - `pbr_subsurface` and `pbr_fuzz` are BC1 only without alpha.
-    - **Owner question:** `hdr_sky` halves by the spec's definition (linear content), though it is a sky colour map like `pbr_emissive`.
+    - `hdr_sky` excluded from resize (owner, 2026-10-12).
   - **T4 `resize = half`** (owner, 2026-10-12): both sides halve together when the larger is above 512 (`HALF_FLOOR`); the shape is kept; there is no POT step; each side is at least 1 px; `DIM-RESIZED` names the mode; admission counts it like `pot-down`.
   - **T5 `validation.mips = smallest`:** PSNR and coverage on the last mip only. The default `all` is not serialised.
   - **T6 The user presets folder.**
@@ -3323,8 +3249,7 @@ Fill in the commit subject's `<…>` with the outcome. Report the 14 summary row
   - **T7 Duplicate ids are refused** (carried fix 1), naming both sources: `CFG-PRESET-SKIPPED` in the folder, an error from `--preset-file`. `is_builtin` means "loaded from the embedded list".
   - **T8 Verbs.**
     - `diff` compares profiles from presets alone (rules are not shown: spec gap).
-    - `export` uses a new id in both modes.
-    - Known limits of `--flat`: chain rules are concatenated root first (overlapping rules from two levels become first-match), and every flattened value counts as explicit.
+    - `export` writes the preset's own TOML (`base` stays a link) under a new id (`<id>-export` or `--id`); no flattening option (owner, 2026-10-12).
     - `validate` reports the first problem per file, and validates a folder file in place of itself.
   - **T9 Migration table.** Presets none, config none, manifest records v1 → v2 (`schema` set to 2; the manifest's key is `schema`). Version 0 is refused. `PresetError::NewerConfigSchema(file, v)` is the spec's `ConfigError::NewerSchema`. Config files accept an optional `schema_version`.
   - **T10 Carried fixes.**
@@ -3346,8 +3271,8 @@ version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
 ## 2026-10-12 — sdc 0.5.0 (M6 Track D)
 
 - **cs-compact 1.0.0** (new; base cs-quality, target cs): BC1 for opaque colour maps (no alpha, or alpha constant
-  255 where the policy resolves to remove); data maps (normals, masks, packed and single-channel maps) at half size,
-  both sides, when the larger side is above 512. BC4/BC5 search radius: <from Task 10>.
+  255 where the policy resolves to remove); colour maps that stay BC7 and data maps (normals, masks, packed and single-channel maps) at half size,
+  both sides, when the larger side is above 512; opaque colour that becomes BC1, emissive and sky stay full size. BC4/BC5 search radius: <from Task 10>.
 - **vanilla-compact 1.0.0** (new; base vanilla-quality, target vanilla): the same for Vanilla/ENB.
 - **fast-preview 1.0.0** (new; base sdc-base, any target): bc7e `fast`, per-mip PSNR and coverage validation on the
   smallest mip only. BC4/BC5 search radius: <from Task 10>. For checking a mod quickly, not for release.
@@ -3406,7 +3331,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 | Spec | Task |
 |---|---|
-| §1 success: `convert --preset cs-compact` gives BC1 opaque colour and half-size data | 7 (goldens), 8 (`cs_compact_writes_bc1_colour_and_half_size_normals`) |
+| §1 success: `convert --preset cs-compact` gives BC1 opaque colour at full size and half-size everything else (except emissive and sky) | 7 (goldens), 8 (`cs_compact_writes_bc1_colour_and_half_size_normals`) |
 | §1 success: folder preset in `list`, `--preset <id>`, GUI with no flag | 5, 8, 9 |
 | §1 success: `diff`, `export`, `validate` on built-in and user presets | 8 |
 | §1 success: every schema family migrates before deserialising | 2 |
@@ -3415,7 +3340,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 | §2.2 `ResizeMode::Half` (owner correction), `DIM-RESIZED`, admission, data sub-types, packed outputs | 4, 7; rulings T3, T4 |
 | §2.3 fast preview: effort fast, `validation.mips`, not serialised | 4, 7, 10 (radius); ruling T5 |
 | §3 folder location, order, every verb and GUI, injectable path, `--preset-file` after the folder, bad files, duplicates, GUI inspector | 1, 5, 8, 9; rulings T6, T7 |
-| §4 `list` source, `diff`, `export` (default, `--flat`, `--id`, stdout), `validate` | 1 (`check_preset`), 8; ruling T8 |
+| §4 `list` source, `diff`, `export` (`--id`, stdout), `validate` | 1 (`check_preset`), 8; ruling T8 |
 | §5 `migrate.rs`, three functions, step tables, newer behaviour, config `schema_version`, callers | 2; ruling T9 |
 | §6 items 1–6, two new codes, count 75 | 1 (#1, codes), 3 (#2, #3), 6 (#4, #5, #6); ruling T10 |
 | §7 radius measurement, report, decision rules, version | 10, 11; ruling T11 |
@@ -3427,13 +3352,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 1. **`RuleMatch` cannot match a sub-type at all** (§2.1 assumed only the alpha question). This is resolved by the allowed smallest extension, `match.subtypes` (T2).
 2. **`alpha = "none"` misses opaque RGBA (`constant255`).** This is resolved with a second rule. An explicit non-`remove` policy on an opaque colour map under compact blocks with `FMT-BC1-ALPHA` (T2).
-3. **`landscape_diffuse` cannot be BC1** (`FMT-LANDSCAPE-BC1`, Blocking). It is excluded from the colour rule (T3).
-4. **`hdr_sky` falls in the spec's "data" definition and halves.** This is flagged as an owner question (T3).
+3. **`landscape_diffuse` cannot be BC1** (`FMT-LANDSCAPE-BC1`, Blocking). It is excluded from the colour rule and halves as BC7 colour (T3).
+4. **`hdr_sky` is excluded from resize (owner, 2026-10-12).** It is a visible sky colour image, like `pbr_emissive` (T3).
 5. **There is no `ConfigError` type.** The plan uses `PresetError::NewerConfigSchema` (T9).
 6. **The manifest version key is `schema`, not `schema_version`** (T9).
 7. **Carried fix #2's two sentences disagree** for a `null` patch on an absent key. The function's documented contract wins (T10).
 8. **Carried fix #5 is already done on `main`.** Tests only (T10).
 9. **`SearchRadius` is an enum (`default` = 5, `max` = 10), with no numeric knob**, so a measured smaller radius needs a new `fast` variant (T11).
 10. **`diff` resolves presets alone (as `show` does), so it never shows rule differences**, such as the compact BC1 rules (T8).
-11. **`export` must change the id in both modes**, or `validate` refuses the file as a duplicate of the loaded original (T8).
-12. **`export --flat` limits:** first-match-per-source rules collapse into one list, and flattened values count as explicit (T8).
+11. **`export` must change the id**, or `validate` refuses the file as a duplicate of the loaded original (T8).
