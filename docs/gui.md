@@ -76,6 +76,8 @@ Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set 
 
 Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter, Height and so on. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card.
 
+The set's **Shader** dropdown lists the shaders the current mode offers. The picked one reads "(auto)" when sdc chose it, and "(fallback)" when the shader you asked for does not exist under the current mode and `default` stands in. Choosing **Auto** clears your choice. Warnings (a missing or unused map, an unavailable shader) show on the set's ⚠ badge. A scanned mod's meshes decide the auto pick unless a PBR or skin member, a complex `_m` or a `_p` does.
+
 ### PGPatcher settings
 
 - Features that cannot go together are **greyed**, with the reason on hover: hair excludes multilayer, glint, fuzz, emissive, parallax and subsurface; multilayer excludes subsurface; multilayer, glint and fuzz exclude each other; fuzz and coat normal exclude each other, because they share one slot. A switch that is already on stays enabled so you can turn it off.
