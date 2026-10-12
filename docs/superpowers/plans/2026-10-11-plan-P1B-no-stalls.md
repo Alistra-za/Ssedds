@@ -7477,3 +7477,14 @@ Notes:
 - 357.98 s: shape 21 pending twice (two keys) with one `shape_ready`: the first key was superseded by a newer load, as designed.
 - 359.9–366.5 s and 600.2–607.8 s: repeated reloads with memo hits (CS toggles); Meshes-panel reloads of the 6-shape mesh take ~214 ms build on the render thread, UI unaffected (no `ui_gap`).
 - Still open: Step 3; Step 4 background encode; Step 4 swap-vs-push decision.
+
+## P1-B verification, run 3 (2026-10-12, exe f122cfb, log preview-timings-20261012-105230.jsonl, read while the app was open)
+
+| Check | Result | Value |
+|---|---|---|
+| Step 3 compile failure keeps old image, error listed | pass | 52.36 s: `compile` `ok: false`, error `ps: …sdc-cs-broken\Shaders\Lighting.hlsl(2,2-6): error: sdc verification: GLINT permutation fails`; `shape_ready` `ok: false`; owner: shape list shows `robe_GND:0: shader failed: …`, old image kept |
+| Source vs Encoded after 6e24581/f122cfb | pass (manual) | owner screenshots: the two modes now match apart from compression (runs 1–2: Source far darker, working-space floats written unconverted) |
+| Step 4 first flip on the fixed exe | pass | `texture_swap` / `ab_flip` 36–70 ms (69.7 ms on the first of 4 encodes landing together) |
+| ui_gap | explained | 3.6 s, 10.2 s, 22.6 s gaps each end right before a `load` with new shader keys: the "Shader folder…" dialog blocks the UI thread while open (rfd modal pick). Three 111–127 ms gaps at 22–25 s during the first 5 s encodes. |
+
+Note: the "Shader folder…" button (0f81507) was added for Steps 3/6; the checklist's "Choose folder…" only existed when CS was not found.
