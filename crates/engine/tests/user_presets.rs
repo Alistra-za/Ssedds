@@ -74,6 +74,22 @@ fn folder_presets_are_selectable_and_bad_ones_are_skipped() {
         .as_str()
         .unwrap()
         .ends_with("zz_bad.toml"));
+    // The warning is the event right after BatchStarted, carries no path and a reason.
+    let i = events
+        .iter()
+        .position(|e| matches!(e.kind, EventKind::BatchStarted { .. }))
+        .unwrap();
+    let ev = &events[i + 1];
+    assert!(
+        matches!(&ev.kind, EventKind::Warning(w) if w.code == Code::CfgPresetSkipped),
+        "{ev:?}"
+    );
+    assert!(ev.path.is_none(), "{ev:?}");
+    assert!(
+        !skipped[0].data["reason"].as_str().unwrap_or("").is_empty(),
+        "{:?}",
+        skipped[0]
+    );
     // No folder given: nothing user-side is loaded.
     let mut req = request(d.path());
     req.preset = Some("mine".into());

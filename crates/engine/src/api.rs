@@ -594,8 +594,9 @@ impl Engine {
     /// config, `--config` or the first input folder's `sdc.toml`), resolve the target and preset, and build every
     /// profile with each rule and `--set` value. An invalid one is an error (exit 2). `plan` runs the same checks
     /// first; `inspect` calls this on its own so a DDS-only or empty input is held to them too (Codex-CLI 2).
-    pub fn preflight(&self, req: &BatchRequest) -> Result<(), EngineError> {
-        self.setup(req).map(|_| ())
+    /// Returns the CFG-PRESET-SKIPPED warnings for the caller to report when it does not go on to `plan`.
+    pub fn preflight(&self, req: &BatchRequest) -> Result<Vec<Warning>, EngineError> {
+        self.setup(req).map(|s| s.preset_skips)
     }
 
     fn setup(&self, req: &BatchRequest) -> Result<Setup, EngineError> {

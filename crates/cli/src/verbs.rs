@@ -230,6 +230,10 @@ fn print_event(ev: &EngineEvent) {
             code.map(|c| format!("{} ", c.as_str())).unwrap_or_default()
         ),
         EventKind::FileFailed { error, .. } => println!("{path}\n  cannot be read: {error}"),
+        // A batch-level warning (CFG-PRESET-SKIPPED).
+        EventKind::Warning(w) => {
+            println!("{} {} {}", tag!(&w.severity), w.code.as_str(), w.message)
+        }
         EventKind::SetResolved {
             recipes,
             shader,
@@ -351,7 +355,7 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         value: false.into(),
     });
     let engine = Engine::new()?;
-    engine.preflight(&req)?;
+    let preset_skips = engine.preflight(&req)?;
     // The BC1 model is global rgbcx state; set it before any decode.
     encoders_sys::init(model).map_err(|e| EngineError::Fatal(e.to_string()))?;
     let found = discover(&a.batch.inputs, root.path(), a.batch.recursive)
@@ -368,6 +372,20 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         }
     }
     if !found.iter().any(|f| f.kind == InputKind::Image) {
+        // No plan runs here, so report the skipped user presets ourselves (a plan reports them itself).
+        for w in preset_skips {
+            if json {
+                let ev = Reporter::new(
+                    Arc::new(JsonLinesSink::new(std::io::stdout())),
+                    new_batch_id(),
+                );
+                ev.emit(None, None, EventKind::Warning(w));
+            } else {
+                let sink = Arc::new(VecSink::default());
+                Reporter::new(sink.clone(), new_batch_id()).emit(None, None, EventKind::Warning(w));
+                sink.take().iter().for_each(print_event);
+            }
+        }
         return Ok(i32::from(unreadable > 0));
     }
 

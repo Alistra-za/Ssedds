@@ -1005,3 +1005,48 @@ fn a_bad_set_scope_is_a_usage_error() {
         text(&o.stderr)
     );
 }
+
+/// Task 5 fix: a bad user-folder preset is reported by `inspect` on every path, exactly once (DDS-only and empty
+/// inputs return before any plan; an image input plans and the plan reports it).
+#[test]
+fn inspect_reports_a_skipped_user_preset_once_on_every_path() {
+    let d = tempfile::tempdir().unwrap();
+    let appdata = d.path().join("appdata");
+    std::fs::create_dir_all(appdata.join("sdc/presets")).unwrap();
+    std::fs::write(
+        appdata.join("sdc/presets/bad.toml"),
+        "schema_version = 1\nid = \"bad\"\nversion = \"1\"\nbase = \"nope\"\n",
+    )
+    .unwrap();
+    let dds_only = d.path().join("dds_only");
+    std::fs::create_dir_all(&dds_only).unwrap();
+    std::fs::write(dds_only.join("junk.dds"), b"not a dds").unwrap();
+    let empty = d.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let image = d.path().join("image");
+    std::fs::create_dir_all(&image).unwrap();
+    ImageBuffer::from_fn(8, 8, |x, y| Rgb([x as u8, y as u8, 1]))
+        .save(image.join("a.png"))
+        .unwrap();
+    for (input, name) in [
+        (&dds_only, "dds-only"),
+        (&empty, "empty"),
+        (&image, "image"),
+    ] {
+        for json in [true, false] {
+            let mut c = sdc();
+            c.env("APPDATA", &appdata).arg("inspect");
+            if json {
+                c.arg("--json");
+            }
+            let o = c.arg(input).output().unwrap();
+            let out = text(&o.stdout);
+            assert_eq!(
+                out.matches("CFG-PRESET-SKIPPED").count(),
+                1,
+                "{name} json={json}: {out}\n{}",
+                text(&o.stderr)
+            );
+        }
+    }
+}
