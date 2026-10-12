@@ -221,7 +221,26 @@ pub fn start() -> Option<Arc<PerfLog>> {
     }
     let dir =
         std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("sdc").join("logs"))?;
-    start_in(&dir)
+    let l = start_in(&dir)?;
+    log_panics();
+    Some(l)
+}
+
+/// Adds a `panic` line (thread, message, location) before the default hook runs: the GUI has no console, so a
+/// panic that ends the app is otherwise invisible. Caught worker panics are logged too.
+pub fn log_panics() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+        emit(
+            "panic",
+            json!({"thread": thread, "message": info.to_string()}),
+        );
+        prev(info);
+    }));
 }
 
 /// [`start`] with an explicit directory and no environment switch. A second call while a log is alive returns it.
