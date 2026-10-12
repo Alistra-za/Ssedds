@@ -1000,3 +1000,25 @@ fn a_dry_run_cancelled_while_planning_lists_the_unplanned_files_and_exits_1() {
     assert_eq!((s.converted, s.cancelled.len(), s.exit_code()), (0, 3, 1));
     assert!(files_with_ext(&d.path().join("out"), "dds").is_empty());
 }
+
+/// F1 (Track C): Preprocess step 6 runs in the real convert path (`preprocess_with`), so a 48x40 diffuse with
+/// `resize = pot-down` is written as a 32x32 DDS. DIM-NPOT is acknowledged here; Task 5 clears it for resize.
+#[test]
+fn a_real_convert_with_pot_down_writes_a_power_of_two_dds() {
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures");
+    std::fs::create_dir_all(&t).unwrap();
+    ImageBuffer::from_fn(48, 40, |x, y| Rgb([x as u8 * 5, y as u8 * 6, 90]))
+        .save(t.join("odd.png"))
+        .unwrap();
+    let mut req = BatchRequest::new(vec![t], d.path().join("out"), Target::Cs);
+    req.overrides = vec![
+        parse_set("file:**/odd.png.subtype=diffuse").unwrap(),
+        parse_set("resize=pot-down").unwrap(),
+    ];
+    req.allow.insert(Code::DimNpot);
+    let (s, ev) = run(req);
+    assert_eq!((s.converted, s.failed), (1, 0), "{ev:#?}");
+    let f = engine::dds::read_dds(&std::fs::read(d.path().join("out/odd.dds")).unwrap()).unwrap();
+    assert_eq!((f.width, f.height, f.mip_count), (32, 32, 6));
+}

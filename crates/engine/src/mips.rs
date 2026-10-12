@@ -115,10 +115,18 @@ fn axis_weights(n: u32, m: u32) -> Vec<Vec<(u32, f64)>> {
         .collect()
 }
 
-/// Area-exact box step for any size (odd sizes included), accumulated in f64. Weighted RGB uses
-/// area x alpha as the weight.
+/// Area-exact box step for any size (odd sizes included).
 fn downsample_area(prev: &Rgba32F, weighted: bool) -> Rgba32F {
-    let (w, h) = ((prev.width / 2).max(1), (prev.height / 2).max(1));
+    area_resample(
+        prev,
+        ((prev.width / 2).max(1), (prev.height / 2).max(1)),
+        weighted,
+    )
+}
+
+/// Area-exact box resample of `prev` to `w`×`h` (no upscaling), accumulated in f64. Weighted RGB uses
+/// area x alpha as the weight.
+pub(crate) fn area_resample(prev: &Rgba32F, (w, h): (u32, u32), weighted: bool) -> Rgba32F {
     let (wx, wy) = (axis_weights(prev.width, w), axis_weights(prev.height, h));
     let mut out = Rgba32F::new(w, h, [0.0; 4]);
     for (y, ys) in wy.iter().enumerate() {
@@ -182,7 +190,7 @@ fn base_level(work: &Work, p: &Profile) -> Rgba32F {
 /// Alpha-weighted RGB filtering (spec §5.5) is for colour. A vector chain (normal, `_msn`, `_flow`) or a roughness
 /// chain is never weighted, even with an alpha-tested policy forced on it (Task 29 carry, DECISIONS R11):
 /// weighting would bend the vectors, and the bake's footprint lengths, toward opaque texels.
-fn weighted_rgb(work: &Work, p: &Profile) -> bool {
+pub(crate) fn weighted_rgb(work: &Work, p: &Profile) -> bool {
     work.alpha_present
         && p.alpha_weighted_mips()
         && !work.roughness_r_squared
@@ -201,7 +209,7 @@ pub(crate) fn effective_filter(work: &Work, p: &Profile) -> MipFilter {
 
 /// The domain clamp of RGB for a level >= 1: HDR at 0 and above, linear light and stored data in [0, 1]; vectors and
 /// `SignedRg` are untouched.
-fn clamp_rgb(px: &mut [f32; 4], domain: Domain) {
+pub(crate) fn clamp_rgb(px: &mut [f32; 4], domain: Domain) {
     match domain {
         Domain::Hdr => {
             for c in &mut px[..3] {

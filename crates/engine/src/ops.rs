@@ -1,8 +1,9 @@
 //! Preprocess (spec §5.4): channel and colour operations before mips.
 //!
 //! Non-finite samples are sanitised first (see [`sanitize_non_finite`]). Steps then run in spec order: (1) alpha `remove`, (2) swizzle then grayscale, (3) vector decode,
-//! (4) dilation, (5) sRGB decode (integer sources only, DECISIONS S1). Resize (step 6) is milestone M6; NPOT is blocked by `DIM-NPOT`
-//! before this stage. Renormalising normals is a mips concern (Task 29), not done here.
+//! (4) dilation, (5) sRGB decode (integer sources only, DECISIONS S1), (6) resize ([`crate::resize`], `resize = pot-down`,
+//! milestone M6), last, in the content's domain. Without resize, NPOT is blocked by `DIM-NPOT` before this stage.
+//! Renormalising normals is a mips concern (Task 29), not done here.
 use crate::config::*;
 use crate::dilate::dilate_under_zero_alpha;
 use crate::image::{Rgba32F, SourceInfo};
@@ -206,13 +207,15 @@ pub fn preprocess_with(mut img: Rgba32F, p: &Profile, transfer: SourceTransfer) 
             }
         }
     }
-    Work {
+    let mut work = Work {
         img,
         alpha_present,
         domain,
         roughness_r_squared: p.subtype.is_roughness_member(),
         nonfinite_samples,
-    }
+    };
+    crate::resize::resize_work(&mut work, p); // (6)
+    work
 }
 
 #[cfg(test)]
@@ -225,6 +228,23 @@ mod tests {
             .unwrap()
             .profile("cs-quality", Target::Cs, st)
             .unwrap()
+    }
+
+    #[test]
+    fn preprocess_resizes_last_after_srgb_decode() {
+        // Stored [1, 0, 1] decodes to linear [1, 0, 1]; 3x1 -> 2x1 averages linear light:
+        // (1 * 1 + 0.5 * 0) / 1.5 = 2/3 per output, not srgb_to_linear(2/3) of the stored average.
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Remove;
+        p.resize = ResizeMode::PotDown;
+        let mut img = Rgba32F::new(3, 1, [0.0, 0.0, 0.0, 1.0]);
+        img.px[0][0] = 1.0;
+        img.px[2][0] = 1.0;
+        let w = preprocess(img, &p);
+        assert_eq!((w.img.width, w.img.height), (2, 1));
+        for px in &w.img.px {
+            assert!((px[0] - 2.0 / 3.0).abs() < 1e-6, "{:?}", w.img.px);
+        }
     }
 
     #[test]

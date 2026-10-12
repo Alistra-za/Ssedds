@@ -26,6 +26,7 @@ pub mod policy;
 pub mod presets;
 pub mod quantize;
 pub mod reports;
+pub mod resize;
 pub mod schemas;
 pub mod session;
 pub mod sets;
