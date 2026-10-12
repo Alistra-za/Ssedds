@@ -820,7 +820,9 @@ impl Renderer {
         let gpu = &self.gpu;
         let target = self.target.as_ref().ok_or("no target")?;
         let grey = match scene.background {
-            Background::Solid(g) => g,
+            // The target is read back as is when not sRGB-encoding: give it the display value then.
+            Background::Solid(g) if self.encode_srgb => g,
+            Background::Solid(g) => scene::linear_to_srgb(g),
             Background::Hdri => 0.0,
         };
         target.clear(gpu, [grey, grey, grey, 1.0]);
@@ -839,7 +841,7 @@ impl Renderer {
             ctx.RSSetState(&self.raster);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             if let (Background::Hdri, Some(b)) = (scene.background, &self.backdrop) {
-                b.draw(gpu, &view, &self.sampler);
+                b.draw(gpu, &view, !self.encode_srgb);
             }
             for id in &self.draw_order {
                 let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {

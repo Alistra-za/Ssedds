@@ -44,8 +44,9 @@ pub struct DirLight {
 /// What is drawn behind the model.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Background {
-    /// A flat grey: the **linear** value written to the (linear, RGBA16F) target, so it is encoded with the rest
-    /// of the frame at readback. A perceptual (sRGB) grey from a UI slider goes through [`Background::grey`].
+    /// A flat grey: a **linear** value. With `Renderer::set_encode_srgb(true)` it is encoded with the rest of the
+    /// frame at readback; without it (gamma-space output) the renderer writes its sRGB encoding, so the same
+    /// value looks the same either way. A perceptual (sRGB) grey from a UI slider goes through [`Background::grey`].
     Solid(f32),
     /// The bundled studio HDRI ([`crate::hdri`]) by view direction. It also replaces `Scene::ambient6`: the
     /// ambient light is taken from the same image ([`Scene::ambient`]).
@@ -207,6 +208,15 @@ pub fn dalc_to_sh(six: &[[f32; 3]; 6]) -> [[f32; 4]; 3] {
         }
     }
     sh.map(|r| r.map(|v| v as f32))
+}
+
+/// IEC 61966-2-1 linear → sRGB.
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 /// IEC 61966-2-1 sRGB → linear.

@@ -22,6 +22,10 @@ pub const YAW: f32 = -2.798;
 /// The ambient taken from it is scaled by this; the background is shown as is.
 pub const AMBIENT_SCALE: f32 = 0.3;
 
+/// Largest side and pixel count the reader accepts (the bundled image is 2048x1024).
+const MAX_SIDE: usize = 16384;
+const MAX_PIXELS: usize = 64 << 20;
+
 /// A decoded image: linear RGB, 3 `f32` per pixel, top row first.
 #[derive(Debug, Clone)]
 pub struct Hdr {
@@ -84,8 +88,16 @@ pub fn decode_rgbe(b: &[u8]) -> Result<Hdr, String> {
         ),
         _ => return Err(format!("unsupported HDR orientation {res:?}")),
     };
-    if w == 0 || h == 0 || w.checked_mul(h).is_none_or(|n| n > 1 << 28) {
+    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || w * h > MAX_PIXELS {
         return Err(format!("bad HDR size {w}x{h}"));
+    }
+    // Before any allocation: the payload must plausibly hold the image (flat: exactly w*h*4 bytes; RLE: at
+    // least a 4-byte header per scanline plus one run byte-pair per channel).
+    let payload = b.len() - pos;
+    let rle_ok = (8..32768).contains(&w) && b[pos..].starts_with(&[2, 2]);
+    let min = if rle_ok { h * (4 + 8) } else { w * h * 4 };
+    if payload < min {
+        return Err(format!("HDR payload too short for {w}x{h}"));
     }
     let mut rgb = Vec::with_capacity(w * h * 3);
     let mut scan = vec![0u8; w * 4];
@@ -250,6 +262,26 @@ mod tests {
         assert!(h.rgb.chunks(3).all(|p| p[0] == 128.0 && p[2] == 0.0));
         let g: Vec<f32> = h.rgb.chunks(3).map(|p| p[1]).collect();
         assert_eq!(g, [1.0, 2.0, 3.0, 7.0, 7.0, 7.0, 7.0, 7.0]);
+    }
+
+    #[test]
+    fn oversized_truncated_and_malformed_inputs_are_errors() {
+        assert!(decode_rgbe(&[header(268_435_456, 1), vec![0; 16]].concat()).is_err());
+        assert!(decode_rgbe(&[header(1, 268_435_456), vec![0; 16]].concat()).is_err());
+        assert!(decode_rgbe(&[header(16384, 16384), vec![0; 16]].concat()).is_err());
+        // Declared 4096x4096 flat, a few bytes of payload: rejected before allocating.
+        assert!(decode_rgbe(&[header(4096, 4096), vec![1; 64]].concat()).is_err());
+        // RLE: truncated mid-scanline, and a zero-length run.
+        let mut b = header(8, 1);
+        b.extend([2, 2, 0, 8, 128 + 8, 1, 128 + 8, 1, 128 + 8, 1, 128 + 4, 1]);
+        assert!(decode_rgbe(&b).is_err());
+        let mut b = header(8, 1);
+        b.extend([2, 2, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(decode_rgbe(&b).is_err());
+        // A run longer than the scanline.
+        let mut b = header(8, 1);
+        b.extend([2, 2, 0, 8, 128 + 100, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(decode_rgbe(&b).is_err());
     }
 
     #[test]

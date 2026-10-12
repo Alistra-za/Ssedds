@@ -35,9 +35,9 @@ fn solid_grey_fills_the_background_and_the_mesh_stays_on_top() {
     let cache = tempfile::tempdir().unwrap();
     let mut r = sphere(cache.path());
     let mut s = Scene::neutral();
-    s.background = Background::Solid(0.5);
+    s.background = Background::grey(0.5);
     let f = r.render(&s, 64, 64).unwrap();
-    // Linear 0.5 into the unorm readback (encode_srgb is off here): 128.
+    // 50 % perceptual grey is 128/255 whether or not the readback sRGB-encodes (see the next test).
     assert_eq!(px(&f, 64, 0, 0), [128, 128, 128]);
     assert_eq!(px(&f, 64, 63, 63), [128, 128, 128]);
     assert_ne!(px(&f, 64, 32, 32), [128, 128, 128], "the sphere is drawn");
@@ -45,6 +45,33 @@ fn solid_grey_fills_the_background_and_the_mesh_stays_on_top() {
     match Background::grey(0.5) {
         Background::Solid(g) => assert!((g - 0.214).abs() < 1e-3, "{g}"),
         b => panic!("{b:?}"),
+    }
+}
+
+/// CS features on = the GUI sRGB-encodes the linear target; off = the target is read as is. The background
+/// must look the same in both.
+#[test]
+fn backgrounds_look_the_same_with_and_without_srgb_encoding() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), &["STANDIN_OPAQUE_OK"]);
+    let mut s = Scene::neutral();
+    for bg in [Background::grey(0.5), Background::Hdri] {
+        s.background = bg;
+        r.set_encode_srgb(true);
+        let on = r.render(&s, 48, 32).unwrap();
+        r.set_encode_srgb(false);
+        let off = r.render(&s, 48, 32).unwrap();
+        if bg != Background::Hdri {
+            assert!((px(&off, 48, 5, 5)[0] as i32 - 128).abs() <= 1, "{bg:?}");
+        }
+        for (a, b) in on.chunks(4).zip(off.chunks(4)) {
+            for k in 0..3 {
+                assert!(
+                    (a[k] as i32 - b[k] as i32).abs() <= 3,
+                    "{bg:?}: {a:?} vs {b:?}"
+                );
+            }
+        }
     }
 }
 
@@ -115,7 +142,8 @@ fn hdri_background_matches_the_cpu_lookup_of_the_same_direction() {
         distance: 5.0,
     };
     let f = r.render(&s, 64, 64).unwrap();
-    let got = px(&f, 64, 32, 32)[1] as f32 / 255.0;
+    // encode_srgb is off here: the shader gives display (sRGB) values.
+    let got = render3d::scene::srgb_to_linear(px(&f, 64, 32, 32)[1] as f32 / 255.0);
     assert!(
         (got - mean).abs() < 0.06,
         "rendered {got} vs image {mean} (yaw {})",

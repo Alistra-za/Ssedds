@@ -11,14 +11,16 @@ use windows::Win32::Graphics::Direct3D::{ID3DBlob, D3D11_SRV_DIMENSION_TEXTURE2D
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11DepthStencilState, ID3D11PixelShader, ID3D11SamplerState,
     ID3D11ShaderResourceView, ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BUFFER_DESC, D3D11_DEPTH_STENCIL_DESC,
-    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
-    D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_BUFFER_DESC, D3D11_COMPARISON_NEVER,
+    D3D11_DEPTH_STENCIL_DESC, D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_FLOAT32_MAX,
+    D3D11_SAMPLER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0,
+    D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP,
+    D3D11_TEXTURE_ADDRESS_WRAP, D3D11_USAGE_DEFAULT, D3D11_USAGE_IMMUTABLE,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC};
 
 const SOURCE: &str = r#"
-cbuffer Bg : register(b0) { row_major float4x4 InvViewProj; };
+cbuffer Bg : register(b0) { row_major float4x4 InvViewProj; float4 Flags; };
 Texture2D<float4> Env : register(t0);
 SamplerState Smp : register(s0);
 struct VsOut { float4 pos : SV_Position; float2 ndc : TEXCOORD0; };
@@ -39,7 +41,11 @@ float4 ps(VsOut i) : SV_Target
     float3 d = normalize(h.xyz / h.w);
     float u = frac((atan2(d.y, d.x) + YAW) / 6.2831853 + 0.5);
     float v = acos(clamp(d.z, -1.0, 1.0)) / 3.1415927;
-    return float4(Env.SampleLevel(Smp, float2(u, v), 0).rgb, 1.0);
+    float3 c = Env.SampleLevel(Smp, float2(u, v), 0).rgb;
+    // Flags.x: the readback does not sRGB-encode, so give it display values.
+    if (Flags.x > 0.5)
+        c = c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    return float4(c, 1.0);
 }
 "#;
 
@@ -84,6 +90,8 @@ pub struct Backdrop {
     cb: ID3D11Buffer,
     env: ID3D11ShaderResourceView,
     no_depth: ID3D11DepthStencilState,
+    /// Wrap in U (azimuth), clamp in V (the poles must not bleed into each other).
+    sampler: ID3D11SamplerState,
 }
 
 impl Backdrop {
@@ -121,7 +129,7 @@ impl Backdrop {
         let vs_code = compile("vs", "vs_5_0")?;
         let ps_code = compile("ps", "ps_5_0")?;
         let bd = D3D11_BUFFER_DESC {
-            ByteWidth: 64,
+            ByteWidth: 80,
             Usage: D3D11_USAGE_DEFAULT,
             BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
             CPUAccessFlags: 0,
@@ -139,8 +147,20 @@ impl Backdrop {
             },
         };
         let dd = D3D11_DEPTH_STENCIL_DESC::default(); // DepthEnable = false
-        let (mut vs, mut ps, mut cb, mut tex, mut env, mut ds) =
-            (None, None, None, None, None, None);
+        let smd = D3D11_SAMPLER_DESC {
+            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+            AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
+            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+            MipLODBias: 0.0,
+            MaxAnisotropy: 1,
+            ComparisonFunc: D3D11_COMPARISON_NEVER,
+            BorderColor: [0.0; 4],
+            MinLOD: 0.0,
+            MaxLOD: D3D11_FLOAT32_MAX,
+        };
+        let (mut vs, mut ps, mut cb, mut tex, mut env, mut ds, mut smp) =
+            (None, None, None, None, None, None, None);
         // SAFETY: descriptors, `half` and the bytecode outlive the calls; out-pointers are locals.
         unsafe {
             gpu.device
@@ -160,6 +180,9 @@ impl Backdrop {
                 .CreateShaderResourceView(&tex, Some(&sd), Some(&mut env))
                 .map_err(|e| gpu.fail("CreateShaderResourceView(HDRI)", e))?;
             gpu.device
+                .CreateSamplerState(&smd, Some(&mut smp))
+                .map_err(|e| gpu.fail("CreateSamplerState(background)", e))?;
+            gpu.device
                 .CreateDepthStencilState(&dd, Some(&mut ds))
                 .map_err(|e| gpu.fail("CreateDepthStencilState", e))?;
         }
@@ -169,15 +192,18 @@ impl Backdrop {
             cb: cb.ok_or("no buffer")?,
             env: env.ok_or("no HDRI view")?,
             no_depth: ds.ok_or("no depth state")?,
+            sampler: smp.ok_or("no sampler")?,
         })
     }
 
     /// Draws the background into the bound target (viewport and render target already set). Leaves the default
     /// depth state and no input layout; the caller sets everything else per shape.
-    pub fn draw(&self, gpu: &Gpu, view: &View, sampler: &ID3D11SamplerState) {
+    pub fn draw(&self, gpu: &Gpu, view: &View, encode: bool) {
+        let flags = [if encode { 1.0f32 } else { 0.0 }, 0.0, 0.0, 0.0];
         let inv: Vec<u8> = inverse4(&view.view_proj)
             .iter()
             .flatten()
+            .chain(flags.iter())
             .flat_map(|v| v.to_le_bytes())
             .collect();
         // SAFETY: every object belongs to `gpu.device`; `inv` holds the 64 bytes of the buffer.
@@ -190,7 +216,7 @@ impl Backdrop {
             ctx.PSSetShader(&self.ps, None);
             ctx.PSSetConstantBuffers(0, Some(&[Some(self.cb.clone())]));
             ctx.PSSetShaderResources(0, Some(&[Some(self.env.clone())]));
-            ctx.PSSetSamplers(0, Some(&[Some(sampler.clone())]));
+            ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
             ctx.Draw(3, 0);
             ctx.OMSetDepthStencilState(None, 0);
