@@ -179,7 +179,8 @@ fn started() -> (
     let d = tempfile::tempdir().unwrap();
     let m = pbr_opened(d.path());
     let (v, e) = rock(&m);
-    let enc = Encoder::new(DEFAULT_CAP);
+    let mut enc = Encoder::new(DEFAULT_CAP);
+    enc.hold_workers(true);
     let slots = member_slots(&m, &v, Some(&e));
     (d, m, enc, slots)
 }
@@ -218,15 +219,19 @@ fn a_completion_of_a_superseded_encode_never_lands_not_in_the_debounce_nor_late(
     enc.pump(m.session.as_ref(), t + DEBOUNCE, false);
     let t2 = enc.token_of(SlotKind::Diffuse);
     assert_ne!(t1, t2);
-    settle(&mut enc, &m);
-    let id = enc.members[&SlotKind::Diffuse].state.shown().unwrap().id;
     enc.inject(SlotKind::Diffuse, t1, DEFAULT_CAP, fake());
     assert!(!enc.poll());
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Encoding(None)
+    ));
+    enc.inject(SlotKind::Diffuse, t2, DEFAULT_CAP, fake());
+    assert!(enc.poll());
+    let id = enc.members[&SlotKind::Diffuse].state.shown().unwrap().id;
+    enc.inject(SlotKind::Diffuse, t1, DEFAULT_CAP, Err("x".into()));
+    assert!(!enc.poll());
     let st = &enc.members[&SlotKind::Diffuse].state;
-    assert!(
-        matches!(st, EncState::Fresh(e) if e.id == id && &e.dds[..8] != b"DDS fake"),
-        "{st:?}"
-    );
+    assert!(matches!(st, EncState::Fresh(e) if e.id == id), "{st:?}");
     // A completion for a finished encode (token spent) is dropped too.
     enc.inject(SlotKind::Diffuse, t2, DEFAULT_CAP, fake());
     assert!(!enc.poll());
@@ -255,8 +260,6 @@ fn a_member_that_becomes_blocked_while_encoding_stays_blocked() {
     enc.inject(SlotKind::Diffuse, t1, DEFAULT_CAP, fake());
     enc.inject(SlotKind::Diffuse, t1, DEFAULT_CAP, Err("late".into()));
     assert!(!enc.poll());
-    std::thread::sleep(Duration::from_millis(200)); // the cancelled worker's own result
-    enc.poll(); // (the other member's genuine result may land)
     assert!(matches!(
         enc.members[&SlotKind::Diffuse].state,
         EncState::Blocked(_)
@@ -264,40 +267,73 @@ fn a_member_that_becomes_blocked_while_encoding_stays_blocked() {
 }
 
 #[test]
-fn a_cap_change_stales_every_member_and_drops_in_flight_work() {
+fn a_cap_change_while_encoding_rejects_that_completion_and_schedules_again() {
     let (_d, m, mut enc, slots) = started();
     let t = Instant::now();
     enc.sync(&m, slots.clone(), t, true);
-    settle(&mut enc, &m);
     enc.pump(m.session.as_ref(), t, false);
+    let t1 = enc.token_of(SlotKind::Diffuse);
+    assert_ne!(t1, 0);
     enc.set_cap(32, t);
     assert!(enc
         .members
         .values()
-        .all(|x| matches!(x.state, EncState::Stale(Some(_)))));
-    // A completion at the old cap cannot land.
-    enc.pump(m.session.as_ref(), t, false);
-    let t1 = enc.token_of(SlotKind::Diffuse);
+        .all(|x| matches!(x.state, EncState::Stale(None))));
+    assert_eq!(enc.token_of(SlotKind::Diffuse), 0);
     enc.inject(SlotKind::Diffuse, t1, DEFAULT_CAP, fake());
-    enc.poll();
-    assert!(!matches!(&enc.members[&SlotKind::Diffuse].state,
-        EncState::Fresh(e) if &e.dds[..8] == b"DDS fake"));
-    settle(&mut enc, &m);
-    let f =
-        engine::dds::read_dds(&enc.members[&SlotKind::Diffuse].state.shown().unwrap().dds).unwrap();
-    assert_eq!((f.width, f.height), (32, 32));
-    // A directly mutated cap is caught by sync too.
+    assert!(!enc.poll());
+    enc.pump(m.session.as_ref(), t, false);
+    let t2 = enc.token_of(SlotKind::Diffuse);
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Encoding(None)
+    ));
+    enc.inject(SlotKind::Diffuse, t2, 32, fake());
+    assert!(enc.poll());
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Fresh(_)
+    ));
+    // A directly mutated cap is caught by sync too: the fresh member goes stale with its bytes on show.
     enc.cap = 64;
     enc.sync(&m, slots, Instant::now(), true);
-    assert!(enc
-        .members
-        .values()
-        .all(|x| matches!(x.state, EncState::Stale(Some(_)))));
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Stale(Some(_))
+    ));
+}
+
+#[test]
+fn a_cap_assigned_away_and_back_does_not_strand_an_encoding_member() {
+    let (_d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots.clone(), t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    let t1 = enc.token_of(SlotKind::Diffuse);
+    enc.cap = 32;
+    enc.inject(SlotKind::Diffuse, t1, DEFAULT_CAP, fake());
+    enc.poll(); // rejected: the encode is useless now, the member is scheduled again
+    enc.cap = DEFAULT_CAP;
+    enc.sync(&m, slots, t, false);
+    enc.pump(m.session.as_ref(), t + DEBOUNCE, false);
+    let t2 = enc.token_of(SlotKind::Diffuse);
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Encoding(None)
+    ));
+    assert_ne!(t2, t1, "re-encoded, not the stranded generation");
+    enc.inject(SlotKind::Diffuse, t2, DEFAULT_CAP, fake());
+    assert!(enc.poll());
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Fresh(_)
+    ));
 }
 
 #[test]
 fn another_source_with_the_same_stamp_is_another_signature_and_ids_are_process_wide() {
     let (_d, m, mut a, slots) = started();
+    a.hold_workers(false);
     let item = m
         .items
         .iter()

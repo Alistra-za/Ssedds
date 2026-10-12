@@ -232,6 +232,7 @@ pub struct Encoder {
     pub paused: bool,
     pub error: Option<String>,
     next_token: u64,
+    hold: bool,
     tx: Sender<EncDone>,
     rx: Receiver<EncDone>,
 }
@@ -304,6 +305,7 @@ impl Encoder {
             paused: false,
             error: None,
             next_token: 0,
+            hold: false,
             tx,
             rx,
         }
@@ -330,6 +332,12 @@ impl Encoder {
     #[doc(hidden)]
     pub fn token_of(&self, kind: SlotKind) -> u64 {
         self.members.get(&kind).map_or(0, |m| m.token)
+    }
+
+    /// Test seam: while held, `pump` does its bookkeeping but starts no worker, so every completion is `inject`ed.
+    #[doc(hidden)]
+    pub fn hold_workers(&mut self, on: bool) {
+        self.hold = on;
     }
 
     /// Test seam: delivers a completion as a worker would, so tests control the order.
@@ -453,6 +461,9 @@ impl Encoder {
             let cancel = CancelToken::default();
             mem.cancel = Some(cancel.clone());
             mem.state = EncState::Encoding(mem.state.shown().cloned());
+            if self.hold {
+                continue;
+            }
             let (session, source, cap, kind) =
                 (session.clone(), mem.source.clone(), self.cap, *kind);
             spawn(
@@ -491,7 +502,19 @@ impl Encoder {
                 continue;
             };
             // Superseded: a newer edit, a block, a cap change (all zero or replace the token).
-            if mem.token == 0 || mem.token != token || cap != self.cap {
+            if mem.token == 0 || mem.token != token {
+                continue;
+            }
+            // The live encode ran at another cap than the current one: useless, schedule it again.
+            if cap != self.cap {
+                if let Some(c) = mem.cancel.take() {
+                    c.cancel();
+                }
+                mem.token = 0;
+                mem.cap = self.cap;
+                mem.state = EncState::Stale(mem.state.shown().cloned());
+                mem.due = Some(Instant::now());
+                changed = true;
                 continue;
             }
             mem.cancel = None;
