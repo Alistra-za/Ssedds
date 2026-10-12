@@ -523,6 +523,57 @@ pub fn pick(i: &PickInput) -> ShaderPick {
     }
 }
 
+/// `pick` for one set at plan time (spec §4): pass-1 `jobs` give the member sub-types (packing inputs excluded),
+/// `mesh` the scanned votes keyed by `mesh_key`.
+pub fn pick_for_set(
+    ctx: &crate::policy::ResolveCtx,
+    set: &crate::group::TextureSet,
+    files: &[crate::discover::InputFile],
+    jobs: &[crate::policy::ResolvedJob],
+    explicit: Option<Shader>,
+    mesh: &BTreeMap<String, Vec<Shader>>,
+) -> ShaderPick {
+    let first = set.members.first().map(|&i| &files[i]);
+    let first_path = first.map_or("", |f| f.game_path.as_str());
+    // The colour member's output stem: set members share one folder.
+    let base = set.key.rsplit('/').next().unwrap_or(&set.key);
+    // shortcut: a set whose first member was added from another folder (set edits) looks up that folder; key by the colour member if that bites
+    let votes = first
+        .and_then(|f| mesh.get(&mesh_key(&f.game_path, base)))
+        .map_or(&[][..], Vec::as_slice);
+    let subtypes: Vec<Subtype> = jobs
+        .iter()
+        .filter(|j| {
+            j.set_key == set.key
+                && !matches!(j.status, crate::policy::JobStatus::PackingInput { .. })
+        })
+        .map(|j| j.profile.subtype)
+        .collect();
+    let game_paths: Vec<&str> = set
+        .members
+        .iter()
+        .map(|&i| files[i].game_path.as_str())
+        .collect();
+    pick(&PickInput {
+        target: ctx.target,
+        explicit,
+        advanced_skin: first.is_some_and(|f| crate::pack::plan::set_is_advanced_skin(ctx, set, f)),
+        pbr: crate::suggest::is_pbr_set(&crate::suggest::SuggestContext {
+            target: Target::Cs,
+            suffix: None,
+            game_path: first_path,
+            set_suffixes: &set.suffixes,
+            alpha: crate::presets::AlphaContent::None,
+            is_float: false,
+            advanced_skin: false,
+        }),
+        suffixes: &set.suffixes,
+        subtypes: &subtypes,
+        game_paths: &game_paths,
+        mesh: votes,
+    })
+}
+
 /// One member of a set as the map check sees it. A skipped DDS member has no sub-type.
 pub struct MemberMap {
     pub name: String,

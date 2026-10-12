@@ -43,7 +43,12 @@ pub struct ResolveCtx<'a> {
     pub allow: &'a BTreeSet<Code>,
     /// The `[files]` layer and per-file acknowledgements (DECISIONS N2).
     pub files: &'a FileScopes,
+    /// M6 (DECISIONS Note S): set key → the set's shader pick. Empty during pass 1 (`NO_SHADERS`).
+    pub shaders: &'a BTreeMap<String, crate::shader::ShaderPick>,
 }
+
+/// For `ResolveCtx` literals made before the shaders are picked (pass 1, tests, `inspect`).
+pub static NO_SHADERS: BTreeMap<String, crate::shader::ShaderPick> = BTreeMap::new();
 
 pub struct FileFacts<'a> {
     pub input: &'a InputFile,
@@ -216,6 +221,7 @@ fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &
             .files
             .rel_of(f.input)
             .is_some_and(|rel| path_key_matches(k, &rel)),
+        Scope::Set(_) => false,
     }
 }
 
@@ -235,6 +241,7 @@ fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
         Scope::Subtype(_) => 1,
         Scope::File(_) => 2,
         Scope::Path(_) => 3,
+        Scope::Set(_) => 4,
     };
     let mut cli: Vec<&SetOverride> = ctx.overrides.iter().collect();
     cli.sort_by_key(|o| rank(o));
@@ -255,7 +262,7 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
                 .files
                 .rel_of(input)
                 .is_some_and(|rel| path_key_matches(k, &rel)),
-            Scope::Subtype(_) => false,
+            Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
@@ -543,6 +550,7 @@ fn layered_profile_with(
                 Scope::All => GENERIC,
                 Scope::Subtype(_) => SUBTYPE_SET,
                 Scope::File(_) | Scope::Path(_) => FILE,
+                Scope::Set(_) => unreachable!("set scopes never apply to a file"),
             };
             apply(
                 &mut doc,
@@ -946,6 +954,9 @@ pub struct ResolvedJob {
     /// every other job and for a member that does not bake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bake: Option<crate::bake::BakeJob>,
+    /// M6 (DECISIONS Note S): the shader picked for this job's set; `None` for a job not made by `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<crate::shader::ShaderPick>,
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1513,6 +1524,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }
 
@@ -1601,6 +1613,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     source: None,
                     pack: None,
                     bake: None,
+                    shader: None,
                 };
             }
         };
@@ -1712,5 +1725,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }

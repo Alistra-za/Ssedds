@@ -215,6 +215,7 @@ fn size_mismatch_job(
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }
 

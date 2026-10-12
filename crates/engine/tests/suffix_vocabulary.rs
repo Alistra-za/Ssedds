@@ -59,6 +59,7 @@ fn resolve_img(
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let stem = Path::new(name)
         .file_stem()

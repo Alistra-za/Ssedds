@@ -71,6 +71,7 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
             shift: 0,
             stamp: SourceStamp::of(normal),
         }),
+        shader: None,
     };
     Plan {
         request,
@@ -82,6 +83,7 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
         failed: vec![],
         peak_admitted_bytes: 0,
         cancelled: vec![],
+        shaders: Default::default(),
     }
 }
 

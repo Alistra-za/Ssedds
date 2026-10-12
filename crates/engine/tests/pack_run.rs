@@ -66,6 +66,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
             sources: vec![source(rough, RawMap::Roughness), source(ao, RawMap::Ao)],
         }),
         bake: None,
+        shader: None,
     };
     Plan {
         request,
@@ -77,6 +78,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         failed: vec![],
         peak_admitted_bytes: 0,
         cancelled: vec![],
+        shaders: Default::default(),
     }
 }
 

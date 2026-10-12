@@ -39,6 +39,7 @@ fn run(
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let name = game.rsplit('/').next().unwrap();
     let f = InputFile {
@@ -306,6 +307,7 @@ fn run_with(
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let f = InputFile {
         path: rel.into(),
@@ -811,6 +813,7 @@ fn preset_alpha_policy_counts_as_explicit() {
         accept: AcceptSuggestions::None,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let j = resolve_file(&ctx("mine"), &facts);
     assert_eq!(
@@ -1065,6 +1068,7 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
         accept: AcceptSuggestions::High,
         allow: &allow_set,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let j = resolve_in(&ctx, "a/x_m.png", Some("m"), &m);
     assert_eq!(
@@ -1139,6 +1143,7 @@ fn table_backends_follow_more_specific_formats() {
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let j = resolve_in(&c, "a/x_m.png", Some("m"), &opaque());
     assert_eq!(
@@ -1214,6 +1219,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
                 accept: AcceptSuggestions::High,
                 allow: &allow,
                 files: &NO_FILE_SCOPES,
+                shaders: &NO_SHADERS,
             };
             let j = resolve_in(&ctx, "a/x.png", None, &img);
             match &j.status {
@@ -1242,6 +1248,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
     };
     let j = resolve_in(&ctx, "a/x.png", None, &img);
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);

@@ -116,6 +116,8 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
             members: vec!["a_d.png".into()],
             pbr: true,
             bake: false,
+            shader: None,
+            warnings: vec![],
             recipes: vec![],
         },
         EventKind::FilePlanned {
@@ -133,6 +135,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 source: None,
                 pack: None,
                 bake: None,
+                shader: None,
             }),
         },
         EventKind::Progress {
