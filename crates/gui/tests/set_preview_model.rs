@@ -1251,3 +1251,110 @@ fn only_le_meshes_say_why_the_sphere_is_shown() {
     ));
     assert!(s.notices.iter().any(|n| n == LE_ONLY), "{:?}", s.notices);
 }
+
+// ---- final review fixes ----
+
+#[test]
+fn a_hidden_panel_with_a_debounced_encode_goes_idle_and_encodes_when_shown_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = pbr_opened(dir.path());
+    let (v, e) = rock(&m);
+    let key = v.key.clone();
+    let mut m = m;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    let before = shown_ids(&s);
+    // An edit marks a member Stale, due DEBOUNCE ahead; the user switches view before then.
+    let mut slots = member_slots(&m, &v, Some(&e));
+    edit(&mut slots);
+    let now = Instant::now();
+    s.enc.sync(&m, slots, now, false);
+    assert!(s.enc.busy());
+    s.poll_at(&m, now);
+    assert!(!s.busy(), "hidden: a waiting encode is not work");
+    s.poll_at(&m, now + DEBOUNCE * 2);
+    assert!(!s.busy(), "and stays idle after the due time");
+    assert!(matches!(
+        s.enc.members[&SlotKind::Diffuse].state,
+        EncState::Stale(_)
+    ));
+    run(&mut s, &m);
+    assert!(
+        matches!(s.enc.members[&SlotKind::Diffuse].state, EncState::Fresh(_)),
+        "shown again: it encodes"
+    );
+    assert_ne!(shown_ids(&s), before);
+}
+
+fn builtin_key(s: &SetPreview) -> u64 {
+    match s.v3.content() {
+        Some(Content::Builtin { key, .. }) => *key,
+        c => panic!("{c:?}"),
+    }
+}
+
+fn poll_once(s: &mut SetPreview, m: &AppModel) {
+    s.shown = true;
+    s.input = true;
+    s.poll(m);
+}
+
+#[test]
+fn a_material_edit_naming_a_new_slot_path_pushes_the_scene_instead_of_set_material() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let fp = render3d::locate::Fingerprint {
+        root: dir.path().to_path_buf(),
+        owner_mod: Some("CS".into()),
+        hash: "a".into(),
+    };
+    let mut s = SetPreview::new(Some(fp.clone()), None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    // `poll` started a real locate (nothing to find here): let it end, then confirm the shaders.
+    while s.v3.locating() {
+        poll_once(&mut s, &m);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    s.v3.on_located(Ok(Some(fp)));
+    let cmds = s.v3.attach_test_thread();
+    s.v3.request_frame(64, 64);
+    let id = cmds
+        .try_iter()
+        .find_map(|c| match c {
+            sdc_gui::model::viewport3d::V3Cmd::LoadBuiltin { id, .. } => Some(id),
+            _ => None,
+        })
+        .expect("a LoadBuiltin");
+    s.v3.handle(sdc_gui::model::viewport3d::V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    let sets = |cmds: &std::sync::mpsc::Receiver<_>| {
+        cmds.try_iter()
+            .filter(|c| matches!(c, sdc_gui::model::viewport3d::V3Cmd::SetMaterial { .. }))
+            .count()
+    };
+    // Control: a plain parameter edit is a SetMaterial on the loaded content.
+    let k0 = builtin_key(&s);
+    m.set_json_value("landscape/rock01", "roughness_scale", Some(json!(0.25)));
+    poll_once(&mut s, &m);
+    assert_eq!(sets(&cmds), 1);
+    assert_eq!(builtin_key(&s), k0, "no scene push");
+    // A new slot path (the worker would not resolve it from the frozen texture map): a full push.
+    m.set_json_value(
+        "landscape/rock01",
+        "cubemap",
+        Some(json!("textures/cubemaps/new_e.dds")),
+    );
+    poll_once(&mut s, &m);
+    poll_once(&mut s, &m);
+    assert_eq!(sets(&cmds), 0, "no SetMaterial for a path the worker lacks");
+    assert_ne!(builtin_key(&s), k0, "the scene was pushed");
+}

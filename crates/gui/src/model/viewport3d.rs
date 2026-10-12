@@ -457,6 +457,8 @@ pub struct Viewport3d {
     pub last_edit: Option<(EditKind, f64)>,
     content: Option<Content>,
     need_load: bool,
+    /// The pending load is a reload of the same model (`set_content(.., true)`): a compile failure keeps the frame.
+    kept_view: bool,
     loaded: Option<u64>,
     pending_load: Option<u64>,
     last_sent: Option<(Camera, u32, u32, u64, Look)>,
@@ -505,6 +507,7 @@ impl Viewport3d {
             edits_sent: 0,
             edits_done: 0,
             need_load: false,
+            kept_view: false,
             loaded: None,
             pending_load: None,
             last_sent: None,
@@ -743,7 +746,8 @@ impl Viewport3d {
         self.shapes.clear();
         self.render_error = None;
         self.last_sent = None;
-        if keep_view && !le {
+        self.kept_view = keep_view && !le;
+        if self.kept_view {
             return;
         }
         self.report = le.then(|| LoadReport {
@@ -926,8 +930,8 @@ impl Viewport3d {
                     // A reload of the same mesh (shaders or features changed) keeps its id. When its
                     // permutations now fail, the last frame stays and the panel lists the compile errors
                     // (Review Focus #3, P0 ruling; keeping the old permutations drawing is P1).
-                    let reload_failed =
-                        self.loaded == Some(id) && !report.compile_errors.is_empty();
+                    let reload_failed = (self.loaded == Some(id) || self.kept_view)
+                        && !report.compile_errors.is_empty();
                     self.pending_load = None;
                     self.loaded = Some(id);
                     if (report.le_mesh || report.shapes == 0) && !reload_failed {
@@ -955,7 +959,9 @@ impl Viewport3d {
             }
             V3Reply::RenderError { id, message } => {
                 self.render_done = self.render_done.max(id);
-                self.render_error = Some(message);
+                if self.loaded.is_some() && self.pending_load.is_none() {
+                    self.render_error = Some(message);
+                }
             }
             V3Reply::Shapes(s) => {
                 // Only for the loaded content: a reply for content replaced since is dropped.

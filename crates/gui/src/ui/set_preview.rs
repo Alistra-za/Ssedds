@@ -26,10 +26,18 @@ pub fn wanted(m: &AppModel) -> bool {
 
 pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     s.shown = true;
-    if ui
-        .ctx()
-        .input(|i| !i.events.is_empty() || i.pointer.any_down())
-    {
+    // Edits arrive as keys, text or clicks; pointer moves and drags (the orbit) keep the throttle.
+    if ui.ctx().input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Key { .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::PointerButton { .. }
+            )
+        })
+    }) {
         s.input = true;
     }
     ui.heading(PANEL_TITLE);
@@ -60,9 +68,6 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     }
     for n in &s.notices {
         ui.colored_label(AMBER, n);
-    }
-    if let Some(e) = &s.enc.error {
-        ui.colored_label(RED, e);
     }
     ui.label(egui::RichText::new(OFF_FEATURES).small());
     timings(ui, s);

@@ -1079,3 +1079,73 @@ fn work_that_starts_after_idle_does_not_inherit_the_old_spinner_timer() {
         "a new piece of work starts its own delay"
     );
 }
+
+/// Final review I2: a set-preview reload (`set_content(.., true)`, a new key every push) whose shapes all fail to
+/// compile keeps the last frame and lists the errors; new content (keep_view false) still clears.
+#[test]
+fn a_keep_view_reload_whose_shapes_all_fail_keeps_the_frame_and_lists_the_errors() {
+    let (_d, mut v, cmds) = confirmed();
+    let id = loaded_parsed(&mut v, &cmds, 1, 1);
+    v.request_frame(64, 64);
+    let v3::V3Cmd::Render { id: rid, .. } = cmds.try_recv().unwrap() else {
+        panic!("render")
+    };
+    v.handle(v3::V3Reply::Frame {
+        frame: Arc::new(v3::Frame {
+            width: 64,
+            height: 64,
+            rgba: vec![9; 64 * 64 * 4],
+            id: rid,
+        }),
+        timing: Default::default(),
+    });
+    let _ = id;
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(2, &nif, &[])), true);
+    assert!(v.frame.is_some(), "kept while the reload is pending");
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id: id2, .. }) = cmds.try_recv() else {
+        panic!("reload")
+    };
+    loaded(
+        &mut v,
+        id2,
+        render3d::LoadReport {
+            compile_errors: vec!["a: ps: X3000".into()],
+            ..Default::default()
+        },
+    );
+    assert!(v.frame.is_some(), "the old image stays");
+    assert_eq!(v.report.as_ref().unwrap().compile_errors.len(), 1);
+    // New content (not a reload) that draws nothing clears it.
+    v.set_content(Some(parsed(3, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id: id3, .. }) = cmds.try_recv() else {
+        panic!("load")
+    };
+    loaded(
+        &mut v,
+        id3,
+        render3d::LoadReport {
+            compile_errors: vec!["b: ps: X3000".into()],
+            ..Default::default()
+        },
+    );
+    assert!(v.frame.is_none());
+}
+
+/// Final review M-d: a render error for content replaced since is dropped like the other replies.
+#[test]
+fn a_render_error_for_replaced_content_is_dropped() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let _ = cmds.try_recv();
+    // Load pending: nothing is loaded for the error to belong to.
+    v.handle(v3::V3Reply::RenderError {
+        id: 1,
+        message: "old".into(),
+    });
+    assert!(v.render_error.is_none());
+}

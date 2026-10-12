@@ -269,7 +269,6 @@ pub struct Encoder {
     mode: PreviewMode,
     /// An export is running: nothing starts (02 §2.3).
     pub paused: bool,
-    pub error: Option<String>,
     next_token: u64,
     hold: bool,
     tx: Sender<EncDone>,
@@ -404,7 +403,6 @@ impl Encoder {
             cap,
             mode: PreviewMode::default(),
             paused: false,
-            error: None,
             next_token: 0,
             hold: false,
             tx,
@@ -505,7 +503,6 @@ impl Encoder {
             }
         }
         self.members.clear();
-        self.error = None;
     }
 }
 
@@ -669,6 +666,7 @@ impl Encoder {
                 }
                 mem.token = 0;
                 mem.cap = self.cap;
+                mem.mode = self.mode;
                 mem.state = EncState::Stale(mem.state.shown().cloned());
                 mem.due = Some(Instant::now());
                 changed = true;
@@ -696,6 +694,11 @@ impl Encoder {
     /// Work is waiting or running (false while paused: the export keeps the app repainting).
     pub fn busy(&self) -> bool {
         !self.paused && !self.settled()
+    }
+
+    /// An encode is running (its completion is still to drain).
+    fn in_flight(&self) -> bool {
+        !self.paused && self.members.values().any(|m| m.token != 0)
     }
 
     /// Whether sdc will produce `norm` for this set (a member that can be encoded serves it): PGPatcher's
@@ -1279,6 +1282,8 @@ pub struct SetPreview {
     pub choice: HashMap<String, MeshChoice>,
     pub rows: Vec<ShapeRow>,
     pub notices: Vec<String>,
+    /// The NIF read's own notices (warnings, a failed read): dropped when the mesh pick changes.
+    nif_notices: Vec<String>,
     pub timings: Timings,
     /// Set by the panel each frame it draws; `poll` does nothing heavy otherwise.
     pub shown: bool,
@@ -1294,6 +1299,9 @@ pub struct SetPreview {
     failed: HashSet<i64>,
     on_screen: Option<Shown>,
     sent: BTreeMap<ShapeId, MaterialState>,
+    /// Every slot path the last pushed scene's materials named (resolved or not): a JSON-only edit naming another
+    /// one needs the push, which runs the VFS lookup.
+    pushed_norms: HashSet<String>,
     want_scene: bool,
     /// The panel was drawn on the last polled frame: a pending scene push only counts as work while it is on screen.
     visible: bool,
@@ -1338,6 +1346,7 @@ impl SetPreview {
             choice: HashMap::new(),
             rows: vec![],
             notices: vec![],
+            nif_notices: vec![],
             timings: Timings::default(),
             shown: false,
             input: false,
@@ -1350,6 +1359,7 @@ impl SetPreview {
             failed: HashSet::new(),
             on_screen: None,
             sent: BTreeMap::new(),
+            pushed_norms: HashSet::new(),
             want_scene: false,
             visible: false,
             querying: None,
@@ -1389,18 +1399,16 @@ impl SetPreview {
 
     /// Encodes, queries, NIF reads, the viewport or a scene to send are in flight.
     pub fn busy(&self) -> bool {
+        // Hidden, `pump` never runs: waiting (debounced) members are not work until the panel is shown again.
         self.v3.busy()
-            || self.enc.busy()
+            || (if self.shown || self.visible {
+                self.enc.busy()
+            } else {
+                self.enc.in_flight()
+            })
             || self.querying.is_some()
             || self.loading.is_some()
             || (self.want_scene && !self.enc.paused && (self.shown || self.visible))
-    }
-
-    /// Window focus: look for CS again (as `MeshesModel::relocate`), once the panel has been shown.
-    pub fn relocate(&mut self) {
-        if self.located {
-            self.v3.locate(self.target.clone());
-        }
     }
 
     pub fn poll(&mut self, m: &AppModel) {
@@ -1448,6 +1456,16 @@ impl SetPreview {
         }
     }
 
+    fn nif_notice(&mut self, n: String) {
+        self.nif_notices.push(n.clone());
+        self.notice(n);
+    }
+
+    fn drop_nif_notices(&mut self) {
+        let old = std::mem::take(&mut self.nif_notices);
+        self.notices.retain(|n| !old.contains(n));
+    }
+
     fn notice(&mut self, n: String) {
         if !self.notices.contains(&n) {
             self.notices.push(n);
@@ -1485,6 +1503,7 @@ impl SetPreview {
             self.enc.reset();
             self.rows.clear();
             self.notices.clear();
+            self.nif_notices.clear();
             self.nif = None;
             self.failed.clear();
             self.sent.clear();
@@ -1515,6 +1534,7 @@ impl SetPreview {
         self.nif = None;
         self.failed.clear();
         self.querying = None;
+        self.notices.retain(|n| !n.starts_with("scan database: "));
         let Some(entry) = self.entry.clone() else {
             self.candidates = Candidates::NotAsked;
             return;
@@ -1564,17 +1584,18 @@ impl SetPreview {
                     if self.loading.is_some_and(|(t, _)| t == token) =>
                 {
                     let (_, copy) = self.loading.take().expect("checked above");
+                    self.drop_nif_notices();
                     match result {
                         Ok(n) => {
                             self.timings.nif_ms = Some(n.ms);
                             for e in n.parsed.errors.iter().chain(&n.parsed.warnings) {
-                                self.notice(format!("{}: {e}", n.nif_path));
+                                self.nif_notice(format!("{}: {e}", n.nif_path));
                             }
                             self.nif = Some(Arc::new(n));
                         }
                         Err(e) => {
                             self.failed.insert(copy);
-                            self.notice(e);
+                            self.nif_notice(e);
                         }
                     }
                     self.want_scene = true;
@@ -1623,6 +1644,7 @@ impl SetPreview {
     pub fn choose(&mut self, c: MeshChoice) {
         if let Some(fp) = &self.fp {
             self.choice.insert(fp.set_key.clone(), c);
+            self.drop_nif_notices();
             self.want_scene = true;
         }
     }
@@ -1769,6 +1791,7 @@ impl SetPreview {
                     same,
                 );
                 self.on_screen = Some(Shown::Builtin(b));
+                self.pushed_norms = slot_norms(&[&material]);
                 self.sent = BTreeMap::from([(ShapeId(0), material)]);
                 self.rows = vec![row];
             }
@@ -1806,6 +1829,8 @@ impl SetPreview {
                     same,
                 );
                 self.on_screen = Some(Shown::Nif(c.load_copy_id));
+                self.pushed_norms =
+                    slot_norms(&rows.iter().map(|r| &r.material).collect::<Vec<_>>());
                 self.sent = rows.iter().map(|r| (r.id, r.material.clone())).collect();
                 self.rows = rows;
             }
@@ -1857,6 +1882,12 @@ impl SetPreview {
                 return;
             }
         };
+        if !slot_norms(&rows.iter().map(|r| &r.material).collect::<Vec<_>>())
+            .is_subset(&self.pushed_norms)
+        {
+            self.want_scene = true;
+            return;
+        }
         for r in &rows {
             if self.sent.get(&r.id) == Some(&r.material) {
                 continue;
@@ -1869,6 +1900,16 @@ impl SetPreview {
         }
         self.rows = rows;
     }
+}
+
+/// The non-empty slot paths of `materials`.
+fn slot_norms(materials: &[&MaterialState]) -> HashSet<String> {
+    materials
+        .iter()
+        .flat_map(|m| m.slots.iter())
+        .filter(|t| !t.norm.is_empty())
+        .map(|t| t.norm.clone())
+        .collect()
 }
 
 impl SetPreview {
