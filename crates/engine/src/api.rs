@@ -526,7 +526,22 @@ fn is_up_to_date(
     encoders: &EncoderVersions,
     bc1_model: Bc1Model,
 ) -> bool {
-    if e.is_newer_schema() || e.preset.is_none() || e.encoders.as_ref() != Some(encoders) {
+    let Some(rec) = e.encoders.as_ref() else {
+        return false;
+    };
+    // The rgbcx patch only changes BC4 blocks (BC3 alpha, BC4, BC5), so other formats ignore it.
+    let rgbcx = matches!(job.profile.format, Format::Bc3 | Format::Bc4 | Format::Bc5);
+    if e.is_newer_schema()
+        || e.preset.is_none()
+        || (&rec.bc7enc_rdo, &rec.ispctc, &rec.ispc, &rec.bc7e_patch)
+            != (
+                &encoders.bc7enc_rdo,
+                &encoders.ispctc,
+                &encoders.ispc,
+                &encoders.bc7e_patch,
+            )
+        || (rgbcx && rec.rgbcx_patch != encoders.rgbcx_patch)
+    {
         return false;
     }
     if matches!(job.profile.format, Format::Bc1 | Format::Bc3)
@@ -2237,11 +2252,7 @@ mod tests {
             f(&mut e);
             e
         };
-        let not_up: [(&str, ManifestEntry); 11] = [
-            (
-                "encoded before the rgbcx round-to-nearest patch",
-                with(&|e| e.encoders.as_mut().unwrap().rgbcx_patch = None),
-            ),
+        let not_up: [(&str, ManifestEntry); 10] = [
             ("no encoders", with(&|e| e.encoders = None)),
             (
                 "other encoders",
@@ -2288,6 +2299,26 @@ mod tests {
             assert!(
                 !up(&old, &job, Bc1Model::Ideal),
                 "{format:?} unrecorded model"
+            );
+        }
+        // The rgbcx BC4 patch only changes BC3/BC4/BC5 output; a record from before it stays current for the rest.
+        for format in [
+            Format::Bc1,
+            Format::Bc3,
+            Format::Bc4,
+            Format::Bc5,
+            Format::Bc6hUf16,
+            Format::Bc7,
+            Format::Rgba8,
+        ] {
+            job.profile.format = format;
+            let mut old = entry_for(&job);
+            old.encoders.as_mut().unwrap().rgbcx_patch = None;
+            let stale = matches!(format, Format::Bc3 | Format::Bc4 | Format::Bc5);
+            assert_eq!(
+                up(&old, &job, Bc1Model::Ideal),
+                !stale,
+                "{format:?} pre-patch record"
             );
         }
     }
