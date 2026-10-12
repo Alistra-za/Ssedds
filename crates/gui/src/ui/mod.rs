@@ -50,12 +50,15 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     header::draw(ui, model);
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops) = (&mut state.thumbs, &mut state.drops);
+    // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
+    let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
     column_panel(
         ui,
         "textures",
         "textures-strip",
         "Textures",
         380.0,
+        columns::TEXTURES_MIN..=textures_max,
         model,
         |ui, model| {
             columns::textures(ui, model, thumbs);
@@ -67,6 +70,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         "sets-strip",
         "Sets",
         260.0,
+        columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
         model,
         |ui, model| {
             sets_column::draw(ui, model, thumbs, drops);
@@ -116,15 +120,19 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
 }
 
 /// A resizable column, or a thin named strip when the columns are collapsed. The strip has its own id: egui keeps a panel's size per id, and the strip's 24 px must not become the column's width.
+#[allow(clippy::too_many_arguments)]
 fn column_panel(
     ui: &mut egui::Ui,
     id: &'static str,
     strip_id: &'static str,
     name: &str,
     width: f32,
+    range: std::ops::RangeInclusive<f32>,
     model: &mut AppModel,
     content: impl FnOnce(&mut egui::Ui, &mut AppModel),
 ) {
+    // Too narrow a window: the minimum wins, and egui caps the column at the width left (never below zero).
+    let range = *range.start()..=range.end().max(*range.start());
     if model.settings.columns_collapsed {
         egui::Panel::left(strip_id)
             .resizable(false)
@@ -134,6 +142,11 @@ fn column_panel(
     } else {
         egui::Panel::left(id)
             .default_size(width)
-            .show(ui, |ui| content(ui, model));
+            .size_range(range)
+            .show(ui, |ui| {
+                // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                content(ui, model)
+            });
     }
 }

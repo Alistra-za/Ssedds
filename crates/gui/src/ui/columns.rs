@@ -15,6 +15,18 @@ const TILE_MARGIN: f32 = 4.0;
 const TILE_STROKE: f32 = 2.0;
 /// Scroll bar and margin allowance when fitting tiles to a row.
 const SCROLL_ALLOWANCE: f32 = 18.0;
+/// A side panel's own chrome: `Frame::side_top_panel`'s 8 px margins and the 1 px separator.
+const PANEL_CHROME: f32 = 2.0 * 8.0 + 1.0;
+/// A set pill's chrome (`Frame::group`: 6 px margin and 1 px stroke a side) and egui's 8 px item spacing.
+const PILL_CHROME: f32 = 2.0 * (6.0 + 1.0);
+const ITEM_SPACING: f32 = 8.0;
+/// The Textures column's narrowest width: its heading over one tile.
+pub const TEXTURES_MIN: f32 =
+    TILE + 2.0 * (TILE_MARGIN + TILE_STROKE) + SCROLL_ALLOWANCE + PANEL_CHROME;
+/// The Sets column's narrowest width: its heading over a pill with two members in a row (one alone is under
+/// egui's 96 px default).
+pub const SETS_MIN: f32 =
+    2.0 * MEMBER + ITEM_SPACING + PILL_CHROME + SCROLL_ALLOWANCE + PANEL_CHROME;
 
 /// A collapsed column: a thin strip with the column name drawn vertically.
 pub fn strip(ui: &mut egui::Ui, name: &str) {
@@ -151,7 +163,8 @@ fn tile(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, idx: u
 }
 
 pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
-    ui.horizontal(|ui| {
+    // Wrapped: the counts move under the heading in a narrow column instead of holding it wider.
+    ui.horizontal_wrapped(|ui| {
         ui.heading("Textures");
         let n = model.undecided();
         if n > 0 {
