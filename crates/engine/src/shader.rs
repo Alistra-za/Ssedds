@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::codes::{Code, Warning};
-use crate::config::{Subtype, Target};
+use crate::config::{AlphaPolicy, Subtype, Target};
 use crate::suggest::has_component;
 
 /// A Skyrim shader a texture set is made for (spec §3).
@@ -330,6 +330,38 @@ pub fn colour_mesh_key(
         None | Some("d")
     );
     colour.then(|| mesh_key(game_path, stem))
+}
+
+/// The alpha property of one scanned lighting shape that uses a colour member in slot 0 (M6 Track E spec §4.1,
+/// DECISIONS Note U5): the NiAlphaProperty blend and test enables and the test threshold. A shape without the
+/// property is all false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshAlpha {
+    pub blend: bool,
+    pub test: bool,
+    pub threshold: u8,
+}
+
+/// The owner's table (spec §4.2, DECISIONS Note U6): the alpha policy the shapes give their colour member, and the
+/// cutout threshold when a shape tests; `None` = no evidence. Any shape with alpha beats the shapes without (there is
+/// no vote), and blend and test anywhere, on one shape or two, is `cutout_blend`. The threshold is the largest of the
+/// testing shapes (the stricter cutoff), clamped to sdc's 1..=254 (owner O2).
+pub fn mesh_alpha_policy(shapes: &[MeshAlpha]) -> Option<(AlphaPolicy, Option<u8>)> {
+    if shapes.is_empty() {
+        return None;
+    }
+    let blend = shapes.iter().any(|s| s.blend);
+    let threshold = shapes
+        .iter()
+        .filter(|s| s.test)
+        .map(|s| s.threshold.clamp(1, 254))
+        .max();
+    Some(match (blend, threshold) {
+        (false, None) => (AlphaPolicy::Remove, None),
+        (true, None) => (AlphaPolicy::Blend, None),
+        (false, t) => (AlphaPolicy::Cutout, t),
+        (true, t) => (AlphaPolicy::CutoutBlend, t),
+    })
 }
 
 /// The auto-pick rule that chose a shader (spec §4.4).
@@ -1445,6 +1477,71 @@ mod tests {
         assert_eq!(
             pick_notes(&a, Target::Cs)[0].message,
             "shader hair picked automatically (mesh)"
+        );
+    }
+
+    const BLEND: MeshAlpha = MeshAlpha {
+        blend: true,
+        test: false,
+        threshold: 0,
+    };
+    const NO_ALPHA: MeshAlpha = MeshAlpha {
+        blend: false,
+        test: false,
+        threshold: 0,
+    };
+    const fn tested(threshold: u8) -> MeshAlpha {
+        MeshAlpha {
+            blend: false,
+            test: true,
+            threshold,
+        }
+    }
+
+    /// M6 Track E spec §4.2: every row of the owner's table. Shapes without alpha never outvote one with alpha, and
+    /// blend on one mesh with test on another is cutout_blend, not a majority (Review Focus 1).
+    #[test]
+    fn mesh_alpha_policy_follows_the_owner_table() {
+        use AlphaPolicy::*;
+        assert_eq!(mesh_alpha_policy(&[]), None);
+        assert_eq!(
+            mesh_alpha_policy(&[NO_ALPHA, NO_ALPHA]),
+            Some((Remove, None))
+        );
+        assert_eq!(mesh_alpha_policy(&[BLEND, BLEND]), Some((Blend, None)));
+        assert_eq!(
+            mesh_alpha_policy(&[NO_ALPHA, BLEND, NO_ALPHA]),
+            Some((Blend, None))
+        );
+        assert_eq!(
+            mesh_alpha_policy(&[tested(90), tested(128), NO_ALPHA]),
+            Some((Cutout, Some(128)))
+        );
+        assert_eq!(
+            mesh_alpha_policy(&[tested(90), BLEND, BLEND, BLEND]),
+            Some((CutoutBlend, Some(90)))
+        );
+        let both = MeshAlpha {
+            blend: true,
+            test: true,
+            threshold: 100,
+        };
+        assert_eq!(
+            mesh_alpha_policy(&[both, NO_ALPHA]),
+            Some((CutoutBlend, Some(100)))
+        );
+    }
+
+    /// Note U6 + owner O2: a NIF threshold outside sdc's 1..=254 is clamped into it (a NIF may say 0 or 255).
+    #[test]
+    fn mesh_threshold_is_clamped_to_the_sdc_range() {
+        assert_eq!(
+            mesh_alpha_policy(&[tested(0)]),
+            Some((AlphaPolicy::Cutout, Some(1)))
+        );
+        assert_eq!(
+            mesh_alpha_policy(&[tested(255), tested(30)]),
+            Some((AlphaPolicy::Cutout, Some(254)))
         );
     }
 }
