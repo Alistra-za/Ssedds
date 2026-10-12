@@ -555,3 +555,60 @@ fn every_builtin_preset_passes_check_preset() {
         .to_string()
         .contains("bogus"));
 }
+
+/// Fix round 1: the reserved-id refusal names the incoming source and the built-in one.
+#[test]
+fn the_reserved_id_refusal_names_both_sources() {
+    let base = "schema_version = 1\nid = \"sdc-base\"\nversion = \"1\"\n";
+    let mut r = PresetRegistry::builtin().unwrap();
+    let e = r.add_toml(base).unwrap_err().to_string();
+    assert!(
+        e.starts_with("CFG-INVALID")
+            && e.contains("from inline")
+            && e.contains("already loaded from builtin"),
+        "{e}"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let p = write(d.path(), "base.toml", base);
+    let e = r.add_file(&p).unwrap_err().to_string();
+    assert!(
+        e.contains(&format!("from {}", p.display())) && e.contains("already loaded from builtin"),
+        "{e}"
+    );
+}
+
+/// Fix round 1: a folder that cannot be read is one CFG-PRESET-SKIPPED naming it (a missing one is silent).
+#[test]
+fn an_unreadable_preset_folder_warns_naming_it() {
+    let d = tempfile::tempdir().unwrap();
+    let not_a_dir = write(d.path(), "file.toml", MINE);
+    let w = PresetRegistry::builtin().unwrap().add_dir(&not_a_dir);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].code, Code::CfgPresetSkipped);
+    assert_eq!(
+        w[0].data["file"].as_str(),
+        Some(not_a_dir.display().to_string().as_str())
+    );
+}
+
+/// Fix round 1: a `*.toml` entry whose metadata cannot be read (a dangling link) is skipped with a warning naming it.
+#[test]
+fn a_dangling_preset_link_warns_naming_it() {
+    let d = tempfile::tempdir().unwrap();
+    let link = d.path().join("dangling.toml");
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(d.path().join("gone.toml"), &link);
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(d.path().join("gone.toml"), &link);
+    if made.is_err() {
+        eprintln!("skipped: cannot create a symlink here (Windows without Developer Mode)");
+        return;
+    }
+    let w = PresetRegistry::builtin().unwrap().add_dir(d.path());
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].code, Code::CfgPresetSkipped);
+    assert_eq!(
+        w[0].data["file"].as_str(),
+        Some(link.display().to_string().as_str())
+    );
+}

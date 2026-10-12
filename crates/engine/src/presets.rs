@@ -353,14 +353,31 @@ pub fn leaf_paths(v: &Value, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
-/// Whether a registry source names the file `path` (both canonicalised; `builtin`/`inline` never do).
-fn same_file(source: &str, path: &Path) -> bool {
-    source != SOURCE_BUILTIN
-        && source != SOURCE_INLINE
-        && matches!(
-            (std::fs::canonicalize(source), std::fs::canonicalize(path)),
-            (Ok(a), Ok(b)) if a == b
-        )
+/// Where a preset came from. The kind is kept apart from the label so a file named `builtin` or `inline` stays a file.
+#[derive(Debug, Clone, PartialEq)]
+enum Source {
+    Builtin,
+    Inline,
+    /// The path as given (`Path::display`).
+    File(String),
+}
+
+impl Source {
+    fn label(&self) -> &str {
+        match self {
+            Source::Builtin => SOURCE_BUILTIN,
+            Source::Inline => SOURCE_INLINE,
+            Source::File(p) => p,
+        }
+    }
+}
+
+/// Whether a registry source is the file `path` (both canonicalised).
+fn same_file(source: &Source, path: &Path) -> bool {
+    matches!(source, Source::File(s) if matches!(
+        (std::fs::canonicalize(s), std::fs::canonicalize(path)),
+        (Ok(a), Ok(b)) if a == b
+    ))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -371,7 +388,7 @@ pub struct PresetRegistry {
     /// Alias → id of the preset that declares it.
     alias_owner: BTreeMap<String, String>,
     /// Id → where the preset was loaded from: `builtin`, `inline` or a file path (M6 Track D, Note T7).
-    sources: BTreeMap<String, String>,
+    sources: BTreeMap<String, Source>,
     /// Id → the preset's TOML table as loaded (`presets export`, Note T8).
     tables: BTreeMap<String, toml::Table>,
 }
@@ -380,7 +397,7 @@ impl PresetRegistry {
     pub fn builtin() -> Result<Self, PresetError> {
         let mut r = PresetRegistry::default();
         for text in BUILTIN {
-            r.insert_toml(text, SOURCE_BUILTIN)?;
+            r.insert_toml(text, Source::Builtin)?;
         }
         Ok(r)
     }
@@ -389,10 +406,10 @@ impl PresetRegistry {
     /// extended (`CFG-INVALID`), so the error path of `policy::resolve_file` can always fall back on the built-in base.
     /// An id that is already loaded is refused (Note T7).
     pub fn add_toml(&mut self, text: &str) -> Result<String, PresetError> {
-        self.insert_toml(text, SOURCE_INLINE)
+        self.insert_toml(text, Source::Inline)
     }
 
-    fn insert_toml(&mut self, text: &str, source: &str) -> Result<String, PresetError> {
+    fn insert_toml(&mut self, text: &str, source: Source) -> Result<String, PresetError> {
         // Review Focus 1: a Windows editor's BOM (CRLF is valid TOML).
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let table: toml::Table =
@@ -400,9 +417,10 @@ impl PresetRegistry {
         let p: PresetFile = toml::Value::Table(table.clone())
             .try_into()
             .map_err(|e: toml::de::Error| PresetError::Parse(e.to_string()))?;
-        if source != SOURCE_BUILTIN && p.id == BASE_ID {
+        if source != Source::Builtin && p.id == BASE_ID {
             return Err(PresetError::Alias(format!(
-                "CFG-INVALID: preset id '{BASE_ID}' is reserved for the built-in base profile"
+                "CFG-INVALID: preset id '{BASE_ID}' from {} is reserved for the built-in base profile, already loaded from {SOURCE_BUILTIN}",
+                source.label()
             )));
         }
         if p.schema_version > SCHEMA_VERSION {
@@ -410,8 +428,10 @@ impl PresetRegistry {
         }
         if let Some(first) = self.sources.get(&p.id) {
             return Err(PresetError::Alias(format!(
-                "CFG-INVALID: preset id '{}' from {source} is already loaded from {first}",
-                p.id
+                "CFG-INVALID: preset id '{}' from {} is already loaded from {}",
+                p.id,
+                source.label(),
+                first.label()
             )));
         }
         self.check_aliases(&p)?;
@@ -420,7 +440,7 @@ impl PresetRegistry {
             self.aliases.insert(alias.clone(), canonical.clone());
             self.alias_owner.insert(alias.clone(), id.clone());
         }
-        self.sources.insert(id.clone(), source.to_string());
+        self.sources.insert(id.clone(), source);
         self.tables.insert(id.clone(), table);
         self.presets.insert(id.clone(), p);
         Ok(id)
@@ -487,7 +507,7 @@ impl PresetRegistry {
         }
         let text = std::fs::read_to_string(path)
             .map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))?;
-        self.insert_toml(&text, &path.display().to_string())
+        self.insert_toml(&text, Source::File(path.display().to_string()))
             .map_err(|e| match e {
                 PresetError::Parse(m) => PresetError::Parse(format!("{}: {m}", path.display())),
                 e => e,
@@ -500,7 +520,7 @@ impl PresetRegistry {
 
     /// True when `id` was loaded from the embedded list (a user preset can never take a built-in id, Note T7).
     pub fn is_builtin(&self, id: &str) -> bool {
-        self.source(id) == Some(SOURCE_BUILTIN)
+        self.sources.get(id) == Some(&Source::Builtin)
     }
 
     pub fn selectable(&self) -> Vec<&PresetFile> {
@@ -509,15 +529,15 @@ impl PresetRegistry {
 
     /// Where `id` was loaded from: [`SOURCE_BUILTIN`], [`SOURCE_INLINE`] or the file path.
     pub fn source(&self, id: &str) -> Option<&str> {
-        self.sources.get(id).map(String::as_str)
+        self.sources.get(id).map(Source::label)
     }
 
     /// `(id, source)` of every preset not loaded from the embedded list, in id order.
     pub fn user_presets(&self) -> Vec<(&str, &str)> {
         self.sources
             .iter()
-            .filter(|(_, s)| *s != SOURCE_BUILTIN)
-            .map(|(id, s)| (id.as_str(), s.as_str()))
+            .filter(|(_, s)| **s != Source::Builtin)
+            .map(|(id, s)| (id.as_str(), s.label()))
             .collect()
     }
 
@@ -595,20 +615,36 @@ impl PresetRegistry {
             )
             .with_data(serde_json::json!({ "file": file.display().to_string(), "reason": reason }))
         };
-        let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
-            Ok(rd) => rd
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| {
-                    p.is_file()
-                        && p.extension()
-                            .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
-                })
-                .collect(),
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return vec![],
             Err(e) => return vec![skip(dir, e.to_string())],
         };
-        files.sort();
         let mut warnings = vec![];
+        let mut files: Vec<PathBuf> = vec![];
+        for entry in rd {
+            let p = match entry {
+                Ok(e) => e.path(),
+                // The entry's name is unknown, so the warning names the folder.
+                Err(e) => {
+                    warnings.push(skip(dir, e.to_string()));
+                    continue;
+                }
+            };
+            if !p
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
+            {
+                continue;
+            }
+            // Follows links, like `Path::is_file`, but reports a dangling or unreadable entry.
+            match std::fs::metadata(&p) {
+                Ok(m) if m.is_file() => files.push(p),
+                Ok(_) => {}
+                Err(e) => warnings.push(skip(&p, e.to_string())),
+            }
+        }
+        files.sort();
         let mut loaded = vec![];
         for f in files {
             match self.add_file(&f) {
