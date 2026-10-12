@@ -34,7 +34,7 @@ pub struct SuggestContext<'a> {
     pub advanced_skin: bool,
 }
 
-fn has_component(path: &str, name: &str) -> bool {
+pub(crate) fn has_component(path: &str, name: &str) -> bool {
     path.split('/').any(|c| c == name)
 }
 
@@ -117,6 +117,7 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
                 vec![s(Envmask, High, "_m with no or all-255 alpha")]
             }
         }
+        Some("i") => vec![s(Diffuse, Medium, "_i multilayer inner layer (colour)")],
         Some("b") | Some("bl") => vec![s(BacklightTint, High, "_b/_bl backlight")],
         Some("sk") => vec![s(BacklightTint, Low, "_sk (unconfirmed meaning)")],
         Some("d") | None if landscape => {
@@ -142,15 +143,28 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
 /// Spec §4.3 item 7, §4.4 (DECISIONS Note H): an exporter vocabulary term declares the file's role. Every reason
 /// is prefixed `exporter suffix _<term> (<role>)`; a colour term raises a colour-member top suggestion to high
 /// confidence (not `hdr_sky`: a float source under sky/ may be an HDRI). Alpha meaning is untouched.
-pub fn apply_vocabulary(suggestions: &mut [Suggestion], v: &Vocab) {
+pub fn apply_vocabulary(suggestions: &mut Vec<Suggestion>, v: &Vocab) {
     let role = match v.role {
         VocabRole::Colour => "colour",
         VocabRole::Normal(_) => "normal",
         VocabRole::Emissive => "emissive",
         VocabRole::PackingInput(_) => "packing input",
+        VocabRole::CoatColour => "coat colour",
     };
     for s in suggestions.iter_mut() {
         s.reason = format!("exporter suffix _{} ({role}); {}", v.term, s.reason);
+    }
+    if v.role == VocabRole::CoatColour {
+        // The owner states it is the coat colour: High, whatever the set (a bare `_s` outside a PBR set is only a tint).
+        suggestions.retain(|s| s.subtype != Subtype::PbrSubsurface);
+        suggestions.insert(
+            0,
+            Suggestion {
+                subtype: Subtype::PbrSubsurface,
+                confidence: Confidence::High,
+                reason: "exporter suffix _coat (coat colour); the PBR coat colour (_s)".into(),
+            },
+        );
     }
     if v.role == VocabRole::Colour {
         if let Some(top) = suggestions.first_mut().filter(|t| {
