@@ -668,6 +668,12 @@ fn null_patches_never_add_absent_keys() {
         &json!({"header": null, "alpha": {"policy": null, "threshold": 5}, "format": null}),
     );
     assert_eq!(a, json!({"format": "bc7", "alpha": {"threshold": 5}}));
+    // A patch object replacing a null or scalar base is filtered the same way.
+    for base in [json!({"alpha": null}), json!({"alpha": 5})] {
+        let mut a = base;
+        merge_json(&mut a, &json!({"alpha": {"policy": null, "threshold": 5}}));
+        assert_eq!(a, json!({"alpha": {"threshold": 5}}));
+    }
 }
 
 /// Note T2: `match.subtypes` round-trips and is not serialised when empty (existing preset hashes hold).

@@ -370,7 +370,11 @@ pub fn merge_json(base: &mut Value, patch: &Value) {
                 }
             }
         }
-        (b, p) => *b = p.clone(),
+        (b, p) => {
+            if let Some(v) = without_nulls(p) {
+                *b = v;
+            }
+        }
     }
 }
 
