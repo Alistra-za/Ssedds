@@ -238,7 +238,7 @@ pub fn provenance_text(p: &str) -> String {
         "user_config" => "from your config.toml".into(),
         "suggestion" => "suggested".into(),
         "analysis" => "from the image analysis".into(),
-        "fallback" => "fallback sub-type".into(),
+        "fallback" => "fallback value (sub-type or box filter)".into(),
         "set" => "decided by the texture set (variance bake)".into(),
         _ => match p.split_once(':') {
             Some(("preset", id)) => format!("from preset {id}"),

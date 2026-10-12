@@ -2277,6 +2277,42 @@ fn unscoped_filter_falls_back_to_box() {
     }
 }
 
+/// Scope is per field: an unrelated sub-type-scoped `--set` does not scope the unscoped filter, and an unrelated
+/// unscoped `--set` does not unscope a scoped one; a later scoped `box` overrides the unscoped filter silently.
+#[test]
+fn filter_scope_is_per_field() {
+    let j = m6_job(&[
+        "subtype=normal",
+        "mips.filter=kaiser",
+        "subtype:normal.mips.normal_base=keep",
+    ]);
+    assert!(cfg_invalid(&j).is_empty(), "{:?}", j.warnings);
+    assert_eq!(j.profile.mips.filter, MipFilter::Box);
+    assert!(
+        codes(&j).contains(&Code::CfgFilterIgnored),
+        "{:?}",
+        j.warnings
+    );
+    let j = m6_job(&[
+        "subtype=normal",
+        "subtype:normal.mips.filter=kaiser",
+        "mips.normal_base=keep",
+    ]);
+    assert!(!cfg_invalid(&j).is_empty(), "{:?}", j.warnings);
+    let j = m6_job(&[
+        "subtype=normal",
+        "mips.filter=kaiser",
+        "subtype:normal.mips.filter=box",
+    ]);
+    assert_eq!(j.profile.mips.filter, MipFilter::Box);
+    assert!(cfg_invalid(&j).is_empty(), "{:?}", j.warnings);
+    assert!(
+        !codes(&j).contains(&Code::CfgFilterIgnored),
+        "{:?}",
+        j.warnings
+    );
+}
+
 /// S-mips-7: `resize = pot-down` turns DIM-NPOT into DIM-RESIZED (Info) with the sizes in its data.
 #[test]
 fn pot_down_turns_dim_npot_into_dim_resized() {

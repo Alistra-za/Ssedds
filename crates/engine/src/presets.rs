@@ -215,7 +215,8 @@ pub enum Provenance {
     /// command line. Shown as `project_file`.
     ProjectFile,
     User,
-    /// The sub-type was replaced by its spec §4.2 fallback, accepted with `--allow CFG-UNAVAILABLE`.
+    /// A fallback value stood in: the sub-type replaced by its spec §4.2 fallback (accepted with `--allow CFG-UNAVAILABLE`),
+    /// or box for an unscoped `mips.filter` the texture cannot use (CFG-FILTER-IGNORED).
     Fallback,
     /// A packed channel read from a raw source (spec §6.4, DECISIONS Note M12): `source:<file>:R`,
     /// `source:<file>:luma`, `source:1-<file>:R` when stored inverted.
