@@ -186,10 +186,24 @@ fn emissive_shown(s: &SetPreview) -> bool {
 }
 
 fn shapes(ui: &mut egui::Ui, s: &SetPreview) {
-    // Spec §1 criterion 4: a shader that failed to compile is named here.
+    // Spec §1 criterion 4: a shader that failed to compile is named here, and one still compiling says so.
     for i in &s.v3.shapes {
-        if let ShapeStatus::Failed { error: e, .. } = &i.status {
-            ui.colored_label(RED, format!("{}: shader failed: {e}", i.name));
+        match &i.status {
+            ShapeStatus::Failed {
+                error,
+                showing_previous,
+            } => {
+                let kept = if *showing_previous {
+                    " (previous look kept)"
+                } else {
+                    ""
+                };
+                ui.colored_label(RED, format!("{}: shader failed: {error}{kept}", i.name));
+            }
+            ShapeStatus::Pending { .. } => {
+                ui.label(format!("{}: compiling…", i.name));
+            }
+            ShapeStatus::Drawing | ShapeStatus::Hidden => {}
         }
     }
     if s.rows.is_empty() {

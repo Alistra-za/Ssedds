@@ -9,10 +9,12 @@ use crate::model::meshes::ScanTarget;
 use crate::worker::{spawn_guarded, WorkerMsg};
 use nif::material::MaterialState;
 use render3d::builtin::Builtin;
+use render3d::device::Gpu;
 use render3d::locate::{self, Change, Fingerprint};
 use render3d::scene::{Background, Camera, PointLight, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
 use render3d::{
-    EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId, ShapeInfo, ShapeStatus,
+    CompileDone, CompilePool, EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId,
+    ShapeInfo, ShapeStatus,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -375,6 +377,11 @@ pub enum V3Cmd {
         h: u32,
         look: Look,
     },
+    /// A finished background compile, sent by the pool into the render loop's own queue.
+    Compiled(CompileDone),
+    /// The model is gone: end the loop (the pool's sink holds a sender to the loop's queue, so the channel no
+    /// longer closes by itself).
+    Quit,
 }
 
 /// Replies from the render thread and the locate worker.
@@ -393,6 +400,12 @@ pub enum V3Reply {
         bounds: Option<([f32; 3], f32)>,
     },
     Frame {
+        frame: Arc<Frame>,
+        timing: FrameTiming,
+    },
+    /// A frame the render thread made on its own because a compile landed (same camera as the last `Render`).
+    /// Its id comes from a private range, so the UI uploads it; it never counts as an answered `Render`.
+    Refresh {
         frame: Arc<Frame>,
         timing: FrameTiming,
     },
@@ -459,8 +472,8 @@ pub struct Viewport3d {
     need_load: bool,
     /// The pending load is a reload of the same model (`set_content(.., true)`): a compile failure keeps the frame.
     kept_view: bool,
-    /// A reload failed to compile and the previous frame stays: no render until a shape draws again (a load-time
-    /// Failed shape has no draw, so a render would blank the frame).
+    /// A reload left shapes with no draw (failed, or still compiling): the previous image stays and no render goes
+    /// out until they have resolved (a render would blank or half-fill it).
     held_frame: bool,
     loaded: Option<u64>,
     pending_load: Option<u64>,
@@ -560,12 +573,28 @@ impl Viewport3d {
         self.locating
     }
 
-    /// A load, a render, a material edit or a locate is in flight.
+    /// A load, a render, a material edit, a locate or a background compile is in flight.
     pub fn busy(&self) -> bool {
         self.locating
             || self.pending_load.is_some()
             || self.render_done < self.render_sent
             || self.edits_done < self.edits_sent
+            || self.compiling() > 0
+    }
+
+    /// Shapes waiting for a shader program: the latest `Shapes` reply, or the load report until the first one.
+    /// Zero when the render thread is gone, so a dead worker cannot keep the panel busy.
+    pub fn compiling(&self) -> usize {
+        if self.thread.is_none() {
+            return 0;
+        }
+        if self.shapes.is_empty() {
+            return self.report.as_ref().map_or(0, |r| r.pending);
+        }
+        self.shapes
+            .iter()
+            .filter(|s| matches!(s.status, ShapeStatus::Pending { .. }))
+            .count()
     }
 
     /// Whether to draw the busy spinner at `now`: only after `SPINNER_DELAY` of continuous work, so an ordinary frame
@@ -808,8 +837,9 @@ impl Viewport3d {
         };
         let (ctx, crx) = channel();
         let features = self.features_on;
+        let me = ctx.clone();
         spawn_guarded(self.tx.clone(), "viewport3d", move |tx| {
-            render_loop(crx, tx, shaders, cache, features)
+            render_loop(crx, me, tx, shaders, cache, features)
         });
         self.thread = Some(ctx);
         true
@@ -933,14 +963,16 @@ impl Viewport3d {
             }
             V3Reply::Loaded { id, report, bounds } => {
                 if self.pending_load == Some(id) {
-                    // A reload of the same mesh (shaders or features changed) keeps its id. When its
-                    // permutations now fail, the last frame stays and the panel lists the compile errors
-                    // (Review Focus #3, P0 ruling; keeping the old permutations drawing is P1).
-                    let reload_failed = (self.loaded == Some(id) || self.kept_view)
-                        && !report.compile_errors.is_empty();
+                    // A reload of the same mesh (shaders or features changed) keeps its id. When its permutations
+                    // fail or are still compiling, the last frame stays (Review Focus #3).
+                    let reload = self.loaded == Some(id) || self.kept_view;
+                    let reload_failed = reload && !report.compile_errors.is_empty();
+                    // Programs still compiling after a reload: load_parsed dropped the old draws, so the old
+                    // image is all that is left to show (held until the new content is ready).
+                    let reload_pending = reload && report.pending > 0;
                     self.pending_load = None;
                     self.loaded = Some(id);
-                    self.held_frame = reload_failed && self.frame.is_some();
+                    self.held_frame = (reload_failed || reload_pending) && self.frame.is_some();
                     if (report.le_mesh || report.shapes == 0) && !reload_failed {
                         self.frame = None;
                     }
@@ -964,6 +996,14 @@ impl Viewport3d {
                     self.timing = Some(timing);
                 }
             }
+            V3Reply::Refresh { frame, timing } => {
+                // Not an answered Render: render_done is untouched. Ignored while the old image is held.
+                if self.loaded.is_some() && self.pending_load.is_none() && !self.held_frame {
+                    self.render_error = None;
+                    self.frame = Some(frame);
+                    self.timing = Some(timing);
+                }
+            }
             V3Reply::RenderError { id, message } => {
                 self.render_done = self.render_done.max(id);
                 if self.loaded.is_some() && self.pending_load.is_none() {
@@ -973,7 +1013,17 @@ impl Viewport3d {
             V3Reply::Shapes(s) => {
                 // Only for the loaded content: a reply for content replaced since is dropped.
                 if self.pending_load.is_none() && self.loaded.is_some() {
-                    if s.iter().any(|x| x.status == ShapeStatus::Drawing) {
+                    let first_time = |x: &ShapeInfo| {
+                        matches!(
+                            x.status,
+                            ShapeStatus::Pending {
+                                showing_previous: false
+                            }
+                        )
+                    };
+                    if s.iter().any(|x| x.status == ShapeStatus::Drawing)
+                        && !s.iter().any(first_time)
+                    {
                         self.held_frame = false;
                     }
                     self.shapes = s;
@@ -1113,6 +1163,14 @@ struct BsaIndex {
     names: HashMap<String, usize>,
 }
 
+impl Drop for Viewport3d {
+    fn drop(&mut self) {
+        if let Some(t) = &self.thread {
+            let _ = t.send(V3Cmd::Quit);
+        }
+    }
+}
+
 fn apply_features(r: &mut Renderer, on: bool) {
     let f = if on {
         render3d::DEFAULT_FEATURES
@@ -1185,10 +1243,14 @@ fn edit(r: &mut Renderer, c: &Content, id: ShapeId, m: MaterialState) -> Result<
     r.set_material(id, m, &textures)
 }
 
-/// The render thread: owns the `Renderer`; batches queued commands, applies material edits after the load they
-/// follow, and draws only the latest camera.
+/// The render thread: owns the `Renderer` and the compile pool; batches queued commands, applies material edits
+/// after the load they follow, and draws only the latest camera. Compile results arrive on the same queue
+/// (`V3Cmd::Compiled`, sent by the pool's sink), so a burst of them and a camera drag still collapse into one
+/// render. A result that changes a shape makes a `Shapes` reply and, with no `Render` in the batch, a `Refresh`
+/// frame from the last camera.
 fn render_loop(
     rx: Receiver<V3Cmd>,
+    self_tx: Sender<V3Cmd>,
     tx: &Sender<WorkerMsg>,
     shaders: Fingerprint,
     cache: PathBuf,
@@ -1199,6 +1261,7 @@ fn render_loop(
     };
     let make = |shaders: Fingerprint, features: bool| -> Result<Renderer, String> {
         let mut r = Renderer::new(shaders, cache.clone())?;
+        r.set_async_compile(true);
         apply_features(&mut r, features);
         Ok(r)
     };
@@ -1212,7 +1275,6 @@ fn render_loop(
             send(V3Reply::Shapes(r.shapes()));
         }
     };
-    let mut features = features;
     let mut r = match make(shaders, features) {
         Ok(r) => r,
         Err(e) => return send(V3Reply::Failed(e)),
@@ -1221,14 +1283,23 @@ fn render_loop(
         adapter: r.gpu().adapter.clone(),
         warp: r.gpu().warp,
     });
-    // After a device loss: a new renderer (maybe WARP, same shaders and features), `Ready`, the last content
-    // loaded again with its edits, and its `Loaded`. Err when no device can be made at all.
+    let pool = CompilePool::new(render3d::pool::WORKERS, move |d| {
+        let _ = self_tx.send(V3Cmd::Compiled(d));
+    });
+    // Jobs queued by a load or an edit go to the workers.
+    let pump = |r: &mut Renderer| {
+        for job in r.take_jobs() {
+            pool.submit(job);
+        }
+    };
+    // After a device loss: a new device (maybe WARP) under the same renderer state (shaders, features and the
+    // compiled programs are kept, so nothing recompiles), `Ready`, the last content loaded again with its
+    // edits, and its `Loaded`. Err when no device can be made at all.
     let rebuild = |r: &mut Renderer,
                    last: &Option<(u64, Content)>,
-                   edits: &BTreeMap<ShapeId, MaterialState>,
-                   features: bool|
+                   edits: &BTreeMap<ShapeId, MaterialState>|
      -> Result<(), String> {
-        *r = make(r.shaders().clone(), features)?;
+        r.rebuild_device_on(Gpu::new(None)?)?;
         send(V3Reply::Ready {
             adapter: r.gpu().adapter.clone(),
             warp: r.gpu().warp,
@@ -1242,19 +1313,27 @@ fn render_loop(
     let mut last: Option<(u64, Content)> = None;
     // Material edits applied to `last` since its load.
     let mut edits: BTreeMap<ShapeId, MaterialState> = BTreeMap::new();
+    // The last camera, size and look drawn: what a compile-triggered refresh renders with.
+    let mut view: Option<(Camera, u32, u32, Look)> = None;
+    let mut refresh_id: u64 = 1 << 62;
     while let Ok(first) = rx.recv() {
         let mut reload = false;
         let mut render = None;
+        let mut compiled_changed = false;
         let mut pending: Vec<(u64, ShapeId, MaterialState)> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
             let content = match c {
+                V3Cmd::Quit => return,
+                V3Cmd::Compiled(done) => {
+                    compiled_changed |= r.apply_compiled(done);
+                    None
+                }
                 V3Cmd::SetShaders(f) => {
                     r.set_shaders(f);
                     reload = true;
                     None
                 }
                 V3Cmd::SetFeatures(on) => {
-                    features = on;
                     apply_features(&mut r, on);
                     reload = true;
                     None
@@ -1303,7 +1382,8 @@ fn render_loop(
             };
             if let Some(c) = content {
                 // A new load drops the queued render and the edits made for the old content (the model reset its
-                // counters when it replaced the content).
+                // counters when it replaced the content). Results already applied or still in flight for the old
+                // content are keyed by program, not by shape: they only warm the memo.
                 last = Some(c);
                 edits.clear();
                 pending.clear();
@@ -1317,7 +1397,7 @@ fn render_loop(
                 if r.gpu().is_removed() {
                     // Lost during the load: rebuild and load again now; with no shapes no Render would follow to
                     // trigger the rebuild.
-                    if let Err(e) = rebuild(&mut r, &last, &edits, features) {
+                    if let Err(e) = rebuild(&mut r, &last, &edits) {
                         return send(V3Reply::Failed(e));
                     }
                 } else {
@@ -1325,6 +1405,7 @@ fn render_loop(
                 }
             }
         }
+        let pending_was_empty = pending.is_empty();
         if !pending.is_empty() {
             if let Some((lid, c)) = &last {
                 for (content, id, m) in pending {
@@ -1346,31 +1427,54 @@ fn render_loop(
                 send(V3Reply::Shapes(r.shapes()));
             }
         }
-        let Some((id, camera, w, h, look)) = render else {
-            continue;
+        pump(&mut r);
+        // A landed program changed a shape and nothing above reported it: tell the panel.
+        if compiled_changed
+            && !reload
+            && pending_was_empty
+            && !matches!(last, Some((_, Content::Mesh(_))))
+        {
+            send(V3Reply::Shapes(r.shapes()));
+        }
+        let (id, camera, w, h, look, refresh) = match (render, view) {
+            (Some((id, camera, w, h, look)), _) => (id, camera, w, h, look, false),
+            (None, Some((camera, w, h, look))) if compiled_changed => {
+                refresh_id += 1;
+                (refresh_id, camera, w, h, look, true)
+            }
+            _ => continue,
         };
+        view = Some((camera, w, h, look));
         let scene = look.scene(camera, r.bounds());
         let mut result = r.render(&scene, w, h);
         if let Err(e) = &result {
             if e.starts_with(render3d::device::DEVICE_REMOVED) {
                 // Device lost (TDR, driver update): a new device (maybe WARP), the content again, one retry.
-                if let Err(e) = rebuild(&mut r, &last, &edits, features) {
+                if let Err(e) = rebuild(&mut r, &last, &edits) {
                     return send(V3Reply::Failed(e));
                 }
+                pump(&mut r);
                 result = r.render(&scene, w, h);
             }
         }
         match result {
-            Ok(rgba) => send(V3Reply::Frame {
-                frame: Arc::new(Frame {
+            Ok(rgba) => {
+                let frame = Arc::new(Frame {
                     width: w,
                     height: h,
                     rgba,
                     id,
-                }),
-                timing: r.last_timing(),
-            }),
-            Err(message) => send(V3Reply::RenderError { id, message }),
+                });
+                let timing = r.last_timing();
+                if refresh {
+                    send(V3Reply::Refresh { frame, timing });
+                } else {
+                    send(V3Reply::Frame { frame, timing });
+                }
+            }
+            // A failed refresh is dropped: the next real Render reports the error with an id the model knows.
+            Err(message) if !refresh => send(V3Reply::RenderError { id, message }),
+            Err(_) => {}
         }
     }
 }

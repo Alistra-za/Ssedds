@@ -1166,3 +1166,301 @@ fn a_render_error_for_replaced_content_is_dropped() {
     });
     assert!(v.render_error.is_none());
 }
+
+// ---- P1-B Task 6: background compiles ----
+
+fn load_with(
+    v: &mut Viewport3d,
+    cmds: &std::sync::mpsc::Receiver<v3::V3Cmd>,
+    key: u64,
+    keep: bool,
+    shapes: usize,
+    pending: usize,
+) -> u64 {
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(key, &nif, &[])), keep);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("load")
+    };
+    loaded(
+        v,
+        id,
+        render3d::LoadReport {
+            shapes,
+            pending,
+            ..Default::default()
+        },
+    );
+    id
+}
+
+fn frame_of(id: u64, px: u8) -> Arc<v3::Frame> {
+    Arc::new(v3::Frame {
+        width: 1,
+        height: 1,
+        rgba: vec![px; 4],
+        id,
+    })
+}
+
+fn pending(previous: bool) -> ShapeStatus {
+    ShapeStatus::Pending {
+        showing_previous: previous,
+    }
+}
+
+/// A first load of an uncached mesh has no drawing shape yet; the camera must still go out so the render
+/// thread has something to redraw with when the programs land (03 §1.4).
+#[test]
+fn a_first_load_with_only_pending_shapes_still_gets_a_camera() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })),
+        "report.shapes counts the pending shape"
+    );
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+}
+
+#[test]
+fn pending_shapes_are_busy_so_a_long_compile_shows_the_spinner_and_idle_does_not() {
+    use std::time::{Duration, Instant};
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    assert!(v.busy(), "report.pending before the first Shapes reply");
+    assert_eq!(v.compiling(), 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    assert!(v.busy());
+    let t0 = Instant::now();
+    assert!(!v.show_spinner(t0));
+    assert!(!v.show_spinner(t0 + Duration::from_millis(299)));
+    assert!(
+        v.show_spinner(t0 + v3::SPINNER_DELAY),
+        "a compile longer than 300 ms spins"
+    );
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert_eq!(v.compiling(), 0);
+    assert!(!v.busy());
+    assert!(!v.show_spinner(t0 + Duration::from_secs(5)));
+    assert!(!v.poll(), "idle: nothing arrives, nothing to repaint for");
+}
+
+#[test]
+fn a_dead_render_thread_does_not_leave_pending_shapes_busy() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    assert!(v.busy());
+    v.handle(v3::V3Reply::Failed("gone".into()));
+    assert!(!v.busy());
+}
+
+#[test]
+fn a_refresh_frame_replaces_the_image_without_touching_the_render_accounting() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(false))]));
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::Render { id: rid, .. }) = cmds.try_recv() else {
+        panic!("render")
+    };
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 1),
+        timing: Default::default(),
+    });
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of((1 << 62) + 1, 7),
+        timing: Default::default(),
+    });
+    assert_eq!(v.frame.as_ref().unwrap().rgba, vec![7; 4]);
+    // A real render sent now is still in flight: the refresh id did not advance render_done.
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(v.busy());
+}
+
+/// A reload whose programs are all new has no old draws to keep (load_parsed discards them): the old image
+/// stays until the new content is ready, not replaced by a half-built one.
+#[test]
+fn a_reload_with_pending_shapes_holds_the_old_image_until_they_all_resolve() {
+    let (_d, mut v, cmds) = confirmed();
+    load_with(&mut v, &cmds, 1, false, 1, 0);
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    v.frame = Some(frame_of(50, 9));
+    load_with(&mut v, &cmds, 2, true, 2, 2);
+    v.handle(v3::V3Reply::Shapes(vec![
+        info(pending(false)),
+        info(pending(false)),
+    ]));
+    assert_eq!(
+        v.frame.as_ref().unwrap().rgba,
+        vec![9; 4],
+        "the old image stays"
+    );
+    v.orbit.drag(5.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "no Render over the held image");
+    // One shape lands, one still has no program: still held, refreshes ignored.
+    v.handle(v3::V3Reply::Shapes(vec![
+        info(ShapeStatus::Drawing),
+        info(pending(false)),
+    ]));
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of((1 << 62) + 1, 7),
+        timing: Default::default(),
+    });
+    assert_eq!(v.frame.as_ref().unwrap().rgba, vec![9; 4]);
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err());
+    // Everything resolved: released, the camera goes out, refreshes are taken again.
+    v.handle(v3::V3Reply::Shapes(vec![
+        info(ShapeStatus::Drawing),
+        info(ShapeStatus::Drawing),
+    ]));
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    v.handle(v3::V3Reply::Refresh {
+        frame: frame_of((1 << 62) + 2, 5),
+        timing: Default::default(),
+    });
+    assert_eq!(v.frame.as_ref().unwrap().rgba, vec![5; 4]);
+}
+
+/// An edit's shapes keep their old draw in the renderer, so camera moves keep rendering while it compiles.
+#[test]
+fn an_edit_waiting_for_its_shader_keeps_the_camera_live_on_the_old_draw() {
+    let (_d, mut v, cmds) = confirmed();
+    let id = load_with(&mut v, &cmds, 1, false, 1, 0);
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+    let _ = cmds.try_recv();
+    v.handle(v3::V3Reply::MaterialSet {
+        content: id,
+        id: ShapeId(0),
+        result: Ok(EditKind::Permutation),
+        ms: 1.0,
+    });
+    v.handle(v3::V3Reply::Shapes(vec![info(pending(true))]));
+    v.orbit.drag(10.0, 0.0);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::Render { id: rid, .. }) = cmds.try_recv() else {
+        panic!("render over the old draw")
+    };
+    v.handle(v3::V3Reply::Frame {
+        frame: frame_of(rid, 3),
+        timing: Default::default(),
+    });
+    assert!(v.busy(), "the compile is still running");
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(!v.busy());
+}
+
+#[test]
+fn dropping_the_viewport_tells_the_render_thread_to_quit() {
+    let (_d, v, cmds) = confirmed();
+    drop(v);
+    assert!(matches!(cmds.try_iter().last(), Some(v3::V3Cmd::Quit)));
+}
+
+// ---- P1-B Task 6: a real render thread, the repo stand-in shader, the real pool ----
+
+fn standin_root() -> PathBuf {
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ))
+}
+
+fn real_viewport(cache: &Path, material: MaterialState) -> Viewport3d {
+    let f = render3d::locate::fingerprint(&standin_root(), None).unwrap();
+    let mut v = Viewport3d::new(Some(f.clone()));
+    v.on_located(Ok(Some(f)));
+    v.cache_dir = Some(cache.to_path_buf());
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 1,
+            shape: Builtin::Sphere,
+            material,
+            textures: Arc::new(HashMap::new()),
+        }),
+        false,
+    );
+    v
+}
+
+/// Drives the UI-thread side until nothing is in flight (the way the app's frames do).
+fn run_idle(v: &mut Viewport3d) {
+    let t = std::time::Instant::now();
+    loop {
+        v.poll();
+        v.request_frame(64, 64);
+        if !v.busy() && !v.shapes.is_empty() {
+            return;
+        }
+        assert!(
+            t.elapsed().as_secs() < 60,
+            "never went idle: {:?}",
+            v.shapes
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_real_load_compiles_in_the_background_then_draws_and_goes_idle() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    }); // DO_ALPHA_TEST: the stand-in's pixel permutation compiles
+    let mut v = real_viewport(cache.path(), m);
+    run_idle(&mut v);
+    assert_eq!(v.shapes[0].status, ShapeStatus::Drawing);
+    // The refresh frame follows the Shapes reply on the same queue; wait for the lit image.
+    let lit = |v: &Viewport3d| {
+        v.frame.as_ref().is_some_and(|f| {
+            f.rgba
+                .chunks(4)
+                .any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0)
+        })
+    };
+    let t = std::time::Instant::now();
+    while !lit(&v) && t.elapsed().as_secs() < 10 {
+        v.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(lit(&v), "the compile-triggered refresh drew the sphere");
+    // Idle stays idle: no endless repaints.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    v.poll();
+    for _ in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!v.poll());
+        assert!(!v.busy());
+    }
+}
+
+#[test]
+fn a_real_compile_failure_is_listed_and_the_panel_goes_idle() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut m = MaterialState::builtin_default();
+    m.alpha = None; // the stand-in's pixel permutation without DO_ALPHA_TEST does not compile
+    let mut v = real_viewport(cache.path(), m);
+    run_idle(&mut v);
+    assert!(matches!(
+        &v.shapes[0].status,
+        ShapeStatus::Failed { error, showing_previous: false } if error.starts_with("ps:")
+    ));
+    assert!(
+        v.frame.is_some(),
+        "the background frame was shown meanwhile"
+    );
+    assert!(!v.busy());
+}

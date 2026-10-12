@@ -415,3 +415,30 @@ fn an_old_gui_toml_without_the_cap_gives_the_default_and_out_of_range_values_cla
     assert_eq!((cap(1), cap(255), cap(256)), (256, 256, 256));
     assert_eq!((cap(8192), cap(8193), cap(u32::MAX)), (8192, 8192, 8192));
 }
+
+#[test]
+fn a_shader_still_compiling_is_listed_and_a_kept_look_is_said() {
+    let (_d, mut h) = plain_rock();
+    h.state_mut().1.v3.shapes = vec![
+        ShapeInfo {
+            id: ShapeId(1),
+            name: "Bottle".into(),
+            material: MaterialState::builtin_default(),
+            status: ShapeStatus::Pending {
+                showing_previous: true,
+            },
+        },
+        ShapeInfo {
+            id: ShapeId(2),
+            name: "Cork".into(),
+            material: MaterialState::builtin_default(),
+            status: ShapeStatus::Failed {
+                error: "X3000 bad register".into(),
+                showing_previous: true,
+            },
+        },
+    ];
+    h.run_steps(4);
+    h.get_by_label("Bottle: compiling…");
+    h.get_by_label("Cork: shader failed: X3000 bad register (previous look kept)");
+}
