@@ -110,8 +110,102 @@ fn preset_targets_and_default_preset_agree() {
     assert_eq!(default_preset_for(Target::Cs), DEFAULT_PRESET);
     assert!(r.get(BASE_ID).unwrap().hidden);
     let ids: Vec<_> = r.selectable().iter().map(|p| p.id.clone()).collect();
-    assert_eq!(ids, ["cpm-quality", "cs-quality", "vanilla-quality"]);
+    assert_eq!(
+        ids,
+        [
+            "cpm-quality",
+            "cs-compact",
+            "cs-quality",
+            "fast-preview",
+            "vanilla-compact",
+            "vanilla-quality"
+        ]
+    );
     assert_eq!(r.get(BASE_ID).unwrap().rules.len(), 2);
+}
+
+/// M6 Track D spec §2 (Notes T1–T3): the three new presets as profiles from presets alone (rules are not applied by
+/// `profile`; the BC1 rules are checked by the goldens).
+#[test]
+fn compact_and_fast_preview_resolve_as_designed() {
+    let r = PresetRegistry::builtin().unwrap();
+    for (id, target) in [
+        ("cs-compact", Some(Target::Cs)),
+        ("vanilla-compact", Some(Target::Vanilla)),
+        ("fast-preview", None),
+    ] {
+        let p = r.get(id).unwrap();
+        assert_eq!(
+            (p.schema_version, p.version.as_str(), p.hidden, p.target),
+            (1, "1.0.0", false, target)
+        );
+        r.check_preset(id).unwrap();
+    }
+    // Owner rules (2026-10-12): data maps and colour that stays BC7 halve; pbr_emissive and hdr_sky keep full size.
+    let halved = [
+        Subtype::Normal,
+        Subtype::LandscapeNormal,
+        Subtype::PbrNormal,
+        Subtype::Msn,
+        Subtype::CoatNormal,
+        Subtype::SkinWet,
+        Subtype::Envmask,
+        Subtype::Height,
+        Subtype::MsnSpecular,
+        Subtype::SkinSk,
+        Subtype::ComplexMaterial,
+        Subtype::Rmaos,
+        Subtype::SkinRfaos,
+        Subtype::Flow,
+        Subtype::GenericTwoChannel,
+        Subtype::GenericData,
+        Subtype::Diffuse,
+        Subtype::LandscapeDiffuse,
+        Subtype::PbrAlbedo,
+        Subtype::Glow,
+        Subtype::PbrSubsurface,
+        Subtype::PbrFuzz,
+        Subtype::SubsurfaceTint,
+        Subtype::BacklightTint,
+        Subtype::UiSky,
+        Subtype::SkinAlbedo,
+    ];
+    for st in Subtype::ALL {
+        let p = r.profile("cs-compact", Target::Cs, st).unwrap();
+        let want = if halved.contains(&st) {
+            ResizeMode::Half
+        } else {
+            ResizeMode::None
+        };
+        assert_eq!(p.resize, want, "{st:?}");
+        // Formats are the quality preset's: BC1 comes from the rules only.
+        assert_eq!(
+            p.format,
+            r.profile("cs-quality", Target::Cs, st).unwrap().format,
+            "{st:?}"
+        );
+    }
+    let compact = r.get("cs-compact").unwrap();
+    assert_eq!(compact.rules.len(), 2);
+    assert_eq!(compact.rules[0].matcher.alpha, Some(AlphaContent::None));
+    assert_eq!(compact.rules[0].matcher.subtypes.len(), 9);
+    assert_eq!(
+        compact.rules[1].matcher.alpha,
+        Some(AlphaContent::Constant255)
+    );
+    assert_eq!(compact.rules[1].matcher.subtypes.len(), 7);
+    for rule in &compact.rules {
+        assert!(!rule.matcher.subtypes.contains(&Subtype::LandscapeDiffuse));
+        assert!(!rule.matcher.subtypes.contains(&Subtype::PbrEmissive));
+        assert_eq!(rule.overrides, json!({"format": "bc1", "resize": "none"}));
+    }
+    assert_eq!(r.get("vanilla-compact").unwrap().rules, compact.rules);
+    for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+        let p = r.profile("fast-preview", t, Subtype::Diffuse).unwrap();
+        assert_eq!(p.encoder.effort, Effort::Fast);
+        assert_eq!(p.validation.mips, ValidationMips::Smallest);
+        assert_eq!(p.resize, ResizeMode::None);
+    }
 }
 
 #[test]

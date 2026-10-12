@@ -27,11 +27,14 @@ pub fn default_preset_for(t: Target) -> &'static str {
     }
 }
 
-const BUILTIN: [&str; 4] = [
+const BUILTIN: [&str; 7] = [
     include_str!("../../../presets/sdc-base.toml"),
     include_str!("../../../presets/cs-quality.toml"),
     include_str!("../../../presets/cpm-quality.toml"),
     include_str!("../../../presets/vanilla-quality.toml"),
+    include_str!("../../../presets/cs-compact.toml"),
+    include_str!("../../../presets/vanilla-compact.toml"),
+    include_str!("../../../presets/fast-preview.toml"),
 ];
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
