@@ -142,7 +142,7 @@ fn failing_permutation_keeps_old_draw() {
         Ok(EditKind::Permutation)
     );
     assert!(
-        matches!(status(&r, peg), ShapeStatus::Failed(e) if e.starts_with("ps:")),
+        matches!(status(&r, peg), ShapeStatus::Failed { error, showing_previous: true } if error.starts_with("ps:")),
         "{:?}",
         status(&r, peg)
     );

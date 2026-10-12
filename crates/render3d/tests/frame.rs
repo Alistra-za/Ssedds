@@ -322,7 +322,7 @@ fn a_retained_draw_returning_from_hidden_matches_the_by_name_writer() {
         x.set_material(peg, bad.clone(), &|_| None).unwrap();
         assert!(matches!(
             x.shapes().into_iter().find(|s| s.id == peg).unwrap().status,
-            render3d::ShapeStatus::Failed(_)
+            render3d::ShapeStatus::Failed { .. }
         ));
     }
     same(

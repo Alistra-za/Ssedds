@@ -57,6 +57,13 @@ pub struct Compiled {
     pub reflection: Reflection,
 }
 
+/// The vertex and pixel stage of one permutation: plain data, `Send`, what a worker returns.
+#[derive(Debug, Clone)]
+pub struct CompiledPair {
+    pub vs: Compiled,
+    pub ps: Compiled,
+}
+
 const FLAGS: u32 = D3DCOMPILE_OPTIMIZATION_LEVEL3;
 /// Bumped when the cached `Reflection` gains information (2: struct members flattened), so old entries miss.
 const REFLECT_VERSION: u32 = 2;

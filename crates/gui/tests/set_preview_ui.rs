@@ -201,7 +201,10 @@ fn a_shader_that_failed_to_compile_is_listed_per_shape() {
             id: ShapeId(1),
             name: "Bottle".into(),
             material: MaterialState::builtin_default(),
-            status: ShapeStatus::Failed("X3000 bad register".into()),
+            status: ShapeStatus::Failed {
+                error: "X3000 bad register".into(),
+                showing_previous: false,
+            },
         },
         ShapeInfo {
             id: ShapeId(2),

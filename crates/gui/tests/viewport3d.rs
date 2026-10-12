@@ -930,9 +930,10 @@ fn a_failed_edit_on_the_only_shape_keeps_the_camera_live() {
         result: Err("compile".into()),
         ms: 1.0,
     });
-    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed(
-        "compile".into(),
-    ))]));
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed {
+        error: "compile".into(),
+        showing_previous: true,
+    })]));
     v.orbit.drag(10.0, 0.0);
     v.request_frame(64, 64);
     assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
@@ -1118,9 +1119,10 @@ fn a_keep_view_reload_whose_shapes_all_fail_keeps_the_frame_and_lists_the_errors
     assert!(v.frame.is_some(), "the old image stays");
     assert_eq!(v.report.as_ref().unwrap().compile_errors.len(), 1);
     // The shapes come back Failed (no draw after a load): a camera change must not render over the kept frame.
-    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed(
-        "x".into(),
-    ))]));
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed {
+        error: "x".into(),
+        showing_previous: false,
+    })]));
     v.orbit.drag(5.0, 0.0);
     v.request_frame(64, 64);
     assert!(

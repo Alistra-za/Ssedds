@@ -188,7 +188,7 @@ fn emissive_shown(s: &SetPreview) -> bool {
 fn shapes(ui: &mut egui::Ui, s: &SetPreview) {
     // Spec §1 criterion 4: a shader that failed to compile is named here.
     for i in &s.v3.shapes {
-        if let ShapeStatus::Failed(e) = &i.status {
+        if let ShapeStatus::Failed { error: e, .. } = &i.status {
             ui.colored_label(RED, format!("{}: shader failed: {e}", i.name));
         }
     }
