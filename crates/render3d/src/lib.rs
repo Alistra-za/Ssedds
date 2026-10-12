@@ -443,7 +443,7 @@ impl Renderer {
         self.settings
             .loaded
             .iter()
-            .filter(|n| n.as_str() != "TruePBR")
+            .filter(|n| n.as_str() != "TruePBR" && !NON_VISUAL.contains(&n.as_str()))
             .filter(|n| !define_of(n).is_some_and(|d| self.features.iter().any(|f| f == d)))
             .cloned()
             .collect()
@@ -1623,6 +1623,24 @@ impl Renderer {
 fn settings_define(d: &str) -> bool {
     d == "ENABLE_LL" || cs_settings::PREVIEW_FEATURES.iter().any(|(_, x)| *x == d)
 }
+
+/// Not visual in the preview: tools, display, performance.
+const NON_VISUAL: [&str; 14] = [
+    "CSEditor",
+    "Effects11",
+    "NRD",
+    "PerformanceOverlay",
+    "RemoteControl",
+    "RenderDoc",
+    "SceneManager",
+    "Screenshot",
+    "Upscaling",
+    "GrassCollision",
+    "GrassOptimizations",
+    "TerrainHelper",
+    "SkySync",
+    "HDRDisplay",
+];
 
 /// The define a loaded CS feature (Info.ini short name) compiles as, if any: Linear Lighting is setting-driven
 /// (`ENABLE_LL`), the others come from [`cs_settings::PREVIEW_FEATURES`].

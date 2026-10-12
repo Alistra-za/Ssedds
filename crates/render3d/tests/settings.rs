@@ -139,7 +139,7 @@ fn off_in_preview_lists_loaded_but_uncompiled_features() {
     let cache = tempfile::tempdir().unwrap();
     let mut r = renderer(cache.path(), FLAT);
     let mut s = settings(true, 1.0);
-    s.loaded = ["LightLimitFix", "LinearLighting", "TruePBR"]
+    s.loaded = ["CSEditor", "LightLimitFix", "LinearLighting", "TruePBR"]
         .map(String::from)
         .into();
     r.set_features_on(false);
