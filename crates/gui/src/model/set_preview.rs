@@ -5,22 +5,40 @@
 //! Part 1: per-member preview encodes → DDS bytes served as `FileSource::Memory`, fresh/stale per member, paused
 //! during an export. Results come back on this module's own channel, so `worker.rs` needs no new message.
 use crate::model::items::{ItemKind, ItemStatus, TextureItem};
+use crate::model::meshes::ScanTarget;
+use crate::model::pbr_export::json_entries;
 use crate::model::preview::DEBOUNCE;
+use crate::model::sets::set_views;
 use crate::model::sets::{SetView, SlotFill, SlotKind};
 use crate::model::viewport3d::FileSource;
+use crate::model::viewport3d::{read_file, Content, Viewport3d};
 use crate::model::AppModel;
+use crate::model::Selection;
 use crate::pgp::prefix::output_rel;
 use crate::pgp::writer::EntryInput;
+use crate::pgp::writer::{document, entry_node};
+use crate::settings::MeshesSettings;
 use engine::api::CancelToken;
 use engine::dds::{dds_bytes, resolve_header, DdsDesc};
 use engine::manifest::sha256_json;
 use engine::policy::ResolvedJob;
 use engine::session::{pack_key, Session};
+use modscan::store::{MatchRow, ShapeView, Store, TexKey};
+use nif::material::MaterialState;
+use nif::path::TexPath;
+use pgpsim::{Badge, SimInput, SimResult};
+use render3d::builtin::Builtin;
+use render3d::{ParsedNif, ShapeId};
+use serde_json::Value;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 /// Memory ids are process-wide: `FileSource::Memory` compares by id, across encoders.
@@ -566,5 +584,1044 @@ impl Encoder {
             }
         }
         out
+    }
+}
+
+// ---- Part 2: fingerprint, change classification, mesh candidates, PGPatcher simulation, the panel's model ----
+
+pub const PANEL_TITLE: &str = "Set preview (3D)";
+pub const NEEDS_CS: &str = "PGPatcher preview needs the CS target and a PBR set";
+pub const JSON_WINS: &str = "Assumes your sdc JSON wins over other mods' PGPatcher configs.";
+pub const NO_SCAN: &str = "Scan your mods in the Meshes view to preview on a real mesh";
+pub const NO_MATCH: &str = "No scanned mesh uses this diffuse";
+pub const NO_BUILTIN_MATCH: &str =
+    "A built-in shape cannot match this entry's match keys: it shows the plain textures; pick a game mesh";
+/// D4: the CS features the preview leaves off (03 §3.2 "off" rows), under the single CS toggle.
+pub const OFF_FEATURES: &str = "Off in this preview: Light Limit Fix, Skylighting, Screen-Space Shadows, \
+Subsurface Scattering, Dynamic Cubemaps, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, \
+water, fog, Volumetric Shadows";
+/// How often the fingerprint is checked when no input arrived (02 §3.2).
+pub const THROTTLE: Duration = Duration::from_millis(200);
+/// Rows asked of the scan DB; `nif_filter` and `shape_matches` thin them out afterwards.
+pub const QUERY_LIMIT: usize = 500;
+pub const BUILTINS: [(Builtin, &str); 4] = [
+    (Builtin::Sphere, "Sphere"),
+    (Builtin::Plane, "Plane"),
+    (Builtin::Cube, "Cube"),
+    (Builtin::MaterialBall, "Material ball"),
+];
+
+pub fn builtin_name(b: Builtin) -> &'static str {
+    BUILTINS
+        .iter()
+        .find(|(x, _)| *x == b)
+        .map_or("Built-in", |(_, n)| n)
+}
+
+pub fn skip_text(reason: &str) -> String {
+    format!("will be skipped: {reason}")
+}
+
+pub fn badge_text(key: &str) -> String {
+    format!("not previewed: {key}")
+}
+
+pub fn count_text(n: usize) -> String {
+    if n == 1 {
+        "1 mesh uses this diffuse".into()
+    } else {
+        format!("{n} meshes use this diffuse")
+    }
+}
+
+/// The set the panel follows: the selected set, or the set of the selected texture (spec §8, 02 Q5).
+pub fn followed_set(m: &AppModel) -> Option<String> {
+    match &m.selection {
+        Selection::Set(k) => Some(k.clone()),
+        Selection::Item(k) => m.item(k).and_then(|i| i.set_key.clone()),
+        Selection::None => None,
+    }
+}
+
+/// The scan target `[meshes]` names, read as `MeshesModel::activate_with` reads it (`meshes.rs:304-311`): the
+/// Meshes view may never have been opened, so its `target` may still be `None`.
+pub fn target_of(s: &MeshesSettings) -> Option<ScanTarget> {
+    match (&s.instance, &s.profile, &s.folder) {
+        (Some(root), Some(profile), _) => Some(ScanTarget::Mo2 {
+            root: root.clone(),
+            profile: profile.clone(),
+        }),
+        (_, _, Some(f)) => Some(ScanTarget::Folder(f.clone())),
+        _ => None,
+    }
+}
+
+/// Everything the preview depends on, for one set (02 §3.2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetFingerprint {
+    pub set_key: String,
+    pub label: String,
+    /// The PGPatcher entry; `None` when the simulation cannot run (not CS, or not a PBR set: D3).
+    pub entry: Option<EntryInput>,
+    pub prefix: Option<String>,
+    pub members: Vec<MemberSlot>,
+}
+
+/// `None` when the set is gone.
+pub fn fingerprint(m: &AppModel, set_key: &str) -> Option<SetFingerprint> {
+    let (v, entry) = match json_entries(m).into_iter().find(|(v, _)| v.key == set_key) {
+        Some((v, e)) => (v, Some(e)),
+        None => (set_views(m).into_iter().find(|v| v.key == set_key)?, None),
+    };
+    let members = member_slots(m, &v, entry.as_ref());
+    Some(SetFingerprint {
+        set_key: set_key.into(),
+        label: v.label.clone(),
+        entry,
+        prefix: v.prefix.clone(),
+        members,
+    })
+}
+
+fn strip_ext(v: &str) -> String {
+    match v.rfind('.') {
+        Some(i) if !v[i..].contains(['\\', '/']) => v[..i].to_string(),
+        _ => v.to_string(),
+    }
+}
+
+/// The scan-DB key and `nif_filter` of an entry, read from the entry as PGPatcher reads it (`pgpsim::prepare`:
+/// default merged, `texture` → `match_diffuse`). The first key set wins, in `prefix::match_mode`'s order:
+/// `match_normal`, `path_contains`, `match1..8`, `match_diffuse`. `None`: no match key at all.
+pub fn tex_key(entry: &Value, default: &Value) -> Option<(TexKey, Option<String>)> {
+    let p = pgpsim::prepare(entry, default);
+    let s = |k: &str| {
+        p.get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.trim_matches('\\').trim().is_empty())
+            .map(str::to_string)
+    };
+    let stem = |v: String| strip_ext(v.trim_start_matches('\\'));
+    let key = if let Some(v) = s("match_normal") {
+        TexKey::Suffix {
+            slot: 1,
+            stem: stem(v),
+        }
+    } else if let Some(v) = s("path_contains") {
+        TexKey::Contains { slot: 0, frag: v }
+    } else if let Some((n, v)) = (1..=8u32).find_map(|n| s(&format!("match{n}")).map(|v| (n, v))) {
+        TexKey::Exact {
+            slot: n - 1,
+            path: v,
+        }
+    } else {
+        TexKey::Suffix {
+            slot: 0,
+            stem: stem(s("match_diffuse")?),
+        }
+    };
+    Some((key, s("nif_filter")))
+}
+
+/// What a fingerprint change means (02 §3.2 table, spec §2.3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Delta {
+    /// Another set, or the set switched between simulated and plain (D3): everything again.
+    pub set: bool,
+    /// A member's bytes change: encode it again, then reload (P1-A has no hot-swap).
+    pub encode: bool,
+    /// The match key or `nif_filter` changed: query the meshes again (and reload).
+    pub requery: bool,
+    /// Texture paths changed (prefix, slot paths): rebuild the texture map and reload.
+    pub reload: bool,
+    /// Only material keys changed: simulate again, `SetMaterial` for the shapes whose material changed.
+    pub material: bool,
+}
+
+pub fn classify(old: Option<&SetFingerprint>, new: &SetFingerprint, default: &Value) -> Delta {
+    let Some(old) =
+        old.filter(|o| o.set_key == new.set_key && o.entry.is_some() == new.entry.is_some())
+    else {
+        return Delta {
+            set: true,
+            ..Default::default()
+        };
+    };
+    let bytes = |f: &SetFingerprint| {
+        f.members
+            .iter()
+            .map(|s| {
+                (
+                    s.kind,
+                    s.item.clone(),
+                    s.job_key.clone(),
+                    s.status.clone(),
+                    s.sig.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let paths = |f: &SetFingerprint| {
+        f.members
+            .iter()
+            .map(|s| (s.kind, s.paths.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut d = Delta {
+        encode: bytes(old) != bytes(new),
+        reload: paths(old) != paths(new) || old.prefix != new.prefix,
+        ..Default::default()
+    };
+    if let (Some(a), Some(b)) = (&old.entry, &new.entry) {
+        let (va, vb) = (entry_node(a).to_value(), entry_node(b).to_value());
+        if tex_key(&va, default) != tex_key(&vb, default) {
+            d.requery = true;
+            d.reload = true;
+        }
+        if a.slots != b.slots {
+            d.reload = true;
+        }
+        d.material = va != vb && !d.reload;
+    }
+    d
+}
+
+/// One game NIF whose shapes match the entry (02 §5.3), best first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    pub load_copy_id: i64,
+    /// The game winner (another copy when PGPatcher's output wins in game).
+    pub copy_id: i64,
+    /// PGPatcher form, as `pgpsim` takes it: `meshes\…`.
+    pub nif_path: String,
+    pub origin: String,
+    pub le_mesh: bool,
+    pub derived: bool,
+    /// (block, name) of the matching shapes, re-checked with `pgpsim::shape_matches`.
+    pub shapes: Vec<(u32, Option<String>)>,
+}
+
+impl Candidate {
+    pub fn label(&self) -> String {
+        format!(
+            "{} · {} · {} matching shape{}{}{}",
+            self.nif_path,
+            self.origin,
+            self.shapes.len(),
+            if self.shapes.len() == 1 { "" } else { "s" },
+            if self.le_mesh {
+                " · LE, not drawn"
+            } else {
+                ""
+            },
+            if self.derived {
+                " · patched by PGPatcher in game"
+            } else {
+                ""
+            },
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Candidates {
+    NotAsked,
+    NoStore(String),
+    Querying,
+    Ready(Vec<Candidate>),
+    Error(String),
+}
+
+/// Rows → one candidate per copy to load, in row order. `filter` is `nif_filter` (`icontains` on the `meshes\…`
+/// path, 01 §1.3); `check(load copy, nif path, block)` is the `shape_matches` re-check.
+pub fn group_rows(
+    rows: &[MatchRow],
+    filter: Option<&str>,
+    check: &dyn Fn(i64, &str, u32) -> bool,
+) -> Vec<Candidate> {
+    let filter = filter.map(str::to_ascii_lowercase);
+    let mut out: Vec<Candidate> = vec![];
+    for r in rows {
+        let nif = r.nif_path.replace('/', "\\");
+        if filter
+            .as_deref()
+            .is_some_and(|f| !nif.to_ascii_lowercase().contains(f))
+        {
+            continue;
+        }
+        if !check(r.load_copy_id, &nif, r.shape_block) {
+            continue;
+        }
+        match out.iter_mut().find(|c| c.load_copy_id == r.load_copy_id) {
+            Some(c) => c.shapes.push((r.shape_block, r.shape_name.clone())),
+            None => out.push(Candidate {
+                load_copy_id: r.load_copy_id,
+                copy_id: r.copy_id,
+                nif_path: nif,
+                origin: r.origin.clone(),
+                le_mesh: r.le_mesh,
+                derived: r.derived,
+                shapes: vec![(r.shape_block, r.shape_name.clone())],
+            }),
+        }
+    }
+    out
+}
+
+/// A stored shape's slots as PGPatcher reads them: the raw string when the store kept it, else the canonical path
+/// with backslashes (the same string up to case, which PGPatcher folds).
+fn view_slots(v: &ShapeView) -> Vec<TexPath> {
+    v.textures
+        .iter()
+        .zip(&v.raw)
+        .map(|(norm, raw)| match (raw, norm) {
+            (Some(r), _) => nif::path::canon_texture(r.raw.as_bytes()),
+            (None, Some(n)) => nif::path::canon_texture(n.replace('/', "\\").as_bytes()),
+            (None, None) => nif::path::canon_texture(b""),
+        })
+        .collect()
+}
+
+/// The worker side of a query: its own read-only connection (a `Connection` is not `Sync`; a scan may be writing).
+fn query(
+    path: &Path,
+    key: &TexKey,
+    filter: Option<&str>,
+    prepared: &Value,
+) -> Result<Vec<Candidate>, String> {
+    let store = Store::open_read_only(path).map_err(|e| e.to_string())?;
+    let rows = store
+        .nifs_using_texture(key, QUERY_LIMIT)
+        .map_err(|e| e.to_string())?;
+    let cache: RefCell<HashMap<i64, Vec<ShapeView>>> = RefCell::new(HashMap::new());
+    let check = |copy: i64, nif: &str, block: u32| -> bool {
+        let mut c = cache.borrow_mut();
+        let shapes = c
+            .entry(copy)
+            .or_insert_with(|| store.shapes_of(copy).unwrap_or_default());
+        shapes
+            .iter()
+            .find(|s| s.block == block)
+            .is_some_and(|s| pgpsim::shape_matches(prepared, nif, &view_slots(s)))
+    };
+    Ok(group_rows(&rows, filter, &check))
+}
+
+/// A game NIF read and parsed for the preview: source materials, the game's copy of every texture its shapes name,
+/// and its path in PGPatcher form.
+#[derive(Debug, Clone)]
+pub struct LoadedNif {
+    pub load_copy_id: i64,
+    pub nif_path: String,
+    pub parsed: ParsedNif,
+    pub vfs: HashMap<String, FileSource>,
+    pub ms: f64,
+}
+
+fn load_nif(path: &Path, c: &Candidate) -> Result<LoadedNif, String> {
+    let t0 = Instant::now();
+    let store = Store::open_read_only(path).map_err(|e| e.to_string())?;
+    let (p, kind, root, _) = store
+        .copy_location(c.load_copy_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{}: no longer in the scan", c.nif_path))?;
+    let bytes = read_file(&FileSource::from_store(kind, &root, &p))?;
+    let parsed = render3d::parse(&bytes);
+    let mut vfs = HashMap::new();
+    for t in parsed.shapes.iter().flat_map(|s| s.material.slots.iter()) {
+        if t.norm.is_empty() || vfs.contains_key(&t.norm) {
+            continue;
+        }
+        if let Some((k, r)) = store.texture_location(&t.norm).map_err(|e| e.to_string())? {
+            vfs.insert(t.norm.clone(), FileSource::from_store(k, &r, &t.norm));
+        }
+    }
+    Ok(LoadedNif {
+        load_copy_id: c.load_copy_id,
+        nif_path: c.nif_path.clone(),
+        parsed,
+        vfs,
+        ms: ms(t0),
+    })
+}
+
+/// What PGPatcher does to one shape of the scene.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    /// Keys the preview cannot show (`smooth_angle`, `auto_uv`, …): the "not previewed" badges.
+    Patched {
+        badges: Vec<&'static str>,
+    },
+    /// PGPatcher would skip the shape for this file (01 §1.4); the shape keeps its source material (red badge).
+    Skip(String),
+    NoMatch,
+    /// No simulation (D3, or a built-in shape no slot of which can match the entry).
+    Plain,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeRow {
+    pub id: ShapeId,
+    pub name: String,
+    pub outcome: Outcome,
+    /// What the renderer draws: the patched material, or the source one.
+    pub material: MaterialState,
+}
+
+impl ShapeRow {
+    pub fn text(&self) -> String {
+        match &self.outcome {
+            Outcome::Patched { .. } => format!("{}: patched as PGPatcher would", self.name),
+            Outcome::Skip(r) => format!("{}: {}", self.name, skip_text(r)),
+            Outcome::NoMatch => format!("{}: not matched, original textures", self.name),
+            Outcome::Plain => format!("{}: plain textures, no PGPatcher simulation", self.name),
+        }
+    }
+}
+
+/// sdc's one entry on each shape (`pgpsim::simulate`). `exists` gets PGPatcher-form paths.
+pub fn simulate_shapes(
+    entry: &Value,
+    default: &Value,
+    nif_path: &str,
+    shapes: &[(ShapeId, String, MaterialState)],
+    exists: &dyn Fn(&str) -> bool,
+) -> Vec<ShapeRow> {
+    shapes
+        .iter()
+        .map(|(id, name, source)| {
+            let r = pgpsim::simulate(&SimInput {
+                entry,
+                default,
+                nif_path,
+                source,
+                exists,
+            });
+            let (outcome, material) = match r {
+                SimResult::Patched {
+                    material, badges, ..
+                } => (
+                    Outcome::Patched {
+                        badges: badges
+                            .iter()
+                            .map(|b| match b {
+                                Badge::NotPreviewed(k) => *k,
+                            })
+                            .collect(),
+                    },
+                    material,
+                ),
+                SimResult::Skip(why) => (Outcome::Skip(why), source.clone()),
+                SimResult::NoMatch => (Outcome::NoMatch, source.clone()),
+            };
+            ShapeRow {
+                id: *id,
+                name: name.clone(),
+                outcome,
+                material,
+            }
+        })
+        .collect()
+}
+
+/// A built-in shape as a shape the entry matches: `builtin_default` with the slot its match key reads set to a
+/// path that key matches, and a mesh path that passes `nif_filter`. `None` when no such stand-in matches.
+pub fn builtin_source(entry: &Value, default: &Value) -> Option<(MaterialState, String)> {
+    let (key, filter) = tex_key(entry, default)?;
+    let mut m = MaterialState::builtin_default();
+    match &key {
+        TexKey::Suffix { slot: 0, stem } => m.set_slot_raw(0, &format!("textures\\{stem}.dds")),
+        TexKey::Suffix { slot, stem } => {
+            m.set_slot_raw(*slot as usize, &format!("textures\\{stem}_n.dds"))
+        }
+        TexKey::Contains { slot, frag } => m.set_slot_raw(
+            *slot as usize,
+            &format!("textures\\{}.dds", frag.trim_matches('\\')),
+        ),
+        TexKey::Exact { slot, path } => {
+            let p = if path.to_ascii_lowercase().starts_with("textures\\") {
+                path.clone()
+            } else {
+                format!("textures\\{path}")
+            };
+            m.set_slot_raw(*slot as usize, &p)
+        }
+    }
+    let nif = match &filter {
+        Some(f) => format!("meshes\\{}\\sdcbuiltin.nif", f.trim_matches('\\')),
+        None => "meshes\\sdcbuiltin.nif".to_string(),
+    };
+    let prepared = pgpsim::prepare(entry, default);
+    pgpsim::shape_matches(&prepared, &nif, &m.slots).then_some((m, nif))
+}
+
+/// No simulation: `builtin_default` with each member's first path at its vanilla slot (diffuse 0, normal 1,
+/// glow/skin 2, height 3).
+pub fn plain_material(members: &[MemberSlot]) -> MaterialState {
+    let mut m = MaterialState::builtin_default();
+    for s in members {
+        let slot = match s.kind {
+            SlotKind::Diffuse => 0,
+            SlotKind::Normal => 1,
+            SlotKind::Emissive | SlotKind::SkinSk => 2,
+            SlotKind::Height => 3,
+            _ => continue,
+        };
+        if let Some(p) = s.paths.first() {
+            m.set_slot_raw(slot, &p.replace('/', "\\"));
+        }
+    }
+    m
+}
+
+/// The mesh per set (spec §2.3): the best candidate, a picked NIF, or a built-in shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshChoice {
+    Auto,
+    Nif(i64),
+    Builtin(Builtin),
+}
+
+/// What is drawn now.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pick {
+    Nif(Candidate),
+    Builtin(Builtin),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    Nif(i64),
+    Builtin(Builtin),
+}
+
+/// Wall times for the verification (Task 17); encode times are on each member, edit times in `v3.last_edit`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Timings {
+    pub query_ms: Option<f64>,
+    pub nif_ms: Option<f64>,
+    /// Simulation of every shape plus building the scene.
+    pub push_ms: Option<f64>,
+}
+
+enum SpMsg {
+    Queried {
+        token: u64,
+        result: Result<(Vec<Candidate>, f64), String>,
+    },
+    NifLoaded {
+        token: u64,
+        result: Result<LoadedNif, String>,
+    },
+}
+
+pub struct SetPreview {
+    /// Its own viewport (D2: a second D3D device; the shader cache on disk is shared).
+    pub v3: Viewport3d,
+    pub enc: Encoder,
+    /// Off in `SetPreview::default()` (so `ui::draw`'s test state keeps the existing layout); on from `new`.
+    pub enabled: bool,
+    pub store_path: Option<PathBuf>,
+    /// What the CS locate searches.
+    pub target: Option<ScanTarget>,
+    pub fp: Option<SetFingerprint>,
+    pub candidates: Candidates,
+    /// The mesh per set key, this session only (spec §8).
+    pub choice: HashMap<String, MeshChoice>,
+    pub rows: Vec<ShapeRow>,
+    pub notices: Vec<String>,
+    pub timings: Timings,
+    /// Set by the panel each frame it draws; `poll` does nothing heavy otherwise.
+    pub shown: bool,
+    /// Set by the panel on a frame with input: the fingerprint is checked now instead of after `THROTTLE`.
+    pub input: bool,
+    default: Value,
+    entry: Option<Value>,
+    nif: Option<Arc<LoadedNif>>,
+    failed: HashSet<i64>,
+    on_screen: Option<Shown>,
+    sent: BTreeMap<ShapeId, MaterialState>,
+    want_scene: bool,
+    querying: Option<u64>,
+    loading: Option<(u64, i64)>,
+    last_check: Option<Instant>,
+    located: bool,
+    next: u64,
+    store: RefCell<Option<Store>>,
+    store_tried: Cell<bool>,
+    vfs_cache: RefCell<HashMap<String, Option<FileSource>>>,
+    tx: Sender<SpMsg>,
+    rx: Receiver<SpMsg>,
+}
+
+impl Default for SetPreview {
+    /// No IO and no threads: no store path, no saved shaders, disabled.
+    fn default() -> SetPreview {
+        let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+        s.enabled = false;
+        s
+    }
+}
+
+impl SetPreview {
+    /// `shaders`: `[render3d] shaders` from `gui.toml`; `store_path`: the scan DB. Opens nothing until shown.
+    pub fn new(
+        shaders: Option<render3d::locate::Fingerprint>,
+        target: Option<ScanTarget>,
+        store_path: Option<PathBuf>,
+        cap: u32,
+    ) -> SetPreview {
+        let (tx, rx) = channel();
+        SetPreview {
+            v3: Viewport3d::new(shaders),
+            enc: Encoder::new(cap),
+            enabled: true,
+            store_path,
+            target,
+            fp: None,
+            candidates: Candidates::NotAsked,
+            choice: HashMap::new(),
+            rows: vec![],
+            notices: vec![],
+            timings: Timings::default(),
+            shown: false,
+            input: false,
+            default: document(&[]).to_value()["default"].clone(),
+            entry: None,
+            nif: None,
+            failed: HashSet::new(),
+            on_screen: None,
+            sent: BTreeMap::new(),
+            want_scene: false,
+            querying: None,
+            loading: None,
+            last_check: None,
+            located: false,
+            next: 0,
+            store: RefCell::new(None),
+            store_tried: Cell::new(false),
+            vfs_cache: RefCell::new(HashMap::new()),
+            tx,
+            rx,
+        }
+    }
+
+    /// Encodes, queries, NIF reads, the viewport or a scene to send are in flight.
+    pub fn busy(&self) -> bool {
+        self.v3.busy()
+            || self.enc.busy()
+            || self.querying.is_some()
+            || self.loading.is_some()
+            || (self.want_scene && !self.enc.paused)
+    }
+
+    /// Window focus: look for CS again (as `MeshesModel::relocate`), once the panel has been shown.
+    pub fn relocate(&mut self) {
+        if self.located {
+            self.v3.locate(self.target.clone());
+        }
+    }
+
+    pub fn poll(&mut self, m: &AppModel) {
+        self.poll_at(m, Instant::now())
+    }
+
+    /// `poll` at a given time (tests drive the debounce and the throttle). Call once per frame.
+    pub fn poll_at(&mut self, m: &AppModel, now: Instant) {
+        self.v3.poll();
+        if self.enc.poll() {
+            self.want_scene = true;
+        }
+        self.drain();
+        let shown = std::mem::take(&mut self.shown);
+        let input = std::mem::take(&mut self.input);
+        if !shown || !self.enabled {
+            return;
+        }
+        if !self.located {
+            self.located = true;
+            self.v3.locate(self.target.clone());
+        }
+        let key = followed_set(m);
+        let due = input
+            || key.as_ref() != self.fp.as_ref().map(|f| &f.set_key)
+            || self
+                .last_check
+                .is_none_or(|t| now.duration_since(t) >= THROTTLE);
+        if due {
+            self.last_check = Some(now);
+            if let Some(k) = key {
+                self.check(m, &k, now);
+            }
+        }
+        self.enc
+            .pump(m.session.as_ref(), now, m.export.running.is_some());
+        if self.want_scene && self.enc.settled() && self.querying.is_none() {
+            self.push_scene();
+        }
+    }
+
+    fn check(&mut self, m: &AppModel, key: &str, now: Instant) {
+        let Some(fp) = fingerprint(m, key) else {
+            return;
+        };
+        let d = classify(self.fp.as_ref(), &fp, &self.default);
+        if d == Delta::default() {
+            return;
+        }
+        if d.set {
+            self.enc.reset();
+            self.rows.clear();
+            self.notices.clear();
+            self.nif = None;
+            self.failed.clear();
+            self.sent.clear();
+            self.candidates = Candidates::NotAsked;
+            self.querying = None;
+            self.loading = None;
+            self.on_screen = None;
+        }
+        self.entry = fp.entry.as_ref().map(|e| entry_node(e).to_value());
+        self.enc.sync(m, fp.members.clone(), now, d.set);
+        self.fp = Some(fp);
+        if d.set || d.requery {
+            self.requery();
+        }
+        if d.set || d.encode || d.reload {
+            self.want_scene = true;
+        } else if d.material {
+            self.apply_materials();
+        }
+    }
+
+    fn requery(&mut self) {
+        // A scan may have run since: reopen lazily, forget cached lookups.
+        self.store_tried.set(false);
+        *self.store.borrow_mut() = None;
+        self.vfs_cache.borrow_mut().clear();
+        self.nif = None;
+        self.failed.clear();
+        self.querying = None;
+        let Some(entry) = self.entry.clone() else {
+            self.candidates = Candidates::NotAsked;
+            return;
+        };
+        let Some(path) = self.store_path.clone().filter(|p| p.is_file()) else {
+            self.candidates = Candidates::NoStore(NO_SCAN.into());
+            return;
+        };
+        let Some((key, filter)) = tex_key(&entry, &self.default) else {
+            self.candidates = Candidates::Ready(vec![]);
+            return;
+        };
+        self.next += 1;
+        let token = self.next;
+        self.querying = Some(token);
+        self.candidates = Candidates::Querying;
+        let prepared = pgpsim::prepare(&entry, &self.default);
+        spawn(
+            self.tx.clone(),
+            move || {
+                let t0 = Instant::now();
+                let result = query(&path, &key, filter.as_deref(), &prepared).map(|c| (c, ms(t0)));
+                SpMsg::Queried { token, result }
+            },
+            move |e| SpMsg::Queried {
+                token,
+                result: Err(format!("internal error in the mesh query: {e}")),
+            },
+        );
+    }
+
+    fn drain(&mut self) {
+        while let Ok(msg) = self.rx.try_recv() {
+            match msg {
+                SpMsg::Queried { token, result } if self.querying == Some(token) => {
+                    self.querying = None;
+                    match result {
+                        Ok((c, t)) => {
+                            self.timings.query_ms = Some(t);
+                            self.candidates = Candidates::Ready(c);
+                        }
+                        Err(e) => self.candidates = Candidates::Error(e),
+                    }
+                    self.want_scene = true;
+                }
+                SpMsg::NifLoaded { token, result }
+                    if self.loading.is_some_and(|(t, _)| t == token) =>
+                {
+                    let (_, copy) = self.loading.take().expect("checked above");
+                    match result {
+                        Ok(n) => {
+                            self.timings.nif_ms = Some(n.ms);
+                            for e in n.parsed.errors.iter().chain(&n.parsed.warnings) {
+                                self.notices.push(format!("{}: {e}", n.nif_path));
+                            }
+                            self.nif = Some(Arc::new(n));
+                        }
+                        Err(e) => {
+                            self.failed.insert(copy);
+                            self.notices.push(e);
+                        }
+                    }
+                    self.want_scene = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The mesh drawn now: the set's choice when usable, else the best usable candidate, else the sphere.
+    pub fn pick(&self) -> Pick {
+        let Some(fp) = &self.fp else {
+            return Pick::Builtin(Builtin::Sphere);
+        };
+        let choice = self
+            .choice
+            .get(&fp.set_key)
+            .copied()
+            .unwrap_or(MeshChoice::Auto);
+        let list: &[Candidate] = match (&self.candidates, fp.entry.is_some()) {
+            (Candidates::Ready(v), true) => v,
+            _ => &[],
+        };
+        let usable = |c: &&Candidate| !c.le_mesh && !self.failed.contains(&c.load_copy_id);
+        let best = || list.iter().find(usable);
+        let found = match choice {
+            MeshChoice::Builtin(b) => return Pick::Builtin(b),
+            MeshChoice::Nif(id) => list
+                .iter()
+                .filter(usable)
+                .find(|c| c.load_copy_id == id)
+                .or_else(best),
+            MeshChoice::Auto => best(),
+        };
+        found.map_or(Pick::Builtin(Builtin::Sphere), |c| Pick::Nif(c.clone()))
+    }
+
+    pub fn choose(&mut self, c: MeshChoice) {
+        if let Some(fp) = &self.fp {
+            self.choice.insert(fp.set_key.clone(), c);
+            self.want_scene = true;
+        }
+    }
+
+    /// The game's copy of `norm` (UI-thread read-only connection, opened on first use; lookups cached).
+    fn vfs_lookup(&self, norm: &str) -> Option<FileSource> {
+        if let Some(hit) = self.vfs_cache.borrow().get(norm) {
+            return hit.clone();
+        }
+        if !self.store_tried.get() {
+            self.store_tried.set(true);
+            if let Some(p) = self.store_path.as_ref().filter(|p| p.is_file()) {
+                *self.store.borrow_mut() = Store::open_read_only(p).ok();
+            }
+        }
+        let found = self
+            .store
+            .borrow()
+            .as_ref()
+            .and_then(|s| s.texture_location(norm).ok().flatten())
+            .map(|(k, r)| FileSource::from_store(k, &r, norm));
+        self.vfs_cache
+            .borrow_mut()
+            .insert(norm.to_string(), found.clone());
+        found
+    }
+
+    /// PGPatcher's existence check (01 §1.4, TP:348-375). pgpsim calls it for every non-empty slot after its slot
+    /// pass, including untouched vanilla slots, `slotN` paths and the cubemap, in PGPatcher form (backslashes, lower
+    /// case). True when sdc produces the path (a member that can be encoded) or the game has a winning copy of it,
+    /// loose or in a BSA (`Store::texture_location` over `tex_winner`, which holds BSA origins too). Without this,
+    /// a shape that keeps a vanilla slot would come back as `Skip`.
+    pub fn exists(&self, pgp_path: &str) -> bool {
+        let n = canon(pgp_path);
+        self.enc.produces(&n) || self.vfs_lookup(&n).is_some()
+    }
+
+    /// Adds the game's copy of every slot texture of `materials` that `map` lacks (a path PGPatcher wrote that the
+    /// source NIF did not name: another mod's `_rmaos`, a `slotN`).
+    fn add_vfs(&self, map: &mut HashMap<String, FileSource>, materials: &[&MaterialState]) {
+        for t in materials.iter().flat_map(|m| m.slots.iter()) {
+            if t.norm.is_empty() || map.contains_key(&t.norm) {
+                continue;
+            }
+            if let Some(src) = self.vfs_lookup(&t.norm) {
+                map.insert(t.norm.clone(), src);
+            }
+        }
+    }
+
+    /// The built-in shape's material and row: the entry simulated on a matching stand-in, or the plain textures.
+    fn builtin_scene(&mut self) -> (MaterialState, ShapeRow) {
+        let name = "Built-in shape".to_string();
+        if let Some(entry) = self.entry.clone() {
+            if let Some((src, nif)) = builtin_source(&entry, &self.default) {
+                let mut rows = simulate_shapes(
+                    &entry,
+                    &self.default,
+                    &nif,
+                    &[(ShapeId(0), name, src)],
+                    &|p| self.exists(p),
+                );
+                let row = rows.remove(0);
+                return (row.material.clone(), row);
+            }
+            if !self.notices.iter().any(|n| n == NO_BUILTIN_MATCH) {
+                self.notices.push(NO_BUILTIN_MATCH.into());
+            }
+        }
+        let members = self
+            .fp
+            .as_ref()
+            .map(|f| f.members.clone())
+            .unwrap_or_default();
+        let m = plain_material(&members);
+        (
+            m.clone(),
+            ShapeRow {
+                id: ShapeId(0),
+                name,
+                outcome: Outcome::Plain,
+                material: m,
+            },
+        )
+    }
+
+    fn nif_rows(&self, nif: &LoadedNif, entry: &Value) -> Vec<ShapeRow> {
+        let shapes: Vec<(ShapeId, String, MaterialState)> = nif
+            .parsed
+            .shapes
+            .iter()
+            .map(|s| (s.id, s.name.clone(), s.material.clone()))
+            .collect();
+        simulate_shapes(entry, &self.default, &nif.nif_path, &shapes, &|p| {
+            self.exists(p)
+        })
+    }
+
+    /// Builds the scene and hands it to the viewport: every shape simulated, its material written into the parsed
+    /// NIF before `LoadParsed` (no first-load edit burst), textures = the game's copies overlaid by the set's
+    /// encodes. A NIF not read yet is read first (off the UI thread); the push repeats when it arrives.
+    fn push_scene(&mut self) {
+        let t0 = Instant::now();
+        self.want_scene = false;
+        let memory = self.enc.memory_sources();
+        match self.pick() {
+            Pick::Builtin(b) => {
+                let (material, row) = self.builtin_scene();
+                let mut textures = memory;
+                self.add_vfs(&mut textures, &[&material]);
+                let same = self.on_screen == Some(Shown::Builtin(b));
+                self.next += 1;
+                self.v3.set_content(
+                    Some(Content::Builtin {
+                        key: self.next,
+                        shape: b,
+                        material: material.clone(),
+                        textures: Arc::new(textures),
+                    }),
+                    same,
+                );
+                self.on_screen = Some(Shown::Builtin(b));
+                self.sent = BTreeMap::from([(ShapeId(0), material)]);
+                self.rows = vec![row];
+            }
+            Pick::Nif(c) => {
+                let Some(nif) = self
+                    .nif
+                    .clone()
+                    .filter(|n| n.load_copy_id == c.load_copy_id)
+                else {
+                    self.start_nif(&c);
+                    return;
+                };
+                let Some(entry) = self.entry.clone() else {
+                    return;
+                };
+                let rows = self.nif_rows(&nif, &entry);
+                let mut parsed = nif.parsed.clone();
+                for (s, r) in parsed.shapes.iter_mut().zip(&rows) {
+                    s.material = r.material.clone();
+                }
+                let mut textures = nif.vfs.clone();
+                self.add_vfs(
+                    &mut textures,
+                    &rows.iter().map(|r| &r.material).collect::<Vec<_>>(),
+                );
+                textures.extend(memory);
+                let same = self.on_screen == Some(Shown::Nif(c.load_copy_id));
+                self.next += 1;
+                self.v3.set_content(
+                    Some(Content::Parsed {
+                        key: self.next,
+                        nif: Arc::new(parsed),
+                        textures: Arc::new(textures),
+                    }),
+                    same,
+                );
+                self.on_screen = Some(Shown::Nif(c.load_copy_id));
+                self.sent = rows.iter().map(|r| (r.id, r.material.clone())).collect();
+                self.rows = rows;
+            }
+        }
+        self.timings.push_ms = Some(ms(t0));
+    }
+
+    fn start_nif(&mut self, c: &Candidate) {
+        if self.loading.is_some_and(|(_, id)| id == c.load_copy_id) {
+            return;
+        }
+        let Some(path) = self.store_path.clone() else {
+            return;
+        };
+        self.next += 1;
+        let token = self.next;
+        self.loading = Some((token, c.load_copy_id));
+        let c = c.clone();
+        spawn(
+            self.tx.clone(),
+            move || SpMsg::NifLoaded {
+                token,
+                result: load_nif(&path, &c),
+            },
+            move |e| SpMsg::NifLoaded {
+                token,
+                result: Err(format!("internal error reading the NIF: {e}")),
+            },
+        );
+    }
+
+    /// A JSON-only change (spec §2.3): simulate again on the stored source materials and send `SetMaterial` for
+    /// the shapes whose material changed; a full push when the viewport has not sent a load of this scene yet.
+    fn apply_materials(&mut self) {
+        let Some(entry) = self.entry.clone() else {
+            return;
+        };
+        let rows = match self.on_screen {
+            Some(Shown::Builtin(_)) => vec![self.builtin_scene().1],
+            Some(Shown::Nif(id)) => match self.nif.clone().filter(|n| n.load_copy_id == id) {
+                Some(nif) => self.nif_rows(&nif, &entry),
+                None => {
+                    self.want_scene = true;
+                    return;
+                }
+            },
+            None => {
+                self.want_scene = true;
+                return;
+            }
+        };
+        for r in &rows {
+            if self.sent.get(&r.id) == Some(&r.material) {
+                continue;
+            }
+            if self.v3.set_material(r.id, r.material.clone()) {
+                self.sent.insert(r.id, r.material.clone());
+            } else {
+                self.want_scene = true;
+            }
+        }
+        self.rows = rows;
     }
 }
