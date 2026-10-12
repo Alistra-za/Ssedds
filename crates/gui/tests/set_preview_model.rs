@@ -1547,3 +1547,249 @@ fn a_flip_before_the_other_variant_exists_re_encodes_as_before() {
     assert_ne!(t2, 0);
     assert_ne!(t2, t1);
 }
+
+// ---- P1-B Task 8c: swaps instead of scene pushes ----
+
+use render3d::Variant;
+use sdc_gui::model::viewport3d::{V3Cmd, V3Reply};
+
+struct Live {
+    _d: tempfile::TempDir,
+    m: AppModel,
+    s: SetPreview,
+    cmds: std::sync::mpsc::Receiver<V3Cmd>,
+}
+
+fn kinds(s: &SetPreview) -> Vec<SlotKind> {
+    s.enc.members.keys().copied().collect()
+}
+
+/// The workers are held: the test finishes every member's pending encode with a fake DDS.
+fn finish(s: &mut SetPreview, cap: u32) {
+    for k in kinds(s) {
+        let t = s.enc.token_of(k);
+        assert_ne!(t, 0, "{k:?} has an encode to finish");
+        s.enc.inject(k, t, cap, fake());
+    }
+}
+
+/// A set preview on the built-in sphere, scene pushed, load sent and answered; encodes held.
+fn live() -> Live {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let fp = render3d::locate::Fingerprint {
+        root: dir.path().to_path_buf(),
+        owner_mod: Some("CS".into()),
+        hash: "a".into(),
+    };
+    let mut s = SetPreview::new(Some(fp.clone()), None, None, DEFAULT_CAP);
+    s.enc.hold_workers(true);
+    poll_once(&mut s, &m); // starts the locate; the pump hands every member a held encode
+    while s.v3.locating() {
+        poll_once(&mut s, &m);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    s.v3.on_located(Ok(Some(fp)));
+    let cmds = s.v3.attach_test_thread();
+    finish(&mut s, DEFAULT_CAP);
+    poll_once(&mut s, &m); // Fresh → the scene is pushed
+    s.v3.request_frame(64, 64);
+    let id = cmds
+        .try_iter()
+        .find_map(|c| match c {
+            V3Cmd::LoadBuiltin { id, .. } => Some(id),
+            _ => None,
+        })
+        .expect("a LoadBuiltin");
+    s.v3.handle(V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    Live {
+        _d: dir,
+        m,
+        s,
+        cmds,
+    }
+}
+
+fn drain(t: &Live) -> Vec<V3Cmd> {
+    t.cmds.try_iter().collect()
+}
+
+fn n_paths(s: &SetPreview) -> usize {
+    s.enc
+        .members
+        .values()
+        .flat_map(|m| m.slot.paths.iter())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+}
+
+fn count(c: &[V3Cmd], f: impl Fn(&V3Cmd) -> bool) -> usize {
+    c.iter().filter(|x| f(x)).count()
+}
+
+fn swaps(c: &[V3Cmd], v: Variant) -> usize {
+    count(
+        c,
+        |x| matches!(x, V3Cmd::SwapTexture { variant, bytes, .. } if *variant == v && !bytes.is_empty()),
+    )
+}
+
+fn drops(c: &[V3Cmd], v: Variant) -> usize {
+    count(
+        c,
+        |x| matches!(x, V3Cmd::SwapTexture { variant, bytes, .. } if *variant == v && bytes.is_empty()),
+    )
+}
+
+fn flips(c: &[V3Cmd], v: Variant) -> usize {
+    count(
+        c,
+        |x| matches!(x, V3Cmd::SetTextureVariant { variant, .. } if *variant == v),
+    )
+}
+
+fn loads(c: &[V3Cmd]) -> usize {
+    count(c, |x| {
+        matches!(
+            x,
+            V3Cmd::Load { .. } | V3Cmd::LoadParsed { .. } | V3Cmd::LoadBuiltin { .. }
+        )
+    })
+}
+
+#[test]
+fn an_encode_completion_on_loaded_content_swaps_the_texture_and_pushes_no_scene() {
+    let mut t = live();
+    drain(&t);
+    let key0 = builtin_key(&t.s);
+    // A new size cap re-encodes every member; the old bytes stay on show meanwhile.
+    t.s.enc.set_cap(1024, Instant::now());
+    poll_once(&mut t.s, &t.m);
+    assert!(
+        drain(&t).is_empty(),
+        "nothing to send while the encodes run"
+    );
+    finish(&mut t.s, 1024);
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(swaps(&c, Variant::Encoded), n_paths(&t.s));
+    assert_eq!(loads(&c), 0, "no scene push");
+    assert_eq!(flips(&c, Variant::Encoded), 0, "already the shown variant");
+    assert_eq!(builtin_key(&t.s), key0);
+    // Nothing changed since: nothing is sent again.
+    poll_once(&mut t.s, &t.m);
+    assert!(drain(&t).is_empty());
+}
+
+#[test]
+fn a_failed_encode_still_pushes_the_scene_so_the_games_texture_comes_back() {
+    let mut t = live();
+    drain(&t);
+    let key0 = builtin_key(&t.s);
+    t.s.enc.set_cap(1024, Instant::now());
+    poll_once(&mut t.s, &t.m);
+    for k in kinds(&t.s) {
+        let tok = t.s.enc.token_of(k);
+        t.s.enc.inject(k, tok, 1024, Err("boom".into()));
+    }
+    poll_once(&mut t.s, &t.m);
+    poll_once(&mut t.s, &t.m);
+    assert_ne!(builtin_key(&t.s), key0, "the scene was pushed");
+}
+
+#[test]
+fn flipping_the_mode_with_both_variants_sends_only_a_variant_flip_and_starts_no_encode() {
+    let mut t = live();
+    drain(&t);
+    let n = n_paths(&t.s);
+    // First flip: today's re-encode of the new mode; the old bytes are kept as the other copy.
+    t.s.set_mode(PreviewMode::Source);
+    assert!(t.s.enc.ab_active());
+    assert!(drain(&t).is_empty(), "nothing Fresh to send yet");
+    poll_once(&mut t.s, &t.m);
+    finish(&mut t.s, DEFAULT_CAP);
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(swaps(&c, Variant::Source), n);
+    assert_eq!(flips(&c, Variant::Source), n, "then show it");
+    assert_eq!(
+        swaps(&c, Variant::Encoded),
+        0,
+        "the renderer already holds the Encoded copy"
+    );
+    assert_eq!(loads(&c), 0);
+    // Second flip: both variants exist.
+    t.s.set_mode(PreviewMode::Encoded);
+    let c = drain(&t);
+    assert_eq!(c.len(), n, "only the flips");
+    assert_eq!(flips(&c, Variant::Encoded), n);
+    poll_once(&mut t.s, &t.m);
+    assert!(drain(&t).is_empty());
+    for k in kinds(&t.s) {
+        assert_eq!(t.s.enc.token_of(k), 0, "no encode started");
+        assert_eq!(t.s.enc.alt_token_of(k), 0);
+    }
+}
+
+#[test]
+fn a_source_change_voids_both_variants_and_the_inactive_one_follows_the_active() {
+    let mut t = live();
+    t.s.set_mode(PreviewMode::Source);
+    poll_once(&mut t.s, &t.m);
+    finish(&mut t.s, DEFAULT_CAP);
+    poll_once(&mut t.s, &t.m);
+    drain(&t);
+    let n = n_paths(&t.s);
+    t.s.enc.set_cap(1024, Instant::now()); // a settings change as the encoder sees it
+    for k in kinds(&t.s) {
+        assert!(!t.s.enc.has_alt(k));
+    }
+    poll_once(&mut t.s, &t.m); // the renderer's stale Encoded copy is dropped
+    let c = drain(&t);
+    assert_eq!(drops(&c, Variant::Encoded), n);
+    finish(&mut t.s, 1024); // the shown (Source) mode
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(swaps(&c, Variant::Source), n);
+    for k in kinds(&t.s) {
+        assert_ne!(t.s.enc.alt_token_of(k), 0, "the inactive mode encodes now");
+    }
+    for k in kinds(&t.s) {
+        let at = t.s.enc.alt_token_of(k);
+        t.s.enc.inject_as(k, at, 1024, PreviewMode::Encoded, fake());
+    }
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(
+        swaps(&c, Variant::Encoded),
+        n,
+        "stored beside the shown one"
+    );
+    assert_eq!(flips(&c, Variant::Encoded), 0, "not shown");
+    assert_eq!(loads(&c), 0);
+}
+
+#[test]
+fn a_flip_before_the_other_variant_exists_falls_back_to_the_re_encode() {
+    let mut t = live();
+    drain(&t);
+    t.s.enc.set_cap(1024, Instant::now()); // everything stale: no Fresh bytes to keep
+    t.s.set_mode(PreviewMode::Source);
+    poll_once(&mut t.s, &t.m);
+    for k in kinds(&t.s) {
+        assert_ne!(t.s.enc.token_of(k), 0, "encoded as before the A/B");
+        assert!(!t.s.enc.has_alt(k));
+    }
+    assert!(drain(&t)
+        .iter()
+        .all(|c| !matches!(c, V3Cmd::SetTextureVariant { .. })));
+}

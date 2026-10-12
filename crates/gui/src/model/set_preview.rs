@@ -57,7 +57,7 @@ const BLOCKED_ERROR: &str = "the texture has an error";
 const BLOCKED_NOTHING: &str = "nothing to encode";
 
 /// What a member's bytes are made of: the engine's full export path, or its prepared source chain uncompressed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PreviewMode {
     #[default]
     Encoded,
@@ -1530,6 +1530,10 @@ pub struct SetPreview {
     /// Every slot path the last pushed scene's materials named (resolved or not): a JSON-only edit naming another
     /// one needs the push, which runs the VFS lookup.
     pushed_norms: HashSet<String>,
+    /// What the viewport's renderer holds of the encoder's bytes: (path, mode) -> `Encoded.id`, and the mode each path
+    /// is showing. Rebuilt by every scene push, kept in line by [`SetPreview::sync_textures`] (P1-B A/B).
+    tex_sent: HashMap<(String, PreviewMode), u64>,
+    tex_active: HashMap<String, PreviewMode>,
     want_scene: bool,
     /// The panel was drawn on the last polled frame: a pending scene push only counts as work while it is on screen.
     visible: bool,
@@ -1588,6 +1592,8 @@ impl SetPreview {
             on_screen: None,
             sent: BTreeMap::new(),
             pushed_norms: HashSet::new(),
+            tex_sent: HashMap::new(),
+            tex_active: HashMap::new(),
             want_scene: false,
             visible: false,
             querying: None,
@@ -1607,9 +1613,17 @@ impl SetPreview {
         self.enc.mode()
     }
 
-    /// Encoded / Source (not persisted): only the encodes change, the meshes stay.
+    /// Encoded / Source (not persisted): only the encodes change, the meshes stay. With both variants encoded this
+    /// is a `SetTextureVariant` per path and nothing else; otherwise the new mode encodes as before and its bytes
+    /// are swapped in when they land. The viewport cannot take it yet (no load of this scene sent): push the scene.
     pub fn set_mode(&mut self, mode: PreviewMode) {
+        if mode == self.enc.mode() {
+            return;
+        }
         self.enc.set_mode(mode, Instant::now());
+        if !self.sync_textures() {
+            self.want_scene = true;
+        }
     }
 
     /// Test seam: a query and a NIF-load completion carrying `token`, as a worker would send them.
@@ -1646,7 +1660,11 @@ impl SetPreview {
     /// `poll` at a given time (tests drive the debounce and the throttle). Call once per frame.
     pub fn poll_at(&mut self, m: &AppModel, now: Instant) {
         self.v3.poll();
-        if self.enc.poll() {
+        // A finished encode on a scene that is already loaded is swapped in (`sync_textures`); the scene is pushed
+        // for a first load and when an encode failed (the game's copy of the texture must come back).
+        let changed = self.enc.poll();
+        let failed = std::mem::take(&mut self.enc.scene_dirty);
+        if changed && (failed || self.on_screen.is_none()) {
             self.want_scene = true;
         }
         self.drain();
@@ -1677,6 +1695,12 @@ impl SetPreview {
             .pump(m.session.as_ref(), now, m.export.running.is_some());
         if self.want_scene && self.enc.settled() && self.querying.is_none() {
             self.push_scene();
+        }
+        if !self.want_scene && !self.sync_textures() {
+            self.want_scene = true;
+        }
+        for e in std::mem::take(&mut self.v3.swap_errors) {
+            self.notice(e);
         }
         let e = self.vfs_err.borrow().clone();
         if let Some(e) = e {
@@ -1995,6 +2019,7 @@ impl SetPreview {
         let t0 = Instant::now();
         self.want_scene = false;
         let memory = self.enc.memory_sources();
+        self.v3.set_load_variant(variant_of(self.enc.mode()));
         match self.pick() {
             Pick::Builtin(b) => {
                 if let (Candidates::Ready(l), Some(fp)) = (&self.candidates, &self.fp) {
@@ -2063,6 +2088,7 @@ impl SetPreview {
                 self.rows = rows;
             }
         }
+        self.reset_tex_mirror();
         self.timings.push_ms = Some(ms(t0));
     }
 
@@ -2088,6 +2114,115 @@ impl SetPreview {
                 result: Err(format!("internal error reading the NIF: {e}")),
             },
         );
+    }
+
+    /// After a scene push the renderer holds exactly what `memory_sources` served, as the current mode's variant
+    /// (`set_load_variant`), and shows it.
+    fn reset_tex_mirror(&mut self) {
+        self.tex_sent.clear();
+        self.tex_active.clear();
+        let mode = self.enc.mode();
+        for m in self.enc.members.values() {
+            for p in &m.slot.paths {
+                // A path without bytes on show may still be loaded from the game's copy, under the same label.
+                self.tex_active.insert(p.clone(), mode);
+                if let Some(e) = m.state.shown() {
+                    self.tex_sent.insert((p.clone(), mode), e.id);
+                }
+            }
+        }
+    }
+
+    /// Brings the renderer's copy of the set's textures in line with the encoder without a scene push (P1-B Task 8):
+    /// the shown mode's Fresh bytes as `SwapTexture`; once A/B is in use the other mode's Fresh bytes beside them
+    /// (only for a path the renderer already shows: a lone copy would become the shown one) and an empty
+    /// `SwapTexture` for a copy that went stale; then `SetTextureVariant` for the shown mode. False when the viewport
+    /// cannot take a required command (no load of this scene has been sent yet): the caller pushes the scene.
+    fn sync_textures(&mut self) -> bool {
+        if self.on_screen.is_none() {
+            return true;
+        }
+        let mode = self.enc.mode();
+        let other = mode.other();
+        let ab = self.enc.ab_active();
+        // Later members win a shared path, as in `memory_sources`.
+        let mut want: HashMap<(String, PreviewMode), Arc<Encoded>> = HashMap::new();
+        let mut paths: Vec<String> = vec![];
+        let mut stale: Vec<(String, PreviewMode)> = vec![];
+        for m in self.enc.members.values() {
+            for p in &m.slot.paths {
+                paths.push(p.clone());
+                if let EncState::Fresh(e) = &m.state {
+                    want.insert((p.clone(), mode), e.clone());
+                }
+                match (&m.alt, ab) {
+                    (Some(e), true) => {
+                        want.insert((p.clone(), other), e.clone());
+                    }
+                    // A stale copy goes, unless it is the one on screen (a flip before the new mode landed keeps
+                    // showing the old picture until it does).
+                    _ if self.tex_sent.contains_key(&(p.clone(), other))
+                        && self.tex_active.get(p) != Some(&other) =>
+                    {
+                        stale.push((p.clone(), other))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut flip: HashSet<String> = HashSet::new();
+        for ((p, label), e) in want.iter().filter(|(k, _)| k.1 == mode) {
+            if self.tex_sent.get(&(p.clone(), *label)) == Some(&e.id) {
+                continue;
+            }
+            let is_new = !self.tex_sent.contains_key(&(p.clone(), *label));
+            if !self
+                .v3
+                .swap_texture(p.clone(), e.dds.clone(), variant_of(*label))
+            {
+                return false;
+            }
+            self.tex_sent.insert((p.clone(), *label), e.id);
+            // The renderer shows the first texture a path gets.
+            self.tex_active.entry(p.clone()).or_insert(*label);
+            if is_new {
+                flip.insert(p.clone());
+            }
+        }
+        for ((p, label), e) in want.iter().filter(|(k, _)| k.1 == other) {
+            if !self.tex_sent.contains_key(&(p.clone(), mode))
+                || self.tex_sent.get(&(p.clone(), *label)) == Some(&e.id)
+            {
+                continue;
+            }
+            // Not required: refused now, tried again on the next frame.
+            if self
+                .v3
+                .swap_texture(p.clone(), e.dds.clone(), variant_of(*label))
+            {
+                self.tex_sent.insert((p.clone(), *label), e.id);
+            }
+        }
+        for key in stale {
+            if self
+                .v3
+                .swap_texture(key.0.clone(), Arc::new(vec![]), variant_of(key.1))
+            {
+                self.tex_sent.remove(&key);
+            }
+        }
+        for p in paths {
+            if !self.tex_sent.contains_key(&(p.clone(), mode)) {
+                continue;
+            }
+            if flip.contains(&p) || self.tex_active.get(&p) != Some(&mode) {
+                if !self.v3.set_texture_variant(p.clone(), variant_of(mode)) {
+                    return false;
+                }
+                self.tex_active.insert(p, mode);
+            }
+        }
+        true
     }
 
     /// A JSON-only change (spec §2.3): simulate again on the stored source materials and send `SetMaterial` for

@@ -442,3 +442,20 @@ fn a_shader_still_compiling_is_listed_and_a_kept_look_is_said() {
     h.get_by_label("Bottle: compiling…");
     h.get_by_label("Cork: shader failed: X3000 bad register (previous look kept)");
 }
+
+#[test]
+fn the_mode_toggle_still_calls_set_mode_and_puts_ab_in_use() {
+    let (_d, mut h) = plain_rock();
+    assert!(!h.state().1.enc.ab_active());
+    h.get_by_label(MODE_LABEL_SOURCE).click();
+    h.run_steps(4);
+    assert_eq!(h.state().1.mode(), PreviewMode::Source);
+    assert_eq!(h.state().1.enc.mode(), PreviewMode::Source);
+    assert!(
+        h.state().1.enc.ab_active(),
+        "the first flip puts A/B in use"
+    );
+    h.get_by_label(MODE_LABEL_ENCODED).click();
+    h.run_steps(4);
+    assert_eq!(h.state().1.mode(), PreviewMode::Encoded);
+}
