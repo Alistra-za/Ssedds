@@ -86,7 +86,8 @@ pub fn default_for_register(reg: u32) -> [u8; 4] {
 ///
 /// CS feature registers (P1-C C3; reflected only with CS_SKIN / CS_HAIR): t72 skin detail normal = flat with
 /// detail mask 0; t73 hair tangent shift (`Texture2D<float>`, read `.x - 0.5`) = mid grey, no shift; t71 skin
-/// extra and t74 skin wetness = 0 (gated off by `skinMaterialFlags` = 0).
+/// extra and t74 skin wetness = 0 (gated off by `skinMaterialFlags` = 0; t71 gets the shape's RFAOS map when
+/// [`rfaos_candidates`] finds one).
 pub fn default_for(reg: u32, shader_type: u32, pbr: bool) -> [u8; 4] {
     match (reg, pbr, shader_type) {
         (72, _, _) => [128, 128, 255, 0],
@@ -97,6 +98,25 @@ pub fn default_for(reg: u32, shader_type: u32, pbr: bool) -> [u8; 4] {
         (4, false, 4) => [64, 64, 64, 255],
         _ => default_for_register(reg),
     }
+}
+
+/// CS skin extra map (RFAOS, bound at t71) candidates of a FaceGen (4) or FaceGen RGB tint (5) shape, in lookup
+/// order (owner rule = pre-October CS `Skin.cpp:451-512`, 02-skin-rfaos.md §0): the canonical slot 7 `…_s.dds`, then
+/// slot 1 `…_n.dds` / `…_msn.dds`, each with that suffix replaced by `_rfaos.dds`. The first one the resolver
+/// returns wins. Canonical paths are lower case, so the end-anchored match is case-insensitive.
+pub fn rfaos_candidates(shader_type: u32, normal: &str, specular: &str) -> Vec<String> {
+    if !matches!(shader_type, 4 | 5) {
+        return vec![];
+    }
+    let s = specular.strip_suffix("_s.dds");
+    let n = normal
+        .strip_suffix("_n.dds")
+        .or_else(|| normal.strip_suffix("_msn.dds"));
+    [s, n]
+        .into_iter()
+        .flatten()
+        .map(|stem| format!("{stem}_rfaos.dds"))
+        .collect()
 }
 
 fn srv_from(
@@ -366,6 +386,34 @@ mod tests {
             dxgi_format(DdsPixelFormat::Bgra8 { srgb: false }, None).0,
             87
         );
+    }
+
+    fn norm(raw: &str) -> String {
+        nif::path::canon_texture(raw.as_bytes()).norm
+    }
+
+    #[test]
+    fn rfaos_candidates_follow_the_old_cs_order() {
+        let (n, s) = (
+            norm(r"textures\arch\skin\head_N.DDS"),
+            norm(r"textures\arch\skin\light\head_s.dds"),
+        );
+        assert_eq!(
+            rfaos_candidates(4, &n, &s),
+            [
+                "textures/arch/skin/light/head_rfaos.dds",
+                "textures/arch/skin/head_rfaos.dds"
+            ]
+        );
+        assert_eq!(
+            rfaos_candidates(5, &norm(r"arch\skin\body_msn.dds"), ""),
+            ["textures/arch/skin/body_rfaos.dds"]
+        );
+        // no _s / _n / _msn suffix (anchored at the end): no candidate
+        assert!(rfaos_candidates(4, "textures/a/head.dds", "textures/a/head_s_x.dds").is_empty());
+        // not a skin technique
+        assert!(rfaos_candidates(0, &n, &s).is_empty());
+        assert!(rfaos_candidates(6, &n, &s).is_empty());
     }
 
     #[test]

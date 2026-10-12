@@ -21,6 +21,8 @@
 // - STANDIN_FEATURE_DATA (with STANDIN_FLAT): the flat colour is scaled by CS's FeatureData
 //   linearLightingSettings.ambientMult, so a settings change that only rewrites the static cbuffer block shows in
 //   pixels (P1-C settings tests).
+// - STANDIN_SKIN (with STANDIN_FLAT): CS's SkinPerGeometry (b7) and skin extra map (t71) are declared, and the flat
+//   colour adds skinMaterialFlags.x x the t71 RGB, so the RFAOS lookup shows in pixels (P1-C Task 8 tests).
 
 struct VsOut
 {
@@ -119,6 +121,15 @@ cbuffer FeatureData : register(b6)
 };
 #endif
 
+#if defined(STANDIN_SKIN)
+cbuffer SkinPerGeometry : register(b7)
+{
+    float4 skinPerGeometry;
+    float4 skinMaterialFlags;
+};
+Texture2D<float4> TexSkinExtraSampler : register(t71);
+#endif
+
 float4 main(VsOut i) : SV_Target
 {
     float4 base = DiffuseMap.Sample(DiffuseSampler, i.Uv);
@@ -132,6 +143,9 @@ float4 main(VsOut i) : SV_Target
     float3 col = 0.25 * base.rgb * i.Color.rgb + EmitColor.rgb + emissive + float3(0.0, flagGreen, 0.0);
 #if defined(STANDIN_FEATURE_DATA)
     col *= linearLightingSettings.ambientMult;
+#endif
+#if defined(STANDIN_SKIN)
+    col += skinMaterialFlags.x * TexSkinExtraSampler.SampleLevel(DiffuseSampler, i.Uv, 0).rgb;
 #endif
     return float4(col, base.a * 0.5);
 #else

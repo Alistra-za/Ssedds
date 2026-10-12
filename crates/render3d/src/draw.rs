@@ -5,7 +5,7 @@
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
-use crate::material::{write_material, Bound};
+use crate::material::{write_material, write_skin_flags, Bound};
 use crate::mesh::GpuMesh;
 use crate::scene::{
     rows, write_static, LightValues, Mat3x4, PointValues, Scene, SceneFields, View, ViewValues,
@@ -174,6 +174,7 @@ impl ShapeDraw {
         let mut uploads = 0;
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
             scene.write(&mut cb.writer, view, &self.model, feature_values);
+            write_skin_flags(&mut cb.writer, &self.built, &self.bound);
             upload(gpu, cb);
             cb.dirty = false;
             uploads += 1;
@@ -194,6 +195,7 @@ impl ShapeDraw {
             cb.writer.zero();
             write_material(&mut cb.writer, m, &self.bound, linear_lighting);
             write_static(&mut cb.writer, feature_values);
+            write_skin_flags(&mut cb.writer, m, &self.bound);
             cb.dirty = true;
         }
         self.blend = m.blend();

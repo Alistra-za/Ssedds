@@ -233,6 +233,18 @@ fn write_trailer(w: &mut CbWriter, p: &LightingParams, has_env_mask: bool) {
     }
 }
 
+/// CS `SkinPerGeometry.skinMaterialFlags` of one draw (02-skin-rfaos.md §0.5): x = an RFAOS map is bound at t71,
+/// w = a skin shape (type 4/5) names a slot 2 `_sk` map (the installed build's `entry.thickness`); y (wetness) and z
+/// (detail normal-only) stay 0. Called after `write_static`, whose FeatureData values hold a global zero.
+pub fn write_skin_flags(w: &mut CbWriter, m: &MaterialState, bound: &Bound) {
+    let x = bound.regs.contains(&71);
+    let sk = matches!(m.shader_type, 4 | 5) && m.slots.get(2).is_some_and(|p| !p.norm.is_empty());
+    w.set(
+        "skinMaterialFlags",
+        &[f32::from(u8::from(x)), 0.0, 0.0, f32::from(u8::from(sk))],
+    );
+}
+
 /// Writes the material fields into one cbuffer of any stage. The writer must be zero (fresh from
 /// `CbWriter::new` or after `CbWriter::zero`): fields a branch does not write must read 0, never a previous
 /// material's value. `bound` = registers bound to a real texture in this draw.

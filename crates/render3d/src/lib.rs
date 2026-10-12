@@ -30,7 +30,7 @@ use cs_settings::CsSettings;
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
-use material::{perm_material, write_material};
+use material::{perm_material, write_material, write_skin_flags};
 use nif::material::MaterialState;
 use permutation::{defines, Defines, Stage};
 pub use scene::Background;
@@ -224,6 +224,12 @@ impl TexEntry {
         self.source.is_some() || self.encoded.is_some()
     }
 }
+/// [`textures::rfaos_candidates`] of a material (slot 1 normal, slot 7 specular).
+fn rfaos_candidates(m: &MaterialState) -> Vec<String> {
+    let norm = |i: usize| m.slots.get(i).map_or("", |p| p.norm.as_str());
+    textures::rfaos_candidates(m.shader_type, norm(1), norm(7))
+}
+
 /// The 3D preview renderer: message-shaped (load bytes → report, render scene → pixels) so it can later move
 /// into a sidecar process. Single-threaded, like [`Gpu`].
 pub struct Renderer {
@@ -629,6 +635,17 @@ impl Renderer {
                 None => {}
             }
         }
+        // CS_SKIN's t71: the first RFAOS candidate in `tex_cache` with a texture (resolve_textures asked for them).
+        if let Some(kind) = draw::srv_kind_at(&program.ps.reflection, 71) {
+            let found = rfaos_candidates(m)
+                .iter()
+                .find_map(|c| self.tex_cache.get(c).and_then(TexEntry::current))
+                .filter(|t| t.kind == kind)
+                .map(|t| t.srv.clone());
+            if let Some(srv) = found {
+                real.insert(71, srv);
+            }
+        }
         let mut srvs = vec![];
         for (_, reg, kind) in &program.ps.reflection.srvs {
             if let Some(v) = real.get(reg) {
@@ -663,6 +680,14 @@ impl Renderer {
                 self.texture(&path.norm, textures, rep);
             }
         }
+        // Derived guesses: a candidate the resolver lacks is not a missing texture (decode errors still count).
+        let mut quiet = LoadReport::default();
+        for c in rfaos_candidates(m) {
+            if self.texture(&c, textures, &mut quiet).is_some() {
+                break;
+            }
+        }
+        rep.errors.append(&mut quiet.errors);
     }
 
     /// Builds one shape's draw for material `m` on `program`: textures (already in `tex_cache`), vertex streams
@@ -694,6 +719,7 @@ impl Renderer {
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
             write_material(&mut cb.writer, m, &bound, ll);
             scene::write_static(&mut cb.writer, &self.feature_values);
+            write_skin_flags(&mut cb.writer, m, &bound);
         }
         Ok(ShapeDraw {
             name: name.to_string(),
@@ -1326,6 +1352,27 @@ impl Renderer {
             touched.push((id, reg));
         }
         Ok(touched)
+    }
+
+    /// Test hook: the floats of `var` as written in the shape's pixel-stage cbuffers (`None` without a draw or when
+    /// the PS does not reflect `var`).
+    #[doc(hidden)]
+    pub fn draw_cb_floats(&self, id: ShapeId, var: &str) -> Option<Vec<f32>> {
+        let d = self.shapes.get(&id)?.draw.as_ref()?;
+        let cb = d.ps_cbs.iter().find(|c| c.writer.has(var))?;
+        let f = cb.writer.resolve(var)?;
+        let bytes = cb
+            .writer
+            .bytes()
+            .get(f.off as usize..(f.off + f.size) as usize)?;
+        Some(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect(),
+        )
     }
 
     /// Test hook: the COM pointer of the shape's index buffer. A hot-swap must leave it alone (no mesh reload).
