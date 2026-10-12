@@ -589,3 +589,19 @@ fn resized_npot_pair_bakes_on_post_resize_sizes() {
         }
     }
 }
+
+/// The bake sizes its inputs by content (`load::image_size`), as Load and admission do, not by extension: an
+/// `_rmaos.tga` that holds a PNG still bakes. A DDS member in the same set changes nothing (DECISIONS S6).
+#[test]
+fn bake_sizes_members_by_content_beside_a_dds_member() {
+    let d = tempfile::tempdir().unwrap();
+    normal(d.path(), "textures/pbr/iron_n.png", 64, 64);
+    rough(d.path(), "textures/pbr/iron_rmaos.png", 64, 64);
+    let png = d.path().join("in/textures/pbr/iron_rmaos.png");
+    std::fs::rename(&png, png.with_extension("tga")).unwrap();
+    fake_dds(d.path(), "textures/pbr/iron_s.dds");
+    let (p, ev) = plan(req(d.path(), &[]));
+    let m = job(&p, "iron_rmaos.tga");
+    assert!(m.bake.is_some(), "{:?}", m.warnings);
+    assert!(bake_flag(&ev, "textures/pbr/iron"));
+}
