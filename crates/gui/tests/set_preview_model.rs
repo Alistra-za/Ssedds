@@ -350,3 +350,551 @@ fn another_source_with_the_same_stamp_is_another_signature_and_ids_are_process_w
     let id = |e: &Encoder| e.members[&SlotKind::Diffuse].state.shown().unwrap().id;
     assert_ne!(id(&a), id(&b));
 }
+
+// ---- Task 14: fingerprint, classification, query keys, simulation, orchestration ----
+
+use modscan::store::{MatchRow, TexKey};
+use nif::material::MaterialState;
+use render3d::builtin::Builtin;
+use render3d::ShapeId;
+use sdc_gui::model::viewport3d::Content;
+use sdc_gui::pgp::writer::entry_node;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+
+fn default_block() -> Value {
+    sdc_gui::pgp::writer::document(&[]).to_value()["default"].clone()
+}
+
+fn entry(pairs: &[(&str, Value)]) -> EntryInput {
+    EntryInput {
+        settings: pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
+        slots: Default::default(),
+        derived_match: r"x\rock".into(),
+    }
+}
+
+fn value(pairs: &[(&str, Value)]) -> Value {
+    entry_node(&entry(pairs)).to_value()
+}
+
+fn fp_of(entry: Option<EntryInput>, sig: &str) -> SetFingerprint {
+    SetFingerprint {
+        set_key: "k".into(),
+        label: "x/rock".into(),
+        entry,
+        prefix: Some(r"textures\pbr\x\rock".into()),
+        members: vec![MemberSlot {
+            kind: SlotKind::Diffuse,
+            item: "x/rock.png".into(),
+            job_key: "textures/pbr/x/rock.dds".into(),
+            status: "Ready".into(),
+            sig: sig.into(),
+            paths: vec!["textures/pbr/x/rock.dds".into()],
+        }],
+    }
+}
+
+#[test]
+fn a_material_key_is_json_only_and_a_texture_change_re_encodes() {
+    let d = default_block();
+    let a = fp_of(Some(entry(&[])), "s1");
+    let rough = fp_of(Some(entry(&[("roughness_scale", json!(0.5))])), "s1");
+    assert_eq!(
+        classify(Some(&a), &rough, &d),
+        Delta {
+            material: true,
+            ..Default::default()
+        }
+    );
+    let tex = fp_of(Some(entry(&[])), "s2");
+    assert_eq!(
+        classify(Some(&a), &tex, &d),
+        Delta {
+            encode: true,
+            ..Default::default()
+        }
+    );
+    assert_eq!(classify(Some(&a), &a.clone(), &d), Delta::default());
+}
+
+#[test]
+fn match_keys_requery_paths_reload_and_another_set_or_d3_is_everything() {
+    let d = default_block();
+    let a = fp_of(Some(entry(&[])), "s1");
+    let moved = fp_of(Some(entry(&[("match_diffuse", json!(r"y\rock"))])), "s1");
+    let dm = classify(Some(&a), &moved, &d);
+    assert!(dm.requery && dm.reload && !dm.material, "{dm:?}");
+    let mut slot = fp_of(Some(entry(&[])), "s1");
+    slot.entry
+        .as_mut()
+        .unwrap()
+        .slots
+        .insert(3, r"effects\white.dds".into());
+    assert_eq!(
+        classify(Some(&a), &slot, &d),
+        Delta {
+            reload: true,
+            ..Default::default()
+        }
+    );
+    let mut other = a.clone();
+    other.set_key = "other".into();
+    assert_eq!(
+        classify(Some(&a), &other, &d),
+        Delta {
+            set: true,
+            ..Default::default()
+        }
+    );
+    assert!(
+        classify(Some(&a), &fp_of(None, "s1"), &d).set,
+        "simulated → plain (D3)"
+    );
+    assert!(classify(None, &a, &d).set);
+}
+
+#[test]
+fn the_fixture_fingerprint_follows_edits_and_the_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    let d = default_block();
+    let before = fingerprint(&m, &key).unwrap();
+    assert!(before.entry.is_some());
+    m.set_json_value("landscape/rock01", "roughness_scale", Some(json!(0.25)));
+    let after = fingerprint(&m, &key).unwrap();
+    assert_eq!(
+        classify(Some(&before), &after, &d),
+        Delta {
+            material: true,
+            ..Default::default()
+        }
+    );
+    m.set_target(engine::config::Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let d3 = fingerprint(&m, &key).unwrap();
+    assert!(d3.entry.is_none(), "json_entries is CS-only");
+    assert!(classify(Some(&after), &d3, &d).set);
+}
+
+#[test]
+fn the_query_key_follows_the_match_mode() {
+    let d = default_block();
+    let key = |pairs: &[(&str, Value)]| tex_key(&value(pairs), &d).unwrap();
+    assert_eq!(
+        key(&[]),
+        (
+            TexKey::Suffix {
+                slot: 0,
+                stem: r"x\rock".into()
+            },
+            None
+        )
+    );
+    assert_eq!(
+        key(&[("match_diffuse", json!(r"x\rock_d.dds"))]).0,
+        TexKey::Suffix {
+            slot: 0,
+            stem: r"x\rock_d".into()
+        }
+    );
+    assert_eq!(
+        key(&[("match_normal", json!(r"x\rock"))]).0,
+        TexKey::Suffix {
+            slot: 1,
+            stem: r"x\rock".into()
+        }
+    );
+    assert_eq!(
+        key(&[("path_contains", json!("rock"))]).0,
+        TexKey::Contains {
+            slot: 0,
+            frag: "rock".into()
+        }
+    );
+    assert_eq!(
+        key(&[("match3", json!(r"x\rock_g.dds"))]).0,
+        TexKey::Exact {
+            slot: 2,
+            path: r"x\rock_g.dds".into()
+        }
+    );
+    assert_eq!(
+        key(&[("nif_filter", json!("armor"))]).1.as_deref(),
+        Some("armor")
+    );
+}
+
+#[test]
+fn shapes_are_patched_skipped_or_left_alone() {
+    let d = default_block();
+    let e = value(&[]);
+    let mut hit = MaterialState::builtin_default();
+    hit.set_slot_raw(0, r"textures\x\rock.dds");
+    let mut other = MaterialState::builtin_default();
+    other.set_slot_raw(0, r"textures\x\stone.dds");
+    let shapes = vec![
+        (ShapeId(1), "Rock".to_string(), hit.clone()),
+        (ShapeId(2), "Stone".to_string(), other.clone()),
+    ];
+    let rows = simulate_shapes(&e, &d, r"meshes\x\rock.nif", &shapes, &|_| true);
+    assert!(
+        matches!(rows[0].outcome, Outcome::Patched { .. }),
+        "{:?}",
+        rows[0]
+    );
+    assert_eq!(rows[0].material.slots[0].norm, "textures/pbr/x/rock.dds");
+    assert!(rows[0].material.is_pbr());
+    assert_eq!(rows[1].outcome, Outcome::NoMatch);
+    assert_eq!(rows[1].material, other);
+    // A patched slot that neither sdc nor the game provides: PGPatcher skips the shape; it keeps its source.
+    let rows = simulate_shapes(&e, &d, r"meshes\x\rock.nif", &shapes, &|p| {
+        !p.ends_with("_rmaos.dds")
+    });
+    let Outcome::Skip(why) = &rows[0].outcome else {
+        panic!("{:?}", rows[0])
+    };
+    assert!(why.contains("rmaos"), "{why}");
+    assert!(rows[0].text().contains("will be skipped"));
+    assert_eq!(rows[0].material, hit);
+}
+
+#[test]
+fn a_built_in_shape_stands_in_for_every_match_mode() {
+    let d = default_block();
+    let cases: [&[(&str, Value)]; 5] = [
+        &[],
+        &[("match_normal", json!(r"x\rock"))],
+        &[("path_contains", json!("rock"))],
+        &[("match1", json!(r"x\rock.dds"))],
+        &[("nif_filter", json!(r"armor\iron"))],
+    ];
+    for pairs in cases {
+        let e = value(pairs);
+        let (src, nif) = builtin_source(&e, &d).unwrap_or_else(|| panic!("{pairs:?}"));
+        let rows = simulate_shapes(&e, &d, &nif, &[(ShapeId(0), "b".into(), src)], &|_| true);
+        assert!(
+            matches!(rows[0].outcome, Outcome::Patched { .. }),
+            "{pairs:?}: {:?}",
+            rows[0]
+        );
+    }
+}
+
+#[test]
+fn plain_textures_go_to_their_vanilla_slots() {
+    let mut members = fp_of(None, "s").members;
+    members.push(MemberSlot {
+        kind: SlotKind::Normal,
+        paths: vec![plain_path(SlotKind::Normal)],
+        ..members[0].clone()
+    });
+    members[0].paths = vec![plain_path(SlotKind::Diffuse)];
+    let m = plain_material(&members);
+    assert_eq!(m.slots[0].norm, plain_path(SlotKind::Diffuse));
+    assert_eq!(m.slots[1].norm, plain_path(SlotKind::Normal));
+    assert!(!m.is_pbr());
+}
+
+fn row(copy: i64, load: i64, path: &str, block: u32, derived: bool) -> MatchRow {
+    MatchRow {
+        copy_id: copy,
+        nif_path: path.into(),
+        origin: "Mod".into(),
+        shape_block: block,
+        shape_name: Some(format!("S{block}")),
+        le_mesh: false,
+        skinned: false,
+        derived,
+        load_copy_id: load,
+    }
+}
+
+#[test]
+fn rows_group_by_nif_and_keep_only_shapes_pgpatcher_matches() {
+    let rows = vec![
+        row(1, 1, "meshes/a/rock.nif", 3, false),
+        row(1, 1, "meshes/a/rock.nif", 4, false),
+        row(2, 9, "meshes/armor/iron.nif", 0, true),
+        row(5, 5, "meshes/b/gone.nif", 0, false),
+    ];
+    let check = |copy: i64, nif: &str, block: u32| {
+        assert!(nif.starts_with(r"meshes\"), "PGPatcher form: {nif}");
+        block != 4 && copy != 5
+    };
+    let c = group_rows(&rows, None, &check);
+    assert_eq!(c.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [1, 9]);
+    assert_eq!(c[0].nif_path, r"meshes\a\rock.nif");
+    assert_eq!(c[0].shapes, vec![(3, Some("S3".to_string()))]);
+    assert!(c[1].derived && c[1].copy_id == 2);
+    let f = group_rows(&rows, Some(r"ARMOR\"), &check);
+    assert_eq!(f.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [9]);
+}
+
+/// Polls like the app does (panel drawn, input every frame) until nothing is in flight.
+fn run(s: &mut SetPreview, m: &AppModel) {
+    let t = Instant::now();
+    loop {
+        s.shown = true;
+        s.input = true;
+        s.poll(m);
+        if !s.busy() {
+            break;
+        }
+        assert!(
+            t.elapsed() < Duration::from_secs(90),
+            "the preview did not settle"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn shown_ids(s: &SetPreview) -> Vec<u64> {
+    s.enc
+        .members
+        .values()
+        .filter_map(|x| x.state.shown().map(|e| e.id))
+        .collect()
+}
+
+#[test]
+fn without_a_scan_db_the_set_shows_patched_on_the_sphere_and_json_edits_encode_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    assert_eq!(s.candidates, Candidates::NoStore(NO_SCAN.into()));
+    let Some(Content::Builtin {
+        shape: Builtin::Sphere,
+        material,
+        textures,
+        ..
+    }) = s.v3.content().cloned()
+    else {
+        panic!("{:?}", s.v3.content())
+    };
+    assert!(material.is_pbr());
+    assert!(textures.contains_key("textures/pbr/landscape/rock01.dds"));
+    assert!(
+        matches!(s.rows[0].outcome, Outcome::Patched { .. }),
+        "{:?}",
+        s.rows
+    );
+    let ids = shown_ids(&s);
+    m.set_json_value("landscape/rock01", "roughness_scale", Some(json!(0.25)));
+    run(&mut s, &m);
+    let Some(Content::Builtin {
+        material: after, ..
+    }) = s.v3.content().cloned()
+    else {
+        panic!()
+    };
+    assert_ne!(material, after, "the material follows the edit");
+    assert_eq!(shown_ids(&s), ids, "a JSON-only edit encodes nothing");
+}
+
+fn lighting_shape(block: u32, slots: &[&str]) -> nif::scan::ShapeRow {
+    use nif::props::{FieldOffsets, Lighting, LightingParams, LightingTrailer};
+    use nif::shape_head::{ShapeHead, ShapeKind};
+    nif::scan::ShapeRow {
+        block,
+        head: ShapeHead {
+            kind: ShapeKind::BSTriShape,
+            name: Some("Rock".into()),
+            skinned: false,
+            shader: 1,
+            alpha: -1,
+            vertex_desc: None,
+            num_triangles: Some(1),
+            num_vertices: Some(3),
+        },
+        shader: nif::scan::Shader::Lighting(
+            Lighting {
+                name: None,
+                shader_type: 0,
+                slsf1: 0,
+                slsf2: 0,
+                texture_set: 2,
+                params: LightingParams {
+                    uv_offset: [0.0; 2],
+                    uv_scale: [1.0; 2],
+                    emissive_color: [0.0; 3],
+                    emissive_multiple: 1.0,
+                    texture_clamp_mode: 3,
+                    alpha: 1.0,
+                    refraction_strength: 0.0,
+                    glossiness: 80.0,
+                    specular_color: [1.0; 3],
+                    specular_strength: 1.0,
+                    lighting_effect_1: 0.3,
+                    lighting_effect_2: 2.0,
+                    trailer: LightingTrailer::None,
+                },
+                field_offsets: FieldOffsets {
+                    block_offset: 0,
+                    slsf1: 0,
+                    uv_offset: 0,
+                    emissive_color: 0,
+                    glossiness: 0,
+                    trailer: 0,
+                },
+            },
+            slots
+                .iter()
+                .map(|p| nif::path::canon_texture(p.as_bytes()))
+                .collect(),
+        ),
+        alpha: None,
+    }
+}
+
+/// A scan DB with one winning NIF (not on disk) whose block 3 uses `slots`.
+pub fn scan_db(dir: &Path, slots: &[&str]) -> PathBuf {
+    use modscan::store::{CopyResult, OriginSpec, Store, KIND_MOD};
+    let p = dir.join("scan.db");
+    let mut s = Store::open(&p).unwrap();
+    s.begin_scan().unwrap();
+    let o = s
+        .upsert_origin(&OriginSpec {
+            kind: KIND_MOD,
+            name: "Rocks".into(),
+            root: dir
+                .join("mods")
+                .join("Rocks")
+                .to_string_lossy()
+                .into_owned(),
+            parent: None,
+            priority: 0,
+            derived_by: None,
+            derived_state: None,
+        })
+        .unwrap();
+    let scan = nif::scan::NifScan {
+        bsver: 100,
+        le_mesh: false,
+        shapes: vec![lighting_shape(3, slots)],
+        problems: vec![],
+    };
+    let path = "meshes/landscape/rocks/rock01.nif";
+    let id = s
+        .upsert_copy(path, o, 1, 1, CopyResult::Scanned(scan), None)
+        .unwrap();
+    let pid = s.path_ids(&[path]).unwrap()[0];
+    s.set_winners(&[(pid, (id, 1))].into_iter().collect(), &Default::default())
+        .unwrap();
+    p
+}
+
+/// Part P's binding clarification: `exists` is asked for every non-empty slot, vanilla ones included. A texture the
+/// game has only inside a BSA must count, or a shape that keeps a vanilla slot would be skipped.
+#[test]
+fn exists_accepts_sdc_outputs_and_any_vfs_winner_including_bsa_only_textures() {
+    use modscan::store::{OriginSpec, Store, KIND_BSA};
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let db = scan_db(dir.path(), &[r"textures\landscape\rock01.dds"]);
+    {
+        let mut s = Store::open(&db).unwrap();
+        let bsa = s
+            .upsert_origin(&OriginSpec {
+                kind: KIND_BSA,
+                name: "Skyrim - Textures0.bsa".into(),
+                root: dir
+                    .path()
+                    .join("Skyrim - Textures0.bsa")
+                    .to_string_lossy()
+                    .into_owned(),
+                parent: None,
+                priority: 0,
+                derived_by: None,
+                derived_state: None,
+            })
+            .unwrap();
+        let pid = s.path_ids(&["textures/clutter/vanilla_m.dds"]).unwrap()[0];
+        s.set_textures(
+            &[(pid, bsa, 1, 1)],
+            &[(pid, (bsa, 1))].into_iter().collect(),
+        )
+        .unwrap();
+    }
+    let mut s = SetPreview::new(None, None, Some(db), DEFAULT_CAP);
+    run(&mut s, &m);
+    assert!(
+        s.exists(r"textures\clutter\vanilla_m.dds"),
+        "a BSA-only vanilla slot exists"
+    );
+    assert!(
+        s.exists(r"Textures\Clutter\Vanilla_M.DDS"),
+        "any case, PGPatcher form"
+    );
+    assert!(
+        s.exists(r"textures\pbr\landscape\rock01_n.dds"),
+        "sdc's own output"
+    );
+    assert!(!s.exists(r"textures\clutter\nothing.dds"));
+}
+
+#[test]
+fn a_scanned_mesh_is_listed_and_an_unreadable_one_falls_back_to_the_sphere() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let db = scan_db(dir.path(), &[r"textures\landscape\rock01.dds"]);
+    let mut s = SetPreview::new(None, None, Some(db), DEFAULT_CAP);
+    run(&mut s, &m);
+    let Candidates::Ready(list) = &s.candidates else {
+        panic!("{:?}", s.candidates)
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].nif_path, r"meshes\landscape\rocks\rock01.nif");
+    assert_eq!(list[0].shapes, vec![(3, Some("Rock".to_string()))]);
+    assert!(s.timings.query_ms.is_some());
+    // The NIF is not on disk: the sphere stands in and the reason is shown.
+    assert!(matches!(
+        s.v3.content(),
+        Some(Content::Builtin {
+            shape: Builtin::Sphere,
+            ..
+        })
+    ));
+    assert!(
+        s.notices.iter().any(|n| n.contains("rock01.nif")),
+        "{:?}",
+        s.notices
+    );
+    // The choice is remembered per set, for the session.
+    s.choose(MeshChoice::Builtin(Builtin::Cube));
+    run(&mut s, &m);
+    assert!(matches!(
+        s.v3.content(),
+        Some(Content::Builtin {
+            shape: Builtin::Cube,
+            ..
+        })
+    ));
+    assert_eq!(
+        s.choice.get(&key),
+        Some(&MeshChoice::Builtin(Builtin::Cube))
+    );
+}
+
+#[test]
+fn every_built_in_is_named_and_the_default_preview_is_disabled_without_io() {
+    assert_eq!(BUILTINS.len(), Builtin::ALL.len());
+    for b in Builtin::ALL {
+        assert!(BUILTINS.iter().any(|(x, _)| *x == b), "{b:?}");
+        assert_ne!(builtin_name(b), "Built-in", "{b:?}");
+    }
+    assert_eq!(builtin_name(Builtin::MaterialBall), "Material ball");
+    let s = SetPreview::default();
+    assert!(!s.enabled && s.store_path.is_none() && !s.busy());
+}
