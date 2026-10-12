@@ -756,6 +756,10 @@ fn lighting_shape(block: u32, slots: &[&str]) -> nif::scan::ShapeRow {
 
 /// A scan DB with one winning NIF (not on disk) whose block 3 uses `slots`.
 pub fn scan_db(dir: &Path, slots: &[&str]) -> PathBuf {
+    scan_db_with(dir, slots, false)
+}
+
+pub fn scan_db_with(dir: &Path, slots: &[&str], le_mesh: bool) -> PathBuf {
     use modscan::store::{CopyResult, OriginSpec, Store, KIND_MOD};
     let p = dir.join("scan.db");
     let mut s = Store::open(&p).unwrap();
@@ -777,7 +781,7 @@ pub fn scan_db(dir: &Path, slots: &[&str]) -> PathBuf {
         .unwrap();
     let scan = nif::scan::NifScan {
         bsver: 100,
-        le_mesh: false,
+        le_mesh,
         shapes: vec![lighting_shape(3, slots)],
         problems: vec![],
     };
@@ -1058,4 +1062,192 @@ fn dds_inputs_ignore_the_mode() {
     }
     let blocked = Source::Blocked("no");
     assert!(encode(session, &blocked, 32, PreviewMode::Source, &cancel).is_err());
+}
+
+// ---- Task 14 fix round 1 ----
+
+#[test]
+fn a_no_op_cap_or_mode_change_keeps_members_fresh() {
+    let (_d, m, mut enc, slots) = started();
+    enc.hold_workers(false);
+    enc.sync(&m, slots, Instant::now(), true);
+    settle(&mut enc, &m);
+    let t = enc.token_of(SlotKind::Diffuse);
+    enc.set_cap(DEFAULT_CAP, Instant::now());
+    enc.set_mode(PreviewMode::Encoded, Instant::now());
+    assert!(matches!(
+        enc.members[&SlotKind::Diffuse].state,
+        EncState::Fresh(_)
+    ));
+    assert_eq!(enc.token_of(SlotKind::Diffuse), t);
+}
+
+fn bsa_db(dir: &Path) -> PathBuf {
+    use modscan::store::{OriginSpec, Store, KIND_BSA};
+    let db = scan_db(dir, &[r"textures\landscape\rock01.dds"]);
+    let mut s = Store::open(&db).unwrap();
+    let bsa = s
+        .upsert_origin(&OriginSpec {
+            kind: KIND_BSA,
+            name: "Skyrim - Textures0.bsa".into(),
+            root: dir
+                .join("Skyrim - Textures0.bsa")
+                .to_string_lossy()
+                .into_owned(),
+            parent: None,
+            priority: 0,
+            derived_by: None,
+            derived_state: None,
+        })
+        .unwrap();
+    let pid = s.path_ids(&["textures/clutter/vanilla_m.dds"]).unwrap()[0];
+    s.set_textures(
+        &[(pid, bsa, 1, 1)],
+        &[(pid, (bsa, 1))].into_iter().collect(),
+    )
+    .unwrap();
+    db
+}
+
+#[test]
+fn a_shape_keeping_a_bsa_only_slot_is_patched_not_skipped_with_the_panels_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, Some(bsa_db(dir.path())), DEFAULT_CAP);
+    run(&mut s, &m);
+    let d = default_block();
+    let e = entry_node(&rock(&m).1).to_value();
+    let mut src = MaterialState::builtin_default();
+    src.set_slot_raw(0, r"textures\landscape\rock01.dds");
+    src.set_slot_raw(5, r"textures\clutter\vanilla_m.dds");
+    let shapes = [(ShapeId(1), "Rock".to_string(), src)];
+    let rows = simulate_shapes(
+        &e,
+        &d,
+        r"meshes\landscape\rocks\rock01.nif",
+        &shapes,
+        &|p| s.exists(p),
+    );
+    assert!(
+        matches!(rows[0].outcome, Outcome::Patched { .. }),
+        "{:?}",
+        rows[0]
+    );
+}
+
+#[test]
+fn a_store_error_never_reads_as_a_missing_texture() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let bad = dir.path().join("scan.db");
+    std::fs::write(&bad, b"this is not a database, just text to break sqlite").unwrap();
+    let mut s = SetPreview::new(None, None, Some(bad), DEFAULT_CAP);
+    run(&mut s, &m);
+    assert!(
+        s.exists(r"textures\clutter\vanilla_m.dds"),
+        "unknown must not mean missing"
+    );
+    run(&mut s, &m);
+    assert!(
+        s.notices.iter().any(|n| n.contains("scan database")),
+        "{:?}",
+        s.notices
+    );
+}
+
+#[test]
+fn an_unchanged_frame_within_the_throttle_does_no_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    let (checks, push) = (s.checks, s.timings.push_ms);
+    let t = Instant::now();
+    s.shown = true;
+    s.poll_at(&m, t);
+    s.shown = true;
+    s.poll_at(&m, t + THROTTLE / 2);
+    assert!(s.checks <= checks + 1, "at most the first poll was due");
+    let after = s.checks;
+    s.shown = true;
+    s.poll_at(&m, t + THROTTLE / 2 + Duration::from_millis(1));
+    assert_eq!(s.checks, after);
+    s.shown = true;
+    s.poll_at(&m, t + THROTTLE * 3);
+    assert_eq!(s.checks, after + 1);
+    assert!(!s.busy());
+    assert_eq!(s.timings.push_ms, push, "no scene was rebuilt");
+}
+
+#[test]
+fn stale_query_and_nif_results_are_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let db = scan_db(dir.path(), &[r"textures\landscape\rock01.dds"]);
+    let mut s = SetPreview::new(None, None, Some(db), DEFAULT_CAP);
+    s.shown = true;
+    s.input = true;
+    s.poll(&m);
+    s.inject_stale(0, "stale boom");
+    run(&mut s, &m);
+    s.inject_stale(0, "stale boom");
+    run(&mut s, &m);
+    assert!(
+        matches!(s.candidates, Candidates::Ready(_)),
+        "{:?}",
+        s.candidates
+    );
+    assert!(
+        !s.notices.iter().any(|n| n.contains("stale boom")),
+        "{:?}",
+        s.notices
+    );
+}
+
+#[test]
+fn a_vanished_set_clears_the_scene_and_settles() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    assert!(s.v3.content().is_some());
+    m.select_set("no/such/set");
+    run(&mut s, &m);
+    assert!(s.fp.is_none() && s.v3.content().is_none() && s.rows.is_empty());
+    let checks = s.checks;
+    let t = Instant::now();
+    s.shown = true;
+    s.poll_at(&m, t);
+    s.shown = true;
+    s.poll_at(&m, t + THROTTLE / 2);
+    assert!(s.checks <= checks + 1, "no per-frame re-evaluation");
+}
+
+#[test]
+fn only_le_meshes_say_why_the_sphere_is_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let db = scan_db_with(dir.path(), &[r"textures\landscape\rock01.dds"], true);
+    let mut s = SetPreview::new(None, None, Some(db), DEFAULT_CAP);
+    run(&mut s, &m);
+    assert!(matches!(
+        s.v3.content(),
+        Some(Content::Builtin {
+            shape: Builtin::Sphere,
+            ..
+        })
+    ));
+    assert!(s.notices.iter().any(|n| n == LE_ONLY), "{:?}", s.notices);
 }

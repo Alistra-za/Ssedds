@@ -415,6 +415,9 @@ impl Encoder {
     /// A new size cap: every member that has something to encode goes stale (old bytes on show), in-flight work
     /// is cancelled and its late result dropped.
     pub fn set_cap(&mut self, cap: u32, now: Instant) {
+        if cap == self.cap {
+            return;
+        }
         self.cap = cap;
         self.restart(now, false);
     }
@@ -425,6 +428,9 @@ impl Encoder {
 
     /// A new mode, handled as a new cap is; a DDS input's bytes do not depend on it, so it is left alone.
     pub fn set_mode(&mut self, mode: PreviewMode, now: Instant) {
+        if mode == self.mode {
+            return;
+        }
         self.mode = mode;
         self.restart(now, true);
     }
@@ -730,6 +736,8 @@ pub const NO_MATCH: &str = "No scanned mesh uses this diffuse";
 pub const NO_BUILTIN_MATCH: &str =
     "A built-in shape cannot match this entry's match keys: it shows the plain textures; pick a game mesh";
 /// D4: the CS features the preview leaves off (03 §3.2 "off" rows), under the single CS toggle.
+pub const LE_ONLY: &str =
+    "Every mesh using this diffuse is an LE mesh, which is not drawn: showing a built-in shape";
 pub const OFF_FEATURES: &str = "Off in this preview: Light Limit Fix, Skylighting, Screen-Space Shadows, \
 Subsurface Scattering, Dynamic Cubemaps, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, \
 water, fog, Volumetric Shadows";
@@ -1027,17 +1035,25 @@ fn query(
         .nifs_using_texture(key, QUERY_LIMIT)
         .map_err(|e| e.to_string())?;
     let cache: RefCell<HashMap<i64, Vec<ShapeView>>> = RefCell::new(HashMap::new());
+    let failed: RefCell<Option<String>> = RefCell::new(None);
     let check = |copy: i64, nif: &str, block: u32| -> bool {
         let mut c = cache.borrow_mut();
-        let shapes = c
-            .entry(copy)
-            .or_insert_with(|| store.shapes_of(copy).unwrap_or_default());
+        let shapes = c.entry(copy).or_insert_with(|| {
+            store.shapes_of(copy).unwrap_or_else(|e| {
+                *failed.borrow_mut() = Some(e.to_string());
+                vec![]
+            })
+        });
         shapes
             .iter()
             .find(|s| s.block == block)
             .is_some_and(|s| pgpsim::shape_matches(prepared, nif, &view_slots(s)))
     };
-    Ok(group_rows(&rows, filter, &check))
+    let out = group_rows(&rows, filter, &check);
+    if let Some(e) = failed.into_inner() {
+        return Err(format!("reading the shapes of a mesh: {e}"));
+    }
+    Ok(out)
 }
 
 /// A game NIF read and parsed for the preview: source materials, the game's copy of every texture its shapes name,
@@ -1268,7 +1284,11 @@ pub struct SetPreview {
     pub shown: bool,
     /// Set by the panel on a frame with input: the fingerprint is checked now instead of after `THROTTLE`.
     pub input: bool,
+    /// Fingerprint evaluations so far (tests assert an unchanged frame within `THROTTLE` does none).
+    pub checks: u32,
     default: Value,
+    gone: Option<String>,
+    vfs_err: RefCell<Option<String>>,
     entry: Option<Value>,
     nif: Option<Arc<LoadedNif>>,
     failed: HashSet<i64>,
@@ -1319,6 +1339,9 @@ impl SetPreview {
             timings: Timings::default(),
             shown: false,
             input: false,
+            checks: 0,
+            gone: None,
+            vfs_err: RefCell::new(None),
             default: document(&[]).to_value()["default"].clone(),
             entry: None,
             nif: None,
@@ -1346,6 +1369,19 @@ impl SetPreview {
     /// Encoded / Source (not persisted): only the encodes change, the meshes stay.
     pub fn set_mode(&mut self, mode: PreviewMode) {
         self.enc.set_mode(mode, Instant::now());
+    }
+
+    /// Test seam: a query and a NIF-load completion carrying `token`, as a worker would send them.
+    #[doc(hidden)]
+    pub fn inject_stale(&self, token: u64, error: &str) {
+        let _ = self.tx.send(SpMsg::Queried {
+            token,
+            result: Err(error.into()),
+        });
+        let _ = self.tx.send(SpMsg::NifLoaded {
+            token,
+            result: Err(error.into()),
+        });
     }
 
     /// Encodes, queries, NIF reads, the viewport or a scene to send are in flight.
@@ -1386,7 +1422,8 @@ impl SetPreview {
         }
         let key = followed_set(m);
         let due = input
-            || key.as_ref() != self.fp.as_ref().map(|f| &f.set_key)
+            || (key.as_ref() != self.fp.as_ref().map(|f| &f.set_key)
+                && key.as_ref() != self.gone.as_ref())
             || self
                 .last_check
                 .is_none_or(|t| now.duration_since(t) >= THROTTLE);
@@ -1401,12 +1438,41 @@ impl SetPreview {
         if self.want_scene && self.enc.settled() && self.querying.is_none() {
             self.push_scene();
         }
+        let e = self.vfs_err.borrow().clone();
+        if let Some(e) = e {
+            self.notice(e);
+        }
+    }
+
+    fn notice(&mut self, n: String) {
+        if !self.notices.contains(&n) {
+            self.notices.push(n);
+        }
     }
 
     fn check(&mut self, m: &AppModel, key: &str, now: Instant) {
+        self.checks += 1;
         let Some(fp) = fingerprint(m, key) else {
+            // The followed set is gone: drop the scene and remember the key so the next frames settle.
+            if self.fp.is_some() {
+                self.enc.reset();
+                self.rows.clear();
+                self.notices.clear();
+                self.nif = None;
+                self.sent.clear();
+                self.entry = None;
+                self.fp = None;
+                self.candidates = Candidates::NotAsked;
+                self.querying = None;
+                self.loading = None;
+                self.on_screen = None;
+                self.want_scene = false;
+                self.v3.set_content(None, false);
+            }
+            self.gone = Some(key.to_string());
             return;
         };
+        self.gone = None;
         let d = classify(self.fp.as_ref(), &fp, &self.default);
         if d == Delta::default() {
             return;
@@ -1441,6 +1507,7 @@ impl SetPreview {
         self.store_tried.set(false);
         *self.store.borrow_mut() = None;
         self.vfs_cache.borrow_mut().clear();
+        *self.vfs_err.borrow_mut() = None;
         self.nif = None;
         self.failed.clear();
         self.querying = None;
@@ -1497,13 +1564,13 @@ impl SetPreview {
                         Ok(n) => {
                             self.timings.nif_ms = Some(n.ms);
                             for e in n.parsed.errors.iter().chain(&n.parsed.warnings) {
-                                self.notices.push(format!("{}: {e}", n.nif_path));
+                                self.notice(format!("{}: {e}", n.nif_path));
                             }
                             self.nif = Some(Arc::new(n));
                         }
                         Err(e) => {
                             self.failed.insert(copy);
-                            self.notices.push(e);
+                            self.notice(e);
                         }
                     }
                     self.want_scene = true;
@@ -1553,18 +1620,34 @@ impl SetPreview {
         if let Some(hit) = self.vfs_cache.borrow().get(norm) {
             return hit.clone();
         }
+        if self.vfs_err.borrow().is_some() {
+            return None;
+        }
         if !self.store_tried.get() {
             self.store_tried.set(true);
             if let Some(p) = self.store_path.as_ref().filter(|p| p.is_file()) {
-                *self.store.borrow_mut() = Store::open_read_only(p).ok();
+                match Store::open_read_only(p) {
+                    Ok(st) => *self.store.borrow_mut() = Some(st),
+                    Err(e) => {
+                        *self.vfs_err.borrow_mut() = Some(format!("scan database: {e}"));
+                        return None;
+                    }
+                }
             }
         }
-        let found = self
+        let found = match self
             .store
             .borrow()
             .as_ref()
-            .and_then(|s| s.texture_location(norm).ok().flatten())
-            .map(|(k, r)| FileSource::from_store(k, &r, norm));
+            .map(|s| s.texture_location(norm))
+        {
+            Some(Err(e)) => {
+                *self.vfs_err.borrow_mut() = Some(format!("scan database: {e}"));
+                return None;
+            }
+            Some(Ok(f)) => f.map(|(k, r)| FileSource::from_store(k, &r, norm)),
+            None => None,
+        };
         self.vfs_cache
             .borrow_mut()
             .insert(norm.to_string(), found.clone());
@@ -1578,7 +1661,8 @@ impl SetPreview {
     /// a shape that keeps a vanilla slot would come back as `Skip`.
     pub fn exists(&self, pgp_path: &str) -> bool {
         let n = canon(pgp_path);
-        self.enc.produces(&n) || self.vfs_lookup(&n).is_some()
+        // Unknown (a store error) counts as existing: an error must never show a false "will be skipped".
+        self.enc.produces(&n) || self.vfs_lookup(&n).is_some() || self.vfs_err.borrow().is_some()
     }
 
     /// Adds the game's copy of every slot texture of `materials` that `map` lacks (a path PGPatcher wrote that the
@@ -1651,6 +1735,13 @@ impl SetPreview {
         let memory = self.enc.memory_sources();
         match self.pick() {
             Pick::Builtin(b) => {
+                if let (Candidates::Ready(l), Some(fp)) = (&self.candidates, &self.fp) {
+                    let auto =
+                        !matches!(self.choice.get(&fp.set_key), Some(MeshChoice::Builtin(_)));
+                    if auto && !l.is_empty() && l.iter().all(|c| c.le_mesh) {
+                        self.notice(LE_ONLY.into());
+                    }
+                }
                 let (material, row) = self.builtin_scene();
                 let mut textures = memory;
                 self.add_vfs(&mut textures, &[&material]);
