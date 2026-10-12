@@ -122,9 +122,14 @@ fn the_flags_survive_a_value_only_settings_change() {
     };
     r.set_settings(ambient(1.0)); // the settings defines join the stand-in hooks: a recompile
     assert_eq!(flags(&r, CYL1), [1.0, 0.0, 0.0, 1.0]);
-    let files = cache_files(cache.path());
+    let (files, draw) = (cache_files(cache.path()), r.draw_identity(CYL1));
     r.set_settings(ambient(0.5));
     assert_eq!(cache_files(cache.path()), files, "nothing was compiled");
+    assert_eq!(
+        r.draw_identity(CYL1),
+        draw,
+        "rewritten in place, not rebuilt"
+    );
     assert_eq!(flags(&r, CYL1), [1.0, 0.0, 0.0, 1.0]);
 }
 
