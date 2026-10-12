@@ -40,7 +40,10 @@ pub fn canon(p: &str) -> String {
 /// Where a set the simulation cannot preview (D3) puts its textures: `textures/sdcpreview/<suffix>.dds`.
 pub fn plain_path(kind: SlotKind) -> String {
     let s = kind.suffix();
-    format!("textures/sdcpreview/{}.dds", if s.is_empty() { "d" } else { s })
+    format!(
+        "textures/sdcpreview/{}.dds",
+        if s.is_empty() { "d" } else { s }
+    )
 }
 
 /// What a slot member can give the preview.
@@ -388,13 +391,18 @@ impl Encoder {
             let cancel = CancelToken::default();
             mem.cancel = Some(cancel.clone());
             mem.state = EncState::Encoding(mem.state.shown().cloned());
-            let (session, source, cap, kind) = (session.clone(), mem.source.clone(), self.cap, *kind);
+            let (session, source, cap, kind) =
+                (session.clone(), mem.source.clone(), self.cap, *kind);
             spawn(
                 self.tx.clone(),
                 move || {
                     let t0 = Instant::now();
                     let result = encode(&session, &source, cap, &cancel).map(|b| (b, ms(t0)));
-                    EncDone { kind, token, result }
+                    EncDone {
+                        kind,
+                        token,
+                        result,
+                    }
                 },
                 move |e| EncDone {
                     kind,
@@ -408,7 +416,12 @@ impl Encoder {
     /// Drains finished encodes. True when a member's bytes changed or it failed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(EncDone { kind, token, result }) = self.rx.try_recv() {
+        while let Ok(EncDone {
+            kind,
+            token,
+            result,
+        }) = self.rx.try_recv()
+        {
             let Some(mem) = self.members.get_mut(&kind) else {
                 continue;
             };
