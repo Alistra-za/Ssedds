@@ -212,3 +212,163 @@ fn an_srgb_tagged_rfaos_is_sampled_linear() {
     let (linear, srgb) = (px(false), px(true));
     assert_eq!(channel(&srgb, 0), channel(&linear, 0));
 }
+
+/// Diagnosis (owner data, read-only): the Arch head on the INSTALLED CS shaders with the owner's settings, features
+/// on. Prints the PS defines, the t71 / b7 reflection, the RFAOS candidate and its binding, the b7 bytes, and renders
+/// the head with and without the RFAOS (PNGs in %TEMP%\sdc-rfaos-diag).
+#[test]
+#[ignore]
+fn diag_arch_head_on_installed_cs() {
+    let root = PathBuf::from(std::env::var("SDC_ACHERUS").expect("SDC_ACHERUS"));
+    let mods = root.join("mods");
+    let cs = mods.join("CommunityShaders_AIO-2026-10-03T06-46Z");
+    let arch = mods.join("Arch Resources");
+    let origins = vec![
+        ("CS".to_string(), cs.clone(), 0),
+        ("overwrite".to_string(), root.join("overwrite"), i32::MAX),
+    ];
+    let paths = render3d::locate::settings_paths(Some(&origins), &cs.join("Shaders"));
+    println!("settings paths: {paths:?}");
+    let settings = render3d::cs_settings::read_settings(&paths);
+    let no_origins = render3d::cs_settings::read_settings(&render3d::locate::settings_paths(
+        None,
+        &cs.join("Shaders"),
+    ));
+    println!(
+        "hash (12): with origins {} / no origins {} / default {}; no-origins loaded {:?}",
+        &settings.hash[..12],
+        &no_origins.hash[..12],
+        &render3d::cs_settings::CsSettings::default().hash[..12],
+        no_origins.loaded
+    );
+    println!(
+        "settings: ll={} loaded={:?} notes={:?}",
+        settings.linear_lighting, settings.loaded, settings.notes
+    );
+    let mut roots = vec![arch.clone()];
+    roots.extend(
+        std::fs::read_dir(&mods)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && *p != arch),
+    );
+    let find = |norm: &str| {
+        roots
+            .iter()
+            .map(|r| r.join(norm.replace('/', "\\")))
+            .find(|p| p.is_file())
+    };
+    let nif = std::fs::read(arch.join(r"meshes\arch\head\Arch_head.nif")).unwrap();
+    let out = std::env::temp_dir().join("sdc-rfaos-diag");
+    std::fs::create_dir_all(&out).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let fp = render3d::locate::fingerprint(&cs.join("Shaders"), None).unwrap();
+    let mut r = Renderer::with_gpu(
+        render3d::device::Gpu::new(None).unwrap(),
+        fp,
+        cache.path().to_path_buf(),
+    )
+    .unwrap();
+    r.set_settings(settings);
+    r.set_features_on(true);
+    println!("features: {:?}", r.features());
+    for hide in [false, true] {
+        let asked = RefCell::new(vec![]);
+        let resolve = |norm: &str| {
+            if hide && norm.ends_with("_rfaos.dds") {
+                asked.borrow_mut().push((norm.to_string(), None));
+                return None;
+            }
+            let p = find(norm);
+            asked.borrow_mut().push((norm.to_string(), p.clone()));
+            p.and_then(|p| std::fs::read(p).ok())
+        };
+        let t0 = std::time::Instant::now();
+        let rep = r.load(&nif, &resolve);
+        println!(
+            "\n=== hide_rfaos={hide} load {:.1}s: {rep:?}",
+            t0.elapsed().as_secs_f64()
+        );
+        for (n, p) in asked.borrow().iter() {
+            println!("  asked {n} -> {p:?}");
+        }
+        for s in r.shapes() {
+            println!(
+                "shape {} '{}' type {} slsf1 {:#x} slsf2 {:#x} status {:?}",
+                s.id.0,
+                s.name,
+                s.material.shader_type,
+                s.material.slsf1,
+                s.material.slsf2,
+                s.status
+            );
+            for (i, t) in s.material.slots.iter().enumerate() {
+                if !t.norm.is_empty() {
+                    println!("  slot {i}: {}", t.norm);
+                }
+            }
+            let (defines, refl, srvs) = r.draw_diag(s.id).unwrap();
+            println!("  PS defines: {defines:?}");
+            match &refl {
+                None => println!("  PS reflection: program not at hand"),
+                Some(refl) => {
+                    println!("  PS srvs: {:?}", refl.srvs);
+                    for cb in &refl.cbuffers {
+                        if cb.slot == 7 || cb.name.contains("Skin") {
+                            println!("  cbuffer {} b{} size {}:", cb.name, cb.slot, cb.size);
+                            for v in &cb.vars {
+                                println!(
+                                    "    {} @{} size {} {:?}",
+                                    v.name, v.offset, v.size, v.kind
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            println!("  bound (reg, dxgi): {srvs:?}");
+            for var in [
+                "skinPerGeometry",
+                "skinMaterialFlags",
+                "skinPerGeometryProfile.skinParams",
+                "skinPerGeometryProfile.skinParams2",
+                "skinPerGeometryProfile.physicalParams",
+            ] {
+                println!("  {var} = {:?}", r.draw_cb_floats(s.id, var));
+            }
+        }
+        let (w, h) = (512, 512);
+        let px = r.render(&Scene::neutral(), w, h).unwrap();
+        let head: Vec<&[u8]> = px
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30)
+            .collect();
+        let n = head.len().max(1) as f64;
+        let mean = |c: usize| head.iter().map(|p| p[c] as f64).sum::<f64>() / n;
+        println!(
+            "render: {} head px, mean RGB ({:.1}, {:.1}, {:.1})",
+            head.len(),
+            mean(0),
+            mean(1),
+            mean(2)
+        );
+        let png = out.join(format!("arch_head_hide_rfaos_{hide}.png"));
+        image::save_buffer(&png, &px, w, h, image::ExtendedColorType::Rgba8).unwrap();
+        println!("saved {}", png.display());
+    }
+    let rfaos = find("textures/arch/skin/light/head_rfaos.dds").unwrap();
+    let (img, _, meta) = engine::load::load_image_meta(&rfaos).unwrap();
+    let n = img.px.len() as f64;
+    let m = |c: usize| img.px.iter().map(|p| p[c] as f64).sum::<f64>() / n;
+    println!(
+        "\nRFAOS {} {}x{} meta {meta:?}: mean R {:.3} G {:.3} B {:.3} A {:.3}",
+        rfaos.display(),
+        img.width,
+        img.height,
+        m(0),
+        m(1),
+        m(2),
+        m(3)
+    );
+}

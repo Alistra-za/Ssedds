@@ -224,6 +224,13 @@ impl TexEntry {
         self.source.is_some() || self.encoded.is_some()
     }
 }
+/// [`Renderer::draw_diag`]: PS defines, PS reflection, (register, DXGI format) of every bound SRV.
+pub type DrawDiag = (
+    Vec<(String, String)>,
+    Option<compile::Reflection>,
+    Vec<(u32, i32)>,
+);
+
 /// [`textures::rfaos_candidates`] of a material (slot 1 normal, slot 7 specular).
 fn rfaos_candidates(m: &MaterialState) -> Vec<String> {
     let norm = |i: usize| m.slots.get(i).map_or("", |p| p.norm.as_str());
@@ -1355,6 +1362,30 @@ impl Renderer {
             touched.push((id, reg));
         }
         Ok(touched)
+    }
+
+    /// Diagnostic hook: the PS defines the shape's material compiles with, the PS reflection of that program (if it
+    /// is at hand), and the shape's draw as (register, DXGI format of the bound view) pairs.
+    #[doc(hidden)]
+    pub fn draw_diag(&mut self, id: ShapeId) -> Option<DrawDiag> {
+        let m = self.shapes.get(&id)?.material.clone();
+        let w = self.wanted(&m).ok()?;
+        let reflection = match self.programs.get(&w.key) {
+            Some(Ok(p)) => Some(p.ps.reflection.clone()),
+            _ => None,
+        };
+        let srvs = self.shapes[&id].draw.as_ref().map_or(vec![], |d| {
+            d.srvs
+                .iter()
+                .map(|(r, v)| {
+                    let mut desc = Default::default();
+                    // SAFETY: `desc` is a live local the call fills in; `v` is a live view.
+                    unsafe { v.GetDesc(&mut desc) };
+                    (*r, desc.Format.0)
+                })
+                .collect()
+        });
+        Some((w.ps.0, reflection, srvs))
     }
 
     /// Test hook: the floats of `var` as written in the shape's pixel-stage cbuffers (`None` without a draw or when
