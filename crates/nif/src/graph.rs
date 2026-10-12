@@ -89,11 +89,10 @@ fn children(h: &Header, b: &[u8], block: usize) -> Result<(Mat3x4, Vec<i32>), Ni
     Ok((av.transform, kids))
 }
 
-/// True when `target` is `from` or one of its ancestors (looks at most `MAX_DEPTH + 1` links up).
-// shortcut: a cycle closed only through a chain deeper than 256 is not cut here; `world` still stops after 256 links.
+/// True when `target` is `from` or one of its ancestors. `parent` is acyclic (every insert is checked), so the walk ends.
 fn reaches(parent: &HashMap<u32, u32>, from: u32, target: u32) -> bool {
     let mut cur = from;
-    for _ in 0..=MAX_DEPTH {
+    loop {
         if cur == target {
             return true;
         }
@@ -102,7 +101,6 @@ fn reaches(parent: &HashMap<u32, u32>, from: u32, target: u32) -> bool {
             None => return false,
         }
     }
-    false
 }
 
 fn depth(parent: &HashMap<u32, u32>, mut b: u32) -> usize {

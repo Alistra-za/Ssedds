@@ -134,3 +134,20 @@ fn depth_over_256_is_reported_once_and_world_stops_at_256_ancestors() {
     assert!(g.problems[0].starts_with("block 257: "), "{:?}", g.problems);
     assert_eq!(world(&g, 299, &ID)[0][3], 256.0);
 }
+
+#[test]
+fn a_ring_longer_than_the_depth_cap_is_cut_at_its_closing_edge() {
+    let mut f = Nif::new(100);
+    for i in 0..258i32 {
+        f.block("NiNode", node([1.0, 0.0, 0.0], &[(i + 1) % 258]));
+    }
+    let g = graph(&f);
+    let cycles = g
+        .problems
+        .iter()
+        .filter(|p| p.contains("cycle"))
+        .collect::<Vec<_>>();
+    assert_eq!(cycles, ["block 257: child 0 would make a cycle"]);
+    assert!(!g.parent.contains_key(&0));
+    assert_eq!(world(&g, 0, &ID), ID);
+}
