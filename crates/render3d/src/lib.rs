@@ -1,5 +1,6 @@
 pub mod background;
 pub mod builtin;
+pub mod cache;
 pub mod cbuffer;
 pub mod compile;
 pub mod device;
@@ -172,6 +173,7 @@ pub struct Renderer {
 impl Renderer {
     /// Creates the device (hardware, else WARP; see [`Gpu::new`]) and the fixed pipeline states.
     pub fn new(shaders: Fingerprint, cache_dir: PathBuf) -> Result<Renderer, String> {
+        cache::prune_in_background(cache_dir.clone());
         Renderer::with_gpu(Gpu::new(None)?, shaders, cache_dir)
     }
 

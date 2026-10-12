@@ -184,7 +184,8 @@ fn entry_paths(cache_dir: &Path, k: &ProgramKey) -> (std::path::PathBuf, std::pa
     )
 }
 
-/// A disk-cache hit for this stage, if there is one (a missing, truncated or torn pair is a miss).
+/// A disk-cache hit for this stage, if there is one (a missing, truncated or torn pair is a miss). A hit
+/// refreshes the entry's age (`cache::touch`).
 pub fn cached(
     src: &ExpandedSource,
     d: &Defines,
@@ -193,7 +194,9 @@ pub fn cached(
 ) -> Option<Compiled> {
     let k = program_key(src, "main", target, &d.0);
     let (cso, js) = entry_paths(cache_dir, &k);
-    read_cache(&cso, &js)
+    let hit = read_cache(&cso, &js)?;
+    crate::cache::touch(&js);
+    Some(hit)
 }
 
 /// Compiles `src` (entry `main`) for `target` with `d`, or returns the disk-cache entry.
