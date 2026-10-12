@@ -790,12 +790,18 @@ mod tests {
 
     #[test]
     fn world_rows_pack_row_major_camera_relative() {
-        use crate::compile::CbLayout;
+        use crate::compile::{CbLayout, CbVar, VarKind};
+        let var = |name: &str, offset| CbVar {
+            name: name.into(),
+            offset,
+            size: 48,
+            kind: VarKind::Float,
+        };
         let layout = CbLayout {
             name: "PerGeometry".into(),
             slot: 2,
             size: 96,
-            vars: vec![("World".into(), 0, 48), ("PreviousWorld".into(), 48, 48)],
+            vars: vec![var("World", 0), var("PreviousWorld", 48)],
         };
         let mut w = CbWriter::new(&layout);
         let mut v = View::new(&Camera::Auto, None, 4, 4);

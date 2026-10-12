@@ -195,7 +195,9 @@ fn tiny_shader_compiles_and_reflects() {
     let cb = &c.reflection.cbuffers[0];
     assert_eq!(cb.name, "PerMaterial");
     assert_eq!(cb.slot, 1);
-    assert!(cb.vars.iter().any(|v| v.0 == "Tint" && v.1 == 16));
+    assert!(cb.vars.iter().any(|v| v.name == "Tint"
+        && v.offset == 16
+        && v.kind == render3d::compile::VarKind::Float));
     use render3d::compile::SrvKind;
     assert_eq!(
         c.reflection.srvs,
@@ -250,7 +252,20 @@ fn cbuffer_writer_sets_by_name() {
         name: "PerMaterial".into(),
         slot: 1,
         size: 32,
-        vars: vec![("Scale".into(), 0, 4), ("Tint".into(), 16, 12)],
+        vars: vec![
+            render3d::compile::CbVar {
+                name: "Scale".into(),
+                offset: 0,
+                size: 4,
+                kind: render3d::compile::VarKind::Float,
+            },
+            render3d::compile::CbVar {
+                name: "Tint".into(),
+                offset: 16,
+                size: 12,
+                kind: render3d::compile::VarKind::Float,
+            },
+        ],
     };
     let mut w = render3d::cbuffer::CbWriter::new(&layout);
     assert!(w.set("Tint", &[1.0, 0.5, 0.25]));
@@ -390,4 +405,44 @@ fn cache_key_uses_path_relative_to_root() {
         .bytecode
     };
     assert_ne!(c("a"), c("b"));
+}
+
+fn feature_kinds_layout(cache: &Path) -> render3d::compile::CbLayout {
+    let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+    let c = compile(
+        &dir.join("feature_kinds.hlsl"),
+        dir,
+        &Default::default(),
+        "ps_5_0",
+        cache,
+        "h",
+    )
+    .unwrap();
+    c.reflection
+        .cbuffers
+        .into_iter()
+        .find(|l| l.name.ends_with("FeatureData"))
+        .unwrap()
+}
+
+/// C6: every reflected variable carries its HLSL scalar type, struct members included; a struct is `Other`.
+#[test]
+fn reflection_reports_member_kinds() {
+    use render3d::compile::VarKind;
+    let cache = tempfile::tempdir().unwrap();
+    let l = feature_kinds_layout(cache.path());
+    assert_eq!(l.slot, 6);
+    let kind = |n: &str| l.vars.iter().find(|v| v.name.ends_with(n)).map(|v| v.kind);
+    assert_eq!(kind("hairSpecularSettings"), Some(VarKind::Other));
+    assert_eq!(kind("hairSpecularSettings.Enabled"), Some(VarKind::Uint));
+    assert_eq!(
+        kind("hairSpecularSettings.HairGlossiness"),
+        Some(VarKind::Float)
+    );
+    assert_eq!(kind("hairSpecularSettings.Signed"), Some(VarKind::Int));
+    assert_eq!(kind("hairSpecularSettings.Flag"), Some(VarKind::Bool));
+    assert_eq!(kind("skinParams"), Some(VarKind::Float));
+    let w = render3d::cbuffer::CbWriter::new(&l);
+    assert_eq!(w.kind("hairSpecularSettings.Enabled"), Some(VarKind::Uint));
+    assert_eq!(w.kind("notInThisBuild"), None);
 }

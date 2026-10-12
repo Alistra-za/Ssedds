@@ -15,7 +15,8 @@ use windows::Win32::Graphics::Direct3D::Fxc::{
 use windows::Win32::Graphics::Direct3D::{
     ID3DBlob, D3D_CT_CBUFFER, D3D_SHADER_MACRO, D3D_SIT_CBUFFER, D3D_SIT_SAMPLER,
     D3D_SIT_STRUCTURED, D3D_SIT_TEXTURE, D3D_SRV_DIMENSION_BUFFER,
-    D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE, D3D_SVC_STRUCT,
+    D3D_SRV_DIMENSION_TEXTURE2DARRAY, D3D_SRV_DIMENSION_TEXTURECUBE, D3D_SVC_STRUCT, D3D_SVT_BOOL,
+    D3D_SVT_FLOAT, D3D_SVT_INT, D3D_SVT_UINT,
 };
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11ShaderReflection, ID3D11ShaderReflectionType, D3D11_SHADER_BUFFER_DESC,
@@ -28,9 +29,29 @@ pub struct CbLayout {
     pub name: String,
     pub slot: u32,
     pub size: u32,
-    /// (name, offset, size) in bytes. Struct members are listed after their struct as `struct.member` (nested:
-    /// `a.b.c`), with the absolute offset and the bytes up to the next member, so `CbWriter` can set them.
-    pub vars: Vec<(String, u32, u32)>,
+    /// Every variable: name, absolute offset and size in bytes, scalar type. Struct members are listed after
+    /// their struct as `struct.member` (nested: `a.b.c`), sized up to the next member, so `CbWriter` can set them.
+    pub vars: Vec<CbVar>,
+}
+
+/// The HLSL scalar type of a cbuffer variable (`D3D_SVT_*` of its type; vectors, matrices and arrays report their
+/// element's). Structs and anything else are `Other`. Decides how `cs_settings::write_feature_data` encodes a
+/// number (C6): the JSON shape (`1` vs `1.0`) is not trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum VarKind {
+    Float,
+    Uint,
+    Int,
+    Bool,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CbVar {
+    pub name: String,
+    pub offset: u32,
+    pub size: u32,
+    pub kind: VarKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -65,8 +86,9 @@ pub struct CompiledPair {
 }
 
 const FLAGS: u32 = D3DCOMPILE_OPTIMIZATION_LEVEL3;
-/// Bumped when the cached `Reflection` gains information (2: struct members flattened), so old entries miss.
-const REFLECT_VERSION: u32 = 2;
+/// Bumped when the cached `Reflection` gains information (2: struct members flattened; 3: variable types), so
+/// old entries miss.
+const REFLECT_VERSION: u32 = 3;
 
 /// Names one compiled stage by what was compiled. The root path and the saved fingerprint are not part of it:
 /// two CS folders with identical sources share entries, and a stale fingerprint cannot file a new compile
@@ -354,7 +376,7 @@ unsafe fn struct_members(
     prefix: &str,
     base: u32,
     size: u32,
-    out: &mut Vec<(String, u32, u32)>,
+    out: &mut Vec<CbVar>,
 ) {
     let mut td = D3D11_SHADER_TYPE_DESC::default();
     // SAFETY: (caller) live type; `td` is a local out-param; indices are bounded by `Members`.
@@ -370,16 +392,32 @@ unsafe fn struct_members(
             };
             let mut md = D3D11_SHADER_TYPE_DESC::default();
             if mt.GetDesc(&mut md).is_ok() {
-                members.push((name, md.Offset, mt));
+                members.push((name, md.Offset, var_kind(&md), mt));
             }
         }
-        for (i, (name, off, mt)) in members.iter().enumerate() {
+        for (i, (name, off, kind, mt)) in members.iter().enumerate() {
             let end = members.get(i + 1).map_or(size, |m| m.1);
             let full = format!("{prefix}.{name}");
             let msize = end.saturating_sub(*off);
-            out.push((full.clone(), base + off, msize));
+            out.push(CbVar {
+                name: full.clone(),
+                offset: base + off,
+                size: msize,
+                kind: *kind,
+            });
             struct_members(mt, &full, base + off, msize, out);
         }
+    }
+}
+
+/// The scalar type of a reflected type (see [`VarKind`]).
+fn var_kind(t: &D3D11_SHADER_TYPE_DESC) -> VarKind {
+    match t.Type {
+        D3D_SVT_FLOAT => VarKind::Float,
+        D3D_SVT_UINT => VarKind::Uint,
+        D3D_SVT_INT => VarKind::Int,
+        D3D_SVT_BOOL => VarKind::Bool,
+        _ => VarKind::Other,
     }
 }
 
@@ -437,8 +475,21 @@ pub fn reflect(bytecode: &[u8]) -> Result<Reflection, String> {
                 let mut vd = D3D11_SHADER_VARIABLE_DESC::default();
                 v.GetDesc(&mut vd).map_err(e)?;
                 let name = pcstr(vd.Name);
-                vars.push((name.clone(), vd.StartOffset, vd.Size));
-                if let Some(t) = v.GetType() {
+                let t = v.GetType();
+                let mut td = D3D11_SHADER_TYPE_DESC::default();
+                let mut kind = VarKind::Other;
+                if let Some(t) = &t {
+                    if t.GetDesc(&mut td).is_ok() {
+                        kind = var_kind(&td);
+                    }
+                }
+                vars.push(CbVar {
+                    name: name.clone(),
+                    offset: vd.StartOffset,
+                    size: vd.Size,
+                    kind,
+                });
+                if let Some(t) = t {
                     struct_members(&t, &name, vd.StartOffset, vd.Size, &mut vars);
                 }
             }

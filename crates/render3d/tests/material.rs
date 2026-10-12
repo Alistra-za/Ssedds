@@ -2,7 +2,7 @@
 use nif::material::MaterialState;
 use nif::props::LightingTrailer;
 use render3d::cbuffer::CbWriter;
-use render3d::compile::CbLayout;
+use render3d::compile::{CbLayout, CbVar, VarKind};
 use render3d::material::{
     pbr_flags, perm_material, remapped_glint, write_material, Bound, PBR_COAT_NORMAL,
     PBR_COLORED_COAT, PBR_FUZZ, PBR_GLINT, PBR_HAIR_MARSCHNER, PBR_HAS_DISPLACEMENT,
@@ -163,7 +163,12 @@ fn writer() -> CbWriter {
     let vars = FIELDS
         .iter()
         .enumerate()
-        .map(|(i, (n, s))| (n.to_string(), 16 * i as u32, *s))
+        .map(|(i, (n, s))| CbVar {
+            name: n.to_string(),
+            offset: 16 * i as u32,
+            size: *s,
+            kind: VarKind::Float,
+        })
         .collect();
     CbWriter::new(&CbLayout {
         name: "PerMaterial".into(),

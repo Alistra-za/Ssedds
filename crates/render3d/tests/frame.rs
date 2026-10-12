@@ -4,7 +4,7 @@ mod common;
 use common::{dds_rgba8, fixture, renderer, FLAT};
 use nif::material::MaterialState;
 use render3d::cbuffer::CbWriter;
-use render3d::compile::CbLayout;
+use render3d::compile::{CbLayout, CbVar, VarKind};
 use render3d::material::{write_material, Bound};
 use render3d::scene::{
     rows, write_static, Camera, LightValues, Scene, SceneFields, View, ViewValues, FEATURE_FLOATS,
@@ -71,7 +71,16 @@ fn layout(names: &[String], size: u32) -> CbLayout {
         vars: names
             .iter()
             .enumerate()
-            .map(|(i, n)| (n.clone(), size * i as u32, size))
+            .map(|(i, n)| CbVar {
+                name: n.clone(),
+                offset: size * i as u32,
+                size,
+                kind: if FEATURE_UINTS.iter().any(|(u, _)| n.ends_with(u)) {
+                    VarKind::Uint
+                } else {
+                    VarKind::Float
+                },
+            })
             .collect(),
     }
 }
