@@ -123,7 +123,8 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
         Some("d") | None if landscape => {
             vec![s(LandscapeDiffuse, High, "colour under textures/landscape")]
         }
-        Some("d") | None if ui_or_sky && c.is_float => {
+        // Carried fix 6: HDR sky only under a `sky` component (a float colour map under interface/ is ui_sky).
+        Some("d") | None if has_component(c.game_path, "sky") && c.is_float => {
             vec![s(HdrSky, Medium, "float source under sky/")]
         }
         Some("d") | None if ui_or_sky => vec![s(UiSky, colour, "colour under interface/ or sky/")],
@@ -685,6 +686,54 @@ mod tests {
             AlphaContent::None,
         ));
         assert_eq!(sky[0].subtype, Subtype::UiSky);
+        let mut f = ctx(
+            Target::Cs,
+            None,
+            "textures/sky/x.exr",
+            &none,
+            AlphaContent::None,
+        );
+        f.is_float = true;
+        assert_eq!(suggest(&f)[0].subtype, Subtype::HdrSky);
+    }
+
+    /// Carried fix 5: only a whole `landscape` component (or textures/landscape/) is landscape.
+    #[test]
+    fn landscape_needs_a_whole_path_component() {
+        let none = BTreeSet::new();
+        let first =
+            |p: &str| suggest(&ctx(Target::Cs, Some("n"), p, &none, AlphaContent::None))[0].subtype;
+        assert_eq!(
+            first("textures/landscape/x_n.png"),
+            Subtype::LandscapeNormal
+        );
+        assert_eq!(
+            first("textures/mod/landscape/x_n.png"),
+            Subtype::LandscapeNormal
+        );
+        assert_ne!(
+            first("textures/landscapes_old/x_n.png"),
+            Subtype::LandscapeNormal
+        );
+        assert_ne!(
+            first("textures/mylandscape/x_n.png"),
+            Subtype::LandscapeNormal
+        );
+    }
+
+    /// Carried fix 6: hdr_sky only under a `sky` component, as its reason says.
+    #[test]
+    fn hdr_sky_needs_a_sky_component() {
+        let none = BTreeSet::new();
+        let mut f = ctx(
+            Target::Cs,
+            None,
+            "textures/interface/x.exr",
+            &none,
+            AlphaContent::None,
+        );
+        f.is_float = true;
+        assert_eq!(suggest(&f)[0].subtype, Subtype::UiSky);
         let mut f = ctx(
             Target::Cs,
             None,

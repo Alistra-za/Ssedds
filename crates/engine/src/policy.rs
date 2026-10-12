@@ -606,8 +606,12 @@ fn layered_profile_with(
     backend_follows_format(&mut profile, &mut prov, &sources);
     emissive_hdr_choice(ctx, &mut profile, &mut prov, f);
     float_source_is_linear(&mut profile, &mut prov, f);
-    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
-    if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
+    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green). An
+    // explicit `flip_green` wins; `resolve_decided` reports a contradiction as CFG-GREEN-CONFLICT (carried fix 4).
+    if takes_green(st)
+        && profile.channels.green_convention == Some(GreenConvention::Opengl)
+        && !field_explicit(ctx, &prov, "channels.flip_green")
+    {
         profile.channels.flip_green = true;
         if let Some(src) = prov.get("channels.green_convention").cloned() {
             prov.insert("channels.flip_green".into(), src);
@@ -636,6 +640,34 @@ fn unscoped_filter_falls_back(
     p.mips.filter = MipFilter::Box;
     prov.insert("mips.filter".into(), Provenance::Fallback);
     Some((dropped, why))
+}
+
+/// Carried fix 4 (DECISIONS Note T10): an explicit `channels.flip_green` that contradicts the resolved
+/// `green_convention` (OpenGL needs the flip, DirectX does not). The explicit field is kept.
+fn green_conflict(
+    ctx: &ResolveCtx,
+    p: &Profile,
+    prov: &BTreeMap<String, Provenance>,
+) -> Option<Warning> {
+    let convention = p.channels.green_convention?;
+    if !takes_green(p.subtype) || !field_explicit(ctx, prov, "channels.flip_green") {
+        return None;
+    }
+    let wants = convention == GreenConvention::Opengl;
+    (p.channels.flip_green != wants).then(|| {
+        let id = serde_json::to_value(convention).unwrap_or_default();
+        Warning::new(
+            Code::CfgGreenConflict,
+            format!(
+                "channels.flip_green = {} contradicts green_convention = {} (from {}); flip_green is kept",
+                p.channels.flip_green,
+                id.as_str().unwrap_or("?"),
+                prov.get("channels.green_convention")
+                    .map_or("builtin".to_string(), ToString::to_string)
+            ),
+        )
+        .with_data(json!({ "flip_green": p.channels.flip_green, "convention": convention }))
+    })
 }
 
 /// The CFG-FILTER-IGNORED notice (S-mips-13): the owner's line, plus the reason when the texture is a colour map.
@@ -1729,6 +1761,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         f,
         alpha_policy_explicit(ctx, &provenance),
     ));
+    warnings.extend(green_conflict(ctx, &profile, &provenance));
     if available && profile.subtype == Subtype::SkinWet {
         warnings.push(skin_wet_notice(&profile, f, &provenance));
     }

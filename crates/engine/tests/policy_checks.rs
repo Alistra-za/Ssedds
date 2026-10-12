@@ -2434,3 +2434,62 @@ fn a_rule_for_the_new_subtype_applies_after_a_set_subtype() {
     let j = run_with(&reg, "cs-quality", Some(&only), "r/x.png", None, &[]);
     assert_ne!(j.provenance["subtype"].to_string(), "rule:project#0");
 }
+
+/// Carried fix 4 (Note T10): an explicit flip_green that contradicts green_convention is kept and warned.
+#[test]
+fn an_explicit_flip_green_against_the_convention_warns_and_wins() {
+    let n = |sets: &[&str]| {
+        run(
+            Target::Cs,
+            "textures/a/x_n.png",
+            Some("n"),
+            &["n"],
+            opaque(),
+            sets,
+            &[],
+        )
+    };
+    let j = n(&[
+        "channels.green_convention=opengl",
+        "channels.flip_green=false",
+    ]);
+    assert!(!j.profile.channels.flip_green);
+    assert!(
+        codes(&j).contains(&Code::CfgGreenConflict),
+        "{:?}",
+        j.warnings
+    );
+    let w = j
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::CfgGreenConflict)
+        .unwrap();
+    assert_eq!(
+        w.data,
+        serde_json::json!({"flip_green": false, "convention": "opengl"})
+    );
+    let j = n(&[
+        "channels.green_convention=directx",
+        "channels.flip_green=true",
+    ]);
+    assert!(j.profile.channels.flip_green);
+    assert!(codes(&j).contains(&Code::CfgGreenConflict));
+    // Agreeing values and the convention alone raise nothing.
+    for sets in [
+        &["channels.green_convention=opengl"][..],
+        &[
+            "channels.green_convention=opengl",
+            "channels.flip_green=true",
+        ],
+        &["channels.green_convention=directx"],
+    ] {
+        let j = n(sets);
+        assert!(!codes(&j).contains(&Code::CfgGreenConflict), "{sets:?}");
+    }
+    assert!(
+        n(&["channels.green_convention=opengl"])
+            .profile
+            .channels
+            .flip_green
+    );
+}
