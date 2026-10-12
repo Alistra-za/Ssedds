@@ -1,4 +1,17 @@
-//! Float mip chain (spec §5.5). Box filter only in v1 Phase 1; other kernels arrive in milestone M6.
+//! Float mip chain (spec §5.5). Box (the default) is recursive and unchanged; tent, Mitchell and Kaiser (S-mips-3)
+//! build each level's RGB directly from mip 0 with [`crate::filter::resample_rgb`], the kernel widened by the
+//! level's scale. How the two compose:
+//! - **Box:** the code path is unchanged; nothing new runs.
+//! - **Non-box:** the box loop still runs, so the accumulation, alpha and the roughness and coat bakes are exactly
+//!   as for box. After `finalize` and before the bakes, RGB is overwritten by the direct resample and clamped to
+//!   the domain again (linear light [0, 1], HDR ≥ 0). Alpha always stays the recursive box.
+//! - **Coverage:** `preserve_coverage` reads only (box) alpha; a non-box filter is never allowed with `cutout` or
+//!   `cutout_blend` (S-mips-2).
+//! - **Box-only contents:** normal renormalisation, the `_cnr` self-bake, `LengthPyramid` and roughness r² are box
+//!   only (S-mips-2); `effective_filter` returns box for them, and for alpha-weighted RGB, even if a blocked profile
+//!   reached the chain.
+//! - **Odd sizes** (an acknowledged `DIM-NPOT` without resize): the level size is the box chain's, and the resample
+//!   takes any n -> m.
 //!
 //! An *accumulation* chain is built by repeated box filtering of the unnormalised base; every output
 //! level is a *finalised* copy (√ back from squared roughness, renormalised vectors, clamps). Mip 0 is the base as
@@ -176,6 +189,34 @@ fn weighted_rgb(work: &Work, p: &Profile) -> bool {
         && !matches!(work.domain, Domain::Normal | Domain::Msn | Domain::SignedRg)
 }
 
+/// The filter the RGB levels use (S-mips-3): `p.mips.filter` when policy allows it ([`crate::filter::filter_allowed`])
+/// and the RGB is not alpha-weighted, else box. The policy check is the gate; this is a backstop for a blocked job.
+pub(crate) fn effective_filter(work: &Work, p: &Profile) -> MipFilter {
+    if crate::filter::filter_allowed(p).is_ok() && !weighted_rgb(work, p) {
+        p.mips.filter
+    } else {
+        MipFilter::Box
+    }
+}
+
+/// The domain clamp of RGB for a level >= 1: HDR at 0 and above, linear light and stored data in [0, 1]; vectors and
+/// `SignedRg` are untouched.
+fn clamp_rgb(px: &mut [f32; 4], domain: Domain) {
+    match domain {
+        Domain::Hdr => {
+            for c in &mut px[..3] {
+                *c = c.max(0.0);
+            }
+        }
+        Domain::LinearLight | Domain::Stored => {
+            for c in &mut px[..3] {
+                *c = c.clamp(0.0, 1.0);
+            }
+        }
+        Domain::Normal | Domain::Msn | Domain::SignedRg => {}
+    }
+}
+
 /// Turn an accumulation level (>= 1) into its stored form: roughness √, then the domain's
 /// vector renormalisation or clamp. `SignedRg` (`_flow`) is deliberately left alone.
 fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
@@ -186,17 +227,7 @@ fn finalize(acc: &Rgba32F, work: &Work) -> Rgba32F {
         }
         match work.domain {
             Domain::Normal | Domain::Msn => normalize_vector(px, work.domain),
-            Domain::Hdr => {
-                for c in &mut px[..3] {
-                    *c = c.max(0.0);
-                }
-            }
-            Domain::LinearLight | Domain::Stored => {
-                for c in &mut px[..3] {
-                    *c = c.clamp(0.0, 1.0);
-                }
-            }
-            Domain::SignedRg => {}
+            d => clamp_rgb(px, d),
         }
     }
     img
@@ -219,6 +250,7 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
     let weighted = weighted_rgb(work, p);
     let rough = bake.filter(|_| work.roughness_r_squared);
     let coat = coat_self_bake(work, p);
+    let filt = effective_filter(work, p);
     let mut out = Vec::with_capacity(n as usize);
     let mut base = base_level(work, p);
     if let Some(b) = rough {
@@ -246,6 +278,15 @@ pub fn build_chain_with(work: &Work, p: &Profile, bake: Option<&NormalVariance>)
             None => downsample(&work.img, weighted),
         };
         let mut fin = finalize(&next, work);
+        if filt != MipFilter::Box {
+            // S-mips-3: RGB straight from mip 0 at this level's size; alpha keeps the box value above.
+            let size = (next.width, next.height);
+            let direct = crate::filter::resample_rgb(&out[0], size, filt, p.mips.edge);
+            for (px, d) in fin.px.iter_mut().zip(&direct.px) {
+                px[..3].copy_from_slice(&d[..3]);
+                clamp_rgb(px, work.domain);
+            }
+        }
         if let Some(b) = rough {
             bake_roughness(&mut fin, level, b, |i| next.px[i][0]);
         }
@@ -973,5 +1014,205 @@ mod tests {
         let c = build_chain(&w, &p);
         assert_eq!((c[0].px[0][0], c[0].px[1][0]), (0.0, 8.0));
         assert!(close(c[1].px[0][0], 4.0));
+    }
+
+    /// A `w`×`h` image of LCG noise in [0, 1) on every channel.
+    fn rnd_image(w: u32, h: u32, seed: u32) -> Rgba32F {
+        let mut seed = seed;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 16_777_216.0
+        };
+        let mut img = Rgba32F::new(w, h, [0.0; 4]);
+        for p in &mut img.px {
+            *p = [rnd(), rnd(), rnd(), rnd()];
+        }
+        img
+    }
+
+    #[test]
+    fn box_is_the_default_and_unchanged() {
+        assert_eq!(profile(Subtype::Diffuse).mips.filter, MipFilter::Box);
+        // The pre-M6 chain is restated by the existing tests; this asserts the non-box branch is not taken.
+        let w = work(rnd_image(8, 8, 1), Domain::LinearLight, false);
+        let p = profile(Subtype::Diffuse);
+        assert_eq!(effective_filter(&w, &p), MipFilter::Box);
+    }
+
+    #[test]
+    fn non_box_levels_are_resampled_directly_from_mip_0() {
+        for f in [MipFilter::Tent, MipFilter::Mitchell, MipFilter::Kaiser] {
+            let mut p = profile(Subtype::Diffuse);
+            p.alpha.policy = AlphaPolicy::Remove;
+            p.mips.filter = f;
+            let img = rnd_image(16, 16, 7);
+            let c = build_chain(&work(img.clone(), Domain::LinearLight, false), &p);
+            for (k, level) in c.iter().enumerate().skip(1) {
+                let d = crate::filter::resample_rgb(
+                    &img,
+                    (level.width, level.height),
+                    f,
+                    MipEdge::Wrap,
+                );
+                for (a, b) in level.px.iter().zip(&d.px) {
+                    for ch in 0..3 {
+                        assert!(
+                            (a[ch] - b[ch].clamp(0.0, 1.0)).abs() < 1e-6,
+                            "{f:?} level {k}"
+                        );
+                    }
+                }
+            }
+            // Not recursive: resampling level 1 again gives a different level 2.
+            let rec =
+                crate::filter::resample_rgb(&c[1], (c[2].width, c[2].height), f, MipEdge::Wrap);
+            let diff = c[2]
+                .px
+                .iter()
+                .zip(&rec.px)
+                .map(|(a, b)| (a[0] - b[0]).abs())
+                .fold(0.0f32, f32::max);
+            assert!(diff > 1e-4, "{f:?}: {diff}");
+        }
+    }
+
+    #[test]
+    fn non_box_alpha_stays_the_box_alpha_bit_for_bit() {
+        let img = rnd_image(16, 16, 3); // random alpha
+        let mut bx = profile(Subtype::Diffuse);
+        bx.alpha.policy = AlphaPolicy::Data;
+        let mut k = bx.clone();
+        k.mips.filter = MipFilter::Kaiser;
+        let w = work(img, Domain::LinearLight, true);
+        let (a, b) = (build_chain(&w, &bx), build_chain(&w, &k));
+        for (la, lb) in a.iter().zip(&b) {
+            assert!(la.px.iter().zip(&lb.px).all(|(x, y)| x[3] == y[3]));
+        }
+        assert_ne!(a[1].px, b[1].px); // RGB did change
+    }
+
+    #[test]
+    fn kaiser_overshoot_is_clamped_in_linear_light() {
+        // A one-texel white spike on black: Kaiser rings below 0 next to it at level 1.
+        let mut img = Rgba32F::new(16, 16, [0.0, 0.0, 0.0, 1.0]);
+        img.at_mut(8, 8)[..3].copy_from_slice(&[1.0, 1.0, 1.0]);
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Remove;
+        p.mips.filter = MipFilter::Kaiser;
+        let c = build_chain(&work(img.clone(), Domain::LinearLight, false), &p);
+        let raw = crate::filter::resample_rgb(&img, (8, 8), MipFilter::Kaiser, MipEdge::Wrap);
+        assert!(raw.px.iter().any(|q| q[0] < 0.0), "the fixture must ring");
+        assert!(c
+            .iter()
+            .skip(1)
+            .all(|l| l.px.iter().all(|q| (0.0..=1.0).contains(&q[0]))));
+    }
+
+    #[test]
+    fn hdr_tent_keeps_highlights_and_never_goes_negative() {
+        // bc6h_uf16 and rgba16f are both HDR formats (F2); rgba16f keeps alpha, so it is removed here.
+        for fmt in [Format::Bc6hUf16, Format::Rgba16f] {
+            let mut img = Rgba32F::new(8, 8, [0.1, 0.1, 0.1, 1.0]);
+            img.at_mut(3, 3)[0] = 100.0;
+            let mut p = profile(Subtype::PbrEmissive);
+            p.format = fmt;
+            p.alpha.policy = AlphaPolicy::Remove;
+            p.mips.filter = MipFilter::Tent;
+            let w = work(img, Domain::Hdr, false);
+            assert_eq!(effective_filter(&w, &p), MipFilter::Tent, "{fmt:?}");
+            let c = build_chain(&w, &p);
+            assert!(c[1].px.iter().any(|q| q[0] > 1.0), "{fmt:?}");
+            assert!(
+                c.iter().all(|l| l.px.iter().all(|q| q[0] >= 0.0)),
+                "{fmt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn box_only_contents_ignore_a_non_box_filter() {
+        // A blocked profile (CFG-INVALID) never runs, but the chain itself must still be the box chain.
+        for (st, dom) in [
+            (Subtype::Normal, Domain::Normal),
+            (Subtype::Msn, Domain::Msn),
+            (Subtype::Flow, Domain::SignedRg),
+            (Subtype::GenericData, Domain::Stored),
+        ] {
+            let img = rnd_image(8, 8, 5);
+            let p = profile(st);
+            let mut k = p.clone();
+            k.mips.filter = MipFilter::Kaiser;
+            let w = work(img, dom, true);
+            assert_eq!(build_chain(&w, &p), build_chain(&w, &k), "{st:?}");
+        }
+        // Alpha-weighted colour.
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Cutout;
+        let mut k = p.clone();
+        k.mips.filter = MipFilter::Kaiser;
+        let w = work(rnd_image(8, 8, 9), Domain::LinearLight, true);
+        assert_eq!(build_chain(&w, &p), build_chain(&w, &k));
+    }
+
+    #[test]
+    fn baked_roughness_is_identical_under_any_filter_setting() {
+        // A roughness member is box-only: build_chain_with + a NormalVariance gives equal chains for box and kaiser.
+        // Fixture restated from `bake::tests` (`bumpy` normals, `ramp` roughness, written mip 0).
+        use crate::bake::LengthPyramid;
+        use crate::ops::preprocess;
+        let mut normals = Rgba32F::new(16, 16, [0.0, 0.0, 0.0, 1.0]);
+        for y in 0..16 {
+            for x in 0..16 {
+                let nx = 0.6 * (x as f32 * 1.3 + y as f32 * 0.7).sin();
+                let ny = 0.6 * (x as f32 * 0.9 - y as f32 * 1.1).cos();
+                let nz = (1.0 - nx * nx - ny * ny).sqrt();
+                *normals.at_mut(x, y) = [nx * 0.5 + 0.5, ny * 0.5 + 0.5, nz * 0.5 + 0.5, 1.0];
+            }
+        }
+        let nw = preprocess(normals, &profile(Subtype::PbrNormal));
+        let mut written = nw.img;
+        for px in &mut written.px {
+            normalize_vector(px, nw.domain);
+        }
+        let mut rough = Rgba32F::new(16, 16, [0.0, 0.0, 0.8, 1.0]);
+        for y in 0..16 {
+            for x in 0..16 {
+                rough.at_mut(x, y)[0] = 0.15 + 0.7 * ((x * 3 + y * 2) % 16) as f32 / 16.0;
+            }
+        }
+        let pr = profile(Subtype::Rmaos);
+        let rw = preprocess(rough, &pr);
+        let nv = NormalVariance::new(LengthPyramid::build(&written), (16, 16), 0.25).unwrap();
+        let mut pk = pr.clone();
+        pk.mips.filter = MipFilter::Kaiser;
+        let baked = build_chain_with(&rw, &pr, Some(&nv));
+        assert_ne!(baked, build_chain(&rw, &pr)); // the bake is live
+        assert_eq!(baked, build_chain_with(&rw, &pk, Some(&nv)));
+    }
+
+    #[test]
+    fn thin_lines_are_exact_for_box_and_tent() {
+        // B8 "Thin lines: box and tent are exact either way": a 1-texel line every 4 columns of a 16x16 image;
+        // level 2 (4x4) is 0.25 everywhere for box and for tent (wrap).
+        let mut img = Rgba32F::new(16, 16, [0.0, 0.0, 0.0, 1.0]);
+        for y in 0..16 {
+            for x in (0..16).step_by(4) {
+                img.at_mut(x, y)[0] = 1.0;
+            }
+        }
+        for f in [MipFilter::Box, MipFilter::Tent] {
+            let mut p = profile(Subtype::Diffuse);
+            p.alpha.policy = AlphaPolicy::Remove;
+            p.mips.filter = f;
+            let w = work(img.clone(), Domain::LinearLight, false);
+            assert_eq!(effective_filter(&w, &p), f);
+            let c = build_chain(&w, &p);
+            assert_eq!((c[2].width, c[2].height), (4, 4));
+            assert!(
+                c[2].px.iter().all(|q| close(q[0], 0.25)),
+                "{f:?}: {:?}",
+                c[2].px
+            );
+        }
     }
 }

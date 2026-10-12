@@ -104,7 +104,10 @@ pub fn kernel(f: MipFilter, x: f64) -> f64 {
 /// Normalised `(source index, weight)` taps for each of `m` destination texels resampled from `n` source texels
 /// (RESULTS-2 B8 `weight_matrix`, generalised to any n -> m; S-mips-4). The kernel is stretched by `n/m`, so a
 /// downscale widens it in source texels. Edges wrap or clamp; duplicate indices are merged and each row sums to 1.
+/// Not used for Box: the box chain is the recursive pair/area path in [`crate::mips`].
 pub fn axis_taps(n: u32, m: u32, f: MipFilter, edge: MipEdge) -> Vec<Vec<(u32, f64)>> {
+    debug_assert!(n >= 1 && m >= 1, "axis_taps {n} -> {m}");
+    debug_assert!(n >= m, "axis_taps downscales only: {n} -> {m}");
     if n == m {
         return (0..n).map(|i| vec![(i, 1.0)]).collect();
     }
@@ -150,6 +153,7 @@ pub fn axis_taps(n: u32, m: u32, f: MipFilter, edge: MipEdge) -> Vec<Vec<(u32, f
 /// Separable polyphase resample of RGB to `(w, h)` (RESULTS-2 B8, S-mips-4): horizontal then vertical, each tap
 /// row accumulated in f64. Alpha of the result is 0.0; there is no clamping here (the caller clamps overshoot).
 pub fn resample_rgb(src: &Rgba32F, (w, h): (u32, u32), f: MipFilter, edge: MipEdge) -> Rgba32F {
+    debug_assert!(src.width >= 1 && src.height >= 1 && w >= 1 && h >= 1);
     let tx = axis_taps(src.width, w, f, edge);
     let ty = axis_taps(src.height, h, f, edge);
     let (sw, dw) = (src.width as usize, w as usize);
@@ -204,6 +208,15 @@ mod tests {
         );
         assert_eq!(kernel(MipFilter::Kaiser, 3.0), 0.0);
         assert!(kernel(MipFilter::Kaiser, 1.5) < 0.0); // a negative lobe
+    }
+
+    #[test]
+    fn kernel_literal_values_derived_by_hand() {
+        // Mitchell B = C = 1/3 on 1 <= |x| < 2 is (-7/3 x³ + 12 x² - 20 x + 32/3) / 6; at 1.5 that is -5/144.
+        assert!((kernel(MipFilter::Mitchell, 1.5) - (-0.034_722_222_222)).abs() < 1e-9);
+        // Kaiser w3 α4: sinc(0.5) I0(4 √(1 - 1/36)) / I0(4) = (2/π)(10.769546 / 11.301922), by a Taylor expansion
+        // of I0 about 4 (I0(4) = 11.3019219521, I1(4) = 9.7594651537).
+        assert!((kernel(MipFilter::Kaiser, 0.5) - 0.606_631_826).abs() < 1e-8);
     }
 
     #[test]
