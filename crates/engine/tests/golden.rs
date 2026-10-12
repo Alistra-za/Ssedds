@@ -2215,7 +2215,10 @@ fn bmp_diffuse_is_bc7_unorm() {
         &[],
     );
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
-    assert_eq!(warnings(&o), vec![]);
+    // File-level: the synthetic gradient trips an unrelated SUG-LOW-CONFIDENCE; no SHADER-* code may appear.
+    assert!(warnings(&o)
+        .iter()
+        .all(|c| !c.as_str().starts_with("SHADER-")));
     assert_dds(
         &dds(d.path(), "textures/a/rock.dds"),
         DdsPixelFormat::Bc7 { srgb: false },
@@ -2844,4 +2847,364 @@ fn default_profiles_hash_as_before() {
         assert!(p.get("resize").is_none(), "{id}: {p}");
         assert!(p["mips"].get("edge").is_none(), "{id}: {p}");
     }
+}
+
+/// Plan only (no run): the `set_resolved` shader, provenance string and set warning codes of the set whose key ends
+/// with `tail`.
+fn plan_shader(
+    dir: &Path,
+    target: Target,
+    sets: &[&str],
+    tail: &str,
+) -> (Out, String, String, Vec<Code>) {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    Engine::new()
+        .unwrap()
+        .plan(
+            request(dir, target, sets, &[]),
+            &rep,
+            &CancelToken::default(),
+        )
+        .unwrap();
+    let events = sink.take();
+    let (shader, prov, codes) = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::SetResolved {
+                shader: Some(p),
+                warnings,
+                ..
+            } if e.set.as_deref().is_some_and(|s| s.ends_with(tail)) => Some((
+                p.shader.id().to_string(),
+                p.provenance.to_string(),
+                warnings.iter().map(|w| w.code).collect(),
+            )),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no set_resolved for {tail}"));
+    (
+        Out {
+            summary: BatchSummary::default(),
+            events,
+        },
+        shader,
+        prov,
+        codes,
+    )
+}
+
+/// Writes `files` under `in/` and plans; asserts the shader, provenance and set codes.
+fn shader_case(
+    target: Target,
+    files: Vec<(&str, DynamicImage)>,
+    tail: &str,
+    want: (&str, &str),
+    codes: &[Code],
+) -> Out {
+    let d = tempfile::tempdir().unwrap();
+    for (p, img) in files {
+        put(d.path(), p, img);
+    }
+    let (o, shader, prov, got) = plan_shader(d.path(), target, &[], tail);
+    assert_eq!((shader.as_str(), prov.as_str()), want);
+    assert_eq!(got, codes);
+    o
+}
+
+#[test]
+fn shader_pbr_auto_from_rmaos() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/rock.png", rgb(16)),
+            ("textures/a/rock_n.png", flat_normal(16)),
+            ("textures/a/rock_rmaos.png", rgb(16)),
+        ],
+        "textures/a/rock",
+        ("pbr", "auto:pbr"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "rock.png")["profile"]["subtype"].as_str(),
+        Some("pbr_albedo")
+    );
+}
+
+#[test]
+fn shader_advanced_skin_auto_from_rfaos() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/b/body.png", rgb(16)),
+            ("textures/b/body_n.png", flat_normal(16)),
+            ("textures/b/body_rfaos.png", rgb(16)),
+        ],
+        "textures/b/body",
+        ("advanced_skin", "auto:advanced_skin"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "body.png")["profile"]["subtype"].as_str(),
+        Some("skin_albedo")
+    );
+}
+
+#[test]
+fn shader_default_is_vanillas_default() {
+    shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+        ],
+        "textures/a/wall",
+        ("default", "auto:default"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_envmap_auto_from_m() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+            ("textures/a/wall_m.png", gray_ramp(16)),
+        ],
+        "textures/a/wall",
+        ("envmap", "auto:env_m"),
+        &[Code::ShaderAuto],
+    );
+    let job = planned(&o, "wall_m.png");
+    assert_eq!(job["profile"]["format"].as_str(), Some("bc4"));
+    assert_eq!(
+        job["provenance"]["format"].as_str(),
+        Some("shader:envmap"),
+        "{job}"
+    );
+}
+
+#[test]
+fn shader_complex_material_auto_from_m_alpha() {
+    shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+            (
+                "textures/a/wall_m.png",
+                rgba(16, |x, y| {
+                    [(x * 4) as u8, (y * 4) as u8, 90, (x * 16) as u8]
+                }),
+            ),
+        ],
+        "textures/a/wall",
+        ("complex_material", "auto:complex_m"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_glow_auto_from_g() {
+    shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/lamp.png", rgb(16)),
+            ("textures/a/lamp_n.png", flat_normal(16)),
+            ("textures/a/lamp_g.png", rgb(16)),
+        ],
+        "textures/a/lamp",
+        ("glow", "auto:g"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_parallax_auto_from_p() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/stone.png", rgb(16)),
+            ("textures/a/stone_n.png", flat_normal(16)),
+            ("textures/a/stone_p.png", gray_ramp(16)),
+        ],
+        "textures/a/stone",
+        ("parallax", "auto:p"),
+        &[Code::ShaderAuto],
+    );
+    let job = planned(&o, "stone_p.png");
+    assert_eq!(job["profile"]["format"].as_str(), Some("bc4"));
+    assert_eq!(
+        job["provenance"]["format"].as_str(),
+        Some("shader:parallax"),
+        "{job}"
+    );
+}
+
+#[test]
+fn shader_skin_auto_from_sk() {
+    shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/face.png", rgb(16)),
+            ("textures/a/face_n.png", flat_normal(16)),
+            ("textures/a/face_sk.png", rgb(16)),
+        ],
+        "textures/a/face",
+        ("skin", "auto:sk"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_hair_auto_from_path() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            (
+                "textures/hair/braid.png",
+                rgba(16, |x, _| [200, 150, 90, if x < 8 { 255 } else { 0 }]),
+            ),
+            ("textures/hair/braid_n.png", flat_normal(16)),
+        ],
+        "textures/hair/braid",
+        ("hair", "auto:hair_path"),
+        &[Code::ShaderAuto],
+    );
+    let p = &planned(&o, "braid.png")["profile"];
+    assert_eq!(p["alpha"]["policy"].as_str(), Some("cutout"), "{p}");
+    assert_eq!(p["mips"]["coverage"].as_str(), Some("on"), "{p}");
+}
+
+#[test]
+fn shader_eye_auto_from_path() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/eyes/eye.png", rgb(16)),
+            ("textures/eyes/eye_n.png", flat_normal(16)),
+        ],
+        "textures/eyes/eye",
+        ("eye", "auto:eyes_path"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "eye_n.png")["profile"]["subtype"].as_str(),
+        Some("msn")
+    );
+}
+
+#[test]
+fn shader_multilayer_auto_from_i() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            (
+                "textures/a/glass.png",
+                rgba(16, |x, _| [120, 160, 200, (x * 16) as u8]),
+            ),
+            ("textures/a/glass_n.png", flat_normal(16)),
+            ("textures/a/glass_i.png", rgb(16)),
+        ],
+        "textures/a/glass",
+        ("multilayer", "auto:i"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "glass.png")["profile"]["alpha"]["policy"].as_str(),
+        Some("data")
+    );
+}
+
+#[test]
+fn shader_landscape_auto_from_path() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/landscape/dirt.png", rgb(16)),
+            ("textures/landscape/dirt_n.png", flat_normal(16)),
+        ],
+        "textures/landscape/dirt",
+        ("landscape", "auto:landscape"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "dirt.png")["profile"]["subtype"].as_str(),
+        Some("landscape_diffuse")
+    );
+}
+
+fn pbr_fixture() -> Vec<(&'static str, DynamicImage)> {
+    vec![
+        ("textures/a/rock.png", rgb(16)),
+        ("textures/a/rock_n.png", flat_normal(16)),
+        ("textures/a/rock_rmaos.png", rgb(16)),
+    ]
+}
+
+#[test]
+fn shader_pbr_under_vanilla_falls_back() {
+    let o = shader_case(
+        Target::Vanilla,
+        pbr_fixture(),
+        "textures/a/rock",
+        ("default", "fallback"),
+        &[Code::ShaderUnavailable, Code::ShaderExtraMap],
+    );
+    let extra = o
+        .events
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::SetResolved { warnings, .. } => warnings
+                .iter()
+                .find(|w| w.code == Code::ShaderExtraMap)
+                .cloned(),
+            _ => None,
+        })
+        .unwrap();
+    assert!(extra.message.contains("rock_rmaos.dds"), "{extra:?}");
+}
+
+#[test]
+fn cs_plain_set_is_default_not_pbr() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+        ],
+        "textures/a/wall",
+        ("default", "auto:default"),
+        &[Code::ShaderAuto],
+    );
+    // File-level: the synthetic gradient trips an unrelated SUG-LOW-CONFIDENCE; no SHADER-* code may appear.
+    assert!(warnings(&o)
+        .iter()
+        .all(|c| !c.as_str().starts_with("SHADER-")));
+}
+
+#[test]
+fn shader_coat_alias_is_the_s_coat_colour() {
+    let mut files = pbr_fixture();
+    files.push(("textures/a/rock_coat.png", rgb(16)));
+    let o = shader_case(
+        Target::Cs,
+        files,
+        "textures/a/rock",
+        ("pbr", "auto:pbr"),
+        &[Code::ShaderAuto],
+    );
+    assert_profile(
+        &o,
+        "rock_coat.png",
+        "pbr_subsurface",
+        "remove",
+        false,
+        "bc7",
+    );
+    assert!(planned(&o, "rock_coat.png")
+        .to_string()
+        .contains("rock_s.dds"));
 }
