@@ -1181,14 +1181,15 @@ impl Viewport3d {
         if !self.busy() {
             self.busy_since = None;
         }
-        // After the drain: a frame that takes the last reply asks for no next frame, so the next input is not a gap.
+        // After the drain (a frame that takes the last reply asks for no next frame); the app re-arms after drawing.
         if let Some(gap) = self.gap.tick(now, self.busy()) {
             perf_log::emit("ui_gap", json!({"gap_ms": gap, "panel": self.panel}));
         }
         changed
     }
 
-    /// Re-arms the gap watch with the owner's end-of-frame busy (the set preview's encodes and scene push).
+    /// Re-arms the gap watch at the end of the frame with the owner's busy (the condition that asks for the next
+    /// frame): drawing may have started work (a render) after `poll`, and the set preview has its own.
     pub fn arm_gap(&mut self, busy: bool) {
         self.gap.arm(busy);
     }

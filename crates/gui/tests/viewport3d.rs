@@ -1723,6 +1723,17 @@ fn the_frame_that_drains_the_last_reply_does_not_arm_the_gap_watch() {
         v.poll_at(at(2_000)); // the next input, two seconds later: idle, not a freeze
     });
     assert!(named(&ev, "ui_gap").is_empty(), "{ev:?}");
+
+    // Drawing after the drain starts a render; the app re-arms with that, so a blocked next frame is a freeze.
+    let ((), ev) = perf_log::capture(|| {
+        v.request_frame(64, 64);
+        assert!(v.busy());
+        v.arm_gap(v.busy());
+        v.poll_at(at(2_500));
+    });
+    let gaps = named(&ev, "ui_gap");
+    assert_eq!(gaps.len(), 1, "{ev:?}");
+    assert_eq!(gaps[0]["gap_ms"], 500.0);
 }
 
 #[test]
