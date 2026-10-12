@@ -1457,12 +1457,15 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     }
     // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).
     let (ow, oh) = crate::resize::target_dims((a.width, a.height), p.resize);
+    let mode = serde_json::to_value(p.resize).unwrap_or_default();
     let resized = ((ow, oh) != (a.width, a.height)).then(|| {
         Warning::new(
             DimResized,
             format!(
-                "{}x{} resized to {ow}x{oh} (resize = pot-down)",
-                a.width, a.height
+                "{}x{} resized to {ow}x{oh} (resize = {})",
+                a.width,
+                a.height,
+                mode.as_str().unwrap_or("?")
             ),
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))

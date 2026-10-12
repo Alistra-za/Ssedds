@@ -815,3 +815,50 @@ fn height_clip_skips_an_all_zero_alpha_but_not_a_mixed_one() {
         r.warnings
     );
 }
+
+/// M6 Track D (Note T5): `validation.mips = smallest` checks PSNR and coverage on the last level only.
+#[test]
+fn smallest_mip_validation_checks_only_the_last_level() {
+    let mut p = profile(Subtype::Diffuse);
+    let (b, _) = dds(
+        &p,
+        &[flat(8, [10, 10, 10, 255]), flat(4, [10, 10, 10, 255])],
+    );
+    let other = [
+        EncoderInput::Ldr(vec![[200, 90, 30, 255]; 64]),
+        EncoderInput::Ldr(vec![[200, 90, 30, 255]; 16]),
+    ];
+    let levels = |r: &ValidationReport| -> Vec<u64> {
+        r.warnings
+            .iter()
+            .filter(|w| w.code == Code::ValMipError)
+            .map(|w| w.data["level"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(levels(&run(&b, &p, Some(&other), None, None)), [0, 1]);
+    p.validation.mips = ValidationMips::Smallest;
+    assert_eq!(levels(&run(&b, &p, Some(&other), None, None)), [1]);
+
+    let mut p = profile(Subtype::Diffuse);
+    p.alpha.policy = AlphaPolicy::Cutout;
+    let a_flat = |n: u32| flat(n, [128, 128, 128, 0]);
+    let (b, inputs) = dds(&p, &[a_flat(32), a_flat(16)]);
+    let r = run(&b, &p, Some(&inputs), Some(1.0), None);
+    assert_eq!(
+        codes(&r)
+            .iter()
+            .filter(|c| **c == Code::ValCoverage)
+            .count(),
+        2
+    );
+    p.validation.mips = ValidationMips::Smallest;
+    let r = run(&b, &p, Some(&inputs), Some(1.0), None);
+    assert_eq!(
+        codes(&r)
+            .iter()
+            .filter(|c| **c == Code::ValCoverage)
+            .count(),
+        1
+    );
+    assert_eq!(r.summary.coverage.len(), 1);
+}

@@ -717,7 +717,7 @@
         },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
-          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
+          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "subtype": {
           "$ref": "#/$defs/Subtype"
@@ -751,6 +751,10 @@
         "min_mip_psnr_db": {
           "format": "double",
           "type": "number"
+        },
+        "mips": {
+          "$ref": "#/$defs/ValidationMips",
+          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",
@@ -791,7 +795,7 @@
         },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
-          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
+          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "subtype": {
           "$ref": "#/$defs/Subtype"
@@ -822,7 +826,8 @@
     "ResizeMode": {
       "enum": [
         "none",
-        "pot-down"
+        "pot-down",
+        "half"
       ],
       "type": "string"
     },
@@ -951,6 +956,13 @@
       ],
       "type": "string"
     },
+    "ValidationMips": {
+      "enum": [
+        "all",
+        "smallest"
+      ],
+      "type": "string"
+    },
     "ValidationSpec": {
       "additionalProperties": false,
       "properties": {
@@ -971,6 +983,10 @@
         "min_mip_psnr_db": {
           "format": "double",
           "type": "number"
+        },
+        "mips": {
+          "$ref": "#/$defs/ValidationMips",
+          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",

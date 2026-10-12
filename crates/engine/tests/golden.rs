@@ -2843,6 +2843,7 @@ fn default_profiles_hash_as_before() {
         assert!(p["mips"].is_object(), "{id}: {p}");
         assert!(p.get("resize").is_none(), "{id}: {p}");
         assert!(p["mips"].get("edge").is_none(), "{id}: {p}");
+        assert!(p["validation"].get("mips").is_none(), "{id}: {p}");
     }
 }
 

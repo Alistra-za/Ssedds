@@ -157,6 +157,7 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
         "resize" => vec![
             opt(json!("none"), "None"),
             opt(json!("pot-down"), "Down to a power of two"),
+            opt(json!("half"), "Half size (larger side above 512)"),
         ],
         "mips.coverage" => vec![
             opt(json!("auto"), "Auto"),
