@@ -90,13 +90,10 @@ fn a_window_narrower_than_the_minimums_does_not_go_negative() {
     }
 }
 
-#[test]
-fn a_drag_past_the_minimum_stops_at_the_minimum() {
-    let d = tempfile::tempdir().unwrap();
-    let mut h = harness(d.path(), 1280.0);
+fn drag_to_minimum(h: &mut H) {
     for (id, min) in [("sets", SETS_MIN), ("textures", TEXTURES_MIN)] {
-        let left = outer(&h, id).left();
-        let (during, after) = drag(&mut h, id, left + 10.0);
+        let left = outer(h, id).left();
+        let (during, after) = drag(h, id, left + 10.0);
         for w in during {
             assert!(w >= min - 2.0, "{id} went to {w} mid-drag, min {min}");
         }
@@ -108,13 +105,74 @@ fn a_drag_past_the_minimum_stops_at_the_minimum() {
 }
 
 #[test]
-fn a_drag_to_the_far_right_leaves_the_others_their_minimums() {
+fn a_drag_past_the_minimum_stops_at_the_minimum() {
+    let d = tempfile::tempdir().unwrap();
+    drag_to_minimum(&mut harness(d.path(), 1280.0));
+}
+
+#[test]
+fn the_changed_on_disk_row_does_not_hold_the_column_open() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(d.path(), 1280.0);
+    for i in &mut h.state_mut().0.items {
+        i.changed_on_disk = true;
+    }
+    h.run_steps(3);
+    drag_to_minimum(&mut h);
+}
+
+#[test]
+fn a_drag_to_the_far_right_stops_at_the_maximum() {
     let w = 1280.0;
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(d.path(), w);
+    // The centre is what lies between the Sets column and the Advanced strip.
+    let centre = |h: &H| outer(h, "advanced-strip").left() - outer(h, "sets").right();
+    // Textures stops where Sets keeps its minimum and the centre CENTRE_MIN.
     let (_, after) = drag(&mut h, "textures", w - 5.0);
-    let max = w - STRIP_WIDTH - SETS_MIN - CENTRE_MIN;
-    assert!(after <= max + 1.0, "textures {after}, max {max}");
-    let s = outer(&h, "sets");
-    assert!(s.width() >= SETS_MIN - 0.5, "sets {}", s.width());
+    let s = outer(&h, "sets").width();
+    assert!((s - SETS_MIN).abs() <= 1.0, "textures {after}, sets {s}");
+    assert!(
+        (centre(&h) - CENTRE_MIN).abs() <= 1.0,
+        "centre {}",
+        centre(&h)
+    );
+    // Back to its minimum, then Sets stops where the centre keeps CENTRE_MIN.
+    let left = outer(&h, "textures").left();
+    drag(&mut h, "textures", left + 10.0);
+    let (_, after) = drag(&mut h, "sets", w - 5.0);
+    assert!(after > SETS_MIN + 100.0, "sets did not widen: {after}");
+    assert!(
+        (centre(&h) - CENTRE_MIN).abs() <= 1.0,
+        "centre {}",
+        centre(&h)
+    );
+}
+
+#[test]
+fn a_window_narrowed_and_widened_again_restores_the_column_widths() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(d.path(), 1280.0);
+    // A width the user chose, and the default.
+    let left = outer(&h, "textures").left();
+    drag(&mut h, "textures", left + 300.0);
+    let before = [outer(&h, "textures").width(), outer(&h, "sets").width()];
+    h.set_size(egui::vec2(
+        STRIP_WIDTH + TEXTURES_MIN + SETS_MIN + 10.0,
+        800.0,
+    ));
+    h.run_steps(3);
+    assert!(
+        outer(&h, "textures").width() < before[0] - 1.0,
+        "not narrowed"
+    );
+    h.set_size(egui::vec2(1280.0, 800.0));
+    h.run_steps(3);
+    let after = [outer(&h, "textures").width(), outer(&h, "sets").width()];
+    for (b, a) in before.iter().zip(after) {
+        assert!(
+            (a - b).abs() <= 1.0,
+            "widths {before:?} came back as {after:?}"
+        );
+    }
 }

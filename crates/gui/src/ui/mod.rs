@@ -140,6 +140,22 @@ fn column_panel(
             .frame(egui::Frame::new())
             .show(ui, |ui| columns::strip(ui, name));
     } else {
+        // egui stores the width it drew, clamped to the window; keep the width the user dragged to apart, so a
+        // window narrowed and widened again gets it back.
+        use egui::containers::panel::PanelState;
+        let (panel, chosen) = (egui::Id::new(id), egui::Id::new(id).with("chosen"));
+        let resize = ui.ctx().read_response(panel.with("__resize"));
+        let released = resize.as_ref().is_some_and(|r| r.drag_stopped());
+        if !released && !resize.is_some_and(|r| r.dragged()) {
+            let w = ui
+                .data_mut(|d| d.get_persisted::<f32>(chosen))
+                .unwrap_or(width);
+            let outer_rect = egui::Rect::from_min_size(
+                ui.available_rect_before_wrap().min,
+                egui::vec2(w, ui.available_height()),
+            );
+            ui.data_mut(|d| d.insert_persisted(panel, PanelState { outer_rect }));
+        }
         egui::Panel::left(id)
             .default_size(width)
             .size_range(range)
@@ -148,5 +164,9 @@ fn column_panel(
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 content(ui, model)
             });
+        // egui stores the released width during `show`.
+        if let Some(s) = PanelState::load(ui.ctx(), panel).filter(|_| released) {
+            ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
+        }
     }
 }

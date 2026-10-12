@@ -181,7 +181,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
     });
     let changed = model.items.iter().filter(|i| i.changed_on_disk).count();
     if changed > 0 {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.colored_label(AMBER, format!("{changed} changed on disk"));
             if ui.button("Reload").clicked() {
                 model.reload_changed();
