@@ -7,11 +7,13 @@
 //! uploads a frame when its id changes.
 use crate::model::meshes::ScanTarget;
 use crate::worker::{spawn_guarded, WorkerMsg};
+use nif::material::MaterialState;
+use render3d::builtin::Builtin;
 use render3d::locate::{self, Change, Fingerprint};
 use render3d::scene::{Camera, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
-use render3d::{FrameTiming, LoadReport, Renderer};
+use render3d::{EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId, ShapeInfo};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -51,11 +53,58 @@ pub enum V3State {
     Error(String),
 }
 
-/// Where a file's bytes are: a loose file, or an entry of a BSA.
-#[derive(Debug, Clone, PartialEq)]
+/// Where a file's bytes are: a loose file, an entry of a BSA, or bytes made in memory (a set-preview encode).
+#[derive(Clone)]
 pub enum FileSource {
     Loose(PathBuf),
-    Bsa { archive: PathBuf, norm: String },
+    Bsa {
+        archive: PathBuf,
+        norm: String,
+    },
+    /// Equal by `id` only: every new encode gets a new id, and comparing DDS blobs on each `set_content` would be
+    /// costly (02 §2.2).
+    Memory {
+        id: u64,
+        bytes: Arc<Vec<u8>>,
+    },
+}
+
+impl PartialEq for FileSource {
+    fn eq(&self, o: &FileSource) -> bool {
+        match (self, o) {
+            (FileSource::Loose(a), FileSource::Loose(b)) => a == b,
+            (
+                FileSource::Bsa {
+                    archive: a,
+                    norm: n,
+                },
+                FileSource::Bsa {
+                    archive: b,
+                    norm: m,
+                },
+            ) => a == b && n == m,
+            (FileSource::Memory { id: a, .. }, FileSource::Memory { id: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for FileSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileSource::Loose(p) => f.debug_tuple("Loose").field(p).finish(),
+            FileSource::Bsa { archive, norm } => f
+                .debug_struct("Bsa")
+                .field("archive", archive)
+                .field("norm", norm)
+                .finish(),
+            FileSource::Memory { id, bytes } => f
+                .debug_struct("Memory")
+                .field("id", id)
+                .field("len", &bytes.len())
+                .finish(),
+        }
+    }
 }
 
 impl FileSource {
@@ -81,6 +130,96 @@ pub struct MeshSpec {
     pub textures: HashMap<String, FileSource>,
     /// BSVER 83: the panel shows the LE text and nothing is loaded or rendered (00 §6.5).
     pub le_mesh: bool,
+}
+
+/// What the panel draws: a NIF read through a [`MeshSpec`] (the Meshes view), a parsed NIF whose shape materials
+/// the caller set (the set preview's simulated PGPatcher patch, P1-A), or a built-in shape.
+#[derive(Debug, Clone)]
+pub enum Content {
+    Mesh(Arc<MeshSpec>),
+    Parsed {
+        /// Unique per (mesh, materials, textures): a new key is a new load.
+        key: u64,
+        nif: Arc<ParsedNif>,
+        textures: Arc<HashMap<String, FileSource>>,
+    },
+    Builtin {
+        key: u64,
+        shape: Builtin,
+        material: MaterialState,
+        textures: Arc<HashMap<String, FileSource>>,
+    },
+}
+
+impl PartialEq for Content {
+    fn eq(&self, o: &Content) -> bool {
+        match (self, o) {
+            (Content::Mesh(a), Content::Mesh(b)) => a == b,
+            (
+                Content::Parsed {
+                    key: a,
+                    nif: n,
+                    textures: t,
+                },
+                Content::Parsed {
+                    key: b,
+                    nif: m,
+                    textures: u,
+                },
+            ) => a == b && Arc::ptr_eq(n, m) && t == u,
+            (
+                Content::Builtin {
+                    key: a,
+                    shape: s,
+                    material: x,
+                    textures: t,
+                },
+                Content::Builtin {
+                    key: b,
+                    shape: r,
+                    material: y,
+                    textures: u,
+                },
+            ) => a == b && s == r && x == y && t == u,
+            _ => false,
+        }
+    }
+}
+
+impl Content {
+    /// BSVER 83: the panel shows the LE text and nothing is loaded (00 §6.5).
+    pub fn le_mesh(&self) -> bool {
+        match self {
+            Content::Mesh(m) => m.le_mesh,
+            Content::Parsed { nif, .. } => nif.le_mesh,
+            Content::Builtin { .. } => false,
+        }
+    }
+
+    fn load_cmd(&self, id: u64) -> V3Cmd {
+        match self.clone() {
+            Content::Mesh(spec) => V3Cmd::Load { id, spec },
+            Content::Parsed { nif, textures, .. } => V3Cmd::LoadParsed { id, nif, textures },
+            Content::Builtin {
+                shape,
+                material,
+                textures,
+                ..
+            } => V3Cmd::LoadBuiltin {
+                id,
+                shape,
+                material,
+                textures,
+            },
+        }
+    }
+
+    fn textures(&self) -> &HashMap<String, FileSource> {
+        match self {
+            Content::Mesh(s) => &s.textures,
+            Content::Parsed { textures, .. } | Content::Builtin { textures, .. } => textures,
+        }
+    }
 }
 
 /// A rendered frame: RGBA8, sRGB-encoded for display when Linear Lighting is on.
@@ -147,6 +286,24 @@ pub enum V3Cmd {
         id: u64,
         spec: Arc<MeshSpec>,
     },
+    /// A parsed NIF drawn with the materials in its shapes (the set preview).
+    LoadParsed {
+        id: u64,
+        nif: Arc<ParsedNif>,
+        textures: Arc<HashMap<String, FileSource>>,
+    },
+    LoadBuiltin {
+        id: u64,
+        shape: Builtin,
+        material: MaterialState,
+        textures: Arc<HashMap<String, FileSource>>,
+    },
+    /// One shape's new material on the loaded content (a JSON-only edit); applied after the load it follows and
+    /// dropped by a later load in the same batch.
+    SetMaterial {
+        id: ShapeId,
+        material: MaterialState,
+    },
     Render {
         id: u64,
         camera: Camera,
@@ -177,6 +334,15 @@ pub enum V3Reply {
     RenderError {
         id: u64,
         message: String,
+    },
+    /// The shapes of the loaded `Parsed`/`Builtin` content: after each load and after each batch of edits.
+    Shapes(Vec<ShapeInfo>),
+    /// One `SetMaterial` applied: its kind (`Cbuffer`/`Textures` compile nothing) and render-thread time, or why
+    /// it failed (the old draw stays).
+    MaterialSet {
+        id: ShapeId,
+        result: Result<EditKind, String>,
+        ms: f64,
     },
     /// A locate answer; `generation` tells a stale one (started before a later locate or "Choose folder…").
     Located {
@@ -214,13 +380,19 @@ pub struct Viewport3d {
     pub render_error: Option<String>,
     pub cache_dir: Option<PathBuf>,
     pub bounds: Option<([f32; 3], f32)>,
-    mesh: Option<Arc<MeshSpec>>,
+    /// Shapes of the loaded `Parsed`/`Builtin` content (empty for a `Mesh`).
+    pub shapes: Vec<ShapeInfo>,
+    /// The last material edit: its kind and render-thread time in ms.
+    pub last_edit: Option<(EditKind, f64)>,
+    content: Option<Content>,
     need_load: bool,
     loaded: Option<u64>,
     pending_load: Option<u64>,
     last_sent: Option<(Camera, u32, u32, u64)>,
     render_sent: u64,
     render_done: u64,
+    edits_sent: u64,
+    edits_done: u64,
     next_id: u64,
     locating: bool,
     locate_gen: u64,
@@ -253,7 +425,11 @@ impl Viewport3d {
             render_error: None,
             cache_dir: default_cache_dir(),
             bounds: None,
-            mesh: None,
+            content: None,
+            shapes: vec![],
+            last_edit: None,
+            edits_sent: 0,
+            edits_done: 0,
             need_load: false,
             loaded: None,
             pending_load: None,
@@ -302,9 +478,12 @@ impl Viewport3d {
         self.locating
     }
 
-    /// A load, a render or a locate is in flight.
+    /// A load, a render, a material edit or a locate is in flight.
     pub fn busy(&self) -> bool {
-        self.locating || self.pending_load.is_some() || self.render_done < self.render_sent
+        self.locating
+            || self.pending_load.is_some()
+            || self.render_done < self.render_sent
+            || self.edits_done < self.edits_sent
     }
 
     /// The fingerprint to save in `gui.toml`, when it changed since the last call.
@@ -450,25 +629,73 @@ impl Viewport3d {
 
     /// The mesh the Meshes view shows (`None`: nothing selected). Loaded on the next `request_frame`.
     pub fn set_mesh(&mut self, spec: Option<MeshSpec>) {
-        if self.mesh.as_deref() == spec.as_ref() {
+        let same = match (&self.content, &spec) {
+            (Some(Content::Mesh(a)), Some(b)) => **a == *b,
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.set_content(spec.map(|s| Content::Mesh(Arc::new(s))), false);
+        }
+    }
+
+    /// What to draw (`None`: nothing), loaded on the next `request_frame`. `keep_view`: the same model with new
+    /// data (re-encoded textures, P1-A): the camera, the bounds and the last frame stay until the reload lands.
+    pub fn set_content(&mut self, c: Option<Content>, keep_view: bool) {
+        if self.content == c {
             return;
         }
-        self.mesh = spec.map(Arc::new);
-        let le = self.mesh.as_ref().is_some_and(|m| m.le_mesh);
-        self.need_load = self.mesh.is_some() && !le;
+        self.content = c;
+        let le = self.content.as_ref().is_some_and(Content::le_mesh);
+        self.need_load = self.content.is_some() && !le;
         self.loaded = None;
         self.pending_load = None;
-        // Renders in flight are for the old mesh; the thread drops one queued behind a new Load without a reply.
+        // Renders and edits in flight are for the old content; the thread drops those queued behind a new load
+        // without a reply.
         self.render_done = self.render_sent;
+        self.edits_done = self.edits_sent;
+        self.shapes.clear();
+        self.render_error = None;
+        self.last_sent = None;
+        if keep_view && !le {
+            return;
+        }
         self.report = le.then(|| LoadReport {
             le_mesh: true,
             ..Default::default()
         });
         self.bounds = None;
         self.frame = None;
-        self.render_error = None;
-        self.last_sent = None;
         self.orbit.reset();
+    }
+
+    /// A JSON-only edit (spec §2.3): one shape's material on the current `Parsed`/`Builtin` content, applied by the
+    /// thread after the load it follows. False when no load of this content has been sent yet (the caller then puts
+    /// the material into a new content instead).
+    pub fn set_material(&mut self, id: ShapeId, material: MaterialState) -> bool {
+        if !matches!(
+            self.content,
+            Some(Content::Parsed { .. } | Content::Builtin { .. })
+        ) {
+            return false;
+        }
+        if self.need_load || (self.loaded.is_none() && self.pending_load.is_none()) {
+            return false;
+        }
+        let Some(t) = &self.thread else {
+            return false;
+        };
+        if t.send(V3Cmd::SetMaterial { id, material }).is_err() {
+            return false;
+        }
+        self.edits_sent += 1;
+        // The next request_frame draws the edit.
+        self.last_sent = None;
+        true
+    }
+
+    pub fn content(&self) -> Option<&Content> {
+        self.content.as_ref()
     }
 
     fn ensure_thread(&mut self) -> bool {
@@ -487,15 +714,15 @@ impl Viewport3d {
         true
     }
 
-    /// The panel wants a `w × h` frame of the current mesh and orbit: loads and renders only what changed.
+    /// The panel wants a `w × h` frame of the current content and orbit: loads and renders only what changed.
     pub fn request_frame(&mut self, w: u32, h: u32) {
         if self.state == V3State::NotFound || matches!(self.state, V3State::Error(_)) {
             return;
         }
-        if self.mesh.as_ref().is_some_and(|m| m.le_mesh) {
+        if self.content.as_ref().is_some_and(Content::le_mesh) {
             return;
         }
-        if self.mesh.is_none() || w == 0 || h == 0 || !self.confirmed || !self.ensure_thread() {
+        if self.content.is_none() || w == 0 || h == 0 || !self.confirmed || !self.ensure_thread() {
             return;
         }
         let Some(thread) = self.thread.clone() else {
@@ -504,9 +731,13 @@ impl Viewport3d {
         if self.need_load {
             self.need_load = false;
             let id = self.id();
-            let spec = self.mesh.clone().expect("mesh checked above");
-            if thread.send(V3Cmd::Load { id, spec }).is_ok() {
-                // A queued Render is dropped by the thread when this Load reaches it, with no reply.
+            let cmd = self
+                .content
+                .as_ref()
+                .expect("content checked above")
+                .load_cmd(id);
+            if thread.send(cmd).is_ok() {
+                // A queued Render is dropped by the thread when this load reaches it, with no reply.
                 self.render_done = self.render_sent;
                 self.pending_load = Some(id);
                 self.state = V3State::Rendering;
@@ -610,6 +841,19 @@ impl Viewport3d {
                 self.render_done = self.render_done.max(id);
                 self.render_error = Some(message);
             }
+            V3Reply::Shapes(s) => {
+                // Only for the loaded content: a reply for content replaced since is dropped.
+                if self.pending_load.is_none() && self.loaded.is_some() {
+                    self.shapes = s;
+                }
+            }
+            V3Reply::MaterialSet { result, ms, .. } => {
+                self.edits_done = (self.edits_done + 1).min(self.edits_sent);
+                match result {
+                    Ok(kind) => self.last_edit = Some((kind, ms)),
+                    Err(e) => self.render_error = Some(e),
+                }
+            }
             V3Reply::Located { generation, result } if generation == self.locate_gen => {
                 self.on_located(result)
             }
@@ -690,6 +934,7 @@ fn read_source(
 ) -> Result<Vec<u8>, String> {
     match src {
         FileSource::Loose(p) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
+        FileSource::Memory { bytes, .. } => Ok(bytes.to_vec()),
         FileSource::Bsa { archive, norm } => {
             let mut map = bsas.borrow_mut();
             let idx = map.entry(archive.clone()).or_insert_with(|| {
@@ -717,6 +962,11 @@ fn read_source(
     }
 }
 
+/// The bytes of one file (a fresh BSA index per call): for workers that read a single NIF.
+pub fn read_file(src: &FileSource) -> Result<Vec<u8>, String> {
+    read_source(src, &RefCell::new(HashMap::new()))
+}
+
 struct BsaIndex {
     bsa: vfs::bsa::Bsa,
     names: HashMap<String, usize>,
@@ -737,34 +987,65 @@ fn apply_features(r: &mut Renderer, on: bool) {
     r.set_encode_srgb(ll);
 }
 
-fn load(r: &mut Renderer, spec: &MeshSpec) -> LoadReport {
-    let bsas = RefCell::new(HashMap::new());
-    let nif = match read_source(&spec.nif, &bsas) {
-        Ok(b) => b,
-        Err(e) => {
-            return LoadReport {
-                errors: vec![format!("NIF: {e}")],
-                ..Default::default()
-            }
-        }
-    };
-    let errors = RefCell::new(vec![]);
-    let textures = |norm: &str| -> Option<Vec<u8>> {
-        let src = spec.textures.get(norm)?;
-        match read_source(src, &bsas) {
+/// The texture resolver over `map` (canonical path → bytes); read errors are collected in `errors`.
+fn resolver<'a>(
+    map: &'a HashMap<String, FileSource>,
+    bsas: &'a RefCell<HashMap<PathBuf, Option<BsaIndex>>>,
+    errors: &'a RefCell<Vec<String>>,
+) -> impl Fn(&str) -> Option<Vec<u8>> + 'a {
+    move |norm: &str| {
+        let src = map.get(norm)?;
+        match read_source(src, bsas) {
             Ok(b) => Some(b),
             Err(e) => {
                 errors.borrow_mut().push(e);
                 None
             }
         }
+    }
+}
+
+/// Loads `c`, then applies the material edits made since its load again (a reload after a shaders, features or
+/// device change keeps them).
+fn load(r: &mut Renderer, c: &Content, edits: &BTreeMap<ShapeId, MaterialState>) -> LoadReport {
+    let bsas = RefCell::new(HashMap::new());
+    let errors = RefCell::new(vec![]);
+    let textures = resolver(c.textures(), &bsas, &errors);
+    let mut rep = match c {
+        Content::Mesh(spec) => match read_source(&spec.nif, &bsas) {
+            Ok(nif) => r.load(&nif, &textures),
+            Err(e) => {
+                return LoadReport {
+                    errors: vec![format!("NIF: {e}")],
+                    ..Default::default()
+                }
+            }
+        },
+        Content::Parsed { nif, .. } => r.load_parsed(nif, &textures),
+        Content::Builtin {
+            shape, material, ..
+        } => r.load_builtin(*shape, material.clone(), &textures),
     };
-    let mut rep = r.load(&nif, &textures);
+    for (id, m) in edits {
+        if let Err(e) = r.set_material(*id, m.clone(), &textures) {
+            rep.errors.push(e);
+        }
+    }
+    drop(textures);
     rep.errors.extend(errors.into_inner());
     rep
 }
 
-/// The render thread: owns the `Renderer`; batches queued commands and draws only the latest camera.
+/// One material edit on the loaded content.
+fn edit(r: &mut Renderer, c: &Content, id: ShapeId, m: MaterialState) -> Result<EditKind, String> {
+    let bsas = RefCell::new(HashMap::new());
+    let errors = RefCell::new(vec![]);
+    let textures = resolver(c.textures(), &bsas, &errors);
+    r.set_material(id, m, &textures)
+}
+
+/// The render thread: owns the `Renderer`; batches queued commands, applies material edits after the load they
+/// follow, and draws only the latest camera.
 fn render_loop(
     rx: Receiver<V3Cmd>,
     tx: &Sender<WorkerMsg>,
@@ -780,6 +1061,16 @@ fn render_loop(
         apply_features(&mut r, features);
         Ok(r)
     };
+    let loaded = |r: &Renderer, id: u64, c: &Content, report: LoadReport| {
+        send(V3Reply::Loaded {
+            id,
+            report,
+            bounds: r.bounds(),
+        });
+        if !matches!(c, Content::Mesh(_)) {
+            send(V3Reply::Shapes(r.shapes()));
+        }
+    };
     let mut features = features;
     let mut r = match make(shaders, features) {
         Ok(r) => r,
@@ -789,10 +1080,11 @@ fn render_loop(
         adapter: r.gpu().adapter.clone(),
         warp: r.gpu().warp,
     });
-    // After a device loss: a new renderer (maybe WARP, same shaders and features), `Ready`, the last mesh
-    // loaded again and its `Loaded`. Err when no device can be made at all.
+    // After a device loss: a new renderer (maybe WARP, same shaders and features), `Ready`, the last content
+    // loaded again with its edits, and its `Loaded`. Err when no device can be made at all.
     let rebuild = |r: &mut Renderer,
-                   last: &Option<(u64, Arc<MeshSpec>)>,
+                   last: &Option<(u64, Content)>,
+                   edits: &BTreeMap<ShapeId, MaterialState>,
                    features: bool|
      -> Result<(), String> {
         *r = make(r.shaders().clone(), features)?;
@@ -800,55 +1092,103 @@ fn render_loop(
             adapter: r.gpu().adapter.clone(),
             warp: r.gpu().warp,
         });
-        if let Some((id, spec)) = last {
-            let report = load(r, spec);
-            send(V3Reply::Loaded {
-                id: *id,
-                report,
-                bounds: r.bounds(),
-            });
+        if let Some((id, c)) = last {
+            let report = load(r, c, edits);
+            loaded(r, *id, c, report);
         }
         Ok(())
     };
-    let mut last: Option<(u64, Arc<MeshSpec>)> = None;
+    let mut last: Option<(u64, Content)> = None;
+    // Material edits applied to `last` since its load.
+    let mut edits: BTreeMap<ShapeId, MaterialState> = BTreeMap::new();
     while let Ok(first) = rx.recv() {
         let mut reload = false;
         let mut render = None;
+        let mut pending: Vec<(ShapeId, MaterialState)> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
-            match c {
+            let content = match c {
                 V3Cmd::SetShaders(f) => {
                     r.set_shaders(f);
                     reload = true;
+                    None
                 }
                 V3Cmd::SetFeatures(on) => {
                     features = on;
                     apply_features(&mut r, on);
                     reload = true;
+                    None
                 }
-                V3Cmd::Load { id, spec } => {
-                    last = Some((id, spec));
-                    render = None;
-                    reload = true;
+                V3Cmd::Load { id, spec } => Some((id, Content::Mesh(spec))),
+                V3Cmd::LoadParsed { id, nif, textures } => Some((
+                    id,
+                    Content::Parsed {
+                        key: id,
+                        nif,
+                        textures,
+                    },
+                )),
+                V3Cmd::LoadBuiltin {
+                    id,
+                    shape,
+                    material,
+                    textures,
+                } => Some((
+                    id,
+                    Content::Builtin {
+                        key: id,
+                        shape,
+                        material,
+                        textures,
+                    },
+                )),
+                V3Cmd::SetMaterial { id, material } => {
+                    pending.push((id, material));
+                    None
                 }
-                V3Cmd::Render { id, camera, w, h } => render = Some((id, camera, w, h)),
+                V3Cmd::Render { id, camera, w, h } => {
+                    render = Some((id, camera, w, h));
+                    None
+                }
+            };
+            if let Some(c) = content {
+                // A new load drops the queued render and the edits made for the old content (the model reset its
+                // counters when it replaced the content).
+                last = Some(c);
+                edits.clear();
+                pending.clear();
+                render = None;
+                reload = true;
             }
         }
         if reload {
-            if let Some((id, spec)) = &last {
-                let report = load(&mut r, spec);
+            if let Some((id, c)) = &last {
+                let report = load(&mut r, c, &edits);
                 if r.gpu().is_removed() {
-                    // Lost during the load (its errors carry the device-removed prefix): rebuild and load again
-                    // now; with no shapes no Render would follow to trigger the rebuild.
-                    if let Err(e) = rebuild(&mut r, &last, features) {
+                    // Lost during the load: rebuild and load again now; with no shapes no Render would follow to
+                    // trigger the rebuild.
+                    if let Err(e) = rebuild(&mut r, &last, &edits, features) {
                         return send(V3Reply::Failed(e));
                     }
                 } else {
-                    send(V3Reply::Loaded {
-                        id: *id,
-                        report,
-                        bounds: r.bounds(),
+                    loaded(&r, *id, c, report);
+                }
+            }
+        }
+        if !pending.is_empty() {
+            if let Some((_, c)) = &last {
+                for (id, m) in pending {
+                    let t0 = std::time::Instant::now();
+                    let result = edit(&mut r, c, id, m.clone());
+                    if result.is_ok() {
+                        edits.insert(id, m);
+                    }
+                    send(V3Reply::MaterialSet {
+                        id,
+                        result,
+                        ms: t0.elapsed().as_secs_f64() * 1000.0,
                     });
                 }
+                send(V3Reply::Shapes(r.shapes()));
             }
         }
         let Some((id, camera, w, h)) = render else {
@@ -861,8 +1201,8 @@ fn render_loop(
         let mut result = r.render(&scene, w, h);
         if let Err(e) = &result {
             if e.starts_with(render3d::device::DEVICE_REMOVED) {
-                // Device lost (TDR, driver update): a new device (maybe WARP), the mesh again, one retry.
-                if let Err(e) = rebuild(&mut r, &last, features) {
+                // Device lost (TDR, driver update): a new device (maybe WARP), the content again, one retry.
+                if let Err(e) = rebuild(&mut r, &last, &edits, features) {
                     return send(V3Reply::Failed(e));
                 }
                 result = r.render(&scene, w, h);

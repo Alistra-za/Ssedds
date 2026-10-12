@@ -642,3 +642,193 @@ fn a_reload_with_compile_errors_keeps_the_last_frame() {
     );
     assert!(v.frame.is_none());
 }
+
+// ---- P1-A Task 12: Memory sources, parsed and built-in content, material edits ----
+
+use nif::material::MaterialState;
+use render3d::builtin::Builtin;
+use render3d::{EditKind, ShapeId, ShapeInfo, ShapeStatus};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+fn mem(id: u64, b: &[u8]) -> v3::FileSource {
+    v3::FileSource::Memory {
+        id,
+        bytes: Arc::new(b.to_vec()),
+    }
+}
+
+fn confirmed() -> (
+    tempfile::TempDir,
+    Viewport3d,
+    std::sync::mpsc::Receiver<v3::V3Cmd>,
+) {
+    let d = tempfile::tempdir().unwrap();
+    let saved = fp(d.path(), "CS", "a");
+    let mut v = Viewport3d::new(Some(saved.clone()));
+    v.on_located(Ok(Some(saved)));
+    let cmds = v.attach_test_thread();
+    (d, v, cmds)
+}
+
+fn parsed(key: u64, nif: &Arc<render3d::ParsedNif>, tex: &[(&str, v3::FileSource)]) -> v3::Content {
+    v3::Content::Parsed {
+        key,
+        nif: nif.clone(),
+        textures: Arc::new(
+            tex.iter()
+                .map(|(k, s)| (k.to_string(), s.clone()))
+                .collect(),
+        ),
+    }
+}
+
+#[test]
+fn memory_sources_compare_by_id_print_their_length_and_serve_their_bytes() {
+    assert_eq!(mem(1, b"DDS a"), mem(1, b"DDS b"));
+    assert_ne!(mem(1, b"DDS a"), mem(2, b"DDS a"));
+    assert_ne!(mem(1, b"x"), v3::FileSource::Loose(PathBuf::from("x")));
+    let dbg = format!("{:?}", mem(7, &[0u8; 4096]));
+    assert!(dbg.contains("4096") && dbg.len() < 64, "{dbg}");
+    assert_eq!(v3::read_file(&mem(3, b"DDS bytes")).unwrap(), b"DDS bytes");
+}
+
+#[test]
+fn parsed_content_loads_once_and_material_edits_follow_the_load() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(
+        Some(parsed(1, &nif, &[("textures/pbr/a.dds", mem(1, b"DDS "))])),
+        false,
+    );
+    assert!(
+        !v.set_material(ShapeId(3), MaterialState::builtin_default()),
+        "nothing sent yet: the caller puts the material into the content"
+    );
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, textures, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed first")
+    };
+    assert!(textures.contains_key("textures/pbr/a.dds"));
+    // Queued behind the load: the thread applies it after the load.
+    let mut m = MaterialState::builtin_default();
+    m.params.glossiness = 12.0;
+    assert!(v.set_material(ShapeId(3), m.clone()));
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetMaterial { id: ShapeId(3), material }) if material == m
+    ));
+    assert!(v.busy());
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+    );
+    v.handle(v3::V3Reply::Shapes(vec![ShapeInfo {
+        id: ShapeId(3),
+        name: "Bottle".into(),
+        material: m.clone(),
+        status: ShapeStatus::Drawing,
+    }]));
+    assert_eq!(v.shapes.len(), 1);
+    v.handle(v3::V3Reply::MaterialSet {
+        id: ShapeId(3),
+        result: Ok(EditKind::Cbuffer),
+        ms: 0.2,
+    });
+    assert_eq!(v.last_edit, Some((EditKind::Cbuffer, 0.2)));
+    assert!(!v.busy());
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    // The same content (same key, same Memory ids) is no reload.
+    v.set_content(
+        Some(parsed(
+            1,
+            &nif,
+            &[("textures/pbr/a.dds", mem(1, b"other bytes, same id"))],
+        )),
+        false,
+    );
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err());
+    assert!(matches!(
+        v.content(),
+        Some(v3::Content::Parsed { key: 1, .. })
+    ));
+}
+
+#[test]
+fn a_keep_view_reload_keeps_frame_and_camera_and_a_new_model_resets_them() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("load")
+    };
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+    );
+    v.frame = Some(Arc::new(v3::Frame {
+        width: 1,
+        height: 1,
+        rgba: vec![9; 4],
+        id: 50,
+    }));
+    v.orbit.drag(40.0, 0.0);
+    let yaw = v.orbit.yaw;
+    // Re-encoded textures: the same model, a new key and new bytes.
+    v.set_content(
+        Some(parsed(2, &nif, &[("textures/a.dds", mem(9, b"DDS "))])),
+        true,
+    );
+    assert!(
+        v.frame.is_some(),
+        "the last frame stays until the reload lands"
+    );
+    assert_eq!(v.orbit.yaw, yaw);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::LoadParsed { .. })));
+    // A built-in shape is another model.
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 3,
+            shape: Builtin::Sphere,
+            material: MaterialState::builtin_default(),
+            textures: Arc::new(HashMap::new()),
+        }),
+        false,
+    );
+    assert!(v.frame.is_none());
+    assert_ne!(v.orbit.yaw, yaw);
+    v.request_frame(64, 64);
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::LoadBuiltin {
+            shape: Builtin::Sphere,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn an_le_parsed_nif_is_never_loaded() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif {
+        le_mesh: true,
+        ..Default::default()
+    });
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err());
+    assert!(v.report.as_ref().is_some_and(|r| r.le_mesh));
+    assert!(!v.busy());
+}
