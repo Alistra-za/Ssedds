@@ -518,9 +518,6 @@ pub struct Viewport3d {
     pub adapter: Option<(String, bool)>,
     /// Which panel owns this viewport, for the `ui_gap` line.
     pub panel: &'static str,
-    /// The owner of the viewport has other work in flight that keeps the app repainting (set preview: encodes,
-    /// a wanted scene push); counted by the gap watch.
-    pub extra_busy: bool,
     pub render_error: Option<String>,
     pub cache_dir: Option<PathBuf>,
     pub bounds: Option<([f32; 3], f32)>,
@@ -583,7 +580,6 @@ impl Viewport3d {
             upload_ms: None,
             adapter: None,
             panel: "meshes",
-            extra_busy: false,
             render_error: None,
             cache_dir: default_cache_dir(),
             bounds: None,
@@ -637,6 +633,12 @@ impl Viewport3d {
         let (t, r) = channel();
         self.thread = Some(t);
         r
+    }
+
+    /// Test seam: the channel the render thread replies on (`poll` drains it).
+    #[doc(hidden)]
+    pub fn reply_sender_for_test(&self) -> Sender<WorkerMsg> {
+        self.tx.clone()
     }
 
     #[doc(hidden)]
@@ -1151,9 +1153,6 @@ impl Viewport3d {
 
     /// [`Viewport3d::poll`] with the clock given (the gap watch reads it).
     pub fn poll_at(&mut self, now: Instant) -> bool {
-        if let Some(gap) = self.gap.tick(now, self.busy() || self.extra_busy) {
-            perf_log::emit("ui_gap", json!({"gap_ms": gap, "panel": self.panel}));
-        }
         let mut changed = false;
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
@@ -1182,7 +1181,16 @@ impl Viewport3d {
         if !self.busy() {
             self.busy_since = None;
         }
+        // After the drain: a frame that takes the last reply asks for no next frame, so the next input is not a gap.
+        if let Some(gap) = self.gap.tick(now, self.busy()) {
+            perf_log::emit("ui_gap", json!({"gap_ms": gap, "panel": self.panel}));
+        }
         changed
+    }
+
+    /// Re-arms the gap watch with the owner's end-of-frame busy (the set preview's encodes and scene push).
+    pub fn arm_gap(&mut self, busy: bool) {
+        self.gap.arm(busy);
     }
 
     /// Applies one reply (what `poll` does with each message; public for tests).

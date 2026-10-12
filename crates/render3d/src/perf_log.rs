@@ -310,7 +310,8 @@ pub fn ms_since(t: Instant) -> f64 {
     r3(t.elapsed().as_secs_f64() * 1000.0)
 }
 
-/// The UI-thread freeze detector: call once per egui frame with `busy` = "3D work is in flight". Returns the gap
+/// The UI-thread freeze detector: call once per egui frame, after its replies are drained, with `busy` = "work is
+/// still in flight" (the condition that asks egui for the next frame). Returns the gap
 /// in ms when this frame came 100 ms or more (and under a minute) after the previous one AND the previous frame
 /// had work in flight (so egui was being asked to repaint). Idle gaps are normal and never reported.
 #[derive(Debug, Default)]
@@ -329,6 +330,11 @@ impl GapWatch {
         self.last = Some(now);
         self.expect = busy;
         gap
+    }
+
+    /// Replaces this frame's `busy` with the owner's, taken after the owner's own work was polled.
+    pub fn arm(&mut self, busy: bool) {
+        self.expect = busy;
     }
 }
 

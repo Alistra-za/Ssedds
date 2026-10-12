@@ -6,6 +6,7 @@ use render3d::locate::{Change, Fingerprint};
 use render3d::perf_log;
 use sdc_gui::model::meshes::LE_WARNING;
 use sdc_gui::model::viewport3d::{self as v3, V3State, Viewport3d};
+use sdc_gui::worker::WorkerMsg;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -1692,6 +1693,36 @@ fn ui_gap_is_logged_only_when_work_was_in_flight() {
     assert_eq!(gaps.len(), 1, "{ev:?}");
     assert_eq!(gaps[0]["gap_ms"], 150.0);
     assert_eq!(gaps[0]["panel"], "meshes");
+}
+
+#[test]
+fn the_frame_that_drains_the_last_reply_does_not_arm_the_gap_watch() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed")
+    };
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    let ((), ev) = perf_log::capture(|| {
+        v.poll_at(at(0));
+        v.reply_sender_for_test()
+            .send(WorkerMsg::Viewport3d(v3::V3Reply::Loaded {
+                id,
+                report: render3d::LoadReport {
+                    shapes: 1,
+                    ..Default::default()
+                },
+                bounds: Some(([0.0; 3], 1.0)),
+            }))
+            .unwrap();
+        v.poll_at(at(16)); // takes the reply: nothing left in flight, egui stops asking for frames
+        assert!(!v.busy());
+        v.poll_at(at(2_000)); // the next input, two seconds later: idle, not a freeze
+    });
+    assert!(named(&ev, "ui_gap").is_empty(), "{ev:?}");
 }
 
 #[test]

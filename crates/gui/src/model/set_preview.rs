@@ -1679,8 +1679,13 @@ impl SetPreview {
 
     /// `poll` at a given time (tests drive the debounce and the throttle). Call once per frame.
     pub fn poll_at(&mut self, m: &AppModel, now: Instant) {
+        self.poll_frame(m, now);
         // `busy` gates each part on the panel being visible, so an idle hidden panel never flags a gap.
-        self.v3.extra_busy = self.busy();
+        let busy = self.busy();
+        self.v3.arm_gap(busy);
+    }
+
+    fn poll_frame(&mut self, m: &AppModel, now: Instant) {
         self.v3.poll_at(now);
         // A finished encode on a scene that is already loaded is swapped in (`sync_textures`); the scene is pushed
         // for a first load and when an encode failed (the game's copy of the texture must come back).
