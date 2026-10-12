@@ -2159,12 +2159,9 @@ fn read_json_settings(json: &str) -> CsSettings {
     })
 }
 
-/// Task 8 fix round 2: a chosen CS folder (no owner mod) with an MO2 scan target reads the settings through the
-/// target's origins (overwrite), not from the folder above `Shaders`.
-#[test]
-fn a_chosen_cs_folder_reads_the_settings_through_the_mo2_target() {
-    let d = tempfile::tempdir().unwrap();
-    let r = d.path().join("MO2");
+/// A tempdir MO2 instance (profile `Default`, one mod `A`) under `d`; `overwrite` = its SettingsUser.json, if any.
+fn mo2_target(d: &Path, overwrite: Option<&str>) -> ScanTarget {
+    let r = d.join("MO2");
     let game = r.join("Game");
     std::fs::create_dir_all(game.join("Data")).unwrap();
     std::fs::write(
@@ -2176,6 +2173,7 @@ fn a_chosen_cs_folder_reads_the_settings_through_the_mo2_target() {
     )
     .unwrap();
     std::fs::create_dir_all(r.join("mods/A")).unwrap();
+    std::fs::create_dir_all(r.join("overwrite")).unwrap();
     std::fs::create_dir_all(r.join("profiles/Default")).unwrap();
     std::fs::write(r.join("profiles/Default/modlist.txt"), "+A\n").unwrap();
     std::fs::write(
@@ -2183,27 +2181,66 @@ fn a_chosen_cs_folder_reads_the_settings_through_the_mo2_target() {
         "[General]\nLocalSettings=true\n",
     )
     .unwrap();
-    let user = r.join("overwrite").join(SETTINGS_REL);
-    std::fs::create_dir_all(user.parent().unwrap()).unwrap();
-    std::fs::write(&user, CHANGED).unwrap();
-    // The chosen folder: a CS copy outside the instance, no settings beside it.
-    let shaders = d.path().join("Elsewhere/CS/Shaders");
-    std::fs::create_dir_all(&shaders).unwrap();
-    std::fs::write(shaders.join("Lighting.hlsl"), "// l").unwrap();
-    let chosen = Fingerprint {
-        root: shaders,
+    if let Some(json) = overwrite {
+        let user = r.join("overwrite").join(SETTINGS_REL);
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, json).unwrap();
+    }
+    ScanTarget::Mo2 {
+        root: r,
+        profile: "Default".into(),
+    }
+}
+
+/// A chosen CS folder (no owner mod) outside the instance; `local` = a SettingsUser.json beside its `Shaders`.
+fn chosen_cs(d: &Path, local: Option<&str>) -> Fingerprint {
+    let cs = d.join("Elsewhere/CS");
+    std::fs::create_dir_all(cs.join("Shaders")).unwrap();
+    std::fs::write(cs.join("Shaders/Lighting.hlsl"), "// l").unwrap();
+    if let Some(json) = local {
+        let user = cs.join(SETTINGS_REL);
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, json).unwrap();
+    }
+    Fingerprint {
+        root: cs.join("Shaders"),
         owner_mod: None,
         hash: "h".into(),
-    };
-    let target = ScanTarget::Mo2 {
-        root: r.clone(),
-        profile: "Default".into(),
-    };
+    }
+}
+
+/// Task 8 fix round 2: a chosen CS folder (no owner mod) with an MO2 scan target reads the settings through the
+/// target's origins (overwrite), not from the folder above `Shaders`.
+#[test]
+fn a_chosen_cs_folder_reads_the_settings_through_the_mo2_target() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), Some(CHANGED));
+    let chosen = chosen_cs(d.path(), None);
     let s = v3::read_cs_settings(Some(&target), &chosen);
     assert_eq!(s.hash, read_json_settings(CHANGED).hash, "{:?}", s.notes);
     // No MO2 target: the folder above `Shaders` as before (nothing there).
     let s = v3::read_cs_settings(None, &chosen);
     assert_eq!(s, CsSettings::default());
+}
+
+/// Fix round 3 (a): no origin has a settings file → the settings beside `Shaders` are read.
+#[test]
+fn settings_beside_shaders_are_the_fallback_when_no_origin_has_any() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), None);
+    let chosen = chosen_cs(d.path(), Some(GOOD));
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    assert_eq!(s.hash, read_json_settings(GOOD).hash, "{:?}", s.notes);
+}
+
+/// Fix round 3 (b): settings beside `Shaders` and in MO2's overwrite disagree → the overwrite wins.
+#[test]
+fn an_origin_settings_file_wins_over_the_one_beside_shaders() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), Some(CHANGED));
+    let chosen = chosen_cs(d.path(), Some(GOOD));
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    assert_eq!(s.hash, read_json_settings(CHANGED).hash, "{:?}", s.notes);
 }
 
 /// Task 8 fix round 2: no settings files but a Features folder with Skin.ini is a change from the default (the
@@ -2237,19 +2274,19 @@ fn features_found_only_in_the_features_folder_are_sent() {
     );
 }
 
-/// Owner data, read-only: the settings the fixed GUI reads for the owner's saved chosen folder (gui.toml:
-/// G:\Acherus\…\Shaders, no owner mod) and Meshes target (C:\_mount\moddingvol\Acherus, Nexus).
+/// Owner data, read-only: the settings the fixed GUI reads for the owner's CS taken as a chosen folder (no owner
+/// mod, as gui.toml saves it) with the Meshes MO2 target (profile Nexus). `SDC_ACHERUS` = the MO2 instance root.
 #[test]
 #[ignore]
 fn owner_chosen_folder_settings_come_through_the_mo2_target() {
-    let shaders = PathBuf::from(r"G:\Acherus\mods\CommunityShaders_AIO-2026-10-03T06-46Z\Shaders");
+    let root = PathBuf::from(std::env::var("SDC_ACHERUS").expect("SDC_ACHERUS"));
     let chosen = Fingerprint {
-        root: shaders,
+        root: root.join(r"mods\CommunityShaders_AIO-2026-10-03T06-46Z\Shaders"),
         owner_mod: None,
         hash: String::new(),
     };
     let target = ScanTarget::Mo2 {
-        root: PathBuf::from(r"C:\_mount\moddingvol\Acherus"),
+        root,
         profile: "Nexus".into(),
     };
     let s = v3::read_cs_settings(Some(&target), &chosen);
