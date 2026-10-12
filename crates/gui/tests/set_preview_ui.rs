@@ -459,3 +459,13 @@ fn the_mode_toggle_still_calls_set_mode_and_puts_ab_in_use() {
     h.run_steps(4);
     assert_eq!(h.state().1.mode(), PreviewMode::Encoded);
 }
+#[test]
+fn the_timings_section_shows_the_log_path_and_a_copy_button() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let _log = render3d::perf_log::start_in(log_dir.path()).expect("a log");
+    let (_d, mut h) = plain_rock();
+    h.get_by_label("Timings").click();
+    h.run();
+    h.get_by_label_contains("Timing log:");
+    h.get_by_label("Copy log path");
+}

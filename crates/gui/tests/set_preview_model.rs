@@ -1,6 +1,7 @@
 //! The set preview's model (P1-A Tasks 13–14): encodes, fingerprint and change classification, query keys,
 //! PGPatcher simulation per shape, and the orchestration without a GPU.
 mod support;
+use render3d::perf_log;
 use sdc_gui::model::items::{ItemKind, ItemStatus};
 use sdc_gui::model::pbr_export::json_entries;
 use sdc_gui::model::preview::DEBOUNCE;
@@ -1822,5 +1823,40 @@ fn members_sharing_a_path_with_one_other_copy_do_not_swap_and_drop_every_frame()
         c.is_empty(),
         "nothing changed: no swap or drop is sent again ({} cmds)",
         c.len()
+    );
+}
+// ---- P1-B Task 9: encode lines ----
+
+#[test]
+fn an_encode_completion_is_logged_with_its_slot_mode_time_and_size() {
+    let (_d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    let k = *enc.members.keys().next().unwrap();
+    let tok = enc.token_of(k);
+    let ((), ev) = perf_log::capture(|| {
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+        assert!(enc.poll());
+    });
+    let e: Vec<_> = ev.iter().filter(|e| e["event"] == "encode").collect();
+    assert_eq!(e.len(), 1, "{ev:?}");
+    assert_eq!(
+        (
+            e[0]["ms"].as_f64(),
+            e[0]["bytes"].as_u64(),
+            e[0]["ok"].as_bool()
+        ),
+        (Some(1.0), Some(8), Some(true))
+    );
+    assert_eq!(e[0]["mode"], "Encoded");
+    assert!(e[0]["slot"].is_string());
+}
+
+#[test]
+fn the_set_preview_tags_its_viewport_for_the_gap_watch() {
+    assert_eq!(
+        SetPreview::new(None, None, None, DEFAULT_CAP).v3.panel,
+        "set_preview"
     );
 }

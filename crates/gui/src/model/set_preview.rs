@@ -34,8 +34,9 @@ use nif::material::MaterialState;
 use nif::path::TexPath;
 use pgpsim::{Badge, SimInput, SimResult};
 use render3d::builtin::Builtin;
+use render3d::perf_log;
 use render3d::{ParsedNif, ShapeId, Variant};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -387,6 +388,19 @@ impl Member {
         self.alt = kept;
         self.alt_err = false;
     }
+}
+
+/// One `encode` line in the timing log for a finished encode.
+fn log_encode(kind: SlotKind, mode: PreviewMode, result: &Result<(Vec<u8>, f64), String>) {
+    let f = match result {
+        Ok((dds, ms)) => {
+            json!({"slot": kind.label(), "mode": format!("{mode:?}"), "ms": ms, "bytes": dds.len(), "ok": true})
+        }
+        Err(e) => {
+            json!({"slot": kind.label(), "mode": format!("{mode:?}"), "ok": false, "error": perf_log::first_line(e)})
+        }
+    };
+    perf_log::emit("encode", f);
 }
 
 /// The selected set's encodes, one per filled slot.
@@ -841,6 +855,7 @@ impl Encoder {
             };
             // The other mode's background encode.
             if token != 0 && mem.alt_token == token {
+                log_encode(kind, mode, &result);
                 mem.alt_cancel = None;
                 mem.alt_token = 0;
                 match result {
@@ -873,6 +888,7 @@ impl Encoder {
                 changed = true;
                 continue;
             }
+            log_encode(kind, mode, &result);
             mem.cancel = None;
             mem.token = 0;
             mem.state = match result {
@@ -1568,7 +1584,11 @@ impl SetPreview {
     ) -> SetPreview {
         let (tx, rx) = channel();
         SetPreview {
-            v3: Viewport3d::new(shaders),
+            v3: {
+                let mut v = Viewport3d::new(shaders);
+                v.panel = "set_preview";
+                v
+            },
             enc: Encoder::new(cap),
             enabled: true,
             store_path,
@@ -1659,7 +1679,9 @@ impl SetPreview {
 
     /// `poll` at a given time (tests drive the debounce and the throttle). Call once per frame.
     pub fn poll_at(&mut self, m: &AppModel, now: Instant) {
-        self.v3.poll();
+        // `busy` gates each part on the panel being visible, so an idle hidden panel never flags a gap.
+        self.v3.extra_busy = self.busy();
+        self.v3.poll_at(now);
         // A finished encode on a scene that is already loaded is swapped in (`sync_textures`); the scene is pushed
         // for a first load and when an encode failed (the game's copy of the texture must come back).
         let changed = self.enc.poll();

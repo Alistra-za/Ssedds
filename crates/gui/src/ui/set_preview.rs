@@ -248,5 +248,15 @@ fn timings(ui: &mut egui::Ui, s: &SetPreview) {
             if let Some((k, t)) = s.v3.last_edit {
                 ui.label(format!("Last material edit: {k:?}, {t:.2} ms"));
             }
+            if let Some(p) = render3d::perf_log::path() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Timing log: {}", p.display()));
+                    if ui.button("Copy log path").clicked() {
+                        ui.ctx().copy_text(p.display().to_string());
+                    }
+                });
+            } else {
+                ui.label("Timing log: off (SDC_PREVIEW_LOG=0)");
+            }
         });
 }

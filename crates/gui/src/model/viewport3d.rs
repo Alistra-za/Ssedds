@@ -11,11 +11,13 @@ use nif::material::MaterialState;
 use render3d::builtin::Builtin;
 use render3d::device::Gpu;
 use render3d::locate::{self, Change, Fingerprint};
+use render3d::perf_log::{self, FrameStats, GapWatch};
 use render3d::scene::{Background, Camera, PointLight, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
 use render3d::{
     CompileDone, CompilePool, EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId,
     ShapeInfo, ShapeStatus, Variant,
 };
+use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -192,6 +194,15 @@ impl PartialEq for Content {
 }
 
 impl Content {
+    /// What a `load` log line calls this content.
+    pub fn label(&self) -> String {
+        match self {
+            Content::Mesh(s) => format!("mesh:{}", s.key),
+            Content::Parsed { key, .. } => format!("parsed:{key}"),
+            Content::Builtin { shape, .. } => format!("builtin:{shape:?}"),
+        }
+    }
+
     /// BSVER 83: the panel shows the LE text and nothing is loaded (00 §6.5).
     pub fn le_mesh(&self) -> bool {
         match self {
@@ -462,6 +473,30 @@ pub fn default_cache_dir() -> Option<PathBuf> {
 /// How long the viewport must be busy without a break before the spinner shows.
 pub const SPINNER_DELAY: Duration = Duration::from_millis(300);
 
+/// A command whose effect shows in a later frame (timing log): sent at `at`, answered by the first `Frame` with
+/// an id above `after` (the last render id sent when the command was sent).
+struct Mark {
+    at: Instant,
+    after: u64,
+    what: MarkKind,
+}
+
+enum MarkKind {
+    Edit {
+        shape: u32,
+        kind: Option<EditKind>,
+    },
+    Swap {
+        path: String,
+        variant: Variant,
+        bytes: usize,
+    },
+    Flip {
+        variant: Variant,
+        paths: usize,
+    },
+}
+
 pub struct Viewport3d {
     pub state: V3State,
     pub orbit: Orbit,
@@ -481,6 +516,11 @@ pub struct Viewport3d {
     pub upload_ms: Option<f64>,
     /// (adapter, software renderer).
     pub adapter: Option<(String, bool)>,
+    /// Which panel owns this viewport, for the `ui_gap` line.
+    pub panel: &'static str,
+    /// The owner of the viewport has other work in flight that keeps the app repainting (set preview: encodes,
+    /// a wanted scene push); counted by the gap watch.
+    pub extra_busy: bool,
     pub render_error: Option<String>,
     pub cache_dir: Option<PathBuf>,
     pub bounds: Option<([f32; 3], f32)>,
@@ -520,6 +560,9 @@ pub struct Viewport3d {
     thread: Option<Sender<V3Cmd>>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
+    gap: GapWatch,
+    marks: Vec<Mark>,
+    load_at: Option<Instant>,
 }
 
 impl Viewport3d {
@@ -539,6 +582,8 @@ impl Viewport3d {
             timing: None,
             upload_ms: None,
             adapter: None,
+            panel: "meshes",
+            extra_busy: false,
             render_error: None,
             cache_dir: default_cache_dir(),
             bounds: None,
@@ -568,6 +613,9 @@ impl Viewport3d {
             thread: None,
             tx,
             rx,
+            gap: GapWatch::default(),
+            marks: vec![],
+            load_at: None,
         }
     }
 
@@ -589,6 +637,16 @@ impl Viewport3d {
         let (t, r) = channel();
         self.thread = Some(t);
         r
+    }
+
+    #[doc(hidden)]
+    pub fn render_sent_for_test(&self) -> u64 {
+        self.render_sent
+    }
+
+    #[doc(hidden)]
+    pub fn loaded_for_test(&self) -> Option<u64> {
+        self.loaded
     }
 
     /// Whether this session has confirmed the shaders (a locate answer, "Use new", "Keep old" or a chosen folder);
@@ -847,6 +905,10 @@ impl Viewport3d {
             return false;
         }
         self.edits_sent += 1;
+        self.mark(MarkKind::Edit {
+            shape: id.0,
+            kind: None,
+        });
         // The next request_frame draws the edit.
         self.last_sent = None;
         true
@@ -887,12 +949,89 @@ impl Viewport3d {
         let Some(t) = self.content_thread() else {
             return false;
         };
+        let what = match &cmd {
+            V3Cmd::SwapTexture {
+                path,
+                bytes,
+                variant,
+            } => MarkKind::Swap {
+                path: path.clone(),
+                variant: *variant,
+                bytes: bytes.len(),
+            },
+            V3Cmd::SetTextureVariant { variant, .. } => MarkKind::Flip {
+                variant: *variant,
+                paths: 1,
+            },
+            _ => return false,
+        };
         if t.send(cmd).is_err() {
             return false;
         }
+        self.mark(what);
         // The next request_frame draws it.
         self.last_sent = None;
         true
+    }
+
+    fn mark(&mut self, what: MarkKind) {
+        let after = self.render_sent;
+        // One click flips many paths: they share one line.
+        if let (
+            MarkKind::Flip { variant, paths },
+            Some(Mark {
+                after: a,
+                what:
+                    MarkKind::Flip {
+                        variant: v,
+                        paths: n,
+                    },
+                ..
+            }),
+        ) = (&what, self.marks.last_mut())
+        {
+            if *a == after && v == variant {
+                *n += *paths;
+                return;
+            }
+        }
+        if self.marks.len() >= 64 {
+            self.marks.remove(0);
+        }
+        self.marks.push(Mark {
+            at: Instant::now(),
+            after,
+            what,
+        });
+    }
+
+    /// A frame with id `id` reached the model: log every command it can show.
+    fn answer_marks(&mut self, id: u64) {
+        let (done, keep): (Vec<Mark>, Vec<Mark>) = std::mem::take(&mut self.marks)
+            .into_iter()
+            .partition(|m| m.after < id);
+        self.marks = keep;
+        for m in done {
+            let ms = perf_log::ms_since(m.at);
+            match m.what {
+                MarkKind::Edit { shape, kind } => perf_log::emit(
+                    "edit",
+                    json!({"shape": shape, "kind": kind.map_or("unknown".into(), |k| format!("{k:?}")), "ms_to_frame": ms}),
+                ),
+                MarkKind::Swap {
+                    path,
+                    variant,
+                    bytes,
+                } => perf_log::emit(
+                    "texture_swap",
+                    json!({"path": path, "variant": format!("{variant:?}"), "bytes": bytes, "ms_to_frame": ms}),
+                ),
+                MarkKind::Flip { variant, paths } => perf_log::emit(
+                    "ab_flip",
+                    json!({"paths": paths, "variant": format!("{variant:?}"), "ms_to_frame": ms}),
+                ),
+            }
+        }
     }
 
     /// The variant the next load's resolver bytes count as (the set preview's current mode). Announced to the
@@ -953,6 +1092,9 @@ impl Viewport3d {
                 self.load_variant_sent = self.load_variant;
             }
             if thread.send(cmd).is_ok() {
+                self.load_at = Some(Instant::now());
+                // The load drops the queued renders and edits: their marks would never be answered.
+                self.marks.clear();
                 // A queued Render is dropped by the thread when this load reaches it, with no reply.
                 self.render_done = self.render_sent;
                 self.pending_load = Some(id);
@@ -1004,6 +1146,14 @@ impl Viewport3d {
 
     /// Drain replies. True when anything changed.
     pub fn poll(&mut self) -> bool {
+        self.poll_at(Instant::now())
+    }
+
+    /// [`Viewport3d::poll`] with the clock given (the gap watch reads it).
+    pub fn poll_at(&mut self, now: Instant) -> bool {
+        if let Some(gap) = self.gap.tick(now, self.busy() || self.extra_busy) {
+            perf_log::emit("ui_gap", json!({"gap_ms": gap, "panel": self.panel}));
+        }
         let mut changed = false;
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
@@ -1038,7 +1188,13 @@ impl Viewport3d {
     /// Applies one reply (what `poll` does with each message; public for tests).
     pub fn handle(&mut self, r: V3Reply) {
         match r {
-            V3Reply::Ready { adapter, warp } => self.adapter = Some((adapter, warp)),
+            V3Reply::Ready { adapter, warp } => {
+                perf_log::emit(
+                    "gpu",
+                    json!({"adapter": adapter, "warp": warp, "cs_root": self.shaders.as_ref().map(|f| f.root.display().to_string())}),
+                );
+                self.adapter = Some((adapter, warp));
+            }
             V3Reply::Failed(e) => {
                 self.thread = None;
                 self.pending_load = None;
@@ -1074,11 +1230,19 @@ impl Viewport3d {
                 }
             }
             V3Reply::Frame { frame, timing } => {
+                let fid = frame.id;
                 self.render_done = self.render_done.max(frame.id);
                 if self.loaded.is_some() && self.pending_load.is_none() {
                     self.render_error = None;
                     self.frame = Some(frame);
                     self.timing = Some(timing);
+                    if let Some(t) = self.load_at.take() {
+                        perf_log::emit(
+                            "first_frame",
+                            json!({"ms_since_load": perf_log::ms_since(t)}),
+                        );
+                    }
+                    self.answer_marks(fid);
                 }
             }
             V3Reply::Refresh { frame, timing } => {
@@ -1116,9 +1280,9 @@ impl Viewport3d {
             }
             V3Reply::MaterialSet {
                 content,
+                id,
                 result,
                 ms,
-                ..
             } => {
                 // A reply for content replaced since: its count was reset with the content.
                 if self.loaded.or(self.pending_load) != Some(content) {
@@ -1126,7 +1290,20 @@ impl Viewport3d {
                 }
                 self.edits_done = (self.edits_done + 1).min(self.edits_sent);
                 match result {
-                    Ok(kind) => self.last_edit = Some((kind, ms)),
+                    Ok(kind) => {
+                        for m in &mut self.marks {
+                            if let MarkKind::Edit {
+                                shape,
+                                kind: k @ None,
+                            } = &mut m.what
+                            {
+                                if *shape == id.0 {
+                                    *k = Some(kind);
+                                }
+                            }
+                        }
+                        self.last_edit = Some((kind, ms));
+                    }
                     Err(e) => self.render_error = Some(e),
                 }
             }
@@ -1451,6 +1628,7 @@ fn render_loop(
                    edits: &BTreeMap<ShapeId, MaterialState>,
                    tex: &TexState|
      -> Result<(), String> {
+        let t0 = std::time::Instant::now();
         r.rebuild_device_on(Gpu::new(None)?)?;
         send(V3Reply::Ready {
             adapter: r.gpu().adapter.clone(),
@@ -1460,6 +1638,7 @@ fn render_loop(
             let report = load_all(r, c, edits, tex);
             loaded(r, *id, c, report);
         }
+        perf_log::emit("device_rebuild", json!({"ms": perf_log::ms_since(t0)}));
         Ok(())
     };
     let mut last: Option<(u64, Content)> = None;
@@ -1469,6 +1648,7 @@ fn render_loop(
     // The last camera, size and look drawn: what a compile-triggered refresh renders with.
     let mut view: Option<(Camera, u32, u32, Look)> = None;
     let mut refresh_id: u64 = 1 << 62;
+    let mut stats = FrameStats::default();
     while let Ok(first) = rx.recv() {
         let mut reload = false;
         let mut render = None;
@@ -1569,7 +1749,12 @@ fn render_loop(
         }
         if reload {
             if let Some((id, c)) = &last {
+                let t0 = std::time::Instant::now();
                 let report = load_all(&mut r, c, &edits, &tex);
+                perf_log::emit(
+                    "load",
+                    json!({"content": c.label(), "shapes": report.shapes, "pending": report.pending, "build_ms": perf_log::ms_since(t0)}),
+                );
                 if r.gpu().is_removed() {
                     // Lost during the load: rebuild and load again now; with no shapes no Render would follow to
                     // trigger the rebuild.
@@ -1669,6 +1854,13 @@ fn render_loop(
                     id,
                 });
                 let timing = r.last_timing();
+                if let Some(s) = stats.push(
+                    std::time::Instant::now(),
+                    timing.draw_ms,
+                    timing.draw_ms + timing.gpu_ms + timing.readback_ms,
+                ) {
+                    perf_log::emit("frame_stats", s);
+                }
                 if refresh {
                     send(V3Reply::Refresh { frame, timing });
                 } else {
