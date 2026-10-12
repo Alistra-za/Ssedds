@@ -612,3 +612,49 @@ fn a_dangling_preset_link_warns_naming_it() {
         Some(link.display().to_string().as_str())
     );
 }
+
+/// Spec §5: a config's schema_version is optional (1), a newer one is refused naming the file.
+#[test]
+fn config_schema_version_is_optional_and_a_newer_one_names_the_file() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("sdc.toml");
+    std::fs::write(&p, "schema_version = 1\npreset = \"cs-quality\"\n").unwrap();
+    assert_eq!(ConfigFile::load(&p).unwrap().schema_version, Some(1));
+    std::fs::write(&p, "schema_version = 2\n").unwrap();
+    match ConfigFile::load(&p) {
+        Err(e @ PresetError::NewerConfigSchema(_, 2)) => {
+            assert!(e.to_string().contains("sdc.toml"), "{e}")
+        }
+        other => panic!("{other:?}"),
+    }
+    // Absent: not serialised back.
+    let c = ConfigFile::parse("preset = \"cs-quality\"\n", "x").unwrap();
+    assert!(serde_json::to_value(&c)
+        .unwrap()
+        .get("schema_version")
+        .is_none());
+}
+
+/// Review Focus 1, config twin.
+#[test]
+fn a_config_with_a_bom_and_crlf_loads() {
+    let c = ConfigFile::parse(
+        "\u{feff}preset = \"cs-quality\"\r\n[defaults]\r\nformat = \"bc7\"\r\n",
+        "user config",
+    )
+    .unwrap();
+    assert_eq!(c.preset.as_deref(), Some("cs-quality"));
+}
+
+#[test]
+fn a_newer_preset_is_still_newer_schema() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    assert_eq!(
+        r.add_toml("schema_version = 3\nid = \"x\"\n"),
+        Err(PresetError::NewerSchema(3))
+    );
+    assert!(matches!(
+        r.add_toml("id = \"x\"\nversion = \"1\"\n"),
+        Err(PresetError::Parse(_))
+    ));
+}

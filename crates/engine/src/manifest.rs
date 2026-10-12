@@ -335,6 +335,12 @@ impl Manifest {
             let Ok(raw) = serde_json::from_slice::<serde_json::Value>(&line?) else {
                 continue;
             };
+            // Spec §5: every record passes the migration hook; a newer one is kept raw (`is_newer_schema`).
+            let raw = match crate::migrate::migrate_manifest_record(raw.clone()) {
+                Ok(v) => v,
+                Err(crate::migrate::MigrateError::Newer { .. }) => raw,
+                Err(_) => continue,
+            };
             if let Some(e) = ManifestEntry::from_value(raw) {
                 map.insert(e.output.clone(), e);
             }

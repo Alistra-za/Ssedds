@@ -588,3 +588,23 @@ fn the_shader_pick_round_trips_through_the_manifest_json() {
     let none = ManifestRecord { shader: None, ..r };
     assert!(serde_json::to_value(&none).unwrap().get("shader").is_none());
 }
+
+/// Spec §5: every manifest record passes the migration hook; a newer one is kept raw, a line without a schema is
+/// not a record.
+#[test]
+fn manifest_records_pass_the_migration_hook() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    std::fs::write(
+        m.path(),
+        "{\"schema\":1,\"output\":\"a.dds\"}\n{\"schema\":9,\"output\":\"b.dds\",\"x\":1}\n{\"output\":\"c.dds\"}\n",
+    )
+    .unwrap();
+    let e = m.load().unwrap();
+    assert_eq!(e["a.dds"].schema, 2);
+    assert!(!e["a.dds"].is_newer_schema());
+    assert!(e["b.dds"].is_newer_schema());
+    assert_eq!(e["b.dds"].raw["x"], 1);
+    assert!(!e.contains_key("c.dds"));
+}

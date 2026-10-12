@@ -44,6 +44,12 @@ pub enum PresetError {
     Cycle(String),
     #[error("preset schema_version {0} is newer than this sdc supports ({SCHEMA_VERSION})")]
     NewerSchema(u32),
+    /// Spec §5 (`ConfigError::NewerSchema`, Note T9): a config file of a newer schema; names the file.
+    #[error(
+        "{0}: config schema_version {1} is newer than this sdc supports ({cur})",
+        cur = crate::migrate::CONFIG_SCHEMA
+    )]
+    NewerConfigSchema(String, u32),
     #[error("invalid profile: {0}")]
     Invalid(String),
     /// A configuration the registry refuses (an invalid or conflicting suffix alias, spec §3.7, or a user preset
@@ -119,6 +125,9 @@ pub struct PresetFile {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
+    /// Schema of this file (spec §5); absent = 1. Not written back when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u32>,
     #[serde(default)]
     pub preset: Option<String>,
     #[serde(default)]
@@ -145,7 +154,25 @@ impl ConfigFile {
     pub fn load(path: &Path) -> Result<ConfigFile, PresetError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))?;
-        toml::from_str(&text).map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))
+        Self::parse(&text, &path.display().to_string())
+    }
+
+    /// A config file's text (`origin` names it in errors): BOM stripped, the migration hook (spec §5), then
+    /// deserialised.
+    pub fn parse(text: &str, origin: &str) -> Result<ConfigFile, PresetError> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let bad = |m: String| PresetError::Parse(format!("{origin}: {m}"));
+        let raw: toml::Table = toml::from_str(text).map_err(|e| bad(e.to_string()))?;
+        let migrated =
+            crate::migrate::migrate_config(toml::Value::Table(raw)).map_err(|e| match e {
+                crate::migrate::MigrateError::Newer { found, .. } => {
+                    PresetError::NewerConfigSchema(origin.to_string(), found)
+                }
+                e => bad(e.to_string()),
+            })?;
+        migrated
+            .try_into()
+            .map_err(|e: toml::de::Error| bad(e.to_string()))
     }
 
     /// The `[files]` table as `Scope::Path` overrides (key order, then leaf order) and per-file `allow` codes.
@@ -412,8 +439,19 @@ impl PresetRegistry {
     fn insert_toml(&mut self, text: &str, source: Source) -> Result<String, PresetError> {
         // Review Focus 1: a Windows editor's BOM (CRLF is valid TOML).
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let table: toml::Table =
+        let raw: toml::Table =
             toml::from_str(text).map_err(|e| PresetError::Parse(e.to_string()))?;
+        // Spec §5: the migration hook runs before deserialising.
+        let migrated =
+            crate::migrate::migrate_preset(toml::Value::Table(raw)).map_err(|e| match e {
+                crate::migrate::MigrateError::Newer { found, .. } => {
+                    PresetError::NewerSchema(found)
+                }
+                e => PresetError::Parse(e.to_string()),
+            })?;
+        let toml::Value::Table(table) = migrated else {
+            return Err(PresetError::Parse("a preset file is a TOML table".into()));
+        };
         let p: PresetFile = toml::Value::Table(table.clone())
             .try_into()
             .map_err(|e: toml::de::Error| PresetError::Parse(e.to_string()))?;
@@ -422,9 +460,6 @@ impl PresetRegistry {
                 "CFG-INVALID: preset id '{BASE_ID}' from {} is reserved for the built-in base profile, already loaded from {SOURCE_BUILTIN}",
                 source.label()
             )));
-        }
-        if p.schema_version > SCHEMA_VERSION {
-            return Err(PresetError::NewerSchema(p.schema_version));
         }
         if let Some(first) = self.sources.get(&p.id) {
             return Err(PresetError::Alias(format!(
