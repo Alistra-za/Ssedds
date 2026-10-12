@@ -106,6 +106,7 @@ pub struct ShapeInfo {
 struct ShapeState {
     name: String,
     mesh: Arc<nif::geom::Mesh>,
+    world: [[f32; 4]; 3],
     material: MaterialState,
     draw: Option<ShapeDraw>,
     status: ShapeStatus,
@@ -313,9 +314,9 @@ impl Renderer {
         self.reference_writer = on;
     }
 
-    /// Bounding sphere (centre, radius) of every shape drawn at load: `positions × transform` (skinned
-    /// shapes: positions as-is, since the skinned VS ignores World and P0 bones are identity). Parent NiNode
-    /// transforms are not applied in P1-A. Material edits do not move it.
+    /// Bounding sphere (centre, radius) of every shape drawn at load: `positions × world` (the parent NiNode
+    /// chain × the shape's own transform; skinned shapes: positions as-is, since the skinned VS ignores World and
+    /// P0 bones are identity). Material edits do not move it.
     pub fn bounds(&self) -> Option<([f32; 3], f32)> {
         self.bounds
     }
@@ -453,6 +454,7 @@ impl Renderer {
         &mut self,
         name: &str,
         mesh: &nif::geom::Mesh,
+        world: &[[f32; 4]; 3],
         m: &MaterialState,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
@@ -491,7 +493,7 @@ impl Renderer {
             ps_cbs,
             srvs,
             samplers: program.ps.reflection.samplers.iter().map(|s| s.1).collect(),
-            model: mesh.transform,
+            model: *world,
             blend: m.blend(),
             skinned: m.skinned,
             bound,
@@ -534,7 +536,7 @@ impl Renderer {
             let (draw, status) = if s.material.hidden {
                 (None, ShapeStatus::Hidden)
             } else {
-                match self.build_draw(&s.name, &s.mesh, &s.material, textures, &mut rep) {
+                match self.build_draw(&s.name, &s.mesh, &s.world, &s.material, textures, &mut rep) {
                     Ok(d) => (Some(d), ShapeStatus::Drawing),
                     Err(BuildError::Compile(e)) => {
                         rep.compile_errors.push(format!("{}: {e}", s.name));
@@ -551,6 +553,7 @@ impl Renderer {
                 ShapeState {
                     name: s.name.clone(),
                     mesh: s.mesh.clone(),
+                    world: s.world,
                     material: s.material.clone(),
                     draw,
                     status,
@@ -579,11 +582,13 @@ impl Renderer {
         let mut material = m;
         material.skinned = false;
         material.has_vertex_colors = false;
+        let mesh = builtin_mesh(b);
         let parsed = ParsedNif {
             shapes: vec![ParsedShape {
                 id: ShapeId(0),
                 name: format!("{b:?}"),
-                mesh: Arc::new(builtin_mesh(b)),
+                world: mesh.transform,
+                mesh: Arc::new(mesh),
                 material,
             }],
             ..ParsedNif::default()
@@ -650,11 +655,11 @@ impl Renderer {
         self.tex_cache.retain(|_, t| t.is_some());
         let mut scratch = LoadReport::default();
         let outcome = if rebuild {
-            let (name, mesh) = {
+            let (name, mesh, world) = {
                 let s = &self.shapes[&id];
-                (s.name.clone(), s.mesh.clone())
+                (s.name.clone(), s.mesh.clone(), s.world)
             };
-            match self.build_draw(&name, &mesh, &m, textures, &mut scratch) {
+            match self.build_draw(&name, &mesh, &world, &m, textures, &mut scratch) {
                 Ok(d) => {
                     if let Some(s) = self.shapes.get_mut(&id) {
                         s.draw = Some(d);
@@ -713,7 +718,7 @@ impl Renderer {
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
         let mut points: Vec<[f32; 3]> = vec![];
         for s in self.shapes.values().filter(|s| s.draw.is_some()) {
-            let t = &s.mesh.transform;
+            let t = &s.world;
             for p in &s.mesh.positions {
                 let q = if s.material.skinned {
                     *p
