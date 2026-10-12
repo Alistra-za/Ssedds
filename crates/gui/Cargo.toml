@@ -29,9 +29,16 @@ rfd = "=0.17.2"
 toml_edit = "0.25"
 sha2.workspace = true
 hex.workspace = true
+modscan = { path = "../modscan" }
+nif = { path = "../nif" }
+render3d = { path = "../render3d" }
+vfs = { path = "../vfs" }
+pgpsim = { path = "../pgpsim" }
+rusqlite.workspace = true
 
 [dev-dependencies]
 egui_kittest = "=0.36.2"
 tempfile.workspace = true
 image.workspace = true
 walkdir.workspace = true
+crc32fast.workspace = true

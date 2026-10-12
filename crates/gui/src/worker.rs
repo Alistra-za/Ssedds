@@ -43,6 +43,16 @@ pub enum WorkerMsg {
         what: &'static str,
         message: String,
     },
+    /// Meshes view (plan A Task 12): a scan phase advanced.
+    ScanProgress {
+        done: usize,
+        total: usize,
+        phase: &'static str,
+    },
+    /// Meshes view: the scan ended. The error keeps its kind (`PgpRunning`, `Cancelled`, a database error).
+    Scanned(Result<modscan::scan::Report, modscan::ScanError>),
+    /// Meshes view 3D panel (plan B Task B8): a reply of the render thread or the CS locate worker.
+    Viewport3d(crate::model::viewport3d::V3Reply),
 }
 
 /// Forwards every engine event into the channel and nothing else, so it never slows the encoders (plan M3 carry).
@@ -193,5 +203,38 @@ pub fn spawn_dds(tx: Sender<WorkerMsg>, path: PathBuf, max: u32, bc1: Bc1Model, 
     spawn_guarded(tx, "preview", move |tx| {
         let result = dds_preview(&path, max, bc1).map(Arc::new);
         let _ = tx.send(WorkerMsg::Encoded { token, result });
+    });
+}
+
+/// Meshes view (plan A Task 12): scan `source` into the store at `db` (opened on this thread; the UI keeps its own
+/// read connection). `procs` lists running process names for the PGPatcher gate; `skip_derived` scans without the
+/// PGPatcher output. Progress and the result go to `tx`; a panic becomes `Panicked { what: "scan" }`.
+pub fn start_scan(
+    source: modscan::scan::Source,
+    db: PathBuf,
+    skip_derived: bool,
+    procs: fn() -> Vec<String>,
+    tx: Sender<WorkerMsg>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) {
+    spawn_guarded(tx, "scan", move |tx| {
+        let progress = |p: modscan::scan::Progress| {
+            let _ = tx.send(WorkerMsg::ScanProgress {
+                done: p.done,
+                total: p.total,
+                phase: p.phase,
+            });
+        };
+        let result = modscan::store::Store::open(&db).and_then(|mut store| {
+            modscan::scan::run_with(
+                &source,
+                &mut store,
+                &cancel,
+                &progress,
+                &procs,
+                skip_derived,
+            )
+        });
+        let _ = tx.send(WorkerMsg::Scanned(result));
     });
 }

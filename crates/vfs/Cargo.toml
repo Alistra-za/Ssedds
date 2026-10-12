@@ -1,0 +1,18 @@
+[package]
+name = "vfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+walkdir.workspace = true
+lz4_flex.workspace = true
+encoding_rs.workspace = true
+nif = { path = "../nif" }
+
+[dev-dependencies]
+tempfile.workspace = true
+lz4_flex.workspace = true

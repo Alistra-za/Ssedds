@@ -51,6 +51,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             }
             recent_menu(ui, model);
             mode_combo(ui, model);
+            view_toggle(ui);
             if ui
                 .toggle_value(&mut model.settings.columns_collapsed, "Collapse columns")
                 .changed()
@@ -117,6 +118,26 @@ fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     if picked != model.target {
         model.set_target(picked);
     }
+}
+
+/// Top-level view toggle (plan A Task 12): "Textures | Meshes", kept in egui memory for the session.
+pub fn view_toggle(ui: &mut egui::Ui) {
+    let mut meshes = meshes_view_active(ui.ctx());
+    ui.separator();
+    if ui.selectable_label(!meshes, "Textures view").clicked() {
+        meshes = false;
+    }
+    if ui.selectable_label(meshes, "Meshes view").clicked() {
+        meshes = true;
+    }
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::new("sdc-meshes-view"), meshes));
+}
+
+/// True when the Meshes view is shown instead of the Textures view.
+pub fn meshes_view_active(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new("sdc-meshes-view")))
+        .unwrap_or(false)
 }
 
 fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {

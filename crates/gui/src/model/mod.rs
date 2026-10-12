@@ -5,12 +5,15 @@ pub mod fields;
 pub mod history;
 pub mod inspector;
 pub mod items;
+pub mod meshes;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
 pub mod preview;
+pub mod set_preview;
 pub mod sets;
 pub mod view;
+pub mod viewport3d;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;

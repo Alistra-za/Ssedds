@@ -4,13 +4,16 @@ pub mod columns;
 pub mod dialogs;
 pub mod drawer;
 pub mod header;
+pub mod meshes;
 pub mod pgp_fields;
 pub mod preview;
 pub mod set_editor;
+pub mod set_preview;
 pub mod sets_column;
 pub mod settings_panel;
 pub mod slot_commands;
 pub mod thumbs;
+pub mod viewport3d;
 
 use crate::model::{AppModel, Selection};
 use eframe::egui;
@@ -30,6 +33,8 @@ pub struct State {
     pub slot_cmds: slot_commands::SlotCmdState,
     /// What is on the GPU; set by the app, empty in tests.
     pub gpu: preview::GpuStatus,
+    /// The set preview (P1-A). `Default` is disabled and does no IO; `SdcApp::new` builds the enabled one.
+    pub set3d: crate::model::set_preview::SetPreview,
 }
 
 thread_local! {
@@ -68,6 +73,16 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
+    // The panel leaves the central columns their minimum width; too narrow a window for both hides the panel
+    // (narrowing a column brings it back).
+    let room = ui.available_width() - set_preview::CENTRE_MIN;
+    if state.set3d.enabled && set_preview::wanted(model) && room >= set_preview::PANEL_MIN {
+        egui::Panel::right("set-3d")
+            .default_size(380.0)
+            .min_size(set_preview::PANEL_MIN)
+            .max_size(room)
+            .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
+    }
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
     dialogs::draw(ui.ctx(), model);
 }

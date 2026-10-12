@@ -26,6 +26,8 @@ fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
 
 pub struct SdcApp {
     pub model: AppModel,
+    /// The Meshes view (plan A Task 12).
+    pub meshes: crate::model::meshes::MeshesModel,
     pub state: crate::ui::State,
     /// The GPU state, `None` when eframe found no usable adapter (the preview is then off).
     pub render_state: Option<egui_wgpu::RenderState>,
@@ -35,9 +37,20 @@ pub struct SdcApp {
 
 impl SdcApp {
     pub fn new(model: AppModel) -> SdcApp {
+        let mut meshes = crate::model::meshes::MeshesModel::new(
+            crate::model::meshes::default_store_path(),
+            model.settings.meshes.clone(),
+        );
+        meshes.v3 =
+            crate::model::viewport3d::Viewport3d::new(model.settings.render3d.shaders.clone());
+        let set3d = crate::model::set_preview::SetPreview::from_settings(&model.settings);
         SdcApp {
             model,
-            state: crate::ui::State::default(),
+            meshes,
+            state: crate::ui::State {
+                set3d,
+                ..crate::ui::State::default()
+            },
             render_state: None,
             uploaded: Uploaded::default(),
             was_focused: true,
@@ -133,6 +146,7 @@ impl SdcApp {
     /// The window regained focus: the place to look for source files that changed meanwhile.
     fn focus_regained(&mut self) {
         self.model.check_sources();
+        self.meshes.relocate();
     }
 }
 
@@ -147,7 +161,10 @@ impl eframe::App for SdcApp {
             let _ = self.model.save();
         }
         // Undo and redo leave a text field's own undo alone and wait while a dialog is open.
-        if self.model.dialog.is_none() && !ctx.egui_wants_keyboard_input() {
+        if self.model.dialog.is_none()
+            && !ctx.egui_wants_keyboard_input()
+            && !crate::ui::header::meshes_view_active(&ctx)
+        {
             let redo = ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
                     || i.consume_key(
@@ -187,10 +204,38 @@ impl eframe::App for SdcApp {
 
         // Upload before drawing: the paint callbacks run after this frame's UI and read what is on the GPU.
         self.sync_renderer();
-        crate::ui::draw_with(ui, &mut self.model, &mut self.state);
+        self.meshes.poll();
+        self.state.set3d.poll(&self.model);
+        if crate::ui::header::meshes_view_active(&ctx) {
+            self.meshes.activate();
+            if let Some(req) = self.meshes.take_request() {
+                self.meshes.start(req);
+            }
+            crate::ui::meshes::page(ui, &mut self.meshes);
+            if let Some(s) = self.meshes.take_settings() {
+                self.model.settings.meshes = s;
+                self.model.save_settings();
+            }
+            if let Some(fp) = self.meshes.v3.take_shaders_changed() {
+                self.model.settings.render3d.shaders = Some(fp);
+                self.model.save_settings();
+            }
+            // The Textures model's dialogs (close with unsaved edits, an export error) must show in this view too.
+            crate::ui::dialogs::draw(&ctx, &mut self.model);
+        } else {
+            crate::ui::draw_with(ui, &mut self.model, &mut self.state);
+        }
+        if let Some(fp) = self.state.set3d.v3.take_shaders_changed() {
+            self.model.settings.render3d.shaders = Some(fp);
+            self.model.save_settings();
+        }
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
-        if self.model.busy() {
+        if self.model.busy()
+            || self.meshes.scanning()
+            || self.meshes.v3.busy()
+            || self.state.set3d.busy()
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if self.model.preview.scheduled() {

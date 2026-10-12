@@ -1,0 +1,19 @@
+[package]
+name = "nif"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+encoding_rs.workspace = true
+half.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+walkdir.workspace = true
+
+[features]
+serde = ["dep:serde"]

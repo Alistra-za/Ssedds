@@ -70,6 +70,28 @@ pub struct GuiSettings {
     pub mem_budget_mb: u64,
     pub columns_collapsed: bool,
     pub advanced_open: bool,
+    /// The Meshes view's source (plan A Task 12), `[meshes]` in the file.
+    pub meshes: MeshesSettings,
+    /// The Meshes view's 3D panel (plan B Task B8), `[render3d]` in the file.
+    pub render3d: Render3dSettings,
+}
+
+/// `[render3d]`: the Community Shaders `Shaders` folder last used, re-checked on start and on focus.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Render3dSettings {
+    pub shaders: Option<render3d::locate::Fingerprint>,
+    /// The set preview's encode cap in pixels (D5); 0 = 2048. Edited in `gui.toml` for now.
+    pub set_preview_max: u32,
+}
+
+/// `[meshes]`: the MO2 instance and profile the Meshes view scans, or the folder chosen instead.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MeshesSettings {
+    pub instance: Option<PathBuf>,
+    pub profile: Option<String>,
+    pub folder: Option<PathBuf>,
 }
 
 impl Default for GuiSettings {
@@ -85,6 +107,8 @@ impl Default for GuiSettings {
             mem_budget_mb: 0,
             columns_collapsed: false,
             advanced_open: false,
+            meshes: MeshesSettings::default(),
+            render3d: Render3dSettings::default(),
         }
     }
 }
