@@ -2051,3 +2051,37 @@ fn the_off_line_lists_what_the_renderer_leaves_off() {
     h.run();
     h.get_by_label_contains("Off in this preview: Dynamic Cubemaps, LOD Blending");
 }
+
+// ---- P1-C Task 6: the `settings` timing-log line ----
+
+#[test]
+fn applying_settings_writes_a_settings_line() {
+    let standin = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ));
+    let fp = render3d::locate::fingerprint(&standin, None).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = render3d::Renderer::with_gpu(
+        render3d::device::Gpu::new_warp().unwrap(),
+        fp,
+        cache.path().to_path_buf(),
+    )
+    .unwrap();
+    let s = CsSettings {
+        hash: "0123456789abcdef0123".into(),
+        notes: vec!["Info.ini missing".into()],
+        ..Default::default()
+    };
+    let ((), ev) = perf_log::capture(|| v3::apply_settings(&mut r, s));
+    let e = named(&ev, "settings");
+    assert_eq!(e.len(), 1, "{ev:?}");
+    assert_eq!(e[0]["hash"], "0123456789ab");
+    assert_eq!(
+        e[0]["defines"],
+        serde_json::json!(["ENABLE_LL"]),
+        "default settings: LL only"
+    );
+    assert_eq!(e[0]["notes"], 1);
+    assert!(e[0]["ms"].as_f64().unwrap() >= 0.0, "{}", e[0]);
+}

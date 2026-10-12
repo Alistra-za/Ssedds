@@ -1571,6 +1571,20 @@ impl Drop for Viewport3d {
     }
 }
 
+/// Applies user CS settings (C11: a cbuffer rewrite, recompiles only when the defines change, never a reload) and
+/// writes the `settings` log line. The render thread calls it; public so a test can capture the line.
+#[doc(hidden)]
+pub fn apply_settings(r: &mut Renderer, s: CsSettings) {
+    let t0 = Instant::now();
+    let hash: String = s.hash.chars().take(12).collect();
+    let notes = s.notes.len();
+    r.set_settings(s);
+    perf_log::emit(
+        "settings",
+        json!({"hash": hash, "defines": r.features(), "ms": perf_log::ms_since(t0), "notes": notes}),
+    );
+}
+
 /// The texture resolver over `map` (canonical path → bytes); read errors are collected in `errors`.
 fn resolver<'a>(
     map: &'a HashMap<String, FileSource>,
@@ -1703,7 +1717,7 @@ fn render_loop(
         let mut r = Renderer::new(shaders, cache.clone())?;
         r.set_async_compile(true);
         r.set_features_on(features);
-        r.set_settings(settings.clone());
+        apply_settings(&mut r, settings.clone());
         Ok(r)
     };
     let loaded = |r: &Renderer, id: u64, c: &Content, report: LoadReport| {
@@ -1789,7 +1803,7 @@ fn render_loop(
                     None
                 }
                 V3Cmd::SetSettings(s) => {
-                    r.set_settings(s);
+                    apply_settings(&mut r, s);
                     restyled = true;
                     None
                 }
