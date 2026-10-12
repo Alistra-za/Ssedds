@@ -52,10 +52,9 @@ The new files sit in `presets/` and are embedded with the existing `include_str!
 
 - **The new mode:** `ResizeMode::Half`, serialised as `"half"`, alongside Track C's `none` / `pot-down`.
 - **Behaviour:**
-  - each dimension is halved (integer division);
-  - a dimension already at or below 512 is not halved;
-  - a dimension above 512 never goes below 512 (`max(d/2, 512)`).
-  - The result keeps the source's aspect ratio wherever the floor allows. A non-POT source is first handled as `pot-down` would handle it, then halved, so outputs stay POT.
+  - both dimensions halve together, so the aspect ratio never changes (the mesh UVs expect the source shape);
+  - the 512 floor applies to the **larger** side: a map halves only when its larger side is above 512 (so 1024×512 → 512×256, 512×256 stays, 2048×2048 → 1024×1024);
+  - no POT step: a non-POT source halves with integer division per side and keeps its shape (owner, 2026-10-12). `pot-down` stays a separate, explicit setting.
 - **The path:** it reuses Track C's resize in `preprocess_with` and emits `DIM-RESIZED`. It also counts in `api::job_bytes` admission like `pot-down`.
 - **Data sub-types:** every sub-type that is not a colour sub-type (§2.1) and not `pbr_emissive`. This covers normals (`normal`, `landscape_normal`, `pbr_normal`, `msn`, `coat_normal`), `envmask`, `complex_material`, `height`, `rmaos`, skin data maps and the other single-channel or packed maps.
 - **Packed outputs** (channel packing, §6.4 of the main spec) follow their recipe's output sub-type.
@@ -150,7 +149,7 @@ New codes: `CFG-PRESET-SKIPPED`, `CFG-GREEN-CONFLICT`. Code count 73 → 75.
   - with alpha gives `bc7`;
   - a 2048 normal plans 1024;
   - a 512 mask stays 512;
-  - a 1024×512 map plans 512×512;
+  - a 1024×512 map plans 512×256, and a 512×256 map stays 512×256;
   - `fast-preview` gives effort `fast` and `validation.mips = smallest`.
 - **Presets:**
   - folder load (good, bad and duplicate files);
