@@ -595,6 +595,8 @@ pub struct Viewport3d {
     /// Since when `busy()` has held without a break (for `show_spinner`).
     busy_since: Option<Instant>,
     locate_gen: u64,
+    /// The last scan target `locate` was given, so "Choose folder…" reads settings through the same target.
+    scan_target: Option<ScanTarget>,
     declined: Option<PathBuf>,
     shaders_changed: bool,
     /// This session's locate (or the user) has confirmed `shaders`: until then the saved fingerprint may be stale,
@@ -656,6 +658,7 @@ impl Viewport3d {
             locating: false,
             busy_since: None,
             locate_gen: 0,
+            scan_target: None,
             declined: None,
             shaders_changed: false,
             confirmed: false,
@@ -774,6 +777,7 @@ impl Viewport3d {
         if self.locating {
             return;
         }
+        self.scan_target.clone_from(&target);
         self.locating = true;
         self.locate_gen += 1;
         let generation = self.locate_gen;
@@ -798,10 +802,14 @@ impl Viewport3d {
         self.locating = true;
         self.locate_gen += 1;
         let generation = self.locate_gen;
+        let target = self.scan_target.clone();
         spawn_guarded(self.tx.clone(), "locate", move |tx| {
             let result = chosen_root(&folder)
                 .and_then(|root| locate::fingerprint(&root, None).map_err(|e| e.to_string()));
-            let settings = result.as_ref().ok().map(|f| read_cs_settings(None, f));
+            let settings = result
+                .as_ref()
+                .ok()
+                .map(|f| read_cs_settings(target.as_ref(), f));
             let _ = tx.send(WorkerMsg::Viewport3d(V3Reply::Chosen {
                 generation,
                 result,

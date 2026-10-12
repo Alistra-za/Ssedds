@@ -2299,3 +2299,26 @@ fn owner_chosen_folder_settings_come_through_the_mo2_target() {
     assert_ne!(s.hash, CsSettings::default().hash);
     assert!(defines.iter().any(|d| d == "CS_SKIN") && defines.iter().any(|d| d == "CS_HAIR"));
 }
+
+/// Review I1: "Choose folder…" after a locate with an MO2 target reads through that target (overwrite wins over
+/// the settings beside the chosen folder's `Shaders`).
+#[test]
+fn choose_folder_reads_the_settings_through_the_last_scan_target() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), Some(CHANGED));
+    let chosen = chosen_cs(d.path(), Some(GOOD));
+    let mut v = Viewport3d::new(None);
+    let _cmds = v.attach_test_thread();
+    relocated(&mut v, &target);
+    v.choose_folder(chosen.root.parent().unwrap().to_path_buf());
+    let t = Instant::now();
+    while v.locating() {
+        assert!(
+            t.elapsed() < Duration::from_secs(20),
+            "choose did not answer"
+        );
+        v.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(v.settings().hash, read_json_settings(CHANGED).hash);
+}

@@ -438,7 +438,7 @@ impl Renderer {
 
     /// Features CS loaded (Info.ini, or the Features inis) that this preview does not compile, in name order, for
     /// the panel "off in preview" line. TruePBR is never listed: it has no define (TRUE_PBR is per material)
-    /// and its settings are always written.
+    /// and its settings are always written. Features in `NON_VISUAL` (no shader/visual effect in this preview) are never listed either.
     pub fn off_in_preview(&self) -> Vec<String> {
         self.settings
             .loaded

@@ -349,7 +349,7 @@ pub fn feature_data(s: &CsSettings) -> Vec<(String, Vec<f64>)> {
         pack_skin(skin, &mut out);
     }
     // C2: the PS reads the profile from `SkinPerGeometry` (b7), not FeatureData (Skin.hlsli:21-31). No skin
-    // extra / wetness / sk textures in the preview: flags 0; per-geometry wetness 0 (Skin.hlsli:254 returns 0).
+    // extra / wetness / sk textures in the preview: skinMaterialFlags 0 here is the FeatureData/static default; the per-shape value (RFAOS bound at t71) is written per draw (material.rs); per-geometry wetness 0 (Skin.hlsli:254 returns 0).
     let profile: Vec<(String, Vec<f64>)> = out
         .iter()
         .filter_map(|(n, v)| {
