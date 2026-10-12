@@ -1335,16 +1335,25 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             "exact opaque alpha is off on an _m written as BC7; 254 may reach PGPatcher/ENB".into(),
         );
     }
-    if !a.is_pot {
-        add(
-            DimNpot,
-            format!("{}x{} is not a power of two", a.width, a.height),
-        );
+    // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).
+    let (ow, oh) = crate::resize::target_dims((a.width, a.height), p.resize);
+    let resized = ((ow, oh) != (a.width, a.height)).then(|| {
+        Warning::new(
+            DimResized,
+            format!(
+                "{}x{} resized to {ow}x{oh} (resize = pot-down)",
+                a.width, a.height
+            ),
+        )
+        .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
+    });
+    if !(ow.is_power_of_two() && oh.is_power_of_two()) {
+        add(DimNpot, format!("{ow}x{oh} is not a power of two"));
     }
-    if a.width.min(a.height) < 4 {
+    if ow.min(oh) < 4 {
         add(DimSmall, "base dimension below 4 px".into());
     }
-    if st == Subtype::Flow && a.width.min(a.height) <= 32 {
+    if st == Subtype::Flow && ow.min(oh) <= 32 {
         add(
             DimFlowSmall,
             "CS ignores _flow maps of 32 px or less".into(),
@@ -1385,6 +1394,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     for c in contradictions(p, f) {
         add(SugContradiction, c);
     }
+    w.extend(resized);
     // DECISIONS S9: the count Preprocess will replace: R, G, B always, A only when the alpha is kept.
     let kept_alpha = p.alpha.policy != AlphaPolicy::Remove;
     let samples: u64 =

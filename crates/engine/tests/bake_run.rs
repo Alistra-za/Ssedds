@@ -364,3 +364,47 @@ fn the_n_stays_up_to_date_when_its_bake_turns_on_or_off() {
         "bake on again: nothing changed"
     );
 }
+
+/// S-mips-7 (ruling F7): an NPOT pair with `resize = pot-down` bakes from the resized, renormalised `_n`. The
+/// expectation is built through the public API: Preprocess (which resizes), the `_n`'s written mip 0, its length
+/// pyramid and the member's chain with that bake.
+#[test]
+fn a_resized_pair_bakes_from_the_resized_normal() {
+    use engine::bake::{LengthPyramid, NormalVariance};
+    use engine::mips::build_chain_with;
+    use engine::ops::preprocess;
+    let d = tempfile::tempdir().unwrap();
+    let n = bumpy_n(d.path(), 48, 0.0);
+    let r = rmaos(d.path(), 48);
+    let mut p = plan(d.path(), &r, &n, true, false);
+    let job = &mut p.jobs[0];
+    job.profile.resize = ResizeMode::PotDown;
+    job.bake.as_mut().unwrap().normal_profile.resize = ResizeMode::PotDown;
+    let (member_p, normal_p) = (
+        job.profile.clone(),
+        job.bake.as_ref().unwrap().normal_profile.clone(),
+    );
+    let (s, ev) = run(p);
+    assert_eq!(s.converted, 1, "{ev:#?}");
+
+    let load = |p: &Path| engine::load::load_image(p).unwrap().0;
+    let n_work = preprocess(load(&n), &normal_p);
+    assert_eq!((n_work.img.width, n_work.img.height), (32, 32));
+    let base = build_chain_with(&n_work, &normal_p, None).swap_remove(0);
+    let nv = NormalVariance::new(
+        LengthPyramid::build(&base),
+        (32, 32),
+        member_p.mips.bake_clamp,
+    )
+    .unwrap();
+    let m_work = preprocess(load(&r), &member_p);
+    let chain = build_chain_with(&m_work, &member_p, Some(&nv));
+    let want =
+        chain[1].px.iter().map(|p| f64::from(p[0])).sum::<f64>() / chain[1].px.len() as f64 * 255.0;
+    let got = mean_r(d.path(), 1);
+    assert!(
+        (got - want).abs() < 1.0,
+        "level 1 mean R: {got} vs reference {want}"
+    );
+    assert!(got > 102.0, "the bake adds roughness: {got}");
+}

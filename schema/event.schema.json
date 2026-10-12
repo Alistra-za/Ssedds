@@ -328,6 +328,7 @@
         "DIM-NPOT",
         "DIM-SMALL",
         "DIM-FLOW-SMALL",
+        "DIM-RESIZED",
         "DIM-TOO-LARGE",
         "SET-MISSING-COMPANION",
         "SET-COMPANION-OUTSIDE",

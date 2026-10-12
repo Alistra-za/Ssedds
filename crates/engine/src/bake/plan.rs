@@ -7,6 +7,7 @@ use crate::config::{ColorContent, NormalMips, RawMap, Subtype, Target};
 use crate::discover::{InputFile, InputKind, IMAGE_EXTS};
 use crate::group::{split_suffix_with, TextureSet};
 use crate::policy::{JobStatus, Provenance, ResolvedJob};
+use crate::resize::target_dims;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -239,7 +240,9 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     {
         return false;
     }
-    let Ok(ndims) = ::image::image_dimensions(&nj.input) else {
+    // S-mips-7: both sizes are the post-resize ones Preprocess writes, so SET-BAKE-RATIO's data reports those too.
+    let Ok(ndims) = ::image::image_dimensions(&nj.input).map(|d| target_dims(d, nj.profile.resize))
+    else {
         return false;
     };
     let (normal, normal_profile, stamp) = (nj.input.clone(), nj.profile.clone(), nj.source);
@@ -249,7 +252,9 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
         if jobs[m].profile.color.content == ColorContent::Srgb {
             continue;
         }
-        let Ok(mdims) = ::image::image_dimensions(&jobs[m].input) else {
+        let Ok(mdims) = ::image::image_dimensions(&jobs[m].input)
+            .map(|d| target_dims(d, jobs[m].profile.resize))
+        else {
             continue;
         };
         match bake_shift(ndims, mdims) {

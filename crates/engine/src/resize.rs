@@ -166,6 +166,44 @@ mod tests {
             .any(|(a, b)| a[0] != b[0].clamp(0.0, 1.0)));
     }
 
+    /// Task 4 review: an axis already a power of two is not filtered (one identity tap), so every output row is the
+    /// 1-D Mitchell resample of its source row alone.
+    #[test]
+    fn mitchell_pot_down_leaves_a_power_of_two_axis_unfiltered() {
+        let img = rnd_image(1000, 512, 7);
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Remove;
+        p.mips.filter = MipFilter::Mitchell;
+        let mut w = work(img.clone(), Domain::LinearLight, false);
+        assert_eq!(mips::effective_filter(&w, &p), MipFilter::Mitchell);
+        resize_work(&mut w, &p);
+        assert_eq!((w.img.width, w.img.height), (512, 512));
+        for y in 0..512 {
+            let mut row = Rgba32F::new(1000, 1, [0.0; 4]);
+            row.px.copy_from_slice(&img.px[y * 1000..(y + 1) * 1000]);
+            let want =
+                crate::filter::resample_rgb(&row, (512, 1), MipFilter::Mitchell, p.mips.edge);
+            for (a, b) in w.img.px[y * 512..(y + 1) * 512].iter().zip(&want.px) {
+                for c in 0..3 {
+                    assert_eq!(a[c], b[c].clamp(0.0, 1.0), "row {y}");
+                }
+            }
+        }
+    }
+
+    /// M8: the box resize is area-exact and does not clamp, so a float LDR value above 1 survives until Quantise.
+    #[test]
+    fn box_resize_keeps_linear_light_values_above_one() {
+        let img = Rgba32F::new(6, 1, [1.5, 1.5, 1.5, 1.0]);
+        let mut p = profile(Subtype::Diffuse);
+        p.alpha.policy = AlphaPolicy::Remove;
+        let mut w = work(img, Domain::LinearLight, false);
+        assert_eq!(mips::effective_filter(&w, &p), MipFilter::Box);
+        resize_work(&mut w, &p);
+        assert_eq!((w.img.width, w.img.height), (4, 1));
+        assert!(w.img.px.iter().all(|px| px[0] > 1.0), "{:?}", w.img.px);
+    }
+
     #[test]
     fn roughness_is_resized_on_r_squared() {
         // 3x1, R = [0, 1, 0] -> 2x1: each output covers texel 0 or 2 whole plus half of texel 1.

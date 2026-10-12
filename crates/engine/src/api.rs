@@ -344,29 +344,33 @@ impl Drop for Admitted<'_> {
 /// times for the loaded image, the chain and the encoder inputs, decoded validation levels and output bytes.
 /// A DDS input (`image` cannot read its size) also holds its file data while mip 0 decodes (`load::load_dds`).
 fn estimated_bytes(path: &Path) -> u64 {
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
-    {
-        return dds_dimensions(path).map_or(0, |(w, h, len)| input_bytes(w, h) + len);
-    }
-    // By content and MAX_DIM-checked; a source refused here is refused at load too, so it holds nothing.
-    crate::load::image_size(path)
-        .map(|(w, h)| input_bytes(w, h))
-        .unwrap_or(0)
+    let Some((w, h)) = input_dims(path) else {
+        return 0;
+    };
+    let file = if is_dds(path) {
+        std::fs::metadata(path).map_or(0, |m| m.len())
+    } else {
+        0
+    };
+    input_bytes(w, h) + file
 }
 
-/// Width, height and file length of a DDS, from its header (`load::dds_header_size`). `None` when the file cannot
-/// be read or is not a DDS.
-fn dds_dimensions(path: &Path) -> Option<(u32, u32, u64)> {
-    let (w, h) = crate::load::dds_header_size(path)?;
-    // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
-    let dim = |v: u32| v.min(crate::load::MAX_DIM);
-    Some((
-        dim(w),
-        dim(h),
-        std::fs::metadata(path).map_or(0, |m| m.len()),
-    ))
+fn is_dds(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
+}
+
+/// The input's size: a DDS from its header (`load::dds_header_size`), anything else by content
+/// (`load::image_size`, MAX_DIM-checked; a source refused here is refused at load too, so it holds nothing).
+/// `None` when the size cannot be read.
+fn input_dims(path: &Path) -> Option<(u32, u32)> {
+    if is_dds(path) {
+        let (w, h) = crate::load::dds_header_size(path)?;
+        // Clamped: a larger DDS is refused at load, and a hostile header must not overflow `input_bytes`.
+        let dim = |v: u32| v.min(crate::load::MAX_DIM);
+        return Some((dim(w), dim(h)));
+    }
+    crate::load::image_size(path).ok()
 }
 
 /// [`estimated_bytes`] of a `w`×`h` input.
@@ -375,9 +379,26 @@ fn input_bytes(w: u32, h: u32) -> u64 {
 }
 
 /// [`estimated_bytes`] of the job's input, plus what its variance bake holds (DECISIONS R4; the M4 carry "the
-/// summed-area table counts against `--mem-budget`", a length pyramid since R5).
+/// summed-area table counts against `--mem-budget`", a length pyramid since R5), plus (S-mips-11) 8 B/texel for a
+/// non-box filter's intermediate and 32 B/texel for a resize, both on the input's size.
 fn job_bytes(job: &ResolvedJob) -> u64 {
+    let p = &job.profile;
+    let extra = input_dims(&job.input).map_or(0, |(w, h)| {
+        let texels = u64::from(w) * u64::from(h);
+        let filter = if p.mips.filter != MipFilter::Box {
+            8
+        } else {
+            0
+        };
+        let resize = if crate::resize::target_dims((w, h), p.resize) != (w, h) {
+            32
+        } else {
+            0
+        };
+        texels * (filter + resize)
+    });
     estimated_bytes(&job.input)
+        + extra
         + job
             .bake
             .as_ref()
@@ -1898,6 +1919,56 @@ mod tests {
         let lying = d.path().join("a.bmp");
         std::fs::rename(&png, &lying).unwrap();
         assert_eq!(estimated_bytes(&lying), input_bytes(64, 32));
+    }
+
+    /// S-mips-11: a non-box filter adds its 8 B/texel intermediate, a resize its 32 B/texel; a DDS is sized from
+    /// its header for both (ruling F4).
+    #[test]
+    fn admission_counts_the_filter_and_resize_intermediates() {
+        let d = tempfile::tempdir().unwrap();
+        let png = d.path().join("a.png");
+        image::GrayImage::new(48, 40).save(&png).unwrap();
+        let mut job = ResolvedJob {
+            input: png,
+            output: d.path().join("a.dds"),
+            game_path: "a".into(),
+            set_key: "x/a".into(),
+            profile: PresetRegistry::builtin()
+                .unwrap()
+                .base_profile(Target::Cs, Subtype::Diffuse),
+            provenance: Default::default(),
+            suggestions: vec![],
+            warnings: vec![],
+            status: JobStatus::Ready,
+            suffix_alias: None,
+            source: None,
+            pack: None,
+            bake: None,
+        };
+        let texels = 48 * 40;
+        assert_eq!(job_bytes(&job), input_bytes(48, 40));
+        job.profile.mips.filter = MipFilter::Kaiser;
+        assert_eq!(job_bytes(&job), input_bytes(48, 40) + texels * 8);
+        job.profile.mips.filter = MipFilter::Box;
+        job.profile.resize = ResizeMode::PotDown;
+        assert_eq!(job_bytes(&job), input_bytes(48, 40) + texels * 32);
+
+        use crate::dds::*;
+        let dds = d.path().join("a.dds");
+        let desc = DdsDesc {
+            width: 48,
+            height: 40,
+            format: crate::config::Format::Bc7,
+            srgb: false,
+            header: ResolvedHeader::Dx10,
+        };
+        let b = dds_bytes(&desc, &[vec![0; 48 * 40]]).unwrap();
+        std::fs::write(&dds, &b).unwrap();
+        job.input = dds;
+        assert_eq!(
+            job_bytes(&job),
+            input_bytes(48, 40) + b.len() as u64 + texels * 32
+        );
     }
 
     /// Carry 13, review M2/I2 and ruling O2: only a comparable, matching, passing record is up to date.

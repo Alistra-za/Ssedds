@@ -216,9 +216,10 @@ fn prepare_then<T>(
     };
     let bake = match (lengths, &job.bake) {
         (Some(l), Some(b)) => {
-            let nv = NormalVariance::new(l, (img.width, img.height), p.mips.bake_clamp).map_err(
-                |e| fail(Stage::Load)(format!("variance bake with {}: {e}", b.normal.display())),
-            )?;
+            let member = crate::resize::target_dims((img.width, img.height), p.resize);
+            let nv = NormalVariance::new(l, member, p.mips.bake_clamp).map_err(|e| {
+                fail(Stage::Load)(format!("variance bake with {}: {e}", b.normal.display()))
+            })?;
             if nv.shift() != b.shift {
                 return Err(fail(Stage::Load)(format!(
                     "{}: size changed since planning; re-run",

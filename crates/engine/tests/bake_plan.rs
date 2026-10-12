@@ -564,3 +564,28 @@ fn a_borrowed_n_from_a_set_without_one_is_set_missing_companion() {
     let w = s.warnings.last().unwrap();
     assert!(w.message.contains("borrowed"), "{}", w.message);
 }
+
+/// S-mips-7: the bake's size check reads the post-resize sizes, so an NPOT pair with `resize = pot-down` bakes.
+#[test]
+fn resized_npot_pair_bakes_on_post_resize_sizes() {
+    for resize in [true, false] {
+        let d = tempfile::tempdir().unwrap();
+        normal(d.path(), "textures/pbr/iron_n.png", 48, 48);
+        rough(d.path(), "textures/pbr/iron_rmaos.png", 48, 48);
+        let sets: &[&str] = if resize { &["resize=pot-down"] } else { &[] };
+        let (p, _) = plan(req(d.path(), sets));
+        let m = job(&p, "iron_rmaos.png");
+        if resize {
+            assert_eq!(
+                m.bake.as_ref().map(|b| b.shift),
+                Some(0),
+                "{:?}",
+                m.warnings
+            );
+            assert!(!codes(m).contains(&Code::SetBakeRatio), "{:?}", m.warnings);
+        } else {
+            assert!(m.bake.is_none());
+            assert!(codes(m).contains(&Code::SetBakeRatio), "{:?}", m.warnings);
+        }
+    }
+}

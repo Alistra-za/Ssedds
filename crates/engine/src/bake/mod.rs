@@ -185,13 +185,20 @@ impl BakeJob {
     /// What the member's output depends on besides the `_n`'s bytes: the decode settings, how mip 0 is written, and
     /// the level shift (DECISIONS R12). Recorded in the manifest so `if-changed` re-encodes when any changes; the
     /// `_n`'s path and its own output settings (format, effort) are not part of it.
+    /// The `_n`'s `resize` joins the tuple only when set, so manifests written before it stay up to date (S-mips-7).
     pub fn identity_sha256(&self) -> String {
-        crate::manifest::sha256_json(&(
-            &self.normal_profile.channels,
-            self.normal_profile.alpha.policy,
-            self.normal_profile.mips.normal_base,
+        let np = &self.normal_profile;
+        let base = (
+            &np.channels,
+            np.alpha.policy,
+            np.mips.normal_base,
             self.shift,
-        ))
+        );
+        if np.resize == crate::config::ResizeMode::None {
+            crate::manifest::sha256_json(&base)
+        } else {
+            crate::manifest::sha256_json(&(base.0, base.1, base.2, base.3, np.resize))
+        }
         .expect("a tuple of plain config values serialises")
     }
 
@@ -520,5 +527,28 @@ mod tests {
         assert_ne!(b.identity_sha256(), flip.identity_sha256());
         assert_ne!(b.identity_sha256(), shift.identity_sha256());
         assert_ne!(b.identity_sha256(), keep.identity_sha256());
+    }
+
+    /// S-mips-7: existing manifests stay up to date without resize; `pot-down` changes the identity.
+    #[test]
+    fn identity_is_unchanged_without_resize() {
+        let b = BakeJob {
+            normal: "a/iron_n.png".into(),
+            normal_profile: profile(Subtype::PbrNormal),
+            shift: 0,
+            stamp: None,
+        };
+        let np = &b.normal_profile;
+        let four = crate::manifest::sha256_json(&(
+            &np.channels,
+            np.alpha.policy,
+            np.mips.normal_base,
+            b.shift,
+        ))
+        .unwrap();
+        assert_eq!(b.identity_sha256(), four);
+        let mut resized = b.clone();
+        resized.normal_profile.resize = crate::config::ResizeMode::PotDown;
+        assert_ne!(resized.identity_sha256(), four);
     }
 }

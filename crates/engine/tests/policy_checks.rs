@@ -2215,3 +2215,55 @@ fn linear_content_colour_keeps_box() {
         j.warnings
     );
 }
+
+/// S-mips-7: `resize = pot-down` turns DIM-NPOT into DIM-RESIZED (Info) with the sizes in its data.
+#[test]
+fn pot_down_turns_dim_npot_into_dim_resized() {
+    let img = || Rgba32F::new(48, 40, [0.5, 0.5, 0.5, 1.0]);
+    let diffuse = |sets: &[&str]| run(Target::Cs, "textures/a/x.png", None, &[], img(), sets, &[]);
+    let j = diffuse(&["subtype=diffuse", "resize=pot-down"]);
+    assert!(!codes(&j).contains(&Code::DimNpot), "{:?}", j.warnings);
+    let w = warning(&j, Code::DimResized);
+    assert_eq!(w.severity, engine::codes::Severity::Info);
+    assert_eq!(w.data["from"], serde_json::json!([48, 40]));
+    assert_eq!(w.data["to"], serde_json::json!([32, 32]));
+    let j = diffuse(&["subtype=diffuse"]);
+    assert_eq!(
+        warning(&j, Code::DimNpot).severity,
+        engine::codes::Severity::Blocking
+    );
+    assert!(!codes(&j).contains(&Code::DimResized), "{:?}", j.warnings);
+}
+
+#[test]
+fn dim_small_tests_the_resized_size() {
+    let small = |w, h| {
+        let j = run(
+            Target::Cs,
+            "textures/a/x.png",
+            None,
+            &[],
+            Rgba32F::new(w, h, [0.5, 0.5, 0.5, 1.0]),
+            &["subtype=diffuse", "resize=pot-down"],
+            &[],
+        );
+        codes(&j).contains(&Code::DimSmall)
+    };
+    assert!(!small(7, 5)); // -> 4x4
+    assert!(small(7, 3)); // -> 4x2
+}
+
+#[test]
+fn flow_small_tests_the_resized_size() {
+    let j = run(
+        Target::Cs,
+        "textures/a/x_flow.png",
+        Some("flow"),
+        &["flow"],
+        Rgba32F::new(40, 40, [0.5, 0.5, 0.5, 1.0]),
+        &["resize=pot-down"],
+        &[],
+    );
+    assert!(codes(&j).contains(&Code::DimFlowSmall), "{:?}", j.warnings);
+    assert!(codes(&j).contains(&Code::DimResized), "{:?}", j.warnings);
+}
