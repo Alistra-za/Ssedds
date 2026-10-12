@@ -38,7 +38,7 @@ impl Default for CsSettings {
     /// No files: built-in values, Linear Lighting on, no feature loaded.
     fn default() -> Self {
         CsSettings {
-            hash: settings_hash(None, None, None),
+            hash: settings_hash(None, None, None, &BTreeSet::new()),
             loaded: BTreeSet::new(),
             linear_lighting: true,
             merged: Map::new(),
@@ -99,7 +99,12 @@ pub fn read_settings(p: &SettingsPaths) -> CsSettings {
         None => feature_inis(p.features_dir.as_deref(), &merged, &mut notes),
     };
     CsSettings {
-        hash: settings_hash(user.as_deref(), default.as_deref(), info.as_deref()),
+        hash: settings_hash(
+            user.as_deref(),
+            default.as_deref(),
+            info.as_deref(),
+            &loaded,
+        ),
         loaded,
         linear_lighting,
         merged,
@@ -227,8 +232,14 @@ fn feature_inis(
     }
 }
 
-/// C10: sha256 over (role, length, bytes) or (role, "absent") for user, default, info_ini, in that order.
-fn settings_hash(user: Option<&[u8]>, default: Option<&[u8]>, info: Option<&[u8]>) -> String {
+/// C10: sha256 over (role, length, bytes) or (role, "absent") for user, default, info_ini, in that order, then the
+/// sorted loaded feature names: features found only through `Shaders/Features` (no Info.ini) change the hash too.
+fn settings_hash(
+    user: Option<&[u8]>,
+    default: Option<&[u8]>,
+    info: Option<&[u8]>,
+    loaded: &BTreeSet<String>,
+) -> String {
     let mut h = Sha256::new();
     for (role, b) in [("user", user), ("default", default), ("info_ini", info)] {
         h.update(role.as_bytes());
@@ -239,6 +250,11 @@ fn settings_hash(user: Option<&[u8]>, default: Option<&[u8]>, info: Option<&[u8]
             }
             None => h.update(b"absent"),
         }
+    }
+    h.update(b"loaded");
+    for n in loaded {
+        h.update((n.len() as u64).to_le_bytes());
+        h.update(n.as_bytes());
     }
     hex::encode(h.finalize())
 }

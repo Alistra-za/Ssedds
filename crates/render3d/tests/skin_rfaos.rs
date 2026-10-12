@@ -372,3 +372,115 @@ fn diag_arch_head_on_installed_cs() {
         m(3)
     );
 }
+
+/// Diagnosis (owner data, read-only): the Arch scalp (hair, flow map in the backlight slot) on the INSTALLED CS
+/// shaders, once with the owner's MO2 settings (CS_HAIR on) and once with the settings the GUI log shows it used
+/// (`CsSettings::default()`, ENABLE_LL only). Prints the scalp's flags, slots → registers, PS defines and the
+/// written `hairSpecularSettings.Enabled`; PNGs in %TEMP%\sdc-rfaos-diag.
+#[test]
+#[ignore]
+fn diag_arch_scalp_on_installed_cs() {
+    let root = PathBuf::from(std::env::var("SDC_ACHERUS").expect("SDC_ACHERUS"));
+    let mods = root.join("mods");
+    let cs = mods.join("CommunityShaders_AIO-2026-10-03T06-46Z");
+    let arch = mods.join("Arch Resources");
+    let origins = vec![
+        ("CS".to_string(), cs.clone(), 0),
+        ("overwrite".to_string(), root.join("overwrite"), i32::MAX),
+    ];
+    let owner = render3d::cs_settings::read_settings(&render3d::locate::settings_paths(
+        Some(&origins),
+        &cs.join("Shaders"),
+    ));
+    let resolve = |norm: &str| std::fs::read(arch.join(norm.replace('/', "\\"))).ok();
+    let nif = std::fs::read(arch.join(r"meshes\arch\head\hair\scalp.nif")).unwrap();
+    let out = std::env::temp_dir().join("sdc-rfaos-diag");
+    std::fs::create_dir_all(&out).unwrap();
+    for (label, settings) in [
+        ("owner_settings", owner),
+        (
+            "gui_default_settings",
+            render3d::cs_settings::CsSettings::default(),
+        ),
+    ] {
+        let cache = tempfile::tempdir().unwrap();
+        let fp = render3d::locate::fingerprint(&cs.join("Shaders"), None).unwrap();
+        let mut r = Renderer::with_gpu(
+            render3d::device::Gpu::new(None).unwrap(),
+            fp,
+            cache.path().to_path_buf(),
+        )
+        .unwrap();
+        r.set_settings(settings);
+        r.set_features_on(true);
+        let rep = r.load(&nif, &resolve);
+        println!("\n=== {label}: features {:?}\n{rep:?}", r.features());
+        for s in r.shapes() {
+            let m = &s.material;
+            println!(
+                "shape {} '{}' type {} slsf1 {:#x} slsf2 {:#x} (SLSF2.27 back lighting: {}) pbr {} status {:?}",
+                s.id.0,
+                s.name,
+                m.shader_type,
+                m.slsf1,
+                m.slsf2,
+                m.slsf2 & (1 << 27) != 0,
+                m.is_pbr(),
+                s.status
+            );
+            let msn = m.slsf1 & (1 << 12) != 0;
+            for (i, t) in m.slots.iter().enumerate() {
+                if !t.norm.is_empty() {
+                    let reg =
+                        render3d::textures::register_for_slot(m.shader_type, m.is_pbr(), msn, i);
+                    println!("  slot {i}: {} -> t{reg:?}", t.norm);
+                }
+            }
+            let (defines, refl, srvs) = r.draw_diag(s.id).unwrap();
+            println!("  PS defines: {defines:?}");
+            println!("  bound (reg, dxgi): {srvs:?}");
+            if let Some(refl) = refl {
+                println!("  PS srvs: {:?}", refl.srvs);
+                for cb in &refl.cbuffers {
+                    for v in cb
+                        .vars
+                        .iter()
+                        .filter(|v| v.name.contains("hairSpecularSettings.Enabled"))
+                    {
+                        println!(
+                            "  reflected {} in {} b{} @{} {:?}",
+                            v.name, cb.name, cb.slot, v.offset, v.kind
+                        );
+                    }
+                }
+            }
+            let enabled = r.draw_cb_floats(s.id, "hairSpecularSettings.Enabled");
+            println!(
+                "  hairSpecularSettings.Enabled written bits: {:?}",
+                enabled.map(|v| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>())
+            );
+        }
+        let (w, h) = (512, 512);
+        let px = r.render(&Scene::neutral(), w, h).unwrap();
+        let hit: Vec<&[u8]> = px
+            .chunks(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30)
+            .collect();
+        let n = hit.len().max(1) as f64;
+        let mean = |c: usize| hit.iter().map(|p| p[c] as f64).sum::<f64>() / n;
+        println!(
+            "render: {} px, mean RGB ({:.1}, {:.1}, {:.1})",
+            hit.len(),
+            mean(0),
+            mean(1),
+            mean(2)
+        );
+        // scalp.png = the owner's settings via MO2 origins (what the fixed GUI reads).
+        let png = out.join(match label {
+            "owner_settings" => "scalp.png".to_string(),
+            _ => format!("scalp_{label}.png"),
+        });
+        image::save_buffer(&png, &px, w, h, image::ExtendedColorType::Rgba8).unwrap();
+        println!("saved {}", png.display());
+    }
+}

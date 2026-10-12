@@ -2158,3 +2158,107 @@ fn read_json_settings(json: &str) -> CsSettings {
         features_dir: None,
     })
 }
+
+/// Task 8 fix round 2: a chosen CS folder (no owner mod) with an MO2 scan target reads the settings through the
+/// target's origins (overwrite), not from the folder above `Shaders`.
+#[test]
+fn a_chosen_cs_folder_reads_the_settings_through_the_mo2_target() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("MO2");
+    let game = r.join("Game");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::write(
+        r.join("ModOrganizer.ini"),
+        format!(
+            "[General]\ngamePath=@ByteArray({})\nselected_profile=@ByteArray(Default)\n",
+            game.display().to_string().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(r.join("mods/A")).unwrap();
+    std::fs::create_dir_all(r.join("profiles/Default")).unwrap();
+    std::fs::write(r.join("profiles/Default/modlist.txt"), "+A\n").unwrap();
+    std::fs::write(
+        r.join("profiles/Default/settings.ini"),
+        "[General]\nLocalSettings=true\n",
+    )
+    .unwrap();
+    let user = r.join("overwrite").join(SETTINGS_REL);
+    std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+    std::fs::write(&user, CHANGED).unwrap();
+    // The chosen folder: a CS copy outside the instance, no settings beside it.
+    let shaders = d.path().join("Elsewhere/CS/Shaders");
+    std::fs::create_dir_all(&shaders).unwrap();
+    std::fs::write(shaders.join("Lighting.hlsl"), "// l").unwrap();
+    let chosen = Fingerprint {
+        root: shaders,
+        owner_mod: None,
+        hash: "h".into(),
+    };
+    let target = ScanTarget::Mo2 {
+        root: r.clone(),
+        profile: "Default".into(),
+    };
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    assert_eq!(s.hash, read_json_settings(CHANGED).hash, "{:?}", s.notes);
+    // No MO2 target: the folder above `Shaders` as before (nothing there).
+    let s = v3::read_cs_settings(None, &chosen);
+    assert_eq!(s, CsSettings::default());
+}
+
+/// Task 8 fix round 2: no settings files but a Features folder with Skin.ini is a change from the default (the
+/// hash covers the loaded features), so it is sent and the renderer compiles CS_SKIN.
+#[test]
+fn features_found_only_in_the_features_folder_are_sent() {
+    let d = tempfile::tempdir().unwrap();
+    let features = d.path().join("Features");
+    std::fs::create_dir_all(&features).unwrap();
+    std::fs::write(features.join("Skin.ini"), "[Info]\nVersion = 1-0-0\n").unwrap();
+    let s = render3d::cs_settings::read_settings(&render3d::cs_settings::SettingsPaths {
+        features_dir: Some(features),
+        ..Default::default()
+    });
+    let mut v = Viewport3d::new(None);
+    let cmds = v.attach_test_thread();
+    v.on_settings(s);
+    let sent = settings_sent(&cmds);
+    assert_eq!(sent.len(), 1, "a features-only read is not the default");
+    let mut r = render3d::Renderer::with_gpu(
+        render3d::device::Gpu::new_warp().unwrap(),
+        render3d::locate::fingerprint(d.path(), None).unwrap(),
+        d.path().join("cache"),
+    )
+    .unwrap();
+    r.set_settings(sent[0].clone());
+    assert!(
+        r.features().iter().any(|f| f == "CS_SKIN"),
+        "{:?}",
+        r.features()
+    );
+}
+
+/// Owner data, read-only: the settings the fixed GUI reads for the owner's saved chosen folder (gui.toml:
+/// G:\Acherus\…\Shaders, no owner mod) and Meshes target (C:\_mount\moddingvol\Acherus, Nexus).
+#[test]
+#[ignore]
+fn owner_chosen_folder_settings_come_through_the_mo2_target() {
+    let shaders = PathBuf::from(r"G:\Acherus\mods\CommunityShaders_AIO-2026-10-03T06-46Z\Shaders");
+    let chosen = Fingerprint {
+        root: shaders,
+        owner_mod: None,
+        hash: String::new(),
+    };
+    let target = ScanTarget::Mo2 {
+        root: PathBuf::from(r"C:\_mount\moddingvol\Acherus"),
+        profile: "Nexus".into(),
+    };
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    let defines = render3d::cs_settings::preview_defines(&s, true);
+    println!(
+        "hash {} notes {:?}\ndefines {defines:?}",
+        &s.hash[..12],
+        s.notes
+    );
+    assert_ne!(s.hash, CsSettings::default().hash);
+    assert!(defines.iter().any(|d| d == "CS_SKIN") && defines.iter().any(|d| d == "CS_HAIR"));
+}

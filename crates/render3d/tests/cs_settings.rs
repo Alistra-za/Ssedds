@@ -391,3 +391,17 @@ fn an_unreadable_settings_file_is_parse_failed_with_a_note() {
     p.info_ini = Some(d.path().to_path_buf());
     assert!(!read_settings(&p).parse_failed);
 }
+
+/// Task 8 fix round 2: the hash covers the loaded feature set, so features found only through the Features
+/// folder (no settings file) differ from `CsSettings::default()`.
+#[test]
+fn the_hash_covers_the_loaded_features() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("Skin.ini"), "[Info]\n").unwrap();
+    let s = read_settings(&SettingsPaths {
+        features_dir: Some(d.path().to_path_buf()),
+        ..Default::default()
+    });
+    assert!(s.loaded.contains("Skin"));
+    assert_ne!(s.hash, CsSettings::default().hash);
+}

@@ -1506,16 +1506,18 @@ fn target_origins(target: Option<&ScanTarget>) -> Vec<(String, PathBuf, i32)> {
 }
 
 /// The user's CS settings for the located `Shaders` folder (03 §3.4, C12). They come through the target's
-/// origins when CS was found there (overwrite wins). For a chosen folder, or a saved one with no origins, they come
-/// from the Data folder above `Shaders`. Never fails: problems become notes.
+/// origins (overwrite wins), also for a chosen folder; from the Data folder above `Shaders` only when no origin
+/// has a settings file (no target, or none there). Never fails: problems become notes.
 pub fn read_cs_settings(target: Option<&ScanTarget>, found: &Fingerprint) -> CsSettings {
-    let origins = if found.owner_mod.is_some() {
-        target_origins(target)
-    } else {
-        vec![]
-    };
-    let origins = (!origins.is_empty()).then_some(origins.as_slice());
-    cs_settings::read_settings(&locate::settings_paths(origins, &found.root))
+    // Through the target's origins whatever folder the shaders came from (a chosen copy of CS still has its
+    // settings in MO2's overwrite); the Data folder above `Shaders` only when no origin has a settings file.
+    let origins = target_origins(target);
+    let through_target = Some(origins.as_slice())
+        .filter(|o| !o.is_empty())
+        .map(|o| locate::settings_paths(Some(o), &found.root))
+        .filter(|p| p.user.is_some() || p.default.is_some() || p.info_ini.is_some());
+    let paths = through_target.unwrap_or_else(|| locate::settings_paths(None, &found.root));
+    cs_settings::read_settings(&paths)
 }
 
 /// Finds the CS `Shaders` folder: a folder the user chose (no owning mod) while it still holds `Lighting.hlsl`;
