@@ -34,8 +34,8 @@ The new files sit in `presets/` and are embedded with the existing `include_str!
 
 | id | base | target | Description |
 |---|---|---|---|
-| `cs-compact` | `cs-quality` | `cs` | "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)." |
-| `vanilla-compact` | `vanilla-quality` | `vanilla` | "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)." |
+| `cs-compact` | `cs-quality` | `cs` | "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (larger side above 512)." |
+| `vanilla-compact` | `vanilla-quality` | `vanilla` | "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (larger side above 512)." |
 | `fast-preview` | `sdc-base` | none (any target) | "Fast preview: bc7e fast, smallest-mip validation only. For checking a mod quickly, not for release." |
 
 `fast-preview` gets no `target`, so the batch target decides availability. If the registry requires a target, add one `fast-preview` per target instead (`cs-fast-preview`, `vanilla-fast-preview`) and record that in Note T. The plan checks this first.

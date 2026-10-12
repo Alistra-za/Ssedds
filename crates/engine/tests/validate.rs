@@ -853,12 +853,12 @@ fn smallest_mip_validation_checks_only_the_last_level() {
     );
     p.validation.mips = ValidationMips::Smallest;
     let r = run(&b, &p, Some(&inputs), Some(1.0), None);
-    assert_eq!(
-        codes(&r)
-            .iter()
-            .filter(|c| **c == Code::ValCoverage)
-            .count(),
-        1
-    );
+    let cov_levels: Vec<u64> = r
+        .warnings
+        .iter()
+        .filter(|w| w.code == Code::ValCoverage)
+        .map(|w| w.data["level"].as_u64().unwrap())
+        .collect();
+    assert_eq!(cov_levels, [1], "the last level, not the first");
     assert_eq!(r.summary.coverage.len(), 1);
 }

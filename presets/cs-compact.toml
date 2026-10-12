@@ -3,7 +3,7 @@ id = "cs-compact"
 version = "1.0.0"
 base = "cs-quality"
 target = "cs"
-description = "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)."
+description = "CS – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (larger side above 512)."
 
 [defaults]
 encoder = { bc45_search_radius = "fast" }

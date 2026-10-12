@@ -1050,3 +1050,34 @@ fn inspect_reports_a_skipped_user_preset_once_on_every_path() {
         }
     }
 }
+
+/// Final review Minor 4: the skipped user presets of one `inspect --json` run share one batch id.
+#[test]
+fn inspect_json_reports_every_skipped_preset_under_one_batch_id() {
+    let d = tempfile::tempdir().unwrap();
+    let appdata = d.path().join("appdata");
+    std::fs::create_dir_all(appdata.join("sdc/presets")).unwrap();
+    for name in ["bad1", "bad2"] {
+        std::fs::write(
+            appdata.join(format!("sdc/presets/{name}.toml")),
+            format!("schema_version = 1\nid = \"{name}\"\nversion = \"1\"\nbase = \"nope\"\n"),
+        )
+        .unwrap();
+    }
+    let empty = d.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let o = sdc()
+        .env("APPDATA", &appdata)
+        .args(["inspect", "--json"])
+        .arg(&empty)
+        .output()
+        .unwrap();
+    let skips: Vec<serde_json::Value> = text(&o.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["code"] == "CFG-PRESET-SKIPPED")
+        .collect();
+    assert_eq!(skips.len(), 2, "{}", text(&o.stdout));
+    assert_eq!(skips[0]["batch"], skips[1]["batch"], "{skips:?}");
+    assert_ne!(skips[0]["seq"], skips[1]["seq"], "{skips:?}");
+}

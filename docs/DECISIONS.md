@@ -510,6 +510,10 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/s
 - **T8 Verbs (owner / plan, 2026-10-12).**
   - `diff` compares profiles from presets alone (rules are not shown: spec gap).
   - `export` writes the preset's own TOML under a new id (`<id>-export` or `--id`); `base` stays a link, and there is no `--flat` (owner).
+  - `export` writes the parsed table re-serialised, not the original text: comments are dropped and keys may be reordered (final review Minor 9). The output is equivalent and validates.
+  - `export` copies `suffix_aliases` as they are and does not strip them. A copy of a preset with suffix aliases therefore cannot load beside the original (the aliases conflict, `CFG-PRESET-SKIPPED`); rename or remove the aliases before putting the copy in the user presets folder. The `export` help says so (final review Minor 8).
+  - `export --out` refuses to overwrite the source file of any loaded preset (final review Minor 10).
+  - `diff` help and its human output footer say "rules are not compared" (final review Minor 13).
   - `validate` reports the first problem per file, and validates a folder file in place of itself.
 - **T9 Migration table (plan, 2026-10-12).** Presets none, config none, manifest records v1 → v2 (`schema` set to 2; the manifest's key is `schema`). Version 0 is refused. `PresetError::NewerConfigSchema(file, v)` is the spec's `ConfigError::NewerSchema`. Config files accept an optional `schema_version`.
 - **T10 Carried fixes (plan, 2026-10-12).**
@@ -527,6 +531,6 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/s
 - **T13 rgbcx rounding patch (owner, 2026-10-12).**
   - The vendored rgbcx's BC4/BC5/BC3-alpha decode model now rounds to nearest like bcdec. It used to floor the interpolants, so a wider search found endpoint pairs that were exact only under the floor.
   - Gain at the default radius: BC4 +3.07 dB, BC5 +2.61 dB (mean PSNR under bcdec, bench corpus). PSNR now rises monotonically with the radius.
-  - A new manifest `rgbcx_patch` field (`bc4-round-to-nearest`) makes old BC3/BC4/BC5 outputs re-encode.
+  - A new manifest `rgbcx_patch` field makes old BC3/BC4/BC5 outputs re-encode. Like `bc7e_patch` it is a content tag, `bc4-round-to-nearest@sha256:<hash of the patched vendor/bc7enc_rdo/rgbcx.h>` (final review Minor 11), so an in-place change to the patched header also re-encodes them.
   - Two bench gates moved from byte-exact to never-worse (per-block bcdec SSE for BC3 alpha, BC4, BC5); BC1 and BC3 colour stay byte-exact.
   - Known quirk: sdc's own BC3 alpha validation decodes through `bcdec_rs::bc3`, which uses `(6a0+a1+1)/7` and matches neither model.

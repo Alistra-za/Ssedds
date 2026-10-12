@@ -262,6 +262,8 @@ pub enum PresetsCmd {
         target: Option<TargetArg>,
     },
     /// Print the fields where two presets resolve differently: `<subtype>.<field>: <a> → <b>`.
+    ///
+    /// Profiles only: rules are not compared.
     Diff {
         a: String,
         b: String,
@@ -273,6 +275,10 @@ pub enum PresetsCmd {
         json: bool,
     },
     /// Write a preset's own TOML (keeping its `base` link) under a new id (default `<id>-export`).
+    ///
+    /// The table is re-serialised: comments are dropped and keys may reorder. Suffix aliases are copied as they are,
+    /// so a copy of a preset with suffix aliases does not load beside the original: rename or remove the aliases
+    /// before you put the copy in the user presets folder. `--out` refuses the source file of a loaded preset.
     Export {
         id: String,
         #[arg(long)]

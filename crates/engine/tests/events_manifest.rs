@@ -316,8 +316,17 @@ fn encoder_versions_come_from_the_encoders_crate() {
     .unwrap();
     assert_eq!(patch, format!("{}@sha256:{hash}", v.bc7e_patch.unwrap()));
     // A manifest from before the rgbcx BC4 round-to-nearest patch must not match, so its BC3/BC4/BC5 re-encode.
-    assert_eq!(e.rgbcx_patch.as_deref(), Some("bc4-round-to-nearest"));
-    assert_eq!(e.rgbcx_patch.as_deref(), v.rgbcx_patch);
+    // The tag hashes the patched rgbcx.h, so an in-place change to the rounding code also re-encodes (T13).
+    let rgbcx = sha256_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../encoders-sys/vendor/bc7enc_rdo/rgbcx.h"
+    )))
+    .unwrap();
+    assert_eq!(v.rgbcx_patch, Some("bc4-round-to-nearest"));
+    assert_eq!(
+        e.rgbcx_patch.as_deref(),
+        Some(format!("bc4-round-to-nearest@sha256:{rgbcx}").as_str())
+    );
 }
 
 #[test]

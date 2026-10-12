@@ -1260,22 +1260,27 @@ fn a_user_folder_preset_is_usable_by_id() {
     );
 }
 
-/// M6 Track D spec §1: `--preset cs-compact` writes an opaque colour map as BC1 and halves a data map (min 512).
+/// M6 Track D spec §1: `--preset cs-compact` writes an opaque colour map as BC1 and halves a data map (larger side
+/// above 512). A packed `_rmaos` halves once after assembly, beside its halved `_n` (Review Focus 3).
 #[test]
 fn cs_compact_writes_bc1_colour_and_half_size_normals() {
     let fx = Fx::new();
-    fx.rgb("wall_d.png");
+    fx.rgb("trim_d.png");
     ImageBuffer::from_fn(1024, 1024, |_, _| Rgb([128u8, 128, 255]))
         .save(fx.p("in/textures/a/wall_n.png"))
         .unwrap();
+    fx.rgb_sized("wall_roughness.png", 1024, 90);
+    fx.rgb_sized("wall_ao.png", 1024, 200);
     let o = fx.convert(&["--preset", "cs-compact", "--accept-suggestions", "high"]);
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
     assert_eq!(
-        fx.format("textures/a/wall_d.dds"),
+        fx.format("textures/a/trim_d.dds"),
         DdsPixelFormat::Bc1 { srgb: false }
     );
-    let c = read_dds(&std::fs::read(fx.dds("textures/a/wall_d.dds")).unwrap()).unwrap();
+    let c = read_dds(&std::fs::read(fx.dds("textures/a/trim_d.dds")).unwrap()).unwrap();
     assert_eq!((c.width, c.height), (32, 32));
     let n = read_dds(&std::fs::read(fx.dds("textures/a/wall_n.dds")).unwrap()).unwrap();
     assert_eq!((n.width, n.height), (512, 512));
+    let p = read_dds(&std::fs::read(fx.dds("textures/a/wall_rmaos.dds")).unwrap()).unwrap();
+    assert_eq!((p.width, p.height), (512, 512));
 }

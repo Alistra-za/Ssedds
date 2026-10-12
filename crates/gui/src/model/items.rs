@@ -81,6 +81,8 @@ pub struct PlanView {
     pub preset_id: String,
     /// `(id, file)` of every user preset the plan's registry loaded.
     pub user_presets: Vec<(String, String)>,
+    /// `(file, reason)` of every user preset file the plan skipped (CFG-PRESET-SKIPPED).
+    pub skipped_user_presets: Vec<(String, String)>,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched: Vec<String>,
@@ -256,6 +258,7 @@ impl PlanView {
             });
         let mut sets = vec![];
         let mut unmatched = vec![];
+        let mut skipped_user_presets = vec![];
         for e in events {
             match &e.kind {
                 EventKind::SetResolved {
@@ -295,6 +298,10 @@ impl PlanView {
                         unmatched.push(k.to_string());
                     }
                 }
+                EventKind::Warning(w) if w.code == Code::CfgPresetSkipped => {
+                    let s = |k: &str| w.data[k].as_str().unwrap_or_default().to_string();
+                    skipped_user_presets.push((s("file"), s("reason")));
+                }
                 _ => {}
             }
         }
@@ -307,6 +314,7 @@ impl PlanView {
                 .into_iter()
                 .map(|(id, src)| (id.to_string(), src.to_string()))
                 .collect(),
+            skipped_user_presets,
             items,
             sets,
             unmatched,

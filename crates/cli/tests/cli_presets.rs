@@ -117,7 +117,7 @@ fn encoders_reports_versions_isa_model_and_nvtt() {
         "79ddbc9",
         "1.31.0",
         "0001-exact-opaque-alpha@sha256:",
-        "patch bc4-round-to-nearest",
+        "patch bc4-round-to-nearest@sha256:",
         "dispatched ISA",
         "BC1 decoder model: ideal",
     ] {
@@ -137,7 +137,10 @@ fn encoders_json_is_one_object_and_nvtt_comes_from_the_flag() {
     assert_eq!(v["ispc"], "1.31.0");
     assert_eq!(v["bc1_model"], "ideal");
     assert!(v["bc7e_patch"].as_str().unwrap().contains("@sha256:"));
-    assert_eq!(v["rgbcx_patch"], "bc4-round-to-nearest");
+    assert!(v["rgbcx_patch"]
+        .as_str()
+        .unwrap()
+        .starts_with("bc4-round-to-nearest@sha256:"));
     assert!(["sse2", "sse4", "avx", "avx2"].contains(&v["isa"].as_str().unwrap()));
     assert_eq!(v["nvtt"]["found"], false);
     assert_eq!(v["nvtt"]["source"], "--nvtt");
@@ -232,9 +235,15 @@ fn diff_prints_only_differences() {
     let d = appdata_with_mine();
     let (code, out, err) = sdc_in(d.path(), &["presets", "diff", "cs-quality", "mine"]);
     assert_eq!(code, 0, "{err}");
-    assert_eq!(out.trim(), "diffuse.format: \"bc7\" → \"bc1\"");
+    assert_eq!(
+        out.trim(),
+        "diffuse.format: \"bc7\" → \"bc1\"\n(rules are not compared)"
+    );
     let (code, out, _) = sdc_in(d.path(), &["presets", "diff", "cs-quality", "cs-quality"]);
-    assert_eq!((code, out.trim()), (0, "no differences"));
+    assert_eq!(
+        (code, out.trim()),
+        (0, "no differences\n(rules are not compared)")
+    );
     let (code, out, _) = sdc_in(
         d.path(),
         &[
@@ -382,4 +391,38 @@ fn help_names_the_user_presets_folder() {
         assert_eq!(code, 0);
         assert!(out.contains(r"%APPDATA%\sdc\presets"), "{args:?}: {out}");
     }
+}
+
+/// Final review Minor 10: `export --out` refuses to overwrite the source file of a loaded preset.
+#[test]
+fn export_refuses_to_overwrite_a_loaded_preset_file() {
+    let d = appdata_with_mine();
+    let src = d.path().join("sdc/presets/mine.toml");
+    let (code, _, err) = sdc_in(
+        d.path(),
+        &[
+            "presets",
+            "export",
+            "cs-compact",
+            "--out",
+            src.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(
+        err.contains("is the source of loaded preset 'mine'"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read_to_string(&src).unwrap(), MINE);
+}
+
+/// Final review Minors 8 and 13: `diff --help` says rules are not compared; `export --help` warns about aliases.
+#[test]
+fn diff_and_export_help_state_their_limits() {
+    let (code, out, _) = stdout_of(&["presets", "diff", "--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("rules are not compared"), "{out}");
+    let (code, out, _) = stdout_of(&["presets", "export", "--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("suffix aliases"), "{out}");
 }

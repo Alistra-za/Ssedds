@@ -378,3 +378,44 @@ fn the_inspector_lists_loaded_user_presets() {
     h.run();
     h.get_by_label_contains("mine.toml");
 }
+
+/// Final review Important 1: a user preset file that fails to load is shown in the inspector with its reason
+/// (CFG-PRESET-SKIPPED), under the presets that did load.
+#[test]
+fn the_inspector_lists_skipped_user_presets_with_their_reason() {
+    let d = tempfile::tempdir().unwrap();
+    let presets = d.path().join("user-presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    std::fs::write(
+        presets.join("mine.toml"),
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        presets.join("bad.toml"),
+        "schema_version = 1\nid = \"bad\"\nversion = \"1.0.0\"\nbase = \"nope\"\n",
+    )
+    .unwrap();
+    let mut m = opened(d.path());
+    m.user_presets = Some(presets.clone());
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let ids: Vec<&str> = m
+        .loaded_user_presets
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(ids, ["mine"]);
+    assert_eq!(m.skipped_user_presets.len(), 1);
+    assert!(m.skipped_user_presets[0].0.ends_with("bad.toml"));
+    assert!(m.skipped_user_presets[0]
+        .1
+        .contains("unknown preset 'nope'"));
+    m.settings.advanced_open = true;
+    m.select_item("landscape/leaf.png");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("mine.toml");
+    h.get_by_label_contains("bad.toml");
+    h.get_by_label_contains("unknown preset 'nope'");
+}

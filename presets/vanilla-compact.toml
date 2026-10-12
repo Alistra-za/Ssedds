@@ -3,7 +3,7 @@ id = "vanilla-compact"
 version = "1.0.0"
 base = "vanilla-quality"
 target = "vanilla"
-description = "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (min 512)."
+description = "Vanilla – Compact: BC1 for opaque colour, every other map except emissive and sky at half size (larger side above 512)."
 
 [defaults]
 encoder = { bc45_search_radius = "fast" }

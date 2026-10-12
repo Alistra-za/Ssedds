@@ -77,3 +77,11 @@ fn schemas_cover_the_reviewed_fields() {
     assert!(info.contains("dds_info") && info.contains("header_issues"));
     assert!(schema_json(SchemaKind::DdsValidation).contains("dds_validation"));
 }
+
+/// Final review Minor 2: `schema_version = 0` is refused by the migration hook, so the config schema says so.
+#[test]
+fn config_schema_version_minimum_is_one() {
+    let v: serde_json::Value = serde_json::from_str(&schema_json(SchemaKind::Config)).unwrap();
+    let sv = &v["properties"]["schema_version"];
+    assert_eq!(sv["minimum"], 1, "{sv}");
+}

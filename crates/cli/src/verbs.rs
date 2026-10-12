@@ -373,19 +373,20 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
     }
     if !found.iter().any(|f| f.kind == InputKind::Image) {
         // No plan runs here, so report the skipped user presets ourselves (a plan reports them itself).
+        // One reporter, so every skip shares one batch id.
+        let sink = Arc::new(VecSink::default());
+        let rep = if json {
+            Reporter::new(
+                Arc::new(JsonLinesSink::new(std::io::stdout())),
+                new_batch_id(),
+            )
+        } else {
+            Reporter::new(sink.clone(), new_batch_id())
+        };
         for w in preset_skips {
-            if json {
-                let ev = Reporter::new(
-                    Arc::new(JsonLinesSink::new(std::io::stdout())),
-                    new_batch_id(),
-                );
-                ev.emit(None, None, EventKind::Warning(w));
-            } else {
-                let sink = Arc::new(VecSink::default());
-                Reporter::new(sink.clone(), new_batch_id()).emit(None, None, EventKind::Warning(w));
-                sink.take().iter().for_each(print_event);
-            }
+            rep.emit(None, None, EventKind::Warning(w));
         }
+        sink.take().iter().for_each(print_event);
         return Ok(i32::from(unreadable > 0));
     }
 
@@ -878,6 +879,9 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                     );
                 }
             }
+            if !json {
+                println!("(rules are not compared)");
+            }
             Ok(0)
         }
         PresetsCmd::Export { id, out, new_id } => {
@@ -885,6 +889,12 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
             let text = reg
                 .export(&id, &new_id)
                 .map_err(|e| EngineError::Usage(e.to_string()))?;
+            if let Some((p, owner)) = out.as_deref().and_then(|p| Some((p, reg.loaded_from(p)?))) {
+                return Err(EngineError::Usage(format!(
+                    "--out {} is the source of loaded preset '{owner}'; choose another file",
+                    p.display()
+                )));
+            }
             match out {
                 Some(p) => std::fs::write(&p, &text)
                     .map_err(|e| EngineError::Fatal(format!("{}: {e}", p.display())))?,

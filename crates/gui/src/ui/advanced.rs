@@ -145,6 +145,13 @@ fn inspector(ui: &mut egui::Ui, model: &AppModel, state: &mut AdvancedState) {
                 ui.label(egui::RichText::new(format!("{id} — {file}")).small());
             }
         }
+        for (file, reason) in &model.skipped_user_presets {
+            ui.label(
+                egui::RichText::new(format!("Skipped: {file} — {reason}"))
+                    .small()
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
         ui.label(
             egui::RichText::new(
                 "Built-in presets are read-only here. Change a texture in the centre panel.",

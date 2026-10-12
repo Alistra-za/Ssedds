@@ -134,6 +134,7 @@ pub struct PresetFile {
 pub struct ConfigFile {
     /// Schema of this file (spec §5); absent = 1. Not written back when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
     pub schema_version: Option<u32>,
     #[serde(default)]
     pub preset: Option<String>,
@@ -732,17 +733,20 @@ impl PresetRegistry {
         warnings
     }
 
+    /// The id of the preset loaded from the file `path` (compared canonically), if any.
+    pub fn loaded_from(&self, path: &Path) -> Option<&str> {
+        self.sources
+            .iter()
+            .find(|(_, s)| same_file(s, path))
+            .map(|(id, _)| id.as_str())
+    }
+
     /// `sdc presets validate` (spec §4): load `path` into a copy of this registry (without a preset already loaded
     /// from that same file, so a user folder file validates in place of itself) and check it. One line per problem;
     /// loading stops at the first, so a file has at most one (Note T8). Empty = clean.
     pub fn validate_file(&self, path: &Path) -> Vec<String> {
         let mut r = self.clone();
-        let own = r
-            .sources
-            .iter()
-            .find(|(_, s)| same_file(s, path))
-            .map(|(id, _)| id.clone());
-        if let Some(id) = own {
+        if let Some(id) = self.loaded_from(path).map(str::to_string) {
             r.remove(&id);
         }
         match r.add_file(path) {
@@ -756,8 +760,9 @@ impl PresetRegistry {
         }
     }
 
-    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded (`base` stays a link) under `new_id`, so it
-    /// loads beside the original.
+    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded (`base` stays a link) under `new_id`,
+    /// re-serialised (comments dropped, keys may reorder). `suffix_aliases` are copied as they are, so a copy of a
+    /// preset with aliases does not load beside the original (the aliases conflict) until they are renamed or removed.
     pub fn export(&self, id: &str, new_id: &str) -> Result<String, PresetError> {
         let mut t = self
             .tables
