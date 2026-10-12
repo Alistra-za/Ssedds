@@ -230,6 +230,10 @@ impl eframe::App for SdcApp {
             self.model.save_settings();
         }
 
+        // The 3D gap watches expect a next frame exactly when their panel asks for one (after drawing).
+        self.meshes.v3.arm_gap(self.meshes.v3.busy());
+        self.state.set3d.v3.arm_gap(self.state.set3d.busy());
+
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
         if self.model.busy()
             || self.meshes.scanning()
