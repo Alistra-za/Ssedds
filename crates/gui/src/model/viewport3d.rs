@@ -774,13 +774,13 @@ impl Viewport3d {
         }
     }
 
-    /// Something is drawn. Parsed/Builtin content follows the current shapes (an edit can un-hide or repair the
+    /// Something may be drawn. Parsed/Builtin content follows the current shapes: any not Hidden (a Failed shape keeps its old draw or draws nothing, and a compile failure must never freeze the panel); an edit can un-hide or repair the
     /// only shape); until the first `Shapes` reply the load report decides. Mesh: the load report.
     fn renderable(&self) -> bool {
         let n = self.report.as_ref().map_or(0, |r| r.shapes);
         match self.content {
             Some(Content::Parsed { .. } | Content::Builtin { .. }) if !self.shapes.is_empty() => {
-                self.shapes.iter().any(|s| s.status == ShapeStatus::Drawing)
+                self.shapes.iter().any(|s| s.status != ShapeStatus::Hidden)
             }
             _ => n > 0,
         }

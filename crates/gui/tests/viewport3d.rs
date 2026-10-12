@@ -916,3 +916,24 @@ fn a_dead_worker_does_not_leave_edits_busy() {
     v.handle(v3::V3Reply::Failed("gone".into()));
     assert!(!v.busy());
 }
+
+#[test]
+fn a_failed_edit_on_the_only_shape_keeps_the_camera_live() {
+    let (_d, mut v, cmds) = confirmed();
+    let id = loaded_parsed(&mut v, &cmds, 1, 1);
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(v.set_material(ShapeId(0), MaterialState::builtin_default()));
+    let _ = cmds.try_recv();
+    v.handle(v3::V3Reply::MaterialSet {
+        content: id,
+        id: ShapeId(0),
+        result: Err("compile".into()),
+        ms: 1.0,
+    });
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed(
+        "compile".into(),
+    ))]));
+    v.orbit.drag(10.0, 0.0);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+}
