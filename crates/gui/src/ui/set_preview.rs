@@ -16,6 +16,9 @@ const EMISSIVE_APPROX: &str = "Emissive colour is approximate (in game the engin
 const SLSF1_EMISSIVE: u32 = 1 << 29;
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
+/// The panel's narrowest width, and the width the central columns keep at the least.
+pub const PANEL_MIN: f32 = 240.0;
+pub const CENTRE_MIN: f32 = 360.0;
 /// Height of the shape list before the frame.
 const LIST_MAX: f32 = 160.0;
 

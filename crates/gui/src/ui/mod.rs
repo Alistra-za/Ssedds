@@ -73,9 +73,14 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
-    if state.set3d.enabled && set_preview::wanted(model) {
+    // The panel leaves the central columns their minimum width; too narrow a window for both hides the panel
+    // (narrowing a column brings it back).
+    let room = ui.available_width() - set_preview::CENTRE_MIN;
+    if state.set3d.enabled && set_preview::wanted(model) && room >= set_preview::PANEL_MIN {
         egui::Panel::right("set-3d")
             .default_size(380.0)
+            .min_size(set_preview::PANEL_MIN)
+            .max_size(room)
             .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
     }
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));

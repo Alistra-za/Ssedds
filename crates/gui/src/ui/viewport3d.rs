@@ -135,6 +135,7 @@ fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
             v.orbit.zoom((-s * 0.002).exp());
         }
     }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, FRAME_LABEL));
     let ppp = ui.ctx().pixels_per_point();
     v.request_frame(
         (rect.width() * ppp).round() as u32,
@@ -145,7 +146,6 @@ fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let Some(frame) = v.frame.clone() else {
         return;
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, FRAME_LABEL));
     let id = egui::Id::new("viewport3d-frame");
     let cached: Option<(u64, egui::TextureHandle)> = ui.ctx().data(|d| d.get_temp(id));
     let tex = match cached {
