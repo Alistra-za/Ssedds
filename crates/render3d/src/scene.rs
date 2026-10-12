@@ -41,9 +41,28 @@ pub struct DirLight {
     pub color: [f32; 3],
 }
 
+/// What is drawn behind the model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Background {
+    /// A flat grey: the **linear** value written to the (linear, RGBA16F) target, so it is encoded with the rest
+    /// of the frame at readback. A perceptual (sRGB) grey from a UI slider goes through [`Background::grey`].
+    Solid(f32),
+    /// The bundled studio HDRI ([`crate::hdri`]) by view direction. It also replaces `Scene::ambient6`: the
+    /// ambient light is taken from the same image ([`Scene::ambient`]).
+    Hdri,
+}
+
+impl Background {
+    /// A solid grey from an sRGB-perceptual value in 0..1 (0 = black, 1 = white).
+    pub fn grey(srgb: f32) -> Background {
+        Background::Solid(srgb_to_linear(srgb.clamp(0.0, 1.0)))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
     pub camera: Camera,
+    pub background: Background,
     pub dir_light: DirLight,
     /// Ambient (DALC) colours seen from +X, −X, +Y, −Y, +Z, −Z, world space.
     pub ambient6: [[f32; 3]; 6],
@@ -72,6 +91,14 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 impl Scene {
+    /// The six ambient colours the shader gets: `ambient6`, or the HDRI's when it is the background.
+    pub fn ambient(&self) -> [[f32; 3]; 6] {
+        match self.background {
+            Background::Solid(_) => self.ambient6,
+            Background::Hdri => crate::hdri::studio().ambient6,
+        }
+    }
+
     /// Interior-like neutral preview:
     /// - one directional light from the upper front-left of the auto camera (camera on +Y looking towards −Y, so its
     ///   left is +X),
@@ -82,6 +109,7 @@ impl Scene {
     pub fn neutral() -> Scene {
         Scene {
             camera: Camera::Auto,
+            background: Background::Solid(0.0),
             dir_light: DirLight {
                 direction: norm([0.5, 0.8, 0.9]),
                 color: [2.0, 1.94, 1.84],
@@ -394,8 +422,9 @@ impl Scene {
             "DirLightColor",
             &[l.color[0], l.color[1], l.color[2], 0.0],
         );
-        put(w, "DirectionalAmbient", &rows(&dalc(&self.ambient6)));
-        let sh = dalc_to_sh(&self.ambient6);
+        let ambient = self.ambient();
+        put(w, "DirectionalAmbient", &rows(&dalc(&ambient)));
+        let sh = dalc_to_sh(&ambient);
         put(w, "AmbientSHR", &sh[0]);
         put(w, "AmbientSHG", &sh[1]);
         put(w, "AmbientSHB", &sh[2]);
@@ -530,12 +559,13 @@ pub struct LightValues {
 impl LightValues {
     pub fn new(s: &Scene) -> LightValues {
         let l = s.dir_light;
-        let sh = dalc_to_sh(&s.ambient6);
+        let ambient = s.ambient();
+        let sh = dalc_to_sh(&ambient);
         LightValues {
             values: vec![
                 vec![l.direction[0], l.direction[1], l.direction[2], 0.0],
                 vec![l.color[0], l.color[1], l.color[2], 0.0],
-                rows(&dalc(&s.ambient6)),
+                rows(&dalc(&ambient)),
                 sh[0].to_vec(),
                 sh[1].to_vec(),
                 sh[2].to_vec(),

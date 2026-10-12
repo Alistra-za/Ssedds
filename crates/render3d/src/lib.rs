@@ -1,3 +1,4 @@
+pub mod background;
 pub mod builtin;
 pub mod cbuffer;
 pub mod compile;
@@ -17,6 +18,7 @@ pub use builtin::{builtin_mesh, Builtin};
 pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 
+use background::Backdrop;
 use compile::{compile, SrvKind};
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
@@ -24,6 +26,7 @@ use locate::Fingerprint;
 use material::{perm_material, write_material};
 use nif::material::MaterialState;
 use permutation::{defines, Material, Stage};
+pub use scene::Background;
 use scene::{LightValues, Scene, View, ViewValues};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -157,6 +160,8 @@ pub struct Renderer {
     uploads: usize,
     /// Test hook: draw with P0's by-name writer (every field, every cbuffer, every frame).
     reference_writer: bool,
+    /// The HDRI background pass, made on the first `Background::Hdri` frame.
+    backdrop: Option<Backdrop>,
 }
 
 fn permutation_key(d: &permutation::Defines, target: &str) -> String {
@@ -240,6 +245,7 @@ impl Renderer {
             last_frame: None,
             uploads: 0,
             reference_writer: false,
+            backdrop: None,
             gpu,
             shaders,
             cache_dir,
@@ -806,9 +812,16 @@ impl Renderer {
             view_changed,
         };
         let mut uploads = 0;
+        if scene.background == Background::Hdri && self.backdrop.is_none() {
+            self.backdrop = Some(Backdrop::new(&self.gpu)?);
+        }
         let gpu = &self.gpu;
         let target = self.target.as_ref().ok_or("no target")?;
-        target.clear(gpu, [0.0, 0.0, 0.0, 1.0]);
+        let grey = match scene.background {
+            Background::Solid(g) => g,
+            Background::Hdri => 0.0,
+        };
+        target.clear(gpu, [grey, grey, grey, 1.0]);
         // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
         unsafe {
             let ctx = &gpu.ctx;
@@ -823,6 +836,9 @@ impl Renderer {
             }]));
             ctx.RSSetState(&self.raster);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            if let (Background::Hdri, Some(b)) = (scene.background, &self.backdrop) {
+                b.draw(gpu, &view, &self.sampler);
+            }
             for id in &self.draw_order {
                 let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
                     continue;
