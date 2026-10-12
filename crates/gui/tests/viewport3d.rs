@@ -1464,3 +1464,179 @@ fn a_real_compile_failure_is_listed_and_the_panel_goes_idle() {
     );
     assert!(!v.busy());
 }
+
+// ---- P1-B Task 8a: texture swaps ----
+
+#[test]
+fn texture_swaps_follow_the_load_re_render_and_report_errors() {
+    use render3d::Variant;
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    let p = "textures/a.dds";
+    let bytes = Arc::new(vec![1u8, 2, 3]);
+    assert!(
+        !v.swap_texture(p.into(), bytes.clone(), Variant::Encoded),
+        "no load sent yet: the caller pushes the scene instead"
+    );
+    assert!(!v.set_texture_variant(p.into(), Variant::Encoded));
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed first (the default load variant is never announced)")
+    };
+    assert!(v.swap_texture(p.into(), bytes.clone(), Variant::Encoded));
+    assert!(v.set_texture_variant(p.into(), Variant::Encoded));
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SwapTexture { path, variant: Variant::Encoded, bytes: b }) if path == p && b == bytes
+    ));
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetTextureVariant { path, variant: Variant::Encoded }) if path == p
+    ));
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+    );
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })));
+    v.request_frame(64, 64);
+    assert!(cmds.try_recv().is_err(), "nothing changed: nothing sent");
+    assert!(v.swap_texture(p.into(), bytes, Variant::Source));
+    cmds.try_recv().unwrap();
+    v.request_frame(64, 64);
+    assert!(
+        matches!(cmds.try_recv(), Ok(v3::V3Cmd::Render { .. })),
+        "a swap draws on the next request"
+    );
+    // A failed swap is listed; a reply for content replaced since is dropped.
+    v.handle(v3::V3Reply::TextureSwap {
+        content: id,
+        path: p.into(),
+        result: Err("boom".into()),
+    });
+    assert_eq!(v.swap_errors, vec!["textures/a.dds: boom".to_string()]);
+    v.handle(v3::V3Reply::TextureSwap {
+        content: id + 99,
+        path: p.into(),
+        result: Err("stale".into()),
+    });
+    assert_eq!(v.swap_errors.len(), 1);
+}
+
+#[test]
+fn only_parsed_and_builtin_content_takes_swaps_and_the_load_variant_is_announced_once() {
+    use render3d::Variant;
+    let (_d, mut v, cmds) = confirmed();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    cmds.try_recv().unwrap(); // Load
+    assert!(!v.swap_texture("textures/a.dds".into(), Arc::new(vec![1]), Variant::Source));
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_load_variant(Variant::Encoded);
+    v.set_content(Some(parsed(2, &nif, &[])), false);
+    v.request_frame(64, 64);
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetLoadVariant(Variant::Encoded))
+    ));
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::LoadParsed { .. })));
+    // Unchanged for the next load: not announced again.
+    v.set_content(Some(parsed(3, &nif, &[])), false);
+    v.request_frame(64, 64);
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::LoadParsed { .. })));
+}
+
+/// A real render thread on WARP with the repo stand-in: a swap shows in the next frame and is applied again after
+/// a reload (here: the features toggle), which loads the content's own bytes again.
+#[test]
+fn a_texture_swap_reaches_the_render_thread_and_survives_a_reload() {
+    use nif::material::MaterialState;
+    use render3d::Variant;
+    use sdc_gui::model::set_preview::uncompressed_dds;
+    const PATH: &str = "textures/ab/t.dds";
+    let standin = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ));
+    let fp = render3d::locate::fingerprint(&standin, None).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut v = Viewport3d::new(Some(fp.clone()));
+    v.cache_dir = Some(cache.path().to_path_buf());
+    v.on_located(Ok(Some(fp)));
+    let tex = |c: [f32; 4]| {
+        uncompressed_dds(
+            &[engine::image::Rgba32F {
+                width: 1,
+                height: 1,
+                px: vec![c],
+            }],
+            false,
+            false,
+        )
+        .unwrap()
+    };
+    let mut material = MaterialState::builtin_default();
+    material.set_slot_raw(0, PATH);
+    // DO_ALPHA_TEST: the stand-in refuses the other permutations.
+    material.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    });
+    let red = v3::FileSource::Memory {
+        id: 1,
+        bytes: Arc::new(tex([1.0, 0.0, 0.0, 1.0])),
+    };
+    v.set_content(
+        Some(v3::Content::Builtin {
+            key: 1,
+            shape: render3d::builtin::Builtin::Sphere,
+            material,
+            textures: Arc::new(HashMap::from([(PATH.to_string(), red)])),
+        }),
+        false,
+    );
+    let chan = |v: &Viewport3d, c: usize| -> u64 {
+        let f = v.frame.as_ref().expect("a frame");
+        f.rgba.chunks(4).map(|p| p[c] as u64).sum()
+    };
+    // The first frame is blank while the programs compile; the compile-triggered refresh draws the lit one.
+    // Frame ids: refresh frames use a private range, so a new frame is one with a different id.
+    let wait_for = |v: &mut Viewport3d, c: usize, newer_than: u64| {
+        let t = std::time::Instant::now();
+        loop {
+            v.request_frame(64, 64);
+            v.poll();
+            let ok = v
+                .frame
+                .as_ref()
+                .is_some_and(|f| f.id != newer_than && chan(v, c) > chan(v, 1 - c) + 1000);
+            if ok && !v.busy() {
+                break;
+            }
+            assert!(
+                t.elapsed().as_secs() < 60,
+                "no frame dominated by channel {c}: {:?} {:?} {:?}",
+                v.swap_errors,
+                v.frame.as_ref().map(|f| (f.id, chan(v, 0), chan(v, 1))),
+                v.render_error
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait_for(&mut v, 0, 0);
+    assert!(v.render_error.is_none(), "{:?}", v.render_error);
+    let green = Arc::new(tex([0.0, 1.0, 0.0, 1.0]));
+    let id0 = v.frame.as_ref().unwrap().id;
+    assert!(v.swap_texture(PATH.into(), green, Variant::Source));
+    wait_for(&mut v, 1, id0);
+    assert!(v.swap_errors.is_empty(), "{:?}", v.swap_errors);
+    let id1 = v.frame.as_ref().unwrap().id;
+    v.set_features(false);
+    // A new frame after the reload that is green again: the swap was applied again.
+    wait_for(&mut v, 1, id1);
+}

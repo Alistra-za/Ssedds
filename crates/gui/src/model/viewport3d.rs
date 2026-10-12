@@ -14,7 +14,7 @@ use render3d::locate::{self, Change, Fingerprint};
 use render3d::scene::{Background, Camera, PointLight, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
 use render3d::{
     CompileDone, CompilePool, EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId,
-    ShapeInfo, ShapeStatus,
+    ShapeInfo, ShapeStatus, Variant,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -370,6 +370,20 @@ pub enum V3Cmd {
         id: ShapeId,
         material: MaterialState,
     },
+    /// New DDS bytes for a texture path as one variant (`Renderer::replace_texture`); empty bytes drop that copy.
+    /// Applied after the load it follows; a later load in the same batch drops it.
+    SwapTexture {
+        path: String,
+        bytes: Arc<Vec<u8>>,
+        variant: Variant,
+    },
+    /// Makes one variant of a path the bound one (`Renderer::set_texture_variant`): the instant A/B flip.
+    SetTextureVariant {
+        path: String,
+        variant: Variant,
+    },
+    /// The variant the next loads' resolver bytes count as (`Renderer::set_load_variant`); sticky.
+    SetLoadVariant(Variant),
     Render {
         id: u64,
         camera: Camera,
@@ -423,6 +437,12 @@ pub enum V3Reply {
         result: Result<EditKind, String>,
         ms: f64,
     },
+    /// One `SwapTexture` applied (or why it was not: the old texture stays).
+    TextureSwap {
+        content: u64,
+        path: String,
+        result: Result<(), String>,
+    },
     /// A locate answer; `generation` tells a stale one (started before a later locate or "Choose folder…").
     Located {
         generation: u64,
@@ -468,6 +488,11 @@ pub struct Viewport3d {
     pub shapes: Vec<ShapeInfo>,
     /// The last material edit: its kind and render-thread time in ms.
     pub last_edit: Option<(EditKind, f64)>,
+    /// Texture swaps the render thread refused (a bad DDS, a kind the slot does not read); the set preview lists them.
+    pub swap_errors: Vec<String>,
+    /// The variant the next load's resolver bytes count as, and the one the render thread was last told.
+    load_variant: Variant,
+    load_variant_sent: Variant,
     content: Option<Content>,
     need_load: bool,
     /// The pending load is a reload of the same model (`set_content(.., true)`): a compile failure keeps the frame.
@@ -520,6 +545,9 @@ impl Viewport3d {
             content: None,
             shapes: vec![],
             last_edit: None,
+            swap_errors: vec![],
+            load_variant: Variant::Source,
+            load_variant_sent: Variant::Source,
             edits_sent: 0,
             edits_done: 0,
             need_load: false,
@@ -824,6 +852,55 @@ impl Viewport3d {
         true
     }
 
+    /// The render thread, once a load of the current `Parsed`/`Builtin` content has been sent: the guard of every
+    /// edit that follows a load (texture swaps).
+    fn content_thread(&self) -> Option<Sender<V3Cmd>> {
+        if !matches!(
+            self.content,
+            Some(Content::Parsed { .. } | Content::Builtin { .. })
+        ) {
+            return None;
+        }
+        if self.need_load || (self.loaded.is_none() && self.pending_load.is_none()) {
+            return None;
+        }
+        self.thread.clone()
+    }
+
+    /// New DDS bytes for `path` as `variant` on the current content (empty bytes drop that copy), applied by the
+    /// thread after the load it follows. False when no load of this content has been sent yet: the caller then puts
+    /// the bytes into a new content instead.
+    pub fn swap_texture(&mut self, path: String, bytes: Arc<Vec<u8>>, variant: Variant) -> bool {
+        self.send_texture_cmd(V3Cmd::SwapTexture {
+            path,
+            bytes,
+            variant,
+        })
+    }
+
+    /// Shows `variant` of `path` (both copies are already on the thread). False as [`Viewport3d::swap_texture`].
+    pub fn set_texture_variant(&mut self, path: String, variant: Variant) -> bool {
+        self.send_texture_cmd(V3Cmd::SetTextureVariant { path, variant })
+    }
+
+    fn send_texture_cmd(&mut self, cmd: V3Cmd) -> bool {
+        let Some(t) = self.content_thread() else {
+            return false;
+        };
+        if t.send(cmd).is_err() {
+            return false;
+        }
+        // The next request_frame draws it.
+        self.last_sent = None;
+        true
+    }
+
+    /// The variant the next load's resolver bytes count as (the set preview's current mode). Announced to the
+    /// thread with the next load, and only when it differs from what the thread has.
+    pub fn set_load_variant(&mut self, v: Variant) {
+        self.load_variant = v;
+    }
+
     pub fn content(&self) -> Option<&Content> {
         self.content.as_ref()
     }
@@ -841,6 +918,7 @@ impl Viewport3d {
         spawn_guarded(self.tx.clone(), "viewport3d", move |tx| {
             render_loop(crx, me, tx, shaders, cache, features)
         });
+        self.load_variant_sent = Variant::Source; // a new thread starts at the default
         self.thread = Some(ctx);
         true
     }
@@ -867,6 +945,13 @@ impl Viewport3d {
                 .as_ref()
                 .expect("content checked above")
                 .load_cmd(id);
+            if self.load_variant != self.load_variant_sent
+                && thread
+                    .send(V3Cmd::SetLoadVariant(self.load_variant))
+                    .is_ok()
+            {
+                self.load_variant_sent = self.load_variant;
+            }
             if thread.send(cmd).is_ok() {
                 // A queued Render is dropped by the thread when this load reaches it, with no reply.
                 self.render_done = self.render_sent;
@@ -1043,6 +1128,18 @@ impl Viewport3d {
                 match result {
                     Ok(kind) => self.last_edit = Some((kind, ms)),
                     Err(e) => self.render_error = Some(e),
+                }
+            }
+            V3Reply::TextureSwap {
+                content,
+                path,
+                result,
+            } => {
+                if self.loaded.or(self.pending_load) != Some(content) {
+                    return;
+                }
+                if let Err(e) = result {
+                    self.swap_errors.push(format!("{path}: {e}"));
                 }
             }
             V3Reply::Located { generation, result } if generation == self.locate_gen => {
@@ -1235,6 +1332,60 @@ fn load(r: &mut Renderer, c: &Content, edits: &BTreeMap<ShapeId, MaterialState>)
     rep
 }
 
+/// The render thread's texture state (P1-B A/B): the variant the load resolver's bytes count as, and the swaps and
+/// flips made since the content's own load. A reload (shaders, features or device change) loads the content's own
+/// bytes again, so they are applied again, exactly as `edits` are. A device rebuild drops the renderer's texture
+/// cache, so the log holds both variants of every path swapped.
+#[derive(Default)]
+struct TexState {
+    load: Variant,
+    swaps: BTreeMap<(String, Variant), Arc<Vec<u8>>>,
+    active: BTreeMap<String, Variant>,
+}
+
+impl TexState {
+    fn clear_log(&mut self) {
+        self.swaps.clear();
+        self.active.clear();
+    }
+
+    /// Swaps first, then flips (the order the set preview sends them). A failure here would have failed the
+    /// original swap too, which was reported then.
+    fn replay(&self, r: &mut Renderer) {
+        for ((path, v), bytes) in &self.swaps {
+            let _ = r.replace_texture(path, bytes, *v);
+        }
+        for (path, v) in &self.active {
+            r.set_texture_variant(path, *v);
+        }
+    }
+}
+
+enum TexCmd {
+    Swap {
+        path: String,
+        bytes: Arc<Vec<u8>>,
+        variant: Variant,
+    },
+    Flip {
+        path: String,
+        variant: Variant,
+    },
+}
+
+/// [`load`] with the texture state: the load variant first, the logged swaps and flips after.
+fn load_all(
+    r: &mut Renderer,
+    c: &Content,
+    edits: &BTreeMap<ShapeId, MaterialState>,
+    tex: &TexState,
+) -> LoadReport {
+    r.set_load_variant(tex.load);
+    let rep = load(r, c, edits);
+    tex.replay(r);
+    rep
+}
+
 /// One material edit on the loaded content.
 fn edit(r: &mut Renderer, c: &Content, id: ShapeId, m: MaterialState) -> Result<EditKind, String> {
     let bsas = RefCell::new(HashMap::new());
@@ -1297,7 +1448,8 @@ fn render_loop(
     // edits, and its `Loaded`. Err when no device can be made at all.
     let rebuild = |r: &mut Renderer,
                    last: &Option<(u64, Content)>,
-                   edits: &BTreeMap<ShapeId, MaterialState>|
+                   edits: &BTreeMap<ShapeId, MaterialState>,
+                   tex: &TexState|
      -> Result<(), String> {
         r.rebuild_device_on(Gpu::new(None)?)?;
         send(V3Reply::Ready {
@@ -1305,7 +1457,7 @@ fn render_loop(
             warp: r.gpu().warp,
         });
         if let Some((id, c)) = last {
-            let report = load(r, c, edits);
+            let report = load_all(r, c, edits, tex);
             loaded(r, *id, c, report);
         }
         Ok(())
@@ -1313,6 +1465,7 @@ fn render_loop(
     let mut last: Option<(u64, Content)> = None;
     // Material edits applied to `last` since its load.
     let mut edits: BTreeMap<ShapeId, MaterialState> = BTreeMap::new();
+    let mut tex = TexState::default();
     // The last camera, size and look drawn: what a compile-triggered refresh renders with.
     let mut view: Option<(Camera, u32, u32, Look)> = None;
     let mut refresh_id: u64 = 1 << 62;
@@ -1321,6 +1474,7 @@ fn render_loop(
         let mut render = None;
         let mut compiled_changed = false;
         let mut pending: Vec<(u64, ShapeId, MaterialState)> = vec![];
+        let mut tex_cmds: Vec<TexCmd> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
             let content = match c {
                 V3Cmd::Quit => return,
@@ -1369,6 +1523,26 @@ fn render_loop(
                     pending.push((content, id, material));
                     None
                 }
+                V3Cmd::SetLoadVariant(v) => {
+                    tex.load = v;
+                    None
+                }
+                V3Cmd::SwapTexture {
+                    path,
+                    bytes,
+                    variant,
+                } => {
+                    tex_cmds.push(TexCmd::Swap {
+                        path,
+                        bytes,
+                        variant,
+                    });
+                    None
+                }
+                V3Cmd::SetTextureVariant { path, variant } => {
+                    tex_cmds.push(TexCmd::Flip { path, variant });
+                    None
+                }
                 V3Cmd::Render {
                     id,
                     camera,
@@ -1387,17 +1561,19 @@ fn render_loop(
                 last = Some(c);
                 edits.clear();
                 pending.clear();
+                tex_cmds.clear();
+                tex.clear_log();
                 render = None;
                 reload = true;
             }
         }
         if reload {
             if let Some((id, c)) = &last {
-                let report = load(&mut r, c, &edits);
+                let report = load_all(&mut r, c, &edits, &tex);
                 if r.gpu().is_removed() {
                     // Lost during the load: rebuild and load again now; with no shapes no Render would follow to
                     // trigger the rebuild.
-                    if let Err(e) = rebuild(&mut r, &last, &edits) {
+                    if let Err(e) = rebuild(&mut r, &last, &edits, &tex) {
                         return send(V3Reply::Failed(e));
                     }
                 } else {
@@ -1427,6 +1603,33 @@ fn render_loop(
                 send(V3Reply::Shapes(r.shapes()));
             }
         }
+        if !tex_cmds.is_empty() {
+            if let Some((lid, _)) = &last {
+                for t in tex_cmds {
+                    match t {
+                        TexCmd::Swap {
+                            path,
+                            bytes,
+                            variant,
+                        } => {
+                            let result = r.replace_texture(&path, &bytes, variant).map(|_| ());
+                            if result.is_ok() {
+                                tex.swaps.insert((path.clone(), variant), bytes);
+                            }
+                            send(V3Reply::TextureSwap {
+                                content: *lid,
+                                path,
+                                result,
+                            });
+                        }
+                        TexCmd::Flip { path, variant } => {
+                            r.set_texture_variant(&path, variant);
+                            tex.active.insert(path, variant);
+                        }
+                    }
+                }
+            }
+        }
         pump(&mut r);
         // A landed program changed a shape and nothing above reported it: tell the panel.
         if compiled_changed
@@ -1450,7 +1653,7 @@ fn render_loop(
         if let Err(e) = &result {
             if e.starts_with(render3d::device::DEVICE_REMOVED) {
                 // Device lost (TDR, driver update): a new device (maybe WARP), the content again, one retry.
-                if let Err(e) = rebuild(&mut r, &last, &edits) {
+                if let Err(e) = rebuild(&mut r, &last, &edits, &tex) {
                     return send(V3Reply::Failed(e));
                 }
                 pump(&mut r);
