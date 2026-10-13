@@ -48,10 +48,6 @@ pub fn init(model: Bc1Model) -> Result<(), InitError> {
     }
 }
 
-pub fn active_bc1_model() -> Option<Bc1Model> {
-    ACTIVE.get().copied()
-}
-
 pub(crate) fn ensure_init() {
     let _ = ACTIVE.get_or_init(|| {
         unsafe { ffi::sdc_init(Bc1Model::Ideal as i32) };

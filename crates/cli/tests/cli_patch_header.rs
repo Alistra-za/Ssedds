@@ -322,3 +322,22 @@ fn two_inputs_with_one_name_are_refused_with_out_dir() {
     );
     assert!(!fixed.exists());
 }
+
+/// Audit left-out: a folder is a usage error naming it, not "Access is denied".
+#[test]
+fn patch_header_given_a_folder_is_a_usage_error() {
+    let d = tempfile::tempdir().unwrap();
+    let o = sdc()
+        .arg("patch-header")
+        .arg("--dry-run")
+        .arg("--in-place")
+        .arg(d.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("is a folder"),
+        "{}",
+        text(&o.stderr)
+    );
+}

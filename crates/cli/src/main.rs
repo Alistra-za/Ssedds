@@ -21,6 +21,11 @@ fn reporter(json: bool) -> Reporter {
 }
 
 fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
+    if a.nvtt.is_some() {
+        return Err(EngineError::Usage(
+            "--nvtt: the NVTT backend is not available yet (M5)".into(),
+        ));
+    }
     let out = a
         .output
         .clone()
@@ -38,9 +43,6 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
     req.dry_run = a.dry_run;
     req.sidecar = a.sidecar;
     req.bc1_model = a.bc1_decoder.into();
-    if a.nvtt.is_some() {
-        eprintln!("note: --nvtt is accepted but the NVTT backend arrives in milestone M5");
-    }
     // Before planning, so a Ctrl-C during a long scan is not lost. A failed install is not fatal, but it is
     // reported: without the handler Ctrl-C ends the process at once, as for any console program.
     let cancel = CancelToken::default();

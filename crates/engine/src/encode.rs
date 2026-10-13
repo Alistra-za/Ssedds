@@ -3,6 +3,7 @@
 //! Output is a pure function of the input: every block is encoded independently from its own 16
 //! texels, so the bytes do not depend on the rayon thread count or on band scheduling.
 use crate::config::*;
+use crate::grass::{unit_err, CS_GRASS_THRESHOLD, GRASS_GUARD_MARGIN};
 use crate::quantize::EncoderInput;
 use encoders_sys::bc7_fixup::{force_opaque_mode6, force_opaque_rotated};
 use encoders_sys::*;
@@ -246,6 +247,12 @@ fn encode_level_with(
                         encode_band(b, o, p, BC7E_EXACT_OPAQUE_NATIVE);
                     }
                 });
+            if p.subtype == Subtype::ComplexGrass
+                && p.format == Format::Bc7
+                && !skipped.load(Ordering::Relaxed)
+            {
+                guard_grass_corner(&mut out, &blocks, w, h, p);
+            }
             out
         }
         EncoderInput::Hdr(px) => {
@@ -267,6 +274,34 @@ fn encode_level_with(
     } else {
         Ok(out)
     }
+}
+
+/// Design §3.6 (ruling R8): the decoded bottom-left texel of a complex-grass level must stay a unit vector within
+/// `CS_GRASS_THRESHOLD - GRASS_GUARD_MARGIN`; when it does not, that one block is encoded again at bc7e's slowest
+/// level (with the same opaque fix-ups). `validate` reports `VAL-GRASS-DETECT` when even that fails.
+fn guard_grass_corner(out: &mut [u8], blocks: &[[u8; 4]], w: u32, h: u32, p: &Profile) {
+    let i = (h.div_ceil(4) as usize - 1) * w.div_ceil(4) as usize; // column 0 of the last block row
+    let texel = ((h - 1) % 4) as usize * 4; // x = 0 inside that block
+    let blk = &mut out[i * BC7_BLOCK_BYTES..(i + 1) * BC7_BLOCK_BYTES];
+    if grass_corner_ok(blk, texel) {
+        return;
+    }
+    let mut best = p.clone();
+    best.encoder.effort = Effort::Slowest;
+    encode_band(
+        &blocks[i * BLOCK_TEXELS..(i + 1) * BLOCK_TEXELS],
+        blk,
+        &best,
+        BC7E_EXACT_OPAQUE_NATIVE,
+    );
+}
+
+/// Whether texel `t` (0..16, row-major) of BC7 block `blk` decodes within the complex-grass guard.
+fn grass_corner_ok(blk: &[u8], t: usize) -> bool {
+    let mut d = [0u8; 64];
+    bcdec_rs::bc7(blk, &mut d, 16);
+    let q = [d[t * 4], d[t * 4 + 1], d[t * 4 + 2]].map(|c| f32::from(c) / 255.0);
+    unit_err(q) < CS_GRASS_THRESHOLD - GRASS_GUARD_MARGIN
 }
 
 #[cfg(test)]
@@ -404,5 +439,39 @@ mod tests {
             out,
             h.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()
         );
+    }
+
+    /// Design §3.6: a corner block that decodes off unit length is encoded again from its own texels.
+    #[test]
+    fn grass_guard_reencodes_a_failing_corner_block() {
+        let p = PresetRegistry::builtin()
+            .unwrap()
+            .profile("cs-quality", Target::Cs, Subtype::ComplexGrass)
+            .unwrap();
+        // 4 x 8: top block = opaque colour, bottom block = flat +Z normal with specular 12.
+        let px: Vec<[u8; 4]> = (0..32)
+            .map(|i| {
+                if i < 16 {
+                    [200, 180, 90, 255]
+                } else {
+                    [128, 128, 255, 12]
+                }
+            })
+            .collect();
+        let blocks = gather_blocks(&px, 4, 8);
+        let mut out = vec![0u8; 32];
+        encode_band(&blocks, &mut out, &p, BC7E_EXACT_OPAQUE_NATIVE);
+        let top = out[..16].to_vec();
+        assert!(
+            grass_corner_ok(&out[16..], 12),
+            "a flat normal encodes within the guard"
+        );
+        // A red block in the corner's place decodes to (1, -1, -1): far from unit length.
+        let red = gather_blocks(&[[255, 0, 0, 12]; 16], 4, 4);
+        encode_band(&red, &mut out[16..], &p, BC7E_EXACT_OPAQUE_NATIVE);
+        assert!(!grass_corner_ok(&out[16..], 12));
+        guard_grass_corner(&mut out, &blocks, 4, 8, &p);
+        assert!(grass_corner_ok(&out[16..], 12));
+        assert_eq!(out[..16], top[..], "the top block is left alone");
     }
 }

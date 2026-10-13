@@ -49,6 +49,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
+    state.thumbs.sweep(model.items_rev());
     header::draw(ui, model);
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops) = (&mut state.thumbs, &mut state.drops);

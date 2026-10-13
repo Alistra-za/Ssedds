@@ -8,7 +8,7 @@
 use crate::analyse::analyse;
 use crate::codes::{Code, Warning};
 use crate::config::*;
-use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
+use crate::discover::{canonicalise_outputs, discover_reporting, InputFile, InputKind};
 use crate::events::{EventKind, Reporter, SkipKind, Stage};
 use crate::group::{group_sets_with, join_skin_wet, member_split, SuffixSplit, TextureSet};
 use crate::image::SourceInfo;
@@ -99,6 +99,10 @@ pub struct BatchRequest {
     /// shape that uses `<key>.dds` in slot 0. The GUI fills it from the scan database; the CLI sends none (empty: no
     /// evidence, and the alpha question is asked as before).
     pub mesh_alpha: BTreeMap<String, Vec<MeshAlpha>>,
+    /// GUI (complex grass design §5): the slot-0 textures of the NIFs that GRAS records of the active load order use,
+    /// as `grass::path_key` keys. A listed 1:2 file that passes the detection tests gets a high-confidence
+    /// `complex_grass` suggestion. Empty for the CLI, which therefore never auto-tags.
+    pub gras_diffuses: BTreeSet<String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -134,6 +138,7 @@ impl BatchRequest {
             set_shaders: BTreeMap::new(),
             mesh_shaders: BTreeMap::new(),
             mesh_alpha: BTreeMap::new(),
+            gras_diffuses: BTreeSet::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -540,6 +545,15 @@ fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
     }
 }
 
+/// `--sidecar` on an up-to-date output (audit 15, DECISIONS Note Y2): write the stored record when the sidecar is
+/// missing. `false` when it cannot be written, so the file re-encodes and the encode reports the error.
+fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
+    let side = output.with_extension("dds.json");
+    side.exists()
+        || serde_json::to_string_pretty(&e.raw)
+            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
+}
+
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
 /// (the bytes of every source and the channel each feeds, for a packed output), profile, engine version and
 /// encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
@@ -568,6 +582,10 @@ fn is_up_to_date(
             )
         || (rgbcx && rec.rgbcx_patch != encoders.rgbcx_patch)
     {
+        return false;
+    }
+    // Note Y1: metadata only, and before any hashing; a legacy record (no stamp) is stale once.
+    if e.output_stamp.is_none() || SourceStamp::of(&job.output) != e.output_stamp {
         return false;
     }
     if matches!(job.profile.format, Format::Bc1 | Format::Bc3)
@@ -761,8 +779,9 @@ impl Engine {
                 )));
             }
         }
-        let mut files = discover(&req.inputs, &req.output_root, req.recursive)
-            .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
+        let (mut files, unreadable) =
+            discover_reporting(&req.inputs, &req.output_root, req.recursive)
+                .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
         // Task 26a: canonical output names before grouping, so alias/canonical collisions are IN-DUPLICATE.
         canonicalise_outputs(&mut files, registry.alias_table());
         rep.emit(
@@ -776,6 +795,13 @@ impl Engine {
         );
         for w in preset_skips {
             rep.emit(None, None, EventKind::Warning(w));
+        }
+        for u in unreadable {
+            rep.emit(
+                None,
+                None,
+                EventKind::Warning(Warning::new(Code::InUnreadable, format!("skipped: {u}"))),
+            );
         }
         let key = |out: &Path| output_key(&req.output_root, out);
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
@@ -945,6 +971,7 @@ impl Engine {
                 .into_owned();
             member_split(&stem, set, registry.alias_table())
         };
+        let gras = &req.gras_diffuses;
         let resolve_one = |&(set, f): &(&TextureSet, &InputFile),
                            admitted: Admitted<'_>,
                            stage: &Cell<Stage>|
@@ -990,7 +1017,8 @@ impl Engine {
                 analysis: &a,
                 info: &info,
             };
-            let mut job = resolve_file(&ctx, &facts);
+            let gras_diffuse = gras.contains(&crate::grass::path_key(&f.game_path));
+            let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
             job.provenance.insert("target".into(), target_src.clone());
             job.source = source;
             Ok((job, a, info))
@@ -1097,10 +1125,12 @@ impl Engine {
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
-            if !picks
-                .get(&old.set_key)
-                .is_some_and(|p| p.shader.has_member_defaults())
-            {
+            // An explicit set shader also re-resolves a GRAS diffuse: it suppresses the auto-detect (`suggest_grass`).
+            let is_gras = gras.contains(&crate::grass::path_key(&work[wi].1.game_path));
+            if !picks.get(&old.set_key).is_some_and(|p| {
+                p.shader.has_member_defaults()
+                    || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
+            }) {
                 jobs.push(old);
                 continue;
             }
@@ -1115,7 +1145,11 @@ impl Engine {
                     analysis: &a,
                     info: &info,
                 };
-                resolve_file(&ctx, &facts)
+                resolve_file_with(
+                    &ctx,
+                    &facts,
+                    gras.contains(&crate::grass::path_key(&f.game_path)),
+                )
             }));
             match r {
                 Ok(mut job) => {
@@ -1623,8 +1657,28 @@ impl Engine {
         })?;
         let encoders = EncoderVersions::current();
 
+        let pool = thread_pool(req.jobs)?;
+        // Audit 9 (DECISIONS Note Y3): the if-changed checks hash every source; run them on the pool, then report
+        // them below in plan order.
+        let current: Vec<bool> = if req.on_existing == OnExisting::IfChanged {
+            use rayon::prelude::*;
+            pool.install(|| {
+                ready
+                    .par_iter()
+                    .map(|job| {
+                        !cancel.is_cancelled()
+                            && job.output.exists()
+                            && existing
+                                .get(&output_key(&req.output_root, &job.output))
+                                .is_some_and(|e| is_up_to_date(e, job, &encoders, req.bc1_model))
+                    })
+                    .collect()
+            })
+        } else {
+            vec![false; ready.len()]
+        };
         let mut todo: Vec<(&ResolvedJob, PresetRef)> = vec![];
-        for job in ready {
+        for (job, current) in ready.into_iter().zip(current) {
             if cancel.is_cancelled() {
                 summary.cancelled.push(job.input.clone());
                 continue;
@@ -1671,7 +1725,9 @@ impl Engine {
                                 );
                                 continue;
                             }
-                            Some(e) if is_up_to_date(e, job, &encoders, req.bc1_model) => {
+                            Some(e)
+                                if current && (!req.sidecar || sidecar_present(&job.output, e)) =>
+                            {
                                 summary.up_to_date += 1;
                                 rep.emit_job(
                                     Some(&key(&job.output)),
@@ -1717,7 +1773,6 @@ impl Engine {
             }
         }
 
-        let pool = thread_pool(req.jobs)?;
         let budget = Budget::new(budget_limit(req), pool.current_num_threads());
         let state = Mutex::new(summary);
         // Admission runs on the calling thread (outside the pool) and only spawns admitted files, so no pool thread
@@ -2284,6 +2339,7 @@ mod tests {
             rnm: None,
             shader: None,
         };
+        std::fs::write(&job.output, b"dds").unwrap();
         let enc = EncoderVersions::current();
         let entry_for = |job: &ResolvedJob| ManifestEntry {
             schema: MANIFEST_SCHEMA,
@@ -2295,6 +2351,7 @@ mod tests {
             encoders: Some(enc.clone()),
             preset: PresetRef::for_preset(&reg, "cs-quality", None),
             bc1_model: Some("ideal".into()),
+            output_stamp: SourceStamp::of(&job.output),
             raw: serde_json::json!({ "validation": { "passed": true } }),
         };
         let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| is_up_to_date(e, job, &enc, m);
@@ -2306,7 +2363,7 @@ mod tests {
             f(&mut e);
             e
         };
-        let not_up: [(&str, ManifestEntry); 10] = [
+        let not_up: [(&str, ManifestEntry); 12] = [
             ("no encoders", with(&|e| e.encoders = None)),
             (
                 "other encoders",
@@ -2325,6 +2382,11 @@ mod tests {
             ),
             ("other source", with(&|e| e.source_sha256 = "0".repeat(64))),
             ("other engine", with(&|e| e.engine_version = "0.0.0".into())),
+            ("no output stamp", with(&|e| e.output_stamp = None)),
+            (
+                "replaced output",
+                with(&|e| e.output_stamp.as_mut().unwrap().size += 1),
+            ),
             (
                 "several sources",
                 with(&|e| {

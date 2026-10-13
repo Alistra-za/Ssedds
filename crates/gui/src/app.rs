@@ -207,9 +207,9 @@ impl eframe::App for SdcApp {
         self.sync_renderer();
         let scanning = self.meshes.scanning();
         self.meshes.poll();
-        // S-shader-10: a finished scan may change what the meshes report.
-        if scanning && !self.meshes.scanning() && self.model.refresh_mesh_votes() {
-            self.model.replan();
+        // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).
+        if scanning && !self.meshes.scanning() {
+            self.model.refresh_mesh_votes(false);
         }
         self.state.set3d.poll(&self.model);
         if crate::ui::header::meshes_view_active(&ctx) {

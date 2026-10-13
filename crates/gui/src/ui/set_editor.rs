@@ -4,12 +4,13 @@ use super::columns::{border_of, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
-use crate::model::fields::{channel_text, field_lock, format_label, format_options};
+use crate::model::fields::{channel_text, encoding_options, field_lock, format_label};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    set_views, slot_label, slot_of, slot_row, SetView, SlotCell, SlotFill, SlotKind,
+    card_title, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell, SlotFill,
+    SlotKind,
 };
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
@@ -39,13 +40,6 @@ enum Act {
     Json(String, String, Option<Value>),
 }
 
-fn tag_options(f: Format) -> Vec<ColorTag> {
-    match f {
-        Format::Bc1 | Format::Bc3 | Format::Bc7 => vec![ColorTag::Srgb, ColorTag::Unorm],
-        _ => vec![ColorTag::Unorm],
-    }
-}
-
 pub fn draw(
     ui: &mut egui::Ui,
     model: &mut AppModel,
@@ -59,11 +53,14 @@ pub fn draw(
     };
     ui.horizontal_wrapped(|ui| {
         ui.heading(&v.label);
-        match (&v.prefix, &v.prefix_error) {
-            (Some(p), _) => ui.weak(format!("→ {p}")),
-            (_, Some(e)) => ui.colored_label(RED, e),
-            _ => ui.weak(""),
-        };
+        // The output prefix and its error are PGPatcher JSON facts: only a JSON set shows them.
+        if shows_json_panel(&v, model.target) {
+            match (&v.prefix, &v.prefix_error) {
+                (Some(p), _) => ui.weak(format!("→ {p}")),
+                (_, Some(e)) => ui.colored_label(RED, e),
+                _ => ui.weak(""),
+            };
+        }
     });
     ui.separator();
     let mut acts = vec![];
@@ -86,7 +83,9 @@ pub fn draw(
                 .on_disabled_hover_text(&why);
                 under_grid(ui, model, &v);
                 super::plugin_refs::set_section(ui, model, &v);
-                super::pgp_fields::panel(&mut cols[1], model, &v.id);
+                if shows_json_panel(&v, model.target) {
+                    super::pgp_fields::panel(&mut cols[1], model, &v.id);
+                }
             });
         });
     super::slot_commands::draw(ui.ctx(), model, cmds);
@@ -224,7 +223,9 @@ fn card(
             ui.set_width(CARD);
             ui.set_min_width(CARD);
             let title = match &fill {
-                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => slot_label(slot, item),
+                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
+                    card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
+                }
                 SlotFill::Empty => slot.label(),
             };
             let t = ui.label(egui::RichText::new(title).strong());
@@ -275,6 +276,7 @@ fn card(
             };
             ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
             if let Some(n) = match slot {
+                _ if !shows_json_panel(v, model.target) => None,
                 SlotKind::Diffuse => Some(1),
                 SlotKind::Normal => Some(2),
                 _ => None,
@@ -324,10 +326,8 @@ fn card(
                     .selected_text(format_label(cur_f, cur_t))
                     .width(CARD - 24.0)
                     .show_ui(ui, |ui| {
-                        for f in format_options(model.target) {
-                            for t in tag_options(f) {
-                                ui.selectable_value(&mut choice, (f, t), format_label(f, t));
-                            }
+                        for (e, label) in encoding_options(model.target, &job.profile) {
+                            ui.selectable_value(&mut choice, e, label);
                         }
                     });
             })

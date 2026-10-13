@@ -6,7 +6,7 @@
 # (--arch=x86-64 --target-os=windows). The generated header's line 2 (the output path, which is a
 # temp dir) is normalised to the bare file name before hashing and vendoring.
 param(
-  [string]$Ispc = "F:\ai\dds\bench\tools\dl_ispc\ispc-v1.31.0-windows\bin\ispc.exe",
+  [string]$Ispc = "ispc.exe",
   [string]$Bc7eSource = "$PSScriptRoot\..\crates\encoders-sys\vendor\bc7e\bc7e.ispc",
   [switch]$Update,
   # with -Update: replace only the bc7e objects (leave the ISPC TC objects untouched)
@@ -15,6 +15,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $vendor = Join-Path $repo "crates\encoders-sys\vendor"
+if (-not (Get-Command $Ispc -ErrorAction SilentlyContinue)) { throw "ISPC 1.31.0 not found as '$Ispc'; pass -Ispc <path to ispc.exe>" }
 $ver = & $Ispc --version | Out-String
 if ($ver -notmatch "1\.31\.0") { throw "ISPC 1.31.0 required; got: $ver" }
 

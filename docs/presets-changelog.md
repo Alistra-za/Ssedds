@@ -24,8 +24,8 @@ version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
   emissive and sky stay full size. BC4/BC5 search radius `fast` (4: −0.06 dB BC4 and −0.04 dB BC5 against 5, at
   about 0.7× the time).
 - **vanilla-compact 1.0.0** (new; base vanilla-quality, target vanilla): the same for Vanilla/ENB.
-- **fast-preview 1.0.0** (new; base sdc-base, any target): bc7e `fast`, per-mip PSNR and coverage validation on the
-  smallest mip only. BC4/BC5 search radius `fast` (4). For checking a mod quickly, not for release.
+- **fast-preview 1.0.0** (new; base sdc-base, any target): bc7e `fast`, PSNR validation on the
+  smallest mip only (coverage on every level). BC4/BC5 search radius `fast` (4). For checking a mod quickly, not for release.
 - **sdc-base**: unchanged (1.1.0). The rule that would raise the default radius to `max` did not fire (+0.12 dB BC4,
   +0.06 dB BC5, at 2.8× and 3.0× the time). cs-quality, vanilla-quality and cpm-quality inherit it.
 

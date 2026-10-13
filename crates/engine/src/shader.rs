@@ -29,6 +29,7 @@ pub enum Shader {
     Eye,
     Multilayer,
     Landscape,
+    ComplexGrass,
 }
 
 /// One map slot of a shader: a member fills it when its sub-type and suffix match (spec §3).
@@ -174,6 +175,10 @@ static MULTILAYER: ShaderSpec = ShaderSpec {
         sfx("_b", &[Subtype::BacklightTint], BL),
     ],
 };
+static COMPLEX_GRASS: ShaderSpec = ShaderSpec {
+    required: &[role("complex_grass", &[Subtype::ComplexGrass])],
+    optional: &[],
+};
 static LANDSCAPE: ShaderSpec = ShaderSpec {
     required: &[
         role("diffuse", &[Subtype::LandscapeDiffuse, Subtype::Diffuse]),
@@ -182,8 +187,22 @@ static LANDSCAPE: ShaderSpec = ShaderSpec {
     optional: &[],
 };
 
+/// `ALL[2..]` without `ComplexGrass` (vanilla has no complex grass, ruling R1); a const loop, so position-independent.
+static VANILLA: [Shader; 10] = {
+    let mut out = [Shader::Default; 10];
+    let (mut i, mut j) = (2, 0);
+    while i < Shader::ALL.len() {
+        if !matches!(Shader::ALL[i], Shader::ComplexGrass) {
+            out[j] = Shader::ALL[i];
+            j += 1;
+        }
+        i += 1;
+    }
+    out
+};
+
 impl Shader {
-    pub const ALL: [Shader; 12] = [
+    pub const ALL: [Shader; 13] = [
         Shader::Pbr,
         Shader::AdvancedSkin,
         Shader::Default,
@@ -196,6 +215,7 @@ impl Shader {
         Shader::Eye,
         Shader::Multilayer,
         Shader::Landscape,
+        Shader::ComplexGrass,
     ];
 
     pub fn id(self) -> &'static str {
@@ -212,6 +232,7 @@ impl Shader {
             Shader::Eye => "eye",
             Shader::Multilayer => "multilayer",
             Shader::Landscape => "landscape",
+            Shader::ComplexGrass => "complex_grass",
         }
     }
 
@@ -229,15 +250,18 @@ impl Shader {
             Shader::Eye => "Eye",
             Shader::Multilayer => "Multilayer Parallax",
             Shader::Landscape => "Landscape",
+            Shader::ComplexGrass => "Complex grass",
         }
     }
 
-    /// The shaders a target can use: CS has all 12 (`pbr` first); Vanilla and CPM lack `pbr` and `advanced_skin`.
+    /// The shaders a target can use: CS has all 13 (`pbr` first); Vanilla and CPM lack `pbr` and `advanced_skin`.
     pub fn available(t: Target) -> &'static [Shader] {
         match t {
             Target::Cs => &Shader::ALL,
             // `ALL` starts with `pbr`, `advanced_skin`.
-            Target::Vanilla | Target::Cpm => &Shader::ALL[2..],
+            Target::Cpm => &Shader::ALL[2..],
+            // Ruling R1: the vanilla grass shader has no complex grass.
+            Target::Vanilla => &VANILLA,
         }
     }
 
@@ -266,6 +290,7 @@ impl Shader {
             Shader::Eye => &EYE,
             Shader::Multilayer => &MULTILAYER,
             Shader::Landscape => &LANDSCAPE,
+            Shader::ComplexGrass => &COMPLEX_GRASS,
         }
     }
 
@@ -279,6 +304,7 @@ impl Shader {
                 | Shader::Multilayer
                 | Shader::Envmap
                 | Shader::Parallax
+                | Shader::ComplexGrass
         )
     }
 
@@ -378,14 +404,16 @@ pub enum AutoRule {
     Sk,
     HairPath,
     EyesPath,
+    ComplexGrass,
     Landscape,
     Otherwise,
 }
 
 impl AutoRule {
-    const ALL: [AutoRule; 13] = [
+    const ALL: [AutoRule; 14] = [
         AutoRule::AdvancedSkin,
         AutoRule::Pbr,
+        AutoRule::ComplexGrass,
         AutoRule::Mesh,
         AutoRule::ComplexM,
         AutoRule::EnvM,
@@ -413,6 +441,7 @@ impl AutoRule {
             AutoRule::HairPath => "hair_path",
             AutoRule::EyesPath => "eyes_path",
             AutoRule::Landscape => "landscape",
+            AutoRule::ComplexGrass => "complex_grass",
             AutoRule::Otherwise => "default",
         }
     }
@@ -530,6 +559,8 @@ pub fn pick(i: &PickInput) -> ShaderPick {
         ])
     {
         (Shader::Pbr, AutoRule::Pbr)
+    } else if has(&[ComplexGrass]) {
+        (Shader::ComplexGrass, AutoRule::ComplexGrass)
     } else if has(&[ComplexMaterial]) {
         (Shader::ComplexMaterial, AutoRule::ComplexM)
     } else if sfx("p") {
@@ -712,6 +743,13 @@ pub fn assign<'s>(spec: &'s ShaderSpec, members: &[MemberMap]) -> Vec<Option<&'s
 /// SHADER-EXTRA-MAP per unused member (data `{"member", "shader"}`) and SHADER-MISSING-MAP per required role no
 /// member fills (data `{"map", "shader"}`), members first, then roles in table order.
 pub fn check_maps(pick: &ShaderPick, members: &[MemberMap]) -> Vec<Warning> {
+    // Complex grass is drawn by the grass shader, which reads diffuse and normal from the one file (DECISIONS X9).
+    if members
+        .iter()
+        .any(|m| m.subtype == Some(Subtype::ComplexGrass))
+    {
+        return vec![];
+    }
     let id = pick.shader.id();
     let spec = pick.shader.spec();
     let filled = assign(spec, members);
@@ -797,6 +835,13 @@ pub fn member_subtype(shader: Shader, suggested: Subtype) -> Option<(Subtype, &'
             Subtype::LandscapeDiffuse,
             "landscape diffuse (alpha = snow mask)",
         )),
+        (
+            Shader::ComplexGrass,
+            Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::PbrAlbedo,
+        ) => Some((
+            Subtype::ComplexGrass,
+            "complex grass (diffuse + normal in one file)",
+        )),
         _ => None,
     }
 }
@@ -820,11 +865,11 @@ mod tests {
 
     #[test]
     fn lists_and_defaults_follow_the_mode() {
-        assert_eq!(Shader::available(Target::Cs).len(), 12);
+        assert_eq!(Shader::available(Target::Cs).len(), 13);
         assert_eq!(Shader::available(Target::Cs)[0], Shader::Pbr);
         for t in [Target::Vanilla, Target::Cpm] {
             let l = Shader::available(t);
-            assert_eq!(l.len(), 10, "{t:?}");
+            assert_eq!(l.len(), if t == Target::Cpm { 11 } else { 10 }, "{t:?}");
             assert!(!l.contains(&Shader::Pbr) && !l.contains(&Shader::AdvancedSkin));
             assert_eq!(Shader::default_for(t), Shader::Default);
         }
@@ -942,7 +987,8 @@ mod tests {
                 Shader::Hair,
                 Shader::Eye,
                 Shader::Multilayer,
-                Shader::Landscape
+                Shader::Landscape,
+                Shader::ComplexGrass
             ]
         );
     }
@@ -1329,6 +1375,17 @@ mod tests {
     }
 
     #[test]
+    fn a_complex_grass_set_raises_no_map_warnings() {
+        let p = ShaderPick {
+            shader: Shader::Default,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let ms = [m("g.dds", None, Some(Subtype::ComplexGrass))];
+        assert!(check_maps(&p, &ms).is_empty());
+    }
+
+    #[test]
     fn envmap_without_m_is_complete() {
         let p = ShaderPick {
             shader: Shader::Envmap,
@@ -1550,5 +1607,35 @@ mod tests {
             mesh_alpha_policy(&[tested(255), tested(30)]),
             Some((AlphaPolicy::Cutout, Some(254)))
         );
+    }
+
+    /// 2026-10-13: a set with a complex_grass member picks `complex_grass` (ENB and CS), before the mesh majority
+    /// and the landscape path; vanilla has no such shader.
+    #[test]
+    fn complex_grass_is_picked_by_its_member_and_is_never_vanilla() {
+        use Subtype::*;
+        let s = sx(&[]);
+        let st = [ComplexGrass];
+        let paths = ["textures/landscape/grass/g.dds"];
+        let mesh = [Shader::Landscape, Shader::Landscape];
+        for t in [Target::Cs, Target::Cpm] {
+            let mut i = input(t, &s, &st, &paths);
+            i.mesh = &mesh;
+            let p = pick(&i);
+            assert_eq!(
+                auto(&p),
+                (
+                    Shader::ComplexGrass,
+                    ShaderOrigin::Auto(AutoRule::ComplexGrass)
+                ),
+                "{t:?}"
+            );
+        }
+        let p = pick(&input(Target::Vanilla, &s, &st, &paths));
+        assert_eq!(p.shader, Shader::Default);
+        assert_eq!(p.wanted, Some(Shader::ComplexGrass));
+        assert!(!Shader::available(Target::Vanilla).contains(&Shader::ComplexGrass));
+        assert_eq!(Shader::ComplexGrass.id(), "complex_grass");
+        assert_eq!(Shader::ComplexGrass.label(), "Complex grass");
     }
 }

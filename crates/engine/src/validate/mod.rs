@@ -99,8 +99,17 @@ pub struct ValidationReport {
     pub warnings: Vec<Warning>,
 }
 
+/// PSNR in dB for a mean squared error over 8-bit values (99 dB when it is zero).
+pub fn psnr_from_mse(mse: f64) -> f64 {
+    if mse <= 1e-12 {
+        99.0
+    } else {
+        10.0 * (65025.0 / mse).log10()
+    }
+}
+
 /// PSNR in dB over the channels `ch` of two equally long images (99 dB when they are identical).
-fn psnr(a: &[[u8; 4]], b: &[[u8; 4]], ch: &[usize]) -> f64 {
+pub fn psnr(a: &[[u8; 4]], b: &[[u8; 4]], ch: &[usize]) -> f64 {
     let mut s = 0.0f64;
     for (x, y) in a.iter().zip(b) {
         for &c in ch {
@@ -108,12 +117,7 @@ fn psnr(a: &[[u8; 4]], b: &[[u8; 4]], ch: &[usize]) -> f64 {
             s += e * e;
         }
     }
-    let mse = s / (a.len() * ch.len()).max(1) as f64;
-    if mse <= 1e-12 {
-        99.0
-    } else {
-        10.0 * (65025.0 / mse).log10()
-    }
+    psnr_from_mse(s / (a.len() * ch.len()).max(1) as f64)
 }
 
 fn finish(mut summary: ValidationSummary, warnings: Vec<Warning>) -> ValidationReport {
@@ -207,7 +211,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             _ if alpha_present => vec![0, 1, 2, 3],
             _ => vec![0, 1, 2],
         };
-        // M6 Track D (Note T5): fast preview checks PSNR on the smallest mip only.
+        // M6 Track D (Note T5): fast preview checks PSNR on the smallest mip only (coverage runs on every level, Note Y6).
         let last = decoded.len().saturating_sub(1);
         let smallest_only = v.mips == ValidationMips::Smallest;
         for (l, ((lw, lh, d), e)) in decoded.iter().zip(enc).enumerate() {
@@ -255,6 +259,28 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
                         "mip {l}: {bad} texels of all-255 blocks decode below 255"
                     ));
                 }
+            }
+        }
+    }
+
+    // Design §3.6 (ruling R8): CS (and, by owner ruling, ENB) detects complex grass from the decoded bottom-left texel
+    // of mip 0; the encoder re-encoded that block once at the slowest level when it failed.
+    if p.subtype == Subtype::ComplexGrass {
+        if let Some((lw, lh, Decoded::Ldr(px))) = decoded.first() {
+            let q = px[((lh - 1) * lw) as usize];
+            let e = crate::grass::unit_err([q[0], q[1], q[2]].map(|c| f32::from(c) / 255.0));
+            if e >= crate::grass::CS_GRASS_THRESHOLD - crate::grass::GRASS_GUARD_MARGIN {
+                w.push(
+                    Warning::new(
+                        Code::ValGrassDetect,
+                        format!(
+                            "decoded bottom-left texel ({}, {}, {}) has |L-1| = {e:.4} >= 0.02 after re-encoding at \
+                             the slowest BC7 level: Community Shaders may not detect this texture as complex grass",
+                            q[0], q[1], q[2]
+                        ),
+                    )
+                    .with_data(json!({ "texel": [q[0], q[1], q[2]], "err": e })),
+                );
             }
         }
     }
@@ -317,9 +343,6 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         if p.coverage_enabled() {
             if let Some(base) = inp.base_coverage {
                 for (l, (lw, lh, px)) in ldr.iter().enumerate() {
-                    if v.mips == ValidationMips::Smallest && l + 1 != ldr.len() {
-                        continue;
-                    }
                     let c = coverage_fraction(
                         px.iter().map(|q| q[3] as f32 / 255.0),
                         p.alpha.threshold,

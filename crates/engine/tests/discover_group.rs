@@ -223,3 +223,72 @@ fn an_i_member_joins_its_set() {
     assert_eq!((base.as_str(), suffix.as_deref()), ("glass", Some("i")));
     assert!(!engine::group::is_vocabulary("i"));
 }
+
+/// Audit 6 (DECISIONS Note Y4): an unreadable folder is skipped and reported; the rest is still found.
+#[test]
+fn an_unreadable_folder_is_skipped_not_fatal() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    let locked = src.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(src.join("a.png"), b"x").unwrap();
+    std::fs::write(locked.join("b.png"), b"x").unwrap();
+    // *S-1-1-0 is Everyone, whatever the system language.
+    let icacls = |args: &[&str]| {
+        let ok = std::process::Command::new("icacls")
+            .arg(&locked)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    };
+    icacls(&["/deny", "*S-1-1-0:(OI)(CI)(RX)"]);
+    let effective = std::fs::read_dir(&locked).is_err();
+    let r = discover_reporting(std::slice::from_ref(&src), &d.path().join("out"), true);
+    icacls(&["/remove:d", "*S-1-1-0"]);
+    if !effective {
+        eprintln!("ACL deny had no effect for this account; skipping");
+        return;
+    }
+    let (files, skipped) = r.unwrap();
+    let rels: Vec<String> = files
+        .iter()
+        .map(|f| f.rel.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(rels, ["a.png"]);
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert!(skipped[0].contains("locked"), "{skipped:?}");
+}
+
+/// Audit 6: an unreadable input folder itself still fails (the child case is the test above).
+#[test]
+fn an_unreadable_root_is_still_an_error() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    let locked = src.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(src.join("a.png"), b"x").unwrap();
+    let deny = |p: &Path, on: bool| {
+        let args: &[&str] = if on {
+            &["/deny", "*S-1-1-0:(OI)(CI)(RX)"]
+        } else {
+            &["/remove:d", "*S-1-1-0"]
+        };
+        let ok = std::process::Command::new("icacls")
+            .arg(p)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    };
+    let out = d.path().join("out");
+    deny(&src, true);
+    let effective = std::fs::read_dir(&src).is_err();
+    let root = discover_reporting(std::slice::from_ref(&src), &out, true);
+    deny(&src, false);
+    if !effective {
+        eprintln!("ACL deny had no effect for this account; skipping");
+        return;
+    }
+    assert!(root.is_err(), "an unreadable input folder must fail");
+}

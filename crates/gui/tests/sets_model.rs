@@ -983,9 +983,15 @@ fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
 #[test]
 fn shader_dropdown_lists_match_the_mode() {
     use engine::{config::Target, shader::Shader};
-    assert_eq!(shader_options(Target::Cs).len(), 12);
+    assert_eq!(shader_options(Target::Cs).len(), 13);
     assert!(!shader_options(Target::Vanilla).contains(&Shader::Pbr));
-    assert_eq!(shader_options(Target::Cpm), shader_options(Target::Vanilla));
+    // ENB has complex grass, vanilla does not (ruling R1).
+    assert!(!shader_options(Target::Vanilla).contains(&Shader::ComplexGrass));
+    assert!(shader_options(Target::Cpm).contains(&Shader::ComplexGrass));
+    assert_eq!(
+        shader_options(Target::Cpm).len(),
+        shader_options(Target::Vanilla).len() + 1
+    );
 }
 
 #[test]
@@ -1156,8 +1162,7 @@ fn a_scan_database_picks_the_set_shader() {
     let db = dbdir.path().join("scan.db");
     scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
     m.scan_db = Some(db);
-    assert!(m.refresh_mesh_votes());
-    m.replan();
+    m.refresh_mesh_votes(false);
     idle(&mut m);
     let leaf = view(&set_views(&m), "landscape/leaf")
         .shader
@@ -1169,8 +1174,7 @@ fn a_scan_database_picks_the_set_shader() {
     );
     // No database: the suffix rules again (the leaf is under textures/landscape).
     m.scan_db = None;
-    assert!(m.refresh_mesh_votes());
-    m.replan();
+    m.refresh_mesh_votes(false);
     idle(&mut m);
     assert_eq!(
         view(&set_views(&m), "landscape/leaf")
@@ -1295,10 +1299,9 @@ fn a_scan_database_decides_a_diffuse_alpha() {
         &[(4, Some(1), Some(0), 0, false)],
     );
     m.scan_db = Some(db);
-    assert!(m.refresh_mesh_votes(), "only the alpha evidence changed");
-    assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
-    m.replan();
+    m.refresh_mesh_votes(false);
     assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
     let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
     assert_eq!(
         (
@@ -1496,4 +1499,177 @@ fn the_plus_menu_prefills_only_suffixes_pgpatcher_strips() {
     assert_eq!(path(4), Some(r"landscape\rock01_p".into()));
     assert_eq!(path(6), Some(r"landscape\rock01_rmaos".into()));
     assert_eq!(path(8), Some(String::new()), "slot 8 does not strip _s");
+}
+
+#[test]
+fn the_scan_database_is_read_off_the_ui_thread_and_a_read_error_keeps_the_values() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let j = m
+        .items
+        .iter()
+        .filter_map(|i| i.job.as_ref())
+        .find(|j| {
+            j.set_key.ends_with("landscape/leaf")
+                && j.output.file_stem().is_some_and(|s| s == "leaf")
+        })
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db.clone());
+    m.refresh_mesh_votes(false);
+    // The read is on a worker: nothing is applied until the model polls, and the model reports busy meanwhile.
+    assert!(m.mesh_votes.is_empty() && m.busy());
+    idle(&mut m);
+    assert!(!m.mesh_votes.is_empty(), "the result landed in poll");
+    // A database that cannot be read keeps the previous evidence (and logs to stderr), it does not clear it.
+    let before = m.mesh_votes.clone();
+    std::fs::write(&db, b"not a database").unwrap();
+    m.refresh_mesh_votes(false);
+    idle(&mut m);
+    assert_eq!(m.mesh_votes, before);
+}
+
+/// A model with a leaf mesh vote in a scan database, planned again until its post-plan read is pending.
+fn pending_read(d: &std::path::Path) -> (sdc_gui::model::AppModel, tempfile::TempDir) {
+    let mut m = pbr_opened(d);
+    idle(&mut m);
+    let j = m
+        .items
+        .iter()
+        .filter_map(|i| i.job.as_ref())
+        .find(|j| {
+            j.set_key.ends_with("landscape/leaf")
+                && j.output.file_stem().is_some_and(|s| s == "leaf")
+        })
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db);
+    m.replan();
+    let end = std::time::Instant::now() + Duration::from_secs(60);
+    while !m.votes_pending() {
+        assert!(std::time::Instant::now() < end, "the plan never landed");
+        m.poll();
+    }
+    assert!(m.mesh_votes.is_empty());
+    (m, dbdir)
+}
+
+fn export_started_or_asked(m: &sdc_gui::model::AppModel) -> bool {
+    m.dialog.is_some() || m.export.running.is_some() || m.export.summary.is_some()
+}
+
+#[test]
+fn a_queued_export_fires_once_the_post_plan_read_lands() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.export_clicked();
+    assert!(!export_started_or_asked(&m), "waits for the read");
+    idle(&mut m);
+    assert!(!m.mesh_votes.is_empty());
+    assert!(export_started_or_asked(&m), "the tail of the plan ran");
+}
+
+#[test]
+fn a_scan_finished_refresh_keeps_the_pending_plan_continuation() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.export_clicked();
+    m.refresh_mesh_votes(false);
+    idle(&mut m);
+    assert!(export_started_or_asked(&m), "the plan still finished");
+}
+
+#[test]
+fn an_edit_during_a_pending_read_drops_the_stale_read() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.export_clicked();
+    m.replan();
+    assert!(!m.votes_pending(), "the stale read was cleared");
+    m.poll();
+    assert!(m.mesh_votes.is_empty(), "its evidence is never applied");
+    assert!(!export_started_or_asked(&m), "no finish on the old plan");
+    idle(&mut m);
+    assert!(!m.mesh_votes.is_empty(), "the new plan read again");
+    assert!(export_started_or_asked(&m));
+}
+
+#[test]
+fn the_json_panel_and_its_errors_belong_to_json_sets_only() {
+    use engine::config::Target;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert_eq!(m.target, Target::Cs);
+    let plain = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(!plain.pbr && !plain.skin);
+    assert!(!shows_json_panel(&plain, Target::Cs));
+    // Existing JSON settings are never hidden.
+    let mut with_json = plain.clone();
+    with_json.settings.insert("slot1".into(), json!("x"));
+    assert!(shows_json_panel(&with_json, Target::Cs));
+    // A PBR set shows it on cs only.
+    let d = tempfile::tempdir().unwrap();
+    m = pbr_opened(d.path());
+    let pbr = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(pbr.pbr && shows_json_panel(&pbr, Target::Cs));
+    assert!(!shows_json_panel(&pbr, Target::Vanilla));
+}
+
+#[test]
+fn a_grass_diffuse_card_is_titled_complex_grass() {
+    use engine::shader::Shader;
+    assert_eq!(
+        card_title(SlotKind::Diffuse, "a.png", Some(Shader::ComplexGrass)),
+        "Complex grass"
+    );
+    assert_eq!(
+        card_title(SlotKind::Diffuse, "a.png", Some(Shader::Landscape)),
+        "Diffuse"
+    );
+    assert_eq!(
+        card_title(SlotKind::Normal, "a.png", Some(Shader::ComplexGrass)),
+        "Normal _n"
+    );
+}
+
+#[test]
+fn a_bad_prefix_on_a_non_json_set_is_no_export_block() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_json_value("landscape/rock01", "rename", Some(json!("a/b")));
+    idle(&mut m);
+    let v = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(!v.pbr && v.prefix_error.is_some(), "{v:?}");
+    assert!(sdc_gui::model::pbr_export::export_blocks(&m)
+        .iter()
+        .all(|b| !b.text.contains("rename")));
+}
+
+/// Round 3 review: the settings Format row writes the tag with the format, so its reset clears both.
+#[test]
+fn resetting_format_also_clears_the_tag_it_wrote() {
+    use engine::config::{ColorTag, Format};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let key = key_of(&m, "rock01_rmaos");
+    m.set_format(&key, Format::Bc1, ColorTag::Unorm);
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert!(p.file_value(&key, "format").is_some() && p.file_value(&key, "color.tag").is_some());
+    m.clear_field(&key, "format");
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert!(p.file_value(&key, "format").is_none());
+    assert!(
+        p.file_value(&key, "color.tag").is_none(),
+        "tag outlived the format reset"
+    );
 }

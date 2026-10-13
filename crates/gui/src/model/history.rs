@@ -30,8 +30,6 @@ pub struct Command {
 pub struct History {
     pub undo: Vec<Command>,
     pub redo: Vec<Command>,
-    /// How many commands were ever appended (a merged command is not one): a batch counts its own.
-    pub pushed: usize,
 }
 
 impl History {
@@ -49,28 +47,18 @@ impl History {
             }
         }
         self.undo.push(c);
-        self.pushed += 1;
         if self.undo.len() > Self::LIMIT {
             self.undo.remove(0);
         }
     }
 
-    /// Fold the last `n` commands into one labelled `label` (a batch of decisions is one undo step).
-    pub fn fold_last(&mut self, n: usize, label: &str) {
-        if n < 2 || self.undo.len() < n {
-            return;
-        }
-        let tail: Vec<Command> = self.undo.drain(self.undo.len() - n..).collect();
-        let mut one = tail[0].clone();
-        one.label = label.into();
-        one.after = tail[n - 1].after.clone();
-        one.merge = None;
-        self.undo.push(one);
-    }
-
     /// The command to undo (moved to the redo list).
     pub fn undo_step(&mut self) -> Option<Command> {
         let c = self.undo.pop()?;
+        // audit 10: a merge only continues an uninterrupted run.
+        if let Some(top) = self.undo.last_mut() {
+            top.merge = None;
+        }
         self.redo.push(c.clone());
         Some(c)
     }
@@ -78,7 +66,10 @@ impl History {
     /// The command to redo (moved back to the undo list).
     pub fn redo_step(&mut self) -> Option<Command> {
         let c = self.redo.pop()?;
-        self.undo.push(c.clone());
+        self.undo.push(Command {
+            merge: None,
+            ..c.clone()
+        });
         Some(c)
     }
 

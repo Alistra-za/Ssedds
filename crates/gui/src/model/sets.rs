@@ -2,7 +2,7 @@
 //! the engine inputs (`set_edits`, `output_paths`) and the drop rules. No egui types.
 use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
-use super::AppModel;
+use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{
     active_matches, check_rel_path, derive_match_diffuse, output_rel, prefix_of, slot_match_path,
     slot_suffixes,
@@ -18,6 +18,7 @@ use engine::shader::{Shader, ShaderPick};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SlotKind {
@@ -100,6 +101,14 @@ pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
         }
         _ => slot.label(),
     }
+}
+
+/// The card title of `slot` holding `key` in a set drawn by `shader`: a grass file in the Diffuse card is "Complex grass".
+pub fn card_title(slot: SlotKind, key: &str, shader: Option<Shader>) -> &'static str {
+    if slot == SlotKind::Diffuse && shader == Some(Shader::ComplexGrass) {
+        return "Complex grass";
+    }
+    slot_label(slot, key)
 }
 
 /// One row of the Matching header, or one choice of its + menu (F1 spec §3.2): slot number, slot name, path (stored
@@ -232,6 +241,17 @@ impl SetView {
     }
 }
 
+/// Whether `v` is written as PGPatcher JSON: a skin or PBR set under Community Shaders (the set card badge).
+pub fn is_json_set(v: &SetView, target: Target) -> bool {
+    (v.skin || v.pbr) && target == Target::Cs
+}
+
+/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set that already has
+/// JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr` itself.
+pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
+    is_json_set(v, target) || !v.settings.is_empty()
+}
+
 /// A diffuse sub-type that makes its set a PBR set (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
 /// `skin_albedo`, which is Community Shaders TruePBR too and so belongs in the PGPatcher JSON (final review C1).
 /// Not the engine's `is_pbr_color`, which decides sRGB and leaves `skin_albedo` (UNORM) out.
@@ -240,12 +260,14 @@ pub fn is_pbr_diffuse(st: Subtype) -> bool {
 }
 
 /// The slot card a resolved sub-type fills; `None` for sub-types without a card (env mask, complex `_m`,
-/// `msn_specular`, backlight, `skin_wet`, …).
+/// `msn_specular`, backlight, `skin_wet`, …). Complex grass is one file in the Diffuse card.
 pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
     Some(match st {
-        Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::SkinAlbedo => {
-            SlotKind::Diffuse
-        }
+        Subtype::PbrAlbedo
+        | Subtype::Diffuse
+        | Subtype::LandscapeDiffuse
+        | Subtype::SkinAlbedo
+        | Subtype::ComplexGrass => SlotKind::Diffuse,
         Subtype::PbrNormal | Subtype::Normal | Subtype::LandscapeNormal | Subtype::Msn => {
             SlotKind::Normal
         }
@@ -356,8 +378,36 @@ fn mirrored_stem(item: &TextureItem) -> String {
     }
 }
 
-/// Every set, in display order, with its slots, ownership and prefix.
+/// Every set, in display order (audit 7, DECISIONS Note Y7): built once per change of its inputs.
+pub fn views(m: &AppModel) -> Arc<Vec<SetView>> {
+    let key = m.view_key();
+    {
+        let c = m.views.borrow();
+        if c.key.as_ref() == Some(&key) {
+            if let Some(v) = &c.views {
+                return v.clone();
+            }
+        }
+    }
+    let v = Arc::new(build_views(m));
+    let mut c = m.views.borrow_mut();
+    if c.key.as_ref() != Some(&key) {
+        *c = ViewCache {
+            key: Some(key),
+            ..Default::default()
+        };
+    }
+    c.views = Some(v.clone());
+    v
+}
+
 pub fn set_views(m: &AppModel) -> Vec<SetView> {
+    // shortcut: a clone per call for the ~20 callers that take ownership; switch them to `views` if it shows in a profile.
+    (*views(m)).clone()
+}
+
+/// Every set, in display order, with its slots, ownership and prefix.
+fn build_views(m: &AppModel) -> Vec<SetView> {
     let root = m.export_root();
     let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
     let order = m.sets_doc.as_ref().map(|d| d.order()).unwrap_or_default();

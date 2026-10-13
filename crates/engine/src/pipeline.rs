@@ -8,7 +8,7 @@
 //! function of its own texels, so the written bytes are identical for any `--jobs`.
 use crate::api::{BatchRequest, CancelToken};
 use crate::bake::NormalVariance;
-use crate::config::{Format, Profile};
+use crate::config::{Format, Profile, Subtype};
 use crate::coverage::{coverage_fraction, preserve_coverage};
 use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
@@ -83,7 +83,7 @@ fn base_coverage(level: &Rgba32F, p: &Profile, alpha_present: bool) -> Option<f6
 /// matching the clamp in `quantize`), for the BC6H peak check. `None` for other formats.
 fn source_peak(level: &Rgba32F, p: &Profile) -> Option<f32> {
     (p.format == Format::Bc6hUf16).then(|| {
-        let c = |v: f32| if v > 0.0 { v.min(65504.0) } else { 0.0 };
+        let c = crate::quantize::clamp_half;
         level
             .px
             .iter()
@@ -247,7 +247,14 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Preprocess);
-    let mut work = preprocess_with(img, p, transfer);
+    // Complex grass builds each half's chain on its own (design §3.4); the stacked chain comes with its Work.
+    let grass = p.subtype == Subtype::ComplexGrass;
+    let (mut work, grass_chain) = if grass {
+        let (w, c) = crate::grass::build(img, p, transfer).map_err(fail(Stage::Preprocess))?;
+        (w, Some(c))
+    } else {
+        (preprocess_with(img, p, transfer), None)
+    };
     // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched.
     // shortcut: memory admission counts only the base (`estimated_bytes`), not the layers loaded here (one at a time,
     // plus its resample); count the largest layer when an 8K-layer-on-2K-base batch runs out of memory.
@@ -257,13 +264,19 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Mipmaps);
-    let mut chain = build_chain_with(&work, p, bake.as_ref());
+    let mut chain = match grass_chain {
+        Some(c) => c,
+        None => build_chain_with(&work, p, bake.as_ref()),
+    };
     drop(bake);
+    // Audit 21: mip 0 is in `chain` now; nothing below reads `work.img` (`to_encoder_input` reads only
+    // `alpha_present` and `domain`), so free the source-sized copy before quantise, the peak.
+    work.img = Rgba32F::new(0, 0, [0.0; 4]);
     let alpha_present = work.alpha_present;
     // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
-    // only alpha channel.
+    // only alpha channel. Complex grass preserved its top half already; its bottom half's alpha is specular data.
     let base_coverage = base_coverage(&chain[0], p, alpha_present);
-    if base_coverage.is_some() {
+    if base_coverage.is_some() && !grass {
         preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
     }
     let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();
@@ -462,7 +475,7 @@ pub fn process_file(
     #[cfg(feature = "test-hooks")]
     force_validation_failure_for_test(job, &mut report);
     enter(Stage::Write);
-    let record = ManifestRecord {
+    let mut record = ManifestRecord {
         schema: MANIFEST_SCHEMA,
         ts: now_rfc3339(),
         engine_version: ENGINE_VERSION.into(),
@@ -480,18 +493,19 @@ pub fn process_file(
         validation: report.summary.clone(),
         bc1_model: Some(bc1_model_id(req.bc1_model).into()),
         shader: job.shader.clone(),
+        output_stamp: None,
     };
-    let sidecar = req
-        .sidecar
-        .then(|| serde_json::to_string_pretty(&record))
-        .transpose()
-        .map_err(|e| fail(Stage::Write)(e.to_string()))?;
     stop()?;
 
     write_atomic(&job.output, &bytes).map_err(|e| fail(Stage::Write)(e.to_string()))?;
     tracker.written.set(true);
     drop(bytes);
-    if let Some(text) = sidecar {
+    // Note Y1: taken after the rename, so `if-changed` notices a replaced output. Any failure from here on removes
+    // the output (`run_one`, `tracker.written`).
+    record.output_stamp = SourceStamp::of(&job.output);
+    if req.sidecar {
+        let text =
+            serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
         write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
             .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
     }

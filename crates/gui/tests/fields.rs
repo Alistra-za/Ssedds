@@ -16,8 +16,6 @@ fn format_labels_state_bc_format_and_colour_space() {
         format_label(Format::Bc6hUf16, ColorTag::NotApplicable),
         "BC6H · HDR linear"
     );
-    assert!(format_options(Target::Cs).contains(&Format::Bc6hUf16));
-    assert!(!format_options(Target::Vanilla).contains(&Format::Bc6hUf16));
 }
 
 #[test]
@@ -162,11 +160,21 @@ fn uncompressed_format_labels_say_so() {
 
 #[test]
 fn uncompressed_formats_are_offered_and_rgba16f_only_under_cs() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let formats = |t: Target, st: Subtype| -> Vec<Format> {
+        encoding_options(t, &reg.base_profile(t, st))
+            .into_iter()
+            .map(|((f, _), _)| f)
+            .collect()
+    };
     for f in [Format::Rgba8, Format::R8, Format::Rg8] {
-        assert!(format_options(Target::Vanilla).contains(&f), "{f:?}");
+        assert!(
+            formats(Target::Vanilla, Subtype::Diffuse).contains(&f),
+            "{f:?}"
+        );
     }
-    assert!(format_options(Target::Cs).contains(&Format::Rgba16f));
-    assert!(!format_options(Target::Cpm).contains(&Format::Rgba16f));
+    assert!(formats(Target::Cs, Subtype::HdrSky).contains(&Format::Rgba16f));
+    assert!(!formats(Target::Cpm, Subtype::Diffuse).contains(&Format::Rgba16f));
 }
 
 #[test]
@@ -267,4 +275,64 @@ fn filter_edge_and_resize_views_show_their_defaults() {
         .find(|v| v.field == "resize")
         .unwrap();
     assert_eq!(resize.value, serde_json::json!("none"));
+}
+
+/// Owner, 2026-10-13: the format pickers list only what the engine allows (`policy::allowed_encodings`).
+#[test]
+fn format_pickers_offer_only_compatible_encodings() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let pairs = |st: Subtype| -> Vec<(Format, ColorTag)> {
+        let p = reg.base_profile(Target::Cs, st);
+        encoding_options(Target::Cs, &p)
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect()
+    };
+    let grass = reg.base_profile(Target::Cs, Subtype::ComplexGrass);
+    assert_eq!(
+        encoding_options(Target::Cs, &grass),
+        vec![((Format::Bc7, ColorTag::Unorm), "BC7 · linear".to_string())]
+    );
+    assert!(pairs(Subtype::PbrAlbedo)
+        .iter()
+        .all(|(_, t)| *t == ColorTag::Srgb));
+    let n = pairs(Subtype::Normal);
+    assert!(n.contains(&(Format::Bc7, ColorTag::Unorm)));
+    assert!(n
+        .iter()
+        .all(|(f, _)| !matches!(f, Format::Bc4 | Format::Bc6hUf16)));
+    let mut emissive = reg.base_profile(Target::Cs, Subtype::PbrEmissive);
+    assert!(encoding_options(Target::Cs, &emissive)
+        .iter()
+        .any(|(e, _)| *e == (Format::Bc6hUf16, ColorTag::NotApplicable)));
+    // Vanilla has no HDR.
+    let d = reg.base_profile(Target::Vanilla, Subtype::Diffuse);
+    assert!(encoding_options(Target::Vanilla, &d)
+        .iter()
+        .all(|((f, t), _)| !f.is_hdr() && *t == ColorTag::Unorm));
+    emissive.color.tag = ColorTag::Srgb;
+    emissive.format = Format::Bc7;
+    assert!(!encoding_options(Target::Cs, &emissive)
+        .iter()
+        .any(|(_, l)| l.ends_with(NOT_VALID)));
+}
+
+/// An incompatible current value (an old project, a hand edit) stays listed, marked, never rewritten.
+#[test]
+fn an_incompatible_current_encoding_is_kept_and_marked() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let mut n = reg.base_profile(Target::Cs, Subtype::Normal);
+    n.format = Format::Bc4;
+    let o = encoding_options(Target::Cs, &n);
+    assert!(o.contains(&(
+        (Format::Bc4, ColorTag::Unorm),
+        format!("BC4 · linear (one channel){NOT_VALID}")
+    )));
+    assert_eq!(o.iter().filter(|(_, l)| l.ends_with(NOT_VALID)).count(), 1);
+    let mut a = reg.base_profile(Target::Cs, Subtype::PbrAlbedo);
+    a.color.tag = ColorTag::Unorm;
+    assert!(encoding_options(Target::Cs, &a).contains(&(
+        (Format::Bc7, ColorTag::Unorm),
+        format!("BC7 · linear{NOT_VALID}")
+    )));
 }

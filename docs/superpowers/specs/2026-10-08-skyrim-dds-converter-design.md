@@ -655,7 +655,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `ALPHA-PBR-NORMAL-DROPPED` | info | Varying alpha dropped from a `pbr_normal`: vanilla specular in alpha, which PBR normals do not use (DECISIONS P25) | — |
 | `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla` or `cpm` [D#4] | UNORM |
 | `TAG-SRGB-NONPBR` | blocking | `_SRGB` on a non-PBR sub-type under `cs` → renders darker [SC §6] | UNORM |
-| `TAG-UNORM-PBR` | warning | UNORM on PBR colour → washed out with LL off [SC §6] | `_SRGB` |
+| `TAG-UNORM-PBR` | blocking | UNORM on PBR colour → washed out with LL off [SC §6]; blocking since the owner's 2026-10-13 ruling (PBR colour is sRGB only) | `_SRGB` |
 | `TAG-SRGB-LOD` | blocking | `_SRGB` under `lod/` → LOD shaders reject sRGB [SC §4] | UNORM |
 | `TAG-CONTENT-MISMATCH` | warning | Linear content with `_SRGB` tag, colour sub-type with linear content, or a roughness member with sRGB content (no bake, DECISIONS R10) | Check both fields |
 | `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a packed map with BC6H or `rgba16f` (DECISIONS S12), `srgb` on `r8`/`rg8`, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |
@@ -671,6 +671,11 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `SET-COMPANION-OUTSIDE` | info | The missing companion (`_n` or roughness member) is on disk, not in the batch → no bake (DECISIONS R8) | Add it |
 | `SET-COMPANION-DDS` | warning | The missing companion (`_n` or roughness member) exists only as DDS → no bake (DECISIONS R8) | Opt in or supply source |
 | `SET-BAKE-RATIO` | warning | `_n`/roughness-member sizes are not powers of two with one aspect → bake off (DECISIONS R5) | Resize |
+| `GRASS-SHAPE` | error | A `complex_grass` source whose height is not exactly 2 × width, or whose sides are not powers of two, so the halves cannot be built separately | Supply a power-of-two 1:2 image (e.g. 2048×4096) |
+| `GRASS-TOP-OPAQUE` | warning | A `complex_grass` top half (diffuse + alpha) is fully opaque, so the grass has no cutout | Check the alpha |
+| `GRASS-NORMALS` | warning | Fewer than 99 % of the `complex_grass` bottom-half texels are unit-length normals (abs(L−1) < 0.1) | Check the bottom half is a normal map |
+| `GRASS-DETECT-SOURCE` | warning | The source bottom-left texel (0, height−1) already fails Community Shaders' complex-grass test (abs(L−1) ≥ 0.03), so the game would not detect it; the written file passes unless `mips.normal_base = keep` | Fix the corner texel in the source |
+| `GRASS-VANILLA` | warning | A file tagged `complex_grass` under the vanilla target, whose shader has no complex-grass support; it still encodes as `complex_grass` | Use the CS or ENB target, or retag |
 | `SUG-LOW-CONFIDENCE` | blocking | Sub-type or alpha meaning unconfirmed | Confirm |
 | `SUG-CONTRADICTION` | warning | Content contradicts suffix | Confirm or change |
 | `VAL-ALPHA-GUARANTEE` | error | Decoded alpha below guarantee, or ≠ 255 on an all-255 block with the flag on | Report bug; the shipped mechanism is chosen by the §11.2 gate |
@@ -682,6 +687,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `VAL-BC6H-PEAK` | warning | BC6H peak ratio < 0.8 [B2 §6] | Try NVTT Production |
 | `VAL-HEADER` | error | Written header fails §5.7, or the encoder input handed to Validate does not match the file | Report bug |
 | `VAL-MIP-ERROR` | warning | A mip's channel PSNR against the encoder input is below `validation.min_mip_psnr_db` (default 30 dB; §5.8); names the mip and its PSNR | Check the source, raise the effort or accept |
+| `VAL-GRASS-DETECT` | error | The encoded bottom-left texel (0, height−1) of the first level still decodes at abs(L−1) ≥ 0.02 after the slowest-quality re-encode, so the game may not detect complex grass (file is written; validation fails) | Fix the source corner, or report a bug |
 | `ENC-NVTT-MISSING` | blocking | NVTT chosen but not found | Install, set path, or built-in |
 | `ENC-NVTT-VERSION` (M5) | blocking | Untested NVTT version | Acknowledge |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
@@ -692,6 +698,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm` states no green convention (§4.4); never settled by `--accept-suggestions` or `--allow` | `--set 'file:<name>.channels.green_convention=opengl\|directx'` |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `IN-NONFINITE` | warning | Source has NaN or infinite samples; Preprocess replaced them (NaN and −∞ → 0, +∞ → 1, or the half-float maximum for HDR colour) | Fix the source |
+| `IN-UNREADABLE` | warning | A file or folder under an input folder could not be read (access denied, dangling junction, cloud placeholder); it was skipped | Fix the permissions, or ignore |
 | `IN-FLOAT-LDR` | info, **retired (M6, DECISIONS S2)** | Never emitted; `--allow IN-FLOAT-LDR` still parses | — |
 | `IN-ICC-IGNORED` | info | The source embeds an ICC profile; it is ignored and the pixels are read as stored (DECISIONS S8) | Convert the source to sRGB or linear first if the profile matters |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |

@@ -87,8 +87,18 @@ pub fn discover(
     output_root: &Path,
     recursive: bool,
 ) -> std::io::Result<Vec<InputFile>> {
+    discover_reporting(inputs, output_root, recursive).map(|(f, _)| f)
+}
+
+/// `discover`, plus each folder entry it could not read (walkdir's message, which names the path).
+pub fn discover_reporting(
+    inputs: &[PathBuf],
+    output_root: &Path,
+    recursive: bool,
+) -> std::io::Result<(Vec<InputFile>, Vec<String>)> {
     let out_abs = std::path::absolute(output_root)?;
     let mut files = vec![];
+    let mut skipped = vec![];
     for input in inputs {
         if input.is_dir() {
             let max_depth = if recursive { usize::MAX } else { 1 };
@@ -103,7 +113,18 @@ pub fn discover(
                     && !std::path::absolute(e.path()).is_ok_and(|a| is_under(&a, &out_abs))
             };
             for e in walker.into_iter().filter_entry(keep) {
-                let e = e.map_err(std::io::Error::other)?;
+                let e = match e {
+                    Ok(e) => e,
+                    // Audit 6: an access-denied folder, a dangling junction or a cloud placeholder skips, never aborts.
+                    Err(err) => {
+                        // An unreadable input folder itself is still fatal.
+                        if err.depth() == 0 {
+                            return Err(std::io::Error::other(err));
+                        }
+                        skipped.push(err.to_string());
+                        continue;
+                    }
+                };
                 let p = e.path();
                 if !e.file_type().is_file() || is_under(&std::path::absolute(p)?, &out_abs) {
                     continue;
@@ -125,7 +146,7 @@ pub fn discover(
         }
     }
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(files)
+    Ok((files, skipped))
 }
 
 /// Spec §3.7, §4.4: an input whose stem ends in a preset suffix alias or an exporter vocabulary term is

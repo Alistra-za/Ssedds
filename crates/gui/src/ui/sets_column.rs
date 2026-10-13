@@ -4,11 +4,10 @@
 use super::columns::{member, status_text, AMBER, RED};
 use super::thumbs::ThumbCache;
 use crate::model::pbr_export::export_blocks;
-use crate::model::sets::{set_views, shader_options, DropChoice, DropOutcome, SetView, SlotFill};
+use crate::model::sets::{is_json_set, shader_options, DropChoice, DropOutcome, SetView, SlotFill};
 use crate::model::{AppModel, Selection};
 use eframe::egui;
 use engine::codes::Warning;
-use engine::config::Target;
 use engine::shader::{Shader, ShaderOrigin};
 
 /// Drag payload: a texture, by item key.
@@ -103,7 +102,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
         on: editable,
         why: &why,
     };
-    let views = set_views(model);
+    let views = crate::model::sets::views(model);
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
     }
@@ -350,12 +349,12 @@ fn pill(
                     ui.label(egui::RichText::new(&v.label).strong());
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if v.skin && model.target == Target::Cs {
-                        badge(ui, "skin → JSON", None);
-                    } else if v.pbr && model.target == Target::Cs {
-                        badge(ui, "PBR → JSON", None);
-                    } else {
+                    if !is_json_set(v, model.target) {
                         badge(ui, "vanilla set (no JSON)", None);
+                    } else if v.skin {
+                        badge(ui, "skin → JSON", None);
+                    } else {
+                        badge(ui, "PBR → JSON", None);
                     }
                     let rows: Vec<(&str, &Warning)> = v
                         .members

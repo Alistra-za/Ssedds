@@ -269,3 +269,34 @@ fn undoing_an_sdc_toml_edit_after_an_export_leaves_the_sets_doc_clean() {
     assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
     assert!(m.sets_doc.as_ref().unwrap().last_json_sha256().is_some());
 }
+
+/// Audit 10 (DECISIONS Note Y8): an edit after an undo starts a new step, even with the merge key now on top.
+#[test]
+fn an_edit_after_undo_never_merges_into_the_step_below() {
+    let mut h = History::default();
+    h.push(cmd("name", snap("", "0"), snap("", "x"), Some("json_name")));
+    h.push(cmd("shader", snap("", "x"), snap("", "xs"), None));
+    h.push(cmd(
+        "name",
+        snap("", "xs"),
+        snap("", "xsy"),
+        Some("json_name"),
+    ));
+    h.undo_step();
+    h.undo_step();
+    h.push(cmd(
+        "name",
+        snap("", "x"),
+        snap("", "xz"),
+        Some("json_name"),
+    ));
+    assert_eq!(h.undo.len(), 2, "z is a step of its own");
+    assert_eq!(h.undo[0].after.project, "x", "the x state is still a step");
+    // Redo also ends a run.
+    let mut h = History::default();
+    h.push(cmd("name", snap("", "0"), snap("", "a"), Some("k")));
+    h.undo_step();
+    h.redo_step();
+    h.push(cmd("name", snap("", "a"), snap("", "ab"), Some("k")));
+    assert_eq!(h.undo.len(), 2);
+}

@@ -603,6 +603,7 @@
         "skin_albedo",
         "skin_sk",
         "skin_wet",
+        "complex_grass",
         "rfaos"
       ],
       "type": "string"
@@ -645,7 +646,7 @@
         },
         "mips": {
           "$ref": "#/$defs/ValidationMips",
-          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
+          "description": "M6 Track D (DECISIONS Notes T5, Y6): `smallest` runs the per-mip PSNR check on the smallest mip only and the\ncoverage check on every level (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",

@@ -328,6 +328,14 @@ pub fn mesh_alpha(
     Ok(out)
 }
 
+/// Complex grass design §5 condition 1: the GRAS diffuses of the scan, as `engine::grass::path_key` keys (sent as
+/// `BatchRequest::gras_diffuses`).
+pub fn gras_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    let paths = store.gras_diffuse_textures().map_err(db_err)?;
+    Ok(paths.iter().map(|p| engine::grass::path_key(p)).collect())
+}
+
 /// "Plugin file references" (esp spec §4.4): information only.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FileRefs {

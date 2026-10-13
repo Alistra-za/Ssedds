@@ -4,7 +4,7 @@ use super::history::sha256_of;
 use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
-use super::AppModel;
+use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
@@ -14,6 +14,7 @@ use engine::sets::OutputKey;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportIssue {
@@ -246,8 +247,32 @@ pub fn missing_texture_texts(
     out
 }
 
-/// What stops Export (spec §6.3). On CS the PBR sets are checked; slot clashes apply to every set.
+/// What stops Export (spec §6.3). On CS the PBR sets are checked; slot clashes apply to every set. Cached with the
+/// set views (audit 7, DECISIONS Note Y7).
 pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
+    let key = m.view_key();
+    {
+        let c = m.views.borrow();
+        if c.key.as_ref() == Some(&key) {
+            if let Some(b) = &c.blocks {
+                return (**b).clone();
+            }
+        }
+    }
+    // No borrow is held here: `build_blocks` reads the cached views.
+    let b = Arc::new(build_blocks(m));
+    let mut c = m.views.borrow_mut();
+    if c.key.as_ref() != Some(&key) {
+        *c = ViewCache {
+            key: Some(key),
+            ..Default::default()
+        };
+    }
+    c.blocks = Some(b.clone());
+    (*b).clone()
+}
+
+fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
     let mut out = vec![];
     for v in &set_views(m) {
         if has(v, SlotKind::Coat) && has(v, SlotKind::Fuzz) {
