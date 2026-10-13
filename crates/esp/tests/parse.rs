@@ -449,3 +449,97 @@ fn groups_nested_too_deep_are_an_error_not_a_stack_overflow() {
     assert!(f.errors[0].contains("nested deeper"), "{:?}", f.errors);
     assert!(f.placed.is_empty());
 }
+
+fn nested(n: usize) -> Vec<u8> {
+    let mut g = grup(&[0u8; 4], 9, &[placed(b"REFR", 1, 0x10)]);
+    for _ in 1..n {
+        g = grup(&[0u8; 4], 6, &[g]);
+    }
+    g
+}
+
+/// The depth cap is exact: 8 groups nested under a CELL group are read, a 9th is an error.
+#[test]
+fn nesting_limit_is_eight_groups() {
+    let ok = parse("x.esp", &plugin(0, &[], &[grup(b"CELL", 0, &[nested(8)])]));
+    assert!(ok.errors.is_empty(), "{:?}", ok.errors);
+    assert_eq!(ok.placed, vec![0x10]);
+    let bad = parse("x.esp", &plugin(0, &[], &[grup(b"CELL", 0, &[nested(9)])]));
+    assert_eq!(bad.errors.len(), 1, "{:?}", bad.errors);
+    assert!(bad.placed.is_empty());
+}
+
+#[test]
+fn a_zero_base_is_not_a_placement() {
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[grup(
+                b"CELL",
+                0,
+                &[placed(b"REFR", 1, 0), placed(b"REFR", 2, 0x20)],
+            )],
+        ),
+    );
+    assert!(f.errors.is_empty(), "{:?}", f.errors);
+    assert_eq!(f.placed, vec![0x20]);
+}
+
+#[test]
+fn temporary_children_group_type_10_is_walked() {
+    let c = 0x1000u32.to_le_bytes();
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[grup(
+                b"CELL",
+                0,
+                &[grup(&c, 10, &[placed(b"ACHR", 1, 0x30)])],
+            )],
+        ),
+    );
+    assert!(f.errors.is_empty(), "{:?}", f.errors);
+    assert_eq!(f.placed, vec![0x30]);
+}
+
+/// A fault in one CELL top group does not lose the placements of the next one.
+#[test]
+fn a_faulty_cell_group_does_not_lose_the_next_one() {
+    let mut bad = grup(&[0u8; 4], 6, &[placed(b"REFR", 1, 0x10)]);
+    bad[4..8].copy_from_slice(&10_000u32.to_le_bytes());
+    let good = grup(&[0u8; 4], 6, &[placed(b"REFR", 2, 0x40)]);
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[grup(b"CELL", 0, &[bad]), grup(b"CELL", 0, &[good])],
+        ),
+    );
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert_eq!(f.placed, vec![0x40]);
+}
+
+/// A CELL/WRLD top group cut off by the end of the file is reported and what is inside is still read.
+#[test]
+fn a_truncated_cell_top_group_is_reported_and_read() {
+    let mut b = plugin(
+        0,
+        &[],
+        &[grup(
+            b"WRLD",
+            0,
+            &[grup(&[0u8; 4], 6, &[placed(b"REFR", 1, 0x50)])],
+        )],
+    );
+    let at = plugin(0, &[], &[]).len();
+    b[at + 4..at + 8].copy_from_slice(&100_000u32.to_le_bytes());
+    let f = parse("x.esp", &b);
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert!(f.errors[0].contains("runs past the end"), "{:?}", f.errors);
+    assert_eq!(f.placed, vec![0x50]);
+}
