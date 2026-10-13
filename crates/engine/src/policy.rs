@@ -592,7 +592,7 @@ fn layered_profile_with(
     }
     if !alpha_policy_explicit(ctx, &prov) {
         if let Some((policy, Confidence::High, _)) =
-            suggest_alpha(st, f.analysis.alpha, near_binary(f.analysis))
+            suggest_alpha(st, f.analysis.alpha, alpha_share(st, f.analysis))
         {
             let value = serde_json::to_value(policy).expect("AlphaPolicy serialises");
             apply(
@@ -1038,6 +1038,15 @@ pub fn near_binary(a: &Analysis) -> f64 {
     (a.alpha_hist.le5 + a.alpha_hist.ge250) as f64 / n
 }
 
+/// The near-binary share the alpha proposal reads (design §3.2, ruling R5): complex grass looks at its top (diffuse)
+/// half only, because the bottom half's alpha is specular data.
+fn alpha_share(st: Subtype, a: &Analysis) -> f64 {
+    match (st, &a.grass) {
+        (Subtype::ComplexGrass, Some(g)) => g.top_near_binary,
+        _ => near_binary(a),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Availability {
     Available,
@@ -1058,6 +1067,14 @@ pub fn availability(t: Target, s: Subtype) -> Availability {
         (Target::Vanilla, ComplexMaterial) => un(Some(Envmask)),
         _ => Availability::Available,
     }
+}
+
+/// Whether the sub-type pickers offer `s` under `t`: available, and not `complex_grass` under vanilla, whose grass
+/// shader has no complex grass (design §3.7, ruling R1). A file tagged `complex_grass` there still encodes, with
+/// `GRASS-VANILLA`.
+pub fn offered(t: Target, s: Subtype) -> bool {
+    availability(t, s) == Availability::Available
+        && !(t == Target::Vanilla && s == Subtype::ComplexGrass)
 }
 
 /// What an unresolved job is waiting for (DECISIONS N9), so a GUI can offer the right control.
@@ -1636,6 +1653,65 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             "CS ignores _flow maps of 32 px or less".into(),
         );
     }
+    // Complex grass (design §3.5, §3.7, §4; rulings R1, R4, R7, R9).
+    if st == Subtype::ComplexGrass {
+        if p.format != Format::Bc7
+            || p.srgb_tag()
+            || crate::resize::target_dims((a.width, a.height), p.resize) != (a.width, a.height)
+        {
+            add(
+                CfgInvalid,
+                "complex_grass is written as BC7 UNORM at its own size (resize would have to run on each half)"
+                    .into(),
+            );
+        }
+        if p.target == Target::Vanilla {
+            add(
+                GrassVanilla,
+                "the vanilla grass shader has no complex grass: written as complex_grass unchanged; only Community \
+                 Shaders or ENB read it"
+                    .into(),
+            );
+        }
+        match &a.grass {
+            Some(g) if a.is_pot => {
+                if g.top_opaque {
+                    add(
+                        GrassTopOpaque,
+                        "top half (diffuse) alpha is fully opaque: the grass has no transparency"
+                            .into(),
+                    );
+                }
+                if g.bottom_unit_share < crate::grass::GRASS_UNIT_SHARE {
+                    add(
+                        GrassNormals,
+                        format!(
+                            "{:.1}% of bottom-half texels are unit-length normals (|L-1| < 0.1); 99% expected",
+                            g.bottom_unit_share * 100.0
+                        ),
+                    );
+                }
+                if g.corner_err >= crate::grass::CS_GRASS_THRESHOLD {
+                    add(
+                        GrassDetectSource,
+                        format!(
+                            "source bottom-left texel has |L-1| = {:.3} >= 0.03: Community Shaders would not detect \
+                             it as complex grass; mip 0 is renormalised, so the written file passes unless \
+                             mips.normal_base = keep",
+                            g.corner_err
+                        ),
+                    );
+                }
+            }
+            _ => add(
+                GrassShape,
+                format!(
+                    "{}x{}: complex_grass needs a power-of-two width and height = 2 x width",
+                    a.width, a.height
+                ),
+            ),
+        }
+    }
     if a.icc_profile {
         add(
             InIccIgnored,
@@ -1883,8 +1959,12 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         && f.analysis.alpha == AlphaContent::Varying
         && !alpha_policy_explicit(ctx, &provenance)
     {
-        let hint = suggest_alpha(profile.subtype, f.analysis.alpha, near_binary(f.analysis))
-            .map(|(p, _, why)| format!("{p:?}: {why}"));
+        let hint = suggest_alpha(
+            profile.subtype,
+            f.analysis.alpha,
+            alpha_share(profile.subtype, f.analysis),
+        )
+        .map(|(p, _, why)| format!("{p:?}: {why}"));
         if !allowed(ctx, f, Code::SugLowConfidence) {
             needs.push(Need::AlphaMeaning);
         }

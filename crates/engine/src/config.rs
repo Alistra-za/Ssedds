@@ -518,7 +518,11 @@ impl Subtype {
     pub fn alpha_from_mesh(self) -> bool {
         matches!(
             self,
-            Subtype::Diffuse | Subtype::PbrAlbedo | Subtype::UiSky | Subtype::SkinAlbedo
+            Subtype::Diffuse
+                | Subtype::PbrAlbedo
+                | Subtype::UiSky
+                | Subtype::SkinAlbedo
+                | Subtype::ComplexGrass
         )
     }
 
