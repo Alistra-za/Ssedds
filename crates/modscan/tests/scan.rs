@@ -792,3 +792,52 @@ fn a_failed_run_discards_staged_derived_copies() {
         0
     );
 }
+
+/// Audit 17: a second scan on the same store is refused while the first runs; the lock is gone after any outcome.
+#[cfg(windows)]
+#[test]
+fn second_scan_on_the_same_store_is_busy_and_the_lock_is_released() {
+    let d = instance_fixture("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let db = d.path().join("scan.db");
+    let attempt = |cancel: bool, progress: &dyn Fn(modscan::scan::Progress)| {
+        let inst = Instance::load(d.path(), None).unwrap();
+        let mut store = Store::open(&db).unwrap();
+        run(
+            &Source::Mo2(inst),
+            &mut store,
+            &AtomicBool::new(cancel),
+            progress,
+            &|| vec![],
+        )
+    };
+    let inner = std::cell::RefCell::new(Vec::new());
+    let r = attempt(false, &|_| {
+        let r = attempt(false, &|_| {});
+        inner
+            .borrow_mut()
+            .push(matches!(r, Err(modscan::ScanError::Busy)));
+    });
+    assert!(r.is_ok(), "{r:?}");
+    let inner = inner.into_inner();
+    assert!(!inner.is_empty() && inner.iter().all(|b| *b), "{inner:?}");
+    let store = Store::open(&db).unwrap();
+    assert_eq!(store.nifs_of(mod_id(&store, "A")).unwrap().len(), 1);
+    // Released after a cancel (a new file forces real work) and after an error.
+    put(d.path(), "mods/A/meshes/z.nif", None);
+    assert!(matches!(
+        attempt(true, &|_| {}),
+        Err(modscan::ScanError::Cancelled)
+    ));
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut s = Store::open(&db).unwrap();
+    let r = run(
+        &Source::Mo2(inst),
+        &mut s,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec!["pgpatcher.exe".into()],
+    );
+    assert!(matches!(r, Err(modscan::ScanError::PgpRunning)));
+    assert!(attempt(false, &|_| {}).is_ok());
+}

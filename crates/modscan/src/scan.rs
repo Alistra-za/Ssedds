@@ -170,6 +170,8 @@ pub fn run_with(
     procs: &dyn Fn() -> Vec<String>,
     skip_derived: bool,
 ) -> Result<Report, ScanError> {
+    // Declared first so it drops last, after end_scan, on every path including a panic.
+    let _lock = ScanLock::take(store)?;
     let r = scan_body(src, store, cancel, progress, procs, skip_derived);
     if let Err(e) = &r {
         // Pending rows must not outlive a failed run (first error wins). A crash after a cold direct write keeps
@@ -186,6 +188,40 @@ pub fn run_with(
         .sub_ms
         .push(("end_scan", t.elapsed().as_millis() as u64));
     Ok(report)
+}
+
+/// Exclusive `scan.lock` beside the store file for the whole run (audit 17: a second scan's `delete_unseen` would
+/// wipe the first one's rows). Windows: the file is held open with share mode 0, so the OS frees it if the process
+/// dies. shortcut: no lock off Windows (std `File::try_lock` needs Rust 1.89, workspace is 1.88); this app ships on
+/// Windows only. In-memory stores have no file and skip it.
+#[allow(dead_code)] // held only for its Drop
+struct ScanLock(#[cfg(windows)] Option<std::fs::File>);
+
+impl ScanLock {
+    #[cfg(windows)]
+    fn take(store: &Store) -> Result<ScanLock, ScanError> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let Some(db) = store.conn.path().filter(|p| !p.is_empty()) else {
+            return Ok(ScanLock(None));
+        };
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .open(std::path::Path::new(db).with_file_name("scan.lock"))
+        {
+            Ok(f) => Ok(ScanLock(Some(f))),
+            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Err(ScanError::Busy),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn take(_: &Store) -> Result<ScanLock, ScanError> {
+        Ok(ScanLock())
+    }
 }
 
 /// A corrupt database is a cache: zero the version so the next `Store::open` rebuilds it.
