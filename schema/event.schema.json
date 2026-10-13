@@ -125,6 +125,17 @@
           "$ref": "#/$defs/Profile",
           "description": "That `_n`'s resolved profile: the member decodes the `_n` with it exactly as the `_n`'s own job does\n(swizzle, green flip, Z rebuild; DECISIONS R4)."
         },
+        "rnm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `_n` job's active RNM blend at plan time (Note W18, owner 2026-10-12): the lengths come from the `_n` as its\nown encode writes it, after the layers."
+        },
         "shift": {
           "description": "log2(`_n` size / member size) ([`bake_shift`]) as planned.",
           "format": "int32",

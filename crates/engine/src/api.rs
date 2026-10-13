@@ -505,6 +505,15 @@ fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
             Some(b.identity_sha256()),
             None,
         ));
+        if let Some(r) = &b.rnm {
+            for (f, role) in r.inputs(&b.normal_profile.rnm) {
+                v.push((
+                    sha256_file(&f.path).ok()?,
+                    None,
+                    Some(format!("bake.{role}")),
+                ));
+            }
+        }
     }
     if let Some(r) = job.active_rnm() {
         for (f, role) in r.inputs(&job.profile.rnm) {
@@ -1280,6 +1289,12 @@ impl Engine {
                 )
             })
             .collect();
+        for j in &mut jobs {
+            j.shader = picks.get(&j.set_key).cloned();
+        }
+        // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped),
+        // before the bakes, so a baking roughness member copies its `_n`'s blend (Note W18).
+        crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
         let baking = crate::bake::plan::plan_bakes(
             &crate::bake::plan::BakeCtx {
                 target,
@@ -1291,11 +1306,6 @@ impl Engine {
             },
             &mut jobs,
         );
-        for j in &mut jobs {
-            j.shader = picks.get(&j.set_key).cloned();
-        }
-        // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped).
-        crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];

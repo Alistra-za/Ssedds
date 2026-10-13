@@ -668,3 +668,4 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on 
 - **W15 Test fixtures.** Shared engine RNM test helpers live in `crates/engine/tests/rnm_support/mod.rs` (one copy; `plan_dir` always recursive).
 - **W16 AO identity.** The AO source's manifest role carries its channel (`bent.ao.r` for a raw AO map's R, `bent.ao.b` for `_rmaos`/`_rfaos` B), so swapping a byte-identical file between the two re-encodes the normal.
 - **W17 GUI storage.** The per-set RNM notes and layer keys are `AppModel.rnm_notes` / `AppModel.rnm_keys` (the model keeps no `PlanView`); the RNM section applies its own edits only when a value changed.
+- **W18 Roughness bake after the blend.** Owner (2026-10-12): the roughness variance bake reads the `_n` after its RNM blend (plan_rnm runs before plan_bakes; `BakeJob.rnm`); the bake identity and the roughness member's sources include the RNM inputs, so a layer edit re-bakes it.

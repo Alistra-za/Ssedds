@@ -144,6 +144,15 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
     if let Some(b) = &job.bake {
         stamps.push((b.normal.as_path(), b.stamp));
     }
+    if let Some(r) = job
+        .bake
+        .as_ref()
+        .and_then(|b| b.rnm.as_ref().map(|r| (r, &b.normal_profile)))
+    {
+        for (f, _) in r.0.inputs(&r.1.rnm) {
+            stamps.push((f.path.as_path(), f.stamp));
+        }
+    }
     if let Some(r) = job.active_rnm() {
         for (f, _) in r.inputs(&job.profile.rnm) {
             stamps.push((f.path.as_path(), f.stamp));
@@ -393,6 +402,19 @@ pub fn process_file(
                     SourceRef::of_bake(&b.normal, b.identity_sha256())
                         .map_err(|e| fail(Stage::Load)(format!("{}: {e}", b.normal.display())))?,
                 );
+            }
+            // Note W18: the baked `_n`'s RNM inputs, roles prefixed `bake.`.
+            if let Some(r) = job
+                .bake
+                .as_ref()
+                .and_then(|b| b.rnm.as_ref().map(|r| (r, &b.normal_profile)))
+            {
+                for (f, role) in r.0.inputs(&r.1.rnm) {
+                    sources.push(
+                        SourceRef::of_rnm(&f.path, format!("bake.{role}"))
+                            .map_err(|e| fail(Stage::Load)(format!("{}: {e}", f.path.display())))?,
+                    );
+                }
             }
             // M6 Track F2: every RNM input the blend reads, with its role.
             if let Some(r) = job.active_rnm() {
