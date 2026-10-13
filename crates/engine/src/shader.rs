@@ -712,6 +712,13 @@ pub fn assign<'s>(spec: &'s ShaderSpec, members: &[MemberMap]) -> Vec<Option<&'s
 /// SHADER-EXTRA-MAP per unused member (data `{"member", "shader"}`) and SHADER-MISSING-MAP per required role no
 /// member fills (data `{"map", "shader"}`), members first, then roles in table order.
 pub fn check_maps(pick: &ShaderPick, members: &[MemberMap]) -> Vec<Warning> {
+    // Complex grass is drawn by the grass shader, which reads diffuse and normal from the one file (DECISIONS X9).
+    if members
+        .iter()
+        .any(|m| m.subtype == Some(Subtype::ComplexGrass))
+    {
+        return vec![];
+    }
     let id = pick.shader.id();
     let spec = pick.shader.spec();
     let filled = assign(spec, members);
@@ -1326,6 +1333,17 @@ mod tests {
         assert_eq!(w[0].data["member"], "lamp_p.dds");
         assert_eq!(w[1].data["map"], "_n");
         assert_eq!(w[2].data["map"], "_g");
+    }
+
+    #[test]
+    fn a_complex_grass_set_raises_no_map_warnings() {
+        let p = ShaderPick {
+            shader: Shader::Default,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let ms = [m("g.dds", None, Some(Subtype::ComplexGrass))];
+        assert!(check_maps(&p, &ms).is_empty());
     }
 
     #[test]

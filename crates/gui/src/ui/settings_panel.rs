@@ -12,7 +12,7 @@ use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
 use engine::config::{AlphaPolicy, GreenConvention, MipFilter, Subtype, Target};
-use engine::policy::{availability, Availability, ResolvedJob};
+use engine::policy::{offered, ResolvedJob};
 use serde_json::{json, Value};
 
 /// What a control asks of the model; applied once the drawing is over.
@@ -94,6 +94,12 @@ pub fn subtype_groups(keep: impl Fn(Subtype) -> bool) -> Vec<(&'static str, Vec<
     groups
 }
 
+/// The sub-type groups a picker offers under `target` (`engine::policy::offered`: not `complex_grass` under vanilla,
+/// complex grass design §3.7).
+pub fn offered_groups(target: Target) -> Vec<(&'static str, Vec<Subtype>)> {
+    subtype_groups(|s| offered(target, s))
+}
+
 pub fn alpha_options() -> Options {
     vec![
         (json!(AlphaPolicy::Remove), "Remove".into()),
@@ -115,15 +121,13 @@ fn capitalised(s: &str) -> String {
 fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options> {
     let p = &job.profile;
     Some(match field {
-        "subtype" => subtype_groups(|s| {
-            s == p.subtype || matches!(availability(target, s), Availability::Available)
-        })
-        .into_iter()
-        .flat_map(|(heading, members)| {
-            std::iter::once((Value::Null, heading.to_string()))
-                .chain(members.into_iter().map(|s| (json!(s), subtype_label(s))))
-        })
-        .collect(),
+        "subtype" => subtype_groups(|s| s == p.subtype || offered(target, s))
+            .into_iter()
+            .flat_map(|(heading, members)| {
+                std::iter::once((Value::Null, heading.to_string()))
+                    .chain(members.into_iter().map(|s| (json!(s), subtype_label(s))))
+            })
+            .collect(),
         "color.content" => vec![
             opt(json!("srgb"), "sRGB-encoded colour"),
             opt(json!("linear"), "Linear data"),
@@ -653,9 +657,7 @@ fn subtype_decision(
         egui::ComboBox::from_id_salt(id)
             .selected_text(subtype_label(chosen))
             .show_ui(ui, |ui| {
-                for (heading, members) in subtype_groups(|s| {
-                    matches!(availability(cx.target, s), Availability::Available)
-                }) {
+                for (heading, members) in offered_groups(cx.target) {
                     ui.label(egui::RichText::new(heading).weak());
                     for st in members {
                         ui.selectable_value(&mut chosen, st, subtype_label(st));

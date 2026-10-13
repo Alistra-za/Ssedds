@@ -8,7 +8,7 @@
 //! function of its own texels, so the written bytes are identical for any `--jobs`.
 use crate::api::{BatchRequest, CancelToken};
 use crate::bake::NormalVariance;
-use crate::config::{Format, Profile};
+use crate::config::{Format, Profile, Subtype};
 use crate::coverage::{coverage_fraction, preserve_coverage};
 use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
@@ -247,7 +247,14 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Preprocess);
-    let mut work = preprocess_with(img, p, transfer);
+    // Complex grass builds each half's chain on its own (design §3.4); the stacked chain comes with its Work.
+    let grass = p.subtype == Subtype::ComplexGrass;
+    let (mut work, grass_chain) = if grass {
+        let (w, c) = crate::grass::build(img, p, transfer).map_err(fail(Stage::Preprocess))?;
+        (w, Some(c))
+    } else {
+        (preprocess_with(img, p, transfer), None)
+    };
     // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched.
     // shortcut: memory admission counts only the base (`estimated_bytes`), not the layers loaded here (one at a time,
     // plus its resample); count the largest layer when an 8K-layer-on-2K-base batch runs out of memory.
@@ -257,13 +264,16 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Mipmaps);
-    let mut chain = build_chain_with(&work, p, bake.as_ref());
+    let mut chain = match grass_chain {
+        Some(c) => c,
+        None => build_chain_with(&work, p, bake.as_ref()),
+    };
     drop(bake);
     let alpha_present = work.alpha_present;
     // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
-    // only alpha channel.
+    // only alpha channel. Complex grass preserved its top half already; its bottom half's alpha is specular data.
     let base_coverage = base_coverage(&chain[0], p, alpha_present);
-    if base_coverage.is_some() {
+    if base_coverage.is_some() && !grass {
         preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
     }
     let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();

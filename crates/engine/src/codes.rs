@@ -11,6 +11,7 @@
 //! `mips.filter` a texture cannot use, which then uses box, S-mips-13) and the four `SHADER-*` codes (M6 Track A) and
 //! CFG-PRESET-SKIPPED (a user preset folder file that failed to load, skipped) and CFG-GREEN-CONFLICT (an explicit
 //! `flip_green` that contradicts `green_convention`) (M6 Track D) and the five `RNM-*` codes of RNM normal layers (M6 Track F2).
+//! and the five `GRASS-*` codes and VAL-GRASS-DETECT (complex grass design 2026-10-12 §3.6, §3.7, §4).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -120,6 +121,12 @@ codes! {
     ShaderMissingMap = "SHADER-MISSING-MAP" => Warning,
     DdsHeaderPatched = "DDS-HEADER-PATCHED" => Info,
     DdsHeaderUnpatchable = "DDS-HEADER-UNPATCHABLE" => Warning,
+    GrassShape = "GRASS-SHAPE" => Error,
+    GrassTopOpaque = "GRASS-TOP-OPAQUE" => Warning,
+    GrassNormals = "GRASS-NORMALS" => Warning,
+    GrassDetectSource = "GRASS-DETECT-SOURCE" => Warning,
+    GrassVanilla = "GRASS-VANILLA" => Warning,
+    ValGrassDetect = "VAL-GRASS-DETECT" => Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -186,7 +193,15 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 80);
+        assert_eq!(Code::ALL.len(), 86);
+        assert_eq!(Code::GrassShape.severity(), Severity::Error);
+        assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
+        assert_eq!(Code::GrassVanilla.severity(), Severity::Warning);
+        assert_eq!(
+            Code::parse("GRASS-DETECT-SOURCE"),
+            Some(Code::GrassDetectSource)
+        );
+        assert_eq!(Code::ALL.last(), Some(&Code::ValGrassDetect));
         assert_eq!(Code::CfgPresetSkipped.severity(), Severity::Warning);
         assert_eq!(
             Code::parse("CFG-GREEN-CONFLICT"),

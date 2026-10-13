@@ -433,7 +433,13 @@
         "SHADER-EXTRA-MAP",
         "SHADER-MISSING-MAP",
         "DDS-HEADER-PATCHED",
-        "DDS-HEADER-UNPATCHABLE"
+        "DDS-HEADER-UNPATCHABLE",
+        "GRASS-SHAPE",
+        "GRASS-TOP-OPAQUE",
+        "GRASS-NORMALS",
+        "GRASS-DETECT-SOURCE",
+        "GRASS-VANILLA",
+        "VAL-GRASS-DETECT"
       ],
       "type": "string"
     },
@@ -1664,6 +1670,7 @@
         "skin_albedo",
         "skin_sk",
         "skin_wet",
+        "complex_grass",
         "rfaos"
       ],
       "type": "string"

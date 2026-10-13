@@ -63,6 +63,8 @@ pub struct Analysis {
     /// NaN and ±∞ samples per channel (R, G, B, A). They are left out of every statistic above; Preprocess replaces
     /// them (DECISIONS S9).
     pub nonfinite: [u64; 4],
+    /// Complex grass facts (design §4, §5), for an image whose height is twice its width; `None` otherwise.
+    pub grass: Option<crate::grass::GrassFacts>,
 }
 
 /// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
@@ -167,6 +169,7 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         icc_profile: false,
         dds_dxgi: None,
         nonfinite,
+        grass: crate::grass::facts(img),
     }
 }
 

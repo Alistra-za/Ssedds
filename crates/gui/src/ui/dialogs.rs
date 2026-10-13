@@ -79,8 +79,7 @@ fn export_issues(
 const VISIBLE_ROWS: f32 = 12.0;
 
 fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
-    use super::settings_panel::{subtype_groups, subtype_label};
-    use engine::policy::{availability, Availability};
+    use super::settings_panel::{offered_groups, subtype_label};
     let (mut proceed, mut cancel, mut accept_all) = (false, false, false);
     let mut select: Option<String> = None;
     let mut decide: Option<(String, engine::config::Subtype)> = None;
@@ -124,9 +123,7 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
                         egui::ComboBox::from_id_salt(id)
                             .selected_text(subtype_label(chosen))
                             .show_ui(ui, |ui| {
-                                for (heading, members) in subtype_groups(|s| {
-                                    matches!(availability(target, s), Availability::Available)
-                                }) {
+                                for (heading, members) in offered_groups(target) {
                                     ui.label(egui::RichText::new(heading).weak());
                                     for st in members {
                                         ui.selectable_value(&mut chosen, st, subtype_label(st));

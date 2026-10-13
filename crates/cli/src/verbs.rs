@@ -1086,6 +1086,7 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
         let p = Engine::new()?.registry().base_profile(target, st);
         req.srgb = Some(p.srgb_tag());
         req.require_full_mips = p.mips.levels == MipLevels::Keyword(MipKeyword::Full);
+        req.complex_grass = st == Subtype::ComplexGrass;
     }
     if let Some(t) = a.tag {
         req.srgb = Some(matches!(t, TagArg::Srgb));

@@ -121,6 +121,10 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 - The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail, with a *use AO* tick. The note under it says sdc inverts the AO for you: supply normal AO (white = open) and do not invert it yourself.
 - Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
 
+## Complex grass
+
+A complex-grass texture is one image twice as tall as it is wide: diffuse and alpha on top, normal and specular below. Pick **complex grass** as its sub-type (under *Packed and data*), or let sdc tag it after a Meshes-page scan that included plugins: a texture used by a GRAS (grass) record, 1:2, with a valid detection corner and a normal-map bottom half is tagged automatically. The vanilla target does not list it (the vanilla shader has no complex grass). Warnings name what is wrong: `GRASS-SHAPE`, `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE`, `GRASS-VANILLA`. The CLI never auto-tags: if you later run `sdc convert` on the same folder, tag the grass files in `sdc.toml` (`[files]`) or the CLI re-encodes them as diffuse.
+
 ## Where settings live
 
 GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.

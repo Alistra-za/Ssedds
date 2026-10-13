@@ -603,6 +603,7 @@
         "skin_albedo",
         "skin_sk",
         "skin_wet",
+        "complex_grass",
         "rfaos"
       ],
       "type": "string"
