@@ -4,11 +4,11 @@ use crate::{AltTex, ModelRef, Payload, Rec, Txst};
 use nif::path::{canon_model, canon_texture};
 
 /// Top-level groups read (spec §3); every other group is skipped by its size.
-const WANTED: [[u8; 4]; 28] = [
+const WANTED: [[u8; 4]; 29] = [
     *b"TXST", *b"STAT", *b"MSTT", *b"ACTI", *b"FURN", *b"DOOR", *b"CONT", *b"LIGH", *b"MISC",
     *b"TREE", *b"FLOR", *b"GRAS", *b"ARMA", *b"ARMO", *b"WEAP", *b"AMMO", *b"BOOK", *b"INGR",
     *b"ALCH", *b"KEYM", *b"SLGM", *b"SCRL", *b"LTEX", *b"HDPT", *b"NPC_", *b"RACE", *b"EFSH",
-    *b"WTHR",
+    *b"WTHR", *b"IPCT",
 ];
 
 pub(crate) fn wanted(label: &[u8; 4]) -> bool {
@@ -53,13 +53,19 @@ pub(crate) fn read(rec: &mut Rec, data: &[u8]) -> Result<(), usize> {
             b"NPC_" if &sig == b"FTST" => form_ref(p, sig, d),
             b"ARMA" if matches!(&sig, b"NAM0" | b"NAM1") => form_ref(p, sig, d),
             b"RACE" => race(p, sig, d),
+            // Skyrim ARMO MODL is an ARMA FormID (one per armature), not a path; world models are MOD2/MOD4 (ruling F-2).
+            b"ARMO" if &sig == b"MODL" => form_ref(p, sig, d),
+            b"HDPT" if &sig == b"DATA" => p.hdpt_flags = d.first().copied(),
+            b"HDPT" if &sig == b"HNAM" => form_ref(p, sig, d),
+            b"LTEX" if &sig == b"GNAM" => form_ref(p, sig, d),
+            b"IPCT" if matches!(&sig, b"DNAM" | b"ENAM") => form_ref(p, sig, d),
             b"EFSH" if matches!(&sig, b"ICON" | b"ICO2" | b"NAM7" | b"NAM8" | b"NAM9") => {
                 texture(p, sig, d)
             }
             b"WTHR" if is_cloud_layer(&sig) => texture(p, sig, d),
             _ => {}
         }
-        if &kind != b"RACE" {
+        if &kind != b"RACE" && !(&kind == b"ARMO" && &sig == b"MODL") {
             model(p, &sig, d);
         }
     })
@@ -86,7 +92,7 @@ fn txst(p: &mut Payload, sig: &[u8; 4], d: &[u8]) {
     }
 }
 
-/// A u32 FormID subrecord pointing at a TXST; 0 (none) is dropped.
+/// A u32 FormID subrecord (a TXST; an HDPT for HNAM, a GRAS for GNAM, an ARMA for ARMO MODL); 0 (none) is dropped.
 fn form_ref(p: &mut Payload, sig: [u8; 4], d: &[u8]) {
     if d.len() >= 4 {
         let id = u32_at(d, 0);

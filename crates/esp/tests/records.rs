@@ -127,8 +127,8 @@ fn models_carry_their_own_alternate_textures() {
 fn every_model_record_type_reads_modl_and_mods() {
     for sig in [
         b"STAT", b"MSTT", b"ACTI", b"FURN", b"DOOR", b"CONT", b"LIGH", b"MISC", b"TREE", b"FLOR",
-        b"GRAS", b"ARMA", b"ARMO", b"WEAP", b"AMMO", b"BOOK", b"INGR", b"ALCH", b"KEYM", b"SLGM",
-        b"SCRL", b"HDPT",
+        b"GRAS", b"ARMA", b"WEAP", b"AMMO", b"BOOK", b"INGR", b"ALCH", b"KEYM", b"SLGM", b"SCRL",
+        b"HDPT",
     ] {
         let r = one(
             sig,
@@ -411,4 +411,109 @@ fn truncated_and_odd_subrecords_do_not_panic_or_lose_earlier_data() {
     assert_eq!(t.flags, 0);
     let l = one(b"LTEX", rec(b"LTEX", 1, &[sub(b"TNAM", &[1, 2, 3])]));
     assert!(l.payload.txst_refs.is_empty());
+}
+
+/// Filtering spec §3, xEdit dev-4.1.6 `wbDefinitionsTES5.pas` l.6238-6276: IPCT DNAM/ENAM are TXSTs; its model is read
+/// like every model record (ruling R11); sounds are not read.
+#[test]
+fn impact_texture_sets() {
+    let r = one(
+        b"IPCT",
+        rec(
+            b"IPCT",
+            1,
+            &[
+                edid("Imp"),
+                sub(b"MODL", &zstr("Effects\\Imp.nif")),
+                sub(b"DATA", &[0u8; 24]),
+                form(b"DNAM", 0xA1),
+                form(b"ENAM", 0xA2),
+                form(b"SNAM", 0xFF),
+            ],
+        ),
+    );
+    assert_eq!(
+        r.payload.txst_refs,
+        vec![(*b"DNAM", 0xA1), (*b"ENAM", 0xA2)]
+    );
+    assert_eq!(r.payload.models[0].path, "meshes/effects/imp.nif");
+}
+
+/// l.5279-5309: HDPT DATA is a u8 flag set (0x01 Playable); HNAM lists extra-part HDPTs (ruling R7).
+#[test]
+fn head_part_flags_and_extra_parts() {
+    let h = one(
+        b"HDPT",
+        rec(
+            b"HDPT",
+            2,
+            &[
+                edid("Hair"),
+                sub(b"DATA", &[0x03]),
+                sub(b"PNAM", &3u32.to_le_bytes()),
+                form(b"HNAM", 0xB1),
+                form(b"HNAM", 0xB2),
+                form(b"TNAM", 0xB3),
+            ],
+        ),
+    );
+    assert_eq!(h.payload.hdpt_flags, Some(0x03));
+    assert_eq!(
+        h.payload.txst_refs,
+        vec![(*b"HNAM", 0xB1), (*b"HNAM", 0xB2), (*b"TNAM", 0xB3)]
+    );
+    assert_eq!(
+        one(b"HDPT", rec(b"HDPT", 3, &[edid("NoData")]))
+            .payload
+            .hdpt_flags,
+        None
+    );
+    let s = one(
+        b"STAT",
+        rec(b"STAT", 4, &[edid("S"), sub(b"DATA", &[0x01])]),
+    );
+    assert_eq!(s.payload.hdpt_flags, None, "DATA is read on HDPT only");
+}
+
+/// l.8009: LTEX GNAM lists the grasses of the landscape texture.
+#[test]
+fn landscape_texture_grasses() {
+    let l = one(
+        b"LTEX",
+        rec(
+            b"LTEX",
+            5,
+            &[
+                edid("Dirt"),
+                form(b"TNAM", 0xC1),
+                form(b"GNAM", 0xC2),
+                form(b"GNAM", 0xC3),
+            ],
+        ),
+    );
+    assert_eq!(
+        l.payload.txst_refs,
+        vec![(*b"TNAM", 0xC1), (*b"GNAM", 0xC2), (*b"GNAM", 0xC3)]
+    );
+}
+
+/// Ruling F-2: Skyrim ARMO MODL is an ARMA FormID (per armature), not a mesh path; world models are MOD2/MOD4.
+#[test]
+fn armor_modl_names_armatures() {
+    let r = one(
+        b"ARMO",
+        rec(
+            b"ARMO",
+            6,
+            &[
+                edid("Arm"),
+                form(b"MODL", 0xA1),
+                form(b"MODL", 0),
+                sub(b"MOD2", &zstr("Armor\\X.nif")),
+            ],
+        ),
+    );
+    assert_eq!(r.payload.models.len(), 1);
+    assert_eq!(r.payload.models[0].slot, 2);
+    assert_eq!(r.payload.txst_refs, vec![(*b"MODL", 0xA1)]);
 }

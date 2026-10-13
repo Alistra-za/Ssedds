@@ -52,8 +52,12 @@ pub struct Rec {
 pub struct Payload {
     pub txst: Option<Txst>,
     pub models: Vec<ModelRef>,
-    /// (role = subrecord signature, local FormID of the TXST); FormID 0 is never stored.
+    /// (role = subrecord signature, local FormID). The target is a TXST, except role HNAM (an extra-part HDPT), GNAM (a GRAS)
+    /// and ARMO MODL (an ARMA); FormID 0 is never stored.
     pub txst_refs: Vec<([u8; 4], u32)>,
+    /// HDPT DATA flags (xEdit: 0x01 Playable, 0x02 Male, 0x04 Female, 0x08 Is Extra Part, 0x10 Use Solid Tint);
+    /// `None` on other records and when DATA is absent.
+    pub hdpt_flags: Option<u8>,
     /// (role = subrecord signature, canonical texture path).
     pub textures: Vec<([u8; 4], String)>,
 }
