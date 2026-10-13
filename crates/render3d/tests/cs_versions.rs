@@ -358,20 +358,6 @@ fn coverage_per_build() {
                 "extendedTranslucencySettings.Reduction",
                 "extendedTranslucencySettings.Softness",
                 "extendedTranslucencySettings.Strength",
-                "linearLightingSettings.ambientGamma",
-                "linearLightingSettings.colorGamma",
-                "linearLightingSettings.effectAlphaGamma",
-                "linearLightingSettings.effectGamma",
-                "linearLightingSettings.emitColorGamma",
-                "linearLightingSettings.emitColorMult",
-                "linearLightingSettings.fogAlphaGamma",
-                "linearLightingSettings.fogGamma",
-                "linearLightingSettings.glowmapGamma",
-                "linearLightingSettings.lightGamma",
-                "linearLightingSettings.skyGamma",
-                "linearLightingSettings.vanillaDiffuseColorMult",
-                "linearLightingSettings.vlGamma",
-                "linearLightingSettings.waterGamma",
             ]
             .map(String::from)
             .into();
@@ -418,4 +404,43 @@ fn coverage_names_the_drift() {
         c.line().as_deref(),
         Some("CS settings: 1 fields unset, 2 keys unmatched")
     );
+}
+
+/// Task 5 Step 3: 1.6/1.8 shaders with 1.9 settings (no gamma keys) drew black: the old-LL gamma fields and
+/// vanillaDiffuseColorMult fell to 0. They take the old builds' SettingsDefault values; a user key still wins.
+#[test]
+fn old_ll_fields_without_a_key_take_the_old_defaults() {
+    let s = with(
+        serde_json::json!({"Linear Lighting": {"enableLinearLighting": 1, "pointLightMult": 1.0}}),
+    );
+    for tag in ["cs16_0528", "cs18_bottle"] {
+        let fields = fields_of(tag);
+        let fd = feature_data(&s, &fields, true, false);
+        assert_eq!(
+            value(&fd, "linearLightingSettings.lightGamma"),
+            [f64::from(1.8f32)],
+            "{tag}"
+        );
+        assert_eq!(
+            value(&fd, "linearLightingSettings.fogGamma"),
+            [f64::from(1.97f32)],
+            "{tag}"
+        );
+        assert_eq!(
+            value(&fd, "linearLightingSettings.vanillaDiffuseColorMult"),
+            [1.0],
+            "{tag}"
+        );
+        let c = coverage(&s, &fields, &fd);
+        assert!(
+            !c.unset
+                .iter()
+                .any(|f| f.starts_with("linearLightingSettings.")),
+            "{tag}: {:?}",
+            c.unset
+        );
+    }
+    let s = with(serde_json::json!({"Linear Lighting": {"lightGamma": 2.2}}));
+    let fd = feature_data(&s, &fields_of("cs16_0528"), true, false);
+    assert_eq!(value(&fd, "linearLightingSettings.lightGamma"), [2.2]);
 }

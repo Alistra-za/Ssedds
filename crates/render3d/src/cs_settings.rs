@@ -270,6 +270,26 @@ pub const NEW_LL: &str = "linearLightingSettings.diffuseCurve";
 /// Reflected only by the old Linear Lighting (1.6, 1.8, Nexus 1.9.1): π in the shader, LL switched by a cbuffer flag.
 pub const OLD_LL: &str = "linearLightingSettings.isDirLightLinear";
 
+/// Old-LL fields the 1.9 settings files have no key for, at the 1.6/1.8 `SettingsDefault.json` values (identical in
+/// both builds).
+const OLD_LL_DEFAULTS: [(&str, f32); 15] = [
+    ("ambientGamma", 1.8),
+    ("colorGamma", 1.8),
+    ("effectAlphaGamma", 1.55),
+    ("effectGamma", 1.4),
+    ("emitColorGamma", 1.8),
+    ("emitColorMult", 1.0),
+    ("enableACEScg", 0.0),
+    ("fogAlphaGamma", 1.8),
+    ("fogGamma", 1.97),
+    ("glowmapGamma", 1.8),
+    ("lightGamma", 1.8),
+    ("skyGamma", 1.8),
+    ("vanillaDiffuseColorMult", 1.0),
+    ("vlGamma", 1.8),
+    ("waterGamma", 1.8),
+];
+
 /// Whether Linear Lighting is on in the preview. Old LL: the setting, with no key = off (the shader's flag reads the
 /// written 0, Nexus before CS's first run). New LL: `CsSettings::linear_lighting` (no key = the P0 default, on).
 pub fn linear_lighting_on(s: &CsSettings, old_ll: bool, features_on: bool) -> bool {
@@ -524,6 +544,13 @@ pub fn feature_data(
             }
         }
     } else if fields.contains(OLD_LL) {
+        // Keys the 1.9 files lack (the capture has no such fields): a 0 gamma or diffuse/emit multiplier draws black.
+        for (k, v) in OLD_LL_DEFAULTS {
+            let f = format!("linearLightingSettings.{k}");
+            if fields.contains(&f) && ll(k).is_none() {
+                put(&mut out, &f, vec![f64::from(v)]);
+            }
+        }
         // Old LL: raw multipliers, the shader applies π itself (Color.hlsli:270-278). isDirLightLinear and
         // dirLightMult are engine-derived (advanced-skin LinearLighting.cpp:125-133); 0 would black out the sun
         // (1.8 Lighting.hlsl:2730). The flag is the LL switch (Color.hlsli:7).
