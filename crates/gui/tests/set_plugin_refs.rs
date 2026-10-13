@@ -230,3 +230,21 @@ fn plugin_refs_requery_on_a_new_key_and_report_db_problems() {
     let e = r.get(Some(&old), &rock).as_ref().unwrap_err();
     assert!(e.contains("scan database version 3"), "{e}");
 }
+
+/// Review M3: an Err (no scan yet) is not cached, so a scan that lands afterwards shows without Refresh.
+#[test]
+fn an_error_result_is_not_cached() {
+    use modscan::store::TexKey;
+    use sdc_gui::model::plugin_refs::{SetPluginRefs, NO_SCAN};
+    let d = tempfile::tempdir().unwrap();
+    let key = TexKey::Suffix {
+        slot: 0,
+        stem: "landscape/rock01".into(),
+    };
+    let db = d.path().join("scan.db");
+    let mut refs = SetPluginRefs::default();
+    assert_eq!(refs.get(Some(&db), &key).as_ref().unwrap_err(), NO_SCAN);
+    seeded_db(d.path());
+    let r = refs.get(Some(&db), &key).as_ref().unwrap();
+    assert_eq!(r.txsts.len(), 1);
+}

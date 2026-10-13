@@ -28,7 +28,12 @@ impl SetPluginRefs {
     /// The result for `key`; read from the scan database `db` when the key changed or after `refresh`. Only called
     /// while the section is open.
     pub fn get(&mut self, db: Option<&Path>, key: &TexKey) -> &Result<SetPluginUse, String> {
-        if self.cached.as_ref().is_none_or(|(k, _)| k != key) {
+        // An Err (no scan yet, old schema) is not cached: it is one stat away from changing after a scan.
+        let stale = match &self.cached {
+            Some((k, r)) => k != key || r.is_err(),
+            None => true,
+        };
+        if stale {
             self.cached = Some((key.clone(), query(db, key)));
         }
         match &self.cached {
