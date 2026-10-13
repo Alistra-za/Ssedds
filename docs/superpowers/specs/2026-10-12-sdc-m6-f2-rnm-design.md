@@ -17,6 +17,7 @@ Owner-approved in chat on 2026-10-12, section by section. Base: `main` 00db642. 
   - Strength is set per layer.
   - No base normal means a warning and no output.
   - Eye sets (model-space `_n`, the `_e` envmap) are ignored.
+  - Layers feed `_n`, `_cnr` or both: plain layers default to `_n`, prefixed ones (`_cnr_bump`) to their base, and either can be shared.
   - Every mask, AO included, can be switched off.
   - AO is displayed inverted, with a note saying not to invert it yourself.
 
@@ -47,6 +48,7 @@ A new vocabulary role, **normal layer**, is added to `group.rs` `VOCABULARY`. Ma
 | `bent` | `_bent` | `_bentmask` | `_bent_mask` |
 
 - `_norm` becomes an alias of `_n`.
+- Every layer and mask suffix also takes a base prefix: `_n_<suffix>` or `_cnr_<suffix>`. For example `_cnr_bump`, `_cnr_bumpmask` and `_n_detailnorm2`. The prefix sets the default target (§2.3).
 - `_ao` keeps its existing packing role and is also read as the bent AO source (§3.3).
 
 ### 2.2 Grouping and hiding
@@ -67,7 +69,14 @@ A new vocabulary role, **normal layer**, is added to `group.rs` `VOCABULARY`. Ma
   - a cubemap, such as the eye `_e` envmap.
 - **Eye set:** its layer files stay hidden and unconverted, and code `RNM-IGNORED-EYE` names them.
 - **No base:** the set's layers stay hidden and unconverted, and code `RNM-NO-BASE` is raised. Nothing is synthesised.
-- **More than one base candidate** (both `_n` and `_cnr`): the layers apply to `_cnr` if present, else to `_n`. Ruling: in a PBR set the coat normal is the output normal. The plan pins this with a test.
+- **Which base a layer feeds** (owner, 2026-10-12):
+  - Every layer file has a **target**: `n`, `cnr` or `both`. Its mask follows it.
+  - **Prefixed layers** like `_cnr_bump`, `_cnr_detailnorm` and `_cnr_bentmask` default to `cnr`. `_n_` prefixes (e.g. `_n_bump`) default to `n`.
+  - **Plain layers** (`_bump`) default to `n`.
+  - Any layer can be switched to any target. This allows sharing: a plain `_bump` or a `_cnr_bump` can be set to `both`.
+  - A target that names a base the set doesn't have is ignored for that base. If a plain layer's default base `_n` is missing but a `_cnr` exists, the layer feeds `_cnr`.
+  - **Same layer id twice in one stack** (e.g. `_bump` set to `both` plus a `_cnr_bump` in the `_cnr` stack): the file whose prefix names that base wins, and the other is left out of that stack with code `RNM-LAYER-SHADOWED`.
+  - Each base has its own stack and its own `rnm.*` settings (§4). A shared layer can have a different strength in each stack.
 - **Mask without its layer:** it is ignored, with code `RNM-MASK-ORPHAN`.
 
 ## 3. Blend
@@ -137,6 +146,7 @@ A new engine job, `NormalStackJob`, sits beside `PackJob` and `BakeJob`. The pip
   - `rnm.order`: a list of layer ids. Unknown ids are refused by `check_profile`, and missing ids are appended in the default order.
   - per layer: `rnm.<layer>.strength` (f32, minimum 0; ruling: maximum 2), `rnm.<layer>.flip_green` (bool) and `rnm.<layer>.mask` (bool).
   - bent only: `rnm.bent.mode` (`ao_blend` | `detail`), `rnm.bent.ao_power` (f32, 0.1..=8) and `rnm.bent.ao` (bool).
+  - On the **layer file's** own `[files]` entry: `rnm.target` (`n` | `cnr` | `both`). The default comes from the prefix (§2.3). A changed target re-encodes every base it adds or removes.
 - **Staleness:**
   - Layer files, mask files and the AO source join the job's hashed source list, in order, with their roles.
   - Every `rnm.*` key joins the hashed `Profile`.
@@ -144,7 +154,7 @@ A new engine job, `NormalStackJob`, sits beside `PackJob` and `BakeJob`. The pip
 - **Reporting:**
   - `plan`, `inspect` and the manifest list each layer, its file and its settings.
   - `explain` covers the new codes.
-- **New codes:** `RNM-NO-BASE`, `RNM-IGNORED-EYE`, `RNM-MASK-ORPHAN`, `RNM-AO-MISSING`. Catalogue 75 → 79.
+- **New codes:** `RNM-NO-BASE`, `RNM-IGNORED-EYE`, `RNM-MASK-ORPHAN`, `RNM-AO-MISSING`, `RNM-LAYER-SHADOWED`. Catalogue 75 → 80.
 - **Version:** 0.6.0 → 0.7.0. DECISIONS **Note W** gets one bullet per ruling.
 
 ## 5. GUI
@@ -163,7 +173,9 @@ The section sits in the settings panel, under the normal's compression settings.
   - a strength slider (0–2);
   - "flip green" toggle;
   - a mask thumbnail with an on/off toggle, or "no mask";
-  - ▲▼ to reorder.
+  - ▲▼ to reorder;
+  - a **target** switch: "Normal" / "CNR" / "Both". It is shown only when the set has both `_n` and `_cnr`, and writes `rnm.target` on the layer file.
+- **Two stacks:** a set with both `_n` and `_cnr` gets one RNM section per base, each listing the layers that feed it.
 - **Bent row, extra controls:**
   - the mode switch "AO blend" / "Like a detail";
   - the AO power slider;
@@ -180,7 +192,13 @@ The section sits in the settings panel, under the normal's compression settings.
   - `foo_bump.png` never becomes a colour output.
 - **Base selection:**
   - `_n` only;
-  - `_cnr` wins over `_n`;
+  - in a set with `_n` + `_cnr`:
+    - plain `_bump` feeds only `_n`;
+    - `_cnr_bump` feeds only `_cnr`;
+    - `rnm.target = both` feeds both;
+    - `_bump` set to `both` plus a `_cnr_bump` gives the `_cnr` stack only `_cnr_bump`, with `RNM-LAYER-SHADOWED`;
+  - plain `_bump` with only a `_cnr` feeds `_cnr`;
+  - a shared layer has independent strengths per stack;
   - an eye set gives `RNM-IGNORED-EYE`;
   - no base gives `RNM-NO-BASE`;
   - an orphan mask gives `RNM-MASK-ORPHAN`.
