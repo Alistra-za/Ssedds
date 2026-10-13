@@ -777,9 +777,6 @@ fn walk(
         }
         // Textures: directory-entry stat only, never the bytes. Distinct paths per origin by construction.
         for f in vfs::loose::walk(&o.root, &["textures"], &["dds"]) {
-            if is_lod_path(&f.norm) {
-                continue;
-            }
             tex.push(Copy {
                 path: f.norm,
                 origin: OriginRef::Loose(i),
@@ -807,11 +804,7 @@ fn walk(
         let mtime = file_mtime(&b.path);
         let bi = opened.len();
         for e in &bsa.entries {
-            if e.norm.starts_with("textures/")
-                && e.norm.ends_with(".dds")
-                && !is_facegen(&e.norm)
-                && !is_lod_path(&e.norm)
-            {
+            if e.norm.starts_with("textures/") && e.norm.ends_with(".dds") && !is_facegen(&e.norm) {
                 tex.push(Copy {
                     path: e.norm.clone(),
                     origin: OriginRef::Bsa(i),

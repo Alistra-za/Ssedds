@@ -673,7 +673,9 @@ impl Store {
     /// Unused textures (spec §4.4, ruling R8), by path.
     pub fn unused_textures(&self) -> Result<Vec<String>, ScanError> {
         let mut st = self.conn.prepare(UNUSED_SQL)?;
-        let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
-        Ok(v)
+        let v: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        Ok(v.into_iter()
+            .filter(|p| !nif::path::is_lod_path(p))
+            .collect())
     }
 }
