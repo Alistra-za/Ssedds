@@ -239,13 +239,15 @@ pub fn is_pbr_diffuse(st: Subtype) -> bool {
     matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
 }
 
-/// The slot card a resolved sub-type fills; `None` for sub-types without a card (env mask, complex `_m`,
+/// The slot card a resolved sub-type fills (complex grass is one file in the diffuse card); `None` for sub-types without a card (env mask, complex `_m`,
 /// `msn_specular`, backlight, `skin_wet`, …).
 pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
     Some(match st {
-        Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::SkinAlbedo => {
-            SlotKind::Diffuse
-        }
+        Subtype::PbrAlbedo
+        | Subtype::Diffuse
+        | Subtype::LandscapeDiffuse
+        | Subtype::SkinAlbedo
+        | Subtype::ComplexGrass => SlotKind::Diffuse,
         Subtype::PbrNormal | Subtype::Normal | Subtype::LandscapeNormal | Subtype::Msn => {
             SlotKind::Normal
         }

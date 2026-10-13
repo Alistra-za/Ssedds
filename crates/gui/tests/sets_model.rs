@@ -983,9 +983,15 @@ fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
 #[test]
 fn shader_dropdown_lists_match_the_mode() {
     use engine::{config::Target, shader::Shader};
-    assert_eq!(shader_options(Target::Cs).len(), 12);
+    assert_eq!(shader_options(Target::Cs).len(), 13);
     assert!(!shader_options(Target::Vanilla).contains(&Shader::Pbr));
-    assert_eq!(shader_options(Target::Cpm), shader_options(Target::Vanilla));
+    // ENB has complex grass, vanilla does not (ruling R1).
+    assert!(!shader_options(Target::Vanilla).contains(&Shader::ComplexGrass));
+    assert!(shader_options(Target::Cpm).contains(&Shader::ComplexGrass));
+    assert_eq!(
+        shader_options(Target::Cpm).len(),
+        shader_options(Target::Vanilla).len() + 1
+    );
 }
 
 #[test]

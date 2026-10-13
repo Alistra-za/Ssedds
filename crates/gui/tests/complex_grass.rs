@@ -193,3 +193,28 @@ fn a_gras_diffuse_from_the_scan_db_is_tagged_after_the_plan() {
     assert_eq!(m.request().unwrap().gras_diffuses, m.gras_diffuses);
     assert_eq!(subtype(&m), Some(Subtype::ComplexGrass));
 }
+
+/// 2026-10-13: a tagged grass file is one Diffuse-slot card, filled, and the set auto-picks the complex_grass shader.
+#[test]
+fn a_grass_set_shows_one_filled_card_under_the_complex_grass_shader() {
+    use sdc_gui::model::sets::{set_views, slot_row, SlotFill};
+    let d = tempfile::tempdir().unwrap();
+    grass_png(&d.path().join("textures/plants/g.png"), 32);
+    let mut m = support::opened(d.path());
+    m.accept = engine::policy::AcceptSuggestions::High;
+    let dbdir = tempfile::tempdir().unwrap();
+    m.scan_db = Some(gras_db(dbdir.path(), r"textures\plants\g.dds"));
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let v = set_views(&m)
+        .into_iter()
+        .find(|v| v.members.iter().any(|k| k == "plants/g.png"))
+        .expect("the grass set");
+    assert_eq!(
+        v.shader.as_ref().map(|p| p.shader),
+        Some(engine::shader::Shader::ComplexGrass)
+    );
+    let row = slot_row(v.shader.as_ref(), &v.slots);
+    assert_eq!(row.len(), 1, "{row:?}");
+    assert!(row[0].usable && matches!(row[0].fill, SlotFill::Own { .. }));
+}
