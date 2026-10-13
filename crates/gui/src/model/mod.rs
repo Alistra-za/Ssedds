@@ -1,4 +1,5 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
+pub mod bulk;
 pub mod dds_patch;
 pub mod export;
 pub mod fields;
@@ -221,6 +222,10 @@ pub struct AppModel {
     /// While set, `edit_docs` changes the documents but neither records a step nor re-plans.
     batch: bool,
     pub selection: Selection,
+    /// F3a D1: the multi-selection; `selection` stays the active entry.
+    pub multi: bulk::MultiSelection,
+    /// F3a: the bulk panel's chip and last report.
+    pub bulk: bulk::BulkState,
     pub filter: Filter,
     pub search: String,
     pub status_line: String,
@@ -315,6 +320,8 @@ impl AppModel {
             batch_preset: String::new(),
             batch: false,
             selection: Selection::None,
+            multi: Default::default(),
+            bulk: Default::default(),
             filter: Filter::default(),
             search: String::new(),
             status_line: String::new(),
@@ -423,6 +430,8 @@ impl AppModel {
         self.sets.clear();
         self.unmatched_keys.clear();
         self.selection = Selection::None;
+        self.multi = Default::default();
+        self.bulk = Default::default();
         self.expanded = None;
         self.preview_close();
         // The drawer shows the folder it ran on; another folder starts with an empty one.
@@ -1164,6 +1173,7 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        self.prune_selection();
         // Keep the selection when its item or set still exists; else nothing.
         let gone = match &self.selection {
             Selection::Item(k) => self.item(k).is_none(),
@@ -1311,12 +1321,18 @@ impl AppModel {
             .collect()
     }
 
+    /// Select one texture; any multi-selection ends (F3a D1).
     pub fn select_item(&mut self, key: &str) {
         self.selection = Selection::Item(key.to_string());
+        self.multi = Default::default();
+        self.bulk = Default::default();
     }
 
+    /// Select one set; any multi-selection ends (F3a D1).
     pub fn select_set(&mut self, key: &str) {
         self.selection = Selection::Set(key.to_string());
+        self.multi = Default::default();
+        self.bulk = Default::default();
     }
 
     pub fn expand(&mut self, key: &str) {
