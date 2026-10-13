@@ -871,6 +871,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 group(ui, g, &cx, &mut actions);
             }
             if !compact {
+                super::rnm_section::rnm_section(ui, model, key);
                 other_warnings(ui, &warnings);
             }
         }
