@@ -700,3 +700,39 @@ fn cancelled_run_leaves_read_lists_empty_until_a_scan_completes() {
     assert!(names.contains(&"C".to_string()) && !names.contains(&"B".to_string()));
     assert!(store.nifs_of(mod_id(&store, "A")).unwrap()[0].wins);
 }
+
+/// Review focus 1: a store error on the writer thread ends the scan with that error instead of hanging the parser.
+/// 2,561 one-byte files span 6 chunks, so the parser is still sending when the writer dies.
+#[test]
+fn a_writer_failure_ends_the_scan_with_its_error() {
+    let d = instance_fixture("+A\n");
+    for i in 0..2561 {
+        put(d.path(), &format!("mods/A/meshes/x{i}.nif"), Some(&[0]));
+    }
+    let root = d.path().to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let inst = Instance::load(&root, None).unwrap();
+        let mut store = Store::open(&root.join("scan.db")).unwrap();
+        store
+            .conn()
+            .execute_batch("CREATE TRIGGER boom BEFORE INSERT ON nif_copy BEGIN SELECT RAISE(ABORT, 'boom'); END")
+            .unwrap();
+        let r = run(
+            &Source::Mo2(inst),
+            &mut store,
+            &AtomicBool::new(false),
+            &|_| {},
+            &|| vec![],
+        );
+        let _ = tx.send(r.map(|_| ()).map_err(|e| format!("{e:?}")));
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .expect("run hung after a writer error");
+    assert!(
+        r.as_ref()
+            .is_err_and(|e| e.contains("Db") && e.contains("boom")),
+        "{r:?}"
+    );
+}

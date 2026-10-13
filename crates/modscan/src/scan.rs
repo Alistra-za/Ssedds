@@ -361,76 +361,107 @@ pub fn run_with(
         }
     }
     let total = work.len();
-    let (read_loose_ns, read_bsa_ns, nif_parse_ns) =
-        (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
-    let mut write_chunk_ns = 0u64;
-    for (n, chunk) in work.chunks(CHUNK).enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            store.discard_pending()?;
-            return Err(ScanError::Cancelled);
-        }
-        progress(Progress {
-            phase: "parse",
-            done: n * CHUNK,
-            total,
+    let (read_loose_ns, read_bsa_ns, nif_parse_ns, write_ns) = (
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    );
+    // Spec §2 step 3: a writer thread stores chunk N while chunk N+1 is parsed; the Store stays on that one thread.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<ChunkItem>>(2);
+    let writer_store = &mut *store;
+    let wns = &write_ns;
+    let looped: Result<(), ScanError> = std::thread::scope(|s| {
+        let writer = s.spawn(move || -> Result<(), ScanError> {
+            for items in rx {
+                let tw = Instant::now();
+                writer_store.write_chunk(&items)?;
+                wns.fetch_add(ns(tw), Ordering::Relaxed);
+            }
+            Ok(())
         });
-        let results: Vec<(usize, CopyResult, Option<u32>)> = chunk
-            .par_iter()
-            .map(|&i| {
-                let t0 = Instant::now();
-                let (bytes, read_ns) = match &locs[i] {
-                    Loc::Loose(p) => (std::fs::read(p).map_err(|e| e.to_string()), &read_loose_ns),
-                    Loc::Bsa(b, e) => {
-                        let bsa = &opened[*b];
-                        (
-                            bsa.read(&bsa.entries[*e]).map_err(|e| e.to_string()),
-                            &read_bsa_ns,
-                        )
-                    }
-                };
-                read_ns.fetch_add(ns(t0), Ordering::Relaxed);
-                match bytes {
-                    Ok(b) => {
-                        let t1 = Instant::now();
-                        let crc = candidate[i].then(|| crc32fast::hash(&b));
-                        let r = scan_guarded(&b);
-                        nif_parse_ns.fetch_add(ns(t1), Ordering::Relaxed);
-                        (i, r, crc)
-                    }
-                    Err(e) => (i, CopyResult::ReadFailed(e), None),
-                }
-            })
-            .collect();
-        parse_ms += lap(&mut t);
-        let mut items = Vec::with_capacity(results.len());
-        for (i, res, crc) in results {
-            let c = &copies[i];
-            report.parsed += 1;
-            match &res {
-                CopyResult::Scanned(s) if s.le_mesh => report.le_meshes += 1,
-                CopyResult::NotSkyrim { .. } => report.not_skyrim += 1,
-                CopyResult::Failed(m) | CopyResult::ReadFailed(m) => report
-                    .problems
-                    .push((format!("{} ({})", c.path, origin_name(c.origin)), m.clone())),
-                _ => {}
+        let mut out = Ok(());
+        for (n, chunk) in work.chunks(CHUNK).enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                out = Err(ScanError::Cancelled);
+                break;
             }
-            if let Some(crc) = crc {
-                crc_known.insert(i, crc);
-            }
-            items.push(ChunkItem {
-                path_id: path_ids[i],
-                origin_id: origin_id(c.origin),
-                size: c.size,
-                mtime: c.mtime,
-                crc32: crc,
-                derived: derived[i],
-                result: res,
+            progress(Progress {
+                phase: "parse",
+                done: n * CHUNK,
+                total,
             });
+            let results: Vec<(usize, CopyResult, Option<u32>)> = chunk
+                .par_iter()
+                .map(|&i| {
+                    let t0 = Instant::now();
+                    let (bytes, read_ns) = match &locs[i] {
+                        Loc::Loose(p) => {
+                            (std::fs::read(p).map_err(|e| e.to_string()), &read_loose_ns)
+                        }
+                        Loc::Bsa(b, e) => {
+                            let bsa = &opened[*b];
+                            (
+                                bsa.read(&bsa.entries[*e]).map_err(|e| e.to_string()),
+                                &read_bsa_ns,
+                            )
+                        }
+                    };
+                    read_ns.fetch_add(ns(t0), Ordering::Relaxed);
+                    match bytes {
+                        Ok(b) => {
+                            let t1 = Instant::now();
+                            let crc = candidate[i].then(|| crc32fast::hash(&b));
+                            let r = scan_guarded(&b);
+                            nif_parse_ns.fetch_add(ns(t1), Ordering::Relaxed);
+                            (i, r, crc)
+                        }
+                        Err(e) => (i, CopyResult::ReadFailed(e), None),
+                    }
+                })
+                .collect();
+            let mut items = Vec::with_capacity(results.len());
+            for (i, res, crc) in results {
+                let c = &copies[i];
+                report.parsed += 1;
+                match &res {
+                    CopyResult::Scanned(s) if s.le_mesh => report.le_meshes += 1,
+                    CopyResult::NotSkyrim { .. } => report.not_skyrim += 1,
+                    CopyResult::Failed(m) | CopyResult::ReadFailed(m) => report
+                        .problems
+                        .push((format!("{} ({})", c.path, origin_name(c.origin)), m.clone())),
+                    _ => {}
+                }
+                if let Some(crc) = crc {
+                    crc_known.insert(i, crc);
+                }
+                items.push(ChunkItem {
+                    path_id: path_ids[i],
+                    origin_id: origin_id(c.origin),
+                    size: c.size,
+                    mtime: c.mtime,
+                    crc32: crc,
+                    derived: derived[i],
+                    result: res,
+                });
+            }
+            // A closed channel means the writer stopped on an error; `join` returns it.
+            if tx.send(items).is_err() {
+                break;
+            }
         }
-        let tw = Instant::now();
-        store.write_chunk(&items)?;
-        write_chunk_ns += ns(tw);
-        write_ms += lap(&mut t);
+        drop(tx);
+        parse_ms = lap(&mut t);
+        let w = writer
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
+        w.and(out)
+    });
+    if let Err(e) = looped {
+        if matches!(e, ScanError::Cancelled) {
+            store.discard_pending()?;
+        }
+        return Err(e);
     }
     progress(Progress {
         phase: "parse",
@@ -461,7 +492,7 @@ pub fn run_with(
         ("read_loose_cpu", read_loose_ns.into_inner() / 1_000_000),
         ("read_bsa_cpu", read_bsa_ns.into_inner() / 1_000_000),
         ("nif_parse_cpu", nif_parse_ns.into_inner() / 1_000_000),
-        ("write_chunk", write_chunk_ns / 1_000_000),
+        ("write_chunk", write_ns.into_inner() / 1_000_000),
         ("commit_pending", commit_ms),
     ]);
 
