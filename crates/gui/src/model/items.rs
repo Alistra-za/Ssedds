@@ -160,6 +160,7 @@ impl PlanView {
                 JobStatus::PackingInput { role } => {
                     ItemStatus::Skipped(format!("raw {} map, not packed", role.id()))
                 }
+                JobStatus::NormalLayer { .. } => ItemStatus::Skipped("normal layer".into()),
             };
             let name = if packed {
                 job.output

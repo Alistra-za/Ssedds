@@ -1517,6 +1517,26 @@ impl Engine {
                         },
                     )
                 }
+                // M6 Track F2: a layer is reported once, with its RNM-* warning when it feeds nothing.
+                JobStatus::NormalLayer { .. } => {
+                    let w = job
+                        .warnings
+                        .iter()
+                        .find(|w| w.code.as_str().starts_with("RNM-"));
+                    rep.emit_job(
+                        Some(&key(&job.output)),
+                        set,
+                        path,
+                        EventKind::FileSkipped {
+                            kind: SkipKind::NormalLayer,
+                            code: w.map(|w| w.code),
+                            reason: w.map_or_else(
+                                || "RNM normal layer, blended into its base normal".to_string(),
+                                |w| w.message.clone(),
+                            ),
+                        },
+                    )
+                }
                 JobStatus::Blocked { codes } => skip(
                     &job.output,
                     set,

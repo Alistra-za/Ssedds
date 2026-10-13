@@ -203,7 +203,7 @@ fn print_planned(job: &ResolvedJob) {
         JobStatus::Blocked { codes } | JobStatus::Error { codes } => {
             codes.iter().map(|c| c.as_str().to_string()).collect()
         }
-        JobStatus::Ready | JobStatus::PackingInput { .. } => vec![],
+        JobStatus::Ready | JobStatus::PackingInput { .. } | JobStatus::NormalLayer { .. } => vec![],
     };
     let state = serde_json::to_value(&job.status)
         .ok()

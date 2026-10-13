@@ -94,3 +94,33 @@ pub fn split_layer(stem: &str) -> Option<(String, &'static Vocab)> {
         // The tail is ASCII, so the cut falls on a char boundary even in non-ASCII stems.
         .map(|v| (stem[..stem.len() - v.term.len() - 1].to_string(), v))
 }
+
+/// The serialisable mirror of [`LayerTerm`], carried by `JobStatus::NormalLayer`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct LayerTermId {
+    pub layer: LayerId,
+    pub mask: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<RnmTarget>,
+}
+
+impl From<LayerTerm> for LayerTermId {
+    fn from(t: LayerTerm) -> Self {
+        LayerTermId {
+            layer: t.layer,
+            mask: t.mask,
+            prefix: t.prefix,
+        }
+    }
+}
+impl From<LayerTermId> for LayerTerm {
+    fn from(t: LayerTermId) -> Self {
+        LayerTerm {
+            layer: t.layer,
+            mask: t.mask,
+            prefix: t.prefix,
+        }
+    }
+}

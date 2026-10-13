@@ -55,7 +55,7 @@ fn decided(j: &ResolvedJob) -> bool {
 fn writable(j: &ResolvedJob) -> bool {
     !matches!(
         j.status,
-        JobStatus::Error { .. } | JobStatus::PackingInput { .. }
+        JobStatus::Error { .. } | JobStatus::PackingInput { .. } | JobStatus::NormalLayer { .. }
     )
 }
 

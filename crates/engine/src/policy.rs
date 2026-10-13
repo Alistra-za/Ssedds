@@ -1095,6 +1095,11 @@ pub enum JobStatus {
     PackingInput {
         role: RawMap,
     },
+    /// An RNM normal layer or mask (M6 Track F2 spec §2.2): never converted on its own; `rnm::plan::plan_rnm`
+    /// attaches it to its base normal's job or tags it `RNM-*`.
+    NormalLayer {
+        term: crate::rnm::LayerTermId,
+    },
     /// Blocking codes not acknowledged with `--allow`.
     Blocked {
         codes: Vec<Code>,
@@ -1727,6 +1732,27 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
     }
 }
 
+/// M6 Track F2 (spec §2.2): the job of a normal-layer file. Nothing is written; the profile is the built-in
+/// `generic_data` placeholder and is never used.
+fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm) -> ResolvedJob {
+    ResolvedJob {
+        input: f.input.path.clone(),
+        output: f.input.output.clone(),
+        game_path: f.input.game_path.clone(),
+        set_key: f.set.key.clone(),
+        profile: ctx.registry.base_profile(ctx.target, Subtype::GenericData),
+        provenance: BTreeMap::new(),
+        suggestions: vec![],
+        warnings: vec![],
+        status: JobStatus::NormalLayer { term: term.into() },
+        suffix_alias: None,
+        source: None,
+        pack: None,
+        bake: None,
+        shader: None,
+    }
+}
+
 /// Resolve one file: sub-type decision, layered profile, §10 checks and status (spec §5.2).
 pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
     let d = decide_subtype(ctx, f);
@@ -1741,6 +1767,19 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
         ) {
             return packing_input_job(ctx, f, term, *role);
+        }
+    }
+    // M6 Track F2 (DECISIONS Note W2): a layer file is hidden unless a rule or --set names its sub-type.
+    if let Some(Vocab {
+        role: VocabRole::NormalLayer(term),
+        ..
+    }) = vocab_for(f)
+    {
+        if !matches!(
+            d.provenance,
+            Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
+        ) {
+            return normal_layer_job(ctx, f, *term);
         }
     }
     resolve_decided(ctx, f, d)

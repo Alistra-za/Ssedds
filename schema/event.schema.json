@@ -411,6 +411,11 @@
         "PACK-UNUSED-INPUT",
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
+        "RNM-NO-BASE",
+        "RNM-IGNORED-EYE",
+        "RNM-MASK-ORPHAN",
+        "RNM-AO-MISSING",
+        "RNM-LAYER-SHADOWED",
         "SKIN-WET-FORM",
         "SHADER-AUTO",
         "SHADER-UNAVAILABLE",
@@ -690,6 +695,23 @@
           "type": "object"
         },
         {
+          "description": "An RNM normal layer or mask (M6 Track F2 spec §2.2): never converted on its own; `rnm::plan::plan_rnm`\nattaches it to its base normal's job or tags it `RNM-*`.",
+          "properties": {
+            "state": {
+              "const": "normal_layer",
+              "type": "string"
+            },
+            "term": {
+              "$ref": "#/$defs/LayerTermId"
+            }
+          },
+          "required": [
+            "state",
+            "term"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Blocking codes not acknowledged with `--allow`.",
           "properties": {
             "codes": {
@@ -762,6 +784,32 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "LayerTermId": {
+      "description": "The serialisable mirror of [`LayerTerm`], carried by `JobStatus::NormalLayer`.",
+      "properties": {
+        "layer": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "mask": {
+          "type": "boolean"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "layer",
+        "mask"
+      ],
       "type": "object"
     },
     "MipEdge": {
@@ -1302,6 +1350,15 @@
       },
       "type": "object"
     },
+    "RnmTarget": {
+      "description": "Which base normal a layer file feeds (F2 spec §2.3): `n` (`_n`), `cnr` (`_cnr`) or both.",
+      "enum": [
+        "n",
+        "cnr",
+        "both"
+      ],
+      "type": "string"
+    },
     "SearchRadius": {
       "enum": [
         "default",
@@ -1404,6 +1461,11 @@
         {
           "const": "packing_input",
           "description": "A raw map not packed (`IN-PACKING-INPUT`, `PACK-UNUSED-INPUT`).",
+          "type": "string"
+        },
+        {
+          "const": "normal_layer",
+          "description": "An RNM normal layer or mask (M6 Track F2): blended into its base normal, never written alone.",
           "type": "string"
         },
         {
