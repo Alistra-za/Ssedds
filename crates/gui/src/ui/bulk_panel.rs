@@ -2,7 +2,7 @@
 //! model call, made after drawing.
 use super::columns::AMBER;
 use super::settings_panel::{editor, RowEdit, GROUPS};
-use crate::model::bulk::{bulk_fields, kind_chips, BulkField, BulkOp};
+use crate::model::bulk::{kind_chips, BulkField, BulkOp};
 use crate::model::fields::{group_of, FieldView};
 use crate::model::sets::SlotKind;
 use crate::model::{AppModel, Selection};
@@ -40,7 +40,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             ui.weak(format!("applies to {} of {} sets", c.sets_with, sets.len()));
         }
     }
-    let keys = model.bulk_targets();
+    let view = model.bulk_view();
+    let keys = &view.keys;
     ui.heading(format!("{} textures selected", keys.len()));
     if let Some(r) = &model.bulk.report {
         ui.weak(r);
@@ -64,7 +65,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                 ui.colored_label(AMBER, why);
             }
             let (target, busy) = (model.target, model.busy());
-            let rows = bulk_fields(model, &keys);
+            let rows = &view.rows;
+            // Slider state is per selection, not shared by every bulk selection.
+            let id = format!(
+                "bulk-{}-{}",
+                keys.len(),
+                keys.first().map_or("", String::as_str)
+            );
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -79,7 +86,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                                         |ui| {
                                             for r in rows.iter().filter(|r| group_of(r.field) == g)
                                             {
-                                                if let Some(e) = row(ui, &job, target, busy, r) {
+                                                if let Some(e) = row(ui, &id, &job, target, busy, r)
+                                                {
                                                     acts.push(Act::Edit(r.field, e));
                                                 }
                                             }
@@ -94,8 +102,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     for a in acts {
         match a {
             Act::Kind(k) => model.bulk.kind = k,
-            Act::Edit(f, RowEdit::Set(v)) => model.apply_bulk_edit(&keys, f, BulkOp::Set(v)),
-            Act::Edit(f, RowEdit::Clear) => model.apply_bulk_edit(&keys, f, BulkOp::Clear),
+            Act::Edit(f, RowEdit::Set(v)) => model.apply_bulk_edit(keys, f, BulkOp::Set(v)),
+            Act::Edit(f, RowEdit::Clear) => model.apply_bulk_edit(keys, f, BulkOp::Clear),
         }
     }
 }
@@ -104,6 +112,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 /// the skip reasons on hover; and a reset when some texture sets the field itself.
 fn row(
     ui: &mut egui::Ui,
+    id: &str,
     job: &ResolvedJob,
     target: Target,
     busy: bool,
@@ -121,7 +130,15 @@ fn row(
     };
     let (set, _) = ui
         .add_enabled_ui(r.applies > 0, |ui| {
-            editor(ui, "bulk", target, job, busy, &view, r.value.is_none())
+            editor(
+                ui,
+                id,
+                target,
+                job,
+                busy,
+                &view,
+                r.value.is_none() && r.applies > 0,
+            )
         })
         .inner;
     if let Some(v) = set {

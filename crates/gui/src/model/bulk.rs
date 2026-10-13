@@ -27,6 +27,33 @@ pub struct BulkState {
     pub kind: Option<SlotKind>,
     /// The last apply's result line (F3a D2: skips are reported).
     pub report: Option<String>,
+    cache: Option<BulkCache>,
+}
+
+type CacheInputs = (
+    MultiSelection,
+    Selection,
+    Option<SlotKind>,
+    u64,
+    u64,
+    String,
+);
+
+/// What `bulk_view` computed and what it was computed from: the multi-selection and active entry, the picked kind,
+/// the view-cache revisions and the target. Equal inputs reuse the result (N=3000 would otherwise serialise 3000
+/// profiles a frame).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BulkCache {
+    inputs: CacheInputs,
+    view: std::sync::Arc<BulkView>,
+    computes: usize,
+}
+
+/// The bulk panel's targets and rows.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BulkView {
+    pub keys: Vec<String>,
+    pub rows: Vec<BulkField>,
 }
 
 impl AppModel {
@@ -335,7 +362,7 @@ pub fn plan_bulk_edit(
 }
 
 /// One row of the bulk panel (F3a D2).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BulkField {
     pub field: &'static str,
     pub label: &'static str,
@@ -374,9 +401,7 @@ impl BulkField {
 }
 
 /// The bulk panel's rows over `keys` (F3a D2). Counts are the value-independent ones; the filter
-/// lock of a picked value shows in the report.
-/// shortcut: rebuilt every frame, one profile serialisation per texture; cache under `items_rev` if a selection of
-/// thousands shows in a profile.
+/// lock of a picked value shows in the report. One profile serialisation per texture; `AppModel::bulk_view` caches.
 pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
     let fields = panel_fields();
     let mut rows: Vec<BulkField> = fields
@@ -715,6 +740,43 @@ impl AppModel {
             return members_of(self, &sets, None);
         }
         picked
+    }
+
+    fn bulk_cache_inputs(&self) -> CacheInputs {
+        (
+            self.multi.clone(),
+            self.selection.clone(),
+            self.bulk.kind,
+            self.items_rev,
+            self.inputs_rev,
+            format!("{:?}", self.target),
+        )
+    }
+
+    /// `bulk_targets` and `bulk_fields`, recomputed only when the selection, the kind, the target or the item or
+    /// input revisions change.
+    pub fn bulk_view(&mut self) -> std::sync::Arc<BulkView> {
+        if let Some(c) = &self.bulk.cache {
+            if c.inputs == self.bulk_cache_inputs() {
+                return c.view.clone();
+            }
+        }
+        let keys = self.bulk_targets();
+        let rows = bulk_fields(self, &keys);
+        let view = std::sync::Arc::new(BulkView { keys, rows });
+        // Taken after `bulk_targets`, which can reset a vanished kind.
+        let computes = self.bulk.cache.as_ref().map_or(0, |c| c.computes) + 1;
+        self.bulk.cache = Some(BulkCache {
+            inputs: self.bulk_cache_inputs(),
+            view: view.clone(),
+            computes,
+        });
+        view
+    }
+
+    /// How many times `bulk_view` has recomputed since the selection last changed (tests).
+    pub fn bulk_computes(&self) -> usize {
+        self.bulk.cache.as_ref().map_or(0, |c| c.computes)
     }
 
     /// F3a D4 "Select members of kind": the selected sets' members of `kind` become a texture selection, the first

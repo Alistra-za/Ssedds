@@ -33,6 +33,13 @@ pub(super) const GROUPS: [&str; 5] = ["Type", "Colour", "Alpha", "Mipmaps", "Com
 /// A 4096 px side has 13 mip levels.
 const MAX_LEVELS: u32 = 13;
 
+const FILTER_OPTIONS: [(MipFilter, &str); 4] = [
+    (MipFilter::Box, "Box"),
+    (MipFilter::Tent, "Tent"),
+    (MipFilter::Mitchell, "Mitchell"),
+    (MipFilter::Kaiser, "Kaiser"),
+];
+
 /// An enum's options as (JSON value, label).
 type Options = Vec<(Value, String)>;
 
@@ -195,12 +202,10 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             opt(json!("dx10"), "DX10 extended header"),
             opt(json!("legacy"), "Legacy FourCC"),
         ],
-        "mips.filter" => vec![
-            opt(json!(MipFilter::Box), "Box"),
-            opt(json!(MipFilter::Tent), "Tent"),
-            opt(json!(MipFilter::Mitchell), "Mitchell"),
-            opt(json!(MipFilter::Kaiser), "Kaiser"),
-        ],
+        "mips.filter" => FILTER_OPTIONS
+            .iter()
+            .map(|(m, l)| opt(json!(m), l))
+            .collect(),
         _ => return None,
     })
 }
@@ -261,15 +266,21 @@ pub fn commit_slider(
     id: egui::Id,
     current: u32,
     range: std::ops::RangeInclusive<u32>,
+    mixed: bool,
 ) -> (Option<u32>, egui::Response) {
     let mut pending: Option<Pending> = ui.data(|d| d.get_temp(id));
     if let Some(p) = pending {
-        if p.value == current || (p.committed && !model_busy) {
+        if (!mixed && p.value == current) || (p.committed && !model_busy) {
             pending = None;
         }
     }
     let mut value = pending.map_or(current, |p| p.value);
-    let r = ui.add(egui::Slider::new(&mut value, range));
+    let mut slider = egui::Slider::new(&mut value, range);
+    // A mixed value shows as text until the user drags; only a drag writes.
+    if mixed && pending.is_none() {
+        slider = slider.custom_formatter(|_, _| "— mixed".to_string());
+    }
+    let r = ui.add(slider);
     if r.changed() {
         pending = Some(Pending {
             value,
@@ -287,7 +298,7 @@ pub fn commit_slider(
             committed: false,
         }) = pending
         {
-            if value != current {
+            if mixed || value != current {
                 out = Some(value);
                 pending = Some(Pending {
                     value,
@@ -312,9 +323,10 @@ fn threshold(
     model_busy: bool,
     key: &str,
     current: u8,
+    mixed: bool,
 ) -> (Option<Value>, egui::Response) {
     let id = egui::Id::new(("threshold", key));
-    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 1..=254);
+    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 1..=254, mixed);
     (out.map(|v| json!(v)), r)
 }
 
@@ -330,7 +342,7 @@ pub(super) fn editor(
     match f.field {
         "alpha.threshold" => {
             let cur = f.value.as_u64().unwrap_or(128).clamp(1, 254) as u8;
-            threshold(ui, busy, key, cur)
+            threshold(ui, busy, key, cur, mixed)
         }
         "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
             let mut b = f.value.as_bool().unwrap_or(false);
@@ -344,7 +356,7 @@ pub(super) fn editor(
                 .unwrap_or(0)
                 .min(u64::from(RGBCX_MAX_LEVEL)) as u32;
             let id = egui::Id::new(("rgbcx-level", key));
-            let (out, r) = commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL);
+            let (out, r) = commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL, mixed);
             (out.map(|v| json!(v)), r)
         }
         field => {
@@ -471,12 +483,7 @@ fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
 
 /// The live Filter combo: every option is listed, the ones S-mips-2 bars for this profile disabled with the reason.
 fn filter_row(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
-    const OPTIONS: [(MipFilter, &str); 4] = [
-        (MipFilter::Box, "Box"),
-        (MipFilter::Tent, "Tent"),
-        (MipFilter::Mitchell, "Mitchell"),
-        (MipFilter::Kaiser, "Kaiser"),
-    ];
+    const OPTIONS: [(MipFilter, &str); 4] = FILTER_OPTIONS;
     let f = filter_view(cx.target, cx.job);
     let current = cx.job.profile.mips.filter;
     let locks = OPTIONS.map(|(m, _)| filter_option_lock(&cx.job.profile, m));

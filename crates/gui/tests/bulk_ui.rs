@@ -215,3 +215,44 @@ fn the_copy_dialog_ticks_every_field_and_check_none_clears_them() {
         Some(Dialog::CopySettings { fields, .. }) if fields.iter().all(|f| !f.1)
     ));
 }
+
+#[test]
+fn a_second_frame_with_nothing_changed_does_not_recompute_the_bulk_view() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    let mut h = harness(m);
+    h.run();
+    let n = h.state().bulk_computes();
+    assert!(n >= 1);
+    h.run();
+    h.run();
+    assert_eq!(h.state().bulk_computes(), n);
+}
+
+#[test]
+fn a_mixed_slider_shows_mixed_and_an_idle_frame_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    for k in [ROCK, LEAF] {
+        m.set_field(k, "alpha.policy", serde_json::json!("cutout"));
+    }
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.set_field(ROCK, "alpha.threshold", serde_json::json!(100));
+    m.set_field(LEAF, "alpha.threshold", serde_json::json!(200));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    let before = m.bulk_view().rows.clone();
+    let row = before
+        .iter()
+        .find(|r| r.field == "alpha.threshold")
+        .unwrap();
+    assert!(row.applies > 0 && row.value.is_none(), "{row:?}");
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    assert!(h.query_all_by_value("— mixed").count() >= 1);
+    assert_eq!(h.state_mut().bulk_view().rows, before);
+}
