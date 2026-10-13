@@ -1088,3 +1088,14 @@ pub fn channel_psnr(src: &[[u8; 4]], dec: &[[u8; 4]], ch: &[usize]) -> f64 {
      - Append to T5 (`DECISIONS.md:503`): "Amended by Note Y6: coverage now runs on every level."
      - Commit `docs: DECISIONS Note Y (audit fixes)`.
 - [ ] **Step 3:** gates (bench tests green with and without a corpus). Final full gate run on the branch head.
+
+## Task 12: GUI hang and crash hygiene (controller addition, 2026-10-13)
+
+Owner report: opening a folder froze the GUI. The cause was the GRAS query join order, hotfixed separately on `fix/gras-query` (58d812c), which is not in this branch. Two lessons belong here:
+
+**Files:** `crates/gui/src/main.rs`, `crates/gui/src/model/mod.rs` (`refresh_mesh_votes`, ~:440-470), `crates/gui/src/model/meshes.rs` (its readers), and a new GUI test.
+
+1. **Crash log.** `main.rs` is `windows_subsystem = "windows"`, so a panic message is lost. Install a panic hook in `main` before the event loop. It appends one line per panic (thread name, message, location, `std::backtrace::Backtrace::force_capture()`) to `%LOCALAPPDATA%\sdc\logs\crash-<yyyymmdd-hhmmss>.log`, then calls the previous hook. Use only std (no new crates). Unit-test the line formatter as a pure function. The hook itself needs no test.
+2. **Scan-DB reads off the UI thread.** `refresh_mesh_votes` runs on the UI thread inside `apply_plan`. It opens the scan DB up to three times (mesh votes, mesh alpha, GRAS diffuses). Move those reads onto one background thread per refresh, the way plan threads are spawned and polled (generation-tagged; a stale result is dropped). Apply the result in `poll`. If the GRAS set changes, the existing re-plan rule (`auto_replans < 2`) still applies. While a read is pending the UI stays responsive and keeps the previous values. On a DB error, keep the previous set and log it to stderr (the panic-log file is not for errors), instead of `unwrap_or_default` (Task 7 review minor). Test: a model whose `scan_db` points at a temp DB is not blocked: `apply_plan` returns before the read completes, and after `wait_idle` the votes and GRAS set are applied.
+
+Gates as in the Global Constraints. Commit each part on its own.
