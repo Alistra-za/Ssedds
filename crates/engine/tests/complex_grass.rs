@@ -250,3 +250,31 @@ fn a_tall_diffuse_raises_no_grass_code() {
     assert_ne!(j.profile.subtype, Subtype::ComplexGrass);
     assert!(grass_codes(j).is_empty(), "{:?}", j.warnings);
 }
+
+fn run(d: &TempDir, target: Target, sets: &[&str]) -> (Vec<EngineEvent>, BatchSummary) {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "t");
+    let e = Engine::new().unwrap();
+    let p = e
+        .plan(req(d, target, sets), &rep, &CancelToken::default())
+        .unwrap();
+    let s = e.run(p, &rep, &CancelToken::default()).unwrap();
+    (sink.take(), s)
+}
+
+fn out(d: &TempDir) -> engine::dds::DdsFile {
+    let b = std::fs::read(d.path().join("out/textures/plants/g.dds")).unwrap();
+    engine::dds::read_dds(&b).unwrap()
+}
+
+/// §3.5, R6: one BC7 UNORM file, 64 x 128 down to 1 x 2 (7 levels).
+#[test]
+fn a_tagged_grass_texture_is_one_bc7_unorm_file_down_to_one_by_two() {
+    let d = tempfile::tempdir().unwrap();
+    put(&d, "g.png", &grass(64));
+    let (_, s) = run(&d, Target::Cs, &[TAG, CUTOUT]);
+    assert_eq!(s.converted, 1);
+    let f = out(&d);
+    assert_eq!(f.format.as_format(), Some((Format::Bc7, false)));
+    assert_eq!((f.width, f.height, f.mip_count), (64, 128, 7));
+}

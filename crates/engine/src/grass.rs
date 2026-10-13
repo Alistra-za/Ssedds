@@ -4,7 +4,12 @@
 //! of mip 0 is a unit vector (`|length(rgb * 2 - 1) - 1| < ComplexGrassThreshold`); ENB is assumed to do the same
 //! (owner ruling 2026-10-12).
 use crate::analyse::code8;
+use crate::config::*;
+use crate::coverage::preserve_coverage;
 use crate::image::Rgba32F;
+use crate::mips::build_chain;
+use crate::ops::{preprocess_with, Domain, SourceTransfer, Work};
+use crate::quantize::{to_encoder_input, EncoderInput};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -64,9 +69,248 @@ pub fn facts(img: &Rgba32F) -> Option<GrassFacts> {
     })
 }
 
+/// Preprocess + Mipmaps of a complex-grass job (design §3.1-3.4): each half is built on its own by the existing
+/// path (top: diffuse with coverage preservation; bottom: normal map, renormalised per level, alpha as data), so no
+/// filter crosses the seam, and the halves are stacked per level as stored values (codes / 255). The chain ends at
+/// 1 x 2 (ruling R6). The returned `Work` quantises the stacked levels as they are (`Stored`).
+pub(crate) fn build(
+    img: Rgba32F,
+    p: &Profile,
+    transfer: SourceTransfer,
+) -> Result<(Work, Vec<Rgba32F>), String> {
+    let (w, h) = (img.width, img.height);
+    if !(w.is_power_of_two() && h == 2 * w) {
+        return Err(format!(
+            "{w}x{h}: complex_grass needs a power-of-two width and height = 2 x width (GRASS-SHAPE)"
+        ));
+    }
+    let (top, bottom) = split(img);
+    let (tp, bp) = (half_profile(p, false), half_profile(p, true));
+    let tw = preprocess_with(top, &tp, transfer);
+    let bw = preprocess_with(bottom, &bp, transfer);
+    let mut tc = build_chain(&tw, &tp);
+    if tw.alpha_present && tp.coverage_enabled() {
+        preserve_coverage(&mut tc, tp.alpha.threshold, tp.alpha.compare);
+    }
+    let bc = build_chain(&bw, &bp);
+    let chain = tc
+        .iter()
+        .zip(&bc)
+        .map(|(t, b)| {
+            stack(
+                &to_encoder_input(t, &tw, &tp),
+                &to_encoder_input(b, &bw, &bp),
+                t.width,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let work = Work {
+        img: Rgba32F::new(0, 0, [0.0; 4]),
+        alpha_present: p.alpha.policy != AlphaPolicy::Remove,
+        domain: Domain::Stored,
+        roughness_r_squared: false,
+        nonfinite_samples: tw.nonfinite_samples + bw.nonfinite_samples,
+    };
+    Ok((work, chain))
+}
+
+/// The top and bottom halves of a `w` x `2w` image.
+fn split(img: Rgba32F) -> (Rgba32F, Rgba32F) {
+    let (w, h) = (img.width, img.height / 2);
+    let mut px = img.px;
+    let bottom = px.split_off((w * h) as usize);
+    (
+        Rgba32F {
+            width: w,
+            height: h,
+            px,
+        },
+        Rgba32F {
+            width: w,
+            height: h,
+            px: bottom,
+        },
+    )
+}
+
+/// One stacked level, top rows first, as stored floats (8-bit code / 255, so `to_encoder_input` gives the codes back).
+fn stack(top: &EncoderInput, bottom: &EncoderInput, w: u32) -> Result<Rgba32F, String> {
+    let (EncoderInput::Ldr(t), EncoderInput::Ldr(b)) = (top, bottom) else {
+        return Err("complex_grass is written as BC7: an HDR format cannot hold it".into());
+    };
+    let px: Vec<[f32; 4]> = t
+        .iter()
+        .chain(b)
+        .map(|c| c.map(|v| f32::from(v) / 255.0))
+        .collect();
+    Ok(Rgba32F {
+        width: w,
+        height: (px.len() / w as usize) as u32,
+        px,
+    })
+}
+
+/// The profile each half is built with (design §3.2-3.3, ruling R5): the top half is a diffuse (sRGB colour, the job's
+/// alpha policy, coverage and filter); the bottom half a normal map whose alpha is data, unless the job removes
+/// alpha. Never resized (ruling R7).
+fn half_profile(p: &Profile, bottom: bool) -> Profile {
+    let mut h = p.clone();
+    h.resize = ResizeMode::None;
+    if bottom {
+        h.subtype = Subtype::Normal;
+        h.category = Category::Normal;
+        h.color.content = ColorContent::Linear;
+        if h.alpha.policy != AlphaPolicy::Remove {
+            h.alpha.policy = AlphaPolicy::Data;
+        }
+    } else {
+        h.subtype = Subtype::Diffuse;
+        h.category = Category::Color;
+        h.color.content = ColorContent::Srgb;
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presets::PresetRegistry;
+
+    fn profile() -> Profile {
+        let mut p = PresetRegistry::builtin()
+            .unwrap()
+            .profile("cs-quality", Target::Cs, Subtype::ComplexGrass)
+            .unwrap();
+        p.alpha.policy = AlphaPolicy::Cutout;
+        p
+    }
+
+    /// Top = colour with ~30 % cutout dots, bottom = unit normals tilted along x with specular 12.
+    fn source(w: u32) -> Rgba32F {
+        let mut img = Rgba32F::new(w, 2 * w, [0.0; 4]);
+        for y in 0..2 * w {
+            for x in 0..w {
+                *img.at_mut(x, y) = if y < w {
+                    let a = if (x * 7 + y * 13) % 10 < 3 { 1.0 } else { 0.0 };
+                    [0.25, 0.5, 0.15, a]
+                } else {
+                    let t = (x as f32 / w as f32 - 0.5) * 0.8;
+                    [t.sin() * 0.5 + 0.5, 0.5, t.cos() * 0.5 + 0.5, 12.0 / 255.0]
+                };
+            }
+        }
+        img
+    }
+
+    fn codes(l: &Rgba32F) -> Vec<[u8; 4]> {
+        l.px.iter().map(|q| q.map(code8)).collect()
+    }
+
+    /// R6: one level per half level, ending at 1 x 2.
+    #[test]
+    fn the_chain_stops_at_one_by_two() {
+        let (_, chain) = build(source(8), &profile(), SourceTransfer::Stored).unwrap();
+        let dims: Vec<_> = chain.iter().map(|l| (l.width, l.height)).collect();
+        assert_eq!(dims, [(8, 16), (4, 8), (2, 4), (1, 2)]);
+    }
+
+    /// §3.4: constant halves stay exactly constant at every level; a filter tap across the seam would mix them.
+    #[test]
+    fn no_texel_crosses_the_seam() {
+        let w = 16;
+        let mut src = Rgba32F::new(w, 2 * w, [0.5, 0.5, 1.0, 12.0 / 255.0]);
+        for px in &mut src.px[..(w * w) as usize] {
+            *px = [1.0, 1.0, 1.0, 1.0];
+        }
+        let (_, chain) = build(src, &profile(), SourceTransfer::Stored).unwrap();
+        for (l, level) in chain.iter().enumerate() {
+            let n = (level.width * level.width) as usize;
+            let c = codes(level);
+            assert!(
+                c[..n].iter().all(|q| *q == [255, 255, 255, 255]),
+                "top, level {l}: {:?}",
+                &c[..n]
+            );
+            assert!(
+                c[n..].iter().all(|q| *q == [128, 128, 255, 12]),
+                "bottom, level {l}: {:?}",
+                &c[n..]
+            );
+        }
+    }
+
+    /// §3.3: the bottom half is renormalised per level and its alpha is data (box-averaged, never coverage-adjusted).
+    #[test]
+    fn bottom_normals_stay_unit_and_alpha_is_data() {
+        let (_, chain) = build(source(16), &profile(), SourceTransfer::Stored).unwrap();
+        for (l, level) in chain.iter().enumerate() {
+            let n = (level.width * level.width) as usize;
+            for q in &level.px[n..] {
+                assert!(unit_err([q[0], q[1], q[2]]) < 0.01, "level {l}: {q:?}");
+                assert_eq!(code8(q[3]), 12, "level {l}");
+            }
+        }
+    }
+
+    /// Each half is exactly what the existing path gives that half on its own: diffuse (with coverage preservation,
+    /// §3.2) on top, normal map below. This is also the coverage test: a direct coverage-tolerance assertion on a
+    /// binary dot source cannot pass, because `preserve_coverage` can only reach the cumulative counts of a level's
+    /// few distinct alpha values.
+    #[test]
+    fn each_half_is_the_existing_path() {
+        let p = profile();
+        let src = source(16);
+        let (_, chain) = build(src.clone(), &p, SourceTransfer::Stored).unwrap();
+        let (top, bottom) = split(src);
+        let (tp, bp) = (half_profile(&p, false), half_profile(&p, true));
+        let tw = preprocess_with(top, &tp, SourceTransfer::Stored);
+        let mut tc = build_chain(&tw, &tp);
+        preserve_coverage(&mut tc, tp.alpha.threshold, tp.alpha.compare);
+        let bw = preprocess_with(bottom, &bp, SourceTransfer::Stored);
+        let bc = build_chain(&bw, &bp);
+        let ldr = |e: EncoderInput| match e {
+            EncoderInput::Ldr(v) => v,
+            EncoderInput::Hdr(_) => panic!("LDR expected"),
+        };
+        for (l, level) in chain.iter().enumerate() {
+            let n = (level.width * level.width) as usize;
+            let got = codes(level);
+            assert_eq!(
+                got[..n],
+                ldr(to_encoder_input(&tc[l], &tw, &tp))[..],
+                "top, level {l}"
+            );
+            assert_eq!(
+                got[n..],
+                ldr(to_encoder_input(&bc[l], &bw, &bp))[..],
+                "bottom, level {l}"
+            );
+        }
+    }
+
+    /// Review Focus 1: a job with the wrong shape (e.g. previewed while it is `GRASS-SHAPE`) is an error, not a panic.
+    #[test]
+    fn a_wrong_shape_is_an_error_not_a_panic() {
+        for (w, h) in [(16, 16), (32, 16), (12, 24)] {
+            let e = build(
+                Rgba32F::new(w, h, [0.5; 4]),
+                &profile(),
+                SourceTransfer::Stored,
+            )
+            .unwrap_err();
+            assert!(e.contains("complex_grass"), "{e}");
+        }
+    }
+
+    /// R5: `remove` makes both halves opaque.
+    #[test]
+    fn remove_makes_both_halves_opaque() {
+        let mut p = profile();
+        p.alpha.policy = AlphaPolicy::Remove;
+        let (work, chain) = build(source(8), &p, SourceTransfer::Stored).unwrap();
+        assert!(!work.alpha_present);
+        assert!(chain[0].px.iter().all(|q| q[3] == 1.0));
+    }
 
     #[test]
     fn facts_only_for_one_by_two() {
