@@ -665,8 +665,8 @@ pub struct ValidationSpec {
     pub complex_m_warn_alpha: u8,
     pub bc6h_min_peak_ratio: f64,
     pub pgpatcher_non_white_share: f64,
-    /// M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip
-    /// only (`fast-preview`). Not serialised at its default, so existing profile hashes hold.
+    /// M6 Track D (DECISIONS Notes T5, Y6): `smallest` runs the per-mip PSNR check on the smallest mip only and the
+    /// coverage check on every level (`fast-preview`). Not serialised at its default, so existing profile hashes hold.
     #[serde(default, skip_serializing_if = "ValidationMips::is_all")]
     pub mips: ValidationMips,
 }
