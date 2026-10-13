@@ -534,3 +534,58 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/s
   - A new manifest `rgbcx_patch` field makes old BC3/BC4/BC5 outputs re-encode. Like `bc7e_patch` it is a content tag, `bc4-round-to-nearest@sha256:<hash of the patched vendor/bc7enc_rdo/rgbcx.h>` (final review Minor 11), so an in-place change to the patched header also re-encodes them.
   - Two bench gates moved from byte-exact to never-worse (per-block bcdec SSE for BC3 alpha, BC4, BC5); BC1 and BC3 colour stay byte-exact.
   - Known quirk: sdc's own BC3 alpha validation decodes through `bcdec_rs::bc3`, which uses `(6a0+a1+1)/7` and matches neither model.
+
+## Note U — M6 Track E: NIF-aware alpha and fewer confirmations (plan rulings, 2026-10-12)
+
+Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on spec `docs/superpowers/specs/2026-10-12-sdc-m6-nif-alpha-confident-design.md` (owner-approved 2026-10-12), with the owner overrides O1 and O2 made while building.
+
+- **U1 No suffix is the colour member, at High (owner, 2026-10-12: "No suffix should equal diffuse by default").**
+  - This reverses Note H's "a bare stem is only a guess". A bare stem suggests `diffuse`, `pbr_albedo` (a PBR set) or `ui_sky` (`interface/`, `sky/`) at High, like `_d`.
+  - `landscape_diffuse` and `skin_albedo` were already High. `hdr_sky` (a float source under `sky/` may be an HDRI) and `_i` stay Medium.
+  - Names that break the conventions (a normal map without `_n`) now resolve as colour maps; fixing them is the mod author's job (owner).
+  - Note H's colour-term raise was removed: every colour member it raised is now High.
+- **U2 `_coat` is coat colour + strength (owner, 2026-10-12).**
+  - `pbr_subsurface` keeps alpha policy `data` (`sdc-base`), so a varying alpha is kept as the strength and stays BC7 under compact (T3).
+  - The reason reads "exporter suffix _coat (coat colour + strength); the PBR coat map (_s)".
+  - The slot card reads "Coat colour + strength" when its source file is a `_coat` (by file name).
+- **U3 The GUI accepts High suggestions (owner, 2026-10-12).**
+  - `AppModel::accept` is `High`, and `request()` sends it. Medium and Low suggestions still ask.
+  - Explicit choices win: `[files]`, rules and `--set subtype` decide before any suggestion.
+  - The CLI is unchanged (`--accept-suggestions high`).
+  - The M3-era GUI test fixtures set `accept = None` to keep their undecided members.
+- **U4 "(auto)" (plan, 2026-10-12).** There is no new engine field. A job shows "(auto)" in the Sub-type row's provenance column when all three hold, with the top suggestion's reason on hover:
+  - its `provenance.subtype` is `suggestion`;
+  - its top suggestion is High;
+  - it does not need a sub-type.
+- **U5 Mesh alpha evidence (plan, 2026-10-12).**
+  - `BatchRequest::mesh_alpha` is keyed by `shader::colour_mesh_key`, the output stem, so a renamed `x_albedo.png` is keyed `x`. The CLI sends none.
+  - The GUI reads it with raw SQL (`meshes::mesh_alpha`). The query is composed with `format!` from a static `FROM` fragment shared with `mesh_votes` (`SLOT0_SOURCE_SHAPES`), and the key is a bound parameter, so no user data reaches the SQL text (review ruling, Task 4). The fragment selects:
+    - lighting shapes using `<key>.dds` in slot 0;
+    - non-derived copies of enabled origins;
+    - TruePBR excluded;
+    - one entry per NIF path, block and alpha property.
+  - Unlike the votes, every lighting shader type counts.
+  - NiAlphaProperty bit 0 is blend and bit 9 is test. A shape with no property is no alpha.
+  - A database read error gives no evidence, as in `mesh_votes` (the Meshes view reports database errors), so the alpha question is asked as before. Surfacing the error in the planner is parked as minor.
+- **U6 The rule (owner, 2026-10-12; threshold range owner O2).**
+  - Any shape with alpha beats shapes without; there is no vote.
+  - Blend only gives `blend`; test only gives `cutout`; blend and test anywhere, on one shape or two, give `cutout_blend`; no alpha gives `remove`.
+  - The threshold is the largest of the testing shapes (the stricter cutoff), clamped to 1..=254. Spec gap: a NIF may say 0..255.
+  - O2 (owner): the valid `alpha.threshold` range widens from 5..=200 to 1..=254 (`CFG-INVALID` outside it), replacing the plan's clamp to 5..=200. Earlier notes that say 5..=200 describe the typical range.
+- **U7 The `mesh:alpha` layer (plan, 2026-10-12).**
+  - **Provenance.** `Provenance::MeshAlpha` (`mesh:alpha`) sits between `shader:<id>` and `suffix:<term>`.
+  - **Where.** It is applied after the analysis-alpha step and `skin_wet_form`, before the shader layer, and only for `alpha_from_mesh` sub-types where `alpha.policy` is not explicit.
+  - **What beats it.** User presets, configs and rules (before it), and `[files]` and `--set` (after it).
+  - **The analysis `remove` keeps priority** (no alpha channel, or alpha constant 255). This extends spec §4.3's "source without alpha" to constant 255.
+  - **What it beats.** A shader's alpha default (hair `cutout`).
+  - **Explicit.** It counts as explicit, so the alpha question is not asked. `alpha.threshold` gets the same provenance unless that field is explicit.
+- **U8 Compact (owner O1, 2026-10-12; replaces the plan's BC7 ruling).**
+  - Under Compact, a mesh-decided `remove` on a varying-alpha colour member is opaque colour: it goes BC1 at full size, like other opaque colour. No `LOSS-ALPHA-DATA` is raised (explicit remove, P25).
+  - Mechanism: rules are matched on the file's real source alpha first. Only when no explicit layer (preset, config, `[files]`/`--set` override, or a matching rule) sets `alpha.policy` does a mesh `remove` make the rules see alpha `none`, so Compact's BC1 rules match. A rule that sets `alpha.policy` is never suppressed, and no BC1 + blend `CFG-INVALID` arises from it (Task 3 review fix).
+  - A mesh `cutout`, `blend` or `cutout_blend` keeps the varying-alpha rules. A mesh `cutout` never reaches a constant-255 source (U7), so an opaque RGBA diffuse stays BC1.
+- **U9 Two-pass GUI (plan, 2026-10-12).** The first plan of a folder asks the alpha question until the scan's evidence is read. `EngineInputs` carries `mesh_alpha`, so the automatic re-plan settles it (`refresh_mesh_votes` reads votes and alpha together and reports whether either changed).
+- **U10 Versions (plan, 2026-10-12).**
+  - There are no new codes (75).
+  - The workspace goes 0.5.0 → 0.6.0, so `if-changed` re-encodes.
+  - There is no manifest change: the up-to-date check compares `engine_version` and `profile_sha256`, and both change.
+  - `schema/` was regenerated only for the `Provenance` doc text.
