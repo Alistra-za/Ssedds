@@ -1503,3 +1503,24 @@ fn the_plus_menu_prefills_only_suffixes_pgpatcher_strips() {
     assert_eq!(path(6), Some(r"landscape\rock01_rmaos".into()));
     assert_eq!(path(8), Some(String::new()), "slot 8 does not strip _s");
 }
+
+#[test]
+fn the_json_panel_and_its_errors_belong_to_json_sets_only() {
+    use engine::config::Target;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert_eq!(m.target, Target::Cs);
+    let plain = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(!plain.pbr && !plain.skin);
+    assert!(!shows_json_panel(&plain, Target::Cs));
+    // Existing JSON settings are never hidden.
+    let mut with_json = plain.clone();
+    with_json.settings.insert("slot1".into(), json!("x"));
+    assert!(shows_json_panel(&with_json, Target::Cs));
+    // A PBR set shows it on cs only.
+    let d = tempfile::tempdir().unwrap();
+    m = pbr_opened(d.path());
+    let pbr = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(pbr.pbr && shows_json_panel(&pbr, Target::Cs));
+    assert!(!shows_json_panel(&pbr, Target::Vanilla));
+}

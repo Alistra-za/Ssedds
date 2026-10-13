@@ -232,6 +232,17 @@ impl SetView {
     }
 }
 
+/// Whether `v` is written as PGPatcher JSON: a skin or PBR set under Community Shaders (the set card badge).
+pub fn is_json_set(v: &SetView, target: Target) -> bool {
+    (v.skin || v.pbr) && target == Target::Cs
+}
+
+/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set that already has
+/// JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr` itself.
+pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
+    is_json_set(v, target) || !v.settings.is_empty()
+}
+
 /// A diffuse sub-type that makes its set a PBR set (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
 /// `skin_albedo`, which is Community Shaders TruePBR too and so belongs in the PGPatcher JSON (final review C1).
 /// Not the engine's `is_pbr_color`, which decides sRGB and leaves `skin_albedo` (UNORM) out.
