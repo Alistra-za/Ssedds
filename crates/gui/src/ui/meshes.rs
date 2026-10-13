@@ -2,8 +2,8 @@
 //! `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::{
     display_path, overridden_text, plugins_line, shader_type_name, slot_name, Banner, MeshesModel,
-    ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, MISSING_NOTE, SEARCH_DEBOUNCE,
-    STALE_CHIP, UNUSED_NOTE,
+    ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, MISSING_NOTE,
+    PLUGINS_NOT_READ_NOTE, SEARCH_DEBOUNCE, STALE_CHIP, UNUSED_NOTE,
 };
 use eframe::egui;
 use modscan::plugin_store::{record_label, MeshUse};
@@ -487,6 +487,9 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
     } else {
         MISSING_NOTE
     });
+    if m.refs_unused && m.report.as_ref().is_some_and(|r| r.plugins.is_none()) {
+        ui.weak(PLUGINS_NOT_READ_NOTE);
+    }
     let n = m.refs_lines().len();
     if n == 0 {
         ui.label("Nothing listed.");

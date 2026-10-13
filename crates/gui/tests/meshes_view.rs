@@ -1151,3 +1151,25 @@ fn a_failed_shape_read_clears_the_plugin_overrides() {
     assert!(m.error.is_some());
     assert!(m.plugin_uses.is_empty());
 }
+
+/// Review M4: after a Folder scan (plugins not read) Unused says so instead of implying plugins were checked.
+#[test]
+fn unused_says_plugins_were_not_read_after_a_folder_scan() {
+    let note = sdc_gui::model::meshes::PLUGINS_NOT_READ_NOTE;
+    let run = |plugins: Option<PluginStats>| {
+        let mut m = model_with(None);
+        m.file_refs = Some(FileRefs::default());
+        m.report = Some(Report {
+            plugins,
+            ..Default::default()
+        });
+        m.refs_unused = true;
+        let mut h = harness(m);
+        h.run();
+        h.get_by_label("Plugin file references").click();
+        h.run();
+        h.query_by_label(note).is_some()
+    };
+    assert!(run(None));
+    assert!(!run(Some(stats(1, 1, 1, 1, &[]))));
+}

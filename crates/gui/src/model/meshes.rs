@@ -336,6 +336,8 @@ pub struct FileRefs {
 }
 
 pub const MISSING_NOTE: &str = "Paths that winning plugin records name and that no enabled mod, the game Data folder or an active BSA provides. Information only.";
+/// Shown under Unused after a scan that did not read plugins (Folder scan): plugin-only textures then look unused.
+pub const PLUGINS_NOT_READ_NOTE: &str = "Plugins were not read (Folder scan): textures that only plugin records name are listed as unused.";
 pub const UNUSED_NOTE: &str = "Textures that no NIF and no plugin record names. textures\\pbr\\ is left out (PGPatcher output); LOD, interface and engine textures are listed too. Information only.";
 
 /// The scan details line of the plugin pass (esp spec §4.3).
