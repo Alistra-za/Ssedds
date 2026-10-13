@@ -53,6 +53,38 @@ An edited file is marked **●** until you save with **Save** or **Ctrl+S**. Exp
 
 Per-texture `[files]` entries sit above preset and config rules and analysis, and below any `--set` on the command line, so `sdc convert <folder>` honours them.
 
+## Bulk editing
+
+**Selecting several.** In the Textures or Sets column:
+- **Ctrl+click** adds or removes one entry.
+- **Shift+click** selects the range from the last clicked entry, in the order shown (search and filters applied).
+- **Ctrl+A** selects everything shown.
+- **Esc** clears the selection.
+
+Textures and sets are never selected together. The column heading counts the selection, for example *12 selected (4 hidden by filter)*: textures hidden by the search or a filter stay selected and are edited too.
+
+**Editing them together.** With two or more textures selected, the centre shows their settings in one panel:
+- A row whose values differ reads *— mixed*.
+- Picking a value writes it to every selected texture that can take it. Rows you do not touch are never written.
+- A row that some textures cannot take (a field locked for them, or one that does not apply, such as *Normal handling* on a diffuse) says *applies to K of N*. Hover it for the reasons.
+- After each change a line reports how many textures were written and why any were skipped.
+- **↺** resets the field on all of them. A reset is not blocked by a lock.
+
+**Sets.** With two or more sets selected, a row of chips picks which of their maps to edit: *All*, *Diffuse*, *Normal _n*, *RMAOS*, and so on. Each chip shows its count, plus *applies to K of N sets* when some sets have no map of that kind.
+
+**Right-click.** Right-clicking a selected tile or set keeps the selection; right-clicking another one selects it alone. The menu offers:
+- *Edit settings for N selected*.
+- *Copy settings from <texture> to N selected…*: a checklist of the active (last clicked) texture's own settings, all ticked; untick what you want to keep. Textures only; to copy between sets, use *Select members of kind* first.
+- *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept.
+- For sets, *Select members of kind*, which turns the selection into those textures.
+
+Every change of this kind is one undo step, and the folder is planned once. A read-only `sdc.toml` takes no bulk change. The Advanced drawer still edits one texture at a time.
+
+**Slot menus.** Right-clicking a slot card in the set editor, or a member thumbnail on a pill, opens a menu for that slot:
+- The slot commands: *From this set*, *Path* and *Clear*. Each is one undo step.
+- *From another set*: links the slot to a map of another set. The link writes that map's output path when it has one (a TruePBR set's packed output), otherwise its `textures\...` game path. A map with neither is greyed out, so a link never points at nothing. A link needs the same slot kind, so the shared slots (glow / skin_sk, coat / fuzz) never offer the other kind.
+- *Lock* / *Unlock*: a locked slot (shown with a lock icon) keeps its fill. It refuses a drag in or out and the slot commands. Bulk edits skip it with the reason *slot locked*, or *slot locked in <set>* when the fill is borrowed from another set. Automatic re-typing leaves it alone; you can still change the texture's sub-type by hand. The lock is saved in `sdc-project.toml` and is never written to the PGPatcher JSON.
+
 ## The preview
 
 Double-click a tile (or a set member) to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again.
