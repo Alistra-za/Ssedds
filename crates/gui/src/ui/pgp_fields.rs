@@ -73,8 +73,8 @@ fn group_title(g: Group) -> &'static str {
     }
 }
 
-const MAIN: [Group; 9] = [
-    Group::Match,
+/// The visual settings (F1 spec §4 header 1). Matching and the advanced keys have their own headers.
+const MAIN: [Group; 8] = [
     Group::Material,
     Group::Features,
     Group::Emissive,
@@ -95,7 +95,6 @@ const ADVANCED: [Group; 5] = [
 struct Ctx {
     /// The set's own settings (there are no inherited ones: the `default` block is fixed).
     own: Settings,
-    derived: Option<String>,
     set: String,
     /// Why every control is disabled, when the sets document is read-only.
     read_only: Option<String>,
@@ -120,7 +119,6 @@ fn context(model: &AppModel, set: &str) -> Ctx {
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
         own,
-        derived,
         matches,
         addable,
         set: set.to_string(),
@@ -134,7 +132,7 @@ fn context(model: &AppModel, set: &str) -> Ctx {
     }
 }
 
-/// The main groups of set `set`.
+/// The TruePBR box of set `set` (F1 spec §4): the visual settings, Matching, and Advanced TruePBR settings.
 pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
@@ -149,22 +147,19 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         group(ui, &c, "pgp", g, &keys, &mut edits);
     }
     matching(ui, &c, &mut edits);
-    for (k, v) in edits {
-        model.set_json_value(set, &k, v);
-    }
-}
-
-/// The advanced keys of set `set` (the Advanced drawer).
-pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
-    let c = context(model, set);
-    let mut edits: Vec<Edit> = vec![];
-    for g in ADVANCED {
-        if !group_open(g, &c.own) {
-            continue;
-        }
-        let keys: Vec<&KeySpec> = KEYS.iter().filter(|k| k.group == g && k.advanced).collect();
-        group(ui, &c, "pgp-adv", g, &keys, &mut edits);
-    }
+    egui::CollapsingHeader::new(egui::RichText::new("Advanced TruePBR settings").strong())
+        .id_salt(("pgp-advanced", &c.set))
+        .default_open(false)
+        .show(ui, |ui| {
+            for g in ADVANCED {
+                if !group_open(g, &c.own) {
+                    continue;
+                }
+                let keys: Vec<&KeySpec> =
+                    KEYS.iter().filter(|k| k.group == g && k.advanced).collect();
+                group(ui, &c, "pgp-adv", g, &keys, &mut edits);
+            }
+        });
     for (k, v) in edits {
         model.set_json_value(set, &k, v);
     }
@@ -381,10 +376,11 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                     .and_then(|v| v.as_str().map(str::to_string))
                     .unwrap_or_default()
             });
-            let hint = match (k.key, &c.derived) {
-                ("match1", Some(d)) => format!("{d} (derived)"),
-                ("match1", None) => "(derived)".to_string(),
-                _ => String::new(),
+            // With a slot match, rename replaces the whole prefix (DECISIONS V3).
+            let hint = if k.key == "rename" {
+                r"textures\pbr\… (the whole prefix)"
+            } else {
+                ""
             };
             let r = ui.add(
                 egui::TextEdit::singleline(&mut text)

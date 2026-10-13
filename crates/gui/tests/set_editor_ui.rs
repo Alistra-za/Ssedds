@@ -545,9 +545,13 @@ fn unticking_a_switch_removes_its_key() {
 #[test]
 fn the_tri_buttons_write_true_false_and_remove() {
     let mut h = rock_with(&[]);
-    h.state_mut().settings.advanced_open = true;
+    // The header and its rows are low in the set editor's scroll area: bring each into view before clicking.
+    h.get_by_label("Advanced TruePBR settings").scroll_to_me();
     h.run();
-    // The first Tri row of the Advanced drawer is vertex_colors.
+    h.get_by_label("Advanced TruePBR settings").click();
+    h.run();
+    h.query_all_by_label("on").next().unwrap().scroll_to_me();
+    // The first Tri row under Advanced TruePBR settings is vertex_colors.
     let nth = |h: &Harness<'static, AppModel>, l: &str| {
         h.query_all_by_label(l).next().map(|n| n.rect()).is_some()
     };
@@ -747,8 +751,9 @@ fn a_filled_fuzz_slot_greys_the_coat_normal_switch() {
         .is_disabled());
 }
 
+/// F1 spec §4: the drawer no longer shows PGPatcher keys; they are in the TruePBR box.
 #[test]
-fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
+fn the_header_has_the_json_name_and_the_drawer_has_no_pgpatcher_keys() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     rock_selected(&mut m);
@@ -756,10 +761,39 @@ fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
     let mut h = harness(m);
     h.run();
     h.get_by_label("JSON:");
-    h.get_by_label_contains("PGPatcher (advanced)");
-    h.get_by_label("Match slot 1 (diffuse)");
-    assert!(h.query_by_label("Match normal").is_none());
-    h.get_by_label("Lock diffuse");
+    assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());
+    h.get_by_label("Advanced TruePBR settings");
+}
+
+/// F1 spec §4, §6 "Layout": path_contains, nif_filter, rename and the locks are under "Advanced TruePBR settings",
+/// collapsed by default; match1–match8 are only in the Matching header.
+#[test]
+fn advanced_truepbr_settings_are_collapsed_and_hold_the_advanced_keys() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(pbr_opened(d.path()));
+    h.run();
+    for l in [
+        "Path contains",
+        "Mesh path contains",
+        "Rename",
+        "Lock diffuse",
+    ] {
+        assert!(
+            h.query_by_label(l).is_none(),
+            "{l} is hidden while collapsed"
+        );
+    }
+    h.get_by_label("Advanced TruePBR settings").click();
+    h.run();
+    for l in [
+        "Path contains",
+        "Mesh path contains",
+        "Rename",
+        "Lock diffuse",
+    ] {
+        h.get_by_label(l);
+    }
+    assert!(h.query_by_label_contains("Match slot").is_none());
 }
 
 /// Final review Minor 2 (parked Task 14): the slot cards' Format and Opaque write `sdc.toml`; while it is read-only
