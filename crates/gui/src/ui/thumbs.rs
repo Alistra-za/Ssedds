@@ -16,7 +16,8 @@ impl ThumbCache {
     /// Drop every texture when the items changed (a new plan): the handles free their GPU memory.
     pub fn sweep(&mut self, rev: u64) {
         if self.rev != rev {
-            self.map.clear();
+            // An Arc only this cache holds is gone from the plan (shared ones are still current): drop its texture.
+            self.map.retain(|_, (t, _)| Arc::strong_count(t) > 1);
             self.rev = rev;
         }
     }
@@ -99,11 +100,17 @@ mod tests {
             c.get_raw(&ctx, "k", &t2, None).id(),
             "a new thumbnail uploads again"
         );
+        drop(t);
         c.sweep(1);
-        assert!(c.map.is_empty());
-        c.sweep(1);
-        let _ = c.get_raw(&ctx, "k", &t2, None);
+        assert_eq!(
+            c.map.len(),
+            1,
+            "a thumbnail still shared is kept, not re-uploaded"
+        );
+        drop(t2);
         c.sweep(1);
         assert_eq!(c.map.len(), 1, "the same revision keeps the textures");
+        c.sweep(2);
+        assert!(c.map.is_empty(), "nothing holds it any more");
     }
 }

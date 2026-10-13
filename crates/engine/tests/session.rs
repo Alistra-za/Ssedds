@@ -180,3 +180,27 @@ fn a_plan_of_another_folder_drops_the_first_folders_entries() {
         .thumbnail_of(&b.path().join("in").join("iron.png"))
         .is_some());
 }
+
+/// A cancelled plan saw only part of its folder: it must not evict the entries it did not cover.
+#[test]
+fn a_cancelled_plan_keeps_the_cached_entries() {
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fixture(a.path());
+    fixture(b.path());
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    plan(&s, req(a.path(), Target::Cs));
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let p = s
+        .plan(
+            req(b.path(), Target::Cs),
+            &Reporter::new(Arc::new(NullSink), "t"),
+            &cancel,
+        )
+        .unwrap();
+    assert!(!p.cancelled.is_empty());
+    assert!(s
+        .cache()
+        .thumbnail_of(&a.path().join("in").join("iron.png"))
+        .is_some());
+}

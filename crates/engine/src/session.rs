@@ -168,19 +168,17 @@ impl AnalysisCache {
         lock(&self.packs).insert(key, e);
     }
     /// Audit 8 (Note Y7): keep only what this plan can use. Files outside its inputs go; packs go only after an
-    /// uncancelled plan, which saw every pack it needs.
+    /// uncancelled plan (the caller checks), which saw everything it needs.
     pub(crate) fn retain_plan(&self, plan: &Plan) {
         let roots = &plan.request.inputs;
         lock(&self.files).retain(|p, _| roots.iter().any(|r| p.starts_with(r)));
-        if plan.cancelled.is_empty() {
-            let keep: std::collections::HashSet<String> = plan
-                .jobs
-                .iter()
-                .filter_map(|j| j.pack.as_ref())
-                .filter_map(pack_cache_key)
-                .collect();
-            lock(&self.packs).retain(|k, _| keep.contains(k));
-        }
+        let keep: std::collections::HashSet<String> = plan
+            .jobs
+            .iter()
+            .filter_map(|j| j.pack.as_ref())
+            .filter_map(pack_cache_key)
+            .collect();
+        lock(&self.packs).retain(|k, _| keep.contains(k));
     }
     /// The source file's thumbnail, if the cache holds one.
     pub fn thumbnail_of(&self, path: &Path) -> Option<Arc<Thumbnail>> {
@@ -235,7 +233,10 @@ impl Session {
     ) -> Result<Plan, EngineError> {
         req.bc1_model = self.bc1_model;
         let plan = self.engine.plan_cached(req, rep, cancel, &self.cache)?;
-        self.cache.retain_plan(&plan);
+        // A cancelled plan saw only part of its folder (and may be superseded): it must not evict a live one.
+        if plan.cancelled.is_empty() {
+            self.cache.retain_plan(&plan);
+        }
         Ok(plan)
     }
     pub fn run(
