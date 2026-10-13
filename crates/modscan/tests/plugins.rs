@@ -549,3 +549,29 @@ fn unload_plugins_rolls_back_as_one() {
         0
     );
 }
+
+/// Review round 2: the check just before resolution (cancel set by the last progress call) leaves the store as it was.
+#[test]
+fn cancel_set_during_progress_stops_before_resolution() {
+    let d = load_order(ORDER);
+    drop(scan(&d).0);
+    fs::write(
+        d.path().join("profiles/Default/plugins.txt"),
+        "*Z.esl\n*A.esp\n*L.esp\n*F.esp\n",
+    )
+    .unwrap();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    let inst = Instance::load(d.path(), None).unwrap();
+    let (loose, _) = loose_origins(&inst).unwrap();
+    let cancel = AtomicBool::new(false);
+    let r = scan_plugins(&inst, &loose, &mut s, &cancel, &|_| {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed)
+    });
+    assert!(matches!(r, Err(ScanError::Cancelled)), "{r:?}");
+    assert_eq!(
+        formid(&s, "ZStat"),
+        0xFE00_1803,
+        "the old order is untouched"
+    );
+    assert_eq!(winner(&s, TXST_DIRT), ("A.esp".to_string(), 1));
+}
