@@ -11,12 +11,10 @@ use crate::mips::area_resample;
 type V3 = [f32; 3];
 
 pub(crate) fn unit(v: V3) -> V3 {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if l > 1e-8 {
-        [v[0] / l, v[1] / l, v[2] / l]
-    } else {
-        [0.0, 0.0, 1.0]
-    }
+    // The one degenerate-normal rule (audit 20): `mips::normalize_vector`, here on a bare vector.
+    let mut p = [v[0], v[1], v[2], 0.0];
+    crate::mips::normalize_vector(&mut p, crate::ops::Domain::Normal);
+    [p[0], p[1], p[2]]
 }
 
 /// A stored texel (0..1) as a tangent normal at strength `s` (rnm.py / DAZ): `t = (2c − 1)·s`,
