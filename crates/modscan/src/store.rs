@@ -772,8 +772,10 @@ impl Store {
         Ok(Store { conn })
     }
 
-    /// Start of a scan: staging tables created and emptied; every origin disabled until this run re-upserts it.
-    /// `origin.enabled = 1` therefore means "part of the latest run" and is the filter of every read query.
+    /// Start of a scan: staging tables created and emptied; every origin disabled until this run commits.
+    /// `origin.enabled = 1` therefore means "part of the latest completed run" and is the filter of every read query.
+    /// `scan::run` stages its origins with `upsert_origin_staged` and enables them with `enable_origins` at the end,
+    /// so a cancelled or failed run leaves the read lists empty instead of mixing in the previous run's winners.
     /// Rows of disabled origins stay cached (a disabled mod or a Folder scan in between costs no re-parse).
     pub fn begin_scan(&mut self) -> Result<(), ScanError> {
         self.conn.execute_batch(TEMP)?;
@@ -781,12 +783,35 @@ impl Store {
         Ok(())
     }
 
+    /// Upserts an origin and enables it at once.
     pub fn upsert_origin(&mut self, o: &OriginSpec) -> Result<i64, ScanError> {
+        self.upsert_origin_as(o, 1)
+    }
+
+    /// Upserts an origin left disabled: part of the run in progress, not yet of the readable data.
+    pub fn upsert_origin_staged(&mut self, o: &OriginSpec) -> Result<i64, ScanError> {
+        self.upsert_origin_as(o, 0)
+    }
+
+    /// The commit point of a scan: the given (staged) origins become the readable run.
+    pub fn enable_origins(&mut self, ids: &[i64]) -> Result<(), ScanError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut st = tx.prepare("UPDATE origin SET enabled = 1 WHERE id = ?1")?;
+            for id in ids {
+                st.execute([id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn upsert_origin_as(&mut self, o: &OriginSpec, enabled: i32) -> Result<i64, ScanError> {
         Ok(self.conn.query_row(
             "INSERT INTO origin(kind, name, root, parent_origin, priority, enabled, derived_by, derived_state)
-             VALUES (?1,?2,?3,?4,?5,1,?6,?7)
+             VALUES (?1,?2,?3,?4,?5,?8,?6,?7)
              ON CONFLICT(kind, root) DO UPDATE SET name = excluded.name, parent_origin = excluded.parent_origin,
-               priority = excluded.priority, enabled = 1, derived_by = excluded.derived_by,
+               priority = excluded.priority, enabled = excluded.enabled, derived_by = excluded.derived_by,
                derived_state = excluded.derived_state
              RETURNING id",
             params![
@@ -796,7 +821,8 @@ impl Store {
                 o.parent,
                 o.priority,
                 o.derived_by,
-                o.derived_state.map(|s| s as i32)
+                o.derived_state.map(|s| s as i32),
+                enabled
             ],
             |r| r.get(0),
         )?)

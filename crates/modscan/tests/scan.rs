@@ -654,3 +654,49 @@ fn owner_timing() {
         t.elapsed().as_millis()
     );
 }
+
+/// A3 (audit 1): a run cancelled mid-parse leaves the read lists empty, not the previous run's winners.
+#[test]
+fn cancelled_run_leaves_read_lists_empty_until_a_scan_completes() {
+    let d = instance_fixture("+B\n+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/B/meshes/x.nif", None);
+    go(&d, vec![]);
+    // Mod list changes (B off, C on) and the scan is cancelled when parsing starts.
+    // More new files than one parse chunk, so the cancel (set on the first "parse" report) lands before the end.
+    for i in 0..600 {
+        put(d.path(), &format!("mods/C/meshes/c{i}.nif"), None);
+    }
+    std::fs::write(
+        d.path().join("profiles/Default/modlist.txt"),
+        "-B\n+C\n+A\n",
+    )
+    .unwrap();
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let cancel = AtomicBool::new(false);
+    let r = run(
+        &Source::Mo2(inst),
+        &mut store,
+        &cancel,
+        &|p| {
+            if p.phase == "parse" {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        &|| vec![],
+    );
+    assert!(matches!(r, Err(modscan::ScanError::Cancelled)));
+    assert!(
+        store.mods().unwrap().is_empty(),
+        "no origin is part of a cancelled run"
+    );
+    for id in 1..=4 {
+        assert!(store.nifs_of(id).unwrap().is_empty());
+    }
+    drop(store);
+    let (store, _) = go(&d, vec![]);
+    let names: Vec<_> = store.mods().unwrap().into_iter().map(|m| m.name).collect();
+    assert!(names.contains(&"C".to_string()) && !names.contains(&"B".to_string()));
+    assert!(store.nifs_of(mod_id(&store, "A")).unwrap()[0].wins);
+}

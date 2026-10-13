@@ -225,7 +225,7 @@ pub fn run_with(
         sig_any[i] = sig != Signature::None;
         // Without the PGPatcher output, the origin is recorded as ordinary; its derived paths are dropped below.
         let state = state.filter(|_| !skip_derived);
-        let id = store.upsert_origin(&OriginSpec {
+        let id = store.upsert_origin_staged(&OriginSpec {
             kind: kind_code(o.kind),
             name: o.name.clone(),
             root: o.root.display().to_string(),
@@ -249,6 +249,7 @@ pub fn run_with(
             });
         }
     }
+    // Origins stay disabled while the run is in progress; `enable_run` is the commit point (before `delete_unseen`).
     let mut bsa_ids = Vec::with_capacity(bsas.len());
     for b in &bsas {
         let parent = b.providing_mod.as_ref().and_then(|m| {
@@ -261,7 +262,7 @@ pub fn run_with(
             .path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        bsa_ids.push(store.upsert_origin(&OriginSpec {
+        bsa_ids.push(store.upsert_origin_staged(&OriginSpec {
             kind: KIND_BSA,
             name,
             root: b.path.display().to_string(),
@@ -271,9 +272,10 @@ pub fn run_with(
             derived_state: None,
         })?);
     }
+    let mut sep_ids = vec![];
     if let Source::Mo2(inst) = src {
         for (name, prio) in &seps {
-            store.upsert_origin(&OriginSpec {
+            sep_ids.push(store.upsert_origin_staged(&OriginSpec {
                 kind: KIND_SEPARATOR,
                 name: name.clone(),
                 root: inst.mods.join(name).display().to_string(),
@@ -281,7 +283,7 @@ pub fn run_with(
                 priority: *prio,
                 derived_by: None,
                 derived_state: None,
-            })?;
+            })?);
         }
     }
 
@@ -440,6 +442,8 @@ pub fn run_with(
     if !skip_derived && pgp::running(&procs()) {
         report.tainted = true;
         store.discard_pending()?;
+        // A tainted run still returns a (flagged) result: its origins are listed, as before.
+        enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
             p.state = DerivedState::RunningAtScan;
             store.set_derived_state(p.origin_id, DerivedState::RunningAtScan)?;
@@ -607,6 +611,8 @@ pub fn run_with(
     // 7. Drop copies not seen in this walk.
     let tdl = Instant::now();
     let seen: HashSet<i64> = ids.iter().copied().collect();
+    // Commit point: only a run that got here makes its origins readable (the plugin pass below needs them enabled).
+    enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
     store.delete_unseen(&seen)?;
     report
         .sub_ms
@@ -636,6 +642,11 @@ pub fn run_with(
         Source::Folder(_) => store.unload_plugins()?,
     }
     Ok(report)
+}
+
+fn enable_run(store: &mut Store, loose: &[i64], bsa: &[i64], sep: &[i64]) -> Result<(), ScanError> {
+    let all: Vec<i64> = loose.iter().chain(bsa).chain(sep).copied().collect();
+    store.enable_origins(&all)
 }
 
 /// Step 3: loose NIFs per origin and NIF entries per BSA (FaceGen excluded), one copy per (path, origin).

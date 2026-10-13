@@ -733,8 +733,8 @@ impl MeshesModel {
                 self.banner = Some(Banner::PgpRunning);
             }
             Err(ScanError::Cancelled) => {
-                // The store marks every origin as outside the run until a scan completes: lists read now would be
-                // empty, so the ones on screen stay until the next scan.
+                // The store keeps every origin outside the readable run until a scan completes: lists read now
+                // would be empty, so the ones on screen stay until the next scan.
                 self.status =
                     "Scan cancelled. The lists are from before; scan again to refresh them.".into();
             }
