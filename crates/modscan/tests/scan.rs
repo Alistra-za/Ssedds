@@ -736,3 +736,59 @@ fn a_writer_failure_ends_the_scan_with_its_error() {
         "{r:?}"
     );
 }
+
+/// F-4: a run that fails after derived copies were staged leaves no pending rows, and the next run on the same store
+/// does not commit the vanished derived copy.
+#[test]
+fn a_failed_run_discards_staged_derived_copies() {
+    let d = instance_fixture(
+        "+PGP
++A
+",
+    );
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/PGP/meshes/x.nif", None);
+    put(d.path(), "mods/PGP/PGPatcher.esp", Some(b"e"));
+    let a_bytes = std::fs::read(d.path().join("mods/A/meshes/x.nif")).unwrap();
+    let crc = crc32fast::hash(&a_bytes);
+    put(
+        d.path(),
+        "mods/PGP/ParallaxGen_Diff.json",
+        Some(
+            format!(r#"{{"meshes\x.nif":{{"crc32original":{crc},"crc32patched":1}}}}"#).as_bytes(),
+        ),
+    );
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let scan = |store: &mut Store| {
+        let inst = Instance::load(d.path(), None).unwrap();
+        run(
+            &Source::Mo2(inst),
+            store,
+            &AtomicBool::new(false),
+            &|_| {},
+            &|| vec![],
+        )
+    };
+    let count = |store: &Store, sql: &str| -> i64 {
+        store.conn().query_row(sql, [], |r| r.get(0)).unwrap()
+    };
+    store
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON nif_copy WHEN NEW.is_derived = 1 BEGIN SELECT RAISE(ABORT, 'boom'); END",
+        )
+        .unwrap();
+    let r = scan(&mut store);
+    assert!(
+        r.as_ref().is_err_and(|e| format!("{e:?}").contains("boom")),
+        "{r:?}"
+    );
+    assert_eq!(count(&store, "SELECT count(*) FROM pending_derived"), 0);
+    store.conn().execute_batch("DROP TRIGGER boom").unwrap();
+    std::fs::remove_file(d.path().join("mods/PGP/meshes/x.nif")).unwrap();
+    scan(&mut store).unwrap();
+    assert_eq!(
+        count(&store, "SELECT count(*) FROM nif_copy WHERE is_derived = 1"),
+        0
+    );
+}

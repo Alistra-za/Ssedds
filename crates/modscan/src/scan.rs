@@ -175,12 +175,7 @@ pub fn run_with(
         // Pending rows must not outlive a failed run (first error wins). A crash after a cold direct write keeps
         // the derived copies; their size/mtime re-parse guards them.
         let _ = store.discard_pending();
-        // A corrupt database is a cache: zero the version so the next `Store::open` rebuilds it.
-        if let ScanError::Db(rusqlite::Error::SqliteFailure(f, _)) = e {
-            if f.code == rusqlite::ErrorCode::DatabaseCorrupt {
-                let _ = store.conn.execute_batch("PRAGMA user_version = 0");
-            }
-        }
+        reset_if_corrupt(store, e);
     }
     // Every outcome, cancel and errors included, ends the scan (resets the store's per-scan state).
     let t = Instant::now();
@@ -191,6 +186,41 @@ pub fn run_with(
         .sub_ms
         .push(("end_scan", t.elapsed().as_millis() as u64));
     Ok(report)
+}
+
+/// A corrupt database is a cache: zero the version so the next `Store::open` rebuilds it.
+fn reset_if_corrupt(store: &Store, e: &ScanError) {
+    if let ScanError::Db(rusqlite::Error::SqliteFailure(f, _)) = e {
+        if f.code == rusqlite::ErrorCode::DatabaseCorrupt {
+            let _ = store.conn.execute_batch("PRAGMA user_version = 0");
+        }
+    }
+}
+
+#[cfg(test)]
+mod corrupt_tests {
+    use super::*;
+
+    #[test]
+    fn a_corrupt_database_error_zeroes_the_schema_version() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::open(&d.path().join("s.db")).unwrap();
+        let ver = |s: &Store| {
+            s.conn
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        let err = |code| {
+            ScanError::Db(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                None,
+            ))
+        };
+        reset_if_corrupt(&store, &err(rusqlite::ffi::SQLITE_CONSTRAINT));
+        assert_ne!(ver(&store), 0, "other errors keep the cache");
+        reset_if_corrupt(&store, &err(rusqlite::ffi::SQLITE_CORRUPT));
+        assert_eq!(ver(&store), 0);
+    }
 }
 
 /// The scan itself; `run_with` adds `Store::end_scan` on every outcome.
