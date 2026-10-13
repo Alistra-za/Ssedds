@@ -603,3 +603,202 @@ impl AppModel {
         self.bulk.report = Some(format!("Reset all settings on {n} textures"));
     }
 }
+
+/// F3a D3: one chip of the kind row over selected sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KindChip {
+    /// `None` is All.
+    pub kind: Option<SlotKind>,
+    pub label: String,
+    pub members: Vec<String>,
+    /// How many of the selected sets have a member of this kind ("applies to K of N sets").
+    pub sets_with: usize,
+}
+
+/// F3a D3: All, then one chip per slot kind present among the members of `set_keys`, in `SlotKind::ALL` order.
+/// Members without a slot (raw packing sources, sub-types without a card) are under All only.
+pub fn kind_chips(m: &AppModel, set_keys: &[String]) -> Vec<KindChip> {
+    let mut chips = vec![KindChip {
+        kind: None,
+        label: "All".into(),
+        members: members_of(m, set_keys, None),
+        sets_with: set_keys.len(),
+    }];
+    for kind in SlotKind::ALL {
+        let members = members_of(m, set_keys, Some(kind));
+        if members.is_empty() {
+            continue;
+        }
+        let sets_with = set_keys
+            .iter()
+            .filter(|s| !members_of(m, std::slice::from_ref(*s), Some(kind)).is_empty())
+            .count();
+        chips.push(KindChip {
+            kind: Some(kind),
+            label: kind.label().into(),
+            members,
+            sets_with,
+        });
+    }
+    chips
+}
+
+/// F3a D4: what a right-click menu entry does. F3b appends its own entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    EditSettings,
+    CopyFromActive,
+    ResetAll,
+    SelectMembersOfKind(Option<SlotKind>),
+}
+
+/// One entry of a right-click menu; `disabled` is the hover reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuEntry {
+    pub action: MenuAction,
+    pub label: String,
+    pub disabled: Option<String>,
+}
+
+impl AppModel {
+    /// Why `sdc.toml` takes no edit, while it is read-only.
+    pub fn toml_read_only_reason(&self) -> Option<String> {
+        self.project
+            .as_ref()
+            .and_then(|p| p.error())
+            .map(|e| format!("sdc.toml is read-only: {e}"))
+    }
+
+    /// The textures the bulk panel edits: the selected textures, or the picked chip's members of the selected
+    /// sets (All when that kind has left after a plan). Empty outside a multi-selection.
+    pub fn bulk_targets(&self) -> Vec<String> {
+        if !self.in_bulk() {
+            return vec![];
+        }
+        let sets = self.selected_sets();
+        if sets.len() < 2 {
+            return self.selected_items();
+        }
+        let picked = members_of(self, &sets, self.bulk.kind);
+        if picked.is_empty() {
+            members_of(self, &sets, None)
+        } else {
+            picked
+        }
+    }
+
+    /// F3a D4 "Select members of kind": the selected sets' members of `kind` become a texture selection, the first
+    /// one active.
+    pub fn select_members_of_kind(&mut self, kind: Option<SlotKind>) {
+        let keys = members_of(self, &self.selected_sets(), kind);
+        let Some(first) = keys.first().cloned() else {
+            return;
+        };
+        self.set_selection(keys, Some(first), false);
+    }
+
+    /// F3a D4: a right-click on an unselected texture selects it alone; on a selected one it keeps the selection.
+    pub fn right_click_item(&mut self, key: &str) {
+        if !self.is_selected(key, false) {
+            self.select_item(key);
+        }
+    }
+
+    pub fn right_click_set(&mut self, key: &str) {
+        if !self.is_selected(key, true) {
+            self.select_set(key);
+        }
+    }
+
+    /// A menu's title: "2 textures selected", "3 sets selected".
+    pub fn menu_title(&self, sets: bool) -> String {
+        let n = self.selected(sets).len();
+        let noun = match (sets, n) {
+            (true, 1) => "set",
+            (true, _) => "sets",
+            (false, 1) => "texture",
+            (false, _) => "textures",
+        };
+        format!("{n} {noun} selected")
+    }
+
+    /// F3a D4: a tile's menu.
+    pub fn item_menu(&self) -> Vec<MenuEntry> {
+        let n = self.selected_items().len();
+        let locked = self.toml_read_only_reason();
+        let active = match &self.selection {
+            Selection::Item(k) => Some(k.as_str()),
+            _ => None,
+        };
+        let name = active
+            .and_then(|k| self.item(k))
+            .map_or(String::new(), |i| i.name.clone());
+        let has_fields = active.is_some_and(|k| {
+            self.project.as_ref().is_some_and(|p| {
+                all_fields()
+                    .iter()
+                    .any(|(f, _)| p.file_value(k, f).is_some())
+            })
+        });
+        let copy_off = (n < 2)
+            .then(|| "select two or more textures".to_string())
+            .or_else(|| locked.clone())
+            .or_else(|| (!has_fields).then(|| format!("{name} has no settings of its own")));
+        vec![
+            MenuEntry {
+                action: MenuAction::EditSettings,
+                label: format!("Edit settings for {n} selected"),
+                disabled: None,
+            },
+            MenuEntry {
+                action: MenuAction::CopyFromActive,
+                label: format!(
+                    "Copy settings from {name} to {} selected…",
+                    n.saturating_sub(1)
+                ),
+                disabled: copy_off,
+            },
+            MenuEntry {
+                action: MenuAction::ResetAll,
+                label: format!("Reset all settings for {n} selected…"),
+                disabled: locked,
+            },
+        ]
+    }
+
+    /// F3a D4: a pill's menu while two or more sets are selected.
+    pub fn set_menu(&self) -> Vec<MenuEntry> {
+        let sets = self.selected_sets();
+        let n = sets.len();
+        let mut v = vec![
+            MenuEntry {
+                action: MenuAction::EditSettings,
+                label: format!("Edit settings for {n} selected"),
+                disabled: None,
+            },
+            MenuEntry {
+                action: MenuAction::ResetAll,
+                label: format!("Reset all settings for {n} selected…"),
+                disabled: self.toml_read_only_reason(),
+            },
+        ];
+        v.extend(kind_chips(self, &sets).into_iter().map(|c| MenuEntry {
+            action: MenuAction::SelectMembersOfKind(c.kind),
+            label: format!("{} ({})", c.label, c.members.len()),
+            disabled: None,
+        }));
+        v
+    }
+
+    pub fn run_menu(&mut self, a: MenuAction) {
+        match a {
+            MenuAction::EditSettings => {
+                self.collapse();
+                self.bulk.kind = None;
+            }
+            MenuAction::CopyFromActive => self.open_copy_settings(),
+            MenuAction::ResetAll => self.ask_reset_all(),
+            MenuAction::SelectMembersOfKind(k) => self.select_members_of_kind(k),
+        }
+    }
+}

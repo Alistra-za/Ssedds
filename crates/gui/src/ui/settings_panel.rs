@@ -768,11 +768,7 @@ fn dds_header_panel(
 
 /// Why `sdc.toml` cannot take an edit, when its file is read-only.
 pub fn toml_read_only_reason(model: &AppModel) -> Option<String> {
-    model
-        .project
-        .as_ref()
-        .and_then(|p| p.error())
-        .map(|e| format!("sdc.toml is read-only: {e}"))
+    model.toml_read_only_reason()
 }
 
 /// Draw texture `key`'s settings. `compact` (the preview's strip) keeps the decision box and the Alpha, Mipmaps and
