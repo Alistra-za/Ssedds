@@ -8,10 +8,12 @@ use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::sets::{set_views, slot_label, slot_of, SetView, SlotFill, SlotKind};
 use crate::model::AppModel;
+use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
 use eframe::egui;
 use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
 use engine::events::RecipeReport;
 use engine::pack::RecipeKind;
+use serde_json::Value;
 
 const CARD: f32 = 150.0;
 const THUMB: f32 = 72.0;
@@ -29,6 +31,8 @@ enum Act {
     Opaque(String, bool),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
+    /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
+    Json(String, String, Option<Value>),
 }
 
 fn tag_options(f: Format) -> Vec<ColorTag> {
@@ -51,16 +55,6 @@ pub fn draw(
     };
     ui.horizontal_wrapped(|ui| {
         ui.heading(&v.label);
-        let m = v
-            .settings
-            .get("match_diffuse")
-            .and_then(|x| x.as_str())
-            .map(str::to_string);
-        match (m, &v.derived_match) {
-            (Some(m), _) => ui.label(format!("match_diffuse: {m}")),
-            (None, Some(d)) => ui.label(format!("match_diffuse: {d} (derived)")),
-            (None, None) => ui.weak("no diffuse to derive a match from"),
-        };
         match (&v.prefix, &v.prefix_error) {
             (Some(p), _) => ui.weak(format!("→ {p}")),
             (_, Some(e)) => ui.colored_label(RED, e),
@@ -102,6 +96,7 @@ pub fn draw(
                 model.set_packing_recipe(&k, r);
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
+            Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
         }
     }
     select_or_expand(ui, model, select, expand);
@@ -229,6 +224,29 @@ fn card(
                 return;
             };
             ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
+            if let Some(n) = match slot {
+                SlotKind::Diffuse => Some(1),
+                SlotKind::Normal => Some(2),
+                _ => None,
+            } {
+                // F1 spec §3.2: the card's switch is the Matching header's slot 1/2 row.
+                let derived = v.derived_match.as_deref().unwrap_or("");
+                let on = active_matches(&v.settings, derived)
+                    .iter()
+                    .any(|(m, _)| *m == n);
+                let mut want = on;
+                let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+                if ui
+                    .add_enabled(editable, egui::Checkbox::new(&mut want, "Match on this"))
+                    .on_hover_text(
+                        "PGPatcher applies the entry to meshes with this exact texture in this slot",
+                    )
+                    .changed()
+                {
+                    let (k, val) = match_toggle(n, want, &slot_match_path(derived, slot.suffix()));
+                    acts.push(Act::Json(v.id.clone(), k, val));
+                }
+            }
             if let Some(from) = &borrowed {
                 ui.colored_label(AMBER, format!("borrowed from {from}"));
                 return;

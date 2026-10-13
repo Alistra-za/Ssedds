@@ -3,7 +3,9 @@
 use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
-use crate::pgp::prefix::{check_rel_path, derive_match_diffuse, output_rel, prefix_of};
+use crate::pgp::prefix::{
+    active_matches, check_rel_path, derive_match_diffuse, output_rel, prefix_of, slot_match_path,
+};
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
 use engine::codes::Warning;
@@ -97,6 +99,52 @@ pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
         }
         _ => slot.label(),
     }
+}
+
+/// One row of the Matching header, or one choice of its + menu (F1 spec §3.2): slot number, slot name, path (stored
+/// form, no `.dds`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotMatch {
+    pub n: u8,
+    pub slot: String,
+    pub path: String,
+}
+
+/// The Matching header of `v`: its active slot matches, and the + menu, which offers the filled slots 3–8 not matched
+/// yet, starting from `slot_match_path` (DECISIONS V1).
+pub fn slot_matches(v: &SetView) -> (Vec<SlotMatch>, Vec<SlotMatch>) {
+    let derived = v.derived_match.as_deref().unwrap_or("");
+    let filled: Vec<SlotKind> = v
+        .slots
+        .iter()
+        .filter(|(_, f)| !matches!(f, SlotFill::Empty))
+        .map(|(k, _)| *k)
+        .collect();
+    let name = |n: u8| match filled.iter().find(|k| k.slot_number() == n) {
+        Some(k) => k.label().to_string(),
+        None if n == 1 => SlotKind::Diffuse.label().to_string(),
+        None if n == 2 => SlotKind::Normal.label().to_string(),
+        None => format!("Slot {n}"),
+    };
+    let active: Vec<SlotMatch> = active_matches(&v.settings, derived)
+        .into_iter()
+        .map(|(n, path)| SlotMatch {
+            n,
+            slot: name(n),
+            path,
+        })
+        .collect();
+    let add = filled
+        .iter()
+        .filter(|k| (3..=8).contains(&k.slot_number()))
+        .filter(|k| !active.iter().any(|a| a.n == k.slot_number()))
+        .map(|k| SlotMatch {
+            n: k.slot_number(),
+            slot: k.label().to_string(),
+            path: slot_match_path(derived, k.suffix()),
+        })
+        .collect();
+    (active, add)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -114,7 +114,8 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         "Coat _cnr",
         "Fuzz _f",
     ] {
-        h.get_by_label(label);
+        // The Matching header repeats the Diffuse/Normal slot names as its row labels.
+        assert!(h.query_all_by_label(label).next().is_some(), "{label}");
     }
     h.get_by_label("Opaque");
     // A combo box exposes its text as a value, not a label.
@@ -250,10 +251,8 @@ fn rock_settings(
         .entries()
         .into_iter()
         .find(|e| e.id == "landscape/rock01")
-        .unwrap()
-        .settings
-        .into_iter()
-        .collect()
+        .map(|e| e.settings.into_iter().collect())
+        .unwrap_or_default() // no entry yet = nothing written
 }
 
 #[test]
@@ -956,4 +955,123 @@ fn a_coat_source_titles_the_subsurface_card_coat_colour_and_strength() {
     h.run();
     h.get_by_label("Coat colour + strength");
     assert!(h.query_by_label("Subsurface _s").is_none());
+}
+
+fn text_inputs(h: &Harness<'static, AppModel>) -> Vec<String> {
+    h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.value())
+        .collect()
+}
+
+/// F1 spec §3.2: the Matching header lists the default match1 and says how the rows combine.
+#[test]
+fn the_matching_header_lists_the_default_match1() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(pbr_opened(d.path()));
+    h.run();
+    h.get_by_label("Matching");
+    h.get_by_label("The entry applies when any of these matches.");
+    assert!(
+        text_inputs(&h).contains(&r"landscape\rock01".to_string()),
+        "{:?}",
+        text_inputs(&h)
+    );
+    assert!(h.query_by_label_contains("matches nothing").is_none());
+}
+
+fn match_toggles(h: &Harness<'static, AppModel>) -> Vec<bool> {
+    use eframe::egui::accesskit::Toggled;
+    h.query_all_by_label("Match on this")
+        .map(|n| n.accesskit_node().toggled() == Some(Toggled::True))
+        .collect()
+}
+
+/// F1 spec §3.2, §6 "Toggles": the diffuse card is on by default and the normal card off. Removing the match1 row
+/// turns the diffuse toggle off and warns; the normal toggle adds match2.
+#[test]
+fn the_card_toggles_mirror_the_matching_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    assert_eq!(match_toggles(&h), vec![true, false], "diffuse, normal");
+    // The Matching header sits below the visual groups: bring it into view before a pointer click.
+    h.get_by_label("×").scroll_to_me();
+    h.run();
+    h.get_by_label("×").click();
+    h.run();
+    assert_eq!(rock_settings(&h)["match1"], serde_json::json!(""));
+    assert_eq!(match_toggles(&h), vec![false, false]);
+    h.get_by_label_contains("this entry matches nothing");
+    h.query_all_by_label("Match on this")
+        .nth(1)
+        .unwrap()
+        .scroll_to_me();
+    h.run();
+    h.query_all_by_label("Match on this")
+        .nth(1)
+        .unwrap()
+        .click();
+    h.run();
+    assert_eq!(
+        rock_settings(&h)["match2"],
+        serde_json::json!(r"landscape\rock01_n")
+    );
+    assert!(text_inputs(&h).contains(&r"landscape\rock01_n".to_string()));
+    h.query_all_by_label("Match on this")
+        .next()
+        .unwrap()
+        .scroll_to_me();
+    h.run();
+    h.query_all_by_label("Match on this")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    assert!(
+        !rock_settings(&h).contains_key("match1"),
+        "back to the derived default"
+    );
+    assert_eq!(match_toggles(&h), vec![true, true]);
+}
+
+/// F1 spec §6 "Toggles": + offers slots 3–8 only when the set has a texture there.
+#[test]
+fn the_plus_menu_offers_only_filled_slots_3_to_8() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(pbr_opened(d.path()));
+    h.run();
+    h.get_by_label("+").click();
+    h.run();
+    assert!(
+        h.query_by_label_contains("3 · ").is_none(),
+        "slot 3 is empty"
+    );
+    h.get_by_label("6 · RMAOS").click();
+    h.run();
+    assert_eq!(
+        rock_settings(&h)["match6"],
+        serde_json::json!(r"landscape\rock01_rmaos")
+    );
+}
+
+/// F1 Review Focus 4 (plan): leaving a row unchanged writes nothing: the default match1 does not become a key, and
+/// the project stays clean.
+#[test]
+fn leaving_a_matching_row_unchanged_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.save().unwrap();
+    let mut h = panel_harness(m);
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+        .find(|n| n.value().as_deref() == Some(r"landscape\rock01"))
+        .expect("the match1 row")
+        .focus();
+    h.run();
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert!(!rock_settings(&h).contains_key("match1"));
+    assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
 }

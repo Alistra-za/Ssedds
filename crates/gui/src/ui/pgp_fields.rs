@@ -1,8 +1,9 @@
 //! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced keys for the
 //! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
 use super::columns::AMBER;
-use crate::model::sets::{set_views, SetView, SlotFill, SlotKind};
+use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
 use crate::model::AppModel;
+use crate::pgp::prefix::{match_toggle, matches_nothing, stored_match, NO_MATCH};
 use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
@@ -100,6 +101,10 @@ struct Ctx {
     read_only: Option<String>,
     coat_filled: bool,
     fuzz_filled: bool,
+    /// The Matching header (F1 spec §3.2): the active slot matches, the + menu, and whether nothing matches.
+    matches: Vec<SlotMatch>,
+    addable: Vec<SlotMatch>,
+    no_match: bool,
 }
 
 fn context(model: &AppModel, set: &str) -> Ctx {
@@ -107,11 +112,17 @@ fn context(model: &AppModel, set: &str) -> Ctx {
     let filled =
         |v: &SetView, s: SlotKind| !matches!(v.slots.get(&s), None | Some(SlotFill::Empty));
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+    let own: Settings = v.as_ref().map(|v| v.settings.clone()).unwrap_or_default();
+    let derived = v.as_ref().and_then(|v| v.derived_match.clone());
+    let (matches, addable) = v.as_ref().map(slot_matches).unwrap_or_default();
     Ctx {
-        own: v.as_ref().map(|v| v.settings.clone()).unwrap_or_default(),
+        no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
-        derived: v.and_then(|v| v.derived_match),
+        own,
+        derived,
+        matches,
+        addable,
         set: set.to_string(),
         read_only: (!editable).then(|| {
             model
@@ -137,6 +148,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
             .collect();
         group(ui, &c, "pgp", g, &keys, &mut edits);
     }
+    matching(ui, &c, &mut edits);
     for (k, v) in edits {
         model.set_json_value(set, &k, v);
     }
@@ -178,6 +190,66 @@ fn group(
                 ui.end_row();
             }
         });
+    ui.add_space(6.0);
+}
+
+/// The Matching header (F1 spec §3.2): one row per slot match (slot, exact path, ×), a + menu for filled slots 3–8,
+/// and the warning when nothing matches. The slot 1 and 2 rows are the card toggles' state.
+fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
+    ui.label(egui::RichText::new("Matching").strong());
+    ui.label(
+        egui::RichText::new("The entry applies when any of these matches.")
+            .small()
+            .weak(),
+    );
+    let r = ui.add_enabled_ui(c.read_only.is_none(), |ui| {
+        egui::Grid::new(("pgp-matching", &c.set))
+            .num_columns(3)
+            .show(ui, |ui| {
+                for m in &c.matches {
+                    ui.label(&m.slot);
+                    let id = egui::Id::new(("pgp-match", m.n, &c.set));
+                    let mut text = ui
+                        .data(|d| d.get_temp::<String>(id))
+                        .unwrap_or_else(|| m.path.clone());
+                    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(220.0));
+                    if r.changed() {
+                        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+                    }
+                    // Committed on Enter or focus loss; an unchanged path is no edit (F1 Review Focus 4).
+                    if r.lost_focus() {
+                        ui.data_mut(|d| d.remove::<String>(id));
+                        if text.trim() != m.path {
+                            edits.push((format!("match{}", m.n), stored_match(m.n, &text)));
+                        }
+                    }
+                    if ui
+                        .small_button("×")
+                        .on_hover_text("Stop matching on this slot")
+                        .clicked()
+                    {
+                        edits.push(match_toggle(m.n, false, &m.path));
+                    }
+                    ui.end_row();
+                }
+            });
+        if !c.addable.is_empty() {
+            ui.menu_button("+", |ui| {
+                for a in &c.addable {
+                    if ui.button(format!("{} · {}", a.n, a.slot)).clicked() {
+                        edits.push(match_toggle(a.n, true, &a.path));
+                        ui.close();
+                    }
+                }
+            });
+        }
+    });
+    if let Some(why) = &c.read_only {
+        r.response.on_disabled_hover_text(why);
+    }
+    if c.no_match {
+        ui.colored_label(AMBER, NO_MATCH);
+    }
     ui.add_space(6.0);
 }
 
@@ -326,7 +398,13 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
             if r.lost_focus() {
                 ui.data_mut(|d| d.remove::<String>(id));
                 let t = text.trim();
-                edits.push((key, (!t.is_empty()).then(|| json!(t))));
+                // Clearing match1 stores "" (diffuse off); removing the key would bring the derived default back.
+                let v = if k.key == "match1" {
+                    stored_match(1, t)
+                } else {
+                    (!t.is_empty()).then(|| json!(t))
+                };
+                edits.push((key, v));
             }
         }
         KeyKind::Rgb | KeyKind::Rgba => {

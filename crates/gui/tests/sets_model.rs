@@ -1330,3 +1330,38 @@ fn a_renamed_set_still_matches_its_source_path() {
         json!(r"landscape\rock01.dds")
     );
 }
+
+/// F1 spec §3.2: the Matching rows are the active matches; the + menu offers filled slots 3–8 not matched yet.
+#[test]
+fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
+    assert_eq!(
+        active,
+        vec![SlotMatch {
+            n: 1,
+            slot: "Diffuse".into(),
+            path: r"landscape\rock01".into()
+        }]
+    );
+    assert_eq!(
+        add,
+        vec![SlotMatch {
+            n: 6,
+            slot: "RMAOS".into(),
+            path: r"landscape\rock01_rmaos".into()
+        }]
+    );
+    m.set_json_value(
+        "landscape/rock01",
+        "match6",
+        Some(json!(r"landscape\rock01_rmaos")),
+    );
+    m.set_json_value("landscape/rock01", "match1", Some(json!("")));
+    idle(&mut m);
+    let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
+    assert_eq!(active.iter().map(|a| a.n).collect::<Vec<_>>(), vec![6]);
+    assert!(add.is_empty());
+}
