@@ -2687,3 +2687,35 @@ Notes (counts from Task 1: derived copies, BSA copies, shapes, paths, texsets; W
 - Base moves to nif/main ee36005 (adds only a Cargo.lock refresh: esp 0.7.0 after main's version bump). Cargo.lock must otherwise stay unchanged.
 - R8 finding is fixed in this round, inside Task 9: in Skyrim the ARMO MODL subrecord is an ARMA FormID (one per armature, after INDX), not a mesh path; ARMO world models are MOD2/MOD4. Read ARMO MODL as ARMA references (role MODL in txst_ref-style link table or a dedicated column), drop the bogus model_ref rows, update the existing test that pins the old reading. ARMA stays never-inert (R8 stands).
 
+
+## Addendum: audit fixes folded into this round (owner, 2026-10-13)
+
+Source: `F:\ai\dds\nif-audit-fixes-prompt.md` (the prompt) and `F:\ai\dds\audit-2026-10-13.md` (the audit; read the finding before each task). Each audit task is **one finding per commit**. The test the audit names must **fail first**. Gates before every commit: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. Re-check every audit line number against this branch. The complex-grass branch may add `Store::gras_diffuse_textures` (plugin_store.rs) and a GRAS read in `gui/src/model/mod.rs` `refresh_mesh_votes`: leave both alone.
+
+Execution order (task ids are the ledger's):
+1. Task 1 (measurement, unchanged).
+2. **A1** audit finding 2: corrupt BSA folder count allocates about 5× the file size (`vfs/src/bsa.rs` ~82-90). Check `counts.iter().sum() == nfiles` before reading. The hostile-count test asserts `Corrupt` before any read.
+3. **A2** finding 3: a hostile NIF string count allocates about 6× the file size (`nif/src/header.rs` ~71-75). Cap `nstrings` the way `nblocks` is capped, and test it.
+4. **A3** finding 1: a cancelled scan shows the last run's winners as current (`modscan/src/scan.rs` ~203-269, `store.rs` ~778-791). Origins stay `enabled = 0` during the run; one `UPDATE origin SET enabled = 1 WHERE id IN (...)` runs right before `delete_unseen`. Test: change the mod list, cancel mid-parse, and assert the read lists are empty. Fix the GUI comment at `gui/src/model/meshes.rs` ~736. **This is the only allowed change to results** (cancelled runs only); the Task 1 dump test, which covers completed scans, must still pass unchanged. This task runs **before Task 3** (writer thread).
+5. Tasks 2-8 (speed). **A-nice-vfs** (uncompressed BSA entries copied twice, `bsa.rs` ~153-167) is a separate commit right after Task 2.
+6. **A4** finding 4: the quadratic NIF graph cycle check freezes the 3D preview (`nif/src/graph.rs` ~220-232). Cap `reaches` at `MAX_DEPTH + 2` hops. The existing cycle tests must still pass; add a long-chain timing test.
+7. **A5** finding 14: shader recompiles on a loaded mesh are invisible and their failures are silent (`gui/src/model/viewport3d.rs` ~744-755, ~1773-1775, ~2011-2017; `gui/src/app.rs` ~244-249). Send `V3Reply::Shapes` for mesh content too, and make `problems()` list `Failed` shapes. Add the two tests the audit names. app.rs is a shared file: edit it add-only if at all possible, in its own commit, and stop and report if it can't be.
+8. **A6** finding 16: non-ASCII MO2 paths decode wrongly from `@ByteArray(...)` (`modscan/src/qtini.rs` ~6-16). Handle Qt 6 Latin-1 and Qt 5 `\xHH`, and test an accented path.
+9. **A7** finding 17: two scans on the same scan.db destroy each other's rows. Take an exclusive `scan.lock` for the whole `run_with` (after Task 4's wrapper) and return `ScanError::Busy` on contention. The workspace `rust-version` is **1.88**, so `File::try_lock` (1.89) is not available. Use the smallest std-only alternative, `OpenOptions::new().create_new(true)` on the lock file plus a stale-lock rule, or a Windows share-mode open (`std::os::windows::fs::OpenOptionsExt::share_mode(0)`), and say which in the report.
+10. **A8** finding 18 (this team's part): `modscan/tests/resolve.rs` ~156-171 writes `Skyrim.ini` where the code opens `skyrim.ini`.
+11. **A9** finding 20 (this team's part), dead code and unused dependencies:
+    - delete modscan `replace_shapes` (store.rs ~925-931) and `usvfs_loaded` (win.rs ~47-57);
+    - remove the dependency lines modscan `serde`, render3d `thiserror` and vfs `encoding_rs`, after grepping src, tests, examples and build.rs;
+    - make `modscan::store::key_form` call `nif::path::canon_mesh`, and share the 8-line rebase between `canon_texture` and `canon_model`.
+
+    The render3d deletions (adapter-LUID machinery, `readback_rgba8`/`readback`, `set_encode_srgb`) need the **owner's confirmation** first (the ledger records the answer). `Cargo.lock` may change only through these removals, in their own commit.
+12. **A10** nice-to-haves, one commit each:
+    - esp `inflate` message for a stream shorter than declared (`read.rs` ~315-320);
+    - render3d `wait_idle` busy-spin, fixed with a 200 µs sleep (`lib.rs` ~1780-1800);
+    - render3d panic hook `SINK.with` changed to `try_with` (`perf_log.rs` ~231-267);
+    - gui `render/upload.rs::to_rgba16f` clamped to the f16 range (65504).
+
+    Bytecode kept twice (`render3d lib.rs` ~289-292, ~903-909; `draw.rs` ~504-510): skip unless the fix is small; record either way.
+13. Tasks 9-16 (filtering, final). Task 16's report adds the audit deliverable: one line per finding (fixed + commit, or skipped + reason), any audit claim found wrong with evidence, and the dead items deleted.
+
+Off-limits for the audit work, as in the prompt: crates/engine, crates/cli, and the GUI outside `model/viewport3d.rs`, `ui/viewport3d.rs`, `render/` and the app.rs lines A5 needs. The main track owns those findings. Global Constraints otherwise unchanged.
