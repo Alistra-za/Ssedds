@@ -1019,3 +1019,28 @@ fn outdated_schema_rebuild_waits_for_the_scan_lock() {
         .unwrap();
     assert_eq!(v, modscan::store::SCHEMA_VERSION);
 }
+
+/// Final review M2: when the corrupt-file rebuild cannot delete the database because another handle holds it, the
+/// error says to restart the app.
+#[cfg(windows)]
+#[test]
+fn a_rebuild_blocked_by_an_open_handle_says_to_restart() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("scan.db");
+    std::fs::write(&p, vec![b'x'; 4096]).unwrap();
+    // Share read+write but not delete: SQLite can open the file, `remove_file` cannot.
+    let _held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(&p)
+        .unwrap();
+    let e = Store::open(&p)
+        .err()
+        .expect("the rebuild cannot delete the file");
+    assert!(
+        e.to_string()
+            .contains("restart the app to rebuild the scan database"),
+        "{e}"
+    );
+}

@@ -841,6 +841,15 @@ impl ScanLock {
     }
 }
 
+/// The corrupt-file rebuild could not delete the database (on Windows another handle, such as this app's own open
+/// store, holds it): tell the user how to get past it.
+fn cannot_rebuild(e: &std::io::Error) -> ScanError {
+    ScanError::Io(std::io::Error::new(
+        e.kind(),
+        format!("cannot rebuild the corrupt scan database ({e}): restart the app to rebuild the scan database"),
+    ))
+}
+
 /// How long a writable open waits for a running scan before giving up with `ScanError::Busy`.
 const OPEN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -860,7 +869,9 @@ impl Store {
                 let lock = ScanLock::take(path.to_str(), OPEN_LOCK_WAIT)?;
                 for ext in ["", "-wal", "-shm"] {
                     match std::fs::remove_file(format!("{}{ext}", path.display())) {
-                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(cannot_rebuild(&e))
+                        }
                         _ => {}
                     }
                 }
