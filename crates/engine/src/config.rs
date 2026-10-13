@@ -50,6 +50,10 @@ pub enum Subtype {
     SkinAlbedo,
     SkinSk,
     SkinWet,
+    // Complex grass (design 2026-10-12): one 1:2 image, top = diffuse + alpha, bottom = normal + specular in alpha.
+    // A `//` comment on purpose: a `///` doc on one variant makes schemars emit `oneOf` instead of the flat `enum`,
+    // which rewrites every schema and drops the `rfaos` alias `subtype_schema` pushes into `enum`.
+    ComplexGrass,
 }
 
 /// The schema lists the deprecated id `rfaos` next to `skin_rfaos`, so an old file still validates.
@@ -454,7 +458,7 @@ impl Subtype {
         }
     }
 
-    pub const ALL: [Subtype; 28] = {
+    pub const ALL: [Subtype; 29] = {
         use Subtype::*;
         [
             Diffuse,
@@ -485,6 +489,7 @@ impl Subtype {
             SkinAlbedo,
             SkinSk,
             SkinWet,
+            ComplexGrass,
         ]
     };
 
@@ -495,9 +500,8 @@ impl Subtype {
             | PbrFuzz | SubsurfaceTint | BacklightTint | UiSky | SkinAlbedo => Category::Color,
             Normal | LandscapeNormal | PbrNormal | Msn | CoatNormal | SkinWet => Category::Normal,
             Envmask | Height | MsnSpecular | SkinSk => Category::Grayscale,
-            ComplexMaterial | Rmaos | SkinRfaos | Flow | GenericTwoChannel | GenericData => {
-                Category::MixedPacked
-            }
+            ComplexMaterial | Rmaos | SkinRfaos | Flow | GenericTwoChannel | GenericData
+            | ComplexGrass => Category::MixedPacked,
             HdrSky => Category::Hdr,
         }
     }
@@ -745,7 +749,10 @@ mod tests {
 
     #[test]
     fn subtypes_map_to_the_categories_of_section_4_1() {
-        assert_eq!(Subtype::ALL.len(), 28);
+        assert_eq!(Subtype::ALL.len(), 29);
+        assert_eq!(Subtype::ComplexGrass.id(), "complex_grass");
+        assert_eq!(Subtype::ComplexGrass.category(), Category::MixedPacked);
+        assert_eq!(Subtype::ALL.last(), Some(&Subtype::ComplexGrass));
         assert_eq!(Subtype::PbrEmissive.category(), Category::Color);
         assert_eq!(Subtype::Msn.category(), Category::Normal);
         assert_eq!(Subtype::Envmask.category(), Category::Grayscale);
@@ -800,7 +807,7 @@ mod tests {
         }
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 28);
+        assert_eq!(ids.len(), 29);
     }
 
     /// M6: coverage preservation only ever applies to alpha-tested policies; `on` cannot force it onto blended

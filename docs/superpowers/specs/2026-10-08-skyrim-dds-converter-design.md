@@ -671,6 +671,11 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `SET-COMPANION-OUTSIDE` | info | The missing companion (`_n` or roughness member) is on disk, not in the batch → no bake (DECISIONS R8) | Add it |
 | `SET-COMPANION-DDS` | warning | The missing companion (`_n` or roughness member) exists only as DDS → no bake (DECISIONS R8) | Opt in or supply source |
 | `SET-BAKE-RATIO` | warning | `_n`/roughness-member sizes are not powers of two with one aspect → bake off (DECISIONS R5) | Resize |
+| `GRASS-SHAPE` | error | A `complex_grass` source that is not one image of 1:2 (width:height), or whose halves cannot be split | Supply a 1:2 image |
+| `GRASS-TOP-OPAQUE` | warning | A `complex_grass` top half (diffuse + alpha) is fully opaque, so the grass has no cutout | Check the alpha |
+| `GRASS-NORMALS` | warning | A `complex_grass` bottom half (normal + specular) does not read as a normal map | Check the bottom half |
+| `GRASS-DETECT-SOURCE` | warning | A `complex_grass` source was detected only from its content, not from a name or setting | Confirm the sub-type |
+| `GRASS-VANILLA` | warning | A `complex_grass` texture matches a vanilla grass texture it would override | Check the load order |
 | `SUG-LOW-CONFIDENCE` | blocking | Sub-type or alpha meaning unconfirmed | Confirm |
 | `SUG-CONTRADICTION` | warning | Content contradicts suffix | Confirm or change |
 | `VAL-ALPHA-GUARANTEE` | error | Decoded alpha below guarantee, or ≠ 255 on an all-255 block with the flag on | Report bug; the shipped mechanism is chosen by the §11.2 gate |
@@ -682,6 +687,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `VAL-BC6H-PEAK` | warning | BC6H peak ratio < 0.8 [B2 §6] | Try NVTT Production |
 | `VAL-HEADER` | error | Written header fails §5.7, or the encoder input handed to Validate does not match the file | Report bug |
 | `VAL-MIP-ERROR` | warning | A mip's channel PSNR against the encoder input is below `validation.min_mip_psnr_db` (default 30 dB; §5.8); names the mip and its PSNR | Check the source, raise the effort or accept |
+| `VAL-GRASS-DETECT` | error | The `complex_grass` layout detected on a written file does not match the encoder input | Report bug |
 | `ENC-NVTT-MISSING` | blocking | NVTT chosen but not found | Install, set path, or built-in |
 | `ENC-NVTT-VERSION` (M5) | blocking | Untested NVTT version | Acknowledge |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
