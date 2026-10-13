@@ -23,9 +23,6 @@ impl Rgba32F {
     pub fn at_mut(&mut self, x: u32, y: u32) -> &mut [f32; 4] {
         &mut self.px[(y * self.width + x) as usize]
     }
-    pub fn est_bytes(&self) -> u64 {
-        self.px.len() as u64 * 16
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +43,5 @@ mod tests {
         *img.at_mut(2, 1) = [1.0, 0.5, 0.25, 1.0];
         assert_eq!(img.px[5], [1.0, 0.5, 0.25, 1.0]);
         assert_eq!(img.at(2, 1)[1], 0.5);
-        assert_eq!(img.est_bytes(), 3 * 2 * 16);
     }
 }
