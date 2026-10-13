@@ -48,7 +48,10 @@ fn f16_loader_reads_the_bench_format() {
 
 #[test]
 fn reads_bench_results_csv() {
-    let root = corpus::bench_root();
+    let Some(root) = corpus::corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
     let rows = corpus::read_results(&root.join("results/results.csv"), "bc7e_u5").unwrap();
     let r = corpus::find(&rows, "rgb_real", "Bricks104").expect("Bricks104 row");
     assert!((r.f("rgb_psnr").unwrap() - 47.81554222506591).abs() < 1e-12);
