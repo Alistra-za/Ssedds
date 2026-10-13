@@ -206,11 +206,17 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 fn status(ui: &mut egui::Ui, model: &mut AppModel) {
-    if model.status_line.is_empty() && model.banner.is_none() {
+    if model.status_line.is_empty() && model.banner.is_none() && model.encoding_note.is_none() {
         return;
     }
     egui::Panel::top("status").show(ui, |ui| {
-        ui.label(&model.status_line);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(&model.status_line);
+            // Task 9 (Z11): the last "encoding follows type" cleanup; every texture on hover.
+            if let Some((line, all)) = &model.encoding_note {
+                ui.weak(format!("· {line}")).on_hover_text(all);
+            }
+        });
         if let Some(b) = model.banner.clone() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(WARNING, format!("⚠ {b}"));

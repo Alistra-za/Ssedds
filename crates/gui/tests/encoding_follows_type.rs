@@ -1,0 +1,166 @@
+//! Task 9 (owner, 2026-10-13; DECISIONS Z11): when a texture's sub-type changes, its explicit format and tag that
+//! the new sub-type does not allow are cleared, so the new type's default applies; a note says so.
+mod support;
+use engine::config::{ColorTag, Format, Subtype, Target};
+use engine::policy::allowed_encodings;
+use engine::shader::Shader;
+use sdc_gui::model::bulk::MenuAction;
+use sdc_gui::model::sets::set_views;
+use sdc_gui::model::AppModel;
+use serde_json::json;
+use std::time::Duration;
+
+const KEY: &str = "plants/g.png";
+
+fn idle(m: &mut AppModel) {
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
+}
+
+fn file(m: &AppModel, f: &str) -> Option<serde_json::Value> {
+    m.project.as_ref().unwrap().file_value(KEY, f)
+}
+
+fn job_of(m: &AppModel) -> engine::policy::ResolvedJob {
+    m.item(KEY).and_then(|i| i.job.clone()).expect("job")
+}
+
+/// The owner's case: `g.png` with `g_rmaos.png` is a TruePBR set (its albedo `pbr_albedo`); under the complex_grass
+/// shader the albedo becomes complex grass, and `e` is written on it explicitly. Returns the model and the set id.
+fn grass_with(dir: &std::path::Path, e: Option<(Format, ColorTag)>) -> (AppModel, String) {
+    let t = dir.join("textures/plants");
+    std::fs::create_dir_all(&t).unwrap();
+    image::ImageBuffer::from_fn(32, 64, |_, y| {
+        image::Rgba([64u8, 128, 38, if y % 3 == 0 { 255 } else { 0 }])
+    })
+    .save(t.join("g.png"))
+    .unwrap();
+    image::ImageBuffer::from_fn(32, 32, |_, _| image::Rgb([100u8, 0, 255]))
+        .save(t.join("g_rmaos.png"))
+        .unwrap();
+    let mut m = support::opened(dir);
+    m.accept = engine::policy::AcceptSuggestions::High;
+    m.replan();
+    idle(&mut m);
+    assert_eq!(job_of(&m).profile.subtype, Subtype::PbrAlbedo);
+    let set = set_views(&m)
+        .into_iter()
+        .find(|v| v.members.iter().any(|k| k == KEY))
+        .expect("the set")
+        .id;
+    m.set_shader(&set, Some(Shader::ComplexGrass));
+    idle(&mut m);
+    assert_eq!(job_of(&m).profile.subtype, Subtype::ComplexGrass);
+    if let Some((f, t)) = e {
+        m.set_format(KEY, f, t);
+        idle(&mut m);
+    }
+    m.encoding_note = None;
+    (m, set)
+}
+
+const LINEAR: (Format, ColorTag) = (Format::Bc7, ColorTag::Unorm);
+
+#[test]
+fn switching_grass_to_pbr_resets_a_linear_albedo_and_says_so() {
+    assert!(allowed_encodings(Subtype::ComplexGrass, Target::Cs).contains(&LINEAR));
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, set) = grass_with(d.path(), Some(LINEAR));
+    assert_eq!(file(&m, "format"), Some(json!("bc7")));
+    m.set_shader(&set, Some(Shader::Pbr));
+    idle(&mut m);
+    let p = job_of(&m).profile;
+    assert_ne!(p.subtype, Subtype::ComplexGrass);
+    assert!(
+        !allowed_encodings(p.subtype, m.target).contains(&LINEAR),
+        "{:?} {:?}",
+        p.subtype,
+        m.target
+    );
+    assert_eq!(file(&m, "format"), None, "the explicit format is cleared");
+    assert_eq!(file(&m, "color.tag"), None, "the explicit tag is cleared");
+    assert_eq!((p.format, p.color.tag), (Format::Bc7, ColorTag::Srgb));
+    let (line, _) = m.encoding_note.clone().expect("a note");
+    assert!(
+        line.starts_with("g.png: complex grass → pbr albedo"),
+        "{line}"
+    );
+    assert!(line.contains("BC7 · sRGB"), "{line}");
+}
+
+#[test]
+fn an_explicit_encoding_the_new_type_allows_is_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let srgb = (Format::Bc7, ColorTag::Srgb);
+    let (mut m, set) = grass_with(d.path(), Some(srgb));
+    m.set_shader(&set, Some(Shader::Pbr));
+    idle(&mut m);
+    assert!(allowed_encodings(job_of(&m).profile.subtype, m.target).contains(&srgb));
+    assert_eq!(file(&m, "format"), Some(json!("bc7")));
+    assert_eq!(file(&m, "color.tag"), Some(json!("srgb")));
+    assert_eq!(m.encoding_note, None);
+}
+
+#[test]
+fn a_texture_in_a_locked_slot_is_untouched_and_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, set) = grass_with(d.path(), Some(LINEAR));
+    assert_eq!(
+        m.run_menu(MenuAction::SlotLock {
+            set: set.clone(),
+            n: 1,
+            on: true
+        }),
+        None
+    );
+    idle(&mut m);
+    m.set_shader(&set, Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(file(&m, "format"), Some(json!("bc7")));
+    assert_eq!(file(&m, "color.tag"), Some(json!("unorm")));
+    let (line, _) = m.encoding_note.clone().expect("a note");
+    assert!(line.contains("slot locked"), "{line}");
+}
+
+#[test]
+fn one_undo_restores_the_type_and_the_cleared_encoding() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, set) = grass_with(d.path(), Some(LINEAR));
+    let steps = m.history.undo.len();
+    m.set_shader(&set, Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(file(&m, "format"), None);
+    assert_eq!(
+        m.history.undo.len(),
+        steps + 1,
+        "the cleanup is part of the shader step"
+    );
+    m.undo();
+    idle(&mut m);
+    assert_eq!(job_of(&m).profile.subtype, Subtype::ComplexGrass);
+    assert_eq!(file(&m, "format"), Some(json!("bc7")));
+    assert_eq!(file(&m, "color.tag"), Some(json!("unorm")));
+    assert!(m.can_redo(), "the undo did not start a new step");
+    m.redo();
+    idle(&mut m);
+    assert_eq!(file(&m, "format"), None);
+}
+
+#[test]
+fn the_cleanup_costs_at_most_one_extra_plan() {
+    let flip = |e| {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, set) = grass_with(d.path(), e);
+        let g = m.generation();
+        m.set_shader(&set, Some(Shader::Pbr));
+        idle(&mut m);
+        m.generation() - g
+    };
+    let (plain, cleaned) = (flip(None), flip(Some(LINEAR)));
+    assert!(
+        cleaned <= plain + 1,
+        "{plain} plans without, {cleaned} with"
+    );
+}

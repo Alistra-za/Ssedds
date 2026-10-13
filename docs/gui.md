@@ -85,6 +85,8 @@ Every change of this kind is one undo step, and the folder is planned once. A re
 - *From another set*: links the slot to a map of another set. The link writes that map's output path when it has one (a TruePBR set's packed output), otherwise its `textures\...` game path. A map with neither is greyed out, so a link never points at nothing. A link needs the same slot kind, so the shared slots (glow / skin_sk, coat / fuzz) never offer the other kind.
 - *Lock* / *Unlock*: a locked slot (shown with a lock icon) keeps its fill. It refuses a drag in or out and the slot commands. Bulk edits skip it with the reason *slot locked*, or *slot locked in <set>* when the fill is borrowed from another set. Automatic re-typing leaves it alone; you can still change the texture's sub-type by hand. The lock is saved in `sdc-project.toml` and is never written to the PGPatcher JSON.
 
+**Encoding follows type.** When a texture's sub-type changes (a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set on it that the new type does not allow are reset, so the new type's default applies; a note after the status line says which (hover it when there are several). Settings that are still valid are kept, and a texture in a locked slot is left alone and named in the note. One undo restores both the change and the reset.
+
 ## The preview
 
 Double-click a tile (or a set member) to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again.
