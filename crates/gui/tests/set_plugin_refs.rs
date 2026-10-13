@@ -55,6 +55,7 @@ fn used_by_plugins_lists_txsts_and_alternate_texture_users() {
                 },
             }],
             truncated: false,
+            inert: Default::default(),
         }),
     ));
     model.select_set(&v.key);
@@ -247,4 +248,57 @@ fn an_error_result_is_not_cached() {
     seeded_db(d.path());
     let r = refs.get(Some(&db), &key).as_ref().unwrap();
     assert_eq!(r.txsts.len(), 1);
+}
+
+/// Filtering spec §3 / ruling R12: an inert alternate-texture user is hidden until "Show inert (N)", then dimmed with
+/// its reason.
+#[test]
+fn used_by_plugins_hides_inert_records_until_asked() {
+    use modscan::plugin_store::{AltUse, ShapeSwap, TxstUse};
+    use sdc_gui::model::plugin_refs::{set_key, SetPluginUse};
+    use sdc_gui::model::sets::set_views;
+    let d = tempfile::tempdir().unwrap();
+    let mut model = pbr_opened(d.path());
+    let v = set_views(&model)
+        .into_iter()
+        .find(|v| set_key(v).is_some())
+        .unwrap();
+    model.plugin_refs.cached = Some((
+        set_key(&v).unwrap(),
+        Ok(SetPluginUse {
+            txsts: vec![TxstUse {
+                formid: 0x0001_2345,
+                edid: Some("RockTXST".into()),
+                plugin: "Skyrim.esm".into(),
+                slot: 0,
+                path: "textures/landscape/rock01.dds".into(),
+                n_overrides: 1,
+            }],
+            alts: vec![AltUse {
+                formid: 0x0000_0DEF,
+                edid: Some("RockStat".into()),
+                sig: "STAT".into(),
+                plugin: "Skyrim.esm".into(),
+                model_slot: 0,
+                swap: ShapeSwap {
+                    shape_name: "Shape0".into(),
+                    txst_formid: 0x0001_2345,
+                    txst_edid: Some("RockTXST".into()),
+                    index: 0,
+                },
+            }],
+            truncated: false,
+            inert: [(0x0000_0DEFu32, "not placed")].into_iter().collect(),
+        }),
+    ));
+    model.select_set(&v.key);
+    let mut h = tall(model);
+    h.run();
+    h.get_by_label("Used by plugins").click();
+    h.run();
+    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1×");
+    assert!(h.query_by_label_contains("RockStat").is_none());
+    h.get_by_label("Show inert (1)").click();
+    h.run();
+    h.get_by_label("RockStat [00000DEF] STAT — Skyrim.esm · Shape0 → RockTXST · not placed");
 }
