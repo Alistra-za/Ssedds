@@ -486,18 +486,30 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), as
-/// (SHA-256, bake identity). Empty for an ordinary file that does not bake; `None` when a source cannot be hashed
-/// (then the output is not up to date).
-fn current_sources(job: &ResolvedJob) -> Option<Vec<(String, Option<String>)>> {
+/// (SHA-256, bake identity, RNM role) of one recorded source.
+type SourceKey = (String, Option<String>, Option<String>);
+
+/// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), then
+/// the RNM inputs (M6 Track F2), as `SourceKey`s. Empty for an ordinary file that does not bake; `None` when a
+/// source cannot be hashed (then the output is not up to date).
+fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
     let mut v = vec![];
     if let Some(pk) = &job.pack {
         for s in &pk.sources {
-            v.push((sha256_file(&s.path).ok()?, None));
+            v.push((sha256_file(&s.path).ok()?, None, None));
         }
     }
     if let Some(b) = &job.bake {
-        v.push((sha256_file(&b.normal).ok()?, Some(b.identity_sha256())));
+        v.push((
+            sha256_file(&b.normal).ok()?,
+            Some(b.identity_sha256()),
+            None,
+        ));
+    }
+    if let Some(r) = job.active_rnm() {
+        for (f, role) in r.inputs(&job.profile.rnm) {
+            v.push((sha256_file(&f.path).ok()?, None, Some(role)));
+        }
     }
     Some(v)
 }
@@ -510,7 +522,7 @@ fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
         Some(pk) => e
             .sources
             .iter()
-            .filter(|r| r.bake.is_none())
+            .filter(|r| r.bake.is_none() && r.rnm.is_none())
             .map(|r| (r.role, r.invert))
             .eq(pk
                 .sources
@@ -563,8 +575,10 @@ fn is_up_to_date(
     passed
         && e.engine_version == ENGINE_VERSION
         && current_sources(job).is_some_and(|now| {
-            now.into_iter()
-                .eq(e.sources.iter().map(|r| (r.sha256.clone(), r.bake.clone())))
+            now.into_iter().eq(e
+                .sources
+                .iter()
+                .map(|r| (r.sha256.clone(), r.bake.clone(), r.rnm.clone())))
         })
         && pack_roles_match(e, job)
         && profile_sha256(&job.profile).is_ok_and(|h| h == e.profile_sha256)
@@ -2310,6 +2324,7 @@ mod tests {
                         role: None,
                         invert: false,
                         bake: None,
+                        rnm: None,
                     }]
                 }),
             ),

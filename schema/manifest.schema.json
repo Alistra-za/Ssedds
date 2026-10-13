@@ -816,6 +816,13 @@
         "path": {
           "type": "string"
         },
+        "rnm": {
+          "description": "M6 Track F2: an RNM input of a base normal and its role (`detail`, `detail.mask`, `bent.ao`). Absent on\nevery other source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "role": {
           "anyOf": [
             {
