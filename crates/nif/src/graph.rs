@@ -89,10 +89,12 @@ fn children(h: &Header, b: &[u8], block: usize) -> Result<(Mat3x4, Vec<i32>), Ni
     Ok((av.transform, kids))
 }
 
-/// True when `target` is `from` or one of its ancestors. `parent` is acyclic (every insert is checked), so the walk ends.
+/// True when `target` is `from` or one of its first `MAX_DEPTH + 2` ancestors. `parent` is acyclic (every insert is
+/// checked), so the walk ends; the cap keeps a long chain linear. A cycle closing only beyond the cap is not caught,
+/// which is harmless: `world` and `depth` both stop at `MAX_DEPTH`.
 fn reaches(parent: &HashMap<u32, u32>, from: u32, target: u32) -> bool {
     let mut cur = from;
-    loop {
+    for _ in 0..=MAX_DEPTH + 2 {
         if cur == target {
             return true;
         }
@@ -101,6 +103,7 @@ fn reaches(parent: &HashMap<u32, u32>, from: u32, target: u32) -> bool {
             None => return false,
         }
     }
+    false
 }
 
 fn depth(parent: &HashMap<u32, u32>, mut b: u32) -> usize {
@@ -226,6 +229,20 @@ mod tests {
             root,
             "block 1: only its parent (the root node) is composed"
         );
+    }
+
+    /// A 50k-node chain: the uncapped walk costs N^2/2 lookups (many seconds), the capped one N * 258.
+    #[test]
+    fn cycle_check_is_linear_on_a_long_chain() {
+        let mut parent = HashMap::new();
+        let t = std::time::Instant::now();
+        for i in 1..50_000u32 {
+            assert!(!reaches(&parent, i - 1, i));
+            parent.insert(i, i - 1);
+        }
+        let e = t.elapsed();
+        eprintln!("chain check took {e:?}");
+        assert!(e < std::time::Duration::from_secs(2), "{e:?}");
     }
 
     #[test]
