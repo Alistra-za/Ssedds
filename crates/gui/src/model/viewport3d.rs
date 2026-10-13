@@ -1830,7 +1830,7 @@ fn render_loop(
                    tex: &TexState|
      -> Result<(), String> {
         let t0 = std::time::Instant::now();
-        r.rebuild_device_on(Gpu::new(None)?)?;
+        r.rebuild_device_on(Gpu::new()?)?;
         send(V3Reply::Ready {
             adapter: r.gpu().adapter.clone(),
             warp: r.gpu().warp,

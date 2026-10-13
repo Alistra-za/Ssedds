@@ -265,7 +265,7 @@ fn diag_arch_head_on_installed_cs() {
     let cache = tempfile::tempdir().unwrap();
     let fp = render3d::locate::fingerprint(&cs.join("Shaders"), None).unwrap();
     let mut r = Renderer::with_gpu(
-        render3d::device::Gpu::new(None).unwrap(),
+        render3d::device::Gpu::new().unwrap(),
         fp,
         cache.path().to_path_buf(),
     )
@@ -406,7 +406,7 @@ fn diag_arch_scalp_on_installed_cs() {
         let cache = tempfile::tempdir().unwrap();
         let fp = render3d::locate::fingerprint(&cs.join("Shaders"), None).unwrap();
         let mut r = Renderer::with_gpu(
-            render3d::device::Gpu::new(None).unwrap(),
+            render3d::device::Gpu::new().unwrap(),
             fp,
             cache.path().to_path_buf(),
         )
