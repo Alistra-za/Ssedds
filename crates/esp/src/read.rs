@@ -6,6 +6,9 @@ use std::io::Read;
 /// Record and group headers are both 24 bytes.
 const HEADER: usize = 24;
 
+/// Largest decompressed record accepted (the size field comes from the file).
+const MAX_INFLATED: usize = 64 << 20;
+
 pub(crate) fn u16_at(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
 }
@@ -30,6 +33,7 @@ pub(crate) fn each_sub<'a>(
 ) -> Result<(), usize> {
     let mut p = 0;
     let mut big: Option<usize> = None;
+    let mut xxxx_at = 0;
     while p + 6 <= data.len() {
         let sig = sig_at(data, p);
         let n = big.take().unwrap_or(u16_at(data, p + 4) as usize);
@@ -42,10 +46,14 @@ pub(crate) fn each_sub<'a>(
                 return Err(p);
             }
             big = Some(u32_at(data, start) as usize);
+            xxxx_at = p;
         } else {
             f(sig, &data[start..start + n]);
         }
         p = start + n;
+    }
+    if big.is_some() {
+        return Err(xxxx_at); // XXXX with no subrecord after it
     }
     if p != data.len() {
         return Err(p);
@@ -207,14 +215,20 @@ fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
         return Err("compressed record shorter than its size field".into());
     }
     let want = u32_at(raw, 0) as usize;
-    // Cap the reservation: the size field comes from the file.
-    let mut out = Vec::with_capacity(want.min(64 << 20));
+    if want > MAX_INFLATED {
+        return Err(format!(
+            "bad zlib stream: declared size {want} is over the {MAX_INFLATED} cap"
+        ));
+    }
+    let mut out = Vec::with_capacity(want);
+    // take(want + 1): a stream that inflates past its declared size stops there and is an error, not an OOM.
     flate2::read::ZlibDecoder::new(&raw[4..])
+        .take(want as u64 + 1)
         .read_to_end(&mut out)
         .map_err(|e| format!("bad zlib stream: {e}"))?;
     if out.len() != want {
         return Err(format!(
-            "bad zlib stream: {} bytes, header says {want}",
+            "bad zlib stream: inflates to {} bytes or more, header says {want}",
             out.len()
         ));
     }

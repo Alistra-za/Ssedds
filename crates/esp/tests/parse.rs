@@ -223,3 +223,66 @@ fn a_subrecord_running_past_its_record_keeps_what_came_before() {
         f.errors
     );
 }
+
+#[test]
+fn a_stream_inflating_past_its_declared_size_is_an_error_and_the_next_record_is_read() {
+    let mut liar = compressed(&edid(&"b".repeat(5000)));
+    liar[0..4].copy_from_slice(&10u32.to_le_bytes());
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[top(
+                b"STAT",
+                &[
+                    rec_raw(b"STAT", 0x0100_0801, FLAG_COMPRESSED, &liar),
+                    rec(b"STAT", 0x0100_0802, &[edid("After")]),
+                ],
+            )],
+        ),
+    );
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert!(
+        f.errors[0].contains("STAT 01000801: bad zlib stream"),
+        "{:?}",
+        f.errors
+    );
+    assert_eq!(f.records.len(), 1);
+    assert_eq!(f.records[0].edid.as_deref(), Some("After"));
+}
+
+#[test]
+fn a_declared_size_over_the_cap_is_an_error() {
+    let mut huge = compressed(&edid("x"));
+    huge[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[top(b"STAT", &[rec_raw(b"STAT", 1, FLAG_COMPRESSED, &huge)])],
+        ),
+    );
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert!(f.errors[0].contains("over the"), "{:?}", f.errors);
+}
+
+#[test]
+fn a_trailing_xxxx_is_an_incomplete_subrecord_and_keeps_earlier_facts() {
+    let mut body = edid("Kept");
+    body.extend_from_slice(b"XXXX");
+    body.extend_from_slice(&4u16.to_le_bytes());
+    body.extend_from_slice(&9u32.to_le_bytes());
+    let f = parse(
+        "x.esp",
+        &plugin(0, &[], &[top(b"STAT", &[rec_raw(b"STAT", 7, 0, &body)])]),
+    );
+    assert_eq!(f.records[0].edid.as_deref(), Some("Kept"));
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert!(
+        f.errors[0].contains("subrecord at +0xb runs past the record"),
+        "{:?}",
+        f.errors
+    );
+}
