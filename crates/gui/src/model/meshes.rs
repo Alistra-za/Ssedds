@@ -426,6 +426,8 @@ pub struct MeshesModel {
     pub file_refs: Option<FileRefs>,
     /// That section's tab (false: Missing) and filter.
     pub refs_unused: bool,
+    /// The "Plugin file references" window is shown.
+    pub refs_open: bool,
     pub refs_filter: String,
     /// The lines for (tab, filter), kept until either changes.
     refs_cache: Option<((bool, String), Vec<String>)>,
@@ -503,6 +505,7 @@ impl MeshesModel {
             plugin_uses: vec![],
             file_refs: None,
             refs_unused: false,
+            refs_open: false,
             refs_filter: String::new(),
             refs_cache: None,
             error: None,
