@@ -224,3 +224,53 @@ fn an_old_linear_lighting_build_compiles_without_the_enable_ll_define() {
     );
     assert_eq!(ll_defined(old.path()), [false, false], "old LL: never a -D");
 }
+
+/// P1-D fix round 1: switching shaders between LL generations on one renderer re-derives the display encode.
+#[test]
+fn set_shaders_between_ll_generations_refreshes_encode_and_defines() {
+    let cache = tempfile::tempdir().unwrap();
+    let old = tempfile::tempdir().unwrap();
+    let src = std::fs::read_to_string(standin_root().join("Lighting.hlsl")).unwrap();
+    std::fs::write(
+        old.path().join("Lighting.hlsl"),
+        src + "\nstatic const uint isDirLightLinear = 0; // P1-D old-LL marker\n",
+    )
+    .unwrap();
+    let fp = |root: &Path| render3d::locate::fingerprint(root, None).unwrap();
+    let mut r = Renderer::with_gpu(
+        Gpu::new_warp().unwrap(),
+        fp(&standin_root()),
+        cache.path().to_path_buf(),
+    )
+    .unwrap();
+    r.set_features(FLAT.iter().map(|s| s.to_string()).collect());
+    r.set_settings(settings(false, 1.0));
+    r.set_settings(settings(true, 1.0));
+    let defined = |r: &mut Renderer| -> Vec<bool> {
+        let rep = r.load_parsed(&parse(&fixture("TestNifFile_Furniture_Col_SE.nif")), &none);
+        assert!(
+            rep.errors.is_empty() && rep.compile_errors.is_empty(),
+            "{rep:?}"
+        );
+        let ids: Vec<_> = r.shapes().into_iter().map(|s| s.id).collect();
+        ids.into_iter()
+            .map(|id| {
+                r.draw_diag(id)
+                    .unwrap()
+                    .0
+                    .iter()
+                    .any(|(n, _)| n == "ENABLE_LL")
+            })
+            .collect()
+    };
+    assert!(r.encode_srgb(), "new LL, setting on");
+    assert_eq!(defined(&mut r), [true, true]);
+    // Old LL with no LL key in the settings: the flag reads off, so no display encode.
+    r.set_settings(CsSettings::default());
+    r.set_shaders(fp(old.path()));
+    assert!(!r.encode_srgb(), "old LL, no key: encode follows the flag");
+    assert_eq!(defined(&mut r), [false, false]);
+    r.set_shaders(fp(&standin_root()));
+    assert!(r.encode_srgb(), "back on new LL: default on");
+    assert_eq!(defined(&mut r), [true, true]);
+}

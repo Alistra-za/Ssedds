@@ -545,10 +545,17 @@ impl Renderer {
         self.shaders = shaders;
         self.programs.clear();
         self.old_ll = std::cell::OnceCell::new();
+        // The LL generation may have changed, so the display encode (follows linear_lighting) must be re-derived.
+        self.encode_srgb = self.linear_lighting();
     }
 
     pub fn shaders(&self) -> &Fingerprint {
         &self.shaders
+    }
+
+    #[doc(hidden)]
+    pub fn encode_srgb(&self) -> bool {
+        self.encode_srgb
     }
 
     /// sRGB-encode the frame on readback (off by default). Turn it on for display when the features include
