@@ -1,8 +1,11 @@
 //! The Meshes view (plan A Task 12): per-mod NIF list with PGPatcher-aware badges and texture slots.
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
+use modscan::plugin_store::{MeshUse, MissingRef, ShapeSwap};
+use modscan::plugins::PluginStats;
+use modscan::scan::Report;
 use modscan::store::{ModRow, NifRow, ShapeView, TexResolution};
-use sdc_gui::model::meshes::{Banner, MeshesDialog, MeshesModel, NifFilter, ScanTarget};
+use sdc_gui::model::meshes::{Banner, FileRefs, MeshesDialog, MeshesModel, NifFilter, ScanTarget};
 use sdc_gui::settings::MeshesSettings;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -468,6 +471,7 @@ fn a_database_error_is_shown_not_swallowed() {
     let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
     m.activate_with(None);
     assert!(m.error.is_some());
+    assert!(m.plugin_uses.is_empty() && m.file_refs.is_none());
     let mut h = harness(m);
     h.run();
     h.get_by_label_contains("Scan database");
@@ -933,4 +937,170 @@ fn an_unchanged_search_is_not_asked_again_and_a_cut_list_says_so() {
     let mut h = harness(m);
     h.run();
     h.get_by_label("Showing the first 1 matches — type more to narrow it");
+}
+
+fn stats(
+    n: usize,
+    cached: usize,
+    records: usize,
+    ms: u64,
+    problems: &[(&str, &str)],
+) -> PluginStats {
+    PluginStats {
+        n,
+        cached,
+        records,
+        ms,
+        problems: problems
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect(),
+    }
+}
+
+/// esp spec §4.3: one plugin line, then parse errors and missing masters by plugin.
+#[test]
+fn scan_details_show_the_plugin_line_and_problems() {
+    let mut m = model_with(None);
+    m.report = Some(Report {
+        plugins: Some(stats(
+            3,
+            2,
+            120,
+            45,
+            &[("M.esp", "missing master Missing.esm")],
+        )),
+        ..Default::default()
+    });
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Scan details").click();
+    h.run();
+    h.get_by_label("Plugins: 3 (2 cached), 120 records, 45 ms");
+    h.get_by_label("Plugin M.esp: missing master Missing.esm");
+}
+
+#[test]
+fn scan_details_show_an_empty_plugin_pass() {
+    let mut m = model_with(None);
+    m.report = Some(Report {
+        plugins: Some(PluginStats::default()),
+        ..Default::default()
+    });
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Scan details").click();
+    h.run();
+    h.get_by_label("Plugins: 0 (0 cached), 0 records, 0 ms");
+}
+
+/// esp spec §4.2: records that use the mesh, and per re-textured shape `shape → TXST EDID`. No PGPatcher warning.
+#[test]
+fn plugin_overrides_list_records_and_shape_swaps() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    m.plugin_uses = vec![MeshUse {
+        formid: 0x0001_2345,
+        edid: Some("RockStat".into()),
+        sig: "STAT".into(),
+        plugin: "Skyrim.esm".into(),
+        model_slot: 0,
+        n_overrides: 2,
+        swaps: vec![ShapeSwap {
+            shape_name: "Shape0".into(),
+            txst_formid: 0xABC,
+            txst_edid: Some("DirtTXST".into()),
+            index: 0,
+        }],
+    }];
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (1)").click();
+    h.run();
+    h.get_by_label("RockStat [00012345] STAT — Skyrim.esm · overridden 2×");
+    h.get_by_label("Shape0 → DirtTXST [00000ABC]");
+}
+
+#[test]
+fn plugin_overrides_say_when_no_record_uses_the_mesh() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (0)").click();
+    h.run();
+    h.get_by_label("No plugin record of the latest scan uses this mesh.");
+}
+
+/// esp spec §4.4: counts, filter, copy; no actions.
+#[test]
+fn plugin_file_references_list_missing_and_unused_with_a_filter() {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs {
+        missing: vec![MissingRef {
+            path: "textures/missing/nothere.dds".into(),
+            n_records: 6,
+            records: vec!["GhostTXST [00000AB0] TXST — Skyrim.esm".into()],
+        }],
+        unused: vec![
+            "textures/unused/lonely.dds".into(),
+            "textures/other/x.dds".into(),
+        ],
+    });
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin file references").click();
+    h.run();
+    h.get_by_label(
+        "textures/missing/nothere.dds ← GhostTXST [00000AB0] TXST — Skyrim.esm; … 5 more",
+    );
+    h.get_by_label("Copy");
+    h.get_by_label("Unused (2)").click();
+    h.run();
+    h.get_by_label("textures/unused/lonely.dds");
+    h.state_mut().refs_filter = "LONELY".into();
+    h.run();
+    assert!(h.query_by_label("textures/other/x.dds").is_none());
+    assert!(
+        h.query_by_label_contains("Delete").is_none()
+            && h.query_by_label_contains("Move").is_none()
+    );
+}
+
+#[test]
+fn plugin_file_references_when_nothing_is_listed() {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs::default());
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin file references").click();
+    h.run();
+    h.get_by_label("Missing (0)");
+    h.get_by_label("Nothing listed.");
+}
+
+/// Ruling R6: the timing log gets one `plugins` line per finished scan.
+#[test]
+fn a_finished_scan_logs_the_plugin_timing() {
+    use sdc_gui::model::meshes::log_plugins;
+    let r = Report {
+        plugins: Some(stats(3, 2, 120, 45, &[])),
+        ..Default::default()
+    };
+    let ((), ev) = render3d::perf_log::capture(|| log_plugins(&r));
+    assert_eq!(ev.len(), 1, "{ev:?}");
+    assert_eq!(ev[0]["event"], "plugins");
+    assert_eq!(
+        (
+            ev[0]["n"].as_u64(),
+            ev[0]["cached"].as_u64(),
+            ev[0]["records"].as_u64(),
+            ev[0]["ms"].as_u64()
+        ),
+        (Some(3), Some(2), Some(120), Some(45))
+    );
+    let ((), none) = render3d::perf_log::capture(|| log_plugins(&Report::default()));
+    assert!(none.is_empty());
 }
