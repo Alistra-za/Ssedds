@@ -19,6 +19,10 @@ use vfs::bsa::Bsa;
 
 const CHUNK: usize = 512;
 
+/// Note of a run cancelled during the plugin pass (ruling R13): the NIF results are complete.
+pub const PLUGINS_CANCELLED: &str =
+    "Plugin scan cancelled: plugin results are incomplete until the next scan.";
+
 #[derive(Debug, Clone)]
 pub enum Source {
     Mo2(Instance),
@@ -56,8 +60,10 @@ pub struct Report {
     pub missing_mods: Vec<String>,
     /// Informational notes (e.g. no INI archive list found).
     pub notes: Vec<String>,
-    /// Wall time per phase in milliseconds, in run order: origins, walk, parse, write, resolve, textures.
+    /// Wall time per phase in milliseconds, in run order: origins, walk, parse, write, resolve, textures, plugins.
     pub phase_ms: Vec<(&'static str, u64)>,
+    /// The plugin pass (esp spec §2.2): `Some` after an MO2 run whose plugin pass finished.
+    pub plugins: Option<crate::plugins::PluginStats>,
 }
 
 /// Elapsed milliseconds since `t`, and restarts `t`.
@@ -188,6 +194,8 @@ pub fn run_with(
             vec![],
         ),
     };
+    // Plugins are not NIF-derived output and the load order must not shrink with the PGPatcher mods (ruling F-6).
+    let plugin_origins = loose.clone();
     if skip_derived {
         // BSA ranks and separator priorities above were computed with these mods present, as MO2 sees them.
         loose.retain(|o| o.kind != OriginKind::Mod || pgp::signature(&o.root) == Signature::None);
@@ -571,6 +579,21 @@ pub fn run_with(
         done: 1,
         total: 1,
     });
+
+    // 8. Plugins (esp spec §2.2), after the NIF/texture pass, same cancel and progress. A Folder has no load order.
+    match src {
+        Source::Mo2(inst) => {
+            match crate::plugins::scan_plugins(inst, &plugin_origins, store, cancel, progress) {
+                Ok(p) => {
+                    report.phase_ms.push(("plugins", p.ms));
+                    report.plugins = Some(p);
+                }
+                Err(ScanError::Cancelled) => report.notes.push(PLUGINS_CANCELLED.into()),
+                Err(e) => return Err(e),
+            }
+        }
+        Source::Folder(_) => store.unload_plugins()?,
+    }
     Ok(report)
 }
 

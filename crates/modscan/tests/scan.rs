@@ -517,7 +517,7 @@ fn report_has_phase_timings() {
     let names: Vec<&str> = r.phase_ms.iter().map(|p| p.0).collect();
     assert_eq!(
         names,
-        ["origins", "walk", "parse", "write", "resolve", "textures"]
+        ["origins", "walk", "parse", "write", "resolve", "textures", "plugins"]
     );
     // the fixture profile has no INI and the game folder no Skyrim_Default.ini: a note, not a problem
     assert_eq!(r.notes.len(), 1, "{:?}", r.notes);

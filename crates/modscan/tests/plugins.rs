@@ -10,6 +10,7 @@ use std::path::Path;
 mod b;
 use b::{alt, edid, form, plugin, rec, sub, top, zstr};
 use modscan::plugins::{scan_plugins, PluginStats};
+use modscan::scan::{run, run_with, Source, PLUGINS_CANCELLED};
 use modscan::store::Store;
 use modscan::ScanError;
 use std::sync::atomic::AtomicBool;
@@ -574,4 +575,168 @@ fn cancel_set_during_progress_stops_before_resolution() {
         "the old order is untouched"
     );
     assert_eq!(winner(&s, TXST_DIRT), ("A.esp".to_string(), 1));
+}
+
+fn full_run(store: &mut Store, src: Source) -> modscan::scan::Report {
+    run(&src, store, &AtomicBool::new(false), &|_| {}, &|| vec![]).unwrap()
+}
+
+/// Spec §2.2: the plugin pass runs in the scan worker after the NIF/texture pass, MO2 sources only.
+#[test]
+fn the_scan_runs_the_plugin_pass_for_mo2_only() {
+    let d = load_order(ORDER);
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let r = full_run(
+        &mut store,
+        Source::Mo2(Instance::load(d.path(), None).unwrap()),
+    );
+    let p = r.plugins.expect("plugin stats");
+    assert_eq!((p.n, p.cached, p.records), (5, 0, 7));
+    assert_eq!(r.phase_ms.last().map(|x| x.0), Some("plugins"));
+    let other = tempfile::tempdir().unwrap();
+    fs::create_dir_all(other.path().join("Loose")).unwrap();
+    let r = full_run(&mut store, Source::Folder(other.path().join("Loose")));
+    assert!(r.plugins.is_none());
+    assert!(r.phase_ms.iter().all(|x| x.0 != "plugins"));
+    assert_eq!(
+        one_i64(&store, "SELECT count(*) FROM rec_winner", []),
+        0,
+        "no load order after a Folder scan"
+    );
+}
+
+/// Ruling F-6: "Scan without PGPatcher output" drops PGPatcher mods from the NIF pass only; plugins stay in the order.
+#[test]
+fn skip_derived_keeps_plugins_of_pgpatcher_mods() {
+    let d = load_order(ORDER);
+    fs::create_dir_all(d.path().join("mods/B/meshes/_pgpatcher_dups")).unwrap();
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let src = Source::Mo2(Instance::load(d.path(), None).unwrap());
+    let r = run_with(
+        &src,
+        &mut store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec![],
+        true,
+    )
+    .unwrap();
+    let p = r.plugins.expect("plugin stats");
+    assert_eq!(p.n, 5, "{:?}", p.problems);
+    assert!(
+        !p.problems.iter().any(|(n, _)| n == "z.esl" || n == "f.esp"),
+        "{:?}",
+        p.problems
+    );
+    assert_eq!(formid(&store, "ZStat"), 0xFE00_1803);
+}
+
+/// Ruling R13/F-5: a cancel during the plugin pass ends the run Ok with a note and no plugin stats.
+#[test]
+fn cancel_during_the_plugin_pass_is_a_noted_ok() {
+    let d = load_order(ORDER);
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let src = Source::Mo2(Instance::load(d.path(), None).unwrap());
+    let cancel = AtomicBool::new(false);
+    let r = run(
+        &src,
+        &mut store,
+        &cancel,
+        &|p| {
+            if p.phase == "plugins" {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed)
+            }
+        },
+        &|| vec![],
+    )
+    .unwrap();
+    assert!(
+        r.notes.iter().any(|n| n == PLUGINS_CANCELLED),
+        "{:?}",
+        r.notes
+    );
+    assert!(r.plugins.is_none());
+    assert!(r.phase_ms.iter().all(|x| x.0 != "plugins"));
+}
+
+/// The owner's full load order (spec §1, §6). Read-only; the store is a temp file.
+/// `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p modscan --release --test plugins owner_load_order -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn owner_load_order() {
+    let root = std::path::PathBuf::from(
+        std::env::var("SDC_ACHERUS").expect("set SDC_ACHERUS to the MO2 instance root"),
+    );
+    let db = tempfile::tempdir().unwrap();
+    let inst = Instance::load(&root, None).unwrap();
+    let (loose, _) = loose_origins(&inst).unwrap();
+    let mut store = Store::open(&db.path().join("scan.db")).unwrap();
+    let go = |store: &mut Store| {
+        let t = std::time::Instant::now();
+        let s = scan_plugins(&inst, &loose, store, &AtomicBool::new(false), &|_| {}).unwrap();
+        (s, t.elapsed())
+    };
+    let (cold, cold_t) = go(&mut store);
+    let (warm, warm_t) = go(&mut store);
+    println!(
+        "cold: n={} records={} ms={} ({:.2} s); warm: cached={}/{} ({:.2} s)",
+        cold.n,
+        cold.records,
+        cold.ms,
+        cold_t.as_secs_f64(),
+        warm.cached,
+        warm.n,
+        warm_t.as_secs_f64()
+    );
+    for p in cold.problems.iter().take(40) {
+        println!("problem: {p:?}");
+    }
+    let (edid, id, slots): (String, i64, i64) = store
+        .conn()
+        .query_row(
+            "SELECT r.edid, r.formid, count(s.slot) FROM rec r JOIN plugin p ON p.id = r.plugin_id
+             JOIN txst_slot s ON s.plugin_id = r.plugin_id AND s.local = r.local
+             WHERE p.name = 'Skyrim.esm' AND r.sig = 'TXST' AND r.edid IS NOT NULL GROUP BY r.plugin_id, r.local LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    println!("Skyrim.esm TXST: {edid} [{id:08X}], {slots} slot paths");
+    assert_eq!(
+        id >> 24,
+        0,
+        "a Skyrim.esm record maps to load-order index 00"
+    );
+    assert!(slots >= 1);
+    // Ruling F-7: alt-texture rows exist and carry load-order FormIDs.
+    let n_alt = one_i64(&store, "SELECT count(*) FROM alt_tex", []);
+    assert!(n_alt > 0, "no alt_tex rows");
+    let (shape, txst): (String, i64) = store
+        .conn()
+        .query_row(
+            "SELECT shape_name, txst_formid FROM alt_tex WHERE txst_formid IS NOT NULL LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    println!("alt_tex: {n_alt} rows, e.g. shape {shape:?} -> txst {txst:08X}");
+    for base in [
+        "skyrim.esm",
+        "update.esm",
+        "dawnguard.esm",
+        "hearthfires.esm",
+        "dragonborn.esm",
+    ] {
+        assert!(
+            !cold
+                .problems
+                .iter()
+                .any(|(p, _)| p.eq_ignore_ascii_case(base)),
+            "{base}: {:?}",
+            cold.problems
+        );
+    }
+    assert_eq!(warm.cached, warm.n);
+    assert!(cold_t.as_secs_f64() < 10.0, "cold {cold_t:?}");
+    assert!(warm_t.as_secs_f64() < 1.0, "warm {warm_t:?}");
 }
