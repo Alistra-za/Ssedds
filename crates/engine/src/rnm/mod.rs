@@ -127,6 +127,7 @@ impl From<LayerTermId> for LayerTerm {
     }
 }
 
+pub mod blend;
 pub mod plan;
 
 /// One input file of a blend, with the stamp `plan` read it at (checked by `run`, like `ResolvedJob::source`).
