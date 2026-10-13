@@ -1357,3 +1357,32 @@ fn a_long_file_ref_row_wraps_inside_the_window() {
     assert!(row.height() > 30.0, "row did not wrap: {row:?}");
     assert!(row.max.x <= 1400.0, "{row:?} {win:?}");
 }
+
+/// Filtering spec §3 / ruling R12: inert records are left out of "Plugin overrides" and its count, shown dimmed with
+/// their reason behind "Show inert (N)".
+#[test]
+fn plugin_overrides_hide_inert_records_until_asked() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    let used = |formid: u32, edid: &str| MeshUse {
+        formid,
+        edid: Some(edid.into()),
+        sig: "STAT".into(),
+        plugin: "Skyrim.esm".into(),
+        model_slot: 0,
+        n_overrides: 0,
+        swaps: vec![],
+    };
+    m.plugin_uses = vec![used(1, "Placed"), used(2, "Lonely")];
+    m.plugin_inert = [(2u32, "not placed")].into_iter().collect();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (1)").click();
+    h.run();
+    h.get_by_label("Placed [00000001] STAT — Skyrim.esm");
+    assert!(h.query_by_label_contains("Lonely").is_none());
+    h.get_by_label("Show inert (1)").click();
+    h.run();
+    h.get_by_label("Lonely [00000002] STAT — Skyrim.esm · not placed");
+}

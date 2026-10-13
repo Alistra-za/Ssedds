@@ -348,7 +348,7 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         if let Some(c) = &n.derive_check {
             ui.label(format!("PGPatcher check: {c}"));
         }
-        plugin_overrides(ui, &m.plugin_uses);
+        plugin_overrides(ui, m);
     }
     if m.pair.is_some() {
         ui.horizontal(|ui| {
@@ -410,24 +410,45 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
 }
 
-/// Winning plugin records that use this mesh and the shapes they re-texture (esp spec §4.2). Information only.
-fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
-    egui::CollapsingHeader::new(format!("Plugin overrides ({})", uses.len()))
+/// Winning plugin records that use this mesh and the shapes they re-texture (esp spec §4.2). Inert records (filtering
+/// spec §3) only behind "Show inert", dimmed, with their reason. Information only.
+fn plugin_overrides(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let (uses, inert, show) = (&m.plugin_uses, &m.plugin_inert, &mut m.show_inert_uses);
+    let n_inert = uses
+        .iter()
+        .filter(|u| inert.contains_key(&u.formid))
+        .count();
+    egui::CollapsingHeader::new(format!("Plugin overrides ({})", uses.len() - n_inert))
         .id_salt("meshes-plugin-overrides")
         .show(ui, |ui| {
+            if n_inert > 0 {
+                ui.checkbox(&mut *show, format!("Show inert ({n_inert})"));
+            }
+            let shown: Vec<&MeshUse> = uses
+                .iter()
+                .filter(|u| *show || !inert.contains_key(&u.formid))
+                .collect();
             egui::ScrollArea::vertical()
                 .id_salt("meshes-plugin-overrides-scroll")
                 .max_height(240.0)
                 .show(ui, |ui| {
-                    if uses.is_empty() {
+                    if shown.is_empty() {
                         ui.label("No plugin record of the latest scan uses this mesh.");
                     }
-                    for (i, u) in uses.iter().take(MAX_LISTED).enumerate() {
-                        ui.label(format!(
+                    for (i, u) in shown.iter().take(MAX_LISTED).enumerate() {
+                        let text = format!(
                             "{}{}",
                             record_label(u.edid.as_deref(), u.formid, &u.sig, &u.plugin),
                             overridden_text(u.n_overrides)
-                        ));
+                        );
+                        match inert.get(&u.formid) {
+                            Some(why) => {
+                                ui.weak(format!("{text} · {why}"));
+                            }
+                            None => {
+                                ui.label(text);
+                            }
+                        }
                         ui.indent(("plugin-swaps", i), |ui| {
                             for s in &u.swaps {
                                 // formid 0 = the TXST's master is not in the load order
@@ -444,8 +465,8 @@ fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
                             }
                         });
                     }
-                    if uses.len() > MAX_LISTED {
-                        ui.label(format!("… and {} more", uses.len() - MAX_LISTED));
+                    if shown.len() > MAX_LISTED {
+                        ui.label(format!("… and {} more", shown.len() - MAX_LISTED));
                     }
                 });
         });
