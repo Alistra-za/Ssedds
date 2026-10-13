@@ -350,7 +350,7 @@ pub struct MissingRef {
 /// `alt_tex a` with its TXST's winning copy (`tr`); select list per query.
 const SWAP_JOINS: &str = "alt_tex a
      LEFT JOIN rec_winner tw ON tw.formid = a.txst_formid
-     LEFT JOIN rec tr ON tr.plugin_id = tw.plugin_id AND tr.formid = tw.formid";
+     LEFT JOIN rec tr ON tr.plugin_id = tw.plugin_id AND tr.formid = tw.formid AND tr.owner_ok = 1";
 
 fn swap_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<ShapeSwap> {
     Ok(ShapeSwap {
@@ -373,7 +373,7 @@ WITH refs(path_id, formid, plugin_id, local) AS (
     JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id)
 SELECT DISTINCT p.p, r.edid, x.formid, r.sig, pl.name FROM refs x
 JOIN path p ON p.id = x.path_id
-JOIN rec r ON r.plugin_id = x.plugin_id AND r.local = x.local
+JOIN rec r ON r.plugin_id = x.plugin_id AND r.local = x.local AND r.owner_ok = 1
 JOIN plugin pl ON pl.id = x.plugin_id
 WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
   AND p.p NOT LIKE 'meshes/actors/character/facegendata/%'
@@ -401,6 +401,9 @@ ORDER BY p.p";
 impl Store {
     /// Winning TXSTs whose slot matches `key` with PGPatcher's rule (ruling R9), by EDID; at most `limit`.
     pub fn txsts_matching(&self, key: &TexKey, limit: usize) -> Result<Vec<TxstUse>, ScanError> {
+        if limit == 0 {
+            return Ok(vec![]);
+        }
         let Some((slot, cond, arg, check)) = tex_query(key, "tp.p") else {
             return Ok(vec![]);
         };
@@ -408,7 +411,7 @@ impl Store {
             "SELECT ts.formid, r.edid, pl.name, ts.slot, tp.p, w.n_overrides FROM path tp
              JOIN txst_slot ts ON ts.path_id = tp.id AND ts.slot = ?1
              JOIN rec_winner w ON w.formid = ts.formid AND w.plugin_id = ts.plugin_id
-             JOIN rec r ON r.plugin_id = ts.plugin_id AND r.local = ts.local
+             JOIN rec r ON r.plugin_id = ts.plugin_id AND r.local = ts.local AND r.owner_ok = 1
              JOIN plugin pl ON pl.id = ts.plugin_id
              WHERE {cond} ORDER BY r.edid, ts.formid"
         ))?;
@@ -441,7 +444,7 @@ impl Store {
             "SELECT a.formid, r.edid, r.sig, pl.name, a.model_slot, a.shape_name, a.txst_formid, tr.edid, a.idx
              FROM {SWAP_JOINS}
              JOIN rec_winner w ON w.formid = a.formid AND w.plugin_id = a.plugin_id
-             JOIN rec r ON r.plugin_id = a.plugin_id AND r.local = a.local
+             JOIN rec r ON r.plugin_id = a.plugin_id AND r.local = a.local AND r.owner_ok = 1
              JOIN plugin pl ON pl.id = a.plugin_id
              WHERE a.txst_formid IN (SELECT value FROM json_each(?1))
              ORDER BY r.edid, a.formid, a.model_slot, a.idx"
@@ -467,7 +470,7 @@ impl Store {
             "SELECT m.formid, r.edid, r.sig, pl.name, m.slot, w.n_overrides, m.plugin_id, m.local
              FROM path p JOIN model_ref m ON m.path_id = p.id
              JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id
-             JOIN rec r ON r.plugin_id = m.plugin_id AND r.local = m.local
+             JOIN rec r ON r.plugin_id = m.plugin_id AND r.local = m.local AND r.owner_ok = 1
              JOIN plugin pl ON pl.id = m.plugin_id
              WHERE p.p = ?1 ORDER BY r.sig, r.edid, m.formid, m.slot",
         )?;

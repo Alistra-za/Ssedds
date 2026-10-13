@@ -249,3 +249,167 @@ fn a_folder_scan_hides_plugin_rows_and_the_next_mo2_scan_restores_them() {
     assert_eq!(p.cached, p.n, "nothing re-parsed");
     assert_eq!(s.txsts_matching(&dirt_key(), 50).unwrap().len(), 1);
 }
+
+/// Skyrim.esm (master Missing.esm, not loaded) with: TXSTs naming a BSA-only, an inactive-origin, a FaceGen and a
+/// seven-times-referenced texture; an unresolved STAT whose raw FormID collides with a resolved one.
+fn fixture2() -> tempfile::TempDir {
+    let d = instance_fixture("+A\\n");
+    let r = d.path();
+    let t = |id: u32, name: &str, path: &str| {
+        rec(
+            b"TXST",
+            0x0100_0000 | id,
+            &[edid(name), sub(b"TX00", &zstr(path))],
+        )
+    };
+    let mut txsts = vec![
+        t(0x101, "BsaTXST", "Bsa\\OnlyBsa.dds"),
+        t(0x102, "OffTXST", "Off\\Inactive.dds"),
+        t(
+            0x103,
+            "FaceTXST",
+            "Actors\\Character\\FaceGenData\\FaceTint\\Skyrim.esm\\00000001.dds",
+        ),
+        t(0x104, "NifTXST", "Nifonly\\Used.dds"),
+    ];
+    for i in 0..7u32 {
+        txsts.push(t(0x200 + i, &format!("Lot{i}"), "Many\\Lots.dds"));
+    }
+    let stat =
+        |id: u32, name: &str, m: &str| rec(b"STAT", id, &[edid(name), sub(b"MODL", &zstr(m))]);
+    put(
+        r,
+        "Game/Data/Skyrim.esm",
+        &plugin(
+            esp::FLAG_ESM,
+            &["Missing.esm"],
+            &[
+                top(b"TXST", &txsts),
+                top(
+                    b"STAT",
+                    &[
+                        stat(0x0000_0ABC, "Orphan", "Missing\\Orphan.nif"),
+                        stat(0x0100_0ABC, "Real", "Real.nif"),
+                    ],
+                ),
+            ],
+        ),
+    );
+    put(r, "profiles/Default/plugins.txt", b"# none\\n");
+    d
+}
+
+/// Registers `path` as a winning texture of a fresh origin (a BSA-like one when `enabled`, an inactive one otherwise).
+fn provide(s: &Store, path: &str, enabled: bool) {
+    let c = s.conn();
+    let n: i64 = c
+        .query_row("SELECT count(*) FROM origin", [], |r| r.get(0))
+        .unwrap();
+    c.execute(
+        "INSERT INTO origin(kind, name, root, priority, enabled) VALUES (9, 'x', ?1, 0, ?2)",
+        rusqlite::params![format!("fake{n}"), enabled],
+    )
+    .unwrap();
+    let o = c.last_insert_rowid();
+    c.execute("INSERT OR IGNORE INTO path(p) VALUES (?1)", [path])
+        .unwrap();
+    let p: i64 = c
+        .query_row("SELECT id FROM path WHERE p = ?1", [path], |r| r.get(0))
+        .unwrap();
+    c.execute(
+        "INSERT INTO tex_copy(path_id, origin_id) VALUES (?1, ?2)",
+        [p, o],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO tex_winner(path_id, origin_id, n_copies) VALUES (?1, ?2, 1)",
+        [p, o],
+    )
+    .unwrap();
+}
+
+#[test]
+fn missing_respects_archives_inactive_origins_facegen_and_caps_records() {
+    let d = fixture2();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    provide(&s, "textures/bsa/onlybsa.dds", true);
+    provide(&s, "textures/off/inactive.dds", false);
+    let missing = s.plugin_missing_files().unwrap();
+    let paths: Vec<&str> = missing.iter().map(|m| m.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "meshes/real.nif",
+            "textures/many/lots.dds",
+            "textures/nifonly/used.dds",
+            "textures/off/inactive.dds"
+        ]
+    );
+    let lots = &missing[1];
+    assert_eq!(lots.n_records, 7);
+    assert_eq!(lots.records.len(), 5);
+    assert_eq!(lots.records[0], "Lot0 [00000200] TXST — Skyrim.esm");
+}
+
+/// An unresolved record (owner_ok = 0) keeps a raw FormID that can equal a resolved winner's.
+#[test]
+fn an_unresolved_record_colliding_with_a_winner_is_ignored() {
+    let d = fixture2();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    let ok: i64 = s
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM rec WHERE edid = 'Orphan' AND owner_ok = 0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(ok, 1, "fixture: Orphan is unresolved");
+    let missing = s.plugin_missing_files().unwrap();
+    assert!(
+        missing
+            .iter()
+            .all(|m| m.path != "meshes/missing/orphan.nif"),
+        "{missing:?}"
+    );
+    assert!(s
+        .plugin_uses_of_mesh("meshes/missing/orphan.nif")
+        .unwrap()
+        .is_empty());
+    let real = s.plugin_uses_of_mesh("meshes/real.nif").unwrap();
+    assert_eq!(real.len(), 1);
+    assert_eq!(real[0].edid.as_deref(), Some("Real"));
+}
+
+#[test]
+fn a_texture_only_a_nif_uses_is_not_unused() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    let used: String = s
+        .conn()
+        .query_row(
+            "SELECT p.p FROM tex_use u JOIN path p ON p.id = u.tex_path_id WHERE p.p NOT IN
+               (SELECT p2.p FROM txst_slot t JOIN path p2 ON p2.id = t.path_id) LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    provide(&s, &used, true);
+    assert!(!s.unused_textures().unwrap().contains(&used), "{used}");
+    provide(&s, "textures/zzz/orphan.dds", true);
+    assert!(s
+        .unused_textures()
+        .unwrap()
+        .contains(&"textures/zzz/orphan.dds".to_string()));
+}
+
+#[test]
+fn zero_limit_matches_nothing() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    assert!(s.txsts_matching(&dirt_key(), 0).unwrap().is_empty());
+}
