@@ -453,26 +453,82 @@ pub struct Store {
     /// This scan started on an empty store (ruling R3); Task 6 reads it. Index deferral did not pay off and was removed.
     #[allow(dead_code)]
     cold: bool,
+    /// The running scan's interning map (ruling R6).
+    pub(crate) intern: Option<Interner>,
 }
 
 pub(crate) fn path_id(c: &Connection, p: &str) -> rusqlite::Result<i64> {
-    c.prepare_cached("INSERT OR IGNORE INTO path(p) VALUES (?1)")?
-        .execute([p])?;
+    // `last_insert_rowid` is the new id only when the insert changed a row; otherwise the path already existed.
+    if c.prepare_cached("INSERT OR IGNORE INTO path(p) VALUES (?1)")?
+        .execute([p])?
+        == 1
+    {
+        return Ok(c.last_insert_rowid());
+    }
     c.prepare_cached("SELECT id FROM path WHERE p = ?1")?
         .query_row([p], |r| r.get(0))
 }
 
-fn texset_id(c: &Connection, slots: &[Option<i64>]) -> rusqlite::Result<i64> {
+/// Path and texset ids of the running scan (spec §2 step 5, ruling R6): loaded by `begin_scan`, dropped by `end_scan`.
+/// A miss goes to SQL, so ids added by another connection stay correct.
+#[derive(Default)]
+pub(crate) struct Interner {
+    paths: HashMap<String, i64>,
+    /// `[n, t0..t8]` with empty slots as 0, as the `texset_key` index folds them.
+    texsets: HashMap<[i64; MAX_SLOTS + 1], i64>,
+}
+
+pub(crate) fn intern_path(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    p: &str,
+) -> rusqlite::Result<i64> {
+    if let Some(id) = i.as_ref().and_then(|i| i.paths.get(p)) {
+        return Ok(*id);
+    }
+    let id = path_id(c, p)?;
+    if let Some(i) = i {
+        i.paths.insert(p.to_string(), id);
+    }
+    Ok(id)
+}
+
+fn texset_id(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    slots: &[Option<i64>],
+) -> rusqlite::Result<i64> {
     let n = slots.len().min(MAX_SLOTS);
     let mut t = [None::<i64>; MAX_SLOTS];
     t[..n].copy_from_slice(&slots[..n]);
-    c.prepare_cached(
-        "INSERT OR IGNORE INTO texset(n,t0,t1,t2,t3,t4,t5,t6,t7,t8) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-    )?
-    .execute(params![n as i64, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]])?;
-    let k: Vec<i64> = t.iter().map(|x| x.unwrap_or(0)).collect();
-    let id: i64 = c
+    let mut key = [0i64; MAX_SLOTS + 1];
+    key[0] = n as i64;
+    for (j, x) in t.iter().enumerate() {
+        key[j + 1] = x.unwrap_or(0);
+    }
+    if let Some(id) = i.as_ref().and_then(|i| i.texsets.get(&key)) {
+        return Ok(*id);
+    }
+    let inserted = c
         .prepare_cached(
+            "INSERT OR IGNORE INTO texset(n,t0,t1,t2,t3,t4,t5,t6,t7,t8) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )?
+        .execute(params![n as i64, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]])?;
+    let id: i64 = if inserted == 1 {
+        let id = c.last_insert_rowid();
+        // A new set gets its tex_use rows; an existing one got them with its insert (tex_use is never deleted).
+        let mut tu = c.prepare_cached(
+            "INSERT OR IGNORE INTO tex_use(tex_path_id, texset_id, slot) VALUES (?1,?2,?3)",
+        )?;
+        for (slot, p) in t[..n].iter().enumerate() {
+            if let Some(p) = p {
+                tu.execute(params![p, id, slot as i64])?;
+            }
+        }
+        id
+    } else {
+        let k = &key[1..];
+        c.prepare_cached(
             "SELECT id FROM texset WHERE n = ?1 AND ifnull(t0,0) = ?2 AND ifnull(t1,0) = ?3 AND ifnull(t2,0) = ?4 \
              AND ifnull(t3,0) = ?5 AND ifnull(t4,0) = ?6 AND ifnull(t5,0) = ?7 AND ifnull(t6,0) = ?8 \
              AND ifnull(t7,0) = ?9 AND ifnull(t8,0) = ?10",
@@ -480,31 +536,31 @@ fn texset_id(c: &Connection, slots: &[Option<i64>]) -> rusqlite::Result<i64> {
         .query_row(
             params![n as i64, k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8]],
             |r| r.get(0),
-        )?;
-    let mut tu = c.prepare_cached(
-        "INSERT OR IGNORE INTO tex_use(tex_path_id, texset_id, slot) VALUES (?1,?2,?3)",
-    )?;
-    for (slot, p) in t[..n].iter().enumerate() {
-        if let Some(p) = p {
-            tu.execute(params![p, id, slot as i64])?;
-        }
+        )?
+    };
+    if let Some(i) = i {
+        i.texsets.insert(key, id);
     }
     Ok(id)
 }
 
-fn tex_slots(c: &Connection, paths: &[&TexPath]) -> rusqlite::Result<Option<i64>> {
+fn tex_slots(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    paths: &[&TexPath],
+) -> rusqlite::Result<Option<i64>> {
     let mut ids = vec![];
     for p in paths {
         ids.push(if p.flags.empty || p.norm.is_empty() {
             None
         } else {
-            Some(path_id(c, &p.norm)?)
+            Some(intern_path(c, i, &p.norm)?)
         });
     }
     if ids.is_empty() {
         return Ok(None);
     }
-    texset_id(c, &ids).map(Some)
+    texset_id(c, i, &ids).map(Some)
 }
 
 /// Shape-family tables: `shape`/`tex_raw` keyed by copy id, or `pending_shape`/`pending_tex_raw` keyed by pid.
@@ -526,7 +582,13 @@ const PENDING: Tables = Tables {
 };
 
 /// Writes the shape rows (and raw slot rows) of `scan` under `key`.
-fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(), ScanError> {
+fn write_shapes(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    t: Tables,
+    key: i64,
+    scan: &NifScan,
+) -> Result<(), ScanError> {
     let sql = format!(
         "INSERT OR REPLACE INTO {}({}, {SHAPE_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
         t.shape, t.key
@@ -546,7 +608,7 @@ fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(
                     Some(l.shader_type),
                     Some(l.slsf1),
                     Some(l.slsf2),
-                    tex_slots(c, &slots)?,
+                    tex_slots(c, i, &slots)?,
                     Some(serde_json::to_string(&l.params).map_err(json_err)?),
                 )
             }
@@ -557,7 +619,7 @@ fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(
                     None,
                     Some(e.slsf1),
                     Some(e.slsf2),
-                    tex_slots(c, &slots)?,
+                    tex_slots(c, i, &slots)?,
                     Some(serde_json::to_string(&e.params).map_err(json_err)?),
                 )
             }
@@ -616,7 +678,11 @@ fn json_err(e: serde_json::Error) -> ScanError {
     ScanError::Io(std::io::Error::other(e))
 }
 
-fn upsert_copy_row(c: &Connection, it: &ChunkItem) -> Result<i64, ScanError> {
+fn upsert_copy_row(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    it: &ChunkItem,
+) -> Result<i64, ScanError> {
     let (status, bsver, le, problem) = it.result.record();
     let id: i64 = c
         .prepare_cached(
@@ -645,12 +711,16 @@ fn upsert_copy_row(c: &Connection, it: &ChunkItem) -> Result<i64, ScanError> {
         )?;
     delete_shapes(c, id)?;
     if let CopyResult::Scanned(s) = &it.result {
-        write_shapes(c, LIVE, id, s)?;
+        write_shapes(c, i, LIVE, id, s)?;
     }
     Ok(id)
 }
 
-fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
+fn stage_derived(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    it: &ChunkItem,
+) -> Result<(), ScanError> {
     let (status, bsver, le, problem) = it.result.record();
     let pid: i64 = c
         .prepare_cached(
@@ -672,7 +742,7 @@ fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
             |r| r.get(0),
         )?;
     if let CopyResult::Scanned(s) = &it.result {
-        write_shapes(c, PENDING, pid, s)?;
+        write_shapes(c, i, PENDING, pid, s)?;
     }
     Ok(())
 }
@@ -753,7 +823,11 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
-        Ok(Store { conn, cold: false })
+        Ok(Store {
+            conn,
+            cold: false,
+            intern: None,
+        })
     }
 
     /// A connection that never writes database content: no folder or file is created, no WAL switch, and another schema version is
@@ -772,7 +846,11 @@ impl Store {
                 want: SCHEMA_VERSION,
             });
         }
-        Ok(Store { conn, cold: false })
+        Ok(Store {
+            conn,
+            cold: false,
+            intern: None,
+        })
     }
 
     /// Start of a scan: staging tables created and emptied; every origin disabled until this run commits.
@@ -788,12 +866,36 @@ impl Store {
             .query_row("SELECT EXISTS(SELECT 1 FROM nif_copy)", [], |r| {
                 r.get::<_, bool>(0)
             })?;
+        let mut i = Interner::default();
+        {
+            let mut st = self.conn.prepare("SELECT p, id FROM path")?;
+            for r in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+                let (p, id) = r?;
+                i.paths.insert(p, id);
+            }
+            let mut st = self.conn.prepare(
+                "SELECT id, n, ifnull(t0,0), ifnull(t1,0), ifnull(t2,0), ifnull(t3,0), ifnull(t4,0), ifnull(t5,0), \
+                 ifnull(t6,0), ifnull(t7,0), ifnull(t8,0) FROM texset",
+            )?;
+            for r in st.query_map([], |r| {
+                let mut k = [0i64; MAX_SLOTS + 1];
+                for (j, v) in k.iter_mut().enumerate() {
+                    *v = r.get(j + 1)?;
+                }
+                Ok((k, r.get::<_, i64>(0)?))
+            })? {
+                let (k, id) = r?;
+                i.texsets.insert(k, id);
+            }
+        }
+        self.intern = Some(i);
         Ok(())
     }
 
     /// End of every run, whatever its outcome: resets the per-scan `cold` flag.
     pub fn end_scan(&mut self) -> Result<(), ScanError> {
         self.cold = false;
+        self.intern = None;
         Ok(())
     }
 
@@ -855,7 +957,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let mut out = Vec::with_capacity(paths.len());
         for p in paths {
-            out.push(path_id(&tx, p)?);
+            out.push(intern_path(&tx, &mut self.intern, p)?);
         }
         tx.commit()?;
         Ok(out)
@@ -887,9 +989,9 @@ impl Store {
         let tx = self.conn.transaction()?;
         for it in items {
             if it.derived {
-                stage_derived(&tx, it)?;
+                stage_derived(&tx, &mut self.intern, it)?;
             } else {
-                upsert_copy_row(&tx, it)?;
+                upsert_copy_row(&tx, &mut self.intern, it)?;
             }
         }
         tx.commit()?;
@@ -949,7 +1051,7 @@ impl Store {
     ) -> Result<i64, ScanError> {
         let tx = self.conn.transaction()?;
         let it = ChunkItem {
-            path_id: path_id(&tx, path)?,
+            path_id: intern_path(&tx, &mut self.intern, path)?,
             origin_id,
             size,
             mtime,
@@ -957,7 +1059,7 @@ impl Store {
             derived: false,
             result,
         };
-        let id = upsert_copy_row(&tx, &it)?;
+        let id = upsert_copy_row(&tx, &mut self.intern, &it)?;
         tx.commit()?;
         Ok(id)
     }
@@ -965,7 +1067,7 @@ impl Store {
     pub fn replace_shapes(&mut self, copy_id: i64, scan: &NifScan) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;
         delete_shapes(&tx, copy_id)?;
-        write_shapes(&tx, LIVE, copy_id, scan)?;
+        write_shapes(&tx, &mut self.intern, LIVE, copy_id, scan)?;
         tx.commit()?;
         Ok(())
     }
@@ -1078,7 +1180,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM pgp_diff", [])?;
         for (p, (o, n)) in diff {
-            let id = path_id(&tx, p)?;
+            let id = intern_path(&tx, &mut self.intern, p)?;
             tx.prepare_cached("INSERT OR REPLACE INTO pgp_diff VALUES (?1,?2,?3)")?
                 .execute(params![id, *o as i64, *n as i64])?;
         }

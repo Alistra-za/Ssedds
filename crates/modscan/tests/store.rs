@@ -912,3 +912,30 @@ fn winning_nifs_matches_the_path_after_the_meshes_folder() {
     assert!(s.winning_nifs("meshes", 100).unwrap().is_empty());
     assert_eq!(s.winning_nifs("x/d", 100).unwrap().len(), 1);
 }
+
+/// Spec §2 step 5 + review focus 2: one id per path with and without the scan's in-memory map, also for a path
+/// another connection added after the map was loaded.
+#[test]
+fn path_ids_are_stable_inside_and_outside_a_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("s.db");
+    let mut s = Store::open(&p).unwrap();
+    let a = s.path_ids(&["meshes/a.nif", "meshes/b.nif"]).unwrap();
+    s.begin_scan().unwrap();
+    let mut other = Store::open(&p).unwrap();
+    let x = other.path_ids(&["meshes/x.nif"]).unwrap()[0];
+    let b = s
+        .path_ids(&[
+            "meshes/b.nif",
+            "meshes/a.nif",
+            "meshes/c.nif",
+            "meshes/c.nif",
+            "meshes/x.nif",
+        ])
+        .unwrap();
+    s.end_scan().unwrap();
+    assert_eq!((b[0], b[1]), (a[1], a[0]));
+    assert_eq!(b[2], b[3]);
+    assert_eq!(b[4], x, "a path another connection interned");
+    assert_eq!(s.path_ids(&["meshes/c.nif"]).unwrap()[0], b[2]);
+}
