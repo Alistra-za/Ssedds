@@ -112,6 +112,15 @@ After a complete export, **Export** writes `<export>\PBRNIFPatcher\<name>.json`.
 
 The test harness cannot simulate drags. Reordering sets by dragging the **≡** handle and the drag-and-drop flows (texture onto a set, onto empty space, onto a filled slot) were verified by code review only; try them yourself.
 
+## RNM normal layers
+
+A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and their masks) are not textures of their own: they blend into the set's `_n` (or `_cnr`) before the mips are made. Layer files are not listed in the Textures column or as tiles, so the only place to see and change them is the normal.
+
+- Select the normal: its settings have an **RNM** section with a switch for the whole blend, one strength slider per layer, the layer order and, for `_bent`, the AO options. The normal (or `_cnr`) card gets a **blue outline** while RNM is active (layers present and enabled); a slot the shader cannot use keeps its amber outline instead.
+- When the set has both an `_n` and a `_cnr`, each layer has a **target** switch (*Normal*, *CNR* or *Both*). It is written as `rnm.target` on the layer file's `[files]` entry.
+- The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail, with a *use AO* tick. The note under it says sdc inverts the AO for you: supply normal AO (white = open) and do not invert it yourself.
+- Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
+
 ## Where settings live
 
 GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.

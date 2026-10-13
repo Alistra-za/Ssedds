@@ -143,7 +143,12 @@ pub fn signature(item: &TextureItem) -> String {
             let p = sha256_json(&job.profile).unwrap_or_default();
             match &job.pack {
                 Some(pk) => format!("{p}:{}", pack_key(pk).unwrap_or_default()),
-                None => format!("{p}:{:?}:{:?}", job.input, job.source),
+                None => format!(
+                    "{p}:{:?}:{:?}:{:?}",
+                    job.input,
+                    job.source,
+                    job.active_rnm()
+                ),
             }
         }
         _ => format!("{:?}:{:?}:{:?}", item.kind, item.input, item.stamp),

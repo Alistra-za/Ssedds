@@ -55,7 +55,7 @@ fn decided(j: &ResolvedJob) -> bool {
 fn writable(j: &ResolvedJob) -> bool {
     !matches!(
         j.status,
-        JobStatus::Error { .. } | JobStatus::PackingInput { .. }
+        JobStatus::Error { .. } | JobStatus::PackingInput { .. } | JobStatus::NormalLayer { .. }
     )
 }
 
@@ -253,6 +253,7 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
         return false;
     };
     let (normal, normal_profile, stamp) = (nj.input.clone(), nj.profile.clone(), nj.source);
+    let rnm = nj.active_rnm().cloned();
     let mut any = false;
     for &m in members {
         // DECISIONS R10: `check_profile` already raised TAG-CONTENT-MISMATCH for an sRGB roughness.
@@ -269,6 +270,7 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
                     normal_profile: normal_profile.clone(),
                     shift,
                     stamp,
+                    rnm: rnm.clone(),
                 });
                 any = true;
             }

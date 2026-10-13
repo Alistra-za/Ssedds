@@ -3,6 +3,16 @@
 One entry per built-in preset version. A version changes when anything the preset resolves to changes; the workspace
 version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
 
+## 2026-10-12 — sdc 0.7.0 (M6 Track F2)
+
+- RNM normal layers: `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2`, `_bent` and their masks (plus rnm.py's aliases and
+  `_n_`/`_cnr_` prefixes) blend into the set's `_n`/`_cnr` before mips. New `rnm.*` profile keys (defaults: bump 0.4,
+  detail 0.6, detail2 0.3, bent 0.35, AO power 1.5) and the per-file `rnm.target`.
+- These files were previously their own sets and could be written as a diffuse (`foo_bump.dds`). They are no longer
+  written; sdc deletes nothing, so remove any stale `*_bump.dds`/`*_detailnorm.dds` from an earlier export yourself.
+- Every output re-encodes once under `if-changed` (engine version 0.7.0).
+- `sdc convert body_n.png` on a single file does not blend layers (it discovers only that file); run it on the folder.
+
 ## 2026-10-12 — sdc 0.5.0 (M6 Track D)
 
 - **Quality change, every preset:** the vendored rgbcx encoder now rounds BC4 interpolants to nearest, as bcdec and the

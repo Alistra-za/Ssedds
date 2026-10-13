@@ -179,6 +179,10 @@ pub struct BakeJob {
     /// The `_n`'s size and modification time when `Engine::plan` read it (final review I7); `None` is not checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stamp: Option<SourceStamp>,
+    /// The `_n` job's active RNM blend at plan time (Note W18, owner 2026-10-12): the lengths come from the `_n` as its
+    /// own encode writes it, after the layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rnm: Option<crate::rnm::RnmJob>,
 }
 
 impl BakeJob {
@@ -194,10 +198,19 @@ impl BakeJob {
             np.mips.normal_base,
             self.shift,
         );
-        if np.resize == crate::config::ResizeMode::None {
-            crate::manifest::sha256_json(&base)
-        } else {
-            crate::manifest::sha256_json(&(base.0, base.1, base.2, base.3, np.resize))
+        // The RNM settings join only when layers apply (Note W18), so layer-free manifests stay up to date.
+        let resized = np.resize != crate::config::ResizeMode::None;
+        match (resized, self.rnm.is_some()) {
+            (false, false) => crate::manifest::sha256_json(&base),
+            (true, false) => {
+                crate::manifest::sha256_json(&(base.0, base.1, base.2, base.3, np.resize))
+            }
+            (false, true) => {
+                crate::manifest::sha256_json(&(base.0, base.1, base.2, base.3, &np.rnm))
+            }
+            (true, true) => {
+                crate::manifest::sha256_json(&(base.0, base.1, base.2, base.3, np.resize, &np.rnm))
+            }
         }
         .expect("a tuple of plain config values serialises")
     }
@@ -212,6 +225,9 @@ impl BakeJob {
             &self.normal_profile,
             crate::ops::SourceTransfer::of(&info),
         );
+        if let Some(r) = &self.rnm {
+            crate::rnm::blend::apply(&mut work.img, r, &self.normal_profile)?;
+        }
         if self.normal_profile.mips.normal_base == crate::config::NormalBase::Renormalize {
             for px in &mut work.img.px {
                 crate::mips::normalize_vector(px, work.domain);
@@ -247,6 +263,8 @@ impl BakeJob {
     /// 16-bit RGBA), its `to_rgba32f` copy (16) and the collected `Vec` (16). Everything after is smaller:
     /// `preprocess` and the renormalise work in place on the 16-byte base, and the pyramid build adds one
     /// quarter-size accumulation level (4), the next one (1) and the lengths (1.33), about 22.4 per texel.
+    /// shortcut: the `_n`'s RNM layers (loaded one at a time with a resample) are not counted; count the largest when an
+    /// 8K-layer-on-2K-`_n` batch runs out of memory.
     /// A DDS input (M6) instead holds its file data (every mip) and the decoded RGBA32F mip 0 at once: ~32 per texel
     /// for a float DDS; not modelled here.
     pub fn peak_bytes(w: u32, h: u32, decoded: u64) -> u64 {
@@ -490,6 +508,7 @@ mod tests {
             normal_profile: profile(Subtype::PbrNormal),
             shift: 0,
             stamp: None,
+            rnm: None,
         };
         // 8-bit RGB: the decoded image (3) + `to_rgba32f` (16) + the collected `Vec` (16) per texel.
         let rgb8 = d.path().join("rgb8_n.png");
@@ -511,6 +530,7 @@ mod tests {
             normal_profile: profile(Subtype::PbrNormal),
             shift: 0,
             stamp: None,
+            rnm: None,
         };
         let mut moved = b.clone();
         moved.normal = "b/iron_n.png".into();
@@ -529,6 +549,30 @@ mod tests {
         assert_ne!(b.identity_sha256(), keep.identity_sha256());
     }
 
+    /// Note W18: RNM settings join the identity only when the bake carries a blend.
+    #[test]
+    fn identity_includes_rnm_only_when_layers_apply() {
+        let b = BakeJob {
+            normal: "a/iron_n.png".into(),
+            normal_profile: profile(Subtype::PbrNormal),
+            shift: 0,
+            stamp: None,
+            rnm: None,
+        };
+        let mut layered = b.clone();
+        layered.rnm = Some(crate::rnm::RnmJob {
+            layers: vec![],
+            ao: None,
+        });
+        let mut strong = layered.clone();
+        strong.normal_profile.rnm.detail.strength = Some(0.5);
+        assert_ne!(b.identity_sha256(), layered.identity_sha256());
+        assert_ne!(layered.identity_sha256(), strong.identity_sha256());
+        let mut off = b.clone();
+        off.normal_profile.rnm.detail.strength = Some(0.5);
+        assert_eq!(b.identity_sha256(), off.identity_sha256());
+    }
+
     /// S-mips-7: existing manifests stay up to date without resize; `pot-down` changes the identity.
     #[test]
     fn identity_is_unchanged_without_resize() {
@@ -537,6 +581,7 @@ mod tests {
             normal_profile: profile(Subtype::PbrNormal),
             shift: 0,
             stamp: None,
+            rnm: None,
         };
         let np = &b.normal_profile;
         let four = crate::manifest::sha256_json(&(

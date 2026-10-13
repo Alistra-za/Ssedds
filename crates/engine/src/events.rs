@@ -71,6 +71,8 @@ pub enum SkipKind {
     DdsInput,
     /// A raw map not packed (`IN-PACKING-INPUT`, `PACK-UNUSED-INPUT`).
     PackingInput,
+    /// An RNM normal layer or mask (M6 Track F2): blended into its base normal, never written alone.
+    NormalLayer,
     /// `OUT-UNKNOWN-EXISTING`.
     UnknownExisting,
     /// `PACK-CONFLICT`: a pre-packed file replaced under `packing.prefer = raw`.

@@ -120,6 +120,18 @@ impl ExportModel {
                 let passed = validation.passed;
                 self.run_row(&ev, RowState::Done { passed });
             }
+            EventKind::FileSkipped {
+                kind: SkipKind::NormalLayer,
+                code: None,
+                ..
+            } => {
+                // A used layer shows only in the RNM section; one an RNM-* code explains stays visible.
+                if let Some(p) = ev.path.as_deref() {
+                    let p = slash(p);
+                    self.rows
+                        .retain(|r| !(r.state == RowState::Queued && slash(&r.path) == p));
+                }
+            }
             EventKind::FileSkipped { kind, reason, .. } => {
                 let state = match kind {
                     SkipKind::UpToDate => RowState::UpToDate,

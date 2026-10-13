@@ -70,8 +70,10 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
             normal_profile,
             shift: 0,
             stamp: SourceStamp::of(normal),
+            rnm: None,
         }),
         shader: None,
+        rnm: None,
     };
     Plan {
         request,

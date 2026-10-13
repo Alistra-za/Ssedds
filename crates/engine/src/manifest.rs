@@ -132,6 +132,10 @@ pub struct SourceRef {
     /// level shift (`BakeJob::identity_sha256`). Absent on every other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bake: Option<String>,
+    /// M6 Track F2: an RNM input of a base normal and its role (`detail`, `detail.mask`, `bent.ao.r`, `bent.ao.b`). Absent on
+    /// every other source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rnm: Option<String>,
 }
 
 impl SourceRef {
@@ -143,6 +147,7 @@ impl SourceRef {
             role: None,
             invert: false,
             bake: None,
+            rnm: None,
         })
     }
 
@@ -159,6 +164,14 @@ impl SourceRef {
     pub fn of_bake(path: &Path, identity: String) -> io::Result<SourceRef> {
         Ok(SourceRef {
             bake: Some(identity),
+            ..SourceRef::of(path)?
+        })
+    }
+
+    /// An RNM input of a base normal, with its role (M6 Track F2).
+    pub fn of_rnm(path: &Path, role: String) -> io::Result<SourceRef> {
+        Ok(SourceRef {
+            rnm: Some(role),
             ..SourceRef::of(path)?
         })
     }

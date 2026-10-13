@@ -286,6 +286,24 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
+/// M6 Track F2 (DECISIONS Note W3): the `rnm.target` a layer file asked for, by the highest-precedence override that
+/// reaches it (`[files]`, then unscoped, file-glob and path `--set`); `None` = the default from its name.
+pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTarget> {
+    ranked_overrides(ctx)
+        .into_iter()
+        .rev()
+        .filter(|o| o.field == crate::overrides::RNM_TARGET_FIELD)
+        .find(|o| match &o.scope {
+            Scope::All => true,
+            Scope::File(g) => glob_match_input(g, input),
+            Scope::Path(k) => ctx
+                .files
+                .rel_of(input)
+                .is_some_and(|rel| path_key_matches(k, &rel)),
+            Scope::Subtype(_) | Scope::Set(_) => false,
+        })
+        .and_then(|o| crate::overrides::rnm_target_value(&o.value))
+}
 
 pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     // An invalid chain is reported by `layered_profile`; here it only contributes no rules.
@@ -637,7 +655,7 @@ fn layered_profile_with(
     }
     for o in ranked_overrides(ctx)
         .into_iter()
-        .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
+        .filter(|o| o.field != "subtype" && !crate::overrides::is_selector(&o.field))
     {
         if override_applies(ctx, o, Some(st), f) {
             let reach = match o.scope {
@@ -674,6 +692,16 @@ fn layered_profile_with(
         if let Some(src) = prov.get("channels.green_convention").cloned() {
             prov.insert("channels.flip_green".into(), src);
         }
+    }
+    // DECISIONS Note W6: only a base normal reads `rnm`, so another sub-type keeps the default (and its hash).
+    if st.rnm_base().is_none() && !profile.rnm.is_default() {
+        profile.rnm = crate::config::RnmSpec::default();
+        prov.retain(|k, _| !k.starts_with("rnm."));
+    }
+    // An order that resolves to the default order is the default (no re-encode); any other is stored normalised.
+    if profile.rnm.order.is_some() {
+        let eff = profile.rnm.effective_order();
+        profile.rnm.order = (eff != crate::config::LayerId::ORDER).then_some(eff);
     }
     // Last: `filter_allowed` reads the final format, content, category and alpha policy.
     let dropped = unscoped_filter_falls_back(&mut profile, &mut prov, &sources);
@@ -1067,6 +1095,11 @@ pub enum JobStatus {
     PackingInput {
         role: RawMap,
     },
+    /// An RNM normal layer or mask (M6 Track F2 spec §2.2): never converted on its own; `rnm::plan::plan_rnm`
+    /// attaches it to its base normal's job or tags it `RNM-*`.
+    NormalLayer {
+        term: crate::rnm::LayerTermId,
+    },
     /// Blocking codes not acknowledged with `--allow`.
     Blocked {
         codes: Vec<Code>,
@@ -1106,6 +1139,18 @@ pub struct ResolvedJob {
     /// M6 (DECISIONS Note S): the shader picked for this job's set; `None` for a job not made by `plan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shader: Option<crate::shader::ShaderPick>,
+    /// M6 Track F2: a base normal's RNM layers (`rnm::plan::plan_rnm`); `None` for every other job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rnm: Option<crate::rnm::RnmJob>,
+}
+
+impl ResolvedJob {
+    /// The RNM layers the encode blends: `rnm` while `profile.rnm.enabled` and it lists a layer.
+    pub fn active_rnm(&self) -> Option<&crate::rnm::RnmJob> {
+        self.rnm
+            .as_ref()
+            .filter(|r| self.profile.rnm.enabled && !r.layers.is_empty())
+    }
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1238,6 +1283,25 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             CfgInvalid,
             format!("mips.bake_clamp {} outside (0, 1]", p.mips.bake_clamp),
         );
+    }
+    // M6 Track F2 (DECISIONS Note W7): layer strengths and the AO power, on a base normal.
+    if st.rnm_base().is_some() {
+        for id in crate::config::LayerId::ORDER {
+            let s = p.rnm.layer(id).strength;
+            if !(0.0..=2.0).contains(&s) {
+                add(
+                    CfgInvalid,
+                    format!("rnm.{}.strength {s} outside 0..=2", id.id()),
+                );
+            }
+        }
+        let pw = p.rnm.ao_power();
+        if !(0.1..=8.0).contains(&pw) {
+            add(
+                CfgInvalid,
+                format!("rnm.bent.ao_power {pw} outside 0.1..=8"),
+            );
+        }
     }
     // Only where rgbcx is the resolved backend (BC1/BC3/BC4/BC5): an out-of-range level would trip rgbcx's
     // assert inside an encode task, and no other backend reads the field.
@@ -1676,6 +1740,29 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         source: None,
         pack: None,
         bake: None,
+        rnm: None,
+        shader: None,
+    }
+}
+
+/// M6 Track F2 (spec §2.2): the job of a normal-layer file. Nothing is written; the profile is the built-in
+/// `generic_data` placeholder and is never used.
+fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm) -> ResolvedJob {
+    ResolvedJob {
+        input: f.input.path.clone(),
+        output: f.input.output.clone(),
+        game_path: f.input.game_path.clone(),
+        set_key: f.set.key.clone(),
+        profile: ctx.registry.base_profile(ctx.target, Subtype::GenericData),
+        provenance: BTreeMap::new(),
+        suggestions: vec![],
+        warnings: vec![],
+        status: JobStatus::NormalLayer { term: term.into() },
+        suffix_alias: None,
+        source: None,
+        pack: None,
+        bake: None,
+        rnm: None,
         shader: None,
     }
 }
@@ -1694,6 +1781,19 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
         ) {
             return packing_input_job(ctx, f, term, *role);
+        }
+    }
+    // M6 Track F2 (DECISIONS Note W2): a layer file is hidden unless a rule or --set names its sub-type.
+    if let Some(Vocab {
+        role: VocabRole::NormalLayer(term),
+        ..
+    }) = vocab_for(f)
+    {
+        if !matches!(
+            d.provenance,
+            Provenance::User | Provenance::Rule(_) | Provenance::ProjectFile
+        ) {
+            return normal_layer_job(ctx, f, *term);
         }
     }
     resolve_decided(ctx, f, d)
@@ -1765,6 +1865,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     source: None,
                     pack: None,
                     bake: None,
+                    rnm: None,
                     shader: None,
                 };
             }
@@ -1878,6 +1979,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         source: None,
         pack: None,
         bake: None,
+        rnm: None,
         shader: None,
     }
 }

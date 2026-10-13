@@ -86,10 +86,14 @@ pub struct PlanView {
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched: Vec<String>,
+    /// Set key to the RNM-* notes of its layer jobs (a layer file has no item).
+    pub rnm_notes: BTreeMap<String, Vec<Warning>>,
+    /// Layer, mask and AO path to its `[files]` key.
+    pub rnm_keys: BTreeMap<PathBuf, String>,
 }
 
 /// The `[files]` key of a path under `root` (DECISIONS N2).
-fn key_of(root: &Path, path: &Path) -> String {
+pub(crate) fn key_of(root: &Path, path: &Path) -> String {
     let f = InputFile {
         path: path.to_path_buf(),
         rel: PathBuf::from(path.file_name().unwrap_or_default()),
@@ -144,7 +148,36 @@ impl PlanView {
     pub fn build(plan: &Plan, events: &[EngineEvent], session: &Session, root: &Path) -> PlanView {
         let out_root = &plan.request.output_root;
         let mut items = vec![];
+        let mut rnm_notes: BTreeMap<String, Vec<Warning>> = BTreeMap::new();
+        let mut rnm_keys = BTreeMap::new();
         for job in &plan.jobs {
+            // M6 Track F2 (Note W11): a layer file has no item; its RNM-* notes are kept for its set.
+            if matches!(job.status, JobStatus::NormalLayer { .. }) {
+                let notes: Vec<Warning> = job
+                    .warnings
+                    .iter()
+                    .filter(|w| w.code.as_str().starts_with("RNM-"))
+                    .cloned()
+                    .collect();
+                if !notes.is_empty() {
+                    rnm_notes
+                        .entry(job.set_key.clone())
+                        .or_default()
+                        .extend(notes);
+                }
+                continue;
+            }
+            if let Some(r) = &job.rnm {
+                for l in &r.layers {
+                    rnm_keys.insert(l.file.path.clone(), key_of(root, &l.file.path));
+                    if let Some(m) = &l.mask {
+                        rnm_keys.insert(m.path.clone(), key_of(root, &m.path));
+                    }
+                }
+                if let Some(a) = &r.ao {
+                    rnm_keys.insert(a.file.path.clone(), key_of(root, &a.file.path));
+                }
+            }
             let packed = job.pack.is_some();
             let key = if let Some(pk) = &job.pack {
                 packed_key(root, job, pk.kind)
@@ -160,6 +193,7 @@ impl PlanView {
                 JobStatus::PackingInput { role } => {
                     ItemStatus::Skipped(format!("raw {} map, not packed", role.id()))
                 }
+                JobStatus::NormalLayer { .. } => unreachable!("layer jobs are skipped above"),
             };
             let name = if packed {
                 job.output
@@ -318,6 +352,8 @@ impl PlanView {
             items,
             sets,
             unmatched,
+            rnm_notes,
+            rnm_keys,
         }
     }
 }

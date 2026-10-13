@@ -37,3 +37,35 @@ impl ThumbCache {
         Some(tex)
     }
 }
+
+impl ThumbCache {
+    /// A texture for a thumbnail that has no item (an RNM layer or mask file); `invert` is the AO channel: shown as inverted grey
+    /// (what the blend reads, `1 - AO`).
+    pub fn get_raw(
+        &mut self,
+        ctx: &egui::Context,
+        key: &str,
+        t: &engine::session::Thumbnail,
+        invert: Option<usize>,
+    ) -> egui::TextureHandle {
+        let h = hash(&t.rgba);
+        let id = format!("raw:{key}:{invert:?}");
+        if let Some((old, tex)) = self.map.get(&id) {
+            if *old == h {
+                return tex.clone();
+            }
+        }
+        let mut rgba = t.rgba.clone();
+        if let Some(ch) = invert {
+            for px in rgba.as_chunks_mut::<4>().0 {
+                let g = 255 - px[ch];
+                px[..3].fill(g);
+            }
+        }
+        let img =
+            egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], &rgba);
+        let tex = ctx.load_texture(format!("thumb:{id}"), img, egui::TextureOptions::LINEAR);
+        self.map.insert(id, (h, tex.clone()));
+        tex
+    }
+}

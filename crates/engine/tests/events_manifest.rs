@@ -141,6 +141,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 source: None,
                 pack: None,
                 bake: None,
+                rnm: None,
                 shader: None,
             }),
         },
@@ -514,6 +515,7 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             role: Some(RawMap::Roughness),
             invert: true,
             bake: None,
+            rnm: None,
         },
         SourceRef {
             path: "in/x_m.png".into(),
@@ -521,6 +523,7 @@ fn multi_source_records_round_trip_and_single_source_omits_the_list() {
             role: None,
             invert: false,
             bake: None,
+            rnm: None,
         },
     ];
     m.append(&r).unwrap();
