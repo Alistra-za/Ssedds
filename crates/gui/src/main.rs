@@ -11,6 +11,11 @@ fn user_config_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("config.toml"))
 }
 
+/// `%APPDATA%\sdc\presets`, the CLI's user presets folder (M6 Track D spec §3).
+fn user_presets_path() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("presets"))
+}
+
 fn build_model() -> AppModel {
     let path = settings::settings_path();
     let (s, err) = path
@@ -22,6 +27,8 @@ fn build_model() -> AppModel {
         Ok(session) => {
             let mut m = AppModel::new(s, path, Arc::new(session));
             m.user_config = user_config_path();
+            m.user_presets = user_presets_path();
+            m.scan_db = sdc_gui::model::meshes::default_store_path();
             m
         }
         Err(e) => {

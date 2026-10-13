@@ -152,6 +152,7 @@ fn sdc_toml_edits_undo_while_the_sets_doc_is_read_only() {
     std::fs::write(root.join("sdc-project.toml"), "this is = = not toml\n").unwrap();
     let mut m =
         sdc_gui::model::AppModel::new(sdc_gui::settings::GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     assert!(m.sets_doc.as_ref().unwrap().read_only());

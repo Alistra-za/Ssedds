@@ -2,7 +2,7 @@ use crate::codec::*;
 use crate::corpus::*;
 use crate::{ddsraw, metrics};
 use anyhow::{anyhow, bail, Result};
-use encoders_sys::{init, Bc1Model, Bc7Level, Bc7Params};
+use encoders_sys::{gather_blocks, init, Bc1Model, Bc7Level, Bc7Params};
 use std::fmt;
 use std::path::Path;
 
@@ -132,8 +132,30 @@ pub fn bc7e_u5(root: &Path, require_identical_bytes: bool) -> Result<GateReport>
     Ok(r)
 }
 
-/// Spec 11.2 rgbcx row: our rgbcx output must equal bc7enc_rdo's bytes for the same images.
-pub fn rgbcx_bit_exact(
+/// The BC4 halves of one `kind` block as (byte offset, source channel); empty for BC1.
+fn bc4_halves(kind: RgbcxKind) -> &'static [(usize, usize)] {
+    match kind {
+        RgbcxKind::Bc1 { .. } => &[],
+        RgbcxKind::Bc3 => &[(0, 3)],
+        RgbcxKind::Bc4 => &[(0, 0)],
+        RgbcxKind::Bc5 => &[(0, 0), (8, 1)],
+    }
+}
+
+/// Squared error of one BC4 block decoded by bcdec against `src` channel `ch`.
+fn bc4_sse(blk: &[u8], src: &[[u8; 4]], ch: usize) -> u64 {
+    let mut d = [0u8; 16];
+    bcdec_rs::bc4(blk, &mut d, 4, false);
+    (0..16)
+        .map(|t| (d[t] as i64 - src[t][ch] as i64).pow(2) as u64)
+        .sum()
+}
+
+/// Spec 11.2 rgbcx row against bc7enc_rdo's bytes for the same images. BC1 (and BC3's colour half) must be
+/// bit-exact. The BC4 halves (BC3 alpha, BC4, BC5) differ since the M6 Track D rgbcx round-to-nearest patch; the
+/// search tries the same endpoint pairs and now scores them as bcdec decodes, so no block may decode (bcdec) worse
+/// than the bench's.
+pub fn rgbcx_vs_bench(
     root: &Path,
     bench_out: &str,
     images_dir: &str,
@@ -141,7 +163,13 @@ pub fn rgbcx_bit_exact(
     kind: RgbcxKind,
 ) -> Result<GateReport> {
     init(Bc1Model::Ideal)?;
-    let mut r = GateReport::new(&format!("rgbcx {kind:?} bit-exact vs {bench_out}"));
+    let halves = bc4_halves(kind);
+    let rule = if halves.is_empty() {
+        "bit-exact"
+    } else {
+        "no BC4 block worse under bcdec"
+    };
+    let mut r = GateReport::new(&format!("rgbcx {kind:?} {rule} vs {bench_out}"));
     let mut total = 0;
     for set in sets {
         let files = set_files(root, images_dir, set, "png")?;
@@ -150,12 +178,34 @@ pub fn rgbcx_bit_exact(
         }
         for src in files {
             let stem = stem(&src);
-            let enc = encode_rgbcx_image(&load_png_rgba8(&src)?, kind);
-            let bench = std::fs::read(root.join(bench_out).join(set).join(format!("{stem}.dds")))?;
+            let img = load_png_rgba8(&src)?;
+            let enc = encode_rgbcx_image(&img, kind);
+            let file = std::fs::read(root.join(bench_out).join(set).join(format!("{stem}.dds")))?;
+            let bench = ddsraw::payload(&file)?;
             total += 1;
+            if halves.is_empty() || bench.len() != enc.len() {
+                r.check(bench == enc.as_slice(), format!("{set}/{stem}"));
+                continue;
+            }
+            let blocks = gather_blocks(&img.px, img.width, img.height);
+            let bsz = enc.len() / (blocks.len() / 16);
+            let (mut worse, mut other, mut ours, mut theirs) = (0usize, 0usize, 0u64, 0u64);
+            for (bi, (o, t)) in enc.chunks(bsz).zip(bench.chunks(bsz)).enumerate() {
+                let px = &blocks[bi * 16..bi * 16 + 16];
+                for &(off, ch) in halves {
+                    let (a, b) = (
+                        bc4_sse(&o[off..off + 8], px, ch),
+                        bc4_sse(&t[off..off + 8], px, ch),
+                    );
+                    worse += (a > b) as usize;
+                    (ours, theirs) = (ours + a, theirs + b);
+                }
+                // BC3's colour half is rgbcx BC1, which the patch does not touch.
+                other += (bsz == 16 && halves.len() == 1 && o[8..] != t[8..]) as usize;
+            }
             r.check(
-                ddsraw::payload(&bench)? == enc.as_slice(),
-                format!("{set}/{stem}"),
+                worse == 0 && other == 0,
+                format!("{set}/{stem}: bcdec SSE {ours} vs bench {theirs}, blocks worse {worse}, colour blocks differing {other}"),
             );
         }
     }
@@ -193,7 +243,7 @@ fn expect_count(r: &mut GateReport, expected: usize) {
 /// BC1/BC3/BC4/BC5 against the bench's bc7enc_rdo output (BC1 with transparent-black on, as benched).
 pub fn rgbcx_all(root: &Path) -> Result<Vec<GateReport>> {
     let mut v = vec![
-        rgbcx_bit_exact(
+        rgbcx_vs_bench(
             root,
             "out/bc1_rgbcx_L18",
             "images",
@@ -202,21 +252,21 @@ pub fn rgbcx_all(root: &Path) -> Result<Vec<GateReport>> {
                 transparent_black: true,
             },
         )?,
-        rgbcx_bit_exact(
+        rgbcx_vs_bench(
             root,
             "out/bc3_rgbcx_L18",
             "images",
             &ALPHA_SETS,
             RgbcxKind::Bc3,
         )?,
-        rgbcx_bit_exact(
+        rgbcx_vs_bench(
             root,
             "out2/bc4_rgbcx",
             "images2",
             &["mask_real", "mask_grad"],
             RgbcxKind::Bc4,
         )?,
-        rgbcx_bit_exact(
+        rgbcx_vs_bench(
             root,
             "out2/bc5_rgbcx",
             "images2",
@@ -595,7 +645,7 @@ pub fn run(name: &str, root: &Path) -> Result<Vec<GateReport>> {
     Ok(match name {
         "s3" => vec![
             bc7e_u5(root, false)?,
-            rgbcx_bit_exact(
+            rgbcx_vs_bench(
                 root,
                 "out2/bc4_rgbcx",
                 "images2",

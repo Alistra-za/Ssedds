@@ -102,6 +102,8 @@ fn resolve_img(
         accept,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let stem = Path::new(name)
         .file_stem()
@@ -176,14 +178,14 @@ fn registry_validates_and_looks_up_aliases() {
     ));
     assert!(r.get("other").is_none());
     assert_eq!(r.alias_for("rmaosultrahigh"), Some(("rmaos", "ultra")));
-    // reloading the same preset id replaces its aliases without a self-conflict
-    r.add_toml(ULTRA).unwrap();
+    // the same preset id cannot be loaded twice, so its aliases stay (M6 Track D, Note T7)
+    assert!(r.add_toml(ULTRA).is_err());
+    assert!(r
+        .add_toml(&preset_with("ultra", "rmaosmax = \"rmaos\""))
+        .is_err());
     assert_eq!(r.alias_table().len(), 3);
-    r.add_toml(&preset_with("ultra", "rmaosmax = \"rmaos\""))
-        .unwrap();
-    assert_eq!(r.alias_table().len(), 1);
-    assert_eq!(r.alias_for("rmaosultrahigh"), None);
-    assert_eq!(r.alias_for("rmaosmax"), Some(("rmaos", "ultra")));
+    assert_eq!(r.alias_for("rmaosultrahigh"), Some(("rmaos", "ultra")));
+    assert_eq!(r.alias_for("rmaosmax"), None);
     // built-in presets declare no aliases, and a user alias preset is not built in
     assert!(PresetRegistry::builtin().unwrap().alias_table().is_empty());
     assert!(!registry().is_builtin("ultra"));
@@ -485,6 +487,8 @@ fn accepted_fallback_keeps_the_alias_preset() {
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let split = split_suffix_with("iron_normalhq", reg.alias_table());
     let f = InputFile {

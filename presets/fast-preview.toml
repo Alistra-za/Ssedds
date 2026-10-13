@@ -1,0 +1,10 @@
+schema_version = 1
+id = "fast-preview"
+version = "1.0.0"
+base = "sdc-base"
+description = "Fast preview: bc7e fast, smallest-mip validation only. For checking a mod quickly, not for release."
+
+# No target: the batch target decides (DECISIONS Note T1).
+[defaults]
+encoder = { effort = "fast", bc45_search_radius = "fast" }
+validation = { mips = "smallest" }

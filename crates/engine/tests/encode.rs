@@ -478,4 +478,5 @@ fn effort_and_radius_mappings() {
     );
     assert_eq!(radius(SearchRadius::Default), 5);
     assert_eq!(radius(SearchRadius::Max), 10);
+    assert_eq!(radius(SearchRadius::Fast), 4);
 }

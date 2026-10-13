@@ -39,6 +39,8 @@ fn run(
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let name = game.rsplit('/').next().unwrap();
     let f = InputFile {
@@ -204,10 +206,24 @@ fn threshold_range_and_npot() {
         Some("n"),
         &["n"],
         opaque(),
-        &["alpha.threshold=250"],
+        &["alpha.threshold=255"],
         &[],
     );
     assert!(codes(&j).contains(&Code::CfgInvalid));
+    // Owner O2 (M6 Track E): 1..=254 is valid.
+    for t in ["1", "254"] {
+        let set = format!("alpha.threshold={t}");
+        let j = run(
+            Target::Cs,
+            "textures/a/x_n.png",
+            Some("n"),
+            &["n"],
+            opaque(),
+            &[set.as_str()],
+            &[],
+        );
+        assert!(!codes(&j).contains(&Code::CfgInvalid), "{t}");
+    }
     let j = run(
         Target::Cs,
         "textures/a/x_n.png",
@@ -306,6 +322,8 @@ fn run_with(
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let f = InputFile {
         path: rel.into(),
@@ -811,6 +829,8 @@ fn preset_alpha_policy_counts_as_explicit() {
         accept: AcceptSuggestions::None,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_file(&ctx("mine"), &facts);
     assert_eq!(
@@ -933,7 +953,7 @@ fn resolved_job_json_shape() {
     assert_eq!(v["profile"]["format"], "bc7");
     assert_eq!(v["profile"]["color"]["tag"], "unorm");
     assert_eq!(v["profile"]["alpha"]["policy"], "remove");
-    assert_eq!(v["suggestions"][0]["confidence"], "medium");
+    assert_eq!(v["suggestions"][0]["confidence"], "high");
     assert!(v["suggestions"][0]["reason"].is_string());
     assert_eq!(v["status"]["state"], "unresolved");
     assert!(v["status"]["reasons"].is_array());
@@ -1065,6 +1085,8 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
         accept: AcceptSuggestions::High,
         allow: &allow_set,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_in(&ctx, "a/x_m.png", Some("m"), &m);
     assert_eq!(
@@ -1139,6 +1161,8 @@ fn table_backends_follow_more_specific_formats() {
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_in(&c, "a/x_m.png", Some("m"), &opaque());
     assert_eq!(
@@ -1214,6 +1238,8 @@ fn builtin_presets_never_confirm_mesh_alpha() {
                 accept: AcceptSuggestions::High,
                 allow: &allow,
                 files: &NO_FILE_SCOPES,
+                shaders: &NO_SHADERS,
+                mesh_alpha: &NO_MESH_ALPHA,
             };
             let j = resolve_in(&ctx, "a/x.png", None, &img);
             match &j.status {
@@ -1227,21 +1253,30 @@ fn builtin_presets_never_confirm_mesh_alpha() {
             }
         }
     }
-    // a user preset loaded under a built-in id is not built in
+    // A user preset may not reuse a built-in id (M6 Track D, Note T7) …
     let mut reg = PresetRegistry::builtin().unwrap();
-    reg.add_toml("schema_version = 1\nid = \"cs-quality\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n[subtypes.diffuse]\nalpha = { policy = \"blend\" }\n").unwrap();
-    assert!(!reg.is_builtin("cs-quality"));
+    assert!(reg
+        .add_toml(
+            "schema_version = 1\nid = \"cs-quality\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n"
+        )
+        .is_err());
+    assert!(reg.is_builtin("cs-quality"));
+    // … and a user preset's alpha policy is a choice.
+    reg.add_toml("schema_version = 1\nid = \"mine\"\nversion = \"9.0.0\"\nbase = \"sdc-base\"\n[subtypes.diffuse]\nalpha = { policy = \"blend\" }\n").unwrap();
+    assert!(!reg.is_builtin("mine"));
     let overrides = sets(&["subtype=diffuse"]);
     let ctx = ResolveCtx {
         target: Target::Cs,
         registry: &reg,
-        preset: "cs-quality",
+        preset: "mine",
         user_config: None,
         project_config: None,
         overrides: &overrides,
         accept: AcceptSuggestions::High,
         allow: &allow,
         files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
     };
     let j = resolve_in(&ctx, "a/x.png", None, &img);
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
@@ -2361,4 +2396,121 @@ fn flow_small_tests_the_resized_size() {
     );
     assert!(codes(&j).contains(&Code::DimFlowSmall), "{:?}", j.warnings);
     assert!(codes(&j).contains(&Code::DimResized), "{:?}", j.warnings);
+}
+
+fn project_rules(rules: &str) -> ConfigFile {
+    ConfigFile::parse(rules, "sdc.toml").unwrap()
+}
+
+/// Carried fix 3 (Note T10): a rule's sub-type then a `--set` sub-type — the rule's overrides no longer apply.
+#[test]
+fn a_set_subtype_drops_the_overrides_of_a_rule_that_named_another_subtype() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let project = project_rules(
+        "[[rules]]\nmatch = { glob = \"**/r/*.png\" }\nsubtype = \"height\"\noverrides = { validation = { min_mip_psnr_db = 31.0 } }\n",
+    );
+    let j = run_with(&reg, "cs-quality", Some(&project), "r/x.png", None, &[]);
+    assert_eq!(j.profile.subtype, Subtype::Height);
+    assert_eq!(j.profile.validation.min_mip_psnr_db, 31.0);
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        Some(&project),
+        "r/x.png",
+        None,
+        &["subtype=diffuse"],
+    );
+    assert_eq!(j.profile.subtype, Subtype::Diffuse);
+    assert_eq!(j.profile.validation.min_mip_psnr_db, 30.0);
+    assert!(!matches!(
+        j.provenance.get("validation.min_mip_psnr_db"),
+        Some(Provenance::Rule(_))
+    ));
+}
+
+/// Carried fix 3: a `--set` sub-type then a rule for the new sub-type — that rule applies, by `subtype` or by
+/// `match.subtypes`; the first rule of a source that names another sub-type is skipped for the next one.
+#[test]
+fn a_rule_for_the_new_subtype_applies_after_a_set_subtype() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let project = project_rules(concat!(
+        "[[rules]]\nmatch = { glob = \"**/r/*.png\" }\nsubtype = \"height\"\noverrides = { validation = { min_mip_psnr_db = 31.0 } }\n",
+        "[[rules]]\nmatch = { glob = \"**/r/*.png\", subtypes = [\"diffuse\"] }\noverrides = { validation = { min_mip_psnr_db = 32.0 } }\n",
+    ));
+    let j = run_with(
+        &reg,
+        "cs-quality",
+        Some(&project),
+        "r/x.png",
+        None,
+        &["subtype=diffuse"],
+    );
+    assert_eq!(j.profile.validation.min_mip_psnr_db, 32.0);
+    assert_eq!(
+        j.provenance["validation.min_mip_psnr_db"].to_string(),
+        "rule:project#1"
+    );
+    // A rule that names sub-types in `match` never decides one.
+    let only = project_rules("[[rules]]\nmatch = { glob = \"**/r/*.png\", subtypes = [\"diffuse\"] }\nsubtype = \"height\"\n");
+    let j = run_with(&reg, "cs-quality", Some(&only), "r/x.png", None, &[]);
+    assert_ne!(j.provenance["subtype"].to_string(), "rule:project#0");
+}
+
+/// Carried fix 4 (Note T10): an explicit flip_green that contradicts green_convention is kept and warned.
+#[test]
+fn an_explicit_flip_green_against_the_convention_warns_and_wins() {
+    let n = |sets: &[&str]| {
+        run(
+            Target::Cs,
+            "textures/a/x_n.png",
+            Some("n"),
+            &["n"],
+            opaque(),
+            sets,
+            &[],
+        )
+    };
+    let j = n(&[
+        "channels.green_convention=opengl",
+        "channels.flip_green=false",
+    ]);
+    assert!(!j.profile.channels.flip_green);
+    assert!(
+        codes(&j).contains(&Code::CfgGreenConflict),
+        "{:?}",
+        j.warnings
+    );
+    let w = j
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::CfgGreenConflict)
+        .unwrap();
+    assert_eq!(
+        w.data,
+        serde_json::json!({"flip_green": false, "convention": "opengl"})
+    );
+    let j = n(&[
+        "channels.green_convention=directx",
+        "channels.flip_green=true",
+    ]);
+    assert!(j.profile.channels.flip_green);
+    assert!(codes(&j).contains(&Code::CfgGreenConflict));
+    // Agreeing values and the convention alone raise nothing.
+    for sets in [
+        &["channels.green_convention=opengl"][..],
+        &[
+            "channels.green_convention=opengl",
+            "channels.flip_green=true",
+        ],
+        &["channels.green_convention=directx"],
+    ] {
+        let j = n(sets);
+        assert!(!codes(&j).contains(&Code::CfgGreenConflict), "{sets:?}");
+    }
+    assert!(
+        n(&["channels.green_convention=opengl"])
+            .profile
+            .channels
+            .flip_green
+    );
 }

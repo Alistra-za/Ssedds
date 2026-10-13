@@ -1,6 +1,7 @@
 //! Pure field logic for the settings panel (M3a spec §2.4): labels, options, locks, provenance.
 use engine::config::*;
-use engine::policy::ResolvedJob;
+use engine::policy::{JobStatus, Need, Provenance, ResolvedJob};
+use engine::suggest::Confidence;
 use serde_json::Value;
 
 /// The editable fields in display order, with the label each row shows.
@@ -240,6 +241,7 @@ pub fn provenance_text(p: &str) -> String {
         "analysis" => "from the image analysis".into(),
         "fallback" => "fallback value (sub-type or box filter)".into(),
         "set" => "decided by the texture set (variance bake)".into(),
+        "mesh:alpha" => "from the meshes that use this texture".into(),
         _ => match p.split_once(':') {
             Some(("preset", id)) => format!("from preset {id}"),
             Some(("rule", r)) => format!("from rule {r}"),
@@ -250,6 +252,17 @@ pub fn provenance_text(p: &str) -> String {
             None => p.to_string(),
         },
     }
+}
+
+/// M6 Track E spec §2 (DECISIONS Note U4): the reason of the High suggestion that decided `job`'s sub-type, shown as
+/// "(auto)" with this hover text. `None` when the user, a rule or a shader chose it, or it still asks.
+pub fn auto_subtype_reason(job: &ResolvedJob) -> Option<&str> {
+    let top = job.suggestions.first()?;
+    let asks = matches!(&job.status, JobStatus::Unresolved { needs, .. } if needs.contains(&Need::Subtype));
+    (job.provenance.get("subtype") == Some(&Provenance::Suggestion)
+        && top.confidence == Confidence::High
+        && !asks)
+        .then_some(top.reason.as_str())
 }
 
 /// A packed channel's provenance (`source:<file>:R`, `default:<v>`, `fill:<code>`) as a reader sees it.

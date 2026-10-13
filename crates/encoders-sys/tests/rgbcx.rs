@@ -105,3 +105,21 @@ fn larger_search_radius_never_hurts_bc4() {
     };
     assert!(err(BC45_RADIUS_MAX) <= err(BC45_RADIUS_DEFAULT));
 }
+
+// M6 Track D: the palette rgbcx searches with must equal what bcdec (and D3D hardware) decodes, for every endpoint
+// pair in both the 8-value and the 6-value mode; otherwise the search optimises for a palette nobody decodes.
+#[test]
+fn bc4_search_model_matches_bcdec_for_every_endpoint_pair() {
+    for e0 in 0..=255u8 {
+        for e1 in 0..=255u8 {
+            // Texel i uses selector i % 8 (3 bits per texel after the two endpoint bytes).
+            let sels: u64 = (0..16u64).fold(0, |acc, i| acc | ((i % 8) << (3 * i)));
+            let mut blk = [0u8; 8];
+            blk[..2].copy_from_slice(&[e0, e1]);
+            blk[2..].copy_from_slice(&sels.to_le_bytes()[..6]);
+            let mut dec = [0u8; 16];
+            bcdec_rs::bc4(&blk, &mut dec, 4, false);
+            assert_eq!(bc4_block_values(e0, e1), dec[..8], "endpoints ({e0}, {e1})");
+        }
+    }
+}

@@ -409,7 +409,7 @@ Owner decisions of 2026-10-11 (R1–R3) and the rulings of `docs/superpowers/pla
 - **R10 sRGB roughness** (plan): a roughness member with `color.content = srgb` raises `TAG-CONTENT-MISMATCH` and does not bake.
 - **R11 No alpha weighting for vectors or roughness** (plan, Task 29 carry): normal, `_msn`, `_flow` and roughness chains are never alpha-weighted, even with a cutout policy forced on them. Preprocess dilation under α = 0 still runs for alpha-tested policies.
 - **R12 `if-changed` and the bake** (plan): the baked `_n` is recorded in the manifest's `sources` with `bake` = the SHA-256 of its decode settings (`channels`, `alpha.policy`, `mips.normal_base`) and level shift; a changed `_n`, changed settings, or the bake turning on or off re-encodes the member. `Profile` gains `mips.normal_base` and `mips.bake_clamp`, so every `profile_sha256` changes once and the first M4 run re-encodes every output (as Note M10). Final review Minor 2: a `pbr_normal`'s `profile_sha256` hashes `mips.normal = renormalize_bake` as `renormalize` (`manifest::profile_sha256`), because the bake changes none of the `_n`'s own bytes; the bake turning on or off re-encodes only the member, not the `_n`. A `coat_normal` keeps its own hash (its self-bake changes its bytes).
-- **R13 Coverage, mipcheck round 2 B1/B6** (owner decision on the dither, 2026-10-11, verbatim: "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them"): every level ≥ 1 passes exactly `k = round(p·n)` texels, the texels above the k-th largest alpha plus as many tied with it as are needed. The dither is in M4 at the owner's request. Ties are split in a hierarchical Bayer order of position (not plain 8×8, which biases the split spatially; deterministic, no RNG), so tied alpha on thin strands neither overshoots (up to ×32 before) nor vanishes (B1). `k = 0` keeps the box alpha ("no texel passes"); zero alpha is never raised, and a level with no positive alpha keeps its box alpha; there is no "more than 2× off" fallback. Remapped texels, the split's included, sit at least 2 codes clear of the threshold (B6). The clearance also applies to levels that skip the remap (early-out levels, including `k = 0`). At the ends of the range (threshold code c ≤ 2 or c ≥ 254) the clearance degrades to whatever codes are available (unreachable: `alpha.threshold` is limited to 5–200).
+- **R13 Coverage, mipcheck round 2 B1/B6** (owner decision on the dither, 2026-10-11, verbatim: "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them"): every level ≥ 1 passes exactly `k = round(p·n)` texels, the texels above the k-th largest alpha plus as many tied with it as are needed. The dither is in M4 at the owner's request. Ties are split in a hierarchical Bayer order of position (not plain 8×8, which biases the split spatially; deterministic, no RNG), so tied alpha on thin strands neither overshoots (up to ×32 before) nor vanishes (B1). `k = 0` keeps the box alpha ("no texel passes"); zero alpha is never raised, and a level with no positive alpha keeps its box alpha; there is no "more than 2× off" fallback. Remapped texels, the split's included, sit at least 2 codes clear of the threshold (B6). The clearance also applies to levels that skip the remap (early-out levels, including `k = 0`). At the ends of the range (threshold code c ≤ 2 or c ≥ 254) the clearance degrades to whatever codes are available (reachable since owner O2, M6 Track E, widened `alpha.threshold` to 1–254; the clearance saturates).
 - **R14 `sdc-base` 1.1.0** (plan): new defaults `mips.normal_base`, `mips.bake_clamp` (0.25) and the `coat_normal` self-bake. There is no preset changelog file; the bump is recorded here and in spec §3.5. `cs`, `cpm` and `vanilla-quality` stay at 1.0.0.
 - **M4-final-1 A borrowed `_n` bakes the borrower's own roughness** (controller ruling on final review I1, 2026-10-11; amends R7's "the engine has no notion of borrowing"): `BatchRequest::borrowed_normal` maps the id of each set whose Normal slot borrows another set's `_n` (GUI share) to the id of the set that owns it. `plan_bakes` bakes the borrower's own `rmaos`/`skin_rfaos` members from the owner's `pbr_normal` (the first by path, R9) under every usual rule: the decided check, the R6 opt-out, R10, `SET-BAKE-RATIO`, the stamp, the manifest `sources`, `if-changed` and bake admission. A borrower whose roughness slot is itself shared (R7) still never bakes. The lent `_n` raises no `SET-MISSING-COMPANION` in its own set when a borrower with a roughness member uses it; a borrower with a roughness member but no usable owner `_n` gets `SET-MISSING-COMPANION` naming the borrowed `_n` file (or saying the owner set has no usable `_n`). While a set borrows its Normal slot, its own `pbr_normal` (if any) is ignored by the bake, as the GUI shows the borrowed one. The GUI fills the map on `cs` only, on both the plan and the export request; the CLI leaves it empty, so CLI runs are unchanged.
 - **M4-final-2 (owner, 2026-10-11): an 8-bit noise floor for the bake** ("Ignore tiny variance", on final review Minor 9): a footprint whose average normal length L is at least `NOISE_FLOOR_L` = 0.999 adds no variance (was 1 − 10⁻⁶), in the `_n` → roughness bake and the `_cnr` self-bake alike (`bake::variance_add`). A visually flat `_n` with ±1–2 codes of quantisation noise has 1 − L of about 1e-5 to 1e-4 and lifted r = 0 to 0.04–0.10 at mip ≥ 1; it now adds nothing at any mip. Worst-case ±k-code noise stays above the floor up to k = 4. Real bumps still widen: the bumpy golden `_n` and `_cnr` cases are far below the floor, and a tilt of ±6 X codes (L = 0.99889) widens while ±5 codes (L = 0.99923, about 2.2°) does not. The golden f64 reference restates the floor independently. Outputs change only where some footprint has 0.999 ≤ L < 1 − 10⁻⁶.
@@ -461,3 +461,175 @@ Rulings of `docs/superpowers/plans/2026-10-11-sdc-m6-mips-resize.md`. The owner 
 - **S-mips-12 Kaiser golden on `rgba8`** (Task 7): the "Kaiser diffuse differs from box, its alpha does not" golden encodes `rgba8`, because BC7's joint RGB/alpha error moves the alpha differently for each filter (an encoder effect, not the filter's).
 - **S-mips-13 An unscoped filter only affects colour maps** (owner, 2026-10-11: "change the unscoped kaiser behaviour, print a message in the console instead saying that it only effects color maps"). A non-box `mips.filter` that S-mips-2 bars for a job is judged by the scope of the **last layer that set it**. Unscoped (an unscoped `--set`, or a preset or config `defaults` table): the job resolves **box** in `layered_profile` (after every layer and analysis fact, since the check reads format, content, category and alpha), with provenance `fallback`, and gets the new **`CFG-FILTER-IGNORED`** (Info): "mips.filter = kaiser only affects colour maps; wall_n.png uses box". On a colour map that is barred for another reason (alpha weighting, linear content, HDR), the S-mips-2 reason follows after a colon. Scoped (a `subtypes.<st>` table, a sub-type- or file-scoped `--set`, a rule, a `[files]` entry): unchanged, `CFG-INVALID`. The fallback is in the resolved profile, so the manifest, `profile_sha256` and if-changed see box: such a `_n` hashes as a default run and stays up to date with or without the set. The CLI's human log prints this one Info code (other Info codes stay hidden). The GUI writes filters at file or set scope, so its edits are unaffected; a texture whose inherited unscoped filter fell back shows Box with provenance `fallback`. The golden "CFG-INVALID Kaiser normal" now sets the filter file-scoped. Code count 69; Track A becomes 73 (S-mips-0).
 - **Deferred:** the Kaiser width/alpha/stretch syntax; alpha-weighted tent for foliage; `resize` upscaling (`pot-up`, `pot-nearest`) and a size cap; matching the resized mip 0's coverage to the source (S-mips-8); resizing pack sources of different sizes to a common size (`PACK-SIZE-MISMATCH` still errors); the 16K box peak and the single-threaded `powf` (S-mips-11).
+
+### M6 Track A: shader modes (plan rulings, 2026-10-11)
+
+Rulings of `docs/superpowers/plans/2026-10-11-sdc-m6-shader-modes.md`. The owner's answers of 2026-10-11 are folded in. Where the plan text and the build differ, this subsection describes the build.
+
+- **S-shader-1 `--set` set scope (owner / plan, 2026-10-11).** There was no set scope before. `set:<id>.shader=<shader>` is the only form, and `shader` the only field a set scope takes. Only a trailing `.shader` splits the key, because set ids may contain dots. The id matches by `sets::set_id` (case-folded); an id without `/` also names every set whose key ends in `/<id>`. GUI ids (`sdc-project.toml`) are canonical and match exactly, with no tail match (final review I2). An id that names no set is one `SET-EDIT-STALE`. A command-line `set:` beats the GUI's choice (a later `--set` beats an earlier one).
+- **S-shader-2 `sdc-project.toml` (owner / plan, 2026-10-11).** `shader = "<id>"` goes in the set's `[[sets]]` entry (the spec's `[sets."<base>"]` adapted to the file's real layout). It is a reserved key, never a JSON setting; an unknown id reads as unset and stays in the file.
+- **S-shader-3 Precedence (owner / plan, 2026-10-11).** `Provenance::Shader` (shown `shader:<id>`) is a new layer applied after the preset chain, configs, rules, the analysis-alpha step and `skin_wet_form`, and before the vocabulary green step and the ranked overrides. It writes a field only where `field_explicit` is false (built-in values and built-in presets), so it beats built-in profiles and suggestions and loses to user presets, configs, rules, analysis facts, suffix facts, `[files]` and `--set`. It counts as explicit itself, so a shader alpha policy answers the alpha-meaning question. In the `Provenance` order it sits between `analysis:<fact>` and `suffix:<term>`. Consequence: `hair` on a diffuse with no alpha keeps the analysis `remove`; on varying alpha it gets `cutout` and asks nothing.
+- **S-shader-4 Sub-type effects (owner / plan, 2026-10-11).** Eye `_n` becomes `msn` and a landscape colour member becomes `landscape_diffuse`. Applied in `decide_subtype` after `--set subtype` and rules. An explicit shader decides it (`decided: true`, provenance `shader:<id>`); an auto or fallback shader inserts a High suggestion "<id> shader (<origin>): <why>" at the front, decided only as any High suggestion is.
+- **S-shader-5 Member defaults (owner / plan, 2026-10-11).** `hair` diffuse: `alpha.policy = cutout`, `mips.coverage = on`. `multilayer` diffuse: `alpha.policy = data` (owner: the alpha is the layer mask, kept exact). `envmap` and `eye` envmask, `parallax` height: `format = bc4`. Finding: `envmask` and `height` were already BC4 in `sdc-base`, so those rows change provenance (`shader:<id>`), not bytes. An `_m` is never re-typed: a varying-alpha `_m` under an explicit `envmap` stays `complex_material` and is reported as an extra map.
+- **S-shader-6 `_i` and rule 12 (owner, 2026-10-11).** `_i` is added to the §6.1 suffix list (a grouping change) and suggests `diffuse` (Medium). Rule 12 auto-picks `default`, never `pbr` without a PBR member. `default_for(target)` (`pbr` on `cs`, else `default`) is only the dropdown's first entry and the fallback shader.
+- **S-shader-7 Planning order (plan, 2026-10-11).** Pass 1 resolves every file; the shader is picked per set after pass 1; members of shaders with defaults or sub-type effects are re-resolved; panic isolation is kept. Shader warnings (`SHADER-AUTO`, `SHADER-UNAVAILABLE`, `SHADER-EXTRA-MAP`, `SHADER-MISSING-MAP`) ride on `set_resolved`, not as `warning` events. `EVENT_SCHEMA` stays 2 (the fields are additive).
+- **S-shader-8 Target independence (plan, 2026-10-11).** The PBR rule is target-independent, so a PBR set under vanilla or cpm auto-picks `pbr` and falls back to `default` with `SHADER-UNAVAILABLE`. PGPatcher JSON still follows `is_pbr_diffuse` (P5/C1), not the shader.
+- **S-shader-9 `_coat` (owner, 2026-10-11: "_coat (for the coat diffuse)").** A built-in §4.4 vocabulary term (`VocabRole::CoatColour`, canonical `s`), not a preset alias.
+  - `x_coat.png` joins set `x` as its `_s` member, `pbr_subsurface` (High), slot 8, written `x_s.dds`;
+  - it collides with `x_s.png`, and with a re-encoded `x_s.dds` (Track B S6), as `IN-DUPLICATE`;
+  - it is blocked by `CFG-UNAVAILABLE` under vanilla and cpm;
+  - a user preset alias `coat` is now refused, because aliases may not be vocabulary terms.
+- **S-shader-10 Mesh-reported shader (owner, 2026-10-11: "map wins, assume the user runs PGPatcher").** Auto-pick order: explicit → advanced skin → PBR → complex `_m` → `_p` → mesh majority (`auto:mesh`) → envmap `_m`, `_g`, `_i`, `_sk`, hair path, eyes path, landscape, default. Only the maps PGPatcher can patch a mesh for (complex `_m`, `_p`) beat the mesh. Evidence is `BatchRequest::mesh_shaders`, keyed by `shader::mesh_key` (diffuse game folder + stem, lower case) and filled by the GUI from the scan database. Votes: lighting shapes using `<key>.dds` in slot 0, from the whole load order (every enabled origin), not TruePBR shapes (SLSF2 bit 23), not PGPatcher-derived copies; one vote per NIF path and block. `Shader::from_lighting_type`: 0 default, 1 envmap, 2 glow, 3 parallax, 5 skin, 6 hair, 7 parallax (Parallax Occlusion; owner-provisional), 8 landscape, 11 multilayer, 16 eye; any other type is no vote. A strict majority is required, else the suffix rules decide. PBR is never read from a NIF (the TruePBR bit is PGPatcher's output marker), so a PBR or skin member always wins. The CLI sends no votes. `modscan` is untouched: `crates/gui/src/model/meshes.rs` reads it with raw SQL on `Store::conn()` (a `shortcut:` comment there; move it into a typed `modscan::store` query when modscan is next edited). There is no envmap-to-complex refinement: complex `_m` (rule 3) fires before the mesh.
+- **S-shader-11 Owner answers and Track C interaction (2026-10-11).** The owner's four answers on the mesh evidence: the map wins over the mesh for complex `_m` and `_p` (PGPatcher patches the mesh for them); the votes come from the whole load order; lighting type 7 maps to `parallax` (provisional); the scan database is read with raw SQL now. Track C (S-mips-0/-13): the shader layer runs before `unscoped_filter_falls_back`, so a hair diffuse's `cutout` makes an unscoped non-box filter box + `CFG-FILTER-IGNORED` and a scoped one `CFG-INVALID`. Catalogue count 69 → 73; workspace version 0.3.0 → 0.4.0 (`if-changed` re-encodes).
+- **Also (Track A).** A landscape set without `_n` shows `SHADER-MISSING-MAP` (Warning) on its card.
+
+## Note T — M6 Track D: presets (plan rulings, 2026-10-12)
+
+Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/superpowers/specs/2026-10-12-sdc-m6-presets-design.md` (owner-approved 2026-10-12; §2.2 corrected by the owner in 956da58).
+
+- **T1 Preset ids (owner / plan, 2026-10-12).** `cs-compact` (base `cs-quality`, target cs) and `vanilla-compact` (base `vanilla-quality`, target vanilla). There is one `fast-preview` (base `sdc-base`, no target): the registry needs no target, and the batch target decides. It does not inherit later `*-quality` settings.
+- **T2 BC1 rule mechanics (plan, 2026-10-12).**
+  - `RuleMatch` had no sub-type matcher, so it gained `match.subtypes` (matched while layering, never while deciding a sub-type).
+  - `match.alpha` matches the source's alpha content, so there are two rules: `none`, and `constant255` for sub-types whose policy resolves to `remove`.
+  - No resolved-policy matcher was added (it would be circular).
+  - An explicit non-`remove` policy on an opaque colour map under compact is `FMT-BC1-ALPHA`.
+  - `bc1_transparent_black` stays false.
+- **T3 The colour and data lists (owner / plan, 2026-10-12).** Exactly as in the plan.
+  - Opaque colour becomes BC1 at full size (its rules set `resize = "none"`). Colour that stays BC7 (colour with alpha) halves, like every BC7 colour sub-type (owner).
+  - `landscape_diffuse` is excluded from BC1 (`FMT-LANDSCAPE-BC1`); as BC7 colour it halves (owner).
+  - `pbr_emissive` (BC6H) and `hdr_sky` stay full size. `hdr_sky` is excluded from resize (owner).
+  - `pbr_subsurface` and `pbr_fuzz` are BC1 only without alpha.
+- **T4 `resize = half` (owner, 2026-10-12).** Both sides halve together when the larger is above 512 (`HALF_FLOOR`); the aspect ratio is kept and the larger side floors (1024×512 becomes 512×256); there is no POT step; each side is at least 1 px; `DIM-RESIZED` names the mode; admission counts it like `pot-down`.
+- **T5 `validation.mips = smallest` (plan, 2026-10-12).** PSNR and coverage on the last mip only. The default `all` is not serialised.
+- **T6 The user presets folder (plan, 2026-10-12).**
+  - Location: `%APPDATA%\sdc\presets\*.toml`, non-recursive, in file-name order.
+  - Load order: all files load first, then each preset is checked, so a base may come later in the order. Failures are skipped with `CFG-PRESET-SKIPPED`, repeatedly, so orphans go too.
+  - Path: `BatchRequest::user_presets`, set by the CLI and the GUI, `None` in tests.
+  - The same file reached twice loads once.
+- **T7 Duplicate ids are refused (plan, 2026-10-12).** Carried fix 1, naming both sources: `CFG-PRESET-SKIPPED` in the folder, an error from `--preset-file`. `is_builtin` means "loaded from the embedded list".
+- **T8 Verbs (owner / plan, 2026-10-12).**
+  - `diff` compares profiles from presets alone (rules are not shown: spec gap).
+  - `export` writes the preset's own TOML under a new id (`<id>-export` or `--id`); `base` stays a link, and there is no `--flat` (owner).
+  - `export` writes the parsed table re-serialised, not the original text: comments are dropped and keys may be reordered (final review Minor 9). The output is equivalent and validates.
+  - `export` copies `suffix_aliases` as they are and does not strip them. A copy of a preset with suffix aliases therefore cannot load beside the original (the aliases conflict, `CFG-PRESET-SKIPPED`); rename or remove the aliases before putting the copy in the user presets folder. The `export` help says so (final review Minor 8).
+  - `export --out` refuses to overwrite the source file of any loaded preset (final review Minor 10).
+  - `diff` help and its human output footer say "rules are not compared" (final review Minor 13).
+  - `validate` reports the first problem per file, and validates a folder file in place of itself.
+- **T9 Migration table (plan, 2026-10-12).** Presets none, config none, manifest records v1 → v2 (`schema` set to 2; the manifest's key is `schema`). Version 0 is refused. `PresetError::NewerConfigSchema(file, v)` is the spec's `ConfigError::NewerSchema`. Config files accept an optional `schema_version`.
+- **T10 Carried fixes (plan, 2026-10-12).**
+  - #2: `merge_json`, where a `null` patch never adds a key (the spec's two sentences disagreed; the function's contract won).
+  - #3: a rule whose `subtype` is not the final sub-type does not apply. This includes a `CFG-UNAVAILABLE` fallback.
+  - #4: `CFG-GREEN-CONFLICT`; the explicit `flip_green` wins.
+  - #5: the landscape match was already whole-component; pinned by tests.
+  - #6: `hdr_sky` only under a `sky` component.
+- **T11 BC4/BC5 search radius (plan / owner, 2026-10-12).** Measured in `docs/spikes/bc45-search-radius.md`, re-run after T13.
+  - Rule Q (quality default becomes `max` if +0.10 dB at ≤ 1.5× time on both formats) did not fire. BC4 at radius 10 gains +0.1231 dB at 2.80× the time; BC5 gains +0.0599 dB at 2.96×. `sdc-base` keeps `"default"` and stays 1.1.0.
+  - Rule F (smallest radius below 5 within 0.10 dB of 5 on both formats) gives 4: −0.0591 dB (BC4) and −0.0362 dB (BC5) against 5, at 0.73× and 0.71× the time. It is `SearchRadius::Fast` (`"fast"`), used by `cs-compact`, `vanilla-compact` and `fast-preview`.
+  - Mean PSNR (dB) at radius 0 / 4 / 5 (`default`) / 10 (`max`): BC4 55.79 / 57.20 / 57.26 / 57.38; BC5 58.94 / 60.57 / 60.60 / 60.66.
+  - No warning on the `max` radius (owner, 2026-10-12); `ENC-RADIUS-MAX` was not added.
+- **T12 Versions (plan, 2026-10-12).** Codes 73 → 75 (`CFG-PRESET-SKIPPED`, `CFG-GREEN-CONFLICT`). `sdc-base` stays 1.1.0 (rule Q did not fire). Workspace 0.4.0 → 0.5.0 so `if-changed` re-encodes.
+- **T13 rgbcx rounding patch (owner, 2026-10-12).**
+  - The vendored rgbcx's BC4/BC5/BC3-alpha decode model now rounds to nearest like bcdec. It used to floor the interpolants, so a wider search found endpoint pairs that were exact only under the floor.
+  - Gain at the default radius: BC4 +3.07 dB, BC5 +2.61 dB (mean PSNR under bcdec, bench corpus). PSNR now rises monotonically with the radius.
+  - A new manifest `rgbcx_patch` field makes old BC3/BC4/BC5 outputs re-encode. Like `bc7e_patch` it is a content tag, `bc4-round-to-nearest@sha256:<hash of the patched vendor/bc7enc_rdo/rgbcx.h>` (final review Minor 11), so an in-place change to the patched header also re-encodes them.
+  - Two bench gates moved from byte-exact to never-worse (per-block bcdec SSE for BC3 alpha, BC4, BC5); BC1 and BC3 colour stay byte-exact.
+  - Known quirk: sdc's own BC3 alpha validation decodes through `bcdec_rs::bc3`, which uses `(6a0+a1+1)/7` and matches neither model.
+
+## Note U — M6 Track E: NIF-aware alpha and fewer confirmations (plan rulings, 2026-10-12)
+
+Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on spec `docs/superpowers/specs/2026-10-12-sdc-m6-nif-alpha-confident-design.md` (owner-approved 2026-10-12), with the owner overrides O1 and O2 made while building.
+
+- **U1 No suffix is the colour member, at High (owner, 2026-10-12: "No suffix should equal diffuse by default").**
+  - This reverses Note H's "a bare stem is only a guess". A bare stem suggests `diffuse`, `pbr_albedo` (a PBR set) or `ui_sky` (`interface/`, `sky/`) at High, like `_d`.
+  - `landscape_diffuse` and `skin_albedo` were already High. `hdr_sky` (a float source under `sky/` may be an HDRI) and `_i` stay Medium.
+  - Names that break the conventions (a normal map without `_n`) now resolve as colour maps; fixing them is the mod author's job (owner).
+  - Note H's colour-term raise was removed: every colour member it raised is now High.
+- **U2 `_coat` is coat colour + strength (owner, 2026-10-12).**
+  - `pbr_subsurface` keeps alpha policy `data` (`sdc-base`), so a varying alpha is kept as the strength and stays BC7 under compact (T3).
+  - The reason reads "exporter suffix _coat (coat colour + strength); the PBR coat map (_s)".
+  - The slot card reads "Coat colour + strength" when its source file is a `_coat` (by file name).
+- **U3 The GUI accepts High suggestions (owner, 2026-10-12).**
+  - `AppModel::accept` is `High`, and `request()` sends it. Medium and Low suggestions still ask.
+  - Explicit choices win: `[files]`, rules and `--set subtype` decide before any suggestion.
+  - The CLI is unchanged (`--accept-suggestions high`).
+  - The M3-era GUI test fixtures set `accept = None` to keep their undecided members.
+- **U4 "(auto)" (plan, 2026-10-12).** There is no new engine field. A job shows "(auto)" in the Sub-type row's provenance column when all three hold, with the top suggestion's reason on hover:
+  - its `provenance.subtype` is `suggestion`;
+  - its top suggestion is High;
+  - it does not need a sub-type.
+- **U5 Mesh alpha evidence (plan, 2026-10-12).**
+  - `BatchRequest::mesh_alpha` is keyed by `shader::colour_mesh_key`, the output stem, so a renamed `x_albedo.png` is keyed `x`. The CLI sends none.
+  - The GUI reads it with raw SQL (`meshes::mesh_alpha`). The query is composed with `format!` from a static `FROM` fragment shared with `mesh_votes` (`SLOT0_SOURCE_SHAPES`), and the key is a bound parameter, so no user data reaches the SQL text (review ruling, Task 4). The fragment selects:
+    - lighting shapes using `<key>.dds` in slot 0;
+    - non-derived copies of enabled origins;
+    - TruePBR excluded;
+    - one entry per NIF path, block and alpha property.
+  - Unlike the votes, every lighting shader type counts.
+  - NiAlphaProperty bit 0 is blend and bit 9 is test. A shape with no property is no alpha.
+  - A database read error gives no evidence, as in `mesh_votes` (the Meshes view reports database errors), so the alpha question is asked as before. Surfacing the error in the planner is parked as minor.
+- **U6 The rule (owner, 2026-10-12; threshold range owner O2).**
+  - Any shape with alpha beats shapes without; there is no vote.
+  - Blend only gives `blend`; test only gives `cutout`; blend and test anywhere, on one shape or two, give `cutout_blend`; no alpha gives `remove`.
+  - The threshold is the largest of the testing shapes (the stricter cutoff), clamped to 1..=254. Spec gap: a NIF may say 0..255.
+  - O2 (owner): the valid `alpha.threshold` range widens from 5..=200 to 1..=254 (`CFG-INVALID` outside it), replacing the plan's clamp to 5..=200. Earlier notes that say 5..=200 describe the typical range.
+- **U7 The `mesh:alpha` layer (plan, 2026-10-12).**
+  - **Provenance.** `Provenance::MeshAlpha` (`mesh:alpha`) sits between `shader:<id>` and `suffix:<term>`.
+  - **Where.** It is applied after the analysis-alpha step and `skin_wet_form`, before the shader layer, and only for `alpha_from_mesh` sub-types where `alpha.policy` is not explicit.
+  - **What beats it.** User presets, configs and rules (before it), and `[files]` and `--set` (after it).
+  - **The analysis `remove` keeps priority** (no alpha channel, or alpha constant 255). This extends spec §4.3's "source without alpha" to constant 255.
+  - **What it beats.** A shader's alpha default (hair `cutout`).
+  - **Explicit.** It counts as explicit, so the alpha question is not asked. `alpha.threshold` gets the same provenance unless that field is explicit.
+- **U8 Compact (owner O1, 2026-10-12; replaces the plan's BC7 ruling).**
+  - Under Compact, a mesh-decided `remove` on a varying-alpha colour member is opaque colour: it goes BC1 at full size, like other opaque colour. No `LOSS-ALPHA-DATA` is raised (explicit remove, P25).
+  - Mechanism: rules are matched on the file's real source alpha first. Only when no explicit layer (preset, config, `[files]`/`--set` override, or a matching rule) sets `alpha.policy` does a mesh `remove` make the rules see alpha `none`, so Compact's BC1 rules match. A rule that sets `alpha.policy` is never suppressed, and no BC1 + blend `CFG-INVALID` arises from it (Task 3 review fix).
+  - A mesh `cutout`, `blend` or `cutout_blend` keeps the varying-alpha rules. A mesh `cutout` never reaches a constant-255 source (U7), so an opaque RGBA diffuse stays BC1.
+- **U9 Two-pass GUI (plan, 2026-10-12).** The first plan of a folder asks the alpha question until the scan's evidence is read. `EngineInputs` carries `mesh_alpha`, so the automatic re-plan settles it (`refresh_mesh_votes` reads votes and alpha together and reports whether either changed).
+- **U10 Versions (plan, 2026-10-12).**
+  - There are no new codes (75).
+  - The workspace goes 0.5.0 → 0.6.0, so `if-changed` re-encodes.
+  - There is no manifest change: the up-to-date check compares `engine_version` and `profile_sha256`, and both change.
+  - `schema/` was regenerated only for the `Provenance` doc text.
+
+## Note V — M6 Track F1: TruePBR panel polish (plan rulings, 2026-10-12)
+
+- **V1 What matchN holds (plan, 2026-10-12).**
+  - PGPatcher compares `matchN` exactly with the unpatched mesh's raw slot path (no `strip_pbr`). So the value is the set's derived diffuse path, which comes from the source, not from the set id or the output.
+  - `match1` is that path, with its `_d`/`mask` kept.
+  - Slot N > 1 is that path with a trailing `_d` cut, plus `_<canonical suffix>` (`match2` = `…\rock01_n`; `facemask` → `facemask_n`).
+  - Proven against pgpsim (`slot_matches_hit_the_unpatched_mesh_and_land_on_the_sdc_prefix`).
+- **V2 Storage and writing.**
+  - `match1` absent means the derived path (on by default; old projects get it too). `match1 = ""` means off. `match2`–`match8` are on when present.
+  - Stored values have no `.dds`.
+  - The JSON gets the value without a leading `textures\` (any case) and with `.dds` exactly once.
+  - `match_diffuse`/`match_normal` are never written (`NOT_EXPOSED`). There is no migration (owner, 2026-10-12: nobody has used them): old `match_diffuse`/`match_normal` values in a project are ignored, and `match1` falls back to the derived default.
+- **V3 Prefix.**
+  - The prefix comes from the lowest active `matchN`, with that slot's suffix cut, under `textures\pbr\`.
+  - With no slot match, it is the derived path.
+  - `rename` is a new file name (owner, 2026-10-12): no folders (a `\` or `/` blocks export), one `.dds` cut. It replaces the last component of the prefix above, so the folder stays the matched one: `textures\pbr\<folder of the matched path>\<name>`.
+  - The JSON's `rename` is that full prefix, not the typed name. PGPatcher substitutes `rename` for the whole matched path when the entry has no `match_diffuse`/`match_normal` (always, for sdc), so every hit (any `matchN`, or `path_contains`, with or without a slot match) lands where sdc writes. Proven against pgpsim (`a_renamed_entry_lands_on_the_sdc_prefix_for_slot_matches_and_path_contains`).
+  - When active matches derive different prefixes and `rename` is empty, a warning says the output prefix depends on which match hits first, and to edit the match paths so they point at the same texture. It does not block export.
+  - Open point, still unverified against real PGPatcher: PGPatcher prepends `\` to `rename` before substituting, so pgpsim's matched path for a renamed entry starts with a backslash (`\textures\pbr\…`); the round-trip tests compare without it. Before F1 this applied only to the old whole-prefix rename; now every renamed set goes through it. Check one renamed set in real PGPatcher (does the NIF get `\textures\pbr\…`, and does its file-existence check accept it?).
+- **V4 No match.** A set with no active `matchN` and no `path_contains` shows "this entry matches nothing", asks before export, and is left out of the JSON. The schema's `hasMatcher` refuses it. Its textures still export.
+- **V5 Number ranges.**
+  - 0–1: `coat_strength`, `subsurface_opacity`, `fuzz.weight`.
+  - Min 0: the other 15 number keys. That includes `smooth_angle` and `auto_uv`, which fit no class.
+  - No range: `glint.log_microfacet_density`, a log value that can be negative (`NumRange::Any`).
+  - No CS or PGPatcher limits are documented.
+- **V6 Clamping.**
+  - The number box has `DragValue::range`, and a typed value outside the range shows "clamped to ≥ 0" / "clamped to 0–1". A stored out-of-range value shows the same note (ruling: it explains why the JSON differs from the box). `Any` has no note.
+  - A stored out-of-range value is shown as it is (`clamp_existing_to_range(false)`). An equal value is no edit, so drawing never dirties the project.
+  - The writer clamps.
+  - `pgpsim::range_warnings` mirrors the ranges (it skips `glint.log_microfacet_density` and the removed `env_map_*` keys), and a GUI test (`pgpsim_warns_on_exactly_the_gui_ranges`) pins the two together.
+- **V7 Layout.**
+  - The TruePBR box shows the visual settings, then **Matching**, then **Advanced TruePBR settings** (collapsed: `path_contains`, `nif_filter`, `rename`, UV, vertex, locks, inner UV scale, coat colour).
+  - The Advanced drawer's "PGPatcher (advanced)" section is gone.
+- **V8 Slot cards.**
+  - The set editor's cards (the 9-slot row; the Sets-column pill shows members, not slots) are the picked shader's usable slots, filled or empty, plus filled slots it cannot use (amber outline, hover reason).
+  - They are ordered by PGPatcher slot 1–8.
+  - Usable slots are the shader roles' sub-types mapped to slot cards (`usable_slots`). Roles matched by suffix only map to none.
+  - A fallback pick uses the fallback shader. With no pick, only the filled slots show.
+- **V9 Versions.** No bump (0.6.0): no engine change, and a bump would re-encode every texture through `engine_version`. No new codes (75). No `schema/` change.
+- **V10 The + menu (owner, 2026-10-12).**
+  - It offers slots 3–8 without a row. A slot the set fills starts from `slot_match_path` (V1); any other slot adds an empty row (`matchN = ""`, N ≥ 2) that says "this row matches nothing until a path is entered".
+  - An empty row is not a match: it is not written to the JSON and does not count for the prefix or the warnings. Clearing a row's text removes it.
+  - A filled slot is prefilled only when PGPatcher's slot-N list strips its suffix, so a prefilled row never splits the prefix (controller ruling). Subsurface `_s` in slot 8 is not in that list (`_b`/`_bl`/`_flow`; pgpsim, `a_match8_on_an_s_map_keeps_the_s_in_pgpatchers_prefix`), so slot 8 starts empty. A typed path that splits still gets the "match8 does not strip _s" and divergent-prefix warnings.

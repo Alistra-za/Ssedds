@@ -43,7 +43,18 @@ pub struct ResolveCtx<'a> {
     pub allow: &'a BTreeSet<Code>,
     /// The `[files]` layer and per-file acknowledgements (DECISIONS N2).
     pub files: &'a FileScopes,
+    /// M6 (DECISIONS Note S): set key → the set's shader pick. Empty during pass 1 (`NO_SHADERS`).
+    pub shaders: &'a BTreeMap<String, crate::shader::ShaderPick>,
+    /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
+    /// the colour member (`BatchRequest::mesh_alpha`). Empty (`NO_MESH_ALPHA`) = no evidence.
+    pub mesh_alpha: &'a BTreeMap<String, Vec<crate::shader::MeshAlpha>>,
 }
+
+/// For `ResolveCtx` literals made before the shaders are picked (pass 1, tests, `inspect`).
+pub static NO_SHADERS: BTreeMap<String, crate::shader::ShaderPick> = BTreeMap::new();
+
+/// For `ResolveCtx` literals with no mesh evidence (tests).
+pub static NO_MESH_ALPHA: BTreeMap<String, Vec<crate::shader::MeshAlpha>> = BTreeMap::new();
 
 pub struct FileFacts<'a> {
     pub input: &'a InputFile,
@@ -154,7 +165,15 @@ fn glob_match(glob: &str, f: &FileFacts) -> bool {
     glob_match_input(glob, f.input)
 }
 
-pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
+/// `st` is the sub-type being resolved, or `None` while it is being decided: a rule with `match.subtypes` then never
+/// matches (DECISIONS Note T2). `alpha` is the alpha content `match.alpha` is compared with (usually
+/// `f.analysis.alpha`); `None` = a rule that matches on `alpha` never matches.
+pub fn rule_matches(
+    m: &RuleMatch,
+    f: &FileFacts,
+    st: Option<Subtype>,
+    alpha: Option<AlphaContent>,
+) -> bool {
     m.glob.as_deref().is_none_or(|g| glob_match(g, f))
         && m.suffix
             .as_deref()
@@ -162,7 +181,8 @@ pub fn rule_matches(m: &RuleMatch, f: &FileFacts) -> bool {
         && m.set_has
             .as_deref()
             .is_none_or(|s| f.set.suffixes.contains(&s.to_ascii_lowercase()))
-        && m.alpha.is_none_or(|a| a == f.analysis.alpha)
+        && m.alpha.is_none_or(|a| Some(a) == alpha)
+        && (m.subtypes.is_empty() || st.is_some_and(|s| m.subtypes.contains(&s)))
 }
 
 /// Rule sources in precedence order: the file's preset chain (base first; `preset_chain`), user config,
@@ -181,13 +201,18 @@ fn rule_sources<'a>(ctx: &ResolveCtx<'a>, chain: &[&'a PresetFile]) -> Vec<(Stri
     v
 }
 
+/// The first rule of one source that matches. While layering sub-type `st`, a rule that names another sub-type
+/// (`Rule::subtype`) does not match, so a `--set`/`[files]` sub-type drops it (carried fix 3, Note T10). `alpha` as
+/// in [`rule_matches`].
 fn first_match<'a>(
     rules: &'a [Rule],
     f: &FileFacts,
-    ignore_alpha_rules: bool,
+    st: Option<Subtype>,
+    alpha: Option<AlphaContent>,
 ) -> Option<(usize, &'a Rule)> {
     rules.iter().enumerate().find(|(_, r)| {
-        !(ignore_alpha_rules && r.matcher.alpha.is_some()) && rule_matches(&r.matcher, f)
+        st.is_none_or(|s| r.subtype.is_none_or(|x| x == s))
+            && rule_matches(&r.matcher, f, st, alpha)
     })
 }
 
@@ -216,6 +241,7 @@ fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &
             .files
             .rel_of(f.input)
             .is_some_and(|rel| path_key_matches(k, &rel)),
+        Scope::Set(_) => false,
     }
 }
 
@@ -235,6 +261,7 @@ fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
         Scope::Subtype(_) => 1,
         Scope::File(_) => 2,
         Scope::Path(_) => 3,
+        Scope::Set(_) => 4,
     };
     let mut cli: Vec<&SetOverride> = ctx.overrides.iter().collect();
     cli.sort_by_key(|o| rank(o));
@@ -255,7 +282,7 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
                 .files
                 .rel_of(input)
                 .is_some_and(|rel| path_key_matches(k, &rel)),
-            Scope::Subtype(_) => false,
+            Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
@@ -306,7 +333,7 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
     }
     // rules: highest-precedence source with a matching rule that names a sub-type
     for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
-        if let Some((i, r)) = first_match(rules, f, false) {
+        if let Some((i, r)) = first_match(rules, f, None, Some(f.analysis.alpha)) {
             if let Some(st) = r.subtype {
                 return SubtypeDecision {
                     subtype: st,
@@ -315,6 +342,31 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
                     suggestions,
                 };
             }
+        }
+    }
+    // S-shader-4: the set's shader re-types a member (eye `_n` → msn, landscape colour → landscape_diffuse).
+    if let Some(p) = ctx.shaders.get(&f.set.key) {
+        let id = p.shader.id();
+        if let Some((st, why)) = suggestions
+            .first()
+            .and_then(|s| crate::shader::member_subtype(p.shader, s.subtype))
+        {
+            if p.provenance == crate::shader::ShaderOrigin::Set {
+                return SubtypeDecision {
+                    subtype: st,
+                    provenance: Provenance::Shader(id.into()),
+                    decided: true,
+                    suggestions,
+                };
+            }
+            suggestions.insert(
+                0,
+                Suggestion {
+                    subtype: st,
+                    confidence: Confidence::High,
+                    reason: format!("{id} shader ({}): {why}", p.provenance),
+                },
+            );
         }
     }
     match suggestions.first() {
@@ -486,8 +538,30 @@ fn layered_profile_with(
             }
         }
     }
+    // M6 Track E (spec §4.3, DECISIONS Note U5): what the meshes that use this colour member say about its alpha.
+    let mesh = st
+        .alpha_from_mesh()
+        .then(|| crate::shader::colour_mesh_key(&f.input.game_path, &f.input.output, Some(st)))
+        .flatten()
+        .and_then(|k| ctx.mesh_alpha.get(&k))
+        .and_then(|shapes| crate::shader::mesh_alpha_policy(shapes));
+    // Owner O1: a varying alpha the meshes drop (and no explicit layer keeps) is opaque colour, so rules match it as
+    // alpha `none` (Compact's BC1 rules). Known before the rules: the mesh layer itself is applied below. A rule that
+    // sets the policy, matched on the source's real alpha, is explicit and keeps the mesh out (fix round 1).
+    let real_alpha = (!ignore_alpha_rules).then_some(f.analysis.alpha);
+    let mesh_remove = f.analysis.alpha == AlphaContent::Varying
+        && matches!(mesh, Some((AlphaPolicy::Remove, _)))
+        && !alpha_policy_explicit(ctx, &prov)
+        && !ranked_overrides(ctx)
+            .into_iter()
+            .any(|o| o.field == "alpha.policy" && override_applies(ctx, o, Some(st), f))
+        && !rule_sources(ctx, &chain).into_iter().any(|(_, rules)| {
+            first_match(rules, f, Some(st), real_alpha)
+                .is_some_and(|(_, r)| r.overrides.pointer("/alpha/policy").is_some())
+        });
+    let rule_alpha = real_alpha.map(|a| if mesh_remove { AlphaContent::None } else { a });
     for (src, rules) in rule_sources(ctx, &chain) {
-        if let Some((i, r)) = first_match(rules, f, ignore_alpha_rules) {
+        if let Some((i, r)) = first_match(rules, f, Some(st), rule_alpha) {
             apply(
                 &mut doc,
                 &mut prov,
@@ -516,6 +590,33 @@ fn layered_profile_with(
     if st == Subtype::SkinWet {
         skin_wet_form(ctx, f, &mut doc, &mut prov, &mut sources);
     }
+    // M6 Track E (spec §4.3, DECISIONS Note U7): the mesh evidence, only where no explicit layer and no analysis fact
+    // (a source without varying alpha) chose the policy; it is explicit itself, so the shader default below never
+    // overwrites it and the alpha question is not asked.
+    if let Some((policy, threshold)) = mesh.filter(|_| !alpha_policy_explicit(ctx, &prov)) {
+        let value = serde_json::to_value(policy).expect("AlphaPolicy serialises");
+        apply(
+            &mut doc,
+            &mut prov,
+            &mut sources,
+            &to_patch("alpha.policy", &value),
+            Provenance::MeshAlpha,
+            GENERIC,
+        );
+        if let Some(t) = threshold.filter(|_| !field_explicit(ctx, &prov, "alpha.threshold")) {
+            apply(
+                &mut doc,
+                &mut prov,
+                &mut sources,
+                &to_patch("alpha.threshold", &json!(t)),
+                Provenance::MeshAlpha,
+                GENERIC,
+            );
+        }
+    }
+    if let Some(p) = ctx.shaders.get(&f.set.key) {
+        shader_layer(ctx, p.shader, st, &mut doc, &mut prov, &mut sources);
+    }
     // Spec §4.4: `_normalgl`/`_normaldx` state the green convention, a fact at the analysis position (--set wins).
     if let Some(Vocab {
         term,
@@ -543,6 +644,7 @@ fn layered_profile_with(
                 Scope::All => GENERIC,
                 Scope::Subtype(_) => SUBTYPE_SET,
                 Scope::File(_) | Scope::Path(_) => FILE,
+                Scope::Set(_) => unreachable!("set scopes never apply to a file"),
             };
             apply(
                 &mut doc,
@@ -562,8 +664,12 @@ fn layered_profile_with(
     backend_follows_format(&mut profile, &mut prov, &sources);
     emissive_hdr_choice(ctx, &mut profile, &mut prov, f);
     float_source_is_linear(&mut profile, &mut prov, f);
-    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green).
-    if takes_green(st) && profile.channels.green_convention == Some(GreenConvention::Opengl) {
+    // Spec §3.2, §5.4: a stated OpenGL convention is flipped to DirectX in Preprocess (Task 28 reads flip_green). An
+    // explicit `flip_green` wins; `resolve_decided` reports a contradiction as CFG-GREEN-CONFLICT (carried fix 4).
+    if takes_green(st)
+        && profile.channels.green_convention == Some(GreenConvention::Opengl)
+        && !field_explicit(ctx, &prov, "channels.flip_green")
+    {
         profile.channels.flip_green = true;
         if let Some(src) = prov.get("channels.green_convention").cloned() {
             prov.insert("channels.flip_green".into(), src);
@@ -594,6 +700,34 @@ fn unscoped_filter_falls_back(
     Some((dropped, why))
 }
 
+/// Carried fix 4 (DECISIONS Note T10): an explicit `channels.flip_green` that contradicts the resolved
+/// `green_convention` (OpenGL needs the flip, DirectX does not). The explicit field is kept.
+fn green_conflict(
+    ctx: &ResolveCtx,
+    p: &Profile,
+    prov: &BTreeMap<String, Provenance>,
+) -> Option<Warning> {
+    let convention = p.channels.green_convention?;
+    if !takes_green(p.subtype) || !field_explicit(ctx, prov, "channels.flip_green") {
+        return None;
+    }
+    let wants = convention == GreenConvention::Opengl;
+    (p.channels.flip_green != wants).then(|| {
+        let id = serde_json::to_value(convention).unwrap_or_default();
+        Warning::new(
+            Code::CfgGreenConflict,
+            format!(
+                "channels.flip_green = {} contradicts green_convention = {} (from {}); flip_green is kept",
+                p.channels.flip_green,
+                id.as_str().unwrap_or("?"),
+                prov.get("channels.green_convention")
+                    .map_or("builtin".to_string(), ToString::to_string)
+            ),
+        )
+        .with_data(json!({ "flip_green": p.channels.flip_green, "convention": convention }))
+    })
+}
+
 /// The CFG-FILTER-IGNORED notice (S-mips-13): the owner's line, plus the reason when the texture is a colour map.
 fn filter_ignored_notice(p: &Profile, f: &FileFacts, (dropped, why): (MipFilter, &str)) -> Warning {
     let id = serde_json::to_value(dropped).unwrap_or_default();
@@ -611,6 +745,29 @@ fn filter_ignored_notice(p: &Profile, f: &FileFacts, (dropped, why): (MipFilter,
     }
     Warning::new(Code::CfgFilterIgnored, msg)
         .with_data(json!({ "filter": dropped, "used": MipFilter::Box, "reason": why }))
+}
+
+/// M6 spec §5: the shader's member defaults, written only where the field still holds a built-in value.
+fn shader_layer(
+    ctx: &ResolveCtx,
+    shader: crate::shader::Shader,
+    st: Subtype,
+    doc: &mut Value,
+    prov: &mut BTreeMap<String, Provenance>,
+    sources: &mut FormatSources,
+) {
+    for (field, value) in crate::shader::member_defaults(shader, st) {
+        if !field_explicit(ctx, prov, field) {
+            apply(
+                doc,
+                prov,
+                sources,
+                &to_patch(field, &value),
+                Provenance::Shader(shader.id().into()),
+                GENERIC,
+            );
+        }
+    }
 }
 
 /// `skin_wet` has two forms (DECISIONS Note R-skin-1): a tangent-space normal with a binary mask in alpha (BC7, the
@@ -946,6 +1103,9 @@ pub struct ResolvedJob {
     /// every other job and for a member that does not bake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bake: Option<crate::bake::BakeJob>,
+    /// M6 (DECISIONS Note S): the shader picked for this job's set; `None` for a job not made by `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<crate::shader::ShaderPick>,
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1050,10 +1210,10 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     // An HDR format (BC6H, RGBA16F) outside cs cannot be acknowledged: an error, added after the other checks.
     let hdr_outside_cs = p.format.is_hdr() && p.target != Target::Cs;
-    if !(5..=200).contains(&p.alpha.threshold) {
+    if !(1..=254).contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
-            format!("alpha.threshold {} outside 5..=200", p.alpha.threshold),
+            format!("alpha.threshold {} outside 1..=254", p.alpha.threshold),
         );
     }
     // M2.5 (spec §6.4): the neutral roughness (0..=1) of the sub-types whose recipe reads it: `_rmaos`/`_rfaos` and
@@ -1387,12 +1547,15 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     }
     // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).
     let (ow, oh) = crate::resize::target_dims((a.width, a.height), p.resize);
+    let mode = serde_json::to_value(p.resize).unwrap_or_default();
     let resized = ((ow, oh) != (a.width, a.height)).then(|| {
         Warning::new(
             DimResized,
             format!(
-                "{}x{} resized to {ow}x{oh} (resize = pot-down)",
-                a.width, a.height
+                "{}x{} resized to {ow}x{oh} (resize = {})",
+                a.width,
+                a.height,
+                mode.as_str().unwrap_or("?")
             ),
         )
         .with_data(json!({ "from": [a.width, a.height], "to": [ow, oh] }))
@@ -1513,6 +1676,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }
 
@@ -1601,6 +1765,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     source: None,
                     pack: None,
                     bake: None,
+                    shader: None,
                 };
             }
         };
@@ -1654,6 +1819,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         f,
         alpha_policy_explicit(ctx, &provenance),
     ));
+    warnings.extend(green_conflict(ctx, &profile, &provenance));
     if available && profile.subtype == Subtype::SkinWet {
         warnings.push(skin_wet_notice(&profile, f, &provenance));
     }
@@ -1712,5 +1878,6 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         source: None,
         pack: None,
         bake: None,
+        shader: None,
     }
 }

@@ -74,6 +74,11 @@ int sdc_bc1_decode(const uint8_t* src, uint8_t* px, int mode) {
     return rgbcx::unpack_bc1(src, px, true, static_cast<rgbcx::bc1_approx_mode>(mode)) ? 1 : 0;
 }
 
+// rgbcx's BC4 decode model, the one encode_bc4_hq searches with (tests and the bench probe compare it with bcdec).
+void sdc_bc4_block_values(uint32_t l, uint32_t h, uint8_t* out8) {
+    rgbcx::bc4_block::get_block_values(out8, l, h);
+}
+
 void sdc_bc6h_compress(const uint16_t* rgba16f, int32_t width, int32_t rows, int32_t stride_bytes, uint8_t* dst, int level) {
     rgba_surface s;
     s.ptr = reinterpret_cast<uint8_t*>(const_cast<uint16_t*>(rgba16f));

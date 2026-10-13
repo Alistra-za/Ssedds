@@ -271,3 +271,63 @@ fn a_hand_written_defaults_table_is_ignored_and_left_untouched() {
         "{text}"
     );
 }
+
+#[test]
+fn shader_is_reserved_not_a_json_setting() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut s = sdc_gui::sets_doc::SetsDoc::open(d.path());
+    s.set_shader("landscape/leaf", Some(Shader::Hair));
+    let e = s
+        .entries()
+        .into_iter()
+        .find(|e| e.id == "landscape/leaf")
+        .unwrap();
+    assert_eq!(e.shader, Some(Shader::Hair));
+    assert!(!e.settings.contains_key("shader"), "{:?}", e.settings);
+    assert!(s.text().contains("shader = \"hair\""), "{}", s.text());
+    s.set_shader("landscape/leaf", None);
+    assert!(!s.text().contains("shader"), "{}", s.text());
+}
+
+// Final review M1: clearing a shader of a set with no table changes nothing.
+#[test]
+fn clearing_the_shader_of_a_set_without_a_table_is_a_no_op() {
+    let (_d, mut s) = doc(None);
+    let before = s.text();
+    s.set_shader("landscape/leaf", None);
+    assert_eq!(s.text(), before);
+    assert!(!s.is_dirty());
+}
+
+#[test]
+fn set_shader_is_a_no_op_while_read_only() {
+    use engine::shader::Shader;
+    let (d, mut s) = doc(Some("[[sets]\nid = "));
+    assert!(s.read_only());
+    let before = s.text();
+    s.set_shader("landscape/leaf", Some(Shader::Hair));
+    s.set_shader("landscape/leaf", None);
+    assert_eq!(s.text(), before);
+    assert!(!s.is_dirty());
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("sdc-project.toml")).unwrap(),
+        "[[sets]\nid = "
+    );
+}
+
+#[test]
+fn an_unknown_shader_id_reads_as_none_and_survives_a_save() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"landscape/leaf\"\nshader = \"toon\"\n",
+    ));
+    assert!(!s.read_only());
+    let e = s.entries().into_iter().next().unwrap();
+    assert_eq!(e.shader, None);
+    assert!(!e.settings.contains_key("shader"), "{:?}", e.settings);
+    s.set_value("landscape/leaf", "hair", Some(json!(true)));
+    s.save(false).unwrap();
+    let text = std::fs::read_to_string(d.path().join("sdc-project.toml")).unwrap();
+    assert!(text.contains("shader = \"toon\""), "{text}");
+    assert!(text.contains("hair = true"), "{text}");
+}

@@ -285,6 +285,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | Normal, OpenGL | `_normalgl` | `_n` with `channels.green_convention = opengl` | `<base>_n.dds` | Green flipped to DirectX in Preprocess (§5.4) [Requirement] |
 | Normal, DirectX | `_normaldx` | `_n` with `channels.green_convention = directx` | `<base>_n.dds` | No flip [Requirement] |
 | Emissive | `_emissive`, `_emission` | `_g` (`glow` or `pbr_emissive`) | `<base>_g.dds` | As `_g` [Proposal] |
+| Coat colour | `_coat` | `_s` (`pbr_subsurface`, coat colour) | `<base>_s.dds` | (M6, Note S-shader-9) |
 | Raw roughness | `_roughness`, `_rough` | Packing input `roughness` | None on its own | §6.4 |
 | Raw metallic | `_metallic`, `_metalness`, `_metal` | Packing input `metallic` | None on its own | §6.4 |
 | Raw AO | `_ao`, `_ambientocclusion`, `_occlusion` | Packing input `ao` | None on its own | §6.4 |
@@ -453,7 +454,7 @@ The terms Note H names are requirements; the synonyms (`_rough`, `_metalness`, `
 
 ### 6.1 Grouping
 
-**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`). A stem with no suffix is the colour member. `_wet` is a suffix only on `cs` and only when the stem without it names an Advanced skin set (an `_rfaos` member, or a recipe that builds `_rfaos`); there `x_wet` joins set `x` as its `skin_wet` member, and everywhere else `_wet` stays part of the base name (DECISIONS Note R). Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
+**[Proposal]** A texture set is the inputs sharing a directory and a basename: the stem minus one recognised suffix, longest match first (`_n`, `_msn`, `_rmaos`, `_rfaos`, `_p`, `_m`, `_em`, `_envmask`, `_g`, `_s`, `_f`, `_cnr`, `_crn`, `_b`, `_bl`, `_sk`, `_d`, `_e`, `_flow`, `_i` (M6, Note S-shader-6)). A stem with no suffix is the colour member. `_wet` is a suffix only on `cs` and only when the stem without it names an Advanced skin set (an `_rfaos` member, or a recipe that builds `_rfaos`); there `x_wet` joins set `x` as its `skin_wet` member, and everywhere else `_wet` stays part of the base name (DECISIONS Note R). Preset suffix aliases (§3.7) are matched first and stand for their canonical suffix; exporter vocabulary terms (§4.4) are matched next and stand for their canonical suffix or packing role. Matching is case-insensitive. Two inputs mapping to one output (`wood01_n.png`, `wood01_n.tga`) are `IN-DUPLICATE` and both are skipped until one is excluded. Sets drive suggestion, `_s` and PBR disambiguation, and the bake.
 
 ### 6.2 Variance bake into roughness
 

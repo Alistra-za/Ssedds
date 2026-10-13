@@ -72,7 +72,7 @@ cfg_enum!(GraySource, "lowercase" { R, Luma });
 cfg_enum!(MipKeyword, "lowercase" { Full, None });
 cfg_enum!(MipFilter, "lowercase" { Box, Tent, Mitchell, Kaiser });
 cfg_enum!(#[derive(Default)] MipEdge, "lowercase" { #[default] Wrap, Clamp });
-cfg_enum!(#[derive(Default)] ResizeMode, "kebab-case" { #[default] None, PotDown });
+cfg_enum!(#[derive(Default)] ResizeMode, "kebab-case" { #[default] None, PotDown, Half });
 impl MipEdge {
     pub fn is_wrap(&self) -> bool {
         *self == MipEdge::Wrap
@@ -83,6 +83,12 @@ impl ResizeMode {
         *self == ResizeMode::None
     }
 }
+cfg_enum!(#[derive(Default)] ValidationMips, "lowercase" { #[default] All, Smallest });
+impl ValidationMips {
+    pub fn is_all(&self) -> bool {
+        *self == ValidationMips::All
+    }
+}
 cfg_enum!(NormalMips, "snake_case" { Renormalize, RenormalizeBake });
 cfg_enum!(NormalBase, "lowercase" { Renormalize, Keep });
 cfg_enum!(CoverageMode, "lowercase" { Auto, On, Off });
@@ -90,7 +96,7 @@ cfg_enum!(Format, "lowercase" { Bc1, Bc3, Bc4, Bc5, Bc6hUf16 = "bc6h_uf16", Bc7,
 cfg_enum!(HeaderForm, "lowercase" { Auto, Dx10, Legacy });
 cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest });
-cfg_enum!(SearchRadius, "lowercase" { Default, Max });
+cfg_enum!(SearchRadius, "lowercase" { Default, Max, Fast });
 cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
 cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz });
 
@@ -359,7 +365,7 @@ pub struct ColorSpec {
 #[serde(deny_unknown_fields)]
 pub struct AlphaSpec {
     pub policy: AlphaPolicy,
-    /// 8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).
+    /// 8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).
     pub threshold: u8,
     pub compare: AlphaCompare,
     pub exact_opaque: bool,
@@ -430,6 +436,10 @@ pub struct ValidationSpec {
     pub complex_m_warn_alpha: u8,
     pub bc6h_min_peak_ratio: f64,
     pub pgpatcher_non_white_share: f64,
+    /// M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip
+    /// only (`fast-preview`). Not serialised at its default, so existing profile hashes hold.
+    #[serde(default, skip_serializing_if = "ValidationMips::is_all")]
+    pub mips: ValidationMips,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -444,7 +454,7 @@ pub struct Profile {
     pub mips: MipSpec,
     pub format: Format,
     pub header: HeaderForm,
-    /// Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis.
+    /// Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D).
     #[serde(default, skip_serializing_if = "ResizeMode::is_none")]
     pub resize: ResizeMode,
     pub encoder: EncoderSpec,

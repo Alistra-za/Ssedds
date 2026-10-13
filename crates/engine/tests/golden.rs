@@ -15,6 +15,7 @@ use engine::policy::AcceptSuggestions;
 use engine::session::Session;
 use engine::validate::ValidationSummary;
 use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -2689,8 +2690,7 @@ fn kaiser_diffuse_differs_from_box_and_its_alpha_does_not() {
             [c, 255 - c, 90, (y * 4) as u8]
         }),
     );
-    // A file-scoped sub-type, not `subtype:diffuse` (which may silently miss): a suffixless file is otherwise
-    // unresolved (SUG-LOW-CONFIDENCE).
+    // A file-scoped sub-type pins the diffuse whatever the suggestion; `subtype:diffuse` would only scope fields.
     const DIFFUSE: &str = "file:**/rock.png.subtype=diffuse";
     // Uncompressed: under BC7 a block holding this checker and an alpha ramp trades alpha for RGB, differently per
     // filter (measured: box 16 / Kaiser 10 at mip 1 texel 0 vs 2 in the source), which would hide the filter's alpha.
@@ -2843,5 +2843,816 @@ fn default_profiles_hash_as_before() {
         assert!(p["mips"].is_object(), "{id}: {p}");
         assert!(p.get("resize").is_none(), "{id}: {p}");
         assert!(p["mips"].get("edge").is_none(), "{id}: {p}");
+        assert!(p["validation"].get("mips").is_none(), "{id}: {p}");
     }
+}
+
+/// Plan only (no run): the `set_resolved` shader, provenance string and set warning codes of the set whose key ends
+/// with `tail`.
+fn plan_shader(
+    dir: &Path,
+    target: Target,
+    sets: &[&str],
+    tail: &str,
+) -> (Out, String, String, Vec<Code>) {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    Engine::new()
+        .unwrap()
+        .plan(
+            request(dir, target, sets, &[]),
+            &rep,
+            &CancelToken::default(),
+        )
+        .unwrap();
+    let events = sink.take();
+    let (shader, prov, codes) = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::SetResolved {
+                shader: Some(p),
+                warnings,
+                ..
+            } if e.set.as_deref().is_some_and(|s| s.ends_with(tail)) => Some((
+                p.shader.id().to_string(),
+                p.provenance.to_string(),
+                warnings.iter().map(|w| w.code).collect(),
+            )),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no set_resolved for {tail}"));
+    (
+        Out {
+            summary: BatchSummary::default(),
+            events,
+        },
+        shader,
+        prov,
+        codes,
+    )
+}
+
+/// Plan only, under `preset`.
+fn plan_preset(dir: &Path, target: Target, preset: &str, sets: &[&str]) -> Out {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    let mut req = request(dir, target, sets, &[]);
+    req.preset = Some(preset.into());
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    Out {
+        summary: BatchSummary::default(),
+        events: sink.take(),
+    }
+}
+
+fn rgb_wh(w: u32, h: u32) -> DynamicImage {
+    DynamicImage::ImageRgb8(ImageBuffer::from_fn(w, h, |x, y| {
+        Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+    }))
+}
+
+/// `DIM-RESIZED`'s `to` of every planned job, by output path (`/` separators).
+fn resized(o: &Out) -> BTreeMap<String, (u64, u64)> {
+    o.events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FilePlanned { job } => {
+                let w = job.warnings.iter().find(|w| w.code == Code::DimResized)?;
+                let to = &w.data["to"];
+                Some((
+                    job.output.to_string_lossy().replace('\\', "/"),
+                    (to[0].as_u64()?, to[1].as_u64()?),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`resized`] keyed by the output file name only.
+fn resized_names(o: &Out) -> BTreeMap<String, (u64, u64)> {
+    resized(o)
+        .into_iter()
+        .map(|(k, v)| (k.rsplit('/').next().unwrap().to_string(), v))
+        .collect()
+}
+
+/// The planned profile's `resize` (`none` when not serialised).
+fn resize_of(o: &Out, suffix: &str) -> String {
+    planned(o, suffix)["profile"]["resize"]
+        .as_str()
+        .unwrap_or("none")
+        .to_string()
+}
+
+fn format_prov(o: &Out, suffix: &str) -> (String, String) {
+    let j = planned(o, suffix);
+    (
+        j["profile"]["format"].as_str().unwrap().to_string(),
+        j["provenance"]["format"].as_str().unwrap_or("").to_string(),
+    )
+}
+
+/// Writes `files` under `in/` and plans; asserts the shader, provenance and set codes.
+fn shader_case(
+    target: Target,
+    files: Vec<(&str, DynamicImage)>,
+    tail: &str,
+    want: (&str, &str),
+    codes: &[Code],
+) -> Out {
+    let d = tempfile::tempdir().unwrap();
+    for (p, img) in files {
+        put(d.path(), p, img);
+    }
+    let (o, shader, prov, got) = plan_shader(d.path(), target, &[], tail);
+    assert_eq!((shader.as_str(), prov.as_str()), want);
+    assert_eq!(got, codes);
+    o
+}
+
+#[test]
+fn shader_pbr_auto_from_rmaos() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/rock.png", rgb(16)),
+            ("textures/a/rock_n.png", flat_normal(16)),
+            ("textures/a/rock_rmaos.png", rgb(16)),
+        ],
+        "textures/a/rock",
+        ("pbr", "auto:pbr"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "rock.png")["profile"]["subtype"].as_str(),
+        Some("pbr_albedo")
+    );
+}
+
+#[test]
+fn shader_advanced_skin_auto_from_rfaos() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/b/body.png", rgb(16)),
+            ("textures/b/body_n.png", flat_normal(16)),
+            ("textures/b/body_rfaos.png", rgb(16)),
+        ],
+        "textures/b/body",
+        ("advanced_skin", "auto:advanced_skin"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "body.png")["profile"]["subtype"].as_str(),
+        Some("skin_albedo")
+    );
+}
+
+#[test]
+fn shader_default_is_vanillas_default() {
+    shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+        ],
+        "textures/a/wall",
+        ("default", "auto:default"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_envmap_auto_from_m() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+            ("textures/a/wall_m.png", gray_ramp(16)),
+        ],
+        "textures/a/wall",
+        ("envmap", "auto:env_m"),
+        &[Code::ShaderAuto],
+    );
+    let job = planned(&o, "wall_m.png");
+    assert_eq!(job["profile"]["format"].as_str(), Some("bc4"));
+    assert_eq!(
+        job["provenance"]["format"].as_str(),
+        Some("shader:envmap"),
+        "{job}"
+    );
+}
+
+#[test]
+fn shader_complex_material_auto_from_m_alpha() {
+    shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+            (
+                "textures/a/wall_m.png",
+                rgba(16, |x, y| {
+                    [(x * 4) as u8, (y * 4) as u8, 90, (x * 16) as u8]
+                }),
+            ),
+        ],
+        "textures/a/wall",
+        ("complex_material", "auto:complex_m"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_glow_auto_from_g() {
+    shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/lamp.png", rgb(16)),
+            ("textures/a/lamp_n.png", flat_normal(16)),
+            ("textures/a/lamp_g.png", rgb(16)),
+        ],
+        "textures/a/lamp",
+        ("glow", "auto:g"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_parallax_auto_from_p() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/stone.png", rgb(16)),
+            ("textures/a/stone_n.png", flat_normal(16)),
+            ("textures/a/stone_p.png", gray_ramp(16)),
+        ],
+        "textures/a/stone",
+        ("parallax", "auto:p"),
+        &[Code::ShaderAuto],
+    );
+    let job = planned(&o, "stone_p.png");
+    assert_eq!(job["profile"]["format"].as_str(), Some("bc4"));
+    assert_eq!(
+        job["provenance"]["format"].as_str(),
+        Some("shader:parallax"),
+        "{job}"
+    );
+}
+
+#[test]
+fn shader_skin_auto_from_sk() {
+    shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/a/face.png", rgb(16)),
+            ("textures/a/face_n.png", flat_normal(16)),
+            ("textures/a/face_sk.png", rgb(16)),
+        ],
+        "textures/a/face",
+        ("skin", "auto:sk"),
+        &[Code::ShaderAuto],
+    );
+}
+
+#[test]
+fn shader_hair_auto_from_path() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            (
+                "textures/hair/braid.png",
+                rgba(16, |x, _| [200, 150, 90, if x < 8 { 255 } else { 0 }]),
+            ),
+            ("textures/hair/braid_n.png", flat_normal(16)),
+        ],
+        "textures/hair/braid",
+        ("hair", "auto:hair_path"),
+        &[Code::ShaderAuto],
+    );
+    let p = &planned(&o, "braid.png")["profile"];
+    assert_eq!(p["alpha"]["policy"].as_str(), Some("cutout"), "{p}");
+    assert_eq!(p["mips"]["coverage"].as_str(), Some("on"), "{p}");
+}
+
+#[test]
+fn shader_eye_auto_from_path() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/eyes/eye.png", rgb(16)),
+            ("textures/eyes/eye_n.png", flat_normal(16)),
+        ],
+        "textures/eyes/eye",
+        ("eye", "auto:eyes_path"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "eye_n.png")["profile"]["subtype"].as_str(),
+        Some("msn")
+    );
+}
+
+#[test]
+fn shader_multilayer_auto_from_i() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            (
+                "textures/a/glass.png",
+                rgba(16, |x, _| [120, 160, 200, (x * 16) as u8]),
+            ),
+            ("textures/a/glass_n.png", flat_normal(16)),
+            ("textures/a/glass_i.png", rgb(16)),
+        ],
+        "textures/a/glass",
+        ("multilayer", "auto:i"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "glass.png")["profile"]["alpha"]["policy"].as_str(),
+        Some("data")
+    );
+}
+
+#[test]
+fn shader_landscape_auto_from_path() {
+    let o = shader_case(
+        Target::Vanilla,
+        vec![
+            ("textures/landscape/dirt.png", rgb(16)),
+            ("textures/landscape/dirt_n.png", flat_normal(16)),
+        ],
+        "textures/landscape/dirt",
+        ("landscape", "auto:landscape"),
+        &[Code::ShaderAuto],
+    );
+    assert_eq!(
+        planned(&o, "dirt.png")["profile"]["subtype"].as_str(),
+        Some("landscape_diffuse")
+    );
+}
+
+fn pbr_fixture() -> Vec<(&'static str, DynamicImage)> {
+    vec![
+        ("textures/a/rock.png", rgb(16)),
+        ("textures/a/rock_n.png", flat_normal(16)),
+        ("textures/a/rock_rmaos.png", rgb(16)),
+    ]
+}
+
+#[test]
+fn shader_pbr_under_vanilla_falls_back() {
+    let o = shader_case(
+        Target::Vanilla,
+        pbr_fixture(),
+        "textures/a/rock",
+        ("default", "fallback"),
+        &[Code::ShaderUnavailable, Code::ShaderExtraMap],
+    );
+    let extra = o
+        .events
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::SetResolved { warnings, .. } => warnings
+                .iter()
+                .find(|w| w.code == Code::ShaderExtraMap)
+                .cloned(),
+            _ => None,
+        })
+        .unwrap();
+    assert!(extra.message.contains("rock_rmaos.dds"), "{extra:?}");
+}
+
+#[test]
+fn cs_plain_set_is_default_not_pbr() {
+    let o = shader_case(
+        Target::Cs,
+        vec![
+            ("textures/a/wall.png", rgb(16)),
+            ("textures/a/wall_n.png", flat_normal(16)),
+        ],
+        "textures/a/wall",
+        ("default", "auto:default"),
+        &[Code::ShaderAuto],
+    );
+    // File-level: no SHADER-* code may appear.
+    assert!(warnings(&o)
+        .iter()
+        .all(|c| !c.as_str().starts_with("SHADER-")));
+}
+
+#[test]
+fn shader_coat_alias_is_the_s_coat_colour() {
+    let mut files = pbr_fixture();
+    files.push(("textures/a/rock_coat.png", rgb(16)));
+    let o = shader_case(
+        Target::Cs,
+        files,
+        "textures/a/rock",
+        ("pbr", "auto:pbr"),
+        &[Code::ShaderAuto],
+    );
+    assert_profile(
+        &o,
+        "rock_coat.png",
+        "pbr_subsurface",
+        "remove",
+        false,
+        "bc7",
+    );
+    assert!(planned(&o, "rock_coat.png")
+        .to_string()
+        .contains("rock_s.dds"));
+}
+
+// M6 Track D (spec §2): the Compact and Fast-preview presets.
+
+fn constant_255(w: u32) -> DynamicImage {
+    rgba(w, |x, y| [(x * 4) as u8, (y * 4) as u8, 90, 255])
+}
+
+#[test]
+fn compact_opaque_diffuse_is_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(64));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(
+        planned(&o, "a/wall.png")["provenance"]["format"].as_str(),
+        Some("rule:cs-compact#0")
+    );
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+#[test]
+fn compact_constant_255_diffuse_is_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", constant_255(64));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(format_prov(&o, "a/wall.png").1, "rule:cs-compact#1");
+}
+
+#[test]
+fn compact_diffuse_with_alpha_stays_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/glass.png",
+        rgba(64, |x, _| [90, 90, 90, (x * 4) as u8]),
+    );
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/glass.png.alpha.policy=blend"],
+    );
+    assert_profile(&o, "a/glass.png", "diffuse", "blend", false, "bc7");
+    assert!(!format_prov(&o, "a/glass.png")
+        .1
+        .starts_with("rule:cs-compact#"));
+}
+
+#[test]
+fn compact_cutout_diffuse_stays_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/leaf.png",
+        rgba(64, |x, _| [40, 120, 40, if x < 32 { 0 } else { 255 }]),
+    );
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/leaf.png.alpha.policy=cutout"],
+    );
+    assert_profile(&o, "a/leaf.png", "diffuse", "cutout", false, "bc7");
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+#[test]
+fn compact_constant_255_subsurface_stays_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/skin_s.png", constant_255(64));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/skin_s.png.subtype=pbr_subsurface"],
+    );
+    let j = planned(&o, "a/skin_s.png");
+    assert_eq!(
+        (
+            j["profile"]["alpha"]["policy"].as_str(),
+            j["profile"]["format"].as_str()
+        ),
+        (Some("data"), Some("bc7"))
+    );
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+#[test]
+fn compact_landscape_diffuse_stays_bc7_and_halves() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/landscape/dirt.png", rgb(1024));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    let j = planned(&o, "landscape/dirt.png");
+    assert_eq!(
+        (
+            j["profile"]["subtype"].as_str(),
+            j["profile"]["format"].as_str()
+        ),
+        (Some("landscape_diffuse"), Some("bc7"))
+    );
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("dirt.dds".to_string(), (512, 512))])
+    );
+    assert!(!warnings(&o).contains(&Code::FmtLandscapeBc1));
+}
+
+#[test]
+fn compact_2048_diffuse_with_alpha_plans_1024_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(
+        d.path(),
+        "textures/a/glass.png",
+        rgba(2048, |x, _| [90, 90, 90, (x % 256) as u8]),
+    );
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/glass.png.alpha.policy=blend"],
+    );
+    assert_eq!(format_prov(&o, "a/glass.png").0, "bc7");
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("glass.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/glass.png"), "half");
+}
+
+#[test]
+fn compact_2048_opaque_diffuse_stays_2048_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(2048));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:cs-compact#0".to_string())
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall.png"), "none");
+}
+
+/// `plan_preset` with `BatchRequest::mesh_alpha` evidence for `textures/a/wall` (M6 Track E).
+fn plan_compact_wall_mesh(dir: &Path, blend: bool) -> Out {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    let mut req = request(dir, Target::Cs, &[], &[]);
+    req.preset = Some("cs-compact".into());
+    let shape = engine::shader::MeshAlpha {
+        blend,
+        test: false,
+        threshold: 0,
+    };
+    req.mesh_alpha = BTreeMap::from([("textures/a/wall".to_string(), vec![shape])]);
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    Out {
+        summary: BatchSummary::default(),
+        events: sink.take(),
+    }
+}
+
+fn varying_2048() -> DynamicImage {
+    rgba(2048, |x, _| [90, 60, 30, (x % 256) as u8])
+}
+
+/// Owner O1 (M6 Track E): a varying-alpha diffuse whose meshes neither blend nor test is opaque colour, so Compact
+/// gives it BC1 at full size.
+#[test]
+fn compact_2048_varying_alpha_diffuse_with_a_no_alpha_mesh_stays_2048_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", varying_2048());
+    let o = plan_compact_wall_mesh(d.path(), false);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:cs-compact#0".to_string())
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall.png"), "none");
+    assert!(!warnings(&o).contains(&Code::LossAlphaData));
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+/// Fix round 1 (O1): a project rule that sets the policy beats the mesh `remove`, matched on the source's real alpha
+/// (`alpha = "varying"`) or unconditionally, and Compact's BC1 rule stays out: BC7 at half size, no CFG-INVALID.
+#[test]
+fn compact_mesh_remove_yields_to_a_project_rule_that_sets_the_policy() {
+    for matcher in ["alpha = \"varying\"", "glob = \"**/wall.png\""] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/a/wall.png", varying_2048());
+        std::fs::write(
+            d.path().join("in/sdc.toml"),
+            format!("[[rules]]\nmatch = {{ {matcher} }}\noverrides = {{ alpha = {{ policy = \"blend\" }} }}\n"),
+        )
+        .unwrap();
+        let o = plan_compact_wall_mesh(d.path(), false);
+        assert_profile(&o, "a/wall.png", "diffuse", "blend", false, "bc7");
+        assert_eq!(
+            planned(&o, "a/wall.png")["provenance"]["alpha.policy"].as_str(),
+            Some("rule:project#0"),
+            "{matcher}"
+        );
+        assert_eq!(
+            resized_names(&o),
+            BTreeMap::from([("wall.dds".to_string(), (1024, 1024))]),
+            "{matcher}"
+        );
+        assert_eq!(resize_of(&o, "a/wall.png"), "half", "{matcher}");
+        assert!(!warnings(&o).contains(&Code::CfgInvalid), "{matcher}");
+    }
+}
+
+/// The same diffuse used by a blending mesh keeps its alpha: BC7 at half size.
+#[test]
+fn compact_2048_varying_alpha_diffuse_with_a_blend_mesh_plans_1024_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", varying_2048());
+    let o = plan_compact_wall_mesh(d.path(), true);
+    assert_profile(&o, "a/wall.png", "diffuse", "blend", false, "bc7");
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wall.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/wall.png"), "half");
+}
+
+#[test]
+fn compact_2048_normal_plans_1024() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall_n.png", flat_normal(2048));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wall_n.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/wall_n.png"), "half");
+}
+
+#[test]
+fn compact_512_mask_stays_512() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall_m.png", gray_ramp(512));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/wall_m.png.subtype=envmask"],
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall_m.png"), "half");
+    assert_eq!(format_prov(&o, "a/wall_m.png").0, "bc4");
+}
+
+#[test]
+fn compact_1024x512_plans_512x256() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wide_n.png", rgb_wh(1024, 512));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/wide_n.png.subtype=normal"],
+    );
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wide_n.dds".to_string(), (512, 256))])
+    );
+    assert!(!warnings(&o).contains(&Code::DimNpot));
+}
+
+#[test]
+fn compact_512x256_stays_512x256() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wide_n.png", rgb_wh(512, 256));
+    let o = plan_preset(
+        d.path(),
+        Target::Cs,
+        "cs-compact",
+        &["file:**/wide_n.png.subtype=normal"],
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+}
+
+#[test]
+fn compact_packed_rmaos_halves_as_one_image() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/p/rock.png", rgb(64));
+    put(d.path(), "textures/p/rock_n.png", flat_normal(1024));
+    put(d.path(), "textures/p/rock_roughness.png", gray_ramp(1024));
+    put(d.path(), "textures/p/rock_ao.png", gray_ramp(1024));
+    let o = plan_preset(d.path(), Target::Cs, "cs-compact", &[]);
+    let r = resized(&o);
+    let mut tails: Vec<&str> = r.keys().map(|k| k.rsplit('/').next().unwrap()).collect();
+    tails.sort();
+    assert_eq!(tails, ["rock_n.dds", "rock_rmaos.dds"], "{r:?}");
+    assert!(r.values().all(|&to| to == (512, 512)), "{r:?}");
+    // The packed job's input is its first member (`rock_roughness.png`); only an unpacked raw-map job would be wrong.
+    let bad: Vec<_> = o
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::FilePlanned { job }
+                if job.pack.is_none()
+                    && (is_of(e, "_roughness.png") || is_of(e, "_ao.png"))
+                    && job.warnings.iter().any(|w| w.code == Code::DimResized) =>
+            {
+                Some((e.path.clone(), job.input.clone(), job.output.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
+#[test]
+fn vanilla_compact_opaque_diffuse_is_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", rgb(64));
+    let o = plan_preset(d.path(), Target::Vanilla, "vanilla-compact", &[]);
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:vanilla-compact#0".to_string())
+    );
+}
+
+#[test]
+fn fast_preview_is_fast_with_smallest_mip_validation() {
+    for t in [Target::Cs, Target::Vanilla] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/a/wall.png", rgb(64));
+        let o = plan_preset(d.path(), t, "fast-preview", &[]);
+        let p = &planned(&o, "a/wall.png")["profile"];
+        assert_eq!(
+            (
+                p["encoder"]["effort"].as_str(),
+                p["validation"]["mips"].as_str(),
+                p["format"].as_str()
+            ),
+            (Some("fast"), Some("smallest"), Some("bc7")),
+            "{t:?}"
+        );
+    }
+}
+
+/// M6 Track E spec §3.1 (DECISIONS Note U2): `_coat` is the coat colour + strength. Its varying alpha is the strength:
+/// policy `data`, kept, and BC7 under cs-compact (never BC1).
+#[test]
+fn compact_coat_keeps_its_strength_alpha_as_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.png", rgb(64));
+    put(d.path(), "textures/a/rock_n.png", flat_normal(64));
+    put(d.path(), "textures/a/rock_rmaos.png", rgb(64));
+    put(
+        d.path(),
+        "textures/a/rock_coat.png",
+        rgba(64, |x, _| [200, 180, 160, (x * 4) as u8]),
+    );
+    let mut req = request(d.path(), Target::Cs, &[], &[]);
+    req.preset = Some("cs-compact".into());
+    let o = run(req);
+    assert_profile(&o, "rock_coat.png", "pbr_subsurface", "data", false, "bc7");
+    assert_eq!(
+        planned(&o, "rock_coat.png")["status"]["state"],
+        "ready",
+        "{:?}",
+        warnings(&o)
+    );
+    assert_eq!(o.summary.failed, 0, "{:?}", warnings(&o));
+    let reason = planned(&o, "rock_coat.png")["suggestions"][0]["reason"].clone();
+    assert!(
+        reason
+            .as_str()
+            .unwrap()
+            .starts_with("exporter suffix _coat (coat colour + strength)"),
+        "{reason}"
+    );
+    assert_alpha_kept(
+        &dds(d.path(), "textures/a/rock_s.dds"),
+        |x, _| (x * 4) as u8,
+        8,
+    );
 }

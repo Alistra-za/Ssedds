@@ -416,18 +416,18 @@ fn set_scopes_rank_by_specificity_not_command_line_order() {
 fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     let fx = Fx::new();
     fx.normal("wall_n.png");
-    fx.rgb("floor.png");
+    fx.rgb("floor_i.png");
     let accept = ["--dry-run", "--accept-suggestions", "high"];
 
-    // An accepted high-confidence suggestion decides `wall_n.png`; the medium one for `floor.png` stays open.
+    // An accepted high-confidence suggestion decides `wall_n.png`; the medium one for `floor_i.png` stays open.
     let o = fx.convert(&accept);
-    assert_eq!(code(&o), 1, "{}", text(&o.stderr)); // floor.png is unresolved
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr)); // floor_i.png is unresolved
     let jobs = planned(&o);
     let wall = &jobs["wall_n.png"];
     assert_eq!(wall["profile"]["subtype"], "normal");
     assert_eq!(prov(wall, "subtype"), "suggestion");
     assert_eq!(wall["status"]["state"], "ready");
-    assert_eq!(jobs["floor.png"]["status"]["state"], "unresolved");
+    assert_eq!(jobs["floor_i.png"]["status"]["state"], "unresolved");
 
     // Without acceptance nothing is decided.
     let o = fx.convert(&["--dry-run"]);
@@ -443,11 +443,11 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     let jobs = planned(&o);
     assert_eq!(jobs["wall_n.png"]["profile"]["subtype"], "height");
     assert_eq!(prov(&jobs["wall_n.png"], "subtype"), "rule:project#0");
-    assert_eq!(jobs["floor.png"]["profile"]["subtype"], "glow");
-    assert_eq!(prov(&jobs["floor.png"], "subtype"), "rule:project#1");
+    assert_eq!(jobs["floor_i.png"]["profile"]["subtype"], "glow");
+    assert_eq!(prov(&jobs["floor_i.png"], "subtype"), "rule:project#1");
     // A rule decides on its own, without `--accept-suggestions`.
     assert_eq!(
-        jobs_state(&fx.convert(&["--dry-run"]), "floor.png"),
+        jobs_state(&fx.convert(&["--dry-run"]), "floor_i.png"),
         "ready"
     );
 
@@ -466,9 +466,9 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     assert_eq!(prov(wall, "subtype"), "rule:project#0");
     assert_eq!(num(wall, "alpha.threshold"), 70.0);
     assert_eq!(prov(wall, "alpha.threshold"), "rule:project#0");
-    // The user rule still supplies what the project rule does not say.
-    assert_eq!(num(wall, "validation.complex_m_warn_alpha"), 200.0);
-    assert_eq!(prov(wall, "validation.complex_m_warn_alpha"), "rule:user#0");
+    // Carried fix 3: the user rule names another sub-type (glow), so none of its overrides apply to a height file.
+    assert_ne!(num(wall, "validation.complex_m_warn_alpha"), 200.0);
+    assert_ne!(prov(wall, "validation.complex_m_warn_alpha"), "rule:user#0");
 
     // `--set` beats the rules, scoped to one file or for everything.
     let o = fx.convert(&[
@@ -483,13 +483,13 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
         "subtype=pbr_normal",
     ]);
     let jobs = planned(&o);
-    // File-scoped sub-type beats the unscoped one; the unscoped one still decides floor.png.
+    // File-scoped sub-type beats the unscoped one; the unscoped one still decides floor_i.png.
     assert_eq!(jobs["wall_n.png"]["profile"]["subtype"], "msn");
     assert_eq!(prov(&jobs["wall_n.png"], "subtype"), "user");
     assert_eq!(num(&jobs["wall_n.png"], "alpha.threshold"), 90.0);
     assert_eq!(prov(&jobs["wall_n.png"], "alpha.threshold"), "user");
-    assert_eq!(jobs["floor.png"]["profile"]["subtype"], "pbr_normal");
-    assert_eq!(prov(&jobs["floor.png"], "subtype"), "user");
+    assert_eq!(jobs["floor_i.png"]["profile"]["subtype"], "pbr_normal");
+    assert_eq!(prov(&jobs["floor_i.png"], "subtype"), "user");
 }
 
 fn jobs_state(o: &Output, name: &str) -> String {
@@ -634,9 +634,10 @@ fn dry_run_writes_nothing() {
 #[test]
 fn unresolved_files_are_skipped_with_exit_1() {
     let fx = Fx::new();
-    fx.rgb("wall.png");
-    fx.rgb("floor.png");
-    // `diffuse` is only a medium-confidence suggestion, so even `--accept-suggestions high` leaves it open.
+    fx.rgb("wall_i.png");
+    fx.rgb("floor_i.png");
+    // `_i` (a multilayer inner layer) is only a medium-confidence `diffuse` suggestion, so even
+    // `--accept-suggestions high` leaves it open (a bare stem is High since M6 Track E).
     let o = fx.convert(&["--accept-suggestions", "high"]);
     assert_eq!(code(&o), 1);
     assert!(
@@ -653,7 +654,7 @@ fn unresolved_files_are_skipped_with_exit_1() {
     // `--allow SUG-LOW-CONFIDENCE` is the explicit acknowledgement.
     let o = fx.convert(&["--allow", "SUG-LOW-CONFIDENCE"]);
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
-    assert!(fx.dds("textures/a/wall.dds").exists());
+    assert!(fx.dds("textures/a/wall_i.dds").exists());
 }
 
 /// DECISIONS S-mips-13: an unscoped filter the `_n` cannot use is an Info line on the console, not an error.
@@ -899,12 +900,12 @@ fn a_file_that_fails_to_resolve_exits_1_and_the_rest_are_converted() {
     let fx = Fx::new();
     fx.rgb("wall.png");
     fx.rgb("floor.png");
-    // alpha.threshold 3 is outside 5..=200: a per-file CFG-INVALID error, not a usage error.
+    // alpha.threshold 0 is outside 1..=254: a per-file CFG-INVALID error, not a usage error.
     let o = fx.convert(&[
         "--set",
         "subtype=diffuse",
         "--set",
-        "file:**/wall.png.alpha.threshold=3",
+        "file:**/wall.png.alpha.threshold=0",
     ]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert!(text(&o.stderr).contains("CFG-INVALID"));
@@ -950,7 +951,7 @@ fn invalid_configs_are_exit_2_and_valid_ones_are_really_read() {
     assert_eq!(code(&fx.convert(&with_missing)), 2);
 
     // An invalid layer value that parses is a per-file CFG-INVALID (exit 1), not a config error.
-    fx.project_config("[subtypes.diffuse]\nalpha = { threshold = 250 }\n");
+    fx.project_config("[subtypes.diffuse]\nalpha = { threshold = 255 }\n");
     let o = fx.convert(&args);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(planned(&o)["wall.png"]["status"]["state"], "error");
@@ -1067,7 +1068,7 @@ fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
 
     // Partial (exit 1) outranks validation failed (exit 4).
     fx.rgb("bad.png");
-    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=3"]);
+    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=0"]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["validation_failed"], 1);
 }
@@ -1215,4 +1216,72 @@ fn set_resize_pot_down_converts_an_npot_file() {
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
     let f = read_dds(&std::fs::read(fx.dds("textures/a/odd.dds")).unwrap()).unwrap();
     assert_eq!((f.width, f.height), (32, 32));
+}
+
+#[test]
+fn the_manifest_records_the_shader() {
+    let fx = Fx::new();
+    fx.rgb("wall_d.png");
+    fx.normal("wall_n.png");
+    let o = fx.convert(&[
+        "--target",
+        "vanilla",
+        "--accept-suggestions",
+        "high",
+        "--set",
+        "set:wall.shader=hair",
+    ]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let manifest = std::fs::read_to_string(fx.dds("_sdc/manifest.jsonl")).unwrap();
+    let rec: Value = manifest
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|v| v["output"].as_str().unwrap().ends_with("wall_d.dds"))
+        .expect("a wall_d.dds record");
+    assert_eq!(
+        rec["shader"],
+        serde_json::json!({ "shader": "hair", "provenance": "set" })
+    );
+}
+
+/// M6 Track D spec §3: a preset in `%APPDATA%\sdc\presets\` is usable by `--preset <id>` with no other flag.
+#[test]
+fn a_user_folder_preset_is_usable_by_id() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    fx.write(
+        "appdata/sdc/presets/mine.toml",
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[subtypes.diffuse]\nformat = \"bc1\"\n",
+    );
+    let o = fx.convert(&["--preset", "mine", DIFFUSE[0], DIFFUSE[1]]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(
+        fx.format("textures/a/wall.dds"),
+        DdsPixelFormat::Bc1 { srgb: false }
+    );
+}
+
+/// M6 Track D spec §1: `--preset cs-compact` writes an opaque colour map as BC1 and halves a data map (larger side
+/// above 512). A packed `_rmaos` halves once after assembly, beside its halved `_n` (Review Focus 3).
+#[test]
+fn cs_compact_writes_bc1_colour_and_half_size_normals() {
+    let fx = Fx::new();
+    fx.rgb("trim_d.png");
+    ImageBuffer::from_fn(1024, 1024, |_, _| Rgb([128u8, 128, 255]))
+        .save(fx.p("in/textures/a/wall_n.png"))
+        .unwrap();
+    fx.rgb_sized("wall_roughness.png", 1024, 90);
+    fx.rgb_sized("wall_ao.png", 1024, 200);
+    let o = fx.convert(&["--preset", "cs-compact", "--accept-suggestions", "high"]);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    assert_eq!(
+        fx.format("textures/a/trim_d.dds"),
+        DdsPixelFormat::Bc1 { srgb: false }
+    );
+    let c = read_dds(&std::fs::read(fx.dds("textures/a/trim_d.dds")).unwrap()).unwrap();
+    assert_eq!((c.width, c.height), (32, 32));
+    let n = read_dds(&std::fs::read(fx.dds("textures/a/wall_n.dds")).unwrap()).unwrap();
+    assert_eq!((n.width, n.height), (512, 512));
+    let p = read_dds(&std::fs::read(fx.dds("textures/a/wall_rmaos.dds")).unwrap()).unwrap();
+    assert_eq!((p.width, p.height), (512, 512));
 }

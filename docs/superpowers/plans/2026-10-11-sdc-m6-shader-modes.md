@@ -13,6 +13,10 @@
   - Pass 2 (`plan_packing`/`finish_recipe`) and everything after see the shader through `ResolveCtx::shaders`.
 - **Precedence.** The shader layer is applied in `layered_profile_with` after the preset chain, the configs, the rules, the analysis-alpha step and `skin_wet_form`. It writes only fields that no explicit layer set (`field_explicit` is false: `builtin` and built-in presets). It is applied before the vocabulary green step and `ranked_overrides`. The two sub-type effects (eye `_n` → `msn`, landscape diffuse → `landscape_diffuse`) sit in `decide_subtype`, after `--set subtype` and rules and before the suggestions.
 - **Where the warnings go.** The four `SHADER-*` codes travel on the `set_resolved` event (`shader`, `warnings`), not as separate `warning` events. So `plan`/`inspect` print them under the set line, the GUI shows them on the set card, and the existing golden `warnings(o)` assertions stay valid.
+- **Mesh-reported shader first (owner, 2026-10-11; spec §12; S-shader-10).** When the scanned meshes report a shader for a set's diffuse, auto-pick uses it before the suffix rules 3–12:
+  - **Evidence.** `BatchRequest::mesh_shaders: BTreeMap<String, Vec<Shader>>`, keyed by `shader::mesh_key` (the diffuse's game path without extension, e.g. `textures/a/wall`); one `Shader` per lighting shape that uses `<key>.dds` in slot 0. The engine never depends on `nif`/`modscan`: the GUI fills the map from the scan database (raw SQL on `Store::conn()`, as `meshes.rs` does) and maps `BSLightingShaderType` with the engine's `Shader::from_lighting_type`. The CLI sends nothing (no flag).
+  - **Order in `pick`:** explicit → rule 1 (advanced skin) → rule 2 (PBR) → **mesh majority** (`auto:mesh`) → rules 3–12. A PBR or skin member always wins over the meshes: a mod's shipped mesh for a PBR set says type 0 until PGPatcher patches it, and the NIF's TruePBR bit (`SLSF2` bit 23) is set only on PGPatcher's output copies, which do not vote.
+  - **Majority:** strictly more than half of the mapped votes; a tie or no votes falls through to the suffix rules. Lighting type 1 is both Environment Map and Complex Material, so a mesh `envmap` majority with a `complex_material` `_m` in the set picks `complex_material`.
 
 **Tech Stack:** Rust 2021 workspace (`engine`, `cli` = `sdc`, `gui` = `sdc_gui`); egui 0.36.2; serde/schemars; toml_edit.
 
@@ -22,12 +26,11 @@
 
 ## Global Constraints
 
-- **Execution order.** Track B (`docs/superpowers/plans/2026-10-11-sdc-m6-inputs-formats.md`: new inputs, uncompressed DDS formats, header patch, HDR check) executes **first**, on its own branch, and is merged to `main` before this plan starts. This plan never edits Track B's plan.
-  - Track B adds codes and bumps the workspace version 0.2.0 → 0.3.0. So in this plan:
-    - the code catalogue count is always "**merged count + 4**": read `Code::ALL.len()` on `main` before Task 3 and add 4;
-    - the version bump is "**next minor after main's version**": read `[workspace.package] version` in `Cargo.toml` at Task 9.
-  - Never hard-code 63 or 0.3.0.
-- **Branch.** Execution branch `feat/m6-shader-modes`; the controller creates it from `main` after Track B is merged. Do not create branches.
+- **Execution order (rebased 2026-10-11, pre-flight `.superpowers/sdd/2026-10-11-sdc-m6-shader-modes/preflight.md`).** `main` 8159bdf already holds Track B (inputs/formats), Track C (mip filters/resize, DECISIONS S-mips-0..13) and the NIF team's merge (`nif`, `modscan`, `vfs`, `render3d`, the GUI Meshes view and live set preview). This plan never edits those plans.
+  - The code catalogue count on `main` is **69** (incl. `DIM-RESIZED`, `CFG-FILTER-IGNORED`); after Task 3 it is **73**.
+  - The workspace version on `main` is **0.3.0** (Track C did not bump, S-mips-9); Task 9 bumps it to **0.4.0**.
+  - Line numbers in this plan were re-checked against 8159bdf; if one has drifted again, find the code by the quoted text, not the number.
+- **Branch.** Execution branch `feat/m6-shader-modes` (exists, from `main` 8159bdf). Do not create branches.
 - **Gates.** Run unpiped before every commit:
   - `cargo fmt --all --check`
   - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -40,10 +43,11 @@
   - Do not push.
 - **Shell.** Never run `python -` heredocs.
 - **Off-limits.**
-  - Never touch `F:/ai/dds/bench`, `F:/ai/dds/converter-nif`, `nif/*` branches, `crates/nif`, `crates/vfs`, `crates/modscan` or DECISIONS Note Q (NIF team).
+  - Never touch `F:/ai/dds/bench`, `F:/ai/dds/converter-nif`, `nif/*` branches, `crates/nif`, `crates/vfs`, `crates/modscan`, `crates/render3d`, `crates/pgpsim` or DECISIONS Note Q (NIF team). The mesh votes read the scan database through the existing `Store::open_read_only` and `Store::conn()`; no new `Store` method.
+  - In `crates/gui`, the NIF merge changed `app.rs`, `ui/header.rs`, `worker.rs`, `settings.rs` and `model/mod.rs`. Only Task 7 touches `app.rs` and `model/mod.rs` (small additive hunks, named there); `header.rs`, `worker.rs` and `settings.rs` are not touched.
   - `G:/` is read-only.
-- **Decisions.** Record them in DECISIONS **Note S**, using sub-ids `S-shader-1` … `S-shader-N`, because Track B may also write Note S. If `## Note S` exists when Task 9 runs, append under it. Otherwise create `## Note S — M6 decisions (owner and M6 plans, 2026-10-11)`.
-- **Versioning (spec §10).** Output-affecting changes need the workspace version bump, and it is the last task (Task 9). The changes here are the hair default, eye `_n` → `msn`, multilayer `data`, the `_i` suffix and the `_coat` alias.
+- **Decisions.** `## Note S` exists (Track B's S1–S12, then `### M6 Track C` with S-mips-0..13). Task 9 appends a `### M6 Track A: shader modes (plan rulings, 2026-10-11)` subsection after Track C's, with sub-ids `S-shader-1` … `S-shader-11`.
+- **Versioning (spec §10).** Output-affecting changes need the workspace version bump, and it is the last task (Task 9). The changes here are the hair default, eye `_n` → `msn`, multilayer `data`, the `_i` suffix, the `_coat` alias and the mesh-reported shader (which changes member defaults wherever it changes the pick).
 - **Mode = target (spec §2).** `cs` = Community Shaders, `vanilla` = Vanilla/ENB, `cpm` keeps its behaviour and uses the Vanilla/ENB list. There is no new axis.
 
 ## Review Focus
@@ -53,6 +57,8 @@
 3. **Fallback after a mode switch.** An explicit `pbr` on a set, then the GUI switched to vanilla, shows `default` with "(fallback)" and `SHADER-UNAVAILABLE`, and the `shader = "pbr"` entry stays in the file. Switching back restores `pbr`. Task 7 pins it: `switching_mode_falls_back_and_back`.
 4. **A `--set set:` id that names no set** is reported (`SET-EDIT-STALE`), never silently ignored and never fatal. A bare base name with no `/` matches every set with that base. Task 4 pins both.
 5. **Shader defaults never beat an explicit layer.** A `--set` format, a project `[subtypes]` table, a rule and a `[files]` entry each win over the shader layer. A source with no alpha keeps the analysis `remove` under `hair`. Task 5 pins each.
+6. **Meshes never override a PBR member or an explicit choice.** A Default-typed mesh on a set with `_rmaos` still auto-picks `pbr`; `--set set:` and the GUI choice beat any mesh majority; a tie falls back to the suffix rules. Tasks 2 and 4 pin these: `mesh_majority_comes_after_pbr_and_before_the_suffix_rules`, `meshes_pick_the_shader_unless_a_pbr_member_or_a_choice_says_otherwise`.
+7. **A hair diffuse and a non-box filter (S-mips-0, S-mips-13).** The shader's `cutout` bars a non-box `mips.filter`: unscoped it falls back to box with `CFG-FILTER-IGNORED` (Info), scoped it is `CFG-INVALID`. Task 5 pins both.
 
 ---
 
@@ -60,7 +66,7 @@
 
 | File | Responsibility | Tasks |
 |---|---|---|
-| `crates/engine/src/shader.rs` (new) | Shader table as data, auto-pick, member defaults, map check, notes | 1, 2, 3, 4 |
+| `crates/engine/src/shader.rs` (new) | Shader table as data, `from_lighting_type`, `mesh_key`, auto-pick (mesh votes first), member defaults, map check, notes | 1, 2, 3, 4 |
 | `crates/engine/src/lib.rs` | `pub mod shader;` | 1 |
 | `crates/engine/src/codes.rs` | 4 new codes, catalogue count | 3 |
 | `crates/engine/src/group.rs` | `i` added to `SUFFIXES` | 2 |
@@ -75,6 +81,8 @@
 | `crates/gui/src/sets_doc.rs` | `shader` reserved key, `SetEntry::shader`, `set_shader` | 7 |
 | `crates/gui/src/model/{items,sets,mod}.rs` | `SetItem`/`SetView` shader + warnings, `set_shader`, `set_shaders` input | 7 |
 | `crates/gui/src/ui/sets_column.rs` | Shader dropdown, set warnings in the badge | 7 |
+| `crates/gui/src/model/meshes.rs` | `mesh_votes` (scan DB → shaders per `mesh_key`) | 7 |
+| `crates/gui/src/app.rs`, `crates/gui/src/main.rs` | refresh the votes when a scan ends; `AppModel::scan_db` set by `main` | 7 |
 | `crates/engine/tests/shaders.rs` (new) | Plan-level shader tests | 4, 5 |
 | `crates/engine/tests/golden.rs` | One golden per shader | 8 |
 | `docs/DECISIONS.md`, `docs/gui.md`, `Cargo.toml`, `Cargo.lock` | Note S, GUI doc, version | 9 |
@@ -104,9 +112,11 @@
     - `pub fn default_for(t: Target) -> Shader`
     - `pub fn spec(self) -> &'static ShaderSpec`
     - `pub fn has_member_defaults(self) -> bool`
+    - `pub fn from_lighting_type(t: u32) -> Option<Shader>` (S-shader-10): the shader a NIF `BSLightingShaderProperty` of `BSLightingShaderType` `t` reports, or `None` (no vote)
+  - `pub fn mesh_key(game_path: &str, stem: &str) -> String` (S-shader-10): the folder of `game_path` + `/` + `stem`, lower case (`("textures/a/wall_n.png", "wall")` → `textures/a/wall`; no folder → just `stem`). The engine calls it with the set's base, the GUI with a job's output stem; the scan database is asked for `<key>.dds`.
   - `pub struct MapRole { pub label: &'static str, pub subtypes: &'static [Subtype], pub suffixes: &'static [&'static str] }` and `impl MapRole { pub fn matches(&self, suffix: Option<&str>, subtype: Option<Subtype>) -> bool }`
   - `pub struct ShaderSpec { pub required: &'static [MapRole], pub optional: &'static [MapRole] }`
-  - `pub enum AutoRule { AdvancedSkin, Pbr, ComplexM, EnvM, P, G, I, Sk, HairPath, EyesPath, Landscape, Otherwise }` with `pub fn id(self) -> &'static str`
+  - `pub enum AutoRule { AdvancedSkin, Pbr, Mesh, ComplexM, EnvM, P, G, I, Sk, HairPath, EyesPath, Landscape, Otherwise }` with `pub fn id(self) -> &'static str` (`Mesh`: S-shader-10)
     - derives `Debug, Clone, Copy, PartialEq, Eq`
   - `pub enum ShaderOrigin { Set, Auto(AutoRule), Fallback }`
     - derives `Debug, Clone, PartialEq, Eq`
@@ -138,7 +148,8 @@
   - `Vanilla` and `Cpm`: the same list without `pbr` and `advanced_skin`.
 - **`default_for`:** `Cs` → `Pbr`; otherwise → `Default`.
 - **`has_member_defaults`:** true for `Hair`, `Eye`, `Landscape`, `Multilayer`, `Envmap` and `Parallax`.
-- **`AutoRule::id`:** `advanced_skin`, `pbr`, `complex_m`, `env_m`, `p`, `g`, `i`, `sk`, `hair_path`, `eyes_path`, `landscape`, `default`.
+- **`AutoRule::id`:** `advanced_skin`, `pbr`, `mesh`, `complex_m`, `env_m`, `p`, `g`, `i`, `sk`, `hair_path`, `eyes_path`, `landscape`, `default`.
+- **`from_lighting_type`** (nif.xml `BSLightingShaderType`; names as `gui/src/model/meshes.rs` `SHADER_TYPES`): `0` Default → `Default`, `1` Environment Map → `Envmap`, `2` Glow → `Glow`, `3` Parallax → `Parallax`, `5` Skin Tint → `Skin`, `6` Hair Tint → `Hair`, `8` Multitexture Landscape → `Landscape`, `11` MultiLayer Parallax → `Multilayer`, `16` Eye Envmap → `Eye`. Every other value → `None`: Face Tint (4), Parallax Occ (7), the LOD, Snow, Tree Anim, Cloud and FO4 types, and unknown numbers. No lighting type yields `Pbr` or `AdvancedSkin`: PBR is not a lighting type (the TruePBR flag is PGPatcher's output marker, S-shader-10).
 
 - [ ] **Step 1: Write the failing tests** (bottom of `shader.rs`)
 
@@ -203,7 +214,27 @@ mod tests {
         assert_eq!(serde_json::from_value::<ShaderPick>(j).unwrap(), p);
         assert_eq!("fallback".parse::<ShaderOrigin>().unwrap(), ShaderOrigin::Fallback);
         assert_eq!("set".parse::<ShaderOrigin>().unwrap(), ShaderOrigin::Set);
+        assert_eq!("auto:mesh".parse::<ShaderOrigin>().unwrap(), ShaderOrigin::Auto(AutoRule::Mesh));
         assert!("auto:nope".parse::<ShaderOrigin>().is_err());
+    }
+
+    #[test]
+    fn lighting_types_map_to_the_twelve_or_nothing() {
+        let want = [(0, Shader::Default), (1, Shader::Envmap), (2, Shader::Glow), (3, Shader::Parallax), (5, Shader::Skin),
+            (6, Shader::Hair), (8, Shader::Landscape), (11, Shader::Multilayer), (16, Shader::Eye)];
+        for (t, s) in want {
+            assert_eq!(Shader::from_lighting_type(t), Some(s), "{t}");
+        }
+        for t in [4, 7, 9, 10, 12, 13, 14, 15, 17, 18, 19, 20, 99, u32::MAX] {
+            assert_eq!(Shader::from_lighting_type(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn mesh_key_is_the_folder_and_the_stem() {
+        assert_eq!(mesh_key("textures/a/wall_n.png", "wall"), "textures/a/wall");
+        assert_eq!(mesh_key("textures/a/Wall.png", "Wall"), "textures/a/wall");
+        assert_eq!(mesh_key("wall.png", "wall"), "wall");
     }
 
     #[test]
@@ -223,12 +254,13 @@ Expected: a compile error (`shader` module or `Shader` not found).
   - Module doc: `//! M6 Track A (spec 2026-10-11-sdc-m6-shader-modes-design.md, DECISIONS Note S): the per-set shader table as data, auto-pick, member defaults and the extra/missing map check. The CLI and GUI read it; neither duplicates it.`
   - Write the table with `static` `MapRole` arrays per the table above, and `ShaderSpec` statics returned by `spec()`.
   - `ShaderOrigin` gets a hand-written `Serialize`/`Deserialize` through `Display`/`FromStr`, as `Provenance` does in `presets.rs` (`impl fmt::Display for Provenance`, `impl FromStr for Provenance`).
-  - `FromStr` maps `auto:<id>` through a match on `AutoRule::id` over all 12 rules, and errors on anything else.
+  - `FromStr` maps `auto:<id>` through a match on `AutoRule::id` over all 13 rules, and errors on anything else.
+  - `from_lighting_type` and `mesh_key` as specified; `from_lighting_type`'s doc names nif.xml `BSLightingShaderType` and S-shader-10.
 
 - [ ] **Step 4: Run the tests and check that they pass**
 
 Run: `cargo test -p engine --lib shader::`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Run the gates, then commit**
 
@@ -266,12 +298,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `:8-11`: `SUFFIXES: [&str; 20]`, insert `"i"` after `"e"`. One-letter suffixes are order-independent.
   - `VocabRole` gets a `CoatColour` variant with doc "`_coat`: the PBR coat colour, the `_s` member (`pbr_subsurface`; DECISIONS Note S-shader-9)", and `Vocab::canonical` maps it to `Some("s".into())`.
   - `VOCABULARY: [Vocab; 32]`: insert `term("coat", CoatColour)` among the 4-letter terms, right after `term("fuzz", PackingInput(Fuzz))`, to keep it longest-first.
-- Modify: `crates/engine/src/discover.rs:155`: `VocabRole::Normal(_) | VocabRole::Emissive | VocabRole::CoatColour => suffixed(),`.
+- Modify: `crates/engine/src/discover.rs:157` (was `:155`): `VocabRole::Normal(_) | VocabRole::Emissive | VocabRole::CoatColour => suffixed(),`.
 - Modify: `crates/engine/src/suggest.rs`:
   - make `fn has_component` `pub(crate)`;
   - add the arm `Some("i") => vec![s(Diffuse, Medium, "_i multilayer inner layer (colour)")],` before `Some("b") | Some("bl")`;
   - in `apply_vocabulary`, add the role label `VocabRole::CoatColour => "coat colour"`. Then, for `CoatColour`, remove any `pbr_subsurface` entry and insert `Suggestion { subtype: PbrSubsurface, confidence: High, reason: "exporter suffix _coat (coat colour); the PBR coat colour (_s)".into() }` at index 0.
-- Check other `match` arms on `VocabRole` (`pack/plan.rs:44`, `policy.rs` `vocab_for` users, `gui/src/model/sets.rs:218`): each either has a `_` arm or compares with `==`. Add an arm only where the compiler asks.
+- Check other `match` arms on `VocabRole` (`pack/plan.rs:45`, `policy.rs` `vocab_for` users, `gui/src/model/sets.rs:218`): each either has a `_` arm or compares with `==`. Add an arm only where the compiler asks.
 - Test:
   - unit tests in `shader.rs`;
   - grouping tests in `crates/engine/tests/discover_group.rs`;
@@ -294,6 +326,9 @@ pub struct PickInput<'a> {
     /// Pass-1 sub-types of the set's members (packing inputs excluded).
     pub subtypes: &'a [Subtype],
     pub game_paths: &'a [&'a str],
+    /// S-shader-10: what the scanned meshes report for the set's diffuse, one entry per lighting shape
+    /// (`BatchRequest::mesh_shaders`); empty = no evidence.
+    pub mesh: &'a [Shader],
 }
 pub fn pick(i: &PickInput) -> ShaderPick;
 ```
@@ -301,6 +336,24 @@ pub fn pick(i: &PickInput) -> ShaderPick;
 **Rules of `pick`.** First match wins:
 1. `advanced_skin`, or any of `SkinAlbedo | SkinRfaos | SkinSk | SkinWet` in `subtypes` → `AdvancedSkin`, `AutoRule::AdvancedSkin`.
 2. `pbr`, or any of `PbrAlbedo | PbrEmissive | PbrSubsurface | PbrFuzz | PbrNormal | CoatNormal | Rmaos` in `subtypes` → `Pbr`.
+- **Mesh (S-shader-10; owner: mesh-reported shader first).** `mesh_majority(i)` → that shader, `AutoRule::Mesh`. It sits after rules 1–2, so a PBR or skin member always wins (a shipped mesh of a PBR set says Default until PGPatcher patches it), and before rules 3–12, which are the fallback:
+
+```rust
+/// S-shader-10: the strict majority of the mesh votes (more than half), else `None` (a tie or no votes: the suffix
+/// rules decide). Lighting type 1 is both Environment Map and Complex Material, so an `envmap` majority in a set
+/// with a complex `_m` is `complex_material`.
+fn mesh_majority(i: &PickInput) -> Option<Shader> {
+    let mut n: BTreeMap<Shader, usize> = BTreeMap::new();
+    for s in i.mesh {
+        *n.entry(*s).or_default() += 1;
+    }
+    let (top, c) = n.into_iter().max_by_key(|(_, c)| *c)?;
+    if c * 2 <= i.mesh.len() {
+        return None;
+    }
+    Some(if top == Shader::Envmap && i.subtypes.contains(&Subtype::ComplexMaterial) { Shader::ComplexMaterial } else { top })
+}
+```
 3. `ComplexMaterial` in `subtypes` → `ComplexMaterial`, `ComplexM`.
 4. `Envmask` in `subtypes`, or any of `m`, `em`, `envmask` in `suffixes` → `Envmap`, `EnvM`.
 5. `p` in suffixes → `Parallax`.
@@ -320,7 +373,7 @@ Then:
 
 ```rust
 fn input<'a>(t: Target, suffixes: &'a BTreeSet<String>, subtypes: &'a [Subtype], paths: &'a [&'a str]) -> PickInput<'a> {
-    PickInput { target: t, explicit: None, advanced_skin: false, pbr: false, suffixes, subtypes, game_paths: paths }
+    PickInput { target: t, explicit: None, advanced_skin: false, pbr: false, suffixes, subtypes, game_paths: paths, mesh: &[] }
 }
 fn sx(s: &[&str]) -> BTreeSet<String> { s.iter().map(|x| x.to_string()).collect() }
 fn auto(p: &ShaderPick) -> (Shader, ShaderOrigin) { (p.shader, p.provenance.clone()) }
@@ -393,6 +446,46 @@ fn explicit_wins_and_unavailable_falls_back() {
     i.target = Target::Cpm;
     assert_eq!(pick(&i).shader, Shader::Default);
 }
+
+#[test]
+fn mesh_majority_comes_after_pbr_and_before_the_suffix_rules() {
+    use Subtype::*;
+    let paths = ["textures/a/b.png"];
+    let s = sx(&["n", "p"]);
+    let st = [Diffuse, Normal, Height];
+    let mut i = input(Target::Vanilla, &s, &st, &paths);
+    // Two hair shapes against one default: hair, before the `_p` rule.
+    let votes = [Shader::Hair, Shader::Default, Shader::Hair];
+    i.mesh = &votes;
+    assert_eq!(auto(&pick(&i)), (Shader::Hair, ShaderOrigin::Auto(AutoRule::Mesh)));
+    // A tie is no evidence: the suffix rules decide.
+    let tie = [Shader::Hair, Shader::Default];
+    i.mesh = &tie;
+    assert_eq!(auto(&pick(&i)), (Shader::Parallax, ShaderOrigin::Auto(AutoRule::P)));
+    // An explicit choice beats the meshes.
+    i.mesh = &votes;
+    i.explicit = Some(Shader::Glow);
+    assert_eq!(auto(&pick(&i)), (Shader::Glow, ShaderOrigin::Set));
+    // A PBR member beats a Default mesh, and an advanced skin set beats it too.
+    i.explicit = None;
+    i.target = Target::Cs;
+    i.pbr = true;
+    let def = [Shader::Default];
+    i.mesh = &def;
+    assert_eq!(auto(&pick(&i)), (Shader::Pbr, ShaderOrigin::Auto(AutoRule::Pbr)));
+    i.advanced_skin = true;
+    assert_eq!(auto(&pick(&i)), (Shader::AdvancedSkin, ShaderOrigin::Auto(AutoRule::AdvancedSkin)));
+    // Lighting type 1 is envmap or complex material: a complex `_m` refines an envmap majority.
+    let s = sx(&["n", "m"]);
+    let st = [Diffuse, Normal, ComplexMaterial];
+    let env = [Shader::Envmap];
+    let mut i = input(Target::Vanilla, &s, &st, &paths);
+    i.mesh = &env;
+    assert_eq!(auto(&pick(&i)), (Shader::ComplexMaterial, ShaderOrigin::Auto(AutoRule::Mesh)));
+    // A Default mesh beats the complex `_m` suffix rule: the game renders the shape as Default.
+    i.mesh = &def;
+    assert_eq!(auto(&pick(&i)), (Shader::Default, ShaderOrigin::Auto(AutoRule::Mesh)));
+}
 ```
 
 In `crates/engine/tests/discover_group.rs`, add:
@@ -406,7 +499,7 @@ fn an_i_member_joins_its_set() {
 }
 ```
 
-In `crates/engine/tests/suffix_vocabulary.rs`, add a plan-level test. Follow the file's existing plan helper; if it has none, use `Engine::plan` with `BatchRequest::new(vec![dir.join("in")], dir.join("out"), Target::Cs)`, `recursive = true` and `accept = AcceptSuggestions::High`:
+In `crates/engine/tests/suffix_vocabulary.rs`, add a plan-level test. The file has no plan helper (checked on 8159bdf: only `resolve_img`), so add `fn plan_cs(dir: &Path) -> Plan` with `Engine::plan` on `BatchRequest::new(vec![dir.join("in")], dir.join("out"), Target::Cs)`, `recursive = true` and `accept = AcceptSuggestions::High` (a `VecSink` reporter and `CancelToken::default()`, as `tests/shaders.rs` `plan` does):
 
 ```rust
 #[test]
@@ -458,7 +551,7 @@ Expected: PASS. `suffix_vocabulary.rs` changes its counts to 20 and 32: name the
 
 ```bash
 git add crates/engine/src/shader.rs crates/engine/src/group.rs crates/engine/src/suggest.rs crates/engine/src/discover.rs crates/engine/tests/discover_group.rs crates/engine/tests/suffix_vocabulary.rs
-git commit -m "feat(engine): shader auto-pick (plain sets -> default), explicit choice and fallback; _i is a set suffix; _coat names the coat colour _s (M6 spec §4, §12)
+git commit -m "feat(engine): shader auto-pick (mesh majority after PBR, plain sets -> default), explicit choice and fallback; _i is a set suffix; _coat names the coat colour _s (M6 spec §4, §12)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -479,7 +572,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     ShaderMissingMap = "SHADER-MISSING-MAP" => Warning,
     ```
   - extend the module doc with "the four `SHADER-*` codes (M6 Track A)";
-  - count test: `assert_eq!(Code::ALL.len(), <merged count + 4>);`. Read the merged count from `main`'s `codes.rs` test line at the start of this task and write the resulting number (e.g. 63 + Track B's n + 4).
+  - count test (`codes.rs:176`): `assert_eq!(Code::ALL.len(), 69);` → `73` (69 on `main` 8159bdf, incl. Track C's `DIM-RESIZED` and `CFG-FILTER-IGNORED`; S-mips-0).
 - Modify: `crates/engine/src/shader.rs`: add `MemberMap`, `assign`, `check_maps`, `pick_notes`.
 
 **Interfaces:**
@@ -612,35 +705,37 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `ranked_overrides` rank: `Scope::Set(_) => 4`;
   - `layered_profile_with` reach match: `Scope::Set(_) => unreachable!("set scopes never apply to a file")`. It is filtered out by `override_applies`, so place the match after that filter.
   - `ResolvedJob` gets `#[serde(default, skip_serializing_if = "Option::is_none")] pub shader: Option<crate::shader::ShaderPick>`.
-  - Every `ResolvedJob { … }` literal gets `shader: None`: `policy.rs` (`packing_input_job`, both literals in `resolve_decided`), `pack/plan.rs:192`, `api.rs` tests near `:1823`, `tests/bake_run.rs:53`, `tests/events_manifest.rs:122`, `tests/pack_run.rs:35`.
+  - Every `ResolvedJob { … }` literal gets `shader: None`: `policy.rs` (`packing_input_job`, both literals in `resolve_decided`), `pack/plan.rs:192`, `api.rs` tests (`:1931`, `:1982`; were near `:1823`), `tests/bake_run.rs:53`, `tests/events_manifest.rs:122`, `tests/pack_run.rs:35`.
   - Every `ResolveCtx { … }` literal gets `shaders: &NO_SHADERS`: `api.rs` (the one in `plan_cached`), `tests/policy_checks.rs` (10), `tests/policy_layers.rs` (7), `tests/suffix_aliases.rs` (2), `tests/suffix_vocabulary.rs` (1). Run `grep -rn "ResolveCtx {" crates` to confirm.
 - Modify: `crates/engine/src/shader.rs`: add `pick_for_set` (glue).
 - Modify: `crates/engine/src/events.rs`: `SetResolved` gets `#[serde(default, skip_serializing_if = "Option::is_none")] shader: Option<crate::shader::ShaderPick>` and `#[serde(default, skip_serializing_if = "Vec::is_empty")] warnings: Vec<crate::codes::Warning>`. `EVENT_SCHEMA` stays 2: both fields are additive and default.
 - Modify: `crates/engine/src/api.rs`:
   - `BatchRequest::set_shaders: BTreeMap<String, Shader>` (doc: "GUI (M6, DECISIONS Note S-shader-2): set id → explicit shader. Empty for the CLI; `--set set:<id>.shader` beats it"), defaulted in `new`;
+  - `BatchRequest::mesh_shaders: BTreeMap<String, Vec<Shader>>` (doc: "GUI (M6, DECISIONS Note S-shader-10): `shader::mesh_key` → the shader each scanned lighting shape that uses `<key>.dds` as its diffuse reports. Empty for the CLI and when no scan exists: the suffix rules decide"), defaulted in `new`. `BatchRequest` derives only `Debug, Clone`, so a plain map fits; every other constructor goes through `new`;
   - `Plan::shaders: BTreeMap<String, ShaderPick>` (set key → pick);
   - the planning order below;
-  - `SetResolved` construction at `:1170` gets the two fields;
+  - `SetResolved` construction at `:1232` (was `:1170`) gets the two fields;
   - fix the `SetResolved` literal in `tests/events_manifest.rs:115`.
 - Test: `crates/engine/tests/shaders.rs` (new).
 
 **Interfaces:**
 - Consumes: `shader::{pick, PickInput, check_maps, pick_notes, MemberMap, ShaderPick, Shader}` (Tasks 1–3); `pack::plan::set_is_advanced_skin`; `suggest::{is_pbr_set, SuggestContext}`.
 - Produces:
-  - `pub fn pick_for_set(ctx: &ResolveCtx, set: &TextureSet, files: &[InputFile], jobs: &[ResolvedJob], explicit: Option<Shader>) -> ShaderPick` in `shader.rs`. It builds `PickInput`:
+  - `pub fn pick_for_set(ctx: &ResolveCtx, set: &TextureSet, files: &[InputFile], jobs: &[ResolvedJob], explicit: Option<Shader>, mesh: &BTreeMap<String, Vec<Shader>>) -> ShaderPick` in `shader.rs`. It builds `PickInput`:
+    - `mesh` = `mesh.get(&mesh_key(&files[set.members[0]].game_path, base))`, or `&[]`, where `base` is the last `/` component of `set.key` (the colour member's output stem: set members share one folder). Shortcut comment: `shortcut: a set whose first member was added from another folder (set edits) looks up that folder; key by the colour member if that bites`;
     - `subtypes` = `profile.subtype` of `jobs` with `set_key == set.key` whose status is not `PackingInput`;
     - `game_paths` from `set.members`;
     - `advanced_skin` = `set_is_advanced_skin(ctx, set, &files[first member])`;
     - `pbr` = `is_pbr_set(&SuggestContext { target: Target::Cs, suffix: None, game_path: <first path or "">, set_suffixes: &set.suffixes, alpha: AlphaContent::None, is_float: false, advanced_skin: false })`.
-  - `ResolveCtx::shaders`, `ResolvedJob::shader`, `Plan::shaders`, `BatchRequest::set_shaders`, `SetResolved { shader, warnings }`, `Scope::Set`.
+  - `ResolveCtx::shaders`, `ResolvedJob::shader`, `Plan::shaders`, `BatchRequest::{set_shaders, mesh_shaders}`, `SetResolved { shader, warnings }`, `Scope::Set`.
 
 **Planning order** in `Engine::plan_cached`. Add steps 6a–6c to the load-bearing comment list at `api.rs` "M3b planning sequence":
-1. `resolve_one` returns `Result<(ResolvedJob, Analysis, SourceInfo), LoadError>`. Keep the job resolve exactly as today, with `ctx.shaders = &NO_SHADERS`. Its slot type changes with it. The collection loop pushes `(job, work index, analysis, info)` into `pass1: Vec<_>`, not `jobs`.
+1. `resolve_one` (on 8159bdf a closure `|&(set, f), admitted: Admitted<'_>, stage: &Cell<Stage>| -> Result<ResolvedJob, LoadError>`, `api.rs:861`; Track C added the admission and stage arguments) returns `Result<(ResolvedJob, Analysis, SourceInfo), LoadError>`. Keep its admission, stage and cache handling and the job resolve exactly as today, with `ctx.shaders = &NO_SHADERS`. Its slot type changes with it. The collection loop pushes `(job, work index, analysis, info)` into `pass1: Vec<_>`, not `jobs`.
 2. **6a — explicit choices.** A new private `fn explicit_shaders(req: &BatchRequest, sets: &[TextureSet], rep: &Reporter) -> BTreeMap<String, Shader>` (set key → shader):
    - first `req.set_shaders`, then the `Scope::Set` entries of `req.overrides` in command-line order, so later wins;
    - matching as in S-shader-1;
    - one `SET-EDIT-STALE` per id that matches nothing: message `shader choice skipped: no set '{id}'`.
-3. **6b — picks.** `let picks: BTreeMap<String, ShaderPick> = sets.iter().map(|s| (s.key.clone(), shader::pick_for_set(&ctx, s, &files, &pass1_jobs, explicit.get(&s.key).copied()))).collect();`. Then shadow `let ctx = ResolveCtx { shaders: &picks, ..ctx };`. Every `ResolveCtx` field is a reference or `Copy`, so the struct update compiles.
+3. **6b — picks.** `let picks: BTreeMap<String, ShaderPick> = sets.iter().map(|s| (s.key.clone(), shader::pick_for_set(&ctx, s, &files, &pass1_jobs, explicit.get(&s.key).copied(), &req.mesh_shaders))).collect();`. Then shadow `let ctx = ResolveCtx { shaders: &picks, ..ctx };`. Every `ResolveCtx` field is a reference or `Copy`, so the struct update compiles.
 4. **6c — re-resolve.** For each `(job, i, a, info)` in `pass1`:
    - if `picks[&job.set_key].shader.has_member_defaults()`, rebuild `FileFacts` for `work[i]` exactly as `resolve_one` does (same `member_split`), and call `resolve_file(&ctx, &facts)` inside `catch_unwind`;
    - on success, copy `source` from the old job and insert `provenance["target"] = target_src`;
@@ -680,11 +775,17 @@ fn put_rgb(dir: &Path, rel: &str, px: [u8; 3]) {
 }
 
 fn plan(dir: &Path, t: Target, sets: &[&str], gui: &[(&str, Shader)]) -> (Plan, Vec<EngineEvent>) {
+    plan_with(dir, t, sets, gui, &[])
+}
+
+/// `plan` with mesh votes (S-shader-10): `shader::mesh_key` → the shaders the meshes report.
+fn plan_with(dir: &Path, t: Target, sets: &[&str], gui: &[(&str, Shader)], mesh: &[(&str, Vec<Shader>)]) -> (Plan, Vec<EngineEvent>) {
     let mut req = BatchRequest::new(vec![dir.join("in")], dir.join("out"), t);
     req.recursive = true;
     req.accept = AcceptSuggestions::High;
     req.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
     req.set_shaders = gui.iter().map(|(k, s)| (k.to_string(), *s)).collect();
+    req.mesh_shaders = mesh.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     let sink = Arc::new(VecSink::default());
     let rep = Reporter::new(sink.clone(), "shaders");
     let p = Engine::new().unwrap().plan(req, &rep, &CancelToken::default()).unwrap();
@@ -785,6 +886,30 @@ fn switching_mode_re_resolves() {
     let (va, _) = plan(d.path(), Target::Vanilla, &[], &[]);
     assert_eq!(va.shaders.values().next().unwrap().provenance, ShaderOrigin::Fallback);
 }
+
+#[test]
+fn meshes_pick_the_shader_unless_a_pbr_member_or_a_choice_says_otherwise() {
+    let d = tempfile::tempdir().unwrap();
+    wall(d.path());
+    put_rgb(d.path(), "textures/a/wall_p.png", [128, 128, 128]);
+    let hair = [("textures/a/wall", vec![Shader::Hair, Shader::Hair])];
+    let (p, ev) = plan_with(d.path(), Target::Vanilla, &[], &[], &hair);
+    let pick = p.shaders.values().next().unwrap();
+    assert_eq!((pick.shader, pick.provenance.to_string().as_str()), (Shader::Hair, "auto:mesh"));
+    let EventKind::SetResolved { warnings, .. } = set_event(&ev, "textures/a/wall") else { unreachable!() };
+    assert_eq!(warnings[0].code, Code::ShaderAuto);
+    assert_eq!(warnings[0].data["rule"], "mesh");
+    // A key for another texture is no evidence: `_p` decides.
+    let (p, _) = plan_with(d.path(), Target::Vanilla, &[], &[], &[("textures/a/other", vec![Shader::Hair])]);
+    assert_eq!(p.shaders.values().next().unwrap().shader, Shader::Parallax);
+    // The explicit choice still wins.
+    let (p, _) = plan_with(d.path(), Target::Vanilla, &["set:wall.shader=glow"], &[], &hair);
+    assert_eq!(p.shaders.values().next().unwrap().shader, Shader::Glow);
+    // A PBR member wins over a Default mesh: the shipped mesh is not patched by PGPatcher yet.
+    put_rgb(d.path(), "textures/a/wall_rmaos.png", [128, 0, 255]);
+    let (p, _) = plan_with(d.path(), Target::Cs, &[], &[], &[("textures/a/wall", vec![Shader::Default])]);
+    assert_eq!(p.shaders.values().next().unwrap().provenance.to_string(), "auto:pbr");
+}
 ```
 
 - [ ] **Step 2: Run them and check that they fail**
@@ -818,6 +943,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Spec:** §5 member defaults, §6 single-channel maps, §9 shader-default tests.
 
+**Track C interaction (pre-flight, S-mips-0/-13).** On 8159bdf `layered_profile_with` returns `Layered = (Profile, provenance, Option<(MipFilter, &str)>)` and ends with `unscoped_filter_falls_back`, which reads the final alpha policy. The shader layer goes after the `skin_wet_form` block, so that check sees the shader's `cutout`: no extra code. The shader layer never writes `mips.filter`. Expected and pinned by `hair_cutout_and_a_non_box_filter`: unscoped kaiser → box + `CFG-FILTER-IGNORED`; scoped → `CFG-INVALID` (S-mips-0 already ruled both).
+
 **Precedence ruling (S-shader-3).**
 - `Provenance::Shader(String)` (shown `shader:<id>`) is a new layer. It is applied in `layered_profile_with` after:
   - the preset chain;
@@ -829,7 +956,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - So it beats built-in profiles and suggestions, and loses to user presets, configs, rules, analysis facts, suffix facts, `[files]` and `--set`.
 - It counts as explicit itself (`field_explicit`'s `Some(_) => true`). So a shader alpha policy answers the alpha-meaning question.
 - Consequence: `hair` on a source with **no** alpha keeps the analysis `remove` (Analysis already set it). On **varying** alpha it gets `cutout` and asks nothing.
-- In the `Provenance` enum (`Ord`), the variant sits between `AnalysisFact` and `Suffix`, so `float_source_is_linear`'s `>= Suffix` check still treats suffix facts and above as overruling.
+- In the `Provenance` enum (`Ord`; `presets.rs:200`, unchanged by B and C apart from the `Fallback` doc), the variant sits between `AnalysisFact` and `Suffix`, so `float_source_is_linear`'s `>= Suffix` check still treats suffix facts and above as overruling.
 
 **Sub-type ruling (S-shader-4).** Eye `_n` → `msn` and landscape colour member → `landscape_diffuse` are sub-type effects. They are applied in `decide_subtype` after `--set subtype` and rules, before `suggestions.first()`:
 - **explicit shader** (`ShaderOrigin::Set`): `decided: true`, `provenance: Provenance::Shader(id)`;
@@ -978,6 +1105,23 @@ fn explicit_layers_beat_the_shader_default() {
     let (p, _) = plan(d.path(), Target::Cs, &["set:wall.shader=eye"], &[]);
     assert_eq!(job(&p, "wall_n.dds").profile.subtype.id(), "normal");
 }
+
+/// S-mips-0 / S-mips-13 (Track C): the hair `cutout` bars a non-box filter. Unscoped, the filter falls back to box
+/// with CFG-FILTER-IGNORED (Info); file-scoped, it stays and is CFG-INVALID.
+#[test]
+fn hair_cutout_and_a_non_box_filter() {
+    let soft = |x: u32, _| [90, 60, 30, (x * 16) as u8];
+    let d = tempfile::tempdir().unwrap();
+    put_rgba(d.path(), "textures/hair/braid.png", soft);
+    let (p, _) = plan(d.path(), Target::Vanilla, &["mips.filter=kaiser"], &[]);
+    let j = job(&p, "braid.dds");
+    assert_eq!(prov(j, "alpha.policy"), "shader:hair");
+    assert_eq!((serde_json::to_value(j.profile.mips.filter).unwrap(), prov(j, "mips.filter")), ("box".into(), "fallback".to_string()));
+    assert!(j.warnings.iter().any(|w| w.code == Code::CfgFilterIgnored), "{:?}", j.warnings);
+    let (p, _) = plan(d.path(), Target::Vanilla, &["file:**/braid.png.mips.filter=kaiser"], &[]);
+    let j = job(&p, "braid.dds");
+    assert!(j.warnings.iter().any(|w| w.code == Code::CfgInvalid), "{:?}", j.warnings);
+}
 ```
 
 Also add to `presets.rs` tests (or `policy_layers.rs`):
@@ -1021,7 +1165,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Spec:** §4.4 (provenance shown by `plan`, `inspect` and the manifest), §4.1 (`--set set:`).
 
 **Files:**
-- Modify: `crates/cli/src/verbs.rs` `print_event`. Replace the `SetResolved { recipes, .. } if !recipes.is_empty()` arm with an arm for every `SetResolved`:
+- Modify: `crates/cli/src/verbs.rs` `print_event` (`:233`). Replace the `SetResolved { recipes, .. } if !recipes.is_empty()` arm with an arm for every `SetResolved`:
 
 ```rust
 EventKind::SetResolved { recipes, shader, warnings, .. } => {
@@ -1034,9 +1178,9 @@ EventKind::SetResolved { recipes, shader, warnings, .. } => {
 }
 ```
 
-- Modify: `crates/cli/src/args.rs` (the `--set` doc comment at `:116`): add "`set:<id>.shader=<shader>` picks a set's shader (ids as `inspect` prints them after `set`)".
+- Modify: `crates/cli/src/args.rs` (the `--set` doc comment at `:117`, was `:116`): add "`set:<id>.shader=<shader>` picks a set's shader (ids as `inspect` prints them after `set`)".
 - Modify: `crates/engine/src/manifest.rs` `ManifestRecord`: `#[serde(default, skip_serializing_if = "Option::is_none")] pub shader: Option<crate::shader::ShaderPick>`.
-- Modify: `crates/engine/src/pipeline.rs:445`: `shader: job.shader.clone(),`.
+- Modify: `crates/engine/src/pipeline.rs` (the `ManifestRecord { … }` literal at `:423`; the plan had `:445`): `shader: job.shader.clone(),`.
 - Test: `crates/cli/tests/cli_inspect_validate.rs`, `crates/cli/tests/cli_convert.rs`, `crates/engine/tests/events_manifest.rs`.
 
 **Interfaces:**
@@ -1104,9 +1248,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: GUI — the Shader dropdown on the set card, `sdc-project.toml`, and set warnings
+### Task 7: GUI — the Shader dropdown on the set card, `sdc-project.toml`, set warnings, and the mesh votes
 
-**Spec:** §7 (dropdown with the mode's shaders, "(auto)", choosing writes `shader`, "Auto" removes it, warnings on the card, switching mode re-resolves), §5 PGPatcher JSON unchanged, §9 GUI model tests.
+**Spec:** §7 (dropdown with the mode's shaders, "(auto)", choosing writes `shader`, "Auto" removes it, warnings on the card, switching mode re-resolves), §5 PGPatcher JSON unchanged, §9 GUI model tests, §12 mesh-reported shader first (the votes come from the scan database; "(auto)" covers `auto:mesh` as every `auto:` provenance).
 
 **Files:**
 - Modify: `crates/gui/src/sets_doc.rs`:
@@ -1125,11 +1269,70 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - entries: "Auto", then `shader_options(model.target)` by `label()`. Picking pushes a new `Act::Shader(v.id.clone(), Option<Shader>)`, applied in `draw` with the other acts via `model.set_shader`;
   - disable it (`ui.add_enabled_ui(editing.on, …)`) when sets are not editable;
   - chain `v.set_warnings` into `rows` as `(v.label.as_str(), w)`, so `SHADER-EXTRA-MAP`/`-MISSING-MAP`/`-UNAVAILABLE` count in the ⚠ badge and its hover popup. `SHADER-AUTO` is Info and drops out through `counts_toward_badge`, as other Info codes do.
-- Test: `crates/gui/tests/sets_doc.rs`, `crates/gui/tests/sets_model.rs`, `crates/gui/tests/pbr_export.rs`.
+- **Mesh votes (S-shader-10; owner: mesh-reported shader first).**
+  - Modify `crates/gui/src/model/meshes.rs` (next to the other store reads; `rusqlite` and `modscan` are already GUI dependencies; `crates/modscan` itself is not touched):
+
+```rust
+/// M6 Track A (DECISIONS S-shader-10): for each key (`engine::shader::mesh_key`), the shader of every lighting shape
+/// that uses `<key>.dds` in slot 0, in non-derived copies of enabled origins. PGPatcher's output copies and TruePBR
+/// shapes (SLSF2 bit 23) do not vote: sdc's own rules decide PBR. Types outside the 12 shaders do not vote
+/// (`Shader::from_lighting_type`). Keys without a vote are left out.
+pub fn mesh_votes(db: &Path, keys: &BTreeSet<String>) -> Result<BTreeMap<String, Vec<Shader>>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    // `DISTINCT` per NIF path and block: the same mesh in two mods votes once.
+    let mut st = store
+        .conn()
+        .prepare(
+            "SELECT DISTINCT c.path_id, s.block, s.shader_type FROM path tp
+             JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = 0
+             JOIN shape s ON s.texset_id = tu.texset_id AND s.shader_kind = 1
+                          AND (ifnull(s.slsf2, 0) & 8388608) = 0
+             JOIN nif_copy c ON c.id = s.copy_id AND c.is_derived = 0
+             JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
+             WHERE tp.p = ?1",
+        )
+        .map_err(db_err)?;
+    let mut out = BTreeMap::new();
+    for k in keys {
+        let types = st
+            .query_map([format!("{k}.dds")], |r| r.get::<_, Option<i64>>(2))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(db_err)?;
+        let v: Vec<Shader> = types
+            .into_iter()
+            .flatten()
+            .filter_map(|t| u32::try_from(t).ok().and_then(Shader::from_lighting_type))
+            .collect();
+        if !v.is_empty() {
+            out.insert(k.clone(), v);
+        }
+    }
+    Ok(out)
+}
+```
+
+  - Modify `crates/gui/src/model/mod.rs` (a NIF-changed file: additive hunks only):
+    - `AppModel` gets `pub scan_db: Option<PathBuf>` (doc: "The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a developer's scan cannot leak in") and `pub mesh_votes: BTreeMap<String, Vec<Shader>>` (doc: "S-shader-10: `shader::mesh_key` → what the scanned meshes report; sent as `BatchRequest::mesh_shaders`"), both empty in `new`;
+    - `pub fn refresh_mesh_votes(&mut self) -> bool`: keys = `mesh_key(&job.game_path, <job.output file stem>)` of every item job with `pack.is_none()`; votes = `meshes::mesh_votes(db, &keys)` when `scan_db` is a file, else empty. A read error also means no votes (the suffix rules decide; the Meshes view reports database errors). Stores the votes and returns whether they changed;
+    - `EngineInputs` gets `mesh_votes: BTreeMap<String, Vec<Shader>>`: `of` copies `m.mesh_votes`, `replan`'s `last_inputs` copies `req.mesh_shaders`; `request()` sets `req.mesh_shaders = self.mesh_votes.clone();`;
+    - in the plan-landed handler, call `self.refresh_mesh_votes();` right before `let now = EngineInputs::of(self);` (the bounded auto-replan then plans once more with the votes: the first plan of a folder has no game paths yet).
+  - Modify `crates/gui/src/app.rs` (a NIF-changed file), where `self.meshes.poll();` is called in `update`:
+
+```rust
+        let scanning = self.meshes.scanning();
+        self.meshes.poll();
+        // S-shader-10: a finished scan may change what the meshes report.
+        if scanning && !self.meshes.scanning() && self.model.refresh_mesh_votes() {
+            self.model.replan();
+        }
+```
+
+  - Modify `crates/gui/src/main.rs`: next to `m.user_config = user_config_path();`, add `m.scan_db = sdc_gui::model::meshes::default_store_path();`.
+- Test: `crates/gui/tests/sets_doc.rs`, `crates/gui/tests/sets_model.rs` (also the mesh votes: it has the `pbr_opened` fixture), `crates/gui/tests/pbr_export.rs`.
 
 **Interfaces:**
-- Consumes: `engine::shader::{Shader, ShaderPick, ShaderOrigin}`, `BatchRequest::set_shaders`, `SetResolved { shader, warnings }`.
-- Produces: `SetsDoc::set_shader`, `SetEntry::shader`, `AppModel::set_shader`, `sets::{set_shaders, shader_options}`, `SetView::{shader, shader_choice, set_warnings}`, `SetItem::{shader, warnings}`.
+- Consumes: `engine::shader::{Shader, ShaderPick, ShaderOrigin, mesh_key}`, `Shader::from_lighting_type`, `BatchRequest::{set_shaders, mesh_shaders}`, `SetResolved { shader, warnings }`, `modscan::store::Store::{open_read_only, conn}`.
+- Produces: `SetsDoc::set_shader`, `SetEntry::shader`, `AppModel::set_shader`, `sets::{set_shaders, shader_options}`, `SetView::{shader, shader_choice, set_warnings}`, `SetItem::{shader, warnings}`, `meshes::mesh_votes`, `AppModel::{scan_db, mesh_votes, refresh_mesh_votes}`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1204,7 +1407,76 @@ fn switching_mode_falls_back_and_back() {
     idle(&mut m);
     assert_eq!(view(&set_views(&m), "landscape/rock01").shader.as_ref().unwrap().shader, Shader::Pbr);
 }
+
+/// A scan database where `tex` (a `textures/…` path with `.dds`) is slot 0 of these shapes:
+/// (lighting shader type, SLSF2, shader kind, derived copy, enabled origin).
+fn scan_db(db: &std::path::Path, tex: &str, shapes: &[(u32, u32, i32, bool, bool)]) {
+    let s = modscan::store::Store::open(db).unwrap();
+    let c = s.conn();
+    c.execute("INSERT INTO path(id, p) VALUES (1, ?1)", [tex]).unwrap();
+    c.execute_batch("INSERT INTO texset(id, n, t0) VALUES (1, 1, 1);
+                     INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0);").unwrap();
+    for (i, (ty, slsf2, kind, derived, enabled)) in shapes.iter().enumerate() {
+        let id = i as i64 + 2;
+        c.execute("INSERT INTO path(id, p) VALUES (?1, ?2)", rusqlite::params![id, format!("meshes/m{id}.nif")]).unwrap();
+        c.execute("INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (?1, 1, ?2, ?2, ?1, ?3)",
+            rusqlite::params![id, format!("mod{id}"), enabled]).unwrap();
+        c.execute("INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES (?1, ?1, ?1, 0, ?2)",
+            rusqlite::params![id, derived]).unwrap();
+        c.execute("INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id) VALUES (?1, 0, 'BSTriShape', ?2, ?3, ?4, 1)",
+            rusqlite::params![id, kind, ty, slsf2]).unwrap();
+    }
+}
+
+#[test]
+fn mesh_votes_count_enabled_source_lighting_shapes_only() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("scan.db");
+    scan_db(&db, "textures/a/wall.dds", &[
+        (6, 0, 1, false, true),          // votes hair
+        (6, 1 << 23, 1, false, true),    // TruePBR: no vote
+        (0, 0, 2, false, true),          // an effect shader: no vote
+        (0, 0, 1, true, true),           // PGPatcher's output copy: no vote
+        (0, 0, 1, false, false),         // a disabled mod: no vote
+        (4, 0, 1, false, true),          // Face Tint: not one of the 12, no vote
+    ]);
+    let keys = ["textures/a/wall".to_string(), "textures/a/none".to_string()].into_iter().collect();
+    let v = sdc_gui::model::meshes::mesh_votes(&db, &keys).unwrap();
+    assert_eq!(v.get("textures/a/wall"), Some(&vec![Shader::Hair]));
+    assert!(!v.contains_key("textures/a/none"));
+}
+
+#[test]
+fn a_scan_database_picks_the_set_shader() {
+    use engine::shader::{AutoRule, Shader, ShaderOrigin};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    // The key the GUI asks for, taken from the plan: the leaf diffuse's game folder and output stem.
+    let j = m.items.iter().filter_map(|i| i.job.as_ref())
+        .find(|j| j.set_key.ends_with("landscape/leaf") && j.output.file_stem().is_some_and(|s| s == "leaf"))
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db);
+    assert!(m.refresh_mesh_votes());
+    m.replan();
+    idle(&mut m);
+    let leaf = view(&set_views(&m), "landscape/leaf").shader.clone().unwrap();
+    assert_eq!((leaf.shader, leaf.provenance), (Shader::Hair, ShaderOrigin::Auto(AutoRule::Mesh)));
+    // No database: the suffix rules again (the leaf is under textures/landscape).
+    m.scan_db = None;
+    assert!(m.refresh_mesh_votes());
+    m.replan();
+    idle(&mut m);
+    assert_eq!(view(&set_views(&m), "landscape/leaf").shader.as_ref().unwrap().shader, Shader::Landscape);
+}
 ```
+
+If the fixture's leaf diffuse has another file name, adjust the `find` to it; the test must take the key from the plan, never hard-code it. `rusqlite` and `modscan` are normal dependencies of `sdc_gui`, so the integration test can use them.
 
 `crates/gui/tests/pbr_export.rs`:
 
@@ -1227,7 +1499,7 @@ fn an_explicit_shader_does_not_change_which_sets_get_json() {
 - [ ] **Step 2: Run them and check that they fail**
 
 Run: `cargo test -p sdc_gui --test sets_doc --test sets_model --test pbr_export`
-Expected: compile errors (`set_shader`, `shader_options`, `SetView::shader` missing).
+Expected: compile errors (`set_shader`, `shader_options`, `SetView::shader`, `mesh_votes`, `AppModel::scan_db` missing).
 
 - [ ] **Step 3: Implement** as listed. Check that `crates/gui/tests/ui_smoke.rs` still renders the sets column (the `ComboBox` must not panic on an empty `shader`).
 
@@ -1239,8 +1511,8 @@ Expected: PASS, including `ui_smoke`, `gui_repro` (`cargo test -p sdc --test gui
 - [ ] **Step 5: Run the gates, then commit**
 
 ```bash
-git add crates/gui/src/sets_doc.rs crates/gui/src/model/items.rs crates/gui/src/model/sets.rs crates/gui/src/model/mod.rs crates/gui/src/ui/sets_column.rs crates/gui/tests/sets_doc.rs crates/gui/tests/sets_model.rs crates/gui/tests/pbr_export.rs
-git commit -m "feat(gui): Shader dropdown on the set card, saved in sdc-project.toml; shader warnings on the card (M6 spec §7)
+git add crates/gui/src/sets_doc.rs crates/gui/src/model/items.rs crates/gui/src/model/sets.rs crates/gui/src/model/mod.rs crates/gui/src/ui/sets_column.rs crates/gui/src/model/meshes.rs crates/gui/src/app.rs crates/gui/src/main.rs crates/gui/tests/sets_doc.rs crates/gui/tests/sets_model.rs crates/gui/tests/pbr_export.rs
+git commit -m "feat(gui): Shader dropdown on the set card, saved in sdc-project.toml; shader warnings on the card; mesh votes from the scan database (M6 spec §7, §12)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1336,7 +1608,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Spec:** §10 (bump the minor so `if-changed` re-encodes), decisions note.
 
 **Files:**
-- Modify: `docs/DECISIONS.md`. Append under `## Note S` (create it if absent, per Global Constraints). One bullet each, in this form: `- **S-shader-N <title> (owner / plan, 2026-10-11).** <ruling>`:
+- Modify: `docs/DECISIONS.md`. `## Note S` exists: append a `### M6 Track A: shader modes (plan rulings, 2026-10-11)` subsection after the Track C one (and after its Deferred bullet). One bullet each, in this form: `- **S-shader-N <title> (owner / plan, 2026-10-11).** <ruling>`:
   - **S-shader-1** `--set` set scope: there was none; `set:<id>.shader=<shader>`, `shader` only, the id matching rules, `SET-EDIT-STALE` for no match, the command line beats the GUI.
   - **S-shader-2** `sdc-project.toml`: `shader` goes in the `[[sets]]` entry (the spec's `[sets."<base>"]` adapted); it is a reserved key, never a JSON setting.
   - **S-shader-3** Precedence: the full order as in Task 5, plus the Provenance placement (between `analysis:<fact>` and `suffix:<term>`) and the hair no-alpha consequence.
@@ -1347,12 +1619,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - **S-shader-8** Rule 2 is target-independent, so a PBR set under vanilla/cpm auto-picks `pbr` and falls back with `SHADER-UNAVAILABLE`. PGPatcher JSON still follows `is_pbr_diffuse` (P5/C1), not the shader.
   - **S-shader-9** `_coat` (owner: "_coat (for the coat diffuse)"). It is a built-in §4.4 vocabulary term (`VocabRole::CoatColour`, canonical `s`), not a preset alias:
     - `x_coat.png` joins set `x` as its `_s` member, `pbr_subsurface` (High), slot 8, written `x_s.dds`;
-    - it collides with `x_s.png` (`IN-DUPLICATE`);
+    - it collides with `x_s.png`, and with a re-encoded `x_s.dds` (Track B S6), as `IN-DUPLICATE`;
     - it is blocked by `CFG-UNAVAILABLE` under vanilla/cpm;
     - a user preset alias `coat` is now refused, because aliases may not be vocabulary terms.
-- Modify: `docs/gui.md`: in the set card section, add a short paragraph on the Shader dropdown ("(auto)", "(fallback)", "Auto" clears, warnings on the ⚠ badge).
+  - **S-shader-10** Mesh-reported shader first (owner, 2026-10-11): order explicit → advanced skin → PBR → mesh majority (`auto:mesh`) → suffix rules 3–12. Evidence = `BatchRequest::mesh_shaders` keyed by `shader::mesh_key` (diffuse game folder + stem), filled by the GUI from the scan database (lighting shapes, slot 0, non-derived copies of enabled origins, not TruePBR); `Shader::from_lighting_type` maps 0/1/2/3/5/6/8/11/16, any other type is no vote. Strict majority, else the suffix rules; an `envmap` majority with a complex `_m` is `complex_material`. PBR is never read from a NIF (the TruePBR bit is PGPatcher's output marker; a shipped mesh of a PBR set says Default), so a PBR or skin member always wins. The CLI sends no votes. `modscan` untouched: raw SQL on `Store::conn()`.
+  - **S-shader-11** Track C interaction (S-mips-0/-13): the shader layer runs before `unscoped_filter_falls_back`, so a hair diffuse's `cutout` makes an unscoped non-box filter box + `CFG-FILTER-IGNORED` and a scoped one `CFG-INVALID`. Catalogue count 69 → 73; workspace version 0.3.0 → 0.4.0.
+- Modify: `docs/gui.md`: in the set card section, add a short paragraph on the Shader dropdown ("(auto)", "(fallback)", "Auto" clears, warnings on the ⚠ badge, and that a scanned mod's meshes decide the auto pick unless a PBR member does).
 - Modify: `docs/superpowers/specs/2026-10-08-skyrim-dds-converter-design.md` §6.1 suffix list: add `_i` with "(M6, Note S-shader-6)". In the §4.4 vocabulary table, add the `_coat` → `_s` (`pbr_subsurface`, coat colour) row "(M6, Note S-shader-9)". Make only these two edits.
-- Modify: `Cargo.toml` `[workspace.package] version` → **the next minor after main's version** (read it first; e.g. `0.3.0` → `0.4.0`). Then `cargo build` updates `Cargo.lock`.
+- Modify: `Cargo.toml` `[workspace.package] version` `0.3.0` → **`0.4.0`** (main 8159bdf is 0.3.0: Track B bumped it, Track C did not, S-mips-9). Then `cargo build` updates `Cargo.lock`.
 - Test: none new. `ENGINE_VERSION` follows `CARGO_PKG_VERSION`.
 
 - [ ] **Step 1: Write the DECISIONS, gui.md and spec edits.**
@@ -1362,11 +1636,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ```bash
 git add docs/DECISIONS.md docs/gui.md docs/superpowers/specs/2026-10-08-skyrim-dds-converter-design.md
-git commit -m "docs: DECISIONS Note S shader rulings (S-shader-1..9), GUI shader dropdown, _i suffix (M6 Track A)
+git commit -m "docs: DECISIONS Note S shader rulings (S-shader-1..11), GUI shader dropdown, _i suffix (M6 Track A)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git add Cargo.toml Cargo.lock
-git commit -m "chore: workspace version <next minor> so if-changed re-encodes outputs the shader defaults changed (hair, eye _n, multilayer, _i)
+git commit -m "chore: workspace version 0.4.0 so if-changed re-encodes outputs the shader defaults changed (hair, eye _n, multilayer, _i, mesh-picked shaders)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1379,6 +1653,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 2. **`_i`: yes.** It joins sets and suggests `diffuse` (Medium). Covered by Task 2 and S-shader-6.
 3. **Multilayer diffuse alpha = `data`.** Covered by Task 5 and S-shader-5.
 4. **New: `_coat`** names the PBR coat colour, i.e. the `_s` member (`pbr_subsurface`, slot 8, written `<base>_s.dds`). Covered by Task 2, the Task 8 golden and S-shader-9.
+5. **Mesh-reported shader first** (owner, 2026-10-11, after the NIF merge; spec §12). The scanned meshes' majority shader is used after the PBR/skin rules and before suffix rules 3–12. Covered by Tasks 1, 2, 4 and 7 and S-shader-10.
 
 ## Spec coverage
 
@@ -1395,8 +1670,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 | §5 PGPatcher JSON unchanged | 7 (`an_explicit_shader_does_not_change_which_sets_get_json`) |
 | §6 BC4 single-channel rows | 5 (finding recorded in S-shader-5) |
 | §7 GUI dropdown, "(auto)", Auto clears, warnings, mode switch | 7 |
-| §8 four codes, count = merged + 4 | 3 |
+| §8 four codes, count 69 + 4 = 73 | 3 |
 | §9 tests | 2, 3, 4, 5, 7, 8 |
 | §10 version bump | 9 |
 | §11 Track D boundary | nothing to do (no preset verbs touched) |
 | §12 amendments: rule 12 → `default`, multilayer `data`, `_i`, `_coat` | 2, 5, 8, 9 |
+| §12 amendment: mesh-reported shader first | 1 (`from_lighting_type`, `mesh_key`), 2 (`pick` order), 4 (`BatchRequest::mesh_shaders`), 7 (scan DB votes), 9 (S-shader-10) |

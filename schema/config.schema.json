@@ -38,7 +38,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -232,7 +232,7 @@
         },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
-          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
+          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "subtype": {
           "$ref": "#/$defs/Subtype"
@@ -510,7 +510,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -764,7 +764,7 @@
         },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
-          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
+          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "subtype": {
           "$ref": "#/$defs/Subtype"
@@ -798,6 +798,10 @@
         "min_mip_psnr_db": {
           "format": "double",
           "type": "number"
+        },
+        "mips": {
+          "$ref": "#/$defs/ValidationMips",
+          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",
@@ -838,7 +842,7 @@
         },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
-          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
+          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "subtype": {
           "$ref": "#/$defs/Subtype"
@@ -869,7 +873,8 @@
     "ResizeMode": {
       "enum": [
         "none",
-        "pot-down"
+        "pot-down",
+        "half"
       ],
       "type": "string"
     },
@@ -912,7 +917,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "The source's alpha content; `none` also matches varying alpha that mesh evidence decided to remove (M6 Track E,\nowner O1)."
         },
         "glob": {
           "default": null,
@@ -930,6 +936,13 @@
             "null"
           ]
         },
+        "subtypes": {
+          "description": "M6 Track D (DECISIONS Note T2): the sub-type being resolved is one of these; empty = any. Matched only when the\nprofile is layered, so a rule that names sub-types here never decides a sub-type.",
+          "items": {
+            "$ref": "#/$defs/Subtype"
+          },
+          "type": "array"
+        },
         "suffix": {
           "default": null,
           "description": "Recognised suffix without underscore, e.g. \"n\", \"rmaos\"; \"\" = no suffix.",
@@ -944,7 +957,8 @@
     "SearchRadius": {
       "enum": [
         "default",
-        "max"
+        "max",
+        "fast"
       ],
       "type": "string"
     },
@@ -991,6 +1005,13 @@
       ],
       "type": "string"
     },
+    "ValidationMips": {
+      "enum": [
+        "all",
+        "smallest"
+      ],
+      "type": "string"
+    },
     "ValidationSpec": {
       "additionalProperties": false,
       "properties": {
@@ -1011,6 +1032,10 @@
         "min_mip_psnr_db": {
           "format": "double",
           "type": "number"
+        },
+        "mips": {
+          "$ref": "#/$defs/ValidationMips",
+          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",
@@ -1055,6 +1080,15 @@
         "$ref": "#/$defs/Rule"
       },
       "type": "array"
+    },
+    "schema_version": {
+      "description": "Schema of this file (spec §5); absent = 1. Not written back when absent.",
+      "format": "uint32",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "subtypes": {
       "additionalProperties": false,

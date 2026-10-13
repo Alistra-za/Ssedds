@@ -316,7 +316,7 @@ fn json_only_edits_do_not_replan_but_match_edits_do() {
     assert!(!m.busy(), "a material value does not plan");
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\boulder")),
     );
     assert!(m.busy(), "a match changes output paths, so it plans");
@@ -335,7 +335,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
     idle(&mut m);
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\boulder")),
     );
     idle(&mut m);
@@ -354,7 +354,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
             .as_deref(),
         Some(r"landscape\rock01")
     );
-    m.set_json_value("landscape/rock01", "match_diffuse", None);
+    m.set_json_value("landscape/rock01", "match1", None);
     idle(&mut m);
     assert_eq!(
         view(&set_views(&m), "landscape/rock01").prefix.as_deref(),
@@ -721,7 +721,7 @@ fn a_packed_format_applies_after_a_match_edit() {
     let before = packed(&m).key;
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\stone")),
     );
     idle(&mut m);
@@ -763,7 +763,7 @@ fn a_packed_entry_stays_matched_after_a_match_edit() {
     m.set_format(&key, Format::Bc1, ColorTag::Unorm);
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\stone")),
     );
     idle(&mut m);
@@ -819,6 +819,7 @@ fn a_created_set_in_a_non_ascii_folder_is_one_set() {
         ..Default::default()
     };
     let mut m = sdc_gui::model::AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     idle(&mut m);
     let normal = key_of(&m, "stein_n.png");
@@ -977,4 +978,522 @@ fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
         Some(false),
         "the plan on screen still bakes the shared rmaos"
     );
+}
+
+#[test]
+fn shader_dropdown_lists_match_the_mode() {
+    use engine::{config::Target, shader::Shader};
+    assert_eq!(shader_options(Target::Cs).len(), 12);
+    assert!(!shader_options(Target::Vanilla).contains(&Shader::Pbr));
+    assert_eq!(shader_options(Target::Cpm), shader_options(Target::Vanilla));
+}
+
+#[test]
+fn choosing_and_clearing_a_shader_round_trips_in_sdc_project_toml() {
+    use engine::shader::{Shader, ShaderOrigin};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let v = set_views(&m);
+    assert_eq!(
+        view(&v, "landscape/leaf").shader.as_ref().unwrap().shader,
+        Shader::Landscape
+    );
+    assert!(matches!(
+        view(&v, "landscape/leaf")
+            .shader
+            .as_ref()
+            .unwrap()
+            .provenance,
+        ShaderOrigin::Auto(_)
+    ));
+    m.set_shader("landscape/leaf", Some(Shader::Hair));
+    idle(&mut m);
+    let v = set_views(&m);
+    let leaf = view(&v, "landscape/leaf");
+    assert_eq!(
+        (
+            leaf.shader_choice,
+            leaf.shader.as_ref().unwrap().provenance.clone()
+        ),
+        (Some(Shader::Hair), ShaderOrigin::Set)
+    );
+    assert!(m
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .text()
+        .contains("shader = \"hair\""));
+    assert_eq!(set_shaders(&m).get("landscape/leaf"), Some(&Shader::Hair));
+    m.set_shader("landscape/leaf", None);
+    idle(&mut m);
+    assert!(!m.sets_doc.as_ref().unwrap().text().contains("shader"));
+    assert_eq!(view(&set_views(&m), "landscape/leaf").shader_choice, None);
+}
+
+#[test]
+fn switching_mode_falls_back_and_back() {
+    use engine::{
+        codes::Code,
+        config::Target,
+        shader::{Shader, ShaderOrigin},
+    };
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_shader("landscape/rock01", Some(Shader::Pbr));
+    idle(&mut m);
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    let v = set_views(&m);
+    let rock = view(&v, "landscape/rock01");
+    let pick = rock.shader.as_ref().unwrap();
+    assert_eq!(
+        (pick.shader, &pick.provenance),
+        (Shader::Default, &ShaderOrigin::Fallback)
+    );
+    assert!(rock
+        .set_warnings
+        .iter()
+        .any(|w| w.code == Code::ShaderUnavailable));
+    assert_eq!(
+        rock.shader_choice,
+        Some(Shader::Pbr),
+        "the saved choice stays"
+    );
+    m.set_target(Target::Cs);
+    idle(&mut m);
+    assert_eq!(
+        view(&set_views(&m), "landscape/rock01")
+            .shader
+            .as_ref()
+            .unwrap()
+            .shader,
+        Shader::Pbr
+    );
+}
+
+/// A scan database where `tex` (a `textures/…` path with `.dds`) is slot 0 of these shapes:
+/// (lighting shader type, SLSF2, shader kind, derived copy, enabled origin).
+fn scan_db(db: &std::path::Path, tex: &str, shapes: &[(u32, u32, i32, bool, bool)]) {
+    let s = modscan::store::Store::open(db).unwrap();
+    let c = s.conn();
+    c.execute("INSERT INTO path(id, p) VALUES (1, ?1)", [tex])
+        .unwrap();
+    c.execute_batch(
+        "INSERT INTO texset(id, n, t0) VALUES (1, 1, 1);
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0);",
+    )
+    .unwrap();
+    for (i, (ty, slsf2, kind, derived, enabled)) in shapes.iter().enumerate() {
+        let id = i as i64 + 2;
+        c.execute(
+            "INSERT INTO path(id, p) VALUES (?1, ?2)",
+            rusqlite::params![id, format!("meshes/m{id}.nif")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (?1, 1, ?2, ?2, ?1, ?3)",
+            rusqlite::params![id, format!("mod{id}"), enabled],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES (?1, ?1, ?1, 0, ?2)",
+            rusqlite::params![id, derived],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id) VALUES (?1, 0, 'BSTriShape', ?2, ?3, ?4, 1)",
+            rusqlite::params![id, kind, ty, slsf2],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn mesh_votes_count_enabled_source_lighting_shapes_only() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("scan.db");
+    scan_db(
+        &db,
+        "textures/a/wall.dds",
+        &[
+            (6, 0, 1, false, true),       // votes hair
+            (6, 1 << 23, 1, false, true), // TruePBR: no vote
+            (0, 0, 2, false, true),       // an effect shader: no vote
+            (0, 0, 1, true, true),        // PGPatcher's output copy: no vote
+            (0, 0, 1, false, false),      // a disabled mod: no vote
+            (4, 0, 1, false, true),       // Face Tint: not one of the 12, no vote
+        ],
+    );
+    let keys = ["textures/a/wall".to_string(), "textures/a/none".to_string()]
+        .into_iter()
+        .collect();
+    let v = sdc_gui::model::meshes::mesh_votes(&db, &keys).unwrap();
+    assert_eq!(v.get("textures/a/wall"), Some(&vec![Shader::Hair]));
+    assert!(!v.contains_key("textures/a/none"));
+}
+
+#[test]
+fn a_scan_database_picks_the_set_shader() {
+    use engine::shader::{AutoRule, Shader, ShaderOrigin};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    // The key the GUI asks for, taken from the plan: the leaf diffuse's game folder and output stem.
+    let j = m
+        .items
+        .iter()
+        .filter_map(|i| i.job.as_ref())
+        .find(|j| {
+            j.set_key.ends_with("landscape/leaf")
+                && j.output.file_stem().is_some_and(|s| s == "leaf")
+        })
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db);
+    assert!(m.refresh_mesh_votes());
+    m.replan();
+    idle(&mut m);
+    let leaf = view(&set_views(&m), "landscape/leaf")
+        .shader
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (leaf.shader, leaf.provenance),
+        (Shader::Hair, ShaderOrigin::Auto(AutoRule::Mesh))
+    );
+    // No database: the suffix rules again (the leaf is under textures/landscape).
+    m.scan_db = None;
+    assert!(m.refresh_mesh_votes());
+    m.replan();
+    idle(&mut m);
+    assert_eq!(
+        view(&set_views(&m), "landscape/leaf")
+            .shader
+            .as_ref()
+            .unwrap()
+            .shader,
+        Shader::Landscape
+    );
+}
+
+/// A scan database where `tex` is slot 0 of these lighting shapes:
+/// (shader type, `alpha_flags`, `alpha_threshold`, SLSF2, derived copy). Every origin is enabled.
+type AlphaShape = (u32, Option<i64>, Option<i64>, u32, bool);
+
+fn scan_db_alpha(db: &std::path::Path, tex: &str, shapes: &[AlphaShape]) {
+    let s = modscan::store::Store::open(db).unwrap();
+    let c = s.conn();
+    c.execute("INSERT INTO path(id, p) VALUES (1, ?1)", [tex])
+        .unwrap();
+    c.execute_batch(
+        "INSERT INTO texset(id, n, t0) VALUES (1, 1, 1);
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0);",
+    )
+    .unwrap();
+    for (i, (ty, flags, threshold, slsf2, derived)) in shapes.iter().enumerate() {
+        let id = i as i64 + 2;
+        c.execute(
+            "INSERT INTO path(id, p) VALUES (?1, ?2)",
+            rusqlite::params![id, format!("meshes/m{id}.nif")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (?1, 1, ?2, ?2, ?1, 1)",
+            rusqlite::params![id, format!("mod{id}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES (?1, ?1, ?1, 0, ?2)",
+            rusqlite::params![id, derived],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO shape(copy_id, block, kind, shader_kind, shader_type, slsf2, texset_id, alpha_flags, alpha_threshold) VALUES (?1, 0, 'BSTriShape', 1, ?2, ?3, 1, ?4, ?5)",
+            rusqlite::params![id, ty, slsf2, flags, threshold],
+        )
+        .unwrap();
+    }
+}
+
+/// M6 Track E spec §4.1, §6 (Note U5): one entry per source lighting shape, from NiAlphaProperty bit 0 (blend) and bit
+/// 9 (test). No property is no alpha. TruePBR shapes and PGPatcher's output copies are left out; a shader type that
+/// is no vote (Face Tint, 4) still counts.
+#[test]
+fn mesh_alpha_reads_the_alpha_property_of_each_source_lighting_shape() {
+    use engine::shader::MeshAlpha;
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("scan.db");
+    scan_db_alpha(
+        &db,
+        "textures/a/wall.dds",
+        &[
+            (0, Some(1), Some(0), 0, false),
+            (0, Some(1 << 9), Some(128), 0, false),
+            (4, Some(1 | 1 << 9), Some(90), 0, false),
+            (0, None, None, 0, false),
+            (0, Some(1 << 9), Some(200), 1 << 23, false),
+            (0, Some(1), Some(0), 0, true),
+        ],
+    );
+    let keys = ["textures/a/wall".to_string(), "textures/a/none".to_string()]
+        .into_iter()
+        .collect();
+    let v = sdc_gui::model::meshes::mesh_alpha(&db, &keys).unwrap();
+    let mut got = v["textures/a/wall"].clone();
+    got.sort_by_key(|a| (a.blend, a.test, a.threshold));
+    let ma = |blend, test, threshold| MeshAlpha {
+        blend,
+        test,
+        threshold,
+    };
+    assert_eq!(
+        got,
+        vec![
+            ma(false, false, 0),
+            ma(false, true, 128),
+            ma(true, false, 0),
+            ma(true, true, 90),
+        ]
+    );
+    assert!(!v.contains_key("textures/a/none"));
+}
+
+/// M6 Track E spec §1 success, plan Review Focus 3 and 4: the scan's alpha evidence reaches the plan. A refresh that
+/// changes only the alpha (a Face Tint shape is no shader vote) still reports a change, and a varying-alpha diffuse
+/// is then no longer asked its alpha meaning.
+#[test]
+fn a_scan_database_decides_a_diffuse_alpha() {
+    use engine::config::AlphaPolicy;
+    use sdc_gui::model::items::Decision;
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures/a");
+    std::fs::create_dir_all(&t).unwrap();
+    image::ImageBuffer::from_fn(16, 16, |x, _| image::Rgba([90u8, 60, 30, (x * 16) as u8]))
+        .save(t.join("glass.png"))
+        .unwrap();
+    let mut m = opened_as_the_app(d.path().join("textures"), d.path().join("export"));
+    let asked = |m: &sdc_gui::model::AppModel| {
+        m.item("a/glass.png")
+            .unwrap()
+            .decisions
+            .contains(&Decision::AlphaMeaning)
+    };
+    assert!(asked(&m));
+    let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
+    let key = engine::shader::mesh_key(&j.game_path, "glass");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db_alpha(
+        &db,
+        &format!("{key}.dds"),
+        &[(4, Some(1), Some(0), 0, false)],
+    );
+    m.scan_db = Some(db);
+    assert!(m.refresh_mesh_votes(), "only the alpha evidence changed");
+    assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
+    assert_eq!(
+        (
+            j.profile.alpha.policy,
+            j.provenance["alpha.policy"].to_string()
+        ),
+        (AlphaPolicy::Blend, "mesh:alpha".to_string())
+    );
+    assert!(!asked(&m));
+}
+
+/// F1 spec Review Focus 1: match1 comes from the source, so a set rename does not move it off the mesh's path.
+#[test]
+fn a_renamed_set_still_matches_its_source_path() {
+    use sdc_gui::model::pbr_export::json_entries;
+    use sdc_gui::pgp::writer::entry_node;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.rename_set("landscape/rock01", "landscape/boulder")
+        .unwrap();
+    idle(&mut m);
+    let (_, e) = json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == "landscape/boulder")
+        .expect("the renamed set is a PBR set");
+    assert_eq!(
+        entry_node(&e).to_value()["match1"],
+        json!(r"landscape\rock01.dds")
+    );
+}
+
+/// F1 spec §3.2, owner 2026-10-12: the Matching rows are the active matches and the empty + rows; the + menu offers
+/// slots 3–8 without a row, a filled slot starting from the set's path and any other empty.
+#[test]
+fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
+    assert_eq!(
+        active,
+        vec![SlotMatch {
+            n: 1,
+            slot: "Diffuse".into(),
+            path: r"landscape\rock01".into()
+        }]
+    );
+    let slot = |n: u8, slot: &str, path: &str| SlotMatch {
+        n,
+        slot: slot.into(),
+        path: path.into(),
+    };
+    assert_eq!(
+        add,
+        vec![
+            slot(3, "Slot 3", ""),
+            slot(4, "Slot 4", ""),
+            slot(5, "Slot 5", ""),
+            slot(6, "RMAOS", r"landscape\rock01_rmaos"),
+            slot(7, "Slot 7", ""),
+            slot(8, "Slot 8", ""),
+        ]
+    );
+    m.set_json_value(
+        "landscape/rock01",
+        "match6",
+        Some(json!(r"landscape\rock01_rmaos")),
+    );
+    m.set_json_value("landscape/rock01", "match3", Some(json!("")));
+    m.set_json_value("landscape/rock01", "match1", Some(json!("")));
+    idle(&mut m);
+    let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
+    assert_eq!(
+        active,
+        vec![
+            slot(3, "Slot 3", ""),
+            slot(6, "RMAOS", r"landscape\rock01_rmaos")
+        ],
+        "an empty + row stays a row; match1 = \"\" (diffuse off) is not one"
+    );
+    assert_eq!(
+        add.iter().map(|a| a.n).collect::<Vec<_>>(),
+        vec![4, 5, 7, 8]
+    );
+}
+
+/// F1 spec §5, DECISIONS V8: a PBR set's cards are the PBR slots in PGPatcher order 1–8, empty or not.
+#[test]
+fn a_pbr_set_shows_its_pbr_slots_in_slot_order() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let v = view(&set_views(&m), "landscape/rock01").clone();
+    assert_eq!(v.shader.as_ref().map(|p| p.shader), Some(Shader::Pbr));
+    let row = slot_row(v.shader.as_ref(), &v.slots);
+    assert_eq!(
+        row.iter().map(|c| c.kind).collect::<Vec<_>>(),
+        vec![
+            SlotKind::Diffuse,
+            SlotKind::Normal,
+            SlotKind::Emissive,
+            SlotKind::Height,
+            SlotKind::Rmaos,
+            SlotKind::Coat,
+            SlotKind::Fuzz,
+            SlotKind::Subsurface,
+        ]
+    );
+    assert!(row.iter().all(|c| c.usable));
+    let set = |k: &[SlotKind]| k.iter().copied().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        usable_slots(Shader::AdvancedSkin),
+        set(&[
+            SlotKind::Diffuse,
+            SlotKind::Normal,
+            SlotKind::SkinSk,
+            SlotKind::Rmaos
+        ])
+    );
+    assert_eq!(
+        usable_slots(Shader::Glow),
+        set(&[SlotKind::Diffuse, SlotKind::Normal, SlotKind::Emissive])
+    );
+    assert_eq!(
+        usable_slots(Shader::Eye),
+        set(&[SlotKind::Diffuse, SlotKind::Normal])
+    );
+}
+
+/// F1 spec §5, Review Focus 4: a SHADER-UNAVAILABLE fallback (default in place of pbr) keeps the filled RMAOS
+/// visible, in slot order and marked; with no pick, only the filled slots show.
+#[test]
+fn a_fallback_shader_keeps_filled_slots_it_cannot_use() {
+    use engine::shader::{Shader, ShaderOrigin, ShaderPick};
+    use std::collections::BTreeMap;
+    let own = |i: &str| SlotFill::Own { item: i.into() };
+    let slots: BTreeMap<SlotKind, SlotFill> =
+        [(SlotKind::Rmaos, own("r")), (SlotKind::Diffuse, own("d"))]
+            .into_iter()
+            .collect();
+    let fallback = ShaderPick {
+        shader: Shader::Default,
+        provenance: ShaderOrigin::Fallback,
+        wanted: Some(Shader::Pbr),
+    };
+    let row = slot_row(Some(&fallback), &slots);
+    assert_eq!(
+        row,
+        vec![
+            SlotCell {
+                kind: SlotKind::Diffuse,
+                fill: own("d"),
+                usable: true
+            },
+            SlotCell {
+                kind: SlotKind::Normal,
+                fill: SlotFill::Empty,
+                usable: true
+            },
+            SlotCell {
+                kind: SlotKind::Rmaos,
+                fill: own("r"),
+                usable: false
+            },
+        ]
+    );
+    let none = slot_row(None, &slots);
+    assert_eq!(
+        none.iter().map(|c| (c.kind, c.usable)).collect::<Vec<_>>(),
+        vec![(SlotKind::Diffuse, true), (SlotKind::Rmaos, true)]
+    );
+}
+
+/// Controller ruling (final fix wave): + prefills slot N only when PGPatcher's slot-N list strips the member's
+/// suffix, so a prefilled row never splits the prefix. Subsurface `_s` in slot 8 is not in that list (`_b`/`_bl`/
+/// `_flow`): it gets an empty row instead. Height `_p` in slot 4 is stripped, so it is prefilled.
+#[test]
+fn the_plus_menu_prefills_only_suffixes_pgpatcher_strips() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let mut v = view(&set_views(&m), "landscape/rock01").clone();
+    for k in [SlotKind::Height, SlotKind::Subsurface] {
+        v.slots.insert(
+            k,
+            SlotFill::Own {
+                item: "landscape/x.png".into(),
+            },
+        );
+    }
+    let (_, add) = slot_matches(&v);
+    let path = |n: u8| add.iter().find(|a| a.n == n).map(|a| a.path.clone());
+    assert_eq!(path(4), Some(r"landscape\rock01_p".into()));
+    assert_eq!(path(6), Some(r"landscape\rock01_rmaos".into()));
+    assert_eq!(path(8), Some(String::new()), "slot 8 does not strip _s");
 }

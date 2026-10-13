@@ -93,11 +93,7 @@ fn two_sets_deriving_one_prefix_block() {
         .clone();
     m.set_field(&leaf, "subtype", json!("pbr_albedo"));
     idle(&mut m);
-    m.set_json_value(
-        "landscape/leaf",
-        "match_diffuse",
-        Some(json!(r"landscape\rock01")),
-    );
+    m.set_json_value("landscape/leaf", "match1", Some(json!(r"landscape\rock01")));
     idle(&mut m);
     let b = export_blocks(&m);
     assert!(b.iter().any(|i| i.text.contains("both write")), "{b:?}");
@@ -501,7 +497,7 @@ fn export_writes_a_valid_json_and_records_its_hash() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["match_diffuse"] == json!(r"landscape\rock01"))
+        .find(|e| e["match1"] == json!(r"landscape\rock01.dds"))
         .unwrap();
     assert_eq!(e["specular_level"], json!(0.05));
     assert!(m
@@ -594,7 +590,7 @@ fn finish_leaves_out_sets_whose_outputs_did_not_export() {
     assert!(matches!(r, Finish::Written(_)), "{r:?}");
     let text = std::fs::read_to_string(&p.path).unwrap();
     assert!(
-        text.contains(r#""a\\one""#) && !text.contains(r#""a\\two""#),
+        text.contains(r#""a\\one.dds""#) && !text.contains(r#""a\\two.dds""#),
         "{text}"
     );
     assert!(
@@ -961,4 +957,42 @@ fn a_borrowed_skin_sk_is_written_to_slot3() {
         .unwrap();
     let p = e.slots.get(&3).expect("slot3 is written");
     assert!(p.ends_with("_sk.dds"), "{p}");
+}
+
+#[test]
+fn an_explicit_shader_does_not_change_which_sets_get_json() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    let before: Vec<String> = json_entries(&m).into_iter().map(|(v, _)| v.id).collect();
+    m.set_shader("landscape/rock01", Some(Shader::Glow));
+    m.set_shader("landscape/leaf", Some(Shader::Pbr));
+    idle(&mut m);
+    let after: Vec<String> = json_entries(&m).into_iter().map(|(v, _)| v.id).collect();
+    assert_eq!(before, after);
+    assert!(
+        after.contains(&"landscape/rock01".to_string())
+            && !after.contains(&"landscape/leaf".to_string())
+    );
+}
+
+/// F1 spec §3.2 "No match", DECISIONS V4: the export still runs, asks first, and the entry stays out of the JSON
+/// (the schema refuses an entry without a matcher).
+#[test]
+fn a_set_that_matches_nothing_asks_and_is_left_out_of_the_json() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "match1", Some(json!("")));
+    idle(&mut m);
+    assert_eq!(export_blocks(&m), vec![]);
+    assert!(
+        export_asks(&m).iter().any(
+            |i| i.set_id == "landscape/rock01" && i.text.contains("this entry matches nothing")
+        ),
+        "{:?}",
+        export_asks(&m)
+    );
+    assert!(json_entries(&m)
+        .iter()
+        .all(|(v, _)| v.id != "landscape/rock01"));
 }

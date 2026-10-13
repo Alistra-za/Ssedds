@@ -3,13 +3,18 @@
 use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
-use crate::pgp::prefix::{check_rel_path, derive_match_diffuse, output_rel, prefix_of};
+use crate::pgp::prefix::{
+    active_matches, check_rel_path, derive_match_diffuse, output_rel, prefix_of, slot_match_path,
+    slot_suffixes,
+};
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
+use engine::codes::Warning;
 use engine::config::{Subtype, Target};
 use engine::group::{split_suffix, split_vocab, VocabRole};
 use engine::overrides::path_key_matches;
 use engine::sets::{fold_id, same_id, set_id, OutputKey, SetEdit};
+use engine::shader::{Shader, ShaderPick};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -29,7 +34,7 @@ pub enum SlotKind {
 }
 
 impl SlotKind {
-    /// The slot cards' order (spec §4.1).
+    /// Every slot kind, in the slot commands' order. The set editor orders its cards by `slot_row` (F1 spec §5).
     pub const ALL: [SlotKind; 9] = [
         SlotKind::Diffuse,
         SlotKind::Normal,
@@ -82,6 +87,82 @@ impl SlotKind {
     }
 }
 
+/// The card title of `slot` holding item `key`: a `_coat` source in the Subsurface slot is the coat colour + strength
+/// (M6 Track E spec §3.1, DECISIONS Note U2), decided by the file name.
+pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
+    let stem = Path::new(key)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    match split_vocab(&stem) {
+        Some((_, v)) if slot == SlotKind::Subsurface && v.role == VocabRole::CoatColour => {
+            "Coat colour + strength"
+        }
+        _ => slot.label(),
+    }
+}
+
+/// One row of the Matching header, or one choice of its + menu (F1 spec §3.2): slot number, slot name, path (stored
+/// form, no `.dds`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotMatch {
+    pub n: u8,
+    pub slot: String,
+    pub path: String,
+}
+
+/// The Matching header of `v`: its active slot matches plus the empty rows (`matchN = ""`, N ≥ 2: added by + and not
+/// filled in yet; `match1 = ""` is the diffuse turned off), and the + menu, which offers slots 3–8 without a row. A
+/// slot the set fills starts from `slot_match_path` (DECISIONS V1); any other starts empty (owner, 2026-10-12).
+pub fn slot_matches(v: &SetView) -> (Vec<SlotMatch>, Vec<SlotMatch>) {
+    let derived = v.derived_match.as_deref().unwrap_or("");
+    let filled: Vec<SlotKind> = v
+        .slots
+        .iter()
+        .filter(|(_, f)| !matches!(f, SlotFill::Empty))
+        .map(|(k, _)| *k)
+        .collect();
+    let name = |n: u8| match filled.iter().find(|k| k.slot_number() == n) {
+        Some(k) => k.label().to_string(),
+        None if n == 1 => SlotKind::Diffuse.label().to_string(),
+        None if n == 2 => SlotKind::Normal.label().to_string(),
+        None => format!("Slot {n}"),
+    };
+    let empty = (2..=8u8).filter(|n| {
+        v.settings
+            .get(&format!("match{n}"))
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.trim().is_empty())
+    });
+    let mut active: Vec<SlotMatch> = active_matches(&v.settings, derived)
+        .into_iter()
+        .chain(empty.map(|n| (n, String::new())))
+        .map(|(n, path)| SlotMatch {
+            n,
+            slot: name(n),
+            path,
+        })
+        .collect();
+    active.sort_by_key(|a| a.n);
+    let add = (3..=8u8)
+        .filter(|n| !active.iter().any(|a| a.n == *n))
+        .map(|n| SlotMatch {
+            n,
+            slot: name(n),
+            // Prefilled only when PGPatcher's slot-N list strips the suffix, so its prefix is sdc's (controller
+            // ruling): `_s` in slot 8 would split it, so that row starts empty.
+            path: filled
+                .iter()
+                .find(|k| {
+                    k.slot_number() == n
+                        && slot_suffixes(n).contains(&format!("_{}", k.suffix()).as_str())
+                })
+                .map_or_else(String::new, |k| slot_match_path(derived, k.suffix())),
+        })
+        .collect();
+    (active, add)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotFill {
     Empty,
@@ -120,6 +201,11 @@ pub struct SetView {
     pub prefix_error: Option<String>,
     /// The set's own JSON settings.
     pub settings: Settings,
+    /// M6: the engine's shader pick (from the plan), the saved choice (from `sdc-project.toml`), and the set's
+    /// SHADER-* warnings.
+    pub shader: Option<ShaderPick>,
+    pub shader_choice: Option<Shader>,
+    pub set_warnings: Vec<Warning>,
 }
 
 impl SetView {
@@ -139,6 +225,9 @@ impl SetView {
             prefix: None,
             prefix_error: None,
             settings: Settings::new(),
+            shader: None,
+            shader_choice: None,
+            set_warnings: vec![],
         }
     }
 }
@@ -150,12 +239,9 @@ pub fn is_pbr_diffuse(st: Subtype) -> bool {
     matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
 }
 
-/// The slot a texture fills, by its resolved sub-type. Raw packing sources and items without a job have none.
-pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
-    if matches!(item.status, ItemStatus::PackedInto(_)) {
-        return None;
-    }
-    let st = item.job.as_ref()?.profile.subtype;
+/// The slot card a resolved sub-type fills; `None` for sub-types without a card (env mask, complex `_m`,
+/// `msn_specular`, backlight, `skin_wet`, …).
+pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
     Some(match st {
         Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::SkinAlbedo => {
             SlotKind::Diffuse
@@ -172,6 +258,56 @@ pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
         Subtype::PbrSubsurface => SlotKind::Subsurface,
         _ => return None,
     })
+}
+
+/// The slot a texture fills, by its resolved sub-type. Raw packing sources and items without a job have none.
+pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
+    if matches!(item.status, ItemStatus::PackedInto(_)) {
+        return None;
+    }
+    slot_kind(item.job.as_ref()?.profile.subtype)
+}
+
+/// The slot cards shader `s` can use (F1 spec §5, DECISIONS V8): each role's sub-types mapped through `slot_kind`.
+/// Roles matched by suffix only (`_e`, `_i`, `_sk` on Skin/Eye) map to none.
+pub fn usable_slots(s: Shader) -> BTreeSet<SlotKind> {
+    let spec = s.spec();
+    spec.required
+        .iter()
+        .chain(spec.optional)
+        .flat_map(|r| r.subtypes.iter().copied())
+        .filter_map(slot_kind)
+        .collect()
+}
+
+/// One slot card of the set editor (F1 spec §5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotCell {
+    pub kind: SlotKind,
+    pub fill: SlotFill,
+    /// False for a filled slot the set's shader does not use: it stays, outlined, and says why.
+    pub usable: bool,
+}
+
+/// The set's slot cards in PGPatcher slot order 1–8 (slots 3 and 7 hold two kinds each, in `SlotKind` order). These
+/// are every slot the picked shader can use, filled or empty, plus every filled slot it cannot use. With no pick yet,
+/// only the filled slots show (F1 spec §5).
+pub fn slot_row(pick: Option<&ShaderPick>, slots: &BTreeMap<SlotKind, SlotFill>) -> Vec<SlotCell> {
+    let usable = pick.map(|p| usable_slots(p.shader));
+    let filled = |k: &SlotKind| !matches!(slots.get(k), None | Some(SlotFill::Empty));
+    let mut kinds: Vec<SlotKind> = SlotKind::ALL
+        .into_iter()
+        .filter(|k| filled(k) || usable.as_ref().is_some_and(|u| u.contains(k)))
+        .collect();
+    kinds.sort_by_key(|k| (k.slot_number(), *k));
+    kinds
+        .into_iter()
+        .map(|kind| SlotCell {
+            kind,
+            fill: slots.get(&kind).cloned().unwrap_or(SlotFill::Empty),
+            usable: usable.as_ref().is_none_or(|u| u.contains(&kind)),
+        })
+        .collect()
 }
 
 /// Why `incoming` cannot join a set holding `existing`, if it cannot (spec §4.1: `_cnr` and `_f` share slot 7;
@@ -231,6 +367,8 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
         .iter()
         .map(|s| {
             let mut v = SetView::new(s.key.clone(), set_id(&root, &s.key), s.members.clone());
+            v.shader = s.shader.clone();
+            v.set_warnings = s.warnings.clone();
             for mk in &s.members {
                 if let Some(slot) = m.item(mk).and_then(slot_of) {
                     v.slots
@@ -267,6 +405,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
         };
         v.created = e.created;
         v.settings = e.settings.clone();
+        v.shader_choice = e.shader;
         if v.key.is_empty() && !e.created {
             v.missing.push(NO_FILES_LEFT.into());
         }
@@ -484,6 +623,20 @@ pub fn borrowed_normal(m: &AppModel) -> BTreeMap<String, String> {
             _ => None,
         })
         .collect()
+}
+
+/// Entry id → the saved shader choice (M6, `BatchRequest::set_shaders`).
+pub fn set_shaders(m: &AppModel) -> BTreeMap<String, Shader> {
+    let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
+    entries
+        .into_iter()
+        .filter_map(|e| Some((e.id, e.shader?)))
+        .collect()
+}
+
+/// The Shader dropdown's choices for `target` (after "Auto").
+pub fn shader_options(target: Target) -> Vec<Shader> {
+    Shader::available(target).to_vec()
 }
 
 /// Every owned output's explicit path, sorted by its owner's display position: (owner id, key, path relative to
@@ -1006,6 +1159,15 @@ impl AppModel {
             s.remove_member(&i, &it)
         });
         Ok(())
+    }
+
+    /// Choose set `set`'s shader, or with `None` go back to Auto (M6 spec §7). Plans again.
+    pub fn set_shader(&mut self, set: &str, shader: Option<Shader>) {
+        if !self.sets_editable() {
+            return;
+        }
+        let id = set.to_string();
+        self.edit_docs("Shader", None, true, move |_, d| d.set_shader(&id, shader));
     }
 
     /// A JSON value of set `set`. Material values do not plan; match fields do (P7).

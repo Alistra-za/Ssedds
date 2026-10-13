@@ -2,9 +2,9 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    channel_text, edge_view, field_hidden, field_views, filter_option_lock, filter_view,
-    format_label, format_options, group_of, levels_view, mips_count, mips_on, provenance_text,
-    FieldView,
+    auto_subtype_reason, channel_text, edge_view, field_hidden, field_views, filter_option_lock,
+    filter_view, format_label, format_options, group_of, levels_view, mips_count, mips_on,
+    provenance_text, FieldView,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -157,6 +157,7 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
         "resize" => vec![
             opt(json!("none"), "None"),
             opt(json!("pot-down"), "Down to a power of two"),
+            opt(json!("half"), "Half size (larger side above 512)"),
         ],
         "mips.coverage" => vec![
             opt(json!("auto"), "Auto"),
@@ -182,6 +183,7 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             vec![
                 opt(json!("default"), "Default"),
                 opt(json!("max"), "Maximum"),
+                opt(json!("fast"), "Fast (preview)"),
             ]
         }
         "header" => vec![
@@ -297,7 +299,7 @@ fn threshold(
     current: u8,
 ) -> (Option<Value>, egui::Response) {
     let id = egui::Id::new(("threshold", key));
-    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 5..=200);
+    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 1..=254);
     (out.map(|v| json!(v)), r)
 }
 
@@ -311,7 +313,7 @@ fn editor(
 ) -> (Option<Value>, egui::Response) {
     match f.field {
         "alpha.threshold" => {
-            let cur = f.value.as_u64().unwrap_or(128).clamp(5, 200) as u8;
+            let cur = f.value.as_u64().unwrap_or(128).clamp(1, 254) as u8;
             threshold(ui, busy, key, cur)
         }
         "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
@@ -379,6 +381,13 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
         ui.label("");
     } else if let Some(reason) = f.lock {
         ui.label(egui::RichText::new(reason).small().weak());
+    } else if let Some(why) = (f.field == "subtype")
+        .then(|| auto_subtype_reason(cx.job))
+        .flatten()
+    {
+        // M6 Track E (Note U4): a sub-type an accepted High suggestion decided; hover says why.
+        ui.label(egui::RichText::new("(auto)").small().weak())
+            .on_hover_text(why);
     } else {
         ui.label(
             egui::RichText::new(provenance_text(&f.provenance))

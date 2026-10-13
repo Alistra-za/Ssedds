@@ -122,6 +122,9 @@ struct EngineInputs {
     output_paths: std::collections::BTreeMap<engine::sets::OutputKey, PathBuf>,
     shared_roughness: std::collections::BTreeSet<String>,
     borrowed_normal: std::collections::BTreeMap<String, String>,
+    set_shaders: std::collections::BTreeMap<String, engine::shader::Shader>,
+    mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
+    mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
 }
 
 impl EngineInputs {
@@ -132,6 +135,9 @@ impl EngineInputs {
             output_paths,
             shared_roughness: sets::shared_roughness(m),
             borrowed_normal: sets::borrowed_normal(m),
+            set_shaders: sets::set_shaders(m),
+            mesh_votes: m.mesh_votes.clone(),
+            mesh_alpha: m.mesh_alpha.clone(),
         }
     }
 }
@@ -145,6 +151,23 @@ pub struct AppModel {
     pub settings_path: Option<PathBuf>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
+    /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
+    pub user_presets: Option<PathBuf>,
+    /// `(id, file)` of the user presets the last plan loaded (the preset inspector lists them).
+    pub loaded_user_presets: Vec<(String, String)>,
+    /// `(file, reason)` of the user preset files the last plan skipped (CFG-PRESET-SKIPPED; the inspector lists them).
+    pub skipped_user_presets: Vec<(String, String)>,
+    /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
+    /// developer's scan cannot leak in.
+    pub scan_db: Option<PathBuf>,
+    /// S-shader-10: `shader::mesh_key` → what the scanned meshes report; sent as `BatchRequest::mesh_shaders`.
+    pub mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
+    /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
+    /// the colour member; sent as `BatchRequest::mesh_alpha`.
+    pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
+    /// fixtures set `None` to keep their High members undecided, as the CLI does without the flag.
+    pub accept: AcceptSuggestions,
     pub session: Option<Arc<Session>>,
     pub root: Option<PathBuf>,
     pub project: Option<ProjectDoc>,
@@ -220,6 +243,13 @@ impl AppModel {
             settings,
             settings_path: None,
             user_config: None,
+            user_presets: None,
+            loaded_user_presets: vec![],
+            skipped_user_presets: vec![],
+            scan_db: None,
+            mesh_votes: Default::default(),
+            mesh_alpha: Default::default(),
+            accept: AcceptSuggestions::High,
             session: None,
             root: None,
             project: None,
@@ -356,20 +386,21 @@ impl AppModel {
             .unwrap_or_else(|| self.root.clone().unwrap_or_default().join("sdc-out"))
     }
 
-    /// What the next plan uses: the folder, recursive, nothing accepted, the in-memory `sdc.toml` (DECISIONS N4).
+    /// What the next plan uses: the folder, recursive, High suggestions accepted (Note U3), the in-memory `sdc.toml` (DECISIONS N4).
     pub fn request(&self) -> Option<BatchRequest> {
         let root = self.root.clone()?;
         let project = self.project.as_ref()?;
         let mut req = BatchRequest::new(vec![root], self.export_root(), Target::Cs);
         req.target = None;
         req.recursive = true;
-        req.accept = AcceptSuggestions::None;
+        req.accept = self.accept;
         req.project_config_inline = Some(if project.read_only() {
             ConfigFile::default()
         } else {
             project.config().unwrap_or_default()
         });
         req.user_config = self.user_config.clone();
+        req.user_presets = self.user_presets.clone();
         req.jobs = self.settings.jobs;
         req.mem_budget = self.settings.mem_budget_mb * 1024 * 1024;
         let (edits, paths) = sets::engine_inputs(self);
@@ -377,7 +408,38 @@ impl AppModel {
         req.output_paths = paths;
         req.shared_roughness = sets::shared_roughness(self);
         req.borrowed_normal = sets::borrowed_normal(self);
+        req.set_shaders = sets::set_shaders(self);
+        req.mesh_shaders = self.mesh_votes.clone();
+        req.mesh_alpha = self.mesh_alpha.clone();
         Some(req)
+    }
+
+    /// S-shader-10, M6 Track E: read the mesh votes and the mesh alpha for the plan's sets (keys from the colour-member
+    /// jobs only, by `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no evidence:
+    /// the suffix rules decide and the alpha is asked, and the Meshes view reports database errors. True when either
+    /// changed.
+    // shortcut: reads SQLite on the UI thread after each plan; move to a background read or cache by db mtime + key set if it hitches on large load orders
+    pub fn refresh_mesh_votes(&mut self) -> bool {
+        let keys: std::collections::BTreeSet<String> = self
+            .items
+            .iter()
+            .filter_map(|i| i.job.as_ref())
+            .filter(|j| j.pack.is_none())
+            .filter_map(|j| {
+                engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
+            })
+            .collect();
+        let (votes, alpha) = match &self.scan_db {
+            Some(db) if db.is_file() => (
+                meshes::mesh_votes(db, &keys).unwrap_or_default(),
+                meshes::mesh_alpha(db, &keys).unwrap_or_default(),
+            ),
+            _ => Default::default(),
+        };
+        let changed = votes != self.mesh_votes || alpha != self.mesh_alpha;
+        self.mesh_votes = votes;
+        self.mesh_alpha = alpha;
+        changed
     }
 
     /// Plan again on a worker; a newer plan supersedes (cancels) an older one.
@@ -399,6 +461,9 @@ impl AppModel {
             output_paths: req.output_paths.clone(),
             shared_roughness: req.shared_roughness.clone(),
             borrowed_normal: req.borrowed_normal.clone(),
+            set_shaders: req.set_shaders.clone(),
+            mesh_votes: req.mesh_shaders.clone(),
+            mesh_alpha: req.mesh_alpha.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
@@ -958,6 +1023,8 @@ impl AppModel {
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
         self.batch_preset = view.preset_id;
+        self.loaded_user_presets = view.user_presets;
+        self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // Keep the selection when its item or set still exists; else nothing.
@@ -986,6 +1053,7 @@ impl AppModel {
         }
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
+        self.refresh_mesh_votes();
         let now = EngineInputs::of(self);
         if self.last_inputs.as_ref() != Some(&now) && self.auto_replans < 2 {
             self.auto_replans += 1;

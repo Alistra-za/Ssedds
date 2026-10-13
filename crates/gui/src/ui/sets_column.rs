@@ -4,11 +4,12 @@
 use super::columns::{member, status_text, AMBER, RED};
 use super::thumbs::ThumbCache;
 use crate::model::pbr_export::export_blocks;
-use crate::model::sets::{set_views, DropChoice, DropOutcome, SetView, SlotFill};
+use crate::model::sets::{set_views, shader_options, DropChoice, DropOutcome, SetView, SlotFill};
 use crate::model::{AppModel, Selection};
 use eframe::egui;
 use engine::codes::Warning;
 use engine::config::Target;
+use engine::shader::{Shader, ShaderOrigin};
 
 /// Drag payload: a texture, by item key.
 #[derive(Debug, Clone)]
@@ -62,6 +63,8 @@ enum Act {
     OpenRename(String),
     Delete(String),
     RemoveMember(String, String),
+    /// The Shader dropdown: `None` is Auto.
+    Shader(String, Option<Shader>),
 }
 
 fn badge(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) -> egui::Response {
@@ -218,6 +221,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
                     st.pending = Some(Pending::Refused(why));
                 }
             }
+            Act::Shader(id, shader) => model.set_shader(&id, shader),
         }
     }
 }
@@ -363,7 +367,16 @@ fn pill(
                                 .filter(|w| super::counts_toward_badge(w))
                                 .map(move |w| (i.name.as_str(), w))
                         })
+                        .chain(
+                            v.set_warnings
+                                .iter()
+                                .filter(|w| super::counts_toward_badge(w))
+                                .map(|w| (v.label.as_str(), w)),
+                        )
                         .collect();
+                    if !v.key.is_empty() {
+                        shader_combo(ui, model, v, editing, acts);
+                    }
                     if !rows.is_empty() {
                         badge(ui, &format!("⚠ {}", rows.len()), Some(AMBER))
                             .on_hover_text(warning_tooltip(&rows));
@@ -438,6 +451,54 @@ fn pill(
         hovered_by_set,
         rect: resp.rect,
     }
+}
+
+/// The set's Shader dropdown (M6 spec §7): the engine's pick with its provenance, then "Auto" and the mode's
+/// shaders. Disabled when sets are not editable.
+fn shader_combo(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    editing: &Editing,
+    acts: &mut Vec<Act>,
+) {
+    let text = v.shader.as_ref().map_or(String::new(), |p| {
+        let tag = match p.provenance {
+            ShaderOrigin::Set => "",
+            ShaderOrigin::Auto(_) => " (auto)",
+            ShaderOrigin::Fallback => " (fallback)",
+        };
+        format!("{}{tag}", p.shader.label())
+    });
+    // A ComboBox never wraps and is at least `combo_width` wide, which held the Sets column open: start a new row
+    // when it would not fit, and never be wider than the row.
+    let w = ui.spacing().combo_width;
+    if ui.available_width() < w {
+        ui.end_row();
+    }
+    let w = ui.available_width().min(w);
+    ui.add_enabled_ui(editing.on, |ui| {
+        egui::ComboBox::from_id_salt(("shader", &v.id))
+            .width(w)
+            .truncate()
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(v.shader_choice.is_none(), "Auto")
+                    .clicked()
+                {
+                    acts.push(Act::Shader(v.id.clone(), None));
+                }
+                for s in shader_options(model.target) {
+                    if ui
+                        .selectable_label(v.shader_choice == Some(s), s.label())
+                        .clicked()
+                    {
+                        acts.push(Act::Shader(v.id.clone(), Some(s)));
+                    }
+                }
+            });
+    });
 }
 
 fn menu(

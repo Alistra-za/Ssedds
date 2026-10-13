@@ -50,7 +50,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -326,6 +326,8 @@
         "CFG-INVALID",
         "CFG-FILE-UNMATCHED",
         "CFG-FILTER-IGNORED",
+        "CFG-PRESET-SKIPPED",
+        "CFG-GREEN-CONFLICT",
         "DIM-NPOT",
         "DIM-SMALL",
         "DIM-FLOW-SMALL",
@@ -365,6 +367,10 @@
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
         "SKIN-WET-FORM",
+        "SHADER-AUTO",
+        "SHADER-UNAVAILABLE",
+        "SHADER-EXTRA-MAP",
+        "SHADER-MISSING-MAP",
         "DDS-HEADER-PATCHED",
         "DDS-HEADER-UNPATCHABLE"
       ],
@@ -929,7 +935,7 @@
         },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
-          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis."
+          "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "subtype": {
           "$ref": "#/$defs/Subtype"
@@ -958,7 +964,7 @@
       "type": "object"
     },
     "Provenance": {
-      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,\n`recipe:<kind>`, and the snake_case variant name for the rest.",
+      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `mesh:alpha`, `suffix:<term>`, `source:<file>`,\n`default:<value>`, `fill:<code>`, `recipe:<kind>`, and the snake_case variant name for the rest.",
       "type": "string"
     },
     "RawMap": {
@@ -1065,7 +1071,8 @@
     "ResizeMode": {
       "enum": [
         "none",
-        "pot-down"
+        "pot-down",
+        "half"
       ],
       "type": "string"
     },
@@ -1114,6 +1121,17 @@
         },
         "set_key": {
           "type": "string"
+        },
+        "shader": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShaderPick"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "M6 (DECISIONS Note S): the shader picked for this job's set; `None` for a job not made by `plan`."
         },
         "source": {
           "anyOf": [
@@ -1169,7 +1187,8 @@
     "SearchRadius": {
       "enum": [
         "default",
-        "max"
+        "max",
+        "fast"
       ],
       "type": "string"
     },
@@ -1181,6 +1200,54 @@
         "error"
       ],
       "type": "string"
+    },
+    "Shader": {
+      "description": "A Skyrim shader a texture set is made for (spec §3).",
+      "enum": [
+        "pbr",
+        "advanced_skin",
+        "default",
+        "envmap",
+        "complex_material",
+        "glow",
+        "parallax",
+        "skin",
+        "hair",
+        "eye",
+        "multilayer",
+        "landscape"
+      ],
+      "type": "string"
+    },
+    "ShaderOrigin": {
+      "description": "Why a set has its shader (spec §4.4). Serialises as a string: `set`, `auto:<rule id>`, `fallback`.",
+      "type": "string"
+    },
+    "ShaderPick": {
+      "description": "A set's shader, why it was chosen, and the shader asked for when that one was not available (`wanted`).",
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/ShaderOrigin"
+        },
+        "shader": {
+          "$ref": "#/$defs/Shader"
+        },
+        "wanted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shader"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "shader",
+        "provenance"
+      ],
+      "type": "object"
     },
     "SkipKind": {
       "description": "Why a file produced no output in this batch (DECISIONS N5).",
@@ -1336,6 +1403,13 @@
       ],
       "type": "string"
     },
+    "ValidationMips": {
+      "enum": [
+        "all",
+        "smallest"
+      ],
+      "type": "string"
+    },
     "ValidationSpec": {
       "additionalProperties": false,
       "properties": {
@@ -1356,6 +1430,10 @@
         "min_mip_psnr_db": {
           "format": "double",
           "type": "number"
+        },
+        "mips": {
+          "$ref": "#/$defs/ValidationMips",
+          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",
@@ -1510,6 +1588,24 @@
           "description": "The set's channel-packing recipes (spec §6.4); absent when it packs nothing.",
           "items": {
             "$ref": "#/$defs/RecipeReport"
+          },
+          "type": "array"
+        },
+        "shader": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShaderPick"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "M6 (DECISIONS Note S): the set's shader and why it was chosen."
+        },
+        "warnings": {
+          "description": "SHADER-AUTO / SHADER-UNAVAILABLE, then SHADER-EXTRA-MAP / SHADER-MISSING-MAP for the set.",
+          "items": {
+            "$ref": "#/$defs/Warning"
           },
           "type": "array"
         }

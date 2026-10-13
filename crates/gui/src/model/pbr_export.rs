@@ -5,7 +5,7 @@ use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
 use super::AppModel;
-use crate::pgp::prefix::{check_json_path, check_rel_path, output_rel, pitfalls};
+use crate::pgp::prefix::{check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, to_text, EntryInput};
@@ -175,7 +175,10 @@ pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
     let views = set_views(m);
     views
         .iter()
-        .filter(|v| v.pbr)
+        // An entry with no match could never apply, and the schema refuses one (F1 spec §3.2, DECISIONS V4).
+        .filter(|v| {
+            v.pbr && !matches_nothing(&v.settings, v.derived_match.as_deref().unwrap_or(""))
+        })
         .map(|v| {
             let e = EntryInput {
                 settings: v.settings.clone(),
@@ -401,7 +404,7 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
         .iter()
         .filter(|v| v.pbr)
         .flat_map(|v| {
-            pitfalls(&v.settings)
+            pitfalls(&v.settings, v.derived_match.as_deref().unwrap_or(""))
                 .into_iter()
                 .map(move |w| issue(v, format!("{}: {w}", v.id)))
         })

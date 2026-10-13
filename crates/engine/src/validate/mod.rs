@@ -207,6 +207,9 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             _ if alpha_present => vec![0, 1, 2, 3],
             _ => vec![0, 1, 2],
         };
+        // M6 Track D (Note T5): fast preview checks PSNR on the smallest mip only.
+        let last = decoded.len().saturating_sub(1);
+        let smallest_only = v.mips == ValidationMips::Smallest;
         for (l, ((lw, lh, d), e)) in decoded.iter().zip(enc).enumerate() {
             // Texel counts are checked for both kinds (Codex-B M1); only LDR levels get the metrics below.
             let (dn, en) = match (d, e) {
@@ -232,16 +235,18 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             let (Decoded::Ldr(d), EncoderInput::Ldr(e)) = (d, e) else {
                 continue;
             };
-            let q = psnr(e, d, &ch);
-            s.min_mip_psnr_db = Some(s.min_mip_psnr_db.map_or(q, |m| m.min(q)));
-            if q < v.min_mip_psnr_db {
-                w.push(
-                    Warning::new(
-                        Code::ValMipError,
-                        format!("mip {l}: {q:.2} dB < {:.1} dB", v.min_mip_psnr_db),
-                    )
-                    .with_data(json!({"level": l, "psnr": q})),
-                );
+            if !smallest_only || l == last {
+                let q = psnr(e, d, &ch);
+                s.min_mip_psnr_db = Some(s.min_mip_psnr_db.map_or(q, |m| m.min(q)));
+                if q < v.min_mip_psnr_db {
+                    w.push(
+                        Warning::new(
+                            Code::ValMipError,
+                            format!("mip {l}: {q:.2} dB < {:.1} dB", v.min_mip_psnr_db),
+                        )
+                        .with_data(json!({"level": l, "psnr": q})),
+                    );
+                }
             }
             if p.format == Format::Bc7 && p.alpha.exact_opaque {
                 let bad = opaque_block_violations(e, d, *lw, *lh);
@@ -312,6 +317,9 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         if p.coverage_enabled() {
             if let Some(base) = inp.base_coverage {
                 for (l, (lw, lh, px)) in ldr.iter().enumerate() {
+                    if v.mips == ValidationMips::Smallest && l + 1 != ldr.len() {
+                        continue;
+                    }
                     let c = coverage_fraction(
                         px.iter().map(|q| q[3] as f32 / 255.0),
                         p.alpha.threshold,

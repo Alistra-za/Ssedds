@@ -136,3 +136,72 @@ pub(crate) fn check_types(e: &Map<String, Value>) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// The 0–1 factors among the number keys (sdc M6 F1 spec §2). Mirrors `NumRange::Unit` in sdc-gui's `pgp/schema.rs`;
+/// the GUI test `pgpsim_warns_on_exactly_the_gui_ranges` keeps the two in step.
+const UNIT_KEYS: [&str; 3] = ["subsurface_opacity", "coat_strength", "fuzz.weight"];
+
+/// sdc's value ranges as warnings (sdc M6 F1 spec §2): every number key below 0, and a 0–1 factor above 1. PGPatcher
+/// itself has no limits, so this is never a `Skip`. Values of the wrong type are `check_types`' business.
+/// `glint.log_microfacet_density` (a log value) and the removed `env_map_*` keys have no range.
+pub fn range_warnings(entry: &Value) -> Vec<String> {
+    let Some(e) = entry.as_object() else {
+        return vec![];
+    };
+    let mut nums: Vec<(String, f64)> = NUM_KEYS
+        .iter()
+        .filter(|k| !k.starts_with("env_map"))
+        .filter_map(|k| Some((k.to_string(), e.get(*k)?.as_f64()?)))
+        .collect();
+    for (obj, keys) in [("glint", &GLINT_KEYS[..]), ("fuzz", &["weight"][..])] {
+        if let Some(o) = e.get(obj).and_then(Value::as_object) {
+            nums.extend(
+                keys.iter()
+                    .filter(|k| **k != "log_microfacet_density")
+                    .filter_map(|k| Some((format!("{obj}.{k}"), o.get(*k)?.as_f64()?))),
+            );
+        }
+    }
+    nums.into_iter()
+        .filter_map(|(k, x)| {
+            let unit = UNIT_KEYS.contains(&k.as_str());
+            let hi = if unit { 1.0 } else { f64::INFINITY };
+            (!(0.0..=hi).contains(&x)).then(|| {
+                let range = if unit { "0–1" } else { "≥ 0" };
+                format!("{k} is {x}, outside {range}")
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::range_warnings;
+    use serde_json::json;
+
+    #[test]
+    fn ranges_warn_below_zero_and_above_one_for_the_factors() {
+        assert!(range_warnings(
+            &json!({"roughness_scale": 0.0, "coat_strength": 1.0, "fuzz": {"weight": 0.5}})
+        )
+        .is_empty());
+        let w = range_warnings(&json!({
+            "roughness_scale": -1, "coat_strength": 1.5, "specular_level": 9.0,
+            "glint": {"microfacet_roughness": -0.1, "log_microfacet_density": -4}, "fuzz": {"weight": 2}
+        }));
+        assert_eq!(w.len(), 4, "{w:?}");
+        assert!(w
+            .iter()
+            .any(|m| m.contains("coat_strength") && m.contains("0–1")));
+        assert!(w
+            .iter()
+            .any(|m| m.contains("glint.microfacet_roughness") && m.contains("≥ 0")));
+        assert!(
+            range_warnings(&json!({"roughness_scale": "x"})).is_empty(),
+            "a wrong type is check_types' business"
+        );
+        assert!(range_warnings(&json!(3)).is_empty());
+        // Final review Minor 9: the removed env_map_* keys have no range.
+        assert!(range_warnings(&json!({"env_map_scale": -1, "env_map_scale_mult": -2})).is_empty());
+    }
+}

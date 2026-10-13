@@ -959,3 +959,125 @@ fn inspect_reports_an_opted_in_dds_once() {
         1
     ); // rock_n.png
 }
+
+#[test]
+fn inspect_prints_the_set_shader_and_its_warnings() {
+    let d = tempfile::tempdir().unwrap();
+    let a = d.path().join("in/textures/a");
+    std::fs::create_dir_all(&a).unwrap();
+    ImageBuffer::from_fn(16, 16, |_, _| Rgb([120u8, 90, 60]))
+        .save(a.join("wall.png"))
+        .unwrap();
+    ImageBuffer::from_fn(16, 16, |_, _| Rgb([128u8, 128, 255]))
+        .save(a.join("wall_n.png"))
+        .unwrap();
+    let o = sdc()
+        .args([
+            "inspect",
+            "--recursive",
+            "--target",
+            "vanilla",
+            "--set",
+            "set:wall.shader=glow",
+        ])
+        .arg(d.path().join("in"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("shader glow (set)"), "{out}");
+    assert!(out.contains("SHADER-MISSING-MAP"), "{out}");
+}
+
+#[test]
+fn a_bad_set_scope_is_a_usage_error() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in")).unwrap();
+    let o = sdc()
+        .args(["inspect", "--set", "set:wall.shader=nope"])
+        .arg(d.path().join("in"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2);
+    assert!(
+        text(&o.stderr).contains("unknown shader"),
+        "{}",
+        text(&o.stderr)
+    );
+}
+
+/// Task 5 fix: a bad user-folder preset is reported by `inspect` on every path, exactly once (DDS-only and empty
+/// inputs return before any plan; an image input plans and the plan reports it).
+#[test]
+fn inspect_reports_a_skipped_user_preset_once_on_every_path() {
+    let d = tempfile::tempdir().unwrap();
+    let appdata = d.path().join("appdata");
+    std::fs::create_dir_all(appdata.join("sdc/presets")).unwrap();
+    std::fs::write(
+        appdata.join("sdc/presets/bad.toml"),
+        "schema_version = 1\nid = \"bad\"\nversion = \"1\"\nbase = \"nope\"\n",
+    )
+    .unwrap();
+    let dds_only = d.path().join("dds_only");
+    std::fs::create_dir_all(&dds_only).unwrap();
+    std::fs::write(dds_only.join("junk.dds"), b"not a dds").unwrap();
+    let empty = d.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let image = d.path().join("image");
+    std::fs::create_dir_all(&image).unwrap();
+    ImageBuffer::from_fn(8, 8, |x, y| Rgb([x as u8, y as u8, 1]))
+        .save(image.join("a.png"))
+        .unwrap();
+    for (input, name) in [
+        (&dds_only, "dds-only"),
+        (&empty, "empty"),
+        (&image, "image"),
+    ] {
+        for json in [true, false] {
+            let mut c = sdc();
+            c.env("APPDATA", &appdata).arg("inspect");
+            if json {
+                c.arg("--json");
+            }
+            let o = c.arg(input).output().unwrap();
+            let out = text(&o.stdout);
+            assert_eq!(
+                out.matches("CFG-PRESET-SKIPPED").count(),
+                1,
+                "{name} json={json}: {out}\n{}",
+                text(&o.stderr)
+            );
+        }
+    }
+}
+
+/// Final review Minor 4: the skipped user presets of one `inspect --json` run share one batch id.
+#[test]
+fn inspect_json_reports_every_skipped_preset_under_one_batch_id() {
+    let d = tempfile::tempdir().unwrap();
+    let appdata = d.path().join("appdata");
+    std::fs::create_dir_all(appdata.join("sdc/presets")).unwrap();
+    for name in ["bad1", "bad2"] {
+        std::fs::write(
+            appdata.join(format!("sdc/presets/{name}.toml")),
+            format!("schema_version = 1\nid = \"{name}\"\nversion = \"1\"\nbase = \"nope\"\n"),
+        )
+        .unwrap();
+    }
+    let empty = d.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let o = sdc()
+        .env("APPDATA", &appdata)
+        .args(["inspect", "--json"])
+        .arg(&empty)
+        .output()
+        .unwrap();
+    let skips: Vec<serde_json::Value> = text(&o.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["code"] == "CFG-PRESET-SKIPPED")
+        .collect();
+    assert_eq!(skips.len(), 2, "{}", text(&o.stdout));
+    assert_eq!(skips[0]["batch"], skips[1]["batch"], "{skips:?}");
+    assert_ne!(skips[0]["seq"], skips[1]["seq"], "{skips:?}");
+}

@@ -146,6 +146,7 @@ fn an_invalid_sdc_toml_opens_read_only() {
     let root = mod_folder(d.path());
     std::fs::write(root.join("sdc.toml"), "target = [\n").unwrap();
     let mut m = sdc_gui::model::AppModel::new(Default::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert!(m.banner.as_deref().unwrap().contains("sdc.toml"));
@@ -307,4 +308,74 @@ fn npot_resize_choice_clears_the_block() {
             .file_value("landscape/odd.png", "resize"),
         Some(serde_json::json!("pot-down"))
     );
+}
+
+/// M6 Track E spec §2, §6: the GUI accepts High suggestions. A PBR set's colour, `_n` and `_rmaos` members decide
+/// themselves (no sub-type question; "(auto)" with the reason), and a Medium `_i` still asks.
+#[test]
+fn the_gui_accepts_high_suggestions_and_still_asks_for_medium_ones() {
+    use engine::policy::{AcceptSuggestions, Provenance};
+    use sdc_gui::model::fields::auto_subtype_reason;
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("textures/a");
+    std::fs::create_dir_all(&t).unwrap();
+    for (name, px) in [
+        ("iron.png", [120u8, 90, 60]),
+        ("iron_n.png", [128, 128, 255]),
+        ("iron_rmaos.png", [128, 0, 255]),
+        ("wall_i.png", [90, 90, 90]),
+    ] {
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb(px))
+            .save(t.join(name))
+            .unwrap();
+    }
+    let m = opened_as_the_app(d.path().join("textures"), d.path().join("export"));
+    assert_eq!(m.request().unwrap().accept, AcceptSuggestions::High);
+    let asks_subtype = |key: &str| {
+        m.item(key)
+            .unwrap()
+            .decisions
+            .iter()
+            .any(|x| matches!(x, Decision::Subtype { .. }))
+    };
+    for (key, want) in [
+        ("a/iron.png", Subtype::PbrAlbedo),
+        ("a/iron_n.png", Subtype::PbrNormal),
+        ("a/iron_rmaos.png", Subtype::Rmaos),
+    ] {
+        let job = m.item(key).unwrap().job.clone().unwrap();
+        assert_eq!(
+            (job.profile.subtype, job.provenance["subtype"].clone()),
+            (want, Provenance::Suggestion),
+            "{key}"
+        );
+        assert!(!asks_subtype(key), "{key}");
+        assert_eq!(
+            auto_subtype_reason(&job),
+            Some(job.suggestions[0].reason.as_str()),
+            "{key}"
+        );
+    }
+    assert!(asks_subtype("a/wall_i.png"));
+    let wall = m.item("a/wall_i.png").unwrap().job.clone().unwrap();
+    assert_eq!(auto_subtype_reason(&wall), None);
+}
+
+/// Spec Review Focus 3: a sub-type the user chose (`sdc.toml` `[files]`) beats the accepted suggestion and is not
+/// "(auto)".
+#[test]
+fn an_explicit_subtype_beats_an_accepted_suggestion() {
+    use sdc_gui::model::fields::auto_subtype_reason;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened_as_the_app(mod_folder(d.path()), d.path().join("export"));
+    let job = m.item("landscape/rock01.png").unwrap().job.clone().unwrap();
+    assert!(auto_subtype_reason(&job).is_some(), "{:?}", job.status);
+    m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let job = m.item("landscape/rock01.png").unwrap().job.clone().unwrap();
+    assert_eq!(
+        (job.profile.subtype, job.provenance["subtype"].to_string()),
+        (Subtype::Diffuse, "project_file".to_string())
+    );
+    assert_eq!(auto_subtype_reason(&job), None);
 }

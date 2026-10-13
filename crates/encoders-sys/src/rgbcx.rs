@@ -6,6 +6,9 @@ pub const RGBCX_MAX_LEVEL: u32 = 18;
 pub const BC45_RADIUS_DEFAULT: u32 = 5;
 /// Spec value `max` (bench `-hr10`).
 pub const BC45_RADIUS_MAX: u32 = 10;
+/// Spec value `fast` (M6 Track D, DECISIONS Note T11): the smallest radius within 0.1 dB of `default` on the bench
+/// corpus (docs/spikes/bc45-search-radius.md).
+pub const BC45_RADIUS_FAST: u32 = 4;
 
 fn bytes(px: &[[u8; 4]; 16]) -> [u8; 64] {
     let mut b = [0u8; 64];
@@ -91,5 +94,13 @@ pub fn bc1_decode_block(block: &[u8; 8], model: Bc1Model) -> [[u8; 4]; 16] {
     for (i, o) in out.iter_mut().enumerate() {
         o.copy_from_slice(&px[i * 4..i * 4 + 4]);
     }
+    out
+}
+
+/// The 8-entry BC4 palette rgbcx's endpoint search assumes for endpoints `(e0, e1)` (`bc4_block::get_block_values`).
+pub fn bc4_block_values(e0: u8, e1: u8) -> [u8; 8] {
+    let mut out = [0u8; 8];
+    // SAFETY: `out` is 8 bytes, the palette size `get_block_values` writes; the function is pure (no global state).
+    unsafe { ffi::sdc_bc4_block_values(e0 as u32, e1 as u32, out.as_mut_ptr()) };
     out
 }

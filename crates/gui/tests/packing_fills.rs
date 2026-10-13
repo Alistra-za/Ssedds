@@ -48,6 +48,7 @@ fn fixture_with(dir: &Path, sdc_toml: &str, second_set: bool) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(dir.to_path_buf());
     idle(&mut m);
     m
@@ -568,6 +569,7 @@ fn skin_fixture(dir: &Path) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(dir.to_path_buf());
     idle(&mut m);
     m
@@ -667,6 +669,7 @@ fn metallic_only_with(dir: &Path, extra: &str) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(dir.to_path_buf());
     idle(&mut m);
     m

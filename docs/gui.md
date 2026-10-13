@@ -17,17 +17,33 @@ The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `s
   - A DDS file shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder; the DDS itself is never changed.
 - **Sets** (right): textures grouped into material sets, with the recipe status (run, conflict, disabled, failed) of each packed output.
 
-The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector, batch settings (worker threads, memory budget, BC1 decoder), packing fill values, the preview settings and a list of unmatched `[files]` entries.
+The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector (with the loaded user presets), batch settings (worker threads, memory budget, BC1 decoder), packing fill values, the preview settings and a list of unmatched `[files]` entries.
 
 ## Deciding
 
-The GUI never decides for you. A texture that needs an answer has an **amber border**: its sub-type, the meaning of its alpha, the green-channel convention of a normal map, or a blocking warning you must acknowledge. Select it and use the confirm controls in the centre column (for example the sub-type buttons, the *Remove / Cutout / Blend / Cutout + Blend / Data* alpha buttons, *DirectX / OpenGL* for green, or an acknowledge button for a blocking warning). Each answer is written explicitly, as a field value or as an `allow` code, so it stays in your project file.
+A texture whose name follows the conventions decides itself. A High-confidence suggestion is accepted, and its sub-type reads **(auto)**; hover it to see why. High suggestions include:
+
+- a known suffix such as `_n`, `_rmaos` or `_rfaos`;
+- an exporter term such as `_albedo`;
+- a file with no suffix, as its set's colour map;
+- `_n` in a PBR set.
+
+Choose another sub-type to override it: your choice is written to `sdc.toml` and always wins. Naming that breaks the conventions (a normal map saved without `_n`) is read as a colour map, so rename the file or choose its sub-type. A texture that still needs an answer has an **amber border**: a Medium or Low sub-type suggestion, the meaning of its alpha, the green-channel convention of a normal map, or a blocking warning you must acknowledge. Select it and use the confirm controls in the centre column (for example the sub-type buttons, the *Remove / Cutout / Blend / Cutout + Blend / Data* alpha buttons, *DirectX / OpenGL* for green, or an acknowledge button for a blocking warning). Each answer is written explicitly, as a field value or as an `allow` code, so it stays in your project file.
+
+**Alpha from the meshes.** When a scan database exists (the Meshes view), a colour map whose alpha varies takes its alpha meaning from the meshes that use it, and the alpha question is not asked:
+
+- any mesh with alpha blending gives *Blend*;
+- alpha testing gives *Cutout*, at the strictest mesh threshold;
+- both give *Cutout + Blend*;
+- no mesh with alpha gives *Remove*.
+
+The Alpha row then reads *from the meshes that use this texture*. A texture with no alpha, or a fully opaque one, keeps *Remove*. Your own choice still wins. Right after a folder opens, the question may show until the scan has been read.
 
 ## Editing
 
 Any field in the centre column can be changed. Changes go into `sdc.toml` as `[files."<path>"]` entries, keyed by the file's path relative to the folder holding `sdc.toml` (packed outputs without an extension, for example `landscape/rock01_rmaos`). The GUI writes only `target`, the `[files.*]` tables and `defaults.packing.fill.*`; comments, ordering, rules and every other table in your `sdc.toml` are left byte for byte as they were.
 
-**Mipmaps: Filter and Edge.** The *Filter* row in the Mipmaps group picks *Box* (the default), *Tent*, *Mitchell* or *Kaiser*. Options the texture cannot use are greyed out and their hover text says why: tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting (not cutout or blend), and an HDR texture (BC6H or RGBA16F) may use box or tent only. The *Edge* row under it (*Wrap*, the default, or *Clamp*) is locked while the filter is box, because only tent, Mitchell and Kaiser read past the edge. **Resize** (*None* or *Down to a power of two*) is the last of the *Advanced texture fields* in the Advanced drawer; it shrinks each side to the largest power of two that fits (1000×600 becomes 512×512) and the texture then shows a `DIM-RESIZED` note.
+**Mipmaps: Filter and Edge.** The *Filter* row in the Mipmaps group picks *Box* (the default), *Tent*, *Mitchell* or *Kaiser*. Options the texture cannot use are greyed out and their hover text says why: tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting (not cutout or blend), and an HDR texture (BC6H or RGBA16F) may use box or tent only. The *Edge* row under it (*Wrap*, the default, or *Clamp*) is locked while the filter is box, because only tent, Mitchell and Kaiser read past the edge. **Resize** (*None*, *Down to a power of two* or *Half size (larger side above 512)*) is the last of the *Advanced texture fields* in the Advanced drawer. *Down to a power of two* shrinks each side to the largest power of two that fits (1000×600 becomes 512×512); *Half size* halves both sides when the larger is above 512 (1024×512 becomes 512×256). A resized texture shows a `DIM-RESIZED` note. The BC4/BC5 search radius field in the same list offers *Default*, *Maximum* and *Fast (preview)*.
 
 A texture with a non-power-of-two size gets the blocking `DIM-NPOT` warning. Its decision box offers **Resize to a power of two** next to **Acknowledge for this texture**; the button writes `resize = "pot-down"` on that file's `[files]` entry and clears the block.
 
@@ -70,11 +86,13 @@ The **Sets** column is editable. It changes which textures belong to which mater
 - **Badges** on a set show what needs attention: a missing file, a borrowed slot, a blocking problem for export.
 - **Ctrl+Z** undoes and **Ctrl+Y** redoes (200 steps).
 
-Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set order, created sets, moves, borrows and the PGPatcher settings, and nothing else. If it cannot be parsed, the sets and the JSON go read-only (a banner says why) while `sdc.toml` editing carries on.
+Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set order, created sets, moves, borrows, the PGPatcher settings and each set's shader choice, and nothing else. If it cannot be parsed, the sets and the JSON go read-only (a banner says why) while `sdc.toml` editing carries on.
 
 ### The set editor
 
-Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter, Height and so on. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card.
+Select a set to edit it. Each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Emissive, Height, RMAOS and so on. Only the slots the set's shader can use are shown. A filled slot the shader cannot use stays, with an amber outline, and its title says why on hover. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card. The Diffuse and Normal cards have **Match on this** (see Matching below). A `_coat` map fills the Subsurface card, which then reads **Coat colour + strength**: its alpha is the coat strength and is kept.
+
+The set's **Shader** dropdown lists the shaders the current mode offers. The picked one reads "(auto)" when sdc chose it, and "(fallback)" when the shader you asked for does not exist under the current mode and `default` stands in. Choosing **Auto** clears your choice. Warnings (a missing or unused map, an unavailable shader) show on the set's ⚠ badge. A scanned mod's meshes decide the auto pick unless a PBR or skin member, a complex `_m` or a `_p` does.
 
 ### PGPatcher settings
 
@@ -82,6 +100,9 @@ Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter
 - A feature that is on without its texture blocks export.
 - **Reset** returns a field, or the whole set, to its default.
 - PGPatcher's own `default` block is fixed: you cannot edit defaults. Each entry writes `emissive`, `parallax` and `subsurface` only when on, and omits the three numbers when unset or equal to the fixed value.
+- Numbers cannot go below 0, and strengths, weights and opacities stay within 0–1. A typed value outside the range is clamped, and the box says "clamped to ≥ 0" or "clamped to 0–1". A value hand-edited in `sdc-project.toml` shows as it is, with the same note, and the JSON gets it clamped. The glint log density has no limit.
+- **Matching** lists the exact texture paths the entry matches (PGPatcher's `match1`–`match8`). The entry applies when any of them matches. The diffuse path is on by default. The **+** button adds a row for slot 3–8. A slot that holds a texture starts from the set's path for it; any other slot starts empty and says "this row matches nothing until a path is entered" (an empty row is not written to the JSON). **×** removes a row. A set that matches nothing is left out of the JSON, and Export asks first.
+- **Advanced TruePBR settings** (collapsed) holds path contains, mesh path contains, rename, UV, vertex colour and lock keys. **Rename** takes a new file name only (no folders): the outputs keep the matched texture's folder under `textures\pbr\` and take the new name, and sdc writes that full path to the JSON so PGPatcher uses it whichever match hits. If matches point at different textures and Rename is empty, a warning says the output prefix depends on which one hits first: edit the match paths so they point at the same texture.
 
 ### The JSON
 
@@ -93,7 +114,7 @@ The test harness cannot simulate drags. Reordering sets by dragging the **≡** 
 
 ## Where settings live
 
-GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI.
+GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.
 
 sdc-gui ships no fonts. It loads the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at start-up and refuses to start, with a message, if they are missing.
 

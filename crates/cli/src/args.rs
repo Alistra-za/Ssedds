@@ -29,9 +29,9 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Run the spec §5.8 checks on existing DDS files.
     Validate(ValidateArgs),
-    /// Inspect presets and print schemas.
-    #[command(subcommand)]
-    Presets(PresetsCmd),
+    /// Inspect, compare, export and validate presets, and print schemas. User presets in %APPDATA%\sdc\presets\*.toml
+    /// are always loaded.
+    Presets(PresetsArgs),
     /// Built-in encoder versions and NVTT detection.
     Encoders(EncodersArgs),
     /// Fix DDS header faults that need no pixel change (mip count, flags, caps, legacy/DX10, an explicit tag).
@@ -105,16 +105,18 @@ pub struct BatchArgs {
     /// Target (default: from the configs or the selected preset, finally `cs`).
     #[arg(long, value_enum)]
     pub target: Option<TargetArg>,
-    /// Preset id, or a path to a preset .toml file.
+    /// Preset id (built-in, or from %APPDATA%\sdc\presets\*.toml), or a path to a preset .toml file.
     #[arg(long)]
     pub preset: Option<String>,
-    /// Load a preset .toml without selecting it, e.g. one declaring suffix aliases (repeatable).
+    /// Load a preset .toml without selecting it, after the user presets folder, e.g. one declaring suffix aliases
+    /// (repeatable). An id that is already loaded is an error.
     #[arg(long = "preset-file")]
     pub preset_file: Vec<PathBuf>,
     /// Project config (default: sdc.toml in the first input folder).
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// Field override: field=value, subtype:<id>.field=value, file:<glob>.field=value.
+    /// Field override: field=value, subtype:<id>.field=value, file:<glob>.field=value. `set:<id>.shader=<shader>`
+    /// picks a set's shader (ids as `inspect` prints them after `set`).
     #[arg(long = "set")]
     pub set: Vec<String>,
     /// Fill value for a packed channel without a source map: <role>=<0..255>, e.g. metallic=255 (repeatable). Same
@@ -235,9 +237,18 @@ impl From<SchemaArg> for SchemaKind {
     }
 }
 
+#[derive(Args)]
+pub struct PresetsArgs {
+    /// Load a preset .toml after the user presets folder (repeatable). An id that is already loaded is an error.
+    #[arg(long = "preset-file", global = true)]
+    pub preset_file: Vec<PathBuf>,
+    #[command(subcommand)]
+    pub cmd: PresetsCmd,
+}
+
 #[derive(Subcommand)]
 pub enum PresetsCmd {
-    /// List selectable presets.
+    /// List selectable presets, built-in and user (with their source file).
     List {
         #[arg(long)]
         json: bool,
@@ -249,6 +260,37 @@ pub enum PresetsCmd {
         subtype: Option<String>,
         #[arg(long, value_enum)]
         target: Option<TargetArg>,
+    },
+    /// Print the fields where two presets resolve differently: `<subtype>.<field>: <a> → <b>`.
+    ///
+    /// Profiles only: rules are not compared.
+    Diff {
+        a: String,
+        b: String,
+        #[arg(long)]
+        subtype: Option<String>,
+        #[arg(long, value_enum)]
+        target: Option<TargetArg>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a preset's own TOML (keeping its `base` link) under a new id (default `<id>-export`).
+    ///
+    /// The table is re-serialised: comments are dropped and keys may reorder. Suffix aliases are copied as they are,
+    /// so a copy of a preset with suffix aliases does not load beside the original: rename or remove the aliases
+    /// before you put the copy in the user presets folder. `--out` refuses the source file of a loaded preset.
+    Export {
+        id: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Id of the exported preset.
+        #[arg(long = "id")]
+        new_id: Option<String>,
+    },
+    /// Check preset files (migration, parse, ids, base, aliases, rules, every profile). Exit 1 if any has a problem.
+    Validate {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
     },
     /// Print a JSON Schema (profile, preset, config, event, manifest, dds-info, dds-validation) or write all to a folder.
     Schema {
@@ -303,6 +345,11 @@ pub fn parse_fill(s: &str) -> Result<SetOverride, String> {
     parse_set(&format!("packing.fill.{role}={code}"))
 }
 
+/// `%APPDATA%\sdc\presets`, the user presets folder (M6 Track D spec §3); `None` when APPDATA is unset.
+pub fn user_presets_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("presets"))
+}
+
 /// Translate the shared batch flags into a `BatchRequest`. Errors are usage or configuration errors (exit 2).
 pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, String> {
     // `BatchRequest::new` takes a target; `--target` is optional, so reset it to "not given".
@@ -326,6 +373,7 @@ pub fn build_request(b: &BatchArgs, output: PathBuf) -> Result<BatchRequest, Str
     r.project_config = b.config.clone();
     r.user_config =
         std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("sdc").join("config.toml"));
+    r.user_presets = user_presets_dir();
     r.overrides = b
         .set
         .iter()

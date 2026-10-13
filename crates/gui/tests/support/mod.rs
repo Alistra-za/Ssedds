@@ -51,6 +51,8 @@ pub fn opened(dir: &Path) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    // M3-era fixture: High members stay undecided, as before M6 Track E (DECISIONS Note U3).
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(
         m.wait_idle(Duration::from_secs(60)),
@@ -74,6 +76,21 @@ pub fn pbr_opened(dir: &Path) -> AppModel {
         "landscape/rock01_normal.png",
         Answer::Green(GreenConvention::Directx),
     );
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
+    m
+}
+
+/// A model built as the app builds it (no test overrides), opened on `root` with exports under `export`.
+pub fn opened_as_the_app(root: PathBuf, export: PathBuf) -> AppModel {
+    let settings = GuiSettings {
+        export_folder: Some(export),
+        ..GuiSettings::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.open_folder(root);
     assert!(
         m.wait_idle(Duration::from_secs(60)),
         "planning did not finish"

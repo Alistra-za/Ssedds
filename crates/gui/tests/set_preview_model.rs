@@ -426,7 +426,7 @@ fn a_material_key_is_json_only_and_a_texture_change_re_encodes() {
 fn match_keys_requery_paths_reload_and_another_set_or_d3_is_everything() {
     let d = default_block();
     let a = fp_of(Some(entry(&[])), "s1");
-    let moved = fp_of(Some(entry(&[("match_diffuse", json!(r"y\rock"))])), "s1");
+    let moved = fp_of(Some(entry(&[("match1", json!(r"y\rock"))])), "s1");
     let dm = classify(Some(&a), &moved, &d);
     assert!(dm.requery && dm.reload && !dm.material, "{dm:?}");
     let mut slot = fp_of(Some(entry(&[])), "s1");
@@ -486,29 +486,19 @@ fn the_fixture_fingerprint_follows_edits_and_the_target() {
 fn the_query_key_follows_the_match_mode() {
     let d = default_block();
     let key = |pairs: &[(&str, Value)]| tex_key(&value(pairs), &d).unwrap();
+    let default_match1 = TexKey::Exact {
+        slot: 0,
+        path: r"x\rock.dds".into(),
+    };
+    assert_eq!(key(&[]), (default_match1.clone(), None));
     assert_eq!(
-        key(&[]),
-        (
-            TexKey::Suffix {
-                slot: 0,
-                stem: r"x\rock".into()
-            },
-            None
-        )
-    );
-    assert_eq!(
-        key(&[("match_diffuse", json!(r"x\rock_d.dds"))]).0,
-        TexKey::Suffix {
-            slot: 0,
-            stem: r"x\rock_d".into()
-        }
-    );
-    assert_eq!(
-        key(&[("match_normal", json!(r"x\rock"))]).0,
-        TexKey::Suffix {
-            slot: 1,
-            stem: r"x\rock".into()
-        }
+        key(&[
+            ("match_diffuse", json!(r"y\z")),
+            ("match_normal", json!(r"y\z"))
+        ])
+        .0,
+        default_match1,
+        "old keys are never written"
     );
     assert_eq!(
         key(&[("path_contains", json!("rock"))]).0,
@@ -518,7 +508,7 @@ fn the_query_key_follows_the_match_mode() {
         }
     );
     assert_eq!(
-        key(&[("match3", json!(r"x\rock_g.dds"))]).0,
+        key(&[("match1", json!("")), ("match3", json!(r"x\rock_g.dds"))]).0,
         TexKey::Exact {
             slot: 2,
             path: r"x\rock_g.dds".into()
@@ -569,7 +559,7 @@ fn a_built_in_shape_stands_in_for_every_match_mode() {
     let d = default_block();
     let cases: [&[(&str, Value)]; 5] = [
         &[],
-        &[("match_normal", json!(r"x\rock"))],
+        &[("match1", json!("")), ("match2", json!(r"x\rock_n"))],
         &[("path_contains", json!("rock"))],
         &[("match1", json!(r"x\rock.dds"))],
         &[("nif_filter", json!(r"armor\iron"))],

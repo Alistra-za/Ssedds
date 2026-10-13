@@ -212,6 +212,14 @@ fn missing_roughness(
     }
 }
 
+/// The job's size after its resize, its input sized by content (`load::image_size`, as Load reads it), not by
+/// extension. `None` when the size cannot be read.
+fn post_resize_dims(j: &ResolvedJob) -> Option<(u32, u32)> {
+    crate::load::image_size(&j.input)
+        .ok()
+        .map(|d| target_dims(d, j.profile.resize))
+}
+
 /// Bake every member from the `_n` at `n`. Returns whether any member bakes.
 fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
     if !decided(&jobs[n]) {
@@ -241,8 +249,7 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
         return false;
     }
     // S-mips-7: both sizes are the post-resize ones Preprocess writes, so SET-BAKE-RATIO's data reports those too.
-    let Ok(ndims) = ::image::image_dimensions(&nj.input).map(|d| target_dims(d, nj.profile.resize))
-    else {
+    let Some(ndims) = post_resize_dims(nj) else {
         return false;
     };
     let (normal, normal_profile, stamp) = (nj.input.clone(), nj.profile.clone(), nj.source);
@@ -252,9 +259,7 @@ fn bake_set(jobs: &mut [ResolvedJob], n: usize, members: &[usize]) -> bool {
         if jobs[m].profile.color.content == ColorContent::Srgb {
             continue;
         }
-        let Ok(mdims) = ::image::image_dimensions(&jobs[m].input)
-            .map(|d| target_dims(d, jobs[m].profile.resize))
-        else {
+        let Some(mdims) = post_resize_dims(&jobs[m]) else {
             continue;
         };
         match bake_shift(ndims, mdims) {

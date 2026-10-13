@@ -6,12 +6,16 @@ use super::thumbs::ThumbCache;
 use crate::model::fields::{channel_text, field_lock, format_label, format_options};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
-use crate::model::sets::{set_views, slot_of, SetView, SlotFill, SlotKind};
+use crate::model::sets::{
+    set_views, slot_label, slot_of, slot_row, SetView, SlotCell, SlotFill, SlotKind,
+};
 use crate::model::AppModel;
+use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
 use eframe::egui;
 use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
 use engine::events::RecipeReport;
 use engine::pack::RecipeKind;
+use serde_json::Value;
 
 const CARD: f32 = 150.0;
 const THUMB: f32 = 72.0;
@@ -29,6 +33,8 @@ enum Act {
     Opaque(String, bool),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
+    /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
+    Json(String, String, Option<Value>),
 }
 
 fn tag_options(f: Format) -> Vec<ColorTag> {
@@ -51,16 +57,6 @@ pub fn draw(
     };
     ui.horizontal_wrapped(|ui| {
         ui.heading(&v.label);
-        let m = v
-            .settings
-            .get("match_diffuse")
-            .and_then(|x| x.as_str())
-            .map(str::to_string);
-        match (m, &v.derived_match) {
-            (Some(m), _) => ui.label(format!("match_diffuse: {m}")),
-            (None, Some(d)) => ui.label(format!("match_diffuse: {d} (derived)")),
-            (None, None) => ui.weak("no diffuse to derive a match from"),
-        };
         match (&v.prefix, &v.prefix_error) {
             (Some(p), _) => ui.weak(format!("→ {p}")),
             (_, Some(e)) => ui.colored_label(RED, e),
@@ -102,6 +98,7 @@ pub fn draw(
                 model.set_packing_recipe(&k, r);
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
+            Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
         }
     }
     select_or_expand(ui, model, select, expand);
@@ -167,8 +164,8 @@ fn cards(
         .num_columns(per_row)
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
-            for (i, slot) in SlotKind::ALL.iter().enumerate() {
-                card(ui, model, v, *slot, thumbs, acts);
+            for (i, cell) in slot_row(v.shader.as_ref(), &v.slots).iter().enumerate() {
+                card(ui, model, v, cell, thumbs, acts);
                 if i % per_row == per_row - 1 {
                     ui.end_row();
                 }
@@ -180,16 +177,35 @@ fn card(
     ui: &mut egui::Ui,
     model: &AppModel,
     v: &SetView,
-    slot: SlotKind,
+    cell: &SlotCell,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
 ) {
-    let fill = v.slots.get(&slot).cloned().unwrap_or(SlotFill::Empty);
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    let slot = cell.kind;
+    let fill = cell.fill.clone();
+    let frame = egui::Frame::group(ui.style());
+    // A filled slot the shader cannot use stays at its place, outlined, and says why on hover (F1 spec §5).
+    let frame = if cell.usable {
+        frame
+    } else {
+        frame.stroke(egui::Stroke::new(2.0, AMBER))
+    };
+    frame.show(ui, |ui| {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(CARD);
             ui.set_min_width(CARD);
-            ui.label(egui::RichText::new(slot.label()).strong());
+            let title = match &fill {
+                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => slot_label(slot, item),
+                SlotFill::Empty => slot.label(),
+            };
+            let t = ui.label(egui::RichText::new(title).strong());
+            if let (false, Some(p)) = (cell.usable, &v.shader) {
+                t.on_hover_text(format!(
+                    "{title}: the {} shader does not use slot {}",
+                    p.shader.label(),
+                    slot.slot_number()
+                ));
+            }
             let (item_key, borrowed) = match &fill {
                 SlotFill::Own { item } => (Some(item.clone()), None),
                 SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),
@@ -225,6 +241,29 @@ fn card(
                 return;
             };
             ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
+            if let Some(n) = match slot {
+                SlotKind::Diffuse => Some(1),
+                SlotKind::Normal => Some(2),
+                _ => None,
+            } {
+                // F1 spec §3.2: the card's switch is the Matching header's slot 1/2 row.
+                let derived = v.derived_match.as_deref().unwrap_or("");
+                let on = active_matches(&v.settings, derived)
+                    .iter()
+                    .any(|(m, _)| *m == n);
+                let mut want = on;
+                let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+                if ui
+                    .add_enabled(editable, egui::Checkbox::new(&mut want, "Match on this"))
+                    .on_hover_text(
+                        "PGPatcher applies the entry to meshes with this exact texture in this slot",
+                    )
+                    .changed()
+                {
+                    let (k, val) = match_toggle(n, want, &slot_match_path(derived, slot.suffix()));
+                    acts.push(Act::Json(v.id.clone(), k, val));
+                }
+            }
             if let Some(from) = &borrowed {
                 ui.colored_label(AMBER, format!("borrowed from {from}"));
                 return;

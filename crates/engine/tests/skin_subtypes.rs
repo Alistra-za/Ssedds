@@ -158,7 +158,7 @@ fn outside_advanced_skin_sk_is_the_vanilla_guess_and_wet_is_a_base_name() {
         top(&p, "x_sk.png"),
         (Subtype::BacklightTint, Confidence::Low)
     );
-    assert_eq!(top(&p, "x_wet.png"), (Subtype::Diffuse, Confidence::Medium));
+    assert_eq!(top(&p, "x_wet.png"), (Subtype::Diffuse, Confidence::High));
     assert_eq!(top(&p, "x.png").0, Subtype::Diffuse);
 }
 

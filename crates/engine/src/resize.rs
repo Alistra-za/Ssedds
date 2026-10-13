@@ -1,4 +1,4 @@
-//! Resize (spec §5.4 step 6, S-mips-6): `resize = pot-down` takes each axis to the largest power of two that fits,
+//! Resize (spec §5.4 step 6, S-mips-6; M6 Track D T4): `resize = pot-down` takes each axis to the largest power of two that fits, `resize = half` halves both axes when the larger is above 512,
 //! in the content's domain and with the mip filter. Alpha is always the area-exact box; RGB is the box too unless
 //! [`mips::effective_filter`] gives tent, Mitchell or Kaiser. Roughness is resized on r², alpha-weighted colour on
 //! area × alpha, exactly as the box chain does. Normals are not renormalised here (that is `base_level`'s job).
@@ -6,12 +6,19 @@ use crate::config::{MipFilter, Profile, ResizeMode};
 use crate::mips;
 use crate::ops::Work;
 
-/// The size `resize` makes of a `w`×`h` image: `pot-down` takes the largest power of two ≤ each axis.
+/// The larger side a `half` resize keeps (M6 Track D spec §2.2).
+pub const HALF_FLOOR: u32 = 512;
+
+/// The size `resize` makes of a `w`×`h` image: `pot-down` takes the largest power of two ≤ each axis; `half` halves
+/// both axes (integer division, never below 1) when the larger one is above [`HALF_FLOOR`], so the shape never changes
+/// and there is no power-of-two step (owner, 2026-10-12).
 pub fn target_dims((w, h): (u32, u32), mode: ResizeMode) -> (u32, u32) {
     let prev_pow2 = |v: u32| 1u32 << (31 - v.max(1).leading_zeros());
     match mode {
         ResizeMode::None => (w, h),
         ResizeMode::PotDown => (prev_pow2(w), prev_pow2(h)),
+        ResizeMode::Half if w.max(h) > HALF_FLOOR => ((w / 2).max(1), (h / 2).max(1)),
+        ResizeMode::Half => (w, h),
     }
 }
 
@@ -89,6 +96,20 @@ mod tests {
             *p = [rnd(), rnd(), rnd(), rnd()];
         }
         img
+    }
+
+    /// M6 Track D (owner, 2026-10-12): both sides halve together when the larger is above 512; the shape never changes.
+    #[test]
+    fn half_halves_both_sides_when_the_larger_is_above_512() {
+        let t = |w, h| target_dims((w, h), ResizeMode::Half);
+        assert_eq!(t(2048, 2048), (1024, 1024));
+        assert_eq!(t(1024, 512), (512, 256));
+        assert_eq!(t(512, 256), (512, 256));
+        assert_eq!(t(512, 512), (512, 512));
+        assert_eq!(t(513, 100), (256, 50));
+        assert_eq!(t(1000, 600), (500, 300));
+        assert_eq!(t(1024, 1), (512, 1));
+        assert_eq!(t(64, 64), (64, 64));
     }
 
     #[test]

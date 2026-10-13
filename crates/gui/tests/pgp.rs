@@ -90,6 +90,86 @@ fn kinds_match_the_owner_rules() {
     assert!(spec("delete").is_none() && spec("pbr").is_none());
 }
 
+/// F1 spec §2, DECISIONS V5: every number key and its range, in KEYS order. Keys that fit no class (smooth_angle,
+/// auto_uv) get min 0; controller ruling: glint.log_microfacet_density is a log value and has no bounds.
+#[test]
+fn number_keys_and_their_ranges() {
+    use NumRange::{Any, Min0, Unit};
+    let got: Vec<(&str, NumRange)> = KEYS
+        .iter()
+        .filter_map(|k| match k.kind {
+            KeyKind::Number(r) => Some((k.key, r)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("smooth_angle", Min0),
+            ("auto_uv", Min0),
+            ("uv_scale", Min0),
+            ("vertex_color_lum_mult", Min0),
+            ("vertex_color_sat_mult", Min0),
+            ("emissive_scale", Min0),
+            ("displacement_scale", Min0),
+            ("specular_level", Min0),
+            ("roughness_scale", Min0),
+            ("subsurface_opacity", Unit),
+            ("coat_specular_level", Min0),
+            ("coat_roughness", Min0),
+            ("coat_strength", Unit),
+            ("inner_uv_scale", Min0),
+            ("glint.screen_space_scale", Min0),
+            ("glint.log_microfacet_density", Any),
+            ("glint.microfacet_roughness", Min0),
+            ("glint.density_randomization", Min0),
+            ("fuzz.weight", Unit),
+        ]
+    );
+    assert_eq!(Min0.clamp(-2.0), 0.0);
+    assert_eq!(Min0.clamp(7.5), 7.5);
+    assert_eq!(Unit.clamp(1.5), 1.0);
+    assert_eq!(Any.clamp(-4.0), -4.0);
+    assert_eq!(Min0.note(), "clamped to ≥ 0");
+    assert_eq!(Unit.note(), "clamped to 0–1");
+}
+
+/// pgpsim keeps its own copy of the ranges (it cannot see the GUI); this pins the two together key for key.
+#[test]
+fn pgpsim_warns_on_exactly_the_gui_ranges() {
+    for k in KEYS {
+        let KeyKind::Number(range) = k.kind else {
+            continue;
+        };
+        // Indexing a Null `Value` by a string makes it an object.
+        let entry = |x: f64| {
+            let mut v = Value::Null;
+            match k.key.split_once('.') {
+                Some((obj, sub)) => v[obj][sub] = json!(x),
+                None => v[k.key] = json!(x),
+            }
+            v
+        };
+        assert_eq!(
+            pgpsim::range_warnings(&entry(-0.5)).len(),
+            usize::from(range != NumRange::Any),
+            "{} below 0",
+            k.key
+        );
+        assert!(
+            pgpsim::range_warnings(&entry(0.5)).is_empty(),
+            "{} inside",
+            k.key
+        );
+        assert_eq!(
+            pgpsim::range_warnings(&entry(2.0)).len(),
+            usize::from(range == NumRange::Unit),
+            "{} above 1",
+            k.key
+        );
+    }
+}
+
 fn s(pairs: &[(&str, Value)]) -> Settings {
     pairs
         .iter()
@@ -141,41 +221,80 @@ fn derived_match_drops_textures_pbr_and_the_extension() {
 }
 
 #[test]
-fn diffuse_mode_prefixes_and_renames() {
+fn the_default_match1_prefixes_and_renames() {
     let p = |pairs: &[(&str, Value)], derived: &str| prefix_of(&s(pairs), derived).unwrap();
     assert_eq!(
         p(&[], r"landscape\rock01"),
         r"textures\pbr\landscape\rock01"
     );
+    // PGPatcher cuts the slot-1 suffix from a match1 hit, so a _d source's outputs go under ...\rock01.
     assert_eq!(
-        p(&[("match_diffuse", json!(r"landscape\rock02.dds"))], "x"),
+        p(&[], r"landscape\rock01_d"),
+        r"textures\pbr\landscape\rock01"
+    );
+    assert_eq!(
+        p(&[], r"landscape\rock.v2"),
+        r"textures\pbr\landscape\rock.v2"
+    );
+    assert_eq!(
+        p(&[("match1", json!(r"landscape\rock02.dds"))], "x"),
         r"textures\pbr\landscape\rock02"
     );
     assert_eq!(
-        p(&[("match_diffuse", json!(r"pbr\landscape\rock02"))], "x"),
+        p(&[("match1", json!(r"pbr\landscape\rock02"))], "x"),
         r"textures\pbr\landscape\rock02",
         "never doubled"
     );
     assert_eq!(
-        p(
-            &[("rename", json!(r"landscape\boulder"))],
-            r"landscape\rock01"
-        ),
+        p(&[("match1", json!(r"Textures\landscape\rock02"))], "x"),
+        r"textures\pbr\landscape\rock02"
+    );
+    // Rename is a file name in the matched folder (owner, 2026-10-12).
+    assert_eq!(
+        p(&[("rename", json!("boulder"))], r"landscape\rock01"),
         r"textures\pbr\landscape\boulder"
     );
+    // The lowest active match decides; match2 alone gives the same prefix.
     assert_eq!(
-        p(&[("match_normal", json!(r"landscape\rock01_n.dds"))], "x"),
+        p(
+            &[
+                ("match1", json!("")),
+                ("match2", json!(r"landscape\rock01_n"))
+            ],
+            "x"
+        ),
+        r"textures\pbr\landscape\rock01"
+    );
+    // path_contains alone, or nothing at all: the derived path.
+    assert_eq!(
+        p(
+            &[("match1", json!("")), ("path_contains", json!("rock"))],
+            r"landscape\rock01"
+        ),
         r"textures\pbr\landscape\rock01"
     );
     assert_eq!(
-        p(&[("path_contains", json!("rock"))], r"landscape\rock01"),
+        p(&[("match1", json!(""))], r"landscape\rock01"),
+        r"textures\pbr\landscape\rock01"
+    );
+    // Old keys are ignored (F1 spec §3.3).
+    assert_eq!(
+        p(
+            &[
+                ("match_diffuse", json!(r"a\b")),
+                ("match_normal", json!(r"c\d"))
+            ],
+            r"landscape\rock01"
+        ),
         r"textures\pbr\landscape\rock01"
     );
 }
 
 #[test]
 fn slot_modes_strip_the_first_suffix_of_their_own_list() {
-    let p = |key: &str, v: &str| prefix_of(&s(&[(key, json!(v))]), "unused").unwrap();
+    let p = |key: &str, v: &str| {
+        prefix_of(&s(&[("match1", json!("")), (key, json!(v))]), "unused").unwrap()
+    };
     assert_eq!(
         p("match2", r"architecture\whiterun\wrplank01_n.dds"),
         r"textures\pbr\architecture\whiterun\wrplank01"
@@ -197,23 +316,24 @@ fn slot_modes_strip_the_first_suffix_of_their_own_list() {
     );
     assert_eq!(p("match7", r"x\leaf_s.dds"), r"textures\pbr\x\leaf");
     assert_eq!(p("match6", r"x\iron_m.dds"), r"textures\pbr\x\iron");
-    // rename replaces the whole prefix in slot modes.
+    // rename names the file in the folder of the match that decides.
     let r = prefix_of(
         &s(&[
+            ("match1", json!("")),
             ("match2", json!(r"a\b_n.dds")),
-            ("rename", json!(r"textures\pbr\c\d")),
+            ("rename", json!("d")),
         ]),
         "x",
     )
     .unwrap();
-    assert_eq!(r, r"textures\pbr\c\d");
+    assert_eq!(r, r"textures\pbr\a\d");
 }
 
 #[test]
 fn bad_paths_block() {
     for bad in [r"..\up", r"C:\abs", r"\lead", "a|b", r"a\..\b"] {
         assert!(
-            prefix_of(&s(&[("match_diffuse", json!(bad))]), "x").is_err(),
+            prefix_of(&s(&[("match1", json!(bad))]), "x").is_err(),
             "{bad:?}"
         );
         assert!(
@@ -223,37 +343,124 @@ fn bad_paths_block() {
         assert!(check_rel_path(bad, "slot3").is_err(), "{bad:?}");
     }
     assert!(check_rel_path("", "slot3").is_err());
-    // An empty match_diffuse falls back to the derived match; an empty derived match blocks.
+    // No match1 key and no derived path: no prefix.
     assert!(prefix_of(&s(&[]), "").is_err());
     assert!(check_rel_path(r"landscape\white.dds", "slot3").is_ok());
 }
 
+/// F1 spec Review Focus 2, DECISIONS V2: .dds exactly once, and no leading textures\ (PGPatcher's prepend check is
+/// case-sensitive, so a pasted Textures\ would become textures\Textures\ and never match).
 #[test]
-fn match_values_starting_with_textures_block() {
-    // PGPatcher matches match_diffuse/match_normal relative to textures\, so these never match (DECISIONS P26).
-    for (key, v) in [
-        ("match_diffuse", r"textures\landscape\rock02.dds"),
-        ("match_diffuse", r"Textures\rock02"),
-        ("match_normal", r"TEXTURES\landscape\rock02_n.dds"),
+fn match_values_are_written_without_textures_and_with_one_dds() {
+    for (stored, written) in [
+        (r"landscape\rock01", r"landscape\rock01.dds"),
+        (r"landscape\rock01.dds", r"landscape\rock01.dds"),
+        (r"landscape\rock01.DDS", r"landscape\rock01.DDS"),
+        (r"Textures\landscape\rock01.dds", r"landscape\rock01.dds"),
+        (r"textures\pbr\x\y", r"pbr\x\y.dds"),
+        (r"x\rock.v2", r"x\rock.v2.dds"),
+        ("  x\\y  ", r"x\y.dds"),
     ] {
-        let e = prefix_of(&s(&[(key, json!(v))]), "x").unwrap_err();
-        assert!(
-            e.0.contains(key) && e.0.contains(r"remove textures\"),
-            "{e:?}"
-        );
+        assert_eq!(match_value(stored), written, "{stored:?}");
     }
-    // A folder merely named like it, and matchN (PGPatcher prepends textures\ itself), still pass.
-    assert!(prefix_of(&s(&[("match_diffuse", json!(r"texturesets\rock02"))]), "x").is_ok());
-    assert!(prefix_of(&s(&[("match2", json!(r"textures\a\b_n.dds"))]), "x").is_ok());
+    // What a typed value stores: no .dds; empty is off (match1 keeps "" so the derived default stays off).
+    assert_eq!(stored_match(1, r"x\y.dds"), Some(json!(r"x\y")));
+    assert_eq!(stored_match(3, r" x\y.DDS "), Some(json!(r"x\y")));
+    assert_eq!(stored_match(2, r"a\b_n"), Some(json!(r"a\b_n")));
+    assert_eq!(stored_match(1, "  "), Some(json!("")));
+    assert_eq!(stored_match(4, ""), None);
+    // A pasted value with its extension is written once.
+    let v = written(&entry(&[("match1", json!(r"landscape\rock01.dds"))], "x"));
+    assert_eq!(v["match1"], json!(r"landscape\rock01.dds"));
+}
+
+#[test]
+fn toggles_and_slot_match_paths() {
+    assert_eq!(
+        match_toggle(1, true, "ignored"),
+        ("match1".to_string(), None)
+    );
+    assert_eq!(
+        match_toggle(1, false, "ignored"),
+        ("match1".to_string(), Some(json!("")))
+    );
+    assert_eq!(
+        match_toggle(2, true, r"a\b_n"),
+        ("match2".to_string(), Some(json!(r"a\b_n")))
+    );
+    assert_eq!(
+        match_toggle(6, false, r"a\b_rmaos"),
+        ("match6".to_string(), None)
+    );
+    let on = |pairs: &[(&str, Value)]| -> Vec<u8> {
+        active_matches(&s(pairs), r"landscape\rock01")
+            .iter()
+            .map(|(n, _)| *n)
+            .collect()
+    };
+    assert_eq!(on(&[]), vec![1]);
+    assert_eq!(on(&[("match1", json!(""))]), Vec::<u8>::new());
+    assert_eq!(
+        on(&[("match2", json!(r"x\y_n")), ("match6", json!(" "))]),
+        vec![1, 2]
+    );
+    assert!(
+        active_matches(&s(&[]), "").is_empty(),
+        "no diffuse, no default"
+    );
+    assert!(matches_nothing(
+        &s(&[("match1", json!(""))]),
+        r"landscape\rock01"
+    ));
+    assert!(!matches_nothing(
+        &s(&[("match1", json!("")), ("path_contains", json!("rock"))]),
+        r"landscape\rock01"
+    ));
+}
+
+/// Review Focus 3: the slot-1 suffix of the source gives way to the slot's own.
+#[test]
+fn slot_match_paths_swap_the_diffuse_suffix() {
+    assert_eq!(
+        slot_match_path(r"landscape\rock01", ""),
+        r"landscape\rock01"
+    );
+    assert_eq!(
+        slot_match_path(r"landscape\rock01_d", ""),
+        r"landscape\rock01_d"
+    );
+    assert_eq!(
+        slot_match_path(r"landscape\rock01_d", "n"),
+        r"landscape\rock01_n"
+    );
+    assert_eq!(
+        slot_match_path(r"landscape\Rock01_D", "n"),
+        r"landscape\Rock01_n"
+    );
+    assert_eq!(
+        slot_match_path(r"actors\facemask", "n"),
+        r"actors\facemask_n"
+    );
+    assert_eq!(slot_match_path("d", "n"), "d_n");
+    assert_eq!(
+        slot_match_path(r"landscape\rock01", "rmaos"),
+        r"landscape\rock01_rmaos"
+    );
 }
 
 #[test]
 fn forward_slashes_in_json_paths_block() {
     // PGPatcher never converts '/', and the writer writes these values as typed (DECISIONS P26).
-    for key in ["match_diffuse", "match_normal", "match2", "rename"] {
+    for key in ["match1", "match2"] {
         let e = prefix_of(&s(&[(key, json!("landscape/rock01"))]), "x").unwrap_err();
         assert!(e.0.contains(key) && e.0.contains(r"use \ not /"), "{e:?}");
     }
+    // rename is a file name: a '/' is a folder, refused as such (owner, 2026-10-12).
+    let e = prefix_of(&s(&[("rename", json!("landscape/rock01"))]), "x").unwrap_err();
+    assert!(
+        e.0.contains("rename") && e.0.contains("a file name only"),
+        "{e:?}"
+    );
     assert!(check_json_path("landscape/white.dds", "slot3").is_err());
     assert!(check_json_path(r"landscape\white.dds", "slot3").is_ok());
     // The derived match is built with backslashes, so a nested folder still works.
@@ -269,14 +476,21 @@ fn forward_slashes_in_json_paths_block() {
 
 #[test]
 fn pitfalls_are_reported_not_fixed() {
-    let w = pitfalls(&s(&[("match8", json!(r"x\leaf_s.dds"))]));
+    let w = pitfalls(&s(&[("match8", json!(r"x\leaf_s.dds"))]), "x");
     assert!(w.iter().any(|m| m.contains("match8")), "{w:?}");
-    let w = pitfalls(&s(&[
-        ("match2", json!(r"a\b_n.dds")),
-        ("rename", json!(r"c\d")),
-    ]));
-    assert!(w.iter().any(|m| m.contains("full path")), "{w:?}");
-    assert!(pitfalls(&s(&[("match_diffuse", json!("a"))])).is_empty());
+    // A rename is a file name now, so there is no "full path" pitfall (owner, 2026-10-12).
+    let w = pitfalls(
+        &s(&[("match2", json!(r"a\b_n.dds")), ("rename", json!("d"))]),
+        "x",
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert!(pitfalls(&s(&[]), r"landscape\rock01").is_empty());
+    let w = pitfalls(&s(&[("match1", json!(""))]), "x");
+    assert!(
+        w.iter()
+            .any(|m| m.starts_with(NO_MATCH) && m.contains("left out")),
+        "{w:?}"
+    );
 }
 
 #[test]
@@ -306,10 +520,23 @@ fn written(e: &EntryInput) -> Value {
     document(std::slice::from_ref(e)).to_value()["entries"][0].clone()
 }
 
+/// F1 spec §6 "New set": match1 is the derived diffuse path with .dds; match_diffuse and match_normal are never written.
 #[test]
-fn a_plain_entry_writes_only_the_match() {
+fn a_plain_entry_writes_only_match1() {
     let v = written(&entry(&[], r"landscape\rock01"));
-    assert_eq!(v, json!({ "match_diffuse": r"landscape\rock01" }));
+    assert_eq!(v, json!({ "match1": r"landscape\rock01.dds" }));
+    let old = written(&entry(
+        &[
+            ("match_diffuse", json!(r"a\b")),
+            ("match_normal", json!(r"c\d")),
+        ],
+        r"landscape\rock01",
+    ));
+    assert_eq!(
+        old,
+        json!({ "match1": r"landscape\rock01.dds" }),
+        "old keys are ignored"
+    );
 }
 
 #[test]
@@ -369,6 +596,48 @@ fn fixed_numbers_are_omitted_when_unset_or_equal_and_written_otherwise() {
     };
     assert!(p(1.0).get("displacement_scale").is_none());
     assert_eq!(p(0.4)["displacement_scale"], json!(0.4));
+}
+
+/// F1 spec §2: a hand-edited out-of-range value cannot reach the JSON; an in-range value is written as it was typed.
+#[test]
+fn the_writer_clamps_a_hand_edited_number_into_its_range() {
+    let v = written(&entry(
+        &[
+            ("roughness_scale", json!(-2.0)),
+            ("specular_level", json!(-0.1)),
+            ("multilayer", json!(true)),
+            ("coat_strength", json!(3)),
+            ("coat_roughness", json!(-1)),
+            ("coat_specular_level", json!(2)),
+        ],
+        "x",
+    ));
+    assert_eq!(v["roughness_scale"], json!(0.0));
+    assert_eq!(v["specular_level"], json!(0.0));
+    assert_eq!(v["coat_strength"], json!(1.0));
+    assert_eq!(v["coat_roughness"], json!(0.0));
+    assert_eq!(v["coat_specular_level"], json!(2), "in range: as typed");
+    assert!(pgpsim::range_warnings(&v).is_empty(), "{v}");
+    let g = written(&entry(
+        &[
+            ("glint_on", json!(true)),
+            ("glint.microfacet_roughness", json!(-0.5)),
+            ("glint.log_microfacet_density", json!(-3.0)),
+        ],
+        "x",
+    ));
+    assert_eq!(g["glint"]["microfacet_roughness"], json!(0.0));
+    assert_eq!(
+        g["glint"]["log_microfacet_density"],
+        json!(-3.0),
+        "a log value may be negative"
+    );
+    let f = written(&entry(
+        &[("fuzz_on", json!(true)), ("fuzz.weight", json!(1.5))],
+        "x",
+    ));
+    assert_eq!(f["fuzz"]["weight"], json!(1.0));
+    assert!(pgpsim::range_warnings(&g).is_empty() && pgpsim::range_warnings(&f).is_empty());
 }
 
 #[test]
@@ -467,15 +736,17 @@ fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
 }
 
 #[test]
-fn other_match_modes_omit_match_diffuse_and_tri_state_writes_only_when_set() {
+fn match_slots_are_written_with_dds_and_tri_state_writes_only_when_set() {
     let v = written(&entry(
         &[
-            ("match2", json!(r"a\b_n.dds")),
+            ("match_diffuse", json!("old")),
+            ("match2", json!(r"a\b_n")),
             ("lock_rmaos", json!(false)),
         ],
         "x",
     ));
-    assert!(v.get("match_diffuse").is_none());
+    assert!(v.get("match_diffuse").is_none() && v.get("match_normal").is_none());
+    assert_eq!(v["match1"], json!("x.dds"));
     assert_eq!(v["match2"], json!(r"a\b_n.dds"));
     assert_eq!(v["lock_rmaos"], json!(false));
     assert!(v.get("lock_diffuse").is_none());
@@ -496,7 +767,7 @@ fn slots_and_key_order() {
             .find(&format!("\"{k}\""))
             .unwrap_or_else(|| panic!("{k} in {text}"))
     };
-    assert!(pos("match_diffuse") < pos("emissive") && pos("emissive") < pos("specular_level"));
+    assert!(pos("match1") < pos("emissive") && pos("emissive") < pos("specular_level"));
     assert!(pos("specular_level") < pos("slot3") && pos("slot3") < pos("slot6"));
     assert!(
         text.ends_with("}\n") && text.contains("\n  \"default\": {\n"),
@@ -680,12 +951,296 @@ fn failures_name_the_path_and_the_key() {
 #[test]
 fn slot_suffixes_compare_ascii_only() {
     // The Kelvin sign lower-cases to an ASCII 'k'; it is not the `_sk` suffix and must not be cut (nor panic).
-    let p = prefix_of(&s(&[("match3", json!("x\\a_s\u{212A}.dds"))]), "unused").unwrap();
+    let p = prefix_of(
+        &s(&[
+            ("match1", json!("")),
+            ("match3", json!("x\\a_s\u{212A}.dds")),
+        ]),
+        "unused",
+    )
+    .unwrap();
     assert_eq!(p, "textures\\pbr\\x\\a_s\u{212A}");
     let p = prefix_of(
-        &s(&[("match3", json!("x\\\u{212A}\u{212A}_SK.dds"))]),
+        &s(&[
+            ("match1", json!("")),
+            ("match3", json!("x\\\u{212A}\u{212A}_SK.dds")),
+        ]),
         "unused",
     )
     .unwrap();
     assert_eq!(p, "textures\\pbr\\x\\\u{212A}\u{212A}");
+}
+
+/// F1 spec Review Focus 1, DECISIONS V1: matchN holds the path the unpatched mesh carries. PGPatcher hits it, and
+/// its matched path is the prefix sdc writes the outputs under. `derive_match_diffuse` is called with the stem that
+/// `set_views` gives it: `mirrored_stem` cuts only colour vocabulary terms, and `d` is not one, so `rock01_d` stays.
+#[test]
+fn slot_matches_hit_the_unpatched_mesh_and_land_on_the_sdc_prefix() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mesh = |d: &str, n: &str| {
+        let mut m = pgpsim::MaterialState::builtin_default();
+        m.set_slot_raw(0, d);
+        m.set_slot_raw(1, n);
+        m
+    };
+    let vanilla = mesh(
+        r"textures\landscape\rock01.dds",
+        r"textures\landscape\rock01_n.dds",
+    );
+    let d_named = mesh(
+        r"Textures\Landscape\Rock01_D.dds",
+        r"textures\landscape\rock01_n.dds",
+    );
+    let nif = r"meshes\landscape\rock01.nif";
+    let cases = [
+        (
+            "match1, the default",
+            "textures/landscape",
+            "rock01",
+            vec![],
+            &vanilla,
+        ),
+        (
+            "a pbr source folder still names the vanilla path",
+            "textures/pbr/landscape",
+            "rock01",
+            vec![],
+            &vanilla,
+        ),
+        (
+            "match2 alone",
+            "textures/landscape",
+            "rock01",
+            vec![
+                ("match1", json!("")),
+                ("match2", json!(slot_match_path(r"landscape\rock01", "n"))),
+            ],
+            &vanilla,
+        ),
+        (
+            "match1 and match2",
+            "textures/landscape",
+            "rock01",
+            vec![("match2", json!(r"landscape\rock01_n"))],
+            &vanilla,
+        ),
+        (
+            "a _d source keeps _d in match1",
+            "textures/landscape",
+            "rock01_d",
+            vec![],
+            &d_named,
+        ),
+    ];
+    for (label, dir, stem, pairs, shape) in cases {
+        let derived = derive_match_diffuse(dir, stem);
+        let e = entry(&pairs, &derived);
+        let prepared = pgpsim::prepare(&written(&e), &default);
+        assert!(
+            pgpsim::shape_matches(&prepared, nif, &shape.slots),
+            "{label}"
+        );
+        assert_eq!(
+            pgpsim::matched_path(&prepared, &shape.slots),
+            Some(
+                prefix_of(&e.settings, &derived)
+                    .unwrap()
+                    .to_ascii_lowercase()
+            ),
+            "{label}"
+        );
+    }
+    // matchN is exact (no strip_pbr): a mesh already pointing at textures\pbr\ is not hit. PGPatcher patches the
+    // unpatched copy, which carries the vanilla path.
+    let patched = mesh(
+        r"textures\pbr\landscape\rock01.dds",
+        r"textures\pbr\landscape\rock01_n.dds",
+    );
+    let prepared = pgpsim::prepare(&written(&entry(&[], r"landscape\rock01")), &default);
+    assert!(!pgpsim::shape_matches(&prepared, nif, &patched.slots));
+}
+
+/// Task 3 review fix: PGPatcher takes the prefix from whichever match hits, not the lowest active one. When the active
+/// matches derive different prefixes the set warns (advising to edit the match paths), and a rename makes every hit land
+/// on sdc's prefix.
+#[test]
+fn divergent_matches_warn_and_a_rename_pins_the_prefix() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mut mesh = pgpsim::MaterialState::builtin_default();
+    mesh.set_slot_raw(0, r"textures\c\other.dds");
+    mesh.set_slot_raw(1, r"textures\b\two_n.dds");
+    let nif = r"meshes\b\two.nif";
+    let pairs = [("match2", json!(r"b\two_n"))];
+    let e = entry(&pairs, r"a\one");
+    let prepared = pgpsim::prepare(&written(&e), &default);
+    assert!(pgpsim::shape_matches(&prepared, nif, &mesh.slots));
+    // Only match2 hits, so PGPatcher's prefix is not the one sdc writes under.
+    assert_ne!(
+        pgpsim::matched_path(&prepared, &mesh.slots),
+        Some(
+            prefix_of(&e.settings, r"a\one")
+                .unwrap()
+                .to_ascii_lowercase()
+        )
+    );
+    let w = pitfalls(&e.settings, r"a\one");
+    assert!(
+        w.iter()
+            .any(|m| m.contains("match slots point at different textures")
+                && m.contains("edit the match paths so they point at the same texture")
+                && !m.contains("Rename")),
+        "{w:?}"
+    );
+    // A rename fixes it: no warning, and the hit lands on sdc's prefix.
+    let pairs = [("match2", json!(r"b\two_n")), ("rename", json!("one"))];
+    let e = entry(&pairs, r"a\one");
+    assert!(
+        pitfalls(&e.settings, r"a\one").is_empty(),
+        "{:?}",
+        pitfalls(&e.settings, r"a\one")
+    );
+    let prepared = pgpsim::prepare(&written(&e), &default);
+    // PGPatcher prepends `\` to rename (pgpsim::prepare), so the matched path starts with one; the game path drops it.
+    assert_eq!(
+        pgpsim::matched_path(&prepared, &mesh.slots)
+            .map(|p| p.trim_start_matches('\\').to_string()),
+        Some(
+            prefix_of(&e.settings, r"a\one")
+                .unwrap()
+                .to_ascii_lowercase()
+        )
+    );
+    // The default: match1 and match2 from the same set agree, so no warning.
+    let same = s(&[("match2", json!(slot_match_path(r"landscape\rock01_d", "n")))]);
+    assert!(pitfalls(&same, r"landscape\rock01_d").is_empty());
+}
+
+/// Owner, 2026-10-12 (final fix wave): Rename is a new file name. sdc puts it in the folder of the matched path and
+/// writes the full prefix, the form PGPatcher's whole-match substitution needs, for every match mode.
+#[test]
+fn a_rename_is_a_file_name_in_the_matched_folder() {
+    let p = |pairs: &[(&str, Value)], derived: &str| prefix_of(&s(pairs), derived).unwrap();
+    assert_eq!(
+        p(&[("rename", json!("boulder"))], r"landscape\rock01"),
+        r"textures\pbr\landscape\boulder"
+    );
+    assert_eq!(
+        p(&[("rename", json!("boulder.DDS"))], r"landscape\rock01"),
+        r"textures\pbr\landscape\boulder",
+        "one .dds is cut, like a match path"
+    );
+    assert_eq!(
+        p(
+            &[
+                ("match1", json!("")),
+                ("match2", json!(r"b\two_n")),
+                ("rename", json!("one"))
+            ],
+            r"a\one"
+        ),
+        r"textures\pbr\b\one",
+        "the folder of the lowest active match"
+    );
+    assert_eq!(
+        p(
+            &[
+                ("match1", json!("")),
+                ("path_contains", json!("rock")),
+                ("rename", json!("snow01"))
+            ],
+            r"landscape\rock01"
+        ),
+        r"textures\pbr\landscape\snow01",
+        "path_contains: the folder of the derived path"
+    );
+    for bad in [r"landscape\boulder", "landscape/boulder", r"textures\pbr\x"] {
+        let e = prefix_of(&s(&[("rename", json!(bad))]), r"landscape\rock01").unwrap_err();
+        assert!(
+            e.0.contains("rename") && e.0.contains("a file name only"),
+            "{bad:?}: {e:?}"
+        );
+    }
+    assert!(prefix_of(&s(&[("rename", json!(".dds"))]), r"landscape\rock01").is_err());
+    // The JSON carries the full prefix, not the typed name.
+    let v = written(&entry(&[("rename", json!("boulder"))], r"landscape\rock01"));
+    assert_eq!(v["rename"], json!(r"textures\pbr\landscape\boulder"));
+}
+
+/// The renamed entry lands where sdc writes the files, through pgpsim. PGPatcher prepends `\` to rename
+/// (`pgpsim::prepare`), so the matched path is compared without it (DECISIONS V3, unverified in real PGPatcher).
+#[test]
+fn a_renamed_entry_lands_on_the_sdc_prefix_for_slot_matches_and_path_contains() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mut mesh = pgpsim::MaterialState::builtin_default();
+    mesh.set_slot_raw(0, r"textures\landscape\rock01.dds");
+    mesh.set_slot_raw(1, r"textures\landscape\rock01_n.dds");
+    let nif = r"meshes\landscape\rock01.nif";
+    let derived = r"landscape\rock01";
+    let cases: [(&str, Vec<(&str, Value)>); 3] = [
+        ("slot match", vec![("rename", json!("boulder"))]),
+        (
+            "path_contains alone",
+            vec![
+                ("match1", json!("")),
+                ("path_contains", json!("rock01")),
+                ("rename", json!("boulder")),
+            ],
+        ),
+        (
+            "path_contains with a slot match",
+            vec![
+                ("path_contains", json!("rock01")),
+                ("match2", json!(r"landscape\rock01_n")),
+                ("rename", json!("boulder")),
+            ],
+        ),
+    ];
+    for (label, pairs) in cases {
+        let e = entry(&pairs, derived);
+        let prepared = pgpsim::prepare(&written(&e), &default);
+        assert!(
+            pgpsim::shape_matches(&prepared, nif, &mesh.slots),
+            "{label}"
+        );
+        let want = prefix_of(&e.settings, derived).unwrap();
+        assert_eq!(want, r"textures\pbr\landscape\boulder", "{label}");
+        assert_eq!(
+            pgpsim::matched_path(&prepared, &mesh.slots)
+                .map(|p| p.trim_start_matches('\\').to_string()),
+            Some(want.to_ascii_lowercase()),
+            "{label}"
+        );
+    }
+}
+
+/// Owner bullet B (slot 8 `_s`), checked against pgpsim: PGPatcher's slot-8 list is `_b`/`_bl`/`_flow`, so a mesh
+/// hit through `match8 = …_s` gets a prefix ending in `_s`, not sdc's. The two warnings report a real split.
+#[test]
+fn a_match8_on_an_s_map_keeps_the_s_in_pgpatchers_prefix() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mut mesh = pgpsim::MaterialState::builtin_default();
+    mesh.set_slot_raw(0, r"textures\other\x.dds");
+    mesh.set_slot_raw(7, r"textures\landscape\rock01_s.dds");
+    let e = entry(
+        &[("match8", json!(r"landscape\rock01_s"))],
+        r"landscape\rock01",
+    );
+    let prepared = pgpsim::prepare(&written(&e), &default);
+    assert_eq!(
+        pgpsim::matched_path(&prepared, &mesh.slots),
+        Some(r"textures\pbr\landscape\rock01_s".into())
+    );
+    assert_eq!(
+        prefix_of(&e.settings, r"landscape\rock01").unwrap(),
+        r"textures\pbr\landscape\rock01"
+    );
+}
+
+/// Owner, 2026-10-12: a + row added for a slot the set does not fill stores `matchN = ""`. It is not a match: it is
+/// not written, and it does not change the prefix or the warnings.
+#[test]
+fn an_empty_match_row_is_not_written() {
+    let e = entry(&[("match3", json!(""))], r"landscape\rock01");
+    assert_eq!(written(&e), json!({ "match1": r"landscape\rock01.dds" }));
+    assert!(pitfalls(&e.settings, r"landscape\rock01").is_empty());
 }

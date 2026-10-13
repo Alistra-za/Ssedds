@@ -4,6 +4,7 @@ use engine::events::*;
 use engine::manifest::*;
 use engine::policy::{JobStatus, ResolvedJob};
 use engine::presets::PresetRegistry;
+use engine::shader::{Shader, ShaderOrigin, ShaderPick};
 use std::sync::Arc;
 
 fn record(
@@ -29,6 +30,11 @@ fn record(
         output: output.into(),
         validation: Default::default(),
         bc1_model: Some("ideal".into()),
+        shader: Some(ShaderPick {
+            shader: Shader::Default,
+            provenance: ShaderOrigin::Fallback,
+            wanted: Some(Shader::Pbr),
+        }),
     }
 }
 
@@ -116,6 +122,8 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
             members: vec!["a_d.png".into()],
             pbr: true,
             bake: false,
+            shader: None,
+            warnings: vec![],
             recipes: vec![],
         },
         EventKind::FilePlanned {
@@ -133,6 +141,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 source: None,
                 pack: None,
                 bake: None,
+                shader: None,
             }),
         },
         EventKind::Progress {
@@ -306,6 +315,18 @@ fn encoder_versions_come_from_the_encoders_crate() {
     )))
     .unwrap();
     assert_eq!(patch, format!("{}@sha256:{hash}", v.bc7e_patch.unwrap()));
+    // A manifest from before the rgbcx BC4 round-to-nearest patch must not match, so its BC3/BC4/BC5 re-encode.
+    // The tag hashes the patched rgbcx.h, so an in-place change to the rounding code also re-encodes (T13).
+    let rgbcx = sha256_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../encoders-sys/vendor/bc7enc_rdo/rgbcx.h"
+    )))
+    .unwrap();
+    assert_eq!(v.rgbcx_patch, Some("bc4-round-to-nearest"));
+    assert_eq!(
+        e.rgbcx_patch.as_deref(),
+        Some(format!("bc4-round-to-nearest@sha256:{rgbcx}").as_str())
+    );
 }
 
 #[test]
@@ -567,4 +588,35 @@ fn a_job_key_and_a_skip_kind_have_an_exact_json_layout() {
         r#"{"schema":2,"seq":1,"ts":"2026-10-09T12:34:56.789Z","batch":"b1","path":"in/a_ao.png","job_key":"a_rmaos.dds","kind":"file_skipped","skip":"packed_source","code":null,"reason":"packed into a_rmaos.dds"}"#
     );
     assert_eq!(serde_json::from_str::<EngineEvent>(&text).unwrap(), ev);
+}
+
+#[test]
+fn the_shader_pick_round_trips_through_the_manifest_json() {
+    let (profile, preset) = cs_quality();
+    let r = record("x.dds", "ab", profile, preset);
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["shader"]["wanted"], "pbr");
+    assert_eq!(serde_json::from_value::<ManifestRecord>(v).unwrap(), r);
+    let none = ManifestRecord { shader: None, ..r };
+    assert!(serde_json::to_value(&none).unwrap().get("shader").is_none());
+}
+
+/// Spec §5: every manifest record passes the migration hook; a newer one is kept raw, a line without a schema is
+/// not a record.
+#[test]
+fn manifest_records_pass_the_migration_hook() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    std::fs::write(
+        m.path(),
+        "{\"schema\":1,\"output\":\"a.dds\"}\n{\"schema\":9,\"output\":\"b.dds\",\"x\":1}\n{\"output\":\"c.dds\"}\n",
+    )
+    .unwrap();
+    let e = m.load().unwrap();
+    assert_eq!(e["a.dds"].schema, 2);
+    assert!(!e["a.dds"].is_newer_schema());
+    assert!(e["b.dds"].is_newer_schema());
+    assert_eq!(e["b.dds"].raw["x"], 1);
+    assert!(!e.contains_key("c.dds"));
 }

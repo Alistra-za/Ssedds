@@ -1,5 +1,5 @@
 //! Presets (spec §3.5): versioned bundles of profile defaults plus ordered rules, with single inheritance.
-use crate::codes::Code;
+use crate::codes::{Code, Warning};
 use crate::config::*;
 use crate::group::SUFFIXES;
 use crate::overrides::{Scope, SetOverride};
@@ -9,11 +9,15 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const BASE_ID: &str = "sdc-base";
 pub const DEFAULT_PRESET: &str = "cs-quality";
+/// [`PresetRegistry::source`] of an embedded preset.
+pub const SOURCE_BUILTIN: &str = "builtin";
+/// [`PresetRegistry::source`] of a preset added as text ([`PresetRegistry::add_toml`]).
+pub const SOURCE_INLINE: &str = "inline";
 
 pub fn default_preset_for(t: Target) -> &'static str {
     match t {
@@ -23,11 +27,14 @@ pub fn default_preset_for(t: Target) -> &'static str {
     }
 }
 
-const BUILTIN: [&str; 4] = [
+const BUILTIN: [&str; 7] = [
     include_str!("../../../presets/sdc-base.toml"),
     include_str!("../../../presets/cs-quality.toml"),
     include_str!("../../../presets/cpm-quality.toml"),
     include_str!("../../../presets/vanilla-quality.toml"),
+    include_str!("../../../presets/cs-compact.toml"),
+    include_str!("../../../presets/vanilla-compact.toml"),
+    include_str!("../../../presets/fast-preview.toml"),
 ];
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
@@ -40,6 +47,12 @@ pub enum PresetError {
     Cycle(String),
     #[error("preset schema_version {0} is newer than this sdc supports ({SCHEMA_VERSION})")]
     NewerSchema(u32),
+    /// Spec §5 (`ConfigError::NewerSchema`, Note T9): a config file of a newer schema; names the file.
+    #[error(
+        "{0}: config schema_version {1} is newer than this sdc supports ({cur})",
+        cur = crate::migrate::CONFIG_SCHEMA
+    )]
+    NewerConfigSchema(String, u32),
     #[error("invalid profile: {0}")]
     Invalid(String),
     /// A configuration the registry refuses (an invalid or conflicting suffix alias, spec §3.7, or a user preset
@@ -68,8 +81,14 @@ pub struct RuleMatch {
     /// The file's texture set contains a member with this suffix.
     #[serde(default)]
     pub set_has: Option<String>,
+    /// The source's alpha content; `none` also matches varying alpha that mesh evidence decided to remove (M6 Track E,
+    /// owner O1).
     #[serde(default)]
     pub alpha: Option<AlphaContent>,
+    /// M6 Track D (DECISIONS Note T2): the sub-type being resolved is one of these; empty = any. Matched only when the
+    /// profile is layered, so a rule that names sub-types here never decides a sub-type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtypes: Vec<Subtype>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -115,6 +134,10 @@ pub struct PresetFile {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
+    /// Schema of this file (spec §5); absent = 1. Not written back when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub schema_version: Option<u32>,
     #[serde(default)]
     pub preset: Option<String>,
     #[serde(default)]
@@ -141,7 +164,25 @@ impl ConfigFile {
     pub fn load(path: &Path) -> Result<ConfigFile, PresetError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))?;
-        toml::from_str(&text).map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))
+        Self::parse(&text, &path.display().to_string())
+    }
+
+    /// A config file's text (`origin` names it in errors): BOM stripped, the migration hook (spec §5), then
+    /// deserialised.
+    pub fn parse(text: &str, origin: &str) -> Result<ConfigFile, PresetError> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let bad = |m: String| PresetError::Parse(format!("{origin}: {m}"));
+        let raw: toml::Table = toml::from_str(text).map_err(|e| bad(e.to_string()))?;
+        let migrated =
+            crate::migrate::migrate_config(toml::Value::Table(raw)).map_err(|e| match e {
+                crate::migrate::MigrateError::Newer { found, .. } => {
+                    PresetError::NewerConfigSchema(origin.to_string(), found)
+                }
+                e => bad(e.to_string()),
+            })?;
+        migrated
+            .try_into()
+            .map_err(|e: toml::de::Error| bad(e.to_string()))
     }
 
     /// The `[files]` table as `Scope::Path` overrides (key order, then leaf order) and per-file `allow` codes.
@@ -193,8 +234,8 @@ impl ConfigFile {
 /// Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.
 ///
 /// Serialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the
-/// `<source>#<n>` part), `analysis:<fact>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,
-/// `recipe:<kind>`, and the snake_case variant name for the rest.
+/// `<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `mesh:alpha`, `suffix:<term>`, `source:<file>`,
+/// `default:<value>`, `fill:<code>`, `recipe:<kind>`, and the snake_case variant name for the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[schemars(with = "String")]
 pub enum Provenance {
@@ -207,6 +248,12 @@ pub enum Provenance {
     /// A named fact derived from the source's analysis, applied at the analysis position. Shown as
     /// `analysis:<fact>`, e.g. `analysis:float-source`.
     AnalysisFact(String),
+    /// A member default of the set's shader (M6 spec §5): above built-in profiles, below every explicit layer and
+    /// analysis fact. Shown as `shader:<id>`.
+    Shader(String),
+    /// The alpha policy (and threshold) the meshes that use the colour member give it (M6 Track E, DECISIONS Note
+    /// U7): above shader defaults, below every explicit layer and the analysis `remove`. Shown as `mesh:alpha`.
+    MeshAlpha,
     /// A fact stated by an exporter vocabulary term, e.g. `_normalgl` (spec §4.4); applied at the analysis
     /// position. Shown as `suffix:<term>`.
     Suffix(String),
@@ -242,6 +289,8 @@ impl fmt::Display for Provenance {
             Provenance::Rule(src) => write!(f, "rule:{src}"),
             Provenance::Analysis => f.write_str("analysis"),
             Provenance::AnalysisFact(t) => write!(f, "analysis:{t}"),
+            Provenance::Shader(id) => write!(f, "shader:{id}"),
+            Provenance::MeshAlpha => f.write_str("mesh:alpha"),
             Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::ProjectFile => f.write_str("project_file"),
@@ -268,6 +317,9 @@ impl std::str::FromStr for Provenance {
         if let Some(t) = s.strip_prefix("analysis:") {
             return Ok(Provenance::AnalysisFact(t.to_string()));
         }
+        if let Some(id) = s.strip_prefix("shader:") {
+            return Ok(Provenance::Shader(id.to_string()));
+        }
         if let Some(t) = s.strip_prefix("suffix:") {
             return Ok(Provenance::Suffix(t.to_string()));
         }
@@ -288,6 +340,7 @@ impl std::str::FromStr for Provenance {
             "user_config" => Provenance::UserConfig,
             "project_config" => Provenance::ProjectConfig,
             "analysis" => Provenance::Analysis,
+            "mesh:alpha" => Provenance::MeshAlpha,
             "suggestion" => Provenance::Suggestion,
             "project_file" => Provenance::ProjectFile,
             "user" => Provenance::User,
@@ -311,16 +364,41 @@ impl<'de> Deserialize<'de> for Provenance {
     }
 }
 
-/// Deep-merge `patch` into `base`: objects merge key by key, other values replace, `null` patches change nothing.
+/// Deep-merge `patch` into `base`: objects merge key by key, other values replace, and a `null` patch changes
+/// nothing: it neither erases a value nor adds an absent key (carried fix 2, DECISIONS Note T10).
 pub fn merge_json(base: &mut Value, patch: &Value) {
     match (base, patch) {
+        (_, Value::Null) => {}
         (Value::Object(b), Value::Object(p)) => {
             for (k, v) in p {
-                merge_json(b.entry(k.clone()).or_insert(Value::Null), v);
+                match b.get_mut(k) {
+                    Some(slot) => merge_json(slot, v),
+                    None => {
+                        if let Some(v) = without_nulls(v) {
+                            b.insert(k.clone(), v);
+                        }
+                    }
+                }
             }
         }
-        (_, Value::Null) => {}
-        (b, p) => *b = p.clone(),
+        (b, p) => {
+            if let Some(v) = without_nulls(p) {
+                *b = v;
+            }
+        }
+    }
+}
+
+/// `v` without its `null` leaves; `None` for `null` itself.
+fn without_nulls(v: &Value) -> Option<Value> {
+    match v {
+        Value::Null => None,
+        Value::Object(m) => Some(Value::Object(
+            m.iter()
+                .filter_map(|(k, x)| Some((k.clone(), without_nulls(x)?)))
+                .collect(),
+        )),
+        _ => Some(v.clone()),
     }
 }
 
@@ -342,6 +420,33 @@ pub fn leaf_paths(v: &Value, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
+/// Where a preset came from. The kind is kept apart from the label so a file named `builtin` or `inline` stays a file.
+#[derive(Debug, Clone, PartialEq)]
+enum Source {
+    Builtin,
+    Inline,
+    /// The path as given (`Path::display`).
+    File(String),
+}
+
+impl Source {
+    fn label(&self) -> &str {
+        match self {
+            Source::Builtin => SOURCE_BUILTIN,
+            Source::Inline => SOURCE_INLINE,
+            Source::File(p) => p,
+        }
+    }
+}
+
+/// Whether a registry source is the file `path` (both canonicalised).
+fn same_file(source: &Source, path: &Path) -> bool {
+    matches!(source, Source::File(s) if matches!(
+        (std::fs::canonicalize(s), std::fs::canonicalize(path)),
+        (Ok(a), Ok(b)) if a == b
+    ))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PresetRegistry {
     presets: BTreeMap<String, PresetFile>,
@@ -349,43 +454,69 @@ pub struct PresetRegistry {
     aliases: BTreeMap<String, String>,
     /// Alias → id of the preset that declares it.
     alias_owner: BTreeMap<String, String>,
+    /// Id → where the preset was loaded from: `builtin`, `inline` or a file path (M6 Track D, Note T7).
+    sources: BTreeMap<String, Source>,
+    /// Id → the preset's TOML table as loaded (`presets export`, Note T8).
+    tables: BTreeMap<String, toml::Table>,
 }
 
 impl PresetRegistry {
     pub fn builtin() -> Result<Self, PresetError> {
         let mut r = PresetRegistry::default();
         for text in BUILTIN {
-            r.insert_toml(text, true)?;
+            r.insert_toml(text, Source::Builtin)?;
         }
         Ok(r)
     }
 
-    /// Load a user preset. The internal base id `sdc-base` is reserved: it can be neither replaced nor extended
-    /// (`CFG-INVALID`), so the error path of `policy::resolve_file` can always fall back on the built-in base.
+    /// Load a user preset from text. The internal base id `sdc-base` is reserved: it can be neither replaced nor
+    /// extended (`CFG-INVALID`), so the error path of `policy::resolve_file` can always fall back on the built-in base.
+    /// An id that is already loaded is refused (Note T7).
     pub fn add_toml(&mut self, text: &str) -> Result<String, PresetError> {
-        self.insert_toml(text, false)
+        self.insert_toml(text, Source::Inline)
     }
 
-    fn insert_toml(&mut self, text: &str, builtin: bool) -> Result<String, PresetError> {
-        let p: PresetFile = toml::from_str(text).map_err(|e| PresetError::Parse(e.to_string()))?;
-        if !builtin && p.id == BASE_ID {
+    fn insert_toml(&mut self, text: &str, source: Source) -> Result<String, PresetError> {
+        // Review Focus 1: a Windows editor's BOM (CRLF is valid TOML).
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let raw: toml::Table =
+            toml::from_str(text).map_err(|e| PresetError::Parse(e.to_string()))?;
+        // Spec §5: the migration hook runs before deserialising.
+        let migrated =
+            crate::migrate::migrate_preset(toml::Value::Table(raw)).map_err(|e| match e {
+                crate::migrate::MigrateError::Newer { found, .. } => {
+                    PresetError::NewerSchema(found)
+                }
+                e => PresetError::Parse(e.to_string()),
+            })?;
+        let toml::Value::Table(table) = migrated else {
+            return Err(PresetError::Parse("a preset file is a TOML table".into()));
+        };
+        let p: PresetFile = toml::Value::Table(table.clone())
+            .try_into()
+            .map_err(|e: toml::de::Error| PresetError::Parse(e.to_string()))?;
+        if source != Source::Builtin && p.id == BASE_ID {
             return Err(PresetError::Alias(format!(
-                "CFG-INVALID: preset id '{BASE_ID}' is reserved for the built-in base profile"
+                "CFG-INVALID: preset id '{BASE_ID}' from {} is reserved for the built-in base profile, already loaded from {SOURCE_BUILTIN}",
+                source.label()
             )));
         }
-        if p.schema_version > SCHEMA_VERSION {
-            return Err(PresetError::NewerSchema(p.schema_version));
+        if let Some(first) = self.sources.get(&p.id) {
+            return Err(PresetError::Alias(format!(
+                "CFG-INVALID: preset id '{}' from {} is already loaded from {}",
+                p.id,
+                source.label(),
+                first.label()
+            )));
         }
         self.check_aliases(&p)?;
         let id = p.id.clone();
-        // Reloading a preset id replaces its aliases.
-        let owner = &self.alias_owner;
-        self.aliases.retain(|a, _| owner.get(a) != Some(&id));
-        self.alias_owner.retain(|_, o| *o != id);
         for (alias, canonical) in &p.suffix_aliases {
             self.aliases.insert(alias.clone(), canonical.clone());
             self.alias_owner.insert(alias.clone(), id.clone());
         }
+        self.sources.insert(id.clone(), source);
+        self.tables.insert(id.clone(), table);
         self.presets.insert(id.clone(), p);
         Ok(id)
     }
@@ -443,33 +574,215 @@ impl PresetRegistry {
         &self.aliases
     }
 
+    /// Load a user preset file. The same file already loaded (e.g. from the user folder) is not loaded again
+    /// (Note T6); another file under a loaded id is refused (Note T7).
     pub fn add_file(&mut self, path: &Path) -> Result<String, PresetError> {
+        if let Some((id, _)) = self.sources.iter().find(|(_, s)| same_file(s, path)) {
+            return Ok(id.clone());
+        }
         let text = std::fs::read_to_string(path)
             .map_err(|e| PresetError::Parse(format!("{}: {e}", path.display())))?;
-        self.add_toml(&text)
+        self.insert_toml(&text, Source::File(path.display().to_string()))
+            .map_err(|e| match e {
+                PresetError::Parse(m) => PresetError::Parse(format!("{}: {m}", path.display())),
+                e => e,
+            })
     }
 
     pub fn get(&self, id: &str) -> Option<&PresetFile> {
         self.presets.get(id)
     }
 
-    /// True when `id` is loaded and identical to the built-in preset of that id (a user preset loaded under a
-    /// built-in id is not built in).
+    /// True when `id` was loaded from the embedded list (a user preset can never take a built-in id, Note T7).
     pub fn is_builtin(&self, id: &str) -> bool {
-        static BUILTINS: std::sync::OnceLock<BTreeMap<String, PresetFile>> =
-            std::sync::OnceLock::new();
-        let builtins = BUILTINS.get_or_init(|| {
-            BUILTIN
-                .iter()
-                .filter_map(|t| toml::from_str::<PresetFile>(t).ok())
-                .map(|p| (p.id.clone(), p))
-                .collect()
-        });
-        matches!((self.presets.get(id), builtins.get(id)), (Some(a), Some(b)) if a == b)
+        self.sources.get(id) == Some(&Source::Builtin)
     }
 
     pub fn selectable(&self) -> Vec<&PresetFile> {
         self.presets.values().filter(|p| !p.hidden).collect()
+    }
+
+    /// Where `id` was loaded from: [`SOURCE_BUILTIN`], [`SOURCE_INLINE`] or the file path.
+    pub fn source(&self, id: &str) -> Option<&str> {
+        self.sources.get(id).map(Source::label)
+    }
+
+    /// `(id, source)` of every preset not loaded from the embedded list, in id order.
+    pub fn user_presets(&self) -> Vec<(&str, &str)> {
+        self.sources
+            .iter()
+            .filter(|(_, s)| **s != Source::Builtin)
+            .map(|(id, s)| (id.as_str(), s.label()))
+            .collect()
+    }
+
+    /// The preset's TOML table as loaded.
+    pub fn table(&self, id: &str) -> Option<&toml::Table> {
+        self.tables.get(id)
+    }
+
+    /// Forget a preset and its aliases (a user folder file that failed its check).
+    pub(crate) fn remove(&mut self, id: &str) {
+        self.presets.remove(id);
+        self.sources.remove(id);
+        self.tables.remove(id);
+        let owner = &self.alias_owner;
+        self.aliases
+            .retain(|a, _| owner.get(a).map(String::as_str) != Some(id));
+        self.alias_owner.retain(|_, o| o != id);
+    }
+
+    /// Spec §3/§4 (`presets validate`, the user folder): the chain resolves, every rule override names a known field,
+    /// and every sub-type's profile, alone and with each of `id`'s own rules applied, deserialises, for each target
+    /// the chain allows (its nearest `target`, else all three).
+    pub fn check_preset(&self, id: &str) -> Result<(), PresetError> {
+        let chain = self.chain(id)?;
+        let own = *chain.last().expect("a chain holds its own preset");
+        for (i, r) in own.rules.iter().enumerate() {
+            let mut paths = vec![];
+            leaf_paths(&r.overrides, "", &mut paths);
+            if let Some(f) = paths
+                .iter()
+                .find(|f| !crate::overrides::FIELD_PATHS.contains(&f.as_str()))
+            {
+                return Err(PresetError::Invalid(format!(
+                    "preset '{id}' rule #{i}: unknown field '{f}'"
+                )));
+            }
+        }
+        let targets = match chain.iter().rev().find_map(|p| p.target) {
+            Some(t) => vec![t],
+            None => vec![Target::Cs, Target::Cpm, Target::Vanilla],
+        };
+        for t in targets {
+            for st in Subtype::ALL {
+                let mut doc = Value::Object(Map::new());
+                for (_, patch) in Self::layers_of(&chain, st) {
+                    merge_json(&mut doc, &patch);
+                }
+                finish_profile(doc.clone(), t, st).map_err(|e| {
+                    PresetError::Invalid(format!("preset '{id}', {} under {t:?}: {e}", st.id()))
+                })?;
+                for (i, r) in own.rules.iter().enumerate() {
+                    let mut d = doc.clone();
+                    merge_json(&mut d, &r.overrides);
+                    finish_profile(d, t, st).map_err(|e| {
+                        PresetError::Invalid(format!(
+                            "preset '{id}' rule #{i}, {} under {t:?}: {e}",
+                            st.id()
+                        ))
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The user presets folder (spec §3, Note T6): every `*.toml` directly in `dir`, in file-name order. Every file is
+    /// loaded first, then each loaded preset must pass [`PresetRegistry::check_preset`], so a preset may base on one
+    /// later in the order (Review Focus 2). A file that fails is skipped with CFG-PRESET-SKIPPED, and so is a preset
+    /// based on a skipped one. A missing folder loads nothing.
+    pub fn add_dir(&mut self, dir: &Path) -> Vec<Warning> {
+        let skip = |file: &Path, reason: String| {
+            Warning::new(
+                Code::CfgPresetSkipped,
+                format!("user preset {} skipped: {reason}", file.display()),
+            )
+            .with_data(serde_json::json!({ "file": file.display().to_string(), "reason": reason }))
+        };
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return vec![],
+            Err(e) => return vec![skip(dir, e.to_string())],
+        };
+        let mut warnings = vec![];
+        let mut files: Vec<PathBuf> = vec![];
+        for entry in rd {
+            let p = match entry {
+                Ok(e) => e.path(),
+                // The entry's name is unknown, so the warning names the folder.
+                Err(e) => {
+                    warnings.push(skip(dir, e.to_string()));
+                    continue;
+                }
+            };
+            if !p
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
+            {
+                continue;
+            }
+            // Follows links, like `Path::is_file`, but reports a dangling or unreadable entry.
+            match std::fs::metadata(&p) {
+                Ok(m) if m.is_file() => files.push(p),
+                Ok(_) => {}
+                Err(e) => warnings.push(skip(&p, e.to_string())),
+            }
+        }
+        files.sort();
+        let mut loaded = vec![];
+        for f in files {
+            match self.add_file(&f) {
+                Ok(id) => loaded.push((id, f)),
+                Err(e) => warnings.push(skip(&f, e.to_string())),
+            }
+        }
+        // Removing a preset can orphan one based on it, so check again until nothing fails.
+        while let Some((i, e)) = loaded
+            .iter()
+            .enumerate()
+            .find_map(|(i, (id, _))| self.check_preset(id).err().map(|e| (i, e)))
+        {
+            let (id, f) = loaded.remove(i);
+            self.remove(&id);
+            warnings.push(skip(&f, e.to_string()));
+        }
+        warnings
+    }
+
+    /// The id of the preset loaded from the file `path` (compared canonically), if any.
+    pub fn loaded_from(&self, path: &Path) -> Option<&str> {
+        self.sources
+            .iter()
+            .find(|(_, s)| same_file(s, path))
+            .map(|(id, _)| id.as_str())
+    }
+
+    /// `sdc presets validate` (spec §4): load `path` into a copy of this registry (without a preset already loaded
+    /// from that same file, so a user folder file validates in place of itself) and check it. One line per problem;
+    /// loading stops at the first, so a file has at most one (Note T8). Empty = clean.
+    pub fn validate_file(&self, path: &Path) -> Vec<String> {
+        let mut r = self.clone();
+        if let Some(id) = self.loaded_from(path).map(str::to_string) {
+            r.remove(&id);
+        }
+        match r.add_file(path) {
+            Ok(id) => r
+                .check_preset(&id)
+                .err()
+                .map(|e| e.to_string())
+                .into_iter()
+                .collect(),
+            Err(e) => vec![e.to_string()],
+        }
+    }
+
+    /// `sdc presets export` (spec §4, Note T8): `id`'s own table as loaded (`base` stays a link) under `new_id`,
+    /// re-serialised (comments dropped, keys may reorder). `suffix_aliases` are copied as they are, so a copy of a
+    /// preset with aliases does not load beside the original (the aliases conflict) until they are renamed or removed.
+    pub fn export(&self, id: &str, new_id: &str) -> Result<String, PresetError> {
+        let mut t = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| PresetError::Unknown(id.to_string()))?;
+        if let Some(src) = self.source(new_id) {
+            return Err(PresetError::Invalid(format!(
+                "CFG-INVALID: preset id '{new_id}' is already loaded from {src}"
+            )));
+        }
+        t.insert("id".into(), toml::Value::String(new_id.to_string()));
+        toml::to_string(&t).map_err(|e| PresetError::Invalid(e.to_string()))
     }
 
     /// The inheritance chain, root base first.

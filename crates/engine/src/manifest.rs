@@ -23,6 +23,9 @@ pub const MANIFEST_SCHEMA: u32 = 2;
 const BC7E_PATCH: &[u8] =
     include_bytes!("../../encoders-sys/vendor/bc7e/patches/0001-exact-opaque-alpha.patch");
 
+/// The patched vendored `rgbcx.h` (the patch is applied in place, so the whole header is hashed; DECISIONS T13).
+const RGBCX_H: &[u8] = include_bytes!("../../encoders-sys/vendor/bc7enc_rdo/rgbcx.h");
+
 /// Git commit of the source tree at build time (12 hex digits, plus `-dirty` when tracked files had uncommitted
 /// changes when the build script last ran), or `unknown` (no git, or not a checkout; see `build.rs`).
 pub fn engine_commit() -> &'static str {
@@ -60,6 +63,9 @@ pub struct EncoderVersions {
     pub ispc: String,
     /// `<patch name>@sha256:<hash of the patch file>`; `None` when the vendored bc7e is unpatched.
     pub bc7e_patch: Option<String>,
+    /// `<patch name>@sha256:<hash of the patched rgbcx.h>`; `None` before the patch, so BC3/BC4/BC5 re-encode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgbcx_patch: Option<String>,
 }
 
 impl EncoderVersions {
@@ -69,6 +75,9 @@ impl EncoderVersions {
             bc7enc_rdo: v.bc7enc_rdo.into(),
             ispctc: v.ispctc.into(),
             ispc: v.ispc.into(),
+            rgbcx_patch: v
+                .rgbcx_patch
+                .map(|name| format!("{name}@sha256:{}", hex::encode(Sha256::digest(RGBCX_H)))),
             bc7e_patch: v
                 .bc7e_patch
                 .map(|name| format!("{name}@sha256:{}", hex::encode(Sha256::digest(BC7E_PATCH)))),
@@ -181,6 +190,9 @@ pub struct ManifestRecord {
     /// BC3) and that validation decoded BC1 with. `None` in records written before the field existed.
     #[serde(default)]
     pub bc1_model: Option<String>,
+    /// The set's shader and why (M6 spec §4.4); `None` in records written before shaders existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader: Option<crate::shader::ShaderPick>,
 }
 
 /// The stable id of a BC1 decoder model, as `--bc1-decoder` spells it (spec §8).
@@ -331,6 +343,12 @@ impl Manifest {
         for line in io::BufReader::new(f).split(b'\n') {
             let Ok(raw) = serde_json::from_slice::<serde_json::Value>(&line?) else {
                 continue;
+            };
+            // Spec §5: every record passes the migration hook; a newer one is kept raw (`is_newer_schema`).
+            let raw = match crate::migrate::migrate_manifest_record(raw.clone()) {
+                Ok(v) => v,
+                Err(crate::migrate::MigrateError::Newer { .. }) => raw,
+                Err(_) => continue,
             };
             if let Some(e) = ManifestEntry::from_value(raw) {
                 map.insert(e.output.clone(), e);
