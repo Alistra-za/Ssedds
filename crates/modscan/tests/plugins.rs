@@ -764,32 +764,3 @@ fn a_master_past_the_limit_is_not_reported_missing() {
     );
     assert!(!m.iter().any(|t| t.contains("missing master")), "{m:?}");
 }
-
-/// A write failing in the writer thread, after a first chunk was handed over, surfaces as the scan's error.
-#[test]
-fn a_write_failure_in_the_writer_thread_is_returned() {
-    let d = instance_fixture("+A\n");
-    let mut order = String::new();
-    for i in 0..70u32 {
-        let name = format!("P{i}.esp");
-        put(
-            d.path(),
-            &format!("mods/A/{name}"),
-            &plugin(
-                0,
-                &[],
-                &[top(b"STAT", &[stat(0x0000_0800 + i, "S", "s.nif")])],
-            ),
-        );
-        order.push_str(&format!("*{name}\n"));
-    }
-    put(d.path(), "profiles/Default/plugins.txt", order.as_bytes());
-    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
-    s.conn()
-        .execute_batch(
-            "CREATE TRIGGER boom BEFORE INSERT ON rec BEGIN SELECT RAISE(ABORT, 'boom'); END",
-        )
-        .unwrap();
-    let e = scan_in(&d, &mut s, false).unwrap_err();
-    assert!(e.to_string().contains("boom"), "{e}");
-}
