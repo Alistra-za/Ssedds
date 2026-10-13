@@ -503,6 +503,11 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         .file_refs
         .as_ref()
         .map_or((0, 0), |r| (r.missing.len(), r.unused.len()));
+    let inert: Vec<String> = if !m.refs_unused && m.show_inert_refs {
+        m.refs_inert_lines()
+    } else {
+        vec![]
+    };
     ui.horizontal(|ui| {
         if ui
             .selectable_label(!m.refs_unused, format!("Missing ({missing})"))
@@ -522,7 +527,11 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 .desired_width(200.0),
         );
         if ui.button("Copy").clicked() {
-            let text = m.refs_lines().join("\n");
+            let mut text = m.refs_lines().join("\n");
+            if !inert.is_empty() {
+                text.push('\n');
+                text.push_str(&inert.join("\n"));
+            }
             ui.ctx().copy_text(text);
         }
     });
@@ -534,8 +543,12 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
     if m.refs_unused && m.report.as_ref().is_some_and(|r| r.plugins.is_none()) {
         ui.weak(PLUGINS_NOT_READ_NOTE);
     }
+    if !m.refs_unused && !m.missing_inert.is_empty() {
+        let n = m.missing_inert.len();
+        ui.checkbox(&mut m.show_inert_refs, format!("Show inert ({n})"));
+    }
     let n = m.refs_lines().len();
-    if n == 0 {
+    if n == 0 && inert.is_empty() {
         ui.label("Nothing listed.");
         return;
     }
@@ -553,6 +566,9 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     "… and {} more — narrow with the filter",
                     n - MAX_REF_ROWS
                 ));
+            }
+            for l in inert.iter().take(MAX_REF_ROWS) {
+                ui.add(egui::Label::new(egui::RichText::new(l.as_str()).weak()).wrap());
             }
         });
 }

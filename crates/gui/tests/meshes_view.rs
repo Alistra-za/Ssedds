@@ -1386,3 +1386,31 @@ fn plugin_overrides_hide_inert_records_until_asked() {
     h.run();
     h.get_by_label("Lonely [00000002] STAT — Skyrim.esm · not placed");
 }
+
+/// Ruling R12: Missing lists live paths; paths only inert records name come dimmed behind "Show inert (N)".
+#[test]
+fn missing_files_of_inert_records_show_on_request() {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs {
+        missing: vec![MissingRef {
+            path: "textures/live.dds".into(),
+            n_records: 1,
+            records: vec!["A [00000001] TXST — S.esm".into()],
+        }],
+        unused: vec![],
+    });
+    m.missing_inert = vec![MissingRef {
+        path: "meshes/lonely.nif".into(),
+        n_records: 1,
+        records: vec!["Lonely [00000002] STAT — S.esm (not placed)".into()],
+    }];
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    h.get_by_label("Missing (1)");
+    assert!(h.query_by_label_contains("lonely.nif").is_none());
+    h.get_by_label("Show inert (1)").click();
+    h.run();
+    h.get_by_label("meshes/lonely.nif ← Lonely [00000002] STAT — S.esm (not placed)");
+}
