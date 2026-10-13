@@ -306,7 +306,7 @@ impl Target {
         }
     }
 
-    /// The frame for display: as [`Target::readback`], but alpha is 255 everywhere. Opaque shapes write
+    /// The frame for display: as the plain readback, but alpha is 255 everywhere. Opaque shapes write
     /// their diffuse alpha into the target (CS `psout.Diffuse.w = baseColor.w`); the frame is already drawn
     /// over the clear colour, so its alpha must not make the viewer see through an opaque mesh.
     pub fn readback_display(&self, gpu: &Gpu, srgb: bool) -> Result<Vec<u8>, String> {
