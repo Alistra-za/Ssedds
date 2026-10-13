@@ -410,3 +410,80 @@ fn owner_example_encodes_and_stays_complex() {
         decoded_corner(&f)
     );
 }
+
+fn plan_gras(d: &TempDir, target: Target, gras: bool, sets: &[&str]) -> Plan {
+    let mut r = req(d, target, sets);
+    if gras {
+        r.gras_diffuses = ["textures/plants/g".to_string()].into();
+    }
+    plan_req(r)
+}
+
+/// §5: all four conditions hold: a high-confidence complex_grass, decided under --accept-suggestions high.
+#[test]
+fn all_four_conditions_tag_complex_grass() {
+    let d = tempfile::tempdir().unwrap();
+    put(&d, "g.png", &grass(32));
+    let p = plan_gras(&d, Target::Cs, true, &[]);
+    let j = job(&p, "g.png");
+    assert_eq!(
+        (j.suggestions[0].subtype, j.suggestions[0].confidence),
+        (Subtype::ComplexGrass, engine::suggest::Confidence::High)
+    );
+    assert_eq!(j.profile.subtype, Subtype::ComplexGrass);
+}
+
+/// §5 (Review Focus 3): each condition false alone leaves the existing classification.
+#[test]
+fn each_condition_false_alone_leaves_the_classification() {
+    let mut bad_corner = grass(32);
+    *bad_corner.at_mut(0, 63) = [0.5, 0.5, 0.5, 12.0 / 255.0];
+    let mut bad_bottom = grass(32);
+    for i in 0..21 {
+        bad_bottom.px[32 * 32 + i] = [0.5, 0.5, 0.5, 12.0 / 255.0];
+    }
+    let square = Rgba32F::new(32, 32, [0.25, 0.5, 0.15, 1.0]);
+    for (what, img, gras) in [
+        ("no GRAS record", grass(32), false),
+        ("not 1:2", square, true),
+        ("corner fails 0.03", bad_corner, true),
+        ("bottom < 99 % unit", bad_bottom, true),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        put(&d, "g.png", &img);
+        let j = job(&plan_gras(&d, Target::Cs, gras, &[]), "g.png").clone();
+        assert!(
+            j.suggestions
+                .iter()
+                .all(|s| s.subtype != Subtype::ComplexGrass),
+            "{what}: {:?}",
+            j.suggestions
+        );
+        assert_ne!(j.profile.subtype, Subtype::ComplexGrass, "{what}");
+    }
+}
+
+/// §5 last paragraph: a user tag always wins, both ways.
+#[test]
+fn a_user_tag_wins_both_ways() {
+    let d = tempfile::tempdir().unwrap();
+    put(&d, "g.png", &grass(32));
+    let p = plan_gras(&d, Target::Cs, true, &["file:**/g.png.subtype=diffuse"]);
+    assert_eq!(job(&p, "g.png").profile.subtype, Subtype::Diffuse);
+    let p = plan_gras(&d, Target::Cs, false, &[TAG]);
+    assert_eq!(job(&p, "g.png").profile.subtype, Subtype::ComplexGrass);
+}
+
+/// R1 (Review Focus 4).
+#[test]
+fn vanilla_is_never_auto_tagged() {
+    let d = tempfile::tempdir().unwrap();
+    put(&d, "g.png", &grass(32));
+    let p = plan_gras(&d, Target::Vanilla, true, &[]);
+    let j = job(&p, "g.png");
+    assert!(j
+        .suggestions
+        .iter()
+        .all(|s| s.subtype != Subtype::ComplexGrass));
+    assert_ne!(j.profile.subtype, Subtype::ComplexGrass);
+}

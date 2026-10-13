@@ -46,6 +46,24 @@ pub fn unit_err(rgb: [f32; 3]) -> f32 {
     }
 }
 
+/// The key `BatchRequest::gras_diffuses` holds for a texture path: lower case, `/`, without the extension, so an
+/// input `textures/plants/g.png` meets the scan's `textures/plants/g.dds`.
+pub fn path_key(path: &str) -> String {
+    let p = path.replace('\\', "/").to_ascii_lowercase();
+    match p.rsplit_once('.') {
+        Some((stem, ext)) if !ext.contains('/') => stem.to_string(),
+        _ => p,
+    }
+}
+
+/// Design §5 conditions 2-4 (condition 1, the GRAS record, is the caller's): 1:2, the bottom-left texel passes CS's
+/// 0.03 test, >= 99 % unit-length normals in the bottom half.
+pub fn looks_like_grass(a: &crate::analyse::Analysis) -> bool {
+    a.grass.is_some_and(|g| {
+        g.corner_err < CS_GRASS_THRESHOLD && g.bottom_unit_share >= GRASS_UNIT_SHARE
+    })
+}
+
 /// The facts of `img` when its height is twice its width; `None` for every other shape.
 pub fn facts(img: &Rgba32F) -> Option<GrassFacts> {
     let (w, h) = (img.width as usize, img.height as usize);
@@ -335,5 +353,12 @@ mod tests {
         let e = unit_err([127.0 / 255.0, 126.0 / 255.0, 1.0]);
         assert!(e < 0.005, "{e}");
         assert_eq!(unit_err([0.5, 0.5, f32::NAN]), f32::INFINITY);
+    }
+
+    #[test]
+    fn path_key_normalises_and_drops_the_extension() {
+        assert_eq!(path_key("textures/plants/g.png"), "textures/plants/g");
+        assert_eq!(path_key("textures\\Plants\\G.dds"), "textures/plants/g");
+        assert_eq!(path_key("textures/a.b/c"), "textures/a.b/c");
     }
 }

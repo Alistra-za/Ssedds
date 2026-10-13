@@ -99,6 +99,10 @@ pub struct BatchRequest {
     /// shape that uses `<key>.dds` in slot 0. The GUI fills it from the scan database; the CLI sends none (empty: no
     /// evidence, and the alpha question is asked as before).
     pub mesh_alpha: BTreeMap<String, Vec<MeshAlpha>>,
+    /// GUI (complex grass design §5): the slot-0 textures of the NIFs that GRAS records of the active load order use,
+    /// as `grass::path_key` keys. A listed 1:2 file that passes the detection tests gets a high-confidence
+    /// `complex_grass` suggestion. Empty for the CLI, which therefore never auto-tags.
+    pub gras_diffuses: BTreeSet<String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -134,6 +138,7 @@ impl BatchRequest {
             set_shaders: BTreeMap::new(),
             mesh_shaders: BTreeMap::new(),
             mesh_alpha: BTreeMap::new(),
+            gras_diffuses: BTreeSet::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -945,6 +950,7 @@ impl Engine {
                 .into_owned();
             member_split(&stem, set, registry.alias_table())
         };
+        let gras = &req.gras_diffuses;
         let resolve_one = |&(set, f): &(&TextureSet, &InputFile),
                            admitted: Admitted<'_>,
                            stage: &Cell<Stage>|
@@ -990,7 +996,8 @@ impl Engine {
                 analysis: &a,
                 info: &info,
             };
-            let mut job = resolve_file(&ctx, &facts);
+            let gras_diffuse = gras.contains(&crate::grass::path_key(&f.game_path));
+            let mut job = resolve_file_with(&ctx, &facts, gras_diffuse);
             job.provenance.insert("target".into(), target_src.clone());
             job.source = source;
             Ok((job, a, info))
@@ -1115,7 +1122,11 @@ impl Engine {
                     analysis: &a,
                     info: &info,
                 };
-                resolve_file(&ctx, &facts)
+                resolve_file_with(
+                    &ctx,
+                    &facts,
+                    gras.contains(&crate::grass::path_key(&f.game_path)),
+                )
             }));
             match r {
                 Ok(mut job) => {

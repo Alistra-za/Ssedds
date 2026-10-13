@@ -1845,7 +1845,14 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
 
 /// Resolve one file: sub-type decision, layered profile, §10 checks and status (spec §5.2).
 pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
-    let d = decide_subtype(ctx, f);
+    resolve_file_with(ctx, f, false)
+}
+
+/// [`resolve_file`] for a file the plugin scanner names as the diffuse of a GRAS model (`gras_diffuse`, complex grass
+/// design §5, ruling R11): when nothing explicit chose its sub-type and its analysis passes the detection tests, its
+/// top suggestion becomes a high-confidence `complex_grass`. Never under vanilla (ruling R1).
+pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) -> ResolvedJob {
+    let mut d = decide_subtype(ctx, f);
     // Spec §4.4: a raw map is a packing input unless a rule or --set names its sub-type.
     if let Some(Vocab {
         term,
@@ -1872,7 +1879,31 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
             return normal_layer_job(ctx, f, *term);
         }
     }
+    if gras_diffuse {
+        suggest_grass(ctx, f, &mut d);
+    }
     resolve_decided(ctx, f, d)
+}
+
+/// Design §5: the auto-tag, only over a suggestion (a `--set`, rule, `[files]` entry or set shader has decided already).
+fn suggest_grass(ctx: &ResolveCtx, f: &FileFacts, d: &mut SubtypeDecision) {
+    if !matches!(d.provenance, Provenance::Suggestion)
+        || ctx.target == Target::Vanilla
+        || !crate::grass::looks_like_grass(f.analysis)
+    {
+        return;
+    }
+    d.suggestions.insert(
+        0,
+        Suggestion {
+            subtype: Subtype::ComplexGrass,
+            confidence: Confidence::High,
+            reason: "diffuse of a GRAS model; 1:2; bottom-left texel passes CS's 0.03 test; >= 99% unit normals in the bottom half"
+                .into(),
+        },
+    );
+    d.subtype = Subtype::ComplexGrass;
+    d.decided = ctx.accept == AcceptSuggestions::High;
 }
 
 /// Resolve a file whose sub-type is decided, by `decide_subtype` or by a packing recipe (spec §6.4): layered
