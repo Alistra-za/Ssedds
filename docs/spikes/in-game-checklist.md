@@ -35,9 +35,9 @@ Question: does CS accept BC6H_UF16 and BC7_SRGB `_g` (emissive), and is `_SRGB` 
 3. Convert `_g` as `BC7_SRGB`, and `_f` as UNORM:
    ```powershell
    sdc convert out/s1-src -o out/s1b --recursive --target cs --accept-suggestions high --set "file:**/*_g.png.format=bc7" --set "file:**/*_g.png.color.tag=srgb"
-   sdc convert out/s1-src -o out/s1c --recursive --target cs --accept-suggestions high --set "file:**/*_f.png.color.tag=unorm"
+   sdc convert out/s1-src -o out/s1c --recursive --target cs --accept-suggestions high --set "file:**/*_f.png.color.tag=unorm" --allow TAG-UNORM-PBR
    ```
-   (`s1b` also contains the default `_f` files; `s1c` also contains the BC6H `_g` files. `TAG-UNORM-PBR` is a warning here, which is intended: UNORM on PBR colour is the variant under test.)
+   (`s1b` also contains the default `_f` files; `s1c` also contains the BC6H `_g` files. `TAG-UNORM-PBR` is blocking since 2026-10-13, so the `s1c` command needs `--allow TAG-UNORM-PBR`: UNORM on PBR colour is the variant under test.)
 4. Install the baseline `F:\ai\dds\mvp-test\out2` as a mod, then overlay one variant at a time (`out/s1a`, `out/s1b`, `out/s1c`) on top; each folder has the same `textures/pbr/...` layout.
 5. Screenshot each variant with linear lighting on and off.
 

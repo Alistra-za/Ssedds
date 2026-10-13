@@ -347,3 +347,36 @@ fn one_texture_is_singular_in_the_step_label_and_report() {
         Some("Reset all settings on 1 texture")
     );
 }
+
+/// Task 9 merge: the bulk Format row offers the pairs every texture allows (else, sharing none, every pair any
+/// allows) and writes the pair (format and tag); a pair only some allow skips the others ("applies to K of N").
+#[test]
+fn the_bulk_format_row_offers_the_shared_pairs_and_writes_both() {
+    use sdc_gui::model::bulk::bulk_encodings;
+    use sdc_gui::model::fields::encoding_options;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let opts = |m: &AppModel, k: &str| {
+        let j = m.item(k).unwrap().job.clone().unwrap();
+        encoding_options(m.target, &j.profile)
+    };
+    let (rock, normal) = (opts(&m, ROCK), opts(&m, NORMAL));
+    assert_eq!(bulk_encodings(&m, &strings(&[ROCK, ROCK])), rock);
+    // An sRGB albedo and a linear normal map share no pair: the row lists both lists.
+    assert!(rock.iter().all(|(e, _)| normal.iter().all(|(o, _)| o != e)));
+    let ks = strings(&[ROCK, NORMAL]);
+    assert_eq!(bulk_encodings(&m, &ks), [rock.clone(), normal].concat());
+    let pick = json!(rock[0].0);
+    let plan = plan_bulk_edit(&m, &ks, "format", &BulkOp::Set(pick.clone()));
+    assert_eq!(plan[0].1, Change::Write);
+    assert_eq!(plan[1].1, Change::Skip("not valid for this map".into()));
+    m.apply_bulk_edit(&ks, "format", BulkOp::Set(pick));
+    assert_eq!(file(&m, ROCK, "format"), Some(json!(rock[0].0 .0)));
+    assert_eq!(file(&m, ROCK, "color.tag"), Some(json!(rock[0].0 .1)));
+    assert_eq!(file(&m, NORMAL, "format"), None);
+    assert_eq!(
+        m.bulk.report.as_deref(),
+        Some("Format: written to 1 of 2; locked on 1 of 2: not valid for this map")
+    );
+}

@@ -1,5 +1,6 @@
 //! M6 Track F3a (design `2026-10-13-sdc-m6-f3a-design.md`): the multi-selection, the bulk edit plan and its
 //! commands. No egui types.
+use super::fields::encoding_options;
 use super::fields::{
     all_fields, field_hidden, field_view, filter_option_lock, views_of, FieldView, EDGE_FIELD,
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
@@ -9,7 +10,7 @@ use super::sets::{
     SlotKind, SLOT_LOCKED,
 };
 use super::{AppModel, Dialog, Selection};
-use engine::config::{MipFilter, Subtype};
+use engine::config::{ColorTag, Format, MipFilter, Subtype, Target};
 use engine::policy::ResolvedJob;
 use engine::sets::same_id;
 use serde_json::Value;
@@ -61,6 +62,8 @@ pub struct BulkView {
     pub rows: Vec<BulkField>,
     /// The kind chips over the selected sets (empty with fewer than two).
     pub chips: Vec<KindChip>,
+    /// The Format row's (format, tag) choices: `bulk_encodings`.
+    pub encodings: Vec<((Format, ColorTag), String)>,
 }
 
 impl AppModel {
@@ -276,6 +279,7 @@ impl AppModel {
 pub const NO_SETTINGS: &str = "has no settings of its own (packed, skipped or failed)";
 const INVALID: &str = "not a valid value for this setting";
 const CUTOUT_ONLY: &str = "used only by cutout and cutout + blend";
+const NOT_ALLOWED: &str = "not valid for this map";
 
 /// What a bulk edit does to one field.
 #[derive(Debug, Clone, PartialEq)]
@@ -317,6 +321,7 @@ fn skip_of(
     field: &str,
     op: Option<&BulkOp>,
     slot_locked: Option<&str>,
+    target: Target,
 ) -> Option<String> {
     if let Some(why) = slot_locked {
         return Some(why.into());
@@ -351,8 +356,48 @@ fn skip_of(
         if let Some(lock) = barred {
             return Some(lock.into());
         }
+        // The Format row writes a (format, tag) pair: one this texture's sub-type does not allow is skipped.
+        if let Some(e) = encoding_of(field, v) {
+            if !engine::policy::allowed_encodings(job.profile.subtype, target).contains(&e) {
+                return Some(NOT_ALLOWED.into());
+            }
+        }
     }
     None
+}
+
+/// The pair a format edit `v` writes, when it is one (the Format row's value); a bare format keeps `set_field`.
+fn encoding_of(field: &str, v: &Value) -> Option<(Format, ColorTag)> {
+    (field == "format")
+        .then(|| serde_json::from_value(v.clone()).ok())
+        .flatten()
+}
+
+/// The bulk Format row's choices, from each texture's `encoding_options`: the pairs every texture of `keys` with a
+/// job offers (their intersection). When they share none (a diffuse with its normal map), every pair any of them
+/// offers, in first-seen order: a pick then reaches only the textures that allow it (`NOT_ALLOWED`, K of N).
+pub fn bulk_encodings(m: &AppModel, keys: &[String]) -> Vec<((Format, ColorTag), String)> {
+    let lists: Vec<_> = keys
+        .iter()
+        .filter_map(|k| m.item(k).and_then(|i| i.job.as_ref()))
+        .map(|j| encoding_options(m.target, &j.profile))
+        .collect();
+    let mut union: Vec<((Format, ColorTag), String)> = vec![];
+    for o in lists.iter().flatten() {
+        if !union.iter().any(|(e, _)| *e == o.0) {
+            union.push(o.clone());
+        }
+    }
+    let shared: Vec<_> = union
+        .iter()
+        .filter(|(e, _)| lists.iter().all(|l| l.iter().any(|(o, _)| o == e)))
+        .cloned()
+        .collect();
+    if shared.is_empty() {
+        union
+    } else {
+        shared
+    }
 }
 
 /// F3a D5: what a bulk edit of `field` does to each of `keys`, in order. Pure: the apply writes exactly this.
@@ -373,6 +418,7 @@ pub fn plan_bulk_edit(
                 field,
                 Some(op),
                 locked.get(k).map(String::as_str),
+                m.target,
             )
             .map_or(Change::Write, Change::Skip);
             (k.clone(), change)
@@ -449,6 +495,7 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
                 row.field,
                 None,
                 locked.get(k).map(String::as_str),
+                m.target,
             ) {
                 Some(r) => match row.skipped.iter_mut().find(|e| e.0 == r) {
                     Some(e) => e.1 += 1,
@@ -457,8 +504,15 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
                 None => {
                     row.applies += 1;
                     if let Some(v) = view {
-                        if !values[n].contains(&v.value) {
-                            values[n].push(v.value.clone());
+                        // The Format row shows and writes the (format, tag) pair, as the single panel does.
+                        let value = match (row.field, job) {
+                            ("format", Some(j)) => {
+                                serde_json::json!((j.profile.format, j.profile.color.tag))
+                            }
+                            _ => v.value.clone(),
+                        };
+                        if !values[n].contains(&value) {
+                            values[n].push(value);
                         }
                         row.edited += usize::from(v.edited);
                     }
@@ -543,7 +597,10 @@ impl AppModel {
                     continue;
                 }
                 match &op {
-                    BulkOp::Set(v) => m.set_field(k, field, v.clone()),
+                    BulkOp::Set(v) => match encoding_of(field, v) {
+                        Some((f, t)) => m.set_format(k, f, t),
+                        None => m.set_field(k, field, v.clone()),
+                    },
                     BulkOp::Clear => m.clear_field(k, field),
                 }
             }
@@ -836,7 +893,13 @@ impl AppModel {
         } else {
             vec![]
         };
-        let view = std::sync::Arc::new(BulkView { keys, rows, chips });
+        let encodings = bulk_encodings(self, &keys);
+        let view = std::sync::Arc::new(BulkView {
+            keys,
+            rows,
+            chips,
+            encodings,
+        });
         // Taken after `bulk_targets`, which can reset a vanished kind.
         let computes = self.bulk.cache.as_ref().map_or(0, |c| c.computes) + 1;
         self.bulk.cache = Some(BulkCache {

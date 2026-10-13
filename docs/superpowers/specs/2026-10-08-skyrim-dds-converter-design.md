@@ -655,7 +655,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `ALPHA-PBR-NORMAL-DROPPED` | info | Varying alpha dropped from a `pbr_normal`: vanilla specular in alpha, which PBR normals do not use (DECISIONS P25) | — |
 | `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla` or `cpm` [D#4] | UNORM |
 | `TAG-SRGB-NONPBR` | blocking | `_SRGB` on a non-PBR sub-type under `cs` → renders darker [SC §6] | UNORM |
-| `TAG-UNORM-PBR` | warning | UNORM on PBR colour → washed out with LL off [SC §6] | `_SRGB` |
+| `TAG-UNORM-PBR` | blocking | UNORM on PBR colour → washed out with LL off [SC §6]; blocking since the owner's 2026-10-13 ruling (PBR colour is sRGB only) | `_SRGB` |
 | `TAG-SRGB-LOD` | blocking | `_SRGB` under `lod/` → LOD shaders reject sRGB [SC §4] | UNORM |
 | `TAG-CONTENT-MISMATCH` | warning | Linear content with `_SRGB` tag, colour sub-type with linear content, or a roughness member with sRGB content (no bake, DECISIONS R10) | Check both fields |
 | `CFG-INVALID` | error | A field value outside its allowed range, or a combination that cannot be honoured: threshold outside 5–200, `rgbcx_level` > 18 with the rgbcx backend, a backend that cannot write the format, `header = legacy` on BC6H, BC7 or `_SRGB`, a malformed `channels.swizzle`, `bc1_transparent_black` with BC1, a BC6H/`color.tag` mismatch, a packed map with BC6H or `rgba16f` (DECISIONS S12), `srgb` on `r8`/`rg8`, a user preset replacing `sdc-base`, an invalid suffix alias. In a preset, config, rule or `--set` value it is found during planning (exit 2, §8); on a combination reached after layering it fails that file (exit 1) | Fix the value |

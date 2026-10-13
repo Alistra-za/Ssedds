@@ -699,10 +699,8 @@ fn layered_profile_with(
         }
     }
     let mut profile = finish_profile(doc, ctx.target, st)?;
-    if st == Subtype::SkinWet && (f.analysis.grayscale || profile.format == Format::Bc4) {
-        // The height form is a grayscale map: R is taken and copied to RGB in Preprocess (DECISIONS Note R-skin-1).
-        profile.category = Category::Grayscale;
-    }
+    // The skin_wet height form is a grayscale map: R is taken and copied to RGB in Preprocess.
+    profile.category = category_of(st, profile.format, f.analysis.grayscale);
     backend_follows_format(&mut profile, &mut prov, &sources);
     emissive_hdr_choice(ctx, &mut profile, &mut prov, f);
     float_source_is_linear(&mut profile, &mut prov, f);
@@ -1260,6 +1258,179 @@ fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
     v
 }
 
+/// BC6H and RGBA16F are written only under cs [D#3], DECISIONS S4. An error `--allow` cannot pass.
+fn hdr_outside_cs(f: Format, t: Target) -> bool {
+    f.is_hdr() && t != Target::Cs
+}
+
+/// Complex grass is BC7 UNORM (design §3.5, owner 2026-10-13: "BC7 linear only").
+fn grass_encoding_bad(f: Format, tag: ColorTag) -> bool {
+    f != Format::Bc7 || tag == ColorTag::Srgb
+}
+
+/// Whether `st` may take an HDR format (owner, 2026-10-13): never a normal or a data map (linear UNORM only), and
+/// of the PBR colour maps only the emissive (PBR `_f` and `_g` are sRGB only, BC6H the option for an emissive `_g`).
+fn takes_hdr(st: Subtype) -> bool {
+    match st.category() {
+        Category::Normal | Category::Grayscale | Category::MixedPacked => false,
+        Category::Color => !st.is_pbr_color() || st == Subtype::PbrEmissive,
+        Category::Hdr => true,
+    }
+}
+
+/// The checks of `check_profile` that read only the sub-type, its category, the target, the format and the tag: the
+/// one source of [`allowed_encodings`], so a format picker and validation never disagree.
+fn encoding_warnings(
+    st: Subtype,
+    category: Category,
+    target: Target,
+    format: Format,
+    tag: ColorTag,
+) -> Vec<Warning> {
+    use Code::*;
+    let mut w = vec![];
+    let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
+    // An HDR format (BC6H, RGBA16F) has no _SRGB or UNORM form, and every other format needs one (spec §3.2, §4.2).
+    let hdr = format.is_hdr();
+    if hdr != (tag == ColorTag::NotApplicable) {
+        let fmt = format.id().to_uppercase();
+        let msg = if hdr {
+            format!(
+                "{} has no _SRGB or UNORM form; set color.tag=n/a",
+                hdr_name(format)
+            )
+        } else if st.is_pbr_color() && target == Target::Cs {
+            format!(
+                "color.tag n/a is only for BC6H or RGBA16F on {}: set color.tag=srgb for a non-BC6H _g ({fmt})",
+                st.id()
+            )
+        } else {
+            format!(
+                "color.tag n/a is only for BC6H or RGBA16F: set color.tag=unorm for a non-BC6H {} ({fmt})",
+                st.id()
+            )
+        };
+        add(CfgInvalid, msg);
+    }
+    // BC4, BC5, R8 and RG8 have no _SRGB DXGI format: the file would be written UNORM (owner, 2026-10-13, for BC4/BC5).
+    if matches!(format, Format::Bc4 | Format::Bc5 | Format::R8 | Format::Rg8)
+        && tag == ColorTag::Srgb
+    {
+        add(
+            CfgInvalid,
+            format!(
+                "{} has no _SRGB form; set color.tag=unorm",
+                format.id().to_uppercase()
+            ),
+        );
+    }
+    // Owner, 2026-10-11: a packed map and an HDR format are mutually exclusive (packed channels are 8-bit data,
+    // often with alpha). Owner, 2026-10-13: so are a normal, a grayscale map and non-emissive PBR colour.
+    if hdr && category == Category::MixedPacked {
+        add(
+            CfgInvalid,
+            format!(
+                "{} is a packed map; {} cannot store it, use bc7",
+                st.id(),
+                hdr_name(format)
+            ),
+        );
+    } else if hdr && !takes_hdr(st) && target == Target::Cs {
+        // Outside cs the HDR error at the end of `check_profile` is the one root cause.
+        add(
+            CfgInvalid,
+            format!(
+                "{} is not for {}: a normal or data map is linear UNORM, PBR colour but emissive is sRGB; choose another format",
+                hdr_name(format),
+                st.id()
+            ),
+        );
+    }
+    let srgb = tag == ColorTag::Srgb;
+    if srgb && target != Target::Cs {
+        add(
+            TagSrgbVanilla,
+            "_SRGB is not usable under vanilla or CPM shaders [D#4]".into(),
+        );
+    } else if srgb && !st.is_pbr_color() {
+        add(
+            TagSrgbNonpbr,
+            "_SRGB on a non-PBR sub-type renders darker [SC §6]".into(),
+        );
+    }
+    // Blocking since the owner's 2026-10-13 ruling: PBR colour is sRGB only.
+    if tag == ColorTag::Unorm && st.is_pbr_color() && !hdr && target == Target::Cs {
+        add(
+            TagUnormPbr,
+            "UNORM on PBR colour looks washed out with linear lighting off".into(),
+        );
+    }
+    if category == Category::Normal
+        && matches!(format, Format::Bc4 | Format::Bc5 | Format::R8 | Format::Rg8)
+    {
+        add(
+            FmtBc5Normal,
+            "BC4/BC5/R8/RG8 on a normal: Skyrim reads Z directly, so Z decodes -1 and alpha is lost [SC §2]".into(),
+        );
+    }
+    if st == Subtype::LandscapeDiffuse && format == Format::Bc1 {
+        add(
+            FmtLandscapeBc1,
+            "BC1 destroys the landscape snow mask / height alpha".into(),
+        );
+    }
+    if st == Subtype::ComplexGrass && grass_encoding_bad(format, tag) {
+        add(
+            CfgInvalid,
+            "complex_grass is written as BC7 UNORM at its own size (resize would have to run on each half)"
+                .into(),
+        );
+    }
+    w
+}
+
+/// The category a profile of `st` written as `format` has: a `skin_wet` height form (grey, or BC4) is a grayscale
+/// map (DECISIONS Note R-skin-1).
+fn category_of(st: Subtype, format: Format, grayscale: bool) -> Category {
+    if st == Subtype::SkinWet && (grayscale || format == Format::Bc4) {
+        Category::Grayscale
+    } else {
+        st.category()
+    }
+}
+
+/// Every (format, tag) pair a format picker may offer for `st` under `target` (owner, 2026-10-13): the pairs
+/// `check_profile` raises nothing blocking or worse for from the format and tag alone. Empty for a sub-type
+/// unavailable under `target` (CFG-UNAVAILABLE: nothing is written).
+pub fn allowed_encodings(st: Subtype, target: Target) -> Vec<(Format, ColorTag)> {
+    if availability(target, st) != Availability::Available {
+        return vec![];
+    }
+    let formats = [
+        Format::Bc1,
+        Format::Bc3,
+        Format::Bc4,
+        Format::Bc5,
+        Format::Bc6hUf16,
+        Format::Bc7,
+        Format::Rgba8,
+        Format::R8,
+        Format::Rg8,
+        Format::Rgba16f,
+    ];
+    let tags = [ColorTag::Srgb, ColorTag::Unorm, ColorTag::NotApplicable];
+    formats
+        .into_iter()
+        .flat_map(|f| tags.map(|t| (f, t)))
+        .filter(|&(f, t)| {
+            !hdr_outside_cs(f, target)
+                && encoding_warnings(st, category_of(st, f, false), target, f, t)
+                    .iter()
+                    .all(|w| w.severity < Severity::Blocking)
+        })
+        .collect()
+}
+
 /// The §10 checks that Resolve can make from the profile, the file's path and its analysis.
 ///
 /// A sub-type unavailable under the target (spec §3.1, §4.2) reports CFG-UNAVAILABLE only: that profile is never
@@ -1284,7 +1455,7 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     let mut w = vec![];
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     // An HDR format (BC6H, RGBA16F) outside cs cannot be acknowledged: an error, added after the other checks.
-    let hdr_outside_cs = p.format.is_hdr() && p.target != Target::Cs;
+    let hdr_outside_cs = hdr_outside_cs(p.format, p.target);
     if !(1..=254).contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
@@ -1376,49 +1547,10 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             );
         }
     }
-    // An HDR format (BC6H, RGBA16F) has no _SRGB or UNORM form, and every other format needs one (spec §3.2, §4.2).
     let hdr = p.format.is_hdr();
-    if hdr != (p.color.tag == ColorTag::NotApplicable) {
-        let fmt = p.format.id().to_uppercase();
-        let msg = if hdr {
-            format!(
-                "{} has no _SRGB or UNORM form; set color.tag=n/a",
-                hdr_name(p.format)
-            )
-        } else if st.is_pbr_color() && p.target == Target::Cs {
-            format!(
-                "color.tag n/a is only for BC6H or RGBA16F on {}: set color.tag=srgb for a non-BC6H _g ({fmt})",
-                st.id()
-            )
-        } else {
-            format!(
-                "color.tag n/a is only for BC6H or RGBA16F: set color.tag=unorm for a non-BC6H {} ({fmt})",
-                st.id()
-            )
-        };
-        add(CfgInvalid, msg);
-    }
-    if matches!(p.format, Format::R8 | Format::Rg8) && p.srgb_tag() {
-        add(
-            CfgInvalid,
-            format!(
-                "{} has no _SRGB form; set color.tag=unorm",
-                p.format.id().to_uppercase()
-            ),
-        );
-    }
-    // Owner, 2026-10-11: a packed map and an HDR format are mutually exclusive (packed channels are 8-bit data,
-    // often with alpha).
-    if hdr && p.category == Category::MixedPacked {
-        add(
-            CfgInvalid,
-            format!(
-                "{} is a packed map; {} cannot store it, use bc7",
-                st.id(),
-                hdr_name(p.format)
-            ),
-        );
-    }
+    let encoding = encoding_warnings(st, p.category, p.target, p.format, p.color.tag);
+    w.extend(encoding);
+    let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     if let Err(why) = crate::filter::filter_allowed(p) {
         let id = serde_json::to_value(p.mips.filter).unwrap_or_default();
         add(
@@ -1427,23 +1559,6 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
         );
     }
     let srgb = p.srgb_tag();
-    if srgb && p.target != Target::Cs {
-        add(
-            TagSrgbVanilla,
-            "_SRGB is not usable under vanilla or CPM shaders [D#4]".into(),
-        );
-    } else if srgb && !st.is_pbr_color() {
-        add(
-            TagSrgbNonpbr,
-            "_SRGB on a non-PBR sub-type renders darker [SC §6]".into(),
-        );
-    }
-    if p.color.tag == ColorTag::Unorm && st.is_pbr_color() && !hdr && p.target == Target::Cs {
-        add(
-            TagUnormPbr,
-            "UNORM on PBR colour looks washed out with linear lighting off".into(),
-        );
-    }
     if srgb && f.input.game_path.split('/').any(|c| c == "lod") {
         add(TagSrgbLod, "LOD shaders reject _SRGB".into());
     }
@@ -1462,23 +1577,6 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
         add(
             TagContentMismatch,
             "roughness member with sRGB content: roughness is linear data, so it is not variance-baked".into(),
-        );
-    }
-    if p.category == Category::Normal
-        && matches!(
-            p.format,
-            Format::Bc4 | Format::Bc5 | Format::R8 | Format::Rg8
-        )
-    {
-        add(
-            FmtBc5Normal,
-            "BC4/BC5/R8/RG8 on a normal: Skyrim reads Z directly, so Z decodes -1 and alpha is lost [SC §2]".into(),
-        );
-    }
-    if st == Subtype::LandscapeDiffuse && p.format == Format::Bc1 {
-        add(
-            FmtLandscapeBc1,
-            "BC1 destroys the landscape snow mask / height alpha".into(),
         );
     }
     if p.format == Format::Bc1 && p.alpha.policy != AlphaPolicy::Remove {
@@ -1668,9 +1766,9 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
     }
     // Complex grass (design §3.5, §3.7, §4; rulings R1, R4, R7, R9).
     if st == Subtype::ComplexGrass {
-        if p.format != Format::Bc7
-            || p.srgb_tag()
-            || crate::resize::target_dims((a.width, a.height), p.resize) != (a.width, a.height)
+        // The format and tag half is `encoding_warnings`'s; one CFG-INVALID either way.
+        if !grass_encoding_bad(p.format, p.color.tag)
+            && crate::resize::target_dims((a.width, a.height), p.resize) != (a.width, a.height)
         {
             add(
                 CfgInvalid,

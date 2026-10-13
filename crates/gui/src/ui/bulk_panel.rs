@@ -1,7 +1,7 @@
 //! The centre panel for two or more textures or sets (M6 Track F3a, design §3-4). Drawing only: every edit is a
 //! model call, made after drawing.
 use super::columns::AMBER;
-use super::settings_panel::{editor, RowEdit, GROUPS};
+use super::settings_panel::{combo, editor, Options, RowEdit, GROUPS};
 use crate::model::bulk::{BulkField, BulkOp};
 use crate::model::fields::{group_of, FieldView};
 use crate::model::sets::SlotKind;
@@ -67,6 +67,12 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             }
             let (target, busy) = (model.target, model.busy());
             let rows = &view.rows;
+            // The Format row offers the pairs every selected texture allows (`bulk_encodings`).
+            let formats: Options = view
+                .encodings
+                .iter()
+                .map(|(e, l)| (serde_json::json!(e), l.clone()))
+                .collect();
             // Slider state is per selection, not shared by every bulk selection.
             let id = format!(
                 "bulk-{}-{}",
@@ -87,7 +93,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                                         |ui| {
                                             for r in rows.iter().filter(|r| group_of(r.field) == g)
                                             {
-                                                if let Some(e) = row(ui, &id, &job, target, busy, r)
+                                                if let Some(e) =
+                                                    row(ui, &id, &job, target, busy, r, &formats)
                                                 {
                                                     acts.push(Act::Edit(r.field, e));
                                                 }
@@ -118,6 +125,7 @@ fn row(
     target: Target,
     busy: bool,
     r: &BulkField,
+    formats: &Options,
 ) -> Option<RowEdit> {
     let mut edit = None;
     ui.label(r.label);
@@ -131,15 +139,17 @@ fn row(
     };
     let (set, _) = ui
         .add_enabled_ui(r.applies > 0, |ui| {
-            editor(
-                ui,
-                id,
-                target,
-                job,
-                busy,
-                &view,
-                r.value.is_none() && r.applies > 0,
-            )
+            let mixed = r.value.is_none() && r.applies > 0;
+            if r.field == "format" {
+                return combo(
+                    ui,
+                    egui::Id::new((id, r.field)),
+                    &view.value,
+                    formats,
+                    mixed,
+                );
+            }
+            editor(ui, id, target, job, busy, &view, mixed)
         })
         .inner;
     if let Some(v) = set {

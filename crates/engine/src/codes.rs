@@ -62,7 +62,7 @@ codes! {
     AlphaPbrNormalDropped = "ALPHA-PBR-NORMAL-DROPPED" => Info,
     TagSrgbVanilla = "TAG-SRGB-VANILLA" => Error,
     TagSrgbNonpbr = "TAG-SRGB-NONPBR" => Blocking,
-    TagUnormPbr = "TAG-UNORM-PBR" => Warning,
+    TagUnormPbr = "TAG-UNORM-PBR" => Blocking,
     TagSrgbLod = "TAG-SRGB-LOD" => Blocking,
     TagContentMismatch = "TAG-CONTENT-MISMATCH" => Warning,
     CfgUnavailable = "CFG-UNAVAILABLE" => Blocking,

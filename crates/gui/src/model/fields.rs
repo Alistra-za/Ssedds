@@ -71,22 +71,22 @@ pub fn format_label(format: Format, tag: ColorTag) -> String {
     }
 }
 
-pub fn format_options(target: Target) -> Vec<Format> {
-    [
-        Format::Bc1,
-        Format::Bc3,
-        Format::Bc4,
-        Format::Bc5,
-        Format::Bc6hUf16,
-        Format::Bc7,
-        Format::Rgba8,
-        Format::R8,
-        Format::Rg8,
-        Format::Rgba16f,
-    ]
-    .into_iter()
-    .filter(|f| !f.is_hdr() || target == Target::Cs)
-    .collect()
+/// Appended to the label of a current value a picker keeps although the engine does not allow it.
+pub const NOT_VALID: &str = " (not valid for this map)";
+
+/// The (format, tag) pairs a format picker lists for `p` under `target`, labelled (owner, 2026-10-13): the pairs
+/// `engine::policy::allowed_encodings` allows, then the current pair, marked `NOT_VALID`, when it is not one of them
+/// (an old project or a hand edit: shown so it can be changed, never rewritten).
+pub fn encoding_options(target: Target, p: &Profile) -> Vec<((Format, ColorTag), String)> {
+    let cur = (p.format, p.color.tag);
+    let allowed = engine::policy::allowed_encodings(p.subtype, target);
+    let stray = (!allowed.contains(&cur))
+        .then(|| (cur, format!("{}{NOT_VALID}", format_label(cur.0, cur.1))));
+    allowed
+        .into_iter()
+        .map(|(f, t)| ((f, t), format_label(f, t)))
+        .chain(stray)
+        .collect()
 }
 
 /// True for the alpha-tested policies (`cutout`, `cutout_blend`).
