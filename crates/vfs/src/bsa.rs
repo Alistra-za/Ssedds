@@ -4,7 +4,7 @@
 use crate::VfsError;
 use nif::path::canon_mesh;
 use nif::text::lossy;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const INCLUDE_DIR_NAMES: u32 = 0x1;
@@ -26,9 +26,6 @@ pub struct Bsa {
     pub version: u32,
     pub flags: u32,
     pub entries: Vec<BsaEntry>,
-    /// Kept open for positional reads (spec §2 step 2); its length is checked once, at open.
-    file: std::fs::File,
-    total: u64,
 }
 
 fn rd<const N: usize>(f: &mut impl Read) -> Result<[u8; N], VfsError> {
@@ -44,7 +41,7 @@ impl Bsa {
     pub fn open(path: &Path) -> Result<Bsa, VfsError> {
         let file = std::fs::File::open(path)?;
         let file_total = file.metadata()?.len();
-        let mut f = std::io::BufReader::new(&file);
+        let mut f = std::io::BufReader::new(file);
         let magic = rd::<4>(&mut f).map_err(|_| VfsError::NotBsa)?;
         if &magic != b"BSA\0" {
             return Err(VfsError::NotBsa);
@@ -125,20 +122,21 @@ impl Bsa {
             version,
             flags,
             entries,
-            file,
-            total: file_total,
         })
     }
 
     pub fn read(&self, e: &BsaEntry) -> Result<Vec<u8>, VfsError> {
-        if e.offset as u64 + e.size as u64 > self.total {
+        let mut f = std::fs::File::open(&self.path)?;
+        let total = f.metadata()?.len();
+        if e.offset as u64 + e.size as u64 > total {
             return Err(VfsError::Corrupt(format!(
                 "{}: data past end of file",
                 e.norm
             )));
         }
+        f.seek(SeekFrom::Start(e.offset as u64))?;
         let mut data = vec![0u8; e.size as usize];
-        read_at(&self.file, &mut data, e.offset as u64)?;
+        f.read_exact(&mut data)?;
         let mut p = 0usize;
         if self.flags & EMBED_NAMES != 0 {
             p += 1 + *data
@@ -176,28 +174,5 @@ impl Bsa {
             )));
         }
         Ok(out)
-    }
-}
-
-/// Fills `buf` from `off` without moving a shared cursor, so threads can read one handle at once.
-fn read_at(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::FileExt;
-        let (mut buf, mut off) = (buf, off);
-        while !buf.is_empty() {
-            let n = f.seek_read(buf, off)?;
-            if n == 0 {
-                return Err(std::io::ErrorKind::UnexpectedEof.into());
-            }
-            buf = &mut buf[n..];
-            off += n as u64;
-        }
-        Ok(())
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileExt;
-        f.read_exact_at(buf, off)
     }
 }
