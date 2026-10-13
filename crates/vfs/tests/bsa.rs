@@ -209,3 +209,34 @@ fn hostile_folder_count_is_corrupt_before_any_record_read() {
     std::fs::write(&p, &out).unwrap(); // ends before the folder name block: any record read would be Io
     assert!(matches!(Bsa::open(&p), Err(vfs::VfsError::Corrupt(_))));
 }
+
+/// Scan speed spec §2 step 2: entries are read through the handle `Bsa::open` keeps (one per archive, positional
+/// reads), never by reopening the path; reads from many threads at once stay correct.
+#[test]
+fn entries_are_read_through_the_open_handle() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("a.bsa");
+    std::fs::write(
+        &p,
+        build(
+            &[
+                ("meshes\\a", "x.nif", b"NIFDATA-1", true),
+                ("meshes\\a", "y.nif", b"plain", false),
+            ],
+            false,
+        ),
+    )
+    .unwrap();
+    let bsa = Bsa::open(&p).unwrap();
+    std::fs::rename(&p, dir.path().join("moved.bsa")).unwrap();
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            s.spawn(|| {
+                for _ in 0..50 {
+                    assert_eq!(bsa.read(&bsa.entries[0]).unwrap(), b"NIFDATA-1");
+                    assert_eq!(bsa.read(&bsa.entries[1]).unwrap(), b"plain");
+                }
+            });
+        }
+    });
+}
