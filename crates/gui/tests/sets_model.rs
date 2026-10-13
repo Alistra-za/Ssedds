@@ -1473,3 +1473,27 @@ fn a_fallback_shader_keeps_filled_slots_it_cannot_use() {
         vec![(SlotKind::Diffuse, true), (SlotKind::Rmaos, true)]
     );
 }
+
+/// Controller ruling (final fix wave): + prefills slot N only when PGPatcher's slot-N list strips the member's
+/// suffix, so a prefilled row never splits the prefix. Subsurface `_s` in slot 8 is not in that list (`_b`/`_bl`/
+/// `_flow`): it gets an empty row instead. Height `_p` in slot 4 is stripped, so it is prefilled.
+#[test]
+fn the_plus_menu_prefills_only_suffixes_pgpatcher_strips() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let mut v = view(&set_views(&m), "landscape/rock01").clone();
+    for k in [SlotKind::Height, SlotKind::Subsurface] {
+        v.slots.insert(
+            k,
+            SlotFill::Own {
+                item: "landscape/x.png".into(),
+            },
+        );
+    }
+    let (_, add) = slot_matches(&v);
+    let path = |n: u8| add.iter().find(|a| a.n == n).map(|a| a.path.clone());
+    assert_eq!(path(4), Some(r"landscape\rock01_p".into()));
+    assert_eq!(path(6), Some(r"landscape\rock01_rmaos".into()));
+    assert_eq!(path(8), Some(String::new()), "slot 8 does not strip _s");
+}

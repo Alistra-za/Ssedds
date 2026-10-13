@@ -5,6 +5,7 @@ use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::AppModel;
 use crate::pgp::prefix::{
     active_matches, check_rel_path, derive_match_diffuse, output_rel, prefix_of, slot_match_path,
+    slot_suffixes,
 };
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
@@ -148,9 +149,14 @@ pub fn slot_matches(v: &SetView) -> (Vec<SlotMatch>, Vec<SlotMatch>) {
         .map(|n| SlotMatch {
             n,
             slot: name(n),
+            // Prefilled only when PGPatcher's slot-N list strips the suffix, so its prefix is sdc's (controller
+            // ruling): `_s` in slot 8 would split it, so that row starts empty.
             path: filled
                 .iter()
-                .find(|k| k.slot_number() == n)
+                .find(|k| {
+                    k.slot_number() == n
+                        && slot_suffixes(n).contains(&format!("_{}", k.suffix()).as_str())
+                })
                 .map_or_else(String::new, |k| slot_match_path(derived, k.suffix())),
         })
         .collect();
