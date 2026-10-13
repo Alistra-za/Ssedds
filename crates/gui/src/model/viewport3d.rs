@@ -507,6 +507,8 @@ pub enum V3Reply {
     },
     /// `Renderer::off_in_preview()`, after the thread starts and after each settings or features change.
     OffInPreview(Vec<String>),
+    /// `Renderer::settings_coverage().line()` whenever it changes (P1-D); `None` = nothing to report.
+    Coverage(Option<String>),
 }
 
 /// `%LOCALAPPDATA%\sdc\shader-cache`.
@@ -552,6 +554,8 @@ pub struct Viewport3d {
     pub features_on: bool,
     /// The user's loaded CS features this preview leaves off (`V3Reply::OffInPreview`), for the panel line.
     pub off_in_preview: Vec<String>,
+    /// The CS settings coverage line (`V3Reply::Coverage`), shown under the frame when `Some`.
+    pub coverage: Option<String>,
     pub notice: Option<String>,
     /// The CS shaders in use (the `Shaders` folder), as saved in `gui.toml`.
     pub shaders: Option<Fingerprint>,
@@ -628,6 +632,7 @@ impl Viewport3d {
             popup: None,
             features_on: true,
             off_in_preview: vec![],
+            coverage: None,
             notice: None,
             shaders: saved,
             frame: None,
@@ -1467,6 +1472,7 @@ impl Viewport3d {
             }
             V3Reply::Located { .. } | V3Reply::Chosen { .. } => {}
             V3Reply::OffInPreview(off) => self.off_in_preview = off,
+            V3Reply::Coverage(c) => self.coverage = c,
         }
     }
 }
@@ -1815,6 +1821,7 @@ fn render_loop(
     let mut view: Option<(Camera, u32, u32, Look)> = None;
     let mut refresh_id: u64 = 1 << 62;
     let mut stats = FrameStats::default();
+    let mut last_coverage: Option<String> = None;
     while let Ok(first) = rx.recv() {
         let mut reload = false;
         let mut render = None;
@@ -1989,6 +1996,12 @@ fn render_loop(
             }
         }
         pump(&mut r);
+        // A settings apply or a new program can change it; sent only on change.
+        let coverage = r.settings_coverage().line();
+        if coverage != last_coverage {
+            send(V3Reply::Coverage(coverage.clone()));
+            last_coverage = coverage;
+        }
         if restyled {
             send(V3Reply::OffInPreview(r.off_in_preview()));
         }

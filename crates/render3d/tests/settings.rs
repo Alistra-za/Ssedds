@@ -1,9 +1,10 @@
 //! P1-C T-S6 and C11: the user's CS settings applied to a loaded model, on WARP with the stand-in shader. The
 //! test is the pool, as in async_compile.rs: it takes the jobs and runs them with `run_job`.
 mod common;
-use common::{cache_files, channel, covered, fixture, renderer, FLAT};
+use common::{cache_files, channel, covered, fixture, renderer, standin_root, FLAT};
 use render3d::cs_settings::CsSettings;
 use render3d::device::Gpu;
+use render3d::perf_log;
 use render3d::scene::Scene;
 use render3d::{parse, run_job, Renderer, ShapeStatus};
 use std::path::Path;
@@ -176,4 +177,169 @@ fn rebuild_device_on_keeps_settings() {
     r.set_settings(s);
     assert_eq!(r.features(), features);
     assert!(r.take_jobs().is_empty());
+}
+
+/// P1-D: an old Linear Lighting build (its source names `isDirLightLinear`) never gets `-D ENABLE_LL`: the shader
+/// aliases ENABLE_LL to the cbuffer flag (old Color.hlsli:7), which feature_data writes from the setting.
+#[test]
+fn an_old_linear_lighting_build_compiles_without_the_enable_ll_define() {
+    let cache = tempfile::tempdir().unwrap();
+    let old = tempfile::tempdir().unwrap();
+    let src = std::fs::read_to_string(standin_root().join("Lighting.hlsl")).unwrap();
+    std::fs::write(
+        old.path().join("Lighting.hlsl"),
+        // A declaration, not a comment, so the marker survives any comment handling in the expander.
+        src + "\nstatic const uint isDirLightLinear = 0; // P1-D old-LL marker\n",
+    )
+    .unwrap();
+    let ll_defined = |root: &Path| -> Vec<bool> {
+        let fp = render3d::locate::fingerprint(root, None).unwrap();
+        let mut r =
+            Renderer::with_gpu(Gpu::new_warp().unwrap(), fp, cache.path().to_path_buf()).unwrap();
+        r.set_features(FLAT.iter().map(|s| s.to_string()).collect());
+        r.set_settings(settings(true, 1.0));
+        assert!(
+            r.features().iter().any(|f| f == "ENABLE_LL"),
+            "the settings still say on"
+        );
+        let rep = r.load_parsed(&parse(&fixture("TestNifFile_Furniture_Col_SE.nif")), &none);
+        assert!(
+            rep.errors.is_empty() && rep.compile_errors.is_empty(),
+            "{rep:?}"
+        );
+        let ids: Vec<_> = r.shapes().into_iter().map(|s| s.id).collect();
+        ids.into_iter()
+            .map(|id| {
+                r.draw_diag(id)
+                    .unwrap()
+                    .0
+                    .iter()
+                    .any(|(n, _)| n == "ENABLE_LL")
+            })
+            .collect()
+    };
+    assert_eq!(
+        ll_defined(&standin_root()),
+        [true, true],
+        "new-LL stand-in: defined"
+    );
+    assert_eq!(ll_defined(old.path()), [false, false], "old LL: never a -D");
+}
+
+/// P1-D fix round 1: switching shaders between LL generations on one renderer re-derives the display encode.
+#[test]
+fn set_shaders_between_ll_generations_refreshes_encode_and_defines() {
+    let cache = tempfile::tempdir().unwrap();
+    let old = tempfile::tempdir().unwrap();
+    let src = std::fs::read_to_string(standin_root().join("Lighting.hlsl")).unwrap();
+    std::fs::write(
+        old.path().join("Lighting.hlsl"),
+        src + "\nstatic const uint isDirLightLinear = 0; // P1-D old-LL marker\n",
+    )
+    .unwrap();
+    let fp = |root: &Path| render3d::locate::fingerprint(root, None).unwrap();
+    let mut r = Renderer::with_gpu(
+        Gpu::new_warp().unwrap(),
+        fp(&standin_root()),
+        cache.path().to_path_buf(),
+    )
+    .unwrap();
+    r.set_features(FLAT.iter().map(|s| s.to_string()).collect());
+    r.set_settings(settings(false, 1.0));
+    r.set_settings(settings(true, 1.0));
+    let defined = |r: &mut Renderer| -> Vec<bool> {
+        let rep = r.load_parsed(&parse(&fixture("TestNifFile_Furniture_Col_SE.nif")), &none);
+        assert!(
+            rep.errors.is_empty() && rep.compile_errors.is_empty(),
+            "{rep:?}"
+        );
+        let ids: Vec<_> = r.shapes().into_iter().map(|s| s.id).collect();
+        ids.into_iter()
+            .map(|id| {
+                r.draw_diag(id)
+                    .unwrap()
+                    .0
+                    .iter()
+                    .any(|(n, _)| n == "ENABLE_LL")
+            })
+            .collect()
+    };
+    assert!(r.encode_srgb(), "new LL, setting on");
+    assert_eq!(defined(&mut r), [true, true]);
+    // Old LL with no LL key in the settings: the flag reads off, so no display encode.
+    r.set_settings(CsSettings::default());
+    r.set_shaders(fp(old.path()));
+    assert!(!r.encode_srgb(), "old LL, no key: encode follows the flag");
+    assert_eq!(defined(&mut r), [false, false]);
+    r.set_shaders(fp(&standin_root()));
+    assert!(r.encode_srgb(), "back on new LL: default on");
+    assert_eq!(defined(&mut r), [true, true]);
+}
+
+/// P1-D: one `settings_coverage` line per program when it is created and per program on every apply; the renderer
+/// union feeds the panel line.
+#[test]
+fn every_program_reports_its_settings_coverage() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut s = settings(true, 1.0);
+    s.merged
+        .get_mut("Linear Lighting")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("bogusKey".into(), 1.into());
+    let (mut r, ev) = perf_log::capture(|| furniture(cache.path(), FEATURE_DATA, s));
+    let lines = |ev: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        ev.iter()
+            .filter(|e| e["event"] == "settings_coverage")
+            .cloned()
+            .collect()
+    };
+    let first = lines(&ev);
+    assert!(!first.is_empty(), "{ev:?}");
+    for e in &first {
+        assert_eq!(
+            e["unmatched"],
+            serde_json::json!(["Linear Lighting.bogusKey"]),
+            "{e}"
+        );
+        assert_eq!(e["unset"], serde_json::json!([]), "{e}");
+        assert_eq!(e["key"].as_str().unwrap().len(), 12, "{e}");
+    }
+    assert_eq!(
+        r.settings_coverage().line().as_deref(),
+        Some("CS settings: 0 fields unset, 1 keys unmatched")
+    );
+    let ((), ev) = perf_log::capture(|| r.set_settings(settings(true, 0.5)));
+    let again = lines(&ev);
+    assert_eq!(again.len(), first.len(), "once per program per apply");
+    assert!(again
+        .iter()
+        .all(|e| e["unmatched"] == serde_json::json!([])));
+    assert_eq!(r.settings_coverage().line(), None);
+}
+
+/// Coverage follows the features toggle (off writes the fallback fields), and ordinary frames do not re-report it.
+#[test]
+fn coverage_follows_the_toggle_and_frames_stay_quiet() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = furniture(cache.path(), FEATURE_DATA, settings(true, 1.0));
+    let on = r.settings_coverage();
+    let scene = Scene::neutral();
+    let ((), ev) = perf_log::capture(|| {
+        r.render(&scene, N, N).unwrap();
+        r.render(&scene, N, N).unwrap();
+    });
+    assert!(
+        ev.iter().all(|e| e["event"] != "settings_coverage"),
+        "{ev:?}"
+    );
+    assert_eq!(r.settings_coverage(), on);
+    // The toggle changes what is written (new-LL fallbacks), so every program at hand is re-reported.
+    let ((), ev) = perf_log::capture(|| r.set_features_on(false));
+    let n = ev
+        .iter()
+        .filter(|e| e["event"] == "settings_coverage")
+        .count();
+    assert!(n >= 1, "toggle must refresh coverage: {ev:?}");
 }

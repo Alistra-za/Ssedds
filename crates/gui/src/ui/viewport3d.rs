@@ -231,6 +231,9 @@ fn problems(ui: &mut egui::Ui, v: &Viewport3d) {
 fn footer(ui: &mut egui::Ui, v: &Viewport3d) {
     ui.horizontal_wrapped(|ui| {
         ui.weak(off_line(&v.off_in_preview, CUBEMAPS_FOOTER));
+        if let Some(c) = &v.coverage {
+            ui.weak(format!("· {c}"));
+        }
         if let Some(t) = v.timing {
             let up = v.upload_ms.unwrap_or(0.0);
             ui.weak(format!(
