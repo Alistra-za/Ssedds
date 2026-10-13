@@ -226,8 +226,10 @@ pub fn draw(
                 DropOutcome::Refused(why) => st.pending = Some(Pending::Refused(why)),
             },
             Act::NewSet(item) => {
-                // `None`: nothing was done (read-only file, or a packed map, which follows its raw maps).
-                let _ = model.drop_new_set(&item);
+                // Nothing was done (a packed map, a locked slot): say why.
+                if let Err(why) = model.drop_new_set(&item) {
+                    st.pending = Some(Pending::Refused(why));
+                }
             }
             Act::Reorder(id, to) => {
                 model.reorder_set(&id, to);

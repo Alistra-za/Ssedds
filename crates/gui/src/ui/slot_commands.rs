@@ -56,9 +56,17 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
                 ui.weak(&given[i]);
                 let locked = locks.contains(&n);
                 let mut on = locked;
-                if ui
-                    .add_enabled(editable, egui::Checkbox::new(&mut on, "🔒"))
-                    .on_hover_text("Locked: drops, slot commands and bulk edits leave this slot as it is")
+                let r = ui.add_enabled(editable, egui::Checkbox::new(&mut on, "🔒"));
+                // Named per slot for screen readers (and tests): eight boxes share the icon.
+                r.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::Checkbox,
+                        editable,
+                        on,
+                        format!("Lock slot {n}"),
+                    )
+                });
+                if r.on_hover_text("Locked: drops, slot commands and bulk edits leave this slot as it is")
                     .on_disabled_hover_text(&why)
                     .changed()
                 {

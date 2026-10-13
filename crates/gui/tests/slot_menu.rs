@@ -186,3 +186,79 @@ fn a_locked_slot_menu_offers_only_unlock() {
     assert_eq!(m.run_menu(lock(false)), None);
     assert!(!m.slot_locked(ROCK_SET, 2));
 }
+
+#[test]
+fn a_vanilla_member_under_textures_gives_its_game_path() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    // leaf.png is in a vanilla set: no planned output path, so the game's own path, `.dds`.
+    assert_eq!(
+        member_game_path(&m, LEAF).as_deref(),
+        Ok(r"textures\landscape\leaf.dds")
+    );
+    assert_eq!(
+        m.run_menu(MenuAction::SlotLink {
+            set: ROCK_SET.into(),
+            n: 1,
+            item: LEAF.into()
+        }),
+        None
+    );
+    assert_eq!(
+        slot_value(&m, ROCK_SET, 1),
+        Some(json!(r"textures\landscape\leaf.dds"))
+    );
+}
+
+#[test]
+fn the_game_path_follows_the_current_prefix_not_the_last_plan() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_json_value(ROCK_SET, "rename", Some(json!("stone")));
+    // Before the new plan lands.
+    assert_eq!(
+        member_game_path(&m, ROCK).as_deref(),
+        Ok(r"textures\pbr\landscape\stone.dds")
+    );
+}
+
+#[test]
+fn a_member_outside_a_textures_folder_is_offered_disabled() {
+    use image::{ImageBuffer, Rgb};
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("m");
+    std::fs::create_dir_all(&r).unwrap();
+    for n in ["rock01.png", "leaf.png"] {
+        ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, (y * 4) as u8, 90u8]))
+            .save(r.join(n))
+            .unwrap();
+    }
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..Default::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.open_folder(d.path().to_path_buf());
+    idle(&mut m);
+    const NO_PATH: &str = "no game path (not under a textures folder)";
+    assert_eq!(
+        member_game_path(&m, "m/rock01.png"),
+        Err(NO_PATH.to_string())
+    );
+    let menu = m.slot_menu("m/leaf", SlotKind::Diffuse);
+    let link = menu
+        .iter()
+        .find(|e| matches!(&e.action, MenuAction::SlotLink { item, .. } if item == "m/rock01.png"))
+        .expect("listed");
+    assert_eq!(link.disabled.as_deref(), Some(NO_PATH));
+    // The submenu itself opens (it has an entry).
+    assert!(menu
+        .iter()
+        .any(|e| e.action == MenuAction::FromAnotherSet && e.disabled.is_none()));
+    // Run anyway, it is refused and writes nothing.
+    assert_eq!(m.run_menu(link.action.clone()), Some(NO_PATH.to_string()));
+    assert_eq!(slot_value(&m, "m/leaf", 1), None);
+}

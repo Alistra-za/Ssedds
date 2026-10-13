@@ -497,7 +497,7 @@ fn a_read_only_project_file_refuses_set_edits_but_sdc_toml_still_edits() {
         DropOutcome::Refused(_)
     ));
     assert!(!root.join("landscape/odd_roughness.png").exists());
-    assert_eq!(m.drop_new_set(&odd), None);
+    assert!(m.drop_new_set(&odd).is_err());
     assert!(m.rename_set("landscape/rock01", "x/y").is_err());
     assert!(m.remove_member("landscape/rock01", &rough).is_err());
     assert!(m

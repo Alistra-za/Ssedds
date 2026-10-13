@@ -228,152 +228,152 @@ fn card(
     let locked = v.locks.contains(&slot.slot_number());
     // F3a Task 8: the whole card takes the right-click; its labels are not selectable, so they do not take it.
     let scoped = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
-      frame.show(ui, |ui| {
-        ui.style_mut().interaction.selectable_labels = false;
-        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.set_width(CARD);
-            ui.set_min_width(CARD);
-            let title = match &fill {
-                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
-                    card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
+        frame.show(ui, |ui| {
+            ui.style_mut().interaction.selectable_labels = false;
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(CARD);
+                ui.set_min_width(CARD);
+                let title = match &fill {
+                    SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
+                        card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
+                    }
+                    SlotFill::Empty => slot.label(),
+                };
+                let t = if locked {
+                    ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
+                        .on_hover_text("Slot locked: right-click to unlock")
+                } else {
+                    ui.label(egui::RichText::new(title).strong())
+                };
+                if cell.usable && !rnm_layers.is_empty() {
+                    t.clone()
+                        .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
                 }
-                SlotFill::Empty => slot.label(),
-            };
-            let t = if locked {
-                ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
-                    .on_hover_text("Slot locked: right-click to unlock")
-            } else {
-                ui.label(egui::RichText::new(title).strong())
-            };
-            if cell.usable && !rnm_layers.is_empty() {
-                t.clone()
-                    .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
-            }
-            if let (false, Some(p)) = (cell.usable, &v.shader) {
-                t.on_hover_text(format!(
-                    "{title}: the {} shader does not use slot {}",
-                    p.shader.label(),
-                    slot.slot_number()
-                ));
-            }
-            let (item_key, borrowed) = match &fill {
-                SlotFill::Own { item } => (Some(item.clone()), None),
-                SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),
-                SlotFill::Empty => (None, None),
-            };
-            let item = item_key.as_deref().and_then(|k| model.item(k));
-            let (rect, resp) =
-                ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::click());
-            slot_menu(&resp, model, v, slot, acts);
-            if ui.is_rect_visible(rect) {
-                match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
-                    Some(t) => egui::Image::new(&t)
-                        .fit_to_exact_size(rect.size())
-                        .paint_at(ui, rect),
-                    None => {
-                        ui.painter().rect_filled(
+                if let (false, Some(p)) = (cell.usable, &v.shader) {
+                    t.on_hover_text(format!(
+                        "{title}: the {} shader does not use slot {}",
+                        p.shader.label(),
+                        slot.slot_number()
+                    ));
+                }
+                let (item_key, borrowed) = match &fill {
+                    SlotFill::Own { item } => (Some(item.clone()), None),
+                    SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),
+                    SlotFill::Empty => (None, None),
+                };
+                let item = item_key.as_deref().and_then(|k| model.item(k));
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::click());
+                slot_menu(&resp, model, v, slot, acts);
+                if ui.is_rect_visible(rect) {
+                    match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
+                        Some(t) => egui::Image::new(&t)
+                            .fit_to_exact_size(rect.size())
+                            .paint_at(ui, rect),
+                        None => {
+                            ui.painter().rect_filled(
+                                rect,
+                                2.0,
+                                ui.visuals().widgets.noninteractive.weak_bg_fill,
+                            );
+                        }
+                    }
+                    if let Some(i) = item {
+                        ui.painter().rect_stroke(
                             rect,
                             2.0,
-                            ui.visuals().widgets.noninteractive.weak_bg_fill,
+                            egui::Stroke::new(1.0, border_of(ui, &i.status)),
+                            egui::StrokeKind::Inside,
                         );
                     }
                 }
-                if let Some(i) = item {
-                    ui.painter().rect_stroke(
-                        rect,
-                        2.0,
-                        egui::Stroke::new(1.0, border_of(ui, &i.status)),
-                        egui::StrokeKind::Inside,
-                    );
+                let Some(i) = item else {
+                    ui.weak("empty");
+                    return;
+                };
+                ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
+                if let Some(n) = match slot {
+                    _ if !shows_json_panel(v, model.target) => None,
+                    SlotKind::Diffuse => Some(1),
+                    SlotKind::Normal => Some(2),
+                    _ => None,
+                } {
+                    // F1 spec §3.2: the card's switch is the Matching header's slot 1/2 row.
+                    let derived = v.derived_match.as_deref().unwrap_or("");
+                    let on = active_matches(&v.settings, derived)
+                        .iter()
+                        .any(|(m, _)| *m == n);
+                    let mut want = on;
+                    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+                    if ui
+                        .add_enabled(editable, egui::Checkbox::new(&mut want, "Match on this"))
+                        .on_hover_text(
+                            "PGPatcher applies the entry to meshes with this exact texture in this slot",
+                        )
+                        .changed()
+                    {
+                        let (k, val) = match_toggle(n, want, &slot_match_path(derived, slot.suffix()));
+                        acts.push(Act::Json(v.id.clone(), k, val));
+                    }
                 }
-            }
-            let Some(i) = item else {
-                ui.weak("empty");
-                return;
-            };
-            ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
-            if let Some(n) = match slot {
-                _ if !shows_json_panel(v, model.target) => None,
-                SlotKind::Diffuse => Some(1),
-                SlotKind::Normal => Some(2),
-                _ => None,
-            } {
-                // F1 spec §3.2: the card's switch is the Matching header's slot 1/2 row.
-                let derived = v.derived_match.as_deref().unwrap_or("");
-                let on = active_matches(&v.settings, derived)
-                    .iter()
-                    .any(|(m, _)| *m == n);
-                let mut want = on;
-                let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
-                if ui
-                    .add_enabled(editable, egui::Checkbox::new(&mut want, "Match on this"))
-                    .on_hover_text(
-                        "PGPatcher applies the entry to meshes with this exact texture in this slot",
-                    )
-                    .changed()
-                {
-                    let (k, val) = match_toggle(n, want, &slot_match_path(derived, slot.suffix()));
-                    acts.push(Act::Json(v.id.clone(), k, val));
+                if let Some(from) = &borrowed {
+                    ui.colored_label(AMBER, format!("borrowed from {from}"));
+                    return;
                 }
-            }
-            if let Some(from) = &borrowed {
-                ui.colored_label(AMBER, format!("borrowed from {from}"));
-                return;
-            }
-            let resp = resp.on_hover_text(&i.key);
-            if resp.double_clicked() {
-                acts.push(Act::Expand(i.key.clone()));
-            } else if resp.clicked() {
-                acts.push(Act::Select(i.key.clone()));
-            }
-            let Some(job) = &i.job else { return };
-            let (cur_f, cur_t) = (job.profile.format, job.profile.color.tag);
-            // Format and Opaque write `sdc.toml`: a read-only one would drop the edit silently.
-            let toml_read_only = model
-                .project
-                .as_ref()
-                .and_then(|p| p.error())
-                .map(|e| format!("sdc.toml is read-only: {e}"));
-            let lock = toml_read_only
-                .clone()
-                .or(field_lock(model.target, &job.profile, "format").map(str::to_string));
-            let mut choice = (cur_f, cur_t);
-            ui.add_enabled_ui(lock.is_none(), |ui| {
-                egui::ComboBox::from_id_salt(("slot-format", &v.id, slot.label()))
-                    .selected_text(format_label(cur_f, cur_t))
-                    .width(CARD - 24.0)
-                    .show_ui(ui, |ui| {
-                        for f in format_options(model.target) {
-                            for t in tag_options(f) {
-                                ui.selectable_value(&mut choice, (f, t), format_label(f, t));
+                let resp = resp.on_hover_text(&i.key);
+                if resp.double_clicked() {
+                    acts.push(Act::Expand(i.key.clone()));
+                } else if resp.clicked() {
+                    acts.push(Act::Select(i.key.clone()));
+                }
+                let Some(job) = &i.job else { return };
+                let (cur_f, cur_t) = (job.profile.format, job.profile.color.tag);
+                // Format and Opaque write `sdc.toml`: a read-only one would drop the edit silently.
+                let toml_read_only = model
+                    .project
+                    .as_ref()
+                    .and_then(|p| p.error())
+                    .map(|e| format!("sdc.toml is read-only: {e}"));
+                let lock = toml_read_only
+                    .clone()
+                    .or(field_lock(model.target, &job.profile, "format").map(str::to_string));
+                let mut choice = (cur_f, cur_t);
+                ui.add_enabled_ui(lock.is_none(), |ui| {
+                    egui::ComboBox::from_id_salt(("slot-format", &v.id, slot.label()))
+                        .selected_text(format_label(cur_f, cur_t))
+                        .width(CARD - 24.0)
+                        .show_ui(ui, |ui| {
+                            for f in format_options(model.target) {
+                                for t in tag_options(f) {
+                                    ui.selectable_value(&mut choice, (f, t), format_label(f, t));
+                                }
                             }
-                        }
-                    });
-            })
-            .response
-            .on_disabled_hover_text(lock.unwrap_or_default());
-            if choice != (cur_f, cur_t) {
-                acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
-            }
-            if i.kind == ItemKind::Packed {
-                packed_controls(ui, model, i, toml_read_only.as_deref(), acts);
-            }
-            if slot == SlotKind::Diffuse {
-                let mut on = model.is_opaque(&i.key);
-                if ui
-                    .add_enabled(
-                        toml_read_only.is_none(),
-                        egui::Checkbox::new(&mut on, "Opaque"),
-                    )
-                    .on_hover_text("Strips alpha: the diffuse is fully opaque")
-                    .on_disabled_hover_text(toml_read_only.unwrap_or_default())
-                    .changed()
-                {
-                    acts.push(Act::Opaque(i.key.clone(), on));
+                        });
+                })
+                .response
+                .on_disabled_hover_text(lock.unwrap_or_default());
+                if choice != (cur_f, cur_t) {
+                    acts.push(Act::Format(i.key.clone(), choice.0, choice.1));
                 }
-            }
+                if i.kind == ItemKind::Packed {
+                    packed_controls(ui, model, i, toml_read_only.as_deref(), acts);
+                }
+                if slot == SlotKind::Diffuse {
+                    let mut on = model.is_opaque(&i.key);
+                    if ui
+                        .add_enabled(
+                            toml_read_only.is_none(),
+                            egui::Checkbox::new(&mut on, "Opaque"),
+                        )
+                        .on_hover_text("Strips alpha: the diffuse is fully opaque")
+                        .on_disabled_hover_text(toml_read_only.unwrap_or_default())
+                        .changed()
+                    {
+                        acts.push(Act::Opaque(i.key.clone(), on));
+                    }
+                }
+            })
         })
-      })
     });
     slot_menu(&scoped.response, model, v, slot, acts);
 }

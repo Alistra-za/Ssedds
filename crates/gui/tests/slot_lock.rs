@@ -47,7 +47,12 @@ fn a_locked_slot_refuses_drops_onto_it() {
     assert!(m.drop_replace(LEAF, SET, DropChoice::Move).is_err());
     // The locked fill cannot leave either.
     assert!(m.remove_member(SET, ROCK).is_err());
-    assert_eq!(m.drop_new_set(ROCK), None);
+    // The new-set area says why (the UI shows it as the refusal note).
+    let why = m.drop_new_set(ROCK).unwrap_err();
+    assert!(
+        why.contains("slot 1 of landscape/rock01 is locked"),
+        "{why}"
+    );
     // Another slot of the set is not locked.
     assert!(!m.slot_locked(SET, 2));
 }
@@ -198,4 +203,42 @@ fn auto_retyping_leaves_a_locked_slot_alone() {
     m.decide("m/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
     idle(&mut m);
     assert_eq!(subtype(&m), before);
+}
+
+#[test]
+fn a_locked_slot_that_borrows_a_texture_names_its_set_in_the_skip() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let rmaos = m
+        .items
+        .iter()
+        .find(|i| i.name.ends_with("rmaos"))
+        .unwrap()
+        .key
+        .clone();
+    let id = m.drop_new_set(ODD).unwrap();
+    idle(&mut m);
+    assert_eq!(
+        m.drop_choice(&rmaos, &id, DropChoice::Share),
+        DropOutcome::Joined
+    );
+    idle(&mut m);
+    m.set_slot_lock(&id, 6, true).unwrap();
+    assert_eq!(
+        plan_bulk_edit(
+            &m,
+            std::slice::from_ref(&rmaos),
+            "encoder.effort",
+            &BulkOp::Clear
+        )[0]
+        .1,
+        Change::Skip(format!("slot locked in {id}"))
+    );
+    // Its own set's lock wins: plain "slot locked".
+    m.set_slot_lock(SET, 6, true).unwrap();
+    assert_eq!(
+        plan_bulk_edit(&m, &[rmaos], "encoder.effort", &BulkOp::Clear)[0].1,
+        Change::Skip("slot locked".into())
+    );
 }

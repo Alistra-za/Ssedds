@@ -787,15 +787,24 @@ fn lock_refusal(v: &SetView, slot: Option<SlotKind>) -> Result<(), String> {
     }
 }
 
-/// The items filling a locked slot of any set, its own or borrowed (F3a Task 8): bulk edits skip them.
-pub fn locked_items(m: &AppModel) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+/// The items filling a locked slot of any set (F3a Task 8), with the reason bulk edits skip them: "slot locked" in
+/// the set that owns the texture, else "slot locked in <set>" for a set borrowing it. The own lock wins.
+pub fn locked_items(m: &AppModel) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
     for v in views(m).iter() {
         for (k, f) in &v.slots {
-            if let SlotFill::Own { item } | SlotFill::Borrowed { item, .. } = f {
-                if v.locks.contains(&k.slot_number()) {
-                    out.insert(item.clone());
+            if !v.locks.contains(&k.slot_number()) {
+                continue;
+            }
+            match f {
+                SlotFill::Own { item } => {
+                    out.insert(item.clone(), SLOT_LOCKED.to_string());
                 }
+                SlotFill::Borrowed { item, .. } => {
+                    out.entry(item.clone())
+                        .or_insert_with(|| format!("{SLOT_LOCKED} in {}", v.id));
+                }
+                SlotFill::Empty => {}
             }
         }
     }
@@ -824,12 +833,41 @@ pub fn slot_gives(m: &AppModel, set: &str, n: u8) -> String {
     }
 }
 
-/// F3a Task 8: where the game finds `item`'s output, as a slot path (relative to Data\, backslashes): its output
-/// path under the export folder, as `slots_of` writes a borrowed slot. `None` for an item that writes no output.
-pub fn member_game_path(m: &AppModel, item: &str) -> Option<String> {
-    let it = m.item(item)?;
-    it.job.as_ref()?;
-    (!it.job_key.is_empty()).then(|| it.job_key.replace('/', "\\"))
+/// Why a member outside a `textures` folder cannot be linked (F3a Task 8).
+pub const NO_GAME_PATH: &str = "no game path (not under a textures folder)";
+
+/// F3a Task 8: the path the game loads `item`'s output from, in the form Path… stores (relative to Data\,
+/// backslashes, `.dds`), from the current documents: its planned output path when it has one (a PBR output under
+/// `textures\pbr\`, as the automatic slot paths, DECISIONS P11), else its game path (`textures\…`). A member with no
+/// `textures` folder above it has none.
+pub fn member_game_path(m: &AppModel, item: &str) -> Result<String, String> {
+    let paths = engine_inputs(m).1;
+    game_path_in(m, &views(m), &paths, item)
+}
+
+/// `member_game_path` over views and output paths already built (the slot menu builds them once).
+pub(crate) fn game_path_in(
+    m: &AppModel,
+    views: &[SetView],
+    paths: &BTreeMap<OutputKey, PathBuf>,
+    item: &str,
+) -> Result<String, String> {
+    let it = m.item(item).ok_or_else(|| format!("no texture {item}"))?;
+    let job = it
+        .job
+        .as_ref()
+        .ok_or_else(|| format!("{} writes no output", it.name))?;
+    if let Some(p) = item_output_key(views, it).and_then(|k| paths.get(&k)) {
+        return Ok(p.to_string_lossy().replace('/', "\\"));
+    }
+    // `game_path` starts at the last `textures` folder, else it is the path under the opened folder.
+    if !job.game_path.starts_with("textures/") {
+        return Err(NO_GAME_PATH.into());
+    }
+    Ok(Path::new(&job.game_path)
+        .with_extension("dds")
+        .to_string_lossy()
+        .replace('/', "\\"))
 }
 
 /// Empty `slot` of set `id` in the document: its own occupant leaves the set, a borrow is dropped. Part of a replace.
@@ -1120,11 +1158,16 @@ impl AppModel {
     }
 
     /// A texture dropped on the empty area: a new set named after its base name (spec §3.1). Returns the new id;
-    /// `None` when nothing was done (read-only `sdc-project.toml`, or a packed map, which follows its raw maps).
-    pub fn drop_new_set(&mut self, item: &str) -> Option<String> {
-        if !self.sets_editable() || self.is_packed(item) || self.leaves_locked(item).is_err() {
-            return None;
+    /// the reason when nothing was done (read-only `sdc-project.toml`, a packed map, which follows its raw maps, or a
+    /// texture filling a locked slot).
+    pub fn drop_new_set(&mut self, item: &str) -> Result<String, String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
         }
+        if self.is_packed(item) {
+            return Err(PACKED_MOVE.into());
+        }
+        self.leaves_locked(item)?;
         let stem = Path::new(item)
             .file_stem()
             .unwrap_or_default()
@@ -1149,7 +1192,7 @@ impl AppModel {
             s.create_set(&i);
             s.add_member(&i, &it);
         });
-        Some(id)
+        Ok(id)
     }
 
     /// Copy `item`'s source next to it under set `set`'s base name and move the copy in (spec §3.4); `existing`

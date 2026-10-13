@@ -5,7 +5,8 @@ use super::fields::{
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
 use super::sets::{
-    locked_items, member_game_path, slot_gives, slot_of, SlotCommand, SlotKind, SLOT_LOCKED,
+    engine_inputs, game_path_in, locked_items, member_game_path, slot_gives, slot_of, SlotCommand,
+    SlotKind, SLOT_LOCKED,
 };
 use super::{AppModel, Dialog, Selection};
 use engine::config::{MipFilter, Subtype};
@@ -307,16 +308,16 @@ pub fn field_label(field: &str) -> &str {
 /// when it reaches it. `plan_bulk_edit` and `bulk_fields` both call it, so the panel and the apply cannot drift.
 /// `op` is `None` for the panel's value-independent counts (locks apply, no value is checked). A Clear is not
 /// blocked by a field lock (R6): dropping a stale `[files]` entry is harmless and the only way to remove it. A
-/// texture filling a locked slot (`slot_locked`, F3a Task 8) takes neither.
+/// texture filling a locked slot (`slot_locked` is its reason, F3a Task 8) takes neither.
 fn skip_of(
     job: Option<&ResolvedJob>,
     view: Option<&FieldView>,
     field: &str,
     op: Option<&BulkOp>,
-    slot_locked: bool,
+    slot_locked: Option<&str>,
 ) -> Option<String> {
-    if slot_locked {
-        return Some(SLOT_LOCKED.into());
+    if let Some(why) = slot_locked {
+        return Some(why.into());
     }
     let Some(job) = job else {
         return Some(NO_SETTINGS.into());
@@ -364,8 +365,14 @@ pub fn plan_bulk_edit(
         .map(|k| {
             let job = m.item(k).and_then(|i| i.job.as_ref());
             let view = job.and_then(|j| field_view(m.target, j, field));
-            let change = skip_of(job, view.as_ref(), field, Some(op), locked.contains(k))
-                .map_or(Change::Write, Change::Skip);
+            let change = skip_of(
+                job,
+                view.as_ref(),
+                field,
+                Some(op),
+                locked.get(k).map(String::as_str),
+            )
+            .map_or(Change::Write, Change::Skip);
             (k.clone(), change)
         })
         .collect()
@@ -434,7 +441,13 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
         let views = job.map_or_else(Vec::new, |j| views_of(&fields, m.target, j));
         for (n, row) in rows.iter_mut().enumerate() {
             let view = views.get(n);
-            match skip_of(job, view, row.field, None, locked.contains(k)) {
+            match skip_of(
+                job,
+                view,
+                row.field,
+                None,
+                locked.get(k).map(String::as_str),
+            ) {
                 Some(r) => match row.skipped.iter_mut().find(|e| e.0 == r) {
                     Some(e) => e.1 += 1,
                     None => row.skipped.push((r, 1)),
@@ -942,13 +955,13 @@ impl AppModel {
             n,
             cmd,
         };
+        let paths = engine_inputs(self).1;
         let links: Vec<MenuEntry> = views
             .iter()
             .filter(|o| !same_id(&o.id, &id))
             .flat_map(|o| o.members.iter().map(move |k| (o, k)))
             .filter_map(|(o, k)| {
                 let it = self.item(k).filter(|i| slot_of(i) == Some(kind))?;
-                member_game_path(self, k)?;
                 Some(MenuEntry {
                     action: MenuAction::SlotLink {
                         set: id.clone(),
@@ -956,7 +969,8 @@ impl AppModel {
                         item: k.clone(),
                     },
                     label: format!("{} — {}", o.label, it.name),
-                    disabled: None,
+                    // Listed but off when the game would find no file there.
+                    disabled: game_path_in(self, &views, &paths, k).err(),
                 })
             })
             .collect();
@@ -1016,10 +1030,10 @@ impl AppModel {
             MenuAction::Slot { set, n, cmd } => return self.set_slot_command(&set, n, cmd).err(),
             MenuAction::SlotPath { .. } | MenuAction::FromAnotherSet => {}
             MenuAction::SlotLink { set, n, item } => {
-                let Some(p) = member_game_path(self, &item) else {
-                    return Some(format!("{item} writes no output"));
+                return match member_game_path(self, &item) {
+                    Ok(p) => self.set_slot_command(&set, n, SlotCommand::Path(p)).err(),
+                    Err(e) => Some(e),
                 };
-                return self.set_slot_command(&set, n, SlotCommand::Path(p)).err();
             }
             MenuAction::SlotLock { set, n, on } => return self.set_slot_lock(&set, n, on).err(),
         }

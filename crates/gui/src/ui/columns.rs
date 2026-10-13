@@ -362,7 +362,13 @@ pub(super) fn bulk_menu(
                 .add_enabled_ui(e.disabled.is_none(), |ui| {
                     ui.menu_button(&e.label, |ui| {
                         for l in &links {
-                            if ui.button(&l.label).clicked() {
+                            let r =
+                                ui.add_enabled(l.disabled.is_none(), egui::Button::new(&l.label));
+                            let r = match &l.disabled {
+                                Some(why) => r.on_disabled_hover_text(why),
+                                None => r,
+                            };
+                            if r.clicked() {
                                 picked = Some(l.action.clone());
                                 ui.close();
                             }
