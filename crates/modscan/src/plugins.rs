@@ -9,7 +9,7 @@ use esp::PluginFacts;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Top-level `.esm/.esp/.esl` files of every loose origin, by lowercase name → (path, file name as on disk); the
@@ -109,6 +109,36 @@ fn read_plugin(a: &Found, cancel: &AtomicBool) -> Result<PluginFacts, String> {
         .map_err(|_| "plugin parser panic".to_string())
 }
 
+/// Stores one plugin's facts; a failed read is stored with its error and no size, so it is read again next scan.
+fn write_found(
+    store: &mut Store,
+    a: &Found,
+    r: Result<PluginFacts, String>,
+) -> Result<(), ScanError> {
+    let (facts, size) = match r {
+        Ok(f) => (f, Some(a.size)),
+        Err(e) => (
+            PluginFacts {
+                name: a.name.clone(),
+                errors: vec![e],
+                ..Default::default()
+            },
+            None,
+        ),
+    };
+    let path = a.path.display().to_string();
+    store.write_plugin(
+        &PluginFile {
+            name: &a.name,
+            path: &path,
+            size,
+            mtime: a.mtime,
+        },
+        &facts,
+    )?;
+    Ok(())
+}
+
 /// The plugin pass (spec §2.2): find the active plugins through the MO2 origins, parse the changed ones in parallel
 /// (one plugin per rayon task), drop the ones that left, then resolve load-order FormIDs and winners when anything
 /// changed (ruling R1).
@@ -160,52 +190,53 @@ pub fn scan_plugins(
         })
         .collect();
     st.cached = active.len() - work.len();
-    let (mut read_ns, mut write_ns) = (0u64, 0u64);
-    for (k, chunk) in work.chunks(CHUNK).enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ScanError::Cancelled);
-        }
-        progress(Progress {
-            phase: "plugins",
-            done: k * CHUNK,
-            total: work.len(),
+    let (read_ns, write_ns) = (AtomicU64::new(0), AtomicU64::new(0));
+    // Spec §2 step 7: a writer thread stores chunk k while chunk k+1 is parsed; the Store stays on that thread.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<(usize, Result<PluginFacts, String>)>>(2);
+    let (writer_store, found, wns) = (&mut *store, &active, &write_ns);
+    std::thread::scope(|s| -> Result<(), ScanError> {
+        let writer = s.spawn(move || -> Result<(), ScanError> {
+            for chunk in rx {
+                let tw = Instant::now();
+                for (i, r) in chunk {
+                    write_found(writer_store, &found[i], r)?;
+                }
+                wns.fetch_add(tw.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
+            Ok(())
         });
-        let tr = Instant::now();
-        let read: Vec<(usize, Result<PluginFacts, String>)> = chunk
-            .par_iter()
-            .map(|&i| (i, read_plugin(&active[i], cancel)))
-            .collect();
-        read_ns += tr.elapsed().as_nanos() as u64;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ScanError::Cancelled);
+        let mut out = Ok(());
+        for (k, chunk) in work.chunks(CHUNK).enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                out = Err(ScanError::Cancelled);
+                break;
+            }
+            progress(Progress {
+                phase: "plugins",
+                done: k * CHUNK,
+                total: work.len(),
+            });
+            let tr = Instant::now();
+            let read: Vec<(usize, Result<PluginFacts, String>)> = chunk
+                .par_iter()
+                .map(|&i| (i, read_plugin(&active[i], cancel)))
+                .collect();
+            read_ns.fetch_add(tr.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            if cancel.load(Ordering::Relaxed) {
+                out = Err(ScanError::Cancelled);
+                break;
+            }
+            // A closed channel means the writer stopped on an error; `join` returns it.
+            if tx.send(read).is_err() {
+                break;
+            }
         }
-        let tw = Instant::now();
-        for (i, r) in read {
-            let a = &active[i];
-            let (facts, size) = match r {
-                Ok(f) => (f, Some(a.size)),
-                Err(e) => (
-                    PluginFacts {
-                        name: a.name.clone(),
-                        errors: vec![e],
-                        ..Default::default()
-                    },
-                    None,
-                ),
-            };
-            let path = a.path.display().to_string();
-            store.write_plugin(
-                &PluginFile {
-                    name: &a.name,
-                    path: &path,
-                    size,
-                    mtime: a.mtime,
-                },
-                &facts,
-            )?;
-        }
-        write_ns += tw.elapsed().as_nanos() as u64;
-    }
+        drop(tx);
+        let w = writer
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
+        w.and(out)
+    })?;
     progress(Progress {
         phase: "plugins",
         done: work.len(),
@@ -277,8 +308,8 @@ pub fn scan_plugins(
         store.resolve_plugins(&lo, &map)?;
     }
     st.sub_ms = vec![
-        ("plugin_read", read_ns / 1_000_000),
-        ("plugin_write", write_ns / 1_000_000),
+        ("plugin_read", read_ns.into_inner() / 1_000_000),
+        ("plugin_write", write_ns.into_inner() / 1_000_000),
         ("plugin_resolve", tres.elapsed().as_millis() as u64),
     ];
     st.records = store.plugin_record_count()?;
