@@ -116,9 +116,9 @@ The test harness cannot simulate drags. Reordering sets by dragging the **≡** 
 
 A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and their masks) are not textures of their own: they blend into the set's `_n` (or `_cnr`) before the mips are made. Layer files are not listed in the Textures column or as tiles, so the only place to see and change them is the normal.
 
-- Select the normal: its settings have an **RNM** section with a switch for the whole blend, one strength slider per layer, the layer order and, for `_bent`, the AO options. A normal that has layers shows a **blue outline** on its card.
-- Each layer has a **target** switch (`_n` or `_cnr`) when the set has both bases. It is written as `rnm.target` on the layer file's `[files]` entry.
-- The bent normal's AO thumbnail is shown inverted, as the blend uses it, with a note saying which file and channel it comes from (a raw AO map's R, or the B of `_rmaos`/`_rfaos`).
+- Select the normal: its settings have an **RNM** section with a switch for the whole blend, one strength slider per layer, the layer order and, for `_bent`, the AO options. The normal (or `_cnr`) card gets a **blue outline** while RNM is active (layers present and enabled); a slot the shader cannot use keeps its amber outline instead.
+- When the set has both an `_n` and a `_cnr`, each layer has a **target** switch (*Normal*, *CNR* or *Both*). It is written as `rnm.target` on the layer file's `[files]` entry.
+- The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail, with a *use AO* tick. The note under it says sdc inverts the AO for you: supply normal AO (white = open) and do not invert it yourself.
 - Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
 
 ## Where settings live
