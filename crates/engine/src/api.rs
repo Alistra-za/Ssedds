@@ -1647,8 +1647,28 @@ impl Engine {
         })?;
         let encoders = EncoderVersions::current();
 
+        let pool = thread_pool(req.jobs)?;
+        // Audit 9 (DECISIONS Note Y3): the if-changed checks hash every source; run them on the pool, then report
+        // them below in plan order.
+        let current: Vec<bool> = if req.on_existing == OnExisting::IfChanged {
+            use rayon::prelude::*;
+            pool.install(|| {
+                ready
+                    .par_iter()
+                    .map(|job| {
+                        !cancel.is_cancelled()
+                            && job.output.exists()
+                            && existing
+                                .get(&output_key(&req.output_root, &job.output))
+                                .is_some_and(|e| is_up_to_date(e, job, &encoders, req.bc1_model))
+                    })
+                    .collect()
+            })
+        } else {
+            vec![false; ready.len()]
+        };
         let mut todo: Vec<(&ResolvedJob, PresetRef)> = vec![];
-        for job in ready {
+        for (job, current) in ready.into_iter().zip(current) {
             if cancel.is_cancelled() {
                 summary.cancelled.push(job.input.clone());
                 continue;
@@ -1696,8 +1716,7 @@ impl Engine {
                                 continue;
                             }
                             Some(e)
-                                if is_up_to_date(e, job, &encoders, req.bc1_model)
-                                    && (!req.sidecar || sidecar_present(&job.output, e)) =>
+                                if current && (!req.sidecar || sidecar_present(&job.output, e)) =>
                             {
                                 summary.up_to_date += 1;
                                 rep.emit_job(
@@ -1744,7 +1763,6 @@ impl Engine {
             }
         }
 
-        let pool = thread_pool(req.jobs)?;
         let budget = Budget::new(budget_limit(req), pool.current_num_threads());
         let state = Mutex::new(summary);
         // Admission runs on the calling thread (outside the pool) and only spawns admitted files, so no pool thread
