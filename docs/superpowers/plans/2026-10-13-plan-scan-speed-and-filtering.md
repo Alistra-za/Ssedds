@@ -2660,20 +2660,42 @@ fn used_by_plugins_hides_inert_records_until_asked() {
 | Row | Cold elapsed | Warm elapsed | Cold phase_ms (origins/walk/parse/write/resolve/textures/plugins) | Cold sub_ms | Warm phase_ms | Kept? |
 |---|---|---|---|---|---|---|
 | Spec baseline (9cb9954, 2026-10-13) | 43.4 s | not measured | 481/2311/21881/12107/556/700/4981 | — | — | — |
-| Task 1 baseline | | | | | | n/a |
-| Task 2 BSA reads | | | | | | |
-| Task 3 writer thread | | | | | | |
-| Task 4 cold indexes | | | | | | |
-| Task 5 interning | | | | | | |
-| Task 6 pragmas | | | | | | |
-| Task 7a plugin interning | | | | | | |
-| Task 7b plugin overlap | | | | | | |
-| Task 8 derived once | | | | | | |
-| Task 10 placed refs | | | | | | |
-| Task 12 inert (owner_load_order cold/warm) | | | | | | |
-| Final | | | | | | |
+| Task 1 baseline (warm OS cache) | 22.1 s | 1.9 s | 270/882/9057/8659/325/383/2298 | intern 163, read_loose_cpu 69016, read_bsa_cpu 66402, nif_parse_cpu 1324, write_chunk 8174, commit_pending 558, plugin_read 382, plugin_write 1375 | 217/785/-/167/259/298/106 | n/a |
+| Task 2 BSA reads | 22.2 s | 2.1 s | parse 8750; read_bsa_cpu 64546 (-2.8%) | | | reverted (dc3f3f4, ace9f58); A-nice-vfs 4353b36 kept |
+| Task 3 writer thread | 18.1 s | 2.2 s | parse(wall) 12261, write 561 | write_chunk 8491 | | kept ed15670 |
+| Task 4 cold indexes | 18.5 s | 2.2 s | commit_pending 444 + write 479 = 923 vs 1101 (-16%) | end_scan 239 | | deferral reverted (e08ed1f); wrapper kept |
+| Task 5 interning | 15.0 s | 2.0 s | | write_chunk 4018 vs 8051 (-50%), intern 120 | | kept 22c8300 |
+| Task 6 pragmas | 14.9 s | 2.1 s | write 368 vs 558 (-34%) | write_chunk 2912, plugin_write 1121 | | kept e951a43 |
+| Task 7a plugin interning | 15.7 s (walk noise) | | plugins 1802 vs 2098 | plugin_write 821 vs 1121 (-27%) | | kept f2910a0 |
+| Task 7b plugin overlap | 13.1 s | | plugins 2057 vs 1802 | plugin_write 1108, plugin_read 443 | | reverted 66ac604 |
+| Task 8 derived once | skipped | | | commit_pending 448 ms cold (<0.5 s), 6 ms warm | | skipped by skip rule |
+| Task 10 placed refs | 16.5 s (owner_timing); owner_load_order 2.65 s | owner_load_order 0.11 s | | plugin_read 531 vs 387-443 | | kept a02c1ca |
+| Task 12 inert (owner_load_order cold/warm) | 3.48 s | 0.12 s | | | | kept; 0 active plugins with error_text; 170168 placed rows |
+| Final (75051b4) | 16.7 s (walk 2890 / origins 656 noisy; best seen 13.1-15.0 s) | 2.3 s | | owner_load_order cold 2.93 s, warm 0.12 s | | targets: cold <= 20 s met; warm 2.3 s vs 1.9 s baseline (noise, within +-0.3) |
 
-Notes (counts from Task 1: derived copies, BSA copies, shapes, paths, texsets; WAL size and checkpoint ms; inert counts by reason from Task 12):
+Notes: Task 1 counts: derived 25529, BSA copies 35953, shapes 375341, paths 179652, texsets 20248; WAL 51 MB, checkpoint 10 ms. Reading: reads are I/O bound (~65 s thread-time each for loose and BSA over 16 threads), parse CPU only 1.3 s; elapsed varies +-1.5 s run to run (walk/origins), so keep/revert decisions used the targeted timers. Inert counts (Task 12, owner data) by reason/signature: no-reference TXST 1440, GRAS 666; not-placed STAT 4830, ACTI 1005, TREE 668, LIGH 534, FURN 387, MSTT 262, CONT 172, DOOR 69, FLOR 40; head-part-not-playable HDPT 463. Owner ruled the inert rules stay as is (carriable lights and script-spawned activators stay behind the toggle).
+
+### Audit deliverable (A1-A10)
+
+- A1 BSA folder-count check before reading: fixed, 188cad1.
+- A2 NIF string-count cap: fixed, 07f16c1.
+- A3 cancelled scan no longer shows previous winners: fixed, a19343c.
+- A-nice-vfs uncompressed BSA entries copied once: fixed, 4353b36.
+- A4 NIF graph cycle check capped at MAX_DEPTH + 2: fixed, f8c9a49.
+- A5 shader recompile/failed shapes visible in the viewport: fixed, 7a46fcf, 4a561db, 661944b.
+- A6 non-ASCII @ByteArray paths: fixed, a73c194, 58e530b.
+- A7 exclusive scan.lock (Windows share_mode(0); no lock elsewhere, shortcut comment): fixed, 662a2b3, d9f885a.
+- A8 skyrim.ini case in resolve test: fixed, 2004db6.
+- A9 dead code and unused deps: fixed, 6090449 (replace_shapes, usvfs_loaded), 77c89c3 (adapter-LUID machinery, readback_rgba8/readback), ccdf688 (serde, thiserror, encoding_rs; Cargo.lock only those 3 lines), 7b9c232 (key_form via canon_mesh, shared rebase). `set_encode_srgb` kept: 4 render3d tests use it.
+- A10 inflate message bb380d8; wait_idle 200 us sleep 9af1a6a; panic hook try_with 8f8a68e; to_rgba16f clamp 4b5c8ac; stale rustdoc link dbee5bc. Bytecode kept twice: skipped, the Arc is needed for device rebuild.
+- Audit claims found wrong: none, apart from the two skips above (set_encode_srgb has users; bytecode copy is deliberate).
+
+### Hand-off notes
+
+- The first scan after merge is cold (schema 5 rebuild).
+- Until then GUI views say to scan again (F-29).
+- Sub-timers (sub_ms) stay in; removing them is the owner's call (R2/F-26).
+- Parked: PA3-1/2/3, PA5-1, PT6-1..3, PT13-1, PT15-1 (see the ledger).
 
 ## Self-review (done at writing time)
 
