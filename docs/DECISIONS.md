@@ -589,3 +589,47 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on 
   - The workspace goes 0.5.0 → 0.6.0, so `if-changed` re-encodes.
   - There is no manifest change: the up-to-date check compares `engine_version` and `profile_sha256`, and both change.
   - `schema/` was regenerated only for the `Provenance` doc text.
+
+## Note V — M6 Track F1: TruePBR panel polish (plan rulings, 2026-10-12)
+
+- **V1 What matchN holds (plan, 2026-10-12).**
+  - PGPatcher compares `matchN` exactly with the unpatched mesh's raw slot path (no `strip_pbr`). So the value is the set's derived diffuse path, which comes from the source, not from the set id or the output.
+  - `match1` is that path, with its `_d`/`mask` kept.
+  - Slot N > 1 is that path with a trailing `_d` cut, plus `_<canonical suffix>` (`match2` = `…\rock01_n`; `facemask` → `facemask_n`).
+  - Proven against pgpsim (`slot_matches_hit_the_unpatched_mesh_and_land_on_the_sdc_prefix`).
+- **V2 Storage and writing.**
+  - `match1` absent means the derived path (on by default; old projects get it too). `match1 = ""` means off. `match2`–`match8` are on when present.
+  - Stored values have no `.dds`.
+  - The JSON gets the value without a leading `textures\` (any case) and with `.dds` exactly once.
+  - `match_diffuse`/`match_normal` are never written (`NOT_EXPOSED`). There is no migration (owner, 2026-10-12: nobody has used them): old `match_diffuse`/`match_normal` values in a project are ignored, and `match1` falls back to the derived default.
+- **V3 Prefix.**
+  - The prefix comes from the lowest active `matchN`, with that slot's suffix cut, under `textures\pbr\`.
+  - With no slot match, it is the derived path.
+  - `rename` is a new file name (owner, 2026-10-12): no folders (a `\` or `/` blocks export), one `.dds` cut. It replaces the last component of the prefix above, so the folder stays the matched one: `textures\pbr\<folder of the matched path>\<name>`.
+  - The JSON's `rename` is that full prefix, not the typed name. PGPatcher substitutes `rename` for the whole matched path when the entry has no `match_diffuse`/`match_normal` (always, for sdc), so every hit (any `matchN`, or `path_contains`, with or without a slot match) lands where sdc writes. Proven against pgpsim (`a_renamed_entry_lands_on_the_sdc_prefix_for_slot_matches_and_path_contains`).
+  - When active matches derive different prefixes and `rename` is empty, a warning says the output prefix depends on which match hits first, and to edit the match paths so they point at the same texture. It does not block export.
+  - Open point, still unverified against real PGPatcher: PGPatcher prepends `\` to `rename` before substituting, so pgpsim's matched path for a renamed entry starts with a backslash (`\textures\pbr\…`); the round-trip tests compare without it. Before F1 this applied only to the old whole-prefix rename; now every renamed set goes through it. Check one renamed set in real PGPatcher (does the NIF get `\textures\pbr\…`, and does its file-existence check accept it?).
+- **V4 No match.** A set with no active `matchN` and no `path_contains` shows "this entry matches nothing", asks before export, and is left out of the JSON. The schema's `hasMatcher` refuses it. Its textures still export.
+- **V5 Number ranges.**
+  - 0–1: `coat_strength`, `subsurface_opacity`, `fuzz.weight`.
+  - Min 0: the other 15 number keys. That includes `smooth_angle` and `auto_uv`, which fit no class.
+  - No range: `glint.log_microfacet_density`, a log value that can be negative (`NumRange::Any`).
+  - No CS or PGPatcher limits are documented.
+- **V6 Clamping.**
+  - The number box has `DragValue::range`, and a typed value outside the range shows "clamped to ≥ 0" / "clamped to 0–1". A stored out-of-range value shows the same note (ruling: it explains why the JSON differs from the box). `Any` has no note.
+  - A stored out-of-range value is shown as it is (`clamp_existing_to_range(false)`). An equal value is no edit, so drawing never dirties the project.
+  - The writer clamps.
+  - `pgpsim::range_warnings` mirrors the ranges (it skips `glint.log_microfacet_density` and the removed `env_map_*` keys), and a GUI test (`pgpsim_warns_on_exactly_the_gui_ranges`) pins the two together.
+- **V7 Layout.**
+  - The TruePBR box shows the visual settings, then **Matching**, then **Advanced TruePBR settings** (collapsed: `path_contains`, `nif_filter`, `rename`, UV, vertex, locks, inner UV scale, coat colour).
+  - The Advanced drawer's "PGPatcher (advanced)" section is gone.
+- **V8 Slot cards.**
+  - The set editor's cards (the 9-slot row; the Sets-column pill shows members, not slots) are the picked shader's usable slots, filled or empty, plus filled slots it cannot use (amber outline, hover reason).
+  - They are ordered by PGPatcher slot 1–8.
+  - Usable slots are the shader roles' sub-types mapped to slot cards (`usable_slots`). Roles matched by suffix only map to none.
+  - A fallback pick uses the fallback shader. With no pick, only the filled slots show.
+- **V9 Versions.** No bump (0.6.0): no engine change, and a bump would re-encode every texture through `engine_version`. No new codes (75). No `schema/` change.
+- **V10 The + menu (owner, 2026-10-12).**
+  - It offers slots 3–8 without a row. A slot the set fills starts from `slot_match_path` (V1); any other slot adds an empty row (`matchN = ""`, N ≥ 2) that says "this row matches nothing until a path is entered".
+  - An empty row is not a match: it is not written to the JSON and does not count for the prefix or the warnings. Clearing a row's text removes it.
+  - A filled slot is prefilled only when PGPatcher's slot-N list strips its suffix, so a prefilled row never splits the prefix (controller ruling). Subsurface `_s` in slot 8 is not in that list (`_b`/`_bl`/`_flow`; pgpsim, `a_match8_on_an_s_map_keeps_the_s_in_pgpatchers_prefix`), so slot 8 starts empty. A typed path that splits still gets the "match8 does not strip _s" and divergent-prefix warnings.

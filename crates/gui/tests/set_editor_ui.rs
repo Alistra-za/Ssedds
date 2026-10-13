@@ -109,13 +109,17 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         "RMAOS",
         "Height _p",
         "Emissive _g",
-        "Skin _sk",
         "Subsurface _s",
         "Coat _cnr",
         "Fuzz _f",
     ] {
-        h.get_by_label(label);
+        // The Matching header repeats the Diffuse/Normal slot names as its row labels.
+        assert!(h.query_all_by_label(label).next().is_some(), "{label}");
     }
+    assert!(
+        h.query_by_label("Skin _sk").is_none(),
+        "the PBR shader has no _sk slot (F1 spec §5)"
+    );
     h.get_by_label("Opaque");
     // A combo box exposes its text as a value, not a label.
     assert!(
@@ -250,10 +254,8 @@ fn rock_settings(
         .entries()
         .into_iter()
         .find(|e| e.id == "landscape/rock01")
-        .unwrap()
-        .settings
-        .into_iter()
-        .collect()
+        .map(|e| e.settings.into_iter().collect())
+        .unwrap_or_default() // no entry yet = nothing written
 }
 
 #[test]
@@ -344,6 +346,138 @@ fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     }
 }
 
+/// The PGPatcher panel of `landscape/rock01` alone.
+fn panel_harness(m: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 900.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, "landscape/rock01"),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// Focus the number box showing `shown` and select its text (egui_kittest's DragValue pattern). If the accesskit
+/// `focus()` does not put the DragValue into text editing, replace it with `.click()`: a plain click on a DragValue
+/// requests focus.
+fn focus_spin(h: &mut Harness<'static, AppModel>, shown: &str) {
+    h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .find(|n| n.value().as_deref() == Some(shown))
+        .unwrap_or_else(|| panic!("no number box shows {shown}: {:?}", spin_values(h)))
+        .focus();
+    h.run();
+    h.key_press_modifiers(eframe::egui::Modifiers::COMMAND, eframe::egui::Key::A);
+    h.run();
+}
+
+/// Type one character into the focused widget. Text events go to the focused widget, whichever node sends them.
+fn type_char(h: &Harness<'static, AppModel>, c: char) {
+    h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .next()
+        .expect("a number box")
+        .type_text(&c.to_string());
+}
+
+/// F1 spec §2: egui clamps a drag to the range the box reports, so the range is the drag test.
+#[test]
+fn every_number_box_reports_its_range() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value(
+        "landscape/rock01",
+        "multilayer",
+        Some(serde_json::json!(true)),
+    );
+    m.set_json_value(
+        "landscape/rock01",
+        "coat_strength",
+        Some(serde_json::json!(0.5)),
+    );
+    let mut h = panel_harness(m);
+    h.run();
+    let spins: Vec<_> = h
+        .query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .map(|n| {
+            let a = n.accesskit_node();
+            (n.value(), a.min_numeric_value(), a.max_numeric_value())
+        })
+        .collect();
+    assert!(spins.len() >= 5, "{spins:?}");
+    for (v, min, max) in &spins {
+        assert_eq!(*min, Some(0.0), "{v:?}");
+        let unit = v.as_deref() == Some("0.5");
+        assert_eq!(*max, unit.then_some(1.0), "{v:?}");
+    }
+}
+
+/// F1 spec §2: a typed value outside the range is clamped, and the box says so for that frame.
+#[test]
+fn typed_values_clamp_and_say_so() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value(
+        "landscape/rock01",
+        "multilayer",
+        Some(serde_json::json!(true)),
+    );
+    let mut h = panel_harness(m);
+    h.run();
+    // roughness_scale shows its fixed default 1.0.
+    focus_spin(&mut h, "1.0");
+    type_char(&h, '-');
+    h.run();
+    type_char(&h, '5');
+    h.step();
+    h.get_by_label("clamped to ≥ 0");
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert_eq!(rock_settings(&h)["roughness_scale"], serde_json::json!(0.0));
+    // coat_strength has no default ("not set"): a 2 becomes 1.
+    h.state_mut().set_json_value(
+        "landscape/rock01",
+        "coat_strength",
+        Some(serde_json::json!(0.5)),
+    );
+    h.run();
+    focus_spin(&mut h, "0.5");
+    type_char(&h, '2');
+    h.step();
+    h.get_by_label("clamped to 0–1");
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert_eq!(rock_settings(&h)["coat_strength"], serde_json::json!(1.0));
+}
+
+/// F1 spec Review Focus 3: a hand-edited value outside the range shows as it is with the note. Drawing it is no
+/// edit, so the project stays clean (the writer clamps it on export).
+#[test]
+fn a_hand_edited_negative_number_shows_as_it_is_and_does_not_dirty_the_project() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value(
+        "landscape/rock01",
+        "roughness_scale",
+        Some(serde_json::json!(-3.0)),
+    );
+    m.save().unwrap();
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    let mut h = panel_harness(m);
+    h.run();
+    h.run();
+    assert!(
+        spin_values(&h).contains(&"-3.0".to_string()),
+        "{:?}",
+        spin_values(&h)
+    );
+    h.get_by_label("clamped to ≥ 0");
+    assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
+    assert_eq!(
+        rock_settings(&h)["roughness_scale"],
+        serde_json::json!(-3.0)
+    );
+}
+
 #[test]
 fn an_unset_number_without_a_default_says_not_set() {
     let d = tempfile::tempdir().unwrap();
@@ -414,9 +548,13 @@ fn unticking_a_switch_removes_its_key() {
 #[test]
 fn the_tri_buttons_write_true_false_and_remove() {
     let mut h = rock_with(&[]);
-    h.state_mut().settings.advanced_open = true;
+    // The header and its rows are low in the set editor's scroll area: bring each into view before clicking.
+    h.get_by_label("Advanced TruePBR settings").scroll_to_me();
     h.run();
-    // The first Tri row of the Advanced drawer is vertex_colors.
+    h.get_by_label("Advanced TruePBR settings").click();
+    h.run();
+    h.query_all_by_label("on").next().unwrap().scroll_to_me();
+    // The first Tri row under Advanced TruePBR settings is vertex_colors.
     let nth = |h: &Harness<'static, AppModel>, l: &str| {
         h.query_all_by_label(l).next().map(|n| n.rect()).is_some()
     };
@@ -616,8 +754,9 @@ fn a_filled_fuzz_slot_greys_the_coat_normal_switch() {
         .is_disabled());
 }
 
+/// F1 spec §4: the drawer no longer shows PGPatcher keys; they are in the TruePBR box.
 #[test]
-fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
+fn the_header_has_the_json_name_and_the_drawer_has_no_pgpatcher_keys() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     rock_selected(&mut m);
@@ -625,10 +764,39 @@ fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
     let mut h = harness(m);
     h.run();
     h.get_by_label("JSON:");
-    h.get_by_label_contains("PGPatcher (advanced)");
-    h.get_by_label_contains("Matching by: match_diffuse");
-    h.get_by_label("Match normal");
-    h.get_by_label("Lock diffuse");
+    assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());
+    h.get_by_label("Advanced TruePBR settings");
+}
+
+/// F1 spec §4, §6 "Layout": path_contains, nif_filter, rename and the locks are under "Advanced TruePBR settings",
+/// collapsed by default; match1–match8 are only in the Matching header.
+#[test]
+fn advanced_truepbr_settings_are_collapsed_and_hold_the_advanced_keys() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(pbr_opened(d.path()));
+    h.run();
+    for l in [
+        "Path contains",
+        "Mesh path contains",
+        "Rename",
+        "Lock diffuse",
+    ] {
+        assert!(
+            h.query_by_label(l).is_none(),
+            "{l} is hidden while collapsed"
+        );
+    }
+    h.get_by_label("Advanced TruePBR settings").click();
+    h.run();
+    for l in [
+        "Path contains",
+        "Mesh path contains",
+        "Rename",
+        "Lock diffuse",
+    ] {
+        h.get_by_label(l);
+    }
+    assert!(h.query_by_label_contains("Match slot").is_none());
 }
 
 /// Final review Minor 2 (parked Task 14): the slot cards' Format and Opaque write `sdc.toml`; while it is read-only
@@ -824,4 +992,246 @@ fn a_coat_source_titles_the_subsurface_card_coat_colour_and_strength() {
     h.run();
     h.get_by_label("Coat colour + strength");
     assert!(h.query_by_label("Subsurface _s").is_none());
+}
+
+fn text_inputs(h: &Harness<'static, AppModel>) -> Vec<String> {
+    h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.value())
+        .collect()
+}
+
+/// F1 spec §3.2: the Matching header lists the default match1 and says how the rows combine.
+#[test]
+fn the_matching_header_lists_the_default_match1() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(pbr_opened(d.path()));
+    h.run();
+    h.get_by_label("Matching");
+    h.get_by_label("The entry applies when any of these matches.");
+    assert!(
+        text_inputs(&h).contains(&r"landscape\rock01".to_string()),
+        "{:?}",
+        text_inputs(&h)
+    );
+    assert!(h.query_by_label_contains("matches nothing").is_none());
+}
+
+fn match_toggles(h: &Harness<'static, AppModel>) -> Vec<bool> {
+    use eframe::egui::accesskit::Toggled;
+    h.query_all_by_label("Match on this")
+        .map(|n| n.accesskit_node().toggled() == Some(Toggled::True))
+        .collect()
+}
+
+/// F1 spec §3.2, §6 "Toggles": the diffuse card is on by default and the normal card off. Removing the match1 row
+/// turns the diffuse toggle off and warns; the normal toggle adds match2.
+#[test]
+fn the_card_toggles_mirror_the_matching_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    assert_eq!(match_toggles(&h), vec![true, false], "diffuse, normal");
+    // The Matching header sits below the visual groups: bring it into view before a pointer click.
+    h.get_by_label("×").scroll_to_me();
+    h.run();
+    h.get_by_label("×").click();
+    h.run();
+    assert_eq!(rock_settings(&h)["match1"], serde_json::json!(""));
+    assert_eq!(match_toggles(&h), vec![false, false]);
+    h.get_by_label_contains("this entry matches nothing");
+    h.query_all_by_label("Match on this")
+        .nth(1)
+        .unwrap()
+        .scroll_to_me();
+    h.run();
+    h.query_all_by_label("Match on this")
+        .nth(1)
+        .unwrap()
+        .click();
+    h.run();
+    assert_eq!(
+        rock_settings(&h)["match2"],
+        serde_json::json!(r"landscape\rock01_n")
+    );
+    assert!(text_inputs(&h).contains(&r"landscape\rock01_n".to_string()));
+    h.query_all_by_label("Match on this")
+        .next()
+        .unwrap()
+        .scroll_to_me();
+    h.run();
+    h.query_all_by_label("Match on this")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    assert!(
+        !rock_settings(&h).contains_key("match1"),
+        "back to the derived default"
+    );
+    assert_eq!(match_toggles(&h), vec![true, true]);
+}
+
+/// Owner, 2026-10-12: + offers slots 3–8. A slot the set fills starts from the set's path for it; an empty slot adds
+/// an empty row that warns until a path is typed.
+#[test]
+fn the_plus_menu_offers_slots_3_to_8_and_an_empty_slot_adds_an_empty_row() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(pbr_opened(d.path()));
+    h.run();
+    h.get_by_label("+").click();
+    h.run();
+    for n in 3..=8 {
+        h.get_by_label_contains(&format!("{n} · "));
+    }
+    h.get_by_label("6 · RMAOS").click();
+    h.run();
+    assert_eq!(
+        rock_settings(&h)["match6"],
+        serde_json::json!(r"landscape\rock01_rmaos")
+    );
+    assert!(h.query_by_label_contains(EMPTY_ROW).is_none());
+    h.get_by_label("+").click();
+    h.run();
+    assert!(h.query_by_label_contains("6 · ").is_none(), "already a row");
+    h.get_by_label("3 · Slot 3").click();
+    h.run();
+    assert_eq!(rock_settings(&h)["match3"], serde_json::json!(""));
+    h.get_by_label_contains(EMPTY_ROW);
+    assert!(
+        text_inputs(&h).contains(&String::new()),
+        "{:?}",
+        text_inputs(&h)
+    );
+}
+
+const EMPTY_ROW: &str = "this row matches nothing until a path is entered";
+
+/// Final review Minor 8: typing into a Matching row. Clearing match1 turns the diffuse match off (`""`), pasting the
+/// path back with `.dds` stores it without, and pasting the derived default (with `.dds`) is no edit.
+#[test]
+fn typing_into_the_match1_row_clears_and_pastes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.save().unwrap();
+    let mut h = panel_harness(m);
+    h.run();
+    let type_into = |h: &mut Harness<'static, AppModel>, from: &str, to: &str| {
+        h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+            .find(|n| n.value().as_deref() == Some(from))
+            .expect("the row")
+            .focus();
+        h.run();
+        h.key_press_modifiers(eframe::egui::Modifiers::COMMAND, eframe::egui::Key::A);
+        h.run();
+        // Text replaces the selection; Backspace clears it.
+        if to.is_empty() {
+            h.key_press(eframe::egui::Key::Backspace);
+        } else {
+            h.event(eframe::egui::Event::Text(to.into()));
+        }
+        h.run();
+        h.key_press(eframe::egui::Key::Enter);
+        h.run();
+    };
+    // The derived default pasted back with .dds is the same path: nothing is written.
+    type_into(&mut h, r"landscape\rock01", r"landscape\rock01.dds");
+    assert!(!rock_settings(&h).contains_key("match1"));
+    assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
+    type_into(&mut h, r"landscape\rock01", r"landscape\other.dds");
+    assert_eq!(
+        rock_settings(&h)["match1"],
+        serde_json::json!(r"landscape\other")
+    );
+    type_into(&mut h, r"landscape\other", "");
+    assert_eq!(rock_settings(&h)["match1"], serde_json::json!(""));
+    h.get_by_label_contains("this entry matches nothing");
+}
+
+/// F1 Review Focus 4 (plan): leaving a row unchanged writes nothing: the default match1 does not become a key, and
+/// the project stays clean.
+#[test]
+fn leaving_a_matching_row_unchanged_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.save().unwrap();
+    let mut h = panel_harness(m);
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+        .find(|n| n.value().as_deref() == Some(r"landscape\rock01"))
+        .expect("the match1 row")
+        .focus();
+    h.run();
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert!(!rock_settings(&h).contains_key("match1"));
+    assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
+}
+
+/// F1 spec §5: a filled slot the set's shader cannot use stays, and says why on hover.
+#[test]
+fn a_filled_slot_the_shader_cannot_use_says_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_shader("landscape/rock01", Some(engine::shader::Shader::Default));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let v = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap();
+    assert_eq!(
+        v.shader.as_ref().map(|p| p.shader),
+        Some(engine::shader::Shader::Default)
+    );
+    assert!(
+        v.slots.contains_key(&sdc_gui::model::sets::SlotKind::Rmaos),
+        "the fixture still packs _rmaos under the Default shader: {:?}",
+        v.slots
+    );
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    assert!(
+        h.query_by_label("Height _p").is_none(),
+        "Default has no height slot"
+    );
+    // Final review Minor 7: the unusable card is outlined (2 px amber); the same set under its PBR shader is not.
+    let mut base = pbr_opened(&d.path().join("base"));
+    rock_selected(&mut base);
+    let mut hb = harness(base);
+    hb.run();
+    assert_eq!(
+        amber_outlines(&h),
+        amber_outlines(&hb) + 1,
+        "one card outlined"
+    );
+    let rmaos = h
+        .query_all_by_label("RMAOS")
+        .next()
+        .expect("the RMAOS card");
+    rmaos.hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("the Default shader does not use slot 6");
+}
+
+/// The 2 px amber rectangle outlines painted in the last frame (the unusable-slot card stroke, set_editor.rs).
+fn amber_outlines(h: &Harness<'static, AppModel>) -> usize {
+    use eframe::egui::{Color32, Shape, Stroke};
+    fn walk(s: &Shape, n: &mut usize) {
+        match s {
+            Shape::Rect(r) if r.stroke == Stroke::new(2.0, Color32::from_rgb(230, 160, 30)) => {
+                *n += 1
+            }
+            Shape::Vec(v) => v.iter().for_each(|x| walk(x, n)),
+            _ => {}
+        }
+    }
+    let mut n = 0;
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut n);
+    }
+    n
 }

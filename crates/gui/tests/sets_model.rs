@@ -316,7 +316,7 @@ fn json_only_edits_do_not_replan_but_match_edits_do() {
     assert!(!m.busy(), "a material value does not plan");
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\boulder")),
     );
     assert!(m.busy(), "a match changes output paths, so it plans");
@@ -335,7 +335,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
     idle(&mut m);
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\boulder")),
     );
     idle(&mut m);
@@ -354,7 +354,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
             .as_deref(),
         Some(r"landscape\rock01")
     );
-    m.set_json_value("landscape/rock01", "match_diffuse", None);
+    m.set_json_value("landscape/rock01", "match1", None);
     idle(&mut m);
     assert_eq!(
         view(&set_views(&m), "landscape/rock01").prefix.as_deref(),
@@ -721,7 +721,7 @@ fn a_packed_format_applies_after_a_match_edit() {
     let before = packed(&m).key;
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\stone")),
     );
     idle(&mut m);
@@ -763,7 +763,7 @@ fn a_packed_entry_stays_matched_after_a_match_edit() {
     m.set_format(&key, Format::Bc1, ColorTag::Unorm);
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\stone")),
     );
     idle(&mut m);
@@ -1308,4 +1308,192 @@ fn a_scan_database_decides_a_diffuse_alpha() {
         (AlphaPolicy::Blend, "mesh:alpha".to_string())
     );
     assert!(!asked(&m));
+}
+
+/// F1 spec Review Focus 1: match1 comes from the source, so a set rename does not move it off the mesh's path.
+#[test]
+fn a_renamed_set_still_matches_its_source_path() {
+    use sdc_gui::model::pbr_export::json_entries;
+    use sdc_gui::pgp::writer::entry_node;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.rename_set("landscape/rock01", "landscape/boulder")
+        .unwrap();
+    idle(&mut m);
+    let (_, e) = json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == "landscape/boulder")
+        .expect("the renamed set is a PBR set");
+    assert_eq!(
+        entry_node(&e).to_value()["match1"],
+        json!(r"landscape\rock01.dds")
+    );
+}
+
+/// F1 spec §3.2, owner 2026-10-12: the Matching rows are the active matches and the empty + rows; the + menu offers
+/// slots 3–8 without a row, a filled slot starting from the set's path and any other empty.
+#[test]
+fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
+    assert_eq!(
+        active,
+        vec![SlotMatch {
+            n: 1,
+            slot: "Diffuse".into(),
+            path: r"landscape\rock01".into()
+        }]
+    );
+    let slot = |n: u8, slot: &str, path: &str| SlotMatch {
+        n,
+        slot: slot.into(),
+        path: path.into(),
+    };
+    assert_eq!(
+        add,
+        vec![
+            slot(3, "Slot 3", ""),
+            slot(4, "Slot 4", ""),
+            slot(5, "Slot 5", ""),
+            slot(6, "RMAOS", r"landscape\rock01_rmaos"),
+            slot(7, "Slot 7", ""),
+            slot(8, "Slot 8", ""),
+        ]
+    );
+    m.set_json_value(
+        "landscape/rock01",
+        "match6",
+        Some(json!(r"landscape\rock01_rmaos")),
+    );
+    m.set_json_value("landscape/rock01", "match3", Some(json!("")));
+    m.set_json_value("landscape/rock01", "match1", Some(json!("")));
+    idle(&mut m);
+    let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
+    assert_eq!(
+        active,
+        vec![
+            slot(3, "Slot 3", ""),
+            slot(6, "RMAOS", r"landscape\rock01_rmaos")
+        ],
+        "an empty + row stays a row; match1 = \"\" (diffuse off) is not one"
+    );
+    assert_eq!(
+        add.iter().map(|a| a.n).collect::<Vec<_>>(),
+        vec![4, 5, 7, 8]
+    );
+}
+
+/// F1 spec §5, DECISIONS V8: a PBR set's cards are the PBR slots in PGPatcher order 1–8, empty or not.
+#[test]
+fn a_pbr_set_shows_its_pbr_slots_in_slot_order() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let v = view(&set_views(&m), "landscape/rock01").clone();
+    assert_eq!(v.shader.as_ref().map(|p| p.shader), Some(Shader::Pbr));
+    let row = slot_row(v.shader.as_ref(), &v.slots);
+    assert_eq!(
+        row.iter().map(|c| c.kind).collect::<Vec<_>>(),
+        vec![
+            SlotKind::Diffuse,
+            SlotKind::Normal,
+            SlotKind::Emissive,
+            SlotKind::Height,
+            SlotKind::Rmaos,
+            SlotKind::Coat,
+            SlotKind::Fuzz,
+            SlotKind::Subsurface,
+        ]
+    );
+    assert!(row.iter().all(|c| c.usable));
+    let set = |k: &[SlotKind]| k.iter().copied().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        usable_slots(Shader::AdvancedSkin),
+        set(&[
+            SlotKind::Diffuse,
+            SlotKind::Normal,
+            SlotKind::SkinSk,
+            SlotKind::Rmaos
+        ])
+    );
+    assert_eq!(
+        usable_slots(Shader::Glow),
+        set(&[SlotKind::Diffuse, SlotKind::Normal, SlotKind::Emissive])
+    );
+    assert_eq!(
+        usable_slots(Shader::Eye),
+        set(&[SlotKind::Diffuse, SlotKind::Normal])
+    );
+}
+
+/// F1 spec §5, Review Focus 4: a SHADER-UNAVAILABLE fallback (default in place of pbr) keeps the filled RMAOS
+/// visible, in slot order and marked; with no pick, only the filled slots show.
+#[test]
+fn a_fallback_shader_keeps_filled_slots_it_cannot_use() {
+    use engine::shader::{Shader, ShaderOrigin, ShaderPick};
+    use std::collections::BTreeMap;
+    let own = |i: &str| SlotFill::Own { item: i.into() };
+    let slots: BTreeMap<SlotKind, SlotFill> =
+        [(SlotKind::Rmaos, own("r")), (SlotKind::Diffuse, own("d"))]
+            .into_iter()
+            .collect();
+    let fallback = ShaderPick {
+        shader: Shader::Default,
+        provenance: ShaderOrigin::Fallback,
+        wanted: Some(Shader::Pbr),
+    };
+    let row = slot_row(Some(&fallback), &slots);
+    assert_eq!(
+        row,
+        vec![
+            SlotCell {
+                kind: SlotKind::Diffuse,
+                fill: own("d"),
+                usable: true
+            },
+            SlotCell {
+                kind: SlotKind::Normal,
+                fill: SlotFill::Empty,
+                usable: true
+            },
+            SlotCell {
+                kind: SlotKind::Rmaos,
+                fill: own("r"),
+                usable: false
+            },
+        ]
+    );
+    let none = slot_row(None, &slots);
+    assert_eq!(
+        none.iter().map(|c| (c.kind, c.usable)).collect::<Vec<_>>(),
+        vec![(SlotKind::Diffuse, true), (SlotKind::Rmaos, true)]
+    );
+}
+
+/// Controller ruling (final fix wave): + prefills slot N only when PGPatcher's slot-N list strips the member's
+/// suffix, so a prefilled row never splits the prefix. Subsurface `_s` in slot 8 is not in that list (`_b`/`_bl`/
+/// `_flow`): it gets an empty row instead. Height `_p` in slot 4 is stripped, so it is prefilled.
+#[test]
+fn the_plus_menu_prefills_only_suffixes_pgpatcher_strips() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let mut v = view(&set_views(&m), "landscape/rock01").clone();
+    for k in [SlotKind::Height, SlotKind::Subsurface] {
+        v.slots.insert(
+            k,
+            SlotFill::Own {
+                item: "landscape/x.png".into(),
+            },
+        );
+    }
+    let (_, add) = slot_matches(&v);
+    let path = |n: u8| add.iter().find(|a| a.n == n).map(|a| a.path.clone());
+    assert_eq!(path(4), Some(r"landscape\rock01_p".into()));
+    assert_eq!(path(6), Some(r"landscape\rock01_rmaos".into()));
+    assert_eq!(path(8), Some(String::new()), "slot 8 does not strip _s");
 }

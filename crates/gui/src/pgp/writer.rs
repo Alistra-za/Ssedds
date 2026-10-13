@@ -1,7 +1,7 @@
 //! The PGPatcher JSON document (M3b spec §5.2–5.3, §5.6): `{ "$schema", "default", "entries" }`, keys in schema
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
-use super::prefix::{match_mode, MatchMode};
-use super::schema::{Group, KeyKind, KEYS, SCHEMA_URL};
+use super::prefix::{active_matches, json_rename, match_value};
+use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
 use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -31,6 +31,7 @@ pub struct EntryInput {
     pub settings: Settings,
     /// Final slot paths (commands and borrowed slots, already merged by the caller): slot → path, `""` clears.
     pub slots: BTreeMap<u8, String>,
+    /// The derived diffuse path: `match1` while the set has no `match1` key (DECISIONS V2).
     pub derived_match: String,
 }
 
@@ -51,6 +52,15 @@ fn colour(v: &Value, alpha: bool) -> Option<Node> {
         out.push(Node::Scalar(json!(1.0)));
     }
     Some(Node::Arr(out))
+}
+
+/// `v` inside `range` (F1 spec §2): a hand-edited value outside it is written clamped. A value inside it, or one that
+/// is not a number (the validator reports that), is written as it is.
+fn clamped(v: &Value, range: NumRange) -> Value {
+    match v.as_f64() {
+        Some(x) if range.clamp(x) != x => json!(range.clamp(x)),
+        _ => v.clone(),
+    }
 }
 
 fn group_feature(g: Group) -> Option<Feature> {
@@ -129,7 +139,7 @@ fn fixed_default_block() -> Vec<(String, Node)> {
 /// The entry for one set: only the set's own settings, under the per-kind rules, in schema order.
 fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(String, Node)> {
     let mut out = vec![];
-    let mode = match_mode(own);
+    let matches = active_matches(own, derived);
     for k in KEYS.iter().filter(|k| !k.key.contains('.')) {
         if let Some(f) = group_feature(k.group) {
             if !live(own, f) {
@@ -147,27 +157,32 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                 let f = feature_of_object(k.key).expect("objects are features");
                 live(own, f).then(|| Node::Obj(sub_object(k.key, own)))
             }
-            KeyKind::Number => {
+            KeyKind::Number(range) => {
                 let fixed = FIXED_NUMBERS.iter().find(|(n, _)| *n == k.key);
-                v.filter(|v| fixed.is_none_or(|(_, x)| v.as_f64() != Some(*x)))
-                    .map(|v| Node::Scalar(v.clone()))
+                v.map(|v| clamped(v, range))
+                    .filter(|v| fixed.is_none_or(|(_, x)| v.as_f64() != Some(*x)))
+                    .map(Node::Scalar)
             }
             KeyKind::Tri => v.map(|v| Node::Scalar(v.clone())),
-            KeyKind::Text => {
-                if k.key == "match_diffuse" {
-                    match mode {
-                        MatchMode::Diffuse => Some(Node::Scalar(json!(v
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(derived)))),
-                        _ => None,
-                    }
-                } else {
-                    v.and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map(|s| Node::Scalar(json!(s)))
+            KeyKind::Text => match k
+                .key
+                .strip_prefix("match")
+                .and_then(|n| n.parse::<u8>().ok())
+            {
+                // matchN: the active slot matches only, in the JSON form (DECISIONS V2).
+                Some(n) => matches
+                    .iter()
+                    .find(|(m, _)| *m == n)
+                    .map(|(_, v)| Node::Scalar(json!(match_value(v)))),
+                // The typed file name becomes the full prefix (owner, 2026-10-12; DECISIONS V3).
+                None if k.key == "rename" => {
+                    json_rename(own, derived).map(|r| Node::Scalar(json!(r)))
                 }
-            }
+                None => v
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Node::Scalar(json!(s))),
+            },
             KeyKind::Rgb => v.and_then(|v| colour(v, false)),
             KeyKind::Rgba => v.and_then(|v| colour(v, true)),
             KeyKind::Slot => {
@@ -191,8 +206,8 @@ fn sub_object(obj: &str, own: &Settings) -> Vec<(String, Node)> {
         let name = &k.key[obj.len() + 1..];
         let v = own.get(k.key).filter(|v| !v.is_null());
         let node = match k.kind {
-            KeyKind::Number => v
-                .cloned()
+            KeyKind::Number(range) => v
+                .map(|v| clamped(v, range))
                 .or_else(|| {
                     GLINT_DEFAULTS
                         .iter()

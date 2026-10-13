@@ -9,6 +9,7 @@ mod prep;
 mod slots;
 mod text;
 
+pub use check::range_warnings;
 pub use matching::{matched_path, shape_matches};
 pub use nif::material::MaterialState;
 pub use prep::prepare;
