@@ -18,6 +18,8 @@ pub enum NifError {
     Truncated { at: usize, need: usize },
     #[error("not a Skyrim LE/SE NIF (version {version:#x}, user {user}, BS version {bsver})")]
     NotSkyrim { version: u32, user: u32, bsver: u32 },
+    #[error("implausible string count {0}")]
+    TooManyStrings(u32),
     #[error("big-endian NIF")]
     BadEndian,
     #[error("no Gamebryo header line")]
