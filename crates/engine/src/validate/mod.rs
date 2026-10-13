@@ -207,7 +207,7 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             _ if alpha_present => vec![0, 1, 2, 3],
             _ => vec![0, 1, 2],
         };
-        // M6 Track D (Note T5): fast preview checks PSNR on the smallest mip only.
+        // M6 Track D (Note T5): fast preview checks PSNR on the smallest mip only (coverage runs on every level, Note Y6).
         let last = decoded.len().saturating_sub(1);
         let smallest_only = v.mips == ValidationMips::Smallest;
         for (l, ((lw, lh, d), e)) in decoded.iter().zip(enc).enumerate() {
@@ -339,9 +339,6 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         if p.coverage_enabled() {
             if let Some(base) = inp.base_coverage {
                 for (l, (lw, lh, px)) in ldr.iter().enumerate() {
-                    if v.mips == ValidationMips::Smallest && l + 1 != ldr.len() {
-                        continue;
-                    }
                     let c = coverage_fraction(
                         px.iter().map(|q| q[3] as f32 / 255.0),
                         p.alpha.threshold,

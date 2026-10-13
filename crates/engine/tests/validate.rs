@@ -816,9 +816,9 @@ fn height_clip_skips_an_all_zero_alpha_but_not_a_mixed_one() {
     );
 }
 
-/// M6 Track D (Note T5): `validation.mips = smallest` checks PSNR and coverage on the last level only.
+/// M6 Track D (Note T5): `validation.mips = smallest` checks PSNR on the last level only; coverage on every level (audit 13, DECISIONS Note Y6).
 #[test]
-fn smallest_mip_validation_checks_only_the_last_level() {
+fn smallest_mip_validation_checks_psnr_on_the_last_level_and_coverage_on_all() {
     let mut p = profile(Subtype::Diffuse);
     let (b, _) = dds(
         &p,
@@ -859,6 +859,26 @@ fn smallest_mip_validation_checks_only_the_last_level() {
         .filter(|w| w.code == Code::ValCoverage)
         .map(|w| w.data["level"].as_u64().unwrap())
         .collect();
-    assert_eq!(cov_levels, [1], "the last level, not the first");
-    assert_eq!(r.summary.coverage.len(), 1);
+    assert_eq!(
+        cov_levels,
+        [0, 1],
+        "coverage is checked on every level (Note Y6, amends T5)"
+    );
+    assert_eq!(r.summary.coverage.len(), 2);
+
+    // A real chain ends at 1x1: under `smallest` the coverage drift on the big levels still fires.
+    let (b, inputs) = dds(
+        &p,
+        &[
+            a_flat(32),
+            a_flat(16),
+            a_flat(8),
+            a_flat(4),
+            a_flat(2),
+            a_flat(1),
+        ],
+    );
+    let r = run(&b, &p, Some(&inputs), Some(1.0), None);
+    assert!(codes(&r).contains(&Code::ValCoverage), "{:?}", r.warnings);
+    assert_eq!(r.summary.coverage.len(), 6);
 }

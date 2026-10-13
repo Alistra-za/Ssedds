@@ -500,7 +500,7 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/s
   - `pbr_emissive` (BC6H) and `hdr_sky` stay full size. `hdr_sky` is excluded from resize (owner).
   - `pbr_subsurface` and `pbr_fuzz` are BC1 only without alpha.
 - **T4 `resize = half` (owner, 2026-10-12).** Both sides halve together when the larger is above 512 (`HALF_FLOOR`); the aspect ratio is kept and the larger side floors (1024×512 becomes 512×256); there is no POT step; each side is at least 1 px; `DIM-RESIZED` names the mode; admission counts it like `pot-down`.
-- **T5 `validation.mips = smallest` (plan, 2026-10-12).** PSNR and coverage on the last mip only. The default `all` is not serialised.
+- **T5 `validation.mips = smallest` (plan, 2026-10-12).** PSNR on the last mip only; coverage runs on every level (amended by audit 13, Note Y6). The default `all` is not serialised.
 - **T6 The user presets folder (plan, 2026-10-12).**
   - Location: `%APPDATA%\sdc\presets\*.toml`, non-recursive, in file-name order.
   - Load order: all files load first, then each preset is checked, so a base may come later in the order. Failures are skipped with `CFG-PRESET-SKIPPED`, repeatedly, so orphans go too.
