@@ -162,7 +162,7 @@ pub struct RnmJob {
 
 impl RnmJob {
     /// The files the blend reads under `spec`, in a fixed order with a role: each layer in `LayerId::ORDER` order
-    /// ("detail"), then its mask when used ("detail.mask"), then the AO when used ("bent.ao").
+    /// ("detail"), then its mask when used ("detail.mask"), then the AO when used ("bent.ao.r" for a raw `_ao`, "bent.ao.b" for `_rmaos`/`_rfaos`).
     pub fn inputs(&self, spec: &RnmSpec) -> Vec<(&RnmFile, String)> {
         let mut v = vec![];
         for id in LayerId::ORDER {
@@ -178,7 +178,9 @@ impl RnmJob {
             && spec.bent.mode == crate::config::BentMode::AoBlend
             && spec.bent.ao;
         if let (Some(a), true) = (&self.ao, bent_ao) {
-            v.push((&a.file, "bent.ao".to_string()));
+            // The channel is part of the identity: the same bytes as `_ao` (R) and `_rmaos` (B) feed different data.
+            let ch = if a.channel == 0 { "r" } else { "b" };
+            v.push((&a.file, format!("bent.ao.{ch}")));
         }
         v
     }

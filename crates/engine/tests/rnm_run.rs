@@ -129,3 +129,53 @@ fn odd_sizes_convert() {
     let dds = read_dds(&std::fs::read(d.path().join("out/iron_n.dds")).unwrap()).unwrap();
     assert_eq!((dds.width, dds.height), (32, 32));
 }
+
+/// Fix I1: the AO channel is part of the source identity. Same bytes as `_rmaos` (B) then `_ao` (R) must re-encode.
+#[test]
+fn ao_channel_swap_re_encodes() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["iron_n.png", "iron_bent.png"] {
+        png(d.path(), n);
+    }
+    let rmaos = d.path().join("in/iron_rmaos.png");
+    image::RgbaImage::from_fn(32, 32, |x, y| {
+        image::Rgba([(x * 8) as u8, 10, (255 - y * 8) as u8, 255])
+    })
+    .save(&rmaos)
+    .unwrap();
+    assert_eq!(run(plan_dir(d.path(), vec![])).failed, 0);
+    let bytes = std::fs::read(&rmaos).unwrap();
+    std::fs::remove_file(&rmaos).unwrap();
+    std::fs::write(d.path().join("in/iron_ao.png"), bytes).unwrap();
+    let s = run(plan_dir(d.path(), vec![]));
+    // The new `_ao` also packs into a fresh `_rmaos`, so the bent `_n` is one of the re-encodes, not the only one.
+    assert!(s.converted >= 1);
+    let m = engine::manifest::Manifest::at(&d.path().join("out"))
+        .load()
+        .unwrap();
+    let roles: Vec<_> = m["iron_n.dds"]
+        .sources
+        .iter()
+        .filter_map(|r| r.rnm.as_deref())
+        .collect();
+    assert_eq!(roles, ["bent", "bent.ao.r"]);
+}
+
+/// Review Focus 1: a target edit re-encodes the `_cnr` that gains the layer, and only it.
+#[test]
+fn target_edit_re_encodes_the_cnr() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["iron.png", "iron_rmaos.png", "iron_n.png", "iron_bump.png"] {
+        png(d.path(), n);
+    }
+    let cnr = d.path().join("in/iron_cnr.png");
+    image::RgbaImage::from_fn(32, 32, |_, _| image::Rgba([128, 128, 255, 200]))
+        .save(&cnr)
+        .unwrap();
+    run(plan_dir(d.path(), vec![]));
+    let s = run(plan_dir(
+        d.path(),
+        vec!["file:iron_bump.png.rnm.target=both".into()],
+    ));
+    assert_eq!(s.converted, 1);
+}
