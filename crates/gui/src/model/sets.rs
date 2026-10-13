@@ -215,6 +215,8 @@ pub struct SetView {
     pub shader: Option<ShaderPick>,
     pub shader_choice: Option<Shader>,
     pub set_warnings: Vec<Warning>,
+    /// F3a Task 8: the locked slot numbers (`SetEntry::lock`).
+    pub locks: BTreeSet<u8>,
 }
 
 impl SetView {
@@ -237,6 +239,7 @@ impl SetView {
             shader: None,
             shader_choice: None,
             set_warnings: vec![],
+            locks: BTreeSet::new(),
         }
     }
 }
@@ -456,6 +459,7 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
         v.created = e.created;
         v.settings = e.settings.clone();
         v.shader_choice = e.shader;
+        v.locks = e.lock.clone();
         if v.key.is_empty() && !e.created {
             v.missing.push(NO_FILES_LEFT.into());
         }
@@ -770,6 +774,34 @@ fn replans(key: &str) -> bool {
     key.starts_with("match") || key == "path_contains" || key == "rename"
 }
 
+/// F3a Task 8: why a locked slot refuses a slot command or a bulk edit.
+pub const SLOT_LOCKED: &str = "slot locked";
+
+/// Why `slot` of `v` takes no change: it is locked (F3a Task 8).
+fn lock_refusal(v: &SetView, slot: Option<SlotKind>) -> Result<(), String> {
+    match slot.map(SlotKind::slot_number) {
+        Some(n) if v.locks.contains(&n) => {
+            Err(format!("slot {n} of {} is locked; unlock it first", v.id))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The items filling a locked slot of any set, its own or borrowed (F3a Task 8): bulk edits skip them.
+pub fn locked_items(m: &AppModel) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for v in views(m).iter() {
+        for (k, f) in &v.slots {
+            if let SlotFill::Own { item } | SlotFill::Borrowed { item, .. } = f {
+                if v.locks.contains(&k.slot_number()) {
+                    out.insert(item.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Empty `slot` of set `id` in the document: its own occupant leaves the set, a borrow is dropped. Part of a replace.
 fn clear_slot(s: &mut SetsDoc, id: &str, slot: Option<SlotKind>, existing: &Option<SlotFill>) {
     match existing {
@@ -796,6 +828,45 @@ impl AppModel {
 
     fn sets_editable(&self) -> bool {
         self.sets_doc.as_ref().is_some_and(|d| !d.read_only())
+    }
+
+    /// Whether slot `n` of set `set` is locked (F3a Task 8).
+    pub fn slot_locked(&self, set: &str, n: u8) -> bool {
+        views(self)
+            .iter()
+            .any(|v| same_id(&v.id, set) && v.locks.contains(&n))
+    }
+
+    /// Lock (or unlock) slot `n` of set `set`, as one step (F3a Task 8). Nothing is planned: the engine never sees it.
+    pub fn set_slot_lock(&mut self, set: &str, n: u8, on: bool) -> Result<(), String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
+        }
+        if !(1..=8).contains(&n) {
+            return Err(format!("slot{n}: there are slots 1 to 8"));
+        }
+        let id = self.view_of(set).ok_or_else(|| format!("no set {set}"))?.id;
+        let label = if on { "Lock" } else { "Unlock" };
+        self.edit_docs(
+            &format!("{label} slot {n} of {id}"),
+            None,
+            false,
+            move |_, d| d.set_lock(&id, n, on),
+        );
+        Ok(())
+    }
+
+    /// Why `item` cannot leave its set: it fills a locked slot there (F3a Task 8).
+    fn leaves_locked(&self, item: &str) -> Result<(), String> {
+        let Some(v) = self.set_of_item(item) else {
+            return Ok(());
+        };
+        let slot = v
+            .slots
+            .iter()
+            .find(|(_, f)| matches!(f, SlotFill::Own { item: i } if i == item))
+            .map(|(k, _)| *k);
+        lock_refusal(&v, slot)
     }
 
     fn is_packed(&self, item: &str) -> bool {
@@ -836,6 +907,7 @@ impl AppModel {
         slot: Option<SlotKind>,
         share_from: Option<&str>,
     ) -> Result<Option<SlotFill>, String> {
+        lock_refusal(target, slot)?;
         match slot.and_then(|s| target.slots.get(&s)).cloned() {
             Some(SlotFill::Own { item }) if self.is_packed(&item) => Err(format!(
                 "that slot holds a packed map ({item}); move its raw maps out of the set first"
@@ -866,6 +938,9 @@ impl AppModel {
         let incoming = self.item(item).and_then(slot_of);
         let existing: Vec<SlotKind> = target.slots.keys().copied().collect();
         if let Some(why) = incoming.and_then(|s| slot_conflict(&existing, s)) {
+            return DropOutcome::Refused(why);
+        }
+        if let Err(why) = lock_refusal(&target, incoming) {
             return DropOutcome::Refused(why);
         }
         // A texture that belongs to a real set (more than itself, or one the user touched) asks what to do. An entry
@@ -948,6 +1023,9 @@ impl AppModel {
         slot: Option<SlotKind>,
         choice: DropChoice,
     ) -> Result<(), String> {
+        if choice == DropChoice::Move {
+            self.leaves_locked(item)?;
+        }
         match choice {
             DropChoice::Move if self.is_packed(item) => Err(PACKED_MOVE.into()),
             DropChoice::Share if slot.is_none() => Err(
@@ -1014,7 +1092,7 @@ impl AppModel {
     /// A texture dropped on the empty area: a new set named after its base name (spec §3.1). Returns the new id;
     /// `None` when nothing was done (read-only `sdc-project.toml`, or a packed map, which follows its raw maps).
     pub fn drop_new_set(&mut self, item: &str) -> Option<String> {
-        if !self.sets_editable() || self.is_packed(item) {
+        if !self.sets_editable() || self.is_packed(item) || self.leaves_locked(item).is_err() {
             return None;
         }
         let stem = Path::new(item)
@@ -1204,6 +1282,7 @@ impl AppModel {
         if v.members.len() == 1 && !moved_in {
             return Err(format!("{item} is the only texture in {}", v.id));
         }
+        self.leaves_locked(item)?;
         let (i, it) = (v.id.clone(), item.to_string());
         self.edit_docs(&format!("Remove from {i}"), None, true, move |_, s| {
             s.remove_member(&i, &it)
@@ -1233,7 +1312,8 @@ impl AppModel {
         });
     }
 
-    /// A slot command (spec §4.2). A path is checked first; the reason comes back when it is refused.
+    /// A slot command (spec §4.2). A path is checked first; the reason comes back when it is refused. One step each
+    /// (no merge: F3a Task 8), refused on a locked slot.
     pub fn set_slot_command(
         &mut self,
         set: &str,
@@ -1245,6 +1325,9 @@ impl AppModel {
         }
         if !(1..=8).contains(&slot) {
             return Err(format!("slot{slot}: there are slots 1 to 8"));
+        }
+        if self.slot_locked(set, slot) {
+            return Err(SLOT_LOCKED.into());
         }
         let key = format!("slot{slot}");
         let v = match cmd {
@@ -1258,7 +1341,10 @@ impl AppModel {
                 Some(Value::from(p.trim().replace('/', "\\")))
             }
         };
-        self.set_json_value(set, &key, v);
+        let id = set.to_string();
+        self.edit_docs(&format!("Change {key}"), None, false, move |_, d| {
+            d.set_value(&id, &key, v)
+        });
         Ok(())
     }
 }

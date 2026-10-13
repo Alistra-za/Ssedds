@@ -6,14 +6,14 @@ use crate::project::{dotted_table, json_to_toml, set_value, sub_table, toml_to_j
 use engine::policy::SourceStamp;
 use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 
 pub const FILE_NAME: &str = "sdc-project.toml";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 7] = [
+const RESERVED: [&str; 8] = [
     "id",
     "created",
     "renamed_from",
@@ -21,6 +21,7 @@ const RESERVED: [&str; 7] = [
     "remove",
     "borrow",
     "shader",
+    "lock",
 ];
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -34,6 +35,8 @@ pub struct SetEntry {
     pub borrow: BTreeMap<u8, String>,
     /// M6: the explicit shader choice (`shader = "<id>"`); an unknown id reads as `None` and stays in the file.
     pub shader: Option<engine::shader::Shader>,
+    /// F3a Task 8: locked slot numbers (`lock = ["slot2"]`), kept as they are by drops, slot commands and bulk edits.
+    pub lock: BTreeSet<u8>,
     pub settings: Settings,
 }
 
@@ -127,6 +130,10 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             .get("shader")
             .and_then(Item::as_str)
             .and_then(|s| serde_json::from_value(Json::String(s.to_string())).ok()),
+        lock: strings(t.get("lock"))
+            .iter()
+            .filter_map(|s| s.strip_prefix("slot")?.parse().ok())
+            .collect(),
         settings,
     })
 }
@@ -505,6 +512,12 @@ impl SetsDoc {
             t.remove("borrow");
         }
         self.dirty = true;
+    }
+
+    /// F3a Task 8: lock (or unlock) slot `slot` of set `id`.
+    pub fn set_lock(&mut self, id: &str, slot: u8, on: bool) {
+        self.rev = next_rev();
+        self.list_edit(id, "lock", &format!("slot{slot}"), on);
     }
 
     /// Set (or with `None` remove) set `id`'s explicit shader (M6 spec §7).

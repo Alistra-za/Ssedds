@@ -4,7 +4,7 @@ use super::fields::{
     all_fields, field_hidden, field_view, filter_option_lock, views_of, FieldView, EDGE_FIELD,
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
-use super::sets::SlotKind;
+use super::sets::{locked_items, SlotKind, SLOT_LOCKED};
 use super::{AppModel, Dialog, Selection};
 use engine::config::{MipFilter, Subtype};
 use engine::policy::ResolvedJob;
@@ -36,11 +36,12 @@ type CacheInputs = (
     Option<SlotKind>,
     u64,
     u64,
+    u64,
     String,
 );
 
 /// What `bulk_view` computed and what it was computed from: the multi-selection and active entry, the picked kind,
-/// the view-cache revisions and the target. Equal inputs reuse the result (N=3000 would otherwise serialise 3000
+/// the view-cache revisions (the sets document's too: a slot lock plans nothing) and the target. Equal inputs reuse the result (N=3000 would otherwise serialise 3000
 /// profiles a frame).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BulkCache {
@@ -302,13 +303,18 @@ pub fn field_label(field: &str) -> &str {
 /// The one rule (F3a D2, Note Z2): why a write of `field` skips the texture whose job and view these are, or `None`
 /// when it reaches it. `plan_bulk_edit` and `bulk_fields` both call it, so the panel and the apply cannot drift.
 /// `op` is `None` for the panel's value-independent counts (locks apply, no value is checked). A Clear is not
-/// blocked by a field lock (R6): dropping a stale `[files]` entry is harmless and the only way to remove it.
+/// blocked by a field lock (R6): dropping a stale `[files]` entry is harmless and the only way to remove it. A
+/// texture filling a locked slot (`slot_locked`, F3a Task 8) takes neither.
 fn skip_of(
     job: Option<&ResolvedJob>,
     view: Option<&FieldView>,
     field: &str,
     op: Option<&BulkOp>,
+    slot_locked: bool,
 ) -> Option<String> {
+    if slot_locked {
+        return Some(SLOT_LOCKED.into());
+    }
     let Some(job) = job else {
         return Some(NO_SETTINGS.into());
     };
@@ -350,12 +356,13 @@ pub fn plan_bulk_edit(
     field: &str,
     op: &BulkOp,
 ) -> Vec<(String, Change)> {
+    let locked = locked_items(m);
     keys.iter()
         .map(|k| {
             let job = m.item(k).and_then(|i| i.job.as_ref());
             let view = job.and_then(|j| field_view(m.target, j, field));
-            let change =
-                skip_of(job, view.as_ref(), field, Some(op)).map_or(Change::Write, Change::Skip);
+            let change = skip_of(job, view.as_ref(), field, Some(op), locked.contains(k))
+                .map_or(Change::Write, Change::Skip);
             (k.clone(), change)
         })
         .collect()
@@ -417,13 +424,14 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
         })
         .collect();
     let mut values: Vec<Vec<Value>> = vec![vec![]; fields.len()];
+    let locked = locked_items(m);
     for k in keys {
         let job = m.item(k).and_then(|i| i.job.as_ref());
         // One profile serialisation per texture, not one per row.
         let views = job.map_or_else(Vec::new, |j| views_of(&fields, m.target, j));
         for (n, row) in rows.iter_mut().enumerate() {
             let view = views.get(n);
-            match skip_of(job, view, row.field, None) {
+            match skip_of(job, view, row.field, None, locked.contains(k)) {
                 Some(r) => match row.skipped.iter_mut().find(|e| e.0 == r) {
                     Some(e) => e.1 += 1,
                     None => row.skipped.push((r, 1)),
@@ -749,6 +757,7 @@ impl AppModel {
             self.bulk.kind,
             self.items_rev,
             self.inputs_rev,
+            self.sets_doc.as_ref().map_or(0, |d| d.rev()),
             format!("{:?}", self.target),
         )
     }

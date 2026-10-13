@@ -134,12 +134,20 @@ impl AppModel {
         if !leads {
             return Follow::Nothing;
         }
+        // F3a Task 8: a member filling a locked slot keeps its sub-type.
+        let free = |mk: &&String| {
+            !v.slots.iter().any(|(k, f)| {
+                v.locks.contains(&k.slot_number())
+                    && matches!(f, SlotFill::Own { item } if item == *mk)
+            })
+        };
         if leaves {
-            return Follow::Revert(v.members.clone());
+            return Follow::Revert(v.members.iter().filter(free).cloned().collect());
         }
         let switch = v
             .members
             .iter()
+            .filter(free)
             .filter(|m| *m != key && p.file_value(m, "subtype").is_none())
             .filter_map(|m| {
                 let it = self.item(m)?;
