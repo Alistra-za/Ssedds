@@ -640,6 +640,9 @@ impl MeshesModel {
         self.stale_list = None;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
+        // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
+        self.file_refs = None;
+        self.refs_cache = None;
         self.progress = Some(("starting", 0, 0));
         self.status = if req.skip_derived {
             "Scanning without PGPatcher output…".into()
@@ -1105,6 +1108,10 @@ impl MeshesModel {
     /// "Plugin file references" opened: the Missing and Unused lists (esp spec §4.4). A failed read is shown and
     /// leaves empty lists, so it is not retried every frame.
     pub fn load_file_refs(&mut self) {
+        // Half-written origins and winners while a scan runs: wait for it.
+        if self.scanning() {
+            return;
+        }
         let Some(store) = &self.store else {
             return;
         };

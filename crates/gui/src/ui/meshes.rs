@@ -132,6 +132,10 @@ fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
         egui::CollapsingHeader::new("Plugin file references")
             .id_salt("meshes-plugin-file-refs")
             .show(ui, |ui| {
+                if m.scanning() {
+                    ui.label("Available after the scan finishes.");
+                    return;
+                }
                 if m.file_refs.is_none() {
                     m.load_file_refs();
                 }
@@ -421,26 +425,31 @@ fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
     egui::CollapsingHeader::new(format!("Plugin overrides ({})", uses.len()))
         .id_salt("meshes-plugin-overrides")
         .show(ui, |ui| {
-            if uses.is_empty() {
-                ui.label("No plugin record of the latest scan uses this mesh.");
-            }
-            for (i, u) in uses.iter().take(MAX_LISTED).enumerate() {
-                ui.label(format!(
-                    "{}{}",
-                    record_label(u.edid.as_deref(), u.formid, &u.sig, &u.plugin),
-                    overridden_text(u.n_overrides)
-                ));
-                ui.indent(("plugin-swaps", i), |ui| {
-                    for s in &u.swaps {
+            egui::ScrollArea::vertical()
+                .id_salt("meshes-plugin-overrides-scroll")
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    if uses.is_empty() {
+                        ui.label("No plugin record of the latest scan uses this mesh.");
+                    }
+                    for (i, u) in uses.iter().take(MAX_LISTED).enumerate() {
                         ui.label(format!(
-                            "{} → {} [{:08X}]",
-                            s.shape_name,
-                            s.txst_edid.as_deref().unwrap_or("(no EDID)"),
-                            s.txst_formid
+                            "{}{}",
+                            record_label(u.edid.as_deref(), u.formid, &u.sig, &u.plugin),
+                            overridden_text(u.n_overrides)
                         ));
+                        ui.indent(("plugin-swaps", i), |ui| {
+                            for s in &u.swaps {
+                                ui.label(format!(
+                                    "{} → {} [{:08X}]",
+                                    s.shape_name,
+                                    s.txst_edid.as_deref().unwrap_or("(no EDID)"),
+                                    s.txst_formid
+                                ));
+                            }
+                        });
                     }
                 });
-            }
         });
 }
 
@@ -489,7 +498,9 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         .max_height(240.0)
         .show_rows(ui, row, n, |ui, range| {
             for l in &m.refs_lines()[range] {
-                ui.label(l.as_str());
+                // One line per row (show_rows needs a fixed height); the full text is on hover.
+                ui.add(egui::Label::new(l.as_str()).truncate())
+                    .on_hover_text(l.as_str());
             }
         });
 }

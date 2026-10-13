@@ -471,7 +471,6 @@ fn a_database_error_is_shown_not_swallowed() {
     let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
     m.activate_with(None);
     assert!(m.error.is_some());
-    assert!(m.plugin_uses.is_empty() && m.file_refs.is_none());
     let mut h = harness(m);
     h.run();
     h.get_by_label_contains("Scan database");
@@ -1062,6 +1061,7 @@ fn plugin_file_references_list_missing_and_unused_with_a_filter() {
     h.get_by_label("textures/unused/lonely.dds");
     h.state_mut().refs_filter = "LONELY".into();
     h.run();
+    h.get_by_label("textures/unused/lonely.dds");
     assert!(h.query_by_label("textures/other/x.dds").is_none());
     assert!(
         h.query_by_label_contains("Delete").is_none()
@@ -1103,4 +1103,51 @@ fn a_finished_scan_logs_the_plugin_timing() {
     );
     let ((), none) = render3d::perf_log::capture(|| log_plugins(&Report::default()));
     assert!(none.is_empty());
+}
+
+/// Review I1: no read while a scan runs; a started scan drops the cached lists.
+#[test]
+fn file_references_are_not_read_during_a_scan_and_a_started_scan_drops_them() {
+    let (_d, mut m) = scanned();
+    m.load_file_refs();
+    assert!(m.file_refs.is_some());
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    assert!(m.scanning());
+    assert!(
+        m.file_refs.is_none(),
+        "the old lists are dropped when a scan starts"
+    );
+    m.load_file_refs();
+    assert!(m.file_refs.is_none(), "no read while the scan runs");
+    wait(&mut m);
+    m.load_file_refs();
+    assert!(m.file_refs.is_some());
+}
+
+/// Review M1: a failed shape read leaves no stale plugin list.
+#[test]
+fn a_failed_shape_read_clears_the_plugin_overrides() {
+    let (d, mut m) = scanned();
+    let a_id = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+    m.select_mod(a_id);
+    let copy = m.nifs[0].copy_id;
+    m.select_nif(copy);
+    m.plugin_uses = vec![MeshUse {
+        formid: 1,
+        edid: None,
+        sig: "STAT".into(),
+        plugin: "P.esp".into(),
+        model_slot: 0,
+        n_overrides: 0,
+        swaps: vec![],
+    }];
+    rusqlite::Connection::open(d.path().join("scan.db"))
+        .unwrap()
+        .execute_batch("DROP TABLE shape")
+        .unwrap();
+    m.set_view_source(true);
+    assert!(m.error.is_some());
+    assert!(m.plugin_uses.is_empty());
 }
