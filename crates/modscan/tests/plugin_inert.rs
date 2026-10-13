@@ -248,3 +248,114 @@ fn placed_bases_head_part_flags_and_edges_are_stored() {
         "IPCT"
     );
 }
+
+/// Master.esp (full) defines nothing but is a master; L.esp (ESL flag) likewise; Other.esp only shifts indices;
+/// Placer.esp (masters Master.esp, L.esp) places one base of each.
+fn lifecycle_fixture(plugins_txt: &str) -> tempfile::TempDir {
+    let d = instance_fixture("+B\n+A\n");
+    let r = d.path();
+    put(r, "Game/Data/Skyrim.esm", &plugin(esp::FLAG_ESM, &[], &[]));
+    put(r, "mods/A/Master.esp", &plugin(0, &[], &[]));
+    put(r, "mods/A/Other.esp", &plugin(0, &[], &[]));
+    put(r, "mods/A/L.esp", &plugin(esp::FLAG_ESL, &[], &[]));
+    put_placer(r, &[0x0000_0801, 0x0100_0802]);
+    put(r, "profiles/Default/plugins.txt", plugins_txt.as_bytes());
+    d
+}
+
+fn put_placer(r: &std::path::Path, bases: &[u32]) {
+    let refs: Vec<(u32, u32, bool)> = bases
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| (0x0200_0801 + i as u32, b, false))
+        .collect();
+    put(
+        r,
+        "mods/A/Placer.esp",
+        &plugin(0, &["Master.esp", "L.esp"], &[cell(0x0200_0800, &refs)]),
+    );
+}
+
+const LO1: &str = "*Master.esp\n*Other.esp\n*L.esp\n*Placer.esp\n";
+const LO2: &str = "*Other.esp\n*Master.esp\n*L.esp\n*Placer.esp\n";
+
+fn placed_ids(s: &Store) -> Vec<i64> {
+    let mut st = s
+        .conn()
+        .prepare("SELECT base_formid FROM placed ORDER BY 1")
+        .unwrap();
+    let v = st
+        .query_map([], |r| r.get::<_, Option<i64>>(0))
+        .unwrap()
+        .map(|x| x.unwrap().unwrap())
+        .collect();
+    v
+}
+
+/// Review: bases in a non-zero-index master and in a light master resolve to load-order FormIDs; a reorder with no
+/// file change remaps them; replacing / dropping the plugin replaces / removes its rows.
+#[test]
+fn placed_rows_follow_masters_reorders_replacement_and_removal() {
+    let d = lifecycle_fixture(LO1);
+    let (s, _) = scan(&d);
+    assert_eq!(
+        placed_ids(&s),
+        vec![0x0100_0801, 0xFE00_0802],
+        "Master.esp is full index 1, L.esp is light slot 0"
+    );
+    drop(s);
+    std::fs::write(d.path().join("profiles/Default/plugins.txt"), LO2).unwrap();
+    let (s, st) = scan(&d);
+    assert_eq!(st.cached, st.n, "no file changed");
+    assert_eq!(
+        placed_ids(&s),
+        vec![0x0200_0801, 0xFE00_0802],
+        "Master.esp moved to full index 2"
+    );
+    drop(s);
+    put_placer(d.path(), &[0x0000_0801]);
+    let (s, _) = scan(&d);
+    assert_eq!(
+        placed_ids(&s),
+        vec![0x0200_0801],
+        "the new file's rows replace the old ones"
+    );
+    drop(s);
+    std::fs::write(
+        d.path().join("profiles/Default/plugins.txt"),
+        "*Other.esp\n*Master.esp\n*L.esp\n",
+    )
+    .unwrap();
+    let (s, _) = scan(&d);
+    assert_eq!(
+        one_i64(&s, "SELECT count(*) FROM placed"),
+        0,
+        "a dropped plugin's rows go with it"
+    );
+}
+
+/// Review: `rec_inert` is cleared wherever `rec_winner` is (resolve, unload, retain).
+#[test]
+fn rec_inert_is_cleared_with_rec_winner() {
+    let seed = |s: &Store| {
+        s.conn()
+            .execute("INSERT INTO rec_inert VALUES (1, 1)", [])
+            .unwrap()
+    };
+    let d = lifecycle_fixture(LO1);
+    let (mut s, _) = scan(&d);
+    seed(&s);
+    s.unload_plugins().unwrap();
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0, "unload");
+    seed(&s);
+    s.retain_plugins(&["Master.esp".to_string()]).unwrap();
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0, "retain");
+    drop(s);
+    let d = lifecycle_fixture(LO1);
+    let (s, _) = scan(&d);
+    seed(&s);
+    drop(s);
+    std::fs::write(d.path().join("profiles/Default/plugins.txt"), LO2).unwrap();
+    let (s, _) = scan(&d);
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0, "resolve");
+}
