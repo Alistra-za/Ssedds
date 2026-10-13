@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = r#"
 CREATE TABLE path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
@@ -56,7 +56,7 @@ CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE N
                      size INTEGER, mtime INTEGER NOT NULL, lo_index INTEGER, light INTEGER NOT NULL,
                      flags INTEGER NOT NULL, masters_json TEXT NOT NULL, error_text TEXT);
 CREATE TABLE rec (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL, edid TEXT,
-                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER);
+                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER);
 CREATE TABLE rec_winner (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, n_overrides INTEGER NOT NULL);
 CREATE TABLE txst_slot (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, slot INTEGER NOT NULL,
                      path_id INTEGER NOT NULL);
@@ -64,10 +64,21 @@ CREATE TABLE model_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGE
                      path_id INTEGER NOT NULL);
 CREATE TABLE alt_tex (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, model_slot INTEGER NOT NULL,
                      shape_name TEXT NOT NULL, txst_formid INTEGER, txst_local INTEGER NOT NULL, idx INTEGER NOT NULL);
+-- txst_ref rows with role HNAM (HDPT -> extra-part HDPT), GNAM (LTEX -> GRAS) and MODL (ARMO -> ARMA) point at those
+-- types, not TXSTs.
 CREATE TABLE txst_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, role TEXT NOT NULL,
                      txst_formid INTEGER, txst_local INTEGER NOT NULL);
 CREATE TABLE tex_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, role TEXT NOT NULL,
                      path_id INTEGER NOT NULL);
+-- Base FormIDs placed by REFR/ACHR in a plugin's CELL/WRLD groups, once per plugin (filtering spec §3). `base_local`
+-- clamped like `local`; `base_formid` set by `resolve_plugins`, NULL when its master is not loaded. A plugin whose
+-- `error_text` is set may have an incomplete list (the walk stops at a fault).
+CREATE TABLE placed (plugin_id INTEGER NOT NULL, base_local INTEGER NOT NULL, base_formid INTEGER);
+-- Winning records nothing reaches (filtering spec §3), rebuilt with rec_winner. reason: 1 no reference, 2 not
+-- placed, 3 head part not playable.
+CREATE TABLE rec_inert (formid INTEGER PRIMARY KEY, reason INTEGER NOT NULL);
+CREATE INDEX placed_base ON placed(base_formid);
+CREATE INDEX placed_plugin ON placed(plugin_id);
 CREATE INDEX rec_formid ON rec(formid);
 CREATE INDEX rec_plugin ON rec(plugin_id, local);
 CREATE INDEX txst_slot_path ON txst_slot(path_id);

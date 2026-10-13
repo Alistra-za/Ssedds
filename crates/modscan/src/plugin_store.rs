@@ -31,17 +31,18 @@ pub struct PluginRow {
 }
 
 /// Tables with plugin rows, for deletes.
-const PLUGIN_TABLES: [&str; 6] = [
+const PLUGIN_TABLES: [&str; 7] = [
     "rec",
     "txst_slot",
     "model_ref",
     "alt_tex",
     "txst_ref",
     "tex_ref",
+    "placed",
 ];
 
 /// (table, load-order column, local column) recomputed by `resolve_plugins`.
-const REMAP: [(&str, &str, &str); 8] = [
+const REMAP: [(&str, &str, &str); 9] = [
     ("rec", "formid", "local"),
     ("txst_slot", "formid", "local"),
     ("model_ref", "formid", "local"),
@@ -50,6 +51,7 @@ const REMAP: [(&str, &str, &str); 8] = [
     ("alt_tex", "txst_formid", "txst_local"),
     ("txst_ref", "formid", "local"),
     ("txst_ref", "txst_formid", "txst_local"),
+    ("placed", "base_formid", "base_local"),
 ];
 
 fn sig_text(s: &[u8; 4]) -> String {
@@ -99,7 +101,7 @@ impl Store {
             let local = i64::from(clamp_local(r.local_formid, nm));
             let t = r.payload.txst.as_ref();
             tx.prepare_cached(
-                "INSERT INTO rec(local, plugin_id, sig, edid, txst_flags, decal) VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO rec(local, plugin_id, sig, edid, txst_flags, decal, hdpt_flags) VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )?
             .execute(params![
                 local,
@@ -107,7 +109,8 @@ impl Store {
                 sig_text(&r.sig),
                 r.edid,
                 t.map(|t| i64::from(t.flags)),
-                t.map(|t| t.decal)
+                t.map(|t| t.decal),
+                r.payload.hdpt_flags.map(i64::from)
             ])?;
             if let Some(t) = t {
                 for (slot, p) in t.slots.iter().enumerate() {
@@ -160,6 +163,10 @@ impl Store {
                 .execute(params![local, id, sig_text(role), pid])?;
             }
         }
+        for &base in &facts.placed {
+            tx.prepare_cached("INSERT INTO placed(plugin_id, base_local) VALUES (?1,?2)")?
+                .execute(params![id, i64::from(clamp_local(base, nm))])?;
+        }
         tx.commit()?;
         Ok(id)
     }
@@ -184,7 +191,9 @@ impl Store {
         }
         if !gone.is_empty() {
             // Same transaction as the removal: a failed resolution then cannot leave a stale order that looks resolved.
-            tx.execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+            tx.execute_batch(
+                "UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner; DELETE FROM rec_inert;",
+            )?;
         }
         tx.commit()?;
         Ok(gone.len())
@@ -243,10 +252,10 @@ impl Store {
         }
         for (t, out, src) in REMAP {
             // A target whose master is missing stays NULL: its raw local id could equal a real winner's FormID.
-            let fallback = if out == "txst_formid" {
-                "NULL".to_string()
-            } else {
+            let fallback = if out == "formid" {
                 format!("{t}.{src}")
+            } else {
+                "NULL".to_string()
             };
             tx.execute(
                 &format!(
@@ -261,6 +270,7 @@ impl Store {
             "UPDATE rec SET owner_ok = EXISTS(SELECT 1 FROM lo_map m WHERE m.plugin_id = rec.plugin_id
                AND m.idx = (rec.local >> 24));
              DELETE FROM rec_winner;
+             DELETE FROM rec_inert;
              INSERT INTO rec_winner(formid, plugin_id, n_overrides)
                SELECT formid, plugin_id, n FROM (
                  SELECT r.formid AS formid, r.plugin_id AS plugin_id, max(p.lo_index) AS lo, count(*) - 1 AS n
@@ -275,7 +285,9 @@ impl Store {
     /// re-resolves them (`lo_index` NULL never matches).
     pub fn unload_plugins(&mut self) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;
-        tx.execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+        tx.execute_batch(
+            "UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner; DELETE FROM rec_inert;",
+        )?;
         tx.commit()?;
         Ok(())
     }
