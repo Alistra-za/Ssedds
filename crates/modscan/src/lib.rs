@@ -29,4 +29,7 @@ pub enum ScanError {
         "scan database version {found}, this build reads {want}: scan again in the Meshes view"
     )]
     SchemaVersion { found: i64, want: i64 },
+    /// Another scan holds `scan.lock` next to this store.
+    #[error("another scan is already running on this scan database")]
+    Busy,
 }

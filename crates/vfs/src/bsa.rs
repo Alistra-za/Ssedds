@@ -73,6 +73,9 @@ impl Bsa {
             let r = rd::<24>(&mut f)?;
             counts.push(u32::from_le_bytes(r[8..12].try_into().unwrap()) as usize);
         }
+        if counts.iter().sum::<usize>() != nfiles {
+            return Err(VfsError::Corrupt("file count mismatch".into()));
+        }
         let mut recs = Vec::with_capacity(nfiles.min(65536));
         for &count in &counts {
             let l = rd::<1>(&mut f)?[0] as usize;
@@ -86,9 +89,6 @@ impl Bsa {
                 let compressed = (flags & COMPRESSED_DEFAULT != 0) ^ (size & 0x4000_0000 != 0);
                 recs.push((folder.clone(), size & 0x3FFF_FFFF, offset, compressed));
             }
-        }
-        if recs.len() != nfiles {
-            return Err(VfsError::Corrupt("file count mismatch".into()));
         }
         let pos = f.stream_position()?;
         if pos.saturating_add(file_len as u64) > file_total {
@@ -145,10 +145,11 @@ impl Bsa {
                 as usize;
         }
         if !e.compressed {
-            return data
-                .get(p..)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(|| VfsError::Corrupt("entry too short".into()));
+            if p > data.len() {
+                return Err(VfsError::Corrupt("entry too short".into()));
+            }
+            data.drain(..p); // in place: no second copy of the payload
+            return Ok(data);
         }
         let orig = data
             .get(p..p + 4)

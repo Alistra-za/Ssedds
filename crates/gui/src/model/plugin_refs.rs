@@ -4,6 +4,7 @@ use crate::model::sets::SetView;
 use modscan::plugin_store::{AltUse, TxstUse};
 use modscan::store::{Store, TexKey};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// TXSTs listed; one more is read to say "only the first … are listed".
@@ -15,6 +16,8 @@ pub struct SetPluginUse {
     pub txsts: Vec<TxstUse>,
     pub alts: Vec<AltUse>,
     pub truncated: bool,
+    /// Inert reasons (filtering spec §3) of the listed TXSTs and alternate-texture users that are inert.
+    pub inert: HashMap<u32, &'static str>,
 }
 
 /// The section's store reads, one per key (and on Refresh).
@@ -22,6 +25,8 @@ pub struct SetPluginUse {
 pub struct SetPluginRefs {
     /// The key the result answers, and the result.
     pub cached: Option<(TexKey, Result<SetPluginUse, String>)>,
+    /// "Show inert" in the section; reset whenever the data is re-read.
+    pub show_inert: bool,
 }
 
 impl SetPluginRefs {
@@ -34,6 +39,7 @@ impl SetPluginRefs {
             None => true,
         };
         if stale {
+            self.show_inert = false;
             self.cached = Some((key.clone(), query(db, key)));
         }
         match &self.cached {
@@ -44,6 +50,7 @@ impl SetPluginRefs {
 
     pub fn refresh(&mut self) {
         self.cached = None;
+        self.show_inert = false;
     }
 }
 
@@ -58,12 +65,15 @@ fn query(db: Option<&Path>, key: &TexKey) -> Result<SetPluginUse, String> {
         .map_err(|e| e.to_string())?;
     let truncated = txsts.len() > LIMIT;
     txsts.truncate(LIMIT);
-    let ids: Vec<u32> = txsts.iter().map(|t| t.formid).collect();
+    let mut ids: Vec<u32> = txsts.iter().map(|t| t.formid).collect();
     let alts = store.alt_users_of(&ids).map_err(|e| e.to_string())?;
+    ids.extend(alts.iter().map(|a| a.formid));
+    let inert = store.inert_of(&ids).map_err(|e| e.to_string())?;
     Ok(SetPluginUse {
         txsts,
         alts,
         truncated,
+        inert,
     })
 }
 

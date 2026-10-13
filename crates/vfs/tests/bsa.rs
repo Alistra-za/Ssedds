@@ -193,3 +193,19 @@ fn fewer_names_than_records_is_an_error() {
     std::fs::write(&p, &b).unwrap();
     assert!(matches!(Bsa::open(&p), Err(vfs::VfsError::Corrupt(_))));
 }
+
+#[test]
+fn hostile_folder_count_is_corrupt_before_any_record_read() {
+    let mut out = b"BSA\0".to_vec();
+    for v in [105u32, 36, 0x3, 1, 1, 2, 2] {
+        out.extend(v.to_le_bytes());
+    }
+    out.extend([0u8; 4]);
+    out.extend(0u64.to_le_bytes());
+    out.extend(u32::MAX.to_le_bytes()); // folder claims 0xFFFFFFFF files; header says 1
+    out.extend([0u8; 12]);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("hostile.bsa");
+    std::fs::write(&p, &out).unwrap(); // ends before the folder name block: any record read would be Io
+    assert!(matches!(Bsa::open(&p), Err(vfs::VfsError::Corrupt(_))));
+}

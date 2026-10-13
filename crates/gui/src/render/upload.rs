@@ -35,12 +35,14 @@ pub fn can_upload_bc(supports_bc: bool, max_dim: u32, first: (u32, u32)) -> bool
         && first.1 <= max_dim
 }
 
-/// RGBA `f16`, little-endian, for an `Rgba16Float` texture.
+const F16_MAX: f32 = 65504.0;
+
+/// RGBA `f16`, little-endian, for an `Rgba16Float` texture. Values past the f16 range clamp to it (they would be inf).
 pub fn to_rgba16f(px: &[[f32; 4]]) -> Vec<u8> {
     let mut out = Vec::with_capacity(px.len() * 8);
     for p in px {
         for &v in p {
-            out.extend_from_slice(&half::f16::from_f32(v).to_le_bytes());
+            out.extend_from_slice(&half::f16::from_f32(v.clamp(-F16_MAX, F16_MAX)).to_le_bytes());
         }
     }
     out
@@ -222,4 +224,19 @@ pub(super) fn rgba8(
     };
     write_mip(queue, &texture, m);
     Some(texture)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba16f_clamps_to_the_f16_range() {
+        let b = to_rgba16f(&[[1.0e6, -1.0e6, f32::INFINITY, f32::NAN]]);
+        let h = |i: usize| half::f16::from_le_bytes([b[i * 2], b[i * 2 + 1]]);
+        assert_eq!(h(0).to_f32(), 65504.0);
+        assert_eq!(h(1).to_f32(), -65504.0);
+        assert_eq!(h(2).to_f32(), 65504.0);
+        assert!(h(3).is_nan());
+    }
 }

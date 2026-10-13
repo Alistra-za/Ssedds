@@ -1,10 +1,14 @@
 //! The walk (spec §2.1): TES4, then top-level groups; a group whose label is not a wanted type is skipped by its
 //! size, and so is every nested group inside a wanted one.
 use crate::{records, PluginFacts, Rec, FLAG_COMPRESSED};
+use std::collections::BTreeSet;
 use std::io::Read;
 
 /// Record and group headers are both 24 bytes.
 const HEADER: usize = 24;
+
+/// Nested groups entered under a CELL/WRLD top group; valid files use at most 5.
+const MAX_DEPTH: usize = 8;
 
 /// Largest decompressed record accepted (the size field comes from the file).
 const MAX_INFLATED: usize = 64 << 20;
@@ -95,6 +99,7 @@ pub fn parse(name: &str, b: &[u8]) -> PluginFacts {
         ));
     }
     f.masters = masters;
+    let mut bases = BTreeSet::new();
     let mut off = end;
     while off < b.len() {
         if off + HEADER > b.len() {
@@ -120,6 +125,7 @@ pub fn parse(name: &str, b: &[u8]) -> PluginFacts {
         }
         let label = sig_at(b, off + 8);
         let wanted = u32_at(b, off + 12) == 0 && records::wanted(&label);
+        let placed = u32_at(b, off + 12) == 0 && (&label == b"CELL" || &label == b"WRLD");
         let gend = off + size;
         if gend > b.len() {
             f.errors.push(format!(
@@ -128,14 +134,19 @@ pub fn parse(name: &str, b: &[u8]) -> PluginFacts {
             ));
             if wanted {
                 walk_group(b, off + HEADER, b.len(), &mut f);
+            } else if placed {
+                walk_placed(b, off + HEADER, b.len(), 0, &mut bases, &mut f);
             }
             break;
         }
         if wanted {
             walk_group(b, off + HEADER, gend, &mut f);
+        } else if placed {
+            walk_placed(b, off + HEADER, gend, 0, &mut bases, &mut f);
         }
         off = gend;
     }
+    f.placed = bases.into_iter().collect();
     f
 }
 
@@ -170,41 +181,135 @@ fn walk_group(b: &[u8], start: usize, end: usize, f: &mut PluginFacts) {
             ));
             return;
         }
-        let flags = u32_at(b, p + 8);
-        let formid = u32_at(b, p + 12);
-        let raw = &b[p + HEADER..rend];
-        let inflated;
-        let data: &[u8] = if flags & FLAG_COMPRESSED != 0 {
-            match inflate(raw) {
-                Ok(v) => {
-                    inflated = v;
-                    &inflated
-                }
-                Err(e) => {
-                    f.errors.push(format!(
-                        "offset {p:#x}: {} {formid:08X}: {e}",
-                        sig_str(&sig)
-                    ));
-                    p = rend;
-                    continue;
-                }
+        read_record(b, p, rend, f);
+        p = rend;
+    }
+}
+
+/// One record at `p..rend` of a group: inflated if needed, read into `f.records`; a fault is an error, never a panic.
+fn read_record(b: &[u8], p: usize, rend: usize, f: &mut PluginFacts) {
+    let sig = sig_at(b, p);
+    let flags = u32_at(b, p + 8);
+    let formid = u32_at(b, p + 12);
+    let raw = &b[p + HEADER..rend];
+    let inflated;
+    let data: &[u8] = if flags & FLAG_COMPRESSED != 0 {
+        match inflate(raw) {
+            Ok(v) => {
+                inflated = v;
+                &inflated
             }
-        } else {
-            raw
-        };
-        let mut rec = Rec {
-            local_formid: formid,
-            sig,
-            edid: None,
-            payload: Default::default(),
-        };
-        if let Err(at) = records::read(&mut rec, data) {
+            Err(e) => {
+                f.errors.push(format!(
+                    "offset {p:#x}: {} {formid:08X}: {e}",
+                    sig_str(&sig)
+                ));
+                return;
+            }
+        }
+    } else {
+        raw
+    };
+    let mut rec = Rec {
+        local_formid: formid,
+        sig,
+        edid: None,
+        payload: Default::default(),
+    };
+    if let Err(at) = records::read(&mut rec, data) {
+        f.errors.push(format!(
+            "offset {p:#x}: {} {formid:08X}: subrecord at +{at:#x} runs past the record",
+            sig_str(&sig)
+        ));
+    }
+    f.records.push(rec);
+}
+
+/// A CELL/WRLD group, `start..end` (filtering spec §3): every nested group is entered; of the records only REFR and
+/// ACHR are read, for their base FormID (NAME); every other record is skipped by its size. A fault ends this group.
+fn walk_placed(
+    b: &[u8],
+    start: usize,
+    end: usize,
+    depth: usize,
+    bases: &mut BTreeSet<u32>,
+    f: &mut PluginFacts,
+) {
+    let mut p = start;
+    while p < end {
+        if p + HEADER > end {
             f.errors.push(format!(
-                "offset {p:#x}: {} {formid:08X}: subrecord at +{at:#x} runs past the record",
+                "offset {p:#x}: truncated header runs past its group"
+            ));
+            return;
+        }
+        let sig = sig_at(b, p);
+        let size = u32_at(b, p + 4) as usize;
+        if &sig == b"GRUP" {
+            if size < HEADER || p + size > end {
+                f.errors.push(format!(
+                    "offset {p:#x}: nested group size {size} runs past its group"
+                ));
+                return;
+            }
+            if depth >= MAX_DEPTH {
+                f.errors.push(format!(
+                    "offset {p:#x}: groups nested deeper than {MAX_DEPTH}"
+                ));
+                return;
+            }
+            walk_placed(b, p + HEADER, p + size, depth + 1, bases, f);
+            p += size;
+            continue;
+        }
+        let rend = p + HEADER + size;
+        if rend > end {
+            f.errors.push(format!(
+                "offset {p:#x}: {} record size {size} runs past its group",
                 sig_str(&sig)
             ));
+            return;
         }
-        f.records.push(rec);
+        if &sig == b"WRLD" {
+            // The worldspace record itself carries a cloud model (xEdit `wbRecord(WRLD…)`).
+            read_record(b, p, rend, f);
+        } else if &sig == b"REFR" || &sig == b"ACHR" {
+            let formid = u32_at(b, p + 12);
+            let raw = &b[p + HEADER..rend];
+            let inflated;
+            let data: &[u8] = if u32_at(b, p + 8) & FLAG_COMPRESSED != 0 {
+                match inflate(raw) {
+                    Ok(v) => {
+                        inflated = v;
+                        &inflated
+                    }
+                    Err(e) => {
+                        f.errors.push(format!(
+                            "offset {p:#x}: {} {formid:08X}: {e}",
+                            sig_str(&sig)
+                        ));
+                        p = rend;
+                        continue;
+                    }
+                }
+            } else {
+                raw
+            };
+            let mut base = None;
+            if let Err(at) = each_sub(data, |s, d| {
+                if &s == b"NAME" && d.len() >= 4 && base.is_none() {
+                    base = Some(u32_at(d, 0));
+                }
+            }) {
+                f.errors.push(format!(
+                    "offset {p:#x}: {} {formid:08X}: subrecord at +{at:#x} runs past the record",
+                    sig_str(&sig)
+                ));
+            }
+            if let Some(id) = base.filter(|&id| id != 0) {
+                bases.insert(id);
+            }
+        }
         p = rend;
     }
 }
@@ -227,8 +332,10 @@ fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
         .read_to_end(&mut out)
         .map_err(|e| format!("bad zlib stream: {e}"))?;
     if out.len() != want {
+        // Longer than declared: the read stopped at want + 1, so the true size is unknown.
+        let or_more = if out.len() > want { " or more" } else { "" };
         return Err(format!(
-            "bad zlib stream: inflates to {} bytes or more, header says {want}",
+            "bad zlib stream: inflates to {} bytes{or_more}, header says {want}",
             out.len()
         ));
     }

@@ -1,6 +1,6 @@
 //! Plugin tables of the scan store (esp scanner spec §2.3): the per-plugin cache rows and the load-order resolution.
 use crate::plugins::{clamp_local, is_light};
-use crate::store::{path_id, tex_query, Store, TexKey};
+use crate::store::{intern_path, tex_query, Store, TexKey};
 use crate::ScanError;
 use esp::PluginFacts;
 use rusqlite::{params, Connection};
@@ -31,17 +31,18 @@ pub struct PluginRow {
 }
 
 /// Tables with plugin rows, for deletes.
-const PLUGIN_TABLES: [&str; 6] = [
+const PLUGIN_TABLES: [&str; 7] = [
     "rec",
     "txst_slot",
     "model_ref",
     "alt_tex",
     "txst_ref",
     "tex_ref",
+    "placed",
 ];
 
 /// (table, load-order column, local column) recomputed by `resolve_plugins`.
-const REMAP: [(&str, &str, &str); 8] = [
+const REMAP: [(&str, &str, &str); 9] = [
     ("rec", "formid", "local"),
     ("txst_slot", "formid", "local"),
     ("model_ref", "formid", "local"),
@@ -50,7 +51,53 @@ const REMAP: [(&str, &str, &str); 8] = [
     ("alt_tex", "txst_formid", "txst_local"),
     ("txst_ref", "formid", "local"),
     ("txst_ref", "txst_formid", "txst_local"),
+    ("placed", "base_formid", "base_local"),
 ];
+
+/// Filtering spec §3: which winning records nothing reaches, conservatively. Runs after `rec_winner` is built, in the
+/// same transaction. `win` = each winning copy; edges and alternate textures count only from winning copies, matched by the copy's `local` (an unresolved copy
+/// can share its FormID with the winner). An active
+/// plugin with `error_text` may have an incomplete placement list, so then nothing is judged "not placed".
+const INERT_SQL: &str = "
+DELETE FROM rec_inert;
+CREATE TEMP TABLE IF NOT EXISTS win (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL,
+  hdpt_flags INTEGER, local INTEGER NOT NULL);
+DELETE FROM win;
+INSERT OR IGNORE INTO win SELECT w.formid, w.plugin_id, r.sig, r.hdpt_flags, r.local FROM rec_winner w
+  JOIN rec r ON r.plugin_id = w.plugin_id AND r.formid = w.formid AND r.owner_ok = 1;
+CREATE TEMP TABLE IF NOT EXISTS placed_base (formid INTEGER PRIMARY KEY);
+DELETE FROM placed_base;
+INSERT OR IGNORE INTO placed_base SELECT p.base_formid FROM placed p JOIN plugin pl ON pl.id = p.plugin_id
+  WHERE pl.lo_index IS NOT NULL AND p.base_formid IS NOT NULL;
+-- A faulted active plugin (parse error, or past the load-order limit so unmapped): pretend every TXST/placeable is placed.
+INSERT OR IGNORE INTO placed_base SELECT formid FROM win
+  WHERE EXISTS (SELECT 1 FROM plugin pl WHERE pl.lo_index IS NOT NULL AND (pl.error_text IS NOT NULL
+    OR NOT EXISTS (SELECT 1 FROM lo_map m WHERE m.plugin_id = pl.id)));
+-- 2 not placed: placeable bases no REFR/ACHR of the load order places (ruling R10).
+INSERT INTO rec_inert SELECT formid, 2 FROM win
+  WHERE sig IN ('STAT', 'MSTT', 'FURN', 'DOOR', 'CONT', 'LIGH', 'ACTI', 'TREE', 'FLOR')
+    AND formid NOT IN (SELECT formid FROM placed_base);
+-- 3 head part not playable: DATA without Playable (0x01; no DATA = playable) and no playable winning HDPT lists it
+-- in HNAM (ruling R9).
+INSERT INTO rec_inert SELECT h.formid, 3 FROM win h
+  WHERE h.sig = 'HDPT' AND h.hdpt_flags & 1 = 0
+    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win p ON p.local = e.local AND p.plugin_id = e.plugin_id
+      WHERE e.role = 'HNAM' AND e.txst_formid = h.formid AND p.sig = 'HDPT' AND ifnull(p.hdpt_flags, 1) & 1 = 1);
+-- 1 no reference: grass no winning landscape texture lists (GNAM).
+INSERT INTO rec_inert SELECT g.formid, 1 FROM win g
+  WHERE g.sig = 'GRAS'
+    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win l ON l.local = e.local AND l.plugin_id = e.plugin_id
+      WHERE e.role = 'GNAM' AND e.txst_formid = g.formid);
+-- 1 no reference: TXSTs that no reference places and no winning, non-inert record uses (alternate textures; LTEX/HDPT
+-- TNAM, NPC_ FTST, RACE face sets, ARMA NAM0/NAM1, IPCT DNAM/ENAM, PROJ decal, any FLST entry). MODL is ARMO -> ARMA, not a texture use.
+INSERT INTO rec_inert SELECT t.formid, 1 FROM win t
+  WHERE t.sig = 'TXST'
+    AND t.formid NOT IN (SELECT formid FROM placed_base)
+    AND NOT EXISTS (SELECT 1 FROM alt_tex a JOIN win u ON u.local = a.local AND u.plugin_id = a.plugin_id
+      WHERE a.txst_formid = t.formid AND u.formid NOT IN (SELECT formid FROM rec_inert))
+    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win u ON u.local = e.local AND u.plugin_id = e.plugin_id
+      WHERE e.txst_formid = t.formid AND e.role NOT IN ('HNAM', 'GNAM', 'MODL')
+        AND u.formid NOT IN (SELECT formid FROM rec_inert));";
 
 fn sig_text(s: &[u8; 4]) -> String {
     String::from_utf8_lossy(s).into_owned()
@@ -94,12 +141,14 @@ impl Store {
             |r| r.get(0),
         )?;
         delete_rows(&tx, id)?;
+        // Verdicts rest on the old rows; a cancelled pass must not keep them (resolve rebuilds them).
+        tx.execute("DELETE FROM rec_inert", [])?;
         let nm = facts.masters.len();
         for r in &facts.records {
             let local = i64::from(clamp_local(r.local_formid, nm));
             let t = r.payload.txst.as_ref();
             tx.prepare_cached(
-                "INSERT INTO rec(local, plugin_id, sig, edid, txst_flags, decal) VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO rec(local, plugin_id, sig, edid, txst_flags, decal, hdpt_flags) VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )?
             .execute(params![
                 local,
@@ -107,12 +156,13 @@ impl Store {
                 sig_text(&r.sig),
                 r.edid,
                 t.map(|t| i64::from(t.flags)),
-                t.map(|t| t.decal)
+                t.map(|t| t.decal),
+                r.payload.hdpt_flags.map(i64::from)
             ])?;
             if let Some(t) = t {
                 for (slot, p) in t.slots.iter().enumerate() {
                     if let Some(p) = p {
-                        let pid = path_id(&tx, p)?;
+                        let pid = intern_path(&tx, &mut self.intern, p)?;
                         tx.prepare_cached(
                             "INSERT INTO txst_slot(local, plugin_id, slot, path_id) VALUES (?1,?2,?3,?4)",
                         )?
@@ -121,7 +171,7 @@ impl Store {
                 }
             }
             for m in &r.payload.models {
-                let pid = path_id(&tx, &m.path)?;
+                let pid = intern_path(&tx, &mut self.intern, &m.path)?;
                 tx.prepare_cached(
                     "INSERT INTO model_ref(local, plugin_id, slot, path_id) VALUES (?1,?2,?3,?4)",
                 )?
@@ -153,12 +203,16 @@ impl Store {
                 ])?;
             }
             for (role, p) in &r.payload.textures {
-                let pid = path_id(&tx, p)?;
+                let pid = intern_path(&tx, &mut self.intern, p)?;
                 tx.prepare_cached(
                     "INSERT INTO tex_ref(local, plugin_id, role, path_id) VALUES (?1,?2,?3,?4)",
                 )?
                 .execute(params![local, id, sig_text(role), pid])?;
             }
+        }
+        for &base in &facts.placed {
+            tx.prepare_cached("INSERT INTO placed(plugin_id, base_local) VALUES (?1,?2)")?
+                .execute(params![id, i64::from(clamp_local(base, nm))])?;
         }
         tx.commit()?;
         Ok(id)
@@ -184,7 +238,9 @@ impl Store {
         }
         if !gone.is_empty() {
             // Same transaction as the removal: a failed resolution then cannot leave a stale order that looks resolved.
-            tx.execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+            tx.execute_batch(
+                "UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner; DELETE FROM rec_inert;",
+            )?;
         }
         tx.commit()?;
         Ok(gone.len())
@@ -243,10 +299,10 @@ impl Store {
         }
         for (t, out, src) in REMAP {
             // A target whose master is missing stays NULL: its raw local id could equal a real winner's FormID.
-            let fallback = if out == "txst_formid" {
-                "NULL".to_string()
-            } else {
+            let fallback = if out == "formid" {
                 format!("{t}.{src}")
+            } else {
+                "NULL".to_string()
             };
             tx.execute(
                 &format!(
@@ -267,6 +323,7 @@ impl Store {
                  FROM rec r JOIN plugin p ON p.id = r.plugin_id
                  WHERE r.owner_ok = 1 AND p.lo_index IS NOT NULL GROUP BY r.formid);",
         )?;
+        tx.execute_batch(INERT_SQL)?;
         tx.commit()?;
         Ok(())
     }
@@ -275,7 +332,9 @@ impl Store {
     /// re-resolves them (`lo_index` NULL never matches).
     pub fn unload_plugins(&mut self) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;
-        tx.execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+        tx.execute_batch(
+            "UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner; DELETE FROM rec_inert;",
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -319,6 +378,38 @@ impl Store {
 
 /// Records listed per missing path (spec §4.4).
 pub const MISSING_RECORDS: usize = 5;
+
+/// The text of a `rec_inert.reason` (ruling R13).
+pub fn inert_reason(code: i64) -> &'static str {
+    match code {
+        2 => "not placed",
+        3 => "head part not playable",
+        _ => "no reference",
+    }
+}
+
+/// One path's rows gathered by `plugin_missing_with_inert`: live labels, inert labels.
+type MissingAcc = (String, Vec<String>, Vec<String>);
+
+fn push_missing(
+    c: Option<MissingAcc>,
+    live: &mut Vec<MissingRef>,
+    inert_refs: &mut Vec<MissingRef>,
+) {
+    let Some((path, l, i)) = c else {
+        return;
+    };
+    let (to, labels) = if l.is_empty() {
+        (inert_refs, i)
+    } else {
+        (live, l)
+    };
+    to.push(MissingRef {
+        path,
+        n_records: labels.len(),
+        records: labels.into_iter().take(MISSING_RECORDS).collect(),
+    });
+}
 
 /// One record as listed everywhere: `EDID [FORMID] SIG — Plugin`.
 pub fn record_label(edid: Option<&str>, formid: u32, sig: &str, plugin: &str) -> String {
@@ -397,8 +488,9 @@ fn swap_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<ShapeSwap> {
     })
 }
 
+/// No enabled origin (no completed scan) lists nothing: the negative query would otherwise call every path missing.
 /// Paths of winning records (`txst_slot`, `tex_ref`, `model_ref`) that are `textures/**.dds` or `meshes/**.nif`, not
-/// FaceGen, and that no enabled origin's winner provides (ruling R8).
+/// FaceGen, and that no enabled origin's winner provides (ruling R8). Column 6 is the record's inert reason (NULL = live).
 const MISSING_SQL: &str = "
 WITH refs(path_id, formid, plugin_id, local) AS (
   SELECT t.path_id, t.formid, t.plugin_id, t.local FROM txst_slot t
@@ -407,11 +499,13 @@ WITH refs(path_id, formid, plugin_id, local) AS (
     JOIN rec_winner w ON w.formid = t.formid AND w.plugin_id = t.plugin_id
   UNION ALL SELECT m.path_id, m.formid, m.plugin_id, m.local FROM model_ref m
     JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id)
-SELECT DISTINCT p.p, r.edid, x.formid, r.sig, pl.name FROM refs x
+SELECT DISTINCT p.p, r.edid, x.formid, r.sig, pl.name, i.reason FROM refs x
 JOIN path p ON p.id = x.path_id
 JOIN rec r ON r.plugin_id = x.plugin_id AND r.local = x.local AND r.owner_ok = 1
 JOIN plugin pl ON pl.id = x.plugin_id
-WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
+LEFT JOIN rec_inert i ON i.formid = x.formid
+WHERE EXISTS (SELECT 1 FROM origin WHERE enabled = 1)
+  AND p.p NOT LIKE 'textures/actors/character/facegendata/%'
   AND p.p NOT LIKE 'meshes/actors/character/facegendata/%'
   AND ((p.p LIKE 'textures/%.dds' AND NOT EXISTS (SELECT 1 FROM tex_winner tw
           JOIN origin o ON o.id = tw.origin_id AND o.enabled = 1 WHERE tw.path_id = x.path_id))
@@ -420,7 +514,7 @@ WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
 ORDER BY p.p, pl.name, x.formid";
 
 /// Winning textures of the run that no NIF copy of the run and no record copy of an active plugin names, outside
-/// `textures/pbr/` (ruling R8).
+/// `textures/pbr/` (ruling R8). A record that is inert (filtering spec §3) is no use.
 const UNUSED_SQL: &str = "
 SELECT p.p FROM tex_winner tw JOIN origin o ON o.id = tw.origin_id AND o.enabled = 1
 JOIN path p ON p.id = tw.path_id
@@ -429,9 +523,11 @@ WHERE p.p NOT LIKE 'textures/pbr/%'
         JOIN nif_copy c ON c.id = s.copy_id JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
         WHERE tu.tex_path_id = tw.path_id)
   AND NOT EXISTS (SELECT 1 FROM txst_slot t JOIN plugin pl ON pl.id = t.plugin_id AND pl.lo_index IS NOT NULL
-        WHERE t.path_id = tw.path_id)
+        WHERE t.path_id = tw.path_id
+          AND NOT EXISTS (SELECT 1 FROM rec_inert i WHERE i.formid = t.formid))
   AND NOT EXISTS (SELECT 1 FROM tex_ref t JOIN plugin pl ON pl.id = t.plugin_id AND pl.lo_index IS NOT NULL
-        WHERE t.path_id = tw.path_id)
+        WHERE t.path_id = tw.path_id
+          AND NOT EXISTS (SELECT 1 FROM rec_inert i WHERE i.formid = t.formid))
 ORDER BY p.p";
 
 /// TXST `TX0n` for each NIF `BSShaderTextureSet` slot (TX02 = env mask = NIF 5, TX03 = glow = NIF 2, ...), and back.
@@ -552,11 +648,20 @@ impl Store {
         Ok(out)
     }
 
-    /// Missing files (spec §4.4, ruling R8), by path, each with up to [`MISSING_RECORDS`] referencing records.
+    /// Missing files (spec §4.4, ruling R8) that at least one live record names, by path (filtering ruling R12).
     pub fn plugin_missing_files(&self) -> Result<Vec<MissingRef>, ScanError> {
+        Ok(self.plugin_missing_with_inert()?.0)
+    }
+
+    /// Missing files split by who names them (filtering ruling R12): `.0` paths a live record names (only live records
+    /// listed), `.1` paths only inert records name, each label ending in ` (reason)`.
+    pub fn plugin_missing_with_inert(
+        &self,
+    ) -> Result<(Vec<MissingRef>, Vec<MissingRef>), ScanError> {
         let mut st = self.conn.prepare(MISSING_SQL)?;
         let mut rows = st.query([])?;
-        let mut out: Vec<MissingRef> = vec![];
+        let (mut live, mut inert_refs) = (vec![], vec![]);
+        let mut cur: Option<MissingAcc> = None;
         while let Some(r) = rows.next()? {
             let path: String = r.get(0)?;
             let edid: Option<String> = r.get(1)?;
@@ -566,27 +671,40 @@ impl Store {
                 &r.get::<_, String>(3)?,
                 &r.get::<_, String>(4)?,
             );
-            match out.last_mut() {
-                Some(m) if m.path == path => {
-                    m.n_records += 1;
-                    if m.records.len() < MISSING_RECORDS {
-                        m.records.push(label);
-                    }
-                }
-                _ => out.push(MissingRef {
-                    path,
-                    n_records: 1,
-                    records: vec![label],
-                }),
+            let reason: Option<i64> = r.get(5)?;
+            if cur.as_ref().is_some_and(|c| c.0 != path) {
+                push_missing(cur.take(), &mut live, &mut inert_refs);
+            }
+            let c = cur.get_or_insert_with(|| (path, vec![], vec![]));
+            match reason {
+                None => c.1.push(label),
+                Some(x) => c.2.push(format!("{label} ({})", inert_reason(x))),
             }
         }
-        Ok(out)
+        push_missing(cur, &mut live, &mut inert_refs);
+        Ok((live, inert_refs))
+    }
+
+    /// The inert reason (filtering spec §3) of each of `formids` that is inert.
+    pub fn inert_of(&self, formids: &[u32]) -> Result<HashMap<u32, &'static str>, ScanError> {
+        let ids = serde_json::to_string(formids).map_err(json_err)?;
+        let mut st = self.conn.prepare(
+            "SELECT formid, reason FROM rec_inert WHERE formid IN (SELECT value FROM json_each(?1))",
+        )?;
+        let v = st
+            .query_map([ids], |r| {
+                Ok((r.get::<_, i64>(0)? as u32, inert_reason(r.get(1)?)))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     /// Unused textures (spec §4.4, ruling R8), by path.
     pub fn unused_textures(&self) -> Result<Vec<String>, ScanError> {
         let mut st = self.conn.prepare(UNUSED_SQL)?;
-        let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
-        Ok(v)
+        let v: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        Ok(v.into_iter()
+            .filter(|p| !nif::path::is_lod_path(p))
+            .collect())
     }
 }

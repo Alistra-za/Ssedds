@@ -94,3 +94,17 @@ fn real_se_and_le_fixtures_pass_the_identity() {
         h.check_file_length(&b).unwrap();
     }
 }
+
+#[test]
+fn hostile_string_count_is_rejected() {
+    let mut n = Nif::new(100);
+    n.block("NiNode", vec![]);
+    let mut b = n.bytes();
+    // data_start follows ngroups(4); nstrings sits 12 bytes before it (nstrings, max length, ngroups)
+    let at = Header::parse(&b).unwrap().data_start - 12;
+    b[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(matches!(
+        Header::parse(&b),
+        Err(NifError::TooManyStrings(u32::MAX))
+    ));
+}

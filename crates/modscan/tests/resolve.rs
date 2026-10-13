@@ -162,7 +162,7 @@ fn ini_lists_add_archives_after_vanilla_and_before_plugins() {
     std::fs::write(r.join("profiles/Default/plugins.txt"), "*Foo.esp\n").unwrap();
     let ini = tempfile::tempdir().unwrap();
     std::fs::write(
-        ini.path().join("Skyrim.ini"),
+        ini.path().join("skyrim.ini"),
         "[Archive]\nsResourceArchiveList=Skyrim - Meshes0.bsa, Extra.bsa\n",
     )
     .unwrap();
