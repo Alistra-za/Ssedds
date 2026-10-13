@@ -2,35 +2,10 @@
 use engine::api::*;
 use engine::codes::Code;
 use engine::config::*;
-use engine::events::*;
 use engine::policy::*;
-use image::{ImageBuffer, Rgb};
-use std::path::Path;
-use std::sync::Arc;
 
-fn png(dir: &Path, name: &str) {
-    let p = dir.join("in").join(name);
-    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    ImageBuffer::from_fn(32, 32, |x, y| Rgb([(x * 8) as u8, (y * 8) as u8, 255u8]))
-        .save(p)
-        .unwrap();
-}
-
-fn plan_dir(dir: &Path, sets: Vec<String>) -> Plan {
-    let mut req = BatchRequest::new(vec![dir.join("in")], dir.join("out"), Target::Cs);
-    req.accept = AcceptSuggestions::High;
-    req.recursive = true; // the eye fixture lives in a subfolder
-    for s in sets {
-        req.overrides
-            .push(engine::overrides::parse_set(&s).unwrap());
-    }
-    let sink = Arc::new(VecSink::default());
-    let rep = Reporter::new(sink, "rnm-plan");
-    Engine::new()
-        .unwrap()
-        .plan(req, &rep, &CancelToken::default())
-        .unwrap()
-}
+mod rnm_support;
+use rnm_support::{plan_dir, png};
 
 fn job<'a>(p: &'a Plan, name: &str) -> &'a ResolvedJob {
     p.jobs

@@ -71,12 +71,19 @@ pub fn plan_rnm(
     aliases: &BTreeMap<String, String>,
     jobs: &mut [ResolvedJob],
 ) {
+    // One pass: job indices per set, so each set scans only its own jobs.
+    let mut by_set: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, j) in jobs.iter().enumerate() {
+        by_set.entry(j.set_key.clone()).or_default().push(i);
+    }
+    let by_path: BTreeMap<&Path, &InputFile> =
+        files.iter().map(|f| (f.path.as_path(), f)).collect();
     for set in sets {
+        let idx: Vec<usize> = by_set.remove(&set.key).unwrap_or_default();
         // (job index, term) of the set's layer files.
-        let layers: Vec<(usize, LayerTerm)> = jobs
+        let layers: Vec<(usize, LayerTerm)> = idx
             .iter()
-            .enumerate()
-            .filter(|(_, j)| j.set_key == set.key)
+            .map(|&i| (i, &jobs[i]))
             .filter_map(|(i, j)| match j.status {
                 JobStatus::NormalLayer { term } => Some((i, term.into())),
                 _ => None,
@@ -85,11 +92,11 @@ pub fn plan_rnm(
         if layers.is_empty() {
             continue;
         }
-        let eye = jobs.iter().any(|j| {
-            j.set_key == set.key
-                && j.shader
-                    .as_ref()
-                    .is_some_and(|p| p.shader == crate::shader::Shader::Eye)
+        let eye = idx.iter().any(|&i| {
+            jobs[i]
+                .shader
+                .as_ref()
+                .is_some_and(|p| p.shader == crate::shader::Shader::Eye)
         });
         if eye {
             for &(i, _) in &layers {
@@ -103,20 +110,17 @@ pub fn plan_rnm(
             }
             continue;
         }
-        let bases: Vec<(usize, RnmTarget)> = jobs
+        let bases: Vec<(usize, RnmTarget)> = idx
             .iter()
-            .enumerate()
-            .filter(|(_, j)| j.set_key == set.key)
-            .filter_map(|(i, j)| base_kind(j).map(|k| (i, k)))
+            .filter_map(|&i| base_kind(&jobs[i]).map(|k| (i, k)))
             .collect();
         let has = |k: RnmTarget| bases.iter().any(|(_, b)| *b == k);
         // Read before any warning is pushed, so no borrow of `jobs` is held across the mutations.
         let reqs: Vec<Option<RnmTarget>> = layers
             .iter()
             .map(|&(i, _)| {
-                files
-                    .iter()
-                    .find(|f| f.path == jobs[i].input)
+                by_path
+                    .get(jobs[i].input.as_path())
                     .and_then(|f| rnm_target_requested(ctx, f))
             })
             .collect();
