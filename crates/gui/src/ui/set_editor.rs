@@ -60,11 +60,14 @@ pub fn draw(
     };
     ui.horizontal_wrapped(|ui| {
         ui.heading(&v.label);
-        match (&v.prefix, &v.prefix_error) {
-            (Some(p), _) => ui.weak(format!("→ {p}")),
-            (_, Some(e)) if shows_json_panel(&v, model.target) => ui.colored_label(RED, e),
-            _ => ui.weak(""),
-        };
+        // The output prefix and its error are PGPatcher JSON facts: only a JSON set shows them.
+        if shows_json_panel(&v, model.target) {
+            match (&v.prefix, &v.prefix_error) {
+                (Some(p), _) => ui.weak(format!("→ {p}")),
+                (_, Some(e)) => ui.colored_label(RED, e),
+                _ => ui.weak(""),
+            };
+        }
     });
     ui.separator();
     let mut acts = vec![];
