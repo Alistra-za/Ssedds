@@ -19,7 +19,9 @@ pub mod viewport3d;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
-use crate::worker::{spawn_export, spawn_plan, PlanFailure, WorkerMsg};
+use crate::worker::{
+    spawn_export, spawn_guarded, spawn_plan, MeshEvidence, PlanFailure, WorkerMsg,
+};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
@@ -258,6 +260,9 @@ pub struct AppModel {
     last_inputs: Option<EngineInputs>,
     /// Automatic re-plans in a row because the inputs changed; bounded so a bug can never loop.
     auto_replans: u8,
+    /// Generation of the latest scan-database read, and (generation, continues `apply_plan`) while it is pending.
+    votes_gen: u64,
+    votes_pending: Option<(u64, bool)>,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -334,6 +339,8 @@ impl AppModel {
             plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
+            votes_gen: 0,
+            votes_pending: None,
             generation: 0,
             planning: None,
             tx,
@@ -467,12 +474,12 @@ impl AppModel {
         Some(req)
     }
 
-    /// S-shader-10, M6 Track E: read the mesh votes and the mesh alpha for the plan's sets (keys from the colour-member
-    /// jobs only, by `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no evidence:
-    /// the suffix rules decide and the alpha is asked, and the Meshes view reports database errors. True when either
-    /// changed.
-    // shortcut: reads SQLite on the UI thread after each plan; move to a background read or cache by db mtime + key set if it hitches on large load orders
-    pub fn refresh_mesh_votes(&mut self) -> bool {
+    /// S-shader-10, M6 Track E: read the mesh votes, the mesh alpha (keys from the colour-member jobs only, by
+    /// `shader::colour_mesh_key`, the engine's rule) and the GRAS diffuses (complex grass design §5 condition 1) from
+    /// the scan database on one worker thread, tagged with a generation; `votes_landed` applies the newest result.
+    /// No database means no evidence (applied at once): the suffix rules decide and the alpha is asked. A read
+    /// error keeps the previous values (stderr). `after_plan`: the result continues `apply_plan`'s tail.
+    pub fn refresh_mesh_votes(&mut self, after_plan: bool) {
         let keys: std::collections::BTreeSet<String> = self
             .items
             .iter()
@@ -482,24 +489,55 @@ impl AppModel {
                 engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
             })
             .collect();
-        let (votes, alpha) = match &self.scan_db {
-            Some(db) if db.is_file() => (
-                meshes::mesh_votes(db, &keys).unwrap_or_default(),
-                meshes::mesh_alpha(db, &keys).unwrap_or_default(),
-            ),
-            _ => Default::default(),
+        self.votes_gen += 1;
+        let generation = self.votes_gen;
+        self.votes_pending = Some((generation, after_plan));
+        let Some(db) = self.scan_db.clone().filter(|d| d.is_file()) else {
+            return self.votes_landed(generation, Ok(Default::default()));
         };
-        let changed = votes != self.mesh_votes || alpha != self.mesh_alpha;
-        self.mesh_votes = votes;
-        self.mesh_alpha = alpha;
-        // Complex grass design §5 condition 1, from the same database.
-        let gras = match &self.scan_db {
-            Some(db) if db.is_file() => meshes::gras_diffuses(db).unwrap_or_default(),
-            _ => Default::default(),
+        spawn_guarded(self.tx.clone(), "mesh-votes", move |tx| {
+            let read = || -> Result<MeshEvidence, String> {
+                Ok(MeshEvidence {
+                    votes: meshes::mesh_votes(&db, &keys)?,
+                    alpha: meshes::mesh_alpha(&db, &keys)?,
+                    gras: meshes::gras_diffuses(&db)?,
+                })
+            };
+            let _ = tx.send(WorkerMsg::MeshVotes {
+                generation,
+                result: read(),
+            });
+        });
+    }
+
+    /// The scan-database read of generation `generation` ended; a stale one is dropped.
+    fn votes_landed(&mut self, generation: u64, result: Result<MeshEvidence, String>) {
+        if generation != self.votes_gen {
+            return;
+        }
+        let Some((_, after_plan)) = self.votes_pending.take() else {
+            return;
         };
-        let changed = changed || gras != self.gras_diffuses;
-        self.gras_diffuses = gras;
-        changed
+        let changed = match result {
+            Ok(e) => {
+                let changed = e.votes != self.mesh_votes
+                    || e.alpha != self.mesh_alpha
+                    || e.gras != self.gras_diffuses;
+                (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
+                changed
+            }
+            Err(e) => {
+                eprintln!(
+                    "sdc-gui: scan database read failed, keeping the previous mesh evidence: {e}"
+                );
+                false
+            }
+        };
+        if after_plan {
+            self.finish_plan();
+        } else if changed {
+            self.replan();
+        }
     }
 
     /// Plan again on a worker; a newer plan supersedes (cancels) an older one.
@@ -536,7 +574,10 @@ impl AppModel {
     }
 
     pub fn busy(&self) -> bool {
-        self.planning.is_some() || self.export.running.is_some() || self.preview.working()
+        self.planning.is_some()
+            || self.votes_pending.is_some()
+            || self.export.running.is_some()
+            || self.preview.working()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -563,6 +604,7 @@ impl AppModel {
                 }
             }
             WorkerMsg::Planned { .. } => {}
+            WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => {
@@ -570,6 +612,7 @@ impl AppModel {
                         self.run_after_export();
                     }
                     "preview" => self.preview_panicked(&message),
+                    "mesh-votes" => self.votes_pending = None,
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -650,7 +693,7 @@ impl AppModel {
         }
         // A plan is in flight (just opened, or an edit): the items on screen are the previous plan's, so the checks
         // wait for the plan that lands (spec §2.6: the button is never silently disabled).
-        if self.planning.is_some() {
+        if self.planning.is_some() || self.votes_pending.is_some() {
             self.export_after_plan = true;
             return;
         }
@@ -1135,7 +1178,11 @@ impl AppModel {
         }
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
-        self.refresh_mesh_votes();
+        self.refresh_mesh_votes(true);
+    }
+
+    /// The tail of `apply_plan`, once the scan-database evidence of this plan is in.
+    fn finish_plan(&mut self) {
         let now = EngineInputs::of(self);
         if self.last_inputs.as_ref() != Some(&now) && self.auto_replans < 2 {
             self.auto_replans += 1;

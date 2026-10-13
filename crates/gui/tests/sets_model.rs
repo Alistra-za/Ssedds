@@ -1156,8 +1156,7 @@ fn a_scan_database_picks_the_set_shader() {
     let db = dbdir.path().join("scan.db");
     scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
     m.scan_db = Some(db);
-    assert!(m.refresh_mesh_votes());
-    m.replan();
+    m.refresh_mesh_votes(false);
     idle(&mut m);
     let leaf = view(&set_views(&m), "landscape/leaf")
         .shader
@@ -1169,8 +1168,7 @@ fn a_scan_database_picks_the_set_shader() {
     );
     // No database: the suffix rules again (the leaf is under textures/landscape).
     m.scan_db = None;
-    assert!(m.refresh_mesh_votes());
-    m.replan();
+    m.refresh_mesh_votes(false);
     idle(&mut m);
     assert_eq!(
         view(&set_views(&m), "landscape/leaf")
@@ -1295,10 +1293,9 @@ fn a_scan_database_decides_a_diffuse_alpha() {
         &[(4, Some(1), Some(0), 0, false)],
     );
     m.scan_db = Some(db);
-    assert!(m.refresh_mesh_votes(), "only the alpha evidence changed");
-    assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
-    m.replan();
+    m.refresh_mesh_votes(false);
     assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.mesh_votes.is_empty(), "Face Tint is no shader vote");
     let j = m.item("a/glass.png").unwrap().job.clone().unwrap();
     assert_eq!(
         (
@@ -1496,4 +1493,36 @@ fn the_plus_menu_prefills_only_suffixes_pgpatcher_strips() {
     assert_eq!(path(4), Some(r"landscape\rock01_p".into()));
     assert_eq!(path(6), Some(r"landscape\rock01_rmaos".into()));
     assert_eq!(path(8), Some(String::new()), "slot 8 does not strip _s");
+}
+
+#[test]
+fn the_scan_database_is_read_off_the_ui_thread_and_a_read_error_keeps_the_values() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let j = m
+        .items
+        .iter()
+        .filter_map(|i| i.job.as_ref())
+        .find(|j| {
+            j.set_key.ends_with("landscape/leaf")
+                && j.output.file_stem().is_some_and(|s| s == "leaf")
+        })
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db.clone());
+    m.refresh_mesh_votes(false);
+    // The read is on a worker: nothing is applied until the model polls, and the model reports busy meanwhile.
+    assert!(m.mesh_votes.is_empty() && m.busy());
+    idle(&mut m);
+    assert!(!m.mesh_votes.is_empty(), "the result landed in poll");
+    // A database that cannot be read keeps the previous evidence (and logs to stderr), it does not clear it.
+    let before = m.mesh_votes.clone();
+    std::fs::write(&db, b"not a database").unwrap();
+    m.refresh_mesh_votes(false);
+    idle(&mut m);
+    assert_eq!(m.mesh_votes, before);
 }

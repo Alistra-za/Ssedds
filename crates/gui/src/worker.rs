@@ -19,6 +19,14 @@ pub struct PlanFailure {
     pub config: bool,
 }
 
+/// What one scan-database read returns (`AppModel::refresh_mesh_votes`).
+#[derive(Default)]
+pub struct MeshEvidence {
+    pub votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
+    pub alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    pub gras: std::collections::BTreeSet<String>,
+}
+
 pub enum WorkerMsg {
     /// Planning discovered `total` files (the status line reads "Analysing {total} files…").
     PlanProgress {
@@ -28,6 +36,11 @@ pub enum WorkerMsg {
     Planned {
         generation: u64,
         result: Result<PlanView, PlanFailure>,
+    },
+    /// A scan-database read for the plan's sets ended (stale generations are dropped).
+    MeshVotes {
+        generation: u64,
+        result: Result<MeshEvidence, String>,
     },
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
