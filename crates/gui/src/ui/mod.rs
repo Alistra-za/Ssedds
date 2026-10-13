@@ -50,7 +50,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     state.thumbs.sweep(model.items_rev());
-    selection_keys(ui, model);
+    let keys_free = selection_keys_free(ui, model);
     header::draw(ui, model);
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops) = (&mut state.thumbs, &mut state.drops);
@@ -93,6 +93,10 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     }
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
     dialogs::draw(ui.ctx(), model);
+    // Last, so every modal, menu and the preview has had its chance to consume the key first.
+    if keys_free {
+        selection_keys(ui, model);
+    }
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
@@ -175,16 +179,21 @@ fn column_panel(
     }
 }
 
-/// F3a D1: Ctrl+A selects everything visible and Esc clears; never while a widget has focus (the search box keeps
-/// its own Ctrl+A), a dialog or popup is open, or a texture is expanded (the preview owns Esc).
-fn selection_keys(ui: &egui::Ui, model: &mut AppModel) {
-    if model.dialog.is_some()
+/// F3a D1: whether Ctrl+A / Esc may act this frame: not while a widget has focus (the search box keeps its own
+/// Ctrl+A), a dialog, popup or any modal layer is open, or a texture is expanded (the preview owns Esc). Read at the
+/// start of the frame, before anything draws or consumes.
+fn selection_keys_free(ui: &egui::Ui, model: &AppModel) -> bool {
+    !(model.dialog.is_some()
         || model.expanded.is_some()
         || egui::Popup::is_any_open(ui.ctx())
-        || ui.ctx().memory(|m| m.focused().is_some())
-    {
-        return;
-    }
+        || ui
+            .ctx()
+            .memory(|m| m.focused().is_some() || m.top_modal_layer().is_some()))
+}
+
+/// Ctrl+A selects everything visible and Esc clears. Runs after the whole UI has drawn, so a key a modal or menu
+/// consumed this frame (Esc closing it) is gone and does not also clear the selection.
+fn selection_keys(ui: &egui::Ui, model: &mut AppModel) {
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
         model.select_all_visible();
     }
