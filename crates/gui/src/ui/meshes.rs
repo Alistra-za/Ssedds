@@ -1,10 +1,12 @@
 //! The Meshes view (plan A Task 12): mods | NIFs of the selected mod | shapes of the selected NIF. Draws
 //! `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::{
-    display_path, shader_type_name, slot_name, Banner, MeshesModel, ModLine, ScanTarget,
-    ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, SEARCH_DEBOUNCE, STALE_CHIP,
+    display_path, overridden_text, plugins_line, shader_type_name, slot_name, Banner, MeshesModel,
+    ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, MISSING_NOTE,
+    PLUGINS_NOT_READ_NOTE, SEARCH_DEBOUNCE, STALE_CHIP, UNUSED_NOTE,
 };
 use eframe::egui;
+use modscan::plugin_store::{record_label, MeshUse};
 use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA};
 
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
@@ -87,13 +89,29 @@ fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
         ui.label(&m.status);
     }
     if let Some(r) = &m.report {
-        if !r.notes.is_empty() || !r.missing_mods.is_empty() || !r.problems.is_empty() {
+        if !r.notes.is_empty()
+            || !r.missing_mods.is_empty()
+            || !r.problems.is_empty()
+            || r.plugins.is_some()
+        {
             egui::CollapsingHeader::new("Scan details")
                 .id_salt("meshes-scan-details")
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(160.0)
                         .show(ui, |ui| {
+                            if let Some(p) = &r.plugins {
+                                ui.label(plugins_line(p));
+                                for (plugin, msg) in p.problems.iter().take(MAX_LISTED) {
+                                    ui.label(format!("Plugin {plugin}: {msg}"));
+                                }
+                                if p.problems.len() > MAX_LISTED {
+                                    ui.label(format!(
+                                        "… and {} more plugin problems",
+                                        p.problems.len() - MAX_LISTED
+                                    ));
+                                }
+                            }
                             for n in &r.notes {
                                 ui.label(format!("Note: {n}"));
                             }
@@ -109,6 +127,20 @@ fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
                         });
                 });
         }
+    }
+    if m.has_store() || m.file_refs.is_some() {
+        egui::CollapsingHeader::new("Plugin file references")
+            .id_salt("meshes-plugin-file-refs")
+            .show(ui, |ui| {
+                if m.scanning() {
+                    ui.label("Available after the scan finishes.");
+                    return;
+                }
+                if m.file_refs.is_none() {
+                    m.load_file_refs();
+                }
+                file_refs(ui, m);
+            });
     }
     if let Some(e) = m.error.clone() {
         ui.horizontal_wrapped(|ui| {
@@ -326,6 +358,7 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         if let Some(c) = &n.derive_check {
             ui.label(format!("PGPatcher check: {c}"));
         }
+        plugin_overrides(ui, &m.plugin_uses);
     }
     if m.pair.is_some() {
         ui.horizontal(|ui| {
@@ -385,6 +418,110 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
     if let Some(p) = clicked {
         m.show_users(&p);
     }
+}
+
+/// Winning plugin records that use this mesh and the shapes they re-texture (esp spec §4.2). Information only.
+fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
+    egui::CollapsingHeader::new(format!("Plugin overrides ({})", uses.len()))
+        .id_salt("meshes-plugin-overrides")
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("meshes-plugin-overrides-scroll")
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    if uses.is_empty() {
+                        ui.label("No plugin record of the latest scan uses this mesh.");
+                    }
+                    for (i, u) in uses.iter().take(MAX_LISTED).enumerate() {
+                        ui.label(format!(
+                            "{}{}",
+                            record_label(u.edid.as_deref(), u.formid, &u.sig, &u.plugin),
+                            overridden_text(u.n_overrides)
+                        ));
+                        ui.indent(("plugin-swaps", i), |ui| {
+                            for s in &u.swaps {
+                                // formid 0 = the TXST's master is not in the load order
+                                let target = if s.txst_formid == 0 {
+                                    "unresolved TXST".to_string()
+                                } else {
+                                    format!(
+                                        "{} [{:08X}]",
+                                        s.txst_edid.as_deref().unwrap_or("(no EDID)"),
+                                        s.txst_formid
+                                    )
+                                };
+                                ui.label(format!("{} → {target}", s.shape_name));
+                            }
+                        });
+                    }
+                    if uses.len() > MAX_LISTED {
+                        ui.label(format!("… and {} more", uses.len() - MAX_LISTED));
+                    }
+                });
+        });
+}
+
+/// Most rows drawn in the file-reference list.
+const MAX_REF_ROWS: usize = 1000;
+
+/// "Plugin file references" (esp spec §4.4): counts, filter, copy; no actions.
+fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let (missing, unused) = m
+        .file_refs
+        .as_ref()
+        .map_or((0, 0), |r| (r.missing.len(), r.unused.len()));
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(!m.refs_unused, format!("Missing ({missing})"))
+            .clicked()
+        {
+            m.refs_unused = false;
+        }
+        if ui
+            .selectable_label(m.refs_unused, format!("Unused ({unused})"))
+            .clicked()
+        {
+            m.refs_unused = true;
+        }
+        ui.add(
+            egui::TextEdit::singleline(&mut m.refs_filter)
+                .hint_text("filter")
+                .desired_width(200.0),
+        );
+        if ui.button("Copy").clicked() {
+            let text = m.refs_lines().join("\n");
+            ui.ctx().copy_text(text);
+        }
+    });
+    ui.weak(if m.refs_unused {
+        UNUSED_NOTE
+    } else {
+        MISSING_NOTE
+    });
+    if m.refs_unused && m.report.as_ref().is_some_and(|r| r.plugins.is_none()) {
+        ui.weak(PLUGINS_NOT_READ_NOTE);
+    }
+    let n = m.refs_lines().len();
+    if n == 0 {
+        ui.label("Nothing listed.");
+        return;
+    }
+    // Wrapping rows bounded to the column; rendering is capped so 68k Unused rows stay fast (Copy still takes all).
+    egui::ScrollArea::vertical()
+        .id_salt("meshes-file-refs-scroll")
+        .max_height(240.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for l in m.refs_lines().iter().take(MAX_REF_ROWS) {
+                ui.add(egui::Label::new(l.as_str()).wrap());
+            }
+            if n > MAX_REF_ROWS {
+                ui.weak(format!(
+                    "… and {} more — narrow with the filter",
+                    n - MAX_REF_ROWS
+                ));
+            }
+        });
 }
 
 /// One shape; returns the texture path that was clicked.

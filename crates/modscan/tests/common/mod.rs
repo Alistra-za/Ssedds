@@ -28,3 +28,11 @@ pub fn instance_fixture(modlist: &str) -> tempfile::TempDir {
     .unwrap();
     d
 }
+
+/// Writes `bytes` to `root/rel`, creating parent directories.
+#[allow(dead_code)]
+pub fn put(root: &std::path::Path, rel: &str, bytes: &[u8]) {
+    let p = root.join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, bytes).unwrap();
+}

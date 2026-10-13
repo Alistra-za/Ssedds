@@ -9,13 +9,17 @@ use crate::worker::{start_scan, WorkerMsg};
 use engine::shader::{MeshAlpha, Shader};
 use modscan::mo2::Instance;
 use modscan::pgp::DeriveCheck;
+use modscan::plugin_store::{MeshUse, MissingRef};
+use modscan::plugins::PluginStats;
 use modscan::scan::{Report, Source};
 use modscan::store::{
     check_code, DerivedState, ModRow, NifRow, ShapeView, Store, TexResolution, KIND_MOD,
     KIND_SEPARATOR,
 };
 use modscan::ScanError;
+use render3d::perf_log;
 use rusqlite::OptionalExtension;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -324,6 +328,67 @@ pub fn mesh_alpha(
     Ok(out)
 }
 
+/// "Plugin file references" (esp spec §4.4): information only.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FileRefs {
+    pub missing: Vec<MissingRef>,
+    pub unused: Vec<String>,
+}
+
+pub const MISSING_NOTE: &str = "Paths that winning plugin records name and that no enabled mod, the game Data folder or an active BSA provides. Information only.";
+/// Shown under Unused when the last scan did not read plugins (Folder scan, cancelled or PGPatcher-tainted run).
+pub const PLUGINS_NOT_READ_NOTE: &str = "Plugins were not read in the last scan; Unused may count plugin-only textures or use earlier plugin data.";
+pub const UNUSED_NOTE: &str = "Textures that no NIF and no plugin record names. textures\\pbr\\ is left out (PGPatcher output); LOD, interface and engine textures are listed too. Information only.";
+
+/// The scan details line of the plugin pass (esp spec §4.3).
+pub fn plugins_line(p: &PluginStats) -> String {
+    format!(
+        "Plugins: {} ({} cached), {} records, {} ms",
+        p.n, p.cached, p.records, p.ms
+    )
+}
+
+/// " · overridden N×" after a record that later plugins override; empty otherwise.
+pub fn overridden_text(n: u32) -> String {
+    if n == 0 {
+        String::new()
+    } else {
+        format!(" · overridden {n}×")
+    }
+}
+
+/// The listed lines of one tab. `filter`: case-insensitive substring of the path, `\` read as `/`.
+pub fn file_refs_lines(r: &FileRefs, unused: bool, filter: &str) -> Vec<String> {
+    let needle = filter.trim().replace('\\', "/").to_lowercase();
+    let keep = |p: &str| needle.is_empty() || p.to_lowercase().contains(&needle);
+    if unused {
+        return r.unused.iter().filter(|p| keep(p)).cloned().collect();
+    }
+    r.missing
+        .iter()
+        .filter(|m| keep(&m.path))
+        .map(|m| {
+            let more = m.n_records.saturating_sub(m.records.len());
+            let tail = if more > 0 {
+                format!("; … {more} more")
+            } else {
+                String::new()
+            };
+            format!("{} ← {}{tail}", m.path, m.records.join("; "))
+        })
+        .collect()
+}
+
+/// Ruling R6: one timing log line per finished plugin pass.
+pub fn log_plugins(r: &Report) {
+    if let Some(p) = &r.plugins {
+        perf_log::emit(
+            "plugins",
+            json!({"n": p.n, "cached": p.cached, "records": p.records, "ms": p.ms}),
+        );
+    }
+}
+
 pub struct MeshesModel {
     pub store_path: Option<PathBuf>,
     pub target: Option<ScanTarget>,
@@ -355,6 +420,15 @@ pub struct MeshesModel {
     pub stale_list: Option<Vec<(String, String)>>,
     /// A texture path and its users (NIF path, slot, shader kind), after a click on the path.
     pub tex_users: Option<(String, Vec<TexUser>)>,
+    /// Winning plugin records that use the shown mesh (esp spec §4.2).
+    pub plugin_uses: Vec<MeshUse>,
+    /// "Plugin file references", read when the section is first opened after a scan.
+    pub file_refs: Option<FileRefs>,
+    /// That section's tab (false: Missing) and filter.
+    pub refs_unused: bool,
+    pub refs_filter: String,
+    /// The lines for (tab, filter), kept until either changes.
+    refs_cache: Option<((bool, String), Vec<String>)>,
     /// Database or scan errors; shown, never swallowed.
     pub error: Option<String>,
     pub dialog: Option<MeshesDialog>,
@@ -426,6 +500,11 @@ impl MeshesModel {
             banner: None,
             stale_list: None,
             tex_users: None,
+            plugin_uses: vec![],
+            file_refs: None,
+            refs_unused: false,
+            refs_filter: String::new(),
+            refs_cache: None,
             error: None,
             dialog: None,
             report: None,
@@ -563,6 +642,9 @@ impl MeshesModel {
         self.stale_list = None;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
+        // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
+        self.file_refs = None;
+        self.refs_cache = None;
         self.progress = Some(("starting", 0, 0));
         self.status = if req.skip_derived {
             "Scanning without PGPatcher output…".into()
@@ -620,6 +702,9 @@ impl MeshesModel {
         match r {
             Ok(report) => {
                 self.status = report_summary(&report);
+                log_plugins(&report);
+                self.file_refs = None;
+                self.refs_cache = None;
                 let incomplete = report
                     .pgp
                     .iter()
@@ -707,6 +792,7 @@ impl MeshesModel {
         self.pair = None;
         self.view_source = false;
         self.tex_users = None;
+        self.plugin_uses.clear();
         self.v3.set_mesh(None);
     }
 
@@ -971,6 +1057,17 @@ impl MeshesModel {
         });
         match r {
             Ok(s) => {
+                let uses = store.copy_location(copy).and_then(|l| match l {
+                    Some((path, ..)) => store.plugin_uses_of_mesh(&path),
+                    None => Ok(vec![]),
+                });
+                self.plugin_uses = match uses {
+                    Ok(u) => u,
+                    Err(e) => {
+                        self.error = Some(db_err(e));
+                        vec![]
+                    }
+                };
                 let spec = mesh_spec(store, copy, &s);
                 self.shapes = s;
                 self.resolved = resolved;
@@ -985,6 +1082,7 @@ impl MeshesModel {
             Err(e) => {
                 self.shapes.clear();
                 self.resolved.clear();
+                self.plugin_uses.clear();
                 self.error = Some(db_err(e));
             }
         }
@@ -1003,6 +1101,51 @@ impl MeshesModel {
             None => vec![],
         };
         self.tex_users = Some((path.to_string(), users));
+    }
+
+    pub fn has_store(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// "Plugin file references" opened: the Missing and Unused lists (esp spec §4.4). A failed read is shown and
+    /// leaves empty lists, so it is not retried every frame.
+    pub fn load_file_refs(&mut self) {
+        // Half-written origins and winners while a scan runs: wait for it.
+        if self.scanning() {
+            return;
+        }
+        let Some(store) = &self.store else {
+            return;
+        };
+        // shortcut: Missing/Unused read on the UI thread on first open; move to the scan worker if the owner sees a stall
+        let r = store.plugin_missing_files().and_then(|missing| {
+            Ok(FileRefs {
+                missing,
+                unused: store.unused_textures()?,
+            })
+        });
+        self.file_refs = Some(match r {
+            Ok(r) => r,
+            Err(e) => {
+                self.error = Some(db_err(e));
+                FileRefs::default()
+            }
+        });
+        self.refs_cache = None;
+    }
+
+    /// The listed lines for the current tab and filter.
+    pub fn refs_lines(&mut self) -> &[String] {
+        let key = (self.refs_unused, self.refs_filter.clone());
+        if self.refs_cache.as_ref().map(|c| &c.0) != Some(&key) {
+            let lines = self
+                .file_refs
+                .as_ref()
+                .map(|r| file_refs_lines(r, key.0, &key.1))
+                .unwrap_or_default();
+            self.refs_cache = Some((key, lines));
+        }
+        self.refs_cache.as_ref().map_or(&[][..], |c| c.1.as_slice())
     }
 
     /// "Show list" on the stale banner.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/encoders-sys", "crates/engine", "crates/cli", "crates/bench", "crates/gui", "crates/nif", "crates/vfs", "crates/modscan", "crates/render3d", "crates/pgpsim"]
+members = ["crates/encoders-sys", "crates/engine", "crates/cli", "crates/bench", "crates/gui", "crates/nif", "crates/vfs", "crates/modscan", "crates/render3d", "crates/pgpsim", "crates/esp"]
 exclude = ["spikes"]
 
 [workspace.package]
@@ -38,6 +38,7 @@ encoding_rs = "0.8.42"
 lz4_flex = { version = "0.14.0", default-features = false, features = ["frame", "std"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 crc32fast = "1.5.2"
+flate2 = "1"
 
 [profile.dev]
 opt-level = 1

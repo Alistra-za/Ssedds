@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = r#"
 CREATE TABLE path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
@@ -48,6 +48,38 @@ CREATE INDEX nif_copy_origin ON nif_copy(origin_id);
 CREATE UNIQUE INDEX texset_key ON texset(n, ifnull(t0,0), ifnull(t1,0), ifnull(t2,0), ifnull(t3,0),
                      ifnull(t4,0), ifnull(t5,0), ifnull(t6,0), ifnull(t7,0), ifnull(t8,0));
 CREATE INDEX shape_texset ON shape(texset_id);
+-- Plugins (esp scanner spec §2.3). `local` = the FormID as the plugin stores it (master index clamped to the
+-- plugin): the cache. `formid`/`txst_formid` = load-order FormIDs, set by `resolve_plugins` (NULL until then; the raw
+-- local id when the master is not loaded, `rec.owner_ok` = 0). `plugin.lo_index` = load-order position, NULL when
+-- not resolved for the current order (written only by `resolve_plugins`).
+CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, path TEXT NOT NULL,
+                     size INTEGER, mtime INTEGER NOT NULL, lo_index INTEGER, light INTEGER NOT NULL,
+                     flags INTEGER NOT NULL, masters_json TEXT NOT NULL, error_text TEXT);
+CREATE TABLE rec (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL, edid TEXT,
+                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER);
+CREATE TABLE rec_winner (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, n_overrides INTEGER NOT NULL);
+CREATE TABLE txst_slot (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, slot INTEGER NOT NULL,
+                     path_id INTEGER NOT NULL);
+CREATE TABLE model_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, slot INTEGER NOT NULL,
+                     path_id INTEGER NOT NULL);
+CREATE TABLE alt_tex (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, model_slot INTEGER NOT NULL,
+                     shape_name TEXT NOT NULL, txst_formid INTEGER, txst_local INTEGER NOT NULL, idx INTEGER NOT NULL);
+CREATE TABLE txst_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, role TEXT NOT NULL,
+                     txst_formid INTEGER, txst_local INTEGER NOT NULL);
+CREATE TABLE tex_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, role TEXT NOT NULL,
+                     path_id INTEGER NOT NULL);
+CREATE INDEX rec_formid ON rec(formid);
+CREATE INDEX rec_plugin ON rec(plugin_id, local);
+CREATE INDEX txst_slot_path ON txst_slot(path_id);
+CREATE INDEX txst_slot_plugin ON txst_slot(plugin_id, local);
+CREATE INDEX model_ref_path ON model_ref(path_id);
+CREATE INDEX model_ref_plugin ON model_ref(plugin_id, local);
+CREATE INDEX alt_tex_txst ON alt_tex(txst_formid);
+CREATE INDEX alt_tex_plugin ON alt_tex(plugin_id, local);
+CREATE INDEX txst_ref_txst ON txst_ref(txst_formid);
+CREATE INDEX txst_ref_plugin ON txst_ref(plugin_id, local);
+CREATE INDEX tex_ref_path ON tex_ref(path_id);
+CREATE INDEX tex_ref_plugin ON tex_ref(plugin_id, local);
 "#;
 
 const SHAPE_COLS: &str = "block, name, kind, shader_kind, shader_type, slsf1, slsf2, texset_id, alpha_flags, \
@@ -249,7 +281,7 @@ fn keep_raw(p: &TexPath) -> bool {
 }
 
 /// Slot, SQL condition on `tp.p`, its bound argument, and the exact post-filter.
-type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
+pub(crate) type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
 
 /// A key value in the stored form: trimmed, `/` separators, lower case, no leading `/`.
 fn key_form(s: &str) -> String {
@@ -417,10 +449,10 @@ pub struct DeriveRow {
 }
 
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
-fn path_id(c: &Connection, p: &str) -> rusqlite::Result<i64> {
+pub(crate) fn path_id(c: &Connection, p: &str) -> rusqlite::Result<i64> {
     c.prepare_cached("INSERT OR IGNORE INTO path(p) VALUES (?1)")?
         .execute([p])?;
     c.prepare_cached("SELECT id FROM path WHERE p = ?1")?
@@ -640,6 +672,55 @@ fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
         write_shapes(c, PENDING, pid, s)?;
     }
     Ok(())
+}
+
+/// The slot, the SQL condition on `eff` (the stored slot string as an SQL expression, argument `?2`), its argument
+/// and the exact post-filter for `key` (spec §2.4 of the PGPatcher plan); `None` when the key is empty (no match).
+pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
+    // `pgp_form` minus the extension and `_n`/`_msn` cuts, which only shorten the tail: a superset prefilter.
+    let pgp = format!(
+        "(CASE WHEN {eff} LIKE 'textures/pbr/%' THEN 'textures/' || substr({eff}, 14) ELSE {eff} END)"
+    );
+    Some(match key {
+        TexKey::Suffix { slot, stem } => {
+            let stem = key_form(stem);
+            if stem.is_empty() {
+                return None;
+            }
+            let pattern = format!("%/{}%", like_escape(&stem));
+            let want = format!("/{stem}");
+            let normal = *slot == 1;
+            (
+                *slot,
+                format!("{pgp} LIKE ?2 ESCAPE '\\'"),
+                pattern,
+                Box::new(move |p: &str| pgp_form(p, normal).ends_with(&want)),
+            )
+        }
+        TexKey::Contains { slot, frag } => {
+            let frag = key_form(frag);
+            if frag.is_empty() {
+                return None;
+            }
+            let pattern = format!("%{}%", like_escape(&frag));
+            let normal = *slot == 1;
+            (
+                *slot,
+                format!("{pgp} LIKE ?2 ESCAPE '\\'"),
+                pattern,
+                Box::new(move |p: &str| pgp_form(p, normal).contains(&frag)),
+            )
+        }
+        TexKey::Exact { slot, path } => {
+            let p = key_form(path);
+            let p = if p.starts_with("textures/") {
+                p
+            } else {
+                format!("textures/{p}")
+            };
+            (*slot, format!("{eff} = ?2"), p, Box::new(|_: &str| true))
+        }
+    })
 }
 
 impl Store {
@@ -1186,50 +1267,10 @@ impl Store {
         }
         // The slot string PGPatcher sees: the raw one when `tex_raw` keeps it, else the canonical path; lower case, `/`.
         let eff = "lower(replace(coalesce(tr.raw, tp.p), char(92), '/'))";
-        // `pgp_form` minus the extension and `_n`/`_msn` cuts, which only shorten the tail: a superset prefilter.
-        let pgp = format!(
-            "(CASE WHEN {eff} LIKE 'textures/pbr/%' THEN 'textures/' || substr({eff}, 14) ELSE {eff} END)"
-        );
-        let (slot, cond, arg, check): TexQuery = match key {
-            TexKey::Suffix { slot, stem } => {
-                let stem = key_form(stem);
-                if stem.is_empty() {
-                    return Ok(vec![]);
-                }
-                let pattern = format!("%/{}%", like_escape(&stem));
-                let want = format!("/{stem}");
-                let normal = *slot == 1;
-                (
-                    *slot,
-                    format!("{pgp} LIKE ?2 ESCAPE '\\'"),
-                    pattern,
-                    Box::new(move |p: &str| pgp_form(p, normal).ends_with(&want)),
-                )
-            }
-            TexKey::Contains { slot, frag } => {
-                let frag = key_form(frag);
-                if frag.is_empty() {
-                    return Ok(vec![]);
-                }
-                let pattern = format!("%{}%", like_escape(&frag));
-                let normal = *slot == 1;
-                (
-                    *slot,
-                    format!("{pgp} LIKE ?2 ESCAPE '\\'"),
-                    pattern,
-                    Box::new(move |p: &str| pgp_form(p, normal).contains(&frag)),
-                )
-            }
-            TexKey::Exact { slot, path } => {
-                let p = key_form(path);
-                let p = if p.starts_with("textures/") {
-                    p
-                } else {
-                    format!("textures/{p}")
-                };
-                (*slot, format!("{eff} = ?2"), p, Box::new(|_: &str| true))
-            }
+        let Some((slot, cond, arg, check)) = tex_query(key, eff) else {
+            return Ok(vec![]);
         };
+
         let sql = format!(
             "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, {eff},
                     (SELECT count(*) FROM shape s2 WHERE s2.copy_id = c.id) AS n_shapes
