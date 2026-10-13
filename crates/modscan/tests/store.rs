@@ -912,3 +912,37 @@ fn winning_nifs_matches_the_path_after_the_meshes_folder() {
     assert!(s.winning_nifs("meshes", 100).unwrap().is_empty());
     assert_eq!(s.winning_nifs("x/d", 100).unwrap().len(), 1);
 }
+
+fn secondary_indexes(s: &Store) -> i64 {
+    s.conn()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name IN ('nif_copy_origin', 'shape_texset')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// Scan speed spec §2 step 4: a scan of an empty store builds its secondary indexes once, at the end.
+#[test]
+fn begin_scan_on_an_empty_store_defers_the_secondary_indexes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&d.path().join("s.db")).unwrap();
+    assert_eq!(secondary_indexes(&s), 2);
+    s.begin_scan().unwrap();
+    assert_eq!(secondary_indexes(&s), 0);
+    s.end_scan().unwrap();
+    assert_eq!(secondary_indexes(&s), 2);
+    s.upsert_copy(
+        "meshes/a.nif",
+        1,
+        1,
+        1,
+        CopyResult::Failed("x".into()),
+        None,
+    )
+    .unwrap();
+    s.begin_scan().unwrap();
+    assert_eq!(secondary_indexes(&s), 2, "a warm scan keeps them");
+    s.end_scan().unwrap();
+}

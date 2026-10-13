@@ -736,3 +736,29 @@ fn a_writer_failure_ends_the_scan_with_its_error() {
         "{r:?}"
     );
 }
+
+/// Ruling R3: a cancelled cold scan still ends with its indexes.
+#[test]
+fn a_cancelled_cold_scan_still_ends_with_its_indexes() {
+    let d = instance_fixture("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let r = run(
+        &Source::Mo2(inst),
+        &mut store,
+        &AtomicBool::new(true),
+        &|_| {},
+        &|| vec![],
+    );
+    assert!(matches!(r, Err(modscan::ScanError::Cancelled)), "{r:?}");
+    let n: i64 = store
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name IN ('nif_copy_origin', 'shape_texset')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 2);
+}

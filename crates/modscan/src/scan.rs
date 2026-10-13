@@ -170,6 +170,38 @@ pub fn run_with(
     procs: &dyn Fn() -> Vec<String>,
     skip_derived: bool,
 ) -> Result<Report, ScanError> {
+    let r = scan_body(src, store, cancel, progress, procs, skip_derived);
+    if let Err(e) = &r {
+        // Pending rows must not outlive a failed run (first error wins). A crash after a cold direct write keeps
+        // the derived copies; their size/mtime re-parse guards them.
+        let _ = store.discard_pending();
+        // A corrupt database is a cache: zero the version so the next `Store::open` rebuilds it.
+        if let ScanError::Db(rusqlite::Error::SqliteFailure(f, _)) = e {
+            if f.code == rusqlite::ErrorCode::DatabaseCorrupt {
+                let _ = store.conn.execute_batch("PRAGMA user_version = 0");
+            }
+        }
+    }
+    // Every outcome, cancel and errors included, ends the scan (deferred indexes, ruling R3).
+    let t = Instant::now();
+    let end = store.end_scan();
+    let mut report = r?;
+    end?;
+    report
+        .sub_ms
+        .push(("end_scan", t.elapsed().as_millis() as u64));
+    Ok(report)
+}
+
+/// The scan itself; `run_with` adds `Store::end_scan` on every outcome.
+fn scan_body(
+    src: &Source,
+    store: &mut Store,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+    procs: &dyn Fn() -> Vec<String>,
+    skip_derived: bool,
+) -> Result<Report, ScanError> {
     // 1. Process gate.
     if !skip_derived && pgp::running(&procs()) {
         return Err(ScanError::PgpRunning);
