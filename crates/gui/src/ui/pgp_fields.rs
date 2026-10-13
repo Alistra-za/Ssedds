@@ -1,5 +1,6 @@
 //! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced keys for the
 //! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
+use super::columns::AMBER;
 use crate::model::sets::{set_views, SetView, SlotFill, SlotKind};
 use crate::model::AppModel;
 use crate::pgp::prefix::{match_mode, MatchMode};
@@ -264,15 +265,28 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                 edits.push((key, v));
             }
         }
-        KeyKind::Number(_) => {
+        KeyKind::Number(range) => {
             let default = GLINT_DEFAULTS
                 .iter()
                 .chain(FIXED_NUMBERS.iter())
                 .find(|(d, _)| *d == k.key)
                 .map(|(_, x)| *x);
             let unset_unknown = value.is_none() && default.is_none();
-            let mut x = value.and_then(|v| v.as_f64()).or(default).unwrap_or(0.0);
+            let stored = value.as_ref().and_then(Value::as_f64);
+            let mut x = stored.or(default).unwrap_or(0.0);
+            let (lo, hi) = range.bounds();
+            // The parser is the only place a typed number is seen before DragValue clamps it.
+            let typed_outside = std::cell::Cell::new(false);
             let mut drag = egui::DragValue::new(&mut x)
+                .range(lo..=hi)
+                // A hand-edited value outside the range shows as it is: clamping it here would edit the project just
+                // by drawing it (F1 Review Focus 3). The writer clamps it on export.
+                .clamp_existing_to_range(false)
+                .custom_parser(|s| {
+                    let n = parse_number(s)?;
+                    typed_outside.set(!(lo..=hi).contains(&n));
+                    Some(n)
+                })
                 .speed(0.01)
                 .max_decimals(4)
                 .custom_formatter(|n, _| format!("{:?}", (n * 1e4).round() / 1e4));
@@ -280,8 +294,19 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                 // No default to show: say so rather than a 0.0 that looks like one.
                 drag = drag.custom_formatter(|_, _| "not set".to_string());
             }
-            let r = ui.add(drag);
-            if r.changed() {
+            let r = ui
+                .horizontal(|ui| {
+                    let r = ui.add(drag);
+                    let stored_outside = stored.is_some_and(|s| range.clamp(s) != s);
+                    // `Any` has no note and never clamps.
+                    if (typed_outside.get() || stored_outside) && !range.note().is_empty() {
+                        ui.label(egui::RichText::new(range.note()).small().color(AMBER));
+                    }
+                    r
+                })
+                .inner;
+            // An equal value is no edit: `SetsDoc::set_value` marks the project dirty even then.
+            if r.changed() && stored != Some(x) {
                 edits.push((key, Some(json!(x))));
             }
         }
@@ -338,4 +363,14 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
         }
         KeyKind::Slot => {}
     }
+}
+
+/// egui's own number parsing (whitespace ignored, U+2212 read as a minus), so the box accepts what it always did.
+fn parse_number(s: &str) -> Option<f64> {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| if c == '\u{2212}' { '-' } else { c })
+        .collect::<String>()
+        .parse()
+        .ok()
 }

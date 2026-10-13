@@ -344,6 +344,138 @@ fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     }
 }
 
+/// The PGPatcher panel of `landscape/rock01` alone.
+fn panel_harness(m: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 900.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, "landscape/rock01"),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// Focus the number box showing `shown` and select its text (egui_kittest's DragValue pattern). If the accesskit
+/// `focus()` does not put the DragValue into text editing, replace it with `.click()`: a plain click on a DragValue
+/// requests focus.
+fn focus_spin(h: &mut Harness<'static, AppModel>, shown: &str) {
+    h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .find(|n| n.value().as_deref() == Some(shown))
+        .unwrap_or_else(|| panic!("no number box shows {shown}: {:?}", spin_values(h)))
+        .focus();
+    h.run();
+    h.key_press_modifiers(eframe::egui::Modifiers::COMMAND, eframe::egui::Key::A);
+    h.run();
+}
+
+/// Type one character into the focused widget. Text events go to the focused widget, whichever node sends them.
+fn type_char(h: &Harness<'static, AppModel>, c: char) {
+    h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .next()
+        .expect("a number box")
+        .type_text(&c.to_string());
+}
+
+/// F1 spec §2: egui clamps a drag to the range the box reports, so the range is the drag test.
+#[test]
+fn every_number_box_reports_its_range() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value(
+        "landscape/rock01",
+        "multilayer",
+        Some(serde_json::json!(true)),
+    );
+    m.set_json_value(
+        "landscape/rock01",
+        "coat_strength",
+        Some(serde_json::json!(0.5)),
+    );
+    let mut h = panel_harness(m);
+    h.run();
+    let spins: Vec<_> = h
+        .query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
+        .map(|n| {
+            let a = n.accesskit_node();
+            (n.value(), a.min_numeric_value(), a.max_numeric_value())
+        })
+        .collect();
+    assert!(spins.len() >= 5, "{spins:?}");
+    for (v, min, max) in &spins {
+        assert_eq!(*min, Some(0.0), "{v:?}");
+        let unit = v.as_deref() == Some("0.5");
+        assert_eq!(*max, unit.then_some(1.0), "{v:?}");
+    }
+}
+
+/// F1 spec §2: a typed value outside the range is clamped, and the box says so for that frame.
+#[test]
+fn typed_values_clamp_and_say_so() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value(
+        "landscape/rock01",
+        "multilayer",
+        Some(serde_json::json!(true)),
+    );
+    let mut h = panel_harness(m);
+    h.run();
+    // roughness_scale shows its fixed default 1.0.
+    focus_spin(&mut h, "1.0");
+    type_char(&h, '-');
+    h.run();
+    type_char(&h, '5');
+    h.step();
+    h.get_by_label("clamped to ≥ 0");
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert_eq!(rock_settings(&h)["roughness_scale"], serde_json::json!(0.0));
+    // coat_strength has no default ("not set"): a 2 becomes 1.
+    h.state_mut().set_json_value(
+        "landscape/rock01",
+        "coat_strength",
+        Some(serde_json::json!(0.5)),
+    );
+    h.run();
+    focus_spin(&mut h, "0.5");
+    type_char(&h, '2');
+    h.step();
+    h.get_by_label("clamped to 0–1");
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert_eq!(rock_settings(&h)["coat_strength"], serde_json::json!(1.0));
+}
+
+/// F1 spec Review Focus 3: a hand-edited value outside the range shows as it is with the note. Drawing it is no
+/// edit, so the project stays clean (the writer clamps it on export).
+#[test]
+fn a_hand_edited_negative_number_shows_as_it_is_and_does_not_dirty_the_project() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value(
+        "landscape/rock01",
+        "roughness_scale",
+        Some(serde_json::json!(-3.0)),
+    );
+    m.save().unwrap();
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    let mut h = panel_harness(m);
+    h.run();
+    h.run();
+    assert!(
+        spin_values(&h).contains(&"-3.0".to_string()),
+        "{:?}",
+        spin_values(&h)
+    );
+    h.get_by_label("clamped to ≥ 0");
+    assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
+    assert_eq!(
+        rock_settings(&h)["roughness_scale"],
+        serde_json::json!(-3.0)
+    );
+}
+
 #[test]
 fn an_unset_number_without_a_default_says_not_set() {
     let d = tempfile::tempdir().unwrap();
