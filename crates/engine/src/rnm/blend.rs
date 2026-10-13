@@ -195,6 +195,7 @@ mod tests {
     use super::*;
     use crate::config::{Subtype, Target};
     use crate::presets::PresetRegistry;
+    use crate::rnm::RnmAo;
 
     fn close(a: [f32; 3], b: [f32; 3], eps: f32) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < eps)
@@ -271,8 +272,17 @@ mod tests {
     }
 
     fn png(dir: &std::path::Path, name: &str, f: impl Fn(u32, u32) -> [u8; 4]) -> RnmFile {
+        png_n(dir, name, 16, f)
+    }
+
+    fn png_n(
+        dir: &std::path::Path,
+        name: &str,
+        n: u32,
+        f: impl Fn(u32, u32) -> [u8; 4],
+    ) -> RnmFile {
         let path = dir.join(name);
-        let mut im = image::RgbaImage::new(16, 16);
+        let mut im = image::RgbaImage::new(n, n);
         for (x, y, p) in im.enumerate_pixels_mut() {
             *p = image::Rgba(f(x, y));
         }
@@ -301,7 +311,7 @@ mod tests {
             .unwrap()
             .profile("cs-quality", Target::Cs, Subtype::CoatNormal)
             .unwrap();
-        let mut work = Rgba32F::new(16, 16, [0.5, 0.5, 1.0, 1.0]);
+        let mut work = Rgba32F::new(16, 16, [0.0, 0.0, 1.0, 1.0]);
         for (i, px) in work.px.iter_mut().enumerate() {
             px[3] = i as f32 / 255.0;
         }
@@ -339,5 +349,179 @@ mod tests {
                 assert!(work.at(x, y)[1] > 0.0, "({x},{y}) {:?}", work.at(x, y));
             }
         }
+    }
+
+    fn profile() -> Profile {
+        PresetRegistry::builtin()
+            .unwrap()
+            .profile("cs-quality", Target::Cs, Subtype::Normal)
+            .unwrap()
+    }
+
+    /// A non-flat unit-normal base, so a blend that does nothing is distinguishable from one that did something.
+    fn base() -> Rgba32F {
+        let mut w = Rgba32F::new(16, 16, [0.0; 4]);
+        for y in 0..16u32 {
+            for x in 0..16u32 {
+                let n = unit([
+                    0.3 * (x as f32 / 5.0).sin(),
+                    0.25 * (y as f32 / 4.0).cos(),
+                    1.0,
+                ]);
+                *w.at_mut(x, y) = [n[0], n[1], n[2], 1.0];
+            }
+        }
+        w
+    }
+
+    fn textured(x: u32, y: u32) -> [u8; 4] {
+        [
+            (40 + x * 11) as u8,
+            (200 - y * 9) as u8,
+            (150 + x * 3) as u8,
+            255,
+        ]
+    }
+
+    fn max_diff(a: &Rgba32F, b: &Rgba32F) -> f32 {
+        a.px.iter()
+            .zip(&b.px)
+            .flat_map(|(p, q)| (0..3).map(move |i| (p[i] - q[i]).abs()))
+            .fold(0.0, f32::max)
+    }
+
+    fn run(p: &Profile, job: &RnmJob) -> Rgba32F {
+        let mut w = base();
+        apply(&mut w, job, p).unwrap();
+        w
+    }
+
+    fn with_mask(mut j: RnmJob, m: RnmFile) -> RnmJob {
+        j.layers[0].mask = Some(m);
+        j
+    }
+
+    /// The base after `apply` with no layers: only the renormalisation.
+    fn no_layer(p: &Profile) -> Rgba32F {
+        run(
+            p,
+            &RnmJob {
+                layers: vec![],
+                ao: None,
+            },
+        )
+    }
+
+    #[test]
+    fn black_mask_is_no_layer_and_white_mask_is_mask_off() {
+        let d = tempfile::tempdir().unwrap();
+        let f = png(d.path(), "d.png", textured);
+        let black = png(d.path(), "k.png", |_, _| [0, 0, 0, 255]);
+        let white = png(d.path(), "w.png", |_, _| [255, 255, 255, 255]);
+        let p = profile();
+        let none = no_layer(&p);
+        let plain = job(LayerId::Detail, f);
+        assert!(max_diff(&run(&p, &with_mask(plain.clone(), black.clone())), &none) < 1e-4);
+        let whited = run(&p, &with_mask(plain.clone(), white));
+        let mut off = p.clone();
+        off.rnm.detail.mask = false;
+        // mask = false ignores even a black mask file.
+        let unmasked = run(&off, &with_mask(plain, black));
+        assert!(max_diff(&whited, &unmasked) < 1e-4);
+        assert!(
+            max_diff(&whited, &none) > 1e-3,
+            "the layer must do something"
+        );
+    }
+
+    #[test]
+    fn bent_detail_mode_equals_a_detail_layer() {
+        let d = tempfile::tempdir().unwrap();
+        let f = png(d.path(), "b.png", textured);
+        let mut p = profile();
+        p.rnm.bent.mode = BentMode::Detail;
+        p.rnm.detail.strength = Some(p.rnm.layer(LayerId::Bent).strength);
+        let bent = run(&p, &job(LayerId::Bent, f.clone()));
+        let detail = run(&p, &job(LayerId::Detail, f));
+        assert!(max_diff(&bent, &detail) < 1e-6);
+        assert!(max_diff(&bent, &no_layer(&p)) > 1e-3);
+    }
+
+    /// AO channel 0 is a raw ao map's R, channel 2 the B of an rmaos-style file (R deliberately differs from B).
+    #[test]
+    fn bent_ao_wiring() {
+        let d = tempfile::tempdir().unwrap();
+        let f = png(d.path(), "b.png", textured);
+        let p = profile();
+        let s = p.rnm.layer(LayerId::Bent).strength as f32;
+        let flip = p.channels.flip_green;
+        let src = load(&f).unwrap();
+        let mut weighted = no_layer(&p);
+        for (px, c) in weighted.px.iter_mut().zip(&src.px) {
+            let b = decode(*c, 1.0, flip);
+            let r = unit([
+                px[0] * (1.0 - s) + b[0] * s,
+                px[1] * (1.0 - s) + b[1] * s,
+                px[2] * (1.0 - s) + b[2] * s,
+            ]);
+            px[..3].copy_from_slice(&r);
+        }
+        let none = no_layer(&p);
+        let with_ao = |name: &str, rgba: [u8; 4], channel: u8, p: &Profile| {
+            let ao = png(d.path(), name, move |_, _| rgba);
+            let mut j = job(LayerId::Bent, f.clone());
+            j.ao = Some(RnmAo { file: ao, channel });
+            run(p, &j)
+        };
+        // channel 0: white AO leaves the base, black AO is full weight.
+        assert!(max_diff(&with_ao("a1.png", [255, 0, 0, 255], 0, &p), &none) < 1e-5);
+        assert!(max_diff(&with_ao("a0.png", [0, 255, 255, 255], 0, &p), &weighted) < 1e-4);
+        // channel 2: B decides, not R.
+        assert!(max_diff(&with_ao("b1.png", [0, 0, 255, 255], 2, &p), &none) < 1e-5);
+        assert!(max_diff(&with_ao("b0.png", [255, 255, 0, 255], 2, &p), &weighted) < 1e-4);
+        // ao = false: uniform weight whatever the AO file says.
+        let mut off = p.clone();
+        off.rnm.bent.ao = false;
+        assert!(max_diff(&with_ao("c1.png", [255, 255, 255, 255], 0, &off), &weighted) < 1e-4);
+        assert!(max_diff(&weighted, &none) > 1e-3);
+    }
+
+    /// Spec section 6 resolution invariance, scaled down: one 64x64 smooth bump on a 16x16 and a 32x32 base gives
+    /// the same normals at the same places. Strength 2.0 gives slopes near 0.3. Tolerance 0.03 per component: the 8-bit height quantisation (about
+    /// 0.004 per texel step) averaged by the area filter stays well below it.
+    #[test]
+    fn bump_is_resolution_invariant() {
+        let d = tempfile::tempdir().unwrap();
+        let f = png_n(d.path(), "bump.png", 64, |x, y| {
+            let v = 0.5 + 0.4 * (x as f32 * 0.3).sin() * (y as f32 * 0.2).cos();
+            let b = (v * 255.0).round() as u8;
+            [b, b, b, 255]
+        });
+        let p = profile();
+        let j = job(LayerId::Bump, f);
+        let mut p = p;
+        p.rnm.bump.strength = Some(2.0);
+        let mut a = Rgba32F::new(16, 16, [0.0, 0.0, 1.0, 1.0]);
+        let mut b = Rgba32F::new(32, 32, [0.0, 0.0, 1.0, 1.0]);
+        apply(&mut a, &j, &p).unwrap();
+        apply(&mut b, &j, &p).unwrap();
+        let mut seen = 0.0f32;
+        for y in 1..15u32 {
+            for x in 1..15u32 {
+                // A 16-texel footprint is the 2x2 block of 32-texels; their centres never coincide.
+                let v: Vec<f32> = (0..3)
+                    .map(|i| {
+                        let s: f32 = (0..4).map(|k| b.at(2 * x + k % 2, 2 * y + k / 2)[i]).sum();
+                        s / 4.0
+                    })
+                    .collect();
+                let u = a.at(x, y);
+                for i in 0..3 {
+                    assert!((u[i] - v[i]).abs() < 0.03, "({x},{y}) {u:?} vs {v:?}");
+                }
+                seen = seen.max(u[0].abs());
+            }
+        }
+        assert!(seen > 0.05, "the bump must tilt the normals");
     }
 }
