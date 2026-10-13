@@ -81,7 +81,7 @@ struct FileEntry {
     stamp: SourceStamp,
     analysis: Analysis,
     info: SourceInfo,
-    thumb: Option<Thumbnail>,
+    thumb: Option<Arc<Thumbnail>>,
 }
 
 /// A packed image's cached analysis, with what `finish_recipe` needs besides it.
@@ -90,7 +90,7 @@ pub(crate) struct PackEntry {
     pub analysis: Analysis,
     pub info: SourceInfo,
     pub non_gray: Vec<PathBuf>,
-    pub thumb: Option<Thumbnail>,
+    pub thumb: Option<Arc<Thumbnail>>,
 }
 
 /// Each source's analysis (keyed by path, valid while its size and mtime match) and each packed image's analysis
@@ -134,8 +134,8 @@ impl AnalysisCache {
         self.loads.fetch_add(n, Ordering::Relaxed);
     }
     /// The thumbnail of `img` when this cache makes them.
-    pub(crate) fn make_thumb(&self, img: &Rgba32F, info: &SourceInfo) -> Option<Thumbnail> {
-        self.thumbnails.then(|| make_thumbnail(img, info))
+    pub(crate) fn make_thumb(&self, img: &Rgba32F, info: &SourceInfo) -> Option<Arc<Thumbnail>> {
+        self.thumbnails.then(|| Arc::new(make_thumbnail(img, info)))
     }
     pub(crate) fn file(&self, path: &Path, stamp: SourceStamp) -> Option<(Analysis, SourceInfo)> {
         lock(&self.files)
@@ -149,7 +149,7 @@ impl AnalysisCache {
         stamp: SourceStamp,
         analysis: Analysis,
         info: SourceInfo,
-        thumb: Option<Thumbnail>,
+        thumb: Option<Arc<Thumbnail>>,
     ) {
         lock(&self.files).insert(
             path.to_path_buf(),
@@ -167,12 +167,27 @@ impl AnalysisCache {
     pub(crate) fn put_pack(&self, key: String, e: PackEntry) {
         lock(&self.packs).insert(key, e);
     }
+    /// Audit 8 (Note Y7): keep only what this plan can use. Files outside its inputs go; packs go only after an
+    /// uncancelled plan, which saw every pack it needs.
+    pub(crate) fn retain_plan(&self, plan: &Plan) {
+        let roots = &plan.request.inputs;
+        lock(&self.files).retain(|p, _| roots.iter().any(|r| p.starts_with(r)));
+        if plan.cancelled.is_empty() {
+            let keep: std::collections::HashSet<String> = plan
+                .jobs
+                .iter()
+                .filter_map(|j| j.pack.as_ref())
+                .filter_map(pack_cache_key)
+                .collect();
+            lock(&self.packs).retain(|k, _| keep.contains(k));
+        }
+    }
     /// The source file's thumbnail, if the cache holds one.
-    pub fn thumbnail_of(&self, path: &Path) -> Option<Thumbnail> {
+    pub fn thumbnail_of(&self, path: &Path) -> Option<Arc<Thumbnail>> {
         lock(&self.files).get(path).and_then(|e| e.thumb.clone())
     }
     /// The job's thumbnail: its packed image's for a packed job, else its source's.
-    pub fn thumbnail(&self, job: &ResolvedJob) -> Option<Thumbnail> {
+    pub fn thumbnail(&self, job: &ResolvedJob) -> Option<Arc<Thumbnail>> {
         match &job.pack {
             Some(pk) => {
                 let key = pack_cache_key(pk)?;
@@ -219,7 +234,9 @@ impl Session {
         cancel: &CancelToken,
     ) -> Result<Plan, EngineError> {
         req.bc1_model = self.bc1_model;
-        self.engine.plan_cached(req, rep, cancel, &self.cache)
+        let plan = self.engine.plan_cached(req, rep, cancel, &self.cache)?;
+        self.cache.retain_plan(&plan);
+        Ok(plan)
     }
     pub fn run(
         &self,
@@ -229,7 +246,7 @@ impl Session {
     ) -> Result<BatchSummary, EngineError> {
         self.engine.run(plan, rep, cancel)
     }
-    pub fn thumbnail(&self, job: &ResolvedJob) -> Option<Thumbnail> {
+    pub fn thumbnail(&self, job: &ResolvedJob) -> Option<Arc<Thumbnail>> {
         self.cache.thumbnail(job)
     }
 

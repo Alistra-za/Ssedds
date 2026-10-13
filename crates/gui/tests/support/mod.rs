@@ -5,7 +5,7 @@ use image::{ImageBuffer, Luma, Rgb, Rgba};
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::GuiSettings;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub fn mod_folder(dir: &Path) -> PathBuf {
@@ -35,13 +35,10 @@ pub fn mod_folder(dir: &Path) -> PathBuf {
     dir.join("textures")
 }
 
-/// One process-wide session: the BC1 model is process-global (spec §4.6).
+/// A session of its own per call: a shared one would drop another test's cache entries on every plan (audit 8). The
+/// BC1 model is process-global (spec §4.6) and the same for all of them.
 pub fn session() -> Arc<engine::session::Session> {
-    static S: OnceLock<Arc<engine::session::Session>> = OnceLock::new();
-    S.get_or_init(|| {
-        Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap())
-    })
-    .clone()
+    Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap())
 }
 
 pub fn opened(dir: &Path) -> AppModel {
