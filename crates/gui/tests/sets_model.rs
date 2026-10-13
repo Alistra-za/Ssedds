@@ -1524,3 +1524,33 @@ fn the_json_panel_and_its_errors_belong_to_json_sets_only() {
     assert!(pbr.pbr && shows_json_panel(&pbr, Target::Cs));
     assert!(!shows_json_panel(&pbr, Target::Vanilla));
 }
+
+#[test]
+fn a_grass_diffuse_card_is_titled_complex_grass() {
+    use engine::shader::Shader;
+    assert_eq!(
+        card_title(SlotKind::Diffuse, "a.png", Some(Shader::ComplexGrass)),
+        "Complex grass"
+    );
+    assert_eq!(
+        card_title(SlotKind::Diffuse, "a.png", Some(Shader::Landscape)),
+        "Diffuse"
+    );
+    assert_eq!(
+        card_title(SlotKind::Normal, "a.png", Some(Shader::ComplexGrass)),
+        "Normal _n"
+    );
+}
+
+#[test]
+fn a_bad_prefix_on_a_non_json_set_is_no_export_block() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_json_value("landscape/rock01", "rename", Some(json!("a/b")));
+    idle(&mut m);
+    let v = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(!v.pbr && v.prefix_error.is_some(), "{v:?}");
+    assert!(sdc_gui::model::pbr_export::export_blocks(&m)
+        .iter()
+        .all(|b| !b.text.contains("rename")));
+}

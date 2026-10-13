@@ -102,6 +102,14 @@ pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
     }
 }
 
+/// The card title of `slot` holding `key` in a set drawn by `shader`: a grass file in the Diffuse card is "Complex grass".
+pub fn card_title(slot: SlotKind, key: &str, shader: Option<Shader>) -> &'static str {
+    if slot == SlotKind::Diffuse && shader == Some(Shader::ComplexGrass) {
+        return "Complex grass";
+    }
+    slot_label(slot, key)
+}
+
 /// One row of the Matching header, or one choice of its + menu (F1 spec §3.2): slot number, slot name, path (stored
 /// form, no `.dds`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,8 +258,8 @@ pub fn is_pbr_diffuse(st: Subtype) -> bool {
     matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
 }
 
-/// The slot card a resolved sub-type fills (complex grass is one file in the diffuse card); `None` for sub-types without a card (env mask, complex `_m`,
-/// `msn_specular`, backlight, `skin_wet`, …).
+/// The slot card a resolved sub-type fills; `None` for sub-types without a card (env mask, complex `_m`,
+/// `msn_specular`, backlight, `skin_wet`, …). Complex grass is one file in the Diffuse card.
 pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
     Some(match st {
         Subtype::PbrAlbedo

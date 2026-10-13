@@ -187,6 +187,20 @@ static LANDSCAPE: ShaderSpec = ShaderSpec {
     optional: &[],
 };
 
+/// `ALL[2..]` without `ComplexGrass` (vanilla has no complex grass, ruling R1); a const loop, so position-independent.
+static VANILLA: [Shader; 10] = {
+    let mut out = [Shader::Default; 10];
+    let (mut i, mut j) = (2, 0);
+    while i < Shader::ALL.len() {
+        if !matches!(Shader::ALL[i], Shader::ComplexGrass) {
+            out[j] = Shader::ALL[i];
+            j += 1;
+        }
+        i += 1;
+    }
+    out
+};
+
 impl Shader {
     pub const ALL: [Shader; 13] = [
         Shader::Pbr,
@@ -246,8 +260,8 @@ impl Shader {
             Target::Cs => &Shader::ALL,
             // `ALL` starts with `pbr`, `advanced_skin`.
             Target::Cpm => &Shader::ALL[2..],
-            // Ruling R1: the vanilla grass shader has no complex grass (`ComplexGrass` is last).
-            Target::Vanilla => &Shader::ALL[2..Shader::ALL.len() - 1],
+            // Ruling R1: the vanilla grass shader has no complex grass.
+            Target::Vanilla => &VANILLA,
         }
     }
 

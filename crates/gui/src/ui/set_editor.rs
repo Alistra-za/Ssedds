@@ -9,7 +9,7 @@ use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    set_views, shows_json_panel, slot_label, slot_of, slot_row, SetView, SlotCell, SlotFill,
+    card_title, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell, SlotFill,
     SlotKind,
 };
 use crate::model::AppModel;
@@ -227,7 +227,9 @@ fn card(
             ui.set_width(CARD);
             ui.set_min_width(CARD);
             let title = match &fill {
-                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => slot_label(slot, item),
+                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
+                    card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
+                }
                 SlotFill::Empty => slot.label(),
             };
             let t = ui.label(egui::RichText::new(title).strong());
@@ -278,6 +280,7 @@ fn card(
             };
             ui.add(egui::Label::new(egui::RichText::new(&i.name).small()).truncate());
             if let Some(n) = match slot {
+                _ if !shows_json_panel(v, model.target) => None,
                 SlotKind::Diffuse => Some(1),
                 SlotKind::Normal => Some(2),
                 _ => None,
