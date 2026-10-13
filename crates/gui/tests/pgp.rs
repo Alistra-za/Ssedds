@@ -90,6 +90,86 @@ fn kinds_match_the_owner_rules() {
     assert!(spec("delete").is_none() && spec("pbr").is_none());
 }
 
+/// F1 spec §2, DECISIONS V5: every number key and its range, in KEYS order. Keys that fit no class (smooth_angle,
+/// auto_uv) get min 0; controller ruling: glint.log_microfacet_density is a log value and has no bounds.
+#[test]
+fn number_keys_and_their_ranges() {
+    use NumRange::{Any, Min0, Unit};
+    let got: Vec<(&str, NumRange)> = KEYS
+        .iter()
+        .filter_map(|k| match k.kind {
+            KeyKind::Number(r) => Some((k.key, r)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("smooth_angle", Min0),
+            ("auto_uv", Min0),
+            ("uv_scale", Min0),
+            ("vertex_color_lum_mult", Min0),
+            ("vertex_color_sat_mult", Min0),
+            ("emissive_scale", Min0),
+            ("displacement_scale", Min0),
+            ("specular_level", Min0),
+            ("roughness_scale", Min0),
+            ("subsurface_opacity", Unit),
+            ("coat_specular_level", Min0),
+            ("coat_roughness", Min0),
+            ("coat_strength", Unit),
+            ("inner_uv_scale", Min0),
+            ("glint.screen_space_scale", Min0),
+            ("glint.log_microfacet_density", Any),
+            ("glint.microfacet_roughness", Min0),
+            ("glint.density_randomization", Min0),
+            ("fuzz.weight", Unit),
+        ]
+    );
+    assert_eq!(Min0.clamp(-2.0), 0.0);
+    assert_eq!(Min0.clamp(7.5), 7.5);
+    assert_eq!(Unit.clamp(1.5), 1.0);
+    assert_eq!(Any.clamp(-4.0), -4.0);
+    assert_eq!(Min0.note(), "clamped to ≥ 0");
+    assert_eq!(Unit.note(), "clamped to 0–1");
+}
+
+/// pgpsim keeps its own copy of the ranges (it cannot see the GUI); this pins the two together key for key.
+#[test]
+fn pgpsim_warns_on_exactly_the_gui_ranges() {
+    for k in KEYS {
+        let KeyKind::Number(range) = k.kind else {
+            continue;
+        };
+        // Indexing a Null `Value` by a string makes it an object.
+        let entry = |x: f64| {
+            let mut v = Value::Null;
+            match k.key.split_once('.') {
+                Some((obj, sub)) => v[obj][sub] = json!(x),
+                None => v[k.key] = json!(x),
+            }
+            v
+        };
+        assert_eq!(
+            pgpsim::range_warnings(&entry(-0.5)).len(),
+            usize::from(range != NumRange::Any),
+            "{} below 0",
+            k.key
+        );
+        assert!(
+            pgpsim::range_warnings(&entry(0.5)).is_empty(),
+            "{} inside",
+            k.key
+        );
+        assert_eq!(
+            pgpsim::range_warnings(&entry(2.0)).len(),
+            usize::from(range == NumRange::Unit),
+            "{} above 1",
+            k.key
+        );
+    }
+}
+
 fn s(pairs: &[(&str, Value)]) -> Settings {
     pairs
         .iter()
@@ -369,6 +449,48 @@ fn fixed_numbers_are_omitted_when_unset_or_equal_and_written_otherwise() {
     };
     assert!(p(1.0).get("displacement_scale").is_none());
     assert_eq!(p(0.4)["displacement_scale"], json!(0.4));
+}
+
+/// F1 spec §2: a hand-edited out-of-range value cannot reach the JSON; an in-range value is written as it was typed.
+#[test]
+fn the_writer_clamps_a_hand_edited_number_into_its_range() {
+    let v = written(&entry(
+        &[
+            ("roughness_scale", json!(-2.0)),
+            ("specular_level", json!(-0.1)),
+            ("multilayer", json!(true)),
+            ("coat_strength", json!(3)),
+            ("coat_roughness", json!(-1)),
+            ("coat_specular_level", json!(2)),
+        ],
+        "x",
+    ));
+    assert_eq!(v["roughness_scale"], json!(0.0));
+    assert_eq!(v["specular_level"], json!(0.0));
+    assert_eq!(v["coat_strength"], json!(1.0));
+    assert_eq!(v["coat_roughness"], json!(0.0));
+    assert_eq!(v["coat_specular_level"], json!(2), "in range: as typed");
+    assert!(pgpsim::range_warnings(&v).is_empty(), "{v}");
+    let g = written(&entry(
+        &[
+            ("glint_on", json!(true)),
+            ("glint.microfacet_roughness", json!(-0.5)),
+            ("glint.log_microfacet_density", json!(-3.0)),
+        ],
+        "x",
+    ));
+    assert_eq!(g["glint"]["microfacet_roughness"], json!(0.0));
+    assert_eq!(
+        g["glint"]["log_microfacet_density"],
+        json!(-3.0),
+        "a log value may be negative"
+    );
+    let f = written(&entry(
+        &[("fuzz_on", json!(true)), ("fuzz.weight", json!(1.5))],
+        "x",
+    ));
+    assert_eq!(f["fuzz"]["weight"], json!(1.0));
+    assert!(pgpsim::range_warnings(&g).is_empty() && pgpsim::range_warnings(&f).is_empty());
 }
 
 #[test]

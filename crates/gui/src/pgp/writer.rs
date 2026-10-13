@@ -1,7 +1,7 @@
 //! The PGPatcher JSON document (M3b spec §5.2–5.3, §5.6): `{ "$schema", "default", "entries" }`, keys in schema
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
 use super::prefix::{match_mode, MatchMode};
-use super::schema::{Group, KeyKind, KEYS, SCHEMA_URL};
+use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
 use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -51,6 +51,15 @@ fn colour(v: &Value, alpha: bool) -> Option<Node> {
         out.push(Node::Scalar(json!(1.0)));
     }
     Some(Node::Arr(out))
+}
+
+/// `v` inside `range` (F1 spec §2): a hand-edited value outside it is written clamped. A value inside it, or one that
+/// is not a number (the validator reports that), is written as it is.
+fn clamped(v: &Value, range: NumRange) -> Value {
+    match v.as_f64() {
+        Some(x) if range.clamp(x) != x => json!(range.clamp(x)),
+        _ => v.clone(),
+    }
 }
 
 fn group_feature(g: Group) -> Option<Feature> {
@@ -147,10 +156,11 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                 let f = feature_of_object(k.key).expect("objects are features");
                 live(own, f).then(|| Node::Obj(sub_object(k.key, own)))
             }
-            KeyKind::Number => {
+            KeyKind::Number(range) => {
                 let fixed = FIXED_NUMBERS.iter().find(|(n, _)| *n == k.key);
-                v.filter(|v| fixed.is_none_or(|(_, x)| v.as_f64() != Some(*x)))
-                    .map(|v| Node::Scalar(v.clone()))
+                v.map(|v| clamped(v, range))
+                    .filter(|v| fixed.is_none_or(|(_, x)| v.as_f64() != Some(*x)))
+                    .map(Node::Scalar)
             }
             KeyKind::Tri => v.map(|v| Node::Scalar(v.clone())),
             KeyKind::Text => {
@@ -191,8 +201,8 @@ fn sub_object(obj: &str, own: &Settings) -> Vec<(String, Node)> {
         let name = &k.key[obj.len() + 1..];
         let v = own.get(k.key).filter(|v| !v.is_null());
         let node = match k.kind {
-            KeyKind::Number => v
-                .cloned()
+            KeyKind::Number(range) => v
+                .map(|v| clamped(v, range))
                 .or_else(|| {
                     GLINT_DEFAULTS
                         .iter()

@@ -15,7 +15,8 @@ pub enum KeyKind {
     OnlyTrue,
     /// Not set / on / off; written only when set.
     Tri,
-    Number,
+    /// A number, kept inside its range (F1 spec §2, DECISIONS V5).
+    Number(NumRange),
     Text,
     /// 0–255 RGB in the GUI; written as 0–1.
     Rgb,
@@ -25,6 +26,42 @@ pub enum KeyKind {
     Slot,
     /// `glint` / `fuzz`: on/off; when on, the object with its `<key>.*` values is written.
     Object,
+}
+
+/// The values sdc lets a number key take (F1 spec §2, DECISIONS V5). Neither the CS True PBR wiki nor PGPatcher
+/// documents limits; these keep values from going negative, and the 0–1 factors from going above 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumRange {
+    /// 0 or more: roughness values, multipliers and levels, and every key that fits no class.
+    Min0,
+    /// 0 to 1: strengths, weights, opacities.
+    Unit,
+    /// No bounds: `glint.log_microfacet_density` is a log value and may be negative (controller ruling).
+    Any,
+}
+
+impl NumRange {
+    pub fn bounds(self) -> (f64, f64) {
+        match self {
+            NumRange::Min0 => (0.0, f64::INFINITY),
+            NumRange::Unit => (0.0, 1.0),
+            NumRange::Any => (f64::NEG_INFINITY, f64::INFINITY),
+        }
+    }
+
+    pub fn clamp(self, x: f64) -> f64 {
+        let (lo, hi) = self.bounds();
+        x.clamp(lo, hi)
+    }
+
+    /// The note a typed value outside the range shows next to its box.
+    pub fn note(self) -> &'static str {
+        match self {
+            NumRange::Min0 => "clamped to ≥ 0",
+            NumRange::Unit => "clamped to 0–1",
+            NumRange::Any => "",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +109,9 @@ const fn k(
 
 use Group as G;
 use KeyKind as K;
+const MIN0: KeyKind = K::Number(NumRange::Min0);
+const UNIT: KeyKind = K::Number(NumRange::Unit);
+const ANY: KeyKind = K::Number(NumRange::Any);
 
 pub const KEYS: &[KeySpec] = &[
     k("match_diffuse", K::Text, G::Match, false, "Match diffuse"),
@@ -99,20 +139,20 @@ pub const KEYS: &[KeySpec] = &[
     ),
     k("nif_filter", K::Text, G::Match, true, "Mesh path contains"),
     k("rename", K::Text, G::Match, false, "Rename"),
-    k("smooth_angle", K::Number, G::Uv, true, "Smooth angle"),
-    k("auto_uv", K::Number, G::Uv, true, "Auto UV"),
-    k("uv_scale", K::Number, G::Uv, true, "UV scale"),
+    k("smooth_angle", MIN0, G::Uv, true, "Smooth angle"),
+    k("auto_uv", MIN0, G::Uv, true, "Auto UV"),
+    k("uv_scale", MIN0, G::Uv, true, "UV scale"),
     k("vertex_colors", K::Tri, G::Vertex, true, "Vertex colours"),
     k(
         "vertex_color_lum_mult",
-        K::Number,
+        MIN0,
         G::Vertex,
         true,
         "Vertex colour luminance ×",
     ),
     k(
         "vertex_color_sat_mult",
-        K::Number,
+        MIN0,
         G::Vertex,
         true,
         "Vertex colour saturation ×",
@@ -122,13 +162,7 @@ pub const KEYS: &[KeySpec] = &[
     k("lock_normal", K::Tri, G::Locks, true, "Lock normal"),
     k("emissive", K::OnlyTrue, G::Features, false, "Emissive"),
     k("lock_emissive", K::Tri, G::Locks, true, "Lock emissive"),
-    k(
-        "emissive_scale",
-        K::Number,
-        G::Emissive,
-        false,
-        "Emissive scale",
-    ),
+    k("emissive_scale", MIN0, G::Emissive, false, "Emissive scale"),
     k(
         "emissive_color",
         K::Rgba,
@@ -140,7 +174,7 @@ pub const KEYS: &[KeySpec] = &[
     k("lock_parallax", K::Tri, G::Locks, true, "Lock parallax"),
     k(
         "displacement_scale",
-        K::Number,
+        MIN0,
         G::Parallax,
         false,
         "Displacement scale",
@@ -148,16 +182,10 @@ pub const KEYS: &[KeySpec] = &[
     k("cubemap", K::Text, G::Uv, true, "Cubemap path"),
     k("lock_cubemap", K::Tri, G::Locks, true, "Lock cubemap"),
     k("lock_rmaos", K::Tri, G::Locks, true, "Lock RMAOS"),
-    k(
-        "specular_level",
-        K::Number,
-        G::Material,
-        false,
-        "Specular level",
-    ),
+    k("specular_level", MIN0, G::Material, false, "Specular level"),
     k(
         "roughness_scale",
-        K::Number,
+        MIN0,
         G::Material,
         false,
         "Roughness scale",
@@ -179,7 +207,7 @@ pub const KEYS: &[KeySpec] = &[
     ),
     k(
         "subsurface_opacity",
-        K::Number,
+        UNIT,
         G::Subsurface,
         false,
         "Subsurface opacity",
@@ -196,25 +224,19 @@ pub const KEYS: &[KeySpec] = &[
     k("coat_color", K::Rgb, G::Multilayer, true, "Coat colour"),
     k(
         "coat_specular_level",
-        K::Number,
+        MIN0,
         G::Multilayer,
         false,
         "Coat specular level",
     ),
     k(
         "coat_roughness",
-        K::Number,
+        MIN0,
         G::Multilayer,
         false,
         "Coat roughness",
     ),
-    k(
-        "coat_strength",
-        K::Number,
-        G::Multilayer,
-        false,
-        "Coat strength",
-    ),
+    k("coat_strength", UNIT, G::Multilayer, false, "Coat strength"),
     k(
         "coat_diffuse",
         K::OnlyTrue,
@@ -239,7 +261,7 @@ pub const KEYS: &[KeySpec] = &[
     k("lock_cnr", K::Tri, G::Locks, true, "Lock coat normal"),
     k(
         "inner_uv_scale",
-        K::Number,
+        MIN0,
         G::Multilayer,
         true,
         "Inner UV scale",
@@ -256,28 +278,28 @@ pub const KEYS: &[KeySpec] = &[
     k("slot8", K::Slot, G::Slots, false, "Slot 8"),
     k(
         "glint.screen_space_scale",
-        K::Number,
+        MIN0,
         G::Glint,
         false,
         "Screen-space scale",
     ),
     k(
         "glint.log_microfacet_density",
-        K::Number,
+        ANY,
         G::Glint,
         false,
         "Log microfacet density",
     ),
     k(
         "glint.microfacet_roughness",
-        K::Number,
+        MIN0,
         G::Glint,
         false,
         "Microfacet roughness",
     ),
     k(
         "glint.density_randomization",
-        K::Number,
+        MIN0,
         G::Glint,
         false,
         "Density randomisation",
@@ -290,7 +312,7 @@ pub const KEYS: &[KeySpec] = &[
         "Fuzz texture (_f)",
     ),
     k("fuzz.color", K::Rgb, G::Fuzz, false, "Fuzz colour"),
-    k("fuzz.weight", K::Number, G::Fuzz, false, "Fuzz weight"),
+    k("fuzz.weight", UNIT, G::Fuzz, false, "Fuzz weight"),
 ];
 
 pub fn spec(key: &str) -> Option<&'static KeySpec> {

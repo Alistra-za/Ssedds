@@ -219,7 +219,7 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
     }
     let reason = disabled_reason(k, c);
     let r = ui.add_enabled_ui(reason.is_none(), |ui| {
-        if own.is_none() && matches!(k.kind, KeyKind::Number | KeyKind::Rgb | KeyKind::Rgba) {
+        if own.is_none() && matches!(k.kind, KeyKind::Number(_) | KeyKind::Rgb | KeyKind::Rgba) {
             // An unset value shows what applies, greyed.
             ui.style_mut().visuals.override_text_color = Some(ui.visuals().weak_text_color());
         }
@@ -264,7 +264,7 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                 edits.push((key, v));
             }
         }
-        KeyKind::Number => {
+        KeyKind::Number(_) => {
             let default = GLINT_DEFAULTS
                 .iter()
                 .chain(FIXED_NUMBERS.iter())
