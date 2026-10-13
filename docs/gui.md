@@ -90,7 +90,7 @@ Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set 
 
 ### The set editor
 
-Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter, Height and so on. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card. A `_coat` map fills the Subsurface card, which then reads **Coat colour + strength**: its alpha is the coat strength and is kept.
+Select a set to edit it. Each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Emissive, Height, RMAOS and so on. Only the slots the set's shader can use are shown. A filled slot the shader cannot use stays, with an amber outline, and its title says why on hover. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card. The Diffuse and Normal cards have **Match on this** (see Matching below). A `_coat` map fills the Subsurface card, which then reads **Coat colour + strength**: its alpha is the coat strength and is kept.
 
 The set's **Shader** dropdown lists the shaders the current mode offers. The picked one reads "(auto)" when sdc chose it, and "(fallback)" when the shader you asked for does not exist under the current mode and `default` stands in. Choosing **Auto** clears your choice. Warnings (a missing or unused map, an unavailable shader) show on the set's ⚠ badge. A scanned mod's meshes decide the auto pick unless a PBR or skin member, a complex `_m` or a `_p` does.
 
@@ -100,6 +100,9 @@ The set's **Shader** dropdown lists the shaders the current mode offers. The pic
 - A feature that is on without its texture blocks export.
 - **Reset** returns a field, or the whole set, to its default.
 - PGPatcher's own `default` block is fixed: you cannot edit defaults. Each entry writes `emissive`, `parallax` and `subsurface` only when on, and omits the three numbers when unset or equal to the fixed value.
+- Numbers cannot go below 0, and strengths, weights and opacities stay within 0–1. A typed value outside the range is clamped, and the box says "clamped to ≥ 0" or "clamped to 0–1". A value hand-edited in `sdc-project.toml` shows as it is, with the same note, and the JSON gets it clamped. The glint log density has no limit.
+- **Matching** lists the exact texture paths the entry matches (PGPatcher's `match1`–`match8`). The entry applies when any of them matches. The diffuse path is on by default. The **+** button adds another slot that holds a texture, and **×** removes a row. A set that matches nothing is left out of the JSON, and Export asks first.
+- **Advanced TruePBR settings** (collapsed) holds path contains, mesh path contains, rename (with a slot match it replaces the whole prefix, so it must start with `textures\pbr\`), UV, vertex colour and lock keys. If matches point at different textures and Rename is empty, a warning says the output prefix depends on which one hits first.
 
 ### The JSON
 

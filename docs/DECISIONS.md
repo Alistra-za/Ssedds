@@ -589,3 +589,42 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on 
   - The workspace goes 0.5.0 → 0.6.0, so `if-changed` re-encodes.
   - There is no manifest change: the up-to-date check compares `engine_version` and `profile_sha256`, and both change.
   - `schema/` was regenerated only for the `Provenance` doc text.
+
+## Note V — M6 Track F1: TruePBR panel polish (plan rulings, 2026-10-12)
+
+- **V1 What matchN holds (plan, 2026-10-12).**
+  - PGPatcher compares `matchN` exactly with the unpatched mesh's raw slot path (no `strip_pbr`). So the value is the set's derived diffuse path, which comes from the source, not from the set id or the output.
+  - `match1` is that path, with its `_d`/`mask` kept.
+  - Slot N > 1 is that path with a trailing `_d` cut, plus `_<canonical suffix>` (`match2` = `…\rock01_n`; `facemask` → `facemask_n`).
+  - Proven against pgpsim (`slot_matches_hit_the_unpatched_mesh_and_land_on_the_sdc_prefix`).
+- **V2 Storage and writing.**
+  - `match1` absent means the derived path (on by default; old projects get it too). `match1 = ""` means off. `match2`–`match8` are on when present.
+  - Stored values have no `.dds`.
+  - The JSON gets the value without a leading `textures\` (any case) and with `.dds` exactly once.
+  - `match_diffuse`/`match_normal` are never written (`NOT_EXPOSED`). There is no migration (owner, 2026-10-12: nobody has used them): old `match_diffuse`/`match_normal` values in a project are ignored, and `match1` falls back to the derived default.
+- **V3 Prefix.**
+  - The prefix comes from the lowest active `matchN`, with that slot's suffix cut, under `textures\pbr\`.
+  - With no slot match, it is the derived path.
+  - With a slot match, `rename` is the whole prefix. It is not put under `textures\pbr\` for you, and a warning says so when it does not start with `textures\`.
+  - When active matches derive different prefixes and `rename` is empty, a warning says the output prefix depends on which match hits first, and that Rename fixes it. It does not block export.
+  - Open point: with a whole-prefix rename, pgpsim gives a leading backslash in the matched path (`\textures\pbr\…`). That behaviour was there before F1. Verify against real PGPatcher.
+- **V4 No match.** A set with no active `matchN` and no `path_contains` shows "this entry matches nothing", asks before export, and is left out of the JSON. The schema's `hasMatcher` refuses it. Its textures still export.
+- **V5 Number ranges.**
+  - 0–1: `coat_strength`, `subsurface_opacity`, `fuzz.weight`.
+  - Min 0: the other 15 number keys. That includes `smooth_angle` and `auto_uv`, which fit no class.
+  - No range: `glint.log_microfacet_density`, a log value that can be negative (`NumRange::Any`).
+  - No CS or PGPatcher limits are documented.
+- **V6 Clamping.**
+  - The number box has `DragValue::range`, and a typed value outside the range shows "clamped to ≥ 0" / "clamped to 0–1". A stored out-of-range value shows the same note (ruling: it explains why the JSON differs from the box). `Any` has no note.
+  - A stored out-of-range value is shown as it is (`clamp_existing_to_range(false)`). An equal value is no edit, so drawing never dirties the project.
+  - The writer clamps.
+  - `pgpsim::range_warnings` mirrors the ranges (it skips `glint.log_microfacet_density` and the removed `env_map_*` keys), and a GUI test (`pgpsim_warns_on_exactly_the_gui_ranges`) pins the two together.
+- **V7 Layout.**
+  - The TruePBR box shows the visual settings, then **Matching**, then **Advanced TruePBR settings** (collapsed: `path_contains`, `nif_filter`, `rename`, UV, vertex, locks, inner UV scale, coat colour).
+  - The Advanced drawer's "PGPatcher (advanced)" section is gone.
+- **V8 Slot cards.**
+  - The set editor's cards (the 9-slot row; the Sets-column pill shows members, not slots) are the picked shader's usable slots, filled or empty, plus filled slots it cannot use (amber outline, hover reason).
+  - They are ordered by PGPatcher slot 1–8.
+  - Usable slots are the shader roles' sub-types mapped to slot cards (`usable_slots`). Roles matched by suffix only map to none.
+  - A fallback pick uses the fallback shader. With no pick, only the filled slots show.
+- **V9 Versions.** No bump (0.6.0): no engine change, and a bump would re-encode every texture through `engine_version`. No new codes (75). No `schema/` change.
