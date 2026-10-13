@@ -109,7 +109,6 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         "RMAOS",
         "Height _p",
         "Emissive _g",
-        "Skin _sk",
         "Subsurface _s",
         "Coat _cnr",
         "Fuzz _f",
@@ -117,6 +116,10 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         // The Matching header repeats the Diffuse/Normal slot names as its row labels.
         assert!(h.query_all_by_label(label).next().is_some(), "{label}");
     }
+    assert!(
+        h.query_by_label("Skin _sk").is_none(),
+        "the PBR shader has no _sk slot (F1 spec §5)"
+    );
     h.get_by_label("Opaque");
     // A combo box exposes its text as a value, not a label.
     assert!(
@@ -1108,4 +1111,42 @@ fn leaving_a_matching_row_unchanged_writes_nothing() {
     h.run();
     assert!(!rock_settings(&h).contains_key("match1"));
     assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
+}
+
+/// F1 spec §5: a filled slot the set's shader cannot use stays, and says why on hover.
+#[test]
+fn a_filled_slot_the_shader_cannot_use_says_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_shader("landscape/rock01", Some(engine::shader::Shader::Default));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let v = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap();
+    assert_eq!(
+        v.shader.as_ref().map(|p| p.shader),
+        Some(engine::shader::Shader::Default)
+    );
+    assert!(
+        v.slots.contains_key(&sdc_gui::model::sets::SlotKind::Rmaos),
+        "the fixture still packs _rmaos under the Default shader: {:?}",
+        v.slots
+    );
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    instant_tooltips(&h);
+    h.run();
+    assert!(
+        h.query_by_label("Height _p").is_none(),
+        "Default has no height slot"
+    );
+    let rmaos = h
+        .query_all_by_label("RMAOS")
+        .next()
+        .expect("the RMAOS card");
+    rmaos.hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("the Default shader does not use slot 6");
 }

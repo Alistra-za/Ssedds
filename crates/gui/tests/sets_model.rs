@@ -1365,3 +1365,91 @@ fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
     assert_eq!(active.iter().map(|a| a.n).collect::<Vec<_>>(), vec![6]);
     assert!(add.is_empty());
 }
+
+/// F1 spec §5, DECISIONS V8: a PBR set's cards are the PBR slots in PGPatcher order 1–8, empty or not.
+#[test]
+fn a_pbr_set_shows_its_pbr_slots_in_slot_order() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let v = view(&set_views(&m), "landscape/rock01").clone();
+    assert_eq!(v.shader.as_ref().map(|p| p.shader), Some(Shader::Pbr));
+    let row = slot_row(v.shader.as_ref(), &v.slots);
+    assert_eq!(
+        row.iter().map(|c| c.kind).collect::<Vec<_>>(),
+        vec![
+            SlotKind::Diffuse,
+            SlotKind::Normal,
+            SlotKind::Emissive,
+            SlotKind::Height,
+            SlotKind::Rmaos,
+            SlotKind::Coat,
+            SlotKind::Fuzz,
+            SlotKind::Subsurface,
+        ]
+    );
+    assert!(row.iter().all(|c| c.usable));
+    let set = |k: &[SlotKind]| k.iter().copied().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        usable_slots(Shader::AdvancedSkin),
+        set(&[
+            SlotKind::Diffuse,
+            SlotKind::Normal,
+            SlotKind::SkinSk,
+            SlotKind::Rmaos
+        ])
+    );
+    assert_eq!(
+        usable_slots(Shader::Glow),
+        set(&[SlotKind::Diffuse, SlotKind::Normal, SlotKind::Emissive])
+    );
+    assert_eq!(
+        usable_slots(Shader::Eye),
+        set(&[SlotKind::Diffuse, SlotKind::Normal])
+    );
+}
+
+/// F1 spec §5, Review Focus 4: a SHADER-UNAVAILABLE fallback (default in place of pbr) keeps the filled RMAOS
+/// visible, in slot order and marked; with no pick, only the filled slots show.
+#[test]
+fn a_fallback_shader_keeps_filled_slots_it_cannot_use() {
+    use engine::shader::{Shader, ShaderOrigin, ShaderPick};
+    use std::collections::BTreeMap;
+    let own = |i: &str| SlotFill::Own { item: i.into() };
+    let slots: BTreeMap<SlotKind, SlotFill> =
+        [(SlotKind::Rmaos, own("r")), (SlotKind::Diffuse, own("d"))]
+            .into_iter()
+            .collect();
+    let fallback = ShaderPick {
+        shader: Shader::Default,
+        provenance: ShaderOrigin::Fallback,
+        wanted: Some(Shader::Pbr),
+    };
+    let row = slot_row(Some(&fallback), &slots);
+    assert_eq!(
+        row,
+        vec![
+            SlotCell {
+                kind: SlotKind::Diffuse,
+                fill: own("d"),
+                usable: true
+            },
+            SlotCell {
+                kind: SlotKind::Normal,
+                fill: SlotFill::Empty,
+                usable: true
+            },
+            SlotCell {
+                kind: SlotKind::Rmaos,
+                fill: own("r"),
+                usable: false
+            },
+        ]
+    );
+    let none = slot_row(None, &slots);
+    assert_eq!(
+        none.iter().map(|c| (c.kind, c.usable)).collect::<Vec<_>>(),
+        vec![(SlotKind::Diffuse, true), (SlotKind::Rmaos, true)]
+    );
+}

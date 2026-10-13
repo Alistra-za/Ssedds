@@ -6,7 +6,9 @@ use super::thumbs::ThumbCache;
 use crate::model::fields::{channel_text, field_lock, format_label, format_options};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
-use crate::model::sets::{set_views, slot_label, slot_of, SetView, SlotFill, SlotKind};
+use crate::model::sets::{
+    set_views, slot_label, slot_of, slot_row, SetView, SlotCell, SlotFill, SlotKind,
+};
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
 use eframe::egui;
@@ -162,8 +164,8 @@ fn cards(
         .num_columns(per_row)
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
-            for (i, slot) in SlotKind::ALL.iter().enumerate() {
-                card(ui, model, v, *slot, thumbs, acts);
+            for (i, cell) in slot_row(v.shader.as_ref(), &v.slots).iter().enumerate() {
+                card(ui, model, v, cell, thumbs, acts);
                 if i % per_row == per_row - 1 {
                     ui.end_row();
                 }
@@ -175,12 +177,20 @@ fn card(
     ui: &mut egui::Ui,
     model: &AppModel,
     v: &SetView,
-    slot: SlotKind,
+    cell: &SlotCell,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
 ) {
-    let fill = v.slots.get(&slot).cloned().unwrap_or(SlotFill::Empty);
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    let slot = cell.kind;
+    let fill = cell.fill.clone();
+    let frame = egui::Frame::group(ui.style());
+    // A filled slot the shader cannot use stays at its place, outlined, and says why on hover (F1 spec §5).
+    let frame = if cell.usable {
+        frame
+    } else {
+        frame.stroke(egui::Stroke::new(2.0, AMBER))
+    };
+    frame.show(ui, |ui| {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(CARD);
             ui.set_min_width(CARD);
@@ -188,7 +198,14 @@ fn card(
                 SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => slot_label(slot, item),
                 SlotFill::Empty => slot.label(),
             };
-            ui.label(egui::RichText::new(title).strong());
+            let t = ui.label(egui::RichText::new(title).strong());
+            if let (false, Some(p)) = (cell.usable, &v.shader) {
+                t.on_hover_text(format!(
+                    "{title}: the {} shader does not use slot {}",
+                    p.shader.label(),
+                    slot.slot_number()
+                ));
+            }
             let (item_key, borrowed) = match &fill {
                 SlotFill::Own { item } => (Some(item.clone()), None),
                 SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),

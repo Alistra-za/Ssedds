@@ -33,7 +33,7 @@ pub enum SlotKind {
 }
 
 impl SlotKind {
-    /// The slot cards' order (spec §4.1).
+    /// Every slot kind, in the slot commands' order. The set editor orders its cards by `slot_row` (F1 spec §5).
     pub const ALL: [SlotKind; 9] = [
         SlotKind::Diffuse,
         SlotKind::Normal,
@@ -223,12 +223,9 @@ pub fn is_pbr_diffuse(st: Subtype) -> bool {
     matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
 }
 
-/// The slot a texture fills, by its resolved sub-type. Raw packing sources and items without a job have none.
-pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
-    if matches!(item.status, ItemStatus::PackedInto(_)) {
-        return None;
-    }
-    let st = item.job.as_ref()?.profile.subtype;
+/// The slot card a resolved sub-type fills; `None` for sub-types without a card (env mask, complex `_m`,
+/// `msn_specular`, backlight, `skin_wet`, …).
+pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
     Some(match st {
         Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::SkinAlbedo => {
             SlotKind::Diffuse
@@ -245,6 +242,56 @@ pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
         Subtype::PbrSubsurface => SlotKind::Subsurface,
         _ => return None,
     })
+}
+
+/// The slot a texture fills, by its resolved sub-type. Raw packing sources and items without a job have none.
+pub fn slot_of(item: &TextureItem) -> Option<SlotKind> {
+    if matches!(item.status, ItemStatus::PackedInto(_)) {
+        return None;
+    }
+    slot_kind(item.job.as_ref()?.profile.subtype)
+}
+
+/// The slot cards shader `s` can use (F1 spec §5, DECISIONS V8): each role's sub-types mapped through `slot_kind`.
+/// Roles matched by suffix only (`_e`, `_i`, `_sk` on Skin/Eye) map to none.
+pub fn usable_slots(s: Shader) -> BTreeSet<SlotKind> {
+    let spec = s.spec();
+    spec.required
+        .iter()
+        .chain(spec.optional)
+        .flat_map(|r| r.subtypes.iter().copied())
+        .filter_map(slot_kind)
+        .collect()
+}
+
+/// One slot card of the set editor (F1 spec §5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotCell {
+    pub kind: SlotKind,
+    pub fill: SlotFill,
+    /// False for a filled slot the set's shader does not use: it stays, outlined, and says why.
+    pub usable: bool,
+}
+
+/// The set's slot cards in PGPatcher slot order 1–8 (slots 3 and 7 hold two kinds each, in `SlotKind` order). These
+/// are every slot the picked shader can use, filled or empty, plus every filled slot it cannot use. With no pick yet,
+/// only the filled slots show (F1 spec §5).
+pub fn slot_row(pick: Option<&ShaderPick>, slots: &BTreeMap<SlotKind, SlotFill>) -> Vec<SlotCell> {
+    let usable = pick.map(|p| usable_slots(p.shader));
+    let filled = |k: &SlotKind| !matches!(slots.get(k), None | Some(SlotFill::Empty));
+    let mut kinds: Vec<SlotKind> = SlotKind::ALL
+        .into_iter()
+        .filter(|k| filled(k) || usable.as_ref().is_some_and(|u| u.contains(k)))
+        .collect();
+    kinds.sort_by_key(|k| (k.slot_number(), *k));
+    kinds
+        .into_iter()
+        .map(|kind| SlotCell {
+            kind,
+            fill: slots.get(&kind).cloned().unwrap_or(SlotFill::Empty),
+            usable: usable.as_ref().is_none_or(|u| u.contains(&kind)),
+        })
+        .collect()
 }
 
 /// Why `incoming` cannot join a set holding `existing`, if it cannot (spec §4.1: `_cnr` and `_f` share slot 7;
