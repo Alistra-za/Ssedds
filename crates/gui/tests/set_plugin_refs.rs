@@ -302,3 +302,72 @@ fn used_by_plugins_hides_inert_records_until_asked() {
     h.run();
     h.get_by_label("RockStat [00000DEF] STAT — Skyrim.esm · Shape0 → RockTXST · not placed");
 }
+
+/// Task 14 lesson: "Show inert" never leaks across a key change or a Refresh.
+#[test]
+fn show_inert_resets_on_key_change_and_refresh() {
+    use modscan::store::TexKey;
+    use sdc_gui::model::plugin_refs::SetPluginRefs;
+    let d = tempfile::tempdir().unwrap();
+    let db = seeded_db(d.path());
+    let key = |s: &str| TexKey::Suffix {
+        slot: 0,
+        stem: s.into(),
+    };
+    let mut r = SetPluginRefs::default();
+    r.get(Some(&db), &key(r"landscape\rock01"))
+        .as_ref()
+        .unwrap();
+    r.show_inert = true;
+    r.get(Some(&db), &key(r"landscape\rock01"))
+        .as_ref()
+        .unwrap();
+    assert!(r.show_inert, "same key, cached: kept");
+    r.get(Some(&db), &key(r"landscape\other")).as_ref().unwrap();
+    assert!(!r.show_inert, "key change resets");
+    r.show_inert = true;
+    r.refresh();
+    assert!(!r.show_inert, "Refresh resets");
+}
+
+/// Ruling F-21: with every TXST inert and the toggle off, the empty message shows; the toggle brings the rows back.
+#[test]
+fn used_by_plugins_all_inert_says_nothing_matches_until_shown() {
+    use modscan::plugin_store::TxstUse;
+    use sdc_gui::model::plugin_refs::{set_key, SetPluginUse};
+    use sdc_gui::model::sets::set_views;
+    let d = tempfile::tempdir().unwrap();
+    let mut model = pbr_opened(d.path());
+    let v = set_views(&model)
+        .into_iter()
+        .find(|v| set_key(v).is_some())
+        .unwrap();
+    model.plugin_refs.cached = Some((
+        set_key(&v).unwrap(),
+        Ok(SetPluginUse {
+            txsts: vec![TxstUse {
+                formid: 0x0001_2345,
+                edid: Some("RockTXST".into()),
+                plugin: "Skyrim.esm".into(),
+                slot: 0,
+                path: "textures/landscape/rock01.dds".into(),
+                n_overrides: 1,
+            }],
+            inert: [(0x0001_2345u32, "no reference")].into_iter().collect(),
+            ..Default::default()
+        }),
+    ));
+    model.select_set(&v.key);
+    let mut h = tall(model);
+    h.run();
+    h.get_by_label("Used by plugins").click();
+    h.run();
+    h.get_by_label("No texture set of the latest scan matches this set.");
+    assert!(h.query_by_label_contains("RockTXST").is_none());
+    h.get_by_label("Show inert (1)").click();
+    h.run();
+    assert!(h
+        .query_by_label("No texture set of the latest scan matches this set.")
+        .is_none());
+    h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1× · no reference");
+}
