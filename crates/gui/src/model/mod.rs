@@ -216,6 +216,8 @@ pub struct AppModel {
     pub rnm_keys: std::collections::BTreeMap<PathBuf, String>,
     /// The preset id the last plan resolved (empty before the first plan).
     pub batch_preset: String,
+    /// While set, `edit_docs` changes the documents but neither records a step nor re-plans.
+    batch: bool,
     pub selection: Selection,
     pub filter: Filter,
     pub search: String,
@@ -306,6 +308,7 @@ impl AppModel {
             rnm_notes: Default::default(),
             rnm_keys: Default::default(),
             batch_preset: String::new(),
+            batch: false,
             selection: Selection::None,
             filter: Filter::default(),
             search: String::new(),
@@ -562,11 +565,6 @@ impl AppModel {
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    "plan" => {
-                        self.planning = None;
-                        self.export_after_plan = false;
-                        self.continue_after_plan = None;
-                    }
                     "export" => {
                         self.export.running = None;
                         self.run_after_export();
@@ -783,8 +781,9 @@ impl AppModel {
         // members (PBR follow), so those members must be looked at afterwards, not decided from the plan's older
         // suggestions.
         picks.sort_by_key(|(_, st)| !(st.is_pbr_color() || sets::is_pbr_diffuse(*st)));
-        // Each decision goes through `decide` (so the PBR follow-on applies); the steps they push fold into one.
-        let pushed = self.history.pushed;
+        // Audit 11 (Note Y8): one snapshot, every pick, one step, one plan (not one plan thread per pick).
+        let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        self.batch = true;
         for (k, st) in &picks {
             let written = self
                 .project
@@ -794,8 +793,19 @@ impl AppModel {
                 self.decide(k, Answer::Subtype(*st));
             }
         }
-        let n = self.history.pushed - pushed;
-        self.history.fold_last(n, "Accept all suggestions");
+        self.batch = false;
+        let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        if after != before {
+            self.history.push(history::Command {
+                label: "Accept all suggestions".into(),
+                before,
+                after,
+                merge: None,
+                created_file: None,
+            });
+            self.auto_replans = 0;
+            self.replan();
+        }
         self.refresh_if_settled();
     }
 
@@ -1283,6 +1293,9 @@ impl AppModel {
         };
         let before = Self::snapshot_of(Some(p), Some(s));
         f(p, s);
+        if self.batch {
+            return;
+        }
         let after = Self::snapshot_of(Some(p), Some(s));
         if after == before {
             return;

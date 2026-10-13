@@ -222,3 +222,29 @@ fn rows_decided_in_the_dialog_go_back_through_the_export_blocks() {
     );
     assert!(m.export.running.is_none() && m.export.summary.is_none());
 }
+
+/// Audit 11 (Note Y8): more picks than the history keeps are still one step, undone at once.
+#[test]
+fn accept_all_over_the_history_limit_is_one_undo_step() {
+    use sdc_gui::model::history::History;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    answer_all_but_subtypes(&mut m);
+    let rock = m.root.clone().unwrap().join(ROCK);
+    for i in 0..History::LIMIT + 5 {
+        std::fs::copy(&rock, rock.with_file_name(format!("rock{i:03}.png"))).unwrap();
+    }
+    m.replan();
+    idle(&mut m);
+    let undecided = m.undecided();
+    assert!(undecided > History::LIMIT, "{undecided}");
+    m.dialog = Some(Dialog::ProceedAnyway(m.undecided_keys()));
+    let steps = m.history.undo.len();
+    m.accept_all_suggestions();
+    assert_eq!(m.history.undo.len(), steps + 1, "one step");
+    idle(&mut m);
+    assert_eq!(m.undecided(), 0);
+    m.undo();
+    idle(&mut m);
+    assert_eq!(m.undecided(), undecided, "one undo restores every pick");
+}
