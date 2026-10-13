@@ -1,0 +1,11 @@
+[package]
+name = "esp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+flate2.workspace = true
+nif = { path = "../nif" }
