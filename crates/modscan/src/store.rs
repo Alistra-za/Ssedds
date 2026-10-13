@@ -1094,14 +1094,6 @@ impl Store {
         Ok(id)
     }
 
-    pub fn replace_shapes(&mut self, copy_id: i64, scan: &NifScan) -> Result<(), ScanError> {
-        let tx = self.conn.transaction()?;
-        delete_shapes(&tx, copy_id)?;
-        write_shapes(&tx, &mut self.intern, LIVE, copy_id, scan)?;
-        tx.commit()?;
-        Ok(())
-    }
-
     pub fn copy_ids(&self) -> Result<HashMap<(i64, i64), i64>, ScanError> {
         let mut st = self
             .conn
