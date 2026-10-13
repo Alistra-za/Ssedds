@@ -128,19 +128,9 @@ fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 });
         }
     }
-    if m.has_store() || m.file_refs.is_some() {
-        egui::CollapsingHeader::new("Plugin file references")
-            .id_salt("meshes-plugin-file-refs")
-            .show(ui, |ui| {
-                if m.scanning() {
-                    ui.label("Available after the scan finishes.");
-                    return;
-                }
-                if m.file_refs.is_none() {
-                    m.load_file_refs();
-                }
-                file_refs(ui, m);
-            });
+    if (m.has_store() || m.file_refs.is_some()) && ui.button("Plugin file references…").clicked()
+    {
+        m.refs_open = true;
     }
     if let Some(e) = m.error.clone() {
         ui.horizontal_wrapped(|ui| {
@@ -461,6 +451,28 @@ fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
         });
 }
 
+/// A window, not part of the top bar: opening it must not resize the panels.
+fn refs_window(ctx: &egui::Context, m: &mut MeshesModel) {
+    let mut open = m.refs_open;
+    egui::Window::new("Plugin file references")
+        .id(egui::Id::new("meshes-plugin-file-refs-window"))
+        .open(&mut open)
+        .default_size([900.0, 500.0])
+        .resizable(true)
+        .vscroll(false)
+        .show(ctx, |ui| {
+            if m.scanning() {
+                ui.label("Available after the scan finishes.");
+                return;
+            }
+            if m.file_refs.is_none() {
+                m.load_file_refs();
+            }
+            file_refs(ui, m);
+        });
+    m.refs_open = open;
+}
+
 /// Most rows drawn in the file-reference list.
 const MAX_REF_ROWS: usize = 1000;
 
@@ -506,11 +518,11 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         ui.label("Nothing listed.");
         return;
     }
-    // Wrapping rows bounded to the column; rendering is capped so 68k Unused rows stay fast (Copy still takes all).
+    ui.set_max_width(ui.available_width());
+    // Wrapping rows bounded to the window; rendering is capped so 68k Unused rows stay fast (Copy still takes all).
     egui::ScrollArea::vertical()
         .id_salt("meshes-file-refs-scroll")
-        .max_height(240.0)
-        .auto_shrink([false, true])
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             for l in m.refs_lines().iter().take(MAX_REF_ROWS) {
                 ui.add(egui::Label::new(l.as_str()).wrap());
@@ -624,6 +636,7 @@ fn shape(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView) -> Option<String> {
 }
 
 fn dialogs(ctx: &egui::Context, m: &mut MeshesModel) {
+    refs_window(ctx, m);
     if let Some(d) = m.dialog.clone() {
         let (mut use_it, mut choose, mut folder) = (false, false, false);
         egui::Modal::new(egui::Id::new("meshes-mo2")).show(ctx, |ui| {
