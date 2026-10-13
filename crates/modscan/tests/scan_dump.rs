@@ -22,6 +22,41 @@ fn nif() -> Vec<u8> {
     .unwrap()
 }
 
+fn fixture_nif(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../nif/tests/fixtures/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+/// The skinned NIF with its first texture set rewritten (same byte length, so no header edit) to three non-empty
+/// slots 0, 1 and 7, two of them non-canonical (a non-dds extension, a backslash with upper case).
+fn multi_slot_nif() -> Vec<u8> {
+    let mut n = nif();
+    let old = [
+        &[9u8, 0, 0, 0, 18, 0, 0, 0][..],
+        b"textures\\white.dds",
+        &[0u8; 32],
+    ]
+    .concat();
+    let at = n.windows(old.len()).position(|w| w == old).unwrap();
+    let mut new = 9u32.to_le_bytes().to_vec();
+    for slot in 0..9 {
+        let s: &[u8] = match slot {
+            0 => b"x.dds",
+            1 => b"y.jpeg",
+            7 => b"Z\\q.dds",
+            _ => b"",
+        };
+        new.extend((s.len() as u32).to_le_bytes());
+        new.extend(s);
+    }
+    assert_eq!(new.len(), old.len());
+    n[at..at + old.len()].copy_from_slice(&new);
+    n
+}
+
 /// Loose NIFs in two mods (one path in both), a parse failure, a PGPatcher mod deriving one path, loose and BSA
 /// textures, an active plugin-named BSA, and a plugin with a TXST, an alternate texture and a landscape texture.
 fn fixture() -> tempfile::TempDir {
@@ -32,6 +67,17 @@ fn fixture() -> tempfile::TempDir {
     put(r, "mods/A/meshes/a_only.nif", &n);
     put(r, "mods/A/meshes/bad.nif", b"not a nif");
     put(r, "mods/B/meshes/x.nif", &n);
+    put(r, "mods/A/meshes/multi.nif", &multi_slot_nif());
+    put(
+        r,
+        "mods/B/meshes/fo4.nif",
+        &fixture_nif("TestNifFile_Skinned_FO4.nif"),
+    );
+    put(
+        r,
+        "mods/B/meshes/le.nif",
+        &fixture_nif("TestNifFile_Animated_LE.nif"),
+    );
     put(r, "mods/PGP/meshes/x.nif", &n);
     put(r, "mods/PGP/PGPatcher.esp", b"e");
     let crc = crc32fast::hash(&n);
@@ -84,7 +130,57 @@ fn fixture() -> tempfile::TempDir {
             ],
         ),
     );
-    put(r, "profiles/Default/plugins.txt", b"*Foo.esp\n");
+    // Bar overrides Foo's TXST (master index 0) and adds an EFSH with a direct texture; Baz is a light plugin.
+    put(
+        r,
+        "mods/B/Bar.esp",
+        &plugin(
+            0,
+            &["Foo.esp"],
+            &[
+                top(
+                    b"TXST",
+                    &[rec(
+                        b"TXST",
+                        0x800,
+                        &[edid("ATxst"), sub(b"TX00", &zstr("a\\b_d.dds"))],
+                    )],
+                ),
+                top(
+                    b"EFSH",
+                    &[rec(
+                        b"EFSH",
+                        0x0100_0801,
+                        &[edid("BEfsh"), sub(b"ICON", &zstr("fx\\spark.dds"))],
+                    )],
+                ),
+            ],
+        ),
+    );
+    put(
+        r,
+        "mods/B/Baz.esp",
+        &plugin(
+            0x200,
+            &[],
+            &[top(
+                b"EFSH",
+                &[rec(
+                    b"EFSH",
+                    0x800,
+                    &[edid("ZEfsh"), sub(b"ICON", &zstr("fx\\z.dds"))],
+                )],
+            )],
+        ),
+    );
+    put(
+        r,
+        "profiles/Default/plugins.txt",
+        b"*Foo.esp
+*Bar.esp
+*Baz.esp
+",
+    );
     d
 }
 
@@ -159,9 +255,9 @@ fn dump(s: &Store, root: &std::path::Path) -> String {
     lines.join("\n") + "\n"
 }
 
-fn scan_and_dump(d: &tempfile::TempDir) -> String {
+fn scan_and_dump(d: &tempfile::TempDir, db: &str) -> String {
     let inst = Instance::load(d.path(), None).unwrap();
-    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let mut store = Store::open(&d.path().join(db)).unwrap();
     run(
         &Source::Mo2(inst),
         &mut store,
@@ -179,16 +275,57 @@ fn golden() -> String {
         .replace("\r\n", "\n")
 }
 
+/// Deletes a loose NIF and a loose texture, rewrites another NIF (new content, new mtime), for the warm rescan.
+fn change(d: &tempfile::TempDir) {
+    let r = d.path();
+    std::fs::remove_file(r.join("mods/A/meshes/a_only.nif")).unwrap();
+    std::fs::remove_file(r.join("mods/B/textures/a/a_d.dds")).unwrap();
+    let p = r.join("mods/B/meshes/x.nif");
+    let mut n = nif();
+    let at = n.windows(9).position(|w| w == b"white.dds").unwrap();
+    n[at..at + 9].copy_from_slice(b"whit3.dds");
+    std::fs::write(&p, n).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+}
+
 #[test]
 fn cold_and_warm_scans_match_the_baseline_dump() {
     let d = fixture();
-    let cold = scan_and_dump(&d);
-    let warm = scan_and_dump(&d);
+    let cold = scan_and_dump(&d, "scan.db");
+    let warm = scan_and_dump(&d, "scan.db");
+    change(&d);
+    let changed = scan_and_dump(&d, "scan.db");
+    // Reusing the store after deletes and an edit must equal a scan of the changed tree from scratch (orphaned `path`
+    // rows are kept by design, so that table is excluded; the golden still records it).
+    let no_path = |d: &str| -> String {
+        d.lines()
+            .filter(|l| !l.starts_with("path|"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+    };
+    assert_eq!(
+        no_path(&changed),
+        no_path(&scan_and_dump(&d, "fresh.db")),
+        "warm rescan differs from a fresh scan"
+    );
+    let got = format!(
+        "== cold ==
+{cold}== warm ==
+{warm}== changed ==
+{changed}"
+    );
     if std::env::var_os("SDC_BLESS").is_some() {
         std::fs::create_dir_all(std::path::Path::new(GOLDEN).parent().unwrap()).unwrap();
-        std::fs::write(GOLDEN, &cold).unwrap();
+        std::fs::write(GOLDEN, &got).unwrap();
     }
-    let want = golden();
-    assert_eq!(cold, want, "cold dump differs from the baseline");
-    assert_eq!(warm, want, "warm dump differs from the baseline");
+    assert_eq!(got, golden(), "dumps differ from the baseline");
 }
