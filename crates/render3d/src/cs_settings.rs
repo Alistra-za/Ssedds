@@ -334,7 +334,7 @@ pub fn feature_data(
     s: &CsSettings,
     fields: &BTreeSet<String>,
     features_on: bool,
-    _head: bool,
+    head: bool,
 ) -> Vec<(String, Vec<f64>)> {
     let mut out: Vec<(String, Vec<f64>)> = FEATURE_FLOATS
         .iter()
@@ -421,9 +421,15 @@ pub fn feature_data(
         "linearLightingSettings.isMainOrLoadingMenu",
         vec![0.0],
     );
-    if let Some(Value::Object(skin)) = s.merged.get("Advanced Skin") {
-        pack_skin(skin, &mut out);
-    }
+    // New packing iff the build reflects the per-geometry profile (AIO 1.9.0); always packed, so an old build with
+    // no skin section still gets the un-multiplied tiling.
+    let new_skin = fields.contains("skinPerGeometryProfile.skinParams");
+    let empty = Map::new();
+    let skin = match s.merged.get("Advanced Skin") {
+        Some(Value::Object(m)) => m,
+        _ => &empty,
+    };
+    let tiling = pack_skin(skin, new_skin, &mut out);
     // C2: the PS reads the profile from `SkinPerGeometry` (b7), not FeatureData (Skin.hlsli:21-31). No skin
     // extra / wetness / sk textures in the preview: skinMaterialFlags 0 here is the FeatureData/static default; the per-shape value (RFAOS bound at t71) is written per draw (material.rs); per-geometry wetness 0 (Skin.hlsli:254 returns 0).
     let profile: Vec<(String, Vec<f64>)> = out
@@ -434,6 +440,17 @@ pub fn feature_data(
         })
         .collect();
     out.extend(profile);
+    if head && new_skin {
+        // CS: bodyTiling = 1 on a head (advanced-skin Renderer.cpp:263-264); FeatureData keeps the body value
+        // (GetCommonBufferData passes false).
+        if let Some((_, v)) = out
+            .iter_mut()
+            .find(|(n, _)| n == "skinPerGeometryProfile.skinDetailParams")
+        {
+            v[0] = tiling;
+            v[1] = 1.0;
+        }
+    }
     out.push(("skinPerGeometry".into(), vec![0.0; 4]));
     out.push(("skinMaterialFlags".into(), vec![0.0; 4]));
     out
@@ -446,17 +463,34 @@ fn put(out: &mut Vec<(String, Vec<f64>)>, name: &str, vals: Vec<f64>) {
     }
 }
 
-/// `"Advanced Skin"` → `skinData.*` (C5). Source keys follow how the installed CS Lighting.hlsl / Skin.hlsli read
-/// each component (line refs: CS 2026-10-03); a key the files lack keeps the capture-11178 component.
-fn pack_skin(skin: &Map<String, Value>, out: &mut [(String, Vec<f64>)]) {
-    let profile = skin.get("DefaultProfile");
-    let p = |k: &str| profile.and_then(|d| d.get(k)).and_then(num);
+/// `"Advanced Skin"` → `skinData.*` (C5). The profile is `DefaultProfile`, else the section itself (CS's own
+/// migration, advanced-skin Skin.cpp:22: 1.6/1.8 files are flat with the same key names). `new` (the build reflects
+/// `skinPerGeometryProfile`): advanced-skin Renderer.cpp:260-268, the CPU pre-multiplies the tiling. Otherwise dev
+/// Skin.cpp:267-273: the shader multiplies x·y itself (1.8 Lighting.hlsl:2049). Returns SkinDetailTiling (for the
+/// head copy). A key the files lack keeps the capture-11178 component.
+fn pack_skin(skin: &Map<String, Value>, new: bool, out: &mut [(String, Vec<f64>)]) -> f64 {
+    let profile = match skin.get("DefaultProfile") {
+        Some(Value::Object(d)) => d,
+        _ => skin,
+    };
+    let p = |k: &str| profile.get(k).and_then(num);
     let top = |k: &str| skin.get(k).and_then(num);
-    // shortcut: tiling × body multiplier is inferred from the captured 20 = 10 × 2 (the shader only reads the
-    // product, :1673); revisit if a capture with BodyTilingMultiplier ≠ 2 disagrees.
-    let tiling = p("SkinDetailTiling")
-        .zip(p("BodyTilingMultiplier"))
-        .map(|(t, b)| t * b);
+    // Capture 11178: x = 20 = 10 × 2.
+    let tiling = p("SkinDetailTiling").unwrap_or(10.0);
+    let body = p("BodyTilingMultiplier").unwrap_or(2.0);
+    let (detail_x, detail_on, sss_amount, wet_response) = if new {
+        (
+            tiling * body,
+            p("EnableSkinDetail"),
+            p("SSSAmount"),
+            p("WetResponse"),
+        )
+    } else {
+        let on = p("EnableSkinDetail")
+            .zip(top("EnableSkin"))
+            .map(|(d, e)| f64::from(u8::from(d != 0.0 && e != 0.0)));
+        (tiling, on, Some(0.0), Some(0.0))
+    };
     let packed = [
         // x roughness, y secondary roughness (:1969-1970), z × glossiness (:1969), w skin on (:1365).
         (
@@ -478,25 +512,21 @@ fn pack_skin(skin: &Map<String, Value>, out: &mut [(String, Vec<f64>)]) {
                 p("BaseColorMultiplier"),
             ],
         ),
-        // x detail UV tiling (:1673), y wet UV tiling (:1663), z detail strength (:1688), w detail on (:1682).
+        // x detail UV tiling (new: × body, :1673; old: the shader × y), y body tiling, z detail strength (:1688),
+        // w detail on (:1682).
         (
             "skinDetailParams",
             [
-                tiling,
-                p("BodyTilingMultiplier"),
+                Some(detail_x),
+                Some(body),
                 p("SkinDetailStrength"),
-                p("EnableSkinDetail"),
+                detail_on,
             ],
         ),
-        // x·w translucency (Skin.hlsli:166), y width (Skin.hlsli:162), z amount (:3159).
+        // x·w translucency (Skin.hlsli:166), y width (Skin.hlsli:162), z amount (:3159; new only, old 0).
         (
             "sssParams",
-            [
-                p("Translucency"),
-                p("sssWidth"),
-                p("SSSAmount"),
-                p("UseSSS"),
-            ],
+            [p("Translucency"), p("sssWidth"), sss_amount, p("UseSSS")],
         ),
         // x weight (:1982), y roughness (:1983), z colour (:1984), w edge roughness (:1968).
         (
@@ -508,14 +538,15 @@ fn pack_skin(skin: &Map<String, Value>, out: &mut [(String, Vec<f64>)]) {
                 p("ExtraEdgeRoughness"),
             ],
         ),
-        // x, y roughness multipliers (:1972-1973), z specular with a skin-extra map (:1979), w wet response (:2216).
+        // x, y roughness multipliers (:1972-1973), z specular with a skin-extra map (:1979), w wet response
+        // (new only, :2216; old 0).
         (
             "physicalParams",
             [
                 p("PhysicalMainRoughnessMultiplier"),
                 p("PhysicalSecondRoughnessMultiplier"),
                 p("PhysicalSpecularStrength"),
-                p("WetResponse"),
+                wet_response,
             ],
         ),
     ];
@@ -537,6 +568,7 @@ fn pack_skin(skin: &Map<String, Value>, out: &mut [(String, Vec<f64>)]) {
             }
         }
     }
+    tiling
 }
 
 /// Writes `values` by name, each as its reflected type (C6): float (and unknown) fields as f32, uint and bool

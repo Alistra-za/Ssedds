@@ -230,3 +230,80 @@ fn each_build_triggers_its_own_linear_lighting_rule() {
         }
     }
 }
+
+/// 1.6/1.8 write the skin keys flat; CS reads the section root when there is no DefaultProfile (advanced-skin
+/// Skin.cpp:22). Old packing: x = tiling (the shader multiplies by y, 1.8 Lighting.hlsl:2049), w = detail && skin,
+/// sssParams.z and physicalParams.w unused (0).
+#[test]
+fn flat_skin_settings_are_read_like_cs_does() {
+    let s = with(serde_json::json!({"Advanced Skin": {
+        "EnableSkin": true, "SkinMainRoughness": 0.5, "EnableSkinDetail": true, "SkinDetailTiling": 10.0,
+        "BodyTilingMultiplier": 2.0, "SkinDetailStrength": 0.3, "Translucency": 0.25
+    }}));
+    let fd = feature_data(&s, &fields_of("cs18_bottle"), true, false);
+    assert_eq!(value(&fd, "skinData.skinParams")[0], 0.5);
+    assert_eq!(
+        value(&fd, "skinData.skinDetailParams"),
+        [10.0, 2.0, 0.3, 1.0]
+    );
+    assert_eq!(value(&fd, "skinData.sssParams")[0], 0.25);
+    assert_eq!(value(&fd, "skinData.sssParams")[2], 0.0);
+    assert_eq!(value(&fd, "skinData.physicalParams")[3], 0.0);
+    let skin_off =
+        with(serde_json::json!({"Advanced Skin": {"EnableSkin": false, "EnableSkinDetail": true}}));
+    let fd = feature_data(&skin_off, &fields_of("cs18_bottle"), true, false);
+    assert_eq!(
+        value(&fd, "skinData.skinDetailParams")[3],
+        0.0,
+        "old w = EnableSkinDetail && EnableSkin"
+    );
+}
+
+/// Golden, capture 11178 (owner settings, installed build): body b7 skinDetailParams (20, 2, 0.25, 0) at ev 4386,
+/// head (FaceGen, ev 4182) (10, 1, 0.25, 0); FeatureData b6 stays the body value for both (GetCommonBufferData).
+#[test]
+fn new_packing_premultiplies_and_heads_use_tiling_one() {
+    let owner = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cs_settings"
+    ));
+    let s = read_settings(&SettingsPaths {
+        user: Some(owner.join("SettingsUser.json")),
+        default: Some(owner.join("SettingsDefault.json")),
+        ..Default::default()
+    });
+    let f = fields_of("aio190");
+    let body = feature_data(&s, &f, true, false);
+    let head = feature_data(&s, &f, true, true);
+    assert_eq!(
+        value(&body, "skinPerGeometryProfile.skinDetailParams"),
+        [20.0, 2.0, 0.25, 0.0]
+    );
+    assert_eq!(
+        value(&head, "skinPerGeometryProfile.skinDetailParams"),
+        [10.0, 1.0, 0.25, 0.0]
+    );
+    assert_eq!(
+        value(&head, "skinData.skinDetailParams"),
+        [20.0, 2.0, 0.25, 0.0]
+    );
+}
+
+/// Each build packs tiling its own way, also with no skin section at all (old shaders would double the capture's
+/// pre-multiplied 20).
+#[test]
+fn each_build_packs_skin_tiling_its_own_way() {
+    for tag in BUILDS {
+        let f = fields_of(tag);
+        for s in [
+            CsSettings::default(),
+            with(
+                serde_json::json!({"Advanced Skin": {"SkinDetailTiling": 10.0, "BodyTilingMultiplier": 2.0}}),
+            ),
+        ] {
+            let fd = feature_data(&s, &f, true, false);
+            let want = if tag == "aio190" { 20.0 } else { 10.0 };
+            assert_eq!(value(&fd, "skinData.skinDetailParams")[0], want, "{tag}");
+        }
+    }
+}
