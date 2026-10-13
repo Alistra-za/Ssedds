@@ -1,7 +1,7 @@
 //! P1-C T-S6 and C11: the user's CS settings applied to a loaded model, on WARP with the stand-in shader. The
 //! test is the pool, as in async_compile.rs: it takes the jobs and runs them with `run_job`.
 mod common;
-use common::{cache_files, channel, covered, fixture, renderer, FLAT};
+use common::{cache_files, channel, covered, fixture, renderer, standin_root, FLAT};
 use render3d::cs_settings::CsSettings;
 use render3d::device::Gpu;
 use render3d::scene::Scene;
@@ -176,4 +176,51 @@ fn rebuild_device_on_keeps_settings() {
     r.set_settings(s);
     assert_eq!(r.features(), features);
     assert!(r.take_jobs().is_empty());
+}
+
+/// P1-D: an old Linear Lighting build (its source names `isDirLightLinear`) never gets `-D ENABLE_LL`: the shader
+/// aliases ENABLE_LL to the cbuffer flag (old Color.hlsli:7), which feature_data writes from the setting.
+#[test]
+fn an_old_linear_lighting_build_compiles_without_the_enable_ll_define() {
+    let cache = tempfile::tempdir().unwrap();
+    let old = tempfile::tempdir().unwrap();
+    let src = std::fs::read_to_string(standin_root().join("Lighting.hlsl")).unwrap();
+    std::fs::write(
+        old.path().join("Lighting.hlsl"),
+        // A declaration, not a comment, so the marker survives any comment handling in the expander.
+        src + "\nstatic const uint isDirLightLinear = 0; // P1-D old-LL marker\n",
+    )
+    .unwrap();
+    let ll_defined = |root: &Path| -> Vec<bool> {
+        let fp = render3d::locate::fingerprint(root, None).unwrap();
+        let mut r =
+            Renderer::with_gpu(Gpu::new_warp().unwrap(), fp, cache.path().to_path_buf()).unwrap();
+        r.set_features(FLAT.iter().map(|s| s.to_string()).collect());
+        r.set_settings(settings(true, 1.0));
+        assert!(
+            r.features().iter().any(|f| f == "ENABLE_LL"),
+            "the settings still say on"
+        );
+        let rep = r.load_parsed(&parse(&fixture("TestNifFile_Furniture_Col_SE.nif")), &none);
+        assert!(
+            rep.errors.is_empty() && rep.compile_errors.is_empty(),
+            "{rep:?}"
+        );
+        let ids: Vec<_> = r.shapes().into_iter().map(|s| s.id).collect();
+        ids.into_iter()
+            .map(|id| {
+                r.draw_diag(id)
+                    .unwrap()
+                    .0
+                    .iter()
+                    .any(|(n, _)| n == "ENABLE_LL")
+            })
+            .collect()
+    };
+    assert_eq!(
+        ll_defined(&standin_root()),
+        [true, true],
+        "new-LL stand-in: defined"
+    );
+    assert_eq!(ll_defined(old.path()), [false, false], "old LL: never a -D");
 }

@@ -279,6 +279,8 @@ pub struct Renderer {
     settings: CsSettings,
     /// The "Community Shaders features" toggle (C8): off, the settings add no define.
     features_on: bool,
+    /// The shaders are an old Linear Lighting build (P1-D); memoised from the expanded source, reset by `set_shaders`.
+    old_ll: std::cell::OnceCell<bool>,
     /// One expanded `Lighting.hlsl` per shaders folder (03 §5); dropped with the folder by `set_shaders`.
     sources: SourceSet,
     /// Device objects by pair key; dropped by `set_shaders` and by a device rebuild.
@@ -405,6 +407,7 @@ impl Renderer {
             features: DEFAULT_FEATURES.iter().map(|s| s.to_string()).collect(),
             settings: CsSettings::default(),
             features_on: true,
+            old_ll: std::cell::OnceCell::new(),
             programs: HashMap::new(),
             compiled: HashMap::new(),
             inflight: HashSet::new(),
@@ -491,8 +494,8 @@ impl Renderer {
         old.sort();
         new.sort();
         // Linear Lighting draws in linear working space: encode for display (was the GUI's apply_features).
-        self.encode_srgb = f.iter().any(|d| d == "ENABLE_LL");
         self.features = f;
+        self.encode_srgb = self.linear_lighting();
         if old == new {
             self.rewrite_static();
         } else {
@@ -541,6 +544,7 @@ impl Renderer {
         self.sources = SourceSet::new(shaders.root.clone());
         self.shaders = shaders;
         self.programs.clear();
+        self.old_ll = std::cell::OnceCell::new();
     }
 
     pub fn shaders(&self) -> &Fingerprint {
@@ -578,8 +582,29 @@ impl Renderer {
         self.bounds
     }
 
+    /// Linear Lighting on in the preview: the `ENABLE_LL` define, or on an old-LL build the cbuffer flag that
+    /// `feature_data` writes (that build never gets the define).
     fn linear_lighting(&self) -> bool {
-        self.features.iter().any(|f| f == "ENABLE_LL")
+        if self.old_ll() {
+            cs_settings::linear_lighting_on(&self.settings, true, self.features_on)
+        } else {
+            self.features.iter().any(|f| f == "ENABLE_LL")
+        }
+    }
+
+    /// The shaders name `isDirLightLinear` (1.6, 1.8, Nexus 1.9.1). Read from the expanded `Lighting.hlsl` because
+    /// the define list is decided before any program (and its reflection) exists. An unreadable source is not
+    /// memoised.
+    fn old_ll(&self) -> bool {
+        if let Some(v) = self.old_ll.get() {
+            return *v;
+        }
+        match self.sources.get(Path::new("Lighting.hlsl")) {
+            Ok(src) => *self
+                .old_ll
+                .get_or_init(|| src.text.contains("isDirLightLinear")),
+            Err(_) => false,
+        }
     }
 
     fn default_srv(
@@ -780,7 +805,14 @@ impl Renderer {
     /// The program `m` needs: both stage keys over the shared expansion of `Lighting.hlsl`.
     fn wanted(&self, m: &MaterialState) -> Result<Wanted, String> {
         let pm = perm_material(m);
-        let f: Vec<&str> = self.features.iter().map(String::as_str).collect();
+        let old_ll = self.old_ll();
+        // Old LL: ENABLE_LL is the shader's own alias of the cbuffer flag (Color.hlsli:7), never a -D (P1-D).
+        let f: Vec<&str> = self
+            .features
+            .iter()
+            .map(String::as_str)
+            .filter(|d| !(old_ll && *d == "ENABLE_LL"))
+            .collect();
         let vs = defines(&pm, Stage::Vertex, &f, false);
         let ps = defines(&pm, Stage::Pixel, &f, false);
         let src = self.sources.get(Path::new("Lighting.hlsl"))?;

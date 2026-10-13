@@ -265,6 +265,22 @@ type Section = (
     &'static str,
     &'static [(&'static str, &'static str)],
 );
+/// Reflected only by the new Linear Lighting (AIO 1.9.0): π on the CPU, LL switched by a compile-time define.
+pub const NEW_LL: &str = "linearLightingSettings.diffuseCurve";
+/// Reflected only by the old Linear Lighting (1.6, 1.8, Nexus 1.9.1): π in the shader, LL switched by a cbuffer flag.
+pub const OLD_LL: &str = "linearLightingSettings.isDirLightLinear";
+
+/// Whether Linear Lighting is on in the preview. Old LL: the setting, with no key = off (the shader's flag reads the
+/// written 0, Nexus before CS's first run). New LL: `CsSettings::linear_lighting` (no key = the P0 default, on).
+pub fn linear_lighting_on(s: &CsSettings, old_ll: bool, features_on: bool) -> bool {
+    features_on
+        && if old_ll {
+            setting(&s.merged, "Linear Lighting", "enableLinearLighting").is_some_and(|x| x != 0.0)
+        } else {
+            s.linear_lighting
+        }
+}
+
 const SECTIONS: &[Section] = &[
     ("Linear Lighting", "linearLightingSettings", &[]),
     ("Hair Specular", "hairSpecularSettings", &[]),
@@ -316,8 +332,8 @@ fn unqualified(name: &str) -> &str {
 /// the values are for ([`reflected_fields`]); `head` = the draw is a head (per-geometry skin tiling, P1-D).
 pub fn feature_data(
     s: &CsSettings,
-    _fields: &BTreeSet<String>,
-    _features_on: bool,
+    fields: &BTreeSet<String>,
+    features_on: bool,
     _head: bool,
 ) -> Vec<(String, Vec<f64>)> {
     let mut out: Vec<(String, Vec<f64>)> = FEATURE_FLOATS
@@ -356,12 +372,50 @@ pub fn feature_data(
             vec![diffuse_curve(gamma, mid, white)],
         );
     }
-    // C4 / spec §2.2: the installed CS uploads π whatever the setting says (capture 11178).
-    put(
-        &mut out,
-        "linearLightingSettings.pointLightMult",
-        vec![f64::from(std::f32::consts::PI)],
-    );
+    let ll_on = linear_lighting_on(s, fields.contains(OLD_LL), features_on);
+    if fields.contains(NEW_LL) {
+        // New LL: the CPU uploads π × pointLightMult and the shader no longer multiplies (dev LinearLighting.cpp:
+        // 228-229; capture 11178: setting 1 → π). Directional stays raw: the capture shows 1.0.
+        let point = f64::from(std::f32::consts::PI) * ll("pointLightMult").unwrap_or(1.0);
+        put(
+            &mut out,
+            "linearLightingSettings.pointLightMult",
+            vec![point],
+        );
+        if !ll_on {
+            // From dev source only (LinearLighting.cpp:207-225, 2026-10-09), not verified against the installed
+            // DLL: with LL inactive CS uploads every multiplier and fireEffectCurve as 1.0; the 1.9 shader reads
+            // them ungated (ColorManagement.hlsli:61-137).
+            for f in fields.iter().filter(|f| {
+                f.strip_prefix("linearLightingSettings.")
+                    .is_some_and(|m| m.ends_with("Mult") || m == "fireEffectCurve")
+            }) {
+                put(&mut out, f, vec![1.0]);
+            }
+        }
+    } else if fields.contains(OLD_LL) {
+        // Old LL: raw multipliers, the shader applies π itself (Color.hlsli:270-278). isDirLightLinear and
+        // dirLightMult are engine-derived (advanced-skin LinearLighting.cpp:125-133); 0 would black out the sun
+        // (1.8 Lighting.hlsl:2730). The flag is the LL switch (Color.hlsli:7).
+        put(
+            &mut out,
+            "linearLightingSettings.pointLightMult",
+            vec![ll("pointLightMult").unwrap_or(1.0)],
+        );
+        put(
+            &mut out,
+            "linearLightingSettings.enableLinearLighting",
+            vec![f64::from(u8::from(ll_on))],
+        );
+        put(
+            &mut out,
+            "linearLightingSettings.isDirLightLinear",
+            vec![0.0],
+        );
+        put(&mut out, "linearLightingSettings.dirLightMult", vec![1.0]);
+        // b8 LLPerGeometry (Color.hlsli:10-14): 0 turns emissive black (Color.hlsli:283).
+        put(&mut out, "emissiveMult", vec![1.0]);
+    }
     put(
         &mut out,
         "linearLightingSettings.isMainOrLoadingMenu",
