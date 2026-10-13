@@ -1,6 +1,7 @@
 pub mod archives;
 pub mod mo2;
 pub mod pgp;
+pub mod plugins;
 pub mod qtini;
 pub mod resolve;
 pub mod scan;

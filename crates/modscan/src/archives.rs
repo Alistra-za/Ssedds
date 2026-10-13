@@ -23,6 +23,47 @@ const IMPLICIT: [&str; 5] = [
     "dragonborn.esm",
 ];
 
+/// One plugin of the active load order (lowercase file name). `optional`: a `Skyrim.ccc` entry, which the game loads
+/// only when the file exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivePlugin {
+    pub name: String,
+    pub optional: bool,
+}
+
+/// The active load order (esp spec §2.2): the five base masters, `Skyrim.ccc` entries absent from plugins.txt, then
+/// plugins.txt `*` entries; each name once, at its first place.
+pub fn active_plugins(inst: &Instance) -> Vec<ActivePlugin> {
+    let game = game_dir(inst);
+    let plugins = std::fs::read_to_string(inst.profiles.join(&inst.profile).join("plugins.txt"))
+        .unwrap_or_default();
+    let listed: std::collections::HashSet<String> = plugins
+        .lines()
+        .map(|l| l.trim().trim_start_matches('*').trim().to_ascii_lowercase())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let ccc: Vec<String> = std::fs::read_to_string(game.join("Skyrim.ccc"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_ascii_lowercase())
+        .filter(|l| !l.is_empty() && !listed.contains(l))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    IMPLICIT
+        .iter()
+        .map(|s| (s.to_string(), false))
+        .chain(ccc.into_iter().map(|s| (s, true)))
+        .chain(
+            plugins
+                .lines()
+                .filter_map(|l| l.strip_prefix('*'))
+                .map(|s| (s.trim().to_ascii_lowercase(), false)),
+        )
+        .filter(|(n, _)| !n.is_empty() && seen.insert(n.clone()))
+        .map(|(name, optional)| ActivePlugin { name, optional })
+        .collect()
+}
+
 /// Default SSE order of the vanilla archives (lowercase). Other `skyrim - *.bsa` follow alphabetically.
 const VANILLA: [&str; 18] = [
     "skyrim - misc.bsa",
@@ -211,27 +252,12 @@ pub fn active_bsas_with(
     }
 
     // 3. Plugin-attached archives: base masters, Skyrim.ccc entries absent from plugins.txt, plugins.txt.
-    let plugins = std::fs::read_to_string(inst.profiles.join(&inst.profile).join("plugins.txt"))
-        .unwrap_or_default();
-    let listed: std::collections::HashSet<String> = plugins
-        .lines()
-        .map(|l| l.trim().trim_start_matches('*').trim().to_ascii_lowercase())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
-    let ccc: Vec<String> = std::fs::read_to_string(game.join("Skyrim.ccc"))
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_ascii_lowercase())
-        .filter(|l| !l.is_empty() && !listed.contains(l))
-        .collect();
-    let active = IMPLICIT.iter().map(|s| s.to_string()).chain(ccc).chain(
-        plugins
-            .lines()
-            .filter_map(|l| l.strip_prefix('*'))
-            .map(|s| s.trim().to_ascii_lowercase()),
-    );
-    for p in active {
-        let stem = p.rsplit_once('.').map_or(p.as_str(), |x| x.0).to_string();
+    for p in active_plugins(inst) {
+        let stem = p
+            .name
+            .rsplit_once('.')
+            .map_or(p.name.as_str(), |x| x.0)
+            .to_string();
         push(&format!("{stem}.bsa"), &mut out);
         push(&format!("{stem} - textures.bsa"), &mut out);
     }
