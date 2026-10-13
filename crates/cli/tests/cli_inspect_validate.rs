@@ -1102,3 +1102,16 @@ fn inspect_lists_a_base_normals_rnm_layers() {
         "{out}"
     );
 }
+
+/// Audit left-out: a folder is a usage error naming it, not "Access is denied".
+#[test]
+fn validate_given_a_folder_is_a_usage_error() {
+    let d = tempfile::tempdir().unwrap();
+    let o = sdc().arg("validate").arg(d.path()).output().unwrap();
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("is a folder"),
+        "{}",
+        text(&o.stderr)
+    );
+}
