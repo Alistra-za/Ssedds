@@ -182,6 +182,10 @@ impl Store {
             delete_rows(&tx, *id)?;
             tx.execute("DELETE FROM plugin WHERE id = ?1", [id])?;
         }
+        if !gone.is_empty() {
+            // Same transaction as the removal: a failed resolution then cannot leave a stale order that looks resolved.
+            tx.execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+        }
         tx.commit()?;
         Ok(gone.len())
     }
@@ -264,8 +268,9 @@ impl Store {
     /// A Folder scan (ruling R7): no load order, so no winners; the rows stay as cache and the next MO2 scan
     /// re-resolves them (`lo_index` NULL never matches).
     pub fn unload_plugins(&mut self) -> Result<(), ScanError> {
-        self.conn
-            .execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+        let tx = self.conn.transaction()?;
+        tx.execute_batch("UPDATE plugin SET lo_index = NULL; DELETE FROM rec_winner;")?;
+        tx.commit()?;
         Ok(())
     }
 

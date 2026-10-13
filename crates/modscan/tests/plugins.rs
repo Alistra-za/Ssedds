@@ -468,3 +468,84 @@ fn cancel_stops_the_plugin_pass() {
     let (_, r) = try_scan(&d, true);
     assert!(matches!(r, Err(ScanError::Cancelled)), "{r:?}");
 }
+
+fn scan_in(d: &tempfile::TempDir, s: &mut Store, cancel: bool) -> Result<PluginStats, ScanError> {
+    let inst = Instance::load(d.path(), None).unwrap();
+    let (loose, _) = loose_origins(&inst).unwrap();
+    scan_plugins(&inst, &loose, s, &AtomicBool::new(cancel), &|_| {})
+}
+
+fn orphan_winners(s: &Store) -> i64 {
+    one_i64(
+        s,
+        "SELECT count(*) FROM rec_winner WHERE plugin_id NOT IN (SELECT id FROM plugin)",
+        [],
+    )
+}
+
+/// Review I1: a resolution that fails after the removal committed must not be skipped on the retry.
+#[test]
+fn a_failed_resolution_after_a_removal_is_redone() {
+    let d = load_order(ORDER);
+    drop(scan(&d).0);
+    fs::write(
+        d.path().join("profiles/Default/plugins.txt"),
+        "*A.esp\n*L.esp\n*Z.esl\n",
+    )
+    .unwrap();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    s.conn().execute_batch("CREATE TRIGGER boom BEFORE INSERT ON rec_winner BEGIN SELECT RAISE(ABORT, 'boom'); END").unwrap();
+    assert!(scan_in(&d, &mut s, false).is_err());
+    s.conn().execute_batch("DROP TRIGGER boom").unwrap();
+    let st = scan_in(&d, &mut s, false).unwrap();
+    assert_eq!(st.n, 4);
+    assert_eq!(orphan_winners(&s), 0);
+    assert_eq!(winner(&s, TXST_DIRT), ("A.esp".to_string(), 1));
+}
+
+#[test]
+fn an_order_that_becomes_empty_clears_everything() {
+    let d = load_order(ORDER);
+    drop(scan(&d).0);
+    fs::remove_file(d.path().join("Game/Data/Skyrim.esm")).unwrap();
+    fs::write(d.path().join("profiles/Default/plugins.txt"), "").unwrap();
+    let (s, st) = scan(&d);
+    assert_eq!(st.n, 0);
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM plugin", []), 0);
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_winner", []), 0);
+}
+
+/// Review I2: an all-cached pass still honours cancel and changes nothing.
+#[test]
+fn cancel_applies_to_an_all_cached_pass() {
+    let d = load_order(ORDER);
+    drop(scan(&d).0);
+    fs::write(
+        d.path().join("profiles/Default/plugins.txt"),
+        "*Z.esl\n*A.esp\n*L.esp\n*F.esp\n",
+    )
+    .unwrap();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    assert!(matches!(
+        scan_in(&d, &mut s, true),
+        Err(ScanError::Cancelled)
+    ));
+    assert_eq!(
+        formid(&s, "ZStat"),
+        0xFE00_1803,
+        "the old order is untouched"
+    );
+}
+
+/// Review I3: unload is one transaction.
+#[test]
+fn unload_plugins_rolls_back_as_one() {
+    let d = load_order(ORDER);
+    let (mut s, _) = scan(&d);
+    s.conn().execute_batch("CREATE TRIGGER boom BEFORE DELETE ON rec_winner BEGIN SELECT RAISE(ABORT, 'boom'); END").unwrap();
+    assert!(s.unload_plugins().is_err());
+    assert_eq!(
+        one_i64(&s, "SELECT count(*) FROM plugin WHERE lo_index IS NULL", []),
+        0
+    );
+}

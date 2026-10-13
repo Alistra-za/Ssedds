@@ -117,6 +117,9 @@ pub fn scan_plugins(
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
 ) -> Result<PluginStats, ScanError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ScanError::Cancelled);
+    }
     let t = Instant::now();
     let mut st = PluginStats::default();
     let files = plugin_files(loose);
@@ -202,6 +205,9 @@ pub fn scan_plugins(
         total: work.len(),
     });
 
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ScanError::Cancelled);
+    }
     let names: Vec<String> = active.iter().map(|a| a.name.clone()).collect();
     let removed = store.retain_plugins(&names)?;
     let rows = store.plugin_rows()?;
