@@ -787,6 +787,52 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
     })
 }
 
+/// Exclusive `scan.lock` beside the store file, held for a whole scan (audit 17: a second scan's `delete_unseen`
+/// would wipe the first one's rows) and while a writable open rebuilds the schema. Windows: the file is held open
+/// with share mode 0, so the OS frees it if the process dies. shortcut: no lock off Windows (std `File::try_lock`
+/// needs Rust 1.89, workspace is 1.88); this app ships on Windows only. In-memory stores have no file and skip it.
+#[allow(dead_code)] // held only for its Drop
+pub(crate) struct ScanLock(#[cfg(windows)] Option<std::fs::File>);
+
+impl ScanLock {
+    /// `db` is the database file path (`Connection::path`); retries for `wait`, then `ScanError::Busy`.
+    #[cfg(windows)]
+    pub(crate) fn take(db: Option<&str>, wait: std::time::Duration) -> Result<ScanLock, ScanError> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let Some(db) = db.filter(|p| !p.is_empty()) else {
+            return Ok(ScanLock(None));
+        };
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        let end = std::time::Instant::now() + wait;
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(0)
+                .open(Path::new(db).with_file_name("scan.lock"))
+            {
+                Ok(f) => return Ok(ScanLock(Some(f))),
+                Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
+                    if std::time::Instant::now() >= end {
+                        return Err(ScanError::Busy);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn take(_: Option<&str>, _: std::time::Duration) -> Result<ScanLock, ScanError> {
+        Ok(ScanLock())
+    }
+}
+
+/// How long a writable open waits for a running scan before giving up with `ScanError::Busy`.
+const OPEN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl Store {
     pub fn open(path: &Path) -> Result<Store, ScanError> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -800,12 +846,14 @@ impl Store {
                     Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
                 ) =>
             {
+                let lock = ScanLock::take(path.to_str(), OPEN_LOCK_WAIT)?;
                 for ext in ["", "-wal", "-shm"] {
                     match std::fs::remove_file(format!("{}{ext}", path.display())) {
                         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
                         _ => {}
                     }
                 }
+                drop(lock);
                 Self::open_rw(path)
             }
             r => r,
@@ -822,6 +870,13 @@ impl Store {
             "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -65536; PRAGMA mmap_size = 268435456;",
         )?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let mut _lock = None;
+        let mut v = v;
+        if v != SCHEMA_VERSION {
+            // A running scan owns the schema: wait for it (Busy after a while) and look again under the lock.
+            _lock = Some(ScanLock::take(conn.path(), OPEN_LOCK_WAIT)?);
+            v = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        }
         if v != SCHEMA_VERSION {
             // The store is a cache: any other version is dropped and rebuilt.
             let tx = conn.unchecked_transaction()?;

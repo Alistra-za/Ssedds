@@ -984,3 +984,38 @@ fn a_corrupt_store_file_is_rebuilt() {
         .unwrap();
     assert_eq!(v, modscan::store::SCHEMA_VERSION);
 }
+
+/// A running scan holds scan.lock: a writable open that would rebuild an outdated db must wait, give up with
+/// Busy and leave the tables alone; once the lock is free it rebuilds.
+#[cfg(windows)]
+#[test]
+fn outdated_schema_rebuild_waits_for_the_scan_lock() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let old = d.path().join("old.db");
+    {
+        let c = rusqlite::Connection::open(&old).unwrap();
+        c.execute_batch("CREATE TABLE shape (a INTEGER); INSERT INTO shape VALUES (1); PRAGMA user_version = 2;")
+            .unwrap();
+    }
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .open(d.path().join("scan.lock"))
+        .unwrap();
+    assert!(matches!(Store::open(&old), Err(modscan::ScanError::Busy)));
+    let n: i64 = rusqlite::Connection::open(&old)
+        .unwrap()
+        .query_row("SELECT count(*) FROM shape", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "no table was dropped under a running scan");
+    drop(lock);
+    Store::open(&old).unwrap();
+    let v: i64 = rusqlite::Connection::open(&old)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, modscan::store::SCHEMA_VERSION);
+}
