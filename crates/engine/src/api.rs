@@ -1104,10 +1104,12 @@ impl Engine {
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
         for (old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
-            if !picks
-                .get(&old.set_key)
-                .is_some_and(|p| p.shader.has_member_defaults())
-            {
+            // An explicit set shader also re-resolves a GRAS diffuse: it suppresses the auto-detect (`suggest_grass`).
+            let is_gras = gras.contains(&crate::grass::path_key(&work[wi].1.game_path));
+            if !picks.get(&old.set_key).is_some_and(|p| {
+                p.shader.has_member_defaults()
+                    || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
+            }) {
                 jobs.push(old);
                 continue;
             }

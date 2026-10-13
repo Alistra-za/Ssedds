@@ -217,13 +217,17 @@ fn views_of(
                 .get(field)
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "builtin".into());
+            // The set's shader decided it: change the shader, not the row.
+            let lock = field_lock(target, &job.profile, field)
+                .or((provenance == "shader:complex_grass" && field == "subtype")
+                    .then_some("set by the set's Complex grass shader"));
             FieldView {
                 field,
                 label,
                 value,
                 edited: provenance == "project_file",
                 provenance,
-                lock: field_lock(target, &job.profile, field),
+                lock,
             }
         })
         .collect()

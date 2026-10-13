@@ -1075,12 +1075,10 @@ pub fn availability(t: Target, s: Subtype) -> Availability {
     }
 }
 
-/// Whether the sub-type pickers offer `s` under `t`: available, and not `complex_grass` under vanilla, whose grass
-/// shader has no complex grass (design §3.7, ruling R1). A file tagged `complex_grass` there still encodes, with
-/// `GRASS-VANILLA`.
+/// Whether the sub-type pickers offer `s` under `t`: available, and never `complex_grass`, which the set shader or the
+/// GRAS auto-detect chooses (DECISIONS X3). A file tagged `complex_grass` still encodes (`availability` is unchanged).
 pub fn offered(t: Target, s: Subtype) -> bool {
-    availability(t, s) == Availability::Available
-        && !(t == Target::Vanilla && s == Subtype::ComplexGrass)
+    availability(t, s) == Availability::Available && s != Subtype::ComplexGrass
 }
 
 /// What an unresolved job is waiting for (DECISIONS N9), so a GUI can offer the right control.
@@ -1893,7 +1891,11 @@ pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) ->
 
 /// Design §5: the auto-tag, only over a suggestion (a `--set`, rule, `[files]` entry or set shader has decided already).
 fn suggest_grass(ctx: &ResolveCtx, f: &FileFacts, d: &mut SubtypeDecision) {
-    if !matches!(d.provenance, Provenance::Suggestion)
+    if ctx
+        .shaders
+        .get(&f.set.key)
+        .is_some_and(|p| p.provenance == crate::shader::ShaderOrigin::Set)
+        || !matches!(d.provenance, Provenance::Suggestion)
         || ctx.target == Target::Vanilla
         || !crate::grass::looks_like_grass(f.analysis)
     {
