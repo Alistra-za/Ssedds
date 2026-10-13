@@ -1795,7 +1795,7 @@ fn wait_idle(gpu: &Gpu, q: &ID3D11Query) -> Result<(), String> {
                 // The readback's Map waits anyway; the timing is then approximate.
                 return Ok(());
             }
-            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_micros(200));
         }
     }
 }
