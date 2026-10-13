@@ -633,3 +633,38 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on 
   - It offers slots 3–8 without a row. A slot the set fills starts from `slot_match_path` (V1); any other slot adds an empty row (`matchN = ""`, N ≥ 2) that says "this row matches nothing until a path is entered".
   - An empty row is not a match: it is not written to the JSON and does not count for the prefix or the warnings. Clearing a row's text removes it.
   - A filled slot is prefilled only when PGPatcher's slot-N list strips its suffix, so a prefilled row never splits the prefix (controller ruling). Subsurface `_s` in slot 8 is not in that list (`_b`/`_bl`/`_flow`; pgpsim, `a_match8_on_an_s_map_keeps_the_s_in_pgpatchers_prefix`), so slot 8 starts empty. A typed path that splits still gets the "match8 does not strip _s" and divergent-prefix warnings.
+
+## Note W — M6 Track F2: RNM normal layers (plan rulings, 2026-10-12)
+
+- **W1 Blend point.** The blend runs on the *preprocessed* base: after `preprocess_with`, so after the base's own `flip_green`/`reconstruct_z` and its `resize`, and before the mips. Layers resample to that size. The spec's "base size" is the base as it will be written, so a `half` preset blends at half size, which is cheaper and gives the same result. The base vector is normalised before blending.
+- **W2 Escape hatch.** A layer file whose sub-type is set by a rule, `--set` or `[files]` converts on its own, as a packing input does (`resolve_file`). This rescues a real texture that happens to end in `_bent`.
+- **W3 Selector.** `rnm.target` is a per-file selector like `reencode`, not a `Profile` field. It is read with `rnm_target_requested` from the layer file's `[files]` entry or a file/path `--set`. A sub-type scope refuses it.
+- **W4 Who gets a layer.**
+  - A layer with no prefix defaults to `n`, falling back to `cnr` when the set has no `_n` base.
+  - Prefixed layers default to their prefix.
+  - A layer whose effective targets name no base in the set gets `RNM-NO-BASE`.
+  - In one stack, the candidates for one layer id are ranked: a prefix naming this base, then no prefix, then the other prefix, with ties broken by path. The first wins, and each loser gives `RNM-LAYER-SHADOWED` on the base job.
+- **W5 Bases.** `n` = `normal`, `pbr_normal`, `landscape_normal`; `cnr` = `coat_normal`. A base job must be planned (not `Error`) and not packed. Any shader `Eye` set makes every layer `RNM-IGNORED-EYE`.
+- **W6 Settings shape.**
+  - Every `rnm.*` field is optional at its default, and `Profile.rnm` is skipped from JSON at its default, so no existing profile hash changes.
+  - `rnm.order` drops duplicates (the first is kept) and appends the missing ids in the default order `bent, bump, bump2, detail, detail2`. The resolved profile stores it normalised, or not at all when it equals the default order.
+  - `rnm.*` on a sub-type that cannot be a base is reset to the default, so a global `--set rnm.enabled=false` does not re-hash every diffuse.
+- **W7 Ranges.** `rnm.<layer>.strength` must be within 0..=2 and finite. `rnm.bent.ao_power` must be within 0.1..=8. Either one out of range gives `CFG-INVALID`.
+- **W8 Bump maths.** The bump slope is computed at the bump's own size: height = mean RGB, `slope = k·(h[+1] − h[−1])`, +v up the image, with green flipped to DirectX. The vectors are then resampled and renormalised. `flip_green` on a bump flips the computed Y (an "invert vertical" escape) and defaults to off: a bump is height, not an OpenGL/DirectX normal, so it never follows the base's `flip_green`. Normal layers default to the base's. A bump mask scales the slope, as rnm.py does.
+- **W9 AO.**
+  - The AO source is, in order:
+    1. the set's raw AO file (vocabulary role `PackingInput(Ao)`), channel R;
+    2. otherwise the set's `_rmaos`/`_rfaos` **file**, channel B.
+  - It is read only for a `bent` layer in `ao_blend` mode with `rnm.bent.ao = true`.
+  - `RNM-AO-MISSING` (info) goes on the base when that mode wants AO and there is none.
+- **W10 Resampling.** Downscaling uses `mips::area_resample`. If any axis grows, a new bilinear filter is used (texel centres, clamped edges). Each axis scales independently.
+- **W11 GUI.**
+  - Layer jobs produce no `TextureItem`. Their set-level warnings (`RNM-NO-BASE`, `RNM-IGNORED-EYE`, `RNM-MASK-ORPHAN`) are kept per set in `PlanView::rnm_notes` and shown under the set grid.
+  - Base-level codes show in the RNM section.
+  - The target switch writes `rnm.target` on the layer file's key.
+- **W12 Versions.** 0.7.0: any set with layers now converts differently. Codes 80.
+- **W13 `_norm`.** `_norm` (rnm.py's base name) is a vocabulary term `Normal(None)`, like `_normal`. Its green convention is unstated, so it asks `IN-GREEN-UNSTATED` once. rnm.py reads `_norm` as OpenGL, but sdc does not guess.
+- **W14 Memory.** Memory admission counts the base only. Layers load one at a time at encode, which is a `shortcut:` comment in `pipeline.rs`.
+- **W15 Test fixtures.** Shared engine RNM test helpers live in `crates/engine/tests/rnm_support/mod.rs` (one copy; `plan_dir` always recursive).
+- **W16 AO identity.** The AO source's manifest role carries its channel (`bent.ao.r` for a raw AO map's R, `bent.ao.b` for `_rmaos`/`_rfaos` B), so swapping a byte-identical file between the two re-encodes the normal.
+- **W17 GUI storage.** The per-set RNM notes and layer keys are `AppModel.rnm_notes` / `AppModel.rnm_keys` (the model keeps no `PlanView`); the RNM section applies its own edits only when a value changed.
