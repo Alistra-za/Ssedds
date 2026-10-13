@@ -285,3 +285,32 @@ fn the_copied_cli_command_uses_the_sessions_decoder_not_the_pending_setting() {
     );
     assert!(c.contains("--bc1-decoder ideal"), "{c}");
 }
+
+/// Audit left-out (DECISIONS Note Y7): rows are found by key; a packed-source drop keeps the index right.
+#[test]
+fn rows_stay_keyed_after_a_packed_source_drop() {
+    let mut x = ExportModel::default();
+    let found = |o: &str| EventKind::FileDiscovered { output: o.into() };
+    x.on_event(ev(0, "a/r.dds", "a/r_roughness.png", found("a/r.dds")));
+    x.on_event(ev(1, "a/b.dds", "a/b.png", found("a/b.dds")));
+    x.on_event(ev(2, "a/c.dds", "a/c.png", found("a/c.dds")));
+    let packed = EventKind::FileSkipped {
+        kind: SkipKind::PackedSource,
+        code: None,
+        reason: "packed".into(),
+    };
+    x.on_event(ev(3, "", "a/r_roughness.png", packed));
+    assert_eq!(x.rows.len(), 2);
+    x.on_event(ev(4, "a/c.dds", "a/c.png", EventKind::FileStarted));
+    let state = |k: &str| {
+        x.rows
+            .iter()
+            .find(|r| r.job_key == k)
+            .unwrap()
+            .state
+            .clone()
+    };
+    assert_eq!(state("a/c.dds"), RowState::Running);
+    assert_eq!(state("a/b.dds"), RowState::Queued);
+    assert_eq!(x.rows.len(), 2, "no duplicate row from a stale index");
+}

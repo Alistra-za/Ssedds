@@ -3,7 +3,7 @@ use crate::settings::Bc1Choice;
 use engine::api::{BatchSummary, CancelToken};
 use engine::codes::{Code, Warning};
 use engine::events::{EngineEvent, EventKind, SkipKind};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +63,8 @@ pub struct ExportModel {
     pub error: Option<String>,
     /// What the export did besides converting: the JSON, the vanilla/CPM copies, and what was left out.
     pub notes: Vec<String>,
+    /// `job_key` to its index in `rows` (the drawer's per-event lookup; rebuilt when rows are removed).
+    pub(crate) index: HashMap<String, usize>,
 }
 
 fn slash(p: &str) -> String {
@@ -72,9 +74,10 @@ fn slash(p: &str) -> String {
 impl ExportModel {
     fn row(&mut self, ev: &EngineEvent) -> Option<&mut Row> {
         let key = ev.job.clone()?;
-        let i = match self.rows.iter().position(|r| r.job_key == key) {
-            Some(i) => i,
+        let i = match self.index.get(&key) {
+            Some(&i) => i,
             None => {
+                self.index.insert(key.clone(), self.rows.len());
                 self.rows.push(Row {
                     job_key: key,
                     path: ev.path.clone().unwrap_or_default(),
@@ -85,6 +88,15 @@ impl ExportModel {
             }
         };
         Some(&mut self.rows[i])
+    }
+
+    fn reindex(&mut self) {
+        self.index = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.job_key.clone(), i))
+            .collect();
     }
 
     /// A row for a job that runs: its path is the input the engine reports for the run, which for a packed output
@@ -110,6 +122,7 @@ impl ExportModel {
                     let p = slash(p);
                     self.rows
                         .retain(|r| !(r.state == RowState::Queued && slash(&r.path) == p));
+                    self.reindex();
                 }
             }
             EventKind::FileDiscovered { .. } => {
@@ -130,6 +143,7 @@ impl ExportModel {
                     let p = slash(p);
                     self.rows
                         .retain(|r| !(r.state == RowState::Queued && slash(&r.path) == p));
+                    self.reindex();
                 }
             }
             EventKind::FileSkipped { kind, reason, .. } => {
@@ -156,14 +170,12 @@ impl ExportModel {
                 }
             }
             EventKind::BatchDone { cancelled, .. } => {
-                for c in cancelled {
-                    let c = slash(c);
-                    for r in self.rows.iter_mut().filter(|r| {
-                        matches!(r.state, RowState::Queued | RowState::Running)
-                            && slash(&r.path) == c
-                    }) {
-                        r.state = RowState::Cancelled;
-                    }
+                let cancelled: HashSet<String> = cancelled.iter().map(|c| slash(c)).collect();
+                for r in self.rows.iter_mut().filter(|r| {
+                    matches!(r.state, RowState::Queued | RowState::Running)
+                        && cancelled.contains(&slash(&r.path))
+                }) {
+                    r.state = RowState::Cancelled;
                 }
             }
             _ => {}
