@@ -10,6 +10,7 @@ use modscan::store::Store;
 use std::sync::atomic::AtomicBool;
 
 const ORDER: &str = "*Mod.esp\n*Ghost.esp\n";
+const OVER: &str = "*Mod.esp\n*Ghost.esp\n*Over.esp\n";
 
 fn txst(id: u32, name: &str, tx00: Option<&str>) -> Vec<u8> {
     let mut s = vec![edid(name)];
@@ -358,4 +359,84 @@ fn rec_inert_is_cleared_with_rec_winner() {
     std::fs::write(d.path().join("profiles/Default/plugins.txt"), LO2).unwrap();
     let (s, _) = scan(&d);
     assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0, "resolve");
+}
+
+/// (EDID of the winning copy, reason) of every inert record.
+fn inert(s: &Store) -> Vec<(String, i64)> {
+    s.conn()
+        .prepare(
+            "SELECT r.edid, i.reason FROM rec_inert i JOIN rec_winner w ON w.formid = i.formid
+             JOIN rec r ON r.plugin_id = w.plugin_id AND r.formid = w.formid ORDER BY r.edid",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Spec §3 (rulings R8-R10, R13): placeables need a placement, TXSTs a live user or a placement, GRAS an LTEX, HDPT
+/// Playable or a playable parent; items, IPCT, NPC_, ARMA and records without DATA are never inert.
+#[test]
+fn only_proven_unreached_records_are_inert() {
+    let d = fixture(ORDER);
+    let (s, _) = scan(&d);
+    let want: Vec<(String, i64)> = [
+        ("LonelyGrass", 1),
+        ("LonelyStat", 2),
+        ("NpcExtra", 3),
+        ("NpcHairTex", 1),
+        ("NpcOnly", 3),
+        ("Orphan", 1),
+        ("UsedByUnplaced", 1),
+    ]
+    .into_iter()
+    .map(|(e, r)| (e.to_string(), r))
+    .collect();
+    assert_eq!(inert(&s), want);
+}
+
+/// Review focus 5: the winning copy decides. Over.esp makes PlayableHair non-playable, so it, its extra part and its
+/// texture set become inert.
+#[test]
+fn reachability_follows_the_winning_copy() {
+    let d = fixture(OVER);
+    let (s, _) = scan(&d);
+    let i = inert(&s);
+    for (e, r) in [("PlayableHair", 3), ("ExtraPart", 3), ("HairTex", 1)] {
+        assert!(i.contains(&(e.to_string(), r)), "{e}: {i:?}");
+    }
+}
+
+#[test]
+fn inert_rows_go_with_the_winners() {
+    let d = fixture(ORDER);
+    let (mut s, _) = scan(&d);
+    assert!(one_i64(&s, "SELECT count(*) FROM rec_inert") > 0);
+    s.unload_plugins().unwrap();
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0);
+}
+
+/// Controller ruling: a faulted active plugin may hide placements, so nothing is judged "not placed" (or unused TXST);
+/// "no reference" for grass and "head part not playable" still apply.
+#[test]
+fn a_plugin_error_suppresses_not_placed() {
+    let d = fixture(&format!(
+        "{ORDER}*Bad.esp
+"
+    ));
+    put(d.path(), "mods/A/Bad.esp", b"not a plugin");
+    let (s, _) = scan(&d);
+    assert_eq!(
+        one_i64(
+            &s,
+            "SELECT count(*) FROM plugin WHERE lo_index IS NOT NULL AND error_text IS NOT NULL"
+        ),
+        1
+    );
+    let i = inert(&s);
+    assert!(i.iter().all(|(_, r)| *r != 2), "{i:?}");
+    for (e, r) in [("LonelyGrass", 1), ("NpcOnly", 3), ("NpcExtra", 3)] {
+        assert!(i.contains(&(e.to_string(), r)), "{e}: {i:?}");
+    }
 }
