@@ -1984,6 +1984,8 @@ fn a_malformed_settings_file_keeps_the_previous_settings_and_shows_a_note() {
     relocated(&mut v, &target);
     assert_eq!(settings_sent(&cmds).len(), 1);
     let good = v.settings().clone();
+    // The test thread never answers:
+    v.handle(v3::V3Reply::Reconfigured(1));
     // CS is half-way through writing the file.
     std::fs::write(&file, r#"{"Linear Lighting": "#).unwrap();
     relocated(&mut v, &target);
@@ -2034,7 +2036,31 @@ fn the_features_toggle_sends_set_features_and_no_load() {
     assert_eq!(sent.len(), 1, "only the toggle: no load, no render");
     assert!(matches!(sent[0], v3::V3Cmd::SetFeatures(false)));
     assert_eq!(v.loaded_for_test(), Some(id));
-    assert!(!v.busy(), "nothing pending in the model");
+    assert!(v.busy(), "awake until the render thread answers the toggle");
+    v.handle(v3::V3Reply::Reconfigured(1));
+    assert!(!v.busy());
+}
+
+#[test]
+fn the_panel_stays_awake_until_the_refresh_after_the_last_shapes_is_read() {
+    let (_d, mut v, _cmds) = loaded_mesh();
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Pending {
+        showing_previous: true,
+    })]));
+    // The worker sends the refresh frame, then the final Shapes: read in separate polls.
+    assert!(v.busy());
+    v.handle(v3::V3Reply::Refresh {
+        frame: Arc::new(v3::Frame {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 16],
+            id: 1 << 62,
+        }),
+        timing: Default::default(),
+    });
+    assert!(v.busy(), "Shapes still unread");
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(!v.busy());
 }
 
 #[test]
