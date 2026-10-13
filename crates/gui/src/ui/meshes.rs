@@ -503,11 +503,7 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         .file_refs
         .as_ref()
         .map_or((0, 0), |r| (r.missing.len(), r.unused.len()));
-    let inert: Vec<String> = if !m.refs_unused && m.show_inert_refs {
-        m.refs_inert_lines()
-    } else {
-        vec![]
-    };
+    let mut copy = false;
     ui.horizontal(|ui| {
         if ui
             .selectable_label(!m.refs_unused, format!("Missing ({missing})"))
@@ -526,14 +522,7 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 .hint_text("filter")
                 .desired_width(200.0),
         );
-        if ui.button("Copy").clicked() {
-            let mut text = m.refs_lines().join("\n");
-            if !inert.is_empty() {
-                text.push('\n');
-                text.push_str(&inert.join("\n"));
-            }
-            ui.ctx().copy_text(text);
-        }
+        copy = ui.button("Copy").clicked();
     });
     ui.weak(if m.refs_unused {
         UNUSED_NOTE
@@ -547,6 +536,20 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         let n = m.missing_inert.len();
         ui.checkbox(&mut m.show_inert_refs, format!("Show inert ({n})"));
     }
+    // Rows are chosen after the controls above, so a tab or filter change shows this frame, not the next.
+    let inert: Vec<String> = if !m.refs_unused && m.show_inert_refs {
+        m.refs_inert_lines()
+    } else {
+        vec![]
+    };
+    if copy {
+        let mut text = m.refs_lines().join("\n");
+        if !inert.is_empty() {
+            text.push('\n');
+            text.push_str(&inert.join("\n"));
+        }
+        ui.ctx().copy_text(text);
+    }
     let n = m.refs_lines().len();
     if n == 0 && inert.is_empty() {
         ui.label("Nothing listed.");
@@ -558,17 +561,17 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         .id_salt("meshes-file-refs-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // One budget over live then inert rows.
             for l in m.refs_lines().iter().take(MAX_REF_ROWS) {
                 ui.add(egui::Label::new(l.as_str()).wrap());
             }
-            if n > MAX_REF_ROWS {
-                ui.weak(format!(
-                    "… and {} more — narrow with the filter",
-                    n - MAX_REF_ROWS
-                ));
-            }
-            for l in inert.iter().take(MAX_REF_ROWS) {
+            let left = MAX_REF_ROWS.saturating_sub(n);
+            for l in inert.iter().take(left) {
                 ui.add(egui::Label::new(egui::RichText::new(l.as_str()).weak()).wrap());
+            }
+            let more = (n + inert.len()).saturating_sub(MAX_REF_ROWS);
+            if more > 0 {
+                ui.weak(format!("… and {more} more — narrow with the filter"));
             }
         });
 }

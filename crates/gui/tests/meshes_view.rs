@@ -1414,3 +1414,87 @@ fn missing_files_of_inert_records_show_on_request() {
     h.run();
     h.get_by_label("meshes/lonely.nif ← Lonely [00000002] STAT — S.esm (not placed)");
 }
+
+fn missing_ref(path: String) -> MissingRef {
+    MissingRef {
+        path,
+        n_records: 1,
+        records: vec!["R [00000001] STAT — S.esm".into()],
+    }
+}
+
+fn budget_model(live: usize, inert: usize) -> MeshesModel {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs {
+        missing: (0..live)
+            .map(|i| missing_ref(format!("textures/live{i:04}.dds")))
+            .collect(),
+        unused: vec!["textures/unused/u.dds".into()],
+    });
+    m.missing_inert = (0..inert)
+        .map(|i| missing_ref(format!("meshes/inert{i:04}.nif")))
+        .collect();
+    m.show_inert_refs = true;
+    m
+}
+
+fn rows_with(h: &Harness<'static, MeshesModel>, needle: &str) -> usize {
+    h.query_all_by_label_contains(needle).count()
+}
+
+/// Review I2: one 1000-row budget over live then inert rows; the remainder is reported.
+#[test]
+fn missing_rows_share_one_budget_and_report_the_remainder() {
+    let mut h = harness(budget_model(900, 300));
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    assert_eq!(rows_with(&h, "textures/live"), 900);
+    assert_eq!(rows_with(&h, "meshes/inert"), 100);
+    h.get_by_label("… and 200 more — narrow with the filter");
+}
+
+#[test]
+fn inert_only_overflow_is_reported() {
+    let mut h = harness(budget_model(0, 1200));
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    assert_eq!(rows_with(&h, "meshes/inert"), 1000);
+    h.get_by_label("… and 200 more — narrow with the filter");
+}
+
+/// Review M3: switching tab shows the new tab's rows at once, with no stale inert rows.
+#[test]
+fn switching_to_unused_drops_the_inert_rows_in_the_same_frame() {
+    let mut h = harness(budget_model(1, 1));
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    h.get_by_label_contains("meshes/inert0000.nif");
+    h.get_by_label("Unused (1)").click();
+    h.step();
+    assert!(h.query_by_label_contains("meshes/inert").is_none());
+    h.get_by_label("textures/unused/u.dds");
+}
+
+/// Review I1: Show inert does not follow the selection to another NIF, nor survive a rescan.
+#[test]
+fn show_inert_resets_on_nif_change_and_on_scan() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/a.nif"), nif(2, "meshes/b.nif")];
+    m.select_nif(1);
+    m.show_inert_uses = true;
+    m.select_nif(2);
+    assert!(!m.show_inert_uses);
+
+    let (_d, mut m) = scanned();
+    (m.show_inert_uses, m.show_inert_refs) = (true, true);
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    assert!(!m.show_inert_uses && !m.show_inert_refs, "scan start");
+    (m.show_inert_uses, m.show_inert_refs) = (true, true);
+    wait(&mut m);
+    assert!(!m.show_inert_uses && !m.show_inert_refs, "scan end");
+}

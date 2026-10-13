@@ -660,6 +660,7 @@ impl MeshesModel {
         // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
         self.file_refs = None;
         self.refs_cache = None;
+        (self.show_inert_uses, self.show_inert_refs) = (false, false);
         self.progress = Some(("starting", 0, 0));
         self.status = if req.skip_derived {
             "Scanning without PGPatcher output…".into()
@@ -720,6 +721,7 @@ impl MeshesModel {
                 log_plugins(&report);
                 self.file_refs = None;
                 self.refs_cache = None;
+                (self.show_inert_uses, self.show_inert_refs) = (false, false);
                 let incomplete = report
                     .pgp
                     .iter()
@@ -809,6 +811,7 @@ impl MeshesModel {
         self.tex_users = None;
         self.plugin_uses.clear();
         self.plugin_inert.clear();
+        self.show_inert_uses = false;
         self.v3.set_mesh(None);
     }
 
