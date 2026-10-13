@@ -127,6 +127,7 @@ struct EngineInputs {
     set_shaders: std::collections::BTreeMap<String, engine::shader::Shader>,
     mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    gras_diffuses: std::collections::BTreeSet<String>,
 }
 
 impl EngineInputs {
@@ -140,6 +141,7 @@ impl EngineInputs {
             set_shaders: sets::set_shaders(m),
             mesh_votes: m.mesh_votes.clone(),
             mesh_alpha: m.mesh_alpha.clone(),
+            gras_diffuses: m.gras_diffuses.clone(),
         }
     }
 }
@@ -167,6 +169,9 @@ pub struct AppModel {
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
     /// the colour member; sent as `BatchRequest::mesh_alpha`.
     pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
+    /// evidence; sent as `BatchRequest::gras_diffuses`.
+    pub gras_diffuses: std::collections::BTreeSet<String>,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
     /// fixtures set `None` to keep their High members undecided, as the CLI does without the flag.
     pub accept: AcceptSuggestions,
@@ -257,6 +262,7 @@ impl AppModel {
             scan_db: None,
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
+            gras_diffuses: Default::default(),
             accept: AcceptSuggestions::High,
             session: None,
             root: None,
@@ -422,6 +428,7 @@ impl AppModel {
         req.set_shaders = sets::set_shaders(self);
         req.mesh_shaders = self.mesh_votes.clone();
         req.mesh_alpha = self.mesh_alpha.clone();
+        req.gras_diffuses = self.gras_diffuses.clone();
         Some(req)
     }
 
@@ -450,6 +457,13 @@ impl AppModel {
         let changed = votes != self.mesh_votes || alpha != self.mesh_alpha;
         self.mesh_votes = votes;
         self.mesh_alpha = alpha;
+        // Complex grass design §5 condition 1, from the same database.
+        let gras = match &self.scan_db {
+            Some(db) if db.is_file() => meshes::gras_diffuses(db).unwrap_or_default(),
+            _ => Default::default(),
+        };
+        let changed = changed || gras != self.gras_diffuses;
+        self.gras_diffuses = gras;
         changed
     }
 
@@ -475,6 +489,7 @@ impl AppModel {
             set_shaders: req.set_shaders.clone(),
             mesh_votes: req.mesh_shaders.clone(),
             mesh_alpha: req.mesh_alpha.clone(),
+            gras_diffuses: req.gras_diffuses.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
