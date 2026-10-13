@@ -1250,6 +1250,17 @@
           "description": "Dotted field path → where its value came from; includes `subtype`, `category` and `target`.",
           "type": "object"
         },
+        "rnm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "M6 Track F2: a base normal's RNM layers (`rnm::plan::plan_rnm`); `None` for every other job."
+        },
         "set_key": {
           "type": "string"
         },
@@ -1312,6 +1323,96 @@
         "suggestions",
         "warnings",
         "status"
+      ],
+      "type": "object"
+    },
+    "RnmAo": {
+      "properties": {
+        "channel": {
+          "description": "0 = a raw AO map's R, 2 = `_rmaos`/`_rfaos` B.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file": {
+          "$ref": "#/$defs/RnmFile"
+        }
+      },
+      "required": [
+        "file",
+        "channel"
+      ],
+      "type": "object"
+    },
+    "RnmFile": {
+      "description": "One input file of a blend, with the stamp `plan` read it at (checked by `run`, like `ResolvedJob::source`).",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceStamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "RnmJob": {
+      "properties": {
+        "ao": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmAo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/RnmLayer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "layers"
+      ],
+      "type": "object"
+    },
+    "RnmLayer": {
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/RnmFile"
+        },
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "mask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmFile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "file"
       ],
       "type": "object"
     },

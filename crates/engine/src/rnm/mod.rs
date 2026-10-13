@@ -1,8 +1,10 @@
 //! M6 Track F2: RNM normal layers (spec `docs/superpowers/specs/2026-10-12-sdc-m6-f2-rnm-design.md`). Layer files
 //! (`_bump`, `_detailnorm`, `_bent`, their masks, rnm.py aliases, `_n_`/`_cnr_` prefixes) join their set, are never
 //! written on their own and are blended into the set's base normal before mips.
-use crate::config::{LayerId, RnmTarget};
+use crate::config::{LayerId, RnmSpec, RnmTarget};
 use crate::group::{Vocab, VocabRole};
+use crate::policy::SourceStamp;
+use std::path::PathBuf;
 
 /// What a layer file is (F2 spec §2.1): its layer, whether it is that layer's mask, and the base its name targets
 /// (`_n_` → `N`, `_cnr_` → `Cnr`, none → `None`).
@@ -122,5 +124,61 @@ impl From<LayerTermId> for LayerTerm {
             mask: t.mask,
             prefix: t.prefix,
         }
+    }
+}
+
+pub mod plan;
+
+/// One input file of a blend, with the stamp `plan` read it at (checked by `run`, like `ResolvedJob::source`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RnmFile {
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<SourceStamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RnmLayer {
+    pub id: LayerId,
+    pub file: RnmFile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<RnmFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RnmAo {
+    pub file: RnmFile,
+    /// 0 = a raw AO map's R, 2 = `_rmaos`/`_rfaos` B.
+    pub channel: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RnmJob {
+    pub layers: Vec<RnmLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ao: Option<RnmAo>,
+}
+
+impl RnmJob {
+    /// The files the blend reads under `spec`, in a fixed order with a role: each layer in `LayerId::ORDER` order
+    /// ("detail"), then its mask when used ("detail.mask"), then the AO when used ("bent.ao").
+    pub fn inputs(&self, spec: &RnmSpec) -> Vec<(&RnmFile, String)> {
+        let mut v = vec![];
+        for id in LayerId::ORDER {
+            let Some(l) = self.layers.iter().find(|l| l.id == id) else {
+                continue;
+            };
+            v.push((&l.file, id.id().to_string()));
+            if let (Some(m), true) = (&l.mask, spec.layer(id).mask) {
+                v.push((m, format!("{}.mask", id.id())));
+            }
+        }
+        let bent_ao = self.layers.iter().any(|l| l.id == LayerId::Bent)
+            && spec.bent.mode == crate::config::BentMode::AoBlend
+            && spec.bent.ao;
+        if let (Some(a), true) = (&self.ao, bent_ao) {
+            v.push((&a.file, "bent.ao".to_string()));
+        }
+        v
     }
 }

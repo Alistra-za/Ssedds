@@ -1280,6 +1280,8 @@ impl Engine {
         for j in &mut jobs {
             j.shader = picks.get(&j.set_key).cloned();
         }
+        // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped).
+        crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];
@@ -2204,6 +2206,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            rnm: None,
             shader: None,
         };
         let texels = 48 * 40;
@@ -2254,6 +2257,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            rnm: None,
             shader: None,
         };
         let enc = EncoderVersions::current();

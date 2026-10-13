@@ -1139,6 +1139,18 @@ pub struct ResolvedJob {
     /// M6 (DECISIONS Note S): the shader picked for this job's set; `None` for a job not made by `plan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shader: Option<crate::shader::ShaderPick>,
+    /// M6 Track F2: a base normal's RNM layers (`rnm::plan::plan_rnm`); `None` for every other job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rnm: Option<crate::rnm::RnmJob>,
+}
+
+impl ResolvedJob {
+    /// The RNM layers the encode blends: `rnm` while `profile.rnm.enabled` and it lists a layer.
+    pub fn active_rnm(&self) -> Option<&crate::rnm::RnmJob> {
+        self.rnm
+            .as_ref()
+            .filter(|r| self.profile.rnm.enabled && !r.layers.is_empty())
+    }
 }
 
 /// A source file's size and modification time, to tell whether it changed between planning and conversion.
@@ -1728,6 +1740,7 @@ fn packing_input_job(ctx: &ResolveCtx, f: &FileFacts, term: &str, role: RawMap) 
         source: None,
         pack: None,
         bake: None,
+        rnm: None,
         shader: None,
     }
 }
@@ -1749,6 +1762,7 @@ fn normal_layer_job(ctx: &ResolveCtx, f: &FileFacts, term: crate::rnm::LayerTerm
         source: None,
         pack: None,
         bake: None,
+        rnm: None,
         shader: None,
     }
 }
@@ -1851,6 +1865,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                     source: None,
                     pack: None,
                     bake: None,
+                    rnm: None,
                     shader: None,
                 };
             }
@@ -1964,6 +1979,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         source: None,
         pack: None,
         bake: None,
+        rnm: None,
         shader: None,
     }
 }

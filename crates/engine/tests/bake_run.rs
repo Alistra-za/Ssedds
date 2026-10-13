@@ -72,6 +72,7 @@ fn plan(dir: &Path, rough: &Path, normal: &Path, bake: bool, flip_green: bool) -
             stamp: SourceStamp::of(normal),
         }),
         shader: None,
+        rnm: None,
     };
     Plan {
         request,

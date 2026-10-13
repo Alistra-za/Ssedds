@@ -141,6 +141,7 @@ fn paths_use_forward_slashes_and_every_kind_round_trips() {
                 source: None,
                 pack: None,
                 bake: None,
+                rnm: None,
                 shader: None,
             }),
         },
