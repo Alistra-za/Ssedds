@@ -1493,7 +1493,13 @@ impl AppModel {
         }
         let k = item_key.to_string();
         let f = field.to_string();
-        self.edit(&format!("Reset {f}"), move |p| p.clear_file_value(&k, &f));
+        self.edit(&format!("Reset {f}"), move |p| {
+            p.clear_file_value(&k, &f);
+            // The Format row writes the tag with the format (`set_format`), so its reset clears both.
+            if f == "format" {
+                p.clear_file_value(&k, "color.tag");
+            }
+        });
     }
 
     /// A confirmation writes the value explicitly, or adds the code to the file's `allow` (M3a spec §5.2).

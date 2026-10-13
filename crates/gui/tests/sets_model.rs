@@ -1651,3 +1651,25 @@ fn a_bad_prefix_on_a_non_json_set_is_no_export_block() {
         .iter()
         .all(|b| !b.text.contains("rename")));
 }
+
+/// Round 3 review: the settings Format row writes the tag with the format, so its reset clears both.
+#[test]
+fn resetting_format_also_clears_the_tag_it_wrote() {
+    use engine::config::{ColorTag, Format};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let key = key_of(&m, "rock01_rmaos");
+    m.set_format(&key, Format::Bc1, ColorTag::Unorm);
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert!(p.file_value(&key, "format").is_some() && p.file_value(&key, "color.tag").is_some());
+    m.clear_field(&key, "format");
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert!(p.file_value(&key, "format").is_none());
+    assert!(
+        p.file_value(&key, "color.tag").is_none(),
+        "tag outlived the format reset"
+    );
+}
