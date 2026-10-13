@@ -88,7 +88,7 @@ INSERT INTO rec_inert SELECT g.formid, 1 FROM win g
     AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win l ON l.local = e.local AND l.plugin_id = e.plugin_id
       WHERE e.role = 'GNAM' AND e.txst_formid = g.formid);
 -- 1 no reference: TXSTs that no reference places and no winning, non-inert record uses (alternate textures; LTEX/HDPT
--- TNAM, NPC_ FTST, RACE face sets, ARMA NAM0/NAM1, IPCT DNAM/ENAM). MODL is ARMO -> ARMA, not a texture use.
+-- TNAM, NPC_ FTST, RACE face sets, ARMA NAM0/NAM1, IPCT DNAM/ENAM, PROJ decal, any FLST entry). MODL is ARMO -> ARMA, not a texture use.
 INSERT INTO rec_inert SELECT t.formid, 1 FROM win t
   WHERE t.sig = 'TXST'
     AND t.formid NOT IN (SELECT formid FROM placed_base)

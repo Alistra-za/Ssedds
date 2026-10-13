@@ -569,3 +569,43 @@ fn missing_and_unused_ignore_inert_records() {
     assert_eq!(r.get(&0xC03), Some(&"head part not playable"));
     assert!(!r.contains_key(&0xB01));
 }
+
+/// Final review I2: a TXST used only by a record type the scanner reads late (ARTO alternate texture, PROJ decal, an
+/// FLST entry such as an ARMA skin-swap list) is reached; one nothing names is still inert.
+#[test]
+fn txsts_reached_through_more_record_types_stay_visible() {
+    let d = instance_fixture("+A\n");
+    let mut decal = vec![0u8; 88];
+    decal[84..88].copy_from_slice(&0xA03u32.to_le_bytes());
+    put(
+        d.path(),
+        "Game/Data/Skyrim.esm",
+        &plugin(
+            esp::FLAG_ESM,
+            &[],
+            &[
+                top(
+                    b"TXST",
+                    &[
+                        txst(0xA01, "ViaArto", None),
+                        txst(0xA02, "ViaFlst", None),
+                        txst(0xA03, "ViaProjDecal", None),
+                        txst(0xA04, "Nobody", None),
+                    ],
+                ),
+                top(b"ARTO", &[model(b"ARTO", 0xB01, "Art", "art.nif", 0xA01)]),
+                top(
+                    b"FLST",
+                    &[rec(b"FLST", 0xB02, &[edid("Swaps"), form(b"LNAM", 0xA02)])],
+                ),
+                top(
+                    b"PROJ",
+                    &[rec(b"PROJ", 0xB03, &[edid("Bolt"), sub(b"DATA", &decal)])],
+                ),
+            ],
+        ),
+    );
+    put(d.path(), "profiles/Default/plugins.txt", b"# none\n");
+    let (s, _) = scan(&d);
+    assert_eq!(inert(&s), [("Nobody".to_string(), 1)]);
+}

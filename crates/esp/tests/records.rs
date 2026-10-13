@@ -128,7 +128,8 @@ fn every_model_record_type_reads_modl_and_mods() {
     for sig in [
         b"STAT", b"MSTT", b"ACTI", b"FURN", b"DOOR", b"CONT", b"LIGH", b"MISC", b"TREE", b"FLOR",
         b"GRAS", b"ARMA", b"WEAP", b"AMMO", b"BOOK", b"INGR", b"ALCH", b"KEYM", b"SLGM", b"SCRL",
-        b"HDPT",
+        b"HDPT", b"TACT", b"ANIO", b"CLMT", b"IDLM", b"PROJ", b"HAZD", b"EXPL", b"ADDN", b"CAMS",
+        b"ARTO", b"MATO", b"LVLN", b"APPA", b"SCOL", b"BPTD",
     ] {
         let r = one(
             sig,
@@ -516,4 +517,25 @@ fn armor_modl_names_armatures() {
     assert_eq!(r.payload.models.len(), 1);
     assert_eq!(r.payload.models[0].slot, 2);
     assert_eq!(r.payload.txst_refs, vec![(*b"MODL", 0xA1)]);
+}
+
+/// Final review I2: FLST LNAM entries (ARMA NAM2/NAM3 skin-swap lists) and the PROJ DATA decal TXST (struct offset 84,
+/// xEdit dev-4.1.6 `wbRecord(PROJ…)`) are TXST references.
+#[test]
+fn flst_entries_and_the_projectile_decal_are_txst_refs() {
+    let r = one(
+        b"FLST",
+        rec(
+            b"FLST",
+            1,
+            &[edid("L"), form(b"LNAM", 0xA1), form(b"LNAM", 0xA2)],
+        ),
+    );
+    assert_eq!(r.payload.txst_refs, [(*b"LNAM", 0xA1), (*b"LNAM", 0xA2)]);
+    let mut data = vec![0u8; 88];
+    data[84..88].copy_from_slice(&0xA3u32.to_le_bytes());
+    let r = one(b"PROJ", rec(b"PROJ", 2, &[edid("P"), sub(b"DATA", &data)]));
+    assert_eq!(r.payload.txst_refs, [(*b"DATA", 0xA3)]);
+    let r = one(b"PROJ", rec(b"PROJ", 3, &[sub(b"DATA", &data[..84])]));
+    assert!(r.payload.txst_refs.is_empty(), "a short DATA has no decal");
 }

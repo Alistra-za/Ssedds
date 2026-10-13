@@ -3,12 +3,16 @@ use crate::read::{each_sub, u32_at};
 use crate::{AltTex, ModelRef, Payload, Rec, Txst};
 use nif::path::{canon_model, canon_texture};
 
-/// Top-level groups read (spec §3); every other group is skipped by its size.
-const WANTED: [[u8; 4]; 29] = [
+/// Top-level groups read (spec §3); every other group is skipped by its size. The last row is every other type with a
+/// `wbGenericModel` (MODL + MODS alternate textures; xEdit dev-4.1.6 `wbDefinitionsTES5.pas`: TACT, ANIO, CLMT, IDLM,
+/// PROJ, HAZD, EXPL, ADDN, CAMS, ARTO, MATO, LVLN, APPA, SCOL, BPTD) and FLST (LNAM lists; ARMA NAM2/NAM3 skin swaps).
+/// WRLD (cloud model) is walked for placements only, so its model is not read.
+const WANTED: [[u8; 4]; 45] = [
     *b"TXST", *b"STAT", *b"MSTT", *b"ACTI", *b"FURN", *b"DOOR", *b"CONT", *b"LIGH", *b"MISC",
     *b"TREE", *b"FLOR", *b"GRAS", *b"ARMA", *b"ARMO", *b"WEAP", *b"AMMO", *b"BOOK", *b"INGR",
     *b"ALCH", *b"KEYM", *b"SLGM", *b"SCRL", *b"LTEX", *b"HDPT", *b"NPC_", *b"RACE", *b"EFSH",
-    *b"WTHR", *b"IPCT",
+    *b"WTHR", *b"IPCT", *b"TACT", *b"ANIO", *b"CLMT", *b"IDLM", *b"PROJ", *b"HAZD", *b"EXPL",
+    *b"ADDN", *b"CAMS", *b"ARTO", *b"MATO", *b"LVLN", *b"APPA", *b"SCOL", *b"BPTD", *b"FLST",
 ];
 
 pub(crate) fn wanted(label: &[u8; 4]) -> bool {
@@ -58,6 +62,9 @@ pub(crate) fn read(rec: &mut Rec, data: &[u8]) -> Result<(), usize> {
             b"HDPT" if &sig == b"DATA" => p.hdpt_flags = d.first().copied(),
             b"HDPT" if &sig == b"HNAM" => form_ref(p, sig, d),
             b"LTEX" if &sig == b"GNAM" => form_ref(p, sig, d),
+            b"FLST" if &sig == b"LNAM" => form_ref(p, sig, d),
+            // DATA struct field "Decal Data" [TXST] at offset 84 (xEdit `wbRecord(PROJ…)`).
+            b"PROJ" if &sig == b"DATA" && d.len() >= 88 => form_ref(p, sig, &d[84..]),
             b"IPCT" if matches!(&sig, b"DNAM" | b"ENAM") => form_ref(p, sig, d),
             b"EFSH" if matches!(&sig, b"ICON" | b"ICO2" | b"NAM7" | b"NAM8" | b"NAM9") => {
                 texture(p, sig, d)
