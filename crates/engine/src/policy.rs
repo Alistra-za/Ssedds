@@ -143,22 +143,31 @@ fn takes_green(st: Subtype) -> bool {
 /// input-relative path. A glob without '/' also matches the file name alone, so `file:*.png` and
 /// `file:wood01.png` work in any folder.
 fn glob_match_input(glob: &str, input: &InputFile) -> bool {
-    let Ok(g) = globset::GlobBuilder::new(&glob.to_lowercase())
-        .literal_separator(true)
-        .build()
-    else {
-        return false;
-    };
-    let m = g.compile_matcher();
+    thread_local! {
+        // shortcut: never evicted; globs come from presets, configs and --set (dozens), so bound it if they ever come
+        // from data.
+        static GLOBS: std::cell::RefCell<std::collections::HashMap<String, Option<globset::GlobMatcher>>> =
+            Default::default();
+    }
     let rel = input
         .rel
         .to_string_lossy()
         .replace('\\', "/")
         .to_lowercase();
     let name = rel.rsplit('/').next().unwrap_or_default();
-    m.is_match(input.game_path.to_lowercase())
-        || m.is_match(&rel)
-        || (!glob.contains('/') && m.is_match(name))
+    let game = input.game_path.to_lowercase();
+    GLOBS.with_borrow_mut(|c| {
+        if !c.contains_key(glob) {
+            let m = globset::GlobBuilder::new(&glob.to_lowercase())
+                .literal_separator(true)
+                .build()
+                .ok()
+                .map(|g| g.compile_matcher());
+            c.insert(glob.to_owned(), m);
+        }
+        let Some(m) = &c[glob] else { return false };
+        m.is_match(&game) || m.is_match(&rel) || (!glob.contains('/') && m.is_match(name))
+    })
 }
 
 fn glob_match(glob: &str, f: &FileFacts) -> bool {

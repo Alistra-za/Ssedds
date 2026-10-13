@@ -55,7 +55,7 @@ pub struct TextureItem {
     pub status: ItemStatus,
     pub decisions: Vec<Decision>,
     pub warnings: Vec<Warning>,
-    pub thumb: Option<Thumbnail>,
+    pub thumb: Option<std::sync::Arc<Thumbnail>>,
     pub changed_on_disk: bool,
     /// The file's stamp when it was listed. Only DDS inputs carry one: the engine plans no job for them, so
     /// nothing else records what they looked like; an item with a job is checked against the job's stamps.

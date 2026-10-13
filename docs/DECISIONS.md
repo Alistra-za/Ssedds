@@ -125,15 +125,15 @@ The flag controls only the mode-6 p-bit constraint (native patch or byte fallbac
 - Source: https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/encoder/basisu_bc7e_scalar.cpp (basis_universal commit `99f52d63aa6799cbdaecfe977111dc5ec3b31d47`, Apache-2.0),
   SHA-256 `684b106e6037042bee065694e5956a97ba91cf2b2417c1a44217e0087a5e808f`; plus its header `encoder/basisu_bc7e_scalar.h` (same commit), SHA-256 `5395f673cbdb9b4ce5115d18369f36b6002712bf88ac3ce71170cdeace889b79`.
   Self-contained: yes (the .cpp inlines its ISPC-compat shim; only the one header is needed; namespace `bc7e_scalar`). Compiled unmodified with MSVC `/O2 /EHsc /std:c++17` plus `-DNDEBUG` (the ISPC objects use `--opt=disable-assertions`), baseline SSE2 (no `/arch`).
-  Lives only in `spikes/s4-scalar/` (own `[workspace]`); not part of the shipped build.
+  It lived in `spikes/s4-scalar/` (own `[workspace]`), removed 2026-10-13 (Note Y10); rebuild it from the commit and SHA-256 above.
 - Quality (veryslow, linear, rgb_real + alpha_real, 11 images, vs ISPC u5 payloads decoded the same way): max per-image |dPSNR| = 0.0759 dB (rgb_real/Metal049A, alpha channel; its rgb delta is 0.015 dB);
   every other image <= 0.0088 dB; bytes identical on 0/11 images (the port differs from the ISPC source, e.g. a denominator bias, so identical bytes are not expected). Deltas are of mixed sign.
   Against the pass limit of 0.01 dB per image: **fails on 1 of 11 images** (Metal049A), passes on the other 10.
 - Speed (u5, rgb_real + alpha_real, 16 threads; three runs each): scalar 0.183 / 0.178 / 0.185 Mpix/s (1 thread), 2.073 / 2.114 / 2.101 Mpix/s (16 threads); ISPC u5 0.872 / 0.831 / 0.888 Mpix/s (1 thread), 8.193 / 8.206 / 7.889 Mpix/s (16 threads)
   → scalar is about 4.8x slower on one thread and 3.8–3.95x slower on 16 threads (limit 4x, so inside it only just, and with the machine otherwise idle).
-- Verdict: **do not adopt as drop-in**: it misses the per-image quality limit on one image (0.076 dB vs 0.01 dB) and sits at the speed limit. It works and is close (mean deltas ~0.003 dB), so it remains a viable
-  fallback if the ISPC objects ever fail on a needed configuration; adopting it would need the owner to accept a looser per-image tolerance. Open item §14 #11 stays "not built".
-  Reproduce: `cargo run --release --manifest-path spikes/s4-scalar/Cargo.toml` and `cargo run --release -p sdc-bench -- speed-bc7e`.
+- Verdict: **do not adopt as drop-in**: it misses the per-image quality limit on one image (0.076 dB vs 0.01 dB) and sits at the speed limit. It works and is close (mean deltas ~0.003 dB), so it could be rebuilt as a
+  fallback (from the pinned source above) if the ISPC objects ever fail on a needed configuration; adopting it would need the owner to accept a looser per-image tolerance. Open item §14 #11 stays "not built".
+  Reproduce: rebuild the spike from the pinned source, then `cargo run --release -p sdc-bench -- speed-bc7e`.
 
 ## Spike S7 — NVTT per-mip feeding (2026-10-09)
 
@@ -500,7 +500,7 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/s
   - `pbr_emissive` (BC6H) and `hdr_sky` stay full size. `hdr_sky` is excluded from resize (owner).
   - `pbr_subsurface` and `pbr_fuzz` are BC1 only without alpha.
 - **T4 `resize = half` (owner, 2026-10-12).** Both sides halve together when the larger is above 512 (`HALF_FLOOR`); the aspect ratio is kept and the larger side floors (1024×512 becomes 512×256); there is no POT step; each side is at least 1 px; `DIM-RESIZED` names the mode; admission counts it like `pot-down`.
-- **T5 `validation.mips = smallest` (plan, 2026-10-12).** PSNR and coverage on the last mip only. The default `all` is not serialised.
+- **T5 `validation.mips = smallest` (plan, 2026-10-12).** PSNR on the last mip only; coverage runs on every level (amended by audit 13, Note Y6). The default `all` is not serialised.
 - **T6 The user presets folder (plan, 2026-10-12).**
   - Location: `%APPDATA%\sdc\presets\*.toml`, non-recursive, in file-name order.
   - Load order: all files load first, then each preset is checked, so a base may come later in the order. Failures are skipped with `CFG-PRESET-SKIPPED`, repeatedly, so orphans go too.
@@ -686,3 +686,17 @@ Spec `docs/superpowers/specs/2026-10-12-complex-grass-design.md`, plan `docs/sup
 - **X10 Auto-detect needs a `textures` folder.** Like mesh votes and mesh alpha, the GRAS match uses the input's game path, so a folder opened without a `textures` ancestor is never auto-tagged; tag by hand there.
 - **X11 CLI vs GUI.** The CLI never fills `gras_diffuses`, so a CLI run over a folder the GUI exported with auto-tagged grass resolves those files as diffuse and re-encodes them. Tag grass in `sdc.toml` `[files]` when both tools are used (same class as mesh-alpha evidence).
 - **X12 complex_grass alpha.** No alpha question; varying alpha defaults to cutout (top half), bottom data; owner's mods: 159/193 loose grass diffuses cutout, 32 mostly hard (2026-10-13). Supersedes plan ruling R5's alpha question.
+
+## Note Y — audit fixes (plan rulings, 2026-10-13)
+
+- **Y1 Output stamp (audit 5; owner D1).** A record stores the output's `SourceStamp` (size, mtime) taken after the rename. `if-changed` keeps an output only when the stamp still matches, and this check runs before any hashing. A record without the field is stale once: the first run after upgrading re-encodes each recorded output one time, then never again. The engine version stays 0.7.0 (owner: "stay on .7"). A same-size, same-mtime replacement is not detected (metadata only, by design).
+- **Y2 Sidecar (audit 15).** Under `--sidecar`, an up-to-date output with no sidecar gets one, written from its stored record (no re-encode). If that write fails, the file re-encodes, and the encode reports the error.
+- **Y3 Parallel decisions (audit 9).** The `if-changed` checks run on the batch pool. Skip events are still emitted in plan order. The source is not re-used by `process_file`: a file found stale by its hash is hashed once more, and only when it really changed.
+- **Y4 Discovery (audit 6).** An unreadable entry under an input folder is skipped with `IN-UNREADABLE` (warning, batch-level), and the batch continues. An unreadable input root itself is still an error. `inspect` skips the same entries silently. The GUI shows no notice for skipped entries yet (follow-up). Per-thread glob matcher cache: it is never evicted (shortcut: bounded by the distinct patterns of one run; evict if a long-lived process ever feeds it unbounded patterns).
+- **Y5 RNM strength (audit 12; owner D2).** `decode` clamps z to ≥ 0. At strength ≤ 1 this is a no-op. Above 1 it deviates from rnm.py, which has the same formula with no clamp: a steep texel becomes horizontal instead of pointing into the surface. The strength range stays 0..=2.
+- **Y6 Coverage under `smallest` (audit 13).** This amends T5. `validation.mips = smallest` checks PSNR on the last level only and coverage on every level, so `summary.coverage` has one entry per level again. The schema doc text says so.
+- **Y7 GUI caches (audit 7, 8).** Set views and export blocks are cached under `(items_rev, sets_doc rev, root, export_root, target)`: the view-cache revision key. `SetsDoc` revisions come from one global counter, so a replaced document never reuses a revision. Code that mutates `items` or `sets` in place calls `AppModel::invalidate_views()`. Engine thumbnails are `Arc`-shared. A GUI plan evicts cached files outside its inputs, and packs not in the plan (uncancelled plans only). `ThumbCache` clears when `items_rev` changes.
+- **Y8 Undo (audit 10, 11).** An undo or redo ends the merge run. "Accept all suggestions" is one history step and one re-plan, whatever the count.
+- **Y9 `--nvtt` (owner D3).** `sdc convert --nvtt` is a usage error (exit 2) until M5. `sdc encoders --nvtt` (detection only) is unchanged.
+- **Y10 S4 spike (owner D4).** `spikes/s4-scalar` is deleted. It can be rebuilt from the pinned commit and SHA-256 in Spike S4.
+- **Y11 Bench (audit 18, left-out).** Corpus tests skip (and say so on stderr) when `SDC_BENCH_ROOT` is unset and the default folder is missing; an explicit root that is missing fails. The bench uses the engine's PSNR (`engine::validate::psnr`), so validation and the engine-parity gate cannot drift. `.gitattributes` marks `crates/*/tests/fixtures/**` and `crates/*/tests/data/**` as `-text`, which also reaches the NIF and render3d fixture folders (a root file; only the eol attribute).

@@ -2,6 +2,17 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// The corpus root, or `None` when `SDC_BENCH_ROOT` is unset and the default folder is missing (a fresh clone).
+pub fn corpus_root() -> Option<PathBuf> {
+    match std::env::var_os("SDC_BENCH_ROOT") {
+        Some(p) => Some(PathBuf::from(p)),
+        None => {
+            let d = bench_root();
+            d.is_dir().then_some(d)
+        }
+    }
+}
+
 pub fn bench_root() -> PathBuf {
     std::env::var_os("SDC_BENCH_ROOT")
         .map(PathBuf::from)

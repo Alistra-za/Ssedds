@@ -36,10 +36,11 @@ fn thumb(ui: &mut egui::Ui, model: &AppModel, path: &Path, invert: Option<usize>
         return;
     };
     let cache = shared_thumbs(ui.ctx());
-    let tex = cache
-        .lock()
-        .unwrap()
-        .get_raw(ui.ctx(), &path.to_string_lossy(), &t, invert);
+    let tex = {
+        let mut c = cache.lock().unwrap();
+        c.sweep(model.items_rev());
+        c.get_raw(ui.ctx(), &path.to_string_lossy(), &t, invert)
+    };
     ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(THUMB, THUMB)));
 }
 

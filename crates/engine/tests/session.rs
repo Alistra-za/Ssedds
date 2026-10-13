@@ -160,3 +160,47 @@ fn a_packed_image_with_an_unstamped_source_is_not_cached() {
     job.pack = Some(unstamped);
     assert!(s.thumbnail(&job).is_none());
 }
+
+/// Audit 8 (DECISIONS Note Y7): thumbnails are shared, not copied, and a plan of another folder drops the first
+/// folder's entries.
+#[test]
+fn a_plan_of_another_folder_drops_the_first_folders_entries() {
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fixture(a.path());
+    fixture(b.path());
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    plan(&s, req(a.path(), Target::Cs));
+    let iron_a = a.path().join("in").join("iron.png");
+    let t = s.cache().thumbnail_of(&iron_a).unwrap();
+    assert!(Arc::ptr_eq(&t, &s.cache().thumbnail_of(&iron_a).unwrap()));
+    plan(&s, req(b.path(), Target::Cs));
+    assert!(s.cache().thumbnail_of(&iron_a).is_none());
+    assert!(s
+        .cache()
+        .thumbnail_of(&b.path().join("in").join("iron.png"))
+        .is_some());
+}
+
+/// A cancelled plan saw only part of its folder: it must not evict the entries it did not cover.
+#[test]
+fn a_cancelled_plan_keeps_the_cached_entries() {
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fixture(a.path());
+    fixture(b.path());
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    plan(&s, req(a.path(), Target::Cs));
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let p = s
+        .plan(
+            req(b.path(), Target::Cs),
+            &Reporter::new(Arc::new(NullSink), "t"),
+            &cancel,
+        )
+        .unwrap();
+    assert!(!p.cancelled.is_empty());
+    assert!(s
+        .cache()
+        .thumbnail_of(&a.path().join("in").join("iron.png"))
+        .is_some());
+}

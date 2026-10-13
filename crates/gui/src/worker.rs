@@ -19,6 +19,14 @@ pub struct PlanFailure {
     pub config: bool,
 }
 
+/// What one scan-database read returns (`AppModel::refresh_mesh_votes`).
+#[derive(Default)]
+pub struct MeshEvidence {
+    pub votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
+    pub alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    pub gras: std::collections::BTreeSet<String>,
+}
+
 pub enum WorkerMsg {
     /// Planning discovered `total` files (the status line reads "Analysing {total} files…").
     PlanProgress {
@@ -28,6 +36,11 @@ pub enum WorkerMsg {
     Planned {
         generation: u64,
         result: Result<PlanView, PlanFailure>,
+    },
+    /// A scan-database read for the plan's sets ended (stale generations are dropped).
+    MeshVotes {
+        generation: u64,
+        result: Result<MeshEvidence, String>,
     },
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
@@ -83,7 +96,7 @@ impl EventSink for PlanSink {
     }
 }
 
-fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
     p.downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| p.downcast_ref::<String>().cloned())
@@ -129,6 +142,17 @@ pub fn spawn_export(
     });
 }
 
+/// A plan, with a panic turned into this plan's failure, so a superseded plan's panic is dropped by its
+/// generation like any stale result (audit left-out).
+fn plan_result(f: impl FnOnce() -> Result<PlanView, PlanFailure>) -> Result<PlanView, PlanFailure> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
+        Err(PlanFailure {
+            config: false,
+            message: format!("internal error in plan: {}", panic_text(&*p)),
+        })
+    })
+}
+
 pub fn spawn_plan(
     tx: Sender<WorkerMsg>,
     session: Arc<Session>,
@@ -145,13 +169,15 @@ pub fn spawn_plan(
             generation,
         });
         let rep = Reporter::new(sink, engine::events::new_batch_id());
-        let result = session
-            .plan(req, &rep, &cancel)
-            .map(|plan| PlanView::build(&plan, &events.take(), &session, &root))
-            .map_err(|e| PlanFailure {
-                config: matches!(e, EngineError::Config(_)),
-                message: e.to_string(),
-            });
+        let result = plan_result(|| {
+            session
+                .plan(req, &rep, &cancel)
+                .map(|plan| PlanView::build(&plan, &events.take(), &session, &root))
+                .map_err(|e| PlanFailure {
+                    config: matches!(e, EngineError::Config(_)),
+                    message: e.to_string(),
+                })
+        });
         let _ = tx.send(WorkerMsg::Planned { generation, result });
     });
 }
@@ -237,4 +263,14 @@ pub fn start_scan(
         });
         let _ = tx.send(WorkerMsg::Scanned(result));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_panicking_plan_is_a_plan_failure_of_its_generation() {
+        let r = super::plan_result(|| panic!("boom"));
+        let Err(f) = r else { panic!("a failure") };
+        assert!(f.message.contains("boom") && !f.config, "{}", f.message);
+    }
 }

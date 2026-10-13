@@ -314,6 +314,25 @@ impl Drop for DenyWrite {
 /// batch is not fatal because the output root itself exists. Windows only (the ACL is the mechanism). When the
 /// ACL cannot be set, or is set but does not stop this process from writing (e.g. a privilege that bypasses
 /// deny entries), the test prints `SKIPPED` with the reason and returns; libtest still reports it as passed.
+/// Owner ruling (DECISIONS Note Y9): `--nvtt` on convert is a usage error until the NVTT backend exists (M5).
+#[test]
+fn nvtt_on_convert_is_a_usage_error() {
+    let d = tempfile::tempdir().unwrap();
+    img(&d.path().join("in/a.png"));
+    let out = d.path().join("out");
+    let o = convert(&d.path().join("in"), &out, &["--nvtt", "nvcompress.exe"])
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("the NVTT backend is not available yet (M5)"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(o.stdout.is_empty(), "nothing runs");
+    assert!(!out.exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn read_only_output_folder_fails_at_write() {

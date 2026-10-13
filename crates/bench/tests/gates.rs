@@ -1,15 +1,27 @@
-use sdc_bench::{codec::RgbcxKind, corpus::bench_root, gates};
+use sdc_bench::{
+    codec::RgbcxKind,
+    corpus::{bench_root, corpus_root},
+    gates,
+};
 
 #[test]
 fn s3_bc7e_u5_reproduces_bench_within_0_01_db() {
-    let r = gates::bc7e_u5(&bench_root(), false).unwrap();
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
+    let r = gates::bc7e_u5(&root, false).unwrap();
     assert!(r.pass, "{r}");
 }
 
 #[test]
 fn s3_rgbcx_bc4_mask_real_never_worse_than_bench() {
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
     let r = gates::rgbcx_vs_bench(
-        &bench_root(),
+        &root,
         "out2/bc4_rgbcx",
         "images2",
         &["mask_real"],
@@ -21,28 +33,44 @@ fn s3_rgbcx_bc4_mask_real_never_worse_than_bench() {
 
 #[test]
 fn rgbcx_bc1_bit_exact_and_bc3_bc4_bc5_never_worse_in_bench_configuration() {
-    for r in gates::rgbcx_all(&bench_root()).unwrap() {
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
+    for r in gates::rgbcx_all(&root).unwrap() {
         assert!(r.pass, "{r}");
     }
 }
 
 #[test]
 fn bc1_transparent_black_off_matches_bc7enc_dash_b() {
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
     let work = tempfile::tempdir().unwrap();
-    let r = gates::bc1_black_off_vs_tool(&bench_root(), work.path()).unwrap();
+    let r = gates::bc1_black_off_vs_tool(&root, work.path()).unwrap();
     assert!(r.pass, "{r}");
 }
 
 #[test]
 fn bc6h_veryslow_reproduces_51_50_db() {
-    let r = gates::bc6h_veryslow(&bench_root()).unwrap();
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
+    let r = gates::bc6h_veryslow(&root).unwrap();
     assert!(r.pass, "{r}");
 }
 
 #[test]
 fn s5a_alpha_checker_agrees_with_recorded_measurements() {
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
     // DECISIONS Note C: bc7e -u6 Bricks104 decodes 254 on 21.0% of pixels; NVTT Production on 0%.
-    let r = gates::alpha_scan(&bench_root()).unwrap();
+    let r = gates::alpha_scan(&root).unwrap();
     assert!(r.pass, "{r}");
 }
 
@@ -55,7 +83,11 @@ fn s5b_byte_patch_gives_255_everywhere_on_opaque_sets() {
 
 #[test]
 fn s5c_native_patch_flag_off_is_bit_identical() {
-    let r = gates::bc7e_matches_dump(&bench_root(), &gates::pre_patch_hashes()).unwrap();
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
+    let r = gates::bc7e_matches_dump(&root, &gates::pre_patch_hashes()).unwrap();
     assert!(r.pass, "{r}");
 }
 
@@ -70,7 +102,11 @@ fn s5c_native_patch_flag_on_gives_255_within_0_05_db() {
 /// printed as info (Task 38 ruling, DECISIONS S5), so this passes on the corpus where the strict gate above fails.
 #[test]
 fn exact_opaque_in_all_passes_on_alpha_and_reports_drgb_as_info() {
-    let r = gates::exact_opaque_alpha_only(&bench_root(), gates::ExactMode::Native).unwrap();
+    let Some(root) = corpus_root() else {
+        eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
+        return;
+    };
+    let r = gates::exact_opaque_alpha_only(&root, gates::ExactMode::Native).unwrap();
     assert!(r.pass, "{r}");
     assert!(
         r.lines

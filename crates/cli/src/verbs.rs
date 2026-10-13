@@ -601,6 +601,12 @@ fn say(json: bool, line: String) {
 /// `--exact-opaque` is given. A format sdc never writes only has its header checked. Exit 1 if a file cannot
 /// be read, else 4 if one fails validation, else 0.
 pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
+    if let Some(p) = a.dds.iter().find(|p| p.is_dir()) {
+        return Err(EngineError::Usage(format!(
+            "{} is a folder; give .dds files",
+            p.display()
+        )));
+    }
     let target = a.target.map_or(Target::Cs, Target::from);
     let model: Bc1Model = a.bc1_decoder.into();
     let json = a.json;
@@ -1072,6 +1078,12 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
 /// (including `--out-dir` resolving to an input itself, DECISIONS S6). A write failure is exit 3 and stops the
 /// batch; files written before it stay written.
 pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
+    if let Some(p) = a.dds.iter().find(|p| p.is_dir()) {
+        return Err(EngineError::Usage(format!(
+            "{} is a folder; give .dds files",
+            p.display()
+        )));
+    }
     use engine::dds_patch::{plan_patch, PatchRequest};
     let target = a.target.map_or(Target::Cs, Target::from);
     let mut req = PatchRequest::default();

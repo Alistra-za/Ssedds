@@ -19,7 +19,9 @@ pub mod viewport3d;
 
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
-use crate::worker::{spawn_export, spawn_plan, PlanFailure, WorkerMsg};
+use crate::worker::{
+    spawn_export, spawn_guarded, spawn_plan, MeshEvidence, PlanFailure, WorkerMsg,
+};
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
@@ -150,6 +152,24 @@ fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
+/// The cached set views and export blocks, valid for `key` only.
+#[derive(Default)]
+pub(crate) struct ViewCache {
+    pub key: Option<ViewKey>,
+    pub views: Option<Arc<Vec<sets::SetView>>>,
+    pub blocks: Option<Arc<Vec<pbr_export::ExportIssue>>>,
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct ViewKey {
+    items: u64,
+    inputs: u64,
+    doc: u64,
+    root: Option<PathBuf>,
+    export_root: PathBuf,
+    target: Target,
+}
+
 pub struct AppModel {
     pub settings: GuiSettings,
     pub settings_path: Option<PathBuf>,
@@ -183,6 +203,14 @@ pub struct AppModel {
     pub target: Target,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
+    /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
+    items_rev: u64,
+    /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
+    inputs_rev: u64,
+    /// `TextureItem::key` to its index in `items` (audit 7).
+    item_index: std::collections::HashMap<String, usize>,
+    /// The cached set views and export blocks (DECISIONS Note Y7).
+    pub(crate) views: std::cell::RefCell<ViewCache>,
     pub unmatched_keys: Vec<String>,
     /// Per-set RNM-* notes from layer jobs (they have no item).
     pub rnm_notes: std::collections::BTreeMap<String, Vec<engine::codes::Warning>>,
@@ -190,6 +218,8 @@ pub struct AppModel {
     pub rnm_keys: std::collections::BTreeMap<PathBuf, String>,
     /// The preset id the last plan resolved (empty before the first plan).
     pub batch_preset: String,
+    /// While set, `edit_docs` changes the documents but neither records a step nor re-plans.
+    batch: bool,
     pub selection: Selection,
     pub filter: Filter,
     pub search: String,
@@ -230,6 +260,9 @@ pub struct AppModel {
     last_inputs: Option<EngineInputs>,
     /// Automatic re-plans in a row because the inputs changed; bounded so a bug can never loop.
     auto_replans: u8,
+    /// Generation of the latest scan-database read, and (generation, continues `apply_plan`) while it is pending.
+    votes_gen: u64,
+    votes_pending: Option<(u64, bool)>,
     generation: u64,
     planning: Option<CancelToken>,
     tx: Sender<WorkerMsg>,
@@ -271,11 +304,16 @@ impl AppModel {
             history: history::History::default(),
             target: Target::Cs,
             items: vec![],
+            items_rev: 0,
+            inputs_rev: 0,
+            item_index: Default::default(),
+            views: Default::default(),
             sets: vec![],
             unmatched_keys: vec![],
             rnm_notes: Default::default(),
             rnm_keys: Default::default(),
             batch_preset: String::new(),
+            batch: false,
             selection: Selection::None,
             filter: Filter::default(),
             search: String::new(),
@@ -301,6 +339,8 @@ impl AppModel {
             plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
+            votes_gen: 0,
+            votes_pending: None,
             generation: 0,
             planning: None,
             tx,
@@ -364,7 +404,9 @@ impl AppModel {
         self.export_after_plan = false;
         self.continue_after_plan = None;
         self.last_inputs = None;
+        self.inputs_rev += 1;
         self.auto_replans = 0;
+        self.drop_pending_votes();
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
@@ -377,6 +419,7 @@ impl AppModel {
         self.save_settings();
         self.root = Some(root);
         self.items.clear();
+        self.invalidate_views();
         self.sets.clear();
         self.unmatched_keys.clear();
         self.selection = Selection::None;
@@ -432,12 +475,12 @@ impl AppModel {
         Some(req)
     }
 
-    /// S-shader-10, M6 Track E: read the mesh votes and the mesh alpha for the plan's sets (keys from the colour-member
-    /// jobs only, by `shader::colour_mesh_key`, the engine's rule). No database, or a read error, means no evidence:
-    /// the suffix rules decide and the alpha is asked, and the Meshes view reports database errors. True when either
-    /// changed.
-    // shortcut: reads SQLite on the UI thread after each plan; move to a background read or cache by db mtime + key set if it hitches on large load orders
-    pub fn refresh_mesh_votes(&mut self) -> bool {
+    /// S-shader-10, M6 Track E: read the mesh votes, the mesh alpha (keys from the colour-member jobs only, by
+    /// `shader::colour_mesh_key`, the engine's rule) and the GRAS diffuses (complex grass design §5 condition 1) from
+    /// the scan database on one worker thread, tagged with a generation; `votes_landed` applies the newest result.
+    /// No database means no evidence (applied at once): the suffix rules decide and the alpha is asked. A read
+    /// error keeps the previous values (stderr). `after_plan`: the result continues `apply_plan`'s tail.
+    pub fn refresh_mesh_votes(&mut self, after_plan: bool) {
         let keys: std::collections::BTreeSet<String> = self
             .items
             .iter()
@@ -447,24 +490,66 @@ impl AppModel {
                 engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
             })
             .collect();
-        let (votes, alpha) = match &self.scan_db {
-            Some(db) if db.is_file() => (
-                meshes::mesh_votes(db, &keys).unwrap_or_default(),
-                meshes::mesh_alpha(db, &keys).unwrap_or_default(),
-            ),
-            _ => Default::default(),
+        // A scan-finished refresh must not drop the continuation of a pending post-plan read.
+        let after_plan = after_plan || self.votes_pending.is_some_and(|(_, a)| a);
+        self.votes_gen += 1;
+        let generation = self.votes_gen;
+        self.votes_pending = Some((generation, after_plan));
+        let Some(db) = self.scan_db.clone().filter(|d| d.is_file()) else {
+            return self.votes_landed(generation, Ok(Default::default()));
         };
-        let changed = votes != self.mesh_votes || alpha != self.mesh_alpha;
-        self.mesh_votes = votes;
-        self.mesh_alpha = alpha;
-        // Complex grass design §5 condition 1, from the same database.
-        let gras = match &self.scan_db {
-            Some(db) if db.is_file() => meshes::gras_diffuses(db).unwrap_or_default(),
-            _ => Default::default(),
+        spawn_guarded(self.tx.clone(), "mesh-votes", move |tx| {
+            let read = || -> Result<MeshEvidence, String> {
+                Ok(MeshEvidence {
+                    votes: meshes::mesh_votes(&db, &keys)?,
+                    alpha: meshes::mesh_alpha(&db, &keys)?,
+                    gras: meshes::gras_diffuses(&db)?,
+                })
+            };
+            // A panic is an error of this generation (kept values, stderr), not a dialog for a stale read.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read))
+                .unwrap_or_else(|p| Err(format!("panic: {}", crate::worker::panic_text(&*p))));
+            let _ = tx.send(WorkerMsg::MeshVotes { generation, result });
+        });
+    }
+
+    /// A newer plan or another folder makes the pending scan-database read stale: its result is dropped.
+    fn drop_pending_votes(&mut self) {
+        self.votes_gen += 1;
+        self.votes_pending = None;
+    }
+
+    /// The scan-database read of generation `generation` ended; a stale one is dropped.
+    fn votes_landed(&mut self, generation: u64, result: Result<MeshEvidence, String>) {
+        if generation != self.votes_gen {
+            return;
+        }
+        let Some((_, after_plan)) = self.votes_pending.take() else {
+            return;
         };
-        let changed = changed || gras != self.gras_diffuses;
-        self.gras_diffuses = gras;
-        changed
+        let changed = match result {
+            Ok(e) => {
+                let changed = e.votes != self.mesh_votes
+                    || e.alpha != self.mesh_alpha
+                    || e.gras != self.gras_diffuses;
+                (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
+                changed
+            }
+            Err(e) => {
+                eprintln!(
+                    "sdc-gui: scan database read failed, keeping the previous mesh evidence: {e}"
+                );
+                false
+            }
+        };
+        if after_plan {
+            // A newer plan in flight finishes (and reads again) itself.
+            if self.planning.is_none() {
+                self.finish_plan();
+            }
+        } else if changed {
+            self.replan();
+        }
     }
 
     /// Plan again on a worker; a newer plan supersedes (cancels) an older one.
@@ -478,9 +563,11 @@ impl AppModel {
             c.cancel();
         }
         self.generation += 1;
+        self.drop_pending_votes();
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
         self.status_line = "Planning…".into();
+        self.inputs_rev += 1;
         self.last_inputs = Some(EngineInputs {
             set_edits: req.set_edits.clone(),
             output_paths: req.output_paths.clone(),
@@ -500,7 +587,10 @@ impl AppModel {
     }
 
     pub fn busy(&self) -> bool {
-        self.planning.is_some() || self.export.running.is_some() || self.preview.working()
+        self.planning.is_some()
+            || self.votes_pending.is_some()
+            || self.export.running.is_some()
+            || self.preview.working()
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -527,13 +617,9 @@ impl AppModel {
                 }
             }
             WorkerMsg::Planned { .. } => {}
+            WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    "plan" => {
-                        self.planning = None;
-                        self.export_after_plan = false;
-                        self.continue_after_plan = None;
-                    }
                     "export" => {
                         self.export.running = None;
                         self.run_after_export();
@@ -619,7 +705,7 @@ impl AppModel {
         }
         // A plan is in flight (just opened, or an edit): the items on screen are the previous plan's, so the checks
         // wait for the plan that lands (spec §2.6: the button is never silently disabled).
-        if self.planning.is_some() {
+        if self.planning.is_some() || self.votes_pending.is_some() {
             self.export_after_plan = true;
             return;
         }
@@ -750,8 +836,9 @@ impl AppModel {
         // members (PBR follow), so those members must be looked at afterwards, not decided from the plan's older
         // suggestions.
         picks.sort_by_key(|(_, st)| !(st.is_pbr_color() || sets::is_pbr_diffuse(*st)));
-        // Each decision goes through `decide` (so the PBR follow-on applies); the steps they push fold into one.
-        let pushed = self.history.pushed;
+        // Audit 11 (Note Y8): one snapshot, every pick, one step, one plan (not one plan thread per pick).
+        let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        self.batch = true;
         for (k, st) in &picks {
             let written = self
                 .project
@@ -761,8 +848,19 @@ impl AppModel {
                 self.decide(k, Answer::Subtype(*st));
             }
         }
-        let n = self.history.pushed - pushed;
-        self.history.fold_last(n, "Accept all suggestions");
+        self.batch = false;
+        let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        if after != before {
+            self.history.push(history::Command {
+                label: "Accept all suggestions".into(),
+                before,
+                after,
+                merge: None,
+                created_file: None,
+            });
+            self.auto_replans = 0;
+            self.replan();
+        }
         self.refresh_if_settled();
     }
 
@@ -1056,6 +1154,7 @@ impl AppModel {
             && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
+        self.invalidate_views();
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
         self.rnm_notes = view.rnm_notes;
@@ -1091,7 +1190,11 @@ impl AppModel {
         }
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
-        self.refresh_mesh_votes();
+        self.refresh_mesh_votes(true);
+    }
+
+    /// The tail of `apply_plan`, once the scan-database evidence of this plan is in.
+    fn finish_plan(&mut self) {
         let now = EngineInputs::of(self);
         if self.last_inputs.as_ref() != Some(&now) && self.auto_replans < 2 {
             self.auto_replans += 1;
@@ -1128,8 +1231,47 @@ impl AppModel {
         }
     }
 
+    /// True while a scan-database read is in flight (tests).
+    pub fn votes_pending(&self) -> bool {
+        self.votes_pending.is_some()
+    }
+
+    pub fn items_rev(&self) -> u64 {
+        self.items_rev
+    }
+
+    /// Call after writing `items` or `sets` in place (tests); a plan does it itself.
+    pub fn invalidate_views(&mut self) {
+        self.items_rev += 1;
+        self.item_index = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(n, i)| (i.key.clone(), n))
+            .rev()
+            .collect();
+    }
+
+    /// Everything `sets::views` and `pbr_export::export_blocks` read (DECISIONS Note Y7).
+    pub(crate) fn view_key(&self) -> ViewKey {
+        ViewKey {
+            items: self.items_rev,
+            inputs: self.inputs_rev,
+            doc: self
+                .sets_doc
+                .as_ref()
+                .map_or(0, crate::sets_doc::SetsDoc::rev),
+            root: self.root.clone(),
+            export_root: self.export_root(),
+            target: self.target,
+        }
+    }
+
     pub fn item(&self, key: &str) -> Option<&TextureItem> {
-        self.items.iter().find(|i| i.key == key)
+        self.item_index
+            .get(key)
+            .and_then(|&i| self.items.get(i))
+            .filter(|i| i.key == key)
     }
 
     pub fn undecided(&self) -> usize {
@@ -1215,6 +1357,9 @@ impl AppModel {
         };
         let before = Self::snapshot_of(Some(p), Some(s));
         f(p, s);
+        if self.batch {
+            return;
+        }
         let after = Self::snapshot_of(Some(p), Some(s));
         if after == before {
             return;

@@ -252,6 +252,7 @@ fn a_member_that_becomes_blocked_while_encoding_stays_blocked() {
         .item
         .clone();
     m.items.iter_mut().find(|i| i.key == key).unwrap().status = ItemStatus::Error(vec![]);
+    m.invalidate_views();
     let (v, e) = rock(&m);
     enc.sync(&m, member_slots(&m, &v, Some(&e)), t, false);
     assert!(matches!(

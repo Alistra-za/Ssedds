@@ -8,6 +8,7 @@ use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 
 pub const FILE_NAME: &str = "sdc-project.toml";
@@ -36,12 +37,19 @@ pub struct SetEntry {
     pub settings: Settings,
 }
 
+/// Source of `SetsDoc::rev`: one counter for every document, so a replaced document never reuses a revision (DECISIONS Note Y7).
+static NEXT_REV: AtomicU64 = AtomicU64::new(1);
+fn next_rev() -> u64 {
+    NEXT_REV.fetch_add(1, Ordering::Relaxed)
+}
+
 pub struct SetsDoc {
     path: PathBuf,
     doc: DocumentMut,
     disk: Option<SourceStamp>,
     dirty: bool,
     error: Option<String>,
+    rev: u64,
 }
 
 /// Flatten a table into `prefix.key` paths; values only (nested tables recurse).
@@ -131,12 +139,14 @@ impl SetsDoc {
             disk: None,
             dirty: false,
             error: None,
+            rev: next_rev(),
         };
         d.reload();
         d
     }
 
     pub fn reload(&mut self) {
+        self.rev = next_rev();
         self.dirty = false;
         self.error = None;
         self.doc = DocumentMut::new();
@@ -149,6 +159,11 @@ impl SetsDoc {
                 Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
             },
         }
+    }
+
+    /// Changes on every edit, restore and reload (the set-view cache key).
+    pub fn rev(&self) -> u64 {
+        self.rev
     }
 
     pub fn path(&self) -> &Path {
@@ -173,6 +188,7 @@ impl SetsDoc {
 
     /// Replace the document with `text` (undo/redo): an unsaved change. Ignored while read-only.
     pub fn restore(&mut self, text: &str) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -186,6 +202,7 @@ impl SetsDoc {
     /// does not change, so it is outside the undoable state. When only the hash differs, nothing changes (and the
     /// document is not marked dirty).
     pub fn restore_keeping_json_sha(&mut self, text: &str) {
+        self.rev = next_rev();
         if self.read_only() || self.text() == text {
             return;
         }
@@ -226,6 +243,7 @@ impl SetsDoc {
     }
 
     fn set_project(&mut self, key: &str, v: Option<Value>) {
+        self.rev = next_rev();
         let absent = self.doc.get("project").and_then(|p| p.get(key)).is_none();
         if self.read_only() || (v.is_none() && absent) {
             return;
@@ -248,12 +266,14 @@ impl SetsDoc {
         self.project_str("json_name")
     }
     pub fn set_json_name(&mut self, name: Option<&str>) {
+        self.rev = next_rev();
         self.set_project("json_name", name.map(Value::from));
     }
     pub fn last_json_sha256(&self) -> Option<String> {
         self.project_str("last_json_sha256")
     }
     pub fn set_last_json_sha256(&mut self, sha: &str) {
+        self.rev = next_rev();
         self.set_project("last_json_sha256", Some(Value::from(sha)));
     }
 
@@ -261,6 +281,7 @@ impl SetsDoc {
         strings(self.doc.get("project").and_then(|p| p.get("order")))
     }
     pub fn set_order(&mut self, ids: &[String]) {
+        self.rev = next_rev();
         let mut arr = Array::new();
         for id in ids {
             arr.push(id.as_str());
@@ -274,6 +295,7 @@ impl SetsDoc {
         strings(self.doc.get("project").and_then(|p| p.get("auto_pbr")))
     }
     pub fn set_auto_pbr(&mut self, keys: &[String]) {
+        self.rev = next_rev();
         let mut arr = Array::new();
         for k in keys {
             arr.push(k.as_str());
@@ -321,6 +343,7 @@ impl SetsDoc {
     }
 
     pub fn create_set(&mut self, id: &str) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -330,6 +353,7 @@ impl SetsDoc {
 
     /// Drop set `id`'s entry and remove it from the order list (DECISIONS P2: its files return to automatic grouping).
     pub fn delete_set(&mut self, id: &str) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -362,6 +386,7 @@ impl SetsDoc {
     /// Rename set `from` to `to`. A created set just changes its id; an automatic set records `renamed_from`. Other
     /// entries that borrow from `from`, and the order list, follow.
     pub fn rename_set(&mut self, from: &str, to: &str) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -427,6 +452,7 @@ impl SetsDoc {
 
     /// `file` moves into set `id` (a `Move` edit); it is taken out of every other entry's `add` and `remove`.
     pub fn add_member(&mut self, id: &str, file: &str) {
+        self.rev = next_rev();
         for e in self.entries() {
             if !same_id(&e.id, id) {
                 if e.add.iter().any(|f| same_id(f, file)) {
@@ -442,6 +468,7 @@ impl SetsDoc {
 
     /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.
     pub fn remove_member(&mut self, id: &str, file: &str) {
+        self.rev = next_rev();
         let moved_in = self
             .entries()
             .iter()
@@ -454,6 +481,7 @@ impl SetsDoc {
     }
 
     pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -481,6 +509,7 @@ impl SetsDoc {
 
     /// Set (or with `None` remove) set `id`'s explicit shader (M6 spec §7).
     pub fn set_shader(&mut self, id: &str, shader: Option<engine::shader::Shader>) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -514,6 +543,7 @@ impl SetsDoc {
 
     /// Set (or with `None` remove) JSON setting `key` (a dotted schema path) of set `id`.
     pub fn set_value(&mut self, id: &str, key: &str, v: Option<Json>) {
+        self.rev = next_rev();
         if self.read_only() {
             return;
         }

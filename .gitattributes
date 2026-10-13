@@ -1,4 +1,5 @@
 crates/encoders-sys/vendor/** -text
-tests/** -text
+crates/*/tests/fixtures/** -text
+crates/*/tests/data/** -text
 schema/*.json text eol=lf
 crates/gui/assets/*.json text eol=lf

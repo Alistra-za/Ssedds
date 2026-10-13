@@ -328,11 +328,7 @@ impl RawMap {
 
     /// The role id a raw map counts as after Discover (spec §4.4): `roughness`, `ao`, …
     pub fn id(self) -> String {
-        serde_json::to_value(self)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_owned()
+        serde_id(self)
     }
 
     /// Spec §4.3 item 1, §6.4: an input that starts the cs `_rmaos`/`_rfaos` recipe, so its set is PBR.
@@ -368,6 +364,15 @@ pub enum PackRecipe {
     Auto,
     Rmaos,
     Rfaos,
+}
+
+/// The serde string a unit enum variant serialises as (its id).
+fn serde_id<T: serde::Serialize>(v: T) -> String {
+    serde_json::to_value(v)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 impl PackRecipe {
@@ -531,21 +536,13 @@ impl Subtype {
     }
 
     pub fn id(self) -> String {
-        serde_json::to_value(self)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_owned()
+        serde_id(self)
     }
 }
 
 impl Format {
     pub fn id(self) -> String {
-        serde_json::to_value(self)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_owned()
+        serde_id(self)
     }
     /// The DDS pixel format this format and tag are written as (DECISIONS S4: `rgba8` is B8G8R8A8).
     pub fn pixel_format(self, srgb: bool) -> crate::dds::DdsPixelFormat {
@@ -668,8 +665,8 @@ pub struct ValidationSpec {
     pub complex_m_warn_alpha: u8,
     pub bc6h_min_peak_ratio: f64,
     pub pgpatcher_non_white_share: f64,
-    /// M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip
-    /// only (`fast-preview`). Not serialised at its default, so existing profile hashes hold.
+    /// M6 Track D (DECISIONS Notes T5, Y6): `smallest` runs the per-mip PSNR check on the smallest mip only and the
+    /// coverage check on every level (`fast-preview`). Not serialised at its default, so existing profile hashes hold.
     #[serde(default, skip_serializing_if = "ValidationMips::is_all")]
     pub mips: ValidationMips,
 }

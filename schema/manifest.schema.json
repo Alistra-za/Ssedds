@@ -845,6 +845,27 @@
       ],
       "type": "object"
     },
+    "SourceStamp": {
+      "description": "A source file's size and modification time, to tell whether it changed between planning and conversion.",
+      "properties": {
+        "mtime_ns": {
+          "description": "Nanoseconds since the Unix epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "size",
+        "mtime_ns"
+      ],
+      "type": "object"
+    },
     "Subtype": {
       "description": "A texture sub-type. `rfaos` is a deprecated alias of `skin_rfaos`: it still loads and is written back as `skin_rfaos`.",
       "enum": [
@@ -919,7 +940,7 @@
         },
         "mips": {
           "$ref": "#/$defs/ValidationMips",
-          "description": "M6 Track D (DECISIONS Note T5): `smallest` runs the per-mip PSNR and coverage checks on the smallest mip\nonly (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
+          "description": "M6 Track D (DECISIONS Notes T5, Y6): `smallest` runs the per-mip PSNR check on the smallest mip only and the\ncoverage check on every level (`fast-preview`). Not serialised at its default, so existing profile hashes hold."
         },
         "pgpatcher_non_white_share": {
           "format": "double",
@@ -1011,6 +1032,17 @@
     "output": {
       "description": "The canonical key from [`output_key`].",
       "type": "string"
+    },
+    "output_stamp": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceStamp"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Size and mtime of the output as written (audit 5, DECISIONS Note Y1); `None` in records written before it."
     },
     "preset": {
       "$ref": "#/$defs/PresetRef"

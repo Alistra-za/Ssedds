@@ -698,6 +698,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm` states no green convention (§4.4); never settled by `--accept-suggestions` or `--allow` | `--set 'file:<name>.channels.green_convention=opengl\|directx'` |
 | `IN-DECODE` | error | Unreadable source | Fix file |
 | `IN-NONFINITE` | warning | Source has NaN or infinite samples; Preprocess replaced them (NaN and −∞ → 0, +∞ → 1, or the half-float maximum for HDR colour) | Fix the source |
+| `IN-UNREADABLE` | warning | A file or folder under an input folder could not be read (access denied, dangling junction, cloud placeholder); it was skipped | Fix the permissions, or ignore |
 | `IN-FLOAT-LDR` | info, **retired (M6, DECISIONS S2)** | Never emitted; `--allow IN-FLOAT-LDR` still parses | — |
 | `IN-ICC-IGNORED` | info | The source embeds an ICC profile; it is ignored and the pixels are read as stored (DECISIONS S8) | Convert the source to sRGB or linear first if the profile matters |
 | `OUT-UNKNOWN-EXISTING` | warning | Existing output without manifest record kept | `--on-existing overwrite` |

@@ -155,7 +155,7 @@ pub struct ConvertArgs {
     /// Also write <name>.dds.json next to each output.
     #[arg(long)]
     pub sidecar: bool,
-    /// Path to nvcompress.exe (NVTT backend arrives in milestone M5).
+    /// Path to nvcompress.exe. Not available yet (M5): passing it is a usage error.
     #[arg(long)]
     pub nvtt: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "ideal")]

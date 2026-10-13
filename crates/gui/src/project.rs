@@ -86,10 +86,16 @@ pub(crate) fn sub_table<'a>(
     t.get_mut(name)?.as_table_like_mut()
 }
 
-/// Set `t[key] = v`, replacing an existing item in place so the key keeps its comments and position.
-pub(crate) fn set_value(t: &mut dyn TableLike, key: &str, v: Value) {
+/// Set `t[key] = v`, replacing an existing item in place so the key keeps its comments and position; a comment on
+/// the value's own line (its decor) is carried over (audit 19).
+pub(crate) fn set_value(t: &mut dyn TableLike, key: &str, mut v: Value) {
     match t.get_mut(key) {
-        Some(slot) => *slot = Item::Value(v),
+        Some(slot) => {
+            if let Some(old) = slot.as_value() {
+                *v.decor_mut() = old.decor().clone();
+            }
+            *slot = Item::Value(v);
+        }
         None => {
             t.insert(key, Item::Value(v));
         }
@@ -200,7 +206,7 @@ impl ProjectDoc {
         }
         let s = serde_json::to_value(t).ok();
         if let Some(Json::String(s)) = s {
-            self.doc["target"] = toml_edit::value(s);
+            set_value(self.doc.as_table_mut(), "target", Value::from(s));
             self.dirty = true;
         }
     }

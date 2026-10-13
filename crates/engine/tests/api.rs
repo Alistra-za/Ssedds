@@ -353,7 +353,9 @@ fn a_failed_manifest_append_removes_the_output() {
         std::fs::set_permissions(manifest.path(), perm).unwrap();
     };
     set_readonly(true);
-    let (s, ev) = run(request(d.path()));
+    let mut req = request(d.path());
+    req.sidecar = true;
+    let (s, ev) = run(req);
     set_readonly(false);
     assert_eq!((s.converted, s.failed), (0, 2), "{ev:#?}");
     assert_eq!(s.exit_code(), 1);
@@ -361,6 +363,10 @@ fn a_failed_manifest_append_removes_the_output() {
         files_with_ext(&d.path().join("out"), "dds").is_empty(),
         "{:?}",
         files_with_ext(&d.path().join("out"), "dds")
+    );
+    assert!(
+        files_with_ext(&d.path().join("out"), "json").is_empty(),
+        "sidecars are removed too"
     );
     assert_eq!(kinds(&ev, "file_done"), 0);
     let failed: Vec<_> = ev
@@ -381,6 +387,60 @@ fn a_failed_manifest_append_removes_the_output() {
     // The rerun converts both instead of keeping unrecorded outputs.
     let (s, _) = run(request(d.path()));
     assert_eq!((s.converted, s.failed), (2, 0));
+}
+
+/// Audit 5 (DECISIONS Note Y1): an output replaced after it was recorded is re-encoded, not kept as up to date.
+#[test]
+fn a_replaced_output_is_reencoded() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    run(request(d.path()));
+    let out = d.path().join("out/armor/iron.dds");
+    let good = std::fs::read(&out).unwrap();
+    std::fs::write(&out, &good[..good.len() / 2]).unwrap();
+    let (s, _) = run(request(d.path()));
+    assert_eq!((s.converted, s.up_to_date), (1, 1));
+    assert_eq!(std::fs::read(&out).unwrap(), good);
+}
+
+/// Note Y1: a record from before the stamp re-encodes once, then is up to date.
+#[test]
+fn a_record_without_an_output_stamp_is_stale_once() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    run(request(d.path()));
+    let m = Manifest::at(&d.path().join("out"));
+    let text = std::fs::read_to_string(m.path()).unwrap();
+    let legacy: String = text
+        .lines()
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            assert!(v.as_object_mut().unwrap().remove("output_stamp").is_some());
+            format!("{v}\n")
+        })
+        .collect();
+    std::fs::write(m.path(), legacy).unwrap();
+    let (s, _) = run(request(d.path()));
+    assert_eq!((s.converted, s.up_to_date), (2, 0));
+    let (s, _) = run(request(d.path()));
+    assert_eq!((s.converted, s.up_to_date), (0, 2));
+}
+
+/// Audit 15 (Note Y2): `--sidecar` on a re-run writes the missing sidecar of an up-to-date output from its record.
+#[test]
+fn sidecar_is_written_for_an_up_to_date_output() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    run(request(d.path()));
+    let side = d.path().join("out/armor/iron.dds.json");
+    assert!(!side.exists());
+    let mut req = request(d.path());
+    req.sidecar = true;
+    let (s, _) = run(req);
+    assert_eq!((s.converted, s.up_to_date), (0, 2));
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&side).unwrap()).unwrap();
+    assert_eq!(v["output"], "armor/iron.dds");
 }
 
 /// I2: every record carries the batch BC1 decoder model.

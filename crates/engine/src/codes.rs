@@ -1,6 +1,7 @@
 //! Warning and error codes (spec §10). Codes added by this plan beyond the spec's original catalogue: VAL-MIP-ERROR
 //! (§5.8 per-mip error warning), CFG-INVALID (a field value outside its allowed range or an encoder/format
-//! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess) and IN-FLOAT-LDR (retired in M6:
+//! mismatch), IN-NONFINITE (NaN or infinite source samples replaced in Preprocess), IN-UNREADABLE (a folder entry
+//! discovery could not read; skipped, audit 6) and IN-FLOAT-LDR (retired in M6:
 //! never emitted) and the four `PACK-*` codes of channel packing (spec §6.4, plan M2.5), and CFG-FILE-UNMATCHED (a
 //! `[files]` key of `sdc.toml` that matches no file, M3a) and SET-EDIT-STALE (a GUI set edit that names a file or
 //! set that no longer exists, M3b), PACK-RECIPE-CONFLICT and PACK-RECIPE-UNBUILDABLE (a `packing.recipe` the set
@@ -99,6 +100,7 @@ codes! {
     InGreenUnstated = "IN-GREEN-UNSTATED" => Blocking,
     InDecode = "IN-DECODE" => Error,
     InNonfinite = "IN-NONFINITE" => Warning,
+    InUnreadable = "IN-UNREADABLE" => Warning,
     // Retired in M6 (DECISIONS S2): never emitted; kept so --allow and [files] allow lists still load.
     InFloatLdr = "IN-FLOAT-LDR" => Info,
     InIccIgnored = "IN-ICC-IGNORED" => Info,
@@ -193,7 +195,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 86);
+        assert_eq!(Code::ALL.len(), 87);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
         assert_eq!(Code::GrassVanilla.severity(), Severity::Warning);
