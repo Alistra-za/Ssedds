@@ -21,7 +21,9 @@ What the code does today (facts the decisions rest on):
   as = "textures/armor/wall_n.png"
   ```
   The key is the real file, matched like a `[files]` key (case-insensitive, with or without the extension).
-- The alias replaces the file's `rel` at discovery, before canonicalising and grouping. Everything downstream (grouping, kind, suggestions, `game_path`, the output path, `[files]` keys, set membership) sees the alias. The decoder still reads the real `path`.
+- The alias replaces the file's `rel` at discovery, before canonicalising and grouping. Grouping, kind, suggestions, rule globs, `game_path` and the output path all see the alias. The decoder still reads the real `path`.
+- **Identity stays the real file.** The file's `[files]` key, its `add`/`remove` entries and borrows in `sdc-project.toml`, and its GUI item key stay on the real path. So adding, changing or clearing an alias never orphans a setting and needs no re-keying. (`overrides::project_rel` builds keys from the folder on disk plus `rel`'s file name today; it takes the real name for an aliased file.)
+- In code the feature is called "read as" (`InputFile::real_rel`, the config key `as`), because "alias" already names a preset's `suffix_aliases` (`FileFacts::alias`).
 - The extension is the real file's. A typed alias extension equal to it is dropped; a different one blocks ("an alias keeps the file's own extension").
 - An alias must stay under the project folder (no absolute path, no `..`), use `/` or `\` (stored as `/`), and must not equal another file's real or aliased path (case-insensitive). Breaking any of these is a plan error on that file (`IN-ALIAS-INVALID`, Blocking), with the reason.
 - An alias whose real file is gone is reported, not fatal (`IN-ALIAS-STALE`, Info, like `SET-EDIT-STALE`). The GUI shows it with a Remove button.
@@ -61,7 +63,7 @@ What the code does today (facts the decisions rest on):
 
 ## D6 Undo and re-plan
 - Each Apply is one undo step and one re-plan, through F3a's `batch_edit`.
-- An alias moves a file's identity, so in the same step the GUI re-keys what was keyed by the old path: its `[files]` entry, and `add`/`remove` entries and borrows in `sdc-project.toml`. Clearing an alias re-keys back. Nothing keyed by the old path is left orphaned.
+- An alias does not move a file's identity (D1), so nothing is re-keyed.
 - A read-only `sdc.toml` makes Inputs mode a no-op with the existing notice; a read-only `sdc-project.toml` does the same for Outputs mode on non-PBR sets.
 - Slot locks (F3a Task 8) are stored by slot number (`lock = ["slot2"]`), so they need no re-keying. An alias can change a file's kind or set, which would pull it out of a locked slot, so Inputs mode skips a file that fills a locked slot and the preview shows "skipped (locked)". Outputs mode changes no membership and ignores locks.
 
@@ -79,4 +81,4 @@ What the code does today (facts the decisions rest on):
   - `plan_rename`: each operation, regex captures, invalid pattern, excluded rows, every block and warning;
   - output rename on a non-PBR set (`output_name` → `output_paths` on all targets) and on a CS PBR set (`rename` key);
   - one undo step and one re-plan for N=300;
-  - alias re-keying of `[files]`, members and borrows, the locked-slot skip, and undo of it.
+  - `[files]` settings, members and borrows survive adding and clearing an alias; the locked-slot skip; undo.
