@@ -456,6 +456,7 @@ fn swap_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<ShapeSwap> {
     })
 }
 
+/// No enabled origin (no completed scan) lists nothing: the negative query would otherwise call every path missing.
 /// Paths of winning records (`txst_slot`, `tex_ref`, `model_ref`) that are `textures/**.dds` or `meshes/**.nif`, not
 /// FaceGen, and that no enabled origin's winner provides (ruling R8). Column 6 is the record's inert reason (NULL = live).
 const MISSING_SQL: &str = "
@@ -471,7 +472,8 @@ JOIN path p ON p.id = x.path_id
 JOIN rec r ON r.plugin_id = x.plugin_id AND r.local = x.local AND r.owner_ok = 1
 JOIN plugin pl ON pl.id = x.plugin_id
 LEFT JOIN rec_inert i ON i.formid = x.formid
-WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
+WHERE EXISTS (SELECT 1 FROM origin WHERE enabled = 1)
+  AND p.p NOT LIKE 'textures/actors/character/facegendata/%'
   AND p.p NOT LIKE 'meshes/actors/character/facegendata/%'
   AND ((p.p LIKE 'textures/%.dds' AND NOT EXISTS (SELECT 1 FROM tex_winner tw
           JOIN origin o ON o.id = tw.origin_id AND o.enabled = 1 WHERE tw.path_id = x.path_id))

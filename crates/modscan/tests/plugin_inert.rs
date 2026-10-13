@@ -521,6 +521,7 @@ fn provide(s: &Store, path: &str) {
 fn missing_and_unused_ignore_inert_records() {
     let d = fixture(ORDER);
     let (s, _) = scan(&d);
+    provide(&s, "textures/zzz/other.dds"); // a completed scan has an enabled origin
     let (live, inert) = s.plugin_missing_with_inert().unwrap();
     let paths = |v: &[MissingRef]| v.iter().map(|m| m.path.clone()).collect::<Vec<_>>();
     assert!(

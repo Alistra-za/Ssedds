@@ -447,3 +447,33 @@ fn zero_limit_matches_nothing() {
     mo2(&d, &mut s);
     assert!(s.txsts_matching(&dirt_key(), 0).unwrap().is_empty());
 }
+
+/// Final review I1: a scan cancelled mid-parse leaves every origin disabled; Missing and Unused are then empty, not
+/// "every referenced file is missing".
+#[test]
+fn a_cancelled_scan_leaves_missing_and_unused_empty() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    mo2(&d, &mut s);
+    assert!(!s.plugin_missing_files().unwrap().is_empty());
+    for i in 0..600 {
+        put(d.path(), &format!("mods/A/meshes/c{i}.nif"), b"x");
+    }
+    let cancel = AtomicBool::new(false);
+    let src = Source::Mo2(Instance::load(d.path(), None).unwrap());
+    let r = run(
+        &src,
+        &mut s,
+        &cancel,
+        &|p| {
+            if p.phase == "parse" {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        &|| vec![],
+    );
+    assert!(matches!(r, Err(modscan::ScanError::Cancelled)), "{r:?}");
+    assert!(s.plugin_missing_files().unwrap().is_empty());
+    assert!(s.plugin_missing_with_inert().unwrap().1.is_empty());
+    assert!(s.unused_textures().unwrap().is_empty());
+}
