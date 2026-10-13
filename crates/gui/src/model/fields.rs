@@ -194,7 +194,26 @@ pub fn advanced_field_views(target: Target, job: &ResolvedJob) -> Vec<FieldView>
     views_of(&ADVANCED_FIELDS, target, job)
 }
 
-fn views_of(
+/// Every field the settings panel and the Advanced drawer edit, each once, in display order (F3a: bulk lookups and
+/// copy-from-active).
+pub fn all_fields() -> Vec<(&'static str, &'static str)> {
+    let mut v = FIELDS.to_vec();
+    v.extend([LEVELS_FIELD, FILTER_FIELD, EDGE_FIELD]);
+    v.extend(
+        ADVANCED_FIELDS
+            .into_iter()
+            .filter(|(f, _)| !FIELDS.iter().any(|(g, _)| g == f)),
+    );
+    v
+}
+
+/// One field's view, its lock included; `None` for a field `all_fields` does not list.
+pub fn field_view(target: Target, job: &ResolvedJob, field: &str) -> Option<FieldView> {
+    let entry = all_fields().into_iter().find(|(f, _)| *f == field)?;
+    views_of(&[entry], target, job).pop()
+}
+
+pub(crate) fn views_of(
     fields: &[(&'static str, &'static str)],
     target: Target,
     job: &ResolvedJob,
