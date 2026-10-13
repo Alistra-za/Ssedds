@@ -46,7 +46,7 @@ fn not_a_plugin_is_an_error_not_a_panic() {
 /// garbage inside them is never read.
 #[test]
 fn unwanted_groups_are_skipped_without_reading_them() {
-    let cell = grup(b"CELL", 0, &[vec![0xFF; 100]]);
+    let cell = grup(b"QUST", 0, &[vec![0xFF; 100]]);
     let nested = grup(&[0u8; 4], 1, &[vec![0xEE; 40]]);
     let f = parse(
         "x.esp",
@@ -309,4 +309,143 @@ fn a_trailing_xxxx_is_an_incomplete_subrecord_and_keeps_earlier_facts() {
         "{:?}",
         f.errors
     );
+}
+
+fn placed(sig: &[u8; 4], id: u32, base: u32) -> Vec<u8> {
+    rec(
+        sig,
+        id,
+        &[edid("R"), form(b"NAME", base), sub(b"DATA", &[0u8; 24])],
+    )
+}
+
+/// Filtering spec §3; group types per xEdit dev-4.1.6 `wbImplementation.pas` `TwbGroupRecord.GetName` (1-10). The base
+/// FormID of every REFR/ACHR under CELL and WRLD, once each, ascending; other records there are skipped unread.
+#[test]
+fn placed_references_in_interior_and_exterior_cells() {
+    let cell = 0x0000_1000u32.to_le_bytes();
+    let interior = grup(
+        b"CELL",
+        0,
+        &[grup(
+            &0u32.to_le_bytes(),
+            2,
+            &[grup(
+                &0u32.to_le_bytes(),
+                3,
+                &[
+                    rec(b"CELL", 0x1000, &[edid("Room")]),
+                    grup(
+                        &cell,
+                        6,
+                        &[
+                            grup(
+                                &cell,
+                                8,
+                                &[
+                                    placed(b"REFR", 0x2001, 0x0100_0800),
+                                    placed(b"ACHR", 0x2002, 0x7777),
+                                ],
+                            ),
+                            grup(
+                                &cell,
+                                9,
+                                &[
+                                    placed(b"REFR", 0x2003, 0x0100_0800),
+                                    rec(b"NAVM", 0x2004, &[vec![0xFF; 32]]),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            )],
+        )],
+    );
+    let (wrld, ext) = (0x0000_3000u32.to_le_bytes(), 0x0000_3001u32.to_le_bytes());
+    let packed = [form(b"NAME", 0x0ABC), sub(b"DATA", &[0u8; 24])].concat();
+    let exterior = grup(
+        b"WRLD",
+        0,
+        &[
+            rec(b"WRLD", 0x3000, &[edid("Tamriel")]),
+            grup(
+                &wrld,
+                1,
+                &[grup(
+                    &[0u8; 4],
+                    4,
+                    &[grup(
+                        &[0u8; 4],
+                        5,
+                        &[
+                            rec(b"CELL", 0x3001, &[]),
+                            grup(
+                                &ext,
+                                6,
+                                &[grup(
+                                    &ext,
+                                    9,
+                                    &[rec_raw(
+                                        b"REFR",
+                                        0x3002,
+                                        FLAG_COMPRESSED,
+                                        &compressed(&packed),
+                                    )],
+                                )],
+                            ),
+                        ],
+                    )],
+                )],
+            ),
+        ],
+    );
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[
+                interior,
+                exterior,
+                top(b"STAT", &[rec(b"STAT", 0x0100_0800, &[edid("Rock")])]),
+            ],
+        ),
+    );
+    assert!(f.errors.is_empty(), "{:?}", f.errors);
+    assert_eq!(f.placed, vec![0x0ABC, 0x7777, 0x0100_0800]);
+    assert_eq!(f.records.len(), 1, "placed references are not records");
+}
+
+/// Review focus 4: a bad nested group is reported and ends only its own group.
+#[test]
+fn a_bad_nested_cell_group_is_reported_and_later_groups_are_read() {
+    let mut bad = grup(&[0u8; 4], 6, &[placed(b"REFR", 1, 0x10)]);
+    bad[4..8].copy_from_slice(&10_000u32.to_le_bytes()); // runs past its parent
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[
+                grup(b"CELL", 0, &[bad]),
+                top(b"STAT", &[rec(b"STAT", 0x0100_0800, &[edid("Rock")])]),
+            ],
+        ),
+    );
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert!(f.errors[0].contains("nested group size"), "{:?}", f.errors);
+    assert_eq!(f.records.len(), 1);
+}
+
+/// Review focus 4: nesting is capped, so a crafted file cannot overflow the stack.
+#[test]
+fn groups_nested_too_deep_are_an_error_not_a_stack_overflow() {
+    let mut g = grup(&[0u8; 4], 9, &[placed(b"REFR", 1, 0x10)]);
+    for _ in 0..20 {
+        g = grup(&[0u8; 4], 6, &[g]);
+    }
+    let f = parse("x.esp", &plugin(0, &[], &[grup(b"CELL", 0, &[g])]));
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    assert!(f.errors[0].contains("nested deeper"), "{:?}", f.errors);
+    assert!(f.placed.is_empty());
 }

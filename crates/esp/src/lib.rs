@@ -20,6 +20,9 @@ pub struct PluginFacts {
     pub flags: u32,
     pub masters: Vec<String>,
     pub records: Vec<Rec>,
+    /// Base FormIDs (as stored) placed by REFR/ACHR records in CELL and WRLD groups, once each, ascending
+    /// (filtering spec §3). The references themselves are not kept.
+    pub placed: Vec<u32>,
     /// `"offset 0x…: message"`, in file order. Records read before a fault are kept.
     pub errors: Vec<String>,
 }
