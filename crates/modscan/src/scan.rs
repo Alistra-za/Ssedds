@@ -9,7 +9,7 @@ use crate::store::{
     KIND_BSA, KIND_DATA, KIND_MOD, KIND_OVERWRITE, KIND_SEPARATOR, PARSE_FAILED, PARSE_NOT_SKYRIM,
 };
 use crate::ScanError;
-use nif::path::is_facegen;
+use nif::path::{is_facegen, is_lod_path};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -764,7 +764,7 @@ fn walk(
         });
         for f in vfs::loose::walk(&o.root, &["meshes"], &["nif"]) {
             let origin = OriginRef::Loose(i);
-            if !seen.insert((f.norm.clone(), origin)) {
+            if is_lod_path(&f.norm) || !seen.insert((f.norm.clone(), origin)) {
                 continue;
             }
             copies.push(Copy {
@@ -777,6 +777,9 @@ fn walk(
         }
         // Textures: directory-entry stat only, never the bytes. Distinct paths per origin by construction.
         for f in vfs::loose::walk(&o.root, &["textures"], &["dds"]) {
+            if is_lod_path(&f.norm) {
+                continue;
+            }
             tex.push(Copy {
                 path: f.norm,
                 origin: OriginRef::Loose(i),
@@ -804,7 +807,11 @@ fn walk(
         let mtime = file_mtime(&b.path);
         let bi = opened.len();
         for e in &bsa.entries {
-            if e.norm.starts_with("textures/") && e.norm.ends_with(".dds") && !is_facegen(&e.norm) {
+            if e.norm.starts_with("textures/")
+                && e.norm.ends_with(".dds")
+                && !is_facegen(&e.norm)
+                && !is_lod_path(&e.norm)
+            {
                 tex.push(Copy {
                     path: e.norm.clone(),
                     origin: OriginRef::Bsa(i),
@@ -814,7 +821,11 @@ fn walk(
             }
         }
         for (ei, e) in bsa.entries.iter().enumerate() {
-            if !e.norm.starts_with("meshes/") || !e.norm.ends_with(".nif") || is_facegen(&e.norm) {
+            if !e.norm.starts_with("meshes/")
+                || !e.norm.ends_with(".nif")
+                || is_facegen(&e.norm)
+                || is_lod_path(&e.norm)
+            {
                 continue;
             }
             let origin = OriginRef::Bsa(i);

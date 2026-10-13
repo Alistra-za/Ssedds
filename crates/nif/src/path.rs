@@ -96,7 +96,40 @@ pub fn canon_model(raw: &[u8]) -> String {
     rebase(&s, "meshes").1
 }
 
+/// PGPatcher's LOD blocklist (`*\lod\*`, `*\dyndolod\*`, `*_lod_*`, `*_lod.*`) on a canonical lower-case path.
+pub fn is_lod_path(norm: &str) -> bool {
+    ["/lod/", "/dyndolod/", "_lod_", "_lod."]
+        .iter()
+        .any(|p| norm.contains(p))
+}
+
 pub fn is_facegen(norm: &str) -> bool {
     norm.starts_with("meshes/actors/character/facegendata/")
         || norm.starts_with("textures/actors/character/facegendata/")
+}
+
+#[cfg(test)]
+mod lod_tests {
+    use super::*;
+
+    #[test]
+    fn lod_paths_match_the_pgpatcher_blocklist_only() {
+        for p in [
+            "meshes/lod/x.nif",
+            "meshes/dyndolod/x.nif",
+            "meshes/a/b_lod_0.nif",
+            "textures/t/x_lod.dds",
+        ] {
+            assert!(is_lod_path(p), "{p}");
+        }
+        assert!(is_lod_path(&canon_model(b"Meshes\\LOD\\X.NIF")));
+        for p in [
+            "meshes/clod/x.nif",
+            "meshes/lodge/x.nif",
+            "meshes/a/blodgett.nif",
+            "textures/flood.dds",
+        ] {
+            assert!(!is_lod_path(p), "{p}");
+        }
+    }
 }

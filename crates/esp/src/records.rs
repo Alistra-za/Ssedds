@@ -1,7 +1,7 @@
 //! Which groups are read, and what each record type contributes (spec §3).
 use crate::read::{each_sub, u32_at};
 use crate::{AltTex, ModelRef, Payload, Rec, Txst};
-use nif::path::{canon_model, canon_texture};
+use nif::path::{canon_model, canon_texture, is_lod_path};
 
 /// Top-level groups read (spec §3); every other group is skipped by its size. The last row is every other type with a
 /// `wbGenericModel` (MODL + MODS alternate textures; xEdit dev-4.1.6 `wbDefinitionsTES5.pas`: TACT, ANIO, CLMT, IDLM,
@@ -80,12 +80,12 @@ pub(crate) fn read(rec: &mut Rec, data: &[u8]) -> Result<(), usize> {
 
 fn tex_path(d: &[u8]) -> Option<String> {
     let t = canon_texture(until_nul(d));
-    (!t.norm.is_empty()).then_some(t.norm)
+    (!t.norm.is_empty() && !is_lod_path(&t.norm)).then_some(t.norm)
 }
 
 fn model_path(d: &[u8]) -> Option<String> {
     let m = canon_model(until_nul(d));
-    (!m.is_empty()).then_some(m)
+    (!m.is_empty() && !is_lod_path(&m)).then_some(m)
 }
 
 /// TXST (xEdit `wbRecord(TXST…)`): TX00..TX07, DODT presence, DNAM itU16 flags.
