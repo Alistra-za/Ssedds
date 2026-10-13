@@ -1,7 +1,7 @@
 //! P1-D: shape-keyed CS settings rules and the coverage report over the four CS builds the owner has
 //! (03-cs-settings-drift.md). Fixtures = name lists extracted by the P1-D plan Task 1 (no CS source, no CS values).
 use render3d::cs_settings::{
-    feature_data, linear_lighting_on, read_settings, CsSettings, SettingsPaths,
+    coverage, feature_data, linear_lighting_on, read_settings, Coverage, CsSettings, SettingsPaths,
 };
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -336,4 +336,86 @@ fn skin_tiling_follows_the_settings_values() {
     );
     let old = feature_data(&s, &fields_of("cs18_bottle"), true, false);
     assert_eq!(value(&old, "skinData.skinDetailParams")[..2], [7.0, 3.0]);
+}
+
+/// 03 report 6.3: with the rules of Tasks 2-3 every build lands its own keys; Nexus has no JSON, so the old-LL
+/// gammas and the ExtMat/ExtTrans fields stay unset (zero), the honest answer.
+#[test]
+fn coverage_per_build() {
+    for tag in BUILDS {
+        let (f, s) = build(tag);
+        let c = coverage(&s, &f, &feature_data(&s, &f, true, false));
+        assert!(c.unmatched.is_empty(), "{tag}: {:?}", c.unmatched);
+        if tag == "nexus191" {
+            let want: BTreeSet<String> = [
+                "extendedMaterialSettings.EnableComplexMaterial",
+                "extendedMaterialSettings.EnableHeightBlending",
+                "extendedMaterialSettings.EnableParallax",
+                "extendedMaterialSettings.EnableParallaxWarpingFix",
+                "extendedMaterialSettings.EnableShadows",
+                "extendedMaterialSettings.EnableTerrainParallax",
+                "extendedTranslucencySettings.MaterialModel",
+                "extendedTranslucencySettings.Reduction",
+                "extendedTranslucencySettings.Softness",
+                "extendedTranslucencySettings.Strength",
+                "linearLightingSettings.ambientGamma",
+                "linearLightingSettings.colorGamma",
+                "linearLightingSettings.effectAlphaGamma",
+                "linearLightingSettings.effectGamma",
+                "linearLightingSettings.emitColorGamma",
+                "linearLightingSettings.emitColorMult",
+                "linearLightingSettings.fogAlphaGamma",
+                "linearLightingSettings.fogGamma",
+                "linearLightingSettings.glowmapGamma",
+                "linearLightingSettings.lightGamma",
+                "linearLightingSettings.skyGamma",
+                "linearLightingSettings.vanillaDiffuseColorMult",
+                "linearLightingSettings.vlGamma",
+                "linearLightingSettings.waterGamma",
+            ]
+            .map(String::from)
+            .into();
+            assert_eq!(c.unset, want);
+        } else {
+            assert_eq!(c, Coverage::default(), "{tag}");
+            assert_eq!(c.line(), None);
+        }
+    }
+}
+
+/// Drift shows: an old-generation key on the new build is unmatched, a reflected field nothing writes is unset;
+/// pads, struct-less sections and known JSON-only keys stay quiet.
+#[test]
+fn coverage_names_the_drift() {
+    // The installed build own (clean) key set plus one drifted field and two drifted keys.
+    let (mut f, mut s) = build("aio190");
+    f.insert("linearLightingSettings.newThing".into());
+    let section = |s: &CsSettings, name: &str| -> serde_json::Map<String, serde_json::Value> {
+        s.merged[name].as_object().unwrap().clone()
+    };
+    let mut ll = section(&s, "Linear Lighting");
+    ll.insert("lightGamma".into(), 2.2.into());
+    s.merged.insert("Linear Lighting".into(), ll.into());
+    let mut skin = section(&s, "Advanced Skin");
+    skin["DefaultProfile"]
+        .as_object_mut()
+        .unwrap()
+        .insert("NewSkinKnob".into(), 1.0.into());
+    s.merged.insert("Advanced Skin".into(), skin.into());
+    let c = coverage(&s, &f, &feature_data(&s, &f, true, false));
+    assert_eq!(
+        c.unset,
+        BTreeSet::from(["linearLightingSettings.newThing".to_string()])
+    );
+    assert_eq!(
+        c.unmatched,
+        BTreeSet::from([
+            "Advanced Skin.NewSkinKnob".to_string(),
+            "Linear Lighting.lightGamma".to_string()
+        ])
+    );
+    assert_eq!(
+        c.line().as_deref(),
+        Some("CS settings: 1 fields unset, 2 keys unmatched")
+    );
 }

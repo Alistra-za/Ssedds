@@ -281,6 +281,8 @@ pub struct Renderer {
     features_on: bool,
     /// The shaders are an old Linear Lighting build (P1-D); memoised from the expanded source, reset by `set_shaders`.
     old_ll: std::cell::OnceCell<bool>,
+    /// The last coverage of every program at hand (P1-D), for the panel line; dropped with the programs.
+    coverage: HashMap<ProgramKey, cs_settings::Coverage>,
     /// One expanded `Lighting.hlsl` per shaders folder (03 §5); dropped with the folder by `set_shaders`.
     sources: SourceSet,
     /// Device objects by pair key; dropped by `set_shaders` and by a device rebuild.
@@ -408,6 +410,7 @@ impl Renderer {
             settings: CsSettings::default(),
             features_on: true,
             old_ll: std::cell::OnceCell::new(),
+            coverage: HashMap::new(),
             programs: HashMap::new(),
             compiled: HashMap::new(),
             inflight: HashSet::new(),
@@ -450,6 +453,36 @@ impl Renderer {
     pub fn set_settings(&mut self, s: CsSettings) {
         self.settings = s;
         self.apply_settings_defines();
+        let at_hand: Vec<(ProgramKey, BTreeSet<String>)> = self
+            .programs
+            .iter()
+            .filter_map(|(k, p)| p.as_ref().ok().map(|p| (k.clone(), program_fields(p))))
+            .collect();
+        for (k, f) in at_hand {
+            self.note_coverage(k, f);
+        }
+    }
+
+    /// The union of every program's coverage (P1-D): the panel shows `line()` when it is `Some`.
+    pub fn settings_coverage(&self) -> cs_settings::Coverage {
+        let mut all = cs_settings::Coverage::default();
+        for c in self.coverage.values() {
+            all.unset.extend(c.unset.iter().cloned());
+            all.unmatched.extend(c.unmatched.iter().cloned());
+        }
+        all
+    }
+
+    /// Logs and keeps one program's coverage (`settings_coverage` line). The coverage depends only on names, so
+    /// a non-head draw stands for the program.
+    fn note_coverage(&mut self, key: ProgramKey, fields: BTreeSet<String>) {
+        let values = cs_settings::feature_data(&self.settings, &fields, self.features_on, false);
+        let c = cs_settings::coverage(&self.settings, &fields, &values);
+        perf_log::emit(
+            "settings_coverage",
+            serde_json::json!({"key": perf_log::short(&key.0), "unset": c.unset, "unmatched": c.unmatched}),
+        );
+        self.coverage.insert(key, c);
     }
 
     pub fn settings(&self) -> &CsSettings {
@@ -545,6 +578,7 @@ impl Renderer {
         self.shaders = shaders;
         self.programs.clear();
         self.old_ll = std::cell::OnceCell::new();
+        self.coverage.clear();
         // The LL generation may have changed, so the display encode (follows linear_lighting) must be re-derived.
         self.encode_srgb = self.linear_lighting();
     }
@@ -863,6 +897,9 @@ impl Renderer {
             Some(Ok(pair)) => {
                 let built = create_program(&self.gpu, pair.vs.clone(), pair.ps.clone());
                 self.programs.insert(w.key.clone(), built.clone());
+                if let Ok(p) = &built {
+                    self.note_coverage(w.key.clone(), program_fields(p));
+                }
                 ready(&built)
             }
         }

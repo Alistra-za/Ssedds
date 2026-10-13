@@ -2322,3 +2322,18 @@ fn choose_folder_reads_the_settings_through_the_last_scan_target() {
     }
     assert_eq!(v.settings().hash, read_json_settings(CHANGED).hash);
 }
+
+/// P1-D: the coverage line shows under the frame only when the renderer reports one.
+#[test]
+fn the_coverage_line_shows_only_when_reported() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.handle(v3::V3Reply::Coverage(Some(
+        "CS settings: 3 fields unset, 1 keys unmatched".into(),
+    )));
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label_contains("CS settings: 3 fields unset, 1 keys unmatched");
+    let mut h = harness(Viewport3d::with_state(V3State::Ready));
+    h.run();
+    assert!(h.query_by_label_contains("CS settings:").is_none());
+}

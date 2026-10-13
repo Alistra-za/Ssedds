@@ -4,6 +4,7 @@ mod common;
 use common::{cache_files, channel, covered, fixture, renderer, standin_root, FLAT};
 use render3d::cs_settings::CsSettings;
 use render3d::device::Gpu;
+use render3d::perf_log;
 use render3d::scene::Scene;
 use render3d::{parse, run_job, Renderer, ShapeStatus};
 use std::path::Path;
@@ -273,4 +274,47 @@ fn set_shaders_between_ll_generations_refreshes_encode_and_defines() {
     r.set_shaders(fp(&standin_root()));
     assert!(r.encode_srgb(), "back on new LL: default on");
     assert_eq!(defined(&mut r), [true, true]);
+}
+
+/// P1-D: one `settings_coverage` line per program when it is created and per program on every apply; the renderer
+/// union feeds the panel line.
+#[test]
+fn every_program_reports_its_settings_coverage() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut s = settings(true, 1.0);
+    s.merged
+        .get_mut("Linear Lighting")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("bogusKey".into(), 1.into());
+    let (mut r, ev) = perf_log::capture(|| furniture(cache.path(), FEATURE_DATA, s));
+    let lines = |ev: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        ev.iter()
+            .filter(|e| e["event"] == "settings_coverage")
+            .cloned()
+            .collect()
+    };
+    let first = lines(&ev);
+    assert!(!first.is_empty(), "{ev:?}");
+    for e in &first {
+        assert_eq!(
+            e["unmatched"],
+            serde_json::json!(["Linear Lighting.bogusKey"]),
+            "{e}"
+        );
+        assert_eq!(e["unset"], serde_json::json!([]), "{e}");
+        assert_eq!(e["key"].as_str().unwrap().len(), 12, "{e}");
+    }
+    assert_eq!(
+        r.settings_coverage().line().as_deref(),
+        Some("CS settings: 0 fields unset, 1 keys unmatched")
+    );
+    let ((), ev) = perf_log::capture(|| r.set_settings(settings(true, 0.5)));
+    let again = lines(&ev);
+    assert_eq!(again.len(), first.len(), "once per program per apply");
+    assert!(again
+        .iter()
+        .all(|e| e["unmatched"] == serde_json::json!([])));
+    assert_eq!(r.settings_coverage().line(), None);
 }

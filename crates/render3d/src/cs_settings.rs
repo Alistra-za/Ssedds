@@ -303,6 +303,139 @@ const SECTIONS: &[Section] = &[
     ),
 ];
 
+/// Settings keys with no FeatureData field by design (03 report 3, 6.3): CPU-only (`SkinnedOnly`, the sweat
+/// timers, `DetailTexture`, `EnableVerboseJsonLogging`), consumed by a derivation (`diffuseMidReflectance` ->
+/// diffuseCurve, `enableLinearLighting` -> the LL switch) or unused by the shader (`enableACEScg`, `gameGamma`,
+/// 1.9 `emitColorMult`, `UseDynamicWetness`).
+const NO_FIELD_KEYS: &[&str] = &[
+    "SkinnedOnly",
+    "enableACEScg",
+    "gameGamma",
+    "emitColorMult",
+    "diffuseMidReflectance",
+    "enableLinearLighting",
+    "EnableVerboseJsonLogging",
+    "DetailTexture",
+    "FullSweat",
+    "StartSweat",
+    "WetFadeTime",
+    "UseDynamicWetness",
+];
+
+/// Every `"Advanced Skin"` key [`pack_skin`] reads (profile or section root).
+const SKIN_KEYS: &[&str] = &[
+    "EnableSkin",
+    "ExtraSkinWetness",
+    "WetParams",
+    "SkinMainRoughness",
+    "SkinSecondRoughness",
+    "SkinSpecularTexMultiplier",
+    "SecondarySpecularStrength",
+    "F0",
+    "BaseColorMultiplier",
+    "SkinDetailTiling",
+    "BodyTilingMultiplier",
+    "SkinDetailStrength",
+    "EnableSkinDetail",
+    "Translucency",
+    "sssWidth",
+    "SSSAmount",
+    "UseSSS",
+    "FuzzStrength",
+    "FuzzRoughness",
+    "FuzzF0",
+    "ExtraEdgeRoughness",
+    "PhysicalMainRoughnessMultiplier",
+    "PhysicalSecondRoughnessMultiplier",
+    "PhysicalSpecularStrength",
+    "WetResponse",
+];
+
+/// The struct field a section key lands in (C5 renames).
+fn renamed<'a>(renames: &[(&str, &'a str)], key: &'a str) -> &'a str {
+    renames.iter().find(|r| r.0 == key).map_or(key, |r| r.1)
+}
+
+/// What one program's settings write missed (03 report 6.3): reflected fields nothing wrote, and settings keys
+/// that matched no field.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Coverage {
+    pub unset: BTreeSet<String>,
+    pub unmatched: BTreeSet<String>,
+}
+
+impl Coverage {
+    /// The panel line; `None` when there is nothing to report.
+    pub fn line(&self) -> Option<String> {
+        (!self.unset.is_empty() || !self.unmatched.is_empty()).then(|| {
+            format!(
+                "CS settings: {} fields unset, {} keys unmatched",
+                self.unset.len(),
+                self.unmatched.len()
+            )
+        })
+    }
+}
+
+/// `fields` (one program's [`reflected_fields`]) against `written` (its [`feature_data`]) and the settings. Checked
+/// fields: the 7 sections' structs, `skinData`, b7 and b8, minus `pad*`. Checked keys: the 7 sections', minus
+/// [`NO_FIELD_KEYS`], strings and objects; a section whose struct this build lacks is skipped.
+pub fn coverage(
+    s: &CsSettings,
+    fields: &BTreeSet<String>,
+    written: &[(String, Vec<f64>)],
+) -> Coverage {
+    let under = |f: &str, p: &str| f.strip_prefix(p).is_some_and(|r| r.starts_with('.'));
+    let has = |p: &str| fields.iter().any(|f| under(f.as_str(), p));
+    let in_scope = |f: &str| {
+        SECTIONS
+            .iter()
+            .map(|sec| sec.1)
+            .chain(["skinData", "skinPerGeometryProfile"])
+            .any(|p| under(f, p))
+            || matches!(f, "skinPerGeometry" | "skinMaterialFlags" | "emissiveMult")
+    };
+    let is_pad = |f: &str| f.rsplit('.').next().is_some_and(|l| l.starts_with("pad"));
+    let wrote: BTreeSet<&str> = written.iter().map(|(n, _)| n.as_str()).collect();
+    let unset = fields
+        .iter()
+        .filter(|f| in_scope(f.as_str()) && !is_pad(f.as_str()) && !wrote.contains(&f.as_str()))
+        .cloned()
+        .collect();
+    let counts = |k: &str, v: &Value| {
+        matches!(v, Value::Number(_) | Value::Bool(_) | Value::Array(_))
+            && !NO_FIELD_KEYS.contains(&k)
+    };
+    let mut unmatched = BTreeSet::new();
+    for (section, prefix, renames) in SECTIONS {
+        let Some(Value::Object(m)) = s.merged.get(*section) else {
+            continue;
+        };
+        if !has(prefix) {
+            continue;
+        }
+        for (key, v) in m {
+            if counts(key.as_str(), v)
+                && !fields.contains(&format!("{prefix}.{}", renamed(renames, key)))
+            {
+                unmatched.insert(format!("{section}.{key}"));
+            }
+        }
+    }
+    if let (Some(Value::Object(skin)), true) = (s.merged.get("Advanced Skin"), has("skinData")) {
+        let profile = match skin.get("DefaultProfile") {
+            Some(Value::Object(d)) => Some(d),
+            _ => None,
+        };
+        for (key, v) in skin.iter().chain(profile.into_iter().flatten()) {
+            if counts(key.as_str(), v) && !SKIN_KEYS.contains(&key.as_str()) {
+                unmatched.insert(format!("Advanced Skin.{key}"));
+            }
+        }
+    }
+    Coverage { unset, unmatched }
+}
+
 /// Linear Lighting's `diffuseCurve` (C4, no settings key): the inverse of CS's DiffuseToWorking curve at mid
 /// grey. `x = 0.5^gamma; mid·(1−x) / (x·(white−mid))`.
 pub fn diffuse_curve(gamma: f64, mid: f64, white: f64) -> f64 {
@@ -350,10 +483,7 @@ pub fn feature_data(
             continue;
         };
         for (key, v) in m {
-            let field = renames
-                .iter()
-                .find(|r| r.0 == key.as_str())
-                .map_or(key.as_str(), |r| r.1);
+            let field = renamed(renames, key);
             let vals: Vec<f64> = match v {
                 Value::Array(a) => a.iter().filter_map(num).collect(),
                 v => num(v).into_iter().collect(),
