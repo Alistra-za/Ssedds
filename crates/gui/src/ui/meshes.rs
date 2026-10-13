@@ -449,6 +449,9 @@ fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
                             }
                         });
                     }
+                    if uses.len() > MAX_LISTED {
+                        ui.label(format!("… and {} more", uses.len() - MAX_LISTED));
+                    }
                 });
         });
 }

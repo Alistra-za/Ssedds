@@ -1173,3 +1173,27 @@ fn unused_says_plugins_were_not_read_after_a_folder_scan() {
     assert!(run(None));
     assert!(!run(Some(stats(1, 1, 1, 1, &[]))));
 }
+
+/// Review M5: the list is cut at 200; the rest is counted.
+#[test]
+fn plugin_overrides_say_how_many_more_are_cut() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    m.plugin_uses = (0..205)
+        .map(|i| MeshUse {
+            formid: i,
+            edid: None,
+            sig: "STAT".into(),
+            plugin: "Skyrim.esm".into(),
+            model_slot: 0,
+            n_overrides: 0,
+            swaps: vec![],
+        })
+        .collect();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (205)").click();
+    h.run();
+    h.get_by_label("… and 5 more");
+}
