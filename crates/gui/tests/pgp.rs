@@ -249,12 +249,9 @@ fn the_default_match1_prefixes_and_renames() {
         p(&[("match1", json!(r"Textures\landscape\rock02"))], "x"),
         r"textures\pbr\landscape\rock02"
     );
-    // With a slot match, rename is the whole prefix.
+    // Rename is a file name in the matched folder (owner, 2026-10-12).
     assert_eq!(
-        p(
-            &[("rename", json!(r"textures\pbr\landscape\boulder"))],
-            r"landscape\rock01"
-        ),
+        p(&[("rename", json!("boulder"))], r"landscape\rock01"),
         r"textures\pbr\landscape\boulder"
     );
     // The lowest active match decides; match2 alone gives the same prefix.
@@ -319,17 +316,17 @@ fn slot_modes_strip_the_first_suffix_of_their_own_list() {
     );
     assert_eq!(p("match7", r"x\leaf_s.dds"), r"textures\pbr\x\leaf");
     assert_eq!(p("match6", r"x\iron_m.dds"), r"textures\pbr\x\iron");
-    // rename replaces the whole prefix in slot modes.
+    // rename names the file in the folder of the match that decides.
     let r = prefix_of(
         &s(&[
             ("match1", json!("")),
             ("match2", json!(r"a\b_n.dds")),
-            ("rename", json!(r"textures\pbr\c\d")),
+            ("rename", json!("d")),
         ]),
         "x",
     )
     .unwrap();
-    assert_eq!(r, r"textures\pbr\c\d");
+    assert_eq!(r, r"textures\pbr\a\d");
 }
 
 #[test]
@@ -454,10 +451,16 @@ fn slot_match_paths_swap_the_diffuse_suffix() {
 #[test]
 fn forward_slashes_in_json_paths_block() {
     // PGPatcher never converts '/', and the writer writes these values as typed (DECISIONS P26).
-    for key in ["match1", "match2", "rename"] {
+    for key in ["match1", "match2"] {
         let e = prefix_of(&s(&[(key, json!("landscape/rock01"))]), "x").unwrap_err();
         assert!(e.0.contains(key) && e.0.contains(r"use \ not /"), "{e:?}");
     }
+    // rename is a file name: a '/' is a folder, refused as such (owner, 2026-10-12).
+    let e = prefix_of(&s(&[("rename", json!("landscape/rock01"))]), "x").unwrap_err();
+    assert!(
+        e.0.contains("rename") && e.0.contains("a file name only"),
+        "{e:?}"
+    );
     assert!(check_json_path("landscape/white.dds", "slot3").is_err());
     assert!(check_json_path(r"landscape\white.dds", "slot3").is_ok());
     // The derived match is built with backslashes, so a nested folder still works.
@@ -475,11 +478,12 @@ fn forward_slashes_in_json_paths_block() {
 fn pitfalls_are_reported_not_fixed() {
     let w = pitfalls(&s(&[("match8", json!(r"x\leaf_s.dds"))]), "x");
     assert!(w.iter().any(|m| m.contains("match8")), "{w:?}");
+    // A rename is a file name now, so there is no "full path" pitfall (owner, 2026-10-12).
     let w = pitfalls(
-        &s(&[("match2", json!(r"a\b_n.dds")), ("rename", json!(r"c\d"))]),
+        &s(&[("match2", json!(r"a\b_n.dds")), ("rename", json!("d"))]),
         "x",
     );
-    assert!(w.iter().any(|m| m.contains("full path")), "{w:?}");
+    assert!(w.is_empty(), "{w:?}");
     assert!(pitfalls(&s(&[]), r"landscape\rock01").is_empty());
     let w = pitfalls(&s(&[("match1", json!(""))]), "x");
     assert!(
@@ -1057,7 +1061,8 @@ fn slot_matches_hit_the_unpatched_mesh_and_land_on_the_sdc_prefix() {
 }
 
 /// Task 3 review fix: PGPatcher takes the prefix from whichever match hits, not the lowest active one. When the active
-/// matches derive different prefixes the set warns, and a whole-prefix rename makes every hit land on sdc's prefix.
+/// matches derive different prefixes the set warns (advising to edit the match paths), and a rename makes every hit land
+/// on sdc's prefix.
 #[test]
 fn divergent_matches_warn_and_a_rename_pins_the_prefix() {
     let default = document(&[]).to_value()["default"].clone();
@@ -1081,14 +1086,13 @@ fn divergent_matches_warn_and_a_rename_pins_the_prefix() {
     let w = pitfalls(&e.settings, r"a\one");
     assert!(
         w.iter()
-            .any(|m| m.contains("match slots point at different textures")),
+            .any(|m| m.contains("match slots point at different textures")
+                && m.contains("edit the match paths so they point at the same texture")
+                && !m.contains("Rename")),
         "{w:?}"
     );
-    // A whole-prefix rename fixes it: no warning, and the hit lands on sdc's prefix.
-    let pairs = [
-        ("match2", json!(r"b\two_n")),
-        ("rename", json!(r"textures\pbr\a\one")),
-    ];
+    // A rename fixes it: no warning, and the hit lands on sdc's prefix.
+    let pairs = [("match2", json!(r"b\two_n")), ("rename", json!("one"))];
     let e = entry(&pairs, r"a\one");
     assert!(
         pitfalls(&e.settings, r"a\one").is_empty(),
@@ -1109,4 +1113,134 @@ fn divergent_matches_warn_and_a_rename_pins_the_prefix() {
     // The default: match1 and match2 from the same set agree, so no warning.
     let same = s(&[("match2", json!(slot_match_path(r"landscape\rock01_d", "n")))]);
     assert!(pitfalls(&same, r"landscape\rock01_d").is_empty());
+}
+
+/// Owner, 2026-10-12 (final fix wave): Rename is a new file name. sdc puts it in the folder of the matched path and
+/// writes the full prefix, the form PGPatcher's whole-match substitution needs, for every match mode.
+#[test]
+fn a_rename_is_a_file_name_in_the_matched_folder() {
+    let p = |pairs: &[(&str, Value)], derived: &str| prefix_of(&s(pairs), derived).unwrap();
+    assert_eq!(
+        p(&[("rename", json!("boulder"))], r"landscape\rock01"),
+        r"textures\pbr\landscape\boulder"
+    );
+    assert_eq!(
+        p(&[("rename", json!("boulder.DDS"))], r"landscape\rock01"),
+        r"textures\pbr\landscape\boulder",
+        "one .dds is cut, like a match path"
+    );
+    assert_eq!(
+        p(
+            &[
+                ("match1", json!("")),
+                ("match2", json!(r"b\two_n")),
+                ("rename", json!("one"))
+            ],
+            r"a\one"
+        ),
+        r"textures\pbr\b\one",
+        "the folder of the lowest active match"
+    );
+    assert_eq!(
+        p(
+            &[
+                ("match1", json!("")),
+                ("path_contains", json!("rock")),
+                ("rename", json!("snow01"))
+            ],
+            r"landscape\rock01"
+        ),
+        r"textures\pbr\landscape\snow01",
+        "path_contains: the folder of the derived path"
+    );
+    for bad in [r"landscape\boulder", "landscape/boulder", r"textures\pbr\x"] {
+        let e = prefix_of(&s(&[("rename", json!(bad))]), r"landscape\rock01").unwrap_err();
+        assert!(
+            e.0.contains("rename") && e.0.contains("a file name only"),
+            "{bad:?}: {e:?}"
+        );
+    }
+    assert!(prefix_of(&s(&[("rename", json!(".dds"))]), r"landscape\rock01").is_err());
+    // The JSON carries the full prefix, not the typed name.
+    let v = written(&entry(&[("rename", json!("boulder"))], r"landscape\rock01"));
+    assert_eq!(v["rename"], json!(r"textures\pbr\landscape\boulder"));
+}
+
+/// The renamed entry lands where sdc writes the files, through pgpsim. PGPatcher prepends `\` to rename
+/// (`pgpsim::prepare`), so the matched path is compared without it (DECISIONS V3, unverified in real PGPatcher).
+#[test]
+fn a_renamed_entry_lands_on_the_sdc_prefix_for_slot_matches_and_path_contains() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mut mesh = pgpsim::MaterialState::builtin_default();
+    mesh.set_slot_raw(0, r"textures\landscape\rock01.dds");
+    mesh.set_slot_raw(1, r"textures\landscape\rock01_n.dds");
+    let nif = r"meshes\landscape\rock01.nif";
+    let derived = r"landscape\rock01";
+    let cases: [(&str, Vec<(&str, Value)>); 3] = [
+        ("slot match", vec![("rename", json!("boulder"))]),
+        (
+            "path_contains alone",
+            vec![
+                ("match1", json!("")),
+                ("path_contains", json!("rock01")),
+                ("rename", json!("boulder")),
+            ],
+        ),
+        (
+            "path_contains with a slot match",
+            vec![
+                ("path_contains", json!("rock01")),
+                ("match2", json!(r"landscape\rock01_n")),
+                ("rename", json!("boulder")),
+            ],
+        ),
+    ];
+    for (label, pairs) in cases {
+        let e = entry(&pairs, derived);
+        let prepared = pgpsim::prepare(&written(&e), &default);
+        assert!(
+            pgpsim::shape_matches(&prepared, nif, &mesh.slots),
+            "{label}"
+        );
+        let want = prefix_of(&e.settings, derived).unwrap();
+        assert_eq!(want, r"textures\pbr\landscape\boulder", "{label}");
+        assert_eq!(
+            pgpsim::matched_path(&prepared, &mesh.slots)
+                .map(|p| p.trim_start_matches('\\').to_string()),
+            Some(want.to_ascii_lowercase()),
+            "{label}"
+        );
+    }
+}
+
+/// Owner bullet B (slot 8 `_s`), checked against pgpsim: PGPatcher's slot-8 list is `_b`/`_bl`/`_flow`, so a mesh
+/// hit through `match8 = …_s` gets a prefix ending in `_s`, not sdc's. The two warnings report a real split.
+#[test]
+fn a_match8_on_an_s_map_keeps_the_s_in_pgpatchers_prefix() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mut mesh = pgpsim::MaterialState::builtin_default();
+    mesh.set_slot_raw(0, r"textures\other\x.dds");
+    mesh.set_slot_raw(7, r"textures\landscape\rock01_s.dds");
+    let e = entry(
+        &[("match8", json!(r"landscape\rock01_s"))],
+        r"landscape\rock01",
+    );
+    let prepared = pgpsim::prepare(&written(&e), &default);
+    assert_eq!(
+        pgpsim::matched_path(&prepared, &mesh.slots),
+        Some(r"textures\pbr\landscape\rock01_s".into())
+    );
+    assert_eq!(
+        prefix_of(&e.settings, r"landscape\rock01").unwrap(),
+        r"textures\pbr\landscape\rock01"
+    );
+}
+
+/// Owner, 2026-10-12: a + row added for a slot the set does not fill stores `matchN = ""`. It is not a match: it is
+/// not written, and it does not change the prefix or the warnings.
+#[test]
+fn an_empty_match_row_is_not_written() {
+    let e = entry(&[("match3", json!(""))], r"landscape\rock01");
+    assert_eq!(written(&e), json!({ "match1": r"landscape\rock01.dds" }));
+    assert!(pitfalls(&e.settings, r"landscape\rock01").is_empty());
 }

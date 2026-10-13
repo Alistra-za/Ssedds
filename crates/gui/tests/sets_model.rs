@@ -1331,7 +1331,8 @@ fn a_renamed_set_still_matches_its_source_path() {
     );
 }
 
-/// F1 spec §3.2: the Matching rows are the active matches; the + menu offers filled slots 3–8 not matched yet.
+/// F1 spec §3.2, owner 2026-10-12: the Matching rows are the active matches and the empty + rows; the + menu offers
+/// slots 3–8 without a row, a filled slot starting from the set's path and any other empty.
 #[test]
 fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
     let d = tempfile::tempdir().unwrap();
@@ -1346,24 +1347,43 @@ fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
             path: r"landscape\rock01".into()
         }]
     );
+    let slot = |n: u8, slot: &str, path: &str| SlotMatch {
+        n,
+        slot: slot.into(),
+        path: path.into(),
+    };
     assert_eq!(
         add,
-        vec![SlotMatch {
-            n: 6,
-            slot: "RMAOS".into(),
-            path: r"landscape\rock01_rmaos".into()
-        }]
+        vec![
+            slot(3, "Slot 3", ""),
+            slot(4, "Slot 4", ""),
+            slot(5, "Slot 5", ""),
+            slot(6, "RMAOS", r"landscape\rock01_rmaos"),
+            slot(7, "Slot 7", ""),
+            slot(8, "Slot 8", ""),
+        ]
     );
     m.set_json_value(
         "landscape/rock01",
         "match6",
         Some(json!(r"landscape\rock01_rmaos")),
     );
+    m.set_json_value("landscape/rock01", "match3", Some(json!("")));
     m.set_json_value("landscape/rock01", "match1", Some(json!("")));
     idle(&mut m);
     let (active, add) = slot_matches(view(&set_views(&m), "landscape/rock01"));
-    assert_eq!(active.iter().map(|a| a.n).collect::<Vec<_>>(), vec![6]);
-    assert!(add.is_empty());
+    assert_eq!(
+        active,
+        vec![
+            slot(3, "Slot 3", ""),
+            slot(6, "RMAOS", r"landscape\rock01_rmaos")
+        ],
+        "an empty + row stays a row; match1 = \"\" (diffuse off) is not one"
+    );
+    assert_eq!(
+        add.iter().map(|a| a.n).collect::<Vec<_>>(),
+        vec![4, 5, 7, 8]
+    );
 }
 
 /// F1 spec §5, DECISIONS V8: a PBR set's cards are the PBR slots in PGPatcher order 1–8, empty or not.

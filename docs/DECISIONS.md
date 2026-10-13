@@ -605,9 +605,10 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on 
 - **V3 Prefix.**
   - The prefix comes from the lowest active `matchN`, with that slot's suffix cut, under `textures\pbr\`.
   - With no slot match, it is the derived path.
-  - With a slot match, `rename` is the whole prefix. It is not put under `textures\pbr\` for you, and a warning says so when it does not start with `textures\`.
-  - When active matches derive different prefixes and `rename` is empty, a warning says the output prefix depends on which match hits first, and that Rename fixes it. It does not block export.
-  - Open point: with a whole-prefix rename, pgpsim gives a leading backslash in the matched path (`\textures\pbr\…`). That behaviour was there before F1. Verify against real PGPatcher.
+  - `rename` is a new file name (owner, 2026-10-12): no folders (a `\` or `/` blocks export), one `.dds` cut. It replaces the last component of the prefix above, so the folder stays the matched one: `textures\pbr\<folder of the matched path>\<name>`.
+  - The JSON's `rename` is that full prefix, not the typed name. PGPatcher substitutes `rename` for the whole matched path when the entry has no `match_diffuse`/`match_normal` (always, for sdc), so every hit (any `matchN`, or `path_contains`, with or without a slot match) lands where sdc writes. Proven against pgpsim (`a_renamed_entry_lands_on_the_sdc_prefix_for_slot_matches_and_path_contains`).
+  - When active matches derive different prefixes and `rename` is empty, a warning says the output prefix depends on which match hits first, and to edit the match paths so they point at the same texture. It does not block export.
+  - Open point, still unverified against real PGPatcher: PGPatcher prepends `\` to `rename` before substituting, so pgpsim's matched path for a renamed entry starts with a backslash (`\textures\pbr\…`); the round-trip tests compare without it. Before F1 this applied only to the old whole-prefix rename; now every renamed set goes through it. Check one renamed set in real PGPatcher (does the NIF get `\textures\pbr\…`, and does its file-existence check accept it?).
 - **V4 No match.** A set with no active `matchN` and no `path_contains` shows "this entry matches nothing", asks before export, and is left out of the JSON. The schema's `hasMatcher` refuses it. Its textures still export.
 - **V5 Number ranges.**
   - 0–1: `coat_strength`, `subsurface_opacity`, `fuzz.weight`.
@@ -628,3 +629,7 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on 
   - Usable slots are the shader roles' sub-types mapped to slot cards (`usable_slots`). Roles matched by suffix only map to none.
   - A fallback pick uses the fallback shader. With no pick, only the filled slots show.
 - **V9 Versions.** No bump (0.6.0): no engine change, and a bump would re-encode every texture through `engine_version`. No new codes (75). No `schema/` change.
+- **V10 The + menu (owner, 2026-10-12).**
+  - It offers slots 3–8 without a row. A slot the set fills starts from `slot_match_path` (V1); any other slot adds an empty row (`matchN = ""`, N ≥ 2) that says "this row matches nothing until a path is entered".
+  - An empty row is not a match: it is not written to the JSON and does not count for the prefix or the warnings. Clearing a row's text removes it.
+  - Open point: `match8` from the set's own `_s` map. PGPatcher's slot-8 list is `_b`/`_bl`/`_flow`, so a mesh hit through `match8 = …_s` gets a prefix ending in `_s` (pgpsim, `a_match8_on_an_s_map_keeps_the_s_in_pgpatchers_prefix`). The "match8 does not strip _s" and divergent-prefix warnings report that real split and still show; a Rename fixes it.

@@ -1,6 +1,6 @@
 //! The PGPatcher JSON document (M3b spec §5.2–5.3, §5.6): `{ "$schema", "default", "entries" }`, keys in schema
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
-use super::prefix::{active_matches, match_value};
+use super::prefix::{active_matches, json_rename, match_value};
 use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
 use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
@@ -174,6 +174,10 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                     .iter()
                     .find(|(m, _)| *m == n)
                     .map(|(_, v)| Node::Scalar(json!(match_value(v)))),
+                // The typed file name becomes the full prefix (owner, 2026-10-12; DECISIONS V3).
+                None if k.key == "rename" => {
+                    json_rename(own, derived).map(|r| Node::Scalar(json!(r)))
+                }
                 None => v
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())

@@ -204,6 +204,8 @@ pub fn slot_match_path(derived: &str, suffix: &str) -> String {
 
 /// The warning of a set whose entry can never apply (F1 spec §3.2).
 pub const NO_MATCH: &str = "this entry matches nothing";
+/// The warning under a + row with no path yet (`matchN = ""`, owner 2026-10-12). It is not written to the JSON.
+pub const EMPTY_ROW: &str = "this row matches nothing until a path is entered";
 
 /// No active `matchN` and no `path_contains`: PGPatcher would never apply the entry (DECISIONS V4).
 pub fn matches_nothing(s: &Settings, derived: &str) -> bool {
@@ -211,24 +213,46 @@ pub fn matches_nothing(s: &Settings, derived: &str) -> bool {
 }
 
 /// The output prefix (backslashes, no extension) of a set with settings `s` and derived diffuse path `derived`
-/// (DECISIONS V3): the lowest active `matchN`, as PGPatcher's first hit gives it, else the derived path.
+/// (DECISIONS V3): the lowest active `matchN`, as PGPatcher's first hit gives it, else the derived path. A `rename`
+/// is a new file name (owner, 2026-10-12): it replaces the last component, so the folder stays the matched one.
 pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
-    let rename = text(s, "rename").map(str::trim);
-    if let Some(r) = &rename {
-        check_json_path(r, "rename")?;
+    // One `.dds` is cut, like a match path.
+    let rename =
+        text(s, "rename")
+            .map(str::trim)
+            .map(|r| if has_dds(r) { &r[..r.len() - 4] } else { r });
+    if let Some(r) = rename {
+        if r.contains(['\\', '/']) {
+            return Err(PrefixError(format!(
+                "rename: a file name only, no folders ({r:?})"
+            )));
+        }
+        check_rel_path(r, "rename")?;
     }
     let matches = active_matches(s, derived);
     for (n, v) in &matches {
         check_json_path(v, &format!("match{n}"))?;
     }
-    match matches.first() {
-        Some((n, v)) => Ok(rename.map_or_else(|| match_prefix(*n, v), str::to_string)),
+    let base = match matches.first() {
+        Some((n, v)) => match_prefix(*n, v),
         None => {
             let d = derived.trim();
             check_json_path(d, "diffuse path")?;
-            Ok(under_pbr(rename.unwrap_or(d)))
+            under_pbr(d)
         }
-    }
+    };
+    Ok(match rename {
+        // `base` always starts with `textures\pbr\`, so it has a folder.
+        Some(r) => format!("{}\\{r}", base.rsplit_once('\\').map_or("", |(d, _)| d)),
+        None => base,
+    })
+}
+
+/// The `rename` the JSON carries: the full prefix, which PGPatcher substitutes for the whole matched path, so every
+/// hit (any matchN or path_contains) lands where sdc writes the files. `None` without a rename or with a bad one.
+pub fn json_rename(s: &Settings, derived: &str) -> Option<String> {
+    text(s, "rename")?;
+    prefix_of(s, derived).ok()
 }
 
 /// The prefix PGPatcher derives when `matchN = v` is the match that hits.
@@ -248,8 +272,8 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
     prefixes.dedup();
     if prefixes.len() > 1 && text(s, "rename").is_none() {
         out.push(
-            "match slots point at different textures; the entry applies to whichever hits first; set Rename to fix \
-             the output prefix"
+            "match slots point at different textures; the entry applies to whichever hits first; edit the match \
+             paths so they point at the same texture"
                 .into(),
         );
     }
@@ -264,17 +288,6 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
                 "match8 does not strip _s (its list is the old backlight one); use match7 for a subsurface map"
                     .into(),
             );
-        }
-    }
-    if !active_matches(s, derived).is_empty() {
-        if let Some(r) = text(s, "rename") {
-            let starts_with_textures = backslash(r).to_lowercase().starts_with("textures\\");
-            if !starts_with_textures {
-                out.push(
-                    "rename on a matchN entry replaces the whole prefix, so it must be a full path such as textures\\pbr\\…"
-                        .into(),
-                );
-            }
         }
     }
     out

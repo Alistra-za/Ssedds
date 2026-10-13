@@ -201,5 +201,7 @@ mod tests {
             "a wrong type is check_types' business"
         );
         assert!(range_warnings(&json!(3)).is_empty());
+        // Final review Minor 9: the removed env_map_* keys have no range.
+        assert!(range_warnings(&json!({"env_map_scale": -1, "env_map_scale_mult": -2})).is_empty());
     }
 }

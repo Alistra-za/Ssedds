@@ -110,8 +110,9 @@ pub struct SlotMatch {
     pub path: String,
 }
 
-/// The Matching header of `v`: its active slot matches, and the + menu, which offers the filled slots 3–8 not matched
-/// yet, starting from `slot_match_path` (DECISIONS V1).
+/// The Matching header of `v`: its active slot matches plus the empty rows (`matchN = ""`, N ≥ 2: added by + and not
+/// filled in yet; `match1 = ""` is the diffuse turned off), and the + menu, which offers slots 3–8 without a row. A
+/// slot the set fills starts from `slot_match_path` (DECISIONS V1); any other starts empty (owner, 2026-10-12).
 pub fn slot_matches(v: &SetView) -> (Vec<SlotMatch>, Vec<SlotMatch>) {
     let derived = v.derived_match.as_deref().unwrap_or("");
     let filled: Vec<SlotKind> = v
@@ -126,22 +127,31 @@ pub fn slot_matches(v: &SetView) -> (Vec<SlotMatch>, Vec<SlotMatch>) {
         None if n == 2 => SlotKind::Normal.label().to_string(),
         None => format!("Slot {n}"),
     };
-    let active: Vec<SlotMatch> = active_matches(&v.settings, derived)
+    let empty = (2..=8u8).filter(|n| {
+        v.settings
+            .get(&format!("match{n}"))
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.trim().is_empty())
+    });
+    let mut active: Vec<SlotMatch> = active_matches(&v.settings, derived)
         .into_iter()
+        .chain(empty.map(|n| (n, String::new())))
         .map(|(n, path)| SlotMatch {
             n,
             slot: name(n),
             path,
         })
         .collect();
-    let add = filled
-        .iter()
-        .filter(|k| (3..=8).contains(&k.slot_number()))
-        .filter(|k| !active.iter().any(|a| a.n == k.slot_number()))
-        .map(|k| SlotMatch {
-            n: k.slot_number(),
-            slot: k.label().to_string(),
-            path: slot_match_path(derived, k.suffix()),
+    active.sort_by_key(|a| a.n);
+    let add = (3..=8u8)
+        .filter(|n| !active.iter().any(|a| a.n == *n))
+        .map(|n| SlotMatch {
+            n,
+            slot: name(n),
+            path: filled
+                .iter()
+                .find(|k| k.slot_number() == n)
+                .map_or_else(String::new, |k| slot_match_path(derived, k.suffix())),
         })
         .collect();
     (active, add)

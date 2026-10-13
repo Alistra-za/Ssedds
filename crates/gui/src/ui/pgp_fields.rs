@@ -3,7 +3,9 @@
 use super::columns::AMBER;
 use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
 use crate::model::AppModel;
-use crate::pgp::prefix::{match_toggle, matches_nothing, stored_match, NO_MATCH};
+use crate::pgp::prefix::{
+    match_toggle, match_value, matches_nothing, stored_match, EMPTY_ROW, NO_MATCH,
+};
 use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
@@ -211,10 +213,11 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                     if r.changed() {
                         ui.data_mut(|d| d.insert_temp(id, text.clone()));
                     }
-                    // Committed on Enter or focus loss; an unchanged path is no edit (F1 Review Focus 4).
+                    // Committed on Enter or focus loss; an unchanged path (`.dds` and a leading `textures\` aside)
+                    // is no edit (F1 Review Focus 4).
                     if r.lost_focus() {
                         ui.data_mut(|d| d.remove::<String>(id));
-                        if text.trim() != m.path {
+                        if match_value(&text) != match_value(&m.path) {
                             edits.push((format!("match{}", m.n), stored_match(m.n, &text)));
                         }
                     }
@@ -226,6 +229,11 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                         edits.push(match_toggle(m.n, false, &m.path));
                     }
                     ui.end_row();
+                    if m.path.is_empty() {
+                        ui.label("");
+                        ui.colored_label(AMBER, EMPTY_ROW);
+                        ui.end_row();
+                    }
                 }
             });
         if !c.addable.is_empty() {
@@ -376,9 +384,9 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                     .and_then(|v| v.as_str().map(str::to_string))
                     .unwrap_or_default()
             });
-            // With a slot match, rename replaces the whole prefix (DECISIONS V3).
+            // sdc puts the name in the matched folder and writes the full prefix (DECISIONS V3).
             let hint = if k.key == "rename" {
-                r"textures\pbr\… (the whole prefix)"
+                "new file name"
             } else {
                 ""
             };
@@ -394,13 +402,7 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
             if r.lost_focus() {
                 ui.data_mut(|d| d.remove::<String>(id));
                 let t = text.trim();
-                // Clearing match1 stores "" (diffuse off); removing the key would bring the derived default back.
-                let v = if k.key == "match1" {
-                    stored_match(1, t)
-                } else {
-                    (!t.is_empty()).then(|| json!(t))
-                };
-                edits.push((key, v));
+                edits.push((key, (!t.is_empty()).then(|| json!(t))));
             }
         }
         KeyKind::Rgb | KeyKind::Rgba => {

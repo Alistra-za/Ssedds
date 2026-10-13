@@ -1073,24 +1073,80 @@ fn the_card_toggles_mirror_the_matching_rows() {
     assert_eq!(match_toggles(&h), vec![true, true]);
 }
 
-/// F1 spec §6 "Toggles": + offers slots 3–8 only when the set has a texture there.
+/// Owner, 2026-10-12: + offers slots 3–8. A slot the set fills starts from the set's path for it; an empty slot adds
+/// an empty row that warns until a path is typed.
 #[test]
-fn the_plus_menu_offers_only_filled_slots_3_to_8() {
+fn the_plus_menu_offers_slots_3_to_8_and_an_empty_slot_adds_an_empty_row() {
     let d = tempfile::tempdir().unwrap();
     let mut h = panel_harness(pbr_opened(d.path()));
     h.run();
     h.get_by_label("+").click();
     h.run();
-    assert!(
-        h.query_by_label_contains("3 · ").is_none(),
-        "slot 3 is empty"
-    );
+    for n in 3..=8 {
+        h.get_by_label_contains(&format!("{n} · "));
+    }
     h.get_by_label("6 · RMAOS").click();
     h.run();
     assert_eq!(
         rock_settings(&h)["match6"],
         serde_json::json!(r"landscape\rock01_rmaos")
     );
+    assert!(h.query_by_label_contains(EMPTY_ROW).is_none());
+    h.get_by_label("+").click();
+    h.run();
+    assert!(h.query_by_label_contains("6 · ").is_none(), "already a row");
+    h.get_by_label("3 · Slot 3").click();
+    h.run();
+    assert_eq!(rock_settings(&h)["match3"], serde_json::json!(""));
+    h.get_by_label_contains(EMPTY_ROW);
+    assert!(
+        text_inputs(&h).contains(&String::new()),
+        "{:?}",
+        text_inputs(&h)
+    );
+}
+
+const EMPTY_ROW: &str = "this row matches nothing until a path is entered";
+
+/// Final review Minor 8: typing into a Matching row. Clearing match1 turns the diffuse match off (`""`), pasting the
+/// path back with `.dds` stores it without, and pasting the derived default (with `.dds`) is no edit.
+#[test]
+fn typing_into_the_match1_row_clears_and_pastes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.save().unwrap();
+    let mut h = panel_harness(m);
+    h.run();
+    let type_into = |h: &mut Harness<'static, AppModel>, from: &str, to: &str| {
+        h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+            .find(|n| n.value().as_deref() == Some(from))
+            .expect("the row")
+            .focus();
+        h.run();
+        h.key_press_modifiers(eframe::egui::Modifiers::COMMAND, eframe::egui::Key::A);
+        h.run();
+        // Text replaces the selection; Backspace clears it.
+        if to.is_empty() {
+            h.key_press(eframe::egui::Key::Backspace);
+        } else {
+            h.event(eframe::egui::Event::Text(to.into()));
+        }
+        h.run();
+        h.key_press(eframe::egui::Key::Enter);
+        h.run();
+    };
+    // The derived default pasted back with .dds is the same path: nothing is written.
+    type_into(&mut h, r"landscape\rock01", r"landscape\rock01.dds");
+    assert!(!rock_settings(&h).contains_key("match1"));
+    assert!(!h.state().sets_doc.as_ref().unwrap().is_dirty());
+    type_into(&mut h, r"landscape\rock01", r"landscape\other.dds");
+    assert_eq!(
+        rock_settings(&h)["match1"],
+        serde_json::json!(r"landscape\other")
+    );
+    type_into(&mut h, r"landscape\other", "");
+    assert_eq!(rock_settings(&h)["match1"], serde_json::json!(""));
+    h.get_by_label_contains("this entry matches nothing");
 }
 
 /// F1 Review Focus 4 (plan): leaving a row unchanged writes nothing: the default match1 does not become a key, and
@@ -1141,6 +1197,16 @@ fn a_filled_slot_the_shader_cannot_use_says_why() {
         h.query_by_label("Height _p").is_none(),
         "Default has no height slot"
     );
+    // Final review Minor 7: the unusable card is outlined (2 px amber); the same set under its PBR shader is not.
+    let mut base = pbr_opened(&d.path().join("base"));
+    rock_selected(&mut base);
+    let mut hb = harness(base);
+    hb.run();
+    assert_eq!(
+        amber_outlines(&h),
+        amber_outlines(&hb) + 1,
+        "one card outlined"
+    );
     let rmaos = h
         .query_all_by_label("RMAOS")
         .next()
@@ -1149,4 +1215,23 @@ fn a_filled_slot_the_shader_cannot_use_says_why() {
     h.run();
     h.run();
     h.get_by_label_contains("the Default shader does not use slot 6");
+}
+
+/// The 2 px amber rectangle outlines painted in the last frame (the unusable-slot card stroke, set_editor.rs).
+fn amber_outlines(h: &Harness<'static, AppModel>) -> usize {
+    use eframe::egui::{Color32, Shape, Stroke};
+    fn walk(s: &Shape, n: &mut usize) {
+        match s {
+            Shape::Rect(r) if r.stroke == Stroke::new(2.0, Color32::from_rgb(230, 160, 30)) => {
+                *n += 1
+            }
+            Shape::Vec(v) => v.iter().for_each(|x| walk(x, n)),
+            _ => {}
+        }
+    }
+    let mut n = 0;
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut n);
+    }
+    n
 }
