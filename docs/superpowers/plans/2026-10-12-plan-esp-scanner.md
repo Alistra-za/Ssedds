@@ -3901,3 +3901,12 @@ git commit -m "gui: set editor 'Used by plugins' (TXSTs matching the set, altern
 ## esp verification
 
 (Filled in by Task 9.)
+
+### Step 1 (run by the controller, 2026-10-12, HEAD c2e30dc)
+
+    cold: n=1983 records=128751 ms=4156 (4.16 s); warm: cached=1983/1983 (0.14 s)
+    Skyrim.esm TXST: LandscapeGrassSnow01 [00000889], 2 slot paths
+    alt_tex: 26042 rows, e.g. shape "MineOreBlackreach02:3" -> txst 000A9293
+    test owner_load_order ... ok
+
+Targets met (cold < 10 s, warm < 1 s). alt_tex > 0 confirms the alternate-texture layout on real data (pre-flight F-7).
