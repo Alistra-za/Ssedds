@@ -537,10 +537,10 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         ui.checkbox(&mut m.show_inert_refs, format!("Show inert ({n})"));
     }
     // Rows are chosen after the controls above, so a tab or filter change shows this frame, not the next.
-    let inert: Vec<String> = if !m.refs_unused && m.show_inert_refs {
+    let inert: std::sync::Arc<Vec<String>> = if !m.refs_unused && m.show_inert_refs {
         m.refs_inert_lines()
     } else {
-        vec![]
+        Default::default()
     };
     if copy {
         let mut text = m.refs_lines().join("\n");

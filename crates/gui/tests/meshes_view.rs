@@ -1498,3 +1498,15 @@ fn show_inert_resets_on_nif_change_and_on_scan() {
     wait(&mut m);
     assert!(!m.show_inert_uses && !m.show_inert_refs, "scan end");
 }
+
+/// Final review M4: the inert Missing lines are built once per filter, not per frame.
+#[test]
+fn inert_ref_lines_are_cached_until_the_filter_changes() {
+    let mut m = budget_model(0, 3);
+    let a = m.refs_inert_lines();
+    assert!(std::sync::Arc::ptr_eq(&a, &m.refs_inert_lines()));
+    m.refs_filter = "inert0001".into();
+    let c = m.refs_inert_lines();
+    assert!(!std::sync::Arc::ptr_eq(&a, &c));
+    assert_eq!(c.len(), 1);
+}

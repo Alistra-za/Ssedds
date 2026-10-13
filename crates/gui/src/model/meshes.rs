@@ -439,6 +439,8 @@ pub struct MeshesModel {
     pub show_inert_refs: bool,
     /// The lines for (tab, filter), kept until either changes.
     refs_cache: Option<((bool, String), Vec<String>)>,
+    /// The inert Missing lines for a filter, kept until the filter or `missing_inert` changes.
+    refs_inert_cache: Option<(String, Arc<Vec<String>>)>,
     /// Database or scan errors; shown, never swallowed.
     pub error: Option<String>,
     pub dialog: Option<MeshesDialog>,
@@ -520,6 +522,7 @@ impl MeshesModel {
             missing_inert: vec![],
             show_inert_refs: false,
             refs_cache: None,
+            refs_inert_cache: None,
             error: None,
             dialog: None,
             report: None,
@@ -660,6 +663,7 @@ impl MeshesModel {
         // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
         self.file_refs = None;
         self.refs_cache = None;
+        self.refs_inert_cache = None;
         (self.show_inert_uses, self.show_inert_refs) = (false, false);
         self.progress = Some(("starting", 0, 0));
         self.status = if req.skip_derived {
@@ -721,6 +725,7 @@ impl MeshesModel {
                 log_plugins(&report);
                 self.file_refs = None;
                 self.refs_cache = None;
+                self.refs_inert_cache = None;
                 (self.show_inert_uses, self.show_inert_refs) = (false, false);
                 let incomplete = report
                     .pgp
@@ -1163,6 +1168,7 @@ impl MeshesModel {
             }
         };
         self.refs_cache = None;
+        self.refs_inert_cache = None;
     }
 
     /// The listed lines for the current tab and filter.
@@ -1179,14 +1185,17 @@ impl MeshesModel {
         self.refs_cache.as_ref().map_or(&[][..], |c| c.1.as_slice())
     }
 
-    /// Missing lines of the paths only inert records name, for "Show inert" (filtering ruling R12).
-    pub fn refs_inert_lines(&self) -> Vec<String> {
-        // shortcut: rebuilt each frame while shown; cache like `refs_lines` if inert lists get large
-        let r = FileRefs {
-            missing: self.missing_inert.clone(),
-            unused: vec![],
-        };
-        file_refs_lines(&r, false, &self.refs_filter)
+    /// Missing lines of the paths only inert records name, for "Show inert" (filtering ruling R12); cached per filter.
+    pub fn refs_inert_lines(&mut self) -> Arc<Vec<String>> {
+        if self.refs_inert_cache.as_ref().map(|c| &c.0) != Some(&self.refs_filter) {
+            let r = FileRefs {
+                missing: self.missing_inert.clone(),
+                unused: vec![],
+            };
+            let lines = Arc::new(file_refs_lines(&r, false, &self.refs_filter));
+            self.refs_inert_cache = Some((self.refs_filter.clone(), lines));
+        }
+        self.refs_inert_cache.as_ref().unwrap().1.clone()
     }
 
     /// "Show list" on the stale banner.
