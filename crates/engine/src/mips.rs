@@ -25,9 +25,9 @@ use crate::config::*;
 use crate::image::Rgba32F;
 use crate::ops::{Domain, Work};
 
-/// Number of levels for a `w`×`h` base: full = ⌊log2 max(w, h)⌋ + 1, `none` = 1, a count is capped at full.
+/// Number of levels for a `w`×`h` base: full = `dds::full_chain_len`, the one chain-length rule the DDS header shares, `none` = 1, a count is capped at full.
 pub fn level_count(w: u32, h: u32, levels: &MipLevels) -> u32 {
-    let full = 32 - w.max(h).max(1).leading_zeros();
+    let full = crate::dds::full_chain_len(w.max(1), h.max(1)) as u32;
     match levels {
         MipLevels::Keyword(MipKeyword::Full) => full,
         MipLevels::Keyword(MipKeyword::None) => 1,
