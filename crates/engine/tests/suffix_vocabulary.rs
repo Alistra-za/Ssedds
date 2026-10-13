@@ -180,7 +180,7 @@ fn vocabulary_splits_to_skyrim_roles() {
     );
     assert_eq!(SUFFIXES.len(), 20);
     // longest first, so `_base_color` is one term
-    assert_eq!(VOCABULARY.len(), 32);
+    assert_eq!(VOCABULARY.len(), 33);
     assert!(VOCABULARY
         .windows(2)
         .all(|w| w[0].term.len() >= w[1].term.len()));

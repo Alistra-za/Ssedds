@@ -1081,3 +1081,24 @@ fn inspect_json_reports_every_skipped_preset_under_one_batch_id() {
     assert_eq!(skips[0]["batch"], skips[1]["batch"], "{skips:?}");
     assert_ne!(skips[0]["seq"], skips[1]["seq"], "{skips:?}");
 }
+
+#[test]
+fn inspect_lists_a_base_normals_rnm_layers() {
+    let d = tempfile::tempdir().unwrap();
+    for n in [
+        "iron_n.png",
+        "iron_detailnorm.png",
+        "iron_detailnormmask.png",
+    ] {
+        ImageBuffer::from_fn(16, 16, |x, y| Rgb([x as u8 * 16, y as u8 * 16, 200]))
+            .save(d.path().join(n))
+            .unwrap();
+    }
+    let o = sdc().arg("inspect").arg(d.path()).output().unwrap();
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(
+        out.contains("rnm detail iron_detailnorm.png strength 0.6, mask iron_detailnormmask.png"),
+        "{out}"
+    );
+}

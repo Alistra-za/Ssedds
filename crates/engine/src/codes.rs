@@ -10,7 +10,7 @@
 //! DIM-RESIZED (`resize = pot-down` changed the base size, S-mips-7) and CFG-FILTER-IGNORED (an unscoped non-box
 //! `mips.filter` a texture cannot use, which then uses box, S-mips-13) and the four `SHADER-*` codes (M6 Track A) and
 //! CFG-PRESET-SKIPPED (a user preset folder file that failed to load, skipped) and CFG-GREEN-CONFLICT (an explicit
-//! `flip_green` that contradicts `green_convention`) (M6 Track D).
+//! `flip_green` that contradicts `green_convention`) (M6 Track D) and the five `RNM-*` codes of RNM normal layers (M6 Track F2).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +108,11 @@ codes! {
     PackUnusedInput = "PACK-UNUSED-INPUT" => Warning,
     PackRecipeConflict = "PACK-RECIPE-CONFLICT" => Warning,
     PackRecipeUnbuildable = "PACK-RECIPE-UNBUILDABLE" => Warning,
+    RnmNoBase = "RNM-NO-BASE" => Warning,
+    RnmIgnoredEye = "RNM-IGNORED-EYE" => Warning,
+    RnmMaskOrphan = "RNM-MASK-ORPHAN" => Warning,
+    RnmAoMissing = "RNM-AO-MISSING" => Info,
+    RnmLayerShadowed = "RNM-LAYER-SHADOWED" => Warning,
     SkinWetForm = "SKIN-WET-FORM" => Info,
     ShaderAuto = "SHADER-AUTO" => Info,
     ShaderUnavailable = "SHADER-UNAVAILABLE" => Warning,
@@ -181,7 +186,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 75);
+        assert_eq!(Code::ALL.len(), 80);
         assert_eq!(Code::CfgPresetSkipped.severity(), Severity::Warning);
         assert_eq!(
             Code::parse("CFG-GREEN-CONFLICT"),

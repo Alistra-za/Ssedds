@@ -652,7 +652,13 @@ pub fn pick_for_set(
         .map_or(&[][..], Vec::as_slice);
     let subtypes: Vec<Subtype> = jobs
         .in_set(&set.key)
-        .filter(|j| !matches!(j.status, crate::policy::JobStatus::PackingInput { .. }))
+        .filter(|j| {
+            !matches!(
+                j.status,
+                crate::policy::JobStatus::PackingInput { .. }
+                    | crate::policy::JobStatus::NormalLayer { .. }
+            )
+        })
         .map(|j| j.profile.subtype)
         .collect();
     let game_paths: Vec<&str> = set
@@ -1433,6 +1439,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            rnm: None,
             shader: None,
         }
     }

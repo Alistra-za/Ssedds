@@ -125,6 +125,17 @@
           "$ref": "#/$defs/Profile",
           "description": "That `_n`'s resolved profile: the member decodes the `_n` with it exactly as the `_n`'s own job does\n(swizzle, green flip, Z rebuild; DECISIONS R4)."
         },
+        "rnm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `_n` job's active RNM blend at plan time (Note W18, owner 2026-10-12): the lengths come from the `_n` as its\nown encode writes it, after the layers."
+        },
         "shift": {
           "description": "log2(`_n` size / member size) ([`bake_shift`]) as planned.",
           "format": "int32",
@@ -147,6 +158,51 @@
         "normal_profile",
         "shift"
       ],
+      "type": "object"
+    },
+    "BentMode": {
+      "enum": [
+        "ao_blend",
+        "detail"
+      ],
+      "type": "string"
+    },
+    "BentSpec": {
+      "additionalProperties": false,
+      "description": "The `bent` layer: a layer plus its AO-blend settings (F2 spec §3.1, §3.3).",
+      "properties": {
+        "ao": {
+          "description": "Read the AO source; `false` = a uniform weight.",
+          "type": "boolean"
+        },
+        "ao_power": {
+          "description": "The power on the occlusion `1 − AO`; `None` = 1.5.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "flip_green": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mask": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/$defs/BentMode"
+        },
+        "strength": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "Category": {
@@ -366,6 +422,11 @@
         "PACK-UNUSED-INPUT",
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
+        "RNM-NO-BASE",
+        "RNM-IGNORED-EYE",
+        "RNM-MASK-ORPHAN",
+        "RNM-AO-MISSING",
+        "RNM-LAYER-SHADOWED",
         "SKIN-WET-FORM",
         "SHADER-AUTO",
         "SHADER-UNAVAILABLE",
@@ -645,6 +706,23 @@
           "type": "object"
         },
         {
+          "description": "An RNM normal layer or mask (M6 Track F2 spec §2.2): never converted on its own; `rnm::plan::plan_rnm`\nattaches it to its base normal's job or tags it `RNM-*`.",
+          "properties": {
+            "state": {
+              "const": "normal_layer",
+              "type": "string"
+            },
+            "term": {
+              "$ref": "#/$defs/LayerTermId"
+            }
+          },
+          "required": [
+            "state",
+            "term"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Blocking codes not acknowledged with `--allow`.",
           "properties": {
             "codes": {
@@ -684,6 +762,66 @@
           "type": "object"
         }
       ]
+    },
+    "LayerId": {
+      "description": "One RNM normal layer (M6 Track F2 spec §2.1).",
+      "enum": [
+        "bump",
+        "bump2",
+        "detail",
+        "detail2",
+        "bent"
+      ],
+      "type": "string"
+    },
+    "LayerSpec": {
+      "additionalProperties": false,
+      "description": "One layer's settings (F2 spec §4). Every field is optional at its default: `strength` = the layer's\n`default_strength`, `flip_green` = the base's own `channels.flip_green`, `mask` = on when the mask file exists.",
+      "properties": {
+        "flip_green": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mask": {
+          "type": "boolean"
+        },
+        "strength": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LayerTermId": {
+      "description": "The serialisable mirror of [`LayerTerm`], carried by `JobStatus::NormalLayer`.",
+      "properties": {
+        "layer": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "mask": {
+          "type": "boolean"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "layer",
+        "mask"
+      ],
+      "type": "object"
     },
     "MipEdge": {
       "enum": [
@@ -937,6 +1075,10 @@
           "$ref": "#/$defs/ResizeMode",
           "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
+        "rnm": {
+          "$ref": "#/$defs/RnmSpec",
+          "description": "RNM normal layers (M6 Track F2); read only by base normals (`Subtype::rnm_base`)."
+        },
         "subtype": {
           "$ref": "#/$defs/Subtype"
         },
@@ -1119,6 +1261,17 @@
           "description": "Dotted field path → where its value came from; includes `subtype`, `category` and `target`.",
           "type": "object"
         },
+        "rnm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "M6 Track F2: a base normal's RNM layers (`rnm::plan::plan_rnm`); `None` for every other job."
+        },
         "set_key": {
           "type": "string"
         },
@@ -1183,6 +1336,140 @@
         "status"
       ],
       "type": "object"
+    },
+    "RnmAo": {
+      "properties": {
+        "channel": {
+          "description": "0 = a raw AO map's R, 2 = `_rmaos`/`_rfaos` B.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file": {
+          "$ref": "#/$defs/RnmFile"
+        }
+      },
+      "required": [
+        "file",
+        "channel"
+      ],
+      "type": "object"
+    },
+    "RnmFile": {
+      "description": "One input file of a blend, with the stamp `plan` read it at (checked by `run`, like `ResolvedJob::source`).",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceStamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "RnmJob": {
+      "properties": {
+        "ao": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmAo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/RnmLayer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "layers"
+      ],
+      "type": "object"
+    },
+    "RnmLayer": {
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/RnmFile"
+        },
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "mask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RnmFile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "file"
+      ],
+      "type": "object"
+    },
+    "RnmSpec": {
+      "additionalProperties": false,
+      "description": "RNM normal layers (M6 Track F2 spec §4). A field of every profile, read only by base normals (`Subtype::rnm_base`);\nnot serialised at its default, so profile hashes written before F2 hold (DECISIONS Note W6).",
+      "properties": {
+        "bent": {
+          "$ref": "#/$defs/BentSpec"
+        },
+        "bump": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "bump2": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "detail": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "detail2": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "description": "Blend order; see [`RnmSpec::effective_order`].",
+          "items": {
+            "$ref": "#/$defs/LayerId"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RnmTarget": {
+      "description": "Which base normal a layer file feeds (F2 spec §2.3): `n` (`_n`), `cnr` (`_cnr`) or both.",
+      "enum": [
+        "n",
+        "cnr",
+        "both"
+      ],
+      "type": "string"
     },
     "SearchRadius": {
       "enum": [
@@ -1286,6 +1573,11 @@
         {
           "const": "packing_input",
           "description": "A raw map not packed (`IN-PACKING-INPUT`, `PACK-UNUSED-INPUT`).",
+          "type": "string"
+        },
+        {
+          "const": "normal_layer",
+          "description": "An RNM normal layer or mask (M6 Track F2): blended into its base normal, never written alone.",
           "type": "string"
         },
         {

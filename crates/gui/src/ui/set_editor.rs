@@ -1,11 +1,13 @@
 //! The set editor, layout A (M3b spec §4): slot cards on the left, PGPatcher settings on the right (Task 15).
 //! Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, status_text, AMBER, RED};
+use super::rnm_section::RNM_OUTLINE;
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::fields::{channel_text, field_lock, format_label, format_options};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
+use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
     set_views, slot_label, slot_of, slot_row, SetView, SlotCell, SlotFill, SlotKind,
 };
@@ -113,6 +115,9 @@ fn under_grid(ui: &mut egui::Ui, model: &AppModel, v: &SetView) {
         ui.add_space(4.0);
         recipe(ui, r);
     }
+    for w in model.rnm_notes.get(&v.key).into_iter().flatten() {
+        ui.colored_label(AMBER, format!("{}: {}", w.code.as_str(), w.message));
+    }
     let mut seen = std::collections::BTreeSet::new();
     let warnings: Vec<_> = set
         .members
@@ -190,6 +195,29 @@ fn card(
     } else {
         frame.stroke(egui::Stroke::new(2.0, AMBER))
     };
+    // The blue outline: this normal blends RNM layers (F2 spec §5.2). The amber one wins.
+    let rnm_layers: Vec<&str> = match (&cell.fill, cell.kind) {
+        (
+            SlotFill::Own { item } | SlotFill::Borrowed { item, .. },
+            SlotKind::Normal | SlotKind::Coat,
+        ) => model
+            .item(item)
+            .and_then(|i| i.job.as_ref())
+            .filter(|j| rnm_active(j))
+            .map(|j| {
+                rnm_rows(j, &model.rnm_keys, &|_| None)
+                    .iter()
+                    .map(|r| r.label)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => vec![],
+    };
+    let frame = if cell.usable && !rnm_layers.is_empty() {
+        frame.stroke(egui::Stroke::new(2.0, RNM_OUTLINE))
+    } else {
+        frame
+    };
     frame.show(ui, |ui| {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(CARD);
@@ -199,6 +227,10 @@ fn card(
                 SlotFill::Empty => slot.label(),
             };
             let t = ui.label(egui::RichText::new(title).strong());
+            if cell.usable && !rnm_layers.is_empty() {
+                t.clone()
+                    .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
+            }
             if let (false, Some(p)) = (cell.usable, &v.shader) {
                 t.on_hover_text(format!(
                     "{title}: the {} shader does not use slot {}",

@@ -66,6 +66,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
             sources: vec![source(rough, RawMap::Roughness), source(ao, RawMap::Ao)],
         }),
         bake: None,
+        rnm: None,
         shader: None,
     };
     Plan {

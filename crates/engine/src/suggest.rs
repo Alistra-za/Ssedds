@@ -152,6 +152,7 @@ pub fn apply_vocabulary(suggestions: &mut Vec<Suggestion>, v: &Vocab) {
         VocabRole::Emissive => "emissive",
         VocabRole::PackingInput(_) => "packing input",
         VocabRole::CoatColour => "coat colour + strength",
+        VocabRole::NormalLayer(_) => "normal layer",
     };
     for s in suggestions.iter_mut() {
         s.reason = format!("exporter suffix _{} ({role}); {}", v.term, s.reason);

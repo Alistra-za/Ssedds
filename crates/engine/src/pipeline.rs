@@ -144,7 +144,21 @@ fn check_stamps(job: &ResolvedJob) -> Result<(), FileError> {
     if let Some(b) = &job.bake {
         stamps.push((b.normal.as_path(), b.stamp));
     }
-    let named = job.pack.is_some() || job.bake.is_some();
+    if let Some(r) = job
+        .bake
+        .as_ref()
+        .and_then(|b| b.rnm.as_ref().map(|r| (r, &b.normal_profile)))
+    {
+        for (f, _) in r.0.inputs(&r.1.rnm) {
+            stamps.push((f.path.as_path(), f.stamp));
+        }
+    }
+    if let Some(r) = job.active_rnm() {
+        for (f, _) in r.inputs(&job.profile.rnm) {
+            stamps.push((f.path.as_path(), f.stamp));
+        }
+    }
+    let named = job.pack.is_some() || job.bake.is_some() || job.active_rnm().is_some();
     for (src, planned) in stamps {
         if let Some(planned) = planned {
             if SourceStamp::of(src) != Some(planned) {
@@ -233,7 +247,13 @@ fn prepare_then<T>(
     stop()?;
 
     enter(Stage::Preprocess);
-    let work = preprocess_with(img, p, transfer);
+    let mut work = preprocess_with(img, p, transfer);
+    // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched.
+    // shortcut: memory admission counts only the base (`estimated_bytes`), not the layers loaded here (one at a time,
+    // plus its resample); count the largest layer when an 8K-layer-on-2K-base batch runs out of memory.
+    if let Some(r) = job.active_rnm() {
+        crate::rnm::blend::apply(&mut work.img, r, p).map_err(fail(Stage::Load))?;
+    }
     stop()?;
 
     enter(Stage::Mipmaps);
@@ -382,6 +402,28 @@ pub fn process_file(
                     SourceRef::of_bake(&b.normal, b.identity_sha256())
                         .map_err(|e| fail(Stage::Load)(format!("{}: {e}", b.normal.display())))?,
                 );
+            }
+            // Note W18: the baked `_n`'s RNM inputs, roles prefixed `bake.`.
+            if let Some(r) = job
+                .bake
+                .as_ref()
+                .and_then(|b| b.rnm.as_ref().map(|r| (r, &b.normal_profile)))
+            {
+                for (f, role) in r.0.inputs(&r.1.rnm) {
+                    sources.push(
+                        SourceRef::of_rnm(&f.path, format!("bake.{role}"))
+                            .map_err(|e| fail(Stage::Load)(format!("{}: {e}", f.path.display())))?,
+                    );
+                }
+            }
+            // M6 Track F2: every RNM input the blend reads, with its role.
+            if let Some(r) = job.active_rnm() {
+                for (f, role) in r.inputs(&job.profile.rnm) {
+                    sources
+                        .push(SourceRef::of_rnm(&f.path, role).map_err(|e| {
+                            fail(Stage::Load)(format!("{}: {e}", f.path.display()))
+                        })?);
+                }
             }
             Ok((source_sha256, sources))
         })?;

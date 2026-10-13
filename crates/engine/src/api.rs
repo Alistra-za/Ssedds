@@ -486,18 +486,39 @@ fn unresolved_code(job: &ResolvedJob) -> Code {
         .unwrap_or(Code::SugLowConfidence)
 }
 
-/// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), as
-/// (SHA-256, bake identity). Empty for an ordinary file that does not bake; `None` when a source cannot be hashed
-/// (then the output is not up to date).
-fn current_sources(job: &ResolvedJob) -> Option<Vec<(String, Option<String>)>> {
+/// (SHA-256, bake identity, RNM role) of one recorded source.
+type SourceKey = (String, Option<String>, Option<String>);
+
+/// Every recorded source of `job` now, in record order: the pack sources, then the baked `_n` (DECISIONS R12), then
+/// the RNM inputs (M6 Track F2), as `SourceKey`s. Empty for an ordinary file that does not bake; `None` when a
+/// source cannot be hashed (then the output is not up to date).
+fn current_sources(job: &ResolvedJob) -> Option<Vec<SourceKey>> {
     let mut v = vec![];
     if let Some(pk) = &job.pack {
         for s in &pk.sources {
-            v.push((sha256_file(&s.path).ok()?, None));
+            v.push((sha256_file(&s.path).ok()?, None, None));
         }
     }
     if let Some(b) = &job.bake {
-        v.push((sha256_file(&b.normal).ok()?, Some(b.identity_sha256())));
+        v.push((
+            sha256_file(&b.normal).ok()?,
+            Some(b.identity_sha256()),
+            None,
+        ));
+        if let Some(r) = &b.rnm {
+            for (f, role) in r.inputs(&b.normal_profile.rnm) {
+                v.push((
+                    sha256_file(&f.path).ok()?,
+                    None,
+                    Some(format!("bake.{role}")),
+                ));
+            }
+        }
+    }
+    if let Some(r) = job.active_rnm() {
+        for (f, role) in r.inputs(&job.profile.rnm) {
+            v.push((sha256_file(&f.path).ok()?, None, Some(role)));
+        }
     }
     Some(v)
 }
@@ -510,7 +531,7 @@ fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
         Some(pk) => e
             .sources
             .iter()
-            .filter(|r| r.bake.is_none())
+            .filter(|r| r.bake.is_none() && r.rnm.is_none())
             .map(|r| (r.role, r.invert))
             .eq(pk
                 .sources
@@ -563,8 +584,10 @@ fn is_up_to_date(
     passed
         && e.engine_version == ENGINE_VERSION
         && current_sources(job).is_some_and(|now| {
-            now.into_iter()
-                .eq(e.sources.iter().map(|r| (r.sha256.clone(), r.bake.clone())))
+            now.into_iter().eq(e
+                .sources
+                .iter()
+                .map(|r| (r.sha256.clone(), r.bake.clone(), r.rnm.clone())))
         })
         && pack_roles_match(e, job)
         && profile_sha256(&job.profile).is_ok_and(|h| h == e.profile_sha256)
@@ -1266,6 +1289,12 @@ impl Engine {
                 )
             })
             .collect();
+        for j in &mut jobs {
+            j.shader = picks.get(&j.set_key).cloned();
+        }
+        // M6 Track F2: RNM layers attach to their base normals once the shaders are known (eye sets are skipped),
+        // before the bakes, so a baking roughness member copies its `_n`'s blend (Note W18).
+        crate::rnm::plan::plan_rnm(&ctx, &sets, &files, registry.alias_table(), &mut jobs);
         let baking = crate::bake::plan::plan_bakes(
             &crate::bake::plan::BakeCtx {
                 target,
@@ -1277,9 +1306,6 @@ impl Engine {
             },
             &mut jobs,
         );
-        for j in &mut jobs {
-            j.shader = picks.get(&j.set_key).cloned();
-        }
         let peak_admitted_bytes = budget.peak.load(Ordering::Relaxed);
         // DECISIONS N2: a [files] key that names nothing planned is reported once (it stays in the file).
         let mut rels: Vec<String> = vec![];
@@ -1512,6 +1538,26 @@ impl Engine {
                             code: Some(w.map_or(Code::InPackingInput, |w| w.code)),
                             reason: w.map_or_else(
                                 || format!("raw {} map, not converted on its own", role.id()),
+                                |w| w.message.clone(),
+                            ),
+                        },
+                    )
+                }
+                // M6 Track F2: a layer is reported once, with its RNM-* warning when it feeds nothing.
+                JobStatus::NormalLayer { .. } => {
+                    let w = job
+                        .warnings
+                        .iter()
+                        .find(|w| w.code.as_str().starts_with("RNM-"));
+                    rep.emit_job(
+                        Some(&key(&job.output)),
+                        set,
+                        path,
+                        EventKind::FileSkipped {
+                            kind: SkipKind::NormalLayer,
+                            code: w.map(|w| w.code),
+                            reason: w.map_or_else(
+                                || "RNM normal layer, used through its base normal".to_string(),
                                 |w| w.message.clone(),
                             ),
                         },
@@ -2001,7 +2047,7 @@ fn check_up_front(
         }
         for o in req.overrides.iter().filter(|o| {
             o.field != "subtype"
-                && o.field != crate::overrides::REENCODE_FIELD
+                && !crate::overrides::is_selector(&o.field)
                 && !matches!(o.scope, Scope::Set(_))
         }) {
             let mut d = doc.clone();
@@ -2011,7 +2057,7 @@ fn check_up_front(
         }
         for o in file_overrides
             .iter()
-            .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
+            .filter(|o| o.field != "subtype" && !crate::overrides::is_selector(&o.field))
         {
             let Scope::Path(key) = &o.scope else { continue };
             let mut d = doc.clone();
@@ -2184,6 +2230,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            rnm: None,
             shader: None,
         };
         let texels = 48 * 40;
@@ -2234,6 +2281,7 @@ mod tests {
             source: None,
             pack: None,
             bake: None,
+            rnm: None,
             shader: None,
         };
         let enc = EncoderVersions::current();
@@ -2286,6 +2334,7 @@ mod tests {
                         role: None,
                         invert: false,
                         bake: None,
+                        rnm: None,
                     }]
                 }),
             ),

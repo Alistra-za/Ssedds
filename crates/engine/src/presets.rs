@@ -220,6 +220,11 @@ impl ConfigFile {
                 if field == crate::overrides::REENCODE_FIELD && !value.is_boolean() {
                     return Err(bad("reencode takes true or false".into()));
                 }
+                if field == crate::overrides::RNM_TARGET_FIELD
+                    && crate::overrides::rnm_target_value(&value).is_none()
+                {
+                    return Err(bad("rnm.target takes n, cnr or both".into()));
+                }
                 overrides.push(SetOverride {
                     scope: Scope::Path(key.clone()),
                     field,
