@@ -2417,3 +2417,18 @@ fn a_failed_recompile_on_a_loaded_mesh_is_listed() {
     h.run();
     h.get_by_label("S: shader failed: X3000 (previous look kept)");
 }
+
+#[test]
+fn a_late_ack_after_failed_does_not_overcount_reconfigurations() {
+    let (_d, mut v, _cmds) = loaded_mesh();
+    v.set_features(false);
+    assert!(v.busy());
+    v.handle(v3::V3Reply::Failed("device".into()));
+    v.handle(v3::V3Reply::Reconfigured(1));
+    assert!(!v.busy());
+    let _new = v.attach_test_thread();
+    v.set_features(true);
+    assert!(v.busy(), "the next command is waited for again");
+    v.handle(v3::V3Reply::Reconfigured(1));
+    assert!(!v.busy());
+}

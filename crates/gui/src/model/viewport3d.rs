@@ -1402,7 +1402,9 @@ impl Viewport3d {
                     self.render_error = Some(message);
                 }
             }
-            V3Reply::Reconfigured(n) => self.reconf_done += n,
+            V3Reply::Reconfigured(n) => {
+                self.reconf_done = (self.reconf_done + n).min(self.reconf_sent)
+            }
             V3Reply::Shapes(s) => {
                 // Only for the loaded content: a reply for content replaced since is dropped.
                 if self.pending_load.is_none() && self.loaded.is_some() {
