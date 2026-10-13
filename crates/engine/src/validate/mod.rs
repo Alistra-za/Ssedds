@@ -259,6 +259,28 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
         }
     }
 
+    // Design §3.6 (ruling R8): CS (and, by owner ruling, ENB) detects complex grass from the decoded bottom-left texel
+    // of mip 0; the encoder re-encoded that block once at the slowest level when it failed.
+    if p.subtype == Subtype::ComplexGrass {
+        if let Some((lw, lh, Decoded::Ldr(px))) = decoded.first() {
+            let q = px[((lh - 1) * lw) as usize];
+            let e = crate::grass::unit_err([q[0], q[1], q[2]].map(|c| f32::from(c) / 255.0));
+            if e >= crate::grass::CS_GRASS_THRESHOLD - crate::grass::GRASS_GUARD_MARGIN {
+                w.push(
+                    Warning::new(
+                        Code::ValGrassDetect,
+                        format!(
+                            "decoded bottom-left texel ({}, {}, {}) has |L-1| = {e:.4} >= 0.02 after re-encoding at \
+                             the slowest BC7 level: Community Shaders may not detect this texture as complex grass",
+                            q[0], q[1], q[2]
+                        ),
+                    )
+                    .with_data(json!({ "texel": [q[0], q[1], q[2]], "err": e })),
+                );
+            }
+        }
+    }
+
     if p.format.has_alpha() {
         let ldr: Vec<(u32, u32, &Vec<[u8; 4]>)> = decoded
             .iter()

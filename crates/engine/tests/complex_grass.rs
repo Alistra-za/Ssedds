@@ -278,3 +278,135 @@ fn a_tagged_grass_texture_is_one_bc7_unorm_file_down_to_one_by_two() {
     assert_eq!(f.format.as_format(), Some((Format::Bc7, false)));
     assert_eq!((f.width, f.height, f.mip_count), (64, 128, 7));
 }
+
+fn decoded_corner(f: &engine::dds::DdsFile) -> [u8; 4] {
+    use engine::decode::{decode_level, Decoded};
+    let (w, h, r) = f.levels[0].clone();
+    match decode_level(f.format, w, h, &f.data[r], None).unwrap() {
+        Decoded::Ldr(px) => px[((h - 1) * w) as usize],
+        Decoded::Hdr(_) => panic!("LDR expected"),
+    }
+}
+
+fn corner_err(t: [u8; 4]) -> f32 {
+    engine::grass::unit_err([t[0], t[1], t[2]].map(|c| f32::from(c) / 255.0))
+}
+
+fn file_done(events: &[EngineEvent]) -> engine::validate::ValidationSummary {
+    events
+        .iter()
+        .find_map(|e| match &e.kind {
+            EventKind::FileDone { validation, .. } => Some(validation.clone()),
+            _ => None,
+        })
+        .expect("file_done")
+}
+
+/// §3.6: the written file's decoded bottom-left texel is within the guard.
+#[test]
+fn the_written_corner_passes_the_guard() {
+    let d = tempfile::tempdir().unwrap();
+    put(&d, "g.png", &grass(64));
+    let (events, _) = run(&d, Target::Cs, &[TAG, CUTOUT]);
+    assert!(file_done(&events).passed);
+    let e = corner_err(decoded_corner(&out(&d)));
+    assert!(e < 0.02, "{e}");
+}
+
+/// §3.6: a corner no BC7 encode can bring to unit length is the named error.
+#[test]
+fn a_corner_no_encode_can_fix_is_val_grass_detect() {
+    use engine::dds::{dds_bytes, resolve_header, DdsDesc};
+    use engine::encode::{encode_level, EncodeCtx};
+    use engine::quantize::EncoderInput;
+    use engine::validate::{validate, ValidationInput};
+    let mut p = engine::presets::PresetRegistry::builtin()
+        .unwrap()
+        .profile("cs-quality", Target::Cs, Subtype::ComplexGrass)
+        .unwrap();
+    p.alpha.policy = AlphaPolicy::Cutout;
+    for (grey, want) in [(false, false), (true, true)] {
+        let mut px = vec![[200u8, 180, 90, 255]; 16];
+        px.extend(vec![[128u8, 128, 255, 12]; 16]);
+        if grey {
+            px[28] = [128, 128, 128, 12]; // texel (0, 7): length ~0
+        }
+        let input = EncoderInput::Ldr(px);
+        let level = encode_level(&input, 4, 8, &p, &EncodeCtx::default()).unwrap();
+        let desc = DdsDesc {
+            width: 4,
+            height: 8,
+            format: Format::Bc7,
+            srgb: false,
+            header: resolve_header(Format::Bc7, false, p.header),
+        };
+        let bytes = dds_bytes(&desc, &[level]).unwrap();
+        let r = validate(&ValidationInput {
+            bytes: &bytes,
+            profile: &p,
+            encoder_input: Some(std::slice::from_ref(&input)),
+            base_coverage: None,
+            source_peak: None,
+            bc1_model: encoders_sys::Bc1Model::Ideal,
+            expected_levels: Some(1),
+        });
+        let named = r.warnings.iter().any(|w| w.code == Code::ValGrassDetect);
+        assert_eq!(named, want, "grey {grey}: {:?}", r.warnings);
+        assert_eq!(r.summary.passed, !want);
+    }
+}
+
+/// Review Focus 2: a source without an alpha channel resolves `remove`, encodes opaque in both halves and passes.
+#[test]
+fn an_rgb_grass_source_encodes_opaque_and_passes() {
+    let d = tempfile::tempdir().unwrap();
+    let rgb = image::DynamicImage::ImageRgb8(png(&grass(32)).to_rgb8());
+    let p = d.path().join("in/textures/plants/g.png");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    rgb.save(&p).unwrap();
+    let plan = plan(&d, Target::Cs, &[TAG]);
+    let j = job(&plan, "g.png");
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Remove);
+    assert_eq!(grass_codes(j), [Code::GrassTopOpaque]);
+    let (events, s) = run(&d, Target::Cs, &[TAG]);
+    assert_eq!(s.converted, 1);
+    let v = file_done(&events);
+    assert!(v.passed, "{v:?}");
+    // `exact_opaque` is off for this sub-type, so the `remove` guarantee is 254 (mode-6 p-bit), as for diffuse.
+    assert!(decoded_corner(&out(&d))[3] >= 254);
+}
+
+/// Design §6: the owner's example (2048 x 4096, bottom-left texel (127, 126, 255, 10)) encodes, the guard passes and the
+/// decoded bottom-left texel passes CS's 0.03 test. Owner data, read only (copied into a temp dir):
+/// `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p engine --test complex_grass -- --ignored`
+#[test]
+#[ignore]
+fn owner_example_encodes_and_stays_complex() {
+    std::env::var("SDC_ACHERUS")
+        .expect("owner-data test: set SDC_ACHERUS (it marks the owner's machine)");
+    let src = std::path::Path::new(r"F:\ai\dds\complexgrass\grassfieldtundra.png");
+    assert!(src.is_file(), "{} is missing", src.display());
+    let d = tempfile::tempdir().unwrap();
+    let dst = d.path().join("in/textures/plants/g.png");
+    std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+    std::fs::copy(src, &dst).unwrap();
+    let p = plan(&d, Target::Cs, &[TAG, CUTOUT]);
+    let j = job(&p, "g.png");
+    assert!(grass_codes(j).is_empty(), "{:?}", j.warnings);
+    let (img, info) = engine::load::load_image(&dst).unwrap();
+    let g = engine::analyse::analyse(&img, &info).grass.unwrap();
+    drop(img);
+    assert!(g.corner_err < 0.001 && g.bottom_unit_share > 0.999, "{g:?}");
+    let (events, s) = run(&d, Target::Cs, &[TAG, CUTOUT]);
+    assert_eq!(s.converted, 1);
+    assert!(file_done(&events).passed);
+    let f = out(&d);
+    assert_eq!(f.format.as_format(), Some((Format::Bc7, false)));
+    assert_eq!((f.width, f.height, f.mip_count), (2048, 4096, 12));
+    let e = corner_err(decoded_corner(&f));
+    assert!(e < 0.03, "decoded corner |L-1| = {e}");
+    eprintln!(
+        "owner example: decoded corner {:?}, |L-1| = {e:.5}",
+        decoded_corner(&f)
+    );
+}
