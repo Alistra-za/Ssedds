@@ -233,3 +233,43 @@ fn unpatchable_faults_are_refused_with_a_reason() {
     assert!(refused(&cube, &PatchRequest::default()).contains("cubemap"));
     assert!(refused(b"not a dds at all", &PatchRequest::default()).contains("unreadable"));
 }
+
+/// R6/P5: a complex_grass file (w x 2w) stores log2(w)+1 levels, ending at 1x2: one short of the full chain.
+#[test]
+fn complex_grass_chain_one_level_short_is_accepted_two_short_is_refused() {
+    let file = |n: u32| {
+        let levels: Vec<Vec<u8>> = (0..n)
+            .map(|i| vec![0x10 + i as u8; level_size(Format::Bc7, 64 >> i, 128 >> i)])
+            .collect();
+        undeclared_mips(
+            dds_bytes(
+                &DdsDesc {
+                    width: 64,
+                    height: 128,
+                    format: Format::Bc7,
+                    srgb: false,
+                    header: ResolvedHeader::Dx10,
+                },
+                &levels,
+            )
+            .unwrap(),
+        )
+    };
+    let req = PatchRequest {
+        require_full_mips: true,
+        complex_grass: true,
+        ..Default::default()
+    };
+    let p = patched(&file(7), &req);
+    assert!(
+        p.fixes.iter().any(|f| f.contains("mip count 1 → 7")),
+        "{:?}",
+        p.fixes
+    );
+    assert!(refused(&file(6), &req).contains("missing mips"));
+    let plain = PatchRequest {
+        complex_grass: false,
+        ..req
+    };
+    assert!(refused(&file(7), &plain).contains("missing mips"));
+}

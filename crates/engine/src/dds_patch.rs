@@ -15,6 +15,8 @@ pub struct PatchRequest {
     pub expect_format: Option<Format>,
     /// The profile wants a full mip chain: fewer stored levels are refused ("missing mips").
     pub require_full_mips: bool,
+    /// The sub-type is complex_grass: a w x 2w chain ending at 1x2 (one level short of full, R6) is complete.
+    pub complex_grass: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,7 +121,8 @@ pub fn plan_patch(bytes: &[u8], req: &PatchRequest) -> Result<Option<HeaderPatch
             "the payload ({payload} bytes) holds no whole mip chain the header could describe: it needs re-encoding"
         ));
     };
-    if req.require_full_mips && stored < full {
+    let grass_chain = req.complex_grass && f.height == 2 * f.width && stored + 1 == full;
+    if req.require_full_mips && stored < full && !grass_chain {
         return refuse(format!(
             "missing mips: {stored} of {full} levels stored: it needs re-encoding"
         ));
