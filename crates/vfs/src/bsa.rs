@@ -147,10 +147,11 @@ impl Bsa {
                 as usize;
         }
         if !e.compressed {
-            return data
-                .get(p..)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(|| VfsError::Corrupt("entry too short".into()));
+            if p > data.len() {
+                return Err(VfsError::Corrupt("entry too short".into()));
+            }
+            data.drain(..p); // in place: no second copy of the payload
+            return Ok(data);
         }
         let orig = data
             .get(p..p + 4)
