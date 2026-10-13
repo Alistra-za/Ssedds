@@ -292,21 +292,23 @@ impl Store {
     /// source copy; TruePBR shapes are skipped). Store form: lower case, `/`.
     pub fn gras_diffuse_textures(&self) -> Result<BTreeSet<String>, ScanError> {
         let mut st = self.conn.prepare(
+            // CROSS JOIN pins the join order (SQLite never reorders it): start from the few GRAS records. Left to
+            // the planner (no ANALYZE stats) it scanned `path` first and hung the GUI for minutes on a real modlist.
             "SELECT DISTINCT tp.p
-             FROM model_ref m
-             JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id
-             JOIN rec r ON r.plugin_id = m.plugin_id AND r.local = m.local AND r.sig = 'GRAS' AND r.owner_ok = 1
-             JOIN nif_winner nw ON nw.path_id = m.path_id
-             JOIN nif_copy wc ON wc.id = nw.copy_id
-             JOIN origin wo ON wo.id = wc.origin_id AND wo.enabled = 1
+             FROM rec r
+             CROSS JOIN model_ref m ON m.plugin_id = r.plugin_id AND m.local = r.local AND m.slot = 0
+             CROSS JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id
+             CROSS JOIN nif_winner nw ON nw.path_id = m.path_id
+             CROSS JOIN nif_copy wc ON wc.id = nw.copy_id
+             CROSS JOIN origin wo ON wo.id = wc.origin_id AND wo.enabled = 1
              LEFT JOIN nif_winner_src ws ON ws.path_id = nw.path_id
-             JOIN nif_copy c ON c.id = CASE WHEN wc.is_derived = 1
+             CROSS JOIN nif_copy c ON c.id = CASE WHEN wc.is_derived = 1
                                             THEN coalesce(ws.copy_id, wc.source_copy_id, wc.id) ELSE wc.id END
-             JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
-             JOIN shape s ON s.copy_id = c.id AND s.shader_kind = 1 AND (ifnull(s.slsf2,0) & 8388608) = 0
-             JOIN tex_use tu ON tu.texset_id = s.texset_id AND tu.slot = 0
-             JOIN path tp ON tp.id = tu.tex_path_id
-             WHERE m.slot = 0",
+             CROSS JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
+             CROSS JOIN shape s ON s.copy_id = c.id AND s.shader_kind = 1 AND (ifnull(s.slsf2,0) & 8388608) = 0
+             CROSS JOIN tex_use tu ON tu.texset_id = s.texset_id AND tu.slot = 0
+             CROSS JOIN path tp ON tp.id = tu.tex_path_id
+             WHERE r.sig = 'GRAS' AND r.owner_ok = 1",
         )?;
         let v = st
             .query_map([], |r| r.get::<_, String>(0))?
