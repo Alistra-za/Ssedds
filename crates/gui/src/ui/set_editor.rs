@@ -4,7 +4,7 @@ use super::columns::{border_of, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
-use crate::model::fields::{channel_text, field_lock, format_label, format_options};
+use crate::model::fields::{channel_text, encoding_options, field_lock, format_label};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
@@ -38,13 +38,6 @@ enum Act {
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
-}
-
-fn tag_options(f: Format) -> Vec<ColorTag> {
-    match f {
-        Format::Bc1 | Format::Bc3 | Format::Bc7 => vec![ColorTag::Srgb, ColorTag::Unorm],
-        _ => vec![ColorTag::Unorm],
-    }
 }
 
 pub fn draw(
@@ -333,10 +326,8 @@ fn card(
                     .selected_text(format_label(cur_f, cur_t))
                     .width(CARD - 24.0)
                     .show_ui(ui, |ui| {
-                        for f in format_options(model.target) {
-                            for t in tag_options(f) {
-                                ui.selectable_value(&mut choice, (f, t), format_label(f, t));
-                            }
+                        for (e, label) in encoding_options(model.target, &job.profile) {
+                            ui.selectable_value(&mut choice, e, label);
                         }
                     });
             })

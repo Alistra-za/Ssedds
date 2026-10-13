@@ -2,16 +2,16 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    auto_subtype_reason, channel_text, edge_view, field_hidden, field_views, filter_option_lock,
-    filter_view, format_label, format_options, group_of, levels_view, mips_count, mips_on,
-    provenance_text, FieldView,
+    auto_subtype_reason, channel_text, edge_view, encoding_options, field_hidden, field_views,
+    filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on, provenance_text,
+    FieldView, NOT_VALID,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
 use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
-use engine::config::{AlphaPolicy, GreenConvention, MipFilter, Subtype, Target};
+use engine::config::{AlphaPolicy, ColorTag, Format, GreenConvention, MipFilter, Subtype, Target};
 use engine::policy::{offered, ResolvedJob};
 use serde_json::{json, Value};
 
@@ -132,10 +132,24 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             opt(json!("srgb"), "sRGB-encoded colour"),
             opt(json!("linear"), "Linear data"),
         ],
-        "color.tag" => vec![
-            opt(json!("srgb"), "_SRGB"),
-            opt(json!("unorm"), "UNORM (linear)"),
-        ],
+        // The tags the engine allows with the current format, and the current one marked when it is not allowed.
+        "color.tag" => encoding_options(target, p)
+            .into_iter()
+            .filter(|((f, _), _)| *f == p.format)
+            .filter_map(|((_, t), label)| {
+                let name = match t {
+                    ColorTag::Srgb => "_SRGB",
+                    ColorTag::Unorm => "UNORM (linear)",
+                    ColorTag::NotApplicable => return None,
+                };
+                let mark = if label.ends_with(NOT_VALID) {
+                    NOT_VALID
+                } else {
+                    ""
+                };
+                Some((json!(t), format!("{name}{mark}")))
+            })
+            .collect(),
         "alpha.policy" => alpha_options(),
         "alpha.compare" => vec![
             opt(json!("gt"), "Greater than"),
@@ -168,9 +182,10 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             opt(json!("on"), "On"),
             opt(json!("off"), "Off"),
         ],
-        "format" => format_options(target)
+        // A (format, tag) pair, so a pick never leaves a tag the format cannot take; applied with `set_format`.
+        "format" => encoding_options(target, p)
             .into_iter()
-            .map(|f| (json!(f), format_label(f, p.color.tag)))
+            .map(|(e, label)| (json!(e), label))
             .collect(),
         "encoder.effort" => [
             "ultrafast",
@@ -337,7 +352,12 @@ fn editor(
         }
         field => {
             let options = options_of(field, target, job).unwrap_or_default();
-            combo(ui, egui::Id::new((key, field)), &f.value, &options)
+            let current = if field == "format" {
+                json!((job.profile.format, job.profile.color.tag))
+            } else {
+                f.value.clone()
+            };
+            combo(ui, egui::Id::new((key, field)), &current, &options)
         }
     }
 }
@@ -880,6 +900,11 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     });
     for a in actions {
         match a {
+            Action::Set("format", v) => {
+                if let Ok((f, t)) = serde_json::from_value::<(Format, ColorTag)>(v) {
+                    model.set_format(key, f, t);
+                }
+            }
             Action::Set(f, v) => model.set_field(key, f, v),
             Action::Clear(f) => model.clear_field(key, f),
             Action::Decide(a) => model.decide(key, a),
