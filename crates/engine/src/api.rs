@@ -545,6 +545,15 @@ fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
     }
 }
 
+/// `--sidecar` on an up-to-date output (audit 15, DECISIONS Note Y2): write the stored record when the sidecar is
+/// missing. `false` when it cannot be written, so the file re-encodes and the encode reports the error.
+fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
+    let side = output.with_extension("dds.json");
+    side.exists()
+        || serde_json::to_string_pretty(&e.raw)
+            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
+}
+
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
 /// (the bytes of every source and the channel each feeds, for a packed output), profile, engine version and
 /// encoders, a comparable record (known schema, encoders and preset present) and a passing validation, so a
@@ -573,6 +582,10 @@ fn is_up_to_date(
             )
         || (rgbcx && rec.rgbcx_patch != encoders.rgbcx_patch)
     {
+        return false;
+    }
+    // Note Y1: metadata only, and before any hashing; a legacy record (no stamp) is stale once.
+    if e.output_stamp.is_none() || SourceStamp::of(&job.output) != e.output_stamp {
         return false;
     }
     if matches!(job.profile.format, Format::Bc1 | Format::Bc3)
@@ -1682,7 +1695,10 @@ impl Engine {
                                 );
                                 continue;
                             }
-                            Some(e) if is_up_to_date(e, job, &encoders, req.bc1_model) => {
+                            Some(e)
+                                if is_up_to_date(e, job, &encoders, req.bc1_model)
+                                    && (!req.sidecar || sidecar_present(&job.output, e)) =>
+                            {
                                 summary.up_to_date += 1;
                                 rep.emit_job(
                                     Some(&key(&job.output)),
@@ -2295,6 +2311,7 @@ mod tests {
             rnm: None,
             shader: None,
         };
+        std::fs::write(&job.output, b"dds").unwrap();
         let enc = EncoderVersions::current();
         let entry_for = |job: &ResolvedJob| ManifestEntry {
             schema: MANIFEST_SCHEMA,
@@ -2306,6 +2323,7 @@ mod tests {
             encoders: Some(enc.clone()),
             preset: PresetRef::for_preset(&reg, "cs-quality", None),
             bc1_model: Some("ideal".into()),
+            output_stamp: SourceStamp::of(&job.output),
             raw: serde_json::json!({ "validation": { "passed": true } }),
         };
         let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| is_up_to_date(e, job, &enc, m);
@@ -2317,7 +2335,7 @@ mod tests {
             f(&mut e);
             e
         };
-        let not_up: [(&str, ManifestEntry); 10] = [
+        let not_up: [(&str, ManifestEntry); 12] = [
             ("no encoders", with(&|e| e.encoders = None)),
             (
                 "other encoders",
@@ -2336,6 +2354,11 @@ mod tests {
             ),
             ("other source", with(&|e| e.source_sha256 = "0".repeat(64))),
             ("other engine", with(&|e| e.engine_version = "0.0.0".into())),
+            ("no output stamp", with(&|e| e.output_stamp = None)),
+            (
+                "replaced output",
+                with(&|e| e.output_stamp.as_mut().unwrap().size += 1),
+            ),
             (
                 "several sources",
                 with(&|e| {

@@ -206,6 +206,9 @@ pub struct ManifestRecord {
     /// The set's shader and why (M6 spec §4.4); `None` in records written before shaders existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shader: Option<crate::shader::ShaderPick>,
+    /// Size and mtime of the output as written (audit 5, DECISIONS Note Y1); `None` in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_stamp: Option<crate::policy::SourceStamp>,
 }
 
 /// The stable id of a BC1 decoder model, as `--bc1-decoder` spells it (spec §8).
@@ -234,6 +237,7 @@ pub struct ManifestEntry {
     pub encoders: Option<EncoderVersions>,
     pub preset: Option<PresetRef>,
     pub bc1_model: Option<String>,
+    pub output_stamp: Option<crate::policy::SourceStamp>,
     pub raw: serde_json::Value,
 }
 
@@ -268,6 +272,7 @@ impl ManifestEntry {
             encoders: lenient(&raw, "encoders"),
             preset: lenient(&raw, "preset"),
             bc1_model: lenient(&raw, "bc1_model"),
+            output_stamp: lenient(&raw, "output_stamp"),
             raw,
         })
     }

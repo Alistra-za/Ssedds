@@ -35,6 +35,7 @@ fn record(
             provenance: ShaderOrigin::Fallback,
             wanted: Some(Shader::Pbr),
         }),
+        output_stamp: None,
     }
 }
 

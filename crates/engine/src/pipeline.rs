@@ -472,7 +472,7 @@ pub fn process_file(
     #[cfg(feature = "test-hooks")]
     force_validation_failure_for_test(job, &mut report);
     enter(Stage::Write);
-    let record = ManifestRecord {
+    let mut record = ManifestRecord {
         schema: MANIFEST_SCHEMA,
         ts: now_rfc3339(),
         engine_version: ENGINE_VERSION.into(),
@@ -490,18 +490,19 @@ pub fn process_file(
         validation: report.summary.clone(),
         bc1_model: Some(bc1_model_id(req.bc1_model).into()),
         shader: job.shader.clone(),
+        output_stamp: None,
     };
-    let sidecar = req
-        .sidecar
-        .then(|| serde_json::to_string_pretty(&record))
-        .transpose()
-        .map_err(|e| fail(Stage::Write)(e.to_string()))?;
     stop()?;
 
     write_atomic(&job.output, &bytes).map_err(|e| fail(Stage::Write)(e.to_string()))?;
     tracker.written.set(true);
     drop(bytes);
-    if let Some(text) = sidecar {
+    // Note Y1: taken after the rename, so `if-changed` notices a replaced output. Any failure from here on removes
+    // the output (`run_one`, `tracker.written`).
+    record.output_stamp = SourceStamp::of(&job.output);
+    if req.sidecar {
+        let text =
+            serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
         write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
             .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
     }
