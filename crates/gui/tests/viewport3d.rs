@@ -2337,3 +2337,17 @@ fn the_coverage_line_shows_only_when_reported() {
     h.run();
     assert!(h.query_by_label_contains("CS settings:").is_none());
 }
+
+/// P1-D: a `Some` -> `None` coverage reply clears the footer line. The render thread send cadence has no harness in
+/// these tests, so it is not pinned here.
+#[test]
+fn the_coverage_line_clears_when_the_renderer_stops_reporting() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.handle(v3::V3Reply::Coverage(Some(
+        "CS settings: 1 fields unset, 0 keys unmatched".into(),
+    )));
+    v.handle(v3::V3Reply::Coverage(None));
+    let mut h = harness(v);
+    h.run();
+    assert!(h.query_by_label_contains("CS settings:").is_none());
+}

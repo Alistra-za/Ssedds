@@ -453,6 +453,11 @@ impl Renderer {
     pub fn set_settings(&mut self, s: CsSettings) {
         self.settings = s;
         self.apply_settings_defines();
+        self.refresh_coverage();
+    }
+
+    /// Re-reports every program at hand (settings or the features toggle changed what is written).
+    fn refresh_coverage(&mut self) {
         let at_hand: Vec<(ProgramKey, BTreeSet<String>)> = self
             .programs
             .iter()
@@ -494,6 +499,7 @@ impl Renderer {
     pub fn set_features_on(&mut self, on: bool) {
         self.features_on = on;
         self.apply_settings_defines();
+        self.refresh_coverage();
     }
 
     /// Features CS loaded (Info.ini, or the Features inis) that this preview does not compile, in name order, for

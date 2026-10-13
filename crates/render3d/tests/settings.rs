@@ -318,3 +318,28 @@ fn every_program_reports_its_settings_coverage() {
         .all(|e| e["unmatched"] == serde_json::json!([])));
     assert_eq!(r.settings_coverage().line(), None);
 }
+
+/// Coverage follows the features toggle (off writes the fallback fields), and ordinary frames do not re-report it.
+#[test]
+fn coverage_follows_the_toggle_and_frames_stay_quiet() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = furniture(cache.path(), FEATURE_DATA, settings(true, 1.0));
+    let on = r.settings_coverage();
+    let scene = Scene::neutral();
+    let ((), ev) = perf_log::capture(|| {
+        r.render(&scene, N, N).unwrap();
+        r.render(&scene, N, N).unwrap();
+    });
+    assert!(
+        ev.iter().all(|e| e["event"] != "settings_coverage"),
+        "{ev:?}"
+    );
+    assert_eq!(r.settings_coverage(), on);
+    // The toggle changes what is written (new-LL fallbacks), so every program at hand is re-reported.
+    let ((), ev) = perf_log::capture(|| r.set_features_on(false));
+    let n = ev
+        .iter()
+        .filter(|e| e["event"] == "settings_coverage")
+        .count();
+    assert!(n >= 1, "toggle must refresh coverage: {ev:?}");
+}
