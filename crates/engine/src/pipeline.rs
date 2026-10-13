@@ -83,7 +83,7 @@ fn base_coverage(level: &Rgba32F, p: &Profile, alpha_present: bool) -> Option<f6
 /// matching the clamp in `quantize`), for the BC6H peak check. `None` for other formats.
 fn source_peak(level: &Rgba32F, p: &Profile) -> Option<f32> {
     (p.format == Format::Bc6hUf16).then(|| {
-        let c = |v: f32| if v > 0.0 { v.min(65504.0) } else { 0.0 };
+        let c = crate::quantize::clamp_half;
         level
             .px
             .iter()

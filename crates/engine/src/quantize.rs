@@ -27,11 +27,19 @@ pub fn unorm8(v: f32) -> u8 {
     code8(v)
 }
 
+/// `v` clamped to the half-float range `[0, 65504]`; -0.0 and NaN give 0. Quantise and the BC6H peak check share it.
+pub(crate) fn clamp_half(v: f32) -> f32 {
+    // Not `clamp`: it would keep -0.0 (sign bit set) and NaN.
+    if v > 0.0 {
+        v.min(HALF_MAX)
+    } else {
+        0.0
+    }
+}
+
 /// IEEE half bits of `v` clamped to `[0, 65504]` (round to nearest even; NaN maps to 0).
 fn half_bits(v: f32) -> u16 {
-    // Not `clamp`: it would keep -0.0 (sign bit set) and NaN.
-    let v = if v > 0.0 { v.min(HALF_MAX) } else { 0.0 };
-    f16::from_f32(v).to_bits()
+    f16::from_f32(clamp_half(v)).to_bits()
 }
 
 /// Quantise one finalised level (see `mips::build_chain`) to what the encoder for `p` consumes.
@@ -89,6 +97,14 @@ mod tests {
     use super::*;
     use crate::ops::preprocess;
     use crate::presets::PresetRegistry;
+
+    #[test]
+    fn clamp_half_matches_the_documented_range() {
+        assert_eq!(clamp_half(-0.0).to_bits(), 0);
+        assert_eq!(clamp_half(f32::NAN), 0.0);
+        assert_eq!(clamp_half(1e9), 65504.0);
+        assert_eq!(clamp_half(1.5), 1.5);
+    }
 
     fn profile(st: Subtype) -> Profile {
         PresetRegistry::builtin()
