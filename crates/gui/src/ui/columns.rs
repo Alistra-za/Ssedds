@@ -325,7 +325,8 @@ pub fn set_label(export_root: &str, key: &str) -> String {
 }
 
 /// F3a D4: a right-click menu drawn from `entries` under its count title; the members-of-kind entries go in a
-/// "Select members of kind" submenu. The menus are lists so F3b can append. Returns the clicked action.
+/// "Select members of kind" submenu, the slot menu's links in "From another set". The menus are lists so F3b can
+/// append. Returns the clicked action.
 pub(super) fn bulk_menu(
     ui: &mut egui::Ui,
     title: &str,
@@ -337,14 +338,36 @@ pub(super) fn bulk_menu(
     let (kinds, rest): (Vec<&MenuEntry>, Vec<&MenuEntry>) = entries
         .iter()
         .partition(|e| matches!(e.action, MenuAction::SelectMembersOfKind(_)));
+    // F3a Task 8: the `SlotLink` entries go in the "From another set" submenu, which their header entry draws.
+    let (links, rest): (Vec<&MenuEntry>, Vec<&MenuEntry>) = rest
+        .into_iter()
+        .partition(|e| matches!(e.action, MenuAction::SlotLink { .. }));
     for e in rest {
+        if e.action == MenuAction::FromAnotherSet {
+            let r = ui
+                .add_enabled_ui(e.disabled.is_none(), |ui| {
+                    ui.menu_button(&e.label, |ui| {
+                        for l in &links {
+                            if ui.button(&l.label).clicked() {
+                                picked = Some(l.action.clone());
+                                ui.close();
+                            }
+                        }
+                    })
+                })
+                .response;
+            if let Some(why) = &e.disabled {
+                r.on_disabled_hover_text(why);
+            }
+            continue;
+        }
         let r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(&e.label));
         let r = match &e.disabled {
             Some(why) => r.on_disabled_hover_text(why),
             None => r,
         };
         if r.clicked() {
-            picked = Some(e.action);
+            picked = Some(e.action.clone());
             ui.close();
         }
     }
@@ -352,7 +375,7 @@ pub(super) fn bulk_menu(
         ui.menu_button("Select members of kind", |ui| {
             for e in kinds {
                 if ui.button(&e.label).clicked() {
-                    picked = Some(e.action);
+                    picked = Some(e.action.clone());
                     ui.close();
                 }
             }

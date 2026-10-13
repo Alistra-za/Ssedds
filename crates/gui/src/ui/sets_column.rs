@@ -196,7 +196,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
             Act::SelectItem(k) => model.select_item(&k),
             Act::Click(k, ctrl, shift) => model.click_set(&k, ctrl, shift),
             Act::RightClick(k) => model.right_click_set(&k),
-            Act::Bulk(a) => model.run_menu(a),
+            Act::Bulk(a) => {
+                model.run_menu(a);
+            }
             Act::Expand(k) => model.expand(&k),
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
                 DropOutcome::Joined => {}

@@ -802,6 +802,36 @@ pub fn locked_items(m: &AppModel) -> BTreeSet<String> {
     out
 }
 
+/// What set `set` itself gives at slot `n` (the Slot commands window, the slot menu): the file names of its own
+/// slot cards there, or "nothing".
+pub fn slot_gives(m: &AppModel, set: &str, n: u8) -> String {
+    let views = views(m);
+    let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
+        return String::new();
+    };
+    let names: Vec<String> = SlotKind::ALL
+        .iter()
+        .filter(|s| s.slot_number() == n)
+        .filter_map(|s| match v.slots.get(s)? {
+            SlotFill::Own { item } => m.item(item).map(|i| i.name.clone()),
+            _ => None,
+        })
+        .collect();
+    if names.is_empty() {
+        "nothing".into()
+    } else {
+        names.join(", ")
+    }
+}
+
+/// F3a Task 8: where the game finds `item`'s output, as a slot path (relative to Data\, backslashes): its output
+/// path under the export folder, as `slots_of` writes a borrowed slot. `None` for an item that writes no output.
+pub fn member_game_path(m: &AppModel, item: &str) -> Option<String> {
+    let it = m.item(item)?;
+    it.job.as_ref()?;
+    (!it.job_key.is_empty()).then(|| it.job_key.replace('/', "\\"))
+}
+
 /// Empty `slot` of set `id` in the document: its own occupant leaves the set, a borrow is dropped. Part of a replace.
 fn clear_slot(s: &mut SetsDoc, id: &str, slot: Option<SlotKind>, existing: &Option<SlotFill>) {
     match existing {

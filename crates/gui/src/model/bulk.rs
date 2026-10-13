@@ -4,10 +4,13 @@ use super::fields::{
     all_fields, field_hidden, field_view, filter_option_lock, views_of, FieldView, EDGE_FIELD,
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
-use super::sets::{locked_items, SlotKind, SLOT_LOCKED};
+use super::sets::{
+    locked_items, member_game_path, slot_gives, slot_of, SlotCommand, SlotKind, SLOT_LOCKED,
+};
 use super::{AppModel, Dialog, Selection};
 use engine::config::{MipFilter, Subtype};
 use engine::policy::ResolvedJob;
+use engine::sets::same_id;
 use serde_json::Value;
 
 /// F3a D1: every selected key of one kind, the active one included, in the order they were added. It is in effect
@@ -706,12 +709,36 @@ pub fn kind_chips(m: &AppModel, set_keys: &[String]) -> Vec<KindChip> {
 }
 
 /// F3a D4: what a right-click menu entry does. F3b appends its own entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
     EditSettings,
     CopyFromActive,
     ResetAll,
     SelectMembersOfKind(Option<SlotKind>),
+    /// F3a Task 8: a Slot commands window command on slot `n` of set `set` (an id), through the same model call.
+    Slot {
+        set: String,
+        n: u8,
+        cmd: SlotCommand,
+    },
+    /// "Path…": the UI opens the Slot commands window on that slot to type it; `run_menu` does nothing.
+    SlotPath {
+        set: String,
+        n: u8,
+    },
+    /// The "From another set" submenu; its `SlotLink` entries follow it in the list.
+    FromAnotherSet,
+    /// Slot `n` of `set` takes `item`'s game path (`member_game_path`), as Path would write it.
+    SlotLink {
+        set: String,
+        n: u8,
+        item: String,
+    },
+    SlotLock {
+        set: String,
+        n: u8,
+        on: bool,
+    },
 }
 
 /// One entry of a right-click menu; `disabled` is the hover reason.
@@ -891,7 +918,93 @@ impl AppModel {
         v
     }
 
-    pub fn run_menu(&mut self, a: MenuAction) {
+    /// F3a Task 8: the menu of slot card `kind` of set `set` (an id): the Slot commands window's commands, From
+    /// another set (each other set's member of that kind that writes an output), then Lock or Unlock. A locked slot
+    /// offers only Unlock.
+    pub fn slot_menu(&self, set: &str, kind: SlotKind) -> Vec<MenuEntry> {
+        let views = super::sets::views(self);
+        let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
+            return vec![];
+        };
+        let (id, n) = (v.id.clone(), kind.slot_number());
+        let locked = v.locks.contains(&n);
+        let read_only = self
+            .sets_doc
+            .as_ref()
+            .and_then(|d| d.error())
+            .map(|e| format!("sdc-project.toml is read-only: {e}"));
+        let off = read_only
+            .clone()
+            .or_else(|| locked.then(|| SLOT_LOCKED.to_string()));
+        let current = v.settings.get(&format!("slot{n}"));
+        let cmd = |cmd| MenuAction::Slot {
+            set: id.clone(),
+            n,
+            cmd,
+        };
+        let links: Vec<MenuEntry> = views
+            .iter()
+            .filter(|o| !same_id(&o.id, &id))
+            .flat_map(|o| o.members.iter().map(move |k| (o, k)))
+            .filter_map(|(o, k)| {
+                let it = self.item(k).filter(|i| slot_of(i) == Some(kind))?;
+                member_game_path(self, k)?;
+                Some(MenuEntry {
+                    action: MenuAction::SlotLink {
+                        set: id.clone(),
+                        n,
+                        item: k.clone(),
+                    },
+                    label: format!("{} — {}", o.label, it.name),
+                    disabled: None,
+                })
+            })
+            .collect();
+        let mut menu = vec![
+            MenuEntry {
+                action: cmd(SlotCommand::FromSet),
+                label: format!("From this set ({})", slot_gives(self, &id, n)),
+                disabled: off
+                    .clone()
+                    .or_else(|| current.is_none().then(|| "already from this set".into())),
+            },
+            MenuEntry {
+                action: MenuAction::SlotPath { set: id.clone(), n },
+                label: "Path…".into(),
+                disabled: off.clone(),
+            },
+            MenuEntry {
+                action: cmd(SlotCommand::Clear),
+                label: "Clear".into(),
+                disabled: off.clone().or_else(|| {
+                    (current == Some(&Value::from(""))).then(|| "already cleared".into())
+                }),
+            },
+            MenuEntry {
+                action: MenuAction::FromAnotherSet,
+                label: "From another set".into(),
+                disabled: off.or_else(|| {
+                    links
+                        .is_empty()
+                        .then(|| format!("no other set has a {}", kind.label()))
+                }),
+            },
+        ];
+        menu.extend(links);
+        menu.push(MenuEntry {
+            action: MenuAction::SlotLock {
+                set: id.clone(),
+                n,
+                on: !locked,
+            },
+            label: if locked { "Unlock" } else { "Lock" }.into(),
+            disabled: read_only,
+        });
+        menu
+    }
+
+    /// Run a menu entry; a refused slot command comes back as its reason.
+    pub fn run_menu(&mut self, a: MenuAction) -> Option<String> {
         match a {
             MenuAction::EditSettings => {
                 self.collapse();
@@ -900,6 +1013,16 @@ impl AppModel {
             MenuAction::CopyFromActive => self.open_copy_settings(),
             MenuAction::ResetAll => self.ask_reset_all(),
             MenuAction::SelectMembersOfKind(k) => self.select_members_of_kind(k),
+            MenuAction::Slot { set, n, cmd } => return self.set_slot_command(&set, n, cmd).err(),
+            MenuAction::SlotPath { .. } | MenuAction::FromAnotherSet => {}
+            MenuAction::SlotLink { set, n, item } => {
+                let Some(p) = member_game_path(self, &item) else {
+                    return Some(format!("{item} writes no output"));
+                };
+                return self.set_slot_command(&set, n, SlotCommand::Path(p)).err();
+            }
+            MenuAction::SlotLock { set, n, on } => return self.set_slot_lock(&set, n, on).err(),
         }
+        None
     }
 }

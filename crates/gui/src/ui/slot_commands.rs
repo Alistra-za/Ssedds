@@ -1,5 +1,5 @@
 //! The Slot commands dialog (M3b spec §4.2): per slot 1–8, from this set / a path / clear.
-use crate::model::sets::{set_views, SlotCommand, SlotFill, SlotKind};
+use crate::model::sets::{slot_gives, SlotCommand};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::sets::same_id;
@@ -28,26 +28,6 @@ const NAMES: [&str; 8] = [
 ];
 const CHOICES: [&str; 3] = ["From this set", "Path", "Clear"];
 
-/// What the set itself gives at slot `n`: the file names of the slot cards that fill it.
-fn gives(model: &AppModel, set: &str, n: u8) -> String {
-    let Some(v) = set_views(model).into_iter().find(|v| same_id(&v.id, set)) else {
-        return String::new();
-    };
-    let names: Vec<String> = SlotKind::ALL
-        .iter()
-        .filter(|s| s.slot_number() == n)
-        .filter_map(|s| match v.slots.get(s)? {
-            SlotFill::Own { item } => model.item(item).map(|i| i.name.clone()),
-            _ => None,
-        })
-        .collect();
-    if names.is_empty() {
-        "nothing".into()
-    } else {
-        names.join(", ")
-    }
-}
-
 pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
     let Some(set) = st.open.clone() else { return };
     let settings = model
@@ -58,7 +38,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
         .unwrap_or_default();
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
-    let given: Vec<String> = (1..=8u8).map(|n| gives(model, &set, n)).collect();
+    let given: Vec<String> = (1..=8u8).map(|n| slot_gives(model, &set, n)).collect();
     let mut close = false;
     let mut apply: Vec<(u8, SlotCommand)> = vec![];
     let modal = egui::Modal::new(egui::Id::new("slot-commands")).show(ctx, |ui| {

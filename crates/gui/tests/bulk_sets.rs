@@ -100,7 +100,10 @@ fn the_tile_menu_is_a_list_with_counts_and_reasons() {
     m.click_item(LEAF, true, false);
     assert_eq!(m.menu_title(false), "2 textures selected");
     let menu = m.item_menu();
-    let got: Vec<(MenuAction, &str)> = menu.iter().map(|e| (e.action, e.label.as_str())).collect();
+    let got: Vec<(MenuAction, &str)> = menu
+        .iter()
+        .map(|e| (e.action.clone(), e.label.as_str()))
+        .collect();
     assert_eq!(
         got,
         vec![
@@ -135,7 +138,7 @@ fn the_set_menu_offers_reset_over_members_and_one_entry_per_chip() {
     }
     let kinds: Vec<MenuAction> = menu
         .iter()
-        .map(|e| e.action)
+        .map(|e| e.action.clone())
         .filter(|a| matches!(a, MenuAction::SelectMembersOfKind(_)))
         .collect();
     assert_eq!(
