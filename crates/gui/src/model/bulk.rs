@@ -498,7 +498,7 @@ impl AppModel {
             }
         });
         // Writes that changed nothing (same values) report nothing; all-skipped plans still say why.
-        if changed || written == 0 {
+        if changed || written == 0 || plan.iter().any(|(_, c)| matches!(c, Change::Skip(_))) {
             self.bulk.report = Some(report(label, &plan));
         }
     }
@@ -629,28 +629,46 @@ pub struct KindChip {
 /// F3a D3: All, then one chip per slot kind present among the members of `set_keys`, in `SlotKind::ALL` order.
 /// Members without a slot (raw packing sources, sub-types without a card) are under All only.
 pub fn kind_chips(m: &AppModel, set_keys: &[String]) -> Vec<KindChip> {
+    let views = super::sets::views(m);
+    let mut seen = std::collections::HashSet::new();
+    let mut all: Vec<String> = vec![];
+    let mut by_kind: Vec<(SlotKind, Vec<String>, usize)> =
+        SlotKind::ALL.into_iter().map(|k| (k, vec![], 0)).collect();
+    for s in set_keys {
+        let Some(v) = views.iter().find(|v| &v.key == s) else {
+            continue;
+        };
+        let mut hit = vec![false; by_kind.len()];
+        for k in &v.members {
+            if !seen.insert(k.clone()) {
+                continue;
+            }
+            all.push(k.clone());
+            if let Some(slot) = m.item(k).and_then(super::sets::slot_of) {
+                if let Some(i) = by_kind.iter().position(|e| e.0 == slot) {
+                    by_kind[i].1.push(k.clone());
+                    hit[i] = true;
+                }
+            }
+        }
+        for (i, h) in hit.into_iter().enumerate() {
+            by_kind[i].2 += usize::from(h);
+        }
+    }
     let mut chips = vec![KindChip {
         kind: None,
         label: "All".into(),
-        members: members_of(m, set_keys, None),
+        members: all,
         sets_with: set_keys.len(),
     }];
-    for kind in SlotKind::ALL {
-        let members = members_of(m, set_keys, Some(kind));
-        if members.is_empty() {
-            continue;
-        }
-        let sets_with = set_keys
-            .iter()
-            .filter(|s| !members_of(m, std::slice::from_ref(*s), Some(kind)).is_empty())
-            .count();
-        chips.push(KindChip {
+    chips.extend(by_kind.into_iter().filter(|e| !e.1.is_empty()).map(
+        |(kind, members, sets_with)| KindChip {
             kind: Some(kind),
             label: kind.label().into(),
             members,
             sets_with,
-        });
-    }
+        },
+    ));
     chips
 }
 
@@ -681,8 +699,9 @@ impl AppModel {
     }
 
     /// The textures the bulk panel edits: the selected textures, or the picked chip's members of the selected
-    /// sets (All when that kind has left after a plan). Empty outside a multi-selection.
-    pub fn bulk_targets(&self) -> Vec<String> {
+    /// sets. A picked kind that has left after a plan is reset to All first, so the chip row and the targets agree.
+    /// Empty outside a multi-selection.
+    pub fn bulk_targets(&mut self) -> Vec<String> {
         if !self.in_bulk() {
             return vec![];
         }
@@ -692,10 +711,10 @@ impl AppModel {
         }
         let picked = members_of(self, &sets, self.bulk.kind);
         if picked.is_empty() {
-            members_of(self, &sets, None)
-        } else {
-            picked
+            self.bulk.kind = None;
+            return members_of(self, &sets, None);
         }
+        picked
     }
 
     /// F3a D4 "Select members of kind": the selected sets' members of `kind` become a texture selection, the first

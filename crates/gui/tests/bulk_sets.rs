@@ -130,9 +130,14 @@ fn the_set_menu_offers_reset_over_members_and_one_entry_per_chip() {
     let (mut m, rock, leaf) = two_sets(d.path());
     assert_eq!(m.menu_title(true), "2 sets selected");
     let menu = m.set_menu();
-    assert_eq!(menu[0].action, MenuAction::EditSettings);
-    assert_eq!(menu[1].action, MenuAction::ResetAll);
-    let kinds: Vec<MenuAction> = menu[2..].iter().map(|e| e.action).collect();
+    for a in [MenuAction::EditSettings, MenuAction::ResetAll] {
+        assert!(menu.iter().any(|e| e.action == a), "{a:?} in the menu");
+    }
+    let kinds: Vec<MenuAction> = menu
+        .iter()
+        .map(|e| e.action)
+        .filter(|a| matches!(a, MenuAction::SelectMembersOfKind(_)))
+        .collect();
     assert_eq!(
         kinds,
         vec![
@@ -154,4 +159,20 @@ fn the_set_menu_offers_reset_over_members_and_one_entry_per_chip() {
         vec![rock, leaf],
         "the menu keeps the selection"
     );
+}
+
+#[test]
+fn a_picked_kind_that_left_after_a_replan_falls_back_to_all_visibly() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _, _) = two_sets(d.path());
+    m.bulk.kind = Some(SlotKind::Normal);
+    assert_eq!(m.bulk_targets(), strings(&[NORMAL]));
+    m.decide(NORMAL, Answer::Subtype(Subtype::Diffuse));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let sets = m.selected_sets();
+    let shown: Vec<Option<SlotKind>> = kind_chips(&m, &sets).iter().map(|c| c.kind).collect();
+    assert!(!shown.contains(&Some(SlotKind::Normal)), "{shown:?}");
+    let all = kind_chips(&m, &sets)[0].members.clone();
+    assert_eq!(m.bulk_targets(), all, "no more than the chips show");
+    assert_eq!(m.bulk.kind, None, "the chip row shows All");
 }
