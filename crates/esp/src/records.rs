@@ -167,7 +167,11 @@ fn race(p: &mut Payload, sig: [u8; 4], d: &[u8]) {
         b"DFTM" | b"DFTF" | b"FTSM" | b"FTSF" => form_ref(p, sig, d),
         b"TINT" => texture(p, sig, d),
         b"ANAM" | b"MODL" => {
-            if until_nul(d).to_ascii_lowercase().ends_with(b".dds") {
+            if until_nul(d)
+                .trim_ascii_end()
+                .to_ascii_lowercase()
+                .ends_with(b".dds")
+            {
                 texture(p, sig, d);
             } else if let Some(path) = model_path(d) {
                 p.models.push(ModelRef {

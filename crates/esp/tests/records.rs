@@ -357,3 +357,58 @@ fn weather_cloud_layers() {
     );
     assert_eq!(r.payload.models[0].path, "meshes/sky/aurora.nif");
 }
+
+#[test]
+fn race_dds_classification_ignores_trailing_space() {
+    let r = one(
+        b"RACE",
+        rec(b"RACE", 4, &[sub(b"MODL", &zstr("Actors\\Body.dds "))]),
+    );
+    assert!(r.payload.models.is_empty());
+    assert_eq!(
+        r.payload.textures,
+        vec![(*b"MODL", "textures/actors/body.dds".to_string())]
+    );
+}
+
+fn weap_alt(d: &[u8]) -> Rec {
+    one(
+        b"WEAP",
+        rec(b"WEAP", 1, &[sub(b"MODL", &zstr("a.nif")), sub(b"MODS", d)]),
+    )
+}
+
+#[test]
+fn truncated_and_odd_subrecords_do_not_panic_or_lose_earlier_data() {
+    // 2 declared entries, the 2nd cut off after its name length.
+    let mut d = 2u32.to_le_bytes().to_vec();
+    for (name, txst, idx) in [("A", 0xABCu32, -1i32), ("B", 0xABD, 0)] {
+        d.extend((name.len() as u32).to_le_bytes());
+        d.extend(name.as_bytes());
+        d.extend(txst.to_le_bytes());
+        d.extend(idx.to_le_bytes());
+    }
+    d.truncate(d.len() - 6);
+    let alt = &weap_alt(&d).payload.models[0].alt;
+    assert_eq!(alt.len(), 1);
+    assert_eq!(
+        (alt[0].shape_name.as_str(), alt[0].index),
+        ("A", -1),
+        "negative index round-trips"
+    );
+
+    // Oversized name length: nothing read, no panic.
+    let mut d = 1u32.to_le_bytes().to_vec();
+    d.extend(u32::MAX.to_le_bytes());
+    d.extend([0; 8]);
+    assert!(weap_alt(&d).payload.models[0].alt.is_empty());
+
+    // Short DNAM keeps flags 0; short FormID subrecord is no reference.
+    let t = one(b"TXST", rec(b"TXST", 1, &[sub(b"DNAM", &[7])]))
+        .payload
+        .txst
+        .unwrap();
+    assert_eq!(t.flags, 0);
+    let l = one(b"LTEX", rec(b"LTEX", 1, &[sub(b"TNAM", &[1, 2, 3])]));
+    assert!(l.payload.txst_refs.is_empty());
+}
