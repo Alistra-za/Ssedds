@@ -1,7 +1,7 @@
 # M5: NVTT Production as an optional encoder (design)
 
-Status: **draft for owner review** (2026-10-13). Nothing here is decided until the owner signs off; the open questions are
-listed in §9 with a proposed default for each.
+Status: **approved by the owner** (2026-10-13), with every §9 question taken at its proposed default; those
+defaults are now decided (DECISIONS Note NV records them).
 
 Sources: design spec §3.2 (`encoder.backend`), §5.6, §7.3 table, §7.4, §7.5, §9 codes `ENC-NVTT-MISSING` / `ENC-NVTT-VERSION` /
 `VAL-BC6H-PEAK`, §14 items 6 and 10; DECISIONS Spike S7, Note Y9; plan phase 0-2 Task 16.
