@@ -89,6 +89,10 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
 
 /// The selected texture's key and resolved job, when it has one.
 fn selected_job(model: &AppModel) -> Option<(String, ResolvedJob)> {
+    // F3a: the drawer edits one texture; with several selected it waits for one.
+    if model.in_bulk() {
+        return None;
+    }
     let Selection::Item(key) = &model.selection else {
         return None;
     };

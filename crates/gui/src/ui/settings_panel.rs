@@ -29,7 +29,7 @@ enum Action {
 
 /// The groups the compact strip keeps (Task 17's preview).
 const COMPACT_GROUPS: [&str; 3] = ["Alpha", "Mipmaps", "Compression"];
-const GROUPS: [&str; 5] = ["Type", "Colour", "Alpha", "Mipmaps", "Compression"];
+pub(super) const GROUPS: [&str; 5] = ["Type", "Colour", "Alpha", "Mipmaps", "Compression"];
 /// A 4096 px side has 13 mip levels.
 const MAX_LEVELS: u32 = 13;
 
@@ -195,6 +195,12 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             opt(json!("dx10"), "DX10 extended header"),
             opt(json!("legacy"), "Legacy FourCC"),
         ],
+        "mips.filter" => vec![
+            opt(json!(MipFilter::Box), "Box"),
+            opt(json!(MipFilter::Tent), "Tent"),
+            opt(json!(MipFilter::Mitchell), "Mitchell"),
+            opt(json!(MipFilter::Kaiser), "Kaiser"),
+        ],
         _ => return None,
     })
 }
@@ -212,11 +218,16 @@ fn combo(
     id: egui::Id,
     current: &Value,
     options: &Options,
+    mixed: bool,
 ) -> (Option<Value>, egui::Response) {
-    let shown = options
-        .iter()
-        .find(|(v, _)| v == current)
-        .map_or_else(|| display_value(current), |(_, l)| l.clone());
+    let shown = if mixed {
+        "— mixed".to_string()
+    } else {
+        options
+            .iter()
+            .find(|(v, _)| v == current)
+            .map_or_else(|| display_value(current), |(_, l)| l.clone())
+    };
     let mut picked = None;
     let r = egui::ComboBox::from_id_salt(id)
         .selected_text(shown)
@@ -307,13 +318,14 @@ fn threshold(
     (out.map(|v| json!(v)), r)
 }
 
-fn editor(
+pub(super) fn editor(
     ui: &mut egui::Ui,
     key: &str,
     target: Target,
     job: &ResolvedJob,
     busy: bool,
     f: &FieldView,
+    mixed: bool,
 ) -> (Option<Value>, egui::Response) {
     match f.field {
         "alpha.threshold" => {
@@ -322,7 +334,7 @@ fn editor(
         }
         "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
             let mut b = f.value.as_bool().unwrap_or(false);
-            let r = ui.checkbox(&mut b, "");
+            let r = ui.add(egui::Checkbox::new(&mut b, "").indeterminate(mixed));
             (r.changed().then(|| json!(b)), r)
         }
         "encoder.rgbcx_level" => {
@@ -337,7 +349,7 @@ fn editor(
         }
         field => {
             let options = options_of(field, target, job).unwrap_or_default();
-            combo(ui, egui::Id::new((key, field)), &f.value, &options)
+            combo(ui, egui::Id::new((key, field)), &f.value, &options, mixed)
         }
     }
 }
@@ -372,7 +384,7 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
             if f.lock.is_some() {
                 ui.disable();
             }
-            editor(ui, cx.key, cx.target, cx.job, cx.busy, f)
+            editor(ui, cx.key, cx.target, cx.job, cx.busy, f, false)
         })
         .inner;
     if let Some(reason) = f.lock.map(str::to_string).or(cx.toml_read_only.clone()) {

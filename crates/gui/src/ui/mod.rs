@@ -1,5 +1,6 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
 pub mod advanced;
+pub mod bulk_panel;
 pub mod columns;
 pub mod dialogs;
 pub mod drawer;
@@ -111,6 +112,11 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     }
     // A texture expanded again starts fitted.
     state.preview = preview::PreviewUi::default();
+    // F3a D2/D3: two or more textures or sets.
+    if model.in_bulk() {
+        bulk_panel::draw(ui, model);
+        return;
+    }
     let selection = model.selection.clone();
     match selection {
         Selection::Item(key) => {

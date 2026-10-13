@@ -161,3 +161,57 @@ fn ctrl_click_on_a_set_pill_adds_it() {
     h.run();
     assert_eq!(h.state().selected_sets(), vec![a, b]);
 }
+
+#[test]
+fn two_selected_textures_show_the_bulk_panel_with_mixed_values() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(ROCK, "encoder.effort", serde_json::json!("veryfast"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("2 textures selected");
+    assert!(h.query_all_by_label("— mixed").count() >= 1);
+    // The single panel's heading for the active texture is gone.
+    assert!(h.query_by_label("Needs a decision").is_none());
+}
+
+#[test]
+fn two_selected_sets_show_the_kind_chips() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let keys: Vec<String> = sdc_gui::model::sets::views(&m)
+        .iter()
+        .filter(|v| !v.key.is_empty())
+        .map(|v| v.key.clone())
+        .collect();
+    m.click_set(&keys[0], false, false);
+    m.click_set(&keys[1], true, false);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("2 sets selected");
+    h.get_by_label_contains("All (").click();
+    h.run();
+    assert_eq!(h.state().bulk.kind, None);
+}
+
+#[test]
+fn the_copy_dialog_ticks_every_field_and_check_none_clears_them() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(LEAF, "format", serde_json::json!("bc1"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    m.open_copy_settings();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Check none").click();
+    h.run();
+    assert!(matches!(
+        &h.state().dialog,
+        Some(Dialog::CopySettings { fields, .. }) if fields.iter().all(|f| !f.1)
+    ));
+}
