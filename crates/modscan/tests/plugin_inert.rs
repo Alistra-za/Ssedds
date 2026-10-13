@@ -609,3 +609,44 @@ fn txsts_reached_through_more_record_types_stay_visible() {
     let (s, _) = scan(&d);
     assert_eq!(inert(&s), [("Nobody".to_string(), 1)]);
 }
+
+/// Final review M1: an active plugin that got a load-order slot but no FormID mapping (past the 254/4096 limit) may
+/// place bases we cannot see, so it counts as a placement fault: nothing is judged "not placed".
+#[test]
+fn an_unmapped_active_plugin_suppresses_not_placed() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    let facts = |name: &str, recs: Vec<esp::Rec>| esp::PluginFacts {
+        name: name.into(),
+        records: recs,
+        ..Default::default()
+    };
+    let stat = esp::Rec {
+        local_formid: 0x800,
+        sig: *b"STAT",
+        edid: Some("Lonely".into()),
+        payload: Default::default(),
+    };
+    let file = |n| modscan::plugin_store::PluginFile {
+        name: n,
+        path: n,
+        size: Some(1),
+        mtime: 0,
+    };
+    let a = s
+        .write_plugin(&file("A.esp"), &facts("A.esp", vec![stat]))
+        .unwrap();
+    let b = s
+        .write_plugin(&file("B.esp"), &facts("B.esp", vec![]))
+        .unwrap();
+    let own = |id| [id, 0, 0, 0x00FF_FFFF];
+    s.resolve_plugins(&[(a, 0), (b, 1)], &[own(a), own(b)])
+        .unwrap();
+    assert_eq!(
+        inert(&s),
+        [("Lonely".to_string(), 2)],
+        "control: both mapped"
+    );
+    s.resolve_plugins(&[(a, 0), (b, 1)], &[own(a)]).unwrap();
+    assert!(inert(&s).is_empty(), "{:?}", inert(&s));
+}

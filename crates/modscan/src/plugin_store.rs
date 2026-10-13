@@ -69,9 +69,10 @@ CREATE TEMP TABLE IF NOT EXISTS placed_base (formid INTEGER PRIMARY KEY);
 DELETE FROM placed_base;
 INSERT OR IGNORE INTO placed_base SELECT p.base_formid FROM placed p JOIN plugin pl ON pl.id = p.plugin_id
   WHERE pl.lo_index IS NOT NULL AND p.base_formid IS NOT NULL;
--- A faulted active plugin: pretend every TXST/placeable is placed.
+-- A faulted active plugin (parse error, or past the load-order limit so unmapped): pretend every TXST/placeable is placed.
 INSERT OR IGNORE INTO placed_base SELECT formid FROM win
-  WHERE EXISTS (SELECT 1 FROM plugin WHERE lo_index IS NOT NULL AND error_text IS NOT NULL);
+  WHERE EXISTS (SELECT 1 FROM plugin pl WHERE pl.lo_index IS NOT NULL AND (pl.error_text IS NOT NULL
+    OR NOT EXISTS (SELECT 1 FROM lo_map m WHERE m.plugin_id = pl.id)));
 -- 2 not placed: placeable bases no REFR/ACHR of the load order places (ruling R10).
 INSERT INTO rec_inert SELECT formid, 2 FROM win
   WHERE sig IN ('STAT', 'MSTT', 'FURN', 'DOOR', 'CONT', 'LIGH', 'ACTI', 'TREE', 'FLOR')
