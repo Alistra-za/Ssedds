@@ -306,6 +306,7 @@ pub struct TxstUse {
     pub edid: Option<String>,
     /// The winning plugin.
     pub plugin: String,
+    /// The NIF `BSShaderTextureSet` slot, as the set editor numbers it (not the TXST `TX0n` index).
     pub slot: u32,
     pub path: String,
     pub n_overrides: u32,
@@ -404,6 +405,10 @@ WHERE p.p NOT LIKE 'textures/pbr/%'
         WHERE t.path_id = tw.path_id)
 ORDER BY p.p";
 
+/// TXST `TX0n` for each NIF `BSShaderTextureSet` slot (TX02 = env mask = NIF 5, TX03 = glow = NIF 2, ...), and back.
+const NIF_TO_TX: [i64; 8] = [0, 1, 3, 4, 5, 2, 6, 7];
+const TX_TO_NIF: [u32; 8] = [0, 1, 5, 2, 3, 4, 6, 7];
+
 impl Store {
     /// Winning TXSTs whose slot matches `key` with PGPatcher's rule (ruling R9), by EDID; at most `limit`.
     pub fn txsts_matching(&self, key: &TexKey, limit: usize) -> Result<Vec<TxstUse>, ScanError> {
@@ -411,6 +416,9 @@ impl Store {
             return Ok(vec![]);
         }
         let Some((slot, cond, arg, check)) = tex_query(key, "tp.p") else {
+            return Ok(vec![]);
+        };
+        let Some(&tx_slot) = NIF_TO_TX.get(slot as usize) else {
             return Ok(vec![]);
         };
         let mut st = self.conn.prepare(&format!(
@@ -421,7 +429,7 @@ impl Store {
              JOIN plugin pl ON pl.id = ts.plugin_id
              WHERE {cond} ORDER BY r.edid, ts.formid"
         ))?;
-        let mut rows = st.query(params![i64::from(slot), arg])?;
+        let mut rows = st.query(params![tx_slot, arg])?;
         let mut out = vec![];
         while let Some(r) = rows.next()? {
             let path: String = r.get(4)?;
@@ -432,7 +440,10 @@ impl Store {
                 formid: r.get::<_, i64>(0)? as u32,
                 edid: r.get(1)?,
                 plugin: r.get(2)?,
-                slot: r.get::<_, i64>(3)? as u32,
+                slot: {
+                    let tx = r.get::<_, i64>(3)? as u32;
+                    TX_TO_NIF.get(tx as usize).copied().unwrap_or(tx)
+                },
                 path,
                 n_overrides: r.get::<_, i64>(5)? as u32,
             });

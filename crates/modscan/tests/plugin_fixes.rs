@@ -6,7 +6,7 @@ use b::{alt, edid, plugin, rec, sub, top, zstr};
 use common::{instance_fixture, put};
 use modscan::mo2::Instance;
 use modscan::scan::{run, Source};
-use modscan::store::Store;
+use modscan::store::{Store, TexKey};
 use std::sync::atomic::AtomicBool;
 
 const TXST: u32 = 0x0000_0ABC;
@@ -70,4 +70,22 @@ fn an_alt_texture_with_a_missing_txst_master_joins_no_winner() {
     let uses = s.plugin_uses_of_mesh("meshes/x.nif").unwrap();
     assert_eq!(uses.len(), 1, "fixture: the STAT is resolved");
     assert_eq!(uses[0].swaps[0].txst_edid, None, "no TXST winner joined");
+}
+
+/// TXST TX02 is the environment mask = NIF slot 5; NIF slot 2 (glow) is TX03.
+#[test]
+fn txst_slots_are_matched_in_nif_slot_order() {
+    let (_d, s) = open();
+    let key = |slot| TexKey::Exact {
+        slot,
+        path: "textures/env/x_m.dds".into(),
+    };
+    let hit = s.txsts_matching(&key(5), 50).unwrap();
+    assert_eq!(hit.len(), 1);
+    assert_eq!(
+        (hit[0].formid, hit[0].slot),
+        (TXST, 5),
+        "reported as the NIF slot"
+    );
+    assert!(s.txsts_matching(&key(2), 50).unwrap().is_empty());
 }
