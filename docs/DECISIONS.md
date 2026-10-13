@@ -723,7 +723,7 @@ Spec `docs/superpowers/specs/2026-10-12-complex-grass-design.md`, plan `docs/sup
   - It offers the fields of `fields::all_fields()` that the active texture's `[files]` entry sets, all ticked.
   - `allow`, `rnm.*`, `pack.*` and `channels.*` are not offered: they belong to one file.
   - It is textures only. For sets, "Select members of kind" first (R2: copying settings between sets is out of scope, a known gap).
-- **Z6 Reset all** removes whole `[files]` entries but keeps acknowledged warnings (`allow`, R3): acknowledgements are decisions, not settings. A `[files]` sub-type is cleared through `clear_field` first. Locks do not apply. `sdc-project.toml` is not touched.
+- **Z6 Reset all** removes whole `[files]` entries but keeps acknowledged warnings (`allow`, R3): acknowledgements are decisions, not settings. A `[files]` sub-type is cleared through `clear_field` first. Field locks do not apply (R6). Slot locks always apply: a texture filling a locked slot is skipped and reported (Z10). `sdc-project.toml` is not touched.
 - **Z7 Version.** It stays 0.7.0 (R4). `ENGINE_VERSION` is the workspace version and is part of `is_up_to_date` (`api.rs:603`), so a GUI-only bump would re-encode every output under `if-changed`. No presets-changelog entry.
 - **Z8 Out of scope** (decisions D6):
   - bulk recipes or presets, auto-sync, hidden modifier keys, regex;
@@ -736,6 +736,6 @@ Spec `docs/superpowers/specs/2026-10-12-complex-grass-design.md`, plan `docs/sup
   - **Exact slot kind (M4).** A link needs the same slot kind. Shared slots 3 (glow / skin_sk) and 7 (coat / fuzz) never offer the other kind.
 - **Z10 Slot lock (R8, R10).**
   - A lock keeps the slot's fill and refuses a drag in or out. Slot commands refuse a locked slot too, one undo step each.
-  - Bulk edits skip it with the reason "slot locked", or "slot locked in <set>" for a fill borrowed from another set.
-  - Automatic re-typing respects it. A manual single sub-type edit of the locked slot's texture is allowed: the lock covers automatic changes only.
+  - Bulk edits skip it with the reason "slot locked", or "slot locked in <set>" for a fill borrowed from another set. This includes Reset all (Z6): slot locks always apply, unlike field locks.
+  - Automatic re-typing respects it, through the same rule (`locked_items`), so a texture borrowed into another set's locked slot is not re-typed either. A manual single sub-type edit of the locked slot's texture is allowed: the lock covers automatic changes only.
   - It is stored in `sdc-project.toml` as `[[sets]] lock = ["slotN"]` and is reserved there. It never reaches the PGPatcher JSON.

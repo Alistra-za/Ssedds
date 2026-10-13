@@ -2,7 +2,7 @@
 //! model call, made after drawing.
 use super::columns::AMBER;
 use super::settings_panel::{editor, RowEdit, GROUPS};
-use crate::model::bulk::{kind_chips, BulkField, BulkOp};
+use crate::model::bulk::{BulkField, BulkOp};
 use crate::model::fields::{group_of, FieldView};
 use crate::model::sets::SlotKind;
 use crate::model::{AppModel, Selection};
@@ -18,12 +18,14 @@ enum Act {
 
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut acts = vec![];
+    // Chips and rows come from one cached view (F3a: nothing recomputed per frame).
+    let view = model.bulk_view();
     let sets = model.selected_sets();
     if sets.len() >= 2 {
         ui.heading(format!("{} sets selected", sets.len()));
-        let chips = kind_chips(model, &sets);
+        let chips = &view.chips;
         ui.horizontal_wrapped(|ui| {
-            for c in &chips {
+            for c in chips {
                 let on = model.bulk.kind == c.kind;
                 if ui
                     .selectable_label(on, format!("{} ({})", c.label, c.members.len()))
@@ -40,7 +42,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             ui.weak(format!("applies to {} of {} sets", c.sets_with, sets.len()));
         }
     }
-    let view = model.bulk_view();
     let keys = &view.keys;
     ui.heading(format!("{} textures selected", keys.len()));
     if let Some(r) = &model.bulk.report {

@@ -75,7 +75,7 @@ Textures and sets are never selected together. The column heading counts the sel
 **Right-click.** Right-clicking a selected tile or set keeps the selection; right-clicking another one selects it alone. The menu offers:
 - *Edit settings for N selected*.
 - *Copy settings from <texture> to N selected…*: a checklist of the active (last clicked) texture's own settings, all ticked; untick what you want to keep. Textures only; to copy between sets, use *Select members of kind* first.
-- *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept.
+- *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept. A texture filling a locked slot is skipped, and the report says so.
 - For sets, *Select members of kind*, which turns the selection into those textures.
 
 Every change of this kind is one undo step, and the folder is planned once. A read-only `sdc.toml` takes no bulk change. The Advanced drawer still edits one texture at a time.

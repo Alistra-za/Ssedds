@@ -242,3 +242,56 @@ fn a_locked_slot_that_borrows_a_texture_names_its_set_in_the_skip() {
         Change::Skip("slot locked".into())
     );
 }
+
+#[test]
+fn reset_all_skips_a_texture_filling_a_locked_slot() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    for k in [ROCK, ODD] {
+        m.set_field(k, "encoder.effort", json!("veryfast"));
+    }
+    idle(&mut m);
+    m.set_slot_lock(SET, 1, true).unwrap();
+    m.reset_all_settings(&strings(&[ROCK, ODD]));
+    idle(&mut m);
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value(ROCK, "encoder.effort"),
+        Some(json!("veryfast"))
+    );
+    assert_eq!(p.file_value(ROCK, "subtype"), Some(json!("pbr_albedo")));
+    assert_eq!(p.file_value(ODD, "encoder.effort"), None);
+    assert_eq!(
+        m.bulk.report.as_deref(),
+        Some("Reset all settings on 1 texture; locked on 1 of 2: slot locked")
+    );
+}
+
+#[test]
+fn auto_retyping_leaves_a_texture_borrowed_into_a_locked_slot_alone() {
+    use engine::config::Subtype;
+    use image::{ImageBuffer, Rgb};
+    use sdc_gui::model::Answer;
+    const N: &str = "m/rock01_n.png";
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("m")).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([(x * 4) as u8, 7u8, (y * 4) as u8]))
+        .save(d.path().join("m/leaf.png"))
+        .unwrap();
+    let mut m = follow_fixture(d.path());
+    assert_eq!(
+        m.drop_choice(N, "m/leaf", DropChoice::Share),
+        DropOutcome::Joined
+    );
+    idle(&mut m);
+    m.set_slot_lock("m/leaf", 2, true).unwrap();
+    let before = m.item(N).unwrap().job.as_ref().unwrap().profile.subtype;
+    assert_ne!(before, Subtype::PbrNormal);
+    m.decide("m/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
+    idle(&mut m);
+    assert_eq!(
+        m.item(N).unwrap().job.as_ref().unwrap().profile.subtype,
+        before
+    );
+}

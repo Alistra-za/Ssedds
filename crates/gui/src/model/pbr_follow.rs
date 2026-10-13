@@ -7,7 +7,7 @@
 //! `[files]` entries reject unknown keys. While `sdc-project.toml` is read-only (DECISIONS P8) the diffuse still
 //! changes but nothing propagates: there would be no way to find the members again to revert them.
 use super::items::Decision;
-use super::sets::{is_pbr_diffuse, set_views, SlotFill, SlotKind};
+use super::sets::{is_pbr_diffuse, locked_items, set_views, SlotFill, SlotKind};
 use super::AppModel;
 use engine::config::Subtype;
 use engine::presets::Provenance;
@@ -134,13 +134,9 @@ impl AppModel {
         if !leads {
             return Follow::Nothing;
         }
-        // F3a Task 8: a member filling a locked slot keeps its sub-type.
-        let free = |mk: &&String| {
-            !v.slots.iter().any(|(k, f)| {
-                v.locks.contains(&k.slot_number())
-                    && matches!(f, SlotFill::Own { item } if item == *mk)
-            })
-        };
+        // F3a Task 8: a member filling a locked slot, here or in a set borrowing it, keeps its sub-type (the bulk rule).
+        let locked = locked_items(self);
+        let free = |mk: &&String| !locked.contains_key(*mk);
         if leaves {
             return Follow::Revert(v.members.iter().filter(free).cloned().collect());
         }

@@ -59,6 +59,8 @@ struct BulkCache {
 pub struct BulkView {
     pub keys: Vec<String>,
     pub rows: Vec<BulkField>,
+    /// The kind chips over the selected sets (empty with fewer than two).
+    pub chips: Vec<KindChip>,
 }
 
 impl AppModel {
@@ -640,17 +642,20 @@ impl AppModel {
         if !self.toml_writable() {
             return;
         }
-        let n = keys.len();
-        let label = format!("Reset all settings on {}", textures(n));
+        // Slot locks apply (field locks do not, R6): a texture filling a locked slot keeps its settings.
+        let locked = locked_items(self);
+        let (skipped, keys): (Vec<&String>, Vec<&String>) =
+            keys.iter().partition(|k| locked.contains_key(*k));
+        let label = format!("Reset all settings on {}", textures(keys.len()));
         let changed = self.batch_edit(&label, |m| {
-            for k in keys {
+            for k in &keys {
                 if m.project
                     .as_ref()
                     .is_some_and(|p| p.file_value(k, "subtype").is_some())
                 {
                     m.clear_field(k, "subtype");
                 }
-                let k = k.clone();
+                let k = (*k).clone();
                 m.edit("Reset all settings", move |p| {
                     let allow = p.allow(&k);
                     p.remove_file_entry(&k);
@@ -658,8 +663,21 @@ impl AppModel {
                 });
             }
         });
-        if changed {
-            self.bulk.report = Some(label);
+        let total = keys.len() + skipped.len();
+        let mut why: Vec<(&str, usize)> = vec![];
+        for k in &skipped {
+            let r = locked[*k].as_str();
+            match why.iter_mut().find(|e| e.0 == r) {
+                Some(e) => e.1 += 1,
+                None => why.push((r, 1)),
+            }
+        }
+        if changed || !why.is_empty() {
+            let mut s = label;
+            for (r, n) in why {
+                s.push_str(&format!("; locked on {n} of {total}: {r}"));
+            }
+            self.bulk.report = Some(s);
         }
     }
 }
@@ -812,7 +830,13 @@ impl AppModel {
         }
         let keys = self.bulk_targets();
         let rows = bulk_fields(self, &keys);
-        let view = std::sync::Arc::new(BulkView { keys, rows });
+        let sets = self.selected_sets();
+        let chips = if sets.len() >= 2 {
+            kind_chips(self, &sets)
+        } else {
+            vec![]
+        };
+        let view = std::sync::Arc::new(BulkView { keys, rows, chips });
         // Taken after `bulk_targets`, which can reset a vanished kind.
         let computes = self.bulk.cache.as_ref().map_or(0, |c| c.computes) + 1;
         self.bulk.cache = Some(BulkCache {
