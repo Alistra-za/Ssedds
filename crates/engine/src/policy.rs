@@ -592,7 +592,7 @@ fn layered_profile_with(
     }
     if !alpha_policy_explicit(ctx, &prov) {
         if let Some((policy, Confidence::High, _)) =
-            suggest_alpha(st, f.analysis.alpha, alpha_share(st, f.analysis))
+            suggest_alpha(st, f.analysis.alpha, near_binary(f.analysis))
         {
             let value = serde_json::to_value(policy).expect("AlphaPolicy serialises");
             apply(
@@ -631,6 +631,21 @@ fn layered_profile_with(
                 GENERIC,
             );
         }
+    }
+    // X12: complex grass is cutout (owner's mods: 159 of 193 loose grass diffuses); the bottom half stays data
+    // (grass::half_profile). Mesh evidence and any explicit layer above already chose the policy.
+    if st == Subtype::ComplexGrass
+        && f.analysis.alpha == AlphaContent::Varying
+        && !alpha_policy_explicit(ctx, &prov)
+    {
+        apply(
+            &mut doc,
+            &mut prov,
+            &mut sources,
+            &to_patch("alpha.policy", &json!(AlphaPolicy::Cutout)),
+            Provenance::Builtin,
+            GENERIC,
+        );
     }
     if let Some(p) = ctx.shaders.get(&f.set.key) {
         shader_layer(ctx, p.shader, st, &mut doc, &mut prov, &mut sources);
@@ -1036,15 +1051,6 @@ fn backend_follows_format(
 pub fn near_binary(a: &Analysis) -> f64 {
     let n = (a.width as f64 * a.height as f64).max(1.0);
     (a.alpha_hist.le5 + a.alpha_hist.ge250) as f64 / n
-}
-
-/// The near-binary share the alpha proposal reads (design §3.2, ruling R5): complex grass looks at its top (diffuse)
-/// half only, because the bottom half's alpha is specular data.
-fn alpha_share(st: Subtype, a: &Analysis) -> f64 {
-    match (st, &a.grass) {
-        (Subtype::ComplexGrass, Some(g)) => g.top_near_binary,
-        _ => near_binary(a),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1987,15 +1993,12 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     // preset, a config, a rule or --set) chose the policy; built-in defaults do not count.
     if available
         && profile.subtype.alpha_from_mesh()
+        && profile.subtype != Subtype::ComplexGrass
         && f.analysis.alpha == AlphaContent::Varying
         && !alpha_policy_explicit(ctx, &provenance)
     {
-        let hint = suggest_alpha(
-            profile.subtype,
-            f.analysis.alpha,
-            alpha_share(profile.subtype, f.analysis),
-        )
-        .map(|(p, _, why)| format!("{p:?}: {why}"));
+        let hint = suggest_alpha(profile.subtype, f.analysis.alpha, near_binary(f.analysis))
+            .map(|(p, _, why)| format!("{p:?}: {why}"));
         if !allowed(ctx, f, Code::SugLowConfidence) {
             needs.push(Need::AlphaMeaning);
         }

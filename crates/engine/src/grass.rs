@@ -27,8 +27,6 @@ pub const GRASS_UNIT_SHARE: f64 = 0.99;
 pub struct GrassFacts {
     /// Every top-half alpha code is 251 or more (DECISIONS Note L: 251..=254 is BC encode noise).
     pub top_opaque: bool,
-    /// Share of top-half texels whose alpha code is <= 5 or >= 250: the diffuse cutout/blend proposal reads it.
-    pub top_near_binary: f64,
     /// Share of bottom-half texels that decode to `|L - 1| < 0.1`.
     pub bottom_unit_share: f64,
     /// `|L - 1|` of the bottom-left texel `(0, h - 1)`, the one CS tests.
@@ -78,10 +76,6 @@ pub fn facts(img: &Rgba32F) -> Option<GrassFacts> {
     let c = img.px[(h - 1) * w];
     Some(GrassFacts {
         top_opaque: top.iter().all(|p| code8(p[3]) >= 251),
-        top_near_binary: share(top, &|p| {
-            let a = code8(p[3]);
-            a <= 5 || a >= 250
-        }),
         bottom_unit_share: share(bottom, &|p| unit_err([p[0], p[1], p[2]]) < GRASS_UNIT_TOL),
         corner_err: unit_err([c[0], c[1], c[2]]),
     })
@@ -344,7 +338,6 @@ mod tests {
         img.px[2][3] = 0.5;
         let f = facts(&img).unwrap();
         assert!(!f.top_opaque);
-        assert!((f.top_near_binary - 15.0 / 16.0).abs() < 1e-12);
         assert_eq!(f.bottom_unit_share, 1.0);
         assert!(f.corner_err < 0.01, "{}", f.corner_err);
     }
