@@ -5,6 +5,7 @@ mod common;
 use b::{alt, edid, form, grup, plugin, rec, sub, top, zstr};
 use common::{instance_fixture, put};
 use modscan::mo2::{loose_origins, Instance};
+use modscan::plugin_store::MissingRef;
 use modscan::plugins::{scan_plugins, PluginStats};
 use modscan::store::Store;
 use std::sync::atomic::AtomicBool;
@@ -488,4 +489,82 @@ fn unresolved_copies_do_not_lend_their_edges_to_the_winner() {
     for (e, r) in [("Child", 3), ("Tex", 1)] {
         assert!(i.contains(&(e.to_string(), r)), "{e}: {i:?}");
     }
+}
+
+/// Registers `path` as a winning texture of a fresh enabled origin.
+fn provide(s: &Store, path: &str) {
+    let c = s.conn();
+    let n: i64 = c
+        .query_row("SELECT count(*) FROM origin", [], |r| r.get(0))
+        .unwrap();
+    c.execute(
+        "INSERT INTO origin(kind, name, root, priority, enabled) VALUES (9, 'x', ?1, 0, 1)",
+        [format!("fake{n}")],
+    )
+    .unwrap();
+    let o = c.last_insert_rowid();
+    c.execute("INSERT OR IGNORE INTO path(p) VALUES (?1)", [path])
+        .unwrap();
+    let p: i64 = c
+        .query_row("SELECT id FROM path WHERE p = ?1", [path], |r| r.get(0))
+        .unwrap();
+    c.execute(
+        "INSERT INTO tex_winner(path_id, origin_id, n_copies) VALUES (?1, ?2, 1)",
+        [p, o],
+    )
+    .unwrap();
+}
+
+/// Spec §3 (ruling R12): inert records name no Missing path and use no texture; paths only they name are listed apart,
+/// labels ending in the reason.
+#[test]
+fn missing_and_unused_ignore_inert_records() {
+    let d = fixture(ORDER);
+    let (s, _) = scan(&d);
+    let (live, inert) = s.plugin_missing_with_inert().unwrap();
+    let paths = |v: &[MissingRef]| v.iter().map(|m| m.path.clone()).collect::<Vec<_>>();
+    assert!(
+        paths(&live).contains(&"textures/live/p_d.dds".to_string()),
+        "{live:?}"
+    );
+    assert!(
+        paths(&live).contains(&"meshes/placed.nif".to_string()),
+        "{live:?}"
+    );
+    assert!(
+        !paths(&live).contains(&"meshes/lonely.nif".to_string()),
+        "{live:?}"
+    );
+    let lonely = inert
+        .iter()
+        .find(|m| m.path == "meshes/lonely.nif")
+        .unwrap();
+    assert_eq!(
+        lonely.records,
+        ["LonelyStat [00000B02] STAT — Skyrim.esm (not placed)"]
+    );
+    let u = inert
+        .iter()
+        .find(|m| m.path == "textures/inert/u_d.dds")
+        .unwrap();
+    assert_eq!(
+        u.records,
+        ["UsedByUnplaced [00000A02] TXST — Skyrim.esm (no reference)"]
+    );
+    assert_eq!(s.plugin_missing_files().unwrap(), live);
+    provide(&s, "textures/inert/u_d.dds");
+    provide(&s, "textures/live/p_d.dds");
+    let unused = s.unused_textures().unwrap();
+    assert!(
+        unused.contains(&"textures/inert/u_d.dds".to_string()),
+        "{unused:?}"
+    );
+    assert!(
+        !unused.contains(&"textures/live/p_d.dds".to_string()),
+        "{unused:?}"
+    );
+    let r = s.inert_of(&[0xB01, 0xB02, 0xC03]).unwrap();
+    assert_eq!(r.get(&0xB02), Some(&"not placed"));
+    assert_eq!(r.get(&0xC03), Some(&"head part not playable"));
+    assert!(!r.contains_key(&0xB01));
 }

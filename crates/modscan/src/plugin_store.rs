@@ -347,6 +347,38 @@ impl Store {
 /// Records listed per missing path (spec §4.4).
 pub const MISSING_RECORDS: usize = 5;
 
+/// The text of a `rec_inert.reason` (ruling R13).
+pub fn inert_reason(code: i64) -> &'static str {
+    match code {
+        2 => "not placed",
+        3 => "head part not playable",
+        _ => "no reference",
+    }
+}
+
+/// One path's rows gathered by `plugin_missing_with_inert`: live labels, inert labels.
+type MissingAcc = (String, Vec<String>, Vec<String>);
+
+fn push_missing(
+    c: Option<MissingAcc>,
+    live: &mut Vec<MissingRef>,
+    inert_refs: &mut Vec<MissingRef>,
+) {
+    let Some((path, l, i)) = c else {
+        return;
+    };
+    let (to, labels) = if l.is_empty() {
+        (inert_refs, i)
+    } else {
+        (live, l)
+    };
+    to.push(MissingRef {
+        path,
+        n_records: labels.len(),
+        records: labels.into_iter().take(MISSING_RECORDS).collect(),
+    });
+}
+
 /// One record as listed everywhere: `EDID [FORMID] SIG — Plugin`.
 pub fn record_label(edid: Option<&str>, formid: u32, sig: &str, plugin: &str) -> String {
     format!(
@@ -425,7 +457,7 @@ fn swap_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<ShapeSwap> {
 }
 
 /// Paths of winning records (`txst_slot`, `tex_ref`, `model_ref`) that are `textures/**.dds` or `meshes/**.nif`, not
-/// FaceGen, and that no enabled origin's winner provides (ruling R8).
+/// FaceGen, and that no enabled origin's winner provides (ruling R8). Column 6 is the record's inert reason (NULL = live).
 const MISSING_SQL: &str = "
 WITH refs(path_id, formid, plugin_id, local) AS (
   SELECT t.path_id, t.formid, t.plugin_id, t.local FROM txst_slot t
@@ -434,10 +466,11 @@ WITH refs(path_id, formid, plugin_id, local) AS (
     JOIN rec_winner w ON w.formid = t.formid AND w.plugin_id = t.plugin_id
   UNION ALL SELECT m.path_id, m.formid, m.plugin_id, m.local FROM model_ref m
     JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id)
-SELECT DISTINCT p.p, r.edid, x.formid, r.sig, pl.name FROM refs x
+SELECT DISTINCT p.p, r.edid, x.formid, r.sig, pl.name, i.reason FROM refs x
 JOIN path p ON p.id = x.path_id
 JOIN rec r ON r.plugin_id = x.plugin_id AND r.local = x.local AND r.owner_ok = 1
 JOIN plugin pl ON pl.id = x.plugin_id
+LEFT JOIN rec_inert i ON i.formid = x.formid
 WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
   AND p.p NOT LIKE 'meshes/actors/character/facegendata/%'
   AND ((p.p LIKE 'textures/%.dds' AND NOT EXISTS (SELECT 1 FROM tex_winner tw
@@ -447,7 +480,7 @@ WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
 ORDER BY p.p, pl.name, x.formid";
 
 /// Winning textures of the run that no NIF copy of the run and no record copy of an active plugin names, outside
-/// `textures/pbr/` (ruling R8).
+/// `textures/pbr/` (ruling R8). A record that is inert (filtering spec §3) is no use.
 const UNUSED_SQL: &str = "
 SELECT p.p FROM tex_winner tw JOIN origin o ON o.id = tw.origin_id AND o.enabled = 1
 JOIN path p ON p.id = tw.path_id
@@ -456,9 +489,11 @@ WHERE p.p NOT LIKE 'textures/pbr/%'
         JOIN nif_copy c ON c.id = s.copy_id JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
         WHERE tu.tex_path_id = tw.path_id)
   AND NOT EXISTS (SELECT 1 FROM txst_slot t JOIN plugin pl ON pl.id = t.plugin_id AND pl.lo_index IS NOT NULL
-        WHERE t.path_id = tw.path_id)
+        WHERE t.path_id = tw.path_id
+          AND NOT EXISTS (SELECT 1 FROM rec_inert i WHERE i.formid = t.formid))
   AND NOT EXISTS (SELECT 1 FROM tex_ref t JOIN plugin pl ON pl.id = t.plugin_id AND pl.lo_index IS NOT NULL
-        WHERE t.path_id = tw.path_id)
+        WHERE t.path_id = tw.path_id
+          AND NOT EXISTS (SELECT 1 FROM rec_inert i WHERE i.formid = t.formid))
 ORDER BY p.p";
 
 /// TXST `TX0n` for each NIF `BSShaderTextureSet` slot (TX02 = env mask = NIF 5, TX03 = glow = NIF 2, ...), and back.
@@ -579,11 +614,20 @@ impl Store {
         Ok(out)
     }
 
-    /// Missing files (spec §4.4, ruling R8), by path, each with up to [`MISSING_RECORDS`] referencing records.
+    /// Missing files (spec §4.4, ruling R8) that at least one live record names, by path (filtering ruling R12).
     pub fn plugin_missing_files(&self) -> Result<Vec<MissingRef>, ScanError> {
+        Ok(self.plugin_missing_with_inert()?.0)
+    }
+
+    /// Missing files split by who names them (filtering ruling R12): `.0` paths a live record names (only live records
+    /// listed), `.1` paths only inert records name, each label ending in ` (reason)`.
+    pub fn plugin_missing_with_inert(
+        &self,
+    ) -> Result<(Vec<MissingRef>, Vec<MissingRef>), ScanError> {
         let mut st = self.conn.prepare(MISSING_SQL)?;
         let mut rows = st.query([])?;
-        let mut out: Vec<MissingRef> = vec![];
+        let (mut live, mut inert_refs) = (vec![], vec![]);
+        let mut cur: Option<MissingAcc> = None;
         while let Some(r) = rows.next()? {
             let path: String = r.get(0)?;
             let edid: Option<String> = r.get(1)?;
@@ -593,21 +637,32 @@ impl Store {
                 &r.get::<_, String>(3)?,
                 &r.get::<_, String>(4)?,
             );
-            match out.last_mut() {
-                Some(m) if m.path == path => {
-                    m.n_records += 1;
-                    if m.records.len() < MISSING_RECORDS {
-                        m.records.push(label);
-                    }
-                }
-                _ => out.push(MissingRef {
-                    path,
-                    n_records: 1,
-                    records: vec![label],
-                }),
+            let reason: Option<i64> = r.get(5)?;
+            if cur.as_ref().is_some_and(|c| c.0 != path) {
+                push_missing(cur.take(), &mut live, &mut inert_refs);
+            }
+            let c = cur.get_or_insert_with(|| (path, vec![], vec![]));
+            match reason {
+                None => c.1.push(label),
+                Some(x) => c.2.push(format!("{label} ({})", inert_reason(x))),
             }
         }
-        Ok(out)
+        push_missing(cur, &mut live, &mut inert_refs);
+        Ok((live, inert_refs))
+    }
+
+    /// The inert reason (filtering spec §3) of each of `formids` that is inert.
+    pub fn inert_of(&self, formids: &[u32]) -> Result<HashMap<u32, &'static str>, ScanError> {
+        let ids = serde_json::to_string(formids).map_err(json_err)?;
+        let mut st = self.conn.prepare(
+            "SELECT formid, reason FROM rec_inert WHERE formid IN (SELECT value FROM json_each(?1))",
+        )?;
+        let v = st
+            .query_map([ids], |r| {
+                Ok((r.get::<_, i64>(0)? as u32, inert_reason(r.get(1)?)))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     /// Unused textures (spec §4.4, ruling R8), by path.

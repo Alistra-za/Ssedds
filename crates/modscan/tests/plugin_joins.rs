@@ -2,7 +2,7 @@
 #[path = "../../esp/tests/common/mod.rs"]
 mod b;
 mod common;
-use b::{alt, edid, plugin, rec, sub, top, zstr};
+use b::{alt, edid, form, grup, plugin, rec, sub, top, zstr};
 use common::{instance_fixture, put};
 use modscan::mo2::Instance;
 use modscan::plugin_store::{ShapeSwap, TxstUse};
@@ -12,6 +12,25 @@ use std::sync::atomic::AtomicBool;
 
 const DIRT: u32 = 0x0000_0ABC;
 const GHOST: u32 = 0x0000_0AB0;
+
+/// A CELL group placing `bases` (filtering spec §3), so the fixture's TXSTs and STATs are live, not inert.
+fn placing(bases: &[u32]) -> Vec<u8> {
+    let refs: Vec<Vec<u8>> = bases
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| rec(b"REFR", 0x0F00 + i as u32, &[form(b"NAME", b)]))
+        .collect();
+    let cell = 0x0F80u32.to_le_bytes();
+    grup(
+        b"CELL",
+        0,
+        &[grup(
+            &0u32.to_le_bytes(),
+            2,
+            &[grup(&0u32.to_le_bytes(), 3, &[grup(&cell, 9, &refs)])],
+        )],
+    )
+}
 
 /// Skyrim.esm: DirtTXST (TX00 dirt02, TX01 dirt02_n, TX02 old/gone), GhostTXST (missing texture), RockStat
 /// (meshes/x.nif with Shape0 → DirtTXST), GhostStat (missing mesh), FireFX (EFSH, present texture). A.esp overrides
@@ -93,6 +112,7 @@ fn fixture() -> tempfile::TempDir {
                         &[edid("FireFX"), sub(b"ICON", &zstr("Effects\\Fire.dds"))],
                     )],
                 ),
+                placing(&[DIRT, GHOST, 0xDEF, 0xD00]),
             ],
         ),
     );
@@ -292,6 +312,20 @@ fn fixture2() -> tempfile::TempDir {
                         stat(0x0100_0ABC, "Real", "Real.nif"),
                     ],
                 ),
+                placing(&[
+                    0x0100_0101,
+                    0x0100_0102,
+                    0x0100_0103,
+                    0x0100_0104,
+                    0x0100_0200,
+                    0x0100_0201,
+                    0x0100_0202,
+                    0x0100_0203,
+                    0x0100_0204,
+                    0x0100_0205,
+                    0x0100_0206,
+                    0x0100_0ABC,
+                ]),
             ],
         ),
     );
