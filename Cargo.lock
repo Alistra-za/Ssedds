@@ -2049,6 +2049,7 @@ name = "modscan"
 version = "0.6.0"
 dependencies = [
  "crc32fast",
+ "esp",
  "nif",
  "rayon",
  "rusqlite",
