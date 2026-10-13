@@ -1383,4 +1383,9 @@ git commit -m "render3d, gui: CS settings coverage report (settings_coverage log
 
 ## P1-D verification
 
-(results recorded here by the person running Task 5)
+2026-10-12, owner, log `preview-timings-20261013-011755.jsonl`, release build of nif/d-p1d.
+
+- Step 1-2: pass. Installed AIO 1.9.0: every `settings_coverage` line has empty `unset` and `unmatched`; no "CS settings:" line under the frame. `settings` defines `CS_SKIN, ENABLE_LL, EXTENDED_MATERIALS, EXTENDED_TRANSLUCENCY, VANILLA_FRESNEL`.
+- Step 3: first run failed: 1.6 (0528) and 1.8 (bottle) drew solid black. Cause: the old-LL gamma fields, `vanillaDiffuseColorMult` and `emitColorMult` have no key in the 1.9 settings and were written as 0. Fix 32fee1e (defaults from the 1.6/1.8 `SettingsDefault.json`, identical in both; a user key wins). Re-run: pass (owner: "that fixed it"). The old builds still list Extended Materials / Extended Translucency / Vanilla Fresnel fields as unset (names differ from 1.9) plus 1.9-only keys as unmatched; not visible.
+- Step 4: standing step, run after the next CS update.
+- Noted: `settings_coverage` re-logs per program on every settings apply (29 lines in a 4-minute session); log noise only (final review M4).
