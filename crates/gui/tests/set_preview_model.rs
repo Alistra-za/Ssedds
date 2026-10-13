@@ -1,6 +1,7 @@
 //! The set preview's model (P1-A Tasks 13–14): encodes, fingerprint and change classification, query keys,
 //! PGPatcher simulation per shape, and the orchestration without a GPU.
 mod support;
+use render3d::perf_log;
 use sdc_gui::model::items::{ItemKind, ItemStatus};
 use sdc_gui::model::pbr_export::json_entries;
 use sdc_gui::model::preview::DEBOUNCE;
@@ -961,6 +962,42 @@ fn source_mode_builds_an_uncompressed_dds() {
     assert_eq!(srgb.data[..4], [255, 128, 0, 255]);
 }
 
+/// Source is the export's input uncompressed: its texels match the Encoded (BCn) texels up to compression error,
+/// for colour (sRGB-encoded, not linear light) and normal maps (signed vectors stored as v * 0.5 + 0.5).
+#[test]
+fn source_mode_texels_match_the_encoded_texels() {
+    use engine::dds::read_dds;
+    use engine::decode::decode_level_rgba;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let session = m.session.as_ref().unwrap();
+    let cancel = engine::api::CancelToken::default();
+    let mut checked = 0;
+    for item in m
+        .items
+        .iter()
+        .filter(|i| i.job.is_some() && i.status == ItemStatus::Ready)
+    {
+        let src = source_of(item);
+        let texels = |mode| {
+            let f = read_dds(&encode(session, &src, 32, mode, &cancel).unwrap()).unwrap();
+            let (w, h, r) = f.levels[0].clone();
+            decode_level_rgba(f.format, w, h, &f.data[r], None).unwrap()
+        };
+        let (enc, raw) = (texels(PreviewMode::Encoded), texels(PreviewMode::Source));
+        assert_eq!(enc.len(), raw.len());
+        let diff: f32 = enc
+            .iter()
+            .zip(&raw)
+            .map(|(a, b)| (0..3).map(|k| (a[k] - b[k]).abs()).sum::<f32>() / 3.0)
+            .sum::<f32>()
+            / enc.len() as f32;
+        assert!(diff < 0.03, "{}: mean RGB difference {diff}", item.key);
+        checked += 1;
+    }
+    assert!(checked >= 2, "a colour and a normal map at least");
+}
+
 #[test]
 fn switching_mode_marks_members_stale_and_reencodes() {
     let d = tempfile::tempdir().unwrap();
@@ -1347,4 +1384,505 @@ fn a_material_edit_naming_a_new_slot_path_pushes_the_scene_instead_of_set_materi
     poll_once(&mut s, &m);
     assert_eq!(sets(&cmds), 0, "no SetMaterial for a path the worker lacks");
     assert_ne!(builtin_key(&s), k0, "the scene was pushed");
+}
+
+// ---- P1-B Task 8b: A/B variants in the encoder ----
+
+fn started_ab() -> (tempfile::TempDir, AppModel, Encoder) {
+    let (d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    for k in enc.members.keys().copied().collect::<Vec<_>>() {
+        let tok = enc.token_of(k);
+        assert_ne!(tok, 0);
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+    }
+    assert!(enc.poll());
+    assert!(enc.settled());
+    (d, m, enc)
+}
+
+fn kinds_of(e: &Encoder) -> Vec<SlotKind> {
+    e.members.keys().copied().collect()
+}
+
+#[test]
+fn the_first_flip_keeps_the_old_bytes_for_the_way_back_and_the_second_flip_is_free() {
+    let (_d, m, mut enc) = started_ab();
+    assert!(!enc.ab_active());
+    let old: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    let t = Instant::now();
+    enc.set_mode(PreviewMode::Source, t);
+    assert!(enc.ab_active());
+    for k in kinds_of(&enc) {
+        assert!(enc.has_alt(k), "the old Fresh bytes are the other copy");
+        assert!(
+            matches!(enc.members[&k].state, EncState::Stale(Some(_))),
+            "as before the change"
+        );
+    }
+    // The re-encode of the new mode as today.
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        let tok = enc.token_of(k);
+        assert_ne!(tok, 0);
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+    }
+    assert!(enc.poll());
+    for k in kinds_of(&enc) {
+        assert!(matches!(enc.members[&k].state, EncState::Fresh(_)));
+        assert_eq!(
+            enc.alt_token_of(k),
+            0,
+            "nothing to encode: the other copy exists"
+        );
+    }
+    // Back: no encode, the old bytes are on show again, and the Source bytes are the other copy.
+    let shown_source: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    enc.set_mode(PreviewMode::Encoded, t);
+    enc.pump(m.session.as_ref(), t, false);
+    let back: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    assert_eq!(back, old);
+    for k in kinds_of(&enc) {
+        assert_eq!(
+            enc.token_of(k),
+            0,
+            "a flip with both variants starts no encode"
+        );
+        assert_eq!(enc.alt_token_of(k), 0);
+        assert!(enc.has_alt(k));
+        assert!(matches!(enc.members[&k].state, EncState::Fresh(_)));
+    }
+    enc.set_mode(PreviewMode::Source, t);
+    let again: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    assert_eq!(again, shown_source);
+}
+
+#[test]
+fn a_cap_change_drops_both_variants_and_the_other_one_encodes_after_the_shown_one_is_fresh() {
+    let (_d, m, mut enc) = started_ab();
+    let t = Instant::now();
+    enc.set_mode(PreviewMode::Source, t); // A/B in use; Encoded kept as the other copy
+    enc.set_cap(1024, t);
+    for k in kinds_of(&enc) {
+        assert!(!enc.has_alt(k), "the other copy was made at the old cap");
+        assert_eq!(enc.alt_token_of(k), 0);
+    }
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        let tok = enc.token_of(k);
+        assert_ne!(tok, 0);
+        assert_eq!(enc.alt_token_of(k), 0, "the shown mode first");
+        enc.inject(k, tok, 1024, fake());
+    }
+    assert!(enc.poll());
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        assert_ne!(enc.alt_token_of(k), 0, "now the inactive mode encodes");
+    }
+    // Its result becomes the other copy; the shown bytes do not move and nothing is reported as changed.
+    let shown: Vec<u64> = enc
+        .members
+        .values()
+        .map(|x| x.state.shown().unwrap().id)
+        .collect();
+    for k in kinds_of(&enc) {
+        let at = enc.alt_token_of(k);
+        enc.inject_as(k, at, 1024, PreviewMode::Encoded, fake());
+    }
+    assert!(
+        !enc.poll(),
+        "an inactive copy is not a change of what is on show"
+    );
+    for k in kinds_of(&enc) {
+        assert!(enc.has_alt(k));
+        assert_eq!(enc.alt_token_of(k), 0);
+    }
+    assert_eq!(
+        enc.members
+            .values()
+            .map(|x| x.state.shown().unwrap().id)
+            .collect::<Vec<_>>(),
+        shown
+    );
+    // A late result of the superseded other-mode encode never lands.
+    let k = kinds_of(&enc)[0];
+    enc.inject_as(k, 1, 1024, PreviewMode::Encoded, fake());
+    assert!(!enc.poll());
+}
+
+#[test]
+fn a_source_change_clears_the_other_variant_and_nothing_encodes_before_the_first_flip() {
+    let (_d, m, mut enc, mut slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots.clone(), t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        let tok = enc.token_of(k);
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+    }
+    assert!(enc.poll());
+    enc.pump(m.session.as_ref(), t, false);
+    for k in kinds_of(&enc) {
+        assert_eq!(enc.alt_token_of(k), 0, "A/B is not in use: no doubled CPU");
+    }
+    enc.set_mode(PreviewMode::Source, t);
+    assert!(kinds_of(&enc).iter().all(|k| enc.has_alt(*k)));
+    edit(&mut slots);
+    enc.sync(&m, slots, t, true);
+    let diffuse = SlotKind::Diffuse;
+    assert!(
+        !enc.has_alt(diffuse),
+        "the edited member's other copy is gone"
+    );
+    assert_eq!(enc.alt_token_of(diffuse), 0);
+}
+
+#[test]
+fn a_flip_before_the_other_variant_exists_re_encodes_as_before() {
+    let (_d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    let t1 = enc.token_of(SlotKind::Diffuse); // still encoding the first mode
+    enc.set_mode(PreviewMode::Source, t);
+    assert!(!enc.has_alt(SlotKind::Diffuse), "nothing Fresh to keep");
+    assert_eq!(
+        enc.token_of(SlotKind::Diffuse),
+        0,
+        "the old encode is cancelled"
+    );
+    enc.pump(m.session.as_ref(), t, false);
+    let t2 = enc.token_of(SlotKind::Diffuse);
+    assert_ne!(t2, 0);
+    assert_ne!(t2, t1);
+}
+
+// ---- P1-B Task 8c: swaps instead of scene pushes ----
+
+use render3d::Variant;
+use sdc_gui::model::viewport3d::{V3Cmd, V3Reply};
+
+struct Live {
+    _d: tempfile::TempDir,
+    m: AppModel,
+    s: SetPreview,
+    cmds: std::sync::mpsc::Receiver<V3Cmd>,
+}
+
+fn kinds(s: &SetPreview) -> Vec<SlotKind> {
+    s.enc.members.keys().copied().collect()
+}
+
+/// The workers are held: the test finishes every member's pending encode with a fake DDS.
+fn finish(s: &mut SetPreview, cap: u32) {
+    for k in kinds(s) {
+        let t = s.enc.token_of(k);
+        assert_ne!(t, 0, "{k:?} has an encode to finish");
+        s.enc.inject(k, t, cap, fake());
+    }
+}
+
+/// A set preview on the built-in sphere, scene pushed, load sent and answered; encodes held.
+fn live() -> Live {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let fp = render3d::locate::Fingerprint {
+        root: dir.path().to_path_buf(),
+        owner_mod: Some("CS".into()),
+        hash: "a".into(),
+    };
+    let mut s = SetPreview::new(Some(fp.clone()), None, None, DEFAULT_CAP);
+    s.enc.hold_workers(true);
+    poll_once(&mut s, &m); // starts the locate; the pump hands every member a held encode
+    while s.v3.locating() {
+        poll_once(&mut s, &m);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    s.v3.on_located(Ok(Some(fp)));
+    let cmds = s.v3.attach_test_thread();
+    finish(&mut s, DEFAULT_CAP);
+    poll_once(&mut s, &m); // Fresh → the scene is pushed
+    s.v3.request_frame(64, 64);
+    let id = cmds
+        .try_iter()
+        .find_map(|c| match c {
+            V3Cmd::LoadBuiltin { id, .. } => Some(id),
+            _ => None,
+        })
+        .expect("a LoadBuiltin");
+    s.v3.handle(V3Reply::Loaded {
+        id,
+        report: render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+        bounds: Some(([0.0; 3], 1.0)),
+    });
+    Live {
+        _d: dir,
+        m,
+        s,
+        cmds,
+    }
+}
+
+fn drain(t: &Live) -> Vec<V3Cmd> {
+    t.cmds.try_iter().collect()
+}
+
+fn n_paths(s: &SetPreview) -> usize {
+    s.enc
+        .members
+        .values()
+        .flat_map(|m| m.slot.paths.iter())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+}
+
+fn count(c: &[V3Cmd], f: impl Fn(&V3Cmd) -> bool) -> usize {
+    c.iter().filter(|x| f(x)).count()
+}
+
+fn swaps(c: &[V3Cmd], v: Variant) -> usize {
+    count(
+        c,
+        |x| matches!(x, V3Cmd::SwapTexture { variant, bytes, .. } if *variant == v && !bytes.is_empty()),
+    )
+}
+
+fn drops(c: &[V3Cmd], v: Variant) -> usize {
+    count(
+        c,
+        |x| matches!(x, V3Cmd::SwapTexture { variant, bytes, .. } if *variant == v && bytes.is_empty()),
+    )
+}
+
+fn flips(c: &[V3Cmd], v: Variant) -> usize {
+    count(
+        c,
+        |x| matches!(x, V3Cmd::SetTextureVariant { variant, .. } if *variant == v),
+    )
+}
+
+fn loads(c: &[V3Cmd]) -> usize {
+    count(c, |x| {
+        matches!(
+            x,
+            V3Cmd::Load { .. } | V3Cmd::LoadParsed { .. } | V3Cmd::LoadBuiltin { .. }
+        )
+    })
+}
+
+#[test]
+fn an_encode_completion_on_loaded_content_swaps_the_texture_and_pushes_no_scene() {
+    let mut t = live();
+    drain(&t);
+    let key0 = builtin_key(&t.s);
+    // A new size cap re-encodes every member; the old bytes stay on show meanwhile.
+    t.s.enc.set_cap(1024, Instant::now());
+    poll_once(&mut t.s, &t.m);
+    assert!(
+        drain(&t).is_empty(),
+        "nothing to send while the encodes run"
+    );
+    finish(&mut t.s, 1024);
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(swaps(&c, Variant::Encoded), n_paths(&t.s));
+    assert_eq!(loads(&c), 0, "no scene push");
+    assert_eq!(flips(&c, Variant::Encoded), 0, "already the shown variant");
+    assert_eq!(builtin_key(&t.s), key0);
+    // Nothing changed since: nothing is sent again.
+    poll_once(&mut t.s, &t.m);
+    assert!(drain(&t).is_empty());
+}
+
+#[test]
+fn a_failed_encode_still_pushes_the_scene_so_the_games_texture_comes_back() {
+    let mut t = live();
+    drain(&t);
+    let key0 = builtin_key(&t.s);
+    t.s.enc.set_cap(1024, Instant::now());
+    poll_once(&mut t.s, &t.m);
+    for k in kinds(&t.s) {
+        let tok = t.s.enc.token_of(k);
+        t.s.enc.inject(k, tok, 1024, Err("boom".into()));
+    }
+    poll_once(&mut t.s, &t.m);
+    poll_once(&mut t.s, &t.m);
+    assert_ne!(builtin_key(&t.s), key0, "the scene was pushed");
+}
+
+#[test]
+fn flipping_the_mode_with_both_variants_sends_only_a_variant_flip_and_starts_no_encode() {
+    let mut t = live();
+    drain(&t);
+    let n = n_paths(&t.s);
+    // First flip: today's re-encode of the new mode; the old bytes are kept as the other copy.
+    t.s.set_mode(PreviewMode::Source);
+    assert!(t.s.enc.ab_active());
+    assert!(drain(&t).is_empty(), "nothing Fresh to send yet");
+    poll_once(&mut t.s, &t.m);
+    finish(&mut t.s, DEFAULT_CAP);
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(swaps(&c, Variant::Source), n);
+    assert_eq!(flips(&c, Variant::Source), n, "then show it");
+    assert_eq!(
+        swaps(&c, Variant::Encoded),
+        0,
+        "the renderer already holds the Encoded copy"
+    );
+    assert_eq!(loads(&c), 0);
+    // Second flip: both variants exist.
+    t.s.set_mode(PreviewMode::Encoded);
+    let c = drain(&t);
+    assert_eq!(c.len(), n, "only the flips");
+    assert_eq!(flips(&c, Variant::Encoded), n);
+    poll_once(&mut t.s, &t.m);
+    assert!(drain(&t).is_empty());
+    for k in kinds(&t.s) {
+        assert_eq!(t.s.enc.token_of(k), 0, "no encode started");
+        assert_eq!(t.s.enc.alt_token_of(k), 0);
+    }
+}
+
+#[test]
+fn a_source_change_voids_both_variants_and_the_inactive_one_follows_the_active() {
+    let mut t = live();
+    t.s.set_mode(PreviewMode::Source);
+    poll_once(&mut t.s, &t.m);
+    finish(&mut t.s, DEFAULT_CAP);
+    poll_once(&mut t.s, &t.m);
+    drain(&t);
+    let n = n_paths(&t.s);
+    t.s.enc.set_cap(1024, Instant::now()); // a settings change as the encoder sees it
+    for k in kinds(&t.s) {
+        assert!(!t.s.enc.has_alt(k));
+    }
+    poll_once(&mut t.s, &t.m); // the renderer's stale Encoded copy is dropped
+    let c = drain(&t);
+    assert_eq!(drops(&c, Variant::Encoded), n);
+    finish(&mut t.s, 1024); // the shown (Source) mode
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(swaps(&c, Variant::Source), n);
+    for k in kinds(&t.s) {
+        assert_ne!(t.s.enc.alt_token_of(k), 0, "the inactive mode encodes now");
+    }
+    for k in kinds(&t.s) {
+        let at = t.s.enc.alt_token_of(k);
+        t.s.enc.inject_as(k, at, 1024, PreviewMode::Encoded, fake());
+    }
+    poll_once(&mut t.s, &t.m);
+    let c = drain(&t);
+    assert_eq!(
+        swaps(&c, Variant::Encoded),
+        n,
+        "stored beside the shown one"
+    );
+    assert_eq!(flips(&c, Variant::Encoded), 0, "not shown");
+    assert_eq!(loads(&c), 0);
+}
+
+#[test]
+fn a_flip_before_the_other_variant_exists_falls_back_to_the_re_encode() {
+    let mut t = live();
+    drain(&t);
+    t.s.enc.set_cap(1024, Instant::now()); // everything stale: no Fresh bytes to keep
+    t.s.set_mode(PreviewMode::Source);
+    poll_once(&mut t.s, &t.m);
+    for k in kinds(&t.s) {
+        assert_ne!(t.s.enc.token_of(k), 0, "encoded as before the A/B");
+        assert!(!t.s.enc.has_alt(k));
+    }
+    assert!(drain(&t)
+        .iter()
+        .all(|c| !matches!(c, V3Cmd::SetTextureVariant { .. })));
+}
+
+#[test]
+fn members_sharing_a_path_with_one_other_copy_do_not_swap_and_drop_every_frame() {
+    let mut t = live();
+    let ks = kinds(&t.s);
+    let shared = t.s.enc.members[&ks[0]].slot.paths.clone();
+    t.s.enc.members.get_mut(&ks[1]).unwrap().slot.paths = shared;
+    t.s.enc.set_cap(1024, Instant::now()); // no other copies anywhere
+    t.s.set_mode(PreviewMode::Source);
+    poll_once(&mut t.s, &t.m);
+    finish(&mut t.s, 1024);
+    poll_once(&mut t.s, &t.m);
+    poll_once(&mut t.s, &t.m); // the other-mode encodes are started
+    let at = t.s.enc.alt_token_of(ks[0]);
+    assert_ne!(at, 0);
+    t.s.enc
+        .inject_as(ks[0], at, 1024, PreviewMode::Encoded, fake());
+    for _ in 0..3 {
+        poll_once(&mut t.s, &t.m);
+    }
+    drain(&t);
+    for _ in 0..5 {
+        poll_once(&mut t.s, &t.m);
+    }
+    let c = drain(&t);
+    assert!(
+        c.is_empty(),
+        "nothing changed: no swap or drop is sent again ({} cmds)",
+        c.len()
+    );
+}
+// ---- P1-B Task 9: encode lines ----
+
+#[test]
+fn an_encode_completion_is_logged_with_its_slot_mode_time_and_size() {
+    let (_d, m, mut enc, slots) = started();
+    let t = Instant::now();
+    enc.sync(&m, slots, t, true);
+    enc.pump(m.session.as_ref(), t, false);
+    let k = *enc.members.keys().next().unwrap();
+    let tok = enc.token_of(k);
+    let ((), ev) = perf_log::capture(|| {
+        enc.inject(k, tok, DEFAULT_CAP, fake());
+        assert!(enc.poll());
+    });
+    let e: Vec<_> = ev.iter().filter(|e| e["event"] == "encode").collect();
+    assert_eq!(e.len(), 1, "{ev:?}");
+    assert_eq!(
+        (
+            e[0]["ms"].as_f64(),
+            e[0]["bytes"].as_u64(),
+            e[0]["ok"].as_bool()
+        ),
+        (Some(1.0), Some(8), Some(true))
+    );
+    assert_eq!(e[0]["mode"], "Encoded");
+    assert!(e[0]["slot"].is_string());
+}
+
+#[test]
+fn the_set_preview_tags_its_viewport_for_the_gap_watch() {
+    assert_eq!(
+        SetPreview::new(None, None, None, DEFAULT_CAP).v3.panel,
+        "set_preview"
+    );
 }

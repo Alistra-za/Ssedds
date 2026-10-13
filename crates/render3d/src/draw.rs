@@ -5,7 +5,7 @@
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
-use crate::material::{write_material, Bound};
+use crate::material::{write_material, write_skin_flags, Bound};
 use crate::mesh::GpuMesh;
 use crate::scene::{
     rows, write_static, LightValues, Mat3x4, PointValues, Scene, SceneFields, View, ViewValues,
@@ -71,9 +71,15 @@ pub struct ShapeDraw {
     pub skinned: bool,
     /// Registers bound to a real texture (not a 1×1 default); the PBR flags and `EnvmapData.y` read it.
     pub bound: Bound,
+    /// The material this draw was built (or last rebound) with: the slot -> register map its `srvs` follow. A
+    /// pending edit's newer material lives on the shape, not here.
+    pub built: MaterialState,
     /// New or rewritten since the last frame: the next [`ShapeDraw::update`] writes the light and view fields
     /// whatever changed.
     pub stale: bool,
+    /// The program's reflected cbuffer names, namespace-stripped (VS + PS): what `cs_settings::feature_data` keys
+    /// its CS-build exceptions on (P1-D).
+    pub fields: std::collections::BTreeSet<String>,
 }
 
 /// The VS/PS pair of a permutation, compiled and created once per renderer.
@@ -161,10 +167,17 @@ impl ShapeDraw {
 
     /// P0's writer, kept as the reference for the pixel-identity test: the whole scene by name into every
     /// cbuffer, every frame, and every cbuffer uploaded. Returns the number of uploads.
-    pub fn update_by_name(&mut self, gpu: &Gpu, scene: &Scene, view: &View) -> usize {
+    pub fn update_by_name(
+        &mut self,
+        gpu: &Gpu,
+        scene: &Scene,
+        view: &View,
+        feature_values: &[(String, Vec<f64>)],
+    ) -> usize {
         let mut uploads = 0;
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
-            scene.write(&mut cb.writer, view, &self.model);
+            scene.write(&mut cb.writer, view, &self.model, feature_values);
+            write_skin_flags(&mut cb.writer, &self.built, &self.bound);
             upload(gpu, cb);
             cb.dirty = false;
             uploads += 1;
@@ -175,11 +188,17 @@ impl ShapeDraw {
 
     /// A cbuffer edit (03 §1.3): every writer back to zero, then the material and the static block, so no field
     /// of the previous material survives. The light and view fields come back with the next update (`stale`).
-    pub fn rewrite_material(&mut self, m: &MaterialState, linear_lighting: bool) {
+    pub fn rewrite_material(
+        &mut self,
+        m: &MaterialState,
+        linear_lighting: bool,
+        feature_values: &[(String, Vec<f64>)],
+    ) {
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
             cb.writer.zero();
             write_material(&mut cb.writer, m, &self.bound, linear_lighting);
-            write_static(&mut cb.writer);
+            write_static(&mut cb.writer, feature_values);
+            write_skin_flags(&mut cb.writer, m, &self.bound);
             cb.dirty = true;
         }
         self.blend = m.blend();

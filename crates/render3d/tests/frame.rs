@@ -4,7 +4,8 @@ mod common;
 use common::{dds_rgba8, fixture, renderer, FLAT};
 use nif::material::MaterialState;
 use render3d::cbuffer::CbWriter;
-use render3d::compile::CbLayout;
+use render3d::compile::{CbLayout, CbVar, VarKind};
+use render3d::cs_settings::{feature_data, CsSettings};
 use render3d::material::{write_material, Bound};
 use render3d::scene::{
     rows, write_static, Camera, LightValues, Scene, SceneFields, View, ViewValues, FEATURE_FLOATS,
@@ -71,7 +72,16 @@ fn layout(names: &[String], size: u32) -> CbLayout {
         vars: names
             .iter()
             .enumerate()
-            .map(|(i, n)| (n.clone(), size * i as u32, size))
+            .map(|(i, n)| CbVar {
+                name: n.clone(),
+                offset: size * i as u32,
+                size,
+                kind: if FEATURE_UINTS.iter().any(|(u, _)| n.ends_with(u)) {
+                    VarKind::Uint
+                } else {
+                    VarKind::Float
+                },
+            })
             .collect(),
     }
 }
@@ -117,13 +127,14 @@ fn resolved_fields_write_same_bytes_as_by_name() {
     let bound = Bound {
         regs: [12].into_iter().collect(),
     };
+    let fv = feature_data(&CsSettings::default(), &Default::default(), true, false);
     for l in [layout(&names, 400), layout(&ns, 32)] {
         let mut by_name = CbWriter::new(&l);
         write_material(&mut by_name, &m, &bound, true);
-        scene.write(&mut by_name, &view, &model);
+        scene.write(&mut by_name, &view, &model, &fv);
         let mut resolved = CbWriter::new(&l);
         write_material(&mut resolved, &m, &bound, true);
-        write_static(&mut resolved);
+        write_static(&mut resolved, &fv);
         let f = SceneFields::resolve(&resolved);
         assert!(f.write_lights(&mut resolved, &LightValues::new(&scene)));
         assert!(f.write_view(
@@ -322,7 +333,7 @@ fn a_retained_draw_returning_from_hidden_matches_the_by_name_writer() {
         x.set_material(peg, bad.clone(), &|_| None).unwrap();
         assert!(matches!(
             x.shapes().into_iter().find(|s| s.id == peg).unwrap().status,
-            render3d::ShapeStatus::Failed(_)
+            render3d::ShapeStatus::Failed { .. }
         ));
     }
     same(

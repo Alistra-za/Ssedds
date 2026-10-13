@@ -10,9 +10,11 @@ use crate::model::AppModel;
 use eframe::egui;
 use render3d::ShapeStatus;
 
-/// Spec D1: the PBR emissive colour is the NIF's, the engine supplies the real one.
-const EMISSIVE_APPROX: &str = "Emissive colour is approximate (in game the engine supplies it)";
-/// SLSF1 bit 29: the shape has an emissive colour.
+/// SLSF1.29 External Emittance: the preview draws the NIF colour (captures C1, frame6171: the engine sends exactly that
+/// in an interior); outdoors the engine can substitute the cell or weather colour.
+const EMISSIVE_APPROX: &str =
+    "External emittance: in game the cell or weather can change this glow colour";
+/// SLSF1 bit 29: External Emittance.
 const SLSF1_EMISSIVE: u32 = 1 << 29;
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
@@ -72,7 +74,10 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     for n in &s.notices {
         ui.colored_label(AMBER, n);
     }
-    ui.label(egui::RichText::new(OFF_FEATURES).small());
+    // Until the CS settings are read the shared footer names only Dynamic Cubemaps: keep the P0 list here.
+    if s.v3.off_in_preview.is_empty() {
+        ui.label(egui::RichText::new(OFF_FEATURES).small());
+    }
     timings(ui, s);
     ui.separator();
     crate::ui::viewport3d::show(ui, &mut s.v3);
@@ -186,10 +191,24 @@ fn emissive_shown(s: &SetPreview) -> bool {
 }
 
 fn shapes(ui: &mut egui::Ui, s: &SetPreview) {
-    // Spec §1 criterion 4: a shader that failed to compile is named here.
+    // Spec §1 criterion 4: a shader that failed to compile is named here, and one still compiling says so.
     for i in &s.v3.shapes {
-        if let ShapeStatus::Failed(e) = &i.status {
-            ui.colored_label(RED, format!("{}: shader failed: {e}", i.name));
+        match &i.status {
+            ShapeStatus::Failed {
+                error,
+                showing_previous,
+            } => {
+                let kept = if *showing_previous {
+                    " (previous look kept)"
+                } else {
+                    ""
+                };
+                ui.colored_label(RED, format!("{}: shader failed: {error}{kept}", i.name));
+            }
+            ShapeStatus::Pending { .. } => {
+                ui.label(format!("{}: compiling…", i.name));
+            }
+            ShapeStatus::Drawing | ShapeStatus::Hidden => {}
         }
     }
     if s.rows.is_empty() {
@@ -233,6 +252,16 @@ fn timings(ui: &mut egui::Ui, s: &SetPreview) {
             }
             if let Some((k, t)) = s.v3.last_edit {
                 ui.label(format!("Last material edit: {k:?}, {t:.2} ms"));
+            }
+            if let Some(p) = render3d::perf_log::path() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Timing log: {}", p.display()));
+                    if ui.button("Copy log path").clicked() {
+                        ui.ctx().copy_text(p.display().to_string());
+                    }
+                });
+            } else {
+                ui.label("Timing log: off (SDC_PREVIEW_LOG=0)");
             }
         });
 }

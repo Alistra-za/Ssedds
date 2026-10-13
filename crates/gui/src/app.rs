@@ -147,6 +147,7 @@ impl SdcApp {
     fn focus_regained(&mut self) {
         self.model.check_sources();
         self.meshes.relocate();
+        self.state.set3d.relocate();
     }
 }
 
@@ -234,6 +235,10 @@ impl eframe::App for SdcApp {
             self.model.settings.render3d.shaders = Some(fp);
             self.model.save_settings();
         }
+
+        // The 3D gap watches expect a next frame exactly when their panel asks for one (after drawing).
+        self.meshes.v3.arm_gap(self.meshes.v3.busy());
+        self.state.set3d.v3.arm_gap(self.state.set3d.busy());
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
         if self.model.busy()

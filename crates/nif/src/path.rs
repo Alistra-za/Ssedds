@@ -81,6 +81,20 @@ pub fn canon_mesh(rel: &str) -> String {
     slashes_lower(rel)
 }
 
+/// A plugin model path (`MODL`…, relative to `meshes\`) in canonical form: lower case, `/`, starting `meshes/`. An
+/// absolute or `data\`-prefixed path is cut back to its last `meshes` component (esp scanner spec §2.1).
+pub fn canon_model(raw: &[u8]) -> String {
+    let s = slashes_lower(&lossy(raw));
+    if s.is_empty() || s.starts_with("meshes/") {
+        return s;
+    }
+    let comps: Vec<&str> = s.split('/').collect();
+    match comps.iter().rposition(|c| *c == "meshes") {
+        Some(i) => comps[i..].join("/"),
+        None => format!("meshes/{s}"),
+    }
+}
+
 pub fn is_facegen(norm: &str) -> bool {
     norm.starts_with("meshes/actors/character/facegendata/")
         || norm.starts_with("textures/actors/character/facegendata/")

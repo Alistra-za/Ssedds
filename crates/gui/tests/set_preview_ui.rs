@@ -201,7 +201,10 @@ fn a_shader_that_failed_to_compile_is_listed_per_shape() {
             id: ShapeId(1),
             name: "Bottle".into(),
             material: MaterialState::builtin_default(),
-            status: ShapeStatus::Failed("X3000 bad register".into()),
+            status: ShapeStatus::Failed {
+                error: "X3000 bad register".into(),
+                showing_previous: false,
+            },
         },
         ShapeInfo {
             id: ShapeId(2),
@@ -220,7 +223,9 @@ fn the_emissive_approximation_label_shows_only_with_an_emissive_material() {
     let (_d, mut h) = plain_rock();
     h.run_steps(4);
     assert!(h
-        .query_by_label("Emissive colour is approximate (in game the engine supplies it)")
+        .query_by_label(
+            "External emittance: in game the cell or weather can change this glow colour"
+        )
         .is_none());
     let mut material = MaterialState::builtin_default();
     material.slsf1 |= 1 << 29;
@@ -231,7 +236,7 @@ fn the_emissive_approximation_label_shows_only_with_an_emissive_material() {
         material,
     }];
     h.run_steps(4);
-    h.get_by_label("Emissive colour is approximate (in game the engine supplies it)");
+    h.get_by_label("External emittance: in game the cell or weather can change this glow colour");
 }
 
 #[test]
@@ -334,7 +339,8 @@ fn the_textures_view_shows_the_panel_for_a_set_only_when_the_app_enables_it() {
     assert!(h.query_by_label(PANEL_TITLE).is_none());
 }
 
-const EMISSIVE_TEXT: &str = "Emissive colour is approximate (in game the engine supplies it)";
+const EMISSIVE_TEXT: &str =
+    "External emittance: in game the cell or weather can change this glow colour";
 
 #[test]
 fn the_emissive_label_ignores_a_hidden_material_and_follows_the_viewport_shapes() {
@@ -411,4 +417,58 @@ fn an_old_gui_toml_without_the_cap_gives_the_default_and_out_of_range_values_cla
     };
     assert_eq!((cap(1), cap(255), cap(256)), (256, 256, 256));
     assert_eq!((cap(8192), cap(8193), cap(u32::MAX)), (8192, 8192, 8192));
+}
+
+#[test]
+fn a_shader_still_compiling_is_listed_and_a_kept_look_is_said() {
+    let (_d, mut h) = plain_rock();
+    h.state_mut().1.v3.shapes = vec![
+        ShapeInfo {
+            id: ShapeId(1),
+            name: "Bottle".into(),
+            material: MaterialState::builtin_default(),
+            status: ShapeStatus::Pending {
+                showing_previous: true,
+            },
+        },
+        ShapeInfo {
+            id: ShapeId(2),
+            name: "Cork".into(),
+            material: MaterialState::builtin_default(),
+            status: ShapeStatus::Failed {
+                error: "X3000 bad register".into(),
+                showing_previous: true,
+            },
+        },
+    ];
+    h.run_steps(4);
+    h.get_by_label("Bottle: compiling…");
+    h.get_by_label("Cork: shader failed: X3000 bad register (previous look kept)");
+}
+
+#[test]
+fn the_mode_toggle_still_calls_set_mode_and_puts_ab_in_use() {
+    let (_d, mut h) = plain_rock();
+    assert!(!h.state().1.enc.ab_active());
+    h.get_by_label(MODE_LABEL_SOURCE).click();
+    h.run_steps(4);
+    assert_eq!(h.state().1.mode(), PreviewMode::Source);
+    assert_eq!(h.state().1.enc.mode(), PreviewMode::Source);
+    assert!(
+        h.state().1.enc.ab_active(),
+        "the first flip puts A/B in use"
+    );
+    h.get_by_label(MODE_LABEL_ENCODED).click();
+    h.run_steps(4);
+    assert_eq!(h.state().1.mode(), PreviewMode::Encoded);
+}
+#[test]
+fn the_timings_section_shows_the_log_path_and_a_copy_button() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let _log = render3d::perf_log::start_in(log_dir.path()).expect("a log");
+    let (_d, mut h) = plain_rock();
+    h.get_by_label("Timings").click();
+    h.run();
+    h.get_by_label_contains("Timing log:");
+    h.get_by_label("Copy log path");
 }

@@ -3,6 +3,7 @@
 //! fixtures share one path. Layer 1 (`geom`) decodes SSE BSTriShape geometry for the 3D preview.
 pub mod cursor;
 pub mod geom;
+pub mod graph;
 pub mod header;
 pub mod material;
 pub mod path;

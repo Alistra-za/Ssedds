@@ -1,5 +1,22 @@
-use render3d::compile::compile;
-use render3d::permutation::{defines, runtime_bits, Material, Stage};
+use render3d::compile::Compiled;
+use render3d::permutation::{defines, runtime_bits, Defines, Material, Stage};
+use render3d::source::SourceSet;
+use std::path::Path;
+
+/// The pre-P1-B call shape (file, root, defines, target, cache, hash): expand `file` under `root`, then
+/// `render3d::compile::compile`. The hash argument is ignored: the key is the content now.
+fn compile(
+    file: &Path,
+    root: &Path,
+    d: &Defines,
+    target: &str,
+    cache: &Path,
+    _hash: &str,
+) -> Result<Compiled, String> {
+    let rel = file.strip_prefix(root).unwrap_or(file);
+    let src = SourceSet::new(root.to_path_buf()).get(rel)?;
+    render3d::compile::compile(&src, d, target, cache)
+}
 
 fn m(shader_type: u32, slsf1: u32, slsf2: u32, skinned: bool) -> Material {
     Material {
@@ -178,7 +195,9 @@ fn tiny_shader_compiles_and_reflects() {
     let cb = &c.reflection.cbuffers[0];
     assert_eq!(cb.name, "PerMaterial");
     assert_eq!(cb.slot, 1);
-    assert!(cb.vars.iter().any(|v| v.0 == "Tint" && v.1 == 16));
+    assert!(cb.vars.iter().any(|v| v.name == "Tint"
+        && v.offset == 16
+        && v.kind == render3d::compile::VarKind::Float));
     use render3d::compile::SrvKind;
     assert_eq!(
         c.reflection.srvs,
@@ -233,7 +252,20 @@ fn cbuffer_writer_sets_by_name() {
         name: "PerMaterial".into(),
         slot: 1,
         size: 32,
-        vars: vec![("Scale".into(), 0, 4), ("Tint".into(), 16, 12)],
+        vars: vec![
+            render3d::compile::CbVar {
+                name: "Scale".into(),
+                offset: 0,
+                size: 4,
+                kind: render3d::compile::VarKind::Float,
+            },
+            render3d::compile::CbVar {
+                name: "Tint".into(),
+                offset: 16,
+                size: 12,
+                kind: render3d::compile::VarKind::Float,
+            },
+        ],
     };
     let mut w = render3d::cbuffer::CbWriter::new(&layout);
     assert!(w.set("Tint", &[1.0, 0.5, 0.25]));
@@ -373,4 +405,88 @@ fn cache_key_uses_path_relative_to_root() {
         .bytecode
     };
     assert_ne!(c("a"), c("b"));
+}
+
+fn feature_kinds_layout(cache: &Path) -> render3d::compile::CbLayout {
+    let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+    let c = compile(
+        &dir.join("feature_kinds.hlsl"),
+        dir,
+        &Default::default(),
+        "ps_5_0",
+        cache,
+        "h",
+    )
+    .unwrap();
+    c.reflection
+        .cbuffers
+        .into_iter()
+        .find(|l| l.name.ends_with("FeatureData"))
+        .unwrap()
+}
+
+/// C6: every reflected variable carries its HLSL scalar type, struct members included; a struct is `Other`.
+#[test]
+fn reflection_reports_member_kinds() {
+    use render3d::compile::VarKind;
+    let cache = tempfile::tempdir().unwrap();
+    let l = feature_kinds_layout(cache.path());
+    assert_eq!(l.slot, 6);
+    let kind = |n: &str| l.vars.iter().find(|v| v.name.ends_with(n)).map(|v| v.kind);
+    assert_eq!(kind("hairSpecularSettings"), Some(VarKind::Other));
+    assert_eq!(kind("hairSpecularSettings.Enabled"), Some(VarKind::Uint));
+    assert_eq!(
+        kind("hairSpecularSettings.HairGlossiness"),
+        Some(VarKind::Float)
+    );
+    assert_eq!(kind("hairSpecularSettings.Signed"), Some(VarKind::Int));
+    assert_eq!(kind("hairSpecularSettings.Flag"), Some(VarKind::Bool));
+    assert_eq!(kind("skinParams"), Some(VarKind::Float));
+    let w = render3d::cbuffer::CbWriter::new(&l);
+    assert_eq!(w.kind("hairSpecularSettings.Enabled"), Some(VarKind::Uint));
+    assert_eq!(w.kind("notInThisBuild"), None);
+}
+
+/// P1-D: the reflected names `feature_data` keys its exceptions on, without fxc's namespace qualifier.
+#[test]
+fn reflected_fields_drop_the_namespace() {
+    let cache = tempfile::tempdir().unwrap();
+    let l = feature_kinds_layout(cache.path());
+    let f = render3d::cs_settings::reflected_fields([&l]);
+    assert!(f.contains("hairSpecularSettings.Enabled"), "{f:?}");
+    assert!(f.contains("skinParams"), "{f:?}");
+    assert!(f.iter().all(|n| !n.contains("::")), "{f:?}");
+}
+
+/// C6, read back from the writer's bytes: a `uint` member gets the integer's bit pattern (1, not 0x3F800000), a
+/// `float` member the f32's, `int` two's complement, `bool` 1; a name the layout lacks is skipped.
+#[test]
+fn feature_data_writes_reflected_kinds() {
+    let cache = tempfile::tempdir().unwrap();
+    let l = feature_kinds_layout(cache.path());
+    let mut w = render3d::cbuffer::CbWriter::new(&l);
+    render3d::cs_settings::write_feature_data(
+        &mut w,
+        &[
+            ("hairSpecularSettings.Enabled".into(), vec![1.0]),
+            ("hairSpecularSettings.HairGlossiness".into(), vec![70.0]),
+            ("hairSpecularSettings.Signed".into(), vec![-2.0]),
+            ("hairSpecularSettings.Flag".into(), vec![1.0]),
+            ("skinParams".into(), vec![0.7, 0.35, 1.0, 1.0]),
+            ("notInThisBuild".into(), vec![5.0]),
+        ],
+    );
+    let word = |n: &str, i: usize| {
+        let at = w.resolve(n).unwrap().off as usize + 4 * i;
+        u32::from_le_bytes(w.bytes()[at..at + 4].try_into().unwrap())
+    };
+    assert_eq!(word("hairSpecularSettings.Enabled", 0), 1);
+    assert_eq!(
+        word("hairSpecularSettings.HairGlossiness", 0),
+        70.0f32.to_bits()
+    );
+    assert_eq!(word("hairSpecularSettings.Signed", 0), (-2i32) as u32);
+    assert_eq!(word("hairSpecularSettings.Flag", 0), 1);
+    assert_eq!(word("skinParams", 0), 0.7f32.to_bits());
+    assert_eq!(word("skinParams", 3), 1.0f32.to_bits());
 }

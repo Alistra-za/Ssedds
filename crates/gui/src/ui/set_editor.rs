@@ -85,6 +85,7 @@ pub fn draw(
                 .response
                 .on_disabled_hover_text(&why);
                 under_grid(ui, model, &v);
+                super::plugin_refs::set_section(ui, model, &v);
                 super::pgp_fields::panel(&mut cols[1], model, &v.id);
             });
         });

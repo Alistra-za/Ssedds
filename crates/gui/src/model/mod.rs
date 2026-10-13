@@ -9,6 +9,7 @@ pub mod meshes;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
+pub mod plugin_refs;
 pub mod preview;
 pub mod rnm;
 pub mod set_preview;
@@ -204,6 +205,8 @@ pub struct AppModel {
     pub gpu_available: bool,
     /// The BC1 decoder choice differs from the session's model, which is fixed at launch (M3a spec §4.6).
     pub restart_needed: bool,
+    /// The set editor "Used by plugins" reads (esp spec 4.1).
+    pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -289,6 +292,7 @@ impl AppModel {
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
+            plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
             generation: 0,

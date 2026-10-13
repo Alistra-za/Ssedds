@@ -6,6 +6,7 @@ pub mod drawer;
 pub mod header;
 pub mod meshes;
 pub mod pgp_fields;
+pub mod plugin_refs;
 pub mod preview;
 pub mod rnm_section;
 pub mod set_editor;

@@ -44,6 +44,8 @@ fn build_model() -> AppModel {
 }
 
 fn main() -> eframe::Result {
+    // The preview timing log (SDC_PREVIEW_LOG=0 turns it off); kept alive for the whole run.
+    let _perf = render3d::perf_log::start();
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         // BC texture compression and the adapter's own limits, for the preview textures.

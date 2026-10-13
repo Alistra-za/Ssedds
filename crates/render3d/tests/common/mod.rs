@@ -72,3 +72,38 @@ pub fn dds_rgba8(w: u32, h: u32, texels: &[[u8; 4]]) -> Vec<u8> {
     b.extend(texels.iter().flatten());
     b
 }
+
+/// An uncompressed DX10-header DDS, one mip: `R8G8B8A8_UNORM` (28) or `R8G8B8A8_UNORM_SRGB` (29). The same texels in
+/// the two formats sample differently on the GPU (the sRGB view linearises), which is what the A/B shows.
+pub fn dds_rgba8_dx10(w: u32, h: u32, texels: &[[u8; 4]], srgb: bool) -> Vec<u8> {
+    assert_eq!(texels.len(), (w * h) as usize);
+    let mut b = vec![0u8; 148];
+    let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    put(0, u32::from_le_bytes(*b"DDS "));
+    put(4, 124);
+    put(8, 0x1 | 0x2 | 0x4 | 0x8 | 0x1000); // CAPS | HEIGHT | WIDTH | PITCH | PIXELFORMAT
+    put(12, h);
+    put(16, w);
+    put(20, w * 4);
+    put(28, 1);
+    put(76, 32);
+    put(80, 0x4); // DDPF_FOURCC
+    put(84, u32::from_le_bytes(*b"DX10"));
+    put(108, 0x1000); // DDSCAPS_TEXTURE
+    put(128, if srgb { 29 } else { 28 });
+    put(132, 3); // D3D10_RESOURCE_DIMENSION_TEXTURE2D
+    put(140, 1); // array size
+    b.extend(texels.iter().flatten());
+    b
+}
+
+/// A 1×1 legacy cube map (all six faces `texel`): a kind a 2D register must refuse.
+pub fn dds_cube_rgba8(texel: [u8; 4]) -> Vec<u8> {
+    let mut b = dds_rgba8(1, 1, &[texel]);
+    b[108..112].copy_from_slice(&0x1008u32.to_le_bytes()); // TEXTURE | COMPLEX
+    b[112..116].copy_from_slice(&(0x200u32 | 0xFC00).to_le_bytes()); // CUBEMAP | all six faces
+    for _ in 0..5 {
+        b.extend(texel);
+    }
+    b
+}
