@@ -54,7 +54,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     let keys_free = selection_keys_free(ui, model);
     header::draw(ui, model);
     advanced::draw(ui, model, &mut state.advanced);
-    let (thumbs, drops) = (&mut state.thumbs, &mut state.drops);
+    let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
     // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
     let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
     column_panel(
@@ -78,7 +78,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
         columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
         model,
         |ui, model| {
-            sets_column::draw(ui, model, thumbs, drops);
+            sets_column::draw(ui, model, thumbs, drops, cmds);
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
@@ -93,6 +93,8 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
             .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
     }
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
+    // Here, not in the set editor: a pill member's slot menu opens it while a texture is selected (F3a Task 8).
+    slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
     // Last, so every modal, menu and the preview has had its chance to consume the key first.
     if keys_free {

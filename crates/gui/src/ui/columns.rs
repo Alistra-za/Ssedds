@@ -267,6 +267,7 @@ pub(super) fn member(
     ui: &mut egui::Ui,
     item: &TextureItem,
     selected: bool,
+    locked: bool,
     thumbs: &mut ThumbCache,
 ) -> egui::Response {
     let (rect, response) =
@@ -295,6 +296,19 @@ pub(super) fn member(
             egui::Stroke::new(if selected { 2.0 } else { 1.0 }, color),
             egui::StrokeKind::Inside,
         );
+        // F3a Task 8: the member fills a locked slot.
+        if locked {
+            ui.painter().text(
+                rect.right_top() + egui::vec2(-1.0, 1.0),
+                egui::Align2::RIGHT_TOP,
+                "🔒",
+                egui::FontId::proportional(10.0),
+                ui.visuals().strong_text_color(),
+            );
+        }
+    }
+    if locked {
+        return response.on_hover_text(format!("{} (slot locked)", item.name));
     }
     response.on_hover_text(&item.name)
 }

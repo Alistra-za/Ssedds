@@ -1,9 +1,10 @@
 //! The set editor, layout A (M3b spec §4): slot cards on the left, PGPatcher settings on the right (Task 15).
 //! Drawing only: every change is a model call, made after drawing.
-use super::columns::{border_of, status_text, AMBER, RED};
+use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
+use crate::model::bulk::MenuAction;
 use crate::model::fields::{channel_text, field_lock, format_label, format_options};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
@@ -38,6 +39,8 @@ enum Act {
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
+    /// F3a Task 8: a slot menu pick.
+    Slot(MenuAction),
 }
 
 fn tag_options(f: Format) -> Vec<ColorTag> {
@@ -92,7 +95,6 @@ pub fn draw(
                 }
             });
         });
-    super::slot_commands::draw(ui.ctx(), model, cmds);
     let (mut select, mut expand) = (None, None);
     for a in acts {
         match a {
@@ -105,6 +107,7 @@ pub fn draw(
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
             Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
+            Act::Slot(a) => super::slot_commands::run(model, cmds, a),
         }
     }
     select_or_expand(ui, model, select, expand);
@@ -222,7 +225,11 @@ fn card(
     } else {
         frame
     };
-    frame.show(ui, |ui| {
+    let locked = v.locks.contains(&slot.slot_number());
+    // F3a Task 8: the whole card takes the right-click; its labels are not selectable, so they do not take it.
+    let scoped = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+      frame.show(ui, |ui| {
+        ui.style_mut().interaction.selectable_labels = false;
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(CARD);
             ui.set_min_width(CARD);
@@ -232,7 +239,12 @@ fn card(
                 }
                 SlotFill::Empty => slot.label(),
             };
-            let t = ui.label(egui::RichText::new(title).strong());
+            let t = if locked {
+                ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
+                    .on_hover_text("Slot locked: right-click to unlock")
+            } else {
+                ui.label(egui::RichText::new(title).strong())
+            };
             if cell.usable && !rnm_layers.is_empty() {
                 t.clone()
                     .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
@@ -252,6 +264,7 @@ fn card(
             let item = item_key.as_deref().and_then(|k| model.item(k));
             let (rect, resp) =
                 ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::click());
+            slot_menu(&resp, model, v, slot, acts);
             if ui.is_rect_visible(rect) {
                 match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
                     Some(t) => egui::Image::new(&t)
@@ -360,6 +373,24 @@ fn card(
                 }
             }
         })
+      })
+    });
+    slot_menu(&scoped.response, model, v, slot, acts);
+}
+
+/// F3a Task 8: the slot menu of card `slot` (the model's list, drawn as the bulk menus are).
+fn slot_menu(
+    resp: &egui::Response,
+    model: &AppModel,
+    v: &SetView,
+    slot: SlotKind,
+    acts: &mut Vec<Act>,
+) {
+    resp.context_menu(|ui| {
+        let title = format!("Slot {}: {}", slot.slot_number(), slot.label());
+        if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, slot)) {
+            acts.push(Act::Slot(a));
+        }
     });
 }
 

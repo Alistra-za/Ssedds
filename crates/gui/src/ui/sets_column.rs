@@ -2,6 +2,7 @@
 //! of textures onto sets (and onto an empty area for a new set), drag-to-reorder by the ≡ handle, and a context
 //! menu. Drawing only: every change is a model call, made after drawing.
 use super::columns::{bulk_menu, member, status_text, AMBER, RED};
+use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
@@ -70,6 +71,8 @@ enum Act {
     Click(String, bool, bool),
     RightClick(String),
     Bulk(MenuAction),
+    /// F3a Task 8: a member's slot menu pick.
+    Slot(MenuAction),
 }
 
 fn badge(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) -> egui::Response {
@@ -99,7 +102,13 @@ struct Editing<'a> {
     why: &'a str,
 }
 
-pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st: &mut DropState) {
+pub fn draw(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    thumbs: &mut ThumbCache,
+    st: &mut DropState,
+    cmds: &mut SlotCmdState,
+) {
     ui.horizontal_wrapped(|ui| {
         ui.heading("Sets");
         if let Some(s) = model.selection_summary(true) {
@@ -199,6 +208,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
             Act::Bulk(a) => {
                 model.run_menu(a);
             }
+            Act::Slot(a) => super::slot_commands::run(model, cmds, a),
             Act::Expand(k) => model.expand(&k),
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
                 DropOutcome::Joined => {}
@@ -336,6 +346,8 @@ fn pill(
     acts: &mut Vec<Act>,
 ) -> PillOut {
     let mut handle_released = false;
+    // A member's slot menu, not the pill's, answers a right-click on that member.
+    let mut member_menu = false;
     let selected = look.selected;
     let accent = ui.visuals().selection.stroke.color;
     let stroke = if look.dragging {
@@ -427,7 +439,24 @@ fn pill(
                     for mk in &v.members {
                         let Some(item) = model.item(mk) else { continue };
                         let sel = sel_items.contains(mk);
-                        let r = member(ui, item, sel, thumbs);
+                        // F3a Task 8: the slot the member fills in this set, if any, has a slot menu.
+                        let kind = v
+                            .slots
+                            .iter()
+                            .find(|(_, f)| matches!(f, SlotFill::Own { item } if item == mk))
+                            .map(|(k, _)| *k);
+                        let locked = kind.is_some_and(|k| v.locks.contains(&k.slot_number()));
+                        let r = member(ui, item, sel, locked, thumbs);
+                        if let Some(k) = kind {
+                            member_menu |= r.secondary_clicked();
+                            let open = r.context_menu(|ui| {
+                                let title = format!("Slot {}: {}", k.slot_number(), k.label());
+                                if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, k)) {
+                                    acts.push(Act::Slot(a));
+                                }
+                            });
+                            member_menu |= open.is_some();
+                        }
                         r.dnd_set_drag_payload(DragItem(mk.clone()));
                         if r.double_clicked() {
                             acts.push(Act::Expand(mk.clone()));
@@ -472,19 +501,21 @@ fn pill(
     let hovered_by_set = editing.on && resp.dnd_hover_payload::<DragSet>().is_some();
     // F3a D4: a right-click on an unselected pill selects it alone first; among two or more selected sets the pill
     // shows the bulk menu, otherwise its own.
-    if resp.secondary_clicked() && !v.key.is_empty() {
+    if resp.secondary_clicked() && !v.key.is_empty() && !member_menu {
         acts.push(Act::RightClick(v.key.clone()));
     }
     let bulk = look.selected && look.bulk;
-    resp.context_menu(|ui| {
-        if bulk {
-            if let Some(a) = bulk_menu(ui, &model.menu_title(true), &model.set_menu()) {
-                acts.push(Act::Bulk(a));
+    if !member_menu {
+        resp.context_menu(|ui| {
+            if bulk {
+                if let Some(a) = bulk_menu(ui, &model.menu_title(true), &model.set_menu()) {
+                    acts.push(Act::Bulk(a));
+                }
+            } else {
+                menu(ui, v, index, editing, model, acts)
             }
-        } else {
-            menu(ui, v, index, editing, model, acts)
-        }
-    });
+        });
+    }
     PillOut {
         handle_released,
         hovered_by_set,

@@ -1,5 +1,7 @@
-//! The Slot commands dialog (M3b spec §4.2): per slot 1–8, from this set / a path / clear.
-use crate::model::sets::{slot_gives, SlotCommand};
+//! The Slot commands dialog (M3b spec §4.2): per slot 1–8, from this set / a path / clear, and the slot lock (F3a
+//! Task 8).
+use crate::model::bulk::MenuAction;
+use crate::model::sets::{slot_gives, SlotCommand, SLOT_LOCKED};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::sets::same_id;
@@ -30,27 +32,45 @@ const CHOICES: [&str; 3] = ["From this set", "Path", "Clear"];
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
     let Some(set) = st.open.clone() else { return };
-    let settings = model
+    let entry = model
         .sets_doc
         .as_ref()
         .and_then(|d| d.entries().into_iter().find(|e| same_id(&e.id, &set)))
-        .map(|e| e.settings)
         .unwrap_or_default();
+    let (settings, locks) = (entry.settings, entry.lock);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
     let given: Vec<String> = (1..=8u8).map(|n| slot_gives(model, &set, n)).collect();
     let mut close = false;
     let mut apply: Vec<(u8, SlotCommand)> = vec![];
+    let mut lock: Vec<(u8, bool)> = vec![];
     let modal = egui::Modal::new(egui::Id::new("slot-commands")).show(ctx, |ui| {
         ui.set_max_width(640.0);
         ui.heading(format!("Slot commands: {set}"));
         ui.label("A path is relative to Data\\ and ends in .dds; textures\\ is added when missing (except for the cubemap). Base-game files in a BSA work too.");
         ui.add_space(6.0);
-        egui::Grid::new("slot-cmd-grid").num_columns(4).show(ui, |ui| {
+        egui::Grid::new("slot-cmd-grid").num_columns(5).show(ui, |ui| {
             for n in 1..=8u8 {
                 let i = usize::from(n - 1);
                 ui.label(format!("Slot {n} ({})", NAMES[i]));
                 ui.weak(&given[i]);
+                let locked = locks.contains(&n);
+                let mut on = locked;
+                if ui
+                    .add_enabled(editable, egui::Checkbox::new(&mut on, "🔒"))
+                    .on_hover_text("Locked: drops, slot commands and bulk edits leave this slot as it is")
+                    .on_disabled_hover_text(&why)
+                    .changed()
+                {
+                    lock.push((n, on));
+                }
+                // A locked slot's commands are off, with the reason on hover.
+                let why = if editable && locked {
+                    SLOT_LOCKED.to_string()
+                } else {
+                    why.clone()
+                };
+                let editable = editable && !locked;
                 let current = match settings.get(&format!("slot{n}")) {
                     None => 0,
                     Some(Value::String(s)) if s.is_empty() => 2,
@@ -113,6 +133,9 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
         ui.add_space(6.0);
         close = ui.button("Close").clicked();
     });
+    for (n, on) in lock {
+        st.error[usize::from(n - 1)] = model.set_slot_lock(&set, n, on).err();
+    }
     for (n, cmd) in apply {
         let i = usize::from(n - 1);
         let is_path = matches!(cmd, SlotCommand::Path(_));
@@ -124,4 +147,33 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
     if close || modal.should_close() {
         *st = SlotCmdState::default();
     }
+}
+
+/// F3a Task 8: run a slot menu pick. "Path…" opens this window on that slot to type the path; a refused command
+/// opens it with the reason on that slot's row. Any other pick runs as is.
+pub fn run(model: &mut AppModel, st: &mut SlotCmdState, a: MenuAction) {
+    let (set, n) = match &a {
+        MenuAction::Slot { set, n, .. }
+        | MenuAction::SlotPath { set, n }
+        | MenuAction::SlotLink { set, n, .. }
+        | MenuAction::SlotLock { set, n, .. } => (set.clone(), *n),
+        _ => {
+            model.run_menu(a);
+            return;
+        }
+    };
+    let path = matches!(a, MenuAction::SlotPath { .. });
+    let err = model.run_menu(a);
+    if !path && err.is_none() {
+        return;
+    }
+    if st.open.as_deref() != Some(set.as_str()) {
+        *st = SlotCmdState::default();
+        st.open = Some(set);
+    }
+    let i = usize::from(n.clamp(1, 8) - 1);
+    if path {
+        st.mode[i] = Some(1);
+    }
+    st.error[i] = err;
 }
