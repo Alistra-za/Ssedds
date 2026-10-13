@@ -248,6 +248,12 @@ fn a_stream_inflating_past_its_declared_size_is_an_error_and_the_next_record_is_
         "{:?}",
         f.errors
     );
+    // The reader stops at declared + 1 bytes: this pins the `take` bound.
+    assert!(
+        f.errors[0].contains("inflates to 11 bytes or more"),
+        "{:?}",
+        f.errors
+    );
     assert_eq!(f.records.len(), 1);
     assert_eq!(f.records[0].edid.as_deref(), Some("After"));
 }
