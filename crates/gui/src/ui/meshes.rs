@@ -461,6 +461,9 @@ fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
         });
 }
 
+/// Most rows drawn in the file-reference list.
+const MAX_REF_ROWS: usize = 1000;
+
 /// "Plugin file references" (esp spec §4.4): counts, filter, copy; no actions.
 fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
     let (missing, unused) = m
@@ -503,15 +506,20 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         ui.label("Nothing listed.");
         return;
     }
-    let row = ui.text_style_height(&egui::TextStyle::Body);
+    // Wrapping rows bounded to the column; rendering is capped so 68k Unused rows stay fast (Copy still takes all).
     egui::ScrollArea::vertical()
         .id_salt("meshes-file-refs-scroll")
         .max_height(240.0)
-        .show_rows(ui, row, n, |ui, range| {
-            for l in &m.refs_lines()[range] {
-                // One line per row (show_rows needs a fixed height); the full text is on hover.
-                ui.add(egui::Label::new(l.as_str()).truncate())
-                    .on_hover_text(l.as_str());
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for l in m.refs_lines().iter().take(MAX_REF_ROWS) {
+                ui.add(egui::Label::new(l.as_str()).wrap());
+            }
+            if n > MAX_REF_ROWS {
+                ui.weak(format!(
+                    "… and {} more — narrow with the filter",
+                    n - MAX_REF_ROWS
+                ));
             }
         });
 }

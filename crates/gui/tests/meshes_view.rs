@@ -1224,3 +1224,92 @@ fn plugin_overrides_say_how_many_more_are_cut() {
     h.run();
     h.get_by_label("… and 5 more");
 }
+
+/// Long plugin-reference rows wrap inside their column instead of widening the panels.
+fn long_line() -> String {
+    format!(
+        "textures/clutter/{}.dds",
+        "journalralis19to23_n ".repeat(20).trim().replace(' ', "_")
+    )
+}
+
+fn x_of(h: &Harness<'static, MeshesModel>, label: &str) -> f32 {
+    h.get_by_label(label).rect().min.x
+}
+
+#[test]
+fn long_file_ref_rows_do_not_widen_the_layout() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    let mut h = harness(m);
+    h.run();
+    let (mods_x, nifs_x) = (x_of(&h, "A"), x_of(&h, "x.nif"));
+    let long = long_line();
+    h.state_mut().file_refs = Some(FileRefs {
+        missing: vec![MissingRef {
+            path: long.clone(),
+            n_records: 3,
+            records: vec!["BCS_JournalRalis19 [2F056C6B] TXST — Book Covers Skyrim.esp".repeat(4)],
+        }],
+        unused: vec![],
+    });
+    h.run();
+    h.get_by_label("Plugin file references").click();
+    h.run();
+    h.run();
+    assert_eq!((x_of(&h, "A"), x_of(&h, "x.nif")), (mods_x, nifs_x));
+    let row = h.get_by_label_contains(&long);
+    assert!(
+        row.rect().max.x <= 1400.0,
+        "row runs off screen: {:?}",
+        row.rect()
+    );
+    assert!(
+        row.rect().height() > 30.0,
+        "row did not wrap: {:?}",
+        row.rect()
+    );
+}
+
+#[test]
+fn file_ref_rows_are_capped_and_overrides_wrap() {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs {
+        missing: vec![],
+        unused: (0..1500).map(|i| format!("textures/u/{i}.dds")).collect(),
+    });
+    m.refs_unused = true;
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin file references").click();
+    h.run();
+    h.get_by_label("… and 500 more — narrow with the filter");
+}
+
+#[test]
+fn long_override_labels_wrap_inside_the_column() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    m.plugin_uses = vec![MeshUse {
+        formid: 1,
+        edid: Some("Rock".into()),
+        sig: "STAT".into(),
+        plugin: "Mod.esp".into(),
+        model_slot: 0,
+        n_overrides: 0,
+        swaps: vec![ShapeSwap {
+            shape_name: "S".repeat(600),
+            txst_formid: 2,
+            txst_edid: Some("T".into()),
+            index: 0,
+        }],
+    }];
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (1)").click();
+    h.run();
+    h.run();
+    let r = h.get_by_label_contains("SSSSSSSSSS").rect();
+    assert!(r.max.x <= 1400.0 && r.height() > 30.0, "{r:?}");
+}
