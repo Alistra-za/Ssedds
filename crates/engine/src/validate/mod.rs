@@ -99,8 +99,17 @@ pub struct ValidationReport {
     pub warnings: Vec<Warning>,
 }
 
+/// PSNR in dB for a mean squared error over 8-bit values (99 dB when it is zero).
+pub fn psnr_from_mse(mse: f64) -> f64 {
+    if mse <= 1e-12 {
+        99.0
+    } else {
+        10.0 * (65025.0 / mse).log10()
+    }
+}
+
 /// PSNR in dB over the channels `ch` of two equally long images (99 dB when they are identical).
-fn psnr(a: &[[u8; 4]], b: &[[u8; 4]], ch: &[usize]) -> f64 {
+pub fn psnr(a: &[[u8; 4]], b: &[[u8; 4]], ch: &[usize]) -> f64 {
     let mut s = 0.0f64;
     for (x, y) in a.iter().zip(b) {
         for &c in ch {
@@ -108,12 +117,7 @@ fn psnr(a: &[[u8; 4]], b: &[[u8; 4]], ch: &[usize]) -> f64 {
             s += e * e;
         }
     }
-    let mse = s / (a.len() * ch.len()).max(1) as f64;
-    if mse <= 1e-12 {
-        99.0
-    } else {
-        10.0 * (65025.0 / mse).log10()
-    }
+    psnr_from_mse(s / (a.len() * ch.len()).max(1) as f64)
 }
 
 fn finish(mut summary: ValidationSummary, warnings: Vec<Warning>) -> ValidationReport {
