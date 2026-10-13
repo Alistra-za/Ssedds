@@ -149,6 +149,51 @@
       ],
       "type": "object"
     },
+    "BentMode": {
+      "enum": [
+        "ao_blend",
+        "detail"
+      ],
+      "type": "string"
+    },
+    "BentSpec": {
+      "additionalProperties": false,
+      "description": "The `bent` layer: a layer plus its AO-blend settings (F2 spec §3.1, §3.3).",
+      "properties": {
+        "ao": {
+          "description": "Read the AO source; `false` = a uniform weight.",
+          "type": "boolean"
+        },
+        "ao_power": {
+          "description": "The power on the occlusion `1 − AO`; `None` = 1.5.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "flip_green": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mask": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/$defs/BentMode"
+        },
+        "strength": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Category": {
       "enum": [
         "color",
@@ -685,6 +730,40 @@
         }
       ]
     },
+    "LayerId": {
+      "description": "One RNM normal layer (M6 Track F2 spec §2.1).",
+      "enum": [
+        "bump",
+        "bump2",
+        "detail",
+        "detail2",
+        "bent"
+      ],
+      "type": "string"
+    },
+    "LayerSpec": {
+      "additionalProperties": false,
+      "description": "One layer's settings (F2 spec §4). Every field is optional at its default: `strength` = the layer's\n`default_strength`, `flip_green` = the base's own `channels.flip_green`, `mask` = on when the mask file exists.",
+      "properties": {
+        "flip_green": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mask": {
+          "type": "boolean"
+        },
+        "strength": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "MipEdge": {
       "enum": [
         "wrap",
@@ -937,6 +1016,10 @@
           "$ref": "#/$defs/ResizeMode",
           "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
+        "rnm": {
+          "$ref": "#/$defs/RnmSpec",
+          "description": "RNM normal layers (M6 Track F2); read only by base normals (`Subtype::rnm_base`)."
+        },
         "subtype": {
           "$ref": "#/$defs/Subtype"
         },
@@ -1182,6 +1265,41 @@
         "warnings",
         "status"
       ],
+      "type": "object"
+    },
+    "RnmSpec": {
+      "additionalProperties": false,
+      "description": "RNM normal layers (M6 Track F2 spec §4). A field of every profile, read only by base normals (`Subtype::rnm_base`);\nnot serialised at its default, so profile hashes written before F2 hold (DECISIONS Note W6).",
+      "properties": {
+        "bent": {
+          "$ref": "#/$defs/BentSpec"
+        },
+        "bump": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "bump2": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "detail": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "detail2": {
+          "$ref": "#/$defs/LayerSpec"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "description": "Blend order; see [`RnmSpec::effective_order`].",
+          "items": {
+            "$ref": "#/$defs/LayerId"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "SearchRadius": {

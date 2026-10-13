@@ -98,6 +98,220 @@ cfg_enum!(Backend, "snake_case" { Bc7e, Rgbcx, IspcBc6h, Nvtt, Uncompressed });
 cfg_enum!(Effort, "lowercase" { Ultrafast, Veryfast, Fast, Basic, Veryslow, Slowest });
 cfg_enum!(SearchRadius, "lowercase" { Default, Max, Fast });
 cfg_enum!(GreenConvention, "lowercase" { Directx, Opengl });
+cfg_enum!(
+    /// One RNM normal layer (M6 Track F2 spec §2.1).
+    LayerId, "lowercase" { Bump, Bump2, Detail, Detail2, Bent }
+);
+cfg_enum!(#[derive(Default)] BentMode, "snake_case" { #[default] AoBlend, Detail });
+cfg_enum!(
+    /// Which base normal a layer file feeds (F2 spec §2.3): `n` (`_n`), `cnr` (`_cnr`) or both.
+    RnmTarget, "lowercase" { N, Cnr, Both }
+);
+
+impl LayerId {
+    /// The default blend order (F2 spec §3.1 step 5).
+    pub const ORDER: [LayerId; 5] = [
+        LayerId::Bent,
+        LayerId::Bump,
+        LayerId::Bump2,
+        LayerId::Detail,
+        LayerId::Detail2,
+    ];
+    pub fn id(self) -> &'static str {
+        match self {
+            LayerId::Bump => "bump",
+            LayerId::Bump2 => "bump2",
+            LayerId::Detail => "detail",
+            LayerId::Detail2 => "detail2",
+            LayerId::Bent => "bent",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            LayerId::Bump => "bump",
+            LayerId::Bump2 => "bump 2",
+            LayerId::Detail => "detail",
+            LayerId::Detail2 => "detail 2",
+            LayerId::Bent => "bent",
+        }
+    }
+    /// F2 spec §3.4 (rnm.py's defaults).
+    pub fn default_strength(self) -> f64 {
+        match self {
+            LayerId::Bump | LayerId::Bump2 => 0.4,
+            LayerId::Detail => 0.6,
+            LayerId::Detail2 => 0.3,
+            LayerId::Bent => 0.35,
+        }
+    }
+}
+
+impl BentMode {
+    pub fn is_ao_blend(&self) -> bool {
+        *self == BentMode::AoBlend
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+/// One layer's settings (F2 spec §4). Every field is optional at its default: `strength` = the layer's
+/// `default_strength`, `flip_green` = the base's own `channels.flip_green`, `mask` = on when the mask file exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LayerSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_green: Option<bool>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub mask: bool,
+}
+
+impl Default for LayerSpec {
+    fn default() -> Self {
+        LayerSpec {
+            strength: None,
+            flip_green: None,
+            mask: true,
+        }
+    }
+}
+
+impl LayerSpec {
+    pub fn is_default(&self) -> bool {
+        *self == LayerSpec::default()
+    }
+}
+
+/// The `bent` layer: a layer plus its AO-blend settings (F2 spec §3.1, §3.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BentSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_green: Option<bool>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub mask: bool,
+    #[serde(default, skip_serializing_if = "BentMode::is_ao_blend")]
+    pub mode: BentMode,
+    /// The power on the occlusion `1 − AO`; `None` = 1.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ao_power: Option<f64>,
+    /// Read the AO source; `false` = a uniform weight.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub ao: bool,
+}
+
+impl Default for BentSpec {
+    fn default() -> Self {
+        BentSpec {
+            strength: None,
+            flip_green: None,
+            mask: true,
+            mode: BentMode::AoBlend,
+            ao_power: None,
+            ao: true,
+        }
+    }
+}
+
+impl BentSpec {
+    pub fn is_default(&self) -> bool {
+        *self == BentSpec::default()
+    }
+}
+
+/// A layer's resolved settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerView {
+    pub strength: f64,
+    /// `None` = follow the base's `channels.flip_green`.
+    pub flip_green: Option<bool>,
+    pub mask: bool,
+}
+
+/// RNM normal layers (M6 Track F2 spec §4). A field of every profile, read only by base normals (`Subtype::rnm_base`);
+/// not serialised at its default, so profile hashes written before F2 hold (DECISIONS Note W6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RnmSpec {
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+    /// Blend order; see [`RnmSpec::effective_order`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<Vec<LayerId>>,
+    #[serde(default, skip_serializing_if = "LayerSpec::is_default")]
+    pub bump: LayerSpec,
+    #[serde(default, skip_serializing_if = "LayerSpec::is_default")]
+    pub bump2: LayerSpec,
+    #[serde(default, skip_serializing_if = "LayerSpec::is_default")]
+    pub detail: LayerSpec,
+    #[serde(default, skip_serializing_if = "LayerSpec::is_default")]
+    pub detail2: LayerSpec,
+    #[serde(default, skip_serializing_if = "BentSpec::is_default")]
+    pub bent: BentSpec,
+}
+
+impl Default for RnmSpec {
+    fn default() -> Self {
+        RnmSpec {
+            enabled: true,
+            order: None,
+            bump: LayerSpec::default(),
+            bump2: LayerSpec::default(),
+            detail: LayerSpec::default(),
+            detail2: LayerSpec::default(),
+            bent: BentSpec::default(),
+        }
+    }
+}
+
+impl RnmSpec {
+    pub fn is_default(&self) -> bool {
+        *self == RnmSpec::default()
+    }
+    /// `order` without repeats (the first wins), then the missing ids in [`LayerId::ORDER`] (DECISIONS Note W6).
+    pub fn effective_order(&self) -> Vec<LayerId> {
+        let mut v: Vec<LayerId> = vec![];
+        for id in self.order.iter().flatten().chain(LayerId::ORDER.iter()) {
+            if !v.contains(id) {
+                v.push(*id);
+            }
+        }
+        v
+    }
+    pub fn layer(&self, id: LayerId) -> LayerView {
+        let (strength, flip_green, mask) = match id {
+            LayerId::Bump => (self.bump.strength, self.bump.flip_green, self.bump.mask),
+            LayerId::Bump2 => (self.bump2.strength, self.bump2.flip_green, self.bump2.mask),
+            LayerId::Detail => (
+                self.detail.strength,
+                self.detail.flip_green,
+                self.detail.mask,
+            ),
+            LayerId::Detail2 => (
+                self.detail2.strength,
+                self.detail2.flip_green,
+                self.detail2.mask,
+            ),
+            LayerId::Bent => (self.bent.strength, self.bent.flip_green, self.bent.mask),
+        };
+        LayerView {
+            strength: strength.unwrap_or(id.default_strength()),
+            flip_green,
+            mask,
+        }
+    }
+    pub fn ao_power(&self) -> f64 {
+        self.bent.ao_power.unwrap_or(1.5)
+    }
+}
 cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz });
 
 impl RawMap {
@@ -230,6 +444,16 @@ pub enum MipLevels {
 }
 
 impl Subtype {
+    /// Which base an RNM layer stack can blend into (F2 spec §2.3, DECISIONS Note W5); `None` for every other
+    /// sub-type, `msn` included.
+    pub fn rnm_base(self) -> Option<RnmTarget> {
+        match self {
+            Subtype::Normal | Subtype::PbrNormal | Subtype::LandscapeNormal => Some(RnmTarget::N),
+            Subtype::CoatNormal => Some(RnmTarget::Cnr),
+            _ => None,
+        }
+    }
+
     pub const ALL: [Subtype; 28] = {
         use Subtype::*;
         [
@@ -460,6 +684,9 @@ pub struct Profile {
     pub encoder: EncoderSpec,
     pub validation: ValidationSpec,
     pub packing: PackingSpec,
+    /// RNM normal layers (M6 Track F2); read only by base normals (`Subtype::rnm_base`).
+    #[serde(default, skip_serializing_if = "RnmSpec::is_default")]
+    pub rnm: RnmSpec,
 }
 
 impl Profile {

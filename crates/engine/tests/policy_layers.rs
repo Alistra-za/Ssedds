@@ -373,3 +373,59 @@ fn float_source_to_bc6h_resolves_linear_content_as_an_analysis_fact() {
         ColorContent::Srgb
     );
 }
+
+/// M6 Track F2 Task 1: out-of-range `rnm.*` values warn on a base normal; another sub-type keeps the default.
+#[test]
+fn rnm_ranges_and_non_base_reset() {
+    use engine::api::*;
+    use engine::codes::Code;
+    use engine::events::*;
+    use image::{ImageBuffer, Rgb};
+    use std::sync::Arc;
+
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("in");
+    std::fs::create_dir_all(&dir).unwrap();
+    ImageBuffer::from_pixel(64, 64, Rgb([128u8, 128, 255]))
+        .save(dir.join("iron.png"))
+        .unwrap();
+    ImageBuffer::from_pixel(64, 64, Rgb([128u8, 128, 255]))
+        .save(dir.join("iron_n.png"))
+        .unwrap();
+    let plan = |sets: &[&str]| {
+        let mut req = BatchRequest::new(vec![dir.clone()], d.path().join("out"), Target::Cs);
+        req.accept = AcceptSuggestions::High;
+        req.overrides = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+        let rep = Reporter::new(Arc::new(VecSink::default()), "rnm-ranges");
+        Engine::new()
+            .unwrap()
+            .plan(req, &rep, &CancelToken::default())
+            .unwrap()
+    };
+    let job = |p: &Plan, name: &str| {
+        p.jobs
+            .iter()
+            .find(|j| j.input.ends_with(name))
+            .cloned()
+            .unwrap()
+    };
+
+    let p = plan(&["rnm.detail.strength=5"]);
+    let n = job(&p, "iron_n.png");
+    assert!(
+        n.warnings
+            .iter()
+            .any(|w| w.code == Code::CfgInvalid && w.message.contains("rnm.detail.strength")),
+        "{:?}",
+        n.warnings
+    );
+
+    let p = plan(&["rnm.enabled=false"]);
+    assert!(job(&p, "iron.png").profile.rnm.is_default());
+
+    let p = plan(&["rnm.bent.ao_power=0.05"]);
+    assert!(job(&p, "iron_n.png")
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::CfgInvalid && w.message.contains("rnm.bent.ao_power")));
+}

@@ -2001,7 +2001,7 @@ fn check_up_front(
         }
         for o in req.overrides.iter().filter(|o| {
             o.field != "subtype"
-                && o.field != crate::overrides::REENCODE_FIELD
+                && !crate::overrides::is_selector(&o.field)
                 && !matches!(o.scope, Scope::Set(_))
         }) {
             let mut d = doc.clone();
@@ -2011,7 +2011,7 @@ fn check_up_front(
         }
         for o in file_overrides
             .iter()
-            .filter(|o| o.field != "subtype" && o.field != crate::overrides::REENCODE_FIELD)
+            .filter(|o| o.field != "subtype" && !crate::overrides::is_selector(&o.field))
         {
             let Scope::Path(key) = &o.scope else { continue };
             let mut d = doc.clone();
