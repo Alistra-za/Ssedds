@@ -650,3 +650,20 @@ fn an_unmapped_active_plugin_suppresses_not_placed() {
     s.resolve_plugins(&[(a, 0), (b, 1)], &[own(a)]).unwrap();
     assert!(inert(&s).is_empty(), "{:?}", inert(&s));
 }
+
+/// Final review M3: rewriting a plugin drops its winners' basis, so stale inert verdicts go too (a cancelled plugin
+/// pass then errs toward showing records).
+#[test]
+fn writing_a_plugin_clears_the_inert_verdicts() {
+    let d = fixture(ORDER);
+    let (mut s, _) = scan(&d);
+    assert!(one_i64(&s, "SELECT count(*) FROM rec_inert") > 0);
+    let f = modscan::plugin_store::PluginFile {
+        name: "Mod.esp",
+        path: "Mod.esp",
+        size: Some(1),
+        mtime: 0,
+    };
+    s.write_plugin(&f, &esp::PluginFacts::default()).unwrap();
+    assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0);
+}

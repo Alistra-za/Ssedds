@@ -141,6 +141,8 @@ impl Store {
             |r| r.get(0),
         )?;
         delete_rows(&tx, id)?;
+        // Verdicts rest on the old rows; a cancelled pass must not keep them (resolve rebuilds them).
+        tx.execute("DELETE FROM rec_inert", [])?;
         let nm = facts.masters.len();
         for r in &facts.records {
             let local = i64::from(clamp_local(r.local_formid, nm));
