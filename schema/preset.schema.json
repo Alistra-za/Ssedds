@@ -1164,6 +1164,7 @@
         "skin_albedo",
         "skin_sk",
         "skin_wet",
+        "complex_grass",
         "rfaos"
       ],
       "type": "string"
@@ -1268,6 +1269,9 @@
           "$ref": "#/$defs/PartialProfile"
         },
         "coat_normal": {
+          "$ref": "#/$defs/PartialProfile"
+        },
+        "complex_grass": {
           "$ref": "#/$defs/PartialProfile"
         },
         "complex_material": {
