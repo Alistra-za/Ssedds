@@ -406,6 +406,7 @@ impl AppModel {
         self.last_inputs = None;
         self.inputs_rev += 1;
         self.auto_replans = 0;
+        self.drop_pending_votes();
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
@@ -489,6 +490,8 @@ impl AppModel {
                 engine::shader::colour_mesh_key(&j.game_path, &j.output, Some(j.profile.subtype))
             })
             .collect();
+        // A scan-finished refresh must not drop the continuation of a pending post-plan read.
+        let after_plan = after_plan || self.votes_pending.is_some_and(|(_, a)| a);
         self.votes_gen += 1;
         let generation = self.votes_gen;
         self.votes_pending = Some((generation, after_plan));
@@ -503,11 +506,17 @@ impl AppModel {
                     gras: meshes::gras_diffuses(&db)?,
                 })
             };
-            let _ = tx.send(WorkerMsg::MeshVotes {
-                generation,
-                result: read(),
-            });
+            // A panic is an error of this generation (kept values, stderr), not a dialog for a stale read.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read))
+                .unwrap_or_else(|p| Err(format!("panic: {}", crate::worker::panic_text(&*p))));
+            let _ = tx.send(WorkerMsg::MeshVotes { generation, result });
         });
+    }
+
+    /// A newer plan or another folder makes the pending scan-database read stale: its result is dropped.
+    fn drop_pending_votes(&mut self) {
+        self.votes_gen += 1;
+        self.votes_pending = None;
     }
 
     /// The scan-database read of generation `generation` ended; a stale one is dropped.
@@ -534,7 +543,10 @@ impl AppModel {
             }
         };
         if after_plan {
-            self.finish_plan();
+            // A newer plan in flight finishes (and reads again) itself.
+            if self.planning.is_none() {
+                self.finish_plan();
+            }
         } else if changed {
             self.replan();
         }
@@ -551,6 +563,7 @@ impl AppModel {
             c.cancel();
         }
         self.generation += 1;
+        self.drop_pending_votes();
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
         self.status_line = "Planning…".into();
@@ -612,7 +625,6 @@ impl AppModel {
                         self.run_after_export();
                     }
                     "preview" => self.preview_panicked(&message),
-                    "mesh-votes" => self.votes_pending = None,
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -1217,6 +1229,11 @@ impl AppModel {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// True while a scan-database read is in flight (tests).
+    pub fn votes_pending(&self) -> bool {
+        self.votes_pending.is_some()
     }
 
     pub fn items_rev(&self) -> u64 {

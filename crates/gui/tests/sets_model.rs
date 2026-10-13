@@ -1526,3 +1526,71 @@ fn the_scan_database_is_read_off_the_ui_thread_and_a_read_error_keeps_the_values
     idle(&mut m);
     assert_eq!(m.mesh_votes, before);
 }
+
+/// A model with a leaf mesh vote in a scan database, planned again until its post-plan read is pending.
+fn pending_read(d: &std::path::Path) -> (sdc_gui::model::AppModel, tempfile::TempDir) {
+    let mut m = pbr_opened(d);
+    idle(&mut m);
+    let j = m
+        .items
+        .iter()
+        .filter_map(|i| i.job.as_ref())
+        .find(|j| {
+            j.set_key.ends_with("landscape/leaf")
+                && j.output.file_stem().is_some_and(|s| s == "leaf")
+        })
+        .expect("the leaf diffuse job");
+    let key = engine::shader::mesh_key(&j.game_path, "leaf");
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    scan_db(&db, &format!("{key}.dds"), &[(6, 0, 1, false, true)]);
+    m.scan_db = Some(db);
+    m.replan();
+    let end = std::time::Instant::now() + Duration::from_secs(60);
+    while !m.votes_pending() {
+        assert!(std::time::Instant::now() < end, "the plan never landed");
+        m.poll();
+    }
+    assert!(m.mesh_votes.is_empty());
+    (m, dbdir)
+}
+
+fn export_started_or_asked(m: &sdc_gui::model::AppModel) -> bool {
+    m.dialog.is_some() || m.export.running.is_some() || m.export.summary.is_some()
+}
+
+#[test]
+fn a_queued_export_fires_once_the_post_plan_read_lands() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.export_clicked();
+    assert!(!export_started_or_asked(&m), "waits for the read");
+    idle(&mut m);
+    assert!(!m.mesh_votes.is_empty());
+    assert!(export_started_or_asked(&m), "the tail of the plan ran");
+}
+
+#[test]
+fn a_scan_finished_refresh_keeps_the_pending_plan_continuation() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.export_clicked();
+    m.refresh_mesh_votes(false);
+    idle(&mut m);
+    assert!(export_started_or_asked(&m), "the plan still finished");
+}
+
+#[test]
+fn an_edit_during_a_pending_read_drops_the_stale_read() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    m.export_clicked();
+    m.replan();
+    assert!(!m.votes_pending(), "the stale read was cleared");
+    m.poll();
+    assert!(m.mesh_votes.is_empty(), "its evidence is never applied");
+    assert!(!export_started_or_asked(&m), "no finish on the old plan");
+    idle(&mut m);
+    assert!(!m.mesh_votes.is_empty(), "the new plan read again");
+    assert!(export_started_or_asked(&m));
+}
