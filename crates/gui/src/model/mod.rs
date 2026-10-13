@@ -92,6 +92,14 @@ pub enum Dialog {
     ExportRunning(AfterExport),
     /// The PGPatcher JSON was edited outside sdc since the last export; the new text waits for the answer.
     OverwriteJson(PathBuf),
+    /// F3a D4: copy the ticked `[files]` fields of texture `from` to `to` (the other selected textures).
+    CopySettings {
+        from: String,
+        to: Vec<String>,
+        fields: Vec<(String, bool)>,
+    },
+    /// F3a D4: remove the `[files]` settings of these textures, once confirmed.
+    ConfirmResetAll(Vec<String>),
     Error(String),
 }
 
@@ -846,31 +854,41 @@ impl AppModel {
         // suggestions.
         picks.sort_by_key(|(_, st)| !(st.is_pbr_color() || sets::is_pbr_diffuse(*st)));
         // Audit 11 (Note Y8): one snapshot, every pick, one step, one plan (not one plan thread per pick).
+        self.batch_edit("Accept all suggestions", |m| {
+            for (k, st) in &picks {
+                let written = m
+                    .project
+                    .as_ref()
+                    .is_some_and(|p| p.file_value(k, "subtype").is_some());
+                if !written {
+                    m.decide(k, Answer::Subtype(*st));
+                }
+            }
+        });
+        self.refresh_if_settled();
+    }
+
+    /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
+    /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
+    fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
         let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
         self.batch = true;
-        for (k, st) in &picks {
-            let written = self
-                .project
-                .as_ref()
-                .is_some_and(|p| p.file_value(k, "subtype").is_some());
-            if !written {
-                self.decide(k, Answer::Subtype(*st));
-            }
-        }
+        f(self);
         self.batch = false;
         let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
-        if after != before {
-            self.history.push(history::Command {
-                label: "Accept all suggestions".into(),
-                before,
-                after,
-                merge: None,
-                created_file: None,
-            });
-            self.auto_replans = 0;
-            self.replan();
+        if after == before {
+            return false;
         }
-        self.refresh_if_settled();
+        self.history.push(history::Command {
+            label: label.into(),
+            before,
+            after,
+            merge: None,
+            created_file: None,
+        });
+        self.auto_replans = 0;
+        self.replan();
+        true
     }
 
     /// No plan in flight, so the items on screen are current: update the dialog's rows now. Otherwise the plan
@@ -1246,6 +1264,11 @@ impl AppModel {
         self.votes_pending.is_some()
     }
 
+    /// The plan generation, bumped once per `replan` (tests: one plan per bulk apply).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn items_rev(&self) -> u64 {
         self.items_rev
     }
@@ -1371,11 +1394,12 @@ impl AppModel {
         let (Some(p), Some(s)) = (self.project.as_mut(), self.sets_doc.as_mut()) else {
             return;
         };
+        // A batch records one step around all its writes (`batch_edit`): no snapshot per write.
+        if self.batch {
+            return f(p, s);
+        }
         let before = Self::snapshot_of(Some(p), Some(s));
         f(p, s);
-        if self.batch {
-            return;
-        }
         let after = Self::snapshot_of(Some(p), Some(s));
         if after == before {
             return;

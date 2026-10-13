@@ -5,8 +5,8 @@ use super::fields::{
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
 use super::sets::SlotKind;
-use super::{AppModel, Selection};
-use engine::config::MipFilter;
+use super::{AppModel, Dialog, Selection};
+use engine::config::{MipFilter, Subtype};
 use engine::policy::ResolvedJob;
 use serde_json::Value;
 
@@ -240,6 +240,7 @@ impl AppModel {
 
 /// Why a texture without a job takes no write.
 pub const NO_SETTINGS: &str = "has no settings of its own (packed, skipped or failed)";
+const INVALID: &str = "not a valid value for this setting";
 const CUTOUT_ONLY: &str = "used only by cutout and cutout + blend";
 
 /// What a bulk edit does to one field.
@@ -273,11 +274,13 @@ pub fn field_label(field: &str) -> &str {
 
 /// The one rule (F3a D2, Note Z2): why a write of `field` skips the texture whose job and view these are, or `None`
 /// when it reaches it. `plan_bulk_edit` and `bulk_fields` both call it, so the panel and the apply cannot drift.
+/// `op` is `None` for the panel's value-independent counts (locks apply, no value is checked). A Clear is not
+/// blocked by a field lock (R6): dropping a stale `[files]` entry is harmless and the only way to remove it.
 fn skip_of(
     job: Option<&ResolvedJob>,
     view: Option<&FieldView>,
     field: &str,
-    op: &BulkOp,
+    op: Option<&BulkOp>,
 ) -> Option<String> {
     let Some(job) = job else {
         return Some(NO_SETTINGS.into());
@@ -289,11 +292,22 @@ fn skip_of(
         return Some(format!("{field} is not a texture setting"));
     };
     if let Some(lock) = view.lock {
-        return Some(lock.into());
+        if op != Some(&BulkOp::Clear) {
+            return Some(lock.into());
+        }
     }
-    if let (BulkOp::Set(v), "mips.filter") = (op, field) {
+    if let Some(BulkOp::Set(v)) = op {
+        // R7: the single-item path writes nothing for a value TOML cannot hold, and the pickers only offer
+        // parsable sub-types and filters; an unparsable one is reported, not written.
+        let bad = v.is_null()
+            || (field == "subtype" && serde_json::from_value::<Subtype>(v.clone()).is_err())
+            || (field == "mips.filter" && serde_json::from_value::<MipFilter>(v.clone()).is_err());
+        if bad {
+            return Some(INVALID.into());
+        }
         let barred = serde_json::from_value::<MipFilter>(v.clone())
             .ok()
+            .filter(|_| field == "mips.filter")
             .and_then(|f| filter_option_lock(&job.profile, f));
         if let Some(lock) = barred {
             return Some(lock.into());
@@ -313,7 +327,8 @@ pub fn plan_bulk_edit(
         .map(|k| {
             let job = m.item(k).and_then(|i| i.job.as_ref());
             let view = job.and_then(|j| field_view(m.target, j, field));
-            let change = skip_of(job, view.as_ref(), field, op).map_or(Change::Write, Change::Skip);
+            let change =
+                skip_of(job, view.as_ref(), field, Some(op)).map_or(Change::Write, Change::Skip);
             (k.clone(), change)
         })
         .collect()
@@ -358,7 +373,7 @@ impl BulkField {
     }
 }
 
-/// The bulk panel's rows over `keys` (F3a D2). Counts are the value-independent ones (`BulkOp::Clear`); the filter
+/// The bulk panel's rows over `keys` (F3a D2). Counts are the value-independent ones; the filter
 /// lock of a picked value shows in the report.
 /// shortcut: rebuilt every frame, one profile serialisation per texture; cache under `items_rev` if a selection of
 /// thousands shows in a profile.
@@ -383,7 +398,7 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
         let views = job.map_or_else(Vec::new, |j| views_of(&fields, m.target, j));
         for (n, row) in rows.iter_mut().enumerate() {
             let view = views.get(n);
-            match skip_of(job, view, row.field, &BulkOp::Clear) {
+            match skip_of(job, view, row.field, None) {
                 Some(r) => match row.skipped.iter_mut().find(|e| e.0 == r) {
                     Some(e) => e.1 += 1,
                     None => row.skipped.push((r, 1)),
@@ -404,4 +419,187 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
         row.value = if vals.len() == 1 { vals.pop() } else { None };
     }
     rows
+}
+
+/// The members of sets `set_keys` (in that order, then member order) whose slot is `kind`; `None` is every member.
+pub fn members_of(m: &AppModel, set_keys: &[String], kind: Option<SlotKind>) -> Vec<String> {
+    let views = super::sets::views(m);
+    let mut out: Vec<String> = vec![];
+    for s in set_keys {
+        let Some(v) = views.iter().find(|v| &v.key == s) else {
+            continue;
+        };
+        for k in &v.members {
+            let fits = kind.is_none() || m.item(k).and_then(super::sets::slot_of) == kind;
+            if fits && !out.contains(k) {
+                out.push(k.clone());
+            }
+        }
+    }
+    out
+}
+
+/// One ticked field of a copy: its id, the value, and the plan over the targets.
+type CopyWrite = (String, Value, Vec<(String, Change)>);
+
+/// "Format: written to 9 of 12; locked on 3 of 12: BC1 only".
+fn report(label: &str, plan: &[(String, Change)]) -> String {
+    let n = plan.len();
+    let written = plan.iter().filter(|(_, c)| *c == Change::Write).count();
+    let mut skipped: Vec<(&str, usize)> = vec![];
+    for (_, c) in plan {
+        if let Change::Skip(r) = c {
+            match skipped.iter_mut().find(|e| e.0 == r.as_str()) {
+                Some(e) => e.1 += 1,
+                None => skipped.push((r.as_str(), 1)),
+            }
+        }
+    }
+    let mut s = format!("{label}: written to {written} of {n}");
+    for (r, k) in skipped {
+        s.push_str(&format!("; locked on {k} of {n}: {r}"));
+    }
+    s
+}
+
+impl AppModel {
+    fn toml_writable(&self) -> bool {
+        self.project.as_ref().is_some_and(|p| !p.read_only())
+    }
+
+    /// F3a D2/D5: write (or clear) `field` on every texture of `keys` it applies to, through the single-texture
+    /// path (a Sub-type runs `edit_subtype`), as one step and one plan. The selection is kept.
+    pub fn apply_bulk_edit(&mut self, keys: &[String], field: &str, op: BulkOp) {
+        if !self.toml_writable() {
+            return;
+        }
+        let plan = plan_bulk_edit(self, keys, field, &op);
+        let label = field_label(field);
+        let verb = if op == BulkOp::Clear {
+            "Reset"
+        } else {
+            "Change"
+        };
+        let written = plan.iter().filter(|(_, c)| *c == Change::Write).count();
+        self.batch_edit(&format!("{verb} {label} on {written} textures"), |m| {
+            for (k, c) in &plan {
+                if *c != Change::Write {
+                    continue;
+                }
+                match &op {
+                    BulkOp::Set(v) => m.set_field(k, field, v.clone()),
+                    BulkOp::Clear => m.clear_field(k, field),
+                }
+            }
+        });
+        self.bulk.report = Some(report(label, &plan));
+    }
+
+    /// F3a D4: the copy checklist for the active texture: every field of `all_fields` its `[files]` entry sets,
+    /// ticked. Nothing opens without another selected texture or a field to copy.
+    pub fn open_copy_settings(&mut self) {
+        let Selection::Item(from) = self.selection.clone() else {
+            return;
+        };
+        let to: Vec<String> = self
+            .selected_items()
+            .into_iter()
+            .filter(|k| *k != from)
+            .collect();
+        let Some(p) = self.project.as_ref() else {
+            return;
+        };
+        let fields: Vec<(String, bool)> = all_fields()
+            .into_iter()
+            .filter(|(f, _)| p.file_value(&from, f).is_some())
+            .map(|(f, _)| (f.to_string(), true))
+            .collect();
+        if to.is_empty() || fields.is_empty() {
+            return;
+        }
+        self.dialog = Some(Dialog::CopySettings { from, to, fields });
+    }
+
+    /// F3a D4: write each of `fields`, valued as in `from`'s `[files]` entry, to every texture of `to` it applies
+    /// to, as one step (Note Z5).
+    pub fn apply_copy_settings(&mut self, from: &str, to: &[String], fields: &[String]) {
+        self.dialog = None;
+        if !self.toml_writable() {
+            return;
+        }
+        let Some(p) = self.project.as_ref() else {
+            return;
+        };
+        let writes: Vec<CopyWrite> = fields
+            .iter()
+            .filter_map(|f| {
+                let v = p.file_value(from, f)?;
+                let plan = plan_bulk_edit(self, to, f, &BulkOp::Set(v.clone()));
+                Some((f.clone(), v, plan))
+            })
+            .collect();
+        let name = self.item(from).map_or(from.to_string(), |i| i.name.clone());
+        self.batch_edit(&format!("Copy settings from {name}"), |m| {
+            for (f, v, plan) in &writes {
+                for (k, c) in plan {
+                    if *c == Change::Write {
+                        m.set_field(k, f, v.clone());
+                    }
+                }
+            }
+        });
+        self.bulk.report = Some(
+            writes
+                .iter()
+                .map(|(f, _, plan)| report(field_label(f), plan))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+
+    /// What Reset all clears: the selected textures, or every member of the selected sets.
+    fn reset_targets(&self) -> Vec<String> {
+        let sets = self.selected_sets();
+        if sets.is_empty() {
+            self.selected_items()
+        } else {
+            members_of(self, &sets, None)
+        }
+    }
+
+    /// F3a D4: the confirm before Reset all.
+    pub fn ask_reset_all(&mut self) {
+        let keys = self.reset_targets();
+        if !keys.is_empty() {
+            self.dialog = Some(Dialog::ConfirmResetAll(keys));
+        }
+    }
+
+    /// F3a D4 (Note Z6, R3): remove each texture's `[files]` settings as one step, keeping its `allow` (acknowledged
+    /// warnings are decisions, not settings). A `[files]` sub-type is cleared first through `clear_field`, so PBR
+    /// follow-on members revert as for a single reset.
+    pub fn reset_all_settings(&mut self, keys: &[String]) {
+        self.dialog = None;
+        if !self.toml_writable() {
+            return;
+        }
+        let n = keys.len();
+        self.batch_edit(&format!("Reset all settings on {n} textures"), |m| {
+            for k in keys {
+                if m.project
+                    .as_ref()
+                    .is_some_and(|p| p.file_value(k, "subtype").is_some())
+                {
+                    m.clear_field(k, "subtype");
+                }
+                let k = k.clone();
+                m.edit("Reset all settings", move |p| {
+                    let allow = p.allow(&k);
+                    p.remove_file_entry(&k);
+                    p.set_allow(&k, &allow);
+                });
+            }
+        });
+        self.bulk.report = Some(format!("Reset all settings on {n} textures"));
+    }
 }

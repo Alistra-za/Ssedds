@@ -19,6 +19,8 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ProceedAnyway(keys) => proceed_anyway(ctx, model, &keys),
         Dialog::ExportBlocked(issues) => export_issues(ctx, model, &issues, false),
         Dialog::ExportWarnings(issues) => export_issues(ctx, model, &issues, true),
+        Dialog::CopySettings { from, to, fields } => copy_settings(ctx, model, &from, &to, fields),
+        Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
     }
 }
 
@@ -210,6 +212,80 @@ fn modal(ctx: &egui::Context, id: &str, add: impl FnOnce(&mut egui::Ui)) {
         ui.set_max_width(420.0);
         add(ui);
     });
+}
+
+/// F3a D4: the copy checklist, every field ticked to start. The ticks live in the dialog itself.
+fn copy_settings(
+    ctx: &egui::Context,
+    model: &mut AppModel,
+    from: &str,
+    to: &[String],
+    mut fields: Vec<(String, bool)>,
+) {
+    let (mut apply, mut close) = (false, false);
+    let name = model
+        .item(from)
+        .map_or(from.to_string(), |i| i.name.clone());
+    modal(ctx, "copy-settings", |ui| {
+        ui.heading(format!(
+            "Copy settings from {name} to {} selected",
+            to.len()
+        ));
+        ui.horizontal(|ui| {
+            if ui.button("Check all").clicked() {
+                fields.iter_mut().for_each(|f| f.1 = true);
+            }
+            if ui.button("Check none").clicked() {
+                fields.iter_mut().for_each(|f| f.1 = false);
+            }
+        });
+        for (f, on) in fields.iter_mut() {
+            let value = model
+                .project
+                .as_ref()
+                .and_then(|p| p.file_value(from, f))
+                .map_or(String::new(), |v| v.to_string());
+            ui.checkbox(
+                on,
+                format!("{}: {value}", crate::model::bulk::field_label(f)),
+            );
+        }
+        ui.horizontal(|ui| {
+            apply = ui
+                .add_enabled(fields.iter().any(|f| f.1), egui::Button::new("Apply"))
+                .clicked();
+            close = ui.button("Cancel").clicked();
+        });
+    });
+    if apply {
+        let ticked: Vec<String> = fields.iter().filter(|f| f.1).map(|f| f.0.clone()).collect();
+        model.apply_copy_settings(from, to, &ticked);
+    } else if close {
+        model.dialog = None;
+    } else if let Some(Dialog::CopySettings { fields: kept, .. }) = model.dialog.as_mut() {
+        *kept = fields;
+    }
+}
+
+/// F3a D4: Reset all asks first; it names how many textures lose their settings.
+fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
+    let (mut reset, mut close) = (false, false);
+    modal(ctx, "confirm-reset-all", |ui| {
+        ui.heading(format!("Reset all settings of {} textures?", keys.len()));
+        ui.label(
+            "Their entries in sdc.toml are removed; acknowledged warnings are kept. Settings in \
+             sdc-project.toml are not touched. Undo brings everything back.",
+        );
+        ui.horizontal(|ui| {
+            reset = ui.button("Reset").clicked();
+            close = ui.button("Cancel").clicked();
+        });
+    });
+    if reset {
+        model.reset_all_settings(keys);
+    } else if close {
+        model.dialog = None;
+    }
 }
 
 fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
