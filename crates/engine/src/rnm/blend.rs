@@ -21,6 +21,7 @@ pub(crate) fn unit(v: V3) -> V3 {
 
 /// A stored texel (0..1) as a tangent normal at strength `s` (rnm.py / DAZ): `t = (2c − 1)·s`,
 /// `n = normalize(t.x, t.y, |t.z| + 1 − s)`; `flip` negates Y (an OpenGL source into DirectX).
+/// z is clamped at 0 (Note Y5).
 pub fn decode(c: [f32; 4], s: f32, flip: bool) -> V3 {
     let y = (2.0 * c[1] - 1.0) * s;
     let t = [
@@ -28,7 +29,8 @@ pub fn decode(c: [f32; 4], s: f32, flip: bool) -> V3 {
         if flip { -y } else { y },
         (2.0 * c[2] - 1.0) * s,
     ];
-    unit([t[0], t[1], t[2].abs() + 1.0 - s])
+    // Audit 12 (Note Y5): above strength 1 the DAZ z goes negative on steep texels; rnm.py does not clamp.
+    unit([t[0], t[1], (t[2].abs() + 1.0 - s).max(0.0)])
 }
 
 /// Reoriented Normal Mapping (Barre-Brisebois & Hill): `detail` reoriented onto `base`.
@@ -201,6 +203,19 @@ mod tests {
         (0..3).all(|i| (a[i] - b[i]).abs() < eps)
     }
     const FLAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
+
+    /// Audit 12 (DECISIONS Note Y5): above strength 1 a steep texel never points into the surface; at or below 1
+    /// the clamp never acts.
+    #[test]
+    fn strength_above_one_never_gives_negative_z() {
+        assert!(decode([0.99, 0.5, 0.6, 1.0], 1.5, false)[2] >= 0.0);
+        for s in [0.5f32, 1.0, 1.5, 2.0] {
+            for b in 0..=255u8 {
+                let z = decode([0.99, 0.5, b as f32 / 255.0, 1.0], s, false)[2];
+                assert!(z >= 0.0, "strength {s}, blue {b}: z {z}");
+            }
+        }
+    }
 
     #[test]
     fn flat_detail_leaves_the_base() {
