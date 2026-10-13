@@ -47,6 +47,15 @@ fn slashes_lower(s: &str) -> String {
         .to_string()
 }
 
+/// Cuts `s` back to its last `root` component (true), or prefixes `root/` when there is none (false).
+fn rebase(s: &str, root: &str) -> (bool, String) {
+    let comps: Vec<&str> = s.split('/').collect();
+    match comps.iter().rposition(|c| *c == root) {
+        Some(i) => (true, comps[i..].join("/")),
+        None => (false, format!("{root}/{s}")),
+    }
+}
+
 pub fn canon_texture(raw: &[u8]) -> TexPath {
     let raw_s = lossy(raw);
     let mut flags = PathFlags::default();
@@ -60,14 +69,10 @@ pub fn canon_texture(raw: &[u8]) -> TexPath {
         };
     }
     if !s.starts_with("textures/") {
-        let comps: Vec<&str> = s.split('/').collect();
-        if let Some(i) = comps.iter().rposition(|c| *c == "textures") {
-            s = comps[i..].join("/");
-            flags.rebased = true;
-        } else {
-            s = format!("textures/{s}");
-            flags.prefixed = true;
-        }
+        let (rebased, t) = rebase(&s, "textures");
+        s = t;
+        flags.rebased = rebased;
+        flags.prefixed = !rebased;
     }
     flags.non_dds = !s.ends_with(".dds");
     TexPath {
@@ -88,11 +93,7 @@ pub fn canon_model(raw: &[u8]) -> String {
     if s.is_empty() || s.starts_with("meshes/") {
         return s;
     }
-    let comps: Vec<&str> = s.split('/').collect();
-    match comps.iter().rposition(|c| *c == "meshes") {
-        Some(i) => comps[i..].join("/"),
-        None => format!("meshes/{s}"),
-    }
+    rebase(&s, "meshes").1
 }
 
 pub fn is_facegen(norm: &str) -> bool {

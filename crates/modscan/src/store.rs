@@ -283,15 +283,6 @@ fn keep_raw(p: &TexPath) -> bool {
 /// Slot, SQL condition on `tp.p`, its bound argument, and the exact post-filter.
 pub(crate) type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
 
-/// A key value in the stored form: trimmed, `/` separators, lower case, no leading `/`.
-fn key_form(s: &str) -> String {
-    s.trim()
-        .replace('\\', "/")
-        .to_ascii_lowercase()
-        .trim_start_matches('/')
-        .to_string()
-}
-
 /// PGPatcher's shape-side form of a stored slot path (01 §1.3): extension stripped, a leading `textures/pbr/` read
 /// as `textures/`, and on the normal slot a trailing `_msn`/`_n` stripped.
 fn pgp_form(norm: &str, normal: bool) -> String {
@@ -756,7 +747,7 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
     );
     Some(match key {
         TexKey::Suffix { slot, stem } => {
-            let stem = key_form(stem);
+            let stem = nif::path::canon_mesh(stem);
             if stem.is_empty() {
                 return None;
             }
@@ -771,7 +762,7 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
             )
         }
         TexKey::Contains { slot, frag } => {
-            let frag = key_form(frag);
+            let frag = nif::path::canon_mesh(frag);
             if frag.is_empty() {
                 return None;
             }
@@ -785,7 +776,7 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
             )
         }
         TexKey::Exact { slot, path } => {
-            let p = key_form(path);
+            let p = nif::path::canon_mesh(path);
             let p = if p.starts_with("textures/") {
                 p
             } else {
