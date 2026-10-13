@@ -269,6 +269,9 @@ fn prepare_then<T>(
         None => build_chain_with(&work, p, bake.as_ref()),
     };
     drop(bake);
+    // Audit 21: mip 0 is in `chain` now; nothing below reads `work.img` (`to_encoder_input` reads only
+    // `alpha_present` and `domain`), so free the source-sized copy before quantise, the peak.
+    work.img = Rgba32F::new(0, 0, [0.0; 4]);
     let alpha_present = work.alpha_present;
     // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
     // only alpha channel. Complex grass preserved its top half already; its bottom half's alpha is specular data.
