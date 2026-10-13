@@ -667,3 +667,39 @@ fn writing_a_plugin_clears_the_inert_verdicts() {
     s.write_plugin(&f, &esp::PluginFacts::default()).unwrap();
     assert_eq!(one_i64(&s, "SELECT count(*) FROM rec_inert"), 0);
 }
+
+/// Final review M6 (PT13-1): a path named by a live and an inert record is listed once, under live, with only the live
+/// label; the inert list drops it and `n_records` counts live records only.
+#[test]
+fn a_path_named_by_a_live_and_an_inert_record_is_listed_once_as_live() {
+    let d = instance_fixture("+A\n");
+    let stat = |id, name| {
+        rec(
+            b"STAT",
+            id,
+            &[edid(name), sub(b"MODL", &zstr("Shared.nif"))],
+        )
+    };
+    put(
+        d.path(),
+        "Game/Data/Skyrim.esm",
+        &plugin(
+            esp::FLAG_ESM,
+            &[],
+            &[
+                top(b"STAT", &[stat(0xB01, "Placed"), stat(0xB02, "Lonely")]),
+                cell(0x800, &[(0x801, 0xB01, false)]),
+            ],
+        ),
+    );
+    put(d.path(), "profiles/Default/plugins.txt", b"# none\n");
+    let (s, _) = scan(&d);
+    assert_eq!(inert(&s), [("Lonely".to_string(), 2)]);
+    provide(&s, "textures/zzz/other.dds");
+    let (live, inert_refs) = s.plugin_missing_with_inert().unwrap();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!(live[0].path, "meshes/shared.nif");
+    assert_eq!(live[0].n_records, 1);
+    assert_eq!(live[0].records, ["Placed [00000B01] STAT — Skyrim.esm"]);
+    assert!(inert_refs.is_empty(), "{inert_refs:?}");
+}
