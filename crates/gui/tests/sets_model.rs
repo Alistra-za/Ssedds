@@ -983,9 +983,15 @@ fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
 #[test]
 fn shader_dropdown_lists_match_the_mode() {
     use engine::{config::Target, shader::Shader};
-    assert_eq!(shader_options(Target::Cs).len(), 12);
+    assert_eq!(shader_options(Target::Cs).len(), 13);
     assert!(!shader_options(Target::Vanilla).contains(&Shader::Pbr));
-    assert_eq!(shader_options(Target::Cpm), shader_options(Target::Vanilla));
+    // ENB has complex grass, vanilla does not (ruling R1).
+    assert!(!shader_options(Target::Vanilla).contains(&Shader::ComplexGrass));
+    assert!(shader_options(Target::Cpm).contains(&Shader::ComplexGrass));
+    assert_eq!(
+        shader_options(Target::Cpm).len(),
+        shader_options(Target::Vanilla).len() + 1
+    );
 }
 
 #[test]
@@ -1593,4 +1599,55 @@ fn an_edit_during_a_pending_read_drops_the_stale_read() {
     idle(&mut m);
     assert!(!m.mesh_votes.is_empty(), "the new plan read again");
     assert!(export_started_or_asked(&m));
+}
+
+#[test]
+fn the_json_panel_and_its_errors_belong_to_json_sets_only() {
+    use engine::config::Target;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    assert_eq!(m.target, Target::Cs);
+    let plain = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(!plain.pbr && !plain.skin);
+    assert!(!shows_json_panel(&plain, Target::Cs));
+    // Existing JSON settings are never hidden.
+    let mut with_json = plain.clone();
+    with_json.settings.insert("slot1".into(), json!("x"));
+    assert!(shows_json_panel(&with_json, Target::Cs));
+    // A PBR set shows it on cs only.
+    let d = tempfile::tempdir().unwrap();
+    m = pbr_opened(d.path());
+    let pbr = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(pbr.pbr && shows_json_panel(&pbr, Target::Cs));
+    assert!(!shows_json_panel(&pbr, Target::Vanilla));
+}
+
+#[test]
+fn a_grass_diffuse_card_is_titled_complex_grass() {
+    use engine::shader::Shader;
+    assert_eq!(
+        card_title(SlotKind::Diffuse, "a.png", Some(Shader::ComplexGrass)),
+        "Complex grass"
+    );
+    assert_eq!(
+        card_title(SlotKind::Diffuse, "a.png", Some(Shader::Landscape)),
+        "Diffuse"
+    );
+    assert_eq!(
+        card_title(SlotKind::Normal, "a.png", Some(Shader::ComplexGrass)),
+        "Normal _n"
+    );
+}
+
+#[test]
+fn a_bad_prefix_on_a_non_json_set_is_no_export_block() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_json_value("landscape/rock01", "rename", Some(json!("a/b")));
+    idle(&mut m);
+    let v = view(&set_views(&m), "landscape/rock01").clone();
+    assert!(!v.pbr && v.prefix_error.is_some(), "{v:?}");
+    assert!(sdc_gui::model::pbr_export::export_blocks(&m)
+        .iter()
+        .all(|b| !b.text.contains("rename")));
 }

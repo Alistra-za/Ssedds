@@ -114,3 +114,24 @@ fn a_truepbr_shape_is_excluded() {
         .unwrap();
     assert!(s.gras_diffuse_textures().unwrap().is_empty());
 }
+
+/// A modlist-sized store: the planner's own join order scanned `path` first and hung the GUI for minutes.
+#[test]
+fn a_large_store_answers_quickly() {
+    let (_d, s) = scanned(b"GRAS");
+    let want = x_diffuses(&s);
+    s.conn()
+        .execute_batch(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000)
+             INSERT INTO path(p) SELECT 'textures/pad/' || i || '.dds' FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+             INSERT INTO model_ref(formid, local, plugin_id, slot, path_id)
+               SELECT NULL, 100000 + i, 999, 0, i FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+             INSERT INTO tex_use(tex_path_id, texset_id, slot) SELECT i, 900000 + i, 0 FROM n;",
+        )
+        .unwrap();
+    let t = std::time::Instant::now();
+    assert_eq!(s.gras_diffuse_textures().unwrap(), want);
+    assert!(t.elapsed().as_secs_f64() < 2.0, "took {:?}", t.elapsed());
+}

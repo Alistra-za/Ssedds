@@ -1509,7 +1509,8 @@
         "hair",
         "eye",
         "multilayer",
-        "landscape"
+        "landscape",
+        "complex_grass"
       ],
       "type": "string"
     },

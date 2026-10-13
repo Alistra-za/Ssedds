@@ -6,7 +6,7 @@ use engine::config::*;
 use engine::events::*;
 use engine::image::Rgba32F;
 use engine::policy::{
-    availability, offered, AcceptSuggestions, Availability, JobStatus, Need, ResolvedJob,
+    availability, offered, AcceptSuggestions, Availability, JobStatus, ResolvedJob,
 };
 use image::{DynamicImage, ImageBuffer, Rgba};
 use std::sync::Arc;
@@ -224,20 +224,21 @@ fn another_format_an_srgb_tag_or_a_resize_is_cfg_invalid() {
     }
 }
 
-/// R5: the alpha question is asked as for a diffuse, and its proposal reads the top half (the whole image is only
-/// ~50 % near-binary because of the specular half, which would propose blend).
+/// X12 (2026-10-13): no alpha question for complex grass; varying alpha defaults to cutout (top half; the bottom
+/// half is data).
 #[test]
 fn the_alpha_proposal_reads_the_top_half() {
     let d = tempfile::tempdir().unwrap();
     put(&d, "g.png", &grass(32));
     let p = plan(&d, Target::Cs, &[TAG]);
-    match &job(&p, "g.png").status {
-        JobStatus::Unresolved { reasons, needs } => {
-            assert!(needs.contains(&Need::AlphaMeaning), "{needs:?}");
-            assert!(reasons.iter().any(|r| r.contains("Cutout")), "{reasons:?}");
-        }
-        s => panic!("expected the alpha question, got {s:?}"),
-    }
+    let j = job(&p, "g.png");
+    assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
+    assert_eq!(j.profile.alpha.policy, AlphaPolicy::Cutout);
+    let c = codes(j);
+    assert!(
+        !c.contains(&Code::LossAlphaData) && !c.contains(&Code::SugLowConfidence),
+        "{c:?}"
+    );
 }
 
 /// Review Focus 3: a tall texture that is not tagged complex grass gets no grass code.

@@ -103,6 +103,14 @@ pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
     }
 }
 
+/// The card title of `slot` holding `key` in a set drawn by `shader`: a grass file in the Diffuse card is "Complex grass".
+pub fn card_title(slot: SlotKind, key: &str, shader: Option<Shader>) -> &'static str {
+    if slot == SlotKind::Diffuse && shader == Some(Shader::ComplexGrass) {
+        return "Complex grass";
+    }
+    slot_label(slot, key)
+}
+
 /// One row of the Matching header, or one choice of its + menu (F1 spec §3.2): slot number, slot name, path (stored
 /// form, no `.dds`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +241,17 @@ impl SetView {
     }
 }
 
+/// Whether `v` is written as PGPatcher JSON: a skin or PBR set under Community Shaders (the set card badge).
+pub fn is_json_set(v: &SetView, target: Target) -> bool {
+    (v.skin || v.pbr) && target == Target::Cs
+}
+
+/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set that already has
+/// JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr` itself.
+pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
+    is_json_set(v, target) || !v.settings.is_empty()
+}
+
 /// A diffuse sub-type that makes its set a PBR set (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
 /// `skin_albedo`, which is Community Shaders TruePBR too and so belongs in the PGPatcher JSON (final review C1).
 /// Not the engine's `is_pbr_color`, which decides sRGB and leaves `skin_albedo` (UNORM) out.
@@ -241,12 +260,14 @@ pub fn is_pbr_diffuse(st: Subtype) -> bool {
 }
 
 /// The slot card a resolved sub-type fills; `None` for sub-types without a card (env mask, complex `_m`,
-/// `msn_specular`, backlight, `skin_wet`, …).
+/// `msn_specular`, backlight, `skin_wet`, …). Complex grass is one file in the Diffuse card.
 pub fn slot_kind(st: Subtype) -> Option<SlotKind> {
     Some(match st {
-        Subtype::PbrAlbedo | Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::SkinAlbedo => {
-            SlotKind::Diffuse
-        }
+        Subtype::PbrAlbedo
+        | Subtype::Diffuse
+        | Subtype::LandscapeDiffuse
+        | Subtype::SkinAlbedo
+        | Subtype::ComplexGrass => SlotKind::Diffuse,
         Subtype::PbrNormal | Subtype::Normal | Subtype::LandscapeNormal | Subtype::Msn => {
             SlotKind::Normal
         }
