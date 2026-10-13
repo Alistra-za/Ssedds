@@ -413,6 +413,7 @@
         "IN-GREEN-UNSTATED",
         "IN-DECODE",
         "IN-NONFINITE",
+        "IN-UNREADABLE",
         "IN-FLOAT-LDR",
         "IN-ICC-IGNORED",
         "OUT-UNKNOWN-EXISTING",

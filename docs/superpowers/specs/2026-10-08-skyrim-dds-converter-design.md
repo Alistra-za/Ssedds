@@ -1,3 +1,4 @@
+| `IN-UNREADABLE` | warning | A file or folder under an input folder could not be read (access denied, dangling junction, cloud placeholder); it was skipped | Fix the permissions, or ignore |
 # Skyrim SE/AE DDS texture converter: design specification
 
 | Field | Value |

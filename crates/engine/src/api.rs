@@ -8,7 +8,7 @@
 use crate::analyse::analyse;
 use crate::codes::{Code, Warning};
 use crate::config::*;
-use crate::discover::{canonicalise_outputs, discover, InputFile, InputKind};
+use crate::discover::{canonicalise_outputs, discover_reporting, InputFile, InputKind};
 use crate::events::{EventKind, Reporter, SkipKind, Stage};
 use crate::group::{group_sets_with, join_skin_wet, member_split, SuffixSplit, TextureSet};
 use crate::image::SourceInfo;
@@ -779,8 +779,9 @@ impl Engine {
                 )));
             }
         }
-        let mut files = discover(&req.inputs, &req.output_root, req.recursive)
-            .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
+        let (mut files, unreadable) =
+            discover_reporting(&req.inputs, &req.output_root, req.recursive)
+                .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
         // Task 26a: canonical output names before grouping, so alias/canonical collisions are IN-DUPLICATE.
         canonicalise_outputs(&mut files, registry.alias_table());
         rep.emit(
@@ -794,6 +795,13 @@ impl Engine {
         );
         for w in preset_skips {
             rep.emit(None, None, EventKind::Warning(w));
+        }
+        for u in unreadable {
+            rep.emit(
+                None,
+                None,
+                EventKind::Warning(Warning::new(Code::InUnreadable, format!("skipped: {u}"))),
+            );
         }
         let key = |out: &Path| output_key(&req.output_root, out);
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
