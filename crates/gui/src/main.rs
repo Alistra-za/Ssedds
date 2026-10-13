@@ -44,6 +44,7 @@ fn build_model() -> AppModel {
 }
 
 fn main() -> eframe::Result {
+    sdc_gui::crash_log::install();
     // The preview timing log (SDC_PREVIEW_LOG=0 turns it off); kept alive for the whole run.
     let _perf = render3d::perf_log::start();
     let options = eframe::NativeOptions {
