@@ -142,6 +142,7 @@ fn one_undo_restores_the_type_and_the_cleared_encoding() {
     assert_eq!(job_of(&m).profile.subtype, Subtype::ComplexGrass);
     assert_eq!(file(&m, "format"), Some(json!("bc7")));
     assert_eq!(file(&m, "color.tag"), Some(json!("unorm")));
+    assert_eq!(m.encoding_note, None, "the undo dismissed the note");
     assert!(m.can_redo(), "the undo did not start a new step");
     m.redo();
     idle(&mut m);
@@ -149,7 +150,7 @@ fn one_undo_restores_the_type_and_the_cleared_encoding() {
 }
 
 #[test]
-fn the_cleanup_costs_at_most_one_extra_plan() {
+fn the_cleanup_costs_one_extra_plan() {
     let flip = |e| {
         let d = tempfile::tempdir().unwrap();
         let (mut m, set) = grass_with(d.path(), e);
@@ -160,7 +161,100 @@ fn the_cleanup_costs_at_most_one_extra_plan() {
     };
     let (plain, cleaned) = (flip(None), flip(Some(LINEAR)));
     assert!(
-        cleaned <= plain + 1,
+        cleaned == plain + 1,
         "{plain} plans without, {cleaned} with"
+    );
+}
+
+/// `name.png` with `name_rmaos.png` under `textures/plants`: a TruePBR set once High suggestions are accepted.
+fn pbr_pair(dir: &std::path::Path, name: &str) {
+    let t = dir.join("textures/plants");
+    std::fs::create_dir_all(&t).unwrap();
+    image::ImageBuffer::from_fn(32, 64, |_, y| {
+        image::Rgba([64u8, 128, 38, if y % 3 == 0 { 255 } else { 0 }])
+    })
+    .save(t.join(format!("{name}.png")))
+    .unwrap();
+    image::ImageBuffer::from_fn(32, 32, |_, _| image::Rgb([100u8, 0, 255]))
+        .save(t.join(format!("{name}_rmaos.png")))
+        .unwrap();
+}
+
+/// Review M6: two textures re-typed by one bulk edit give one count line, each listed on hover, in one step.
+#[test]
+fn several_textures_give_one_count_line_with_each_on_hover() {
+    use sdc_gui::model::bulk::BulkOp;
+    let d = tempfile::tempdir().unwrap();
+    pbr_pair(d.path(), "g");
+    pbr_pair(d.path(), "h");
+    let mut m = support::opened(d.path());
+    m.accept = engine::policy::AcceptSuggestions::High;
+    m.replan();
+    idle(&mut m);
+    let keys = vec!["plants/g.png".to_string(), "plants/h.png".to_string()];
+    for k in &keys {
+        m.set_field(k, "subtype", json!("complex_grass"));
+        m.set_format(k, Format::Bc7, ColorTag::Unorm);
+    }
+    idle(&mut m);
+    let steps = m.history.undo.len();
+    m.apply_bulk_edit(&keys, "subtype", BulkOp::Set(json!("pbr_albedo")));
+    idle(&mut m);
+    assert_eq!(
+        m.history.undo.len(),
+        steps + 1,
+        "one step for the edit and the cleanup"
+    );
+    for k in &keys {
+        assert_eq!(
+            m.project.as_ref().unwrap().file_value(k, "format"),
+            None,
+            "{k}"
+        );
+    }
+    let (line, hover) = m.encoding_note.clone().expect("a note");
+    assert!(
+        line.starts_with("Encoding follows type: 2 textures"),
+        "{line}"
+    );
+    assert!(
+        hover.contains("g.png: complex grass → pbr albedo"),
+        "{hover}"
+    );
+    assert!(
+        hover.contains("h.png: complex grass → pbr albedo"),
+        "{hover}"
+    );
+}
+
+/// Review M6: a field-locked Format value is kept and reported, never cleared. No field lock covers `format`
+/// today, so the rule is checked directly.
+#[test]
+fn a_field_locked_format_is_kept_and_reported() {
+    use sdc_gui::model::encoding_follow::{verdict, Verdict};
+    let t = Target::Cs;
+    assert_eq!(
+        verdict(t, Subtype::PbrAlbedo, LINEAR, true, None),
+        Verdict::Clear
+    );
+    assert_eq!(
+        verdict(t, Subtype::PbrAlbedo, LINEAR, true, Some("locked here")),
+        Verdict::Kept("locked here".into())
+    );
+    assert_eq!(
+        verdict(t, Subtype::PbrAlbedo, LINEAR, false, None),
+        Verdict::Keep,
+        "nothing explicit"
+    );
+    assert_eq!(
+        verdict(
+            t,
+            Subtype::PbrAlbedo,
+            (Format::Bc7, ColorTag::Srgb),
+            true,
+            None
+        ),
+        Verdict::Keep,
+        "still allowed"
     );
 }

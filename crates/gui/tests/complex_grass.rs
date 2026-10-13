@@ -296,3 +296,31 @@ fn a_hand_tag_stays_editable_and_pickers_list_complex_grass_only_as_the_current_
             .all(|(_, m)| !m.contains(&Subtype::ComplexGrass)));
     }
 }
+
+/// Task 9 review I2 (Z11): a sub-type change no step caused (the scan DB names the file a GRAS diffuse) clears an
+/// explicit encoding complex grass does not allow in its own "Encoding follows type" step; the last user step is
+/// left as it was.
+#[test]
+fn a_scan_vote_retype_cleans_up_in_its_own_step() {
+    use engine::config::{ColorTag, Format};
+    let d = tempfile::tempdir().unwrap();
+    grass_png(&d.path().join("textures/plants/g.png"), 32);
+    let mut m = support::opened(d.path());
+    m.accept = engine::policy::AcceptSuggestions::High;
+    m.set_format("plants/g.png", Format::Bc7, ColorTag::Srgb);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let last = m.history.undo.last().cloned().expect("a step");
+    let dbdir = tempfile::tempdir().unwrap();
+    m.scan_db = Some(gras_db(dbdir.path(), r"textures\plants\g.dds"));
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(p.file_value("plants/g.png", "format"), None);
+    let n = m.history.undo.len();
+    assert_eq!(m.history.undo[n - 1].label, "Encoding follows type");
+    assert_eq!(
+        m.history.undo[n - 2],
+        last,
+        "the last user step is unchanged"
+    );
+}

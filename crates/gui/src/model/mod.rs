@@ -1,7 +1,7 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod bulk;
 pub mod dds_patch;
-mod encoding_follow;
+pub mod encoding_follow;
 pub mod export;
 pub mod fields;
 pub mod history;
@@ -280,6 +280,12 @@ pub struct AppModel {
     follow_off: bool,
     /// A cleanup waiting for the plan that shows its new defaults (the note is written then).
     type_pending: Option<encoding_follow::Pending>,
+    /// The sub-types before the plan chain in flight (`settle_types` compares them with the final pass).
+    type_base: Option<std::collections::HashMap<String, Subtype>>,
+    /// A user step started the chain in flight: its cleanup folds into that step.
+    type_cause: bool,
+    /// One-shot guard: the chain in flight is a cleanup's own replan.
+    type_cleaned: bool,
     /// Generation of the latest scan-database read, and (generation, continues `apply_plan`) while it is pending.
     votes_gen: u64,
     votes_pending: Option<(u64, bool)>,
@@ -364,6 +370,9 @@ impl AppModel {
             auto_replans: 0,
             follow_off: false,
             type_pending: None,
+            type_base: None,
+            type_cause: false,
+            type_cleaned: false,
             votes_gen: 0,
             votes_pending: None,
             generation: 0,
@@ -431,8 +440,7 @@ impl AppModel {
         self.last_inputs = None;
         self.inputs_rev += 1;
         self.auto_replans = 0;
-        self.follow_off = true;
-        self.encoding_note = None;
+        self.reset_type_follow();
         self.drop_pending_votes();
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
@@ -899,7 +907,7 @@ impl AppModel {
             created_file: None,
         });
         self.auto_replans = 0;
-        self.encoding_note = None;
+        self.type_edit_recorded();
         self.replan();
         true
     }
@@ -1183,7 +1191,10 @@ impl AppModel {
     }
 
     fn apply_plan(&mut self, view: PlanView) {
-        let before = self.subtypes();
+        // Task 9 (Z11): the sub-types before this plan chain, compared when it settles.
+        if self.type_base.is_none() {
+            self.type_base = Some(self.subtypes());
+        }
         // Look the expanded item's set up before the items are replaced: if the item vanishes, its set is the
         // fallback selection (Review Focus 1).
         let expanded_set = self
@@ -1232,9 +1243,6 @@ impl AppModel {
         }
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
-        if self.follow_types(&before) {
-            return;
-        }
         self.refresh_mesh_votes(true);
     }
 
@@ -1247,7 +1255,10 @@ impl AppModel {
             return;
         }
         self.auto_replans = 0;
-        self.follow_off = false;
+        // Task 9 (Z11): the final pass; a cleanup re-plans once.
+        if self.settle_types() {
+            return;
+        }
         // Both flags are taken together so a leftover one cannot fire on a later, unrelated plan; the export the
         // user clicked wins.
         let (clicked, continued) = (
@@ -1430,8 +1441,8 @@ impl AppModel {
             created_file: None,
         });
         self.auto_replans = 0;
-        self.encoding_note = None;
         if replan {
+            self.type_edit_recorded();
             self.replan();
         }
     }
@@ -1448,7 +1459,7 @@ impl AppModel {
     fn apply_snapshot(&mut self, s: &history::Snapshot) {
         self.dropped_fills.clear();
         // Task 9 (Z11): restoring a state as it was is no sub-type change to clean up after.
-        self.follow_off = true;
+        self.reset_type_follow();
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
         // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
@@ -1656,7 +1667,7 @@ impl AppModel {
     /// Reload both documents from disk (the banner's Reload), then plan once.
     pub fn reload_documents(&mut self) {
         self.dialog = None;
-        self.follow_off = true;
+        self.reset_type_follow();
         if let Some(p) = self.project.as_mut() {
             p.reload();
         }

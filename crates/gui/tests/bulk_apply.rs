@@ -141,7 +141,8 @@ fn a_read_only_sdc_toml_makes_every_bulk_write_a_no_op() {
 fn copy_from_active_lists_the_set_fields_and_writes_only_the_ticked_ones() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    m.set_field(LEAF, "format", json!("bc1"));
+    // R13: a valid pair for the targets (BC1 linear is not one for a landscape diffuse).
+    m.set_field(LEAF, "format", json!("bc7"));
     m.set_field(LEAF, "encoder.effort", json!("veryfast"));
     idle(&mut m);
     m.click_item(ROCK, false, false);
@@ -165,7 +166,7 @@ fn copy_from_active_lists_the_set_fields_and_writes_only_the_ticked_ones() {
     assert_eq!(m.dialog, None);
     assert_eq!(m.history.undo.len(), steps + 1);
     for k in [ROCK, ODD] {
-        assert_eq!(file(&m, k, "format"), Some(json!("bc1")), "{k}");
+        assert_eq!(file(&m, k, "format"), Some(json!("bc7")), "{k}");
         assert_eq!(file(&m, k, "encoder.effort"), None, "{k}: unticked");
     }
     assert_eq!(m.selected_items().len(), 3, "the selection is kept");
@@ -375,6 +376,47 @@ fn the_bulk_format_row_offers_the_shared_pairs_and_writes_both() {
     assert_eq!(file(&m, ROCK, "format"), Some(json!(rock[0].0 .0)));
     assert_eq!(file(&m, ROCK, "color.tag"), Some(json!(rock[0].0 .1)));
     assert_eq!(file(&m, NORMAL, "format"), None);
+    assert_eq!(
+        m.bulk.report.as_deref(),
+        Some("Format: written to 1 of 2; locked on 1 of 2: not valid for this map")
+    );
+}
+
+/// R13: Copy settings copies the format with its tag (a pair, through `set_format`), and skips a texture whose
+/// sub-type does not allow the pair.
+#[test]
+fn copy_settings_copies_the_format_pair_and_skips_where_not_allowed() {
+    use engine::policy::allowed_encodings;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let allowed = |m: &AppModel, k: &str| {
+        let st = m.item(k).unwrap().job.as_ref().unwrap().profile.subtype;
+        allowed_encodings(st, m.target)
+    };
+    // A pair the two landscape diffuses allow and the TruePBR albedo does not.
+    let (leaf, odd, rock) = (allowed(&m, LEAF), allowed(&m, ODD), allowed(&m, ROCK));
+    let (f, t) = *leaf
+        .iter()
+        .find(|e| odd.contains(e) && !rock.contains(e))
+        .expect("fixture: such a pair");
+    m.set_format(LEAF, f, t);
+    idle(&mut m);
+    let to = strings(&[ODD, ROCK]);
+    m.apply_copy_settings(LEAF, &to, &["format".to_string(), "color.tag".to_string()]);
+    idle(&mut m);
+    assert_eq!(file(&m, ODD, "format"), Some(json!(f)));
+    assert_eq!(file(&m, ODD, "color.tag"), Some(json!(t)));
+    assert_eq!(
+        file(&m, ROCK, "format"),
+        None,
+        "not valid for a TruePBR albedo"
+    );
+    assert_eq!(
+        file(&m, ROCK, "color.tag"),
+        None,
+        "the tag is not copied alone"
+    );
     assert_eq!(
         m.bulk.report.as_deref(),
         Some("Format: written to 1 of 2; locked on 1 of 2: not valid for this map")

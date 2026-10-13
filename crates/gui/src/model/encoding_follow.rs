@@ -1,9 +1,9 @@
-//! Task 9 (owner, 2026-10-13; DECISIONS Z11): encoding follows type. When a plan changes a texture's sub-type, its
-//! explicit format and tag that the new sub-type does not allow are cleared, so the new type's default applies.
+//! Task 9 (owner, 2026-10-13; DECISIONS Z11): encoding follows type. When a texture's sub-type changes, its explicit
+//! format and tag that the new sub-type does not allow are cleared, so the new type's default applies.
 use super::fields::{field_view, format_label};
 use super::sets::locked_items;
 use super::{history, AppModel};
-use engine::config::Subtype;
+use engine::config::{ColorTag, Format, Subtype, Target};
 use engine::policy::allowed_encodings;
 use std::collections::HashMap;
 
@@ -13,6 +13,35 @@ use std::collections::HashMap;
 pub(super) struct Pending {
     cleared: Vec<(String, String)>,
     kept: Vec<String>,
+}
+
+/// What the cleanup does with one re-typed texture.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Nothing explicit, or the new sub-type allows the pair.
+    Keep,
+    /// The explicit pair is not allowed: clear it.
+    Clear,
+    /// Not allowed, but a lock holds it: report it (the reason).
+    Kept(String),
+}
+
+/// The rule for a texture now of sub-type `st` resolving to `pair`: `explicit` when its `[files]` entry sets the
+/// format or tag; `lock` is a slot lock or a Format field lock.
+pub fn verdict(
+    target: Target,
+    st: Subtype,
+    pair: (Format, ColorTag),
+    explicit: bool,
+    lock: Option<&str>,
+) -> Verdict {
+    if !explicit || allowed_encodings(st, target).contains(&pair) {
+        return Verdict::Keep;
+    }
+    match lock {
+        Some(why) => Verdict::Kept(why.into()),
+        None => Verdict::Clear,
+    }
 }
 
 fn type_name(st: Subtype) -> String {
@@ -28,47 +57,70 @@ impl AppModel {
             .collect()
     }
 
-    /// Run from `apply_plan` once the new items are in, with the sub-types of the plan before. Finishes the note of
-    /// a cleanup this plan shows, then clears the encodings a sub-type change left invalid: one edit, folded into
-    /// the step that caused it, and one replan. True when it re-planned. Plans of an undo, redo or reload never
-    /// clean up (they restore a state as it was), and `auto_replans` bounds the chain.
-    pub(super) fn follow_types(&mut self, before: &HashMap<String, Subtype>) -> bool {
+    /// Forget the cleanup state: an undo, redo, open or reload restores a state as it was (its plans never clean
+    /// up), and a note or pending cleanup of before no longer applies.
+    pub(super) fn reset_type_follow(&mut self) {
+        self.follow_off = true;
+        self.encoding_note = None;
+        self.type_pending = None;
+        self.type_base = None;
+        self.type_cause = false;
+        self.type_cleaned = false;
+    }
+
+    /// A user edit recorded a step and re-plans: a cleanup on its settled plan folds into that step.
+    pub(super) fn type_edit_recorded(&mut self) {
+        self.encoding_note = None;
+        self.type_pending = None;
+        self.type_cause = true;
+        self.type_cleaned = false;
+    }
+
+    /// Run from `finish_plan` when a plan chain has settled (the final pass: output paths agree with sub-types).
+    /// Writes the note of a cleanup this plan shows, then compares the sub-types with those before the chain and
+    /// clears the encodings a change left invalid: one edit and one replan. The edit is folded into the user step
+    /// that started the chain, else it is its own step. True when it re-planned. A one-shot guard
+    /// (`type_cleaned`) keeps the cleanup's own plan from cleaning again; it does not use `auto_replans`.
+    pub(super) fn settle_types(&mut self) -> bool {
+        let base = self.type_base.take();
         if let Some(p) = self.type_pending.take() {
             self.set_type_note(p);
         }
-        if self.follow_off
-            || self.auto_replans >= 2
-            || self.project.as_ref().is_none_or(|p| p.read_only())
-        {
+        let cause = std::mem::take(&mut self.type_cause);
+        let off = std::mem::take(&mut self.follow_off);
+        let cleaned = std::mem::take(&mut self.type_cleaned);
+        let (Some(base), false, false) = (base, off, cleaned) else {
             return false;
-        }
-        let Some(doc) = self.project.as_ref() else {
+        };
+        let Some(doc) = self.project.as_ref().filter(|p| !p.read_only()) else {
             return false;
         };
         let locked = locked_items(self);
         let mut pending = Pending::default();
         for i in &self.items {
-            let (Some(j), Some(&old)) = (&i.job, before.get(&i.key)) else {
+            let (Some(j), Some(&old)) = (&i.job, base.get(&i.key)) else {
                 continue;
             };
-            let (st, e) = (j.profile.subtype, (j.profile.format, j.profile.color.tag));
+            let st = j.profile.subtype;
+            if st == old {
+                continue;
+            }
+            let e = (j.profile.format, j.profile.color.tag);
             let explicit = ["format", "color.tag"]
                 .iter()
                 .any(|f| doc.file_value(&i.key, f).is_some());
-            if st == old || !explicit || allowed_encodings(st, self.target).contains(&e) {
-                continue;
-            }
-            let head = format!("{}: {} → {}", i.name, type_name(old), type_name(st));
             let lock = locked.get(&i.key).cloned().or_else(|| {
                 field_view(self.target, j, "format")
                     .and_then(|v| v.lock)
                     .map(str::to_string)
             });
-            match lock {
-                Some(why) => pending
+            let head = format!("{}: {} → {}", i.name, type_name(old), type_name(st));
+            match verdict(self.target, st, e, explicit, lock.as_deref()) {
+                Verdict::Keep => {}
+                Verdict::Clear => pending.cleared.push((i.key.clone(), head)),
+                Verdict::Kept(why) => pending
                     .kept
                     .push(format!("{head}; {} kept ({why})", format_label(e.0, e.1))),
-                None => pending.cleared.push((i.key.clone(), head)),
             }
         }
         if pending.cleared.is_empty() {
@@ -77,7 +129,7 @@ impl AppModel {
             }
             return false;
         }
-        let before_docs = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
+        let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
         self.batch = true;
         for (k, _) in &pending.cleared {
             // Clearing the format clears the explicit tag too (`clear_field`).
@@ -85,23 +137,23 @@ impl AppModel {
         }
         self.batch = false;
         let after = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
-        if after == before_docs {
+        if after == before {
             return false;
         }
         match self.history.undo.last_mut() {
-            // The step that left the documents as they were is the edit that caused the change: one undo for both.
-            Some(last) if last.after == before_docs => last.after = after,
-            // shortcut: a change no step caused (scan votes) gets its own step; an unrelated later step cannot fold.
+            // The user step that started this chain: one undo restores the edit and the cleanup.
+            Some(last) if cause && last.after == before => last.after = after,
+            // A change no step caused (a scan vote, a reload) is its own step.
             _ => self.history.push(history::Command {
                 label: "Encoding follows type".into(),
-                before: before_docs,
+                before,
                 after,
                 merge: None,
                 created_file: None,
             }),
         }
         self.type_pending = Some(pending);
-        self.auto_replans += 1;
+        self.type_cleaned = true;
         self.replan();
         true
     }

@@ -646,10 +646,21 @@ impl AppModel {
         let Some(p) = self.project.as_ref() else {
             return;
         };
+        // R13: the format goes with its tag, as a pair (the Format row's value), so `skip_of` checks it against
+        // each target's sub-type and the write is `set_format`; the tag is then not copied on its own.
+        let pair = fields.iter().any(|f| f == "format");
+        let from_job = self.item(from).and_then(|i| i.job.as_ref());
         let writes: Vec<CopyWrite> = fields
             .iter()
+            .filter(|f| !(pair && *f == "color.tag"))
             .filter_map(|f| {
-                let v = p.file_value(from, f)?;
+                let mut v = p.file_value(from, f)?;
+                if f == "format" {
+                    let tag = p
+                        .file_value(from, "color.tag")
+                        .or_else(|| from_job.map(|j| serde_json::json!(j.profile.color.tag)))?;
+                    v = serde_json::json!([v, tag]);
+                }
                 let plan = plan_bulk_edit(self, to, f, &BulkOp::Set(v.clone()));
                 Some((f.clone(), v, plan))
             })
@@ -659,7 +670,10 @@ impl AppModel {
             for (f, v, plan) in &writes {
                 for (k, c) in plan {
                     if *c == Change::Write {
-                        m.set_field(k, f, v.clone());
+                        match encoding_of(f, v) {
+                            Some((fmt, t)) => m.set_format(k, fmt, t),
+                            None => m.set_field(k, f, v.clone()),
+                        }
                     }
                 }
             }
