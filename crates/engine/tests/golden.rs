@@ -2690,8 +2690,7 @@ fn kaiser_diffuse_differs_from_box_and_its_alpha_does_not() {
             [c, 255 - c, 90, (y * 4) as u8]
         }),
     );
-    // A file-scoped sub-type, not `subtype:diffuse` (which may silently miss): a suffixless file is otherwise
-    // unresolved (SUG-LOW-CONFIDENCE).
+    // A file-scoped sub-type pins the diffuse whatever the suggestion; `subtype:diffuse` would only scope fields.
     const DIFFUSE: &str = "file:**/rock.png.subtype=diffuse";
     // Uncompressed: under BC7 a block holding this checker and an alpha ramp trades alpha for RGB, differently per
     // filter (measured: box 16 / Kaiser 10 at mip 1 texel 0 vs 2 in the source), which would hide the filter's alpha.
@@ -3242,7 +3241,7 @@ fn cs_plain_set_is_default_not_pbr() {
         ("default", "auto:default"),
         &[Code::ShaderAuto],
     );
-    // File-level: the synthetic gradient trips an unrelated SUG-LOW-CONFIDENCE; no SHADER-* code may appear.
+    // File-level: no SHADER-* code may appear.
     assert!(warnings(&o)
         .iter()
         .all(|c| !c.as_str().starts_with("SHADER-")));
@@ -3414,6 +3413,93 @@ fn compact_2048_opaque_diffuse_stays_2048_bc1() {
     assert_eq!(resize_of(&o, "a/wall.png"), "none");
 }
 
+/// `plan_preset` with `BatchRequest::mesh_alpha` evidence for `textures/a/wall` (M6 Track E).
+fn plan_compact_wall_mesh(dir: &Path, blend: bool) -> Out {
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "golden");
+    let mut req = request(dir, Target::Cs, &[], &[]);
+    req.preset = Some("cs-compact".into());
+    let shape = engine::shader::MeshAlpha {
+        blend,
+        test: false,
+        threshold: 0,
+    };
+    req.mesh_alpha = BTreeMap::from([("textures/a/wall".to_string(), vec![shape])]);
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    Out {
+        summary: BatchSummary::default(),
+        events: sink.take(),
+    }
+}
+
+fn varying_2048() -> DynamicImage {
+    rgba(2048, |x, _| [90, 60, 30, (x % 256) as u8])
+}
+
+/// Owner O1 (M6 Track E): a varying-alpha diffuse whose meshes neither blend nor test is opaque colour, so Compact
+/// gives it BC1 at full size.
+#[test]
+fn compact_2048_varying_alpha_diffuse_with_a_no_alpha_mesh_stays_2048_bc1() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", varying_2048());
+    let o = plan_compact_wall_mesh(d.path(), false);
+    assert_profile(&o, "a/wall.png", "diffuse", "remove", false, "bc1");
+    assert_eq!(
+        format_prov(&o, "a/wall.png"),
+        ("bc1".to_string(), "rule:cs-compact#0".to_string())
+    );
+    assert!(resized(&o).is_empty(), "{:?}", resized(&o));
+    assert_eq!(resize_of(&o, "a/wall.png"), "none");
+    assert!(!warnings(&o).contains(&Code::LossAlphaData));
+    assert!(!warnings(&o).contains(&Code::FmtBc1Alpha));
+}
+
+/// Fix round 1 (O1): a project rule that sets the policy beats the mesh `remove`, matched on the source's real alpha
+/// (`alpha = "varying"`) or unconditionally, and Compact's BC1 rule stays out: BC7 at half size, no CFG-INVALID.
+#[test]
+fn compact_mesh_remove_yields_to_a_project_rule_that_sets_the_policy() {
+    for matcher in ["alpha = \"varying\"", "glob = \"**/wall.png\""] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "textures/a/wall.png", varying_2048());
+        std::fs::write(
+            d.path().join("in/sdc.toml"),
+            format!("[[rules]]\nmatch = {{ {matcher} }}\noverrides = {{ alpha = {{ policy = \"blend\" }} }}\n"),
+        )
+        .unwrap();
+        let o = plan_compact_wall_mesh(d.path(), false);
+        assert_profile(&o, "a/wall.png", "diffuse", "blend", false, "bc7");
+        assert_eq!(
+            planned(&o, "a/wall.png")["provenance"]["alpha.policy"].as_str(),
+            Some("rule:project#0"),
+            "{matcher}"
+        );
+        assert_eq!(
+            resized_names(&o),
+            BTreeMap::from([("wall.dds".to_string(), (1024, 1024))]),
+            "{matcher}"
+        );
+        assert_eq!(resize_of(&o, "a/wall.png"), "half", "{matcher}");
+        assert!(!warnings(&o).contains(&Code::CfgInvalid), "{matcher}");
+    }
+}
+
+/// The same diffuse used by a blending mesh keeps its alpha: BC7 at half size.
+#[test]
+fn compact_2048_varying_alpha_diffuse_with_a_blend_mesh_plans_1024_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/wall.png", varying_2048());
+    let o = plan_compact_wall_mesh(d.path(), true);
+    assert_profile(&o, "a/wall.png", "diffuse", "blend", false, "bc7");
+    assert_eq!(
+        resized_names(&o),
+        BTreeMap::from([("wall.dds".to_string(), (1024, 1024))])
+    );
+    assert_eq!(resize_of(&o, "a/wall.png"), "half");
+}
+
 #[test]
 fn compact_2048_normal_plans_1024() {
     let d = tempfile::tempdir().unwrap();
@@ -3530,4 +3616,43 @@ fn fast_preview_is_fast_with_smallest_mip_validation() {
             "{t:?}"
         );
     }
+}
+
+/// M6 Track E spec §3.1 (DECISIONS Note U2): `_coat` is the coat colour + strength. Its varying alpha is the strength:
+/// policy `data`, kept, and BC7 under cs-compact (never BC1).
+#[test]
+fn compact_coat_keeps_its_strength_alpha_as_bc7() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/a/rock.png", rgb(64));
+    put(d.path(), "textures/a/rock_n.png", flat_normal(64));
+    put(d.path(), "textures/a/rock_rmaos.png", rgb(64));
+    put(
+        d.path(),
+        "textures/a/rock_coat.png",
+        rgba(64, |x, _| [200, 180, 160, (x * 4) as u8]),
+    );
+    let mut req = request(d.path(), Target::Cs, &[], &[]);
+    req.preset = Some("cs-compact".into());
+    let o = run(req);
+    assert_profile(&o, "rock_coat.png", "pbr_subsurface", "data", false, "bc7");
+    assert_eq!(
+        planned(&o, "rock_coat.png")["status"]["state"],
+        "ready",
+        "{:?}",
+        warnings(&o)
+    );
+    assert_eq!(o.summary.failed, 0, "{:?}", warnings(&o));
+    let reason = planned(&o, "rock_coat.png")["suggestions"][0]["reason"].clone();
+    assert!(
+        reason
+            .as_str()
+            .unwrap()
+            .starts_with("exporter suffix _coat (coat colour + strength)"),
+        "{reason}"
+    );
+    assert_alpha_kept(
+        &dds(d.path(), "textures/a/rock_s.dds"),
+        |x, _| (x * 4) as u8,
+        8,
+    );
 }

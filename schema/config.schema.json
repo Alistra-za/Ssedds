@@ -38,7 +38,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -510,7 +510,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -917,7 +917,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "The source's alpha content; `none` also matches varying alpha that mesh evidence decided to remove (M6 Track E,\nowner O1)."
         },
         "glob": {
           "default": null,

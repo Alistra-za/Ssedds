@@ -416,18 +416,18 @@ fn set_scopes_rank_by_specificity_not_command_line_order() {
 fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     let fx = Fx::new();
     fx.normal("wall_n.png");
-    fx.rgb("floor.png");
+    fx.rgb("floor_i.png");
     let accept = ["--dry-run", "--accept-suggestions", "high"];
 
-    // An accepted high-confidence suggestion decides `wall_n.png`; the medium one for `floor.png` stays open.
+    // An accepted high-confidence suggestion decides `wall_n.png`; the medium one for `floor_i.png` stays open.
     let o = fx.convert(&accept);
-    assert_eq!(code(&o), 1, "{}", text(&o.stderr)); // floor.png is unresolved
+    assert_eq!(code(&o), 1, "{}", text(&o.stderr)); // floor_i.png is unresolved
     let jobs = planned(&o);
     let wall = &jobs["wall_n.png"];
     assert_eq!(wall["profile"]["subtype"], "normal");
     assert_eq!(prov(wall, "subtype"), "suggestion");
     assert_eq!(wall["status"]["state"], "ready");
-    assert_eq!(jobs["floor.png"]["status"]["state"], "unresolved");
+    assert_eq!(jobs["floor_i.png"]["status"]["state"], "unresolved");
 
     // Without acceptance nothing is decided.
     let o = fx.convert(&["--dry-run"]);
@@ -443,11 +443,11 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     let jobs = planned(&o);
     assert_eq!(jobs["wall_n.png"]["profile"]["subtype"], "height");
     assert_eq!(prov(&jobs["wall_n.png"], "subtype"), "rule:project#0");
-    assert_eq!(jobs["floor.png"]["profile"]["subtype"], "glow");
-    assert_eq!(prov(&jobs["floor.png"], "subtype"), "rule:project#1");
+    assert_eq!(jobs["floor_i.png"]["profile"]["subtype"], "glow");
+    assert_eq!(prov(&jobs["floor_i.png"], "subtype"), "rule:project#1");
     // A rule decides on its own, without `--accept-suggestions`.
     assert_eq!(
-        jobs_state(&fx.convert(&["--dry-run"]), "floor.png"),
+        jobs_state(&fx.convert(&["--dry-run"]), "floor_i.png"),
         "ready"
     );
 
@@ -483,13 +483,13 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
         "subtype=pbr_normal",
     ]);
     let jobs = planned(&o);
-    // File-scoped sub-type beats the unscoped one; the unscoped one still decides floor.png.
+    // File-scoped sub-type beats the unscoped one; the unscoped one still decides floor_i.png.
     assert_eq!(jobs["wall_n.png"]["profile"]["subtype"], "msn");
     assert_eq!(prov(&jobs["wall_n.png"], "subtype"), "user");
     assert_eq!(num(&jobs["wall_n.png"], "alpha.threshold"), 90.0);
     assert_eq!(prov(&jobs["wall_n.png"], "alpha.threshold"), "user");
-    assert_eq!(jobs["floor.png"]["profile"]["subtype"], "pbr_normal");
-    assert_eq!(prov(&jobs["floor.png"], "subtype"), "user");
+    assert_eq!(jobs["floor_i.png"]["profile"]["subtype"], "pbr_normal");
+    assert_eq!(prov(&jobs["floor_i.png"], "subtype"), "user");
 }
 
 fn jobs_state(o: &Output, name: &str) -> String {
@@ -634,9 +634,10 @@ fn dry_run_writes_nothing() {
 #[test]
 fn unresolved_files_are_skipped_with_exit_1() {
     let fx = Fx::new();
-    fx.rgb("wall.png");
-    fx.rgb("floor.png");
-    // `diffuse` is only a medium-confidence suggestion, so even `--accept-suggestions high` leaves it open.
+    fx.rgb("wall_i.png");
+    fx.rgb("floor_i.png");
+    // `_i` (a multilayer inner layer) is only a medium-confidence `diffuse` suggestion, so even
+    // `--accept-suggestions high` leaves it open (a bare stem is High since M6 Track E).
     let o = fx.convert(&["--accept-suggestions", "high"]);
     assert_eq!(code(&o), 1);
     assert!(
@@ -653,7 +654,7 @@ fn unresolved_files_are_skipped_with_exit_1() {
     // `--allow SUG-LOW-CONFIDENCE` is the explicit acknowledgement.
     let o = fx.convert(&["--allow", "SUG-LOW-CONFIDENCE"]);
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
-    assert!(fx.dds("textures/a/wall.dds").exists());
+    assert!(fx.dds("textures/a/wall_i.dds").exists());
 }
 
 /// DECISIONS S-mips-13: an unscoped filter the `_n` cannot use is an Info line on the console, not an error.
@@ -899,12 +900,12 @@ fn a_file_that_fails_to_resolve_exits_1_and_the_rest_are_converted() {
     let fx = Fx::new();
     fx.rgb("wall.png");
     fx.rgb("floor.png");
-    // alpha.threshold 3 is outside 5..=200: a per-file CFG-INVALID error, not a usage error.
+    // alpha.threshold 0 is outside 1..=254: a per-file CFG-INVALID error, not a usage error.
     let o = fx.convert(&[
         "--set",
         "subtype=diffuse",
         "--set",
-        "file:**/wall.png.alpha.threshold=3",
+        "file:**/wall.png.alpha.threshold=0",
     ]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert!(text(&o.stderr).contains("CFG-INVALID"));
@@ -950,7 +951,7 @@ fn invalid_configs_are_exit_2_and_valid_ones_are_really_read() {
     assert_eq!(code(&fx.convert(&with_missing)), 2);
 
     // An invalid layer value that parses is a per-file CFG-INVALID (exit 1), not a config error.
-    fx.project_config("[subtypes.diffuse]\nalpha = { threshold = 250 }\n");
+    fx.project_config("[subtypes.diffuse]\nalpha = { threshold = 255 }\n");
     let o = fx.convert(&args);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(planned(&o)["wall.png"]["status"]["state"], "error");
@@ -1067,7 +1068,7 @@ fn failed_validation_exits_4_unless_the_batch_is_also_partial() {
 
     // Partial (exit 1) outranks validation failed (exit 4).
     fx.rgb("bad.png");
-    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=3"]);
+    let o = fx.convert_failing_validation(&["--set", "file:**/bad.png.alpha.threshold=0"]);
     assert_eq!(code(&o), 1, "{}", text(&o.stderr));
     assert_eq!(batch_done(&o)["validation_failed"], 1);
 }

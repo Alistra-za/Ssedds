@@ -30,7 +30,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -601,7 +601,7 @@
       "type": "object"
     },
     "Provenance": {
-      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,\n`recipe:<kind>`, and the snake_case variant name for the rest.",
+      "description": "Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.\n\nSerialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the\n`<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `mesh:alpha`, `suffix:<term>`, `source:<file>`,\n`default:<value>`, `fill:<code>`, `recipe:<kind>`, and the snake_case variant name for the rest.",
       "type": "string"
     },
     "RawMap": {

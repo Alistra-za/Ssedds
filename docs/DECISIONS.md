@@ -409,7 +409,7 @@ Owner decisions of 2026-10-11 (R1–R3) and the rulings of `docs/superpowers/pla
 - **R10 sRGB roughness** (plan): a roughness member with `color.content = srgb` raises `TAG-CONTENT-MISMATCH` and does not bake.
 - **R11 No alpha weighting for vectors or roughness** (plan, Task 29 carry): normal, `_msn`, `_flow` and roughness chains are never alpha-weighted, even with a cutout policy forced on them. Preprocess dilation under α = 0 still runs for alpha-tested policies.
 - **R12 `if-changed` and the bake** (plan): the baked `_n` is recorded in the manifest's `sources` with `bake` = the SHA-256 of its decode settings (`channels`, `alpha.policy`, `mips.normal_base`) and level shift; a changed `_n`, changed settings, or the bake turning on or off re-encodes the member. `Profile` gains `mips.normal_base` and `mips.bake_clamp`, so every `profile_sha256` changes once and the first M4 run re-encodes every output (as Note M10). Final review Minor 2: a `pbr_normal`'s `profile_sha256` hashes `mips.normal = renormalize_bake` as `renormalize` (`manifest::profile_sha256`), because the bake changes none of the `_n`'s own bytes; the bake turning on or off re-encodes only the member, not the `_n`. A `coat_normal` keeps its own hash (its self-bake changes its bytes).
-- **R13 Coverage, mipcheck round 2 B1/B6** (owner decision on the dither, 2026-10-11, verbatim: "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them"): every level ≥ 1 passes exactly `k = round(p·n)` texels, the texels above the k-th largest alpha plus as many tied with it as are needed. The dither is in M4 at the owner's request. Ties are split in a hierarchical Bayer order of position (not plain 8×8, which biases the split spatially; deterministic, no RNG), so tied alpha on thin strands neither overshoots (up to ×32 before) nor vanishes (B1). `k = 0` keeps the box alpha ("no texel passes"); zero alpha is never raised, and a level with no positive alpha keeps its box alpha; there is no "more than 2× off" fallback. Remapped texels, the split's included, sit at least 2 codes clear of the threshold (B6). The clearance also applies to levels that skip the remap (early-out levels, including `k = 0`). At the ends of the range (threshold code c ≤ 2 or c ≥ 254) the clearance degrades to whatever codes are available (unreachable: `alpha.threshold` is limited to 5–200).
+- **R13 Coverage, mipcheck round 2 B1/B6** (owner decision on the dither, 2026-10-11, verbatim: "I would probably encourage a dithering at lower mips, the whole point of coverage is to ensure it isn't lost, especially for foliage and grass, when your likely seeing mostly lower mip versions of them"): every level ≥ 1 passes exactly `k = round(p·n)` texels, the texels above the k-th largest alpha plus as many tied with it as are needed. The dither is in M4 at the owner's request. Ties are split in a hierarchical Bayer order of position (not plain 8×8, which biases the split spatially; deterministic, no RNG), so tied alpha on thin strands neither overshoots (up to ×32 before) nor vanishes (B1). `k = 0` keeps the box alpha ("no texel passes"); zero alpha is never raised, and a level with no positive alpha keeps its box alpha; there is no "more than 2× off" fallback. Remapped texels, the split's included, sit at least 2 codes clear of the threshold (B6). The clearance also applies to levels that skip the remap (early-out levels, including `k = 0`). At the ends of the range (threshold code c ≤ 2 or c ≥ 254) the clearance degrades to whatever codes are available (reachable since owner O2, M6 Track E, widened `alpha.threshold` to 1–254; the clearance saturates).
 - **R14 `sdc-base` 1.1.0** (plan): new defaults `mips.normal_base`, `mips.bake_clamp` (0.25) and the `coat_normal` self-bake. There is no preset changelog file; the bump is recorded here and in spec §3.5. `cs`, `cpm` and `vanilla-quality` stay at 1.0.0.
 - **M4-final-1 A borrowed `_n` bakes the borrower's own roughness** (controller ruling on final review I1, 2026-10-11; amends R7's "the engine has no notion of borrowing"): `BatchRequest::borrowed_normal` maps the id of each set whose Normal slot borrows another set's `_n` (GUI share) to the id of the set that owns it. `plan_bakes` bakes the borrower's own `rmaos`/`skin_rfaos` members from the owner's `pbr_normal` (the first by path, R9) under every usual rule: the decided check, the R6 opt-out, R10, `SET-BAKE-RATIO`, the stamp, the manifest `sources`, `if-changed` and bake admission. A borrower whose roughness slot is itself shared (R7) still never bakes. The lent `_n` raises no `SET-MISSING-COMPANION` in its own set when a borrower with a roughness member uses it; a borrower with a roughness member but no usable owner `_n` gets `SET-MISSING-COMPANION` naming the borrowed `_n` file (or saying the owner set has no usable `_n`). While a set borrows its Normal slot, its own `pbr_normal` (if any) is ignored by the bake, as the GUI shows the borrowed one. The GUI fills the map on `cs` only, on both the plan and the export request; the CLI leaves it empty, so CLI runs are unchanged.
 - **M4-final-2 (owner, 2026-10-11): an 8-bit noise floor for the bake** ("Ignore tiny variance", on final review Minor 9): a footprint whose average normal length L is at least `NOISE_FLOOR_L` = 0.999 adds no variance (was 1 − 10⁻⁶), in the `_n` → roughness bake and the `_cnr` self-bake alike (`bake::variance_add`). A visually flat `_n` with ±1–2 codes of quantisation noise has 1 − L of about 1e-5 to 1e-4 and lifted r = 0 to 0.04–0.10 at mip ≥ 1; it now adds nothing at any mip. Worst-case ±k-code noise stays above the floor up to k = 4. Real bumps still widen: the bumpy golden `_n` and `_cnr` cases are far below the floor, and a tilt of ±6 X codes (L = 0.99889) widens while ±5 codes (L = 0.99923, about 2.2°) does not. The golden f64 reference restates the floor independently. Outputs change only where some footprint has 0.999 ≤ L < 1 − 10⁻⁶.
@@ -534,3 +534,58 @@ Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-presets.md` on spec `docs/s
   - A new manifest `rgbcx_patch` field makes old BC3/BC4/BC5 outputs re-encode. Like `bc7e_patch` it is a content tag, `bc4-round-to-nearest@sha256:<hash of the patched vendor/bc7enc_rdo/rgbcx.h>` (final review Minor 11), so an in-place change to the patched header also re-encodes them.
   - Two bench gates moved from byte-exact to never-worse (per-block bcdec SSE for BC3 alpha, BC4, BC5); BC1 and BC3 colour stay byte-exact.
   - Known quirk: sdc's own BC3 alpha validation decodes through `bcdec_rs::bc3`, which uses `(6a0+a1+1)/7` and matches neither model.
+
+## Note U — M6 Track E: NIF-aware alpha and fewer confirmations (plan rulings, 2026-10-12)
+
+Rulings of `docs/superpowers/plans/2026-10-12-sdc-m6-nif-alpha-confident.md` on spec `docs/superpowers/specs/2026-10-12-sdc-m6-nif-alpha-confident-design.md` (owner-approved 2026-10-12), with the owner overrides O1 and O2 made while building.
+
+- **U1 No suffix is the colour member, at High (owner, 2026-10-12: "No suffix should equal diffuse by default").**
+  - This reverses Note H's "a bare stem is only a guess". A bare stem suggests `diffuse`, `pbr_albedo` (a PBR set) or `ui_sky` (`interface/`, `sky/`) at High, like `_d`.
+  - `landscape_diffuse` and `skin_albedo` were already High. `hdr_sky` (a float source under `sky/` may be an HDRI) and `_i` stay Medium.
+  - Names that break the conventions (a normal map without `_n`) now resolve as colour maps; fixing them is the mod author's job (owner).
+  - Note H's colour-term raise was removed: every colour member it raised is now High.
+- **U2 `_coat` is coat colour + strength (owner, 2026-10-12).**
+  - `pbr_subsurface` keeps alpha policy `data` (`sdc-base`), so a varying alpha is kept as the strength and stays BC7 under compact (T3).
+  - The reason reads "exporter suffix _coat (coat colour + strength); the PBR coat map (_s)".
+  - The slot card reads "Coat colour + strength" when its source file is a `_coat` (by file name).
+- **U3 The GUI accepts High suggestions (owner, 2026-10-12).**
+  - `AppModel::accept` is `High`, and `request()` sends it. Medium and Low suggestions still ask.
+  - Explicit choices win: `[files]`, rules and `--set subtype` decide before any suggestion.
+  - The CLI is unchanged (`--accept-suggestions high`).
+  - The M3-era GUI test fixtures set `accept = None` to keep their undecided members.
+- **U4 "(auto)" (plan, 2026-10-12).** There is no new engine field. A job shows "(auto)" in the Sub-type row's provenance column when all three hold, with the top suggestion's reason on hover:
+  - its `provenance.subtype` is `suggestion`;
+  - its top suggestion is High;
+  - it does not need a sub-type.
+- **U5 Mesh alpha evidence (plan, 2026-10-12).**
+  - `BatchRequest::mesh_alpha` is keyed by `shader::colour_mesh_key`, the output stem, so a renamed `x_albedo.png` is keyed `x`. The CLI sends none.
+  - The GUI reads it with raw SQL (`meshes::mesh_alpha`). The query is composed with `format!` from a static `FROM` fragment shared with `mesh_votes` (`SLOT0_SOURCE_SHAPES`), and the key is a bound parameter, so no user data reaches the SQL text (review ruling, Task 4). The fragment selects:
+    - lighting shapes using `<key>.dds` in slot 0;
+    - non-derived copies of enabled origins;
+    - TruePBR excluded;
+    - one entry per NIF path, block and alpha property.
+  - Unlike the votes, every lighting shader type counts.
+  - NiAlphaProperty bit 0 is blend and bit 9 is test. A shape with no property is no alpha.
+  - A database read error gives no evidence, as in `mesh_votes` (the Meshes view reports database errors), so the alpha question is asked as before. Surfacing the error in the planner is parked as minor.
+- **U6 The rule (owner, 2026-10-12; threshold range owner O2).**
+  - Any shape with alpha beats shapes without; there is no vote.
+  - Blend only gives `blend`; test only gives `cutout`; blend and test anywhere, on one shape or two, give `cutout_blend`; no alpha gives `remove`.
+  - The threshold is the largest of the testing shapes (the stricter cutoff), clamped to 1..=254. Spec gap: a NIF may say 0..255.
+  - O2 (owner): the valid `alpha.threshold` range widens from 5..=200 to 1..=254 (`CFG-INVALID` outside it), replacing the plan's clamp to 5..=200. Earlier notes that say 5..=200 describe the typical range.
+- **U7 The `mesh:alpha` layer (plan, 2026-10-12).**
+  - **Provenance.** `Provenance::MeshAlpha` (`mesh:alpha`) sits between `shader:<id>` and `suffix:<term>`.
+  - **Where.** It is applied after the analysis-alpha step and `skin_wet_form`, before the shader layer, and only for `alpha_from_mesh` sub-types where `alpha.policy` is not explicit.
+  - **What beats it.** User presets, configs and rules (before it), and `[files]` and `--set` (after it).
+  - **The analysis `remove` keeps priority** (no alpha channel, or alpha constant 255). This extends spec §4.3's "source without alpha" to constant 255.
+  - **What it beats.** A shader's alpha default (hair `cutout`).
+  - **Explicit.** It counts as explicit, so the alpha question is not asked. `alpha.threshold` gets the same provenance unless that field is explicit.
+- **U8 Compact (owner O1, 2026-10-12; replaces the plan's BC7 ruling).**
+  - Under Compact, a mesh-decided `remove` on a varying-alpha colour member is opaque colour: it goes BC1 at full size, like other opaque colour. No `LOSS-ALPHA-DATA` is raised (explicit remove, P25).
+  - Mechanism: rules are matched on the file's real source alpha first. Only when no explicit layer (preset, config, `[files]`/`--set` override, or a matching rule) sets `alpha.policy` does a mesh `remove` make the rules see alpha `none`, so Compact's BC1 rules match. A rule that sets `alpha.policy` is never suppressed, and no BC1 + blend `CFG-INVALID` arises from it (Task 3 review fix).
+  - A mesh `cutout`, `blend` or `cutout_blend` keeps the varying-alpha rules. A mesh `cutout` never reaches a constant-255 source (U7), so an opaque RGBA diffuse stays BC1.
+- **U9 Two-pass GUI (plan, 2026-10-12).** The first plan of a folder asks the alpha question until the scan's evidence is read. `EngineInputs` carries `mesh_alpha`, so the automatic re-plan settles it (`refresh_mesh_votes` reads votes and alpha together and reports whether either changed).
+- **U10 Versions (plan, 2026-10-12).**
+  - There are no new codes (75).
+  - The workspace goes 0.5.0 → 0.6.0, so `if-changed` re-encodes.
+  - There is no manifest change: the up-to-date check compares `engine_version` and `profile_sha256`, and both change.
+  - `schema/` was regenerated only for the `Provenance` doc text.

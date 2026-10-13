@@ -21,7 +21,23 @@ The columns can be collapsed to thin strips (**Collapse columns**). The **Advanc
 
 ## Deciding
 
-The GUI never decides for you. A texture that needs an answer has an **amber border**: its sub-type, the meaning of its alpha, the green-channel convention of a normal map, or a blocking warning you must acknowledge. Select it and use the confirm controls in the centre column (for example the sub-type buttons, the *Remove / Cutout / Blend / Cutout + Blend / Data* alpha buttons, *DirectX / OpenGL* for green, or an acknowledge button for a blocking warning). Each answer is written explicitly, as a field value or as an `allow` code, so it stays in your project file.
+A texture whose name follows the conventions decides itself. A High-confidence suggestion is accepted, and its sub-type reads **(auto)**; hover it to see why. High suggestions include:
+
+- a known suffix such as `_n`, `_rmaos` or `_rfaos`;
+- an exporter term such as `_albedo`;
+- a file with no suffix, as its set's colour map;
+- `_n` in a PBR set.
+
+Choose another sub-type to override it: your choice is written to `sdc.toml` and always wins. Naming that breaks the conventions (a normal map saved without `_n`) is read as a colour map, so rename the file or choose its sub-type. A texture that still needs an answer has an **amber border**: a Medium or Low sub-type suggestion, the meaning of its alpha, the green-channel convention of a normal map, or a blocking warning you must acknowledge. Select it and use the confirm controls in the centre column (for example the sub-type buttons, the *Remove / Cutout / Blend / Cutout + Blend / Data* alpha buttons, *DirectX / OpenGL* for green, or an acknowledge button for a blocking warning). Each answer is written explicitly, as a field value or as an `allow` code, so it stays in your project file.
+
+**Alpha from the meshes.** When a scan database exists (the Meshes view), a colour map whose alpha varies takes its alpha meaning from the meshes that use it, and the alpha question is not asked:
+
+- any mesh with alpha blending gives *Blend*;
+- alpha testing gives *Cutout*, at the strictest mesh threshold;
+- both give *Cutout + Blend*;
+- no mesh with alpha gives *Remove*.
+
+The Alpha row then reads *from the meshes that use this texture*. A texture with no alpha, or a fully opaque one, keeps *Remove*. Your own choice still wins. Right after a folder opens, the question may show until the scan has been read.
 
 ## Editing
 
@@ -74,7 +90,7 @@ Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set 
 
 ### The set editor
 
-Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter, Height and so on. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card.
+Select a set to edit it. Each texture slot is a card: Diffuse, Normal, Parameter, Height and so on. A card has a **preset dropdown** (it fills the PGPatcher settings for that kind of material), and **Slot commands** to move, share, duplicate or clear the slot. **Opaque** sits on the Diffuse card. A `_coat` map fills the Subsurface card, which then reads **Coat colour + strength**: its alpha is the coat strength and is kept.
 
 The set's **Shader** dropdown lists the shaders the current mode offers. The picked one reads "(auto)" when sdc chose it, and "(fallback)" when the shader you asked for does not exist under the current mode and `default` stands in. Choosing **Auto** clears your choice. Warnings (a missing or unused map, an unavailable shader) show on the set's ⚠ badge. A scanned mod's meshes decide the auto pick unless a PBR or skin member, a complex `_m` or a `_p` does.
 

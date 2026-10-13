@@ -30,7 +30,7 @@
           "$ref": "#/$defs/AlphaPolicy"
         },
         "threshold": {
-          "description": "8-bit alpha-test threshold, per texture; allowed 5..=200 (checked in policy).",
+          "description": "8-bit alpha-test threshold, per texture; allowed 1..=254 (checked in policy).",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,

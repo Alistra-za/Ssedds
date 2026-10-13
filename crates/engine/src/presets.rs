@@ -81,6 +81,8 @@ pub struct RuleMatch {
     /// The file's texture set contains a member with this suffix.
     #[serde(default)]
     pub set_has: Option<String>,
+    /// The source's alpha content; `none` also matches varying alpha that mesh evidence decided to remove (M6 Track E,
+    /// owner O1).
     #[serde(default)]
     pub alpha: Option<AlphaContent>,
     /// M6 Track D (DECISIONS Note T2): the sub-type being resolved is one of these; empty = any. Matched only when the
@@ -232,8 +234,8 @@ impl ConfigFile {
 /// Where a resolved field value came from (spec §5.2). Declaration order is precedence order, lowest first.
 ///
 /// Serialises as a string: `builtin`, `preset:<id>`, `rule:<source>#<n>` (the `Rule` payload is the
-/// `<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `suffix:<term>`, `source:<file>`, `default:<value>`, `fill:<code>`,
-/// `recipe:<kind>`, and the snake_case variant name for the rest.
+/// `<source>#<n>` part), `analysis:<fact>`, `shader:<id>`, `mesh:alpha`, `suffix:<term>`, `source:<file>`,
+/// `default:<value>`, `fill:<code>`, `recipe:<kind>`, and the snake_case variant name for the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[schemars(with = "String")]
 pub enum Provenance {
@@ -249,6 +251,9 @@ pub enum Provenance {
     /// A member default of the set's shader (M6 spec §5): above built-in profiles, below every explicit layer and
     /// analysis fact. Shown as `shader:<id>`.
     Shader(String),
+    /// The alpha policy (and threshold) the meshes that use the colour member give it (M6 Track E, DECISIONS Note
+    /// U7): above shader defaults, below every explicit layer and the analysis `remove`. Shown as `mesh:alpha`.
+    MeshAlpha,
     /// A fact stated by an exporter vocabulary term, e.g. `_normalgl` (spec §4.4); applied at the analysis
     /// position. Shown as `suffix:<term>`.
     Suffix(String),
@@ -285,6 +290,7 @@ impl fmt::Display for Provenance {
             Provenance::Analysis => f.write_str("analysis"),
             Provenance::AnalysisFact(t) => write!(f, "analysis:{t}"),
             Provenance::Shader(id) => write!(f, "shader:{id}"),
+            Provenance::MeshAlpha => f.write_str("mesh:alpha"),
             Provenance::Suffix(t) => write!(f, "suffix:{t}"),
             Provenance::Suggestion => f.write_str("suggestion"),
             Provenance::ProjectFile => f.write_str("project_file"),
@@ -334,6 +340,7 @@ impl std::str::FromStr for Provenance {
             "user_config" => Provenance::UserConfig,
             "project_config" => Provenance::ProjectConfig,
             "analysis" => Provenance::Analysis,
+            "mesh:alpha" => Provenance::MeshAlpha,
             "suggestion" => Provenance::Suggestion,
             "project_file" => Provenance::ProjectFile,
             "user" => Provenance::User,

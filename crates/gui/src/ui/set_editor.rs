@@ -6,7 +6,7 @@ use super::thumbs::ThumbCache;
 use crate::model::fields::{channel_text, field_lock, format_label, format_options};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
-use crate::model::sets::{set_views, slot_of, SetView, SlotFill, SlotKind};
+use crate::model::sets::{set_views, slot_label, slot_of, SetView, SlotFill, SlotKind};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
@@ -189,7 +189,11 @@ fn card(
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(CARD);
             ui.set_min_width(CARD);
-            ui.label(egui::RichText::new(slot.label()).strong());
+            let title = match &fill {
+                SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => slot_label(slot, item),
+                SlotFill::Empty => slot.label(),
+            };
+            ui.label(egui::RichText::new(title).strong());
             let (item_key, borrowed) = match &fill {
                 SlotFill::Own { item } => (Some(item.clone()), None),
                 SlotFill::Borrowed { from, item } => (Some(item.clone()), Some(from.clone())),
