@@ -1,6 +1,6 @@
 //! "Used by plugins" in the set editor (esp scanner spec §4.1). Information only: no PGPatcher warning (spec §1).
 use crate::model::meshes::overridden_text;
-use crate::model::plugin_refs::{set_key, LIMIT};
+use crate::model::plugin_refs::{set_key, SetPluginRefs, LIMIT};
 use crate::model::sets::SetView;
 use crate::model::AppModel;
 use eframe::egui;
@@ -17,12 +17,16 @@ pub fn set_section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             if ui.small_button("Refresh").clicked() {
                 model.plugin_refs.refresh();
             }
-            let result = model
-                .plugin_refs
-                .get(model.scan_db.as_deref(), &key)
-                .clone();
-            let mut show = model.plugin_refs.show_inert;
-            match &result {
+            model.plugin_refs.get(model.scan_db.as_deref(), &key);
+            // Split borrows: the cached rows and the toggle are separate fields.
+            let SetPluginRefs {
+                cached,
+                show_inert: show,
+            } = &mut model.plugin_refs;
+            let Some((_, result)) = cached else {
+                return;
+            };
+            match result {
                 Err(e) => {
                     ui.weak(e.as_str());
                 }
@@ -37,11 +41,11 @@ pub fn set_section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                             .filter(|a| u.inert.contains_key(&a.formid))
                             .count();
                     if n_inert > 0 {
-                        ui.checkbox(&mut show, format!("Show inert ({n_inert})"));
+                        ui.checkbox(show, format!("Show inert ({n_inert})"));
                     }
                     if u.txsts
                         .iter()
-                        .all(|t| !show && u.inert.contains_key(&t.formid))
+                        .all(|t| !*show && u.inert.contains_key(&t.formid))
                     {
                         ui.label("No texture set of the latest scan matches this set.");
                     }
@@ -54,7 +58,7 @@ pub fn set_section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                             overridden_text(t.n_overrides)
                         );
                         match u.inert.get(&t.formid) {
-                            Some(why) if show => {
+                            Some(why) if *show => {
                                 ui.weak(format!("{text} · {why}"));
                             }
                             Some(_) => {}
@@ -69,7 +73,7 @@ pub fn set_section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                     let alts: Vec<_> = u
                         .alts
                         .iter()
-                        .filter(|a| show || !u.inert.contains_key(&a.formid))
+                        .filter(|a| *show || !u.inert.contains_key(&a.formid))
                         .collect();
                     if !alts.is_empty() {
                         ui.label(egui::RichText::new("Alternate textures using them").strong());
@@ -92,6 +96,5 @@ pub fn set_section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                     }
                 }
             }
-            model.plugin_refs.show_inert = show;
         });
 }

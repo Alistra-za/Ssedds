@@ -371,3 +371,45 @@ fn used_by_plugins_all_inert_says_nothing_matches_until_shown() {
         .is_none());
     h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1× · no reference");
 }
+
+/// Filtering spec §3 through the real `get` (so `inert_of` is exercised): an inert TXST and an inert alternate-texture
+/// user are hidden by default, counted, and shown dimmed with their reasons when asked.
+#[test]
+fn used_by_plugins_reads_inert_from_the_scan_db() {
+    use modscan::store::TexKey;
+    use sdc_gui::model::plugin_refs::set_key;
+    use sdc_gui::model::sets::set_views;
+    let d = tempfile::tempdir().unwrap();
+    let db = seeded_db(d.path());
+    add_txst(&db, 0x2000, "LiveTXST");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO rec(formid, local, plugin_id, sig, edid, owner_ok) VALUES (3567, 3567, 1, 'STAT', 'DeadStat', 1);
+             INSERT INTO rec_winner(formid, plugin_id, n_overrides) VALUES (3567, 1, 0);
+             INSERT INTO alt_tex(formid, local, plugin_id, model_slot, shape_name, txst_formid, txst_local, idx)
+                 VALUES (3567, 3567, 1, 0, 'Shape0', 8192, 8192, 0);
+             INSERT INTO rec_inert(formid, reason) VALUES (74565, 1), (3567, 2);",
+        )
+        .unwrap();
+    let mut model = pbr_opened(d.path());
+    let v = set_views(&model)
+        .into_iter()
+        .find(
+            |v| matches!(set_key(v), Some(TexKey::Suffix { stem, .. }) if stem.ends_with("rock01")),
+        )
+        .unwrap();
+    model.scan_db = Some(db);
+    model.select_set(&v.key);
+    let mut h = tall(model);
+    h.run();
+    h.get_by_label("Used by plugins").click();
+    h.run();
+    h.get_by_label_contains("LiveTXST [00002000] TXST");
+    assert!(h.query_by_label_contains("RockTXST").is_none());
+    assert!(h.query_by_label_contains("DeadStat").is_none());
+    h.get_by_label("Show inert (2)").click();
+    h.run();
+    h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1× · no reference");
+    h.get_by_label("DeadStat [00000DEF] STAT — Skyrim.esm · Shape0 → LiveTXST · not placed");
+}
