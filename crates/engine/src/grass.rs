@@ -111,6 +111,8 @@ pub(crate) fn build(
         preserve_coverage(&mut tc, tp.alpha.threshold, tp.alpha.compare);
     }
     let bc = build_chain(&bw, &bp);
+    // shortcut: both half chains and the stacked chain are live together (~1.3-1.5x the generic path) while
+    // `estimated_bytes` counts one image; account for it if 4096x8192 grass hits memory admission.
     let chain = tc
         .iter()
         .zip(&bc)

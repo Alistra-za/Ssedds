@@ -682,3 +682,5 @@ Spec `docs/superpowers/specs/2026-10-12-complex-grass-design.md`, plan `docs/sup
 - **X6 Header patch.** `PatchRequest.complex_grass` (set by `sdc patch-header --subtype complex_grass`) accepts exactly one level short of the full chain for a 1:2 file.
 - **X7 No version bump.** No preset and no existing output changes, so the engine version stays 0.7.0 and nothing re-encodes under `if-changed`. Codes 80 → 86.
 - **X8 Accepted limits.** `VAL-COVERAGE`/`base_coverage` measure the whole stacked level, so the bottom half's specular alpha counts toward coverage (warnings only). A grass file whose stem ends in a raw-map or normal-layer suffix is treated as that, not as grass.
+- **X9 Map check.** A set with a `complex_grass` member gets no `SHADER-EXTRA-MAP`/`SHADER-MISSING-MAP`: the grass shader reads diffuse and normal from the one file, so the lighting shader's map roles do not apply (final review I1).
+- **X10 Auto-detect needs a `textures` folder.** Like mesh votes and mesh alpha, the GRAS match uses the input's game path, so a folder opened without a `textures` ancestor is never auto-tagged; tag by hand there.
