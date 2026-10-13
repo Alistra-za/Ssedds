@@ -316,7 +316,7 @@ fn json_only_edits_do_not_replan_but_match_edits_do() {
     assert!(!m.busy(), "a material value does not plan");
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\boulder")),
     );
     assert!(m.busy(), "a match changes output paths, so it plans");
@@ -335,7 +335,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
     idle(&mut m);
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\boulder")),
     );
     idle(&mut m);
@@ -354,7 +354,7 @@ fn clearing_a_match_returns_to_the_derived_prefix() {
             .as_deref(),
         Some(r"landscape\rock01")
     );
-    m.set_json_value("landscape/rock01", "match_diffuse", None);
+    m.set_json_value("landscape/rock01", "match1", None);
     idle(&mut m);
     assert_eq!(
         view(&set_views(&m), "landscape/rock01").prefix.as_deref(),
@@ -721,7 +721,7 @@ fn a_packed_format_applies_after_a_match_edit() {
     let before = packed(&m).key;
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\stone")),
     );
     idle(&mut m);
@@ -763,7 +763,7 @@ fn a_packed_entry_stays_matched_after_a_match_edit() {
     m.set_format(&key, Format::Bc1, ColorTag::Unorm);
     m.set_json_value(
         "landscape/rock01",
-        "match_diffuse",
+        "match1",
         Some(json!(r"landscape\stone")),
     );
     idle(&mut m);
@@ -1308,4 +1308,25 @@ fn a_scan_database_decides_a_diffuse_alpha() {
         (AlphaPolicy::Blend, "mesh:alpha".to_string())
     );
     assert!(!asked(&m));
+}
+
+/// F1 spec Review Focus 1: match1 comes from the source, so a set rename does not move it off the mesh's path.
+#[test]
+fn a_renamed_set_still_matches_its_source_path() {
+    use sdc_gui::model::pbr_export::json_entries;
+    use sdc_gui::pgp::writer::entry_node;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.rename_set("landscape/rock01", "landscape/boulder")
+        .unwrap();
+    idle(&mut m);
+    let (_, e) = json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == "landscape/boulder")
+        .expect("the renamed set is a PBR set");
+    assert_eq!(
+        entry_node(&e).to_value()["match1"],
+        json!(r"landscape\rock01.dds")
+    );
 }

@@ -1,37 +1,11 @@
-//! Match modes and the output prefix PGPatcher derives (M3b spec §5.5, gap review "How match1–match8 build the
-//! output prefix"). Quirks are kept on purpose: the files must land where PGPatcher looks.
+//! Slot matches and the output prefix PGPatcher derives (M3b spec §5.5; M6 F1 spec §3, DECISIONS V1–V4).
+//! Quirks are kept on purpose: the files must land where PGPatcher looks.
 use super::settings::Settings;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefixError(pub String);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MatchMode {
-    Diffuse,
-    Normal,
-    PathContains,
-    Slot(u8),
-}
-
-/// The first alternative match key that is set decides the mode; none set means `match_diffuse` (spec §4.4).
-pub fn match_mode(s: &Settings) -> MatchMode {
-    let set = |k: &str| {
-        s.get(k)
-            .and_then(Value::as_str)
-            .is_some_and(|v| !v.is_empty())
-    };
-    if set("match_normal") {
-        return MatchMode::Normal;
-    }
-    if set("path_contains") {
-        return MatchMode::PathContains;
-    }
-    (1..=8u8)
-        .find(|n| set(&format!("match{n}")))
-        .map_or(MatchMode::Diffuse, MatchMode::Slot)
-}
 
 pub fn slot_suffixes(n: u8) -> &'static [&'static str] {
     match n {
@@ -106,20 +80,6 @@ pub fn check_json_path(p: &str, field: &str) -> Result<(), PrefixError> {
     check_rel_path(p, field)
 }
 
-/// `match_diffuse`/`match_normal`: PGPatcher matches them against paths relative to `textures\`, so a value that
-/// starts with `textures\` never matches (DECISIONS P26).
-fn check_match_value(p: &str, field: &str) -> Result<(), PrefixError> {
-    check_json_path(p, field)?;
-    let t = p.trim();
-    if strip_ci(t, "textures\\").len() != t.len() {
-        return Err(PrefixError(format!(
-            "{field}: PGPatcher matches paths relative to textures\\, so a value starting with textures\\ never \
-             matches; remove textures\\ ({p:?})"
-        )));
-    }
-    Ok(())
-}
-
 /// `rel_dir` (the diffuse's folder under the opened folder, '/'-separated) and its output stem → `match_diffuse`:
 /// without a leading `textures/` and `pbr/`, with backslashes, case kept.
 pub fn derive_match_diffuse(rel_dir: &str, stem: &str) -> String {
@@ -169,53 +129,123 @@ fn strip_slot_suffix(v: &str, n: u8) -> String {
     v.to_string()
 }
 
-/// The output prefix (backslashes, no extension) of a set with effective settings `s`; `derived` is the derived
-/// `match_diffuse`.
+/// `matchN` as the JSON writes it (DECISIONS V2): no leading `textures\` (PGPatcher prepends one only when the value
+/// does not start with exactly `textures\`), and `.dds` exactly once (F1 Review Focus 2).
+pub fn match_value(v: &str) -> String {
+    let v = strip_ci(v.trim(), "textures\\");
+    if has_dds(v) {
+        v.to_string()
+    } else {
+        format!("{v}.dds")
+    }
+}
+
+fn has_dds(v: &str) -> bool {
+    v.len() >= 4
+        && v.get(v.len() - 4..)
+            .is_some_and(|e| e.eq_ignore_ascii_case(".dds"))
+}
+
+/// The active slot matches of a set, stored form (no `.dds`), N ascending (F1 spec §3.1, DECISIONS V2). `match1` is
+/// the derived diffuse path while the set has no `match1` key; `match1 = ""` is the diffuse toggle turned off.
+/// `match_diffuse` and `match_normal` are ignored (spec §3.3).
+pub fn active_matches(s: &Settings, derived: &str) -> Vec<(u8, String)> {
+    (1..=8u8)
+        .filter_map(|n| {
+            let v = match s.get(&format!("match{n}")) {
+                None if n == 1 => derived,
+                Some(Value::String(v)) => v.as_str(),
+                _ => return None,
+            };
+            let v = v.trim();
+            (!v.is_empty()).then(|| (n, v.to_string()))
+        })
+        .collect()
+}
+
+/// What a typed `matchN` value stores: trimmed, one trailing `.dds` cut. Empty turns the match off: `match1 = ""`
+/// (removing the key would bring the derived default back), any other slot loses its key.
+pub fn stored_match(n: u8, typed: &str) -> Option<Value> {
+    let t = typed.trim();
+    let t = if has_dds(t) { &t[..t.len() - 4] } else { t };
+    match (n, t.is_empty()) {
+        (1, true) => Some(json!("")),
+        (_, true) => None,
+        _ => Some(json!(t)),
+    }
+}
+
+/// The edit that turns slot match `n` on or off, as (key, value for `set_json_value`) (F1 spec §3.2). Slot 1 on
+/// removes the key (the derived default applies) and off stores `""`; other slots store `path` when on and lose the
+/// key when off.
+pub fn match_toggle(n: u8, on: bool, path: &str) -> (String, Option<Value>) {
+    let v = match (n == 1, on) {
+        (true, true) | (false, false) => None,
+        (true, false) => Some(json!("")),
+        (false, true) => Some(json!(path)),
+    };
+    (format!("match{n}"), v)
+}
+
+/// The path a match on the slot with canonical `suffix` starts from (DECISIONS V1): the derived diffuse path for the
+/// diffuse (`""`), else that path with a trailing `_d` cut and `_<suffix>` added. Only `_d` pairs with `_n` in vanilla
+/// naming: `facemask.dds` goes with `facemask_n.dds`, so `mask` stays (unlike PGPatcher's prefix rule).
+pub fn slot_match_path(derived: &str, suffix: &str) -> String {
+    if suffix.is_empty() {
+        return derived.to_string();
+    }
+    let cut = derived.len().saturating_sub(2);
+    let base = match derived.get(cut..) {
+        Some(d) if d.eq_ignore_ascii_case("_d") => &derived[..cut],
+        _ => derived,
+    };
+    format!("{base}_{suffix}")
+}
+
+/// The warning of a set whose entry can never apply (F1 spec §3.2).
+pub const NO_MATCH: &str = "this entry matches nothing";
+
+/// No active `matchN` and no `path_contains`: PGPatcher would never apply the entry (DECISIONS V4).
+pub fn matches_nothing(s: &Settings, derived: &str) -> bool {
+    active_matches(s, derived).is_empty() && text(s, "path_contains").is_none()
+}
+
+/// The output prefix (backslashes, no extension) of a set with settings `s` and derived diffuse path `derived`
+/// (DECISIONS V3): the lowest active `matchN`, as PGPatcher's first hit gives it, else the derived path.
 pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
     let rename = text(s, "rename").map(str::trim);
     if let Some(r) = &rename {
         check_json_path(r, "rename")?;
     }
-    let mode = match_mode(s);
-    match mode {
-        MatchMode::Diffuse | MatchMode::PathContains | MatchMode::Normal => {
-            let (field, value) = match mode {
-                MatchMode::Normal => (
-                    "match_normal",
-                    text(s, "match_normal").unwrap_or_default().to_string(),
-                ),
-                MatchMode::Diffuse => (
-                    "match_diffuse",
-                    text(s, "match_diffuse").map_or_else(|| derived.to_string(), str::to_string),
-                ),
-                _ => ("match_diffuse", derived.to_string()),
-            };
-            let value = value.trim().to_string();
-            check_match_value(&value, field)?;
-            if let Some(r) = rename {
-                return Ok(under_pbr(r));
-            }
-            let mut v = strip_ext(&value).to_string();
-            if mode == MatchMode::Normal {
-                v = strip_slot_suffix(&v, 2);
-            }
-            Ok(under_pbr(&v))
-        }
-        MatchMode::Slot(n) => {
-            let field = format!("match{n}");
-            let value = text(s, &field).unwrap_or_default().trim();
-            check_json_path(value, &field)?;
+    let matches = active_matches(s, derived);
+    for (n, v) in &matches {
+        check_json_path(v, &format!("match{n}"))?;
+    }
+    match matches.first() {
+        Some((n, v)) => {
             if let Some(r) = rename {
                 return Ok(r.to_string());
             }
-            Ok(under_pbr(&strip_slot_suffix(strip_ext(value), n)))
+            let full = match_value(v);
+            let stem = &full[..full.len() - 4];
+            Ok(under_pbr(&strip_slot_suffix(stem, *n)))
+        }
+        None => {
+            let d = derived.trim();
+            check_json_path(d, "diffuse path")?;
+            Ok(under_pbr(rename.unwrap_or(d)))
         }
     }
 }
 
-/// Warnings that are never "corrected" (owner, 2026-10-09).
-pub fn pitfalls(s: &Settings) -> Vec<String> {
+/// Warnings that are never "corrected" (owner, 2026-10-09; F1 DECISIONS V4).
+pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
     let mut out = vec![];
+    if matches_nothing(s, derived) {
+        out.push(format!(
+            "{NO_MATCH}, so it is left out of the PGPatcher JSON"
+        ));
+    }
     if let Some(v) = text(s, "match8") {
         if strip_ext(&v.to_lowercase()).ends_with("_s") {
             out.push(
@@ -224,7 +254,7 @@ pub fn pitfalls(s: &Settings) -> Vec<String> {
             );
         }
     }
-    if matches!(match_mode(s), MatchMode::Slot(_)) {
+    if !active_matches(s, derived).is_empty() {
         if let Some(r) = text(s, "rename") {
             let starts_with_textures = backslash(r).to_lowercase().starts_with("textures\\");
             if !starts_with_textures {

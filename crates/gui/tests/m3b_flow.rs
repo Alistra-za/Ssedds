@@ -125,7 +125,8 @@ fn build_sets_export_and_reexport_unchanged() {
     sdc_gui::pgp::validate::validate(&v).unwrap();
     let entries = v["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2, "{text}");
-    assert_eq!(entries[0]["match_diffuse"], json!(r"landscape\rock01"));
+    assert_eq!(entries[0]["match1"], json!(r"landscape\rock01.dds"));
+    assert!(entries[0].get("match_diffuse").is_none());
     assert_eq!(entries[0]["slot3"], json!(r"effects\white.dds"));
     assert_eq!(
         entries[1]["slot6"],

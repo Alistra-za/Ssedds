@@ -758,8 +758,8 @@ fn the_header_has_the_json_name_and_the_drawer_has_the_advanced_keys() {
     h.run();
     h.get_by_label("JSON:");
     h.get_by_label_contains("PGPatcher (advanced)");
-    h.get_by_label_contains("Matching by: match_diffuse");
-    h.get_by_label("Match normal");
+    h.get_by_label("Match slot 1 (diffuse)");
+    assert!(h.query_by_label("Match normal").is_none());
     h.get_by_label("Lock diffuse");
 }
 

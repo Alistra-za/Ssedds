@@ -3,7 +3,6 @@
 use super::columns::AMBER;
 use crate::model::sets::{set_views, SetView, SlotFill, SlotKind};
 use crate::model::AppModel;
-use crate::pgp::prefix::{match_mode, MatchMode};
 use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
@@ -147,13 +146,6 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
 pub fn advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
-    let mode = match match_mode(&c.own) {
-        MatchMode::Diffuse => "match_diffuse".to_string(),
-        MatchMode::Normal => "match_normal".into(),
-        MatchMode::PathContains => "path_contains".into(),
-        MatchMode::Slot(n) => format!("match{n}"),
-    };
-    ui.label(format!("Matching by: {mode}"));
     for g in ADVANCED {
         if !group_open(g, &c.own) {
             continue;
@@ -318,8 +310,8 @@ fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits:
                     .unwrap_or_default()
             });
             let hint = match (k.key, &c.derived) {
-                ("match_diffuse", Some(d)) => format!("{d} (derived)"),
-                ("match_diffuse", None) => "(derived)".to_string(),
+                ("match1", Some(d)) => format!("{d} (derived)"),
+                ("match1", None) => "(derived)".to_string(),
                 _ => String::new(),
             };
             let r = ui.add(

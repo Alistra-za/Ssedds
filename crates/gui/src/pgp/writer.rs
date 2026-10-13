@@ -1,6 +1,6 @@
 //! The PGPatcher JSON document (M3b spec §5.2–5.3, §5.6): `{ "$schema", "default", "entries" }`, keys in schema
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
-use super::prefix::{match_mode, MatchMode};
+use super::prefix::{active_matches, match_value};
 use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
 use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
@@ -31,6 +31,7 @@ pub struct EntryInput {
     pub settings: Settings,
     /// Final slot paths (commands and borrowed slots, already merged by the caller): slot → path, `""` clears.
     pub slots: BTreeMap<u8, String>,
+    /// The derived diffuse path: `match1` while the set has no `match1` key (DECISIONS V2).
     pub derived_match: String,
 }
 
@@ -138,7 +139,7 @@ fn fixed_default_block() -> Vec<(String, Node)> {
 /// The entry for one set: only the set's own settings, under the per-kind rules, in schema order.
 fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(String, Node)> {
     let mut out = vec![];
-    let mode = match_mode(own);
+    let matches = active_matches(own, derived);
     for k in KEYS.iter().filter(|k| !k.key.contains('.')) {
         if let Some(f) = group_feature(k.group) {
             if !live(own, f) {
@@ -163,21 +164,21 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                     .map(Node::Scalar)
             }
             KeyKind::Tri => v.map(|v| Node::Scalar(v.clone())),
-            KeyKind::Text => {
-                if k.key == "match_diffuse" {
-                    match mode {
-                        MatchMode::Diffuse => Some(Node::Scalar(json!(v
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(derived)))),
-                        _ => None,
-                    }
-                } else {
-                    v.and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map(|s| Node::Scalar(json!(s)))
-                }
-            }
+            KeyKind::Text => match k
+                .key
+                .strip_prefix("match")
+                .and_then(|n| n.parse::<u8>().ok())
+            {
+                // matchN: the active slot matches only, in the JSON form (DECISIONS V2).
+                Some(n) => matches
+                    .iter()
+                    .find(|(m, _)| *m == n)
+                    .map(|(_, v)| Node::Scalar(json!(match_value(v)))),
+                None => v
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Node::Scalar(json!(s))),
+            },
             KeyKind::Rgb => v.and_then(|v| colour(v, false)),
             KeyKind::Rgba => v.and_then(|v| colour(v, true)),
             KeyKind::Slot => {
