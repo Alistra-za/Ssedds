@@ -13,7 +13,7 @@ use nif::path::is_facegen;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use vfs::bsa::Bsa;
 
@@ -62,6 +62,8 @@ pub struct Report {
     pub notes: Vec<String>,
     /// Wall time per phase in milliseconds, in run order: origins, walk, parse, write, resolve, textures, plugins.
     pub phase_ms: Vec<(&'static str, u64)>,
+    /// Sub-timers in milliseconds (spec §2 step 1; ruling R2). `*_cpu` entries are summed over the parse threads.
+    pub sub_ms: Vec<(&'static str, u64)>,
     /// The plugin pass (esp spec §2.2): `Some` after an MO2 run whose plugin pass finished.
     pub plugins: Option<crate::plugins::PluginStats>,
 }
@@ -71,6 +73,11 @@ fn lap(t: &mut Instant) -> u64 {
     let ms = t.elapsed().as_millis() as u64;
     *t = Instant::now();
     ms
+}
+
+/// Nanoseconds since `t` (sub-timers summed across threads).
+fn ns(t: Instant) -> u64 {
+    t.elapsed().as_nanos() as u64
 }
 
 /// Scans one file's bytes; a parser panic becomes a `Failed` copy instead of aborting the scan.
@@ -311,8 +318,10 @@ pub fn run_with(
     report.nifs = copies.len();
 
     // 4. Parse or reuse.
+    let ti = Instant::now();
     let path_ids = store.path_ids(&copies.iter().map(|c| c.path.as_str()).collect::<Vec<_>>())?;
     let existing = store.existing_copies()?;
+    let intern_ms = ti.elapsed().as_millis() as u64;
     // Source candidates of derived copies: every non-derived copy of a derived copy's (dup-stripped) path.
     let source_paths: HashSet<String> = copies
         .iter()
@@ -350,6 +359,9 @@ pub fn run_with(
         }
     }
     let total = work.len();
+    let (read_loose_ns, read_bsa_ns, nif_parse_ns) =
+        (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
+    let mut write_chunk_ns = 0u64;
     for (n, chunk) in work.chunks(CHUNK).enumerate() {
         if cancel.load(Ordering::Relaxed) {
             store.discard_pending()?;
@@ -363,17 +375,25 @@ pub fn run_with(
         let results: Vec<(usize, CopyResult, Option<u32>)> = chunk
             .par_iter()
             .map(|&i| {
-                let bytes = match &locs[i] {
-                    Loc::Loose(p) => std::fs::read(p).map_err(|e| e.to_string()),
+                let t0 = Instant::now();
+                let (bytes, read_ns) = match &locs[i] {
+                    Loc::Loose(p) => (std::fs::read(p).map_err(|e| e.to_string()), &read_loose_ns),
                     Loc::Bsa(b, e) => {
                         let bsa = &opened[*b];
-                        bsa.read(&bsa.entries[*e]).map_err(|e| e.to_string())
+                        (
+                            bsa.read(&bsa.entries[*e]).map_err(|e| e.to_string()),
+                            &read_bsa_ns,
+                        )
                     }
                 };
+                read_ns.fetch_add(ns(t0), Ordering::Relaxed);
                 match bytes {
                     Ok(b) => {
+                        let t1 = Instant::now();
                         let crc = candidate[i].then(|| crc32fast::hash(&b));
-                        (i, scan_guarded(&b), crc)
+                        let r = scan_guarded(&b);
+                        nif_parse_ns.fetch_add(ns(t1), Ordering::Relaxed);
+                        (i, r, crc)
                     }
                     Err(e) => (i, CopyResult::ReadFailed(e), None),
                 }
@@ -405,7 +425,9 @@ pub fn run_with(
                 result: res,
             });
         }
+        let tw = Instant::now();
         store.write_chunk(&items)?;
+        write_chunk_ns += ns(tw);
         write_ms += lap(&mut t);
     }
     progress(Progress {
@@ -424,10 +446,20 @@ pub fn run_with(
         }
         return Ok(report);
     }
+    let tc = Instant::now();
     store.commit_pending()?;
+    let commit_ms = tc.elapsed().as_millis() as u64;
     write_ms += lap(&mut t);
     report.phase_ms.push(("parse", parse_ms));
     report.phase_ms.push(("write", write_ms));
+    report.sub_ms.extend([
+        ("intern", intern_ms),
+        ("read_loose_cpu", read_loose_ns.into_inner() / 1_000_000),
+        ("read_bsa_cpu", read_bsa_ns.into_inner() / 1_000_000),
+        ("nif_parse_cpu", nif_parse_ns.into_inner() / 1_000_000),
+        ("write_chunk", write_chunk_ns / 1_000_000),
+        ("commit_pending", commit_ms),
+    ]);
 
     // 6. Winners and the derived layer.
     progress(Progress {
@@ -435,6 +467,7 @@ pub fn run_with(
         done: 0,
         total: 1,
     });
+    let tr = Instant::now();
     let ids_by_key = store.copy_ids()?;
     let ids: Vec<i64> = copies
         .iter()
@@ -467,6 +500,9 @@ pub fn run_with(
         .map(|(p, &i)| (pid_of[p.as_str()], ids[i]))
         .collect();
     store.set_winners(&game_rows, &src_rows)?;
+    report
+        .sub_ms
+        .push(("winners", tr.elapsed().as_millis() as u64));
     let mut resolve_ms = lap(&mut t);
 
     // Texture winners (game view only; stat-only data from the walk).
@@ -569,8 +605,12 @@ pub fn run_with(
     store.set_derived(&rows, &new_crcs)?;
 
     // 7. Drop copies not seen in this walk.
+    let tdl = Instant::now();
     let seen: HashSet<i64> = ids.iter().copied().collect();
     store.delete_unseen(&seen)?;
+    report
+        .sub_ms
+        .push(("delete_unseen", tdl.elapsed().as_millis() as u64));
     resolve_ms += lap(&mut t);
     report.phase_ms.push(("resolve", resolve_ms));
     report.phase_ms.push(("textures", textures_ms));
@@ -586,6 +626,7 @@ pub fn run_with(
             match crate::plugins::scan_plugins(inst, &plugin_origins, store, cancel, progress) {
                 Ok(p) => {
                     report.phase_ms.push(("plugins", p.ms));
+                    report.sub_ms.extend(p.sub_ms.iter().copied());
                     report.plugins = Some(p);
                 }
                 Err(ScanError::Cancelled) => report.notes.push(PLUGINS_CANCELLED.into()),

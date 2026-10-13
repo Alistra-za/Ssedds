@@ -88,6 +88,8 @@ pub struct PluginStats {
     pub ms: u64,
     /// (plugin, message): not found, parse errors, missing masters, load-order limits. Every scan, cached or not.
     pub problems: Vec<(String, String)>,
+    /// Sub-timers in milliseconds (scan speed spec §2 step 1): plugin_read, plugin_write, plugin_resolve.
+    pub sub_ms: Vec<(&'static str, u64)>,
 }
 
 /// An active plugin found on disk.
@@ -158,6 +160,7 @@ pub fn scan_plugins(
         })
         .collect();
     st.cached = active.len() - work.len();
+    let (mut read_ns, mut write_ns) = (0u64, 0u64);
     for (k, chunk) in work.chunks(CHUNK).enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(ScanError::Cancelled);
@@ -167,13 +170,16 @@ pub fn scan_plugins(
             done: k * CHUNK,
             total: work.len(),
         });
+        let tr = Instant::now();
         let read: Vec<(usize, Result<PluginFacts, String>)> = chunk
             .par_iter()
             .map(|&i| (i, read_plugin(&active[i], cancel)))
             .collect();
+        read_ns += tr.elapsed().as_nanos() as u64;
         if cancel.load(Ordering::Relaxed) {
             return Err(ScanError::Cancelled);
         }
+        let tw = Instant::now();
         for (i, r) in read {
             let a = &active[i];
             let (facts, size) = match r {
@@ -198,6 +204,7 @@ pub fn scan_plugins(
                 &facts,
             )?;
         }
+        write_ns += tw.elapsed().as_nanos() as u64;
     }
     progress(Progress {
         phase: "plugins",
@@ -208,6 +215,7 @@ pub fn scan_plugins(
     if cancel.load(Ordering::Relaxed) {
         return Err(ScanError::Cancelled);
     }
+    let tres = Instant::now();
     let names: Vec<String> = active.iter().map(|a| a.name.clone()).collect();
     let removed = store.retain_plugins(&names)?;
     let rows = store.plugin_rows()?;
@@ -268,6 +276,11 @@ pub fn scan_plugins(
             .collect();
         store.resolve_plugins(&lo, &map)?;
     }
+    st.sub_ms = vec![
+        ("plugin_read", read_ns / 1_000_000),
+        ("plugin_write", write_ns / 1_000_000),
+        ("plugin_resolve", tres.elapsed().as_millis() as u64),
+    ];
     st.records = store.plugin_record_count()?;
     st.ms = t.elapsed().as_millis() as u64;
     Ok(st)

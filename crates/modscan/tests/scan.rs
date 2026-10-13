@@ -593,3 +593,64 @@ fn skip_derived_ignores_pgp_and_running_process() {
     );
     assert!(matches!(r, Err(modscan::ScanError::PgpRunning)));
 }
+
+/// Scan speed spec §2 step 1: cold then warm scan of the owner instance, with phase and sub-timers. Read-only on the
+/// instance; the store is a temp file, never the real scan.db.
+/// `SDC_ACHERUS='C:\_mount\moddingvol\Acherus' cargo test -p modscan --release --test scan owner_timing -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn owner_timing() {
+    let root = std::path::PathBuf::from(
+        std::env::var("SDC_ACHERUS").expect("set SDC_ACHERUS to the MO2 instance root"),
+    );
+    let db = tempfile::tempdir().unwrap();
+    let path = db.path().join("scan.db");
+    let mut store = Store::open(&path).unwrap();
+    #[cfg(windows)]
+    let procs = modscan::win::process_names;
+    #[cfg(not(windows))]
+    let procs = || -> Vec<String> { vec![] };
+    for pass in ["cold", "warm"] {
+        let inst = Instance::load(&root, None).unwrap();
+        let t = std::time::Instant::now();
+        let r = run(
+            &Source::Mo2(inst),
+            &mut store,
+            &AtomicBool::new(false),
+            &|_| {},
+            &procs,
+        )
+        .unwrap();
+        // A tainted run skipped resolve: its numbers are not comparable; rerun when PGPatcher is closed.
+        println!(
+            "{pass}: nifs={} parsed={} reused={} tainted={} elapsed {:.1} s",
+            r.nifs,
+            r.parsed,
+            r.reused,
+            r.tainted,
+            t.elapsed().as_secs_f64()
+        );
+        println!("{pass}: phase_ms {:?}", r.phase_ms);
+        println!("{pass}: sub_ms {:?}", r.sub_ms);
+    }
+    let q = |sql: &str| -> i64 { store.conn().query_row(sql, [], |r| r.get(0)).unwrap() };
+    println!(
+        "derived copies {}, BSA copies {}, shapes {}, paths {}, texsets {}",
+        q("SELECT count(*) FROM nif_copy WHERE is_derived = 1"),
+        q("SELECT count(*) FROM nif_copy c JOIN origin o ON o.id = c.origin_id WHERE o.kind = 4"),
+        q("SELECT count(*) FROM shape"),
+        q("SELECT count(*) FROM path"),
+        q("SELECT count(*) FROM texset")
+    );
+    let wal = std::fs::metadata(format!("{}-wal", path.display())).map_or(0, |m| m.len());
+    let t = std::time::Instant::now();
+    store
+        .conn()
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
+    println!(
+        "wal before checkpoint {} MB; checkpoint {} ms",
+        wal >> 20,
+        t.elapsed().as_millis()
+    );
+}
