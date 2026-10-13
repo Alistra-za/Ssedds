@@ -108,3 +108,20 @@ fn light_by_flag_or_extension() {
     assert!(is_light("X.esp", esp::FLAG_ESL));
     assert!(!is_light("X.esm", esp::FLAG_ESM));
 }
+
+/// Same-name plugins in several origins: overwrite beats a mod, a mod beats the game Data folder.
+#[test]
+fn plugin_collisions_resolve_by_origin_priority() {
+    let d = instance_fixture("+A\n");
+    let r = d.path();
+    put(r, "Game/Data/Both.esp", b"game");
+    put(r, "mods/A/Both.esp", b"mod");
+    put(r, "Game/Data/Three.esp", b"game");
+    put(r, "mods/A/Three.esp", b"mod");
+    put(r, "overwrite/Three.esp", b"over");
+    let inst = Instance::load(r, None).unwrap();
+    let (loose, _) = loose_origins(&inst).unwrap();
+    let f = plugin_files(&loose);
+    assert_eq!(fs::read(&f["both.esp"].0).unwrap(), b"mod");
+    assert_eq!(fs::read(&f["three.esp"].0).unwrap(), b"over");
+}
