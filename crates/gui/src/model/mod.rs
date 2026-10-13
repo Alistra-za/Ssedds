@@ -10,6 +10,7 @@ pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
 pub mod preview;
+pub mod rnm;
 pub mod set_preview;
 pub mod sets;
 pub mod view;
@@ -177,6 +178,10 @@ pub struct AppModel {
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched_keys: Vec<String>,
+    /// Per-set RNM-* notes from layer jobs (they have no item).
+    pub rnm_notes: std::collections::BTreeMap<String, Vec<engine::codes::Warning>>,
+    /// Layer, mask and AO path to its `[files]` key.
+    pub rnm_keys: std::collections::BTreeMap<PathBuf, String>,
     /// The preset id the last plan resolved (empty before the first plan).
     pub batch_preset: String,
     pub selection: Selection,
@@ -259,6 +264,8 @@ impl AppModel {
             items: vec![],
             sets: vec![],
             unmatched_keys: vec![],
+            rnm_notes: Default::default(),
+            rnm_keys: Default::default(),
             batch_preset: String::new(),
             selection: Selection::None,
             filter: Filter::default(),
@@ -1022,6 +1029,8 @@ impl AppModel {
         self.items = view.items;
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
+        self.rnm_notes = view.rnm_notes;
+        self.rnm_keys = view.rnm_keys;
         self.batch_preset = view.preset_id;
         self.loaded_user_presets = view.user_presets;
         self.skipped_user_presets = view.skipped_user_presets;
