@@ -26,7 +26,7 @@ fn shared_thumbs(ctx: &egui::Context) -> Arc<Mutex<ThumbCache>> {
     })
 }
 
-fn thumb(ui: &mut egui::Ui, model: &AppModel, path: &Path, invert: bool) {
+fn thumb(ui: &mut egui::Ui, model: &AppModel, path: &Path, invert: Option<usize>) {
     let t = model
         .session
         .as_ref()
@@ -70,18 +70,18 @@ fn row(
 ) {
     let id = r.id.id();
     ui.horizontal(|ui| {
-        thumb(ui, model, &r.path, false);
+        thumb(ui, model, &r.path, None);
         ui.label(r.label);
-        let mut v = r.strength;
-        if ui.add(egui::Slider::new(&mut v, 0.0..=2.0)).changed() {
-            let v = json!(v.clamp(0.0, 2.0));
+        let sid = egui::Id::new(("rnm-strength", key, id));
+        if let Some(v) = drag_slider(ui, sid, r.strength, 0.0..=2.0, "") {
+            let v = json!(v);
             edits.push((key.into(), format!("rnm.{id}.strength"), Some(v)));
         }
         let flip = format!("rnm.{id}.flip_green");
         check(ui, edits, key, flip, r.flip_green, "flip green");
         match &r.mask {
             Some((p, used)) => {
-                thumb(ui, model, p, false);
+                thumb(ui, model, p, None);
                 check(ui, edits, key, format!("rnm.{id}.mask"), *used, "mask");
             }
             None => {
@@ -131,18 +131,15 @@ fn bent(ui: &mut egui::Ui, model: &AppModel, key: &str, job: &ResolvedJob, edits
         if mode != b.mode {
             edits.push((key.into(), "rnm.bent.mode".into(), Some(json!(mode))));
         }
-        let mut p = job.profile.rnm.ao_power();
-        if ui
-            .add(egui::Slider::new(&mut p, 0.1..=8.0).text("AO power"))
-            .changed()
-        {
-            let p = json!(p.clamp(0.1, 8.0));
+        let pid = egui::Id::new(("rnm-ao-power", key));
+        if let Some(p) = drag_slider(ui, pid, job.profile.rnm.ao_power(), 0.1..=8.0, "AO power") {
+            let p = json!(p);
             edits.push((key.into(), "rnm.bent.ao_power".into(), Some(p)));
         }
     });
     if let Some((path, channel, used)) = ao_line(job) {
         ui.horizontal(|ui| {
-            thumb(ui, model, &path, true);
+            thumb(ui, model, &path, Some(usize::from(channel)));
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             ui.label(if channel == 2 {
                 format!("{name} (B channel)")
@@ -211,4 +208,27 @@ pub fn rnm_section(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
             None => model.clear_field(&k, &f),
         }
     }
+}
+
+/// A slider that returns its value once per gesture (drag release, click or key press), not every frame; the
+/// value in flight lives in `ui.data` under `id`.
+fn drag_slider(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    current: f64,
+    range: std::ops::RangeInclusive<f64>,
+    text: &str,
+) -> Option<f64> {
+    let pending: Option<f64> = ui.data(|d| d.get_temp(id));
+    let mut v = pending.unwrap_or(current);
+    let r = ui.add(egui::Slider::new(&mut v, range.clone()).text(text));
+    if r.changed() {
+        ui.data_mut(|d| d.insert_temp(id, v));
+    }
+    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+        ui.data_mut(|d| d.remove_temp::<f64>(id));
+        let v = v.clamp(*range.start(), *range.end());
+        return (v != current).then_some(v);
+    }
+    None
 }

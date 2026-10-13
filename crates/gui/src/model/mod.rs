@@ -822,6 +822,12 @@ impl AppModel {
                     .collect(),
                 None => vec![(job.input.as_path(), job.source)],
             };
+            let rnm = job
+                .active_rnm()
+                .into_iter()
+                .flat_map(|r| r.inputs(&job.profile.rnm))
+                .map(|(f, _)| (f.path.as_path(), f.stamp));
+            let stamps: Vec<_> = stamps.into_iter().chain(rnm).collect();
             for (path, planned) in stamps {
                 if planned.is_some_and(|p| SourceStamp::of(path) != Some(p)) {
                     changed_paths.insert(path.to_path_buf());
@@ -838,6 +844,10 @@ impl AppModel {
                 || item.job.as_ref().is_some_and(|j| {
                     j.pack.as_ref().is_some_and(|pk| {
                         pk.sources.iter().any(|s| changed_paths.contains(&s.path))
+                    }) || j.active_rnm().is_some_and(|r| {
+                        r.inputs(&j.profile.rnm)
+                            .iter()
+                            .any(|(f, _)| changed_paths.contains(&f.path))
                     })
                 });
             n += usize::from(item.changed_on_disk);

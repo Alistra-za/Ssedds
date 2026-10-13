@@ -1547,7 +1547,7 @@ impl Engine {
                             kind: SkipKind::NormalLayer,
                             code: w.map(|w| w.code),
                             reason: w.map_or_else(
-                                || "RNM normal layer, blended into its base normal".to_string(),
+                                || "RNM normal layer, used through its base normal".to_string(),
                                 |w| w.message.clone(),
                             ),
                         },

@@ -113,3 +113,42 @@ fn no_base_notes_are_kept_per_set() {
         .any(|w| w.code.as_str() == "RNM-NO-BASE");
     assert!(found, "notes: {:?}", m.rnm_notes);
 }
+
+#[test]
+fn layer_target_edit_changes_the_set_preview_signature() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(
+        d.path(),
+        &[
+            "iron.png",
+            "iron_n.png",
+            "iron_cnr.png",
+            "iron_detailnorm.png",
+        ],
+    );
+    let sig = |m: &mut AppModel, t: &str| {
+        m.set_field("m/iron_detailnorm.png", "rnm.target", json!(t));
+        idle(m);
+        let item = m.item("m/iron_cnr.png").unwrap();
+        assert!(item.job.as_ref().unwrap().active_rnm().is_some() || t == "n");
+        sdc_gui::model::set_preview::signature(item)
+    };
+    let (a, b) = (sig(&mut m, "n"), sig(&mut m, "cnr"));
+    assert_ne!(
+        a, b,
+        "the _cnr preview must refresh when a layer is retargeted"
+    );
+}
+
+#[test]
+fn editing_a_layer_file_flags_its_base_normal() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &FULL);
+    assert_eq!(m.check_sources(), 0);
+    std::thread::sleep(Duration::from_millis(20));
+    ImageBuffer::from_fn(32, 32, |_, _| Rgb([128u8, 128, 255]))
+        .save(d.path().join("m/iron_detailnorm.png"))
+        .unwrap();
+    assert!(m.check_sources() >= 1);
+    assert!(m.item("m/iron_n.png").unwrap().changed_on_disk);
+}
