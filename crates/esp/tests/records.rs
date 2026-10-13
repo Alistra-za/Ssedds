@@ -539,3 +539,38 @@ fn flst_entries_and_the_projectile_decal_are_txst_refs() {
     let r = one(b"PROJ", rec(b"PROJ", 3, &[sub(b"DATA", &data[..84])]));
     assert!(r.payload.txst_refs.is_empty(), "a short DATA has no decal");
 }
+
+/// Re-review: the WRLD record's cloud model (xEdit `wbRecord(WRLD…)`, `wbGenericModel`) is read with its alternate
+/// textures, and the placement walk of the world's children is unchanged.
+#[test]
+fn a_worldspace_cloud_model_is_read_and_its_children_still_place() {
+    let id = 0x3000u32.to_le_bytes();
+    let refr = rec(b"REFR", 0x3100, &[form(b"NAME", 0xB01)]);
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[top(
+                b"WRLD",
+                &[
+                    rec(
+                        b"WRLD",
+                        0x3000,
+                        &[
+                            edid("World"),
+                            sub(b"MODL", &zstr("Sky/Clouds.nif")),
+                            sub(b"MODS", &alt(&[("S", 0xA01, 0)])),
+                        ],
+                    ),
+                    grup(&id, 1, &[grup(&id, 8, &[refr])]),
+                ],
+            )],
+        ),
+    );
+    assert!(f.errors.is_empty(), "{:?}", f.errors);
+    assert_eq!(f.placed, [0xB01]);
+    assert_eq!(f.records.len(), 1);
+    let m = &f.records[0].payload.models;
+    assert_eq!((m.len(), m[0].alt.len()), (1, 1));
+}

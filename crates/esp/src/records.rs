@@ -6,7 +6,7 @@ use nif::path::{canon_model, canon_texture};
 /// Top-level groups read (spec §3); every other group is skipped by its size. The last row is every other type with a
 /// `wbGenericModel` (MODL + MODS alternate textures; xEdit dev-4.1.6 `wbDefinitionsTES5.pas`: TACT, ANIO, CLMT, IDLM,
 /// PROJ, HAZD, EXPL, ADDN, CAMS, ARTO, MATO, LVLN, APPA, SCOL, BPTD) and FLST (LNAM lists; ARMA NAM2/NAM3 skin swaps).
-/// WRLD (cloud model) is walked for placements only, so its model is not read.
+/// WRLD is walked for placements (`read.rs`); its own record, with the cloud model, is read there too.
 const WANTED: [[u8; 4]; 45] = [
     *b"TXST", *b"STAT", *b"MSTT", *b"ACTI", *b"FURN", *b"DOOR", *b"CONT", *b"LIGH", *b"MISC",
     *b"TREE", *b"FLOR", *b"GRAS", *b"ARMA", *b"ARMO", *b"WEAP", *b"AMMO", *b"BOOK", *b"INGR",

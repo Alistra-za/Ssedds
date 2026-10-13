@@ -703,3 +703,30 @@ fn a_path_named_by_a_live_and_an_inert_record_is_listed_once_as_live() {
     assert_eq!(live[0].records, ["Placed [00000B01] STAT — Skyrim.esm"]);
     assert!(inert_refs.is_empty(), "{inert_refs:?}");
 }
+
+/// Re-review: a TXST named only by a worldspace's cloud-model alternate textures is reached, not inert.
+#[test]
+fn a_txst_used_only_by_a_worldspace_model_is_not_inert() {
+    let d = instance_fixture("+A\n");
+    put(
+        d.path(),
+        "Game/Data/Skyrim.esm",
+        &plugin(
+            esp::FLAG_ESM,
+            &[],
+            &[
+                top(
+                    b"TXST",
+                    &[txst(0xA01, "ViaWorld", None), txst(0xA02, "Nobody", None)],
+                ),
+                top(
+                    b"WRLD",
+                    &[model(b"WRLD", 0xB01, "World", "clouds.nif", 0xA01)],
+                ),
+            ],
+        ),
+    );
+    put(d.path(), "profiles/Default/plugins.txt", b"# none\n");
+    let (s, _) = scan(&d);
+    assert_eq!(inert(&s), [("Nobody".to_string(), 1)]);
+}

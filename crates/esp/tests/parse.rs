@@ -413,7 +413,8 @@ fn placed_references_in_interior_and_exterior_cells() {
     );
     assert!(f.errors.is_empty(), "{:?}", f.errors);
     assert_eq!(f.placed, vec![0x0ABC, 0x7777, 0x0100_0800]);
-    assert_eq!(f.records.len(), 1, "placed references are not records");
+    // The STAT and the WRLD record itself (its cloud model is read); placed references are not records.
+    assert_eq!(f.records.len(), 2);
 }
 
 /// Review focus 4: a bad nested group is reported and ends only its own group.
