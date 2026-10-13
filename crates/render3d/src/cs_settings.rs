@@ -486,8 +486,14 @@ fn pack_skin(skin: &Map<String, Value>, new: bool, out: &mut [(String, Vec<f64>)
             p("WetResponse"),
         )
     } else {
+        // A missing EnableSkin falls back to the capture's skinParams.w before the AND.
+        let skin_on = top("EnableSkin").or_else(|| {
+            out.iter()
+                .find(|(n, _)| n == "skinData.skinParams")
+                .map(|(_, v)| v[3])
+        });
         let on = p("EnableSkinDetail")
-            .zip(top("EnableSkin"))
+            .zip(skin_on)
             .map(|(d, e)| f64::from(u8::from(d != 0.0 && e != 0.0)));
         (tiling, on, Some(0.0), Some(0.0))
     };

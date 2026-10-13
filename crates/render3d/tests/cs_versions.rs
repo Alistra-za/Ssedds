@@ -307,3 +307,33 @@ fn each_build_packs_skin_tiling_its_own_way() {
         }
     }
 }
+
+/// Old packing, partial settings: a missing EnableSkin falls back to the capture value (skin on) before the AND.
+#[test]
+fn old_detail_flag_falls_back_per_flag() {
+    let s = with(serde_json::json!({"Advanced Skin": {"EnableSkinDetail": true}}));
+    let fd = feature_data(&s, &fields_of("cs18_bottle"), true, false);
+    assert_eq!(value(&fd, "skinData.skinParams")[3], 1.0);
+    assert_eq!(value(&fd, "skinData.skinDetailParams")[3], 1.0);
+}
+
+/// Non-default tiling inputs, so a hard-coded 20/2 or 10/1 cannot pass.
+#[test]
+fn skin_tiling_follows_the_settings_values() {
+    let s = with(
+        serde_json::json!({"Advanced Skin": {"SkinDetailTiling": 7.0, "BodyTilingMultiplier": 3.0}}),
+    );
+    let f = fields_of("aio190");
+    let body = feature_data(&s, &f, true, false);
+    let head = feature_data(&s, &f, true, true);
+    assert_eq!(
+        value(&body, "skinPerGeometryProfile.skinDetailParams")[..2],
+        [21.0, 3.0]
+    );
+    assert_eq!(
+        value(&head, "skinPerGeometryProfile.skinDetailParams")[..2],
+        [7.0, 1.0]
+    );
+    let old = feature_data(&s, &fields_of("cs18_bottle"), true, false);
+    assert_eq!(value(&old, "skinData.skinDetailParams")[..2], [7.0, 3.0]);
+}
