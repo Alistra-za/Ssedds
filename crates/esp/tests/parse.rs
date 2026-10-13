@@ -259,6 +259,24 @@ fn a_stream_inflating_past_its_declared_size_is_an_error_and_the_next_record_is_
 }
 
 #[test]
+fn a_stream_inflating_short_of_its_declared_size_reports_the_exact_size() {
+    let mut liar = compressed(&edid("abc"));
+    let real = u32::from_le_bytes(liar[0..4].try_into().unwrap());
+    liar[0..4].copy_from_slice(&(real + 5).to_le_bytes());
+    let f = parse(
+        "x.esp",
+        &plugin(
+            0,
+            &[],
+            &[top(b"STAT", &[rec_raw(b"STAT", 1, FLAG_COMPRESSED, &liar)])],
+        ),
+    );
+    assert_eq!(f.errors.len(), 1, "{:?}", f.errors);
+    let want = format!("inflates to {real} bytes, header says {}", real + 5);
+    assert!(f.errors[0].contains(&want), "{:?}", f.errors);
+}
+
+#[test]
 fn a_declared_size_over_the_cap_is_an_error() {
     let mut huge = compressed(&edid("x"));
     huge[0..4].copy_from_slice(&u32::MAX.to_le_bytes());

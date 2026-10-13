@@ -227,8 +227,10 @@ fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
         .read_to_end(&mut out)
         .map_err(|e| format!("bad zlib stream: {e}"))?;
     if out.len() != want {
+        // Longer than declared: the read stopped at want + 1, so the true size is unknown.
+        let or_more = if out.len() > want { " or more" } else { "" };
         return Err(format!(
-            "bad zlib stream: inflates to {} bytes or more, header says {want}",
+            "bad zlib stream: inflates to {} bytes{or_more}, header says {want}",
             out.len()
         ));
     }
