@@ -1510,3 +1510,14 @@ fn inert_ref_lines_are_cached_until_the_filter_changes() {
     assert!(!std::sync::Arc::ptr_eq(&a, &c));
     assert_eq!(c.len(), 1);
 }
+
+/// Re-review (M4): a reload that replaces the inert paths shows the new lines although the filter is unchanged.
+#[test]
+fn reloading_file_references_replaces_the_cached_inert_lines() {
+    let (_d, mut m) = scanned();
+    m.missing_inert = vec![missing_ref("meshes/old.nif".into())];
+    assert_eq!(m.refs_inert_lines().len(), 1);
+    m.load_file_refs(); // the store has no inert paths
+    assert!(m.missing_inert.is_empty());
+    assert!(m.refs_inert_lines().is_empty(), "stale cached lines");
+}
