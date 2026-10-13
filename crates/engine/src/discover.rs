@@ -117,6 +117,10 @@ pub fn discover_reporting(
                     Ok(e) => e,
                     // Audit 6: an access-denied folder, a dangling junction or a cloud placeholder skips, never aborts.
                     Err(err) => {
+                        // An unreadable input folder itself is still fatal.
+                        if err.depth() == 0 {
+                            return Err(std::io::Error::other(err));
+                        }
                         skipped.push(err.to_string());
                         continue;
                     }
