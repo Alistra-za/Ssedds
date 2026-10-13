@@ -477,6 +477,8 @@ pub enum V3Reply {
         id: u64,
         message: String,
     },
+    /// `n` features/settings commands are answered, after all the replies they caused (no wake-up otherwise).
+    Reconfigured(u64),
     /// The shapes of the loaded `Parsed`/`Builtin` content: after each load and after each batch of edits.
     Shapes(Vec<ShapeInfo>),
     /// One `SetMaterial` applied: its kind (`Cbuffer`/`Textures` compile nothing) and render-thread time, or why
@@ -594,6 +596,9 @@ pub struct Viewport3d {
     render_done: u64,
     edits_sent: u64,
     edits_done: u64,
+    /// Features/settings commands sent to the render thread and answered: busy until they match.
+    reconf_sent: u64,
+    reconf_done: u64,
     next_id: u64,
     locating: bool,
     /// Since when `busy()` has held without a break (for `show_spinner`).
@@ -651,6 +656,8 @@ impl Viewport3d {
             load_variant_sent: Variant::Source,
             edits_sent: 0,
             edits_done: 0,
+            reconf_sent: 0,
+            reconf_done: 0,
             need_load: false,
             kept_view: false,
             held_frame: false,
@@ -736,7 +743,13 @@ impl Viewport3d {
             || self.pending_load.is_some()
             || self.render_done < self.render_sent
             || self.edits_done < self.edits_sent
+            || self.reconf_done < self.reconf_sent
             || self.compiling() > 0
+    }
+
+    /// The content is a Meshes-view mesh (the set preview lists its own shape errors).
+    pub fn is_mesh(&self) -> bool {
+        matches!(self.content, Some(Content::Mesh(_)))
     }
 
     /// Shapes waiting for a shader program: the latest `Shapes` reply, or the load report until the first one.
@@ -882,6 +895,7 @@ impl Viewport3d {
         }
         self.settings = s.clone();
         if let Some(t) = &self.thread {
+            self.reconf_sent += 1;
             let _ = t.send(V3Cmd::SetSettings(s));
         }
     }
@@ -949,6 +963,7 @@ impl Viewport3d {
         }
         self.features_on = on;
         if let Some(t) = &self.thread {
+            self.reconf_sent += 1;
             let _ = t.send(V3Cmd::SetFeatures(on));
         }
     }
@@ -1284,6 +1299,7 @@ impl Viewport3d {
                         self.pending_load = None;
                         self.render_done = self.render_sent;
                         self.edits_done = self.edits_sent;
+                        self.reconf_done = self.reconf_sent;
                         self.state =
                             V3State::Error(format!("internal error in the 3D preview: {message}"));
                     }
@@ -1326,6 +1342,7 @@ impl Viewport3d {
                 self.pending_load = None;
                 self.render_done = self.render_sent;
                 self.edits_done = self.edits_sent;
+                self.reconf_done = self.reconf_sent;
                 self.state = V3State::Error(format!("3D preview unavailable: {e}"));
             }
             V3Reply::Loaded { id, report, bounds } => {
@@ -1384,6 +1401,9 @@ impl Viewport3d {
                 if self.loaded.is_some() && self.pending_load.is_none() {
                     self.render_error = Some(message);
                 }
+            }
+            V3Reply::Reconfigured(n) => {
+                self.reconf_done = (self.reconf_done + n).min(self.reconf_sent)
             }
             V3Reply::Shapes(s) => {
                 // Only for the loaded content: a reply for content replaced since is dropped.
@@ -1745,6 +1765,17 @@ fn edit(r: &mut Renderer, c: &Content, id: ShapeId, m: MaterialState) -> Result<
 /// (`V3Cmd::Compiled`, sent by the pool's sink), so a burst of them and a camera drag still collapse into one
 /// render. A result that changes a shape makes a `Shapes` reply and, with no `Render` in the batch, a `Refresh`
 /// frame from the last camera.
+/// Sends `Reconfigured(n)` when dropped, so it follows every reply of the batch whatever way the batch ends.
+struct ReconfAck<'a>(u64, &'a dyn Fn(V3Reply));
+
+impl Drop for ReconfAck<'_> {
+    fn drop(&mut self) {
+        if self.0 > 0 {
+            (self.1)(V3Reply::Reconfigured(self.0));
+        }
+    }
+}
+
 fn render_loop(
     rx: Receiver<V3Cmd>,
     self_tx: Sender<V3Cmd>,
@@ -1764,15 +1795,13 @@ fn render_loop(
         apply_settings(&mut r, settings.clone());
         Ok(r)
     };
-    let loaded = |r: &Renderer, id: u64, c: &Content, report: LoadReport| {
+    let loaded = |r: &Renderer, id: u64, report: LoadReport| {
         send(V3Reply::Loaded {
             id,
             report,
             bounds: r.bounds(),
         });
-        if !matches!(c, Content::Mesh(_)) {
-            send(V3Reply::Shapes(r.shapes()));
-        }
+        send(V3Reply::Shapes(r.shapes()));
     };
     let mut r = match make(shaders, features) {
         Ok(r) => r,
@@ -1801,14 +1830,14 @@ fn render_loop(
                    tex: &TexState|
      -> Result<(), String> {
         let t0 = std::time::Instant::now();
-        r.rebuild_device_on(Gpu::new(None)?)?;
+        r.rebuild_device_on(Gpu::new()?)?;
         send(V3Reply::Ready {
             adapter: r.gpu().adapter.clone(),
             warp: r.gpu().warp,
         });
         if let Some((id, c)) = last {
             let report = load_all(r, c, edits, tex);
-            loaded(r, *id, c, report);
+            loaded(r, *id, report);
         }
         perf_log::emit("device_rebuild", json!({"ms": perf_log::ms_since(t0)}));
         Ok(())
@@ -1823,6 +1852,8 @@ fn render_loop(
     let mut stats = FrameStats::default();
     let mut last_coverage: Option<String> = None;
     while let Ok(first) = rx.recv() {
+        // Dropped at the end of the batch, after every other reply: answers each features/settings command.
+        let mut ack = ReconfAck(0, &send);
         let mut reload = false;
         let mut render = None;
         let mut compiled_changed = false;
@@ -1845,11 +1876,13 @@ fn render_loop(
                 V3Cmd::SetFeatures(on) => {
                     r.set_features_on(on);
                     restyled = true;
+                    ack.0 += 1;
                     None
                 }
                 V3Cmd::SetSettings(s) => {
                     apply_settings(&mut r, s);
                     restyled = true;
+                    ack.0 += 1;
                     None
                 }
                 V3Cmd::Load { id, spec } => Some((id, Content::Mesh(spec))),
@@ -1942,7 +1975,7 @@ fn render_loop(
                         return send(V3Reply::Failed(e));
                     }
                 } else {
-                    loaded(&r, *id, c, report);
+                    loaded(&r, *id, report);
                 }
             }
         }
@@ -2008,20 +2041,20 @@ fn render_loop(
         // Redraw from the last camera, and report the shapes (now pending or swapped) like a landed program.
         compiled_changed |= restyled;
         // A landed program changed a shape and nothing above reported it: tell the panel.
-        if compiled_changed
-            && !reload
-            && pending_was_empty
-            && !matches!(last, Some((_, Content::Mesh(_))))
-        {
-            send(V3Reply::Shapes(r.shapes()));
-        }
+        // Sent after the refresh frame: the panel stays busy (Pending) until it reads this, so it also reads the frame.
+        let shapes_due = compiled_changed && !reload && pending_was_empty;
         let (id, camera, w, h, look, refresh) = match (render, view) {
             (Some((id, camera, w, h, look)), _) => (id, camera, w, h, look, false),
             (None, Some((camera, w, h, look))) if compiled_changed => {
                 refresh_id += 1;
                 (refresh_id, camera, w, h, look, true)
             }
-            _ => continue,
+            _ => {
+                if shapes_due {
+                    send(V3Reply::Shapes(r.shapes()));
+                }
+                continue;
+            }
         };
         view = Some((camera, w, h, look));
         let scene = look.scene(camera, r.bounds());
@@ -2061,6 +2094,9 @@ fn render_loop(
             // A failed refresh is dropped: the next real Render reports the error with an id the model knows.
             Err(message) if !refresh => send(V3Reply::RenderError { id, message }),
             Err(_) => {}
+        }
+        if shapes_due {
+            send(V3Reply::Shapes(r.shapes()));
         }
     }
 }

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA: &str = r#"
 CREATE TABLE path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
@@ -56,7 +56,7 @@ CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE N
                      size INTEGER, mtime INTEGER NOT NULL, lo_index INTEGER, light INTEGER NOT NULL,
                      flags INTEGER NOT NULL, masters_json TEXT NOT NULL, error_text TEXT);
 CREATE TABLE rec (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL, edid TEXT,
-                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER);
+                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER);
 CREATE TABLE rec_winner (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, n_overrides INTEGER NOT NULL);
 CREATE TABLE txst_slot (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, slot INTEGER NOT NULL,
                      path_id INTEGER NOT NULL);
@@ -64,10 +64,21 @@ CREATE TABLE model_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGE
                      path_id INTEGER NOT NULL);
 CREATE TABLE alt_tex (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, model_slot INTEGER NOT NULL,
                      shape_name TEXT NOT NULL, txst_formid INTEGER, txst_local INTEGER NOT NULL, idx INTEGER NOT NULL);
+-- txst_ref rows with role HNAM (HDPT -> extra-part HDPT), GNAM (LTEX -> GRAS) and MODL (ARMO -> ARMA) point at those
+-- types, not TXSTs.
 CREATE TABLE txst_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, role TEXT NOT NULL,
                      txst_formid INTEGER, txst_local INTEGER NOT NULL);
 CREATE TABLE tex_ref (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, role TEXT NOT NULL,
                      path_id INTEGER NOT NULL);
+-- Base FormIDs placed by REFR/ACHR in a plugin's CELL/WRLD groups, once per plugin (filtering spec §3). `base_local`
+-- clamped like `local`; `base_formid` set by `resolve_plugins`, NULL when its master is not loaded. A plugin whose
+-- `error_text` is set may have an incomplete list (the walk stops at a fault).
+CREATE TABLE placed (plugin_id INTEGER NOT NULL, base_local INTEGER NOT NULL, base_formid INTEGER);
+-- Winning records nothing reaches (filtering spec §3), rebuilt with rec_winner. reason: 1 no reference, 2 not
+-- placed, 3 head part not playable.
+CREATE TABLE rec_inert (formid INTEGER PRIMARY KEY, reason INTEGER NOT NULL);
+CREATE INDEX placed_base ON placed(base_formid);
+CREATE INDEX placed_plugin ON placed(plugin_id);
 CREATE INDEX rec_formid ON rec(formid);
 CREATE INDEX rec_plugin ON rec(plugin_id, local);
 CREATE INDEX txst_slot_path ON txst_slot(path_id);
@@ -283,15 +294,6 @@ fn keep_raw(p: &TexPath) -> bool {
 /// Slot, SQL condition on `tp.p`, its bound argument, and the exact post-filter.
 pub(crate) type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
 
-/// A key value in the stored form: trimmed, `/` separators, lower case, no leading `/`.
-fn key_form(s: &str) -> String {
-    s.trim()
-        .replace('\\', "/")
-        .to_ascii_lowercase()
-        .trim_start_matches('/')
-        .to_string()
-}
-
 /// PGPatcher's shape-side form of a stored slot path (01 §1.3): extension stripped, a leading `textures/pbr/` read
 /// as `textures/`, and on the normal slot a trailing `_msn`/`_n` stripped.
 fn pgp_form(norm: &str, normal: bool) -> String {
@@ -450,26 +452,85 @@ pub struct DeriveRow {
 
 pub struct Store {
     pub(crate) conn: Connection,
+    /// This scan started on an empty store (ruling R3): it runs with `synchronous = OFF`.
+    cold: bool,
+    /// The running scan's interning map (ruling R6). Ids stay valid only because every write failure ends the scan;
+    /// a caller that retries a failed chunk must clear the map.
+    pub(crate) intern: Option<Interner>,
 }
 
 pub(crate) fn path_id(c: &Connection, p: &str) -> rusqlite::Result<i64> {
-    c.prepare_cached("INSERT OR IGNORE INTO path(p) VALUES (?1)")?
-        .execute([p])?;
+    // `last_insert_rowid` is the new id only when the insert changed a row; otherwise the path already existed.
+    if c.prepare_cached("INSERT OR IGNORE INTO path(p) VALUES (?1)")?
+        .execute([p])?
+        == 1
+    {
+        return Ok(c.last_insert_rowid());
+    }
     c.prepare_cached("SELECT id FROM path WHERE p = ?1")?
         .query_row([p], |r| r.get(0))
 }
 
-fn texset_id(c: &Connection, slots: &[Option<i64>]) -> rusqlite::Result<i64> {
+/// Path and texset ids of the running scan (spec §2 step 5, ruling R6): loaded by `begin_scan`, dropped by `end_scan`.
+/// A miss goes to SQL, so ids added by another connection stay correct.
+#[derive(Default)]
+pub(crate) struct Interner {
+    paths: HashMap<String, i64>,
+    /// `[n, t0..t8]` with empty slots as 0, as the `texset_key` index folds them.
+    texsets: HashMap<[i64; MAX_SLOTS + 1], i64>,
+}
+
+pub(crate) fn intern_path(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    p: &str,
+) -> rusqlite::Result<i64> {
+    if let Some(id) = i.as_ref().and_then(|i| i.paths.get(p)) {
+        return Ok(*id);
+    }
+    let id = path_id(c, p)?;
+    if let Some(i) = i {
+        i.paths.insert(p.to_string(), id);
+    }
+    Ok(id)
+}
+
+fn texset_id(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    slots: &[Option<i64>],
+) -> rusqlite::Result<i64> {
     let n = slots.len().min(MAX_SLOTS);
     let mut t = [None::<i64>; MAX_SLOTS];
     t[..n].copy_from_slice(&slots[..n]);
-    c.prepare_cached(
-        "INSERT OR IGNORE INTO texset(n,t0,t1,t2,t3,t4,t5,t6,t7,t8) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-    )?
-    .execute(params![n as i64, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]])?;
-    let k: Vec<i64> = t.iter().map(|x| x.unwrap_or(0)).collect();
-    let id: i64 = c
+    let mut key = [0i64; MAX_SLOTS + 1];
+    key[0] = n as i64;
+    for (j, x) in t.iter().enumerate() {
+        key[j + 1] = x.unwrap_or(0);
+    }
+    if let Some(id) = i.as_ref().and_then(|i| i.texsets.get(&key)) {
+        return Ok(*id);
+    }
+    let inserted = c
         .prepare_cached(
+            "INSERT OR IGNORE INTO texset(n,t0,t1,t2,t3,t4,t5,t6,t7,t8) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )?
+        .execute(params![n as i64, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]])?;
+    let id: i64 = if inserted == 1 {
+        let id = c.last_insert_rowid();
+        // A new set gets its tex_use rows; an existing one got them with its insert (tex_use is never deleted).
+        let mut tu = c.prepare_cached(
+            "INSERT OR IGNORE INTO tex_use(tex_path_id, texset_id, slot) VALUES (?1,?2,?3)",
+        )?;
+        for (slot, p) in t[..n].iter().enumerate() {
+            if let Some(p) = p {
+                tu.execute(params![p, id, slot as i64])?;
+            }
+        }
+        id
+    } else {
+        let k = &key[1..];
+        c.prepare_cached(
             "SELECT id FROM texset WHERE n = ?1 AND ifnull(t0,0) = ?2 AND ifnull(t1,0) = ?3 AND ifnull(t2,0) = ?4 \
              AND ifnull(t3,0) = ?5 AND ifnull(t4,0) = ?6 AND ifnull(t5,0) = ?7 AND ifnull(t6,0) = ?8 \
              AND ifnull(t7,0) = ?9 AND ifnull(t8,0) = ?10",
@@ -477,31 +538,31 @@ fn texset_id(c: &Connection, slots: &[Option<i64>]) -> rusqlite::Result<i64> {
         .query_row(
             params![n as i64, k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8]],
             |r| r.get(0),
-        )?;
-    let mut tu = c.prepare_cached(
-        "INSERT OR IGNORE INTO tex_use(tex_path_id, texset_id, slot) VALUES (?1,?2,?3)",
-    )?;
-    for (slot, p) in t[..n].iter().enumerate() {
-        if let Some(p) = p {
-            tu.execute(params![p, id, slot as i64])?;
-        }
+        )?
+    };
+    if let Some(i) = i {
+        i.texsets.insert(key, id);
     }
     Ok(id)
 }
 
-fn tex_slots(c: &Connection, paths: &[&TexPath]) -> rusqlite::Result<Option<i64>> {
+fn tex_slots(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    paths: &[&TexPath],
+) -> rusqlite::Result<Option<i64>> {
     let mut ids = vec![];
     for p in paths {
         ids.push(if p.flags.empty || p.norm.is_empty() {
             None
         } else {
-            Some(path_id(c, &p.norm)?)
+            Some(intern_path(c, i, &p.norm)?)
         });
     }
     if ids.is_empty() {
         return Ok(None);
     }
-    texset_id(c, &ids).map(Some)
+    texset_id(c, i, &ids).map(Some)
 }
 
 /// Shape-family tables: `shape`/`tex_raw` keyed by copy id, or `pending_shape`/`pending_tex_raw` keyed by pid.
@@ -523,7 +584,13 @@ const PENDING: Tables = Tables {
 };
 
 /// Writes the shape rows (and raw slot rows) of `scan` under `key`.
-fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(), ScanError> {
+fn write_shapes(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    t: Tables,
+    key: i64,
+    scan: &NifScan,
+) -> Result<(), ScanError> {
     let sql = format!(
         "INSERT OR REPLACE INTO {}({}, {SHAPE_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
         t.shape, t.key
@@ -543,7 +610,7 @@ fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(
                     Some(l.shader_type),
                     Some(l.slsf1),
                     Some(l.slsf2),
-                    tex_slots(c, &slots)?,
+                    tex_slots(c, i, &slots)?,
                     Some(serde_json::to_string(&l.params).map_err(json_err)?),
                 )
             }
@@ -554,7 +621,7 @@ fn write_shapes(c: &Connection, t: Tables, key: i64, scan: &NifScan) -> Result<(
                     None,
                     Some(e.slsf1),
                     Some(e.slsf2),
-                    tex_slots(c, &slots)?,
+                    tex_slots(c, i, &slots)?,
                     Some(serde_json::to_string(&e.params).map_err(json_err)?),
                 )
             }
@@ -613,7 +680,11 @@ fn json_err(e: serde_json::Error) -> ScanError {
     ScanError::Io(std::io::Error::other(e))
 }
 
-fn upsert_copy_row(c: &Connection, it: &ChunkItem) -> Result<i64, ScanError> {
+fn upsert_copy_row(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    it: &ChunkItem,
+) -> Result<i64, ScanError> {
     let (status, bsver, le, problem) = it.result.record();
     let id: i64 = c
         .prepare_cached(
@@ -642,12 +713,16 @@ fn upsert_copy_row(c: &Connection, it: &ChunkItem) -> Result<i64, ScanError> {
         )?;
     delete_shapes(c, id)?;
     if let CopyResult::Scanned(s) = &it.result {
-        write_shapes(c, LIVE, id, s)?;
+        write_shapes(c, i, LIVE, id, s)?;
     }
     Ok(id)
 }
 
-fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
+fn stage_derived(
+    c: &Connection,
+    i: &mut Option<Interner>,
+    it: &ChunkItem,
+) -> Result<(), ScanError> {
     let (status, bsver, le, problem) = it.result.record();
     let pid: i64 = c
         .prepare_cached(
@@ -669,7 +744,7 @@ fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
             |r| r.get(0),
         )?;
     if let CopyResult::Scanned(s) = &it.result {
-        write_shapes(c, PENDING, pid, s)?;
+        write_shapes(c, i, PENDING, pid, s)?;
     }
     Ok(())
 }
@@ -683,7 +758,7 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
     );
     Some(match key {
         TexKey::Suffix { slot, stem } => {
-            let stem = key_form(stem);
+            let stem = nif::path::canon_mesh(stem);
             if stem.is_empty() {
                 return None;
             }
@@ -698,7 +773,7 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
             )
         }
         TexKey::Contains { slot, frag } => {
-            let frag = key_form(frag);
+            let frag = nif::path::canon_mesh(frag);
             if frag.is_empty() {
                 return None;
             }
@@ -712,7 +787,7 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
             )
         }
         TexKey::Exact { slot, path } => {
-            let p = key_form(path);
+            let p = nif::path::canon_mesh(path);
             let p = if p.starts_with("textures/") {
                 p
             } else {
@@ -723,16 +798,107 @@ pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
     })
 }
 
+/// Exclusive `scan.lock` beside the store file, held for a whole scan (audit 17: a second scan's `delete_unseen`
+/// would wipe the first one's rows) and while a writable open rebuilds the schema. Windows: the file is held open
+/// with share mode 0, so the OS frees it if the process dies. shortcut: no lock off Windows (std `File::try_lock`
+/// needs Rust 1.89, workspace is 1.88); this app ships on Windows only. In-memory stores have no file and skip it.
+#[allow(dead_code)] // held only for its Drop
+pub(crate) struct ScanLock(#[cfg(windows)] Option<std::fs::File>);
+
+impl ScanLock {
+    /// `db` is the database file path (`Connection::path`); retries for `wait`, then `ScanError::Busy`.
+    #[cfg(windows)]
+    pub(crate) fn take(db: Option<&str>, wait: std::time::Duration) -> Result<ScanLock, ScanError> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let Some(db) = db.filter(|p| !p.is_empty()) else {
+            return Ok(ScanLock(None));
+        };
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        let end = std::time::Instant::now() + wait;
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(0)
+                .open(Path::new(db).with_file_name("scan.lock"))
+            {
+                Ok(f) => return Ok(ScanLock(Some(f))),
+                Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
+                    if std::time::Instant::now() >= end {
+                        return Err(ScanError::Busy);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn take(_: Option<&str>, _: std::time::Duration) -> Result<ScanLock, ScanError> {
+        Ok(ScanLock())
+    }
+}
+
+/// The corrupt-file rebuild could not delete the database (on Windows another handle, such as this app's own open
+/// store, holds it): tell the user how to get past it.
+fn cannot_rebuild(e: &std::io::Error) -> ScanError {
+    ScanError::Io(std::io::Error::new(
+        e.kind(),
+        format!("cannot rebuild the corrupt scan database ({e}): restart the app to rebuild the scan database"),
+    ))
+}
+
+/// How long a writable open waits for a running scan before giving up with `ScanError::Busy`.
+const OPEN_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl Store {
     pub fn open(path: &Path) -> Result<Store, ScanError> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
         }
+        match Self::open_rw(path) {
+            // Ruling R4: the store is a cache; a file SQLite cannot read (power loss during synchronous = OFF) is rebuilt.
+            Err(ScanError::Db(e))
+                if matches!(
+                    e.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+                ) =>
+            {
+                let lock = ScanLock::take(path.to_str(), OPEN_LOCK_WAIT)?;
+                for ext in ["", "-wal", "-shm"] {
+                    match std::fs::remove_file(format!("{}{ext}", path.display())) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(cannot_rebuild(&e))
+                        }
+                        _ => {}
+                    }
+                }
+                drop(lock);
+                Self::open_rw(path)
+            }
+            r => r,
+        }
+    }
+
+    fn open_rw(path: &Path) -> Result<Store, ScanError> {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Spec §2 step 6: temp tables in memory, a 64 MB page cache, 256 MB of memory-mapped reads.
+        conn.execute_batch(
+            "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -65536; PRAGMA mmap_size = 268435456;",
+        )?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let mut _lock = None;
+        let mut v = v;
+        if v != SCHEMA_VERSION {
+            // A running scan owns the schema: wait for it (Busy after a while) and look again under the lock.
+            _lock = Some(ScanLock::take(conn.path(), OPEN_LOCK_WAIT)?);
+            v = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        }
         if v != SCHEMA_VERSION {
             // The store is a cache: any other version is dropped and rebuilt.
             let tx = conn.unchecked_transaction()?;
@@ -750,7 +916,11 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
-        Ok(Store { conn })
+        Ok(Store {
+            conn,
+            cold: false,
+            intern: None,
+        })
     }
 
     /// A connection that never writes database content: no folder or file is created, no WAL switch, and another schema version is
@@ -769,24 +939,93 @@ impl Store {
                 want: SCHEMA_VERSION,
             });
         }
-        Ok(Store { conn })
+        Ok(Store {
+            conn,
+            cold: false,
+            intern: None,
+        })
     }
 
-    /// Start of a scan: staging tables created and emptied; every origin disabled until this run re-upserts it.
-    /// `origin.enabled = 1` therefore means "part of the latest run" and is the filter of every read query.
+    /// Start of a scan: staging tables created and emptied; every origin disabled until this run commits.
+    /// `origin.enabled = 1` therefore means "part of the latest completed run" and is the filter of every read query.
+    /// `scan::run` stages its origins with `upsert_origin_staged` and enables them with `enable_origins` at the end,
+    /// so a cancelled or failed run leaves the read lists empty instead of mixing in the previous run's winners.
     /// Rows of disabled origins stay cached (a disabled mod or a Folder scan in between costs no re-parse).
     pub fn begin_scan(&mut self) -> Result<(), ScanError> {
         self.conn.execute_batch(TEMP)?;
         self.conn.execute("UPDATE origin SET enabled = 0", [])?;
+        self.cold = !self
+            .conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM nif_copy)", [], |r| {
+                r.get::<_, bool>(0)
+            })?;
+        if self.cold {
+            // Ruling R4: a cold store has nothing to lose to a crash; a power loss is caught by `open`.
+            self.conn.pragma_update(None, "synchronous", "OFF")?;
+        }
+        let mut i = Interner::default();
+        {
+            let mut st = self.conn.prepare("SELECT p, id FROM path")?;
+            for r in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+                let (p, id) = r?;
+                i.paths.insert(p, id);
+            }
+            let mut st = self.conn.prepare(
+                "SELECT id, n, ifnull(t0,0), ifnull(t1,0), ifnull(t2,0), ifnull(t3,0), ifnull(t4,0), ifnull(t5,0), \
+                 ifnull(t6,0), ifnull(t7,0), ifnull(t8,0) FROM texset",
+            )?;
+            for r in st.query_map([], |r| {
+                let mut k = [0i64; MAX_SLOTS + 1];
+                for (j, v) in k.iter_mut().enumerate() {
+                    *v = r.get(j + 1)?;
+                }
+                Ok((k, r.get::<_, i64>(0)?))
+            })? {
+                let (k, id) = r?;
+                i.texsets.insert(k, id);
+            }
+        }
+        self.intern = Some(i);
         Ok(())
     }
 
+    /// End of every run, whatever its outcome: resets the per-scan `cold` flag.
+    pub fn end_scan(&mut self) -> Result<(), ScanError> {
+        self.cold = false;
+        self.intern = None;
+        self.conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Ok(())
+    }
+
+    /// Upserts an origin and enables it at once.
     pub fn upsert_origin(&mut self, o: &OriginSpec) -> Result<i64, ScanError> {
+        self.upsert_origin_as(o, 1)
+    }
+
+    /// Upserts an origin left disabled: part of the run in progress, not yet of the readable data.
+    pub fn upsert_origin_staged(&mut self, o: &OriginSpec) -> Result<i64, ScanError> {
+        self.upsert_origin_as(o, 0)
+    }
+
+    /// The commit point of a scan: the given (staged) origins become the readable run.
+    pub fn enable_origins(&mut self, ids: &[i64]) -> Result<(), ScanError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut st = tx.prepare("UPDATE origin SET enabled = 1 WHERE id = ?1")?;
+            for id in ids {
+                st.execute([id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn upsert_origin_as(&mut self, o: &OriginSpec, enabled: i32) -> Result<i64, ScanError> {
         Ok(self.conn.query_row(
             "INSERT INTO origin(kind, name, root, parent_origin, priority, enabled, derived_by, derived_state)
-             VALUES (?1,?2,?3,?4,?5,1,?6,?7)
+             VALUES (?1,?2,?3,?4,?5,?8,?6,?7)
              ON CONFLICT(kind, root) DO UPDATE SET name = excluded.name, parent_origin = excluded.parent_origin,
-               priority = excluded.priority, enabled = 1, derived_by = excluded.derived_by,
+               priority = excluded.priority, enabled = excluded.enabled, derived_by = excluded.derived_by,
                derived_state = excluded.derived_state
              RETURNING id",
             params![
@@ -796,7 +1035,8 @@ impl Store {
                 o.parent,
                 o.priority,
                 o.derived_by,
-                o.derived_state.map(|s| s as i32)
+                o.derived_state.map(|s| s as i32),
+                enabled
             ],
             |r| r.get(0),
         )?)
@@ -815,7 +1055,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let mut out = Vec::with_capacity(paths.len());
         for p in paths {
-            out.push(path_id(&tx, p)?);
+            out.push(intern_path(&tx, &mut self.intern, p)?);
         }
         tx.commit()?;
         Ok(out)
@@ -847,9 +1087,9 @@ impl Store {
         let tx = self.conn.transaction()?;
         for it in items {
             if it.derived {
-                stage_derived(&tx, it)?;
+                stage_derived(&tx, &mut self.intern, it)?;
             } else {
-                upsert_copy_row(&tx, it)?;
+                upsert_copy_row(&tx, &mut self.intern, it)?;
             }
         }
         tx.commit()?;
@@ -909,7 +1149,7 @@ impl Store {
     ) -> Result<i64, ScanError> {
         let tx = self.conn.transaction()?;
         let it = ChunkItem {
-            path_id: path_id(&tx, path)?,
+            path_id: intern_path(&tx, &mut self.intern, path)?,
             origin_id,
             size,
             mtime,
@@ -917,17 +1157,9 @@ impl Store {
             derived: false,
             result,
         };
-        let id = upsert_copy_row(&tx, &it)?;
+        let id = upsert_copy_row(&tx, &mut self.intern, &it)?;
         tx.commit()?;
         Ok(id)
-    }
-
-    pub fn replace_shapes(&mut self, copy_id: i64, scan: &NifScan) -> Result<(), ScanError> {
-        let tx = self.conn.transaction()?;
-        delete_shapes(&tx, copy_id)?;
-        write_shapes(&tx, LIVE, copy_id, scan)?;
-        tx.commit()?;
-        Ok(())
     }
 
     pub fn copy_ids(&self) -> Result<HashMap<(i64, i64), i64>, ScanError> {
@@ -1038,7 +1270,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM pgp_diff", [])?;
         for (p, (o, n)) in diff {
-            let id = path_id(&tx, p)?;
+            let id = intern_path(&tx, &mut self.intern, p)?;
             tx.prepare_cached("INSERT OR REPLACE INTO pgp_diff VALUES (?1,?2,?3)")?
                 .execute(params![id, *o as i64, *n as i64])?;
         }

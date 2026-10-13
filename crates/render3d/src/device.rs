@@ -1,4 +1,4 @@
-//! D3D11 device creation (hardware adapter by LUID → each hardware adapter →
+//! D3D11 device creation (each hardware adapter →
 //! default hardware → WARP), an offscreen RGBA16F + D32 target, clear, and
 //! RGBA8 readback.
 //!
@@ -23,7 +23,7 @@
 
 use std::sync::OnceLock;
 use windows::core::Interface;
-use windows::Win32::Foundation::{HMODULE, LUID};
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,
     D3D_FEATURE_LEVEL_11_0,
@@ -56,21 +56,6 @@ pub struct Gpu {
     pub warp: bool,
     /// Adapter description, e.g. "NVIDIA GeForce RTX 4090".
     pub adapter: String,
-    /// LUID of the adapter the device landed on (byte order: [`luid_bytes`]).
-    /// Compare with the preferred LUID to tell whether it was honoured.
-    /// All zero if DXGI could not report it.
-    pub luid: [u8; 8],
-}
-
-/// The `LUID` struct's in-memory bytes: `LowPart` (u32) little-endian, then
-/// `HighPart` (i32) little-endian. These are the 8 bytes DXGI gives as
-/// `DXGI_ADAPTER_DESC1::AdapterLuid` and Vulkan as
-/// `VkPhysicalDeviceIDProperties::deviceLUID`. `prefer_luid` uses this order.
-pub fn luid_bytes(luid: LUID) -> [u8; 8] {
-    let mut b = [0u8; 8];
-    b[..4].copy_from_slice(&luid.LowPart.to_le_bytes());
-    b[4..].copy_from_slice(&luid.HighPart.to_le_bytes());
-    b
 }
 
 fn adapter_name(desc: &DXGI_ADAPTER_DESC1) -> String {
@@ -120,7 +105,6 @@ fn create(adapter: Option<&IDXGIAdapter>, driver: D3D_DRIVER_TYPE) -> Result<Gpu
         ctx,
         warp: driver == D3D_DRIVER_TYPE_WARP || software,
         adapter: desc.as_ref().map(adapter_name).unwrap_or_default(),
-        luid: desc.map(|d| luid_bytes(d.AdapterLuid)).unwrap_or_default(),
     })
 }
 
@@ -147,14 +131,6 @@ fn hardware_adapters() -> Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> {
     out
 }
 
-/// Hardware adapters as `(description, LUID bytes)`, in DXGI order.
-pub fn hardware_adapter_list() -> Vec<(String, [u8; 8])> {
-    hardware_adapters()
-        .iter()
-        .map(|(_, d)| (adapter_name(d), luid_bytes(d.AdapterLuid)))
-        .collect()
-}
-
 fn create_on(a: &IDXGIAdapter1) -> Result<Gpu, String> {
     let a = a.cast::<IDXGIAdapter>().map_err(|e| e.to_string())?;
     create(Some(&a), D3D_DRIVER_TYPE_UNKNOWN)
@@ -162,32 +138,15 @@ fn create_on(a: &IDXGIAdapter1) -> Result<Gpu, String> {
 
 impl Gpu {
     /// Tries, in order:
-    /// 1. the hardware adapter whose LUID matches `prefer_luid` (byte order:
-    ///    [`luid_bytes`]);
-    /// 2. every other enumerated hardware adapter, in DXGI order (so a real
+    /// 1. every other enumerated hardware adapter, in DXGI order (so a real
     ///    GPU listed after adapter 0 is still used);
-    /// 3. `D3D_DRIVER_TYPE_HARDWARE` on the default adapter;
-    /// 4. WARP.
+    /// 2. `D3D_DRIVER_TYPE_HARDWARE` on the default adapter;
+    /// 3. WARP.
     ///
     /// The error lists every attempt's failure.
-    pub fn new(prefer_luid: Option<[u8; 8]>) -> Result<Gpu, String> {
+    pub fn new() -> Result<Gpu, String> {
         let mut errors = Vec::new();
-        let mut adapters = hardware_adapters();
-        if let Some(want) = prefer_luid {
-            match adapters
-                .iter()
-                .position(|(_, d)| luid_bytes(d.AdapterLuid) == want)
-            {
-                Some(i) => {
-                    let (a, d) = adapters.remove(i);
-                    match create_on(&a) {
-                        Ok(g) => return Ok(g),
-                        Err(e) => errors.push(format!("adapter {}: {e}", adapter_name(&d))),
-                    }
-                }
-                None => errors.push(format!("no hardware adapter with LUID {want:02x?}")),
-            }
-        }
+        let adapters = hardware_adapters();
         for (a, d) in &adapters {
             match create_on(a) {
                 Ok(g) => return Ok(g),
@@ -347,23 +306,7 @@ impl Target {
         }
     }
 
-    /// Tightly packed RGBA8, `width × height × 4` bytes, top row first.
-    ///
-    /// Copies the RGBA16F colour into a staging texture, maps it (rows are
-    /// `RowPitch` apart, which may exceed `width × 8`), and converts each
-    /// half to u8 with the identity-clamp tonemap of P0. A removed device
-    /// (surfaced by `Map`) gives an error starting with [`DEVICE_REMOVED`].
-    pub fn readback_rgba8(&self, gpu: &Gpu) -> Result<Vec<u8>, String> {
-        self.readback(gpu, false)
-    }
-
-    /// As [`Target::readback_rgba8`]; with `srgb` the colour channels are sRGB-encoded from the half values
-    /// (alpha stays linear), for display of a frame drawn in linear working space (Linear Lighting on).
-    pub fn readback(&self, gpu: &Gpu, srgb: bool) -> Result<Vec<u8>, String> {
-        self.read(gpu, srgb, false)
-    }
-
-    /// The frame for display: as [`Target::readback`], but alpha is 255 everywhere. Opaque shapes write
+    /// The frame for display: as the plain readback, but alpha is 255 everywhere. Opaque shapes write
     /// their diffuse alpha into the target (CS `psout.Diffuse.w = baseColor.w`); the frame is already drawn
     /// over the clear colour, so its alpha must not make the viewer see through an opaque mesh.
     pub fn readback_display(&self, gpu: &Gpu, srgb: bool) -> Result<Vec<u8>, String> {

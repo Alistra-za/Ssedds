@@ -593,3 +593,251 @@ fn skip_derived_ignores_pgp_and_running_process() {
     );
     assert!(matches!(r, Err(modscan::ScanError::PgpRunning)));
 }
+
+/// Scan speed spec §2 step 1: cold then warm scan of the owner instance, with phase and sub-timers. Read-only on the
+/// instance; the store is a temp file, never the real scan.db.
+/// `SDC_ACHERUS='C:\_mount\moddingvol\Acherus' cargo test -p modscan --release --test scan owner_timing -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn owner_timing() {
+    let root = std::path::PathBuf::from(
+        std::env::var("SDC_ACHERUS").expect("set SDC_ACHERUS to the MO2 instance root"),
+    );
+    let db = tempfile::tempdir().unwrap();
+    let path = db.path().join("scan.db");
+    let mut store = Store::open(&path).unwrap();
+    #[cfg(windows)]
+    let procs = modscan::win::process_names;
+    #[cfg(not(windows))]
+    let procs = || -> Vec<String> { vec![] };
+    for pass in ["cold", "warm"] {
+        let inst = Instance::load(&root, None).unwrap();
+        let t = std::time::Instant::now();
+        let r = run(
+            &Source::Mo2(inst),
+            &mut store,
+            &AtomicBool::new(false),
+            &|_| {},
+            &procs,
+        )
+        .unwrap();
+        // A tainted run skipped resolve: its numbers are not comparable; rerun when PGPatcher is closed.
+        println!(
+            "{pass}: nifs={} parsed={} reused={} tainted={} elapsed {:.1} s",
+            r.nifs,
+            r.parsed,
+            r.reused,
+            r.tainted,
+            t.elapsed().as_secs_f64()
+        );
+        println!("{pass}: phase_ms {:?}", r.phase_ms);
+        println!("{pass}: sub_ms {:?}", r.sub_ms);
+    }
+    let q = |sql: &str| -> i64 { store.conn().query_row(sql, [], |r| r.get(0)).unwrap() };
+    println!(
+        "derived copies {}, BSA copies {}, shapes {}, paths {}, texsets {}",
+        q("SELECT count(*) FROM nif_copy WHERE is_derived = 1"),
+        q("SELECT count(*) FROM nif_copy c JOIN origin o ON o.id = c.origin_id WHERE o.kind = 4"),
+        q("SELECT count(*) FROM shape"),
+        q("SELECT count(*) FROM path"),
+        q("SELECT count(*) FROM texset")
+    );
+    let wal = std::fs::metadata(format!("{}-wal", path.display())).map_or(0, |m| m.len());
+    let t = std::time::Instant::now();
+    store
+        .conn()
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
+    println!(
+        "wal before checkpoint {} MB; checkpoint {} ms",
+        wal >> 20,
+        t.elapsed().as_millis()
+    );
+}
+
+/// A3 (audit 1): a run cancelled mid-parse leaves the read lists empty, not the previous run's winners.
+#[test]
+fn cancelled_run_leaves_read_lists_empty_until_a_scan_completes() {
+    let d = instance_fixture("+B\n+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/B/meshes/x.nif", None);
+    go(&d, vec![]);
+    // Mod list changes (B off, C on) and the scan is cancelled when parsing starts.
+    // More new files than one parse chunk, so the cancel (set on the first "parse" report) lands before the end.
+    for i in 0..600 {
+        put(d.path(), &format!("mods/C/meshes/c{i}.nif"), None);
+    }
+    std::fs::write(
+        d.path().join("profiles/Default/modlist.txt"),
+        "-B\n+C\n+A\n",
+    )
+    .unwrap();
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let cancel = AtomicBool::new(false);
+    let r = run(
+        &Source::Mo2(inst),
+        &mut store,
+        &cancel,
+        &|p| {
+            if p.phase == "parse" {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        &|| vec![],
+    );
+    assert!(matches!(r, Err(modscan::ScanError::Cancelled)));
+    assert!(
+        store.mods().unwrap().is_empty(),
+        "no origin is part of a cancelled run"
+    );
+    for id in 1..=4 {
+        assert!(store.nifs_of(id).unwrap().is_empty());
+    }
+    drop(store);
+    let (store, _) = go(&d, vec![]);
+    let names: Vec<_> = store.mods().unwrap().into_iter().map(|m| m.name).collect();
+    assert!(names.contains(&"C".to_string()) && !names.contains(&"B".to_string()));
+    assert!(store.nifs_of(mod_id(&store, "A")).unwrap()[0].wins);
+}
+
+/// Review focus 1: a store error on the writer thread ends the scan with that error instead of hanging the parser.
+/// 2,561 one-byte files span 6 chunks, so the parser is still sending when the writer dies.
+#[test]
+fn a_writer_failure_ends_the_scan_with_its_error() {
+    let d = instance_fixture("+A\n");
+    for i in 0..2561 {
+        put(d.path(), &format!("mods/A/meshes/x{i}.nif"), Some(&[0]));
+    }
+    let root = d.path().to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let inst = Instance::load(&root, None).unwrap();
+        let mut store = Store::open(&root.join("scan.db")).unwrap();
+        store
+            .conn()
+            .execute_batch("CREATE TRIGGER boom BEFORE INSERT ON nif_copy BEGIN SELECT RAISE(ABORT, 'boom'); END")
+            .unwrap();
+        let r = run(
+            &Source::Mo2(inst),
+            &mut store,
+            &AtomicBool::new(false),
+            &|_| {},
+            &|| vec![],
+        );
+        let _ = tx.send(r.map(|_| ()).map_err(|e| format!("{e:?}")));
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .expect("run hung after a writer error");
+    assert!(
+        r.as_ref()
+            .is_err_and(|e| e.contains("Db") && e.contains("boom")),
+        "{r:?}"
+    );
+}
+
+/// F-4: a run that fails after derived copies were staged leaves no pending rows, and the next run on the same store
+/// does not commit the vanished derived copy.
+#[test]
+fn a_failed_run_discards_staged_derived_copies() {
+    let d = instance_fixture(
+        "+PGP
++A
+",
+    );
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    put(d.path(), "mods/PGP/meshes/x.nif", None);
+    put(d.path(), "mods/PGP/PGPatcher.esp", Some(b"e"));
+    let a_bytes = std::fs::read(d.path().join("mods/A/meshes/x.nif")).unwrap();
+    let crc = crc32fast::hash(&a_bytes);
+    put(
+        d.path(),
+        "mods/PGP/ParallaxGen_Diff.json",
+        Some(
+            format!(r#"{{"meshes\x.nif":{{"crc32original":{crc},"crc32patched":1}}}}"#).as_bytes(),
+        ),
+    );
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let scan = |store: &mut Store| {
+        let inst = Instance::load(d.path(), None).unwrap();
+        run(
+            &Source::Mo2(inst),
+            store,
+            &AtomicBool::new(false),
+            &|_| {},
+            &|| vec![],
+        )
+    };
+    let count = |store: &Store, sql: &str| -> i64 {
+        store.conn().query_row(sql, [], |r| r.get(0)).unwrap()
+    };
+    store
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON nif_copy WHEN NEW.is_derived = 1 BEGIN SELECT RAISE(ABORT, 'boom'); END",
+        )
+        .unwrap();
+    let r = scan(&mut store);
+    assert!(
+        r.as_ref().is_err_and(|e| format!("{e:?}").contains("boom")),
+        "{r:?}"
+    );
+    assert_eq!(count(&store, "SELECT count(*) FROM pending_derived"), 0);
+    store.conn().execute_batch("DROP TRIGGER boom").unwrap();
+    std::fs::remove_file(d.path().join("mods/PGP/meshes/x.nif")).unwrap();
+    scan(&mut store).unwrap();
+    assert_eq!(
+        count(&store, "SELECT count(*) FROM nif_copy WHERE is_derived = 1"),
+        0
+    );
+}
+
+/// Audit 17: a second scan on the same store is refused while the first runs; the lock is gone after any outcome.
+#[cfg(windows)]
+#[test]
+fn second_scan_on_the_same_store_is_busy_and_the_lock_is_released() {
+    let d = instance_fixture("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let db = d.path().join("scan.db");
+    let attempt = |cancel: bool, progress: &dyn Fn(modscan::scan::Progress)| {
+        let inst = Instance::load(d.path(), None).unwrap();
+        let mut store = Store::open(&db).unwrap();
+        run(
+            &Source::Mo2(inst),
+            &mut store,
+            &AtomicBool::new(cancel),
+            progress,
+            &|| vec![],
+        )
+    };
+    let inner = std::cell::RefCell::new(Vec::new());
+    let r = attempt(false, &|_| {
+        let r = attempt(false, &|_| {});
+        inner
+            .borrow_mut()
+            .push(matches!(r, Err(modscan::ScanError::Busy)));
+    });
+    assert!(r.is_ok(), "{r:?}");
+    let inner = inner.into_inner();
+    assert!(!inner.is_empty() && inner.iter().all(|b| *b), "{inner:?}");
+    let store = Store::open(&db).unwrap();
+    assert_eq!(store.nifs_of(mod_id(&store, "A")).unwrap().len(), 1);
+    // Released after a cancel (a new file forces real work) and after an error.
+    put(d.path(), "mods/A/meshes/z.nif", None);
+    assert!(matches!(
+        attempt(true, &|_| {}),
+        Err(modscan::ScanError::Cancelled)
+    ));
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut s = Store::open(&db).unwrap();
+    let r = run(
+        &Source::Mo2(inst),
+        &mut s,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec!["pgpatcher.exe".into()],
+    );
+    assert!(matches!(r, Err(modscan::ScanError::PgpRunning)));
+    assert!(attempt(false, &|_| {}).is_ok());
+}

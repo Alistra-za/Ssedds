@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use windows::core::w;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Diagnostics::ToolHelp::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
 
 fn exe_name(e: &PROCESSENTRY32W) -> String {
@@ -43,18 +42,12 @@ pub fn process_names() -> Vec<String> {
     out
 }
 
-/// True when usvfs is injected into this process (we were started through MO2's virtual file system).
-pub fn usvfs_loaded() -> bool {
-    unsafe { GetModuleHandleW(w!("usvfs_x64.dll")).is_ok() }
-}
-
 /// Folder of ModOrganizer.exe if this process was started by MO2.
 ///
 /// The usvfs DLL being loaded ranks first (plan 02 §1.2) but only tells us we are under MO2; the
 /// folder still comes from the parent process image, and if the parent is not ModOrganizer.exe
 /// (for example a launcher in between) the answer is `None`.
 pub fn mo2_exe_dir() -> Option<PathBuf> {
-    let _under_usvfs = usvfs_loaded();
     unsafe {
         let me = std::process::id();
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;

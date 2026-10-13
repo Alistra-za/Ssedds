@@ -223,7 +223,7 @@ fn schema_v3_rebuilds_old_databases_and_sets_pragmas() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(v, modscan::store::SCHEMA_VERSION);
-    assert_eq!(v, 4);
+    assert_eq!(v, 6);
     let n: i64 = c
         .query_row("SELECT count(*) FROM shape", [], |r| r.get(0))
         .unwrap();
@@ -581,7 +581,7 @@ fn open_read_only_never_creates_rebuilds_or_writes() {
     }
     assert!(matches!(
         Store::open_read_only(&old),
-        Err(modscan::ScanError::SchemaVersion { found: 2, want: 4 })
+        Err(modscan::ScanError::SchemaVersion { found: 2, want: 6 })
     ));
     let n: i64 = rusqlite::Connection::open(&old)
         .unwrap()
@@ -911,4 +911,136 @@ fn winning_nifs_matches_the_path_after_the_meshes_folder() {
     assert!(s.winning_nifs("mes", 100).unwrap().is_empty());
     assert!(s.winning_nifs("meshes", 100).unwrap().is_empty());
     assert_eq!(s.winning_nifs("x/d", 100).unwrap().len(), 1);
+}
+
+/// Spec §2 step 5 + review focus 2: one id per path with and without the scan's in-memory map, also for a path
+/// another connection added after the map was loaded.
+#[test]
+fn path_ids_are_stable_inside_and_outside_a_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("s.db");
+    let mut s = Store::open(&p).unwrap();
+    let a = s.path_ids(&["meshes/a.nif", "meshes/b.nif"]).unwrap();
+    s.begin_scan().unwrap();
+    let mut other = Store::open(&p).unwrap();
+    let x = other.path_ids(&["meshes/x.nif"]).unwrap()[0];
+    let b = s
+        .path_ids(&[
+            "meshes/b.nif",
+            "meshes/a.nif",
+            "meshes/c.nif",
+            "meshes/c.nif",
+            "meshes/x.nif",
+        ])
+        .unwrap();
+    s.end_scan().unwrap();
+    assert_eq!((b[0], b[1]), (a[1], a[0]));
+    assert_eq!(b[2], b[3]);
+    assert_eq!(b[4], x, "a path another connection interned");
+    assert_eq!(s.path_ids(&["meshes/c.nif"]).unwrap()[0], b[2]);
+}
+
+/// Spec §2 step 6: cache pragmas on every connection; synchronous OFF only while a cold scan runs.
+#[test]
+fn a_cold_scan_runs_with_synchronous_off_and_ends_normal() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&d.path().join("s.db")).unwrap();
+    let pragma = |s: &Store, p: &str| -> i64 {
+        s.conn()
+            .query_row(&format!("PRAGMA {p}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(pragma(&s, "cache_size"), -65536);
+    assert_eq!(pragma(&s, "temp_store"), 2, "MEMORY");
+    assert_eq!(pragma(&s, "synchronous"), 1, "NORMAL");
+    s.begin_scan().unwrap();
+    assert_eq!(pragma(&s, "synchronous"), 0, "OFF during a cold scan");
+    s.end_scan().unwrap();
+    assert_eq!(pragma(&s, "synchronous"), 1);
+    s.upsert_copy(
+        "meshes/a.nif",
+        1,
+        1,
+        1,
+        CopyResult::Failed("x".into()),
+        None,
+    )
+    .unwrap();
+    s.begin_scan().unwrap();
+    assert_eq!(pragma(&s, "synchronous"), 1, "a warm scan keeps NORMAL");
+    s.end_scan().unwrap();
+}
+
+/// Review focus 3 / ruling R4: a file SQLite cannot read is rebuilt (the store is a cache).
+#[test]
+fn a_corrupt_store_file_is_rebuilt() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("scan.db");
+    std::fs::write(&p, vec![0xAB; 8192]).unwrap();
+    let s = Store::open(&p).unwrap();
+    let v: i64 = s
+        .conn()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, modscan::store::SCHEMA_VERSION);
+}
+
+/// A running scan holds scan.lock: a writable open that would rebuild an outdated db must wait, give up with
+/// Busy and leave the tables alone; once the lock is free it rebuilds.
+#[cfg(windows)]
+#[test]
+fn outdated_schema_rebuild_waits_for_the_scan_lock() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let old = d.path().join("old.db");
+    {
+        let c = rusqlite::Connection::open(&old).unwrap();
+        c.execute_batch("CREATE TABLE shape (a INTEGER); INSERT INTO shape VALUES (1); PRAGMA user_version = 2;")
+            .unwrap();
+    }
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .open(d.path().join("scan.lock"))
+        .unwrap();
+    assert!(matches!(Store::open(&old), Err(modscan::ScanError::Busy)));
+    let n: i64 = rusqlite::Connection::open(&old)
+        .unwrap()
+        .query_row("SELECT count(*) FROM shape", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "no table was dropped under a running scan");
+    drop(lock);
+    Store::open(&old).unwrap();
+    let v: i64 = rusqlite::Connection::open(&old)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, modscan::store::SCHEMA_VERSION);
+}
+
+/// Final review M2: when the corrupt-file rebuild cannot delete the database because another handle holds it, the
+/// error says to restart the app.
+#[cfg(windows)]
+#[test]
+fn a_rebuild_blocked_by_an_open_handle_says_to_restart() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("scan.db");
+    std::fs::write(&p, vec![b'x'; 4096]).unwrap();
+    // Share read+write but not delete: SQLite can open the file, `remove_file` cannot.
+    let _held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(&p)
+        .unwrap();
+    let e = Store::open(&p)
+        .err()
+        .expect("the rebuild cannot delete the file");
+    assert!(
+        e.to_string()
+            .contains("restart the app to rebuild the scan database"),
+        "{e}"
+    );
 }

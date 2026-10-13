@@ -954,6 +954,7 @@ fn stats(
             .iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
             .collect(),
+        sub_ms: vec![],
     }
 }
 
@@ -1355,4 +1356,168 @@ fn a_long_file_ref_row_wraps_inside_the_window() {
     let row = h.get_by_label_contains("qqqqqqqqqq").rect();
     assert!(row.height() > 30.0, "row did not wrap: {row:?}");
     assert!(row.max.x <= 1400.0, "{row:?} {win:?}");
+}
+
+/// Filtering spec §3 / ruling R12: inert records are left out of "Plugin overrides" and its count, shown dimmed with
+/// their reason behind "Show inert (N)".
+#[test]
+fn plugin_overrides_hide_inert_records_until_asked() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    let used = |formid: u32, edid: &str| MeshUse {
+        formid,
+        edid: Some(edid.into()),
+        sig: "STAT".into(),
+        plugin: "Skyrim.esm".into(),
+        model_slot: 0,
+        n_overrides: 0,
+        swaps: vec![],
+    };
+    m.plugin_uses = vec![used(1, "Placed"), used(2, "Lonely")];
+    m.plugin_inert = [(2u32, "not placed")].into_iter().collect();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (1)").click();
+    h.run();
+    h.get_by_label("Placed [00000001] STAT — Skyrim.esm");
+    assert!(h.query_by_label_contains("Lonely").is_none());
+    h.get_by_label("Show inert (1)").click();
+    h.run();
+    h.get_by_label("Lonely [00000002] STAT — Skyrim.esm · not placed");
+}
+
+/// Ruling R12: Missing lists live paths; paths only inert records name come dimmed behind "Show inert (N)".
+#[test]
+fn missing_files_of_inert_records_show_on_request() {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs {
+        missing: vec![MissingRef {
+            path: "textures/live.dds".into(),
+            n_records: 1,
+            records: vec!["A [00000001] TXST — S.esm".into()],
+        }],
+        unused: vec![],
+    });
+    m.missing_inert = vec![MissingRef {
+        path: "meshes/lonely.nif".into(),
+        n_records: 1,
+        records: vec!["Lonely [00000002] STAT — S.esm (not placed)".into()],
+    }];
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    h.get_by_label("Missing (1)");
+    assert!(h.query_by_label_contains("lonely.nif").is_none());
+    h.get_by_label("Show inert (1)").click();
+    h.run();
+    h.get_by_label("meshes/lonely.nif ← Lonely [00000002] STAT — S.esm (not placed)");
+}
+
+fn missing_ref(path: String) -> MissingRef {
+    MissingRef {
+        path,
+        n_records: 1,
+        records: vec!["R [00000001] STAT — S.esm".into()],
+    }
+}
+
+fn budget_model(live: usize, inert: usize) -> MeshesModel {
+    let mut m = model_with(None);
+    m.file_refs = Some(FileRefs {
+        missing: (0..live)
+            .map(|i| missing_ref(format!("textures/live{i:04}.dds")))
+            .collect(),
+        unused: vec!["textures/unused/u.dds".into()],
+    });
+    m.missing_inert = (0..inert)
+        .map(|i| missing_ref(format!("meshes/inert{i:04}.nif")))
+        .collect();
+    m.show_inert_refs = true;
+    m
+}
+
+fn rows_with(h: &Harness<'static, MeshesModel>, needle: &str) -> usize {
+    h.query_all_by_label_contains(needle).count()
+}
+
+/// Review I2: one 1000-row budget over live then inert rows; the remainder is reported.
+#[test]
+fn missing_rows_share_one_budget_and_report_the_remainder() {
+    let mut h = harness(budget_model(900, 300));
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    assert_eq!(rows_with(&h, "textures/live"), 900);
+    assert_eq!(rows_with(&h, "meshes/inert"), 100);
+    h.get_by_label("… and 200 more — narrow with the filter");
+}
+
+#[test]
+fn inert_only_overflow_is_reported() {
+    let mut h = harness(budget_model(0, 1200));
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    assert_eq!(rows_with(&h, "meshes/inert"), 1000);
+    h.get_by_label("… and 200 more — narrow with the filter");
+}
+
+/// Review M3: switching tab shows the new tab's rows at once, with no stale inert rows.
+#[test]
+fn switching_to_unused_drops_the_inert_rows_in_the_same_frame() {
+    let mut h = harness(budget_model(1, 1));
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    h.get_by_label_contains("meshes/inert0000.nif");
+    h.get_by_label("Unused (1)").click();
+    h.step();
+    assert!(h.query_by_label_contains("meshes/inert").is_none());
+    h.get_by_label("textures/unused/u.dds");
+}
+
+/// Review I1: Show inert does not follow the selection to another NIF, nor survive a rescan.
+#[test]
+fn show_inert_resets_on_nif_change_and_on_scan() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/a.nif"), nif(2, "meshes/b.nif")];
+    m.select_nif(1);
+    m.show_inert_uses = true;
+    m.select_nif(2);
+    assert!(!m.show_inert_uses);
+
+    let (_d, mut m) = scanned();
+    (m.show_inert_uses, m.show_inert_refs) = (true, true);
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    assert!(!m.show_inert_uses && !m.show_inert_refs, "scan start");
+    (m.show_inert_uses, m.show_inert_refs) = (true, true);
+    wait(&mut m);
+    assert!(!m.show_inert_uses && !m.show_inert_refs, "scan end");
+}
+
+/// Final review M4: the inert Missing lines are built once per filter, not per frame.
+#[test]
+fn inert_ref_lines_are_cached_until_the_filter_changes() {
+    let mut m = budget_model(0, 3);
+    let a = m.refs_inert_lines();
+    assert!(std::sync::Arc::ptr_eq(&a, &m.refs_inert_lines()));
+    m.refs_filter = "inert0001".into();
+    let c = m.refs_inert_lines();
+    assert!(!std::sync::Arc::ptr_eq(&a, &c));
+    assert_eq!(c.len(), 1);
+}
+
+/// Re-review (M4): a reload that replaces the inert paths shows the new lines although the filter is unchanged.
+#[test]
+fn reloading_file_references_replaces_the_cached_inert_lines() {
+    let (_d, mut m) = scanned();
+    m.missing_inert = vec![missing_ref("meshes/old.nif".into())];
+    assert_eq!(m.refs_inert_lines().len(), 1);
+    m.load_file_refs(); // the store has no inert paths
+    assert!(m.missing_inert.is_empty());
+    assert!(m.refs_inert_lines().is_empty(), "stale cached lines");
 }

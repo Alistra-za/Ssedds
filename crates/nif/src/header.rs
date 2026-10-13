@@ -70,6 +70,9 @@ impl Header {
             .collect::<Result<Vec<_>, _>>()?;
         let nstrings = c.u32()?;
         c.u32()?; // max string length
+        if nstrings > MAX_BLOCKS {
+            return Err(NifError::TooManyStrings(nstrings));
+        }
         let strings = (0..nstrings)
             .map(|_| c.sized_bytes().map(<[u8]>::to_vec))
             .collect::<Result<Vec<_>, _>>()?;

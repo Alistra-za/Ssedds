@@ -7,6 +7,7 @@ use crate::model::viewport3d::{
 };
 use eframe::egui;
 use render3d::locate::Change;
+use render3d::ShapeStatus;
 
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
@@ -212,6 +213,23 @@ fn problems(ui: &mut egui::Ui, v: &Viewport3d) {
             }
             for e in r.errors.iter().take(MAX_LISTED) {
                 ui.colored_label(RED, format!("Error: {e}"));
+            }
+            // A recompile after a toggle can fail on a loaded mesh; the old look stays, so say why.
+            for i in v.shapes.iter().filter(|_| v.is_mesh()) {
+                if let ShapeStatus::Failed { error, .. } = &i.status {
+                    let kept = if matches!(
+                        i.status,
+                        ShapeStatus::Failed {
+                            showing_previous: true,
+                            ..
+                        }
+                    ) {
+                        " (previous look kept)"
+                    } else {
+                        ""
+                    };
+                    ui.colored_label(RED, format!("{}: shader failed: {error}{kept}", i.name));
+                }
             }
             for t in r.missing_textures.iter().take(MAX_LISTED) {
                 ui.colored_label(AMBER, format!("Missing texture: {t}"));

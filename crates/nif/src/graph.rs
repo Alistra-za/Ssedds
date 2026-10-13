@@ -89,18 +89,28 @@ fn children(h: &Header, b: &[u8], block: usize) -> Result<(Mat3x4, Vec<i32>), Ni
     Ok((av.transform, kids))
 }
 
-/// True when `target` is `from` or one of its ancestors. `parent` is acyclic (every insert is checked), so the walk ends.
+/// True when `target` is `from` or one of its first `MAX_DEPTH + 2` ancestors. `parent` is acyclic (every insert is
+/// checked), so the walk ends; the cap keeps a long chain linear. A cycle closing only beyond the cap is not caught,
+/// which is harmless: `world` and `depth` both stop at `MAX_DEPTH`.
 fn reaches(parent: &HashMap<u32, u32>, from: u32, target: u32) -> bool {
+    reaches_counted(parent, from, target).0
+}
+
+/// [`reaches`] and the number of parent lookups it made.
+fn reaches_counted(parent: &HashMap<u32, u32>, from: u32, target: u32) -> (bool, usize) {
     let mut cur = from;
-    loop {
+    let mut lookups = 0;
+    for _ in 0..=MAX_DEPTH + 2 {
         if cur == target {
-            return true;
+            return (true, lookups);
         }
+        lookups += 1;
         match parent.get(&cur) {
             Some(&p) => cur = p,
-            None => return false,
+            None => return (false, lookups),
         }
     }
+    (false, lookups)
 }
 
 fn depth(parent: &HashMap<u32, u32>, mut b: u32) -> usize {
@@ -226,6 +236,22 @@ mod tests {
             root,
             "block 1: only its parent (the root node) is composed"
         );
+    }
+
+    /// A 50k-node chain: the uncapped walk costs N^2/2 lookups (many seconds), the capped one N * 258. Counts lookups, so
+    /// the check does not depend on the clock.
+    #[test]
+    fn cycle_check_is_linear_on_a_long_chain() {
+        let mut parent = HashMap::new();
+        let mut total = 0;
+        for i in 1..50_000u32 {
+            let (hit, n) = reaches_counted(&parent, i - 1, i);
+            assert!(!hit);
+            assert!(n <= MAX_DEPTH + 3, "{n} lookups at {i}");
+            total += n;
+            parent.insert(i, i - 1);
+        }
+        assert!(total < 50_000 * (MAX_DEPTH + 3), "{total}");
     }
 
     #[test]

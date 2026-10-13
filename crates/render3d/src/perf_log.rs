@@ -258,13 +258,16 @@ pub fn start_in(dir: &Path) -> Option<Arc<PerfLog>> {
 
 /// The global emit: this thread's capture if one is active, else the live log, else nothing.
 pub fn emit(event: &str, fields: Value) {
-    let captured = SINK.with(|s| match s.borrow_mut().as_mut() {
-        Some(v) => {
-            v.push(object(event, 0.0, fields.clone()));
-            true
-        }
-        None => false,
-    });
+    // try_with: the panic hook can run while this thread's TLS is being torn down.
+    let captured = SINK
+        .try_with(|s| match s.borrow_mut().as_mut() {
+            Some(v) => {
+                v.push(object(event, 0.0, fields.clone()));
+                true
+            }
+            None => false,
+        })
+        .unwrap_or(false);
     if captured {
         return;
     }

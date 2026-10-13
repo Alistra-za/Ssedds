@@ -20,6 +20,9 @@ pub struct PluginFacts {
     pub flags: u32,
     pub masters: Vec<String>,
     pub records: Vec<Rec>,
+    /// Base FormIDs (as stored) placed by REFR/ACHR records in CELL and WRLD groups, once each, ascending
+    /// (filtering spec §3). The references themselves are not kept.
+    pub placed: Vec<u32>,
     /// `"offset 0x…: message"`, in file order. Records read before a fault are kept.
     pub errors: Vec<String>,
 }
@@ -52,8 +55,12 @@ pub struct Rec {
 pub struct Payload {
     pub txst: Option<Txst>,
     pub models: Vec<ModelRef>,
-    /// (role = subrecord signature, local FormID of the TXST); FormID 0 is never stored.
+    /// (role = subrecord signature, local FormID). The target is a TXST, except role HNAM (an extra-part HDPT), GNAM (a GRAS)
+    /// and ARMO MODL (an ARMA); FormID 0 is never stored.
     pub txst_refs: Vec<([u8; 4], u32)>,
+    /// HDPT DATA flags (xEdit: 0x01 Playable, 0x02 Male, 0x04 Female, 0x08 Is Extra Part, 0x10 Use Solid Tint);
+    /// `None` on other records and when DATA is absent.
+    pub hdpt_flags: Option<u8>,
     /// (role = subrecord signature, canonical texture path).
     pub textures: Vec<([u8; 4], String)>,
 }

@@ -422,6 +422,10 @@ pub struct MeshesModel {
     pub tex_users: Option<(String, Vec<TexUser>)>,
     /// Winning plugin records that use the shown mesh (esp spec §4.2).
     pub plugin_uses: Vec<MeshUse>,
+    /// Inert reasons (filtering spec §3) of the `plugin_uses` records that are inert.
+    pub plugin_inert: HashMap<u32, &'static str>,
+    /// "Show inert" in Plugin overrides.
+    pub show_inert_uses: bool,
     /// "Plugin file references", read when the section is first opened after a scan.
     pub file_refs: Option<FileRefs>,
     /// That section's tab (false: Missing) and filter.
@@ -429,8 +433,14 @@ pub struct MeshesModel {
     /// The "Plugin file references" window is shown.
     pub refs_open: bool,
     pub refs_filter: String,
+    /// Missing paths that only inert records name (filtering ruling R12), read with `file_refs`.
+    pub missing_inert: Vec<MissingRef>,
+    /// "Show inert" on the Missing tab.
+    pub show_inert_refs: bool,
     /// The lines for (tab, filter), kept until either changes.
     refs_cache: Option<((bool, String), Vec<String>)>,
+    /// The inert Missing lines for a filter, kept until the filter or `missing_inert` changes.
+    refs_inert_cache: Option<(String, Arc<Vec<String>>)>,
     /// Database or scan errors; shown, never swallowed.
     pub error: Option<String>,
     pub dialog: Option<MeshesDialog>,
@@ -503,11 +513,16 @@ impl MeshesModel {
             stale_list: None,
             tex_users: None,
             plugin_uses: vec![],
+            plugin_inert: HashMap::new(),
+            show_inert_uses: false,
             file_refs: None,
             refs_unused: false,
             refs_open: false,
             refs_filter: String::new(),
+            missing_inert: vec![],
+            show_inert_refs: false,
             refs_cache: None,
+            refs_inert_cache: None,
             error: None,
             dialog: None,
             report: None,
@@ -648,6 +663,8 @@ impl MeshesModel {
         // The scan rewrites origins and winners: a cached list is stale from here on, whatever the scan's outcome.
         self.file_refs = None;
         self.refs_cache = None;
+        self.refs_inert_cache = None;
+        (self.show_inert_uses, self.show_inert_refs) = (false, false);
         self.progress = Some(("starting", 0, 0));
         self.status = if req.skip_derived {
             "Scanning without PGPatcher output…".into()
@@ -708,6 +725,8 @@ impl MeshesModel {
                 log_plugins(&report);
                 self.file_refs = None;
                 self.refs_cache = None;
+                self.refs_inert_cache = None;
+                (self.show_inert_uses, self.show_inert_refs) = (false, false);
                 let incomplete = report
                     .pgp
                     .iter()
@@ -736,8 +755,8 @@ impl MeshesModel {
                 self.banner = Some(Banner::PgpRunning);
             }
             Err(ScanError::Cancelled) => {
-                // The store marks every origin as outside the run until a scan completes: lists read now would be
-                // empty, so the ones on screen stay until the next scan.
+                // The store keeps every origin outside the readable run until a scan completes: lists read now
+                // would be empty, so the ones on screen stay until the next scan.
                 self.status =
                     "Scan cancelled. The lists are from before; scan again to refresh them.".into();
             }
@@ -796,6 +815,8 @@ impl MeshesModel {
         self.view_source = false;
         self.tex_users = None;
         self.plugin_uses.clear();
+        self.plugin_inert.clear();
+        self.show_inert_uses = false;
         self.v3.set_mesh(None);
     }
 
@@ -1060,15 +1081,21 @@ impl MeshesModel {
         });
         match r {
             Ok(s) => {
-                let uses = store.copy_location(copy).and_then(|l| match l {
-                    Some((path, ..)) => store.plugin_uses_of_mesh(&path),
-                    None => Ok(vec![]),
-                });
-                self.plugin_uses = match uses {
-                    Ok(u) => u,
+                let uses = store
+                    .copy_location(copy)
+                    .and_then(|l| match l {
+                        Some((path, ..)) => store.plugin_uses_of_mesh(&path),
+                        None => Ok(vec![]),
+                    })
+                    .and_then(|u| {
+                        let ids: Vec<u32> = u.iter().map(|x| x.formid).collect();
+                        Ok((store.inert_of(&ids)?, u))
+                    });
+                (self.plugin_inert, self.plugin_uses) = match uses {
+                    Ok(x) => x,
                     Err(e) => {
                         self.error = Some(db_err(e));
-                        vec![]
+                        (HashMap::new(), vec![])
                     }
                 };
                 let spec = mesh_spec(store, copy, &s);
@@ -1086,6 +1113,7 @@ impl MeshesModel {
                 self.shapes.clear();
                 self.resolved.clear();
                 self.plugin_uses.clear();
+                self.plugin_inert.clear();
                 self.error = Some(db_err(e));
             }
         }
@@ -1121,20 +1149,26 @@ impl MeshesModel {
             return;
         };
         // shortcut: Missing/Unused read on the UI thread on first open; move to the scan worker if the owner sees a stall
-        let r = store.plugin_missing_files().and_then(|missing| {
-            Ok(FileRefs {
-                missing,
-                unused: store.unused_textures()?,
-            })
-        });
-        self.file_refs = Some(match r {
-            Ok(r) => r,
+        let r = store
+            .plugin_missing_with_inert()
+            .and_then(|(missing, inert)| {
+                Ok((
+                    FileRefs {
+                        missing,
+                        unused: store.unused_textures()?,
+                    },
+                    inert,
+                ))
+            });
+        (self.file_refs, self.missing_inert) = match r {
+            Ok((r, i)) => (Some(r), i),
             Err(e) => {
                 self.error = Some(db_err(e));
-                FileRefs::default()
+                (Some(FileRefs::default()), vec![])
             }
-        });
+        };
         self.refs_cache = None;
+        self.refs_inert_cache = None;
     }
 
     /// The listed lines for the current tab and filter.
@@ -1149,6 +1183,19 @@ impl MeshesModel {
             self.refs_cache = Some((key, lines));
         }
         self.refs_cache.as_ref().map_or(&[][..], |c| c.1.as_slice())
+    }
+
+    /// Missing lines of the paths only inert records name, for "Show inert" (filtering ruling R12); cached per filter.
+    pub fn refs_inert_lines(&mut self) -> Arc<Vec<String>> {
+        if self.refs_inert_cache.as_ref().map(|c| &c.0) != Some(&self.refs_filter) {
+            let r = FileRefs {
+                missing: self.missing_inert.clone(),
+                unused: vec![],
+            };
+            let lines = Arc::new(file_refs_lines(&r, false, &self.refs_filter));
+            self.refs_inert_cache = Some((self.refs_filter.clone(), lines));
+        }
+        self.refs_inert_cache.as_ref().unwrap().1.clone()
     }
 
     /// "Show list" on the stale banner.

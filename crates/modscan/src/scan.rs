@@ -5,16 +5,16 @@ use crate::mo2::{loose_origins, Instance, LooseOrigin, OriginKind};
 use crate::pgp::{self, DeriveCheck, Diff, Signature};
 use crate::resolve::{winners, Copy, OriginRef};
 use crate::store::{
-    check_code, ChunkItem, CopyResult, DeriveRow, DerivedState, OriginSpec, Store, KIND_BSA,
-    KIND_DATA, KIND_MOD, KIND_OVERWRITE, KIND_SEPARATOR, PARSE_FAILED, PARSE_NOT_SKYRIM,
+    check_code, ChunkItem, CopyResult, DeriveRow, DerivedState, OriginSpec, ScanLock, Store,
+    KIND_BSA, KIND_DATA, KIND_MOD, KIND_OVERWRITE, KIND_SEPARATOR, PARSE_FAILED, PARSE_NOT_SKYRIM,
 };
 use crate::ScanError;
-use nif::path::is_facegen;
+use nif::path::{is_facegen, is_lod_path};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use vfs::bsa::Bsa;
 
 const CHUNK: usize = 512;
@@ -62,6 +62,8 @@ pub struct Report {
     pub notes: Vec<String>,
     /// Wall time per phase in milliseconds, in run order: origins, walk, parse, write, resolve, textures, plugins.
     pub phase_ms: Vec<(&'static str, u64)>,
+    /// Sub-timers in milliseconds (spec §2 step 1; ruling R2). `*_cpu` entries are summed over the parse threads.
+    pub sub_ms: Vec<(&'static str, u64)>,
     /// The plugin pass (esp spec §2.2): `Some` after an MO2 run whose plugin pass finished.
     pub plugins: Option<crate::plugins::PluginStats>,
 }
@@ -71,6 +73,11 @@ fn lap(t: &mut Instant) -> u64 {
     let ms = t.elapsed().as_millis() as u64;
     *t = Instant::now();
     ms
+}
+
+/// Nanoseconds since `t` (sub-timers summed across threads).
+fn ns(t: Instant) -> u64 {
+    t.elapsed().as_nanos() as u64
 }
 
 /// Scans one file's bytes; a parser panic becomes a `Failed` copy instead of aborting the scan.
@@ -163,6 +170,70 @@ pub fn run_with(
     procs: &dyn Fn() -> Vec<String>,
     skip_derived: bool,
 ) -> Result<Report, ScanError> {
+    // Declared first so it drops last, after end_scan, on every path including a panic.
+    let _lock = ScanLock::take(store.conn.path(), Duration::ZERO)?;
+    let r = scan_body(src, store, cancel, progress, procs, skip_derived);
+    if let Err(e) = &r {
+        // Pending rows must not outlive a failed run (first error wins). A crash after a cold direct write keeps
+        // the derived copies; their size/mtime re-parse guards them.
+        let _ = store.discard_pending();
+        reset_if_corrupt(store, e);
+    }
+    // Every outcome, cancel and errors included, ends the scan (resets the store's per-scan state).
+    let t = Instant::now();
+    let end = store.end_scan();
+    let mut report = r?;
+    end?;
+    report
+        .sub_ms
+        .push(("end_scan", t.elapsed().as_millis() as u64));
+    Ok(report)
+}
+
+/// A corrupt database is a cache: zero the version so the next `Store::open` rebuilds it.
+fn reset_if_corrupt(store: &Store, e: &ScanError) {
+    if let ScanError::Db(rusqlite::Error::SqliteFailure(f, _)) = e {
+        if f.code == rusqlite::ErrorCode::DatabaseCorrupt {
+            let _ = store.conn.execute_batch("PRAGMA user_version = 0");
+        }
+    }
+}
+
+#[cfg(test)]
+mod corrupt_tests {
+    use super::*;
+
+    #[test]
+    fn a_corrupt_database_error_zeroes_the_schema_version() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::open(&d.path().join("s.db")).unwrap();
+        let ver = |s: &Store| {
+            s.conn
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        let err = |code| {
+            ScanError::Db(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                None,
+            ))
+        };
+        reset_if_corrupt(&store, &err(rusqlite::ffi::SQLITE_CONSTRAINT));
+        assert_ne!(ver(&store), 0, "other errors keep the cache");
+        reset_if_corrupt(&store, &err(rusqlite::ffi::SQLITE_CORRUPT));
+        assert_eq!(ver(&store), 0);
+    }
+}
+
+/// The scan itself; `run_with` adds `Store::end_scan` on every outcome.
+fn scan_body(
+    src: &Source,
+    store: &mut Store,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+    procs: &dyn Fn() -> Vec<String>,
+    skip_derived: bool,
+) -> Result<Report, ScanError> {
     // 1. Process gate.
     if !skip_derived && pgp::running(&procs()) {
         return Err(ScanError::PgpRunning);
@@ -218,7 +289,7 @@ pub fn run_with(
         sig_any[i] = sig != Signature::None;
         // Without the PGPatcher output, the origin is recorded as ordinary; its derived paths are dropped below.
         let state = state.filter(|_| !skip_derived);
-        let id = store.upsert_origin(&OriginSpec {
+        let id = store.upsert_origin_staged(&OriginSpec {
             kind: kind_code(o.kind),
             name: o.name.clone(),
             root: o.root.display().to_string(),
@@ -242,6 +313,7 @@ pub fn run_with(
             });
         }
     }
+    // Origins stay disabled while the run is in progress; `enable_run` is the commit point (before `delete_unseen`).
     let mut bsa_ids = Vec::with_capacity(bsas.len());
     for b in &bsas {
         let parent = b.providing_mod.as_ref().and_then(|m| {
@@ -254,7 +326,7 @@ pub fn run_with(
             .path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        bsa_ids.push(store.upsert_origin(&OriginSpec {
+        bsa_ids.push(store.upsert_origin_staged(&OriginSpec {
             kind: KIND_BSA,
             name,
             root: b.path.display().to_string(),
@@ -264,9 +336,10 @@ pub fn run_with(
             derived_state: None,
         })?);
     }
+    let mut sep_ids = vec![];
     if let Source::Mo2(inst) = src {
         for (name, prio) in &seps {
-            store.upsert_origin(&OriginSpec {
+            sep_ids.push(store.upsert_origin_staged(&OriginSpec {
                 kind: KIND_SEPARATOR,
                 name: name.clone(),
                 root: inst.mods.join(name).display().to_string(),
@@ -274,7 +347,7 @@ pub fn run_with(
                 priority: *prio,
                 derived_by: None,
                 derived_state: None,
-            })?;
+            })?);
         }
     }
 
@@ -311,8 +384,10 @@ pub fn run_with(
     report.nifs = copies.len();
 
     // 4. Parse or reuse.
+    let ti = Instant::now();
     let path_ids = store.path_ids(&copies.iter().map(|c| c.path.as_str()).collect::<Vec<_>>())?;
     let existing = store.existing_copies()?;
+    let intern_ms = ti.elapsed().as_millis() as u64;
     // Source candidates of derived copies: every non-derived copy of a derived copy's (dup-stripped) path.
     let source_paths: HashSet<String> = copies
         .iter()
@@ -350,63 +425,107 @@ pub fn run_with(
         }
     }
     let total = work.len();
-    for (n, chunk) in work.chunks(CHUNK).enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            store.discard_pending()?;
-            return Err(ScanError::Cancelled);
-        }
-        progress(Progress {
-            phase: "parse",
-            done: n * CHUNK,
-            total,
+    let (read_loose_ns, read_bsa_ns, nif_parse_ns, write_ns) = (
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    );
+    // Spec §2 step 3: a writer thread stores chunk N while chunk N+1 is parsed; the Store stays on that one thread.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<ChunkItem>>(2);
+    let writer_store = &mut *store;
+    let wns = &write_ns;
+    let looped: Result<(), ScanError> = std::thread::scope(|s| {
+        let writer = s.spawn(move || -> Result<(), ScanError> {
+            for items in rx {
+                let tw = Instant::now();
+                writer_store.write_chunk(&items)?;
+                wns.fetch_add(ns(tw), Ordering::Relaxed);
+            }
+            Ok(())
         });
-        let results: Vec<(usize, CopyResult, Option<u32>)> = chunk
-            .par_iter()
-            .map(|&i| {
-                let bytes = match &locs[i] {
-                    Loc::Loose(p) => std::fs::read(p).map_err(|e| e.to_string()),
-                    Loc::Bsa(b, e) => {
-                        let bsa = &opened[*b];
-                        bsa.read(&bsa.entries[*e]).map_err(|e| e.to_string())
-                    }
-                };
-                match bytes {
-                    Ok(b) => {
-                        let crc = candidate[i].then(|| crc32fast::hash(&b));
-                        (i, scan_guarded(&b), crc)
-                    }
-                    Err(e) => (i, CopyResult::ReadFailed(e), None),
-                }
-            })
-            .collect();
-        parse_ms += lap(&mut t);
-        let mut items = Vec::with_capacity(results.len());
-        for (i, res, crc) in results {
-            let c = &copies[i];
-            report.parsed += 1;
-            match &res {
-                CopyResult::Scanned(s) if s.le_mesh => report.le_meshes += 1,
-                CopyResult::NotSkyrim { .. } => report.not_skyrim += 1,
-                CopyResult::Failed(m) | CopyResult::ReadFailed(m) => report
-                    .problems
-                    .push((format!("{} ({})", c.path, origin_name(c.origin)), m.clone())),
-                _ => {}
+        let mut out = Ok(());
+        for (n, chunk) in work.chunks(CHUNK).enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                out = Err(ScanError::Cancelled);
+                break;
             }
-            if let Some(crc) = crc {
-                crc_known.insert(i, crc);
-            }
-            items.push(ChunkItem {
-                path_id: path_ids[i],
-                origin_id: origin_id(c.origin),
-                size: c.size,
-                mtime: c.mtime,
-                crc32: crc,
-                derived: derived[i],
-                result: res,
+            progress(Progress {
+                phase: "parse",
+                done: n * CHUNK,
+                total,
             });
+            let results: Vec<(usize, CopyResult, Option<u32>)> = chunk
+                .par_iter()
+                .map(|&i| {
+                    let t0 = Instant::now();
+                    let (bytes, read_ns) = match &locs[i] {
+                        Loc::Loose(p) => {
+                            (std::fs::read(p).map_err(|e| e.to_string()), &read_loose_ns)
+                        }
+                        Loc::Bsa(b, e) => {
+                            let bsa = &opened[*b];
+                            (
+                                bsa.read(&bsa.entries[*e]).map_err(|e| e.to_string()),
+                                &read_bsa_ns,
+                            )
+                        }
+                    };
+                    read_ns.fetch_add(ns(t0), Ordering::Relaxed);
+                    match bytes {
+                        Ok(b) => {
+                            let t1 = Instant::now();
+                            let crc = candidate[i].then(|| crc32fast::hash(&b));
+                            let r = scan_guarded(&b);
+                            nif_parse_ns.fetch_add(ns(t1), Ordering::Relaxed);
+                            (i, r, crc)
+                        }
+                        Err(e) => (i, CopyResult::ReadFailed(e), None),
+                    }
+                })
+                .collect();
+            let mut items = Vec::with_capacity(results.len());
+            for (i, res, crc) in results {
+                let c = &copies[i];
+                report.parsed += 1;
+                match &res {
+                    CopyResult::Scanned(s) if s.le_mesh => report.le_meshes += 1,
+                    CopyResult::NotSkyrim { .. } => report.not_skyrim += 1,
+                    CopyResult::Failed(m) | CopyResult::ReadFailed(m) => report
+                        .problems
+                        .push((format!("{} ({})", c.path, origin_name(c.origin)), m.clone())),
+                    _ => {}
+                }
+                if let Some(crc) = crc {
+                    crc_known.insert(i, crc);
+                }
+                items.push(ChunkItem {
+                    path_id: path_ids[i],
+                    origin_id: origin_id(c.origin),
+                    size: c.size,
+                    mtime: c.mtime,
+                    crc32: crc,
+                    derived: derived[i],
+                    result: res,
+                });
+            }
+            // A closed channel means the writer stopped on an error; `join` returns it.
+            if tx.send(items).is_err() {
+                break;
+            }
         }
-        store.write_chunk(&items)?;
-        write_ms += lap(&mut t);
+        drop(tx);
+        parse_ms = lap(&mut t);
+        let w = writer
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
+        w.and(out)
+    });
+    if let Err(e) = looped {
+        if matches!(e, ScanError::Cancelled) {
+            store.discard_pending()?;
+        }
+        return Err(e);
     }
     progress(Progress {
         phase: "parse",
@@ -418,16 +537,28 @@ pub fn run_with(
     if !skip_derived && pgp::running(&procs()) {
         report.tainted = true;
         store.discard_pending()?;
+        // A tainted run still returns a (flagged) result: its origins are listed, as before.
+        enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
             p.state = DerivedState::RunningAtScan;
             store.set_derived_state(p.origin_id, DerivedState::RunningAtScan)?;
         }
         return Ok(report);
     }
+    let tc = Instant::now();
     store.commit_pending()?;
+    let commit_ms = tc.elapsed().as_millis() as u64;
     write_ms += lap(&mut t);
     report.phase_ms.push(("parse", parse_ms));
     report.phase_ms.push(("write", write_ms));
+    report.sub_ms.extend([
+        ("intern", intern_ms),
+        ("read_loose_cpu", read_loose_ns.into_inner() / 1_000_000),
+        ("read_bsa_cpu", read_bsa_ns.into_inner() / 1_000_000),
+        ("nif_parse_cpu", nif_parse_ns.into_inner() / 1_000_000),
+        ("write_chunk", write_ns.into_inner() / 1_000_000),
+        ("commit_pending", commit_ms),
+    ]);
 
     // 6. Winners and the derived layer.
     progress(Progress {
@@ -435,6 +566,7 @@ pub fn run_with(
         done: 0,
         total: 1,
     });
+    let tr = Instant::now();
     let ids_by_key = store.copy_ids()?;
     let ids: Vec<i64> = copies
         .iter()
@@ -467,6 +599,9 @@ pub fn run_with(
         .map(|(p, &i)| (pid_of[p.as_str()], ids[i]))
         .collect();
     store.set_winners(&game_rows, &src_rows)?;
+    report
+        .sub_ms
+        .push(("winners", tr.elapsed().as_millis() as u64));
     let mut resolve_ms = lap(&mut t);
 
     // Texture winners (game view only; stat-only data from the walk).
@@ -569,8 +704,14 @@ pub fn run_with(
     store.set_derived(&rows, &new_crcs)?;
 
     // 7. Drop copies not seen in this walk.
+    let tdl = Instant::now();
     let seen: HashSet<i64> = ids.iter().copied().collect();
+    // Commit point: only a run that got here makes its origins readable (the plugin pass below needs them enabled).
+    enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
     store.delete_unseen(&seen)?;
+    report
+        .sub_ms
+        .push(("delete_unseen", tdl.elapsed().as_millis() as u64));
     resolve_ms += lap(&mut t);
     report.phase_ms.push(("resolve", resolve_ms));
     report.phase_ms.push(("textures", textures_ms));
@@ -586,6 +727,7 @@ pub fn run_with(
             match crate::plugins::scan_plugins(inst, &plugin_origins, store, cancel, progress) {
                 Ok(p) => {
                     report.phase_ms.push(("plugins", p.ms));
+                    report.sub_ms.extend(p.sub_ms.iter().copied());
                     report.plugins = Some(p);
                 }
                 Err(ScanError::Cancelled) => report.notes.push(PLUGINS_CANCELLED.into()),
@@ -595,6 +737,11 @@ pub fn run_with(
         Source::Folder(_) => store.unload_plugins()?,
     }
     Ok(report)
+}
+
+fn enable_run(store: &mut Store, loose: &[i64], bsa: &[i64], sep: &[i64]) -> Result<(), ScanError> {
+    let all: Vec<i64> = loose.iter().chain(bsa).chain(sep).copied().collect();
+    store.enable_origins(&all)
 }
 
 /// Step 3: loose NIFs per origin and NIF entries per BSA (FaceGen excluded), one copy per (path, origin).
@@ -617,7 +764,7 @@ fn walk(
         });
         for f in vfs::loose::walk(&o.root, &["meshes"], &["nif"]) {
             let origin = OriginRef::Loose(i);
-            if !seen.insert((f.norm.clone(), origin)) {
+            if is_lod_path(&f.norm) || !seen.insert((f.norm.clone(), origin)) {
                 continue;
             }
             copies.push(Copy {
@@ -667,7 +814,11 @@ fn walk(
             }
         }
         for (ei, e) in bsa.entries.iter().enumerate() {
-            if !e.norm.starts_with("meshes/") || !e.norm.ends_with(".nif") || is_facegen(&e.norm) {
+            if !e.norm.starts_with("meshes/")
+                || !e.norm.ends_with(".nif")
+                || is_facegen(&e.norm)
+                || is_lod_path(&e.norm)
+            {
                 continue;
             }
             let origin = OriginRef::Bsa(i);

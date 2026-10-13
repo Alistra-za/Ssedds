@@ -328,7 +328,7 @@ impl Renderer {
     /// Creates the device (hardware, else WARP; see [`Gpu::new`]) and the fixed pipeline states.
     pub fn new(shaders: Fingerprint, cache_dir: PathBuf) -> Result<Renderer, String> {
         cache::prune_in_background(cache_dir.clone());
-        Renderer::with_gpu(Gpu::new(None)?, shaders, cache_dir)
+        Renderer::with_gpu(Gpu::new()?, shaders, cache_dir)
     }
 
     pub fn with_gpu(
@@ -1795,7 +1795,7 @@ fn wait_idle(gpu: &Gpu, q: &ID3D11Query) -> Result<(), String> {
                 // The readback's Map waits anyway; the timing is then approximate.
                 return Ok(());
             }
-            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_micros(200));
         }
     }
 }
