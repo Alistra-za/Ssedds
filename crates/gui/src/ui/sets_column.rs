@@ -4,7 +4,7 @@
 use super::columns::{member, status_text, AMBER, RED};
 use super::thumbs::ThumbCache;
 use crate::model::pbr_export::export_blocks;
-use crate::model::sets::{set_views, shader_options, DropChoice, DropOutcome, SetView, SlotFill};
+use crate::model::sets::{shader_options, DropChoice, DropOutcome, SetView, SlotFill};
 use crate::model::{AppModel, Selection};
 use eframe::egui;
 use engine::codes::Warning;
@@ -103,7 +103,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
         on: editable,
         why: &why,
     };
-    let views = set_views(model);
+    let views = crate::model::sets::views(model);
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
     }

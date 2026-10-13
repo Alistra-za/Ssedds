@@ -857,6 +857,7 @@ fn hovering_a_pills_warning_badge_lists_the_warnings() {
     let member = m.items.iter_mut().find(|i| i.key == key).unwrap();
     let name = member.name.clone();
     member.warnings = vec![Warning::new(Code::LossAlphaData, "the alpha would be lost")];
+    m.invalidate_views();
     let total: usize = sdc_gui::model::sets::set_views(&m)
         .into_iter()
         .find(|v| v.id == "landscape/rock01")
@@ -898,6 +899,7 @@ fn with_only_warnings(ws: &[engine::codes::Warning]) -> (tempfile::TempDir, AppM
         .members[0]
         .clone();
     m.items.iter_mut().find(|i| i.key == key).unwrap().warnings = ws.to_vec();
+    m.invalidate_views();
     (d, m)
 }
 
@@ -943,6 +945,7 @@ fn a_sets_own_warnings_count_in_the_pill_badge() {
         Warning::new(Code::ShaderMissingMap, "the pbr shader needs _rmaos"),
         Warning::new(Code::ShaderAuto, "shader pbr picked automatically (pbr)"),
     ];
+    m.invalidate_views();
     let v = sdc_gui::model::sets::set_views(&m)
         .into_iter()
         .find(|v| v.key == key)

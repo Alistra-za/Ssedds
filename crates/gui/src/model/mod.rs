@@ -150,6 +150,24 @@ fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
+/// The cached set views and export blocks, valid for `key` only.
+#[derive(Default)]
+pub(crate) struct ViewCache {
+    pub key: Option<ViewKey>,
+    pub views: Option<Arc<Vec<sets::SetView>>>,
+    pub blocks: Option<Arc<Vec<pbr_export::ExportIssue>>>,
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct ViewKey {
+    items: u64,
+    inputs: u64,
+    doc: u64,
+    root: Option<PathBuf>,
+    export_root: PathBuf,
+    target: Target,
+}
+
 pub struct AppModel {
     pub settings: GuiSettings,
     pub settings_path: Option<PathBuf>,
@@ -183,6 +201,14 @@ pub struct AppModel {
     pub target: Target,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
+    /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
+    items_rev: u64,
+    /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
+    inputs_rev: u64,
+    /// `TextureItem::key` to its index in `items` (audit 7).
+    item_index: std::collections::HashMap<String, usize>,
+    /// The cached set views and export blocks (DECISIONS Note Y7).
+    pub(crate) views: std::cell::RefCell<ViewCache>,
     pub unmatched_keys: Vec<String>,
     /// Per-set RNM-* notes from layer jobs (they have no item).
     pub rnm_notes: std::collections::BTreeMap<String, Vec<engine::codes::Warning>>,
@@ -271,6 +297,10 @@ impl AppModel {
             history: history::History::default(),
             target: Target::Cs,
             items: vec![],
+            items_rev: 0,
+            inputs_rev: 0,
+            item_index: Default::default(),
+            views: Default::default(),
             sets: vec![],
             unmatched_keys: vec![],
             rnm_notes: Default::default(),
@@ -364,6 +394,7 @@ impl AppModel {
         self.export_after_plan = false;
         self.continue_after_plan = None;
         self.last_inputs = None;
+        self.inputs_rev += 1;
         self.auto_replans = 0;
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
@@ -377,6 +408,7 @@ impl AppModel {
         self.save_settings();
         self.root = Some(root);
         self.items.clear();
+        self.invalidate_views();
         self.sets.clear();
         self.unmatched_keys.clear();
         self.selection = Selection::None;
@@ -481,6 +513,7 @@ impl AppModel {
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
         self.status_line = "Planning…".into();
+        self.inputs_rev += 1;
         self.last_inputs = Some(EngineInputs {
             set_edits: req.set_edits.clone(),
             output_paths: req.output_paths.clone(),
@@ -1056,6 +1089,7 @@ impl AppModel {
             && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
+        self.invalidate_views();
         self.sets = view.sets;
         self.unmatched_keys = view.unmatched;
         self.rnm_notes = view.rnm_notes;
@@ -1128,8 +1162,42 @@ impl AppModel {
         }
     }
 
+    pub fn items_rev(&self) -> u64 {
+        self.items_rev
+    }
+
+    /// Call after writing `items` or `sets` in place (tests); a plan does it itself.
+    pub fn invalidate_views(&mut self) {
+        self.items_rev += 1;
+        self.item_index = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(n, i)| (i.key.clone(), n))
+            .rev()
+            .collect();
+    }
+
+    /// Everything `sets::views` and `pbr_export::export_blocks` read (DECISIONS Note Y7).
+    pub(crate) fn view_key(&self) -> ViewKey {
+        ViewKey {
+            items: self.items_rev,
+            inputs: self.inputs_rev,
+            doc: self
+                .sets_doc
+                .as_ref()
+                .map_or(0, crate::sets_doc::SetsDoc::rev),
+            root: self.root.clone(),
+            export_root: self.export_root(),
+            target: self.target,
+        }
+    }
+
     pub fn item(&self, key: &str) -> Option<&TextureItem> {
-        self.items.iter().find(|i| i.key == key)
+        self.item_index
+            .get(key)
+            .and_then(|&i| self.items.get(i))
+            .filter(|i| i.key == key)
     }
 
     pub fn undecided(&self) -> usize {

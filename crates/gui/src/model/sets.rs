@@ -2,7 +2,7 @@
 //! the engine inputs (`set_edits`, `output_paths`) and the drop rules. No egui types.
 use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
-use super::AppModel;
+use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{
     active_matches, check_rel_path, derive_match_diffuse, output_rel, prefix_of, slot_match_path,
     slot_suffixes,
@@ -18,6 +18,7 @@ use engine::shader::{Shader, ShaderPick};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SlotKind {
@@ -356,8 +357,36 @@ fn mirrored_stem(item: &TextureItem) -> String {
     }
 }
 
-/// Every set, in display order, with its slots, ownership and prefix.
+/// Every set, in display order (audit 7, DECISIONS Note Y7): built once per change of its inputs.
+pub fn views(m: &AppModel) -> Arc<Vec<SetView>> {
+    let key = m.view_key();
+    {
+        let c = m.views.borrow();
+        if c.key.as_ref() == Some(&key) {
+            if let Some(v) = &c.views {
+                return v.clone();
+            }
+        }
+    }
+    let v = Arc::new(build_views(m));
+    let mut c = m.views.borrow_mut();
+    if c.key.as_ref() != Some(&key) {
+        *c = ViewCache {
+            key: Some(key),
+            ..Default::default()
+        };
+    }
+    c.views = Some(v.clone());
+    v
+}
+
 pub fn set_views(m: &AppModel) -> Vec<SetView> {
+    // shortcut: a clone per call for the ~20 callers that take ownership; switch them to `views` if it shows in a profile.
+    (*views(m)).clone()
+}
+
+/// Every set, in display order, with its slots, ownership and prefix.
+fn build_views(m: &AppModel) -> Vec<SetView> {
     let root = m.export_root();
     let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
     let order = m.sets_doc.as_ref().map(|d| d.order()).unwrap_or_default();
