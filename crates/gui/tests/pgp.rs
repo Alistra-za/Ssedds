@@ -1055,3 +1055,58 @@ fn slot_matches_hit_the_unpatched_mesh_and_land_on_the_sdc_prefix() {
     let prepared = pgpsim::prepare(&written(&entry(&[], r"landscape\rock01")), &default);
     assert!(!pgpsim::shape_matches(&prepared, nif, &patched.slots));
 }
+
+/// Task 3 review fix: PGPatcher takes the prefix from whichever match hits, not the lowest active one. When the active
+/// matches derive different prefixes the set warns, and a whole-prefix rename makes every hit land on sdc's prefix.
+#[test]
+fn divergent_matches_warn_and_a_rename_pins_the_prefix() {
+    let default = document(&[]).to_value()["default"].clone();
+    let mut mesh = pgpsim::MaterialState::builtin_default();
+    mesh.set_slot_raw(0, r"textures\c\other.dds");
+    mesh.set_slot_raw(1, r"textures\b\two_n.dds");
+    let nif = r"meshes\b\two.nif";
+    let pairs = [("match2", json!(r"b\two_n"))];
+    let e = entry(&pairs, r"a\one");
+    let prepared = pgpsim::prepare(&written(&e), &default);
+    assert!(pgpsim::shape_matches(&prepared, nif, &mesh.slots));
+    // Only match2 hits, so PGPatcher's prefix is not the one sdc writes under.
+    assert_ne!(
+        pgpsim::matched_path(&prepared, &mesh.slots),
+        Some(
+            prefix_of(&e.settings, r"a\one")
+                .unwrap()
+                .to_ascii_lowercase()
+        )
+    );
+    let w = pitfalls(&e.settings, r"a\one");
+    assert!(
+        w.iter()
+            .any(|m| m.contains("match slots point at different textures")),
+        "{w:?}"
+    );
+    // A whole-prefix rename fixes it: no warning, and the hit lands on sdc's prefix.
+    let pairs = [
+        ("match2", json!(r"b\two_n")),
+        ("rename", json!(r"textures\pbr\a\one")),
+    ];
+    let e = entry(&pairs, r"a\one");
+    assert!(
+        pitfalls(&e.settings, r"a\one").is_empty(),
+        "{:?}",
+        pitfalls(&e.settings, r"a\one")
+    );
+    let prepared = pgpsim::prepare(&written(&e), &default);
+    // PGPatcher prepends `\` to rename (pgpsim::prepare), so the matched path starts with one; the game path drops it.
+    assert_eq!(
+        pgpsim::matched_path(&prepared, &mesh.slots)
+            .map(|p| p.trim_start_matches('\\').to_string()),
+        Some(
+            prefix_of(&e.settings, r"a\one")
+                .unwrap()
+                .to_ascii_lowercase()
+        )
+    );
+    // The default: match1 and match2 from the same set agree, so no warning.
+    let same = s(&[("match2", json!(slot_match_path(r"landscape\rock01_d", "n")))]);
+    assert!(pitfalls(&same, r"landscape\rock01_d").is_empty());
+}

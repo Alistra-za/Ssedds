@@ -222,14 +222,7 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
         check_json_path(v, &format!("match{n}"))?;
     }
     match matches.first() {
-        Some((n, v)) => {
-            if let Some(r) = rename {
-                return Ok(r.to_string());
-            }
-            let full = match_value(v);
-            let stem = &full[..full.len() - 4];
-            Ok(under_pbr(&strip_slot_suffix(stem, *n)))
-        }
+        Some((n, v)) => Ok(rename.map_or_else(|| match_prefix(*n, v), str::to_string)),
         None => {
             let d = derived.trim();
             check_json_path(d, "diffuse path")?;
@@ -238,9 +231,28 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
     }
 }
 
+/// The prefix PGPatcher derives when `matchN = v` is the match that hits.
+fn match_prefix(n: u8, v: &str) -> String {
+    let full = match_value(v);
+    under_pbr(&strip_slot_suffix(&full[..full.len() - 4], n))
+}
+
 /// Warnings that are never "corrected" (owner, 2026-10-09; F1 DECISIONS V4).
 pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
     let mut out = vec![];
+    // PGPatcher takes the prefix from whichever match hits; without a rename, matches that disagree split the outputs.
+    let mut prefixes: Vec<String> = active_matches(s, derived)
+        .iter()
+        .map(|(n, v)| match_prefix(*n, v).to_ascii_lowercase())
+        .collect();
+    prefixes.dedup();
+    if prefixes.len() > 1 && text(s, "rename").is_none() {
+        out.push(
+            "match slots point at different textures; the entry applies to whichever hits first; set Rename to fix \
+             the output prefix"
+                .into(),
+        );
+    }
     if matches_nothing(s, derived) {
         out.push(format!(
             "{NO_MATCH}, so it is left out of the PGPatcher JSON"
