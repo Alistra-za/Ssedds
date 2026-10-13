@@ -127,7 +127,7 @@ fn resolved_fields_write_same_bytes_as_by_name() {
     let bound = Bound {
         regs: [12].into_iter().collect(),
     };
-    let fv = feature_data(&CsSettings::default());
+    let fv = feature_data(&CsSettings::default(), &Default::default(), true, false);
     for l in [layout(&names, 400), layout(&ns, 32)] {
         let mut by_name = CbWriter::new(&l);
         write_material(&mut by_name, &m, &bound, true);

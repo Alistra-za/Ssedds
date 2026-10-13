@@ -77,6 +77,9 @@ pub struct ShapeDraw {
     /// New or rewritten since the last frame: the next [`ShapeDraw::update`] writes the light and view fields
     /// whatever changed.
     pub stale: bool,
+    /// The program's reflected cbuffer names, namespace-stripped (VS + PS): what `cs_settings::feature_data` keys
+    /// its CS-build exceptions on (P1-D).
+    pub fields: std::collections::BTreeSet<String>,
 }
 
 /// The VS/PS pair of a permutation, compiled and created once per renderer.

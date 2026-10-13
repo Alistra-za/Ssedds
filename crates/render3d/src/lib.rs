@@ -36,7 +36,7 @@ use permutation::{defines, Defines, Stage};
 pub use scene::Background;
 use scene::{LightValues, PointValues, Scene, View, ViewValues};
 use source::{ExpandedSource, SourceSet};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -231,6 +231,35 @@ pub type DrawDiag = (
     Vec<(u32, i32)>,
 );
 
+/// The reflected names of a program, both stages ([`cs_settings::reflected_fields`]).
+fn program_fields(p: &Program) -> BTreeSet<String> {
+    cs_settings::reflected_fields(
+        p.vs.reflection
+            .cbuffers
+            .iter()
+            .chain(&p.ps.reflection.cbuffers),
+    )
+}
+
+/// One draw's FeatureData values: the settings against that draw's program (P1-D: exceptions keyed on its fields).
+fn values_for(
+    s: &CsSettings,
+    features_on: bool,
+    fields: &BTreeSet<String>,
+    m: &MaterialState,
+) -> Vec<(String, Vec<f64>)> {
+    cs_settings::feature_data(s, fields, features_on, is_head(m))
+}
+
+/// CS's head (bodyTiling = 1): a geometry under a `BSFaceGenNiNode` (advanced-skin Renderer.cpp:133-134). That
+/// node exists only at runtime, so the preview uses the FaceGen shader type, the old shader's own head split
+/// (1.8 Lighting.hlsl:2047).
+/// shortcut: type-5 head parts (mouth: capture 11178 ev 4269, tiling 10/1) count as body; upgrade with a
+/// "loaded from a facegendata NIF / root named BSFaceGenNiNodeSkinned" flag at parse time if a user reports it.
+fn is_head(m: &MaterialState) -> bool {
+    m.shader_type == 4
+}
+
 /// [`textures::rfaos_candidates`] of a material (slot 1 normal, slot 7 specular).
 fn rfaos_candidates(m: &MaterialState) -> Vec<String> {
     let norm = |i: usize| m.slots.get(i).map_or("", |p| p.norm.as_str());
@@ -287,9 +316,6 @@ pub struct Renderer {
     uploads: usize,
     /// Test hook: draw with P0's by-name writer (every field, every cbuffer, every frame).
     reference_writer: bool,
-    /// FeatureData values every static block writes ([`cs_settings::feature_data`]); typed at write time from
-    /// the reflection. Default: the capture-11178 constants.
-    feature_values: Vec<(String, Vec<f64>)>,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
     backdrop: Option<Backdrop>,
 }
@@ -370,7 +396,6 @@ impl Renderer {
             last_frame: None,
             uploads: 0,
             reference_writer: false,
-            feature_values: cs_settings::feature_data(&cs_settings::CsSettings::default()),
             backdrop: None,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
@@ -415,12 +440,11 @@ impl Renderer {
         &self.features
     }
 
-    /// Applies the user CS settings (P1-C C11). The FeatureData values are recomputed. If the settings
+    /// Applies the user CS settings (P1-C C11). The FeatureData values are recomputed per draw. If the settings
     /// defines are unchanged, the static block of every drawing shape is rewritten (a cbuffer edit, next
     /// frame). If they changed, every shape goes through the permutation path, and the old draws keep drawing
     /// with their old constants until their programs land. The display sRGB encode follows `ENABLE_LL`.
     pub fn set_settings(&mut self, s: CsSettings) {
-        self.feature_values = cs_settings::feature_data(&s);
         self.settings = s;
         self.apply_settings_defines();
     }
@@ -486,7 +510,8 @@ impl Renderer {
                 continue;
             }
             if let Some(d) = s.draw.as_mut() {
-                d.rewrite_material(&s.material, ll, &self.feature_values);
+                let fv = values_for(&self.settings, self.features_on, &d.fields, &s.material);
+                d.rewrite_material(&s.material, ll, &fv);
             }
         }
     }
@@ -726,9 +751,11 @@ impl Renderer {
             (Err(e), _) | (_, Err(e)) => return Err(e),
         };
         let ll = self.linear_lighting();
+        let fields = program_fields(program);
+        let fv = values_for(&self.settings, self.features_on, &fields, m);
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
             write_material(&mut cb.writer, m, &bound, ll);
-            scene::write_static(&mut cb.writer, &self.feature_values);
+            scene::write_static(&mut cb.writer, &fv);
             write_skin_flags(&mut cb.writer, m, &bound);
         }
         Ok(ShapeDraw {
@@ -746,6 +773,7 @@ impl Renderer {
             bound,
             built: m.clone(),
             stale: true,
+            fields,
         })
     }
 
@@ -954,7 +982,6 @@ impl Renderer {
         n.async_compile = self.async_compile;
         n.load_variant = self.load_variant;
         n.reference_writer = self.reference_writer;
-        n.feature_values = std::mem::take(&mut self.feature_values);
         n.compiled = std::mem::take(&mut self.compiled);
         *self = n;
         Ok(())
@@ -1213,7 +1240,8 @@ impl Renderer {
             .get_mut(&id)
             .and_then(|s| s.draw.as_mut())
             .ok_or("no draw")?;
-        d.rewrite_material(m, ll, &self.feature_values);
+        let fv = values_for(&self.settings, self.features_on, &d.fields, m);
+        d.rewrite_material(m, ll, &fv);
         Ok(())
     }
 
@@ -1357,7 +1385,8 @@ impl Renderer {
                 d.bound.regs.remove(&reg);
             }
             if was != real && applied {
-                d.rewrite_material(&material, ll, &self.feature_values);
+                let fv = values_for(&self.settings, self.features_on, &d.fields, &material);
+                d.rewrite_material(&material, ll, &fv);
             }
             touched.push((id, reg));
         }
@@ -1563,7 +1592,11 @@ impl Renderer {
                     continue;
                 };
                 uploads += if self.reference_writer {
-                    s.update_by_name(gpu, scene, &view, &self.feature_values)
+                    {
+                        // Test hook only (P0's reference writer): recomputed every frame.
+                        let fv = values_for(&self.settings, self.features_on, &s.fields, &s.built);
+                        s.update_by_name(gpu, scene, &view, &fv)
+                    }
                 } else {
                     s.update(gpu, &inputs)
                 };

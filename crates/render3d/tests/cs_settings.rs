@@ -42,6 +42,19 @@ fn names_set(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|s| s.to_string()).collect()
 }
 
+/// The installed CS 1.9.0's reflected FeatureData/b7 names (P1-D fixture): the build these tests describe.
+fn aio190() -> BTreeSet<String> {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cs_versions/aio190/fields.txt"
+    ))
+    .unwrap()
+    .lines()
+    .filter(|l| !l.is_empty())
+    .map(String::from)
+    .collect()
+}
+
 /// Info.ini fixture sections with `Enabled = true` (UnifiedWater is false, `[Cache]` is not a feature).
 const INFO_LOADED: &[&str] = &[
     "ExtendedMaterials",
@@ -86,7 +99,7 @@ fn settings_overlay_user_over_default_over_builtin() {
         "T-S1 notes: {:?}",
         s.notes
     );
-    let fd = feature_data(&s);
+    let fd = feature_data(&s, &aio190(), true, false);
     assert_eq!(value(&fd, "linearLightingSettings.glowmapMult"), [0.5]);
     assert_eq!(value(&fd, "linearLightingSettings.ambientMult"), [2.0]);
     assert_eq!(
@@ -307,7 +320,7 @@ fn owner_settings_reproduce_capture_values() {
         s.merged["Linear Lighting"]["pointLightMult"].as_f64(),
         Some(1.0)
     );
-    let fd = feature_data(&s);
+    let fd = feature_data(&s, &aio190(), true, false);
     assert_constants(&fd);
     assert_eq!(
         bits(value(&fd, "linearLightingSettings.pointLightMult")),
@@ -318,7 +331,7 @@ fn owner_settings_reproduce_capture_values() {
 /// No files: exactly today's constants, plus the C2 per-geometry copy and zeros.
 #[test]
 fn default_settings_reproduce_todays_constants() {
-    let fd = feature_data(&CsSettings::default());
+    let fd = feature_data(&CsSettings::default(), &aio190(), true, false);
     assert_constants(&fd);
     for f in [
         "skinParams",
@@ -346,7 +359,12 @@ fn default_settings_reproduce_todays_constants() {
 /// C5: section → struct prefix with the renamed keys; skin packing from the profile.
 #[test]
 fn owner_section_keys_map_to_struct_fields() {
-    let fd = feature_data(&read_settings(&paths(true, true, false, None)));
+    let fd = feature_data(
+        &read_settings(&paths(true, true, false, None)),
+        &aio190(),
+        true,
+        false,
+    );
     assert_eq!(
         value(&fd, "extendedTranslucencySettings.MaterialModel"),
         [3.0]
@@ -367,7 +385,12 @@ fn owner_section_keys_map_to_struct_fields() {
         [20.0, 2.0, 0.25, 0.0]
     );
     // Default alone has EnableSkinDetail true: detail on.
-    let d = feature_data(&read_settings(&paths(false, true, false, None)));
+    let d = feature_data(
+        &read_settings(&paths(false, true, false, None)),
+        &aio190(),
+        true,
+        false,
+    );
     assert_eq!(value(&d, "skinData.skinDetailParams")[3], 1.0);
 }
 

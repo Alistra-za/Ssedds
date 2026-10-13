@@ -2,7 +2,7 @@
 //! features CS loaded (`ShaderCache/Info.ini`, else `Shaders/Features/*.ini` minus "Disable at Boot"), a change
 //! hash, and the feature defines the preview compiles. Never fails: problems become notes and fallbacks.
 use crate::cbuffer::CbWriter;
-use crate::compile::VarKind;
+use crate::compile::{CbLayout, VarKind};
 use crate::scene::{FEATURE_FLOATS, FEATURE_UINTS};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -294,10 +294,32 @@ pub fn diffuse_curve(gamma: f64, mid: f64, white: f64) -> f64 {
     mid * (1.0 - x) / (x * (white - mid))
 }
 
+/// Every cbuffer variable name of `layouts` without its namespace (`SharedData::linearLightingSettings.diffuseCurve`
+/// → `linearLightingSettings.diffuseCurve`): the shape evidence [`feature_data`] keys its exceptions on (P1-D).
+pub fn reflected_fields<'a>(layouts: impl IntoIterator<Item = &'a CbLayout>) -> BTreeSet<String> {
+    layouts
+        .into_iter()
+        .flat_map(|l| &l.vars)
+        .map(|v| unqualified(&v.name).to_string())
+        .collect()
+}
+
+/// `ns::a.b` → `a.b`. Only the part before the first `.` can carry a namespace (struct members are dotted).
+fn unqualified(name: &str) -> &str {
+    let head = name.split('.').next().unwrap_or(name);
+    head.rfind("::").map_or(name, |i| &name[i + 2..])
+}
+
 /// FeatureData values by cbuffer name, raw numbers (the writer types them from the reflection): the
 /// capture-11178 constants, overwritten by every number the settings have (C7: a missing file or key keeps the
-/// constant). Names this CS build lacks are dropped at write time.
-pub fn feature_data(s: &CsSettings) -> Vec<(String, Vec<f64>)> {
+/// constant). Names this CS build lacks are dropped at write time. `fields` = the reflected names of the program
+/// the values are for ([`reflected_fields`]); `head` = the draw is a head (per-geometry skin tiling, P1-D).
+pub fn feature_data(
+    s: &CsSettings,
+    _fields: &BTreeSet<String>,
+    _features_on: bool,
+    _head: bool,
+) -> Vec<(String, Vec<f64>)> {
     let mut out: Vec<(String, Vec<f64>)> = FEATURE_FLOATS
         .iter()
         .map(|(n, v)| (n.to_string(), v.iter().map(|x| f64::from(*x)).collect()))

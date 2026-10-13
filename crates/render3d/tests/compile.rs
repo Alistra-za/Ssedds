@@ -447,6 +447,17 @@ fn reflection_reports_member_kinds() {
     assert_eq!(w.kind("notInThisBuild"), None);
 }
 
+/// P1-D: the reflected names `feature_data` keys its exceptions on, without fxc's namespace qualifier.
+#[test]
+fn reflected_fields_drop_the_namespace() {
+    let cache = tempfile::tempdir().unwrap();
+    let l = feature_kinds_layout(cache.path());
+    let f = render3d::cs_settings::reflected_fields([&l]);
+    assert!(f.contains("hairSpecularSettings.Enabled"), "{f:?}");
+    assert!(f.contains("skinParams"), "{f:?}");
+    assert!(f.iter().all(|n| !n.contains("::")), "{f:?}");
+}
+
 /// C6, read back from the writer's bytes: a `uint` member gets the integer's bit pattern (1, not 0x3F800000), a
 /// `float` member the f32's, `int` two's complement, `bool` 1; a name the layout lacks is skipped.
 #[test]
