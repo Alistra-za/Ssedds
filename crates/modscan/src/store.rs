@@ -281,7 +281,7 @@ fn keep_raw(p: &TexPath) -> bool {
 }
 
 /// Slot, SQL condition on `tp.p`, its bound argument, and the exact post-filter.
-type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
+pub(crate) type TexQuery = (u32, String, String, Box<dyn Fn(&str) -> bool>);
 
 /// A key value in the stored form: trimmed, `/` separators, lower case, no leading `/`.
 fn key_form(s: &str) -> String {
@@ -672,6 +672,55 @@ fn stage_derived(c: &Connection, it: &ChunkItem) -> Result<(), ScanError> {
         write_shapes(c, PENDING, pid, s)?;
     }
     Ok(())
+}
+
+/// The slot, the SQL condition on `eff` (the stored slot string as an SQL expression, argument `?2`), its argument
+/// and the exact post-filter for `key` (spec §2.4 of the PGPatcher plan); `None` when the key is empty (no match).
+pub(crate) fn tex_query(key: &TexKey, eff: &str) -> Option<TexQuery> {
+    // `pgp_form` minus the extension and `_n`/`_msn` cuts, which only shorten the tail: a superset prefilter.
+    let pgp = format!(
+        "(CASE WHEN {eff} LIKE 'textures/pbr/%' THEN 'textures/' || substr({eff}, 14) ELSE {eff} END)"
+    );
+    Some(match key {
+        TexKey::Suffix { slot, stem } => {
+            let stem = key_form(stem);
+            if stem.is_empty() {
+                return None;
+            }
+            let pattern = format!("%/{}%", like_escape(&stem));
+            let want = format!("/{stem}");
+            let normal = *slot == 1;
+            (
+                *slot,
+                format!("{pgp} LIKE ?2 ESCAPE '\\'"),
+                pattern,
+                Box::new(move |p: &str| pgp_form(p, normal).ends_with(&want)),
+            )
+        }
+        TexKey::Contains { slot, frag } => {
+            let frag = key_form(frag);
+            if frag.is_empty() {
+                return None;
+            }
+            let pattern = format!("%{}%", like_escape(&frag));
+            let normal = *slot == 1;
+            (
+                *slot,
+                format!("{pgp} LIKE ?2 ESCAPE '\\'"),
+                pattern,
+                Box::new(move |p: &str| pgp_form(p, normal).contains(&frag)),
+            )
+        }
+        TexKey::Exact { slot, path } => {
+            let p = key_form(path);
+            let p = if p.starts_with("textures/") {
+                p
+            } else {
+                format!("textures/{p}")
+            };
+            (*slot, format!("{eff} = ?2"), p, Box::new(|_: &str| true))
+        }
+    })
 }
 
 impl Store {
@@ -1218,50 +1267,10 @@ impl Store {
         }
         // The slot string PGPatcher sees: the raw one when `tex_raw` keeps it, else the canonical path; lower case, `/`.
         let eff = "lower(replace(coalesce(tr.raw, tp.p), char(92), '/'))";
-        // `pgp_form` minus the extension and `_n`/`_msn` cuts, which only shorten the tail: a superset prefilter.
-        let pgp = format!(
-            "(CASE WHEN {eff} LIKE 'textures/pbr/%' THEN 'textures/' || substr({eff}, 14) ELSE {eff} END)"
-        );
-        let (slot, cond, arg, check): TexQuery = match key {
-            TexKey::Suffix { slot, stem } => {
-                let stem = key_form(stem);
-                if stem.is_empty() {
-                    return Ok(vec![]);
-                }
-                let pattern = format!("%/{}%", like_escape(&stem));
-                let want = format!("/{stem}");
-                let normal = *slot == 1;
-                (
-                    *slot,
-                    format!("{pgp} LIKE ?2 ESCAPE '\\'"),
-                    pattern,
-                    Box::new(move |p: &str| pgp_form(p, normal).ends_with(&want)),
-                )
-            }
-            TexKey::Contains { slot, frag } => {
-                let frag = key_form(frag);
-                if frag.is_empty() {
-                    return Ok(vec![]);
-                }
-                let pattern = format!("%{}%", like_escape(&frag));
-                let normal = *slot == 1;
-                (
-                    *slot,
-                    format!("{pgp} LIKE ?2 ESCAPE '\\'"),
-                    pattern,
-                    Box::new(move |p: &str| pgp_form(p, normal).contains(&frag)),
-                )
-            }
-            TexKey::Exact { slot, path } => {
-                let p = key_form(path);
-                let p = if p.starts_with("textures/") {
-                    p
-                } else {
-                    format!("textures/{p}")
-                };
-                (*slot, format!("{eff} = ?2"), p, Box::new(|_: &str| true))
-            }
+        let Some((slot, cond, arg, check)) = tex_query(key, eff) else {
+            return Ok(vec![]);
         };
+
         let sql = format!(
             "SELECT wc.id, np.p, co.name, s.block, s.name, c.le_mesh, s.skinned, wc.is_derived, c.id, {eff},
                     (SELECT count(*) FROM shape s2 WHERE s2.copy_id = c.id) AS n_shapes

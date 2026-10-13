@@ -1,11 +1,10 @@
 //! esp scanner spec §2.2: the active load order, MO2 resolution of plugin files, and load-order FormIDs.
 mod common;
-use common::instance_fixture;
+use common::{instance_fixture, put};
 use modscan::archives::{active_plugins, ActivePlugin};
 use modscan::mo2::{loose_origins, Instance};
 use modscan::plugins::{clamp_local, is_light, plugin_files, prefixes};
 use std::fs;
-use std::path::Path;
 #[path = "../../esp/tests/common/mod.rs"]
 mod b;
 use b::{alt, edid, form, plugin, rec, sub, top, zstr};
@@ -14,12 +13,6 @@ use modscan::scan::{run, run_with, Source, PLUGINS_CANCELLED};
 use modscan::store::Store;
 use modscan::ScanError;
 use std::sync::atomic::AtomicBool;
-
-fn put(root: &Path, rel: &str, bytes: &[u8]) {
-    let p = root.join(rel);
-    fs::create_dir_all(p.parent().unwrap()).unwrap();
-    fs::write(p, bytes).unwrap();
-}
 
 fn ap(name: &str, optional: bool) -> ActivePlugin {
     ActivePlugin {
@@ -739,4 +732,35 @@ fn owner_load_order() {
     assert_eq!(warm.cached, warm.n);
     assert!(cold_t.as_secs_f64() < 10.0, "cold {cold_t:?}");
     assert!(warm_t.as_secs_f64() < 1.0, "warm {warm_t:?}");
+}
+
+/// A master that is in the load order but past the 254 full-plugin limit is not "missing".
+#[test]
+fn a_master_past_the_limit_is_not_reported_missing() {
+    let mut txt = String::from("*M.esp\n");
+    for i in 0..255 {
+        txt += &format!("*P{i:03}.esp\n");
+    }
+    let d = load_order(&txt);
+    for i in 0..255 {
+        put(
+            d.path(),
+            &format!("mods/A/P{i:03}.esp"),
+            &plugin(0, &[], &[]),
+        );
+    }
+    put(d.path(), "mods/A/M.esp", &plugin(0, &["P254.esp"], &[]));
+    let (_, st) = scan(&d);
+    let m: Vec<&str> = st
+        .problems
+        .iter()
+        .filter(|(p, _)| p == "M.esp")
+        .map(|(_, t)| t.as_str())
+        .collect();
+    assert!(
+        m.iter()
+            .any(|t| t.contains("P254.esp") && t.contains("past the load-order limit")),
+        "{m:?}"
+    );
+    assert!(!m.iter().any(|t| t.contains("missing master")), "{m:?}");
 }

@@ -234,8 +234,14 @@ pub fn scan_plugins(
             continue;
         };
         for (idx, m) in r.masters.iter().enumerate() {
-            match index.get(&m.to_ascii_lowercase()).and_then(|&j| pre[j]) {
-                Some((b, k)) => map.push([r.id, idx as i64, i64::from(b), i64::from(k)]),
+            match index.get(&m.to_ascii_lowercase()) {
+                Some(&j) => match pre[j] {
+                    Some((b, k)) => map.push([r.id, idx as i64, i64::from(b), i64::from(k)]),
+                    None => st.problems.push((
+                        r.name.clone(),
+                        format!("master {m} is past the load-order limit"),
+                    )),
+                },
                 None => st
                     .problems
                     .push((r.name.clone(), format!("missing master {m}"))),

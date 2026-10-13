@@ -1,6 +1,6 @@
 //! Plugin tables of the scan store (esp scanner spec §2.3): the per-plugin cache rows and the load-order resolution.
 use crate::plugins::{clamp_local, is_light};
-use crate::store::{path_id, Store};
+use crate::store::{path_id, tex_query, Store, TexKey};
 use crate::ScanError;
 use esp::PluginFacts;
 use rusqlite::{params, Connection};
@@ -279,5 +279,265 @@ impl Store {
             .conn
             .query_row("SELECT count(*) FROM rec", [], |r| r.get(0))?;
         Ok(n as usize)
+    }
+}
+
+/// Records listed per missing path (spec §4.4).
+pub const MISSING_RECORDS: usize = 5;
+
+/// One record as listed everywhere: `EDID [FORMID] SIG — Plugin`.
+pub fn record_label(edid: Option<&str>, formid: u32, sig: &str, plugin: &str) -> String {
+    format!(
+        "{} [{formid:08X}] {sig} — {plugin}",
+        edid.unwrap_or("(no EDID)")
+    )
+}
+
+/// A winning TXST whose slot matches a set's key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TxstUse {
+    pub formid: u32,
+    pub edid: Option<String>,
+    /// The winning plugin.
+    pub plugin: String,
+    pub slot: u32,
+    pub path: String,
+    pub n_overrides: u32,
+}
+
+/// One alternate-texture entry: a NIF shape re-textured with a TXST.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeSwap {
+    pub shape_name: String,
+    pub txst_formid: u32,
+    /// The EDID of the TXST's winning copy.
+    pub txst_edid: Option<String>,
+    pub index: i32,
+}
+
+/// A winning record whose alternate textures use a given TXST.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AltUse {
+    pub formid: u32,
+    pub edid: Option<String>,
+    pub sig: String,
+    pub plugin: String,
+    pub model_slot: u32,
+    pub swap: ShapeSwap,
+}
+
+/// A winning record that uses a mesh, with its swaps for that model slot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshUse {
+    pub formid: u32,
+    pub edid: Option<String>,
+    pub sig: String,
+    pub plugin: String,
+    pub model_slot: u32,
+    pub n_overrides: u32,
+    pub swaps: Vec<ShapeSwap>,
+}
+
+/// A path winning plugin records name that nothing provides (spec §4.4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MissingRef {
+    pub path: String,
+    pub n_records: usize,
+    /// The first [`MISSING_RECORDS`], as [`record_label`].
+    pub records: Vec<String>,
+}
+
+/// `alt_tex a` with its TXST's winning copy (`tr`); select list per query.
+const SWAP_JOINS: &str = "alt_tex a
+     LEFT JOIN rec_winner tw ON tw.formid = a.txst_formid
+     LEFT JOIN rec tr ON tr.plugin_id = tw.plugin_id AND tr.formid = tw.formid";
+
+fn swap_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<ShapeSwap> {
+    Ok(ShapeSwap {
+        shape_name: r.get(at)?,
+        txst_formid: r.get::<_, i64>(at + 1)? as u32,
+        txst_edid: r.get(at + 2)?,
+        index: r.get::<_, i64>(at + 3)? as i32,
+    })
+}
+
+/// Paths of winning records (`txst_slot`, `tex_ref`, `model_ref`) that are `textures/**.dds` or `meshes/**.nif`, not
+/// FaceGen, and that no enabled origin's winner provides (ruling R8).
+const MISSING_SQL: &str = "
+WITH refs(path_id, formid, plugin_id, local) AS (
+  SELECT t.path_id, t.formid, t.plugin_id, t.local FROM txst_slot t
+    JOIN rec_winner w ON w.formid = t.formid AND w.plugin_id = t.plugin_id
+  UNION ALL SELECT t.path_id, t.formid, t.plugin_id, t.local FROM tex_ref t
+    JOIN rec_winner w ON w.formid = t.formid AND w.plugin_id = t.plugin_id
+  UNION ALL SELECT m.path_id, m.formid, m.plugin_id, m.local FROM model_ref m
+    JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id)
+SELECT DISTINCT p.p, r.edid, x.formid, r.sig, pl.name FROM refs x
+JOIN path p ON p.id = x.path_id
+JOIN rec r ON r.plugin_id = x.plugin_id AND r.local = x.local
+JOIN plugin pl ON pl.id = x.plugin_id
+WHERE p.p NOT LIKE 'textures/actors/character/facegendata/%'
+  AND p.p NOT LIKE 'meshes/actors/character/facegendata/%'
+  AND ((p.p LIKE 'textures/%.dds' AND NOT EXISTS (SELECT 1 FROM tex_winner tw
+          JOIN origin o ON o.id = tw.origin_id AND o.enabled = 1 WHERE tw.path_id = x.path_id))
+    OR (p.p LIKE 'meshes/%.nif' AND NOT EXISTS (SELECT 1 FROM nif_winner nw JOIN nif_copy c ON c.id = nw.copy_id
+          JOIN origin o ON o.id = c.origin_id AND o.enabled = 1 WHERE nw.path_id = x.path_id)))
+ORDER BY p.p, pl.name, x.formid";
+
+/// Winning textures of the run that no NIF copy of the run and no record copy of an active plugin names, outside
+/// `textures/pbr/` (ruling R8).
+const UNUSED_SQL: &str = "
+SELECT p.p FROM tex_winner tw JOIN origin o ON o.id = tw.origin_id AND o.enabled = 1
+JOIN path p ON p.id = tw.path_id
+WHERE p.p NOT LIKE 'textures/pbr/%'
+  AND NOT EXISTS (SELECT 1 FROM tex_use tu JOIN shape s ON s.texset_id = tu.texset_id
+        JOIN nif_copy c ON c.id = s.copy_id JOIN origin co ON co.id = c.origin_id AND co.enabled = 1
+        WHERE tu.tex_path_id = tw.path_id)
+  AND NOT EXISTS (SELECT 1 FROM txst_slot t JOIN plugin pl ON pl.id = t.plugin_id AND pl.lo_index IS NOT NULL
+        WHERE t.path_id = tw.path_id)
+  AND NOT EXISTS (SELECT 1 FROM tex_ref t JOIN plugin pl ON pl.id = t.plugin_id AND pl.lo_index IS NOT NULL
+        WHERE t.path_id = tw.path_id)
+ORDER BY p.p";
+
+impl Store {
+    /// Winning TXSTs whose slot matches `key` with PGPatcher's rule (ruling R9), by EDID; at most `limit`.
+    pub fn txsts_matching(&self, key: &TexKey, limit: usize) -> Result<Vec<TxstUse>, ScanError> {
+        let Some((slot, cond, arg, check)) = tex_query(key, "tp.p") else {
+            return Ok(vec![]);
+        };
+        let mut st = self.conn.prepare(&format!(
+            "SELECT ts.formid, r.edid, pl.name, ts.slot, tp.p, w.n_overrides FROM path tp
+             JOIN txst_slot ts ON ts.path_id = tp.id AND ts.slot = ?1
+             JOIN rec_winner w ON w.formid = ts.formid AND w.plugin_id = ts.plugin_id
+             JOIN rec r ON r.plugin_id = ts.plugin_id AND r.local = ts.local
+             JOIN plugin pl ON pl.id = ts.plugin_id
+             WHERE {cond} ORDER BY r.edid, ts.formid"
+        ))?;
+        let mut rows = st.query(params![i64::from(slot), arg])?;
+        let mut out = vec![];
+        while let Some(r) = rows.next()? {
+            let path: String = r.get(4)?;
+            if !check(&path) {
+                continue;
+            }
+            out.push(TxstUse {
+                formid: r.get::<_, i64>(0)? as u32,
+                edid: r.get(1)?,
+                plugin: r.get(2)?,
+                slot: r.get::<_, i64>(3)? as u32,
+                path,
+                n_overrides: r.get::<_, i64>(5)? as u32,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Winning records whose alternate textures use one of `txsts` (load-order FormIDs).
+    pub fn alt_users_of(&self, txsts: &[u32]) -> Result<Vec<AltUse>, ScanError> {
+        let ids = serde_json::to_string(txsts).map_err(json_err)?;
+        let mut st = self.conn.prepare(&format!(
+            "SELECT a.formid, r.edid, r.sig, pl.name, a.model_slot, a.shape_name, a.txst_formid, tr.edid, a.idx
+             FROM {SWAP_JOINS}
+             JOIN rec_winner w ON w.formid = a.formid AND w.plugin_id = a.plugin_id
+             JOIN rec r ON r.plugin_id = a.plugin_id AND r.local = a.local
+             JOIN plugin pl ON pl.id = a.plugin_id
+             WHERE a.txst_formid IN (SELECT value FROM json_each(?1))
+             ORDER BY r.edid, a.formid, a.model_slot, a.idx"
+        ))?;
+        let v = st
+            .query_map([ids], |r| {
+                Ok(AltUse {
+                    formid: r.get::<_, i64>(0)? as u32,
+                    edid: r.get(1)?,
+                    sig: r.get(2)?,
+                    plugin: r.get(3)?,
+                    model_slot: r.get::<_, i64>(4)? as u32,
+                    swap: swap_row(r, 5)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// Winning records whose model (any slot) is `norm`, with the swaps of that model slot (spec §4.2).
+    pub fn plugin_uses_of_mesh(&self, norm: &str) -> Result<Vec<MeshUse>, ScanError> {
+        let mut st = self.conn.prepare(
+            "SELECT m.formid, r.edid, r.sig, pl.name, m.slot, w.n_overrides, m.plugin_id, m.local
+             FROM path p JOIN model_ref m ON m.path_id = p.id
+             JOIN rec_winner w ON w.formid = m.formid AND w.plugin_id = m.plugin_id
+             JOIN rec r ON r.plugin_id = m.plugin_id AND r.local = m.local
+             JOIN plugin pl ON pl.id = m.plugin_id
+             WHERE p.p = ?1 ORDER BY r.sig, r.edid, m.formid, m.slot",
+        )?;
+        let rows: Vec<(MeshUse, i64, i64)> = st
+            .query_map([norm], |r| {
+                Ok((
+                    MeshUse {
+                        formid: r.get::<_, i64>(0)? as u32,
+                        edid: r.get(1)?,
+                        sig: r.get(2)?,
+                        plugin: r.get(3)?,
+                        model_slot: r.get::<_, i64>(4)? as u32,
+                        n_overrides: r.get::<_, i64>(5)? as u32,
+                        swaps: vec![],
+                    },
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut sw = self.conn.prepare(&format!(
+            "SELECT a.shape_name, a.txst_formid, tr.edid, a.idx FROM {SWAP_JOINS} WHERE a.plugin_id = ?1 AND a.local = ?2 AND a.model_slot = ?3 ORDER BY a.idx, a.shape_name"
+        ))?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (mut u, plugin_id, local) in rows {
+            u.swaps = sw
+                .query_map(params![plugin_id, local, i64::from(u.model_slot)], |r| {
+                    swap_row(r, 0)
+                })?
+                .collect::<Result<_, _>>()?;
+            out.push(u);
+        }
+        Ok(out)
+    }
+
+    /// Missing files (spec §4.4, ruling R8), by path, each with up to [`MISSING_RECORDS`] referencing records.
+    pub fn plugin_missing_files(&self) -> Result<Vec<MissingRef>, ScanError> {
+        let mut st = self.conn.prepare(MISSING_SQL)?;
+        let mut rows = st.query([])?;
+        let mut out: Vec<MissingRef> = vec![];
+        while let Some(r) = rows.next()? {
+            let path: String = r.get(0)?;
+            let edid: Option<String> = r.get(1)?;
+            let label = record_label(
+                edid.as_deref(),
+                r.get::<_, i64>(2)? as u32,
+                &r.get::<_, String>(3)?,
+                &r.get::<_, String>(4)?,
+            );
+            match out.last_mut() {
+                Some(m) if m.path == path => {
+                    m.n_records += 1;
+                    if m.records.len() < MISSING_RECORDS {
+                        m.records.push(label);
+                    }
+                }
+                _ => out.push(MissingRef {
+                    path,
+                    n_records: 1,
+                    records: vec![label],
+                }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Unused textures (spec §4.4, ruling R8), by path.
+    pub fn unused_textures(&self) -> Result<Vec<String>, ScanError> {
+        let mut st = self.conn.prepare(UNUSED_SQL)?;
+        let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        Ok(v)
     }
 }
