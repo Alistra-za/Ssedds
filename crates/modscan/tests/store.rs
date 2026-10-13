@@ -223,7 +223,7 @@ fn schema_v3_rebuilds_old_databases_and_sets_pragmas() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(v, modscan::store::SCHEMA_VERSION);
-    assert_eq!(v, 3);
+    assert_eq!(v, 4);
     let n: i64 = c
         .query_row("SELECT count(*) FROM shape", [], |r| r.get(0))
         .unwrap();
@@ -581,7 +581,7 @@ fn open_read_only_never_creates_rebuilds_or_writes() {
     }
     assert!(matches!(
         Store::open_read_only(&old),
-        Err(modscan::ScanError::SchemaVersion { found: 2, want: 3 })
+        Err(modscan::ScanError::SchemaVersion { found: 2, want: 4 })
     ));
     let n: i64 = rusqlite::Connection::open(&old)
         .unwrap()

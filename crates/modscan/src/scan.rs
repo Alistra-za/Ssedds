@@ -91,7 +91,7 @@ enum Loc {
     Bsa(usize, usize),
 }
 
-fn file_mtime(p: &std::path::Path) -> i64 {
+pub(crate) fn file_mtime(p: &std::path::Path) -> i64 {
     std::fs::metadata(p)
         .and_then(|m| m.modified())
         .ok()
