@@ -50,6 +50,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     state.thumbs.sweep(model.items_rev());
+    selection_keys(ui, model);
     header::draw(ui, model);
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops) = (&mut state.thumbs, &mut state.drops);
@@ -171,5 +172,23 @@ fn column_panel(
         if let Some(s) = PanelState::load(ui.ctx(), panel).filter(|_| released) {
             ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
         }
+    }
+}
+
+/// F3a D1: Ctrl+A selects everything visible and Esc clears; never while a widget has focus (the search box keeps
+/// its own Ctrl+A), a dialog or popup is open, or a texture is expanded (the preview owns Esc).
+fn selection_keys(ui: &egui::Ui, model: &mut AppModel) {
+    if model.dialog.is_some()
+        || model.expanded.is_some()
+        || egui::Popup::is_any_open(ui.ctx())
+        || ui.ctx().memory(|m| m.focused().is_some())
+    {
+        return;
+    }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+        model.select_all_visible();
+    }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        model.clear_selection();
     }
 }

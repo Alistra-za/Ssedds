@@ -1,9 +1,11 @@
 //! The Textures and Sets columns (M3a spec §2.2–2.3). Drawing only: every click is a call on the model.
 use super::thumbs::ThumbCache;
+use crate::model::bulk::{MenuAction, MenuEntry};
 use crate::model::items::{ItemStatus, TextureItem};
-use crate::model::{AppModel, Selection};
+use crate::model::AppModel;
 use eframe::egui;
 use engine::events::RecipeStatus;
+use std::collections::HashSet;
 
 pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
@@ -107,10 +109,16 @@ fn tile_tooltip(item: &TextureItem) -> String {
     lines.join("\n")
 }
 
-fn tile(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, idx: usize) {
+fn tile(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    thumbs: &mut ThumbCache,
+    idx: usize,
+    chosen: &HashSet<String>,
+) {
     let inner_h = tile_height(ui) - 2.0 * (TILE_MARGIN + TILE_STROKE);
     let item = &model.items[idx];
-    let selected = matches!(&model.selection, Selection::Item(k) if *k == item.key);
+    let selected = chosen.contains(&item.key);
     let fill = if selected {
         ui.visuals().selection.bg_fill.linear_multiply(0.4)
     } else {
@@ -155,10 +163,21 @@ fn tile(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, idx: u
         .interact(egui::Sense::click_and_drag())
         .on_hover_text(tile_tooltip(item));
     resp.dnd_set_drag_payload(crate::ui::sets_column::DragItem(key.clone()));
-    if resp.double_clicked() {
+    // F3a D4: a right-click on an unselected tile selects it alone first.
+    if resp.secondary_clicked() {
+        model.right_click_item(&key);
+    }
+    let mut picked = None;
+    resp.context_menu(|ui| {
+        picked = bulk_menu(ui, &model.menu_title(false), &model.item_menu());
+    });
+    if let Some(a) = picked {
+        model.run_menu(a);
+    } else if resp.double_clicked() {
         model.expand(&key);
     } else if resp.clicked() {
-        model.select_item(&key);
+        let m = ui.input(|i| i.modifiers);
+        model.click_item(&key, m.command, m.shift);
     }
 }
 
@@ -166,6 +185,9 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
     // Wrapped: the counts move under the heading in a narrow column instead of holding it wider.
     ui.horizontal_wrapped(|ui| {
         ui.heading("Textures");
+        if let Some(s) = model.selection_summary(false) {
+            ui.label(egui::RichText::new(s).strong());
+        }
         let n = model.undecided();
         if n > 0 {
             ui.colored_label(AMBER, format!("{n} need a decision"));
@@ -207,6 +229,8 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         }
         return;
     }
+    // One set per frame keeps the per-tile test O(1) however many are selected.
+    let chosen: HashSet<String> = model.selected_items().into_iter().collect();
     let tile_h = tile_height(ui);
     let tile_w = TILE + 2.0 * (TILE_MARGIN + TILE_STROKE);
     let gap = ui.spacing().item_spacing.x;
@@ -222,7 +246,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                     egui::Layout::left_to_right(egui::Align::Min),
                     |ui| {
                         for &idx in row {
-                            tile(ui, model, thumbs, idx);
+                            tile(ui, model, thumbs, idx, &chosen);
                         }
                     },
                 );
@@ -298,4 +322,41 @@ pub fn set_label(export_root: &str, key: &str) -> String {
     } else {
         k
     }
+}
+
+/// F3a D4: a right-click menu drawn from `entries` under its count title; the members-of-kind entries go in a
+/// "Select members of kind" submenu. The menus are lists so F3b can append. Returns the clicked action.
+pub(super) fn bulk_menu(
+    ui: &mut egui::Ui,
+    title: &str,
+    entries: &[MenuEntry],
+) -> Option<MenuAction> {
+    let mut picked = None;
+    ui.label(egui::RichText::new(title).strong());
+    ui.separator();
+    let (kinds, rest): (Vec<&MenuEntry>, Vec<&MenuEntry>) = entries
+        .iter()
+        .partition(|e| matches!(e.action, MenuAction::SelectMembersOfKind(_)));
+    for e in rest {
+        let r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(&e.label));
+        let r = match &e.disabled {
+            Some(why) => r.on_disabled_hover_text(why),
+            None => r,
+        };
+        if r.clicked() {
+            picked = Some(e.action);
+            ui.close();
+        }
+    }
+    if !kinds.is_empty() {
+        ui.menu_button("Select members of kind", |ui| {
+            for e in kinds {
+                if ui.button(&e.label).clicked() {
+                    picked = Some(e.action);
+                    ui.close();
+                }
+            }
+        });
+    }
+    picked
 }

@@ -1,14 +1,16 @@
 //! The editable Sets column (M3b spec §3.1): set pills in project order with badges, drag and drop
 //! of textures onto sets (and onto an empty area for a new set), drag-to-reorder by the ≡ handle, and a context
 //! menu. Drawing only: every change is a model call, made after drawing.
-use super::columns::{member, status_text, AMBER, RED};
+use super::columns::{bulk_menu, member, status_text, AMBER, RED};
 use super::thumbs::ThumbCache;
+use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
 use crate::model::sets::{is_json_set, shader_options, DropChoice, DropOutcome, SetView, SlotFill};
-use crate::model::{AppModel, Selection};
+use crate::model::AppModel;
 use eframe::egui;
 use engine::codes::Warning;
 use engine::shader::{Shader, ShaderOrigin};
+use std::collections::HashSet;
 
 /// Drag payload: a texture, by item key.
 #[derive(Debug, Clone)]
@@ -64,6 +66,10 @@ enum Act {
     RemoveMember(String, String),
     /// The Shader dropdown: `None` is Auto.
     Shader(String, Option<Shader>),
+    /// A pill click with its modifiers (F3a D1).
+    Click(String, bool, bool),
+    RightClick(String),
+    Bulk(MenuAction),
 }
 
 fn badge(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) -> egui::Response {
@@ -94,8 +100,16 @@ struct Editing<'a> {
 }
 
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st: &mut DropState) {
-    ui.heading("Sets");
+    ui.horizontal_wrapped(|ui| {
+        ui.heading("Sets");
+        if let Some(s) = model.selection_summary(true) {
+            ui.label(egui::RichText::new(s).strong());
+        }
+    });
     ui.separator();
+    // One set per frame keeps the per-pill and per-member tests O(1) however many are selected.
+    let sel_sets: HashSet<String> = model.selected_sets().into_iter().collect();
+    let sel_items: HashSet<String> = model.selected_items().into_iter().collect();
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
     let editing = Editing {
@@ -139,9 +153,11 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
                 let look = PillLook {
                     dragging: dragged.as_deref() == Some(v.id.as_str()),
                     flash: flash.filter(|(id, _)| *id == v.id).map(|(_, f)| f),
+                    selected: !v.key.is_empty() && sel_sets.contains(&v.key),
+                    bulk: sel_sets.len() >= 2,
                 };
                 let out = pill(
-                    ui, model, thumbs, v, index, &editing, is_blocked, look, &mut acts,
+                    ui, model, thumbs, v, index, &editing, is_blocked, look, &sel_items, &mut acts,
                 );
                 rects.push(out.rect);
                 if out.handle_released {
@@ -178,6 +194,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache, st
         match a {
             Act::Select(k) => model.select_set(&k),
             Act::SelectItem(k) => model.select_item(&k),
+            Act::Click(k, ctrl, shift) => model.click_set(&k, ctrl, shift),
+            Act::RightClick(k) => model.right_click_set(&k),
+            Act::Bulk(a) => model.run_menu(a),
             Act::Expand(k) => model.expand(&k),
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
                 DropOutcome::Joined => {}
@@ -286,6 +305,9 @@ struct PillOut {
 struct PillLook {
     dragging: bool,
     flash: Option<f64>,
+    selected: bool,
+    /// Two or more sets are selected: the pills of selected ones show the bulk menu.
+    bulk: bool,
 }
 
 /// The y of the insertion line (None over the dragged pill itself, where nothing moves) when set `from` is dragged over the pill at `to` (whose rect is `r`): moving
@@ -308,10 +330,11 @@ fn pill(
     editing: &Editing,
     blocked: bool,
     look: PillLook,
+    sel_items: &HashSet<String>,
     acts: &mut Vec<Act>,
 ) -> PillOut {
     let mut handle_released = false;
-    let selected = matches!(&model.selection, Selection::Set(k) if !k.is_empty() && *k == v.key);
+    let selected = look.selected;
     let accent = ui.visuals().selection.stroke.color;
     let stroke = if look.dragging {
         egui::Stroke::new(2.0, accent)
@@ -401,7 +424,7 @@ fn pill(
                 ui.horizontal_wrapped(|ui| {
                     for mk in &v.members {
                         let Some(item) = model.item(mk) else { continue };
-                        let sel = matches!(&model.selection, Selection::Item(k) if k == mk);
+                        let sel = sel_items.contains(mk);
                         let r = member(ui, item, sel, thumbs);
                         r.dnd_set_drag_payload(DragItem(mk.clone()));
                         if r.double_clicked() {
@@ -435,7 +458,8 @@ fn pill(
         resp.clone().on_hover_text(editing.why);
     }
     if resp.clicked() && !v.key.is_empty() && acts.is_empty() {
-        acts.push(Act::Select(v.key.clone()));
+        let m = ui.input(|i| i.modifiers);
+        acts.push(Act::Click(v.key.clone(), m.command, m.shift));
     }
     if let Some(p) = dropped {
         if editing.on {
@@ -444,7 +468,21 @@ fn pill(
     }
     // Not consuming: the handle's release (in `draw`) applies the move.
     let hovered_by_set = editing.on && resp.dnd_hover_payload::<DragSet>().is_some();
-    resp.context_menu(|ui| menu(ui, v, index, editing, model, acts));
+    // F3a D4: a right-click on an unselected pill selects it alone first; among two or more selected sets the pill
+    // shows the bulk menu, otherwise its own.
+    if resp.secondary_clicked() && !v.key.is_empty() {
+        acts.push(Act::RightClick(v.key.clone()));
+    }
+    let bulk = look.selected && look.bulk;
+    resp.context_menu(|ui| {
+        if bulk {
+            if let Some(a) = bulk_menu(ui, &model.menu_title(true), &model.set_menu()) {
+                acts.push(Act::Bulk(a));
+            }
+        } else {
+            menu(ui, v, index, editing, model, acts)
+        }
+    });
     PillOut {
         handle_released,
         hovered_by_set,
