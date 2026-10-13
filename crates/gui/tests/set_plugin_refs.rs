@@ -113,26 +113,120 @@ fn the_set_key_is_pgpatchers_match_rule() {
     let model = pbr_opened(d.path());
     let mut v = set_views(&model).into_iter().next().unwrap();
     v.settings.clear();
-    v.derived_match = Some("landscape\rock01.dds".into());
+    v.derived_match = Some(r"landscape\rock01.dds".into());
     assert_eq!(
         set_key(&v),
         Some(TexKey::Suffix {
             slot: 0,
-            stem: "landscape\rock01".into()
+            stem: r"landscape\rock01".into()
         })
     );
     v.settings.insert(
         "match_normal".into(),
-        serde_json::json!("landscape\rock01_n.dds"),
+        serde_json::json!(r"landscape\rock01_n.dds"),
     );
     assert_eq!(
         set_key(&v),
         Some(TexKey::Suffix {
             slot: 1,
-            stem: "landscape\rock01_n".into()
+            stem: r"landscape\rock01_n".into()
         })
     );
     v.settings.clear();
     v.derived_match = None;
     assert_eq!(set_key(&v), None);
+}
+
+/// A scan database with one winning TXST (`RockTXST`) on `textures/landscape/rock01.dds`, slot 0.
+fn seeded_db(dir: &std::path::Path) -> std::path::PathBuf {
+    let p = dir.join("scan.db");
+    drop(modscan::store::Store::open(&p).unwrap());
+    let c = rusqlite::Connection::open(&p).unwrap();
+    c.execute_batch(
+        "INSERT INTO plugin(id, name, path, mtime, light, flags, masters_json) VALUES (1, 'Skyrim.esm', 'x', 0, 0, 0, '[]');
+         INSERT INTO path(id, p) VALUES (1, 'textures/landscape/rock01.dds');",
+    )
+    .unwrap();
+    add_txst(&p, 0x12345, "RockTXST");
+    p
+}
+
+fn add_txst(db: &std::path::Path, formid: u32, edid: &str) {
+    rusqlite::Connection::open(db)
+        .unwrap()
+        .execute_batch(&format!(
+            "INSERT INTO rec(formid, local, plugin_id, sig, edid, owner_ok) VALUES ({formid}, {formid}, 1, 'TXST', '{edid}', 1);
+             INSERT INTO rec_winner(formid, plugin_id, n_overrides) VALUES ({formid}, 1, 1);
+             INSERT INTO txst_slot(formid, local, plugin_id, slot, path_id) VALUES ({formid}, {formid}, 1, 0, 1);"
+        ))
+        .unwrap();
+}
+
+/// The panel reads the model's `scan_db` when opened and again on Refresh.
+#[test]
+fn used_by_plugins_reads_the_scan_db_and_refresh_rereads_it() {
+    use modscan::store::TexKey;
+    use sdc_gui::model::plugin_refs::set_key;
+    use sdc_gui::model::sets::set_views;
+    let d = tempfile::tempdir().unwrap();
+    let db = seeded_db(d.path());
+    let mut model = pbr_opened(d.path());
+    let v = set_views(&model)
+        .into_iter()
+        .find(
+            |v| matches!(set_key(v), Some(TexKey::Suffix { stem, .. }) if stem.ends_with("rock01")),
+        )
+        .unwrap();
+    model.scan_db = Some(db.clone());
+    model.select_set(&v.key);
+    let mut h = tall(model);
+    h.run();
+    h.get_by_label("Used by plugins").click();
+    h.run();
+    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1×");
+    assert!(h.query_by_label_contains("Rock2TXST").is_none());
+    add_txst(&db, 0x2000, "Rock2TXST");
+    h.run();
+    assert!(
+        h.query_by_label_contains("Rock2TXST").is_none(),
+        "cached until Refresh"
+    );
+    h.get_by_label("Refresh").click();
+    h.run();
+    h.get_by_label_contains("Rock2TXST [00002000] TXST");
+}
+
+#[test]
+fn plugin_refs_requery_on_a_new_key_and_report_db_problems() {
+    use modscan::store::TexKey;
+    use sdc_gui::model::plugin_refs::{SetPluginRefs, NO_SCAN};
+    let d = tempfile::tempdir().unwrap();
+    let db = seeded_db(d.path());
+    let rock = TexKey::Suffix {
+        slot: 0,
+        stem: r"landscape\rock01".into(),
+    };
+    let other = TexKey::Suffix {
+        slot: 0,
+        stem: r"landscape\other".into(),
+    };
+    let mut r = SetPluginRefs::default();
+    assert_eq!(r.get(Some(&db), &rock).as_ref().unwrap().txsts.len(), 1);
+    assert!(r.get(Some(&db), &other).as_ref().unwrap().txsts.is_empty());
+    assert_eq!(r.cached.as_ref().unwrap().0, other);
+    assert_eq!(r.get(Some(&db), &rock).as_ref().unwrap().txsts.len(), 1);
+
+    let mut r = SetPluginRefs::default();
+    let missing = d.path().join("nope.db");
+    assert_eq!(r.get(Some(&missing), &rock).as_ref().unwrap_err(), NO_SCAN);
+    assert_eq!(r.get(None, &rock).as_ref().unwrap_err(), NO_SCAN);
+
+    let old = d.path().join("old.db");
+    rusqlite::Connection::open(&old)
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 3")
+        .unwrap();
+    let mut r = SetPluginRefs::default();
+    let e = r.get(Some(&old), &rock).as_ref().unwrap_err();
+    assert!(e.contains("scan database version 3"), "{e}");
 }
