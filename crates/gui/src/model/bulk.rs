@@ -439,6 +439,11 @@ pub fn members_of(m: &AppModel, set_keys: &[String], kind: Option<SlotKind>) -> 
     out
 }
 
+/// "1 texture", "3 textures".
+fn textures(n: usize) -> String {
+    format!("{n} texture{}", if n == 1 { "" } else { "s" })
+}
+
 /// One ticked field of a copy: its id, the value, and the plan over the targets.
 type CopyWrite = (String, Value, Vec<(String, Change)>);
 
@@ -481,7 +486,7 @@ impl AppModel {
             "Change"
         };
         let written = plan.iter().filter(|(_, c)| *c == Change::Write).count();
-        self.batch_edit(&format!("{verb} {label} on {written} textures"), |m| {
+        let changed = self.batch_edit(&format!("{verb} {label} on {}", textures(written)), |m| {
             for (k, c) in &plan {
                 if *c != Change::Write {
                     continue;
@@ -492,7 +497,10 @@ impl AppModel {
                 }
             }
         });
-        self.bulk.report = Some(report(label, &plan));
+        // Writes that changed nothing (same values) report nothing; all-skipped plans still say why.
+        if changed || written == 0 {
+            self.bulk.report = Some(report(label, &plan));
+        }
     }
 
     /// F3a D4: the copy checklist for the active texture: every field of `all_fields` its `[files]` entry sets,
@@ -584,7 +592,8 @@ impl AppModel {
             return;
         }
         let n = keys.len();
-        self.batch_edit(&format!("Reset all settings on {n} textures"), |m| {
+        let label = format!("Reset all settings on {}", textures(n));
+        let changed = self.batch_edit(&label, |m| {
             for k in keys {
                 if m.project
                     .as_ref()
@@ -600,7 +609,9 @@ impl AppModel {
                 });
             }
         });
-        self.bulk.report = Some(format!("Reset all settings on {n} textures"));
+        if changed {
+            self.bulk.report = Some(label);
+        }
     }
 }
 

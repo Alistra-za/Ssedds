@@ -314,3 +314,36 @@ fn the_shader_locked_sub_type_is_skipped_for_a_set_but_counted() {
         Some(json!("landscape_diffuse"))
     );
 }
+
+#[test]
+fn a_bulk_write_that_changes_nothing_sets_no_report() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let keys = strings(&[ROCK, ODD]);
+    m.apply_bulk_edit(&keys, "format", BulkOp::Set(json!("bc1")));
+    m.bulk.report = None;
+    m.apply_bulk_edit(&keys, "format", BulkOp::Set(json!("bc1")));
+    assert_eq!(m.bulk.report, None, "same values: nothing was written");
+    m.reset_all_settings(&strings(&[LEAF]));
+    assert_eq!(m.bulk.report, None, "no entry to remove");
+}
+
+#[test]
+fn one_texture_is_singular_in_the_step_label_and_report() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.apply_bulk_edit(&strings(&[ROCK]), "format", BulkOp::Set(json!("bc1")));
+    assert_eq!(
+        m.history.undo.last().unwrap().label,
+        "Change Format on 1 texture"
+    );
+    m.reset_all_settings(&strings(&[ROCK]));
+    assert_eq!(
+        m.history.undo.last().unwrap().label,
+        "Reset all settings on 1 texture"
+    );
+    assert_eq!(
+        m.bulk.report.as_deref(),
+        Some("Reset all settings on 1 texture")
+    );
+}

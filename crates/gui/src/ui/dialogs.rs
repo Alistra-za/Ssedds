@@ -244,7 +244,10 @@ fn copy_settings(
                 .project
                 .as_ref()
                 .and_then(|p| p.file_value(from, f))
-                .map_or(String::new(), |v| v.to_string());
+                .map_or(String::new(), |v| match v {
+                    serde_json::Value::String(s) => s,
+                    v => v.to_string(),
+                });
             ui.checkbox(
                 on,
                 format!("{}: {value}", crate::model::bulk::field_label(f)),
