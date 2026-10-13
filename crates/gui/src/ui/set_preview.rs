@@ -10,9 +10,11 @@ use crate::model::AppModel;
 use eframe::egui;
 use render3d::ShapeStatus;
 
-/// Spec D1: the PBR emissive colour is the NIF's, the engine supplies the real one.
-const EMISSIVE_APPROX: &str = "Emissive colour is approximate (in game the engine supplies it)";
-/// SLSF1 bit 29: the shape has an emissive colour.
+/// SLSF1.29 External Emittance: the preview draws the NIF colour (captures C1, frame6171: the engine sends exactly that
+/// in an interior); outdoors the engine can substitute the cell or weather colour.
+const EMISSIVE_APPROX: &str =
+    "External emittance: in game the cell or weather can change this glow colour";
+/// SLSF1 bit 29: External Emittance.
 const SLSF1_EMISSIVE: u32 = 1 << 29;
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
