@@ -242,10 +242,16 @@ impl Store {
             }
         }
         for (t, out, src) in REMAP {
+            // A target whose master is missing stays NULL: its raw local id could equal a real winner's FormID.
+            let fallback = if out == "txst_formid" {
+                "NULL".to_string()
+            } else {
+                format!("{t}.{src}")
+            };
             tx.execute(
                 &format!(
                     "UPDATE {t} SET {out} = coalesce((SELECT m.base | ({t}.{src} & m.mask) FROM lo_map m
-                       WHERE m.plugin_id = {t}.plugin_id AND m.idx = ({t}.{src} >> 24)), {t}.{src})"
+                       WHERE m.plugin_id = {t}.plugin_id AND m.idx = ({t}.{src} >> 24)), {fallback})"
                 ),
                 [],
             )?;
@@ -355,7 +361,7 @@ const SWAP_JOINS: &str = "alt_tex a
 fn swap_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<ShapeSwap> {
     Ok(ShapeSwap {
         shape_name: r.get(at)?,
-        txst_formid: r.get::<_, i64>(at + 1)? as u32,
+        txst_formid: r.get::<_, Option<i64>>(at + 1)?.unwrap_or(0) as u32,
         txst_edid: r.get(at + 2)?,
         index: r.get::<_, i64>(at + 3)? as i32,
     })
