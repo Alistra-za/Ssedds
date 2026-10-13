@@ -5,9 +5,13 @@ use serde_json::json;
 
 const HAND_WRITTEN: &str = r#"# My mod's settings — keep this comment.
 preset = "cs-quality"
+target = "cs"  # my target
 
 [defaults]
 mips.levels = "full"   # trailing comment
+
+[files."landscape/rock01_n.png"]
+format = "bc1"  # BC7 looks worse here
 
 [[rules]]
 match = { glob = "**/foliage/**" }
@@ -36,9 +40,17 @@ fn edits_keep_every_hand_written_byte() {
     doc.save(false).unwrap();
     assert!(!doc.is_dirty());
     let text = std::fs::read_to_string(d.path().join("sdc.toml")).unwrap();
-    for line in HAND_WRITTEN.lines() {
+    for line in HAND_WRITTEN
+        .lines()
+        .filter(|l| !l.starts_with("target") && !l.starts_with("format"))
+    {
         assert!(text.contains(line), "lost line: {line}");
     }
+    assert!(text.contains("target = \"cpm\"  # my target"), "{text}");
+    assert!(
+        text.contains("format = \"bc7\"  # BC7 looks worse here"),
+        "{text}"
+    );
     let cfg = ProjectDoc::open(d.path()).config().unwrap();
     assert_eq!(cfg.target, Some(Target::Cpm));
     assert_eq!(cfg.files["landscape/rock01_n.png"]["format"], "bc7");
