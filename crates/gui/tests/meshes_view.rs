@@ -1021,6 +1021,33 @@ fn plugin_overrides_list_records_and_shape_swaps() {
     h.get_by_label("Shape0 → DirtTXST [00000ABC]");
 }
 
+/// A swap whose TXST master is missing says so instead of showing FormID 00000000.
+#[test]
+fn an_unresolved_swap_target_is_labelled() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.selected_nif = Some(1);
+    m.plugin_uses = vec![MeshUse {
+        formid: 1,
+        edid: None,
+        sig: "STAT".into(),
+        plugin: "Mod.esp".into(),
+        model_slot: 0,
+        n_overrides: 0,
+        swaps: vec![ShapeSwap {
+            shape_name: "Shape0".into(),
+            txst_formid: 0,
+            txst_edid: None,
+            index: 0,
+        }],
+    }];
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin overrides (1)").click();
+    h.run();
+    h.get_by_label("Shape0 → unresolved TXST");
+}
+
 #[test]
 fn plugin_overrides_say_when_no_record_uses_the_mesh() {
     let mut m = model_with(None);

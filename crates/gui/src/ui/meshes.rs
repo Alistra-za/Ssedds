@@ -440,12 +440,17 @@ fn plugin_overrides(ui: &mut egui::Ui, uses: &[MeshUse]) {
                         ));
                         ui.indent(("plugin-swaps", i), |ui| {
                             for s in &u.swaps {
-                                ui.label(format!(
-                                    "{} → {} [{:08X}]",
-                                    s.shape_name,
-                                    s.txst_edid.as_deref().unwrap_or("(no EDID)"),
-                                    s.txst_formid
-                                ));
+                                // formid 0 = the TXST's master is not in the load order
+                                let target = if s.txst_formid == 0 {
+                                    "unresolved TXST".to_string()
+                                } else {
+                                    format!(
+                                        "{} [{:08X}]",
+                                        s.txst_edid.as_deref().unwrap_or("(no EDID)"),
+                                        s.txst_formid
+                                    )
+                                };
+                                ui.label(format!("{} → {target}", s.shape_name));
                             }
                         });
                     }
