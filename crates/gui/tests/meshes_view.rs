@@ -1077,7 +1077,7 @@ fn plugin_file_references_list_missing_and_unused_with_a_filter() {
     });
     let mut h = harness(m);
     h.run();
-    h.get_by_label("Plugin file references").click();
+    h.get_by_label("Plugin file references…").click();
     h.run();
     h.get_by_label(
         "textures/missing/nothere.dds ← GhostTXST [00000AB0] TXST — Skyrim.esm; … 5 more",
@@ -1102,7 +1102,7 @@ fn plugin_file_references_when_nothing_is_listed() {
     m.file_refs = Some(FileRefs::default());
     let mut h = harness(m);
     h.run();
-    h.get_by_label("Plugin file references").click();
+    h.get_by_label("Plugin file references…").click();
     h.run();
     h.get_by_label("Missing (0)");
     h.get_by_label("Nothing listed.");
@@ -1193,7 +1193,7 @@ fn unused_says_plugins_were_not_read_after_a_folder_scan() {
         m.refs_unused = true;
         let mut h = harness(m);
         h.run();
-        h.get_by_label("Plugin file references").click();
+        h.get_by_label("Plugin file references…").click();
         h.run();
         h.query_by_label(note).is_some()
     };
@@ -1254,7 +1254,7 @@ fn long_file_ref_rows_do_not_widen_the_layout() {
         unused: vec![],
     });
     h.run();
-    h.get_by_label("Plugin file references").click();
+    h.get_by_label("Plugin file references…").click();
     h.run();
     h.run();
     assert_eq!((x_of(&h, "A"), x_of(&h, "x.nif")), (mods_x, nifs_x));
@@ -1281,7 +1281,7 @@ fn file_ref_rows_are_capped_and_overrides_wrap() {
     m.refs_unused = true;
     let mut h = harness(m);
     h.run();
-    h.get_by_label("Plugin file references").click();
+    h.get_by_label("Plugin file references…").click();
     h.run();
     h.get_by_label("… and 500 more — narrow with the filter");
 }
@@ -1312,4 +1312,47 @@ fn long_override_labels_wrap_inside_the_column() {
     h.run();
     let r = h.get_by_label_contains("SSSSSSSSSS").rect();
     assert!(r.max.x <= 1400.0 && r.height() > 30.0, "{r:?}");
+}
+
+fn refs_model() -> MeshesModel {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(1, "meshes/x.nif")];
+    m.file_refs = Some(FileRefs {
+        missing: vec![MissingRef {
+            path: "textures/a.dds".into(),
+            n_records: 1,
+            records: vec!["R [00000001] TXST — A.esp".into()],
+        }],
+        unused: vec![],
+    });
+    m
+}
+
+#[test]
+fn opening_plugin_file_references_does_not_move_the_panels() {
+    let mut h = harness(refs_model());
+    h.run();
+    let before = (h.get_by_label("A").rect(), h.get_by_label("x.nif").rect());
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    h.run();
+    assert_eq!(
+        (h.get_by_label("A").rect(), h.get_by_label("x.nif").rect()),
+        before
+    );
+}
+
+#[test]
+fn a_long_file_ref_row_wraps_inside_the_window() {
+    let mut m = refs_model();
+    m.file_refs.as_mut().unwrap().missing[0].path = format!("textures/{}.dds", "q".repeat(400));
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Plugin file references…").click();
+    h.run();
+    h.run();
+    let win = h.get_by_label("Plugin file references").rect();
+    let row = h.get_by_label_contains("qqqqqqqqqq").rect();
+    assert!(row.height() > 30.0, "row did not wrap: {row:?}");
+    assert!(row.max.x <= 1400.0, "{row:?} {win:?}");
 }
