@@ -316,7 +316,7 @@ fn edit_rewrites_from_zero() {
 
 #[test]
 fn emissive_d1() {
-    // PBR (approximate, spec D1, capture C1 pending): NIF emissive colour × emissive multiple.
+    // PBR (spec D1, captures C1/frame6171): sRGB-to-linear(NIF colour) × multiple with LL on; raw × multiple without.
     let mut p = pbr(&[]);
     p.params.emissive_color = [0.5, 0.25, 1.0];
     p.params.emissive_multiple = 2.0;

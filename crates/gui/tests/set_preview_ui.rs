@@ -223,7 +223,9 @@ fn the_emissive_approximation_label_shows_only_with_an_emissive_material() {
     let (_d, mut h) = plain_rock();
     h.run_steps(4);
     assert!(h
-        .query_by_label("Emissive colour is approximate (in game the engine supplies it)")
+        .query_by_label(
+            "External emittance: in game the cell or weather can change this glow colour"
+        )
         .is_none());
     let mut material = MaterialState::builtin_default();
     material.slsf1 |= 1 << 29;
@@ -234,7 +236,7 @@ fn the_emissive_approximation_label_shows_only_with_an_emissive_material() {
         material,
     }];
     h.run_steps(4);
-    h.get_by_label("Emissive colour is approximate (in game the engine supplies it)");
+    h.get_by_label("External emittance: in game the cell or weather can change this glow colour");
 }
 
 #[test]
@@ -337,7 +339,8 @@ fn the_textures_view_shows_the_panel_for_a_set_only_when_the_app_enables_it() {
     assert!(h.query_by_label(PANEL_TITLE).is_none());
 }
 
-const EMISSIVE_TEXT: &str = "Emissive colour is approximate (in game the engine supplies it)";
+const EMISSIVE_TEXT: &str =
+    "External emittance: in game the cell or weather can change this glow colour";
 
 #[test]
 fn the_emissive_label_ignores_a_hidden_material_and_follows_the_viewport_shapes() {

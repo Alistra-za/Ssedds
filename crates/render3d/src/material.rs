@@ -272,8 +272,9 @@ pub fn write_material(w: &mut CbWriter, m: &MaterialState, bound: &Bound, linear
     // EmitColor: "sRGB by default, linear if LL on" (iLH ~2595).
     // - Vanilla (P0 rule): only Own_Emit (SLSF1.22) shapes get the NIF colour × multiple [Inference: every
     //   captured vanilla EmitColor was 0].
-    // - PBR: approximate, spec D1, capture C1 pending. The NIF emissive colour × emissive multiple for every PBR
-    //   shape (in game the engine supplies it; the one captured emissive PBR draw had 0).
+    // - PBR (spec D1, settled by captures C1/frame6171 with LL on): sRGB-to-linear(NIF colour) × multiple, exact
+    //   to 7 digits on a controller-free mesh. Only Own_Emit PBR shapes were captured; the rest get the same rule.
+    //   An animated mesh (BSLightingShaderPropertyColor/FloatController) differs per frame; the preview is static.
     let emit = if pbr || bit(m.slsf1, 22) {
         p.emissive_color.map(|c| {
             (if linear_lighting {
