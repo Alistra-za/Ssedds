@@ -42,10 +42,12 @@ CREATE TABLE pgp_diff (path_id INTEGER PRIMARY KEY, crc_orig INTEGER NOT NULL, c
 CREATE TABLE tex_copy   (path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER,
                      PRIMARY KEY(path_id, origin_id)) WITHOUT ROWID;
 CREATE TABLE tex_winner (path_id INTEGER PRIMARY KEY, origin_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
+CREATE INDEX nif_copy_origin ON nif_copy(origin_id);
 -- The texset uniqueness key. SQLite treats NULLs as distinct in UNIQUE, so empty (NULL) slots are folded to 0
 -- (path ids start at 1) and INSERT OR IGNORE dedups sets with empty slots too.
 CREATE UNIQUE INDEX texset_key ON texset(n, ifnull(t0,0), ifnull(t1,0), ifnull(t2,0), ifnull(t3,0),
                      ifnull(t4,0), ifnull(t5,0), ifnull(t6,0), ifnull(t7,0), ifnull(t8,0));
+CREATE INDEX shape_texset ON shape(texset_id);
 -- Plugins (esp scanner spec §2.3). `local` = the FormID as the plugin stores it (master index clamped to the
 -- plugin): the cache. `formid`/`txst_formid` = load-order FormIDs, set by `resolve_plugins` (NULL until then; the raw
 -- local id when the master is not loaded, `rec.owner_ok` = 0). `plugin.lo_index` = load-order position, NULL when
@@ -79,11 +81,6 @@ CREATE INDEX txst_ref_plugin ON txst_ref(plugin_id, local);
 CREATE INDEX tex_ref_path ON tex_ref(path_id);
 CREATE INDEX tex_ref_plugin ON tex_ref(plugin_id, local);
 "#;
-
-/// Secondary NIF indexes no upsert relies on (every UNIQUE stays in `SCHEMA`): dropped when a scan starts on an empty
-/// store and built once by `end_scan` (spec §2 step 4).
-const COLD_INDEXES: &str = "CREATE INDEX IF NOT EXISTS nif_copy_origin ON nif_copy(origin_id);
-CREATE INDEX IF NOT EXISTS shape_texset ON shape(texset_id);";
 
 const SHAPE_COLS: &str = "block, name, kind, shader_kind, shader_type, slsf1, slsf2, texset_id, alpha_flags, \
                           alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles";
@@ -453,7 +450,8 @@ pub struct DeriveRow {
 
 pub struct Store {
     pub(crate) conn: Connection,
-    /// This scan started on an empty store (ruling R3): secondary indexes are deferred to `end_scan`.
+    /// This scan started on an empty store (ruling R3); Task 6 reads it. Index deferral did not pay off and was removed.
+    #[allow(dead_code)]
     cold: bool,
 }
 
@@ -752,7 +750,6 @@ impl Store {
                 tx.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
             }
             tx.execute_batch(SCHEMA)?;
-            tx.execute_batch(COLD_INDEXES)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
@@ -791,19 +788,12 @@ impl Store {
             .query_row("SELECT EXISTS(SELECT 1 FROM nif_copy)", [], |r| {
                 r.get::<_, bool>(0)
             })?;
-        if self.cold {
-            self.conn.execute_batch(
-                "DROP INDEX IF EXISTS nif_copy_origin; DROP INDEX IF EXISTS shape_texset;",
-            )?;
-        }
         Ok(())
     }
 
-    /// End of every run, whatever its outcome (ruling R3): the deferred indexes exist again, also after a scan that
-    /// failed before reaching here.
+    /// End of every run, whatever its outcome: resets the per-scan `cold` flag.
     pub fn end_scan(&mut self) -> Result<(), ScanError> {
         self.cold = false;
-        self.conn.execute_batch(COLD_INDEXES)?;
         Ok(())
     }
 

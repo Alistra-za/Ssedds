@@ -182,7 +182,7 @@ pub fn run_with(
             }
         }
     }
-    // Every outcome, cancel and errors included, ends the scan (deferred indexes, ruling R3).
+    // Every outcome, cancel and errors included, ends the scan (resets the store's per-scan state).
     let t = Instant::now();
     let end = store.end_scan();
     let mut report = r?;
