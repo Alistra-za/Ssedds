@@ -15,30 +15,30 @@ fn unquote(v: &str) -> String {
     else {
         return v.replace("\\\\", "\\");
     };
-    // Qt 6 writes each byte as a Latin-1 char, Qt 5 writes non-ASCII bytes as `\xHH`; rebuild the bytes, read UTF-8.
-    let (mut bytes, cs, mut i) = (Vec::new(), v.chars().collect::<Vec<_>>(), 0);
+    // Qt's reader: `\xHH` -> that byte, `\\` -> `\`, `""` is the separator Qt writes after an escape; every other
+    // char is its own UTF-8. MO2 stores QString::toUtf8, so decode as UTF-8 (Latin-1 if the bytes are not).
+    let (mut bytes, cs, mut i) = (
+        Vec::new(),
+        v.replace("\"\"", "").chars().collect::<Vec<_>>(),
+        0,
+    );
     while i < cs.len() {
         let hex = |k: usize| cs.get(i + k).and_then(|c| c.to_digit(16));
-        match cs[i] {
-            '\\' if cs.get(i + 1) == Some(&'\\') => {
-                bytes.push(b'\\');
-                i += 2;
-            }
-            '\\' if cs.get(i + 1) == Some(&'x') && hex(2).is_some() && hex(3).is_some() => {
-                bytes.push((hex(2).unwrap() * 16 + hex(3).unwrap()) as u8);
-                i += 4;
-            }
-            c => {
-                match u8::try_from(c) {
-                    Ok(b) => bytes.push(b),
-                    Err(_) => bytes.extend(c.encode_utf8(&mut [0; 4]).as_bytes()),
-                }
-                i += 1;
-            }
+        let c = cs[i];
+        let next = cs.get(i + 1).copied();
+        if c == '\\' && next == Some('x') && hex(2).is_some() {
+            let n = if hex(3).is_some() { 2 } else { 1 };
+            bytes.push((1..=n).fold(0, |a, k| a * 16 + hex(1 + k).unwrap()) as u8);
+            i += 2 + n;
+        } else if c == '\\' && next == Some('\\') {
+            bytes.push(b'\\');
+            i += 2;
+        } else {
+            bytes.extend(c.encode_utf8(&mut [0; 4]).as_bytes());
+            i += 1;
         }
     }
-    // not valid UTF-8 once reduced to bytes: the file already held real text, keep it
-    String::from_utf8(bytes).unwrap_or_else(|_| v.replace("\\\\", "\\"))
+    String::from_utf8(bytes.clone()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 
 impl Ini {
@@ -72,19 +72,27 @@ impl Ini {
 mod tests {
     use super::*;
 
-    fn game_path(raw: &str) -> String {
-        Ini::parse(&format!("[General]\ngamePath=@ByteArray({raw})\n"))
+    fn value(raw: &str) -> String {
+        Ini::parse(&format!("[General]\ngamePath={raw}\n"))
             .get("General", "gamePath")
             .unwrap()
     }
 
+    /// Fixtures follow Qt's `iniEscapedString` / reader rules (qsettings.cpp): bytes >= 0x80 inside a byte array
+    /// are `\xHH`, a backslash is doubled, and a hex digit right after an escape is split off with `""` (the
+    /// value is then quoted).
     #[test]
-    fn bytearray_decodes_both_qt_encodings() {
-        // Qt 6: the UTF-8 bytes of the path are written as Latin-1 characters.
-        assert_eq!(game_path(r"C:\\Mods\\CafÃ©"), r"C:\Mods\Café");
-        // Qt 5: non-ASCII bytes are \xHH escapes.
-        assert_eq!(game_path(r"C:\\Mods\\Caf\xc3\xa9"), r"C:\Mods\Café");
-        // a value that is already real UTF-8 text (not valid once reduced to bytes) is kept
-        assert_eq!(game_path(r"C:\\Mods\\Café"), r"C:\Mods\Café");
+    fn bytearray_decodes_like_qt() {
+        assert_eq!(value(r"@ByteArray(C:\\Mods\\Cafe)"), r"C:\Mods\Cafe");
+        assert_eq!(value(r"@ByteArray(C:\\Mods\\Caf\xc3\xa9)"), r"C:\Mods\Café");
+        assert_eq!(value(r"@ByteArray(C:\\Mods\\Café)"), r"C:\Mods\Café");
+        // raw text is never re-interpreted: this is a real folder name, not mojibake
+        assert_eq!(value(r"@ByteArray(C:\\Mods\\Ã©)"), r"C:\Mods\Ã©");
+        assert_eq!(
+            value(r#""@ByteArray(C:\\Mods\\Caf\xc3\xa9""a)""#),
+            r"C:\Mods\Caféa"
+        );
+        // bytes that are not UTF-8 fall back to Latin-1
+        assert_eq!(value(r"@ByteArray(C:\\Caf\xe9)"), r"C:\Café");
     }
 }
