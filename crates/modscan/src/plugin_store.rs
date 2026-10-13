@@ -55,14 +55,15 @@ const REMAP: [(&str, &str, &str); 9] = [
 ];
 
 /// Filtering spec §3: which winning records nothing reaches, conservatively. Runs after `rec_winner` is built, in the
-/// same transaction. `win` = each winning copy; edges and alternate textures count only from winning copies. An active
+/// same transaction. `win` = each winning copy; edges and alternate textures count only from winning copies, matched by the copy's `local` (an unresolved copy
+/// can share its FormID with the winner). An active
 /// plugin with `error_text` may have an incomplete placement list, so then nothing is judged "not placed".
 const INERT_SQL: &str = "
 DELETE FROM rec_inert;
 CREATE TEMP TABLE IF NOT EXISTS win (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL,
-  hdpt_flags INTEGER);
+  hdpt_flags INTEGER, local INTEGER NOT NULL);
 DELETE FROM win;
-INSERT OR IGNORE INTO win SELECT w.formid, w.plugin_id, r.sig, r.hdpt_flags FROM rec_winner w
+INSERT OR IGNORE INTO win SELECT w.formid, w.plugin_id, r.sig, r.hdpt_flags, r.local FROM rec_winner w
   JOIN rec r ON r.plugin_id = w.plugin_id AND r.formid = w.formid AND r.owner_ok = 1;
 CREATE TEMP TABLE IF NOT EXISTS placed_base (formid INTEGER PRIMARY KEY);
 DELETE FROM placed_base;
@@ -79,21 +80,21 @@ INSERT INTO rec_inert SELECT formid, 2 FROM win
 -- in HNAM (ruling R9).
 INSERT INTO rec_inert SELECT h.formid, 3 FROM win h
   WHERE h.sig = 'HDPT' AND h.hdpt_flags & 1 = 0
-    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win p ON p.formid = e.formid AND p.plugin_id = e.plugin_id
+    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win p ON p.local = e.local AND p.plugin_id = e.plugin_id
       WHERE e.role = 'HNAM' AND e.txst_formid = h.formid AND p.sig = 'HDPT' AND ifnull(p.hdpt_flags, 1) & 1 = 1);
 -- 1 no reference: grass no winning landscape texture lists (GNAM).
 INSERT INTO rec_inert SELECT g.formid, 1 FROM win g
   WHERE g.sig = 'GRAS'
-    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win l ON l.formid = e.formid AND l.plugin_id = e.plugin_id
+    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win l ON l.local = e.local AND l.plugin_id = e.plugin_id
       WHERE e.role = 'GNAM' AND e.txst_formid = g.formid);
 -- 1 no reference: TXSTs that no reference places and no winning, non-inert record uses (alternate textures; LTEX/HDPT
 -- TNAM, NPC_ FTST, RACE face sets, ARMA NAM0/NAM1, IPCT DNAM/ENAM). MODL is ARMO -> ARMA, not a texture use.
 INSERT INTO rec_inert SELECT t.formid, 1 FROM win t
   WHERE t.sig = 'TXST'
     AND t.formid NOT IN (SELECT formid FROM placed_base)
-    AND NOT EXISTS (SELECT 1 FROM alt_tex a JOIN win u ON u.formid = a.formid AND u.plugin_id = a.plugin_id
+    AND NOT EXISTS (SELECT 1 FROM alt_tex a JOIN win u ON u.local = a.local AND u.plugin_id = a.plugin_id
       WHERE a.txst_formid = t.formid AND u.formid NOT IN (SELECT formid FROM rec_inert))
-    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win u ON u.formid = e.formid AND u.plugin_id = e.plugin_id
+    AND NOT EXISTS (SELECT 1 FROM txst_ref e JOIN win u ON u.local = e.local AND u.plugin_id = e.plugin_id
       WHERE e.txst_formid = t.formid AND e.role NOT IN ('HNAM', 'GNAM', 'MODL')
         AND u.formid NOT IN (SELECT formid FROM rec_inert));";
 

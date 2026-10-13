@@ -436,7 +436,56 @@ fn a_plugin_error_suppresses_not_placed() {
     );
     let i = inert(&s);
     assert!(i.iter().all(|(_, r)| *r != 2), "{i:?}");
+    assert_eq!(
+        one_i64(
+            &s,
+            "SELECT count(*) FROM rec_inert i JOIN rec_winner w ON w.formid = i.formid
+             JOIN rec r ON r.plugin_id = w.plugin_id AND r.formid = w.formid WHERE r.sig = 'TXST'"
+        ),
+        0,
+        "no TXST is inert under a fault: {i:?}"
+    );
     for (e, r) in [("LonelyGrass", 1), ("NpcOnly", 3), ("NpcExtra", 3)] {
+        assert!(i.contains(&(e.to_string(), r)), "{e}: {i:?}");
+    }
+}
+
+/// Review I1: Coll.esp (masters Skyrim, Missing; load-order slot 1) holds a valid 02000ABC that resolves to 01000ABC
+/// and an unresolved 01000ABC (owner_ok = 0) keeping that same value. The ghost's edges must not be credited to the winner.
+#[test]
+fn unresolved_copies_do_not_lend_their_edges_to_the_winner() {
+    let d = fixture(&format!(
+        "*Coll.esp
+{ORDER}"
+    ));
+    put(
+        d.path(),
+        "mods/A/Coll.esp",
+        &plugin(
+            0,
+            &["Skyrim.esm", "Missing.esm"],
+            &[
+                top(
+                    b"HDPT",
+                    &[
+                        hdpt(0x0200_0ABC, "Victim", Some(0x01), &[], None),
+                        hdpt(0x0200_0ABD, "Child", Some(0x00), &[], None),
+                        hdpt(
+                            0x0100_0ABC,
+                            "Ghost",
+                            Some(0x01),
+                            &[0x0200_0ABD],
+                            Some(0x0200_0ABE),
+                        ),
+                    ],
+                ),
+                top(b"TXST", &[txst(0x0200_0ABE, "Tex", None)]),
+            ],
+        ),
+    );
+    let (s, _) = scan(&d);
+    let i = inert(&s);
+    for (e, r) in [("Child", 3), ("Tex", 1)] {
         assert!(i.contains(&(e.to_string(), r)), "{e}: {i:?}");
     }
 }
