@@ -11,13 +11,13 @@ Owner-approved in chat on 2026-10-12. Base: `main` 735cb79. Track F was split in
 - `path_contains` stays available under advanced.
 - Whatever is left of TruePBR "Advanced" moves into a collapsed "Advanced TruePBR settings" header inside the TruePBR box.
 - The set card shows only the slots its shader can use, ordered 1–8.
-- Old projects convert match_diffuse/match_normal to match1/match2.
+- Old projects: no migration (owner: nobody has used it).
 
 **Success:**
 - No PBR number can be set below its floor.
 - A new set exports `match1` (the exact diffuse path with `.dds`) by default.
 - The Matching header explains that any row hit applies the entry.
-- Opening an old project rewrites partial matches to exact ones and says so.
+
 - The set card shows only usable slots, in slot order.
 
 **Out of scope:**
@@ -61,11 +61,7 @@ Owner-approved in chat on 2026-10-12. Base: `main` 735cb79. Track F was split in
 
 ### 3.3 Old projects
 
-- On open, a set entry with `match_diffuse` becomes `match1` and one with `match_normal` becomes `match2`. Each takes the set's exact slot path, taken from the set's own members. The partial value is not reused.
-- A one-line note appears in the set's Matching header: "converted from match_diffuse (partial) to an exact match". The note stays until the next save. The project file is rewritten on the next save, not silently at open.
-- **Read-only projects:** the conversion is shown, but nothing is written.
-- `rename`, which depended on the matched part, is re-checked against the exact path. If it can no longer apply, the set shows a warning and keeps the value.
-
+- Owner (2026-10-12): nobody has used this yet, so there is no migration. An old `match_diffuse`/`match_normal` value in a project file is ignored by the new UI and is not written on export, and the set gets the default `match1`. No note and no rename re-check.
 ## 4. TruePBR box layout
 
 - The TruePBR box has three headers:
@@ -86,7 +82,6 @@ Owner-approved in chat on 2026-10-12. Base: `main` 735cb79. Track F was split in
 - Each Number key class clamps on drag and on typed entry. The writer clamps a hand-edited out-of-range value. `pgpsim::check` warns.
 - **New set:** `match1` is exported with `.dds`, and neither `match_diffuse` nor `match_normal` is written.
 - **Toggles:** the diffuse and normal toggles add and remove `match1`/`match2`. The + dropdown adds `match3`–`match8`, but only for filled slots.
-- **Old project:** `match_diffuse` → `match1` and `match_normal` → `match2`, with the note shown. A read-only project shows the conversion but writes nothing. A conflicting `rename` raises a warning.
 - **Layout:** `path_contains` and `nif_filter` render under "Advanced TruePBR settings", collapsed by default.
 - **Slot row:** a PBR set shows only PBR slots in 1–8 order. A filled unusable slot shows its warning outline.
 
@@ -94,6 +89,5 @@ Owner-approved in chat on 2026-10-12. Base: `main` 735cb79. Track F was split in
 
 1. A set whose diffuse output path differs from its mesh's slot path, for example after a set rename, must still match. The exact path must be the path PGPatcher sees in the mesh after patching, i.e. the `textures\pbr\` mapping (pgpsim `strip_pbr`). The plan must pin which path `match1` holds, and test it against pgpsim.
 2. The `.dds` extension must be added exactly once, including for values a user pastes with the extension already on.
-3. An old project with both `match_diffuse` and `match1` must not get a duplicate `match1`.
-4. A clamped field must not mark the project dirty when the value did not actually change.
-5. The slot row must not hide a filled slot on a set whose shader fell back (`SHADER-UNAVAILABLE`).
+3. A clamped field must not mark the project dirty when the value did not actually change.
+4. The slot row must not hide a filled slot on a set whose shader fell back (`SHADER-UNAVAILABLE`).
