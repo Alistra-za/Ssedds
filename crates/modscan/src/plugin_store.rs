@@ -1,6 +1,6 @@
 //! Plugin tables of the scan store (esp scanner spec §2.3): the per-plugin cache rows and the load-order resolution.
 use crate::plugins::{clamp_local, is_light};
-use crate::store::{path_id, tex_query, Store, TexKey};
+use crate::store::{intern_path, tex_query, Store, TexKey};
 use crate::ScanError;
 use esp::PluginFacts;
 use rusqlite::{params, Connection};
@@ -112,7 +112,7 @@ impl Store {
             if let Some(t) = t {
                 for (slot, p) in t.slots.iter().enumerate() {
                     if let Some(p) = p {
-                        let pid = path_id(&tx, p)?;
+                        let pid = intern_path(&tx, &mut self.intern, p)?;
                         tx.prepare_cached(
                             "INSERT INTO txst_slot(local, plugin_id, slot, path_id) VALUES (?1,?2,?3,?4)",
                         )?
@@ -121,7 +121,7 @@ impl Store {
                 }
             }
             for m in &r.payload.models {
-                let pid = path_id(&tx, &m.path)?;
+                let pid = intern_path(&tx, &mut self.intern, &m.path)?;
                 tx.prepare_cached(
                     "INSERT INTO model_ref(local, plugin_id, slot, path_id) VALUES (?1,?2,?3,?4)",
                 )?
@@ -153,7 +153,7 @@ impl Store {
                 ])?;
             }
             for (role, p) in &r.payload.textures {
-                let pid = path_id(&tx, p)?;
+                let pid = intern_path(&tx, &mut self.intern, p)?;
                 tx.prepare_cached(
                     "INSERT INTO tex_ref(local, plugin_id, role, path_id) VALUES (?1,?2,?3,?4)",
                 )?
