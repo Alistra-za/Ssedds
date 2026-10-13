@@ -1,6 +1,6 @@
 //! Reflection-driven cbuffer writer: fields are set by name, so a CS build that moves or drops a variable
 //! never needs a hand-written struct.
-use crate::compile::CbLayout;
+use crate::compile::{CbLayout, CbVar, VarKind};
 
 /// A resolved cbuffer variable: byte offset and size in one writer's layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,7 +10,7 @@ pub struct Field {
 }
 
 pub struct CbWriter {
-    vars: Vec<(String, u32, u32)>,
+    vars: Vec<CbVar>,
     data: Vec<u8>,
 }
 
@@ -33,11 +33,8 @@ impl CbWriter {
         }
     }
 
-    fn find(&self, var: &str) -> Option<(usize, usize)> {
-        self.vars
-            .iter()
-            .find(|v| name_matches(&v.0, var))
-            .map(|v| (v.1 as usize, v.2 as usize))
+    fn find(&self, var: &str) -> Option<&CbVar> {
+        self.vars.iter().find(|v| name_matches(&v.name, var))
     }
 
     /// Whether this build's layout has `var` (namespace-tolerant, see [`name_matches`]).
@@ -66,10 +63,15 @@ impl CbWriter {
     /// Where `var` lives in this layout (namespace-tolerant, see [`name_matches`]); resolve once, then
     /// [`CbWriter::set_at`] every frame without a name search.
     pub fn resolve(&self, var: &str) -> Option<Field> {
-        self.find(var).map(|(off, size)| Field {
-            off: off as u32,
-            size: size as u32,
+        self.find(var).map(|v| Field {
+            off: v.offset,
+            size: v.size,
         })
+    }
+
+    /// The reflected scalar type of `var` (namespace-tolerant), for writers that hold raw numbers.
+    pub fn kind(&self, var: &str) -> Option<VarKind> {
+        self.find(var).map(|v| v.kind)
     }
 
     /// As [`CbWriter::set`] at a resolved field.

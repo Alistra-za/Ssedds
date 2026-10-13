@@ -1723,6 +1723,13 @@ impl SetPreview {
         self.poll_at(m, Instant::now())
     }
 
+    /// Window focus (`app.rs`): look for CS and re-read its settings again, once this panel has located it.
+    pub fn relocate(&mut self) {
+        if self.located {
+            self.v3.locate(self.target.clone());
+        }
+    }
+
     /// `poll` at a given time (tests drive the debounce and the throttle). Call once per frame.
     pub fn poll_at(&mut self, m: &AppModel, now: Instant) {
         self.v3.poll_at(now);
@@ -2026,6 +2033,18 @@ impl SetPreview {
             }
             if let Some(src) = self.vfs_lookup(&t.norm) {
                 map.insert(t.norm.clone(), src);
+            }
+        }
+        // The skin RFAOS candidates too (render3d resolves only through this map), optional: a failed read is quiet.
+        for m in materials {
+            let slot = |i: usize| m.slots.get(i).map_or("", |p| p.norm.as_str());
+            for c in render3d::textures::rfaos_candidates(m.shader_type, slot(1), slot(7)) {
+                if map.contains_key(&c) {
+                    continue;
+                }
+                if let Some(src) = self.vfs_lookup(&c) {
+                    map.insert(c, FileSource::Optional(Box::new(src)));
+                }
             }
         }
     }

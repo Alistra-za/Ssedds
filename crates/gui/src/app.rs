@@ -147,6 +147,7 @@ impl SdcApp {
     fn focus_regained(&mut self) {
         self.model.check_sources();
         self.meshes.relocate();
+        self.state.set3d.relocate();
     }
 }
 

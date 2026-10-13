@@ -1,4 +1,5 @@
 //! Where the user's Community Shaders lives, and whether it changed (00-decision §6.4).
+use crate::cs_settings::SettingsPaths;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -61,6 +62,44 @@ pub fn find_in_mods(origins: &[(String, PathBuf, i32)]) -> Option<(String, PathB
         .filter(|(_, root, _)| root.join("Shaders").join("Lighting.hlsl").is_file())
         .max_by_key(|(_, _, prio)| *prio)
         .map(|(n, r, _)| (n.clone(), r.clone()))
+}
+
+/// Highest-priority origin that has the file `rel` (`/`-separated, relative to the origin root), and that
+/// file's full path. Same tuples and tie rule as [`find_in_mods`]: MO2's overwrite (`i32::MAX`) beats every
+/// mod, and game Data (-1) loses to all of them.
+pub fn find_file(origins: &[(String, PathBuf, i32)], rel: &str) -> Option<(String, PathBuf)> {
+    origins
+        .iter()
+        .map(|(n, root, prio)| (n, root.join(rel), *prio))
+        .filter(|(_, f, _)| f.is_file())
+        .max_by_key(|(_, _, prio)| *prio)
+        .map(|(n, f, _)| (n.clone(), f))
+}
+
+const SETTINGS_USER: &str = "SKSE/Plugins/CommunityShaders/SettingsUser.json";
+const SETTINGS_DEFAULT: &str = "SKSE/Plugins/CommunityShaders/SettingsDefault.json";
+const INFO_INI: &str = "ShaderCache/Info.ini";
+
+/// Where the user's CS settings are (P1-C C12). Through the MO2 origins when there are any (overwrite wins);
+/// otherwise in the Data folder, which is the parent of the `Shaders` root (folder target, "Choose folder…").
+/// A file that is not there, or a missing `Shaders/Features` folder, is `None`.
+pub fn settings_paths(
+    origins: Option<&[(String, PathBuf, i32)]>,
+    shaders_root: &Path,
+) -> SettingsPaths {
+    let find = |rel: &str| match origins.filter(|o| !o.is_empty()) {
+        Some(o) => find_file(o, rel).map(|(_, f)| f),
+        None => shaders_root
+            .parent()
+            .map(|data| data.join(rel))
+            .filter(|f| f.is_file()),
+    };
+    SettingsPaths {
+        user: find(SETTINGS_USER),
+        default: find(SETTINGS_DEFAULT),
+        info_ini: find(INFO_INI),
+        features_dir: Some(shaders_root.join("Features")).filter(|d| d.is_dir()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

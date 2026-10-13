@@ -961,6 +961,20 @@ fn mesh_spec(
             textures.insert(t.clone(), FileSource::from_store(k, &r, t));
         }
     }
+    // The skin RFAOS candidates too (render3d resolves only through this map), optional: a failed read is quiet.
+    for s in shapes {
+        let slot = |i: usize| s.textures.get(i).cloned().flatten().unwrap_or_default();
+        let ty = s.shader_type.filter(|_| s.shader_kind == 1).unwrap_or(0);
+        for c in render3d::textures::rfaos_candidates(ty, &slot(1), &slot(7)) {
+            if textures.contains_key(&c) {
+                continue;
+            }
+            if let Some((k, r)) = store.texture_location(&c)? {
+                let src = FileSource::from_store(k, &r, &c);
+                textures.insert(c, FileSource::Optional(Box::new(src)));
+            }
+        }
+    }
     Ok(Some(MeshSpec {
         key: copy,
         nif: FileSource::from_store(kind, &root, &path),

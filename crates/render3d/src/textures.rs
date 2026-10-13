@@ -83,13 +83,40 @@ pub fn default_for_register(reg: u32) -> [u8; 4] {
 ///   multiplies by `3.984375 × (detail + 1/255)`, so 64/255 ≈ ×1.02 keeps the diffuse, and a 0.5 tint keeps
 ///   it close to the base (`raw² + raw − raw²/2`); black would make the face black. [Inference: the engine's
 ///   16×16 RGBA8 default at t4 (ev4217) has unknown content.]
+///
+/// CS feature registers (P1-C C3; reflected only with CS_SKIN / CS_HAIR): t72 skin detail normal = flat with
+/// detail mask 0; t73 hair tangent shift (`Texture2D<float>`, read `.x - 0.5`) = mid grey, no shift; t71 skin
+/// extra and t74 skin wetness = 0 (gated off by `skinMaterialFlags` = 0; t71 gets the shape's RFAOS map when
+/// [`rfaos_candidates`] finds one).
 pub fn default_for(reg: u32, shader_type: u32, pbr: bool) -> [u8; 4] {
     match (reg, pbr, shader_type) {
+        (72, _, _) => [128, 128, 255, 0],
+        (73, _, _) => [128, 128, 128, 255],
+        (71 | 74, _, _) => [0, 0, 0, 0],
         (5, true, _) => [255, 0, 255, 255],
         (3, false, 4) => [128, 128, 128, 255],
         (4, false, 4) => [64, 64, 64, 255],
         _ => default_for_register(reg),
     }
+}
+
+/// CS skin extra map (RFAOS, bound at t71) candidates of a FaceGen (4) or FaceGen RGB tint (5) shape, in lookup
+/// order (owner rule = pre-October CS `Skin.cpp:451-512`, 02-skin-rfaos.md §0): the canonical slot 7 `…_s.dds`, then
+/// slot 1 `…_n.dds` / `…_msn.dds`, each with that suffix replaced by `_rfaos.dds`. The first one the resolver
+/// returns wins. Canonical paths are lower case, so the end-anchored match is case-insensitive.
+pub fn rfaos_candidates(shader_type: u32, normal: &str, specular: &str) -> Vec<String> {
+    if !matches!(shader_type, 4 | 5) {
+        return vec![];
+    }
+    let s = specular.strip_suffix("_s.dds");
+    let n = normal
+        .strip_suffix("_n.dds")
+        .or_else(|| normal.strip_suffix("_msn.dds"));
+    [s, n]
+        .into_iter()
+        .flatten()
+        .map(|stem| format!("{stem}_rfaos.dds"))
+        .collect()
 }
 
 fn srv_from(
@@ -277,6 +304,20 @@ pub fn dxgi_format(f: DdsPixelFormat, dx10: Option<u32>) -> DXGI_FORMAT {
     })
 }
 
+/// The UNORM twin of an `_SRGB` format (R8G8B8A8, BC1-3, B8G8R8A8, B8G8R8X8, BC7); any other format as is.
+pub fn without_srgb(f: DXGI_FORMAT) -> DXGI_FORMAT {
+    DXGI_FORMAT(match f.0 {
+        29 => 28,
+        72 => 71,
+        75 => 74,
+        78 => 77,
+        91 => 87,
+        93 => 88,
+        99 => 98,
+        x => x,
+    })
+}
+
 /// A decoded DDS ready for binding.
 #[derive(Clone)]
 pub struct Texture {
@@ -303,8 +344,15 @@ pub fn view_kind(v: &ID3D11ShaderResourceView) -> Option<SrvKind> {
 /// DDS bytes → immutable texture + SRV in the file's own format (2D, or a cube when the header says so).
 /// Arrays upload slice 0 only. Errors (unsupported header, BC top level not a multiple of 4, …) are text.
 pub fn load_dds(gpu: &Gpu, bytes: &[u8]) -> Result<Texture, String> {
+    load_dds_as(gpu, bytes, false)
+}
+
+/// As [`load_dds`]; `linear` uploads an `_SRGB` file as its UNORM twin (the same bytes, no sRGB decode on
+/// sampling), for data maps such as the skin RFAOS at t71.
+pub fn load_dds_as(gpu: &Gpu, bytes: &[u8], linear: bool) -> Result<Texture, String> {
     let f = read_dds(bytes).map_err(|e| format!("{e:?}"))?;
     let format = dxgi_format(f.format, f.dx10.map(|d| d.dxgi));
+    let format = if linear { without_srgb(format) } else { format };
     let mips = f.levels.len().max(1);
     let slice_bytes = f.levels.last().map_or(0, |l| l.2.end);
     let faces = if f.is_cubemap { 6 } else { 1 };
@@ -361,11 +409,44 @@ mod tests {
         );
     }
 
+    fn norm(raw: &str) -> String {
+        nif::path::canon_texture(raw.as_bytes()).norm
+    }
+
+    #[test]
+    fn rfaos_candidates_follow_the_old_cs_order() {
+        let (n, s) = (
+            norm(r"textures\arch\skin\head_N.DDS"),
+            norm(r"textures\arch\skin\light\head_s.dds"),
+        );
+        assert_eq!(
+            rfaos_candidates(4, &n, &s),
+            [
+                "textures/arch/skin/light/head_rfaos.dds",
+                "textures/arch/skin/head_rfaos.dds"
+            ]
+        );
+        assert_eq!(
+            rfaos_candidates(5, &norm(r"arch\skin\body_msn.dds"), ""),
+            ["textures/arch/skin/body_rfaos.dds"]
+        );
+        // no _s / _n / _msn suffix (anchored at the end): no candidate
+        assert!(rfaos_candidates(4, "textures/a/head.dds", "textures/a/head_s_x.dds").is_empty());
+        // not a skin technique
+        assert!(rfaos_candidates(0, &n, &s).is_empty());
+        assert!(rfaos_candidates(6, &n, &s).is_empty());
+    }
+
     #[test]
     fn technique_defaults() {
         assert_eq!(default_for(5, 0, true), [255, 0, 255, 255]);
         assert_eq!(default_for(5, 0, false), [0, 0, 0, 255]);
         assert_eq!(default_for(3, 4, false), [128, 128, 128, 255]);
         assert_eq!(default_for(14, 0, false), [255, 255, 255, 255]);
+        // P1-C C3: CS_SKIN / CS_HAIR registers get neutral 1x1 defaults, whatever the technique.
+        assert_eq!(default_for(72, 0, false), [128, 128, 255, 0]); // skin detail normal: flat, mask 0
+        assert_eq!(default_for(73, 6, false), [128, 128, 128, 255]); // hair tangent shift: .x - 0.5 ~ 0
+        assert_eq!(default_for(71, 0, false), [0, 0, 0, 0]); // skin extra (gated off by skinMaterialFlags)
+        assert_eq!(default_for(74, 0, true), [0, 0, 0, 0]); // skin wetness (gated off)
     }
 }

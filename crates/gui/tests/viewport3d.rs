@@ -348,17 +348,24 @@ fn femalebody_1600x900_frame_times() {
     let out = PathBuf::from(PNG_OUT);
     image::save_buffer(&out, &f.rgba, f.width, f.height, image::ColorType::Rgba8).unwrap();
     println!("wrote {}", out.display());
-    // Features off: no ENABLE_LL, gamma-space output, no display encode (for a by-eye check).
-    v.set_features(false);
-    v.request_frame(1600, 900);
-    wait(&mut v);
+    // Features off: no ENABLE_LL, gamma-space output, no display encode (for a by-eye check). No reload (P1-C):
+    // the thread recompiles in the background and sends refresh frames; take the picture once none came for 5 s.
     let before = v.frame.clone().unwrap().id;
-    v.request_frame(1600, 900);
-    wait(&mut v);
+    v.set_features(false);
+    let t = std::time::Instant::now();
+    let mut last = (before, std::time::Instant::now());
+    while (last.0 == before || last.1.elapsed().as_secs() < 5) && t.elapsed().as_secs() < 300 {
+        v.poll();
+        let id = v.frame.as_ref().unwrap().id;
+        if id != last.0 {
+            last = (id, std::time::Instant::now());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
     assert_ne!(
         v.frame.as_ref().unwrap().id,
         before,
-        "re-rendered after the reload"
+        "re-rendered after the toggle"
     );
     println!(
         "features off: {:?}",
@@ -503,6 +510,7 @@ fn a_stale_locate_after_choose_folder_is_ignored() {
     v.handle(v3::V3Reply::Located {
         generation: stale,
         result: Ok(None),
+        settings: None,
     });
     assert_eq!(v.state, V3State::Ready, "the late answer is ignored");
     assert_eq!(v.shaders.as_ref().unwrap().root, d.path());
@@ -605,9 +613,9 @@ fn a_reload_with_compile_errors_keeps_the_last_frame() {
         }),
         timing: Default::default(),
     });
-    // A CS update recompiles; both shapes now fail.
-    v.set_features(false);
-    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::SetFeatures(false))));
+    // A CS update (same folder, new hash) reloads and recompiles; both shapes now fail.
+    v.on_located(Ok(Some(fp(d.path(), "CS", "b"))));
+    assert!(matches!(cmds.try_recv(), Ok(v3::V3Cmd::SetShaders(_))));
     loaded(
         &mut v,
         id,
@@ -1639,7 +1647,10 @@ fn a_texture_swap_reaches_the_render_thread_and_survives_a_reload() {
     wait_for(&mut v, 1, id0);
     assert!(v.swap_errors.is_empty(), "{:?}", v.swap_errors);
     let id1 = v.frame.as_ref().unwrap().id;
-    v.set_features(false);
+    // A CS update (same folder, new hash) reloads the content; the features toggle no longer does (P1-C).
+    let mut updated = v.shaders.clone().unwrap();
+    updated.hash.push('x');
+    v.on_located(Ok(Some(updated)));
     // A new frame after the reload that is green again: the swap was applied again.
     wait_for(&mut v, 1, id1);
 }
@@ -1899,4 +1910,415 @@ fn a_real_render_thread_writes_gpu_compile_load_and_first_frame_lines() {
             .any(|e| e["event"] == "load" && e["content"] == "builtin:Sphere" && e["shapes"] == 1),
         "{text}"
     );
+}
+
+// ---- P1-C Task 5: the user's CS settings (T-S4b) ----
+
+use render3d::cs_settings::CsSettings;
+use sdc_gui::model::meshes::ScanTarget;
+
+const SETTINGS_REL: &str = "SKSE/Plugins/CommunityShaders/SettingsUser.json";
+const GOOD: &str = r#"{"Linear Lighting": {"enableLinearLighting": 1}}"#;
+const CHANGED: &str = r#"{"Linear Lighting": {"enableLinearLighting": 1, "glowmapMult": 0.5}}"#;
+
+/// A folder target holding a CS `Shaders/Lighting.hlsl` and `SettingsUser.json` (no real owner files).
+fn cs_folder(json: &str) -> (tempfile::TempDir, ScanTarget, PathBuf) {
+    let d = tempfile::tempdir().unwrap();
+    let m = d.path().join("CS");
+    std::fs::create_dir_all(m.join("Shaders")).unwrap();
+    std::fs::write(m.join("Shaders/Lighting.hlsl"), "// l").unwrap();
+    let file = m.join(SETTINGS_REL);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, json).unwrap();
+    (d, ScanTarget::Folder(m), file)
+}
+
+/// One locate (what start and window focus do), waited for.
+fn relocated(v: &mut Viewport3d, target: &ScanTarget) {
+    v.locate(Some(target.clone()));
+    let t = Instant::now();
+    while v.locating() {
+        assert!(
+            t.elapsed() < Duration::from_secs(20),
+            "locate did not answer"
+        );
+        v.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn settings_sent(cmds: &std::sync::mpsc::Receiver<v3::V3Cmd>) -> Vec<CsSettings> {
+    cmds.try_iter()
+        .filter_map(|c| match c {
+            v3::V3Cmd::SetSettings(s) => Some(s),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn focus_reread_sends_set_settings_only_when_the_hash_changes() {
+    let (_d, target, file) = cs_folder(GOOD);
+    let mut v = Viewport3d::new(None);
+    let cmds = v.attach_test_thread();
+    relocated(&mut v, &target); // start
+    let first = settings_sent(&cmds);
+    assert_eq!(first.len(), 1, "the first read is applied");
+    assert!(!first[0].parse_failed, "{:?}", first[0].notes);
+    assert_eq!(v.settings().hash, first[0].hash);
+    relocated(&mut v, &target); // focus, nothing changed on disk
+    assert!(settings_sent(&cmds).is_empty(), "same hash: nothing sent");
+    std::fs::write(&file, CHANGED).unwrap();
+    relocated(&mut v, &target); // focus after CS saved its settings
+    let next = settings_sent(&cmds);
+    assert_eq!(next.len(), 1, "a new hash is sent once");
+    assert_ne!(next[0].hash, first[0].hash);
+    assert_eq!(v.settings().hash, next[0].hash);
+}
+
+#[test]
+fn a_malformed_settings_file_keeps_the_previous_settings_and_shows_a_note() {
+    let (_d, target, file) = cs_folder(GOOD);
+    let mut v = Viewport3d::new(None);
+    let cmds = v.attach_test_thread();
+    relocated(&mut v, &target);
+    assert_eq!(settings_sent(&cmds).len(), 1);
+    let good = v.settings().clone();
+    // CS is half-way through writing the file.
+    std::fs::write(&file, r#"{"Linear Lighting": "#).unwrap();
+    relocated(&mut v, &target);
+    assert!(
+        settings_sent(&cmds).is_empty(),
+        "a malformed file sends nothing"
+    );
+    assert_eq!(v.settings(), &good, "the previous settings stay");
+    let note = v.notice.clone().expect("a notice");
+    assert!(note.starts_with(v3::SETTINGS_KEPT), "{note}");
+    // The panel shows it through the existing notice line.
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label_contains(v3::SETTINGS_KEPT);
+    let mut v = h.into_state();
+    // CS finished writing: the next focus applies the file and the note goes.
+    std::fs::write(&file, CHANGED).unwrap();
+    relocated(&mut v, &target);
+    assert_eq!(settings_sent(&cmds).len(), 1);
+    assert!(v.notice.is_none(), "{:?}", v.notice);
+}
+
+#[test]
+fn the_features_toggle_sends_set_features_and_no_load() {
+    let (_d, mut v, cmds) = confirmed();
+    let nif = Arc::new(render3d::ParsedNif::default());
+    v.set_content(Some(parsed(1, &nif, &[])), false);
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::LoadParsed { id, .. }) = cmds.try_recv() else {
+        panic!("LoadParsed")
+    };
+    loaded(
+        &mut v,
+        id,
+        render3d::LoadReport {
+            shapes: 1,
+            ..Default::default()
+        },
+    );
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::Render { id: rid, .. }) = cmds.try_recv() else {
+        panic!("render")
+    };
+    frame_reply(&mut v, rid); // answered, so nothing is in flight before the toggle
+    v.set_features(false);
+    v.request_frame(64, 64);
+    let sent: Vec<v3::V3Cmd> = cmds.try_iter().collect();
+    assert_eq!(sent.len(), 1, "only the toggle: no load, no render");
+    assert!(matches!(sent[0], v3::V3Cmd::SetFeatures(false)));
+    assert_eq!(v.loaded_for_test(), Some(id));
+    assert!(!v.busy(), "nothing pending in the model");
+}
+
+#[test]
+fn the_off_line_lists_what_the_renderer_leaves_off() {
+    assert_eq!(v3::off_line(&[], v3::CUBEMAPS_FOOTER), v3::CUBEMAPS_FOOTER);
+    let off = ["DynamicCubemaps", "LODBlending", "ScreenSpaceGI", "NRD"].map(String::from);
+    assert_eq!(
+        v3::off_line(&off, "unused"),
+        "Off in this preview: Dynamic Cubemaps, LOD Blending, Screen Space GI, NRD"
+    );
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.handle(v3::V3Reply::OffInPreview(off.to_vec()));
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label_contains("Off in this preview: Dynamic Cubemaps, LOD Blending");
+}
+
+// ---- P1-C Task 6: the `settings` timing-log line ----
+
+#[test]
+fn applying_settings_writes_a_settings_line() {
+    let standin = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../render3d/tests/fixtures/standin"
+    ));
+    let fp = render3d::locate::fingerprint(&standin, None).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = render3d::Renderer::with_gpu(
+        render3d::device::Gpu::new_warp().unwrap(),
+        fp,
+        cache.path().to_path_buf(),
+    )
+    .unwrap();
+    let s = CsSettings {
+        hash: "0123456789abcdef0123".into(),
+        notes: vec!["Info.ini missing".into()],
+        ..Default::default()
+    };
+    let ((), ev) = perf_log::capture(|| v3::apply_settings(&mut r, s));
+    let e = named(&ev, "settings");
+    assert_eq!(e.len(), 1, "{ev:?}");
+    assert_eq!(e[0]["hash"], "0123456789ab");
+    assert_eq!(
+        e[0]["defines"],
+        serde_json::json!(["ENABLE_LL"]),
+        "default settings: LL only"
+    );
+    assert_eq!(e[0]["notes"], 1);
+    assert!(e[0]["ms"].as_f64().unwrap() >= 0.0, "{}", e[0]);
+}
+
+#[test]
+fn a_dismissed_malformed_notice_stays_gone_until_the_failure_changes() {
+    let (_d, target, file) = cs_folder(GOOD);
+    let mut v = Viewport3d::new(None);
+    let _cmds = v.attach_test_thread();
+    relocated(&mut v, &target);
+    std::fs::write(&file, r#"{"a": "#).unwrap();
+    relocated(&mut v, &target);
+    assert!(v.notice.is_some());
+    v.notice = None; // Dismiss
+    relocated(&mut v, &target); // focus, same bad file
+    assert!(v.notice.is_none(), "{:?}", v.notice);
+    std::fs::write(&file, r#"{"b": "#).unwrap();
+    relocated(&mut v, &target); // a different failure shows
+    assert!(v.notice.is_some());
+    v.notice = None;
+    std::fs::write(&file, CHANGED).unwrap();
+    relocated(&mut v, &target); // a good read clears it
+    std::fs::write(&file, r#"{"a": "#).unwrap();
+    relocated(&mut v, &target);
+    assert!(
+        v.notice.is_some(),
+        "the same bad file shows again after a good read"
+    );
+}
+
+#[test]
+fn keep_old_keeps_the_old_settings_and_use_new_applies_the_new_ones() {
+    let d = tempfile::tempdir().unwrap();
+    let (a, b) = (d.path().join("CS_a"), d.path().join("CS_b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    for keep in [true, false] {
+        let mut v = Viewport3d::new(Some(fp(&a, "CS_a", "h")));
+        let cmds = v.attach_test_thread();
+        let old = CsSettings::default();
+        let new = read_json_settings(CHANGED);
+        v.on_settings(old.clone());
+        let _ = settings_sent(&cmds);
+        v.handle(v3::V3Reply::Located {
+            generation: v.locate_generation(),
+            result: Ok(Some(fp(&b, "CS_b", "h"))),
+            settings: Some(new.clone()),
+        });
+        assert!(matches!(v.popup, Some(Change::Moved { .. })));
+        assert!(
+            settings_sent(&cmds).is_empty(),
+            "nothing applied while asking"
+        );
+        assert_eq!(v.settings(), &old);
+        if keep {
+            v.keep_old();
+            assert_eq!(v.settings(), &old);
+        } else {
+            v.use_new();
+            assert_eq!(v.settings(), &new);
+            assert_eq!(settings_sent(&cmds).len(), 1);
+        }
+    }
+}
+
+fn read_json_settings(json: &str) -> CsSettings {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("SettingsUser.json");
+    std::fs::write(&f, json).unwrap();
+    render3d::cs_settings::read_settings(&render3d::cs_settings::SettingsPaths {
+        user: Some(f),
+        default: None,
+        info_ini: None,
+        features_dir: None,
+    })
+}
+
+/// A tempdir MO2 instance (profile `Default`, one mod `A`) under `d`; `overwrite` = its SettingsUser.json, if any.
+fn mo2_target(d: &Path, overwrite: Option<&str>) -> ScanTarget {
+    let r = d.join("MO2");
+    let game = r.join("Game");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::write(
+        r.join("ModOrganizer.ini"),
+        format!(
+            "[General]\ngamePath=@ByteArray({})\nselected_profile=@ByteArray(Default)\n",
+            game.display().to_string().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(r.join("mods/A")).unwrap();
+    std::fs::create_dir_all(r.join("overwrite")).unwrap();
+    std::fs::create_dir_all(r.join("profiles/Default")).unwrap();
+    std::fs::write(r.join("profiles/Default/modlist.txt"), "+A\n").unwrap();
+    std::fs::write(
+        r.join("profiles/Default/settings.ini"),
+        "[General]\nLocalSettings=true\n",
+    )
+    .unwrap();
+    if let Some(json) = overwrite {
+        let user = r.join("overwrite").join(SETTINGS_REL);
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, json).unwrap();
+    }
+    ScanTarget::Mo2 {
+        root: r,
+        profile: "Default".into(),
+    }
+}
+
+/// A chosen CS folder (no owner mod) outside the instance; `local` = a SettingsUser.json beside its `Shaders`.
+fn chosen_cs(d: &Path, local: Option<&str>) -> Fingerprint {
+    let cs = d.join("Elsewhere/CS");
+    std::fs::create_dir_all(cs.join("Shaders")).unwrap();
+    std::fs::write(cs.join("Shaders/Lighting.hlsl"), "// l").unwrap();
+    if let Some(json) = local {
+        let user = cs.join(SETTINGS_REL);
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, json).unwrap();
+    }
+    Fingerprint {
+        root: cs.join("Shaders"),
+        owner_mod: None,
+        hash: "h".into(),
+    }
+}
+
+/// Task 8 fix round 2: a chosen CS folder (no owner mod) with an MO2 scan target reads the settings through the
+/// target's origins (overwrite), not from the folder above `Shaders`.
+#[test]
+fn a_chosen_cs_folder_reads_the_settings_through_the_mo2_target() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), Some(CHANGED));
+    let chosen = chosen_cs(d.path(), None);
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    assert_eq!(s.hash, read_json_settings(CHANGED).hash, "{:?}", s.notes);
+    // No MO2 target: the folder above `Shaders` as before (nothing there).
+    let s = v3::read_cs_settings(None, &chosen);
+    assert_eq!(s, CsSettings::default());
+}
+
+/// Fix round 3 (a): no origin has a settings file → the settings beside `Shaders` are read.
+#[test]
+fn settings_beside_shaders_are_the_fallback_when_no_origin_has_any() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), None);
+    let chosen = chosen_cs(d.path(), Some(GOOD));
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    assert_eq!(s.hash, read_json_settings(GOOD).hash, "{:?}", s.notes);
+}
+
+/// Fix round 3 (b): settings beside `Shaders` and in MO2's overwrite disagree → the overwrite wins.
+#[test]
+fn an_origin_settings_file_wins_over_the_one_beside_shaders() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), Some(CHANGED));
+    let chosen = chosen_cs(d.path(), Some(GOOD));
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    assert_eq!(s.hash, read_json_settings(CHANGED).hash, "{:?}", s.notes);
+}
+
+/// Task 8 fix round 2: no settings files but a Features folder with Skin.ini is a change from the default (the
+/// hash covers the loaded features), so it is sent and the renderer compiles CS_SKIN.
+#[test]
+fn features_found_only_in_the_features_folder_are_sent() {
+    let d = tempfile::tempdir().unwrap();
+    let features = d.path().join("Features");
+    std::fs::create_dir_all(&features).unwrap();
+    std::fs::write(features.join("Skin.ini"), "[Info]\nVersion = 1-0-0\n").unwrap();
+    let s = render3d::cs_settings::read_settings(&render3d::cs_settings::SettingsPaths {
+        features_dir: Some(features),
+        ..Default::default()
+    });
+    let mut v = Viewport3d::new(None);
+    let cmds = v.attach_test_thread();
+    v.on_settings(s);
+    let sent = settings_sent(&cmds);
+    assert_eq!(sent.len(), 1, "a features-only read is not the default");
+    let mut r = render3d::Renderer::with_gpu(
+        render3d::device::Gpu::new_warp().unwrap(),
+        render3d::locate::fingerprint(d.path(), None).unwrap(),
+        d.path().join("cache"),
+    )
+    .unwrap();
+    r.set_settings(sent[0].clone());
+    assert!(
+        r.features().iter().any(|f| f == "CS_SKIN"),
+        "{:?}",
+        r.features()
+    );
+}
+
+/// Owner data, read-only: the settings the fixed GUI reads for the owner's CS taken as a chosen folder (no owner
+/// mod, as gui.toml saves it) with the Meshes MO2 target (profile Nexus). `SDC_ACHERUS` = the MO2 instance root.
+#[test]
+#[ignore]
+fn owner_chosen_folder_settings_come_through_the_mo2_target() {
+    let root = PathBuf::from(std::env::var("SDC_ACHERUS").expect("SDC_ACHERUS"));
+    let chosen = Fingerprint {
+        root: root.join(r"mods\CommunityShaders_AIO-2026-10-03T06-46Z\Shaders"),
+        owner_mod: None,
+        hash: String::new(),
+    };
+    let target = ScanTarget::Mo2 {
+        root,
+        profile: "Nexus".into(),
+    };
+    let s = v3::read_cs_settings(Some(&target), &chosen);
+    let defines = render3d::cs_settings::preview_defines(&s, true);
+    println!(
+        "hash {} notes {:?}\ndefines {defines:?}",
+        &s.hash[..12],
+        s.notes
+    );
+    assert_ne!(s.hash, CsSettings::default().hash);
+    assert!(defines.iter().any(|d| d == "CS_SKIN") && defines.iter().any(|d| d == "CS_HAIR"));
+}
+
+/// Review I1: "Choose folder…" after a locate with an MO2 target reads through that target (overwrite wins over
+/// the settings beside the chosen folder's `Shaders`).
+#[test]
+fn choose_folder_reads_the_settings_through_the_last_scan_target() {
+    let d = tempfile::tempdir().unwrap();
+    let target = mo2_target(d.path(), Some(CHANGED));
+    let chosen = chosen_cs(d.path(), Some(GOOD));
+    let mut v = Viewport3d::new(None);
+    let _cmds = v.attach_test_thread();
+    relocated(&mut v, &target);
+    v.choose_folder(chosen.root.parent().unwrap().to_path_buf());
+    let t = Instant::now();
+    while v.locating() {
+        assert!(
+            t.elapsed() < Duration::from_secs(20),
+            "choose did not answer"
+        );
+        v.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(v.settings().hash, read_json_settings(CHANGED).hash);
 }

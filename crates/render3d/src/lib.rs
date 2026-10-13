@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod cache;
 pub mod cbuffer;
 pub mod compile;
+pub mod cs_settings;
 pub mod device;
 pub mod draw;
 pub mod hdri;
@@ -25,10 +26,11 @@ pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
 
 use background::Backdrop;
 use compile::{cached, program_key, CompiledPair, ProgramKey, SrvKind};
+use cs_settings::CsSettings;
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
-use material::{perm_material, write_material};
+use material::{perm_material, write_material, write_skin_flags};
 use nif::material::MaterialState;
 use permutation::{defines, Defines, Stage};
 pub use scene::Background;
@@ -222,13 +224,32 @@ impl TexEntry {
         self.source.is_some() || self.encoded.is_some()
     }
 }
+/// [`Renderer::draw_diag`]: PS defines, PS reflection, (register, DXGI format) of every bound SRV.
+pub type DrawDiag = (
+    Vec<(String, String)>,
+    Option<compile::Reflection>,
+    Vec<(u32, i32)>,
+);
+
+/// [`textures::rfaos_candidates`] of a material (slot 1 normal, slot 7 specular).
+fn rfaos_candidates(m: &MaterialState) -> Vec<String> {
+    let norm = |i: usize| m.slots.get(i).map_or("", |p| p.norm.as_str());
+    textures::rfaos_candidates(m.shader_type, norm(1), norm(7))
+}
+
 /// The 3D preview renderer: message-shaped (load bytes → report, render scene → pixels) so it can later move
 /// into a sidecar process. Single-threaded, like [`Gpu`].
 pub struct Renderer {
     gpu: Gpu,
     shaders: Fingerprint,
     cache_dir: PathBuf,
+    /// The CS feature defines every program is compiled with. `set_features` replaces it whole; `set_settings`
+    /// and `set_features_on` replace only the settings defines (`ENABLE_LL` and [`cs_settings::PREVIEW_FEATURES`]).
     features: Vec<String>,
+    /// The user CS settings last applied (P1-C C11); default = no settings files found.
+    settings: CsSettings,
+    /// The "Community Shaders features" toggle (C8): off, the settings add no define.
+    features_on: bool,
     /// One expanded `Lighting.hlsl` per shaders folder (03 §5); dropped with the folder by `set_shaders`.
     sources: SourceSet,
     /// Device objects by pair key; dropped by `set_shaders` and by a device rebuild.
@@ -266,6 +287,9 @@ pub struct Renderer {
     uploads: usize,
     /// Test hook: draw with P0's by-name writer (every field, every cbuffer, every frame).
     reference_writer: bool,
+    /// FeatureData values every static block writes ([`cs_settings::feature_data`]); typed at write time from
+    /// the reflection. Default: the capture-11178 constants.
+    feature_values: Vec<(String, Vec<f64>)>,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
     backdrop: Option<Backdrop>,
 }
@@ -346,12 +370,16 @@ impl Renderer {
             last_frame: None,
             uploads: 0,
             reference_writer: false,
+            feature_values: cs_settings::feature_data(&cs_settings::CsSettings::default()),
             backdrop: None,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
             cache_dir,
+            // = preview_defines(&CsSettings::default(), true): the P0 Linear Lighting default.
             features: DEFAULT_FEATURES.iter().map(|s| s.to_string()).collect(),
+            settings: CsSettings::default(),
+            features_on: true,
             programs: HashMap::new(),
             compiled: HashMap::new(),
             inflight: HashSet::new(),
@@ -376,13 +404,111 @@ impl Renderer {
         &self.gpu
     }
 
-    /// CS feature defines for the next load or rebuilt draw (default [`DEFAULT_FEATURES`]).
+    /// The whole CS feature define list for the next load or rebuilt draw (default [`DEFAULT_FEATURES`]): tests
+    /// and P0 callers. A later [`Renderer::set_settings`] / [`Renderer::set_features_on`] replaces only the
+    /// settings defines in it and keeps the rest (the stand-in STANDIN_* hooks) in order.
     pub fn set_features(&mut self, features: Vec<String>) {
         self.features = features;
     }
 
     pub fn features(&self) -> &[String] {
         &self.features
+    }
+
+    /// Applies the user CS settings (P1-C C11). The FeatureData values are recomputed. If the settings
+    /// defines are unchanged, the static block of every drawing shape is rewritten (a cbuffer edit, next
+    /// frame). If they changed, every shape goes through the permutation path, and the old draws keep drawing
+    /// with their old constants until their programs land. The display sRGB encode follows `ENABLE_LL`.
+    pub fn set_settings(&mut self, s: CsSettings) {
+        self.feature_values = cs_settings::feature_data(&s);
+        self.settings = s;
+        self.apply_settings_defines();
+    }
+
+    pub fn settings(&self) -> &CsSettings {
+        &self.settings
+    }
+
+    /// The "Community Shaders features" toggle (C8): off drops every settings define (LL included) and the sRGB
+    /// encode; applied like [`Renderer::set_settings`].
+    pub fn set_features_on(&mut self, on: bool) {
+        self.features_on = on;
+        self.apply_settings_defines();
+    }
+
+    /// Features CS loaded (Info.ini, or the Features inis) that this preview does not compile, in name order, for
+    /// the panel "off in preview" line. TruePBR is never listed: it has no define (TRUE_PBR is per material)
+    /// and its settings are always written. Features in `NON_VISUAL` (no shader/visual effect in this preview) are never listed either.
+    pub fn off_in_preview(&self) -> Vec<String> {
+        self.settings
+            .loaded
+            .iter()
+            .filter(|n| n.as_str() != "TruePBR" && !NON_VISUAL.contains(&n.as_str()))
+            .filter(|n| !define_of(n).is_some_and(|d| self.features.iter().any(|f| f == d)))
+            .cloned()
+            .collect()
+    }
+
+    /// `set_settings` / `set_features_on`: the defines the settings do not manage, in their order, then
+    /// `preview_defines`. Unchanged as a set (`program_key` sorts defines) -> the static block of every drawing
+    /// shape is rewritten in place; changed -> every shape through [`Renderer::begin`].
+    fn apply_settings_defines(&mut self) {
+        let mut f: Vec<String> = self
+            .features
+            .iter()
+            .filter(|d| !settings_define(d))
+            .cloned()
+            .collect();
+        f.extend(cs_settings::preview_defines(
+            &self.settings,
+            self.features_on,
+        ));
+        let (mut old, mut new) = (self.features.clone(), f.clone());
+        old.sort();
+        new.sort();
+        // Linear Lighting draws in linear working space: encode for display (was the GUI's apply_features).
+        self.encode_srgb = f.iter().any(|d| d == "ENABLE_LL");
+        self.features = f;
+        if old == new {
+            self.rewrite_static();
+        } else {
+            self.begin_all();
+        }
+    }
+
+    /// New FeatureData values on every `Drawing` shape: the cbuffer-edit path of `apply_in_place` with the
+    /// shape's current material. Pending/failed shapes keep their old draw constants (P1-B); a pending one gets
+    /// the new values when its program lands.
+    fn rewrite_static(&mut self) {
+        let ll = self.linear_lighting();
+        for s in self.shapes.values_mut() {
+            if s.status != ShapeStatus::Drawing {
+                continue;
+            }
+            if let Some(d) = s.draw.as_mut() {
+                d.rewrite_material(&s.material, ll, &self.feature_values);
+            }
+        }
+    }
+
+    /// Every shape that is not hidden through [`Renderer::begin`] (a define-set change, C11). A program that is at
+    /// hand swaps now; the others queue one job each and stay `Pending { showing_previous }` on their old draw.
+    /// The resolver is never asked: every slot of a shape's material is in `tex_cache` since its load or edit.
+    fn begin_all(&mut self) {
+        let todo: Vec<(ShapeId, MaterialState)> = self
+            .shapes
+            .iter()
+            .filter(|(_, s)| s.status != ShapeStatus::Hidden)
+            .map(|(id, s)| (*id, s.material.clone()))
+            .collect();
+        let mut scratch = LoadReport::default();
+        for (id, m) in todo {
+            self.begin(id, &m, &|_| None, &mut scratch);
+        }
+        self.sort_draw_order();
+        if !self.async_compile {
+            self.settle();
+        }
     }
 
     /// Replaces the shaders (a moved or updated CS): the expansion memo and the device programs are dropped (`compiled` is content-addressed and stays valid). The loaded model still uses the old programs until the next [`Renderer::load`].
@@ -446,10 +572,11 @@ impl Renderer {
 
     /// The active texture at canonical `norm`, resolved and decoded once per load (stored as the `load_variant`
     /// copy). A path the resolver does not return is listed in `rep.missing_textures`; undecodable bytes are an
-    /// `rep.errors` line.
+    /// `rep.errors` line. `linear`: an `_SRGB` file is uploaded as UNORM (a data map, [`textures::load_dds_as`]).
     fn texture(
         &mut self,
         norm: &str,
+        linear: bool,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> TexSlot {
@@ -467,7 +594,7 @@ impl Renderer {
                     rep.missing_textures.push(norm.to_string());
                 }
             }
-            Some(bytes) => match textures::load_dds(&self.gpu, &bytes) {
+            Some(bytes) => match textures::load_dds_as(&self.gpu, &bytes, linear) {
                 Ok(t) => *entry.slot_mut(v) = Some(t),
                 Err(e) => rep.errors.push(format!("{norm}: {e}")),
             },
@@ -516,6 +643,19 @@ impl Renderer {
                 None => {}
             }
         }
+        // CS_SKIN's t71: the first RFAOS candidate in `tex_cache` with a texture (resolve_textures asked for them,
+        // linear). A hot-swap does not rebind it: sdc never encodes or swaps an RFAOS file (not a set member), and
+        // a reload picks up an external edit.
+        if let Some(kind) = draw::srv_kind_at(&program.ps.reflection, 71) {
+            let found = rfaos_candidates(m)
+                .iter()
+                .find_map(|c| self.tex_cache.get(c).and_then(TexEntry::current))
+                .filter(|t| t.kind == kind)
+                .map(|t| t.srv.clone());
+            if let Some(srv) = found {
+                real.insert(71, srv);
+            }
+        }
         let mut srvs = vec![];
         for (_, reg, kind) in &program.ps.reflection.srvs {
             if let Some(v) = real.get(reg) {
@@ -547,9 +687,17 @@ impl Renderer {
             if !path.norm.is_empty()
                 && textures::register_for_slot(m.shader_type, pbr, msn, slot).is_some()
             {
-                self.texture(&path.norm, textures, rep);
+                self.texture(&path.norm, false, textures, rep);
             }
         }
+        // Derived guesses: a candidate the resolver lacks is not a missing texture (decode errors still count).
+        let mut quiet = LoadReport::default();
+        for c in rfaos_candidates(m) {
+            if self.texture(&c, true, textures, &mut quiet).is_some() {
+                break;
+            }
+        }
+        rep.errors.append(&mut quiet.errors);
     }
 
     /// Builds one shape's draw for material `m` on `program`: textures (already in `tex_cache`), vertex streams
@@ -580,7 +728,8 @@ impl Renderer {
         let ll = self.linear_lighting();
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
             write_material(&mut cb.writer, m, &bound, ll);
-            scene::write_static(&mut cb.writer);
+            scene::write_static(&mut cb.writer, &self.feature_values);
+            write_skin_flags(&mut cb.writer, m, &bound);
         }
         Ok(ShapeDraw {
             name: name.to_string(),
@@ -794,15 +943,18 @@ impl Renderer {
     }
 
     /// After a device loss: a fresh device (the caller makes it, WARP if need be) with the same shaders, cache
-    /// dir, features, sRGB mode and `compiled` results. Everything that lived on the old device is gone,
-    /// including the loaded model: load it again, and every program comes from `compiled` with no compile.
+    /// dir, features, CS settings and toggle, sRGB mode and `compiled` results. Everything that lived on the old
+    /// device is gone, including the loaded model: load it again, and every program comes from `compiled` with no compile.
     pub fn rebuild_device_on(&mut self, gpu: Gpu) -> Result<(), String> {
         let mut n = Renderer::with_gpu(gpu, self.shaders.clone(), self.cache_dir.clone())?;
         n.features = std::mem::take(&mut self.features);
+        n.settings = std::mem::take(&mut self.settings);
+        n.features_on = self.features_on;
         n.encode_srgb = self.encode_srgb;
         n.async_compile = self.async_compile;
         n.load_variant = self.load_variant;
         n.reference_writer = self.reference_writer;
+        n.feature_values = std::mem::take(&mut self.feature_values);
         n.compiled = std::mem::take(&mut self.compiled);
         *self = n;
         Ok(())
@@ -1061,7 +1213,7 @@ impl Renderer {
             .get_mut(&id)
             .and_then(|s| s.draw.as_mut())
             .ok_or("no draw")?;
-        d.rewrite_material(m, ll);
+        d.rewrite_material(m, ll, &self.feature_values);
         Ok(())
     }
 
@@ -1205,11 +1357,56 @@ impl Renderer {
                 d.bound.regs.remove(&reg);
             }
             if was != real && applied {
-                d.rewrite_material(&material, ll);
+                d.rewrite_material(&material, ll, &self.feature_values);
             }
             touched.push((id, reg));
         }
         Ok(touched)
+    }
+
+    /// Diagnostic hook: the PS defines the shape's material compiles with, the PS reflection of that program (if it
+    /// is at hand), and the shape's draw as (register, DXGI format of the bound view) pairs.
+    #[doc(hidden)]
+    pub fn draw_diag(&mut self, id: ShapeId) -> Option<DrawDiag> {
+        let m = self.shapes.get(&id)?.material.clone();
+        let w = self.wanted(&m).ok()?;
+        let reflection = match self.programs.get(&w.key) {
+            Some(Ok(p)) => Some(p.ps.reflection.clone()),
+            _ => None,
+        };
+        let srvs = self.shapes[&id].draw.as_ref().map_or(vec![], |d| {
+            d.srvs
+                .iter()
+                .map(|(r, v)| {
+                    let mut desc = Default::default();
+                    // SAFETY: `desc` is a live local the call fills in; `v` is a live view.
+                    unsafe { v.GetDesc(&mut desc) };
+                    (*r, desc.Format.0)
+                })
+                .collect()
+        });
+        Some((w.ps.0, reflection, srvs))
+    }
+
+    /// Test hook: the floats of `var` as written in the shape's pixel-stage cbuffers (`None` without a draw or when
+    /// the PS does not reflect `var`).
+    #[doc(hidden)]
+    pub fn draw_cb_floats(&self, id: ShapeId, var: &str) -> Option<Vec<f32>> {
+        let d = self.shapes.get(&id)?.draw.as_ref()?;
+        let cb = d.ps_cbs.iter().find(|c| c.writer.has(var))?;
+        let f = cb.writer.resolve(var)?;
+        let bytes = cb
+            .writer
+            .bytes()
+            .get(f.off as usize..(f.off + f.size) as usize)?;
+        Some(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect(),
+        )
     }
 
     /// Test hook: the COM pointer of the shape's index buffer. A hot-swap must leave it alone (no mesh reload).
@@ -1366,7 +1563,7 @@ impl Renderer {
                     continue;
                 };
                 uploads += if self.reference_writer {
-                    s.update_by_name(gpu, scene, &view)
+                    s.update_by_name(gpu, scene, &view, &self.feature_values)
                 } else {
                     s.update(gpu, &inputs)
                 };
@@ -1420,6 +1617,41 @@ impl Renderer {
         };
         Ok(px)
     }
+}
+
+/// A define the CS settings manage (C8): `ENABLE_LL` or a [`cs_settings::PREVIEW_FEATURES`] define.
+fn settings_define(d: &str) -> bool {
+    d == "ENABLE_LL" || cs_settings::PREVIEW_FEATURES.iter().any(|(_, x)| *x == d)
+}
+
+/// Not visual in the preview: tools, display, performance.
+const NON_VISUAL: [&str; 14] = [
+    "CSEditor",
+    "Effects11",
+    "NRD",
+    "PerformanceOverlay",
+    "RemoteControl",
+    "RenderDoc",
+    "SceneManager",
+    "Screenshot",
+    "Upscaling",
+    "GrassCollision",
+    "GrassOptimizations",
+    "TerrainHelper",
+    "SkySync",
+    "HDRDisplay",
+];
+
+/// The define a loaded CS feature (Info.ini short name) compiles as, if any: Linear Lighting is setting-driven
+/// (`ENABLE_LL`), the others come from [`cs_settings::PREVIEW_FEATURES`].
+fn define_of(feature: &str) -> Option<&'static str> {
+    if feature == "LinearLighting" {
+        return Some("ENABLE_LL");
+    }
+    cs_settings::PREVIEW_FEATURES
+        .iter()
+        .find(|(n, _)| *n == feature)
+        .map(|(_, d)| *d)
 }
 
 /// Flushes and spins on the renderer's event query until the GPU has finished every submitted command, so the
