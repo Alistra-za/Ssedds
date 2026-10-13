@@ -84,6 +84,21 @@ impl SlotKind {
     }
 }
 
+/// The card title of `slot` holding item `key`: a `_coat` source in the Subsurface slot is the coat colour + strength
+/// (M6 Track E spec §3.1, DECISIONS Note U2), decided by the file name.
+pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
+    let stem = Path::new(key)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    match split_vocab(&stem) {
+        Some((_, v)) if slot == SlotKind::Subsurface && v.role == VocabRole::CoatColour => {
+            "Coat colour + strength"
+        }
+        _ => slot.label(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotFill {
     Empty,

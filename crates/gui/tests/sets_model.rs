@@ -819,6 +819,7 @@ fn a_created_set_in_a_non_ascii_folder_is_one_set() {
         ..Default::default()
     };
     let mut m = sdc_gui::model::AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     idle(&mut m);
     let normal = key_of(&m, "stein_n.png");

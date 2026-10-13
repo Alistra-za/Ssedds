@@ -619,6 +619,7 @@ fn the_header_shows_the_effective_export_folder() {
     let d = tempfile::tempdir().unwrap();
     let root = mod_folder(d.path());
     let mut model = AppModel::new(GuiSettings::default(), None, session());
+    model.accept = engine::policy::AcceptSuggestions::None;
     model.open_folder(root.clone());
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
@@ -638,6 +639,7 @@ fn export_is_disabled_while_sdc_toml_is_ignored() {
         ..GuiSettings::default()
     };
     let mut model = AppModel::new(settings, None, session());
+    model.accept = engine::policy::AcceptSuggestions::None;
     model.open_folder(root);
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
@@ -921,6 +923,7 @@ fn an_8_bit_emissive_says_why_it_is_bc7() {
         .save(t.join("lamp_g.png"))
         .unwrap();
     let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(d.path().join("textures"));
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     m.select_item("pbr/lamp_g.png");
@@ -1035,6 +1038,7 @@ fn patch_without_an_export_folder_writes_to_sdc_out() {
     let root = mod_folder(d.path());
     let (src, b) = broken_dds(&root);
     let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     m.dds_patch.confirming = Some("landscape/broken.dds".into());
@@ -1068,6 +1072,7 @@ fn patch_refuses_an_output_key_another_item_exports_to() {
     let (_, b) = broken_dds(&root);
     std::fs::write(root.join("landscape/rock01.dds"), &b).unwrap();
     let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     let (dds, png) = ("landscape/rock01.dds", "landscape/rock01.png");
@@ -1103,6 +1108,7 @@ fn patch_refuses_an_output_key_that_differs_only_in_case() {
     let (_, b) = broken_dds(&root);
     std::fs::write(root.join("landscape/Rock01.dds"), &b).unwrap();
     let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root.clone());
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     let (dds, png) = ("landscape/Rock01.dds", "landscape/rock01.png");
@@ -1136,4 +1142,28 @@ fn the_dim_npot_box_offers_a_power_of_two_resize() {
         engine::config::ResizeMode::PotDown
     );
     assert!(h.query_by_label("Resize to a power of two").is_none());
+}
+
+/// M6 Track E spec §2, §6: a sub-type decided by an accepted High suggestion reads "(auto)" next to it, with the
+/// suggestion's reason as hover text.
+#[test]
+fn an_accepted_suggestion_reads_auto_with_its_reason_on_hover() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened_as_the_app(mod_folder(d.path()), d.path().join("export"));
+    model.select_item("landscape/rock01.png");
+    let mut h = harness(model);
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.run();
+    assert!(
+        h.query_by_label_contains("colour under textures/landscape")
+            .is_none(),
+        "the reason shows only on hover"
+    );
+    h.get_by_label("(auto)").hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("colour under textures/landscape");
 }

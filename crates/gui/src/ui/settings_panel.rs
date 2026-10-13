@@ -2,9 +2,9 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    channel_text, edge_view, field_hidden, field_views, filter_option_lock, filter_view,
-    format_label, format_options, group_of, levels_view, mips_count, mips_on, provenance_text,
-    FieldView,
+    auto_subtype_reason, channel_text, edge_view, field_hidden, field_views, filter_option_lock,
+    filter_view, format_label, format_options, group_of, levels_view, mips_count, mips_on,
+    provenance_text, FieldView,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -381,6 +381,13 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
         ui.label("");
     } else if let Some(reason) = f.lock {
         ui.label(egui::RichText::new(reason).small().weak());
+    } else if let Some(why) = (f.field == "subtype")
+        .then(|| auto_subtype_reason(cx.job))
+        .flatten()
+    {
+        // M6 Track E (Note U4): a sub-type an accepted High suggestion decided; hover says why.
+        ui.label(egui::RichText::new("(auto)").small().weak())
+            .on_hover_text(why);
     } else {
         ui.label(
             egui::RichText::new(provenance_text(&f.provenance))

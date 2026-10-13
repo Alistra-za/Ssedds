@@ -51,6 +51,8 @@ pub fn opened(dir: &Path) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    // M3-era fixture: High members stay undecided, as before M6 Track E (DECISIONS Note U3).
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(
         m.wait_idle(Duration::from_secs(60)),

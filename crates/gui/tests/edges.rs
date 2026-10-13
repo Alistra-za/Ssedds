@@ -20,6 +20,7 @@ fn a_source_changed_on_disk_is_flagged_and_reloads_alone() {
         ..Default::default()
     };
     let mut m = sdc_gui::model::AppModel::new(settings, None, session);
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(mod_folder(d.path()));
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(m.check_sources(), 0);
@@ -174,6 +175,7 @@ fn export_during_a_plan_waits_for_it_and_then_asks_about_undecided_textures() {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     // The plan has not landed: the item list is still empty, so a count of it would say "nothing to decide".
     m.export_clicked();
@@ -194,6 +196,7 @@ fn opened_with_toml(d: &std::path::Path, text: &str) -> AppModel {
         ..GuiSettings::default()
     };
     let mut m = AppModel::new(settings, None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(
         m.wait_idle(Duration::from_secs(60)),
@@ -370,6 +373,7 @@ fn a_dropped_folder_opens_and_a_dropped_file_opens_its_parent() {
     assert_eq!(AppModel::drop_folder(&root.join("nope.png")), None);
 
     let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     // A path that names nothing is skipped; the first usable one opens.
     assert!(m.dropped(&[root.join("nope.png"), file.clone()]));
     assert_eq!(m.root, Some(root.join("landscape")));
@@ -411,6 +415,7 @@ fn a_user_config_the_engine_rejects_is_not_blamed_on_sdc_toml() {
     std::fs::write(&user, "[defaults]\nalpha.threshold = 1000\n").unwrap();
     std::fs::write(root.join("sdc.toml"), "# fine\n").unwrap();
     let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
     m.user_config = Some(user);
     m.open_folder(root);
     assert!(m.wait_idle(Duration::from_secs(60)));

@@ -792,3 +792,36 @@ fn a_sets_own_warnings_count_in_the_pill_badge() {
     h.run();
     h.get_by_label_contains("landscape/rock01: SHADER-MISSING-MAP the pbr shader needs _rmaos");
 }
+
+/// M6 Track E spec §3.1 (Note U2): a `_coat` source in the Subsurface slot titles its card "Coat colour + strength".
+#[test]
+fn a_coat_source_titles_the_subsurface_card_coat_colour_and_strength() {
+    use sdc_gui::model::sets::{slot_label, SlotKind};
+    assert_eq!(
+        slot_label(SlotKind::Subsurface, "landscape/rock01_s.png"),
+        "Subsurface _s"
+    );
+    assert_eq!(
+        slot_label(SlotKind::Subsurface, "landscape/rock01_Coat.png"),
+        "Coat colour + strength"
+    );
+    assert_eq!(
+        slot_label(SlotKind::Diffuse, "landscape/rock01.png"),
+        "Diffuse"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Rgba([200u8, 180, 160, (x * 4) as u8]))
+        .save(r.join("rock01_coat.png"))
+        .unwrap();
+    let mut m = pbr_opened(d.path());
+    rock_selected(&mut m);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 1200.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label("Coat colour + strength");
+    assert!(h.query_by_label("Subsurface _s").is_none());
+}

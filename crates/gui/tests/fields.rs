@@ -104,6 +104,10 @@ fn provenance_reads_as_prose() {
     );
     assert_eq!(channel_text("default:0.5"), "default value 0.5");
     assert_eq!(channel_text("fill:255"), "fill value 255");
+    assert_eq!(
+        provenance_text("mesh:alpha"),
+        "from the meshes that use this texture"
+    );
 }
 
 #[test]

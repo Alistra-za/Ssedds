@@ -165,6 +165,9 @@ pub struct AppModel {
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
     /// the colour member; sent as `BatchRequest::mesh_alpha`.
     pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
+    /// fixtures set `None` to keep their High members undecided, as the CLI does without the flag.
+    pub accept: AcceptSuggestions,
     pub session: Option<Arc<Session>>,
     pub root: Option<PathBuf>,
     pub project: Option<ProjectDoc>,
@@ -246,6 +249,7 @@ impl AppModel {
             scan_db: None,
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
+            accept: AcceptSuggestions::High,
             session: None,
             root: None,
             project: None,
@@ -382,14 +386,14 @@ impl AppModel {
             .unwrap_or_else(|| self.root.clone().unwrap_or_default().join("sdc-out"))
     }
 
-    /// What the next plan uses: the folder, recursive, nothing accepted, the in-memory `sdc.toml` (DECISIONS N4).
+    /// What the next plan uses: the folder, recursive, High suggestions accepted (Note U3), the in-memory `sdc.toml` (DECISIONS N4).
     pub fn request(&self) -> Option<BatchRequest> {
         let root = self.root.clone()?;
         let project = self.project.as_ref()?;
         let mut req = BatchRequest::new(vec![root], self.export_root(), Target::Cs);
         req.target = None;
         req.recursive = true;
-        req.accept = AcceptSuggestions::None;
+        req.accept = self.accept;
         req.project_config_inline = Some(if project.read_only() {
             ConfigFile::default()
         } else {
