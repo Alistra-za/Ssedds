@@ -739,6 +739,11 @@ impl Viewport3d {
             || self.compiling() > 0
     }
 
+    /// The content is a Meshes-view mesh (the set preview lists its own shape errors).
+    pub fn is_mesh(&self) -> bool {
+        matches!(self.content, Some(Content::Mesh(_)))
+    }
+
     /// Shapes waiting for a shader program: the latest `Shapes` reply, or the load report until the first one.
     /// Zero when the render thread is gone, so a dead worker cannot keep the panel busy.
     pub fn compiling(&self) -> usize {
@@ -1764,15 +1769,13 @@ fn render_loop(
         apply_settings(&mut r, settings.clone());
         Ok(r)
     };
-    let loaded = |r: &Renderer, id: u64, c: &Content, report: LoadReport| {
+    let loaded = |r: &Renderer, id: u64, report: LoadReport| {
         send(V3Reply::Loaded {
             id,
             report,
             bounds: r.bounds(),
         });
-        if !matches!(c, Content::Mesh(_)) {
-            send(V3Reply::Shapes(r.shapes()));
-        }
+        send(V3Reply::Shapes(r.shapes()));
     };
     let mut r = match make(shaders, features) {
         Ok(r) => r,
@@ -1808,7 +1811,7 @@ fn render_loop(
         });
         if let Some((id, c)) = last {
             let report = load_all(r, c, edits, tex);
-            loaded(r, *id, c, report);
+            loaded(r, *id, report);
         }
         perf_log::emit("device_rebuild", json!({"ms": perf_log::ms_since(t0)}));
         Ok(())
@@ -1942,7 +1945,7 @@ fn render_loop(
                         return send(V3Reply::Failed(e));
                     }
                 } else {
-                    loaded(&r, *id, c, report);
+                    loaded(&r, *id, report);
                 }
             }
         }
@@ -2008,11 +2011,7 @@ fn render_loop(
         // Redraw from the last camera, and report the shapes (now pending or swapped) like a landed program.
         compiled_changed |= restyled;
         // A landed program changed a shape and nothing above reported it: tell the panel.
-        if compiled_changed
-            && !reload
-            && pending_was_empty
-            && !matches!(last, Some((_, Content::Mesh(_))))
-        {
+        if compiled_changed && !reload && pending_was_empty {
             send(V3Reply::Shapes(r.shapes()));
         }
         let (id, camera, w, h, look, refresh) = match (render, view) {

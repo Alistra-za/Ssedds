@@ -2351,3 +2351,43 @@ fn the_coverage_line_clears_when_the_renderer_stops_reporting() {
     h.run();
     assert!(h.query_by_label_contains("CS settings:").is_none());
 }
+
+// ---- audit finding 14: recompiles on a loaded mesh ----
+
+fn loaded_mesh() -> (
+    tempfile::TempDir,
+    Viewport3d,
+    std::sync::mpsc::Receiver<v3::V3Cmd>,
+) {
+    let (d, mut v, cmds) = confirmed();
+    v.set_mesh(Some(spec(1, false)));
+    v.request_frame(64, 64);
+    let Ok(v3::V3Cmd::Load { id, .. }) = cmds.try_recv() else {
+        panic!("load")
+    };
+    loaded(&mut v, id, render3d::LoadReport::default());
+    (d, v, cmds)
+}
+
+#[test]
+fn a_recompile_on_a_loaded_mesh_keeps_the_panel_busy() {
+    let (_d, mut v, _cmds) = loaded_mesh();
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Drawing)]));
+    assert!(!v.busy());
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Pending {
+        showing_previous: true,
+    })]));
+    assert!(v.busy());
+}
+
+#[test]
+fn a_failed_recompile_on_a_loaded_mesh_is_listed() {
+    let (_d, mut v, _cmds) = loaded_mesh();
+    v.handle(v3::V3Reply::Shapes(vec![info(ShapeStatus::Failed {
+        error: "X3000".into(),
+        showing_previous: true,
+    })]));
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label("S: shader failed: X3000 (previous look kept)");
+}
