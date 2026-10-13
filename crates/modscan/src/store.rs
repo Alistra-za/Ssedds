@@ -450,10 +450,10 @@ pub struct DeriveRow {
 
 pub struct Store {
     pub(crate) conn: Connection,
-    /// This scan started on an empty store (ruling R3); Task 6 reads it. Index deferral did not pay off and was removed.
-    #[allow(dead_code)]
+    /// This scan started on an empty store (ruling R3): it runs with `synchronous = OFF`.
     cold: bool,
-    /// The running scan's interning map (ruling R6).
+    /// The running scan's interning map (ruling R6). Ids stay valid only because every write failure ends the scan;
+    /// a caller that retries a failed chunk must clear the map.
     pub(crate) intern: Option<Interner>,
 }
 
@@ -801,10 +801,35 @@ impl Store {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
         }
+        match Self::open_rw(path) {
+            // Ruling R4: the store is a cache; a file SQLite cannot read (power loss during synchronous = OFF) is rebuilt.
+            Err(ScanError::Db(e))
+                if matches!(
+                    e.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+                ) =>
+            {
+                for ext in ["", "-wal", "-shm"] {
+                    match std::fs::remove_file(format!("{}{ext}", path.display())) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                        _ => {}
+                    }
+                }
+                Self::open_rw(path)
+            }
+            r => r,
+        }
+    }
+
+    fn open_rw(path: &Path) -> Result<Store, ScanError> {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Spec §2 step 6: temp tables in memory, a 64 MB page cache, 256 MB of memory-mapped reads.
+        conn.execute_batch(
+            "PRAGMA temp_store = MEMORY; PRAGMA cache_size = -65536; PRAGMA mmap_size = 268435456;",
+        )?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v != SCHEMA_VERSION {
             // The store is a cache: any other version is dropped and rebuilt.
@@ -866,6 +891,10 @@ impl Store {
             .query_row("SELECT EXISTS(SELECT 1 FROM nif_copy)", [], |r| {
                 r.get::<_, bool>(0)
             })?;
+        if self.cold {
+            // Ruling R4: a cold store has nothing to lose to a crash; a power loss is caught by `open`.
+            self.conn.pragma_update(None, "synchronous", "OFF")?;
+        }
         let mut i = Interner::default();
         {
             let mut st = self.conn.prepare("SELECT p, id FROM path")?;
@@ -896,6 +925,7 @@ impl Store {
     pub fn end_scan(&mut self) -> Result<(), ScanError> {
         self.cold = false;
         self.intern = None;
+        self.conn.pragma_update(None, "synchronous", "NORMAL")?;
         Ok(())
     }
 

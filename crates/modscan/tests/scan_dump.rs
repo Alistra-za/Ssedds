@@ -329,3 +329,90 @@ fn cold_and_warm_scans_match_the_baseline_dump() {
     }
     assert_eq!(got, golden(), "dumps differ from the baseline");
 }
+
+/// Ruling R4: a cold scan that dies part-way (here after its NIF writes; no `end_scan`, connection never closed, as
+/// in a killed process) is finished by the next scan with the same tables as a clean one.
+#[test]
+fn a_scan_that_died_mid_way_is_finished_by_the_next_one() {
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    let inst = Instance::load(d.path(), None).unwrap();
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(
+            &Source::Mo2(inst),
+            &mut s,
+            &AtomicBool::new(false),
+            &|p| {
+                if p.phase == "resolve" {
+                    panic!("simulated crash")
+                }
+            },
+            &|| vec![],
+        )
+    }));
+    assert!(died.is_err());
+    // Deliberate leak (a killed process never closes its connection); `drop(s)` would also do, but then the TempDir
+    // could be removed cleanly on Windows, which is not what a crash leaves behind.
+    std::mem::forget(s);
+    let got = scan_and_dump(&d, "scan.db");
+    assert_eq!(got, scan_and_dump(&d, "fresh.db"));
+    // The indexes the schema declares exist after the crash-then-rescan.
+    let ro = Store::open_read_only(&d.path().join("scan.db")).unwrap();
+    let n: i64 = ro
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let fresh = Store::open_read_only(&d.path().join("fresh.db")).unwrap();
+    let m: i64 = fresh
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        m > 0 && n == m,
+        "indexes after crash+rescan: {n}, fresh: {m}"
+    );
+}
+
+/// PT4-1: `end_scan` runs on the cancel and error paths (synchronous back to NORMAL, per-scan state reset).
+#[test]
+fn end_scan_runs_after_a_cancelled_and_after_a_failed_scan() {
+    let sync = |s: &Store| -> i64 {
+        s.conn()
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap()
+    };
+    let d = fixture();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    let inst = Instance::load(d.path(), None).unwrap();
+    let r = run(
+        &Source::Mo2(inst),
+        &mut s,
+        &AtomicBool::new(true),
+        &|_| {},
+        &|| vec![],
+    );
+    assert!(r.is_err(), "pre-set cancel flag must cancel");
+    assert_eq!(sync(&s), 1, "cancelled cold scan restores NORMAL");
+    // A failing cold scan: a table the NIF writer needs is gone.
+    let d2 = fixture();
+    let mut s2 = Store::open(&d2.path().join("scan.db")).unwrap();
+    s2.conn().execute_batch("DROP TABLE shape").unwrap();
+    let inst = Instance::load(d2.path(), None).unwrap();
+    let r = run(
+        &Source::Mo2(inst),
+        &mut s2,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| vec![],
+    );
+    assert!(r.is_err());
+    assert_eq!(sync(&s2), 1, "failed cold scan restores NORMAL");
+}

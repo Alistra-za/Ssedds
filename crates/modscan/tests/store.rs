@@ -939,3 +939,48 @@ fn path_ids_are_stable_inside_and_outside_a_scan() {
     assert_eq!(b[4], x, "a path another connection interned");
     assert_eq!(s.path_ids(&["meshes/c.nif"]).unwrap()[0], b[2]);
 }
+
+/// Spec §2 step 6: cache pragmas on every connection; synchronous OFF only while a cold scan runs.
+#[test]
+fn a_cold_scan_runs_with_synchronous_off_and_ends_normal() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&d.path().join("s.db")).unwrap();
+    let pragma = |s: &Store, p: &str| -> i64 {
+        s.conn()
+            .query_row(&format!("PRAGMA {p}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(pragma(&s, "cache_size"), -65536);
+    assert_eq!(pragma(&s, "temp_store"), 2, "MEMORY");
+    assert_eq!(pragma(&s, "synchronous"), 1, "NORMAL");
+    s.begin_scan().unwrap();
+    assert_eq!(pragma(&s, "synchronous"), 0, "OFF during a cold scan");
+    s.end_scan().unwrap();
+    assert_eq!(pragma(&s, "synchronous"), 1);
+    s.upsert_copy(
+        "meshes/a.nif",
+        1,
+        1,
+        1,
+        CopyResult::Failed("x".into()),
+        None,
+    )
+    .unwrap();
+    s.begin_scan().unwrap();
+    assert_eq!(pragma(&s, "synchronous"), 1, "a warm scan keeps NORMAL");
+    s.end_scan().unwrap();
+}
+
+/// Review focus 3 / ruling R4: a file SQLite cannot read is rebuilt (the store is a cache).
+#[test]
+fn a_corrupt_store_file_is_rebuilt() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("scan.db");
+    std::fs::write(&p, vec![0xAB; 8192]).unwrap();
+    let s = Store::open(&p).unwrap();
+    let v: i64 = s
+        .conn()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, modscan::store::SCHEMA_VERSION);
+}
