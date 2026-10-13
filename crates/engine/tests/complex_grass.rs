@@ -197,7 +197,7 @@ fn vanilla_tag_warns_and_stays_complex_grass() {
     );
     assert!(!offered(Target::Vanilla, Subtype::ComplexGrass));
     assert!(
-        offered(Target::Cs, Subtype::ComplexGrass) && offered(Target::Cpm, Subtype::ComplexGrass)
+        !offered(Target::Cs, Subtype::ComplexGrass) && !offered(Target::Cpm, Subtype::ComplexGrass)
     );
     assert!(offered(Target::Vanilla, Subtype::Diffuse));
 }
@@ -487,4 +487,72 @@ fn vanilla_is_never_auto_tagged() {
         .iter()
         .all(|s| s.subtype != Subtype::ComplexGrass));
     assert_ne!(j.profile.subtype, Subtype::ComplexGrass);
+}
+
+/// Plan `rel` (under `in/`) with an explicit set shader for its set, and the GRAS flag on or off.
+fn plan_shader(rel: &str, shader: Option<engine::shader::Shader>, gras: bool) -> (TempDir, Plan) {
+    let d = tempfile::tempdir().unwrap();
+    let key = rel.trim_end_matches(".png");
+    let p = d.path().join("in").join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    png(&grass(32)).save(p).unwrap();
+    let mut r = req(&d, Target::Cs, &[]);
+    if gras {
+        r.gras_diffuses = [key.to_string()].into();
+    }
+    if let Some(s) = shader {
+        r.set_shaders = [(key.to_string(), s)].into();
+    }
+    let plan = plan_req(r);
+    (d, plan)
+}
+
+/// 2026-10-13: the set's complex_grass shader makes its colour member complex grass, over a landscape path too.
+#[test]
+fn a_set_shader_complex_grass_tags_its_member() {
+    use engine::shader::Shader;
+    for rel in ["textures/plants/g.png", "textures/landscape/grass/g.png"] {
+        let (_d, p) = plan_shader(rel, Some(Shader::ComplexGrass), false);
+        let j = job(&p, "g.png");
+        assert_eq!(j.profile.subtype, Subtype::ComplexGrass, "{rel}");
+        assert_eq!(
+            j.provenance
+                .get("subtype")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("shader:complex_grass"),
+            "{rel}"
+        );
+    }
+}
+
+/// 2026-10-13: any other explicit set shader keeps a GRAS-listed diffuse an ordinary texture.
+#[test]
+fn another_explicit_set_shader_is_not_grass() {
+    use engine::shader::Shader;
+    let (_d, p) = plan_shader(
+        "textures/landscape/grass/g.png",
+        Some(Shader::Landscape),
+        true,
+    );
+    assert_eq!(job(&p, "g.png").profile.subtype, Subtype::LandscapeDiffuse);
+    for s in [Shader::Default, Shader::Envmap] {
+        let (_d, p) = plan_shader("textures/plants/g.png", Some(s), true);
+        assert_ne!(
+            job(&p, "g.png").profile.subtype,
+            Subtype::ComplexGrass,
+            "{s:?}"
+        );
+    }
+}
+
+/// An auto shader plus a GRAS-listed diffuse is still grass, and the set auto-picks complex_grass.
+#[test]
+fn an_auto_shader_with_a_gras_diffuse_is_grass() {
+    let (_d, p) = plan_shader("textures/plants/g.png", None, true);
+    assert_eq!(job(&p, "g.png").profile.subtype, Subtype::ComplexGrass);
+    assert_eq!(
+        p.shaders.values().next().map(|s| s.shader),
+        Some(engine::shader::Shader::ComplexGrass)
+    );
 }

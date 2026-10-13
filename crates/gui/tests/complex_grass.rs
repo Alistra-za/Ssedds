@@ -2,12 +2,12 @@
 use engine::config::{Subtype, Target};
 use sdc_gui::ui::settings_panel::{offered_groups, subtype_groups};
 
-/// R1 (Review Focus 4): offered under cs and cpm (ENB), not under vanilla; grouped with the packed maps.
+/// DECISIONS X3 (2026-10-13): no picker offers complex grass on any target; it is grouped with the packed maps.
 #[test]
-fn pickers_hide_complex_grass_under_vanilla() {
+fn pickers_never_offer_complex_grass() {
     for (t, want) in [
-        (Target::Cs, true),
-        (Target::Cpm, true),
+        (Target::Cs, false),
+        (Target::Cpm, false),
         (Target::Vanilla, false),
     ] {
         let listed = offered_groups(t)
@@ -217,4 +217,82 @@ fn a_grass_set_shows_one_filled_card_under_the_complex_grass_shader() {
     let row = slot_row(v.shader.as_ref(), &v.slots);
     assert_eq!(row.len(), 1, "{row:?}");
     assert!(row[0].usable && matches!(row[0].fill, SlotFill::Own { .. }));
+}
+
+/// 2026-10-13: the set shader drives the sub-type. complex_grass locks the member's Sub-type row; going back to
+/// auto returns the ordinary one.
+#[test]
+fn the_set_shader_makes_the_member_complex_grass_and_locks_it() {
+    use engine::shader::Shader;
+    use sdc_gui::model::{fields::field_views, sets::set_views};
+    let d = tempfile::tempdir().unwrap();
+    grass_png(&d.path().join("textures/plants/g.png"), 32);
+    let mut m = support::opened(d.path());
+    let set = set_views(&m)
+        .into_iter()
+        .find(|v| v.members.iter().any(|k| k == "plants/g.png"))
+        .expect("the set")
+        .id;
+    let row = |m: &sdc_gui::model::AppModel| {
+        let job = m
+            .items
+            .iter()
+            .find(|i| i.key == "plants/g.png")
+            .and_then(|i| i.job.clone())
+            .expect("job");
+        let v = field_views(m.target, &job)
+            .into_iter()
+            .find(|f| f.field == "subtype")
+            .unwrap();
+        (job.profile.subtype, v.lock)
+    };
+    assert_ne!(row(&m).0, Subtype::ComplexGrass);
+    m.set_shader(&set, Some(Shader::ComplexGrass));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let (st, lock) = row(&m);
+    assert_eq!(st, Subtype::ComplexGrass);
+    assert!(
+        lock.is_some_and(|l| l.contains("Complex grass")),
+        "{lock:?}"
+    );
+    m.set_shader(&set, Some(Shader::Landscape));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(row(&m), (Subtype::LandscapeDiffuse, None));
+    m.set_shader(&set, None);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(row(&m).1, None);
+    assert_ne!(row(&m).0, Subtype::ComplexGrass);
+}
+
+/// A hand-tagged complex_grass file (old `[files]` entry) keeps an editable row; no picker lists it unless it is
+/// the current value.
+#[test]
+fn a_hand_tag_stays_editable_and_pickers_list_complex_grass_only_as_the_current_value() {
+    use sdc_gui::model::fields::field_views;
+    let d = tempfile::tempdir().unwrap();
+    grass_png(&d.path().join("textures/plants/g.png"), 32);
+    let mut m = support::opened(d.path());
+    m.set_field(
+        "plants/g.png",
+        "subtype",
+        serde_json::json!("complex_grass"),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let job = m
+        .items
+        .iter()
+        .find(|i| i.key == "plants/g.png")
+        .and_then(|i| i.job.clone())
+        .unwrap();
+    assert_eq!(job.profile.subtype, Subtype::ComplexGrass);
+    let v = field_views(m.target, &job)
+        .into_iter()
+        .find(|f| f.field == "subtype")
+        .unwrap();
+    assert_eq!(v.lock, None);
+    for t in [Target::Cs, Target::Cpm, Target::Vanilla] {
+        assert!(offered_groups(t)
+            .iter()
+            .all(|(_, m)| !m.contains(&Subtype::ComplexGrass)));
+    }
 }

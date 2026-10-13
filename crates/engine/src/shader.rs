@@ -304,6 +304,7 @@ impl Shader {
                 | Shader::Multilayer
                 | Shader::Envmap
                 | Shader::Parallax
+                | Shader::ComplexGrass
         )
     }
 
@@ -834,6 +835,13 @@ pub fn member_subtype(shader: Shader, suggested: Subtype) -> Option<(Subtype, &'
             Subtype::LandscapeDiffuse,
             "landscape diffuse (alpha = snow mask)",
         )),
+        (
+            Shader::ComplexGrass,
+            Subtype::Diffuse | Subtype::LandscapeDiffuse | Subtype::PbrAlbedo,
+        ) => Some((
+            Subtype::ComplexGrass,
+            "complex grass (diffuse + normal in one file)",
+        )),
         _ => None,
     }
 }
@@ -979,7 +987,8 @@ mod tests {
                 Shader::Hair,
                 Shader::Eye,
                 Shader::Multilayer,
-                Shader::Landscape
+                Shader::Landscape,
+                Shader::ComplexGrass
             ]
         );
     }
