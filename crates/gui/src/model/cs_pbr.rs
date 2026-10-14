@@ -412,3 +412,168 @@ impl AppModel {
         self.set_cs_value(set, Kind::Txst, "statics", statics.as_str().map(Json::from));
     }
 }
+
+use super::plugin_refs::{set_key, LIMIT, NO_SCAN};
+use super::sets::SetView;
+use modscan::plugin_store::WinRec;
+use modscan::store::{MatchRow, Store, TexKey};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+/// Shape rows read for the statics count; more only lowers a count that is already far above 0.
+pub const STATICS_ROWS: usize = 20_000;
+
+/// What the scan says about one set's diffuse (design §5.1, §6).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SetFacts {
+    /// EDIDs of the winning TXSTs whose slot matches the set (`txsts_matching`): suggestions; W4 when empty.
+    pub txst_edids: Vec<String>,
+    /// Non-LOD winning NIFs whose shapes the set's PGPatcher entry matches (ruling R6).
+    pub statics: Vec<String>,
+}
+
+/// The scan's winning TXST and MATO records with an EDID (W1–W3, the material-object picker).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScanRecords {
+    pub txst: Vec<WinRec>,
+    pub mato: Vec<WinRec>,
+}
+
+impl ScanRecords {
+    pub fn of(&self, kind: Kind) -> &[WinRec] {
+        match kind {
+            Kind::Txst => &self.txst,
+            Kind::Mato => &self.mato,
+        }
+    }
+}
+
+/// The scan database file's (mtime, length); `None` without one.
+type Stamp = Option<(Option<SystemTime>, u64)>;
+
+fn stamp(db: Option<&Path>) -> Stamp {
+    let md = std::fs::metadata(db?).ok().filter(|m| m.is_file())?;
+    Some((md.modified().ok(), md.len()))
+}
+
+/// The scan reads of the CS PBR section and the statics rule, for the session. shortcut: read on the UI thread on
+/// demand (section open, export start) like "Used by plugins"; move to a worker if a modlist makes them slow.
+/// Errors are cached like answers (an old-schema database is not re-opened every frame); everything is forgotten
+/// when the database file's mtime or length changes (a new scan) and on "Refresh scan".
+#[derive(Debug, Default)]
+pub struct CsPbrScan {
+    pub facts: RefCell<HashMap<TexKey, Result<SetFacts, String>>>,
+    pub records: RefCell<Option<Result<Arc<ScanRecords>, String>>>,
+    /// The database file the cached reads came from.
+    stamp: RefCell<Stamp>,
+}
+
+fn open(db: Option<&Path>) -> Result<Store, String> {
+    let p = db
+        .filter(|p| p.is_file())
+        .ok_or_else(|| NO_SCAN.to_string())?;
+    Store::open_read_only(p).map_err(|e| e.to_string())
+}
+
+/// Distinct mesh paths of `rows`, LOD meshes left out (`is_lod_path`, PGPatcher's own blocklist).
+pub fn non_lod_nifs(rows: &[MatchRow]) -> Vec<String> {
+    rows.iter()
+        .map(|r| r.nif_path.as_str())
+        .filter(|p| !nif::path::is_lod_path(p))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn read_facts(db: Option<&Path>, key: &TexKey) -> Result<SetFacts, String> {
+    let s = open(db)?;
+    let mut txst_edids: Vec<String> = s
+        .txsts_matching(key, LIMIT)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|t| t.edid)
+        .collect();
+    txst_edids.sort();
+    txst_edids.dedup();
+    let rows = s
+        .nifs_using_texture(key, STATICS_ROWS)
+        .map_err(|e| e.to_string())?;
+    Ok(SetFacts {
+        txst_edids,
+        statics: non_lod_nifs(&rows),
+    })
+}
+
+fn read_records(db: Option<&Path>) -> Result<Arc<ScanRecords>, String> {
+    let s = open(db)?;
+    let w = |sig: &str| s.winning_records(sig).map_err(|e| e.to_string());
+    Ok(Arc::new(ScanRecords {
+        txst: w("TXST")?,
+        mato: w("MATO")?,
+    }))
+}
+
+impl CsPbrScan {
+    /// Forget the cached reads when `db` is not the file they came from (one stat per call).
+    fn sync(&self, db: Option<&Path>) {
+        let now = stamp(db);
+        if *self.stamp.borrow() != now {
+            self.refresh();
+            *self.stamp.borrow_mut() = now;
+        }
+    }
+
+    pub fn facts(&self, db: Option<&Path>, key: &TexKey) -> Result<SetFacts, String> {
+        self.sync(db);
+        if let Some(r) = self.facts.borrow().get(key) {
+            return r.clone();
+        }
+        let r = read_facts(db, key);
+        self.facts.borrow_mut().insert(key.clone(), r.clone());
+        r
+    }
+
+    pub fn records(&self, db: Option<&Path>) -> Result<Arc<ScanRecords>, String> {
+        self.sync(db);
+        if let Some(r) = &*self.records.borrow() {
+            return r.clone();
+        }
+        let r = read_records(db);
+        *self.records.borrow_mut() = Some(r.clone());
+        r
+    }
+
+    pub fn refresh(&self) {
+        self.facts.borrow_mut().clear();
+        *self.records.borrow_mut() = None;
+    }
+}
+
+/// Whether and why a texture-set set gets its PGPatcher entry (design §5.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticsStatus {
+    Never,
+    Always,
+    /// The non-LOD meshes of the latest scan whose shapes the entry matches.
+    Used(Vec<String>),
+    Unused,
+    NoScan(String),
+}
+
+pub fn statics_text(s: &StaticsStatus) -> String {
+    match s {
+        StaticsStatus::Used(p) => format!("Used by {} meshes: PGPatcher entry written", p.len()),
+        StaticsStatus::Unused => {
+            "No mesh of the latest scan uses this diffuse (LOD meshes do not count): no PGPatcher entry".into()
+        }
+        StaticsStatus::NoScan(e) => {
+            format!("{e} No PGPatcher entry is written until a scan finds meshes using this diffuse.")
+        }
+        StaticsStatus::Always => "statics = always: PGPatcher entry written".into(),
+        StaticsStatus::Never => "statics = never: no PGPatcher entry".into(),
+    }
+}
