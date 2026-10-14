@@ -26,6 +26,7 @@ enum Action {
     Allow16k(bool),
     Live(bool),
     Bc1(Bc1Choice),
+    NvttPath(Option<std::path::PathBuf>),
 }
 
 /// The drawer: a 24 px "Advanced" strip while closed, the panel while `settings.advanced_open`.
@@ -62,6 +63,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
                 .show(ui, |ui| {
                     inspector(ui, model, state);
                     batch(ui, model, &mut actions);
+                    nvtt(ui, model, &mut actions);
                     legacy_fills(ui, model, &mut actions);
                     preview_settings(ui, model, &mut actions);
                     mipmaps(ui, model, &mut actions);
@@ -83,6 +85,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
             Action::Allow16k(on) => model.set_allow_16k_preview(on),
             Action::Live(on) => model.set_live(on),
             Action::Bc1(c) => model.set_bc1_choice(c),
+            Action::NvttPath(p) => model.set_nvtt_path(p),
         }
     }
 }
@@ -240,6 +243,37 @@ fn batch(ui: &mut egui::Ui, model: &mut AppModel, actions: &mut Vec<Action>) {
     });
 }
 
+/// M5 (DECISIONS Note NV): where nvcompress is and what the probe found. NVTT is never bundled.
+fn nvtt(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
+    section(ui, "NVTT", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("NVTT path");
+            let shown = model
+                .settings
+                .nvtt_path
+                .as_ref()
+                .map_or("automatic (PATH, then the NVIDIA folder)".into(), |p| {
+                    p.display().to_string()
+                });
+            ui.label(egui::RichText::new(shown).small());
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Choose nvcompress.exe…").clicked() {
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("nvcompress", &["exe"])
+                    .pick_file()
+                {
+                    actions.push(Action::NvttPath(Some(p)));
+                }
+            }
+            if model.settings.nvtt_path.is_some() && ui.button("Automatic").clicked() {
+                actions.push(Action::NvttPath(None));
+            }
+        });
+        ui.label(egui::RichText::new(model.nvtt_status()).small());
+    });
+}
+
 /// The project-wide fills an older `sdc.toml` may still hold (`defaults.packing.fill.*`). They still apply as a
 /// fallback under each packed output's own fills; new fills are set on the packed output's card.
 fn legacy_fills(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
@@ -330,6 +364,7 @@ fn mipmaps(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
                         compact: false,
                         toml_read_only: why.clone(),
                         warnings: &[],
+                        nvtt_found: model.nvtt_found(),
                     };
                     match field_row(ui, &cx, &f) {
                         Some(RowEdit::Set(v)) => {
@@ -366,6 +401,7 @@ fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>
                         compact: false,
                         toml_read_only: why.clone(),
                         warnings: &[],
+                        nvtt_found: model.nvtt_found(),
                     };
                     for f in advanced_field_views(model.target, &job) {
                         match field_row(ui, &cx, &f) {

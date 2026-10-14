@@ -80,6 +80,7 @@ fn plan(dir: &Path, rough: &Path, ao: &Path) -> Plan {
         peak_admitted_bytes: 0,
         cancelled: vec![],
         shaders: Default::default(),
+        nvtt: None,
     }
 }
 

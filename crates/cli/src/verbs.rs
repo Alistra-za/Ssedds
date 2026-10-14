@@ -997,44 +997,34 @@ fn alias_list(aliases: &BTreeMap<String, String>) -> Option<String> {
     })
 }
 
-/// Where NVTT's `nvcompress` was found (never bundled, spec §8).
-#[derive(Debug, PartialEq)]
-struct NvttStatus {
-    path: Option<PathBuf>,
-    /// `--nvtt` or `PATH`; for a missing `--nvtt` file, `--nvtt` with no path.
-    source: &'static str,
-}
-
-/// `--nvtt <file>` if given (it must exist), else `nvcompress.exe` on `path_var`.
-fn find_nvtt(explicit: Option<&Path>, path_var: Option<&std::ffi::OsStr>) -> NvttStatus {
-    if let Some(p) = explicit {
-        return NvttStatus {
-            path: p.is_file().then(|| p.to_path_buf()),
-            source: "--nvtt",
-        };
-    }
-    let path = path_var.and_then(|v| {
-        std::env::split_paths(v)
-            .map(|d| d.join("nvcompress.exe"))
-            .find(|c| c.is_file())
-    });
-    NvttStatus {
-        path,
-        source: "PATH",
-    }
-}
-
 /// `sdc encoders`: the vendored encoder versions, the ISA the ISPC kernels dispatch to, the active BC1 model
 /// and whether NVTT can be found. Result verb: stdout (DECISIONS Note J); `--json` prints one object.
 pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
     let v = engine::manifest::EncoderVersions::current();
     let isa = engine::manifest::dispatched_isa();
     let model = engine::manifest::bc1_model_id(a.bc1_decoder.into());
-    let nvtt = find_nvtt(a.nvtt.as_deref(), std::env::var_os("PATH").as_deref());
+    let nvtt = engine::nvtt::locate(
+        a.nvtt.as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        Path::new(engine::nvtt::NVTT_DEFAULT),
+    );
+    let source = match (&nvtt, a.nvtt.is_some()) {
+        (_, true) => "--nvtt",
+        (Ok((_, s)), false) => s,
+        (Err(_), false) => "PATH",
+    };
     let nvtt_path = nvtt
-        .path
         .as_ref()
-        .map(|p| p.to_string_lossy().replace('\\', "/"));
+        .ok()
+        .map(|(p, _)| p.to_string_lossy().replace('\\', "/"));
+    // The same probe a batch runs (DECISIONS Note NV3); `why` says where it looked or why the probe failed.
+    let (tool, why) = match &nvtt {
+        Ok((p, _)) => match engine::nvtt::probe_path(p) {
+            engine::nvtt::NvttProbe::Found(t) => (Some(t), None),
+            engine::nvtt::NvttProbe::Missing(why) => (None, Some(why)),
+        },
+        Err(why) => (None, Some(why.clone())),
+    };
     if a.json {
         println!(
             "{}",
@@ -1042,7 +1032,11 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
                 "kind": "encoders",
                 "bc7enc_rdo": v.bc7enc_rdo, "ispc_texture_compressor": v.ispctc, "ispc": v.ispc,
                 "bc7e_patch": v.bc7e_patch, "rgbcx_patch": v.rgbcx_patch, "isa": isa, "bc1_model": model,
-                "nvtt": { "found": nvtt.path.is_some(), "path": nvtt_path, "source": nvtt.source },
+                "nvtt": {
+                    "found": tool.is_some(), "path": nvtt_path, "source": source,
+                    "version": tool.as_ref().map(|t| &t.version), "tested": tool.as_ref().map(|t| t.tested()),
+                    "error": why,
+                },
             })
         );
         return Ok(0);
@@ -1060,16 +1054,13 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
     println!("ISPC Texture Compressor {} (BC6H)", v.ispctc);
     println!("ISPC {} objects; dispatched ISA on this CPU: {isa}", v.ispc);
     println!("BC1 decoder model: {model}");
-    match nvtt_path {
-        Some(p) => println!("NVTT: found at {p} (backend arrives in milestone M5)"),
-        None => println!(
-            "NVTT: not found ({}; backend arrives in milestone M5)",
-            if nvtt.source == "PATH" {
-                "not on PATH, use --nvtt <nvcompress.exe>"
-            } else {
-                "no such file"
-            }
+    match (&tool, nvtt_path) {
+        (Some(t), Some(p)) if t.tested() => println!("NVTT: {} at {p} (tested)", t.version),
+        (Some(t), Some(p)) => println!(
+            "NVTT: {} at {p} (untested: acknowledge with --allow ENC-NVTT-VERSION)",
+            t.version
         ),
+        _ => println!("NVTT: not found ({})", why.unwrap_or_default()),
     }
     Ok(0)
 }
@@ -1171,32 +1162,6 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nvtt_is_found_on_path_or_by_flag_only() {
-        let d = tempfile::tempdir().unwrap();
-        let (a, b) = (d.path().join("a"), d.path().join("b"));
-        std::fs::create_dir_all(&a).unwrap();
-        std::fs::create_dir_all(&b).unwrap();
-        let exe = b.join("nvcompress.exe");
-        std::fs::write(&exe, b"").unwrap();
-        let var = std::env::join_paths([&a, &b]).unwrap();
-        let on_path = find_nvtt(None, Some(&var));
-        assert_eq!(
-            (on_path.path.as_deref(), on_path.source),
-            (Some(exe.as_path()), "PATH")
-        );
-        assert_eq!(find_nvtt(None, None).path, None);
-        assert_eq!(find_nvtt(None, Some(a.as_os_str())).path, None);
-        // The flag wins over PATH, and a missing file is not found (no fall-back to PATH).
-        let missing = a.join("nvcompress.exe");
-        let flagged = find_nvtt(Some(&missing), Some(&var));
-        assert_eq!((flagged.path, flagged.source), (None, "--nvtt"));
-        assert_eq!(
-            find_nvtt(Some(&exe), None).path.as_deref(),
-            Some(exe.as_path())
-        );
-    }
 
     #[test]
     fn format_name_splits_the_srgb_tag() {

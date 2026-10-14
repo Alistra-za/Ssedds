@@ -70,6 +70,8 @@ pub struct GuiSettings {
     pub mem_budget_mb: u64,
     pub columns_collapsed: bool,
     pub advanced_open: bool,
+    /// M5 (DECISIONS Note NV2): an explicit `nvcompress.exe`; `None` looks on PATH, then in the NVIDIA install folder.
+    pub nvtt_path: Option<PathBuf>,
     /// The Meshes view's source (plan A Task 12), `[meshes]` in the file.
     pub meshes: MeshesSettings,
     /// The Meshes view's 3D panel (plan B Task B8), `[render3d]` in the file.
@@ -107,6 +109,7 @@ impl Default for GuiSettings {
             mem_budget_mb: 0,
             columns_collapsed: false,
             advanced_open: false,
+            nvtt_path: None,
             meshes: MeshesSettings::default(),
             render3d: Render3dSettings::default(),
         }

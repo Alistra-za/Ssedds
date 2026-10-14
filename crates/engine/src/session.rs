@@ -283,14 +283,24 @@ impl Session {
         cancel: &CancelToken,
     ) -> Result<PreviewResult, FileError> {
         let rep = Reporter::new(Arc::new(NullSink), "preview");
-        let p = &job.profile;
+        // DECISIONS Note NV9: NVTT is 40-60x slower, so a texture on NVTT previews with the format's built-in
+        // encoder; the export still uses NVTT. The caller tells from `job.profile.encoder.backend` and says so.
+        let built_in;
+        let p = if job.profile.encoder.backend == crate::config::Backend::Nvtt {
+            let mut b = job.profile.clone();
+            b.encoder.backend = crate::policy::default_backend(b.format);
+            built_in = b;
+            &built_in
+        } else {
+            &job.profile
+        };
         let prep = prepare(
             job,
             cancel,
             &FileTracker::default(),
             Keep::Preview { max_size },
         )?;
-        let levels = encode_levels(&prep, p, cancel, &rep, "", None, None)?;
+        let levels = encode_levels(&prep, p, cancel, &rep, "", None, None, None)?;
         let srgb = p.srgb_tag();
         let (width, height) = prep.dims[prep.first_level];
         let desc = DdsDesc {

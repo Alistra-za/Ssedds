@@ -261,6 +261,9 @@ pub struct AppModel {
     pub gpu_available: bool,
     /// The BC1 decoder choice differs from the session's model, which is fixed at launch (M3a spec §4.6).
     pub restart_needed: bool,
+    /// M5 (DECISIONS Note NV3): the NVTT probe of `settings.nvtt_path`, run on start, on a path change and on window
+    /// focus; `None` until the first run.
+    pub nvtt: Option<engine::nvtt::NvttProbe>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -371,6 +374,7 @@ impl AppModel {
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
+            nvtt: None,
             plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
@@ -506,6 +510,7 @@ impl AppModel {
         req.user_presets = self.user_presets.clone();
         req.jobs = self.settings.jobs;
         req.mem_budget = self.settings.mem_budget_mb * 1024 * 1024;
+        req.nvtt = self.settings.nvtt_path.clone();
         let (edits, paths) = sets::engine_inputs(self);
         req.set_edits = edits;
         req.output_paths = paths;
@@ -1530,6 +1535,10 @@ impl AppModel {
         self.edit("Format", move |p| {
             p.set_file_value(&k, "format", &json!(f));
             p.set_file_value(&k, "color.tag", &json!(tag));
+            // NVTT encodes BC7 and BC6H only: a texture leaving them goes back to the built-in encoder.
+            if !engine::policy::backend_fits(engine::config::Backend::Nvtt, f) {
+                p.clear_file_value(&k, "encoder.backend");
+            }
         });
     }
 
@@ -1558,6 +1567,16 @@ impl AppModel {
                 return self.edit_subtype("Change subtype", item_key, Some(st));
             }
         }
+        // DECISIONS Note NV: "Built-in" is the texture's own format default, so one bulk value fits BC7 and BC6H.
+        let value = match field {
+            "encoder.backend" if value != serde_json::json!(engine::config::Backend::Nvtt) => self
+                .item(item_key)
+                .and_then(|i| i.job.as_ref())
+                .map_or(value, |j| {
+                    serde_json::json!(engine::policy::default_backend(j.profile.format))
+                }),
+            _ => value,
+        };
         let k = item_key.to_string();
         let f = field.to_string();
         self.edit(&format!("Change {f}"), move |p| {
@@ -1617,6 +1636,47 @@ impl AppModel {
     }
 
     /// The BC1 decoder for the next launch. The session's model is fixed, so a difference needs a restart.
+    /// Probe NVTT again (Spike S7b: about 30 ms, so on the UI thread). shortcut: synchronous, move it off the UI
+    /// thread if a slow nvcompress is ever seen.
+    pub fn refresh_nvtt(&mut self) {
+        let now = Some(engine::nvtt::probe(self.settings.nvtt_path.as_deref()));
+        // A change since the last probe (NVTT installed or removed meanwhile) re-plans, so textures on NVTT see it.
+        let changed = self.nvtt.is_some() && self.nvtt != now;
+        self.nvtt = now;
+        if changed {
+            self.replan();
+        }
+    }
+
+    pub fn nvtt_found(&self) -> bool {
+        matches!(self.nvtt, Some(engine::nvtt::NvttProbe::Found(_)))
+    }
+
+    /// The Advanced drawer's NVTT status line.
+    pub fn nvtt_status(&self) -> String {
+        use engine::nvtt::NvttProbe;
+        match &self.nvtt {
+            Some(NvttProbe::Found(t)) if t.tested() => {
+                format!("NVTT {} at {} (tested)", t.version, t.path.display())
+            }
+            Some(NvttProbe::Found(t)) => format!(
+                "NVTT {} at {}: untested (3.2.5 is), acknowledge ENC-NVTT-VERSION to use it",
+                t.version,
+                t.path.display()
+            ),
+            Some(NvttProbe::Missing(why)) => format!("NVTT not found ({why})"),
+            None => "NVTT not checked yet".into(),
+        }
+    }
+
+    /// A new NVTT path (or `None`: automatic). Saved, probed, and re-planned so the textures on NVTT see it.
+    pub fn set_nvtt_path(&mut self, p: Option<PathBuf>) {
+        self.settings.nvtt_path = p;
+        self.save_settings();
+        self.refresh_nvtt();
+        self.replan();
+    }
+
     pub fn set_bc1_choice(&mut self, c: crate::settings::Bc1Choice) {
         self.settings.bc1_decoder = c;
         self.save_settings();
