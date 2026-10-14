@@ -99,8 +99,112 @@ fn undo_clears_the_encoding_note_and_keeps_the_export_cancelled_note() {
     let d = tempfile::tempdir().unwrap();
     let mut m = with_a_step(d.path());
     m.encoding_note = Some(("one texture".into(), "a.png".into()));
+    m.status_note = Some("Export cancelled: edited.".into());
     m.undo();
     assert!(m.encoding_note.is_none());
+    assert_eq!(m.status_note.as_deref(), Some("Export cancelled: edited."));
+    assert!(
+        m.status_line
+            .starts_with("Undid: hair. Export cancelled: edited."),
+        "{}",
+        m.status_line
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(
+        m.status_line.contains("Export cancelled: edited."),
+        "{}",
+        m.status_line
+    );
+}
+
+#[test]
+fn the_undo_note_stands_in_front_of_the_counts_and_goes_with_the_next_plan_or_after_5_s() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    let counts = format!("{} textures, {} sets", m.items.len(), m.sets.len());
+    m.undo();
+    assert_eq!(m.status_line, format!("Undid: hair. {counts}"));
+    // The plan the undo started shows it; the next plan drops it.
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(
+        m.status_line.starts_with("Undid: hair. "),
+        "{}",
+        m.status_line
+    );
+    assert!(m.status_line.contains("textures"), "{}", m.status_line);
+    m.replan();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(!m.status_line.contains("Undid"), "{}", m.status_line);
+    assert!(m.status_line.contains("textures"), "{}", m.status_line);
+    // Or five seconds after it was set.
+    m.redo();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.tick(std::time::Instant::now() + std::time::Duration::from_secs(1));
+    assert!(
+        m.status_line.starts_with("Redid: hair."),
+        "{}",
+        m.status_line
+    );
+    m.tick(std::time::Instant::now() + std::time::Duration::from_secs(6));
+    assert!(!m.status_line.contains("Redid"), "{}", m.status_line);
+    assert!(m.status_line.contains("textures"), "{}", m.status_line);
+}
+
+#[test]
+fn ctrl_z_waits_while_a_sets_column_box_is_open() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(400.0, 300.0))
+        .build_ui_state(
+            |ui, (m, open): &mut (AppModel, bool)| {
+                sdc_gui::ui::header::undo_redo_keys(ui.ctx(), m, *open)
+            },
+            (with_a_step(d.path()), true),
+        );
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(h.state().0.can_undo(), "Ctrl+Z undid behind a box");
+    h.state_mut().1 = false;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(!h.state().0.can_undo(), "Ctrl+Z works once the box is gone");
+}
+
+#[test]
+fn enter_presses_ok_on_the_sets_column_refusal() {
+    use sdc_gui::ui::sets_column::Pending;
+    use sdc_gui::ui::State;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+            (opened(d.path()), State::default()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.state_mut().1.drops.pending = Some(Pending::Refused("no".into()));
+    h.run();
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().1.drops.pending.is_none(), "Enter closed the box");
+}
+
+#[test]
+fn the_undo_label_after_a_bulk_edit_is_the_bulk_steps_label() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    m.accept_all_suggestions();
+    assert_eq!(m.undo_label(), Some("Accept all suggestions"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.undo();
+    assert!(
+        m.status_line.starts_with("Undid: Accept all suggestions."),
+        "{}",
+        m.status_line
+    );
 }
 
 #[test]
@@ -109,7 +213,7 @@ fn ctrl_z_and_ctrl_y_work_in_the_meshes_view() {
     let mut h = Harness::builder()
         .with_size(egui::vec2(400.0, 300.0))
         .build_ui_state(
-            |ui, m: &mut AppModel| sdc_gui::ui::header::undo_redo_keys(ui.ctx(), m),
+            |ui, m: &mut AppModel| sdc_gui::ui::header::undo_redo_keys(ui.ctx(), m, false),
             with_a_step(d.path()),
         );
     h.ctx

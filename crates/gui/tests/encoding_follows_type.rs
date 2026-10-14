@@ -258,3 +258,20 @@ fn a_field_locked_format_is_kept_and_reported() {
         "still allowed"
     );
 }
+
+#[test]
+fn undo_after_the_encoding_cleanup_names_the_step_that_caused_it() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, set) = grass_with(d.path(), Some(LINEAR));
+    m.set_shader(&set, Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(file(&m, "format"), None, "the cleanup ran");
+    // The cleanup folded into the Shader step: no step of its own.
+    assert_eq!(m.undo_label(), Some("Shader"));
+    m.undo();
+    assert!(
+        m.status_line.starts_with("Undid: Shader."),
+        "{}",
+        m.status_line
+    );
+}

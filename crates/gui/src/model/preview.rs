@@ -466,6 +466,7 @@ impl AppModel {
 
     /// Start whatever has waited out the debounce. The UI calls this every frame with `Instant::now()`.
     pub fn tick(&mut self, now: Instant) {
+        self.expire_undo_note(now);
         let p = &mut self.preview;
         if !p.scheduled() {
             p.pending_since = None;

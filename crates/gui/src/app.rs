@@ -163,7 +163,11 @@ impl eframe::App for SdcApp {
             // A failed save raises its own dialog.
             let _ = self.model.save();
         }
-        crate::ui::header::undo_redo_keys(&ctx, &mut self.model);
+        crate::ui::header::undo_redo_keys(
+            &ctx,
+            &mut self.model,
+            self.state.drops.pending.is_some(),
+        );
         if ctx.input(|i| i.viewport().close_requested()) && !self.model.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }

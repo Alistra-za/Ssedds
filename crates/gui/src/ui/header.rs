@@ -127,10 +127,11 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z. They leave a text field's own undo alone and wait while a dialog is open. They
+/// Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z. They leave a text field's own undo alone and wait while a dialog is open,
+/// or while a sets-column box (`set_modal`: delete, choice, refused) is. They
 /// work in the Meshes view too (AG5): no code documented a reason to keep them off there.
-pub fn undo_redo_keys(ctx: &egui::Context, model: &mut AppModel) {
-    if model.dialog.is_some() || ctx.egui_wants_keyboard_input() {
+pub fn undo_redo_keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) {
+    if set_modal || model.dialog.is_some() || ctx.egui_wants_keyboard_input() {
         return;
     }
     let redo = ctx.input_mut(|i| {

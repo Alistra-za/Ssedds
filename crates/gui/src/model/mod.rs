@@ -252,9 +252,11 @@ pub struct AppModel {
     pub search: String,
     pub status_line: String,
     /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
-    status_note: Option<String>,
+    pub status_note: Option<String>,
     /// "Undid: <label>" / "Redid: <label>" in front of the status line until the next edit (item 2).
     undo_note: Option<String>,
+    /// When the note was set, and whether a plan has shown it: it goes with the next plan after that, or after 5 s.
+    undo_note_at: Option<(Instant, bool)>,
     pub banner: Option<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
@@ -377,6 +379,7 @@ impl AppModel {
             status_line: String::new(),
             status_note: None,
             undo_note: None,
+            undo_note_at: None,
             dropped_fills: Default::default(),
             banner: None,
             encoding_note: None,
@@ -1304,6 +1307,13 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        // The undo note stays through the plan the undo started, and goes with the next one.
+        if matches!(self.undo_note_at, Some((_, true))) {
+            self.drop_undo_note();
+        }
+        if let Some((_, shown)) = self.undo_note_at.as_mut() {
+            *shown = true;
+        }
         for n in [&self.status_note, &self.undo_note].into_iter().flatten() {
             self.status_line = format!("{n} {}", self.status_line);
         }
@@ -1581,6 +1591,7 @@ impl AppModel {
 
     /// Remove the "Undid/Redid" note from the status line (an edit, or a new history).
     fn drop_undo_note(&mut self) {
+        self.undo_note_at = None;
         if let Some(n) = self.undo_note.take() {
             self.status_line = self.status_line.replacen(&format!("{n} "), "", 1);
             if self.status_line == n {
@@ -1589,15 +1600,28 @@ impl AppModel {
         }
     }
 
+    /// The note is shown for at most 5 s (the UI's per-frame `tick`).
+    pub(crate) fn expire_undo_note(&mut self, now: Instant) {
+        if let Some((at, _)) = self.undo_note_at {
+            if now.saturating_duration_since(at) >= Duration::from_secs(5) {
+                self.drop_undo_note();
+            }
+        }
+    }
+
     /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled
     /// note (AF10, AF11), which stays; the encoding note went with the undo's `reset_type_follow`.
     fn undo_noted(&mut self, verb: &str, label: &str) {
+        self.drop_undo_note();
         let n = format!("{verb}: {label}.");
+        // In front of the normal status text, not in place of it; the plan the step started rewrites the counts.
+        let counts = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         self.status_line = match &self.status_note {
-            Some(c) => format!("{n} {c}"),
-            None => n.clone(),
+            Some(c) => format!("{n} {c} {counts}"),
+            None => format!("{n} {counts}"),
         };
         self.undo_note = Some(n);
+        self.undo_note_at = Some((Instant::now(), false));
     }
 
     /// Undo one step. A step that created a file (Duplicate source) deletes it first, and only if it is unchanged

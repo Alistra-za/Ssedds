@@ -736,8 +736,8 @@ fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
         }
         Pending::Rename { .. } => {}
     });
-    // Esc and a click outside cancel; Enter takes the safe default of a confirm, which is Cancel.
-    let confirm = matches!(p, Pending::ConfirmDelete { .. });
+    // Esc and a click outside cancel; Enter takes the safe default of a confirm (Cancel) and presses the OK of a refusal.
+    let confirm = matches!(p, Pending::ConfirmDelete { .. } | Pending::Refused(_));
     if answer.is_none() && (keys.cancel || (keys.enter && confirm)) {
         answer = Some(ModalAnswer::Close);
     }
