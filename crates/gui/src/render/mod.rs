@@ -25,6 +25,8 @@ pub enum Slot {
     Source,
     Encoded,
     Heatmap,
+    /// The pinned encode (Task 9), drawn in place of the source while comparing.
+    Pinned,
 }
 
 impl Slot {
@@ -124,7 +126,7 @@ pub struct PreviewRenderer {
     layout: wgpu::BindGroupLayout,
     nearest: wgpu::Sampler,
     linear: wgpu::Sampler,
-    slots: [Option<SlotTexture>; 3],
+    slots: [Option<SlotTexture>; 4],
     supports_bc: bool,
     max_dim: u32,
 }
@@ -220,7 +222,7 @@ impl PreviewRenderer {
                 wgpu::FilterMode::Linear,
                 wgpu::MipmapFilterMode::Linear,
             ),
-            slots: [None, None, None],
+            slots: [None, None, None, None],
             supports_bc: device
                 .features()
                 .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
@@ -326,7 +328,21 @@ impl PreviewRenderer {
 
     /// The encoded mips: as a BC texture when the device and the first mip's size allow, else the CPU decode.
     pub fn set_encoded(&mut self, rs: &egui_wgpu::RenderState, out: &PreviewOut) -> UploadPath {
-        self.clear(Slot::Encoded);
+        self.set_encoded_slot(rs, Slot::Encoded, out)
+    }
+
+    /// The pinned encode: the same upload as the encoded one, into its own slot.
+    pub fn set_pinned(&mut self, rs: &egui_wgpu::RenderState, out: &PreviewOut) -> UploadPath {
+        self.set_encoded_slot(rs, Slot::Pinned, out)
+    }
+
+    fn set_encoded_slot(
+        &mut self,
+        rs: &egui_wgpu::RenderState,
+        slot: Slot,
+        out: &PreviewOut,
+    ) -> UploadPath {
+        self.clear(slot);
         let r = &out.result;
         let first = r.source.first_level;
         let count = r.levels.len();
@@ -344,7 +360,7 @@ impl PreviewRenderer {
             if let Some((texture, _)) =
                 upload::bc_chain(&rs.device, &rs.queue, r.format, dims, &r.levels)
             {
-                self.store(&rs.device, Slot::Encoded, texture, base, kind);
+                self.store(&rs.device, slot, texture, base, kind);
                 return UploadPath::Bc;
             }
             NOT_DECODED
@@ -362,7 +378,7 @@ impl PreviewRenderer {
             .collect();
         match upload::rgba16f_chain(&rs.device, &rs.queue, "preview decoded", &levels) {
             Some((texture, _)) => {
-                self.store(&rs.device, Slot::Encoded, texture, base, kind);
+                self.store(&rs.device, slot, texture, base, kind);
                 UploadPath::CpuDecoded(reason)
             }
             None => UploadPath::Skipped(NOT_DECODED),

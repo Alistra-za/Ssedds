@@ -1,5 +1,6 @@
 //! The pixel readout of the expanded preview (item 1, DECISIONS AG54-AG56): the texel under the cursor, read from
 //! the CPU images the preview already holds (the source chain and the decoded encode), never from the GPU.
+use crate::model::pin::decoded_side;
 use crate::model::preview::SourceState;
 use crate::model::view::{channel_error, Channel};
 use crate::model::AppModel;
@@ -53,10 +54,20 @@ pub struct PixelReadout {
     /// The error the channel measures, as the heatmap does.
     pub max_error: Option<f32>,
     pub normal: Option<NormalReadout>,
+    /// While comparing with a pin (DECISIONS AG68): the pinned side of the texel and its |pinned - encoded|.
+    /// `Some(None)` is a pinned encode without this mip.
+    pub pinned: Option<Option<PinnedReadout>>,
     /// What the numbers are.
     pub space: &'static str,
     channels: &'static [usize],
     hdr: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinnedReadout {
+    pub value: [f32; 4],
+    /// |pinned - encoded| per channel, `None` without an encoded side.
+    pub error: Option<[f32; 4]>,
 }
 
 const NAMES: [&str; 4] = ["R", "G", "B", "A"];
@@ -133,6 +144,7 @@ pub fn texel_readout(
         error,
         max_error: error.map(|e| channel_error(e, o.channel)),
         normal: o.normal.map(|two| normal_readout(s, e, two)),
+        pinned: None,
         space,
         channels: channels(o.channel),
         hdr: o.hdr,
@@ -146,6 +158,19 @@ fn vec3(v: Option<[f32; 3]>) -> String {
 }
 
 impl PixelReadout {
+    /// Adds the pinned side (`None`: the pinned encode lacks this mip).
+    pub fn with_pinned(mut self, pinned: Option<Side>) -> PixelReadout {
+        self.pinned = Some(pinned.and_then(|p| p.at(self.texel)).map(|value| {
+            PinnedReadout {
+                value,
+                error: self
+                    .encoded
+                    .map(|e| std::array::from_fn(|c| (value[c] - e[c]).abs())),
+            }
+        }));
+        self
+    }
+
     /// The readout as lines: the texel and colour space, each side, the error, and the normal.
     pub fn lines(&self) -> Vec<String> {
         let (x, y) = self.texel;
@@ -172,6 +197,9 @@ impl PixelReadout {
             }
         };
         out.push(side("Source", self.source));
+        if let Some(p) = &self.pinned {
+            out.push(side("Pinned", p.as_ref().map(|p| p.value)));
+        }
         out.push(side("Encoded", self.encoded));
         out.push(match (self.error, self.max_error) {
             (Some(e), Some(m)) => {
@@ -184,6 +212,19 @@ impl PixelReadout {
             }
             _ => "|Δ|: —".into(),
         });
+        if let Some(p) = &self.pinned {
+            out.push(match p.as_ref().and_then(|p| p.error) {
+                Some(e) => {
+                    let parts: Vec<String> = self
+                        .channels
+                        .iter()
+                        .map(|&c| format!("{} {:.4}", NAMES[c], e[c]))
+                        .collect();
+                    format!("|Δ| pinned vs encoded: {}", parts.join("  "))
+                }
+                None => "|Δ| pinned vs encoded: —".into(),
+            });
+        }
         if let Some(n) = &self.normal {
             out.push(format!(
                 "Normal: source {}  encoded {}  length {}  angle error {}",
@@ -242,7 +283,7 @@ impl AppModel {
         let hdr = format
             .or(job.map(|j| j.profile.format))
             .is_some_and(Format::is_hdr);
-        texel_readout(
+        let r = texel_readout(
             source,
             encoded,
             mip,
@@ -253,6 +294,30 @@ impl AppModel {
                 hdr,
                 normal,
             },
-        )
+        );
+        match self.compared_pin() {
+            Some(pin) => r.with_pinned(decoded_side(&pin.out, mip)),
+            None => r,
+        }
+    }
+
+    /// The images of the left and right sides at absolute mip `mip`: the source (or, while comparing with a pin, the
+    /// pinned encode) and the current encode.
+    pub fn compare_sides(&self, mip: usize) -> (Option<Side<'_>>, Option<Side<'_>>) {
+        let shown = self.preview.encoded.shown();
+        let right = shown.and_then(|o| decoded_side(o, mip));
+        if let Some(pin) = self.compared_pin() {
+            return (decoded_side(&pin.out, mip), right);
+        }
+        let left = shown.and_then(|o| {
+            let s = &o.result.source;
+            let l = s.levels.get(mip.checked_sub(s.first_level)?)?;
+            Some(Side {
+                width: l.width,
+                height: l.height,
+                px: &l.px,
+            })
+        });
+        (left, right)
     }
 }

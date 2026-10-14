@@ -124,6 +124,10 @@ Double-click a tile (or a set member), or select it and press **Enter** or **Spa
 - **Tile 3×3** (**T**): the picture repeats three by three, to check the seams. Zoom, pan and the readout work on the tiled view; *Fit* fits all nine copies.
 - **Exposure:** for HDR formats (BC6H, RGBA16F) a slider from −8 to +8 EV scales the values by 2^EV before the tone map. It starts at 0 for every texture.
 - **Heatmap legend:** with the heatmap on, a colour bar under the viewports shows the scale from 0 to the *full scale* (the difference drawn white), which a slider sets from 0.005 to 0.5 (0.1 by default, about 25 codes of 255). The heatmap is made in the background. While a new one is made after a full-scale change the previous one stays on show (a result for an older scale is shown as soon as it lands, so dragging the slider never blanks it); after a mip change the plain image shows instead, because a heatmap of another mip does not fit. The legend label reads "updating…" greyed until the current heatmap is ready.
+- **Pin and compare:** *Pin this result* (**P**) in the toolbar keeps the encode on show, with the settings that made it, so that the next encode can be compared against it ("is NVTT, or a higher effort, worth it on this texture").
+  - **What it keeps.** The finished encode for all its mips (not re-encoded), and a summary of its format, colour tag, encoder and effort, alpha policy and mip options, and its PSNR against the source. The button is off until the encode on show is finished and matches the settings (not stale). Pinning again replaces the old pin, so there is at most one.
+  - **When it goes.** Closing the preview, moving to another texture and opening a folder drop the pin and free its images and its GPU texture. *Unpin* drops it too. Changing settings on the same texture keeps it: that is the point.
+  - **While pinned.** *Compare: Source | Pinned* sets what the left side shows in *Side by side* and *Split*. *Pinned* puts the pinned encode on the left and the current encode on the right (pinning turns it on). Each side has a caption with its settings summary and its PSNR against the source. The texel readout adds the pinned values and the difference between the pinned and the current encode (two more lines), the lens magnifies both sides, and the heatmap shows the difference between the current and the pinned encode, labelled "Current vs Pinned". If the pinned encode has no mip you are on (it was made under another size limit), the left side shows "— not in the pinned encode".
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
 
@@ -156,6 +160,7 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | Preview | ] | Next texture |
 | Preview | L | Magnifier lens on or off |
 | Preview | T | Tile the picture 3×3 on or off |
+| Preview | P | Pin this result |
 | Preview | 1 | Show RGBA |
 | Preview | 2 | Show R |
 | Preview | 3 | Show G |

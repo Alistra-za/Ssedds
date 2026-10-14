@@ -14,6 +14,7 @@ struct Uploaded {
     source: Option<Arc<SourcePreview>>,
     encoded: Option<Arc<PreviewOut>>,
     heatmap: Option<Arc<HeatImage>>,
+    pinned: Option<Arc<PreviewOut>>,
 }
 
 fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
@@ -153,6 +154,13 @@ impl SdcApp {
             .heatmap_image()
             .filter(|_| expanded && self.model.view.heatmap);
 
+        // The pinned encode only goes to the GPU while it is compared; unpinning releases the texture.
+        let want_pinned = self
+            .model
+            .compared_pin()
+            .filter(|_| expanded)
+            .map(|p| p.out.clone());
+
         let mut resources = rs.renderer.write();
         let Some(renderer) = resources.callback_resources.get_mut::<PreviewRenderer>() else {
             return;
@@ -177,6 +185,16 @@ impl SdcApp {
                 }
             };
             self.uploaded.encoded = want_encoded;
+        }
+        if !same(&self.uploaded.pinned, &want_pinned) {
+            gpu.pinned = match &want_pinned {
+                Some(o) => Some(renderer.set_pinned(&rs, o)),
+                None => {
+                    renderer.clear(Slot::Pinned);
+                    None
+                }
+            };
+            self.uploaded.pinned = want_pinned;
         }
         if !same(&self.uploaded.heatmap, &want_heatmap) {
             gpu.heatmap = match &want_heatmap {

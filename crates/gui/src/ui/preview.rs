@@ -33,6 +33,8 @@ pub struct GpuStatus {
     pub source: bool,
     pub encoded: Option<UploadPath>,
     pub heatmap: bool,
+    /// The pinned encode, while it is compared.
+    pub pinned: Option<UploadPath>,
 }
 
 /// Drawing state that is not part of the model.
@@ -205,6 +207,7 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     {
         model.view.layout = Layout::Split;
     }
+    pin_controls(ui, model);
     let possible = info.heatmap_possible();
     ui.add_enabled_ui(possible, |ui| {
         ui.toggle_value(&mut model.view.heatmap, "Heatmap")
@@ -257,6 +260,38 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     }
 }
 
+/// **Pin this result**, and while a result is pinned: **Compare: Source | Pinned** and **Unpin**.
+fn pin_controls(ui: &mut egui::Ui, model: &mut AppModel) {
+    let pin = ui
+        .add_enabled(model.can_pin(), egui::Button::new("Pin this result"))
+        .on_hover_text(format!(
+            "Keep this encode to compare against the next one ({})",
+            super::actions::keys_text("pin")
+        ))
+        .on_disabled_hover_text("Needs a finished encode of the current settings");
+    if pin.clicked() {
+        model.pin_this();
+    }
+    if model.preview.pin.is_none() {
+        return;
+    }
+    let pinned = model.comparing_pin();
+    ui.label("Compare:");
+    if ui.selectable_label(!pinned, "Source").clicked() {
+        model.set_compare_pinned(false);
+    }
+    if ui
+        .selectable_label(pinned, "Pinned")
+        .on_hover_text("Side by side and Split show the pinned encode against the current one")
+        .clicked()
+    {
+        model.set_compare_pinned(true);
+    }
+    if ui.small_button("Unpin").clicked() {
+        model.unpin();
+    }
+}
+
 /// The mip label (`mip k (w×h)`) and, when there is a choice, the slider.
 fn mip_control(ui: &mut egui::Ui, view: &mut ViewState, info: &Info) {
     if !info.known() {
@@ -306,14 +341,16 @@ fn notes(
     readout: Option<&[String]>,
 ) {
     if model.view.heatmap && info.heatmap_possible() {
-        let updating = model.heatmap_updating();
-        legend(ui, &mut model.view.full_scale, updating);
+        let (label, updating) = (model.heatmap_label(), model.heatmap_updating());
+        legend(ui, &mut model.view.full_scale, label, updating);
     }
     // A fixed height (the five lines of a normal map), so the viewports do not move as the pointer enters them;
     // otherwise a pointer near their bottom edge would flip the strip on and off every frame.
     ui.scope(|ui| {
         let line = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
-        ui.set_min_height(5.0 * line);
+        // Two more lines while a pin is compared (the pinned values and their difference).
+        let lines = if model.comparing_pin() { 7.0 } else { 5.0 };
+        ui.set_min_height(lines * line);
         match readout {
             Some(lines) => {
                 for l in lines {
@@ -357,13 +394,13 @@ fn notes(
 }
 
 /// The heatmap's colour bar from 0 to the full scale, with ticks, and the full-scale slider (log, 0.005 to 0.5).
-fn legend(ui: &mut egui::Ui, full_scale: &mut f32, updating: bool) {
+fn legend(ui: &mut egui::Ui, full_scale: &mut f32, label: &str, updating: bool) {
     const STEPS: usize = 32;
     ui.horizontal(|ui| {
         if updating {
-            ui.label(RichText::new("Heatmap |Δ| updating…").small().weak());
+            ui.label(RichText::new(format!("{label} updating…")).small().weak());
         } else {
-            ui.label(RichText::new("Heatmap |Δ|").small());
+            ui.label(RichText::new(label).small());
         }
         let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 22.0), Sense::hover());
         let bar = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 10.0));
@@ -484,8 +521,16 @@ fn viewports(
         (left, right)
     };
     let mut encode = false;
-    let left_draw = draw_source_pane(ui, model, info, gpu, left, left_vis, size);
+    let left_draw = if model.comparing_pin() {
+        draw_pinned_pane(ui, model, gpu, left, left_vis, size)
+    } else {
+        draw_source_pane(ui, model, info, gpu, left, left_vis, size)
+    };
     let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
+    if let Some((pinned, current)) = model.pin_captions() {
+        caption(ui, left_vis, &pinned, false);
+        caption(ui, right_vis, &current, true);
+    }
     if split {
         ui.painter().vline(
             divider_x,
@@ -654,6 +699,70 @@ fn draw_source_pane(
     drawn
 }
 
+/// The left pane while comparing with a pin: the pinned encode, or the dash when it lacks the mip on view.
+fn draw_pinned_pane(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    gpu: &GpuStatus,
+    viewport: Rect,
+    visible: Rect,
+    size: [f32; 2],
+) -> Option<(Slot, Params)> {
+    ui.painter().rect_filled(visible, 0.0, PANE_BG);
+    let mip = model.view.mip;
+    let pin = model.compared_pin()?;
+    let uploaded = matches!(gpu.pinned, Some(UploadPath::Bc | UploadPath::CpuDecoded(_)));
+    let text = if let Some(missing) = model.pin_missing_text(mip) {
+        Some(missing)
+    } else if !gpu.renderer {
+        Some("No GPU preview")
+    } else if !uploaded {
+        Some("No preview of the pinned result")
+    } else {
+        None
+    };
+    let mut drawn = None;
+    if text.is_none() {
+        let first = pin.out.result.source.first_level;
+        let params = params_for(
+            &model.view,
+            size,
+            (pin.out.result.source.dims.get(mip).copied()).unwrap_or((1, 1)),
+            mip.saturating_sub(first),
+            pin.out.result.format.is_hdr(),
+        );
+        paint_clipped(ui, viewport, visible, Slot::Pinned, params);
+        drawn = Some((Slot::Pinned, params));
+    }
+    pane_overlay(ui, visible, "Pinned", None, text, false);
+    drawn
+}
+
+/// A small caption under a pane's title, wrapped to the pane (the current side's right-aligned).
+fn caption(ui: &egui::Ui, visible: Rect, text: &str, right: bool) {
+    let colour = Color32::from_gray(230);
+    let wrap = (visible.width() - 12.0).max(20.0);
+    let galley = ui.painter().layout(
+        text.to_string(),
+        egui::FontId::proportional(11.0),
+        colour,
+        wrap,
+    );
+    let x = if right {
+        visible.max.x - 6.0 - galley.size().x
+    } else {
+        visible.min.x + 6.0
+    };
+    let pos = egui::pos2(x, visible.min.y + 26.0);
+    let painter = ui.painter().with_clip_rect(visible);
+    painter.rect_filled(
+        Rect::from_min_size(pos, galley.size()).expand(2.0),
+        2.0,
+        Color32::from_black_alpha(150),
+    );
+    painter.galley(pos, galley, colour);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_encoded_pane(
     ui: &mut egui::Ui,
@@ -721,7 +830,13 @@ fn draw_encoded_pane(
         ui.painter()
             .rect_filled(visible, 0.0, Color32::from_black_alpha(128));
     }
-    let title = if heat { "Difference" } else { "Encoded" };
+    let comparing = model.comparing_pin();
+    let title = match (heat, comparing) {
+        (true, true) => "Current vs Pinned |Δ|",
+        (true, false) => "Difference",
+        (false, true) => "Current",
+        (false, false) => "Encoded",
+    };
     let button = offer_encode && can_encode(model);
     if pane_overlay(ui, visible, title, badge, text.as_deref(), button) {
         *encode = true;

@@ -405,6 +405,12 @@ pub static ACTIONS: &[Action] = &[
         &[key(Key::T)],
         |m, _| m.view.tile = !m.view.tile,
     ),
+    when(
+        a("pin", "Pin this result", Preview, &[key(Key::P)], |m, _| {
+            m.pin_this()
+        }),
+        AppModel::can_pin,
+    ),
     unlisted(a(
         "channel-rgba",
         "Show RGBA",

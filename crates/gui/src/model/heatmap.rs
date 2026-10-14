@@ -5,7 +5,7 @@
 //! current key only in its full scale is shown at once, so a slider drag never leaves the heatmap blank (AG63);
 //! any other result for an older key is dropped.
 use crate::model::preview::PreviewOut;
-use crate::model::view::{heatmap_of, Channel};
+use crate::model::view::{heatmap_of, heatmap_vs_pin, Channel};
 use crate::model::AppModel;
 use crate::worker::{spawn_guarded, WorkerMsg};
 use std::sync::Arc;
@@ -24,12 +24,21 @@ pub(crate) struct HeatKey {
     mip: usize,
     channel: Channel,
     full_scale: f32,
+    /// The pinned encode the current one is compared with (DECISIONS AG69): its id and images.
+    pin: Option<(u64, Arc<PreviewOut>)>,
 }
 
 impl HeatKey {
     /// Same picture, only the full scale may differ.
     fn same_view(&self, o: &HeatKey) -> bool {
-        Arc::ptr_eq(&self.out, &o.out) && self.mip == o.mip && self.channel == o.channel
+        Arc::ptr_eq(&self.out, &o.out)
+            && self.mip == o.mip
+            && self.channel == o.channel
+            && self.pin_id() == o.pin_id()
+    }
+
+    fn pin_id(&self) -> Option<u64> {
+        self.pin.as_ref().map(|p| p.0)
     }
 }
 
@@ -39,6 +48,7 @@ impl PartialEq for HeatKey {
             && self.mip == o.mip
             && self.channel == o.channel
             && self.full_scale == o.full_scale
+            && self.pin_id() == o.pin_id()
     }
 }
 
@@ -71,6 +81,7 @@ impl AppModel {
             mip: self.view.mip,
             channel: self.view.channel,
             full_scale: self.view.full_scale,
+            pin: self.compared_pin().map(|p| (p.id, p.out.clone())),
         })
     }
 
@@ -88,15 +99,19 @@ impl AppModel {
         let id = h.next_id;
         h.running = Some((id, want.clone()));
         spawn_guarded(self.tx.clone(), "heatmap", move |tx| {
-            let image = heatmap_of(&want.out, want.mip, want.channel, want.full_scale).map(
-                |(width, height, rgba)| {
-                    Arc::new(HeatImage {
-                        width,
-                        height,
-                        rgba,
-                    })
-                },
-            );
+            let made = match &want.pin {
+                Some((_, pin)) => {
+                    heatmap_vs_pin(&want.out, pin, want.mip, want.channel, want.full_scale)
+                }
+                None => heatmap_of(&want.out, want.mip, want.channel, want.full_scale),
+            };
+            let image = made.map(|(width, height, rgba)| {
+                Arc::new(HeatImage {
+                    width,
+                    height,
+                    rgba,
+                })
+            });
             let _ = tx.send(WorkerMsg::Heatmap { id, image });
         });
     }
@@ -129,7 +144,11 @@ impl AppModel {
     /// The heatmap on show: the one made for the mip on view (an older full scale is fine), else none.
     pub fn heatmap_image(&self) -> Option<Arc<HeatImage>> {
         let (key, image) = self.preview.heat.shown.as_ref()?;
-        (key.mip == self.view.mip).then(|| image.clone()).flatten()
+        let want = self.heat_wanted()?;
+        // Another mip, or the other comparison (source or pin), is not this picture; only the scale may lag.
+        (key.mip == want.mip && key.pin_id() == want.pin_id())
+            .then(|| image.clone())
+            .flatten()
     }
 
     /// The heatmap is on but the one for the current key has not landed (the legend says "updating…").
