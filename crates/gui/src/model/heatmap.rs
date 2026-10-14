@@ -1,6 +1,9 @@
 //! The error heatmap off the UI thread (item 15, DECISIONS AG58): one job at a time on the worker pattern, keyed by
 //! (result, mip, channel, full scale). The result `Arc` stands for the texture and its encode revision. The heatmap
-//! on show stays until the one for the current key lands; a result for another key is dropped.
+//! on show stays until the one for the current key lands, but only for the same mip (a heatmap of another mip is
+//! never stretched over this one: the plain image shows instead, DECISIONS AG62). A result that differs from the
+//! current key only in its full scale is shown at once, so a slider drag never leaves the heatmap blank (AG63);
+//! any other result for an older key is dropped.
 use crate::model::preview::PreviewOut;
 use crate::model::view::{heatmap_of, Channel};
 use crate::model::AppModel;
@@ -21,6 +24,13 @@ pub(crate) struct HeatKey {
     mip: usize,
     channel: Channel,
     full_scale: f32,
+}
+
+impl HeatKey {
+    /// Same picture, only the full scale may differ.
+    fn same_view(&self, o: &HeatKey) -> bool {
+        Arc::ptr_eq(&self.out, &o.out) && self.mip == o.mip && self.channel == o.channel
+    }
 }
 
 impl PartialEq for HeatKey {
@@ -97,7 +107,7 @@ impl AppModel {
         let Some((_, key)) = h.running.take_if(|(rid, _)| *rid == id) else {
             return;
         };
-        if want.as_ref() == Some(&key) {
+        if want.as_ref().is_some_and(|w| key.same_view(w)) {
             h.shown = Some((key, image));
         }
     }
@@ -116,12 +126,20 @@ impl AppModel {
         self.preview.heat.running.is_some()
     }
 
-    /// The heatmap on show.
+    /// The heatmap on show: the one made for the mip on view (an older full scale is fine), else none.
     pub fn heatmap_image(&self) -> Option<Arc<HeatImage>> {
-        self.preview
-            .heat
-            .shown
-            .as_ref()
-            .and_then(|(_, i)| i.clone())
+        let (key, image) = self.preview.heat.shown.as_ref()?;
+        (key.mip == self.view.mip).then(|| image.clone()).flatten()
+    }
+
+    /// The heatmap is on but the one for the current key has not landed (the legend says "updating…").
+    pub fn heatmap_updating(&self) -> bool {
+        self.heat_wanted().is_some_and(|w| {
+            self.preview
+                .heat
+                .shown
+                .as_ref()
+                .is_none_or(|(k, _)| *k != w)
+        })
     }
 }

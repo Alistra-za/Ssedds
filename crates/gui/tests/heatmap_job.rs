@@ -20,8 +20,15 @@ fn model_with_result() -> AppModel {
         result: PreviewResult {
             source: SourcePreview {
                 first_level: 0,
-                dims: vec![(2, 1)],
-                levels: vec![src],
+                dims: vec![(2, 1), (1, 1)],
+                levels: vec![
+                    src,
+                    Rgba32F {
+                        width: 1,
+                        height: 1,
+                        px: vec![[0.5, 0.5, 0.5, 1.0]],
+                    },
+                ],
             },
             format: Format::Bc7,
             srgb: true,
@@ -30,7 +37,10 @@ fn model_with_result() -> AppModel {
             warnings: vec![],
             normal_len: vec![],
         },
-        decoded: vec![vec![[0.5, 0.5, 0.5, 1.0], [0.53, 0.5, 0.5, 1.0]]],
+        decoded: vec![
+            vec![[0.5, 0.5, 0.5, 1.0], [0.53, 0.5, 0.5, 1.0]],
+            vec![[0.6, 0.5, 0.5, 1.0]],
+        ],
     };
     m.preview.encoded = EncodedState::Done(Arc::new(out));
     m.view.heatmap = true;
@@ -65,19 +75,53 @@ fn the_frame_call_starts_a_job_and_the_result_arrives_through_poll() {
 }
 
 #[test]
-fn a_result_for_an_older_key_is_dropped() {
+fn a_result_for_an_older_full_scale_is_shown_and_the_current_one_follows() {
     let mut m = model_with_result();
     m.heatmap_frame();
-    // The full scale moves while the job runs: its result no longer matches.
+    // The slider moves while the job runs: the result is for the same texture, mip and channel, so it is shown.
     m.view.full_scale = 0.02;
     m.heatmap_frame();
     settle(&mut m);
-    assert!(m.heatmap_image().is_none(), "the stale result was dropped");
+    let early = m.heatmap_image().expect("never blank during a drag");
+    assert!(m.heatmap_updating(), "but it is not the current one");
     m.heatmap_frame();
     settle(&mut m);
     let img = m.heatmap_image().expect("the current one landed");
+    assert!(!Arc::ptr_eq(&early, &img));
+    assert!(!m.heatmap_updating());
     // 0.03 off at full scale 0.02 is white.
     assert_eq!(&img.rgba[4..7], &[255, 255, 255]);
+}
+
+#[test]
+fn a_result_for_another_encode_is_dropped() {
+    let mut m = model_with_result();
+    m.heatmap_frame();
+    let other = model_with_result().preview.encoded;
+    m.preview.encoded = other;
+    m.heatmap_frame();
+    settle(&mut m);
+    assert!(m.heatmap_image().is_none(), "the stale result was dropped");
+}
+
+#[test]
+fn a_mip_change_falls_back_to_the_plain_image_until_the_new_heatmap_lands() {
+    let mut m = model_with_result();
+    m.heatmap_frame();
+    settle(&mut m);
+    assert!(m.heatmap_image().is_some());
+    assert!(!m.heatmap_updating());
+    m.view.mip = 1;
+    m.heatmap_frame();
+    assert!(
+        m.heatmap_image().is_none(),
+        "not the old mip stretched over the new one"
+    );
+    assert!(m.heatmap_updating());
+    settle(&mut m);
+    let img = m.heatmap_image().expect("landed");
+    assert_eq!((img.width, img.height), (1, 1));
+    assert!(!m.heatmap_updating());
 }
 
 #[test]

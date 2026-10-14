@@ -305,8 +305,9 @@ fn notes(
     gpu: &GpuStatus,
     readout: Option<&[String]>,
 ) {
-    if model.view.heatmap && gpu.heatmap {
-        legend(ui, &mut model.view.full_scale);
+    if model.view.heatmap && info.heatmap_possible() {
+        let updating = model.heatmap_updating();
+        legend(ui, &mut model.view.full_scale, updating);
     }
     // A fixed height (the five lines of a normal map), so the viewports do not move as the pointer enters them;
     // otherwise a pointer near their bottom edge would flip the strip on and off every frame.
@@ -356,10 +357,14 @@ fn notes(
 }
 
 /// The heatmap's colour bar from 0 to the full scale, with ticks, and the full-scale slider (log, 0.005 to 0.5).
-fn legend(ui: &mut egui::Ui, full_scale: &mut f32) {
+fn legend(ui: &mut egui::Ui, full_scale: &mut f32, updating: bool) {
     const STEPS: usize = 32;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Heatmap |Δ|").small());
+        if updating {
+            ui.label(RichText::new("Heatmap |Δ| updating…").small().weak());
+        } else {
+            ui.label(RichText::new("Heatmap |Δ|").small());
+        }
         let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 22.0), Sense::hover());
         let bar = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 10.0));
         let w = bar.width() / STEPS as f32;
