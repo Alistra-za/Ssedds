@@ -505,7 +505,12 @@ pub fn process_file(
         ts: now_rfc3339(),
         engine_version: ENGINE_VERSION.into(),
         engine_commit: engine_commit().into(),
-        encoders: EncoderVersions::current(),
+        encoders: EncoderVersions {
+            nvtt: nvtt
+                .filter(|_| p.encoder.backend == Backend::Nvtt)
+                .map(|t| t.version.clone()),
+            ..EncoderVersions::current()
+        },
         isa: dispatched_isa().into(),
         preset: preset.clone(),
         profile: p.clone(),

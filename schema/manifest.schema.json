@@ -290,6 +290,13 @@
         "ispctc": {
           "type": "string"
         },
+        "nvtt": {
+          "description": "M5 (DECISIONS Note NV10): the NVTT version that encoded this output; only on records of a profile on\n`encoder.backend = \"nvtt\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "rgbcx_patch": {
           "description": "`<patch name>@sha256:<hash of the patched rgbcx.h>`; `None` before the patch, so BC3/BC4/BC5 re-encode.",
           "type": [
