@@ -82,6 +82,7 @@ fn file(rel: &str) -> InputFile {
         game_path: rel.to_string(),
         output: PathBuf::from("out").join(rel).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     }
 }
 

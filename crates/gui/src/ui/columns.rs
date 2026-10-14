@@ -125,6 +125,10 @@ fn tile(
         egui::Color32::TRANSPARENT
     };
     let key = item.key.clone();
+    // F3b: an `[inputs]` alias shows, so it never looks like the file was renamed on disk.
+    let read_as = model
+        .read_as_of(&key)
+        .map(|a| a.rsplit(['/', '\\']).next().unwrap_or_default().to_string());
     let resp = egui::Frame::default()
         .stroke(egui::Stroke::new(TILE_STROKE, border_of(ui, &item.status)))
         .fill(fill)
@@ -152,6 +156,9 @@ fn tile(
                 }
                 if item.changed_on_disk {
                     badges.push("changed on disk".to_string());
+                }
+                if let Some(a) = &read_as {
+                    badges.push(format!("read as {a}"));
                 }
                 ui.add(
                     egui::Label::new(egui::RichText::new(badges.join("  ")).small().weak())

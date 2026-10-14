@@ -1057,6 +1057,20 @@
       ],
       "type": "object"
     },
+    "ReadAs": {
+      "additionalProperties": false,
+      "description": "One `[inputs.\"<real path>\"]` entry: the file is grouped, named and written as if it were at `as`. The file on\ndisk is never touched.",
+      "properties": {
+        "as": {
+          "description": "The path the file is read as, relative to the folder holding `sdc.toml` (same extension as the file; it may\nbe left out).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "as"
+      ],
+      "type": "object"
+    },
     "ResizeMode": {
       "enum": [
         "none",
@@ -1288,6 +1302,13 @@
         "$ref": "#/$defs/FileEntry"
       },
       "description": "Per-file edits (DECISIONS N2): key relative to the folder holding this `sdc.toml` → partial profile, plus\n`allow = [codes]`. Only a project config may hold it.",
+      "type": "object"
+    },
+    "inputs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ReadAs"
+      },
+      "description": "Input aliases (M6 Track F3b): key relative to the folder holding this `sdc.toml` → the path the file is read\nas. Only a project config may hold it.",
       "type": "object"
     },
     "preset": {

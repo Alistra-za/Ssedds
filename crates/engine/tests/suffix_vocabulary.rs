@@ -74,6 +74,7 @@ fn resolve_img(
         game_path: format!("textures/armor/{}", name.to_ascii_lowercase()),
         output: PathBuf::from(name).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let mut suffixes: BTreeSet<String> = companions.iter().map(|s| s.to_string()).collect();
     suffixes.extend(split.suffix.clone());

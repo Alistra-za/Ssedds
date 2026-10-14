@@ -65,6 +65,24 @@ pub fn draw(
             };
         }
     });
+    // F3b: the set's output name, or why it is ignored.
+    let mut clear_name = false;
+    if let Some(n) = model.output_name_of(&v.id) {
+        ui.horizontal_wrapped(|ui| {
+            if v.pbr && model.target == Target::Cs {
+                ui.colored_label(
+                    AMBER,
+                    format!("Output name {n:?} is ignored on a PBR set; use Rename"),
+                );
+            } else {
+                ui.weak(format!("Outputs named {n}"));
+            }
+            clear_name = ui.small_button("Clear").clicked();
+        });
+    }
+    if clear_name {
+        model.clear_output_name(&v.id);
+    }
     ui.separator();
     let mut acts = vec![];
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());

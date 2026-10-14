@@ -155,6 +155,21 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schemars(schema_with = "crate::schemas::files_table_schema")]
     pub files: BTreeMap<String, Value>,
+    /// Input aliases (M6 Track F3b): key relative to the folder holding this `sdc.toml` → the path the file is read
+    /// as. Only a project config may hold it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, ReadAs>,
+}
+
+/// One `[inputs."<real path>"]` entry: the file is grouped, named and written as if it were at `as`. The file on
+/// disk is never touched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadAs {
+    /// The path the file is read as, relative to the folder holding `sdc.toml` (same extension as the file; it may
+    /// be left out).
+    #[serde(rename = "as")]
+    pub path: String,
 }
 
 /// What `ConfigFile::file_entries` returns: the `[files]` overrides and the per-file `allow` codes by key.

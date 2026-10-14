@@ -43,6 +43,35 @@ fn strip_ext(s: &str) -> &str {
     }
 }
 
+/// F3b: a single file or folder name Windows can create: `check_rel_path`'s rules, no separator, no reserved device
+/// name (`CON`, `NUL`, `COM1`… with any extension) and no trailing dot or space.
+pub fn check_file_name(name: &str, field: &str) -> Result<(), PrefixError> {
+    let err = |why: &str| Err(PrefixError(format!("{field}: {why} ({name:?})")));
+    if name.contains(['\\', '/']) {
+        return err("a name only, no folders");
+    }
+    check_rel_path(name, field)?;
+    if name.ends_with(['.', ' ']) {
+        return err("must not end in a dot or a space");
+    }
+    let device = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let numbered = |p: &str| {
+        device
+            .strip_prefix(p)
+            .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit() && n != "0")
+    };
+    if ["CON", "PRN", "AUX", "NUL"].contains(&device.as_str()) || numbered("COM") || numbered("LPT")
+    {
+        return err("is a name Windows reserves");
+    }
+    Ok(())
+}
+
 /// Reject what could escape the export folder or that Windows cannot name (DECISIONS P13).
 pub fn check_rel_path(p: &str, field: &str) -> Result<(), PrefixError> {
     let err = |why: &str| Err(PrefixError(format!("{field}: {why} ({p:?})")));

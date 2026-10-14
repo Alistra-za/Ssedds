@@ -34,6 +34,8 @@ render3d = { path = "../render3d" }
 vfs = { path = "../vfs" }
 pgpsim = { path = "../pgpsim" }
 rusqlite.workspace = true
+# F3b: find/replace patterns in the rename dialog (linear time, no look-around).
+regex = "1"
 
 [dev-dependencies]
 egui_kittest = "=0.36.2"
