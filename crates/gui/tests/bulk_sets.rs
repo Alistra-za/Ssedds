@@ -113,6 +113,9 @@ fn the_tile_menu_is_a_list_with_counts_and_reasons() {
                 "Copy settings from leaf.png to 1 selected…"
             ),
             (MenuAction::ResetAll, "Reset all settings for 2 selected…"),
+            // F3b D5: the rename entries are appended.
+            (MenuAction::RenameInputs, "Rename inputs…  F2"),
+            (MenuAction::RenameOutputs, "Rename outputs…"),
         ]
     );
     assert_eq!(

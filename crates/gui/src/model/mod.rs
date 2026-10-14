@@ -13,6 +13,7 @@ pub mod pbr_export;
 mod pbr_follow;
 pub mod plugin_refs;
 pub mod preview;
+pub mod rename;
 pub mod rnm;
 pub mod set_preview;
 pub mod sets;
@@ -101,6 +102,8 @@ pub enum Dialog {
     },
     /// F3a D4: remove the `[files]` settings of these textures, once confirmed.
     ConfirmResetAll(Vec<String>),
+    /// F3b: the rename dialog (input aliases or output names).
+    Rename(rename::RenameDialog),
     Error(String),
 }
 
@@ -244,6 +247,8 @@ pub struct AppModel {
     /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
     pub dropped_fills: std::collections::BTreeMap<String, String>,
     pub dialog: Option<Dialog>,
+    /// F3b D4: the rename dialog's last applied recipe, offered again on the next open (this session only).
+    pub last_recipe: rename::Recipe,
     pub expanded: Option<String>,
     pub export: export::ExportModel,
     pub preview: preview::PreviewModel,
@@ -350,6 +355,7 @@ impl AppModel {
             banner: None,
             encoding_note: None,
             dialog: None,
+            last_recipe: Default::default(),
             expanded: None,
             export: export::ExportModel::default(),
             preview,

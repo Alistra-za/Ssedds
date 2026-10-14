@@ -683,6 +683,12 @@ impl Engine {
                     p.display()
                 )));
             }
+            if !c.inputs.is_empty() {
+                return Err(EngineError::Config(format!(
+                    "[inputs] is only valid in a project sdc.toml, not in {}",
+                    p.display()
+                )));
+            }
         }
         let project_config = match &req.project_config_inline {
             Some(c) => Some(c.clone()),
@@ -782,6 +788,13 @@ impl Engine {
         let (mut files, unreadable) =
             discover_reporting(&req.inputs, &req.output_root, req.recursive)
                 .map_err(|e| EngineError::Usage(format!("discover: {e}")))?;
+        // F3b: `[inputs]` aliases rename files before anything reads their names.
+        let read_as_warnings = match (&project_config, project_root(&req)) {
+            (Some(c), Some(root)) if !c.inputs.is_empty() => {
+                crate::discover::apply_read_as(&mut files, &root, &req.output_root, &c.inputs)
+            }
+            _ => vec![],
+        };
         // Task 26a: canonical output names before grouping, so alias/canonical collisions are IN-DUPLICATE.
         canonicalise_outputs(&mut files, registry.alias_table());
         rep.emit(
@@ -793,7 +806,7 @@ impl Engine {
                 inputs: files.len(),
             },
         );
-        for w in preset_skips {
+        for w in preset_skips.into_iter().chain(read_as_warnings) {
             rep.emit(None, None, EventKind::Warning(w));
         }
         for u in unreadable {
@@ -805,7 +818,7 @@ impl Engine {
         }
         let key = |out: &Path| output_key(&req.output_root, out);
         // M3b planning sequence (spec §2.1, DECISIONS P1). It is load-bearing:
-        // 1. `discover`, then `canonicalise_outputs` (above).
+        // 1. `discover`, then `[inputs]` aliases (`apply_read_as`, F3b), then `canonicalise_outputs` (above).
         // 2. `group_sets_with` gives the automatic sets; its duplicate-output groups are ignored from now on. On cs,
         //    `join_skin_wet` then moves a skin `_wet` member into its Advanced skin set.
         // 3. `apply_set_edits`. Set keys are fixed from here on: output overrides never change a key.
@@ -1351,6 +1364,7 @@ impl Engine {
                     game_path: String::new(),
                     output: PathBuf::new(),
                     kind: InputKind::Image,
+                    real_rel: None,
                 };
                 project_rel(root, &f)
             };

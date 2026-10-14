@@ -9,6 +9,7 @@ pub mod meshes;
 pub mod pgp_fields;
 pub mod plugin_refs;
 pub mod preview;
+pub mod rename_dialog;
 pub mod rnm_section;
 pub mod set_editor;
 pub mod set_preview;
@@ -207,5 +208,15 @@ fn selection_keys(ui: &egui::Ui, model: &mut AppModel) {
     }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         model.clear_selection();
+    }
+    // F3b D5: F2 renames the outputs of selected sets, or the selected textures' inputs.
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2)) {
+        use crate::model::rename::RenameMode;
+        let sets = !model.selected_sets().is_empty();
+        model.open_rename(if sets {
+            RenameMode::Outputs
+        } else {
+            RenameMode::Inputs
+        });
     }
 }

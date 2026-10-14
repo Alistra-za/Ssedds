@@ -100,6 +100,7 @@ pub(crate) fn key_of(root: &Path, path: &Path) -> String {
         game_path: String::new(),
         output: PathBuf::new(),
         kind: InputKind::Image,
+        real_rel: None,
     };
     project_rel(root, &f).unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
 }

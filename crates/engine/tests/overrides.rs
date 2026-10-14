@@ -106,6 +106,7 @@ fn project_rel_uses_the_virtual_file_name() {
         game_path: "textures/landscape/rock01_roughness.png".into(),
         output: PathBuf::from("C:/out/landscape/rock01_roughness.dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     assert_eq!(
         project_rel(root, &real).as_deref(),
@@ -130,6 +131,7 @@ fn project_rel_keeps_the_folder_case_and_ignores_the_root_case() {
         game_path: "textures/landscape/rock01_n.png".into(),
         output: PathBuf::from("C:/out/Landscape/Rock01_N.dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     assert_eq!(
         project_rel(Path::new("c:/mod/textures"), &input).as_deref(),

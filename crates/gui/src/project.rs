@@ -377,6 +377,69 @@ impl ProjectDoc {
         Some(())
     }
 
+    /// F3b: every `[inputs]` alias as (key as written, alias).
+    pub fn read_as_all(&self) -> Vec<(String, String)> {
+        let Some(t) = self.doc.get("inputs").and_then(Item::as_table_like) else {
+            return vec![];
+        };
+        t.iter()
+            .filter_map(|(k, v)| Some((k.to_string(), v.get("as")?.as_str()?.to_string())))
+            .collect()
+    }
+
+    /// The spelling of file `key`'s entry in `[inputs]`: `key` in any case, or without its extension.
+    fn read_as_key(&self, key: &str) -> Option<String> {
+        let t = self.doc.get("inputs")?.as_table_like()?;
+        find_key(t, key).or_else(|| find_key(t, without_ext(key)?))
+    }
+
+    /// F3b: the path file `key` is read as (its `[inputs]` alias), if it has one.
+    pub fn read_as(&self, key: &str) -> Option<String> {
+        let name = self.read_as_key(key)?;
+        self.doc
+            .get("inputs")?
+            .get(&name)?
+            .get("as")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    /// F3b: set file `key`'s alias to `alias`, or with `None` remove its entry (an empty `[inputs]` goes too).
+    pub fn set_read_as(&mut self, key: &str, alias: Option<&str>) {
+        if self.read_only() {
+            return;
+        }
+        let existing = self.read_as_key(key);
+        match alias {
+            Some(a) => {
+                let Some(inputs) = sub_table(self.doc.as_table_mut(), "inputs", || {
+                    let mut t = Table::new();
+                    t.set_implicit(true);
+                    Item::Table(t)
+                }) else {
+                    return;
+                };
+                let name = existing.unwrap_or_else(|| key.to_owned());
+                let Some(entry) = sub_table(inputs, &name, || Item::Table(Table::new())) else {
+                    return;
+                };
+                set_value(entry, "as", Value::from(a));
+            }
+            None => {
+                let Some(name) = existing else { return };
+                let Some(inputs) = self.doc.get_mut("inputs").and_then(Item::as_table_like_mut)
+                else {
+                    return;
+                };
+                inputs.remove(&name);
+                if inputs.is_empty() {
+                    self.doc.as_table_mut().remove("inputs");
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
     pub fn file_keys(&self) -> Vec<String> {
         self.files()
             .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
@@ -412,4 +475,11 @@ impl ProjectDoc {
         self.dirty = false;
         Ok(())
     }
+}
+
+/// `key` without the extension of its file name (`a/b.png` → `a/b`), as the engine also matches keys.
+fn without_ext(key: &str) -> Option<&str> {
+    let dir_len = key.rfind('/').map_or(0, |i| i + 1);
+    let dot = key[dir_len..].rfind('.').filter(|&d| d > 0)?;
+    Some(&key[..dir_len + dot])
 }

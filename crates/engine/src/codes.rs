@@ -12,7 +12,8 @@
 //! `mips.filter` a texture cannot use, which then uses box, S-mips-13) and the four `SHADER-*` codes (M6 Track A) and
 //! CFG-PRESET-SKIPPED (a user preset folder file that failed to load, skipped) and CFG-GREEN-CONFLICT (an explicit
 //! `flip_green` that contradicts `green_convention`) (M6 Track D) and the five `RNM-*` codes of RNM normal layers (M6 Track F2).
-//! and the five `GRASS-*` codes and VAL-GRASS-DETECT (complex grass design 2026-10-12 §3.6, §3.7, §4).
+//! and the five `GRASS-*` codes and VAL-GRASS-DETECT (complex grass design 2026-10-12 §3.6, §3.7, §4)
+//! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -104,6 +105,8 @@ codes! {
     // Retired in M6 (DECISIONS S2): never emitted; kept so --allow and [files] allow lists still load.
     InFloatLdr = "IN-FLOAT-LDR" => Info,
     InIccIgnored = "IN-ICC-IGNORED" => Info,
+    InAliasInvalid = "IN-ALIAS-INVALID" => Warning,
+    InAliasStale = "IN-ALIAS-STALE" => Info,
     OutUnknownExisting = "OUT-UNKNOWN-EXISTING" => Warning,
     PackDefaulted = "PACK-DEFAULTED" => Warning,
     PackSizeMismatch = "PACK-SIZE-MISMATCH" => Error,
@@ -195,7 +198,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 87);
+        assert_eq!(Code::ALL.len(), 89);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
         assert_eq!(Code::GrassVanilla.severity(), Severity::Warning);
