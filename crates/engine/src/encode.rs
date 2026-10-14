@@ -81,17 +81,7 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
             {
                 bc7e_compress_blocks(bc, oc, params);
             }
-            for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
-                if src.iter().all(|t| t[3] == 255) {
-                    let blk: &mut [u8; 16] = blk.try_into().unwrap();
-                    if p.alpha.exact_opaque && !native {
-                        force_opaque_mode6(blk);
-                    }
-                    // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native flag
-                    // nor the mode-6 patch covers them. Lossless for RGB, so it runs with the flag off.
-                    force_opaque_rotated(blk);
-                }
-            }
+            bc7_opaque_fix(o, b, p.alpha.exact_opaque && !native);
         }
         f => {
             let bs = f.block_bytes().expect("block format");
@@ -125,6 +115,23 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
                     | Format::Rgba16f => unreachable!("handled elsewhere"),
                 }
             }
+        }
+    }
+}
+
+/// The encoder-independent BC7 opaque fix-ups (DECISIONS Note NV6) on blocks `o` whose source texels `b` (16 per
+/// block) have alpha 255 throughout: the lossless rotated mode 4/5 fix always, and the S5b mode-6 byte patch when
+/// `mode6_patch` (bc7e without the native flag only).
+fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool) {
+    for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
+        if src.iter().all(|t| t[3] == 255) {
+            let blk: &mut [u8; 16] = blk.try_into().unwrap();
+            if mode6_patch {
+                force_opaque_mode6(blk);
+            }
+            // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native flag
+            // nor the mode-6 patch covers them. Lossless for RGB, so it runs with the flag off.
+            force_opaque_rotated(blk);
         }
     }
 }
