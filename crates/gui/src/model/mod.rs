@@ -696,7 +696,7 @@ impl AppModel {
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        for d in self.picker.take(&Self::PICKS) {
+        for d in self.picker.take() {
             changed = true;
             self.picked(d);
         }

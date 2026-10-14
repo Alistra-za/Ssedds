@@ -155,6 +155,11 @@ impl StatCache {
         self.get(p, now, false)
     }
 
+    /// Forget every answer (tests: the disk changed and the clock did not move).
+    pub fn clear(&mut self) {
+        self.map.clear();
+    }
+
     pub fn is_dir(&mut self, p: &Path, now: std::time::Instant) -> bool {
         self.get(p, now, true)
     }

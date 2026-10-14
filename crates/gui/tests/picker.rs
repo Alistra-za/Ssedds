@@ -192,12 +192,14 @@ fn a_stale_open_folder_result_is_dropped() {
     // ... another folder replaces it before the user answers ...
     let b = mod_folder(&d.path().join("b"));
     m.open_folder(b.clone());
+    assert!(m.wait_idle(Duration::from_secs(60)));
     tx.send(Some(c)).unwrap();
     wait_closed(&m.picker);
     m.poll();
     // ... so the answer is for a folder that is gone.
     assert_eq!(m.root, Some(b));
     assert_ne!(m.root, a);
+    assert!(m.status_line.contains("Picker result ignored"));
 }
 
 #[test]
@@ -252,4 +254,24 @@ fn the_actions_and_buttons_are_disabled_while_a_dialog_is_open() {
         .accesskit_node()
         .is_disabled());
     assert_eq!(BUSY_HOVER, "A file dialog is already open");
+}
+
+#[test]
+fn a_shader_folder_pick_reaches_the_viewport_that_asked() {
+    use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
+    let d = tempfile::tempdir().unwrap();
+    let mut meshes = MeshesModel::new(None, MeshesSettings::default());
+    let mut set = SetPreview::new(None, None, None, DEFAULT_CAP);
+    // The set preview's 3D panel asks.
+    ask(
+        &set.v3.picker,
+        PickerPurpose::ShaderFolder,
+        None,
+        Some(d.path().to_path_buf()),
+    );
+    // The Meshes viewport polls first, as in the app, and gets nothing.
+    meshes.poll();
+    assert!(!meshes.v3.locating());
+    assert!(set.v3.poll());
+    assert!(set.v3.locating());
 }

@@ -88,6 +88,8 @@ pub struct Picked {
     pub purpose: PickerPurpose,
     /// The opened folder when the picker started (`None`: no folder, or the purpose is app-wide).
     pub scope: Option<PathBuf>,
+    /// The requester (`Picker::owner`); only it takes the result.
+    owner: u64,
     pub path: Option<PathBuf>,
 }
 
@@ -99,7 +101,9 @@ struct State {
 
 /// A handle on the one picker state; clones share it.
 #[derive(Clone)]
-pub struct Picker(Arc<Mutex<State>>);
+pub struct Picker(Arc<Mutex<State>>, u64);
+
+static OWNERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 thread_local! {
     // The UI thread has one; a test thread (each test is its own thread) gets its own.
@@ -114,16 +118,24 @@ impl Default for Picker {
 
 impl Picker {
     pub fn new() -> Picker {
-        Picker(Arc::new(Mutex::new(State {
-            backend: Arc::new(Native),
-            open: None,
-            inbox: vec![],
-        })))
+        Picker(
+            Arc::new(Mutex::new(State {
+                backend: Arc::new(Native),
+                open: None,
+                inbox: vec![],
+            })),
+            0,
+        )
     }
 
     /// The UI thread's picker: the app's models all hold a clone, so one dialog blocks every picker button.
     pub fn shared() -> Picker {
-        SHARED.with(Picker::clone)
+        SHARED.with(|p| {
+            Picker(
+                p.0.clone(),
+                OWNERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            )
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -157,7 +169,7 @@ impl Picker {
             s.open = Some(purpose);
             s.backend.clone()
         };
-        let (me, ctx) = (self.clone(), ctx.clone());
+        let (me, ctx, owner) = (self.clone(), ctx.clone(), self.1);
         let work = move || {
             // A panicking dialog must not leave the buttons disabled for good.
             let path =
@@ -168,6 +180,7 @@ impl Picker {
                 let mut s = me.lock();
                 s.open = None;
                 s.inbox.push(Picked {
+                    owner,
                     purpose,
                     scope,
                     path,
@@ -186,12 +199,14 @@ impl Picker {
         true
     }
 
-    /// The finished pickers whose purpose is in `mine`, oldest first.
-    pub fn take(&self, mine: &[PickerPurpose]) -> Vec<Picked> {
+    /// The finished pickers this handle asked for, oldest first. Each model and each 3D viewport has its own owner, so a
+    /// result reaches only the one that opened the dialog.
+    pub fn take(&self) -> Vec<Picked> {
+        let me = self.1;
         let mut s = self.lock();
         let (taken, rest) = std::mem::take(&mut s.inbox)
             .into_iter()
-            .partition(|p| mine.contains(&p.purpose));
+            .partition(|p| p.owner == me);
         s.inbox = rest;
         taken
     }
@@ -237,6 +252,8 @@ impl AppModel {
     pub fn picked(&mut self, d: Picked) {
         let Some(path) = d.path else { return };
         if d.purpose.folder_scoped() && d.scope != self.root {
+            self.status_line =
+                "Picker result ignored: the folder changed while the dialog was open".into();
             return;
         }
         match d.purpose {

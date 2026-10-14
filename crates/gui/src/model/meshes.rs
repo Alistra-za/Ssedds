@@ -708,10 +708,7 @@ impl MeshesModel {
     /// Drain worker messages. True when anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.v3.poll();
-        for d in self
-            .picker
-            .take(&[PickerPurpose::ChooseMo2, PickerPurpose::ScanFolder])
-        {
+        for d in self.picker.take() {
             changed = true;
             if let Some(p) = d.path {
                 match d.purpose {

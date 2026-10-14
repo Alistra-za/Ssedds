@@ -6,7 +6,6 @@
 //! shader file, so it runs on a short-lived worker too. The model holds pixels, never egui textures: `ui::viewport3d`
 //! uploads a frame when its id changes.
 use crate::model::meshes::ScanTarget;
-use crate::model::picker::PickerPurpose;
 use crate::worker::{spawn_guarded, WorkerMsg};
 use nif::material::MaterialState;
 use render3d::builtin::Builtin;
@@ -1316,7 +1315,7 @@ impl Viewport3d {
     /// [`Viewport3d::poll`] with the clock given (the gap watch reads it).
     pub fn poll_at(&mut self, now: Instant) -> bool {
         let mut changed = false;
-        for d in self.picker.take(&[PickerPurpose::ShaderFolder]) {
+        for d in self.picker.take() {
             changed = true;
             if let Some(p) = d.path {
                 self.popup = None;

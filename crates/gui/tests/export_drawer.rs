@@ -319,8 +319,7 @@ fn open_export_folder_is_disabled_until_the_folder_exists() {
         "a disabled button queues nothing"
     );
     // Once it exists the button opens it.
-    // The drawer re-checks the disk at most once a second.
-    std::thread::sleep(Duration::from_millis(1100));
+    h.state_mut().1.stats.clear();
     std::fs::create_dir_all(&out).unwrap();
     h.run();
     h.run();
