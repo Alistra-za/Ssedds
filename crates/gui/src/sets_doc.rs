@@ -15,6 +15,8 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value
 pub const FILE_NAME: &str = "sdc-project.toml";
 /// GUI tweaks G4: the array of extra PGPatcher entries (delete sections).
 const SECTIONS: &str = "pgp_sections";
+/// Design §5: `[project] cs_pbr_sha256`, path under the export root → hash of the CS JSON sdc last wrote there.
+const CS_SHA: &str = "cs_pbr_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
 const RESERVED: [&str; 11] = [
     "id",
@@ -233,7 +235,7 @@ impl SetsDoc {
         }
     }
 
-    /// Undo/redo: `restore` that keeps the live `last_json_sha256`. The hash records the JSON on disk, which undo
+    /// Undo/redo: `restore` that keeps the live `last_json_sha256` and `cs_pbr_sha256`. The hash records the JSON on disk, which undo
     /// does not change, so it is outside the undoable state. When only the hash differs, nothing changes (and the
     /// document is not marked dirty).
     pub fn restore_keeping_json_sha(&mut self, text: &str) {
@@ -242,10 +244,14 @@ impl SetsDoc {
             return;
         }
         let (doc, dirty, sha) = (self.doc.clone(), self.dirty, self.last_json_sha256());
+        let cs = self.cs_pbr_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
             self.set_project("last_json_sha256", sha.map(Value::from));
+        }
+        if self.cs_pbr_shas() != cs {
+            self.set_cs_pbr_shas(&cs);
         }
         if self.text() == old {
             self.doc = doc;
@@ -310,6 +316,28 @@ impl SetsDoc {
     pub fn set_last_json_sha256(&mut self, sha: &str) {
         self.rev = next_rev();
         self.set_project("last_json_sha256", Some(Value::from(sha)));
+    }
+
+    pub fn cs_pbr_shas(&self) -> BTreeMap<String, String> {
+        self.doc
+            .get("project")
+            .and_then(|p| p.get(CS_SHA))
+            .and_then(Item::as_table_like)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, v)| Some((k.to_string(), v.as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.rev = next_rev();
+        let mut t = toml_edit::InlineTable::new();
+        for (k, v) in shas {
+            t.insert(k, Value::from(v.as_str()));
+        }
+        self.set_project(CS_SHA, (!shas.is_empty()).then_some(Value::InlineTable(t)));
     }
 
     pub fn order(&self) -> Vec<String> {
