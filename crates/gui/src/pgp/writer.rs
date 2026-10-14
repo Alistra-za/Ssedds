@@ -176,10 +176,12 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                     .iter()
                     .find(|(m, _)| *m == n)
                     .map(|(_, v)| Node::Scalar(json!(match_value(v)))),
-                // The typed file name becomes the full prefix (owner, 2026-10-12; DECISIONS V3).
-                None if k.key == "rename" => {
-                    json_rename(own, derived).map(|r| Node::Scalar(json!(r)))
-                }
+                // The typed file name becomes the renamed path, with the `texture` PGPatcher needs to apply it
+                // (owner, 2026-10-14; DECISIONS V3, AA8).
+                None if k.key == "rename" => json_rename(own, derived).map(|(texture, r)| {
+                    out.push(("texture".to_string(), Node::Scalar(json!(texture))));
+                    Node::Scalar(json!(r))
+                }),
                 None => v
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())

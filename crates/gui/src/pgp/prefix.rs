@@ -272,18 +272,7 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
         }
         check_rel_path(r, "rename")?;
     }
-    let matches = active_matches(s, derived);
-    for (n, v) in &matches {
-        check_json_path(v, &format!("match{n}"))?;
-    }
-    let base = match matches.first() {
-        Some((n, v)) => match_prefix(*n, v),
-        None => {
-            let d = derived.trim();
-            check_json_path(d, "diffuse path")?;
-            under_pbr(d)
-        }
-    };
+    let base = matched_prefix(s, derived)?;
     Ok(match rename {
         // `base` always starts with `textures\pbr\`, so it has a folder.
         Some(r) => format!("{}\\{r}", base.rsplit_once('\\').map_or("", |(d, _)| d)),
@@ -291,11 +280,34 @@ pub fn prefix_of(s: &Settings, derived: &str) -> Result<String, PrefixError> {
     })
 }
 
-/// The `rename` the JSON carries: the full prefix, which PGPatcher substitutes for the whole matched path, so every
-/// hit (any matchN or path_contains) lands where sdc writes the files. `None` without a rename or with a bad one.
-pub fn json_rename(s: &Settings, derived: &str) -> Option<String> {
+/// The prefix before any rename: the lowest active `matchN`, else the derived path (DECISIONS V3).
+fn matched_prefix(s: &Settings, derived: &str) -> Result<String, PrefixError> {
+    let matches = active_matches(s, derived);
+    for (n, v) in &matches {
+        check_json_path(v, &format!("match{n}"))?;
+    }
+    Ok(match matches.first() {
+        Some((n, v)) => match_prefix(*n, v),
+        None => {
+            let d = derived.trim();
+            check_json_path(d, "diffuse path")?;
+            under_pbr(d)
+        }
+    })
+}
+
+/// The `texture` and `rename` a renamed set's entry carries, both relative to `textures\pbr\` (owner, 2026-10-14;
+/// DECISIONS AA8). With `texture`, PGPatcher keeps `textures\pbr` in front of the match and appends the rename, the
+/// form every working rename in the owner's load order uses. Without it, PGPatcher substitutes `\` + rename for the
+/// whole path and then finds no file, so the entry patches nothing (seen with PGPatcher 1.2.0). The hit lands on
+/// the renamed files only when its texture is `texture` (PGPatcher cuts the matched path by `texture`'s length);
+/// `pitfalls` warns otherwise. `None` without a rename or with a bad one.
+pub fn json_rename(s: &Settings, derived: &str) -> Option<(String, String)> {
     text(s, "rename")?;
-    prefix_of(s, derived).ok()
+    let full = prefix_of(s, derived).ok()?;
+    let base = matched_prefix(s, derived).ok()?;
+    let rel = |p: &str| strip_ci(p, "textures\\pbr\\").to_string();
+    Some((rel(&base), rel(&full)))
 }
 
 /// The prefix PGPatcher derives when `matchN = v` is the match that hits.
@@ -313,10 +325,19 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
         .map(|(n, v)| match_prefix(*n, v).to_ascii_lowercase())
         .collect();
     prefixes.dedup();
-    if prefixes.len() > 1 && text(s, "rename").is_none() {
+    let renamed = text(s, "rename").is_some();
+    if prefixes.len() > 1 && !renamed {
         out.push(
             "match slots point at different textures; the entry applies to whichever hits first; edit the match \
              paths so they point at the same texture"
+                .into(),
+        );
+    }
+    // A rename lands right only for meshes whose matched texture is the entry's `texture` (DECISIONS AA8).
+    if renamed && (prefixes.len() > 1 || text(s, "path_contains").is_some()) {
+        out.push(
+            "with a rename, only meshes using the first matched texture get the renamed files; meshes hit through \
+             path_contains or a match slot pointing at another texture get a wrong path"
                 .into(),
         );
     }
