@@ -3,8 +3,10 @@ use crate::settings::Bc1Choice;
 use engine::api::{BatchSummary, CancelToken};
 use engine::codes::{Code, Warning};
 use engine::events::{EngineEvent, EventKind, SkipKind};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowState {
@@ -40,6 +42,11 @@ impl RowState {
     fn accepts_skip(&self) -> bool {
         matches!(self, RowState::Queued | RowState::Skipped(..))
     }
+
+    /// The "Failed only" filter: a failed file or a validation failure.
+    pub fn is_failed(&self) -> bool {
+        matches!(self, RowState::Failed(_) | RowState::Done { passed: false })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +70,12 @@ pub struct ExportModel {
     pub error: Option<String>,
     /// What the export did besides converting: the JSON, the vanilla/CPM copies, and what was left out.
     pub notes: Vec<String>,
+    /// Job key to the file the engine plans to write (or wrote): an absolute path with forward slashes.
+    pub outputs: HashMap<String, String>,
+    /// Progress timing of the running export (set when it starts).
+    pub pace: Option<Pace>,
+    /// Changes whenever a row, its state or its warnings change; the Files list caches by it.
+    pub revision: u64,
     /// `job_key` to its index in `rows` (the drawer's per-event lookup; rebuilt when rows are removed).
     pub(crate) index: HashMap<String, usize>,
 }
@@ -112,6 +125,19 @@ impl ExportModel {
     }
 
     pub fn on_event(&mut self, ev: EngineEvent) {
+        self.on_event_at(ev, Instant::now());
+    }
+
+    /// [`Self::on_event`] with the clock given, so the pace can be tested.
+    pub fn on_event_at(&mut self, ev: EngineEvent, now: Instant) {
+        // Progress and the like change no row; every other event may, and the Files list re-filters on a new revision.
+        if !matches!(
+            ev.kind,
+            EventKind::Progress { .. } | EventKind::BatchStarted { .. }
+        ) {
+            static REV: AtomicU64 = AtomicU64::new(1);
+            self.revision = REV.fetch_add(1, Ordering::Relaxed);
+        }
         match &ev.kind {
             EventKind::FileSkipped {
                 kind: SkipKind::PackedSource,
@@ -125,13 +151,16 @@ impl ExportModel {
                     self.reindex();
                 }
             }
-            EventKind::FileDiscovered { .. } => {
+            EventKind::FileDiscovered { output } => {
                 self.row(&ev);
+                self.note_output(&ev, output);
             }
             EventKind::FileStarted => self.run_row(&ev, RowState::Running),
-            EventKind::FileDone { validation, .. } => {
-                let passed = validation.passed;
+            EventKind::FileDone { validation, output } => {
+                let (passed, output) = (validation.passed, output.clone());
                 self.run_row(&ev, RowState::Done { passed });
+                self.note_output(&ev, &output);
+                self.finished_at(now);
             }
             EventKind::FileSkipped {
                 kind: SkipKind::NormalLayer,
@@ -151,15 +180,21 @@ impl ExportModel {
                     SkipKind::UpToDate => RowState::UpToDate,
                     k => RowState::Skipped(*k, reason.clone()),
                 };
+                let mut set = false;
                 if let Some(r) = self.row(&ev) {
                     if r.state.accepts_skip() {
                         r.state = state;
+                        set = true;
                     }
+                }
+                if set {
+                    self.finished_at(now);
                 }
             }
             EventKind::FileFailed { error, .. } => {
                 let e = error.clone();
                 self.run_row(&ev, RowState::Failed(e));
+                self.finished_at(now);
             }
             EventKind::Warning(w) => {
                 let w = w.clone();
@@ -170,6 +205,9 @@ impl ExportModel {
                 }
             }
             EventKind::BatchDone { cancelled, .. } => {
+                if let Some(p) = self.pace.as_mut() {
+                    p.stop(now);
+                }
                 let cancelled: HashSet<String> = cancelled.iter().map(|c| slash(c)).collect();
                 for r in self.rows.iter_mut().filter(|r| {
                     matches!(r.state, RowState::Queued | RowState::Running)
@@ -181,6 +219,18 @@ impl ExportModel {
             _ => {}
         }
         self.events.push(ev);
+    }
+
+    fn note_output(&mut self, ev: &EngineEvent, output: &str) {
+        if let Some(k) = &ev.job {
+            self.outputs.insert(k.clone(), output.to_string());
+        }
+    }
+
+    fn finished_at(&mut self, now: Instant) {
+        if let Some(p) = self.pace.as_mut() {
+            p.finished(now);
+        }
     }
 
     /// Warnings grouped by code: code → job keys (M3a spec §2.5).
@@ -263,4 +313,182 @@ pub fn cli_command(root: &Path, export: &Path, bc1: Bc1Choice, jobs: usize) -> S
         c += &format!(" --jobs {jobs}");
     }
     c
+}
+
+// ---- Task 5: progress line, Files filters and caches (DECISIONS AG35-AG38) ----
+
+/// The files/s average looks back this far.
+pub const RATE_WINDOW: Duration = Duration::from_secs(10);
+/// No ETA before this many files have finished ...
+pub const ETA_MIN_FILES: usize = 3;
+/// ... or this much time has passed.
+pub const ETA_MIN_TIME: Duration = Duration::from_secs(2);
+
+/// The timing of one export: when it started and when each file finished. Every method takes the time as an argument
+/// (the model passes `Instant::now()`), so the rules are tested with a fake clock.
+#[derive(Debug, Clone)]
+pub struct Pace {
+    start: Instant,
+    end: Option<Instant>,
+    /// Finish times of the last `RATE_WINDOW`, oldest first.
+    recent: VecDeque<Instant>,
+}
+
+impl Pace {
+    pub fn new(start: Instant) -> Self {
+        Pace {
+            start,
+            end: None,
+            recent: VecDeque::new(),
+        }
+    }
+
+    pub fn finished(&mut self, now: Instant) {
+        self.recent.push_back(now);
+        while self
+            .recent
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) > RATE_WINDOW)
+        {
+            self.recent.pop_front();
+        }
+    }
+
+    /// The export ended: the elapsed time stops.
+    pub fn stop(&mut self, now: Instant) {
+        self.end.get_or_insert(now);
+    }
+
+    pub fn elapsed(&self, now: Instant) -> Duration {
+        self.end
+            .unwrap_or(now)
+            .saturating_duration_since(self.start)
+    }
+
+    /// Files finished per second over the last `RATE_WINDOW` (or since the start, while that is shorter).
+    pub fn rate(&self, now: Instant) -> f64 {
+        let span = self.elapsed(now).min(RATE_WINDOW).as_secs_f64();
+        let n = self
+            .recent
+            .iter()
+            .filter(|t| now.saturating_duration_since(**t) <= RATE_WINDOW)
+            .count();
+        if span <= 0.0 {
+            0.0
+        } else {
+            n as f64 / span
+        }
+    }
+
+    /// `None` until `ETA_MIN_FILES` have finished or `ETA_MIN_TIME` has passed, and while nothing finished lately.
+    pub fn eta(&self, done: usize, total: usize, now: Instant) -> Option<Duration> {
+        if done < ETA_MIN_FILES && self.elapsed(now) < ETA_MIN_TIME {
+            return None;
+        }
+        let rate = self.rate(now);
+        (rate > 0.0).then(|| Duration::from_secs_f64(total.saturating_sub(done) as f64 / rate))
+    }
+
+    /// `done/total · elapsed · files/s · ETA`; the ETA is left out while it is `None`.
+    pub fn line(&self, done: usize, total: usize, now: Instant) -> String {
+        let mut s = format!(
+            "{done}/{total} · {} · {:.1} files/s",
+            fmt_duration(self.elapsed(now)),
+            self.rate(now)
+        );
+        if let Some(eta) = self.eta(done, total, now) {
+            s += &format!(" · ETA {}", fmt_duration(eta));
+        }
+        s
+    }
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour on; a fraction of a second rounds up (an ETA never reads 0:00 early).
+pub fn fmt_duration(d: Duration) -> String {
+    let s = d.as_secs_f64().ceil() as u64;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// The drawer's two Files filters; both on means both must hold.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FileFilter {
+    pub failed_only: bool,
+    pub has_warnings: bool,
+}
+
+impl FileFilter {
+    pub fn any(self) -> bool {
+        self.failed_only || self.has_warnings
+    }
+
+    pub fn matches(self, r: &Row) -> bool {
+        (!self.failed_only || r.state.is_failed()) && (!self.has_warnings || !r.warnings.is_empty())
+    }
+}
+
+/// The row indices the Files tab shows and the warnings the Warnings tab lists, cached by what they were computed
+/// from: the filter and the export's `revision`. A frame that changed neither only reads the cache.
+#[derive(Default)]
+pub struct FilesIndex {
+    files: Option<(FileFilter, u64, Vec<usize>)>,
+    warns: Option<(u64, Vec<(usize, usize)>)>,
+    /// How many times the filter / the warning list was computed (tests).
+    pub computed: u32,
+}
+
+impl FilesIndex {
+    /// How many rows pass `f`; recomputes the index only when `f` or the export changed.
+    pub fn len(&mut self, m: &ExportModel, f: FileFilter) -> usize {
+        if !f.any() {
+            return m.rows.len();
+        }
+        let stale = !matches!(&self.files, Some((cf, rev, _)) if *cf == f && *rev == m.revision);
+        if stale {
+            self.computed += 1;
+            let idx = (0..m.rows.len())
+                .filter(|&i| f.matches(&m.rows[i]))
+                .collect();
+            self.files = Some((f, m.revision, idx));
+        }
+        self.files.as_ref().map_or(0, |(_, _, v)| v.len())
+    }
+
+    /// The `i`th row that passes `f`; call [`Self::len`] first in the frame.
+    pub fn row<'a>(&self, m: &'a ExportModel, f: FileFilter, i: usize) -> Option<&'a Row> {
+        if !f.any() {
+            return m.rows.get(i);
+        }
+        let (_, _, idx) = self.files.as_ref()?;
+        m.rows.get(*idx.get(i)?)
+    }
+
+    /// Every warning as (row, warning) indices, by code and then by row; cached by the revision.
+    pub fn warnings(&mut self, m: &ExportModel) -> &[(usize, usize)] {
+        if !matches!(&self.warns, Some((rev, _)) if *rev == m.revision) {
+            self.computed += 1;
+            let mut v: Vec<(usize, usize)> = m
+                .rows
+                .iter()
+                .enumerate()
+                .flat_map(|(r, row)| (0..row.warnings.len()).map(move |w| (r, w)))
+                .collect();
+            v.sort_by_key(|&(r, w)| m.rows[r].warnings[w].code);
+            self.warns = Some((m.revision, v));
+        }
+        self.warns.as_ref().map_or(&[], |(_, v)| v)
+    }
+}
+
+/// A warning in the Warnings tab: `CODE (severity): message`.
+pub fn warning_line(w: &Warning) -> String {
+    format!(
+        "{} ({}): {}",
+        w.code.as_str(),
+        format!("{:?}", w.severity).to_lowercase(),
+        w.message
+    )
 }

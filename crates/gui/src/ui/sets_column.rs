@@ -616,6 +616,22 @@ fn menu(
     model: &AppModel,
     acts: &mut Vec<Act>,
 ) {
+    // First: it only reads, so it works while sets are not editable (the disable below cannot be undone).
+    ui.menu_button("Show in Explorer", |ui| {
+        for mk in &v.members {
+            let name = model.item(mk).map_or(mk.as_str(), |i| i.name.as_str());
+            let off = model.reveal_problem(mk);
+            let r = ui.add_enabled(off.is_none(), egui::Button::new(name));
+            let r = match &off {
+                Some(why) => r.on_disabled_hover_text(why),
+                None => r,
+            };
+            if r.clicked() {
+                acts.push(Act::Bulk(MenuAction::ShowInExplorer(mk.clone())));
+                ui.close();
+            }
+        }
+    });
     if !editing.on {
         ui.disable();
     }

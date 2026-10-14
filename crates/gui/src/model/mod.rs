@@ -21,6 +21,7 @@ pub mod rnm;
 pub mod sections;
 pub mod set_preview;
 pub mod sets;
+pub mod shell;
 pub mod view;
 pub mod viewport3d;
 
@@ -294,6 +295,8 @@ pub struct AppModel {
     pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Keyboard navigation, the shortcut sheet and the command palette (items 5 and 19).
     pub nav: nav::Nav,
+    /// Explorer requests the app has not started yet (Task 5, `model::shell`).
+    pub shell: Vec<shell::ShellRequest>,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -413,6 +416,7 @@ impl AppModel {
             nvtt_key: None,
             plugin_refs: Default::default(),
             nav: Default::default(),
+            shell: Vec::new(),
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -771,6 +775,9 @@ impl AppModel {
             WorkerMsg::Event(e) => self.export.on_event(e),
             WorkerMsg::ExportDone(result) => {
                 self.export.running = None;
+                if let Some(p) = self.export.pace.as_mut() {
+                    p.stop(Instant::now());
+                }
                 let mut failure = None;
                 match result {
                     Ok(summary) => self.export.summary = Some(summary),
@@ -1143,6 +1150,7 @@ impl AppModel {
         self.pending_text = None;
         self.export = export::ExportModel {
             open: true,
+            pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
         };
         let cancel = CancelToken::default();

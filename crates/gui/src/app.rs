@@ -262,6 +262,10 @@ impl eframe::App for SdcApp {
         } else {
             crate::ui::draw_with_scan(ui, &mut self.model, &mut self.state, Some(&mut self.meshes));
         }
+        // Explorer requests the drawer and the menus queued this frame (Task 5).
+        for req in self.model.take_shell() {
+            crate::model::shell::spawn(&req);
+        }
         if let Some(s) = self.meshes.take_settings() {
             self.model.settings.meshes = s;
             self.model.save_settings();

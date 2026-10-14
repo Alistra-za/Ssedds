@@ -82,6 +82,7 @@ Textures and sets are never selected together. The column heading counts the sel
 - *Copy settings from <texture> to N selected…*: a checklist of the active (last clicked) texture's own settings, all ticked; untick what you want to keep. Textures only; to copy between sets, use *Select members of kind* first.
 - *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept. A texture filling a locked slot is skipped, and the report says so.
 - For sets, *Select members of kind*, which turns the selection into those textures.
+- *Show in Explorer* (one texture selected): opens Explorer with the source file selected. It is greyed out, with the reason, when the file is gone.
 
 Every change of this kind is one undo step, and the folder is planned once. A read-only `sdc.toml` takes no bulk change. The Advanced drawer still edits one texture at a time.
 
@@ -89,6 +90,7 @@ Every change of this kind is one undo step, and the folder is planned once. A re
 - The slot commands: *From this set*, *Path* and *Clear*. Each is one undo step.
 - *From another set*: links the slot to a map of another set. The link writes that map's output path when it has one (a TruePBR set's packed output), otherwise its `textures\...` game path. A map with neither is greyed out, so a link never points at nothing. A link needs the same slot kind, so the shared slots (glow / skin_sk, coat / fuzz) never offer the other kind.
 - *Lock* / *Unlock*: a locked slot (shown with a lock icon) keeps its fill. It refuses a drag in or out and the slot commands. Bulk edits skip it with the reason *slot locked*, or *slot locked in <set>* when the fill is borrowed from another set. Automatic re-typing leaves it alone; you can still change the texture's sub-type by hand. The lock is saved in `sdc-project.toml` and is never written to the PGPatcher JSON.
+- *Show in Explorer*: the source file of the texture that fills the slot, selected in Explorer. A set pill's own menu has a *Show in Explorer* submenu that lists its members.
 
 **Encoding follows type.** When a texture's sub-type changes (a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set on it that the new type does not allow are reset, so the new type's default applies; a note after the status line says which (hover it when there are several). Settings that are still valid are kept, and a texture in a locked slot is left alone and named in the note. One undo restores both the change and the reset.
 
@@ -158,7 +160,9 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 
 - If some textures are undecided, a dialog offers **Proceed anyway** or **Cancel**. Proceeding exports only the decided textures and skips the rest; it never decides for you.
 - If a source file changed on disk since it was planned, the textures concerned show "changed on disk" and the Textures column offers **Reload**. Reload plans again, re-reading only the changed files. Export checks first and plans again by itself, so the export uses current files. The GUI also checks whenever its window regains focus.
-- The **drawer** at the bottom opens when Export starts: a *Files* tab with per-file progress (queued, running, done, up to date, skipped, failed) and a *Warnings* tab grouped by code. Click a row to select that texture. **Cancel** stops the batch; **Save report…** writes the report; **Close** hides the drawer.
+- The **drawer** at the bottom opens when Export starts. While the export runs its line reads *done/total Â· elapsed Â· files/s Â· ETA*: files per second is the average of the last 10 seconds, and the ETA appears once 3 files have finished or 2 seconds have passed. **Cancel** stops the batch; **Save reportâ¦** writes the report; **Copy CLI command** copies the matching `sdc` command; **Open export folder** opens the export folder in Explorer (greyed out, with the reason, until Export has created it); **Close** hides the drawer.
+  - The *Files* tab lists each file with its state and handles thousands of files: only the rows on screen are drawn. **Failed only** (failed, or failed validation) and **Has warnings** narrow it, and together they show the files that match both. Click a row to select that texture. **Show in Explorer** on a row selects the written output once it exists, otherwise the source file.
+  - The *Warnings* tab lists every warning on its own row: the code, the severity, then the message (wrapped; a very long one is cut at three lines and shows whole on hover) and the file, which you can click.
 - **Copy CLI command** copies the `sdc convert` command that reproduces this export from the command line (same folder, output, BC1 decoder and thread count; an NVTT path chosen in Advanced is not included: add `--nvtt <path>`). Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes.
 
 ## Sets and the PGPatcher JSON

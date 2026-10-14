@@ -87,6 +87,11 @@ fn a_filled_slot_offers_the_slot_commands_other_sets_and_lock() {
                 None
             ),
             (
+                MenuAction::ShowInExplorer(ROCK.into()),
+                "Show in Explorer",
+                None
+            ),
+            (
                 MenuAction::SlotLock {
                     set: ROCK_SET.into(),
                     n: 1,

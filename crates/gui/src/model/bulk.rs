@@ -851,6 +851,8 @@ pub enum MenuAction {
     RenameOutputs,
     /// F3b D5: remove the `[inputs]` aliases of the selected textures.
     ClearInputAlias,
+    /// Task 5: select the source file of texture `key` in Explorer.
+    ShowInExplorer(String),
 }
 
 /// One entry of a right-click menu; `disabled` is the hover reason.
@@ -1018,7 +1020,17 @@ impl AppModel {
         ]
         .into_iter()
         .chain(self.rename_entries(false))
+        .chain(active.filter(|_| n == 1).map(|k| self.show_entry(k)))
         .collect()
+    }
+
+    /// "Show in Explorer" for the source of texture `key`; off, with the reason, when the file is gone.
+    fn show_entry(&self, key: &str) -> MenuEntry {
+        MenuEntry {
+            action: MenuAction::ShowInExplorer(key.to_string()),
+            label: "Show in Explorer".into(),
+            disabled: self.reveal_problem(key),
+        }
     }
 
     /// F3b D5: the rename entries both menus append. Inputs need `sdc.toml`, Outputs `sdc-project.toml`.
@@ -1172,6 +1184,11 @@ impl AppModel {
             },
         ];
         menu.extend(links);
+        // The member that fills this slot has a source file to show.
+        let own = v.slots.iter().find(|(k, _)| **k == kind);
+        if let Some((_, super::sets::SlotFill::Own { item })) = own {
+            menu.push(self.show_entry(item));
+        }
         menu.push(MenuEntry {
             action: MenuAction::SlotLock {
                 set: id.clone(),
@@ -1209,6 +1226,7 @@ impl AppModel {
                 let keys = self.aliased_selection();
                 self.clear_input_alias(&keys);
             }
+            MenuAction::ShowInExplorer(key) => return self.reveal_item(&key).err(),
         }
         None
     }
