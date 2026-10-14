@@ -31,25 +31,36 @@ fn slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
-/// The input of a job, or of an earlier recipe, that already writes `output` (case-insensitive, either
-/// separator); the recipe's own raw sources are not counted, their jobs give way to it (Note M8).
+/// The input of a job that writes (or will, once decided or acknowledged: not a raw input, an RNM layer or an
+/// error), or of another recipe, that also writes `output` (case-insensitive, either separator). The recipe's own
+/// raw sources are raw inputs (Note M8). `outputs` holds every recipe's output (explicit or default), input and
+/// whether it writes, in planning order, collected before any recipe is planned, so a later recipe counts too
+/// (DECISIONS AF7); `me` is this recipe's index in it.
 fn other_output(
     output: &Path,
-    sources: &[PathBuf],
     jobs: &[ResolvedJob],
-    candidates: &[Candidate],
+    outputs: &[(PathBuf, PathBuf, bool)],
+    me: usize,
 ) -> Option<PathBuf> {
     let fold = |p: &Path| slash(p).to_lowercase();
     let want = fold(output);
     jobs.iter()
-        .filter(|j| !sources.contains(&j.input))
+        .filter(|j| {
+            !matches!(
+                j.status,
+                JobStatus::PackingInput { .. }
+                    | JobStatus::NormalLayer { .. }
+                    | JobStatus::Error { .. }
+            )
+        })
         .find(|j| fold(&j.output) == want)
         .map(|j| j.input.clone())
         .or_else(|| {
-            candidates
+            outputs
                 .iter()
-                .find(|c| fold(&c.virtual_input.output) == want)
-                .map(|c| c.virtual_input.path.clone())
+                .enumerate()
+                .find(|(i, (o, _, writes))| *i != me && *writes && fold(o) == want)
+                .map(|(_, (_, input, _))| input.clone())
         })
 }
 
@@ -407,6 +418,7 @@ pub fn plan_packing(
         reports: BTreeMap::new(),
     };
     let mut consumed: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut heads = vec![];
     for set in sets {
         // Raw members still waiting for a recipe: a planned packing input, or one that failed to load or was
         // cancelled before its Load. A raw map whose sub-type a rule or `--set` named is an ordinary file
@@ -433,10 +445,39 @@ pub fn plan_packing(
         let (choice, recipe_note) =
             chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &pa, &pinfo);
         let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice);
+        heads.push((set, members, recipe_note, recipes, unused));
+    }
+    // Every recipe's output (explicit or default) before any is planned: an explicit packed path is compared with
+    // recipes planned after it too (DECISIONS AF7). A recipe that writes nothing (a failed or cancelled source,
+    // packing off, sources that differ in size) holds no path. The planning loop below walks `heads` in this same
+    // order, so a recipe's index here is its `me` there.
+    let mut outputs: Vec<(PathBuf, PathBuf, bool)> = vec![];
+    for (set, members, _, recipes, _) in &heads {
+        for recipe in recipes {
+            let sources: Vec<PathBuf> = recipe.sources().into_iter().map(|(p, _)| p).collect();
+            let mut vin = virtual_input(members[&sources[0]], recipe.kind);
+            let key = (set.key.clone(), recipe.kind.suffix().to_string());
+            if let Some(p) = packed_outputs.get(&key) {
+                vin.output = p.clone();
+            }
+            let writes = !sources
+                .iter()
+                .any(|p| failed.contains(p) || cancelled.contains(p))
+                && pass1_profile(ctx, set, &vin, recipe.kind, &pa, &pinfo)
+                    .packing
+                    .enabled
+                && !matches!(check_sizes(&sources), Err(PackError::SizeMismatch(_)));
+            outputs.push((vin.output, vin.path, writes));
+        }
+    }
+    let mut next = 0;
+    for (set, members, recipe_note, recipes, unused) in heads {
         let mut unused: Vec<(PathBuf, String)> =
             unused.into_iter().map(|u| (u.path, u.reason)).collect();
         let mut reports = vec![];
         for recipe in recipes {
+            let me = next;
+            next += 1;
             let sources: Vec<PathBuf> = recipe.sources().into_iter().map(|(p, _)| p).collect();
             let mut vin = virtual_input(members[&sources[0]], recipe.kind);
             let mut explicit = false;
@@ -469,7 +510,7 @@ pub fn plan_packing(
             // step 5's duplicate check ran on the files, so it is checked against every other output now. Two
             // jobs on one path would both write it (the last rename wins) and append two manifest records.
             if explicit {
-                let taken = other_output(&vin.output, &sources, jobs, &out.candidates);
+                let taken = other_output(&vin.output, jobs, &outputs, me);
                 if let Some(other) = taken {
                     report.status = RecipeStatus::Failed;
                     report.reason = Some(format!(

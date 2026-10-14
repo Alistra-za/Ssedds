@@ -2323,7 +2323,57 @@ fn owner_chosen_folder_settings_come_through_the_mo2_target() {
         s.notes
     );
     assert_ne!(s.hash, CsSettings::default().hash);
-    assert!(defines.iter().any(|d| d == "CS_SKIN") && defines.iter().any(|d| d == "CS_HAIR"));
+    // Each feature as the owner's own files say (read directly, CS mod under overwrite): the owner turned Hair
+    // Specular off (2026-10-14), so not every feature is on.
+    let cs = root_of(&target).join(r"mods\CommunityShaders_AIO-2026-10-03T06-46Z");
+    let origins = vec![
+        ("cs".to_string(), cs.clone(), 0),
+        (
+            "overwrite".to_string(),
+            root_of(&target).join("overwrite"),
+            i32::MAX,
+        ),
+    ];
+    let direct = render3d::cs_settings::read_settings(&render3d::locate::settings_paths(
+        Some(&origins),
+        &cs.join("Shaders"),
+    ));
+    assert_eq!(
+        defines,
+        render3d::cs_settings::preview_defines(&direct, true),
+        "the GUI reads what the owner's files enable"
+    );
+    for (name, define) in render3d::cs_settings::PREVIEW_FEATURES {
+        assert_eq!(
+            defines.iter().any(|d| d == define),
+            owner_enables(&direct, name),
+            "{name}"
+        );
+    }
+}
+
+/// Whether the settings as read turn feature `name` on: CS loaded it and its own master switch (Vanilla Fresnel's
+/// `Enable`, Hair Specular's `Enabled`) is not 0.
+fn owner_enables(s: &CsSettings, name: &str) -> bool {
+    let switch = match name {
+        "VanillaFresnel" => Some(("Vanilla Fresnel", "Enable")),
+        "HairSpecular" => Some(("Hair Specular", "Enabled")),
+        _ => None,
+    };
+    let off = switch.is_some_and(|(section, key)| {
+        s.merged
+            .get(section)
+            .and_then(|v| v.get(key))
+            .is_some_and(|v| v.as_f64() == Some(0.0) || v.as_bool() == Some(false))
+    });
+    s.loaded.contains(name) && !off
+}
+
+fn root_of(t: &ScanTarget) -> PathBuf {
+    match t {
+        ScanTarget::Mo2 { root, .. } => root.clone(),
+        _ => unreachable!("an MO2 target"),
+    }
 }
 
 /// Review I1: "Choose folder…" after a locate with an MO2 target reads through that target (overwrite wins over

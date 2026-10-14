@@ -422,3 +422,71 @@ fn copy_settings_copies_the_format_pair_and_skips_where_not_allowed() {
         Some("Format: written to 1 of 2; locked on 1 of 2: not valid for this map")
     );
 }
+
+/// Audit 2026-10-13b F-I1 (DECISIONS AF5): a bulk DDS tag write checks the tag against each texture's own format;
+/// a pair its sub-type does not allow is skipped and counted.
+#[test]
+fn a_bulk_tag_skips_a_texture_whose_format_has_no_such_tag() {
+    use engine::policy::allowed_encodings;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let pair_ok = |m: &AppModel, k: &str, t: engine::config::ColorTag| {
+        let p = &m.item(k).unwrap().job.as_ref().unwrap().profile;
+        allowed_encodings(p.subtype, m.target).contains(&(p.format, t))
+    };
+    let t = [
+        engine::config::ColorTag::Srgb,
+        engine::config::ColorTag::Unorm,
+    ]
+    .into_iter()
+    .find(|&t| pair_ok(&m, ROCK, t) && !pair_ok(&m, NORMAL, t))
+    .expect("fixture: a tag the albedo takes and the normal map does not");
+    let ks = strings(&[ROCK, NORMAL]);
+    m.apply_bulk_edit(&ks, "color.tag", BulkOp::Set(json!(t)));
+    idle(&mut m);
+    assert_eq!(file(&m, NORMAL, "color.tag"), None);
+    assert_eq!(
+        m.bulk.report.as_deref(),
+        Some("DDS tag: written to 1 of 2; locked on 1 of 2: not valid for this map")
+    );
+    // Copy settings with only the tag ticked takes the same rule.
+    m.undo();
+    idle(&mut m);
+    m.set_field(ROCK, "color.tag", json!(t));
+    idle(&mut m);
+    m.apply_copy_settings(ROCK, &strings(&[NORMAL]), &["color.tag".to_string()]);
+    idle(&mut m);
+    assert_eq!(file(&m, NORMAL, "color.tag"), None, "copy skips it too");
+    let report = m.bulk.report.clone().unwrap_or_default();
+    assert!(report.contains("not valid for this map"), "{report}");
+}
+
+/// F3a ledger R15 (DECISIONS AF5): Copy with Format ticked from a source that has a tag but no format of its own
+/// copies the tag (checked like a lone tag) instead of dropping it.
+#[test]
+fn copy_with_format_ticked_keeps_a_tag_only_source_tag() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    use engine::config::ColorTag;
+    use engine::policy::allowed_encodings;
+    let pair_ok = |m: &AppModel, k: &str, t: ColorTag| {
+        let p = &m.item(k).unwrap().job.as_ref().unwrap().profile;
+        allowed_encodings(p.subtype, m.target).contains(&(p.format, t))
+    };
+    let t = [ColorTag::Srgb, ColorTag::Unorm]
+        .into_iter()
+        .find(|&t| pair_ok(&m, ODD, t) && pair_ok(&m, LEAF, t))
+        .expect("fixture: a tag both diffuses take");
+    m.set_field(LEAF, "color.tag", json!(t));
+    idle(&mut m);
+    assert_eq!(file(&m, LEAF, "format"), None);
+    m.apply_copy_settings(
+        LEAF,
+        &strings(&[ODD]),
+        &["format".to_string(), "color.tag".to_string()],
+    );
+    idle(&mut m);
+    assert_eq!(file(&m, ODD, "color.tag"), Some(json!(t)));
+}

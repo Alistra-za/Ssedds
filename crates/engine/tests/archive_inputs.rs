@@ -140,6 +140,21 @@ fn an_archive_is_size_checked_before_decoding() {
     ));
 }
 
+/// Audit 2026-10-13b A-I1 (DECISIONS AF2): an entry that claims more than a 16384 px image can need is refused
+/// before anything is inflated.
+#[test]
+fn a_merged_image_claiming_more_than_the_cap_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut z = zip(&[("mergedimage.png", &png(2, 2))], true);
+    let cd = z.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    z[cd + 24..cd + 28].copy_from_slice(&0xF000_0000u32.to_le_bytes()); // uncompressed size
+    let p = write(d.path(), "bomb.kra", &z);
+    match load_image(&p) {
+        Err(LoadError::Decode { msg, .. }) => assert!(msg.contains("larger than"), "{msg}"),
+        other => panic!("expected a decode error, got {other:?}"),
+    }
+}
+
 #[test]
 fn webp_lossless_reads_exactly() {
     let d = tempfile::tempdir().unwrap();
@@ -159,4 +174,44 @@ fn webp_lossless_reads_exactly() {
         [180.0 / 255.0, 90.0 / 255.0, 7.0 / 255.0, 200.0 / 255.0]
     );
     assert_eq!(image_size(&p).unwrap(), (4, 2));
+}
+
+/// Review round 1 (DECISIONS AF2): the inflation is capped from the PNG's own IHDR, so a merged image whose IHDR
+/// says 2×2 but which inflates to megabytes is refused, whether its central directory tells the truth or lies.
+#[test]
+fn a_small_ihdr_with_megabytes_behind_it_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut data = png(2, 2);
+    data.resize(data.len() + (12 << 20), 0); // 12 MiB of zeros after IEND: tiny once deflated
+    let honest = zip(&[("mergedimage.png", &data)], true);
+    let mut liar = honest.clone();
+    let cd = liar.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    liar[cd + 24..cd + 28].copy_from_slice(&100u32.to_le_bytes());
+    for (name, z) in [("honest.kra", honest), ("liar.kra", liar)] {
+        assert!(z.len() < 1 << 20, "{name}: the archive itself is small");
+        let p = write(d.path(), name, &z);
+        match load_image(&p) {
+            Err(LoadError::Decode { msg, .. }) => {
+                assert!(msg.contains("larger than"), "{name}: {msg}")
+            }
+            other => panic!("{name}: expected a decode error, got {other:?}"),
+        }
+    }
+}
+
+/// Review round 1: an archive over MAX_DIM is `DIM-TOO-LARGE` at load too, from the IHDR, before any inflation.
+#[test]
+fn an_archive_over_max_dim_is_too_large_at_load() {
+    let d = tempfile::tempdir().unwrap();
+    let mut merged = png(1, 1);
+    merged[16..20].copy_from_slice(&16385u32.to_be_bytes());
+    let p = write(
+        d.path(),
+        "wide.ora",
+        &zip(&[("mergedimage.png", &merged)], true),
+    );
+    assert!(matches!(
+        load_image(&p),
+        Err(LoadError::TooLarge { dim: 16385, .. })
+    ));
 }

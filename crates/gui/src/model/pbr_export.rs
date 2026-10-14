@@ -5,7 +5,9 @@ use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
 use super::{AppModel, ViewCache};
-use crate::pgp::prefix::{check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls};
+use crate::pgp::prefix::{
+    check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls, rename_hits_elsewhere,
+};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, to_text, EntryInput};
@@ -426,12 +428,15 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
     if m.target != Target::Cs {
         return vec![];
     }
+    let known = m.known_textures(Some(0));
     set_views(m)
         .iter()
         .filter(|v| v.pbr)
         .flat_map(|v| {
-            pitfalls(&v.settings, v.derived_match.as_deref().unwrap_or(""))
+            let derived = v.derived_match.as_deref().unwrap_or("");
+            pitfalls(&v.settings, derived)
                 .into_iter()
+                .chain(rename_hits_elsewhere(&v.settings, derived, &known))
                 .map(move |w| issue(v, format!("{}: {w}", v.id)))
         })
         .collect()
@@ -596,8 +601,18 @@ pub fn finish(
             Some(why) => notes.push(format!("not in JSON: {id} ({why})")),
         }
     }
-    if kept.is_empty() {
-        notes.push("PGPatcher JSON not written: no PBR set exported completely".into());
+    // DECISIONS AF1: delete sections alone would strip vanilla shapes with no PBR replacement; keep the old JSON.
+    if p.entries.iter().all(|(_, _, e)| e.section) {
+        notes.push(
+            "PGPatcher JSON not written: there is no PBR set, and delete sections alone are not written".into(),
+        );
+        return Finish::Nothing;
+    }
+    if kept.iter().all(|e| e.section) {
+        notes.push(
+            "PGPatcher JSON not written: no PBR set exported completely (the previous JSON is kept; delete sections alone would remove shapes with no PBR replacement)"
+                .into(),
+        );
         return Finish::Nothing;
     }
     let doc = document(&kept);

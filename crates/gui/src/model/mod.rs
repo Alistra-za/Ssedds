@@ -37,6 +37,9 @@ use engine::session::Session;
 use items::*;
 use serde_json::json;
 use std::path::PathBuf;
+
+/// The file an NVTT probe ran on: path, size and modified time (`AppModel::refresh_nvtt_if_changed`).
+type NvttKey = (PathBuf, u64, Option<std::time::SystemTime>);
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -248,6 +251,8 @@ pub struct AppModel {
     pub filter: Filter,
     pub search: String,
     pub status_line: String,
+    /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
+    status_note: Option<String>,
     pub banner: Option<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
@@ -271,6 +276,11 @@ pub struct AppModel {
     /// M5 (DECISIONS Note NV3): the NVTT probe of `settings.nvtt_path`, run on start, on a path change and on window
     /// focus; `None` until the first run.
     pub nvtt: Option<engine::nvtt::NvttProbe>,
+    /// Generation of the latest NVTT probe, and whether it still runs (on a worker, DECISIONS AF3).
+    nvtt_gen: u64,
+    nvtt_pending: bool,
+    /// The file the last probe ran on (path, size, modified time; `None` inside: none found), `None` before any.
+    nvtt_key: Option<Option<NvttKey>>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -363,6 +373,7 @@ impl AppModel {
             filter: Filter::default(),
             search: String::new(),
             status_line: String::new(),
+            status_note: None,
             dropped_fills: Default::default(),
             banner: None,
             encoding_note: None,
@@ -384,6 +395,9 @@ impl AppModel {
             close_ready: false,
             restart_needed: false,
             nvtt: None,
+            nvtt_gen: 0,
+            nvtt_pending: false,
+            nvtt_key: None,
             plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
@@ -606,7 +620,11 @@ impl AppModel {
                 self.finish_plan();
             }
         } else if changed {
+            // The plan this starts carries a queued export to its end (`finish_plan`).
             self.replan();
+        } else if std::mem::take(&mut self.export_after_plan) {
+            // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
+            self.export_clicked();
         }
     }
 
@@ -649,6 +667,7 @@ impl AppModel {
             || self.votes_pending.is_some()
             || self.export.running.is_some()
             || self.preview.working()
+            || self.nvtt_pending
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -677,6 +696,7 @@ impl AppModel {
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
             WorkerMsg::KnownPaths(result) => self.known_paths_landed(result),
+            WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => {
@@ -759,6 +779,7 @@ impl AppModel {
     /// Export the folder; first the checks that need an answer (M3a spec §2.5). Sources that changed since the plan
     /// are flagged and the plan is made again first, so the export starts from fresh plans (M3a spec §7).
     pub fn export_clicked(&mut self) {
+        self.status_note = None;
         if self.root.is_none() {
             return;
         }
@@ -910,6 +931,29 @@ impl AppModel {
         self.refresh_if_settled();
     }
 
+    /// A user edit recorded a step: re-plan as a change (`replan_changed`).
+    fn replan_after_edit(&mut self) {
+        self.type_edit_recorded();
+        self.replan_changed();
+    }
+
+    /// `replan` for a change the user made to the project (an edit, an undo or a redo): an Export queued behind a
+    /// scan-finished read is cancelled with a note (DECISIONS AF4, AF10, AF11).
+    fn replan_changed(&mut self) {
+        let cancel = self.export_after_plan
+            && self.planning.is_none()
+            && matches!(self.votes_pending, Some((_, false)));
+        self.replan();
+        if cancel {
+            self.export_after_plan = false;
+            self.status_note = Some(
+                "Export cancelled: the project changed while scan results were loading — click Export again."
+                    .into(),
+            );
+            self.status_line = self.status_note.clone().unwrap_or_default();
+        }
+    }
+
     /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
     /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
     fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
@@ -929,8 +973,7 @@ impl AppModel {
             created_file: None,
         });
         self.auto_replans = 0;
-        self.type_edit_recorded();
-        self.replan();
+        self.replan_after_edit();
         true
     }
 
@@ -1253,6 +1296,9 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        if let Some(n) = &self.status_note {
+            self.status_line = format!("{n} {}", self.status_line);
+        }
         self.prune_selection();
         // Keep the selection when its item or set still exists; else nothing.
         let gone = match &self.selection {
@@ -1479,8 +1525,7 @@ impl AppModel {
         });
         self.auto_replans = 0;
         if replan {
-            self.type_edit_recorded();
-            self.replan();
+            self.replan_after_edit();
         }
     }
 
@@ -1506,7 +1551,8 @@ impl AppModel {
         if let Some(d) = self.sets_doc.as_mut() {
             d.restore_keeping_json_sha(&s.project);
         }
-        self.replan();
+        // An undo or redo changes the project like an edit (AF11), without the edit's type-follow bookkeeping.
+        self.replan_changed();
     }
 
     pub fn can_undo(&self) -> bool {
@@ -1662,10 +1708,52 @@ impl AppModel {
     }
 
     /// The BC1 decoder for the next launch. The session's model is fixed, so a difference needs a restart.
-    /// Probe NVTT again (Spike S7b: about 30 ms, so on the UI thread). shortcut: synchronous, move it off the UI
-    /// thread if a slow nvcompress is ever seen.
+    /// Probe NVTT again, on a worker (DECISIONS AF3: a wrong program can take up to the probe timeout); the result
+    /// lands in `nvtt_landed`. A newer probe supersedes an older one still running.
     pub fn refresh_nvtt(&mut self) {
-        let now = Some(engine::nvtt::probe(self.settings.nvtt_path.as_deref()));
+        self.nvtt_gen += 1;
+        self.nvtt_pending = true;
+        self.nvtt_key = Some(self.nvtt_file());
+        let (generation, path) = (self.nvtt_gen, self.settings.nvtt_path.clone());
+        spawn_guarded(self.tx.clone(), "nvtt-probe", move |tx| {
+            // A panic is this generation's result, so a stale probe's panic never ends the current one's wait.
+            let probe = std::panic::catch_unwind(|| engine::nvtt::probe(path.as_deref()))
+                .unwrap_or_else(|p| {
+                    engine::nvtt::NvttProbe::Missing(format!(
+                        "the probe panicked: {}",
+                        crate::worker::panic_text(&*p)
+                    ))
+                });
+            let _ = tx.send(WorkerMsg::Nvtt { generation, probe });
+        });
+    }
+
+    /// Window focus (DECISIONS AF3): probe again only when the file NVTT resolves to changed (path, size or
+    /// modified time) since the last probe, so a wrong program that takes focus is not started over and over.
+    pub fn refresh_nvtt_if_changed(&mut self) {
+        if self.nvtt_key.as_ref() != Some(&self.nvtt_file()) {
+            self.refresh_nvtt();
+        }
+    }
+
+    /// The file a probe now would run: the configured or located path, with its size and modified time.
+    fn nvtt_file(&self) -> Option<NvttKey> {
+        let (p, _) = engine::nvtt::locate(
+            self.settings.nvtt_path.as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            std::path::Path::new(engine::nvtt::NVTT_DEFAULT),
+        )
+        .ok()?;
+        let md = std::fs::metadata(&p).ok()?;
+        Some((p, md.len(), md.modified().ok()))
+    }
+
+    fn nvtt_landed(&mut self, generation: u64, probe: engine::nvtt::NvttProbe) {
+        if generation != self.nvtt_gen {
+            return;
+        }
+        self.nvtt_pending = false;
+        let now = Some(probe);
         // A change since the last probe (NVTT installed or removed meanwhile) re-plans, so textures on NVTT see it.
         let changed = self.nvtt.is_some() && self.nvtt != now;
         self.nvtt = now;

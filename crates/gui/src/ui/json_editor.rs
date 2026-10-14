@@ -441,7 +441,14 @@ fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<A
             let val = c.own.get(key).map(Value::to_string).unwrap_or_default();
             ui.label(egui::RichText::new(format!("{}: {val}", k.label)).small())
                 .on_hover_text("A slot command; change it with Slot commands…");
-            if c.read_only.is_none() && remove_button(ui) {
+            let locked = key
+                .strip_prefix("slot")
+                .and_then(|n| n.parse::<u8>().ok())
+                .is_some_and(|n| c.locks.contains(&n));
+            if locked {
+                ui.label(egui::RichText::new("locked").small().weak())
+                    .on_hover_text("The slot is locked; unlock it to change its command");
+            } else if c.read_only.is_none() && remove_button(ui) {
                 acts.push(Act::Edit(
                     Owner::Set(set.to_string()),
                     key.to_string(),

@@ -357,7 +357,12 @@ fn skip_of(
             return Some(lock.into());
         }
         // The Format row writes a (format, tag) pair: one this texture's sub-type does not allow is skipped.
-        if let Some(e) = encoding_of(field, v) {
+        // A lone tag pairs with the texture's own (explicit or effective) format (DECISIONS AF5).
+        let tag = (field == "color.tag")
+            .then(|| serde_json::from_value::<ColorTag>(v.clone()).ok())
+            .flatten()
+            .map(|t| (job.profile.format, t));
+        if let Some(e) = encoding_of(field, v).or(tag) {
             if !engine::policy::allowed_encodings(job.profile.subtype, target).contains(&e) {
                 return Some(NOT_ALLOWED.into());
             }
@@ -648,7 +653,8 @@ impl AppModel {
         };
         // R13: the format goes with its tag, as a pair (the Format row's value), so `skip_of` checks it against
         // each target's sub-type and the write is `set_format`; the tag is then not copied on its own.
-        let pair = fields.iter().any(|f| f == "format");
+        // A source with a tag but no format of its own copies the tag alone (F3a ledger R15, DECISIONS AF5).
+        let pair = fields.iter().any(|f| f == "format") && p.file_value(from, "format").is_some();
         let from_job = self.item(from).and_then(|i| i.job.as_ref());
         let writes: Vec<CopyWrite> = fields
             .iter()

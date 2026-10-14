@@ -44,6 +44,23 @@ fn owner_settings(root: &Path) -> CsSettings {
     s
 }
 
+/// Whether the settings as read turn feature `name` on: CS loaded it and its own master switch (Vanilla Fresnel's
+/// `Enable`, Hair Specular's `Enabled`) is not 0.
+fn owner_enables(s: &CsSettings, name: &str) -> bool {
+    let switch = match name {
+        "VanillaFresnel" => Some(("Vanilla Fresnel", "Enable")),
+        "HairSpecular" => Some(("Hair Specular", "Enabled")),
+        _ => None,
+    };
+    let off = switch.is_some_and(|(section, key)| {
+        s.merged
+            .get(section)
+            .and_then(|v| v.get(key))
+            .is_some_and(|v| v.as_f64() == Some(0.0) || v.as_bool() == Some(false))
+    });
+    s.loaded.contains(name) && !off
+}
+
 /// One mesh, one define set, one frame on a grey background, in a fresh renderer.
 fn shoot(
     fp: &Fingerprint,
@@ -89,11 +106,18 @@ fn each_preview_feature_compiles_and_draws_a_head_and_hair_on_the_installed_cs()
     let cache = tempfile::tempdir().unwrap(); // shared by every run below: each permutation compiles once
     let ll = "ENABLE_LL".to_string();
     let all = preview_defines(&s, true);
-    assert_eq!(
-        all.len(),
-        PREVIEW_FEATURES.len() + 1,
-        "the owner's settings turn every preview feature and LL on: {all:?}"
-    );
+    // The owner's settings no longer turn every feature on (Hair Specular off, 2026-10-14): "all" is what they
+    // enable, each feature as read; every feature still compiles and draws alone below.
+    let mut want: Vec<String> = PREVIEW_FEATURES
+        .iter()
+        .filter(|(name, _)| owner_enables(&s, name))
+        .map(|(_, define)| define.to_string())
+        .collect();
+    if s.linear_lighting {
+        want.push(ll.clone());
+    }
+    want.sort();
+    assert_eq!(all, want, "the defines follow the owner's settings");
     let mut cases: Vec<(String, Vec<String>)> = vec![("ENABLE_LL only".into(), vec![ll.clone()])];
     for (name, define) in PREVIEW_FEATURES {
         cases.push((name.to_string(), vec![ll.clone(), define.to_string()]));
