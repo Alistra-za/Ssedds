@@ -427,3 +427,74 @@ fn an_output_path_outside_the_output_root_is_ignored() {
         assert_eq!(outputs(&a), outputs(&b), "{}", rel.display());
     }
 }
+
+/// Audit 2026-10-13b C-I1 (DECISIONS AF7): an explicit packed path equal to another recipe's default output is a
+/// duplicate in either planning order (`landscape/rock01` plans before `stone/stone`).
+#[test]
+fn an_explicit_packed_path_equal_to_another_recipes_default_is_a_duplicate_in_either_order() {
+    for (set, path, clash) in [
+        (
+            "landscape/rock01",
+            "stone/stone_rmaos.dds",
+            "stone_rmaos.dds",
+        ),
+        (
+            "stone/stone",
+            "landscape/rock01_rmaos.dds",
+            "rock01_rmaos.dds",
+        ),
+    ] {
+        let d = fixture();
+        gray(&d.path().join("in"), "landscape/rock01_roughness.png", 90);
+        let mut r = req(&d);
+        r.output_paths = BTreeMap::from([(
+            OutputKey::Packed {
+                set: set.into(),
+                suffix: "rmaos".into(),
+            },
+            PathBuf::from(path),
+        )]);
+        let (p, _) = plan_events(r);
+        let packed = packed_outputs_of(&p);
+        assert_eq!(
+            packed.iter().filter(|o| o.ends_with(clash)).count(),
+            1,
+            "{set}: one job writes {clash}: {packed:?}"
+        );
+        let dup = p
+            .skipped
+            .iter()
+            .filter(|s| s.code == Some(Code::InDuplicate))
+            .count();
+        assert_eq!(dup, 1, "{set}: {:?}", p.skipped);
+    }
+}
+
+/// Audit 2026-10-13b C minor (DECISIONS AF7): only jobs that write are compared; a raw packing input of another set
+/// (consumed into its own recipe) writes nothing at its own path.
+#[test]
+fn an_explicit_packed_path_on_a_raw_inputs_path_is_not_a_duplicate() {
+    let d = fixture();
+    gray(&d.path().join("in"), "landscape/rock01_roughness.png", 90);
+    let mut r = req(&d);
+    r.output_paths = BTreeMap::from([(
+        OutputKey::Packed {
+            set: "landscape/rock01".into(),
+            suffix: "rmaos".into(),
+        },
+        PathBuf::from("stone/stone_roughness.dds"),
+    )]);
+    let (p, _) = plan_events(r);
+    assert!(
+        !p.skipped.iter().any(|s| s.code == Some(Code::InDuplicate)),
+        "{:?}",
+        p.skipped
+    );
+    assert!(
+        packed_outputs_of(&p)
+            .iter()
+            .any(|o| o.ends_with("stone/stone_roughness.dds")),
+        "{:?}",
+        packed_outputs_of(&p)
+    );
+}
