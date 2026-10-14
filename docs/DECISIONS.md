@@ -845,3 +845,13 @@ Real-NVTT checks (`cargo test --release -p engine --test nvtt_real -- --ignored 
 - (c) Engine run of that BC7 file 18.07 s vs direct per-level `-nocuda` processes 17.66 s (ratio 1.023, limit 1.10).
 - (d) `alpha_real/Fingerprints009`, `alpha.policy = blend`: mip 0 alpha PSNR 38.7786 dB on NVTT (`-alpha`), 38.9259 dB on
   bc7e, bench direct `nvtt_production` 38.7883 dB. Not measured: the same file without `-alpha`.
+
+## Note AB — Photoshop PSD/PSB input (plan rulings, 2026-10-14)
+
+Owner ask (2026-10-14): support `.psd`, and look at other common authoring formats sdc does not read yet.
+
+- **AB1 The merged image only.** `.psd` and `.psb` are image inputs (discovery, `[inputs]` aliases, packing, the bake). sdc reads the composite Photoshop stores after the layers and never composites layers itself, so a file reads as Photoshop last flattened it. Own reader (`engine::psd`), no new dependency. Chosen by content (the `8BPS` signature), like every other image input.
+- **AB2 What reads.** RGB and Grayscale; 8, 16 and 32 bits per channel (32-bit is float and linear light, S1); raw or RLE composite data. RGB channel 3 (Grayscale channel 1) is alpha: the document's transparency, or its first alpha channel when it has a Background layer, as the Photoshop DDS plugins read it. Later channels are ignored. An ICC profile (resource 1039) is `IN-ICC-IGNORED` (S8).
+- **AB3 Merged transparency is un-matted.** When the layer section holds `Mtrn`/`Mt16`/`Mt32`, Photoshop matted the composite colour against white; sdc restores `(c − (1 − a)) / a` (clamped for integer depths, the stored value kept where a = 0). Inferred from psd-tools' composite handling; to be confirmed on an owner file.
+- **AB4 Refusals (`IN-DECODE`, with the reason).** Saved without a real composite (resource 1057 `hasRealMergedData` = 0, Maximize Compatibility off): "re-save it with Maximize Compatibility on". Bitmap, Indexed, CMYK, Multichannel, Duotone and Lab modes: "convert the document to RGB or Grayscale". A ZIP-compressed composite (Photoshop does not write one). Over 16384 px is `DIM-TOO-LARGE`, from the header.
+- **AB5 No version bump.** Existing inputs produce the same bytes; a PSD is a new input.

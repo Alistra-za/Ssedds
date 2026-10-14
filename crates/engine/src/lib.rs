@@ -27,6 +27,7 @@ pub mod pack;
 pub mod pipeline;
 pub mod policy;
 pub mod presets;
+mod psd;
 pub mod quantize;
 pub mod reports;
 pub mod resize;

@@ -255,7 +255,13 @@ impl BakeJob {
                 u64::from(d.color_type().bytes_per_pixel()),
             ))
         };
-        header().unwrap_or(0)
+        // A PSD decodes straight to float RGBA (`psd::load`), with no decoded buffer of its own.
+        header()
+            .or_else(|| {
+                let (w, h) = crate::load::image_size(&self.normal).ok()?;
+                Some(Self::peak_bytes(w, h, 0))
+            })
+            .unwrap_or(0)
     }
 
     /// Peak bytes of baking a `w`×`h` `_n` whose decoded texels are `decoded` bytes wide. The peak is inside
