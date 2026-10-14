@@ -1,5 +1,6 @@
 //! Window and layout memory (item 3, DECISIONS AG3, AG17-AG20): what is saved in `gui.toml` `[layout]`, how the saved
 //! window is fitted to the monitors, and the debounce that keeps the file from being written every frame.
+use crate::model::texture_view::{ColumnPrefs, SetFilter, SortKey};
 use crate::model::view::{Channel, Layout, ViewState};
 use crate::model::viewport3d::Look;
 use crate::model::Filter;
@@ -199,7 +200,8 @@ pub struct Probe {
     ppp: Option<f32>,
     widths: [Option<f32>; WIDTH_IDS.len()],
     meshes_view: bool,
-    filter: [bool; 4],
+    filter: Filter,
+    prefs: ColumnPrefs,
     channel: Channel,
     layout: Layout,
     looks: (Look, Look),
@@ -208,6 +210,7 @@ pub struct Probe {
 pub fn probe(
     ctx: &egui::Context,
     filter: &Filter,
+    prefs: &ColumnPrefs,
     view: &ViewState,
     looks: (&Look, &Look),
 ) -> Probe {
@@ -225,12 +228,8 @@ pub fn probe(
         ppp,
         widths: WIDTH_IDS.map(|n| panel_width(ctx, n)),
         meshes_view: crate::ui::header::meshes_view_active(ctx),
-        filter: [
-            filter.needs_decision,
-            filter.warnings,
-            filter.failed,
-            filter.not_in_set,
-        ],
+        filter: filter.clone(),
+        prefs: *prefs,
         channel: view.channel,
         layout: view.layout,
         looks: (*looks.0, *looks.1),
@@ -243,6 +242,7 @@ pub fn capture(
     ctx: &egui::Context,
     prev: &LayoutSettings,
     filter: &Filter,
+    prefs: &ColumnPrefs,
     view: &ViewState,
     looks: (&Look, &Look),
 ) -> LayoutSettings {
@@ -271,6 +271,12 @@ pub fn capture(
         .filter(|(_, on)| *on)
         .map(|(n, _)| n.to_string())
         .collect();
+    l.filter_subtype = filter.subtype.clone();
+    l.filter_format = filter.format.clone();
+    l.filter_encoder = filter.encoder.clone();
+    l.filter_set = filter.set.name().to_string();
+    l.sort = prefs.sort.name().to_string();
+    l.tile = prefs.tile;
     l.preview_channel = view.channel.shader_id() as u8;
     l.preview_layout = view.layout.name().to_string();
     l.look = look_now(looks.0, &prev.look);
@@ -351,13 +357,26 @@ pub fn restore_ctx(ctx: &egui::Context, l: &LayoutSettings) {
 }
 
 /// The Textures filters, the preview channel and layout the file names; an unknown one is skipped.
-pub fn restore_model(l: &LayoutSettings, filter: &mut Filter, view: &mut ViewState) {
+pub fn restore_model(
+    l: &LayoutSettings,
+    filter: &mut Filter,
+    prefs: &mut ColumnPrefs,
+    view: &mut ViewState,
+) {
     let has = |n: &str| l.filters.iter().any(|f| f == n);
     *filter = Filter {
         needs_decision: has("needs-decision"),
         warnings: has("warnings"),
         failed: has("failed"),
         not_in_set: has("not-in-set"),
+        subtype: l.filter_subtype.clone(),
+        format: l.filter_format.clone(),
+        encoder: l.filter_encoder.clone(),
+        set: SetFilter::from_name(&l.filter_set).unwrap_or_default(),
+    };
+    *prefs = ColumnPrefs {
+        sort: SortKey::from_name(&l.sort).unwrap_or_default(),
+        tile: l.tile,
     };
     view.channel = Channel::from_id(u32::from(l.preview_channel)).unwrap_or_default();
     view.layout = Layout::from_name(&l.preview_layout).unwrap_or_default();

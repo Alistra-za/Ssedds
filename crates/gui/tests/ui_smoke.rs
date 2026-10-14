@@ -296,7 +296,7 @@ fn the_threshold_commits_when_the_drag_stops_not_while_dragging() {
         .threshold;
     let rect = h
         .query_all_by_role(eframe::egui::accesskit::Role::Slider)
-        .next()
+        .nth(1) // the first slider is the Textures column's tile size
         .expect("the threshold slider")
         .rect();
     let at = |f: f32| {

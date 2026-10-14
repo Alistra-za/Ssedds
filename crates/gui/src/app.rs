@@ -52,7 +52,12 @@ impl SdcApp {
         let mut set3d = crate::model::set_preview::SetPreview::from_settings(&model.settings);
         // The saved arrangement: filters, preview channel and layout, and both 3D looks (AG17).
         let layout = model.settings.layout.clone();
-        crate::layout::restore_model(&layout, &mut model.filter, &mut model.view);
+        crate::layout::restore_model(
+            &layout,
+            &mut model.filter,
+            &mut model.prefs,
+            &mut model.view,
+        );
         meshes.v3.look = Look::from_settings(layout.look.as_ref());
         set3d.v3.look = Look::from_settings(layout.set_look.as_ref());
         SdcApp {
@@ -79,12 +84,19 @@ impl SdcApp {
     /// waited 2 s from its first change (AG19), and at exit.
     pub fn sync_layout_at(&mut self, ctx: &egui::Context, now: std::time::Instant) {
         let looks = (&self.meshes.v3.look, &self.state.set3d.v3.look);
-        let probe = crate::layout::probe(ctx, &self.model.filter, &self.model.view, looks);
+        let probe = crate::layout::probe(
+            ctx,
+            &self.model.filter,
+            &self.model.prefs,
+            &self.model.view,
+            looks,
+        );
         if self.layout_probe.as_ref() != Some(&probe) {
             let cur = crate::layout::capture(
                 ctx,
                 &self.model.settings.layout,
                 &self.model.filter,
+                &self.model.prefs,
                 &self.model.view,
                 looks,
             );

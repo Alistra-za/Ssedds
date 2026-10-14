@@ -59,6 +59,24 @@ fn lenient_one<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> 
         .unwrap_or(1.0))
 }
 
+fn lenient_any<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(toml::Value::deserialize(d)?
+        .try_into()
+        .unwrap_or_else(|_| "any".into()))
+}
+
+fn lenient_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(toml::Value::deserialize(d)?
+        .try_into()
+        .unwrap_or_else(|_| "name".into()))
+}
+
+fn lenient_tile<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    Ok(toml::Value::deserialize(d)?
+        .try_into::<f32>()
+        .unwrap_or(96.0))
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -122,6 +140,21 @@ pub struct LayoutSettings {
     /// The Textures filters that are on, by [`FILTER_NAMES`] name.
     #[serde(deserialize_with = "lenient_strings")]
     pub filters: Vec<String>,
+    /// The Textures combo filters: a sub-type id, a format id, a backend id (none: Any), and the set membership one
+    /// (`any`, `in`, `not-in`).
+    #[serde(deserialize_with = "lenient")]
+    pub filter_subtype: Option<String>,
+    #[serde(deserialize_with = "lenient")]
+    pub filter_format: Option<String>,
+    #[serde(deserialize_with = "lenient")]
+    pub filter_encoder: Option<String>,
+    #[serde(deserialize_with = "lenient_any")]
+    pub filter_set: String,
+    /// The Textures sort (`name`, `size`, `status`) and tile size in points.
+    #[serde(deserialize_with = "lenient_name")]
+    pub sort: String,
+    #[serde(deserialize_with = "lenient_tile")]
+    pub tile: f32,
     /// The preview channel, as `Channel::shader_id`.
     #[serde(deserialize_with = "lenient")]
     pub preview_channel: u8,
@@ -142,6 +175,12 @@ impl Default for LayoutSettings {
             widths: BTreeMap::new(),
             meshes_view: false,
             filters: vec![],
+            filter_subtype: None,
+            filter_format: None,
+            filter_encoder: None,
+            filter_set: "any".into(),
+            sort: "name".into(),
+            tile: 96.0,
             preview_channel: 0,
             preview_layout: "side-by-side".into(),
             look: None,
@@ -170,6 +209,17 @@ impl LayoutSettings {
             seen.push(f.clone());
             keep
         });
+        if !["any", "in", "not-in"].contains(&self.filter_set.as_str()) {
+            self.filter_set = "any".into();
+        }
+        if !["name", "size", "status"].contains(&self.sort.as_str()) {
+            self.sort = "name".into();
+        }
+        self.tile = if self.tile.is_finite() && (64.0..=192.0).contains(&self.tile) {
+            self.tile
+        } else {
+            96.0
+        };
         if self.preview_channel > 5 {
             self.preview_channel = 0;
         }

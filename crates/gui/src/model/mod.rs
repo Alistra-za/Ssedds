@@ -23,6 +23,7 @@ pub mod sections;
 pub mod set_preview;
 pub mod sets;
 pub mod shell;
+pub mod texture_view;
 pub mod view;
 pub mod viewport3d;
 
@@ -67,13 +68,7 @@ pub enum Selection {
     Set(String),
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct Filter {
-    pub needs_decision: bool,
-    pub warnings: bool,
-    pub failed: bool,
-    pub not_in_set: bool,
-}
+pub use texture_view::Filter;
 
 /// Which of the two project files a dialog or save error is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +253,9 @@ pub struct AppModel {
     /// F3a: the bulk panel's chip and last report.
     pub bulk: bulk::BulkState,
     pub filter: Filter,
+    /// The Textures column's sort and tile size (item 8).
+    pub prefs: texture_view::ColumnPrefs,
+    pub(crate) texture_cache: std::cell::RefCell<texture_view::TextureViewCache>,
     pub search: String,
     pub status_line: String,
     /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
@@ -389,6 +387,8 @@ impl AppModel {
             multi: Default::default(),
             bulk: Default::default(),
             filter: Filter::default(),
+            prefs: Default::default(),
+            texture_cache: Default::default(),
             search: String::new(),
             status_line: String::new(),
             status_note: None,
@@ -1466,36 +1466,6 @@ impl AppModel {
             .iter()
             .filter(|i| i.status == ItemStatus::NeedsDecision)
             .count()
-    }
-
-    /// Whether a texture is in a set of more than itself (the rule of the "Not in a set" filter).
-    fn in_set(&self, i: &TextureItem) -> bool {
-        i.set_key
-            .as_ref()
-            .is_some_and(|k| self.sets.iter().any(|s| &s.key == k && s.members.len() > 1))
-    }
-
-    /// How many textures the "Not in a set" filter would show.
-    pub fn not_in_set_count(&self) -> usize {
-        self.items.iter().filter(|i| !self.in_set(i)).count()
-    }
-
-    pub fn visible_items(&self) -> Vec<usize> {
-        let q = self.search.to_lowercase();
-        let in_set = |i: &TextureItem| self.in_set(i);
-        self.items
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| q.is_empty() || i.key.to_lowercase().contains(&q))
-            .filter(|(_, i)| !self.filter.needs_decision || i.status == ItemStatus::NeedsDecision)
-            .filter(|(_, i)| !self.filter.warnings || i.warnings.iter().any(counts_toward_badge))
-            .filter(|(_, i)| {
-                !self.filter.failed
-                    || matches!(i.status, ItemStatus::Failed(_) | ItemStatus::Error(_))
-            })
-            .filter(|(_, i)| !self.filter.not_in_set || !in_set(i))
-            .map(|(n, _)| n)
-            .collect()
     }
 
     /// Select one texture; any multi-selection ends (F3a D1).

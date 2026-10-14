@@ -24,6 +24,12 @@ fn full() -> LayoutSettings {
         widths: [("textures".to_string(), 410.0), ("sets".to_string(), 275.5)].into(),
         meshes_view: true,
         filters: vec!["warnings".into(), "not-in-set".into()],
+        filter_subtype: Some("normal".into()),
+        filter_format: None,
+        filter_encoder: Some("nvtt".into()),
+        filter_set: "in".into(),
+        sort: "size".into(),
+        tile: 128.0,
         preview_channel: 3,
         preview_layout: "split".into(),
         look: Some(LookSettings {

@@ -116,9 +116,9 @@ impl AppModel {
     }
 
     pub(super) fn visible_keys(&self) -> Vec<String> {
-        self.visible_items()
-            .into_iter()
-            .map(|i| self.items[i].key.clone())
+        self.visible_shared()
+            .iter()
+            .map(|&i| self.items[i].key.clone())
             .collect()
     }
 
