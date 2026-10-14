@@ -520,3 +520,78 @@ fn a_dropped_entry_does_not_block_the_export() {
     m.set_cs_statics(ROCK, Statics::Always);
     assert!(name_block(&m));
 }
+
+fn slot_block(m: &AppModel) -> bool {
+    sdc_gui::model::pbr_export::export_blocks(m)
+        .iter()
+        .any(|i| i.text.contains("slot3"))
+}
+
+/// Fix round 1: none of a dropped set's own checks block the export.
+#[test]
+fn a_dropped_set_with_a_bad_slot_path_does_not_block() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    m.set_json_value(ROCK, "slot3", Some(json!(r"..\g.dds")));
+    m.add_cs_block(ROCK, Kind::Txst);
+    m.set_cs_statics(ROCK, Statics::Never);
+    assert!(
+        !slot_block(&m),
+        "{:?}",
+        sdc_gui::model::pbr_export::export_blocks(&m)
+    );
+    m.set_cs_statics(ROCK, Statics::Always);
+    assert!(slot_block(&m));
+}
+
+/// Fix round 1: the export blocks follow a new scan (the scan file is part of their cache key).
+#[test]
+fn export_blocks_follow_a_rescan_both_ways() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    m.set_json_value(ROCK, "slot3", Some(json!(r"..\g.dds")));
+    m.add_cs_block(ROCK, Kind::Txst);
+    let db = d.path().join("scan.db");
+    std::fs::write(&db, "scan 1").unwrap();
+    m.scan_db = Some(db.clone());
+    let key = set_key(&rock(&m)).unwrap();
+    let used = || {
+        Ok(SetFacts {
+            txst_edids: vec![],
+            statics: vec!["meshes/landscape/rocks/rock01.nif".into()],
+        })
+    };
+    // Scan 1: a mesh uses the set, so its bad slot blocks.
+    let _ = m.cs_pbr.facts(Some(&db), &key);
+    m.cs_pbr.facts.borrow_mut().insert(key.clone(), used());
+    assert!(slot_block(&m));
+    // Scan 2 (a new file length): no usable answer, the entry is dropped and the cached block goes.
+    std::fs::write(&db, "scan 2!").unwrap();
+    assert!(!slot_block(&m));
+    // Scan 3: used again, the block comes back.
+    std::fs::write(&db, "scan 3!!").unwrap();
+    let _ = m.cs_pbr.facts(Some(&db), &key);
+    m.cs_pbr.facts.borrow_mut().insert(key, used());
+    assert!(slot_block(&m));
+}
+
+/// Fix round 1: LOD shapes filling the row cap never hide a static after them.
+#[test]
+fn lod_rows_filling_the_cap_do_not_hide_a_static() {
+    let all: Vec<_> = (0..5)
+        .map(|i| row(&format!("meshes/lod/r{i}_lod_0.nif")))
+        .chain([row("meshes/landscape/rocks/rock01.nif")])
+        .collect();
+    let read = |n: usize| Ok(all.iter().take(n).cloned().collect());
+    assert_eq!(
+        statics_of(5, read).unwrap(),
+        ["meshes/landscape/rocks/rock01.nif"]
+    );
+    assert_eq!(
+        statics_of(6, read).unwrap(),
+        ["meshes/landscape/rocks/rock01.nif"]
+    );
+    let lod_only = |n: usize| Ok(all[..5].iter().take(n).cloned().collect());
+    assert!(statics_of(5, lod_only).unwrap().is_empty());
+    assert!(statics_of(9, lod_only).unwrap().is_empty());
+}

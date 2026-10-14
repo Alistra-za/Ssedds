@@ -281,6 +281,10 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
 fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
     let mut out = vec![];
     for v in &set_views(m) {
+        // Design §5.1: a set whose entry the statics rule drops writes no JSON, so nothing of it blocks.
+        if m.target == Target::Cs && !m.pgp_entry_wanted(v) {
+            continue;
+        }
         if has(v, SlotKind::Coat) && has(v, SlotKind::Fuzz) {
             out.push(issue(v, format!("{}: _cnr and _f both use slot 7", v.id)));
         }
