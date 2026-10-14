@@ -618,3 +618,57 @@ impl AppModel {
         )
     }
 }
+
+pub const NOT_CHECKED: &str = "EDIDs not checked: no plugin scan yet";
+/// W4.
+pub const NO_TXST_USES: &str = "No texture set of the latest scan uses this texture";
+
+/// Design §6 W1–W3 for one EDID against the scan's winning records of its kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdidCheck {
+    Found,
+    /// W2: only a case-insensitive match; the scanned record's exact spelling (CS is case-sensitive).
+    Case(String),
+    /// W1.
+    NotFound,
+    /// W3.
+    NotSinglePass,
+    /// W3, a DATA too short to carry flags.
+    SinglePassUnknown,
+}
+
+pub fn check_edid(kind: Kind, edid: &str, recs: &[WinRec]) -> EdidCheck {
+    match recs.iter().find(|r| r.edid == edid) {
+        Some(r) if kind == Kind::Mato => match r.mato_flags {
+            None => EdidCheck::SinglePassUnknown,
+            Some(f) if f & 1 == 0 => EdidCheck::NotSinglePass,
+            Some(_) => EdidCheck::Found,
+        },
+        Some(_) => EdidCheck::Found,
+        None => match recs.iter().find(|r| r.edid.eq_ignore_ascii_case(edid)) {
+            Some(r) => EdidCheck::Case(r.edid.clone()),
+            None => EdidCheck::NotFound,
+        },
+    }
+}
+
+/// The warning shown next to the EDID; `None` when it is fine. W2's exact spelling is the fix button's label.
+pub fn check_text(c: &EdidCheck) -> Option<&'static str> {
+    Some(match c {
+        EdidCheck::Found => return None,
+        EdidCheck::Case(_) => "the scanned record differs in case only (CS matches the exact case)",
+        EdidCheck::NotFound => "not found among the scanned winning records",
+        EdidCheck::NotSinglePass => "CS ignores this JSON unless the record is single-pass",
+        EdidCheck::SinglePassUnknown => {
+            "single-pass unknown (the record's DATA is too short to carry flags)"
+        }
+    })
+}
+
+pub fn single_pass_text(flags: Option<u32>) -> &'static str {
+    match flags {
+        None => "single-pass unknown",
+        Some(f) if f & 1 == 0 => "not single-pass",
+        Some(_) => "single-pass",
+    }
+}

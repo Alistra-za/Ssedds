@@ -595,3 +595,47 @@ fn lod_rows_filling_the_cap_do_not_hide_a_static() {
     assert!(statics_of(5, lod_only).unwrap().is_empty());
     assert!(statics_of(9, lod_only).unwrap().is_empty());
 }
+
+fn win(edid: &str, flags: Option<u32>) -> modscan::plugin_store::WinRec {
+    modscan::plugin_store::WinRec {
+        formid: 1,
+        edid: edid.into(),
+        plugin: "Skyrim.esm".into(),
+        mato_flags: flags,
+    }
+}
+
+#[test]
+fn edid_checks_find_case_mismatches_and_single_pass_status() {
+    let txst = [win("LandscapeSnow01", None)];
+    assert_eq!(
+        check_edid(Kind::Txst, "LandscapeSnow01", &txst),
+        EdidCheck::Found
+    );
+    assert_eq!(
+        check_edid(Kind::Txst, "landscapesnow01", &txst),
+        EdidCheck::Case("LandscapeSnow01".into())
+    );
+    assert_eq!(check_edid(Kind::Txst, "Nope", &txst), EdidCheck::NotFound);
+    // Flags come from DATA offset 44 (48-byte DATA included); None only when DATA is too short.
+    let mato = [
+        win("Snow1P", Some(1)),
+        win("Plain", Some(0)),
+        win("Ash1P", None),
+    ];
+    assert_eq!(check_edid(Kind::Mato, "Snow1P", &mato), EdidCheck::Found);
+    assert_eq!(
+        check_edid(Kind::Mato, "Plain", &mato),
+        EdidCheck::NotSinglePass
+    );
+    assert_eq!(
+        check_edid(Kind::Mato, "Ash1P", &mato),
+        EdidCheck::SinglePassUnknown
+    );
+    assert_eq!(check_text(&EdidCheck::Found), None);
+    assert_eq!(
+        check_text(&EdidCheck::NotSinglePass),
+        Some("CS ignores this JSON unless the record is single-pass")
+    );
+    assert_eq!(single_pass_text(Some(1)), "single-pass");
+}
