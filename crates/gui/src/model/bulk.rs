@@ -115,7 +115,7 @@ impl AppModel {
         self.multi_in_effect()
     }
 
-    fn visible_keys(&self) -> Vec<String> {
+    pub(super) fn visible_keys(&self) -> Vec<String> {
         self.visible_items()
             .into_iter()
             .map(|i| self.items[i].key.clone())
@@ -1032,6 +1032,8 @@ impl AppModel {
             .and_then(|d| d.error())
             .map(|e| format!("sdc-project.toml is read-only: {e}"));
         let plural = |n: usize, one: &str, many: &str| if n == 1 { one } else { many }.to_string();
+        // The key comes from the action list (item 5), which the shortcut sheet shows too.
+        let f2 = format!("  {}", crate::ui::actions::keys_text("rename"));
         let (ni, no) = (
             self.rename_keys(RenameMode::Inputs).len(),
             self.rename_keys(RenameMode::Outputs).len(),
@@ -1041,7 +1043,7 @@ impl AppModel {
             label: format!(
                 "{}…{}",
                 plural(ni, "Rename input", "Rename inputs"),
-                if sets { "" } else { "  F2" }
+                if sets { "" } else { f2.as_str() }
             ),
             disabled: toml
                 .clone()
@@ -1052,7 +1054,7 @@ impl AppModel {
             label: format!(
                 "{}…{}",
                 plural(no, "Rename output", "Rename outputs"),
-                if sets { "  F2" } else { "" }
+                if sets { f2.as_str() } else { "" }
             ),
             disabled: project.or_else(|| (no == 0).then(|| "no set writes an output".into())),
         };

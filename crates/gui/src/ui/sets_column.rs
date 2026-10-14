@@ -160,6 +160,8 @@ pub fn draw(
         .as_ref()
         .map(|(id, t)| (id.as_str(), (now - t) / FLASH_SECS));
     let mut rects = vec![];
+    // A set the palette picked scrolls into view (item 19).
+    let reveal = model.nav.reveal_set.take();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -174,6 +176,12 @@ pub fn draw(
                 let out = pill(
                     ui, model, thumbs, v, index, &editing, is_blocked, look, &sel_items, &mut acts,
                 );
+                if reveal
+                    .as_deref()
+                    .is_some_and(|k| !v.key.is_empty() && k == v.key)
+                {
+                    ui.scroll_to_rect(out.rect, None);
+                }
                 rects.push(out.rect);
                 if out.handle_released {
                     released = Some(v.id.clone());
@@ -580,20 +588,20 @@ fn shader_combo(
 }
 
 /// The Rename submenu of a set's menu: label, one-line hover text, and what it does. F3b D5 for the last two.
-fn rename_entries(set: &str) -> [(&'static str, &'static str, Act); 3] {
+fn rename_entries(set: &str) -> [(String, &'static str, Act); 3] {
     [
         (
-            "Rename…",
+            "Rename…".to_string(),
             "Change the set's name only",
             Act::OpenRename(set.to_string()),
         ),
         (
-            "Rename outputs…  F2",
+            format!("Rename outputs…  {}", super::actions::keys_text("rename")),
             "Change the names of the files this set writes",
             Act::Bulk(MenuAction::RenameOutputs),
         ),
         (
-            "Rename inputs…",
+            "Rename inputs…".to_string(),
             "Read the source files under other names; the files on disk keep theirs",
             Act::Bulk(MenuAction::RenameInputs),
         ),

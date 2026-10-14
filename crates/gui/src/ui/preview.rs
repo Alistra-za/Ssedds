@@ -59,30 +59,12 @@ struct Info {
 impl Info {
     fn new(model: &AppModel, key: &str) -> Info {
         let shown = model.preview.encoded.shown().cloned();
-        let source = match &model.preview.source {
-            SourceState::Ready(s) => Some(s.clone()),
-            _ => None,
-        };
         let job = model.item(key).and_then(|i| i.job.as_ref());
         let job_format = job.map(|j| j.profile.format);
         let nvtt = job.is_some_and(|j| j.profile.encoder.backend == engine::config::Backend::Nvtt);
-        let has_source = source.as_ref().is_some_and(|s| !s.levels.is_empty());
-        let (dims, first, end) = match (&shown, &source) {
-            (Some(o), _) => {
-                let s = &o.result.source;
-                (
-                    s.dims.clone(),
-                    s.first_level,
-                    s.first_level + o.result.levels.len(),
-                )
-            }
-            (None, Some(s)) if has_source => (
-                s.dims.clone(),
-                s.first_level,
-                s.first_level + s.levels.len(),
-            ),
-            _ => (vec![], 0, 0),
-        };
+        let has_source =
+            matches!(&model.preview.source, SourceState::Ready(s) if !s.levels.is_empty());
+        let (dims, first, end) = model.preview_mips();
         Info {
             dims,
             first,
@@ -122,10 +104,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
     let Some(key) = model.expanded.clone() else {
         return;
     };
-    if escape_pressed(ui, model) {
-        model.collapse();
-        return;
-    }
     let info = Info::new(model, &key);
     if info.known() {
         model.view.clamp_mip(info.first, info.end);
@@ -151,15 +129,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
     }
 }
 
-/// Esc collapses, unless something else wants it: a dialog, a popup, or a text field being edited.
-fn escape_pressed(ui: &mut egui::Ui, model: &AppModel) -> bool {
-    let ctx = ui.ctx().clone();
-    model.dialog.is_none()
-        && !egui::Popup::is_any_open(&ctx)
-        && !ctx.egui_wants_keyboard_input()
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-}
-
 fn channel_help(c: Channel) -> &'static str {
     match c {
         Channel::Rgba => "All channels",
@@ -174,7 +143,14 @@ fn channel_help(c: Channel) -> &'static str {
 fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, info: &Info) -> Requests {
     let mut requests = Requests::default();
     ui.with_layout(UiLayout::right_to_left(Align::Min), |ui| {
-        if ui.button("✕ Close").on_hover_text("Close (Esc)").clicked() {
+        if ui
+            .button("✕ Close")
+            .on_hover_text(format!(
+                "Close ({})",
+                super::actions::keys_text("close-preview")
+            ))
+            .clicked()
+        {
             requests.close = true;
         }
         ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {

@@ -63,10 +63,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             view_toggle(ui);
             column_checkboxes(ui, model);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Not while `sdc.toml` is ignored (M3a spec §7.4): an export would not be the project's settings.
-                let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
-                let can_export =
-                    model.root.is_some() && model.export.running.is_none() && !read_only;
+                let can_export = can_export(model);
                 let mut export = egui::Button::new(egui::RichText::new("Export").strong())
                     .min_size(egui::vec2(120.0, 30.0));
                 if can_export {
@@ -127,25 +124,11 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z. They leave a text field's own undo alone and wait while a dialog is open,
-/// or while a sets-column box (`set_modal`: delete, choice, refused) is. They
-/// work in the Meshes view too (AG5): no code documented a reason to keep them off there.
-pub fn undo_redo_keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) {
-    if set_modal || model.dialog.is_some() || ctx.egui_wants_keyboard_input() {
-        return;
-    }
-    let redo = ctx.input_mut(|i| {
-        i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
-            || i.consume_key(
-                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                egui::Key::Z,
-            )
-    });
-    if redo {
-        model.redo();
-    } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
-        model.undo();
-    }
+/// Export can start: a folder is open, no export runs, and `sdc.toml` is not ignored (M3a spec §7.4: an export would
+/// not be the project's settings).
+pub fn can_export(model: &AppModel) -> bool {
+    let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
+    model.root.is_some() && model.export.running.is_none() && !read_only
 }
 
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
@@ -157,7 +140,10 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
             model.redo_label()
         };
         let hover = match label {
-            Some(l) => format!("{name}: {l}  ({})", if undo { "Ctrl+Z" } else { "Ctrl+Y" }),
+            Some(l) => format!(
+                "{name}: {l}  ({})",
+                super::actions::keys_text(if undo { "undo" } else { "redo" })
+            ),
             None => format!("Nothing to {}", name.to_lowercase()),
         };
         let r = ui.add_enabled(label.is_some(), egui::Button::new(name));

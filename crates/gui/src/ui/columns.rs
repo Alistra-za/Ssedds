@@ -277,9 +277,27 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
     let gap = ui.spacing().item_spacing.x;
     let cols = (((ui.available_width() - SCROLL_ALLOWANCE + gap) / (tile_w + gap)) as usize).max(1);
     let rows = visible.len().div_ceil(cols);
+    // Item 5: Up and Down move by this row's width, and a texture the keys or the palette moved to scrolls into view.
+    model.nav.cols = cols;
+    let reveal = model
+        .nav
+        .reveal_item
+        .take()
+        .and_then(|k| visible.iter().position(|&i| model.items[i].key == k))
+        .map(|n| n / cols);
+    let row_step = tile_h + ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_rows(ui, tile_h, rows, |ui, range| {
+            // The rows outside `range` are not drawn: the reveal's rectangle is worked out from the first drawn one.
+            if let Some(r) = reveal {
+                let top = ui.max_rect().top() + (r as f32 - range.start as f32) * row_step;
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(ui.max_rect().left(), top),
+                    egui::vec2(ui.max_rect().width(), tile_h),
+                );
+                ui.scroll_to_rect(rect, None);
+            }
             for r in range {
                 let row = &visible[r * cols..((r + 1) * cols).min(visible.len())];
                 ui.allocate_ui_with_layout(

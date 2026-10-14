@@ -10,6 +10,7 @@ pub mod inspector;
 pub mod items;
 pub mod known_paths;
 pub mod meshes;
+pub mod nav;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
@@ -291,6 +292,8 @@ pub struct AppModel {
     nvtt_key: Option<Option<NvttKey>>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
+    /// Keyboard navigation, the shortcut sheet and the command palette (items 5 and 19).
+    pub nav: nav::Nav,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -409,6 +412,7 @@ impl AppModel {
             nvtt_pending: false,
             nvtt_key: None,
             plugin_refs: Default::default(),
+            nav: Default::default(),
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,

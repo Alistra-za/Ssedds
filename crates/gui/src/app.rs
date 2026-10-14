@@ -209,15 +209,6 @@ impl eframe::App for SdcApp {
             ctx.request_repaint_after(left);
         }
 
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
-            // A failed save raises its own dialog.
-            let _ = self.model.save();
-        }
-        crate::ui::header::undo_redo_keys(
-            &ctx,
-            &mut self.model,
-            self.state.drops.pending.is_some(),
-        );
         if ctx.input(|i| i.viewport().close_requested()) && !self.model.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -258,12 +249,15 @@ impl eframe::App for SdcApp {
             self.meshes.start(req);
         }
         if crate::ui::header::meshes_view_active(&ctx) {
+            // The Textures view reads its keys in `ui::draw_with_scan`.
+            crate::ui::actions::keys(&ctx, &mut self.model, self.state.drops.pending.is_some());
             crate::ui::meshes::page(ui, &mut self.meshes);
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {
                 self.model.settings.render3d.shaders = Some(fp);
                 self.model.save_settings();
             }
-            // The Textures model's dialogs (close with unsaved edits, an export error) must show in this view too.
+            // The Textures model's dialogs (close with unsaved edits, an export error), the shortcut sheet and the palette
+            // must show in this view too.
             crate::ui::dialogs::draw(&ctx, &mut self.model);
         } else {
             crate::ui::draw_with_scan(ui, &mut self.model, &mut self.state, Some(&mut self.meshes));

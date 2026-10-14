@@ -102,7 +102,7 @@ Apply is greyed out while a row is red: two files or sets would end up with one 
 
 ## The preview
 
-Double-click a tile (or a set member) to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again.
+Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. In the preview, **[** and **]** step to the previous and next texture in the order the Textures column shows, **1** to **6** pick the channel buttons from left to right, and **PageUp** and **PageDown** step through the mips.
 
 - **Live encode** is **off by default**. Encoding happens when you press **Encode now**; switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
 - Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
@@ -110,6 +110,45 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
+
+## Keyboard
+
+Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. Press **Ctrl+K** for the command palette: type part of an action's, a texture's or a set's name (the letters in order are enough; names that start with what you typed come first, then names that contain it). Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, Esc closes. The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
+
+While a text field has the keyboard (the search box, a name, a number), the shortcuts leave it alone: only **Ctrl+K** opens the palette, and **Esc** leaves the field. No shortcut acts while a dialog, a menu or a box is open; a dialog has its own Enter and Esc. In the Textures grid the arrow keys follow the order on show (search and filters applied): Left and Right step one texture, Up and Down one row. Shift with an arrow selects the range from the active texture, as a Shift-click does.
+
+| Area | Keys | Action |
+|---|---|---|
+| Global | Ctrl+K | Command palette |
+| Global | F1 or ? | Keyboard shortcuts |
+| Global | Ctrl+S | Save |
+| Global | Ctrl+Z | Undo |
+| Global | Ctrl+Y or Ctrl+Shift+Z | Redo |
+| Textures grid | Ctrl+A | Select every visible texture (every set when a set is active) |
+| Textures grid | Esc | Clear the selection |
+| Textures grid | Left | Select the texture to the left |
+| Textures grid | Right | Select the texture to the right |
+| Textures grid | Up | Select the texture above |
+| Textures grid | Down | Select the texture below |
+| Textures grid | Shift+Left | Extend the selection to the left |
+| Textures grid | Shift+Right | Extend the selection to the right |
+| Textures grid | Shift+Up | Extend the selection up a row |
+| Textures grid | Shift+Down | Extend the selection down a row |
+| Textures grid | Enter or Space | Open the expanded preview of the active texture |
+| Preview | Esc | Close the preview |
+| Preview | [ | Previous texture |
+| Preview | ] | Next texture |
+| Preview | 1 | Show RGBA |
+| Preview | 2 | Show R |
+| Preview | 3 | Show G |
+| Preview | 4 | Show B |
+| Preview | 5 | Show A |
+| Preview | 6 | Show the α-mask |
+| Preview | PageUp | Larger mip |
+| Preview | PageDown | Smaller mip |
+| Sets | F2 | Rename the outputs of the selected sets, or the inputs of the selected textures |
+| Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
+| Dialogs | Esc | Cancel the dialog |
 
 ## Export
 

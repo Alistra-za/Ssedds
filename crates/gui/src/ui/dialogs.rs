@@ -6,6 +6,7 @@ use eframe::egui;
 use engine::config::{AlphaPolicy, GreenConvention};
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
+    super::actions::draw(ctx, model);
     let Some(dialog) = model.dialog.clone() else {
         return;
     };

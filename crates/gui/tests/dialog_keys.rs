@@ -179,7 +179,7 @@ fn ctrl_z_waits_while_a_sets_column_box_is_open() {
         .with_size(egui::vec2(400.0, 300.0))
         .build_ui_state(
             |ui, (m, open): &mut (AppModel, bool)| {
-                sdc_gui::ui::header::undo_redo_keys(ui.ctx(), m, *open)
+                sdc_gui::ui::actions::keys(ui.ctx(), m, *open);
             },
             (with_a_step(d.path()), true),
         );
@@ -235,7 +235,9 @@ fn ctrl_z_and_ctrl_y_work_in_the_meshes_view() {
     let mut h = Harness::builder()
         .with_size(egui::vec2(400.0, 300.0))
         .build_ui_state(
-            |ui, m: &mut AppModel| sdc_gui::ui::header::undo_redo_keys(ui.ctx(), m, false),
+            |ui, m: &mut AppModel| {
+                sdc_gui::ui::actions::keys(ui.ctx(), m, false);
+            },
             with_a_step(d.path()),
         );
     h.ctx

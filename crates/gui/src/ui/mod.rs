@@ -1,4 +1,5 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
+pub mod actions;
 pub mod advanced;
 pub mod bulk_panel;
 pub mod color;
@@ -66,7 +67,8 @@ pub fn draw_with_scan(
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
     state.thumbs.sweep(model.items_rev());
-    let keys_free = selection_keys_free(ui, model);
+    // First, before any widget sees the keys (items 5 and 19).
+    actions::keys(ui.ctx(), model, state.drops.pending.is_some());
     header::draw(ui, model);
     if let Some(m) = scan {
         egui::Panel::top("textures-scan").show(ui, |ui| meshes::scan_row(ui, m));
@@ -114,10 +116,6 @@ pub fn draw_with_scan(
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
     json_editor::draw(ui.ctx(), model);
-    // Last, so every modal, menu and the preview has had its chance to consume the key first.
-    if keys_free {
-        selection_keys(ui, model);
-    }
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
@@ -251,38 +249,5 @@ fn column_panel(
         if let Some(s) = PanelState::load(ui.ctx(), panel).filter(|_| released) {
             ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
         }
-    }
-}
-
-/// F3a D1: whether Ctrl+A / Esc may act this frame: not while a widget has focus (the search box keeps its own
-/// Ctrl+A), a dialog, popup or any modal layer is open, or a texture is expanded (the preview owns Esc). Read at the
-/// start of the frame, before anything draws or consumes.
-fn selection_keys_free(ui: &egui::Ui, model: &AppModel) -> bool {
-    !(model.dialog.is_some()
-        || model.expanded.is_some()
-        || egui::Popup::is_any_open(ui.ctx())
-        || ui
-            .ctx()
-            .memory(|m| m.focused().is_some() || m.top_modal_layer().is_some()))
-}
-
-/// Ctrl+A selects everything visible and Esc clears. Runs after the whole UI has drawn, so a key a modal or menu
-/// consumed this frame (Esc closing it) is gone and does not also clear the selection.
-fn selection_keys(ui: &egui::Ui, model: &mut AppModel) {
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
-        model.select_all_visible();
-    }
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        model.clear_selection();
-    }
-    // F3b D5: F2 renames the outputs of selected sets, or the selected textures' inputs.
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2)) {
-        use crate::model::rename::RenameMode;
-        let sets = !model.selected_sets().is_empty();
-        model.open_rename(if sets {
-            RenameMode::Outputs
-        } else {
-            RenameMode::Inputs
-        });
     }
 }
