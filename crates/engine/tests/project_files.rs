@@ -243,6 +243,7 @@ fn project_rel_resolves_a_relative_input_against_an_absolute_root() {
         game_path: String::new(),
         output: PathBuf::new(),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let rel = |root: &Path, p: &str| project_rel(root, &input(p));
     assert_eq!(

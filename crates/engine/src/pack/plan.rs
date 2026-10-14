@@ -68,6 +68,7 @@ pub fn virtual_input(first: &InputFile, kind: RecipeKind) -> InputFile {
         game_path,
         output: first.output.with_file_name(format!("{stem}.dds")),
         kind: InputKind::Image,
+        real_rel: None,
     }
 }
 
