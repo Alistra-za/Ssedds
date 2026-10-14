@@ -2,6 +2,7 @@
 //! Task 5 (items 6 and 14): Open export folder, Show in Explorer, the progress line with pace, a virtualised Files
 //! list with filters, and a Warnings tab that shows each message. DECISIONS AG34-AG38.
 use crate::model::export::{cli_command, warning_line, FileFilter, FilesIndex, RowState};
+use crate::model::shell::StatCache;
 use crate::model::{AppModel, Dialog};
 use eframe::egui;
 use std::path::Path;
@@ -22,6 +23,11 @@ pub struct DrawerState {
     pub filter: FileFilter,
     /// The filtered rows and the warning list, cached by (filter, export revision).
     pub index: FilesIndex,
+    /// The Warnings tab groups by code; the codes whose files are listed.
+    pub by_code: bool,
+    pub expanded: std::collections::BTreeSet<engine::codes::Code>,
+    /// Cached "is the export folder / this file on disk" answers (AG39).
+    pub stats: StatCache,
 }
 
 /// Draw the drawer while `model.export.open`. Call before the central panel.
@@ -33,7 +39,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut DrawerState) {
         .resizable(true)
         .default_size(220.0)
         .show(ui, |ui| {
-            toolbar(ui, model);
+            toolbar(ui, model, &mut state.stats);
             ui.separator();
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut state.tab, Tab::Files, "Files");
@@ -49,7 +55,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut DrawerState) {
             let (mut picked, mut reveal) = (None, None);
             match state.tab {
                 Tab::Files => files(ui, model, state, &mut picked, &mut reveal),
-                Tab::Warnings => warnings(ui, model, &mut state.index, &mut picked),
+                Tab::Warnings => warnings(ui, model, state, &mut picked),
             }
             if let Some(key) = picked {
                 model.select_job(&key);
@@ -61,7 +67,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut DrawerState) {
 }
 
 /// The header line: counts, then Cancel / Open export folder / Close / Save report / Copy CLI command.
-fn toolbar(ui: &mut egui::Ui, model: &mut AppModel) {
+fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
     let count =
         |f: &dyn Fn(&RowState) -> bool| model.export.rows.iter().filter(|r| f(&r.state)).count();
     let converted = count(&|s| matches!(s, RowState::Done { .. }));
@@ -104,7 +110,8 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel) {
             ui.label(egui::RichText::new(n).small());
         }
     });
-    let folder = model.export_folder_state();
+    let exists = stats.is_dir(&model.export_root(), Instant::now());
+    let folder = model.export_folder_check(exists);
     ui.horizontal(|ui| {
         if running {
             cancel = ui.button("Cancel").clicked();
@@ -216,7 +223,8 @@ fn files(
                         ui.label(format!("{} warnings", r.warnings.len()));
                     }
                     // The written output once it exists, otherwise the source.
-                    let target = model.row_reveal_target(r);
+                    let now = Instant::now();
+                    let target = model.row_reveal_with(r, &mut |p| state.stats.is_file(p, now));
                     let b = ui.add_enabled(
                         target.is_some(),
                         egui::Button::new("Show in Explorer").small(),
@@ -237,19 +245,26 @@ fn files(
         });
 }
 
-/// The Warnings tab: one row per warning, `CODE severity` then the message (wrapped) then the file; virtualised, with
-/// a fixed row height of three lines (a longer message is cut there and shows whole on hover).
+/// The Warnings tab. Flat (the default): one row per warning, `file` first (so it stays clickable inside the clipped
+/// row), then `CODE severity` and the message; a fixed height of three lines, a longer message shows whole on hover.
+/// "By code": one row per code with its count; expanding it lists that code's files. Both are virtualised.
 fn warnings(
     ui: &mut egui::Ui,
     model: &AppModel,
-    index: &mut FilesIndex,
+    state: &mut DrawerState,
     picked: &mut Option<String>,
 ) {
-    let list = index.warnings(&model.export);
-    if list.is_empty() {
+    if state.index.warnings(&model.export).is_empty() {
         ui.label("No warnings.");
         return;
     }
+    ui.toggle_value(&mut state.by_code, "By code")
+        .on_hover_text("One row per warning code with its count; expand a code to see its files");
+    if state.by_code {
+        by_code(ui, model, state, picked);
+        return;
+    }
+    let list = state.index.warnings(&model.export);
     let line = ui.text_style_height(&egui::TextStyle::Body);
     let row_h = 3.0 * line;
     egui::ScrollArea::vertical()
@@ -262,15 +277,74 @@ fn warnings(
                 ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     ui.horizontal_wrapped(|ui| {
+                        if ui.link(&row.job_key).clicked() {
+                            *picked = Some(row.job_key.clone());
+                        }
                         ui.strong(warning.code.as_str());
                         ui.label(format!("{:?}", warning.severity).to_lowercase());
                         ui.label(&warning.message)
                             .on_hover_text(warning_line(warning));
-                        if ui.link(&row.job_key).clicked() {
-                            *picked = Some(row.job_key.clone());
-                        }
                     });
                 });
             }
         });
+}
+
+/// The by-code view as one flat virtual list: a header row per code, then its files while it is expanded.
+fn by_code(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    state: &mut DrawerState,
+    picked: &mut Option<String>,
+) {
+    let groups = state.index.groups(&model.export).to_vec();
+    let total: usize = groups
+        .iter()
+        .map(|g| {
+            1 + if state.expanded.contains(&g.0) {
+                g.2 - g.1
+            } else {
+                0
+            }
+        })
+        .sum();
+    let row_h = ui.spacing().interact_size.y;
+    let mut toggle = None;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show_rows(ui, row_h, total, |ui, range| {
+            let list = state.index.warnings(&model.export);
+            let mut at = 0;
+            for &(code, start, end) in &groups {
+                let open = state.expanded.contains(&code);
+                let len = 1 + if open { end - start } else { 0 };
+                for i in range.start.max(at)..range.end.min(at + len) {
+                    if i == at {
+                        let arrow = if open { "v" } else { ">" };
+                        let text = format!("{arrow} {} ({})", code.as_str(), end - start);
+                        if ui.selectable_label(open, text).clicked() {
+                            toggle = Some(code);
+                        }
+                    } else {
+                        let (r, w) = list[start + i - at - 1];
+                        let row = &model.export.rows[r];
+                        let warning = &row.warnings[w];
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            if ui.link(&row.job_key).clicked() {
+                                *picked = Some(row.job_key.clone());
+                            }
+                            ui.label(&warning.message)
+                                .on_hover_text(warning_line(warning));
+                        });
+                    }
+                }
+                at += len;
+            }
+        });
+    if let Some(c) = toggle {
+        if !state.expanded.remove(&c) {
+            state.expanded.insert(c);
+        }
+    }
 }

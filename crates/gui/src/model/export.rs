@@ -180,15 +180,11 @@ impl ExportModel {
                     SkipKind::UpToDate => RowState::UpToDate,
                     k => RowState::Skipped(*k, reason.clone()),
                 };
-                let mut set = false;
+                // A skip is not work: it counts in done/total but not in the files/s rate or the ETA.
                 if let Some(r) = self.row(&ev) {
                     if r.state.accepts_skip() {
                         r.state = state;
-                        set = true;
                     }
-                }
-                if set {
-                    self.finished_at(now);
                 }
             }
             EventKind::FileFailed { error, .. } => {
@@ -430,12 +426,15 @@ impl FileFilter {
     }
 }
 
+/// The revision, every (row, warning) pair by code, and the per-code ranges over it.
+type Warns = (u64, Vec<(usize, usize)>, Vec<(Code, usize, usize)>);
+
 /// The row indices the Files tab shows and the warnings the Warnings tab lists, cached by what they were computed
 /// from: the filter and the export's `revision`. A frame that changed neither only reads the cache.
 #[derive(Default)]
 pub struct FilesIndex {
     files: Option<(FileFilter, u64, Vec<usize>)>,
-    warns: Option<(u64, Vec<(usize, usize)>)>,
+    warns: Option<Warns>,
     /// How many times the filter / the warning list was computed (tests).
     pub computed: u32,
 }
@@ -468,18 +467,37 @@ impl FilesIndex {
 
     /// Every warning as (row, warning) indices, by code and then by row; cached by the revision.
     pub fn warnings(&mut self, m: &ExportModel) -> &[(usize, usize)] {
-        if !matches!(&self.warns, Some((rev, _)) if *rev == m.revision) {
-            self.computed += 1;
-            let mut v: Vec<(usize, usize)> = m
-                .rows
-                .iter()
-                .enumerate()
-                .flat_map(|(r, row)| (0..row.warnings.len()).map(move |w| (r, w)))
-                .collect();
-            v.sort_by_key(|&(r, w)| m.rows[r].warnings[w].code);
-            self.warns = Some((m.revision, v));
+        self.refresh_warnings(m);
+        self.warns.as_ref().map_or(&[], |(_, v, _)| v)
+    }
+
+    /// One `(code, start, end)` per code over [`Self::warnings`]: `end - start` warnings carry the code.
+    pub fn groups(&mut self, m: &ExportModel) -> &[(Code, usize, usize)] {
+        self.refresh_warnings(m);
+        self.warns.as_ref().map_or(&[], |(_, _, g)| g)
+    }
+
+    fn refresh_warnings(&mut self, m: &ExportModel) {
+        if matches!(&self.warns, Some((rev, ..)) if *rev == m.revision) {
+            return;
         }
-        self.warns.as_ref().map_or(&[], |(_, v)| v)
+        self.computed += 1;
+        let mut v: Vec<(usize, usize)> = m
+            .rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| (0..row.warnings.len()).map(move |w| (r, w)))
+            .collect();
+        v.sort_by_key(|&(r, w)| m.rows[r].warnings[w].code);
+        let mut groups: Vec<(Code, usize, usize)> = vec![];
+        for (i, &(r, w)) in v.iter().enumerate() {
+            let code = m.rows[r].warnings[w].code;
+            match groups.last_mut() {
+                Some(g) if g.0 == code => g.2 = i + 1,
+                _ => groups.push((code, i, i + 1)),
+            }
+        }
+        self.warns = Some((m.revision, v, groups));
     }
 }
 

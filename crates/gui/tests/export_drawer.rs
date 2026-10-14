@@ -135,8 +135,8 @@ fn events_feed_the_pace_with_the_clock_they_are_given() {
         at(t0, 1500),
     );
     let p = x.pace.as_ref().unwrap();
-    // Two files finished within the first 2 s: 1 file/s over the 2 s so far.
-    assert!((p.rate(at(t0, 2000)) - 1.0).abs() < 1e-9);
+    // The up-to-date skip is not work: one converted file in the 2 s so far is 0.5 files/s.
+    assert!((p.rate(at(t0, 2000)) - 0.5).abs() < 1e-9);
 }
 
 // ---- Events ----
@@ -319,6 +319,8 @@ fn open_export_folder_is_disabled_until_the_folder_exists() {
         "a disabled button queues nothing"
     );
     // Once it exists the button opens it.
+    // The drawer re-checks the disk at most once a second.
+    std::thread::sleep(Duration::from_millis(1100));
     std::fs::create_dir_all(&out).unwrap();
     h.run();
     h.run();
@@ -500,4 +502,89 @@ fn the_slot_menu_shows_the_member_that_fills_the_slot() {
         .find(|e| e.label == "Show in Explorer")
         .expect("the entry");
     assert!(matches!(&e.action, MenuAction::ShowInExplorer(k) if k == "landscape/rock01.png"));
+}
+
+// ---- Task 6 carry-over: By code, stat cache, pace without skips ----
+
+fn warned(x: &mut ExportModel, key: &str, code: Code, msg: &str) {
+    let png = key.replace(".dds", ".png");
+    x.on_event(ev(
+        0,
+        key,
+        &png,
+        EventKind::FileDiscovered { output: key.into() },
+    ));
+    x.on_event(ev(
+        1,
+        key,
+        &png,
+        EventKind::Warning(Warning::new(code, msg)),
+    ));
+}
+
+#[test]
+fn by_code_lists_a_row_per_code_and_expands_to_its_files() {
+    let d = tempfile::tempdir().unwrap();
+    let mut x = ExportModel::default();
+    warned(&mut x, "t/a.dds", Code::DimNpot, "first npot");
+    warned(&mut x, "t/b.dds", Code::DimNpot, "second npot");
+    warned(&mut x, "t/c.dds", Code::DimNpot, "third npot");
+    let other = Code::PackConflict;
+    warned(&mut x, "t/d.dds", other, "a conflict");
+    let mut idx = FilesIndex::default();
+    let g = idx.groups(&x).to_vec();
+    assert_eq!(g.iter().map(|g| g.2 - g.1).sum::<usize>(), 4);
+    assert_eq!(g.len(), 2);
+    let mut h = drawer_harness(model_with(d.path(), x));
+    h.run();
+    h.get_by_label("Warnings").click();
+    h.run();
+    // The flat list is the default: the file link comes with its message.
+    h.get_by_label("t/a.dds");
+    h.get_by_label("By code").click();
+    h.run();
+    h.run();
+    h.get_by_label(&format!("> {} (3)", Code::DimNpot.as_str()));
+    h.get_by_label(&format!("> {} (1)", other.as_str()));
+    assert!(h.query_by_label("t/a.dds").is_none());
+    h.get_by_label(&format!("> {} (3)", Code::DimNpot.as_str()))
+        .click();
+    h.run();
+    h.run();
+    h.get_by_label(&format!("v {} (3)", Code::DimNpot.as_str()));
+    for f in ["t/a.dds", "t/b.dds", "t/c.dds"] {
+        h.get_by_label(f);
+    }
+    assert!(h.query_by_label("t/d.dds").is_none());
+}
+
+#[test]
+fn stats_are_made_once_a_second() {
+    let t0 = Instant::now();
+    let d = tempfile::tempdir().unwrap();
+    let mut c = sdc_gui::model::shell::StatCache::default();
+    for i in 0..100 {
+        assert!(c.is_dir(d.path(), at(t0, i)));
+        assert!(!c.is_file(&d.path().join("x"), at(t0, i)));
+    }
+    assert_eq!(c.stats, 2, "100 frames, two paths: two stats");
+    c.is_dir(d.path(), at(t0, 1500));
+    assert_eq!(c.stats, 3, "re-checked after a second");
+}
+
+#[test]
+fn skips_stay_out_of_the_rate_but_count_as_done() {
+    let t0 = Instant::now();
+    let mut x = ExportModel::default();
+    x.pace = Some(Pace::new(t0));
+    for i in 0..40 {
+        let (job, png) = (format!("a/{i}.dds"), format!("a/{i}.png"));
+        x.on_event_at(
+            ev(i, &job, &png, skipped(SkipKind::UpToDate)),
+            at(t0, 100 * i),
+        );
+    }
+    let p = x.pace.as_ref().unwrap();
+    assert_eq!(p.rate(at(t0, 4000)), 0.0);
+    assert!(p.eta(40, 100, at(t0, 4000)).is_none(), "no ETA from skips");
 }

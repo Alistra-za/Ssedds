@@ -315,7 +315,11 @@ fn a_stale_raw_buffer_is_not_shown_after_the_section_was_closed() {
         .unwrap()
         .focus();
     h.run();
-    h.key_press(eframe::egui::Key::Num9);
+    // A text event: the box now holds "48449", which is not the stored value.
+    h.query_all_by_role(TEXT)
+        .find(|n| n.value().as_deref() == Some("4844"))
+        .unwrap()
+        .type_text("9");
     h.run();
     // The section collapses while the box is focused, then opens again many frames later.
     h.get_by_label("NiAlphaProperty").click();

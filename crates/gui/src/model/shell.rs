@@ -61,8 +61,13 @@ impl AppModel {
 
     /// The export folder, or why "Open export folder" is off: Explorer would show some other folder instead.
     pub fn export_folder_state(&self) -> Result<PathBuf, String> {
+        self.export_folder_check(self.export_root().is_dir())
+    }
+
+    /// [`Self::export_folder_state`] with the stat result given (the drawer passes a cached one).
+    pub fn export_folder_check(&self, exists: bool) -> Result<PathBuf, String> {
         let p = self.export_root();
-        if p.is_dir() {
+        if exists {
             Ok(p)
         } else {
             Err(format!(
@@ -107,9 +112,50 @@ impl AppModel {
 
     /// What a Files row reveals: the written output once it exists, otherwise the source.
     pub fn row_reveal_target(&self, r: &Row) -> Option<PathBuf> {
+        self.row_reveal_with(r, &mut |p| p.is_file())
+    }
+
+    /// [`Self::row_reveal_target`] with the "is a file" test given (the drawer passes a cached one).
+    pub fn row_reveal_with(
+        &self,
+        r: &Row,
+        is_file: &mut dyn FnMut(&Path) -> bool,
+    ) -> Option<PathBuf> {
         let output = self.export.outputs.get(&r.job_key).map(PathBuf::from);
         output
-            .filter(|p| p.is_file())
-            .or_else(|| Some(PathBuf::from(&r.path)).filter(|p| p.is_file()))
+            .filter(|p| is_file(p))
+            .or_else(|| Some(PathBuf::from(&r.path)).filter(|p| is_file(p)))
+    }
+}
+
+/// Filesystem answers the drawer asks every frame, re-checked at most once per [`STAT_TTL`] (DECISIONS AG39).
+#[derive(Default)]
+pub struct StatCache {
+    map: std::collections::HashMap<PathBuf, (std::time::Instant, bool)>,
+    /// How many real stats were made (tests).
+    pub stats: u32,
+}
+
+pub const STAT_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl StatCache {
+    fn get(&mut self, p: &Path, now: std::time::Instant, dir: bool) -> bool {
+        if let Some((at, v)) = self.map.get(p) {
+            if now.saturating_duration_since(*at) < STAT_TTL {
+                return *v;
+            }
+        }
+        self.stats += 1;
+        let v = if dir { p.is_dir() } else { p.is_file() };
+        self.map.insert(p.to_path_buf(), (now, v));
+        v
+    }
+
+    pub fn is_file(&mut self, p: &Path, now: std::time::Instant) -> bool {
+        self.get(p, now, false)
+    }
+
+    pub fn is_dir(&mut self, p: &Path, now: std::time::Instant) -> bool {
+        self.get(p, now, true)
     }
 }
