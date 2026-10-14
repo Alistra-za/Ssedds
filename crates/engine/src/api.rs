@@ -103,6 +103,9 @@ pub struct BatchRequest {
     /// as `grass::path_key` keys. A listed 1:2 file that passes the detection tests gets a high-confidence
     /// `complex_grass` suggestion. Empty for the CLI, which therefore never auto-tags.
     pub gras_diffuses: BTreeSet<String>,
+    /// GUI (PBR grass design §4.2): as `gras_diffuses` with TruePBR shapes kept (`Store::gras_all_diffuse_textures`).
+    /// A PBR set with a member listed here auto-picks `pbr_grass`. Empty for the CLI, which never auto-picks it.
+    pub gras_all_diffuses: BTreeSet<String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -142,6 +145,7 @@ impl BatchRequest {
             mesh_shaders: BTreeMap::new(),
             mesh_alpha: BTreeMap::new(),
             gras_diffuses: BTreeSet::new(),
+            gras_all_diffuses: BTreeSet::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -1138,6 +1142,7 @@ impl Engine {
                     &index,
                     explicit.get(&s.key).copied(),
                     &req.mesh_shaders,
+                    &req.gras_all_diffuses,
                 );
                 (s.key.clone(), pick)
             })
