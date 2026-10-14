@@ -596,8 +596,12 @@ pub fn finish(
             Some(why) => notes.push(format!("not in JSON: {id} ({why})")),
         }
     }
-    if kept.is_empty() {
-        notes.push("PGPatcher JSON not written: no PBR set exported completely".into());
+    // DECISIONS AF1: delete sections alone would strip vanilla shapes with no PBR replacement; keep the old JSON.
+    if kept.iter().all(|e| e.section) {
+        notes.push(
+            "PGPatcher JSON not written: no PBR set exported completely (the previous JSON is kept; delete sections alone would remove shapes with no PBR replacement)"
+                .into(),
+        );
         return Finish::Nothing;
     }
     let doc = document(&kept);

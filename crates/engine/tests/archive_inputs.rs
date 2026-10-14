@@ -140,6 +140,21 @@ fn an_archive_is_size_checked_before_decoding() {
     ));
 }
 
+/// Audit 2026-10-13b A-I1 (DECISIONS AF2): an entry that claims more than a 16384 px image can need is refused
+/// before anything is inflated.
+#[test]
+fn a_merged_image_claiming_more_than_the_cap_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let mut z = zip(&[("mergedimage.png", &png(2, 2))], true);
+    let cd = z.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    z[cd + 24..cd + 28].copy_from_slice(&0xF000_0000u32.to_le_bytes()); // uncompressed size
+    let p = write(d.path(), "bomb.kra", &z);
+    match load_image(&p) {
+        Err(LoadError::Decode { msg, .. }) => assert!(msg.contains("larger than"), "{msg}"),
+        other => panic!("expected a decode error, got {other:?}"),
+    }
+}
+
 #[test]
 fn webp_lossless_reads_exactly() {
     let d = tempfile::tempdir().unwrap();

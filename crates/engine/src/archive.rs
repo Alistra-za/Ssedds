@@ -28,6 +28,8 @@ fn u32_at(b: &[u8], i: usize) -> u32 {
 struct Entry {
     method: u16,
     compressed: u64,
+    /// Uncompressed size as the central directory claims it.
+    size: u64,
     /// Offset of the entry's local file header.
     local: u64,
 }
@@ -78,6 +80,7 @@ fn find(f: &mut File) -> Result<Entry, String> {
             return Ok(Entry {
                 method: u16_at(&cd, i + 10),
                 compressed: compressed.into(),
+                size: u32_at(&cd, i + 24).into(),
                 local: local.into(),
             });
         }
@@ -89,10 +92,28 @@ fn find(f: &mut File) -> Result<Entry, String> {
     )
 }
 
-/// The bytes of `mergedimage.png` in the archive at `path`. With `limit`, only its first `limit` bytes.
+/// Most bytes a whole `mergedimage.png` may inflate to (DECISIONS AF2): a 16384 px RGBA8 image stored raw
+/// (`MAX_DIM`² × 4 = 1 GiB) plus 64 MiB for PNG filter bytes, chunk framing and ancillary chunks.
+pub(crate) const MERGED_CAP: u64 =
+    crate::load::MAX_DIM as u64 * crate::load::MAX_DIM as u64 * 4 + (64 << 20);
+
+/// The bytes of `mergedimage.png` in the archive at `path`. With `limit`, only its first `limit` bytes; without,
+/// the whole entry, refused past `MERGED_CAP` (a zip bomb).
 pub(crate) fn merged_png(path: &Path, limit: Option<u64>) -> Result<Vec<u8>, String> {
+    merged_png_capped(path, limit, MERGED_CAP)
+}
+
+fn merged_png_capped(path: &Path, limit: Option<u64>, cap: u64) -> Result<Vec<u8>, String> {
+    let too_big = || {
+        format!("mergedimage.png is larger than a 16384 px image can be ({cap} bytes; a corrupt or hostile archive)")
+    };
     let mut f = File::open(path).map_err(|e| e.to_string())?;
     let e = find(&mut f)?;
+    if limit.is_none() && e.size > cap {
+        return Err(too_big());
+    }
+    // The claim can lie: the inflation itself stops one byte past the cap.
+    let limit = limit.unwrap_or(cap + 1);
     let mut h = [0u8; 30];
     f.seek(SeekFrom::Start(e.local))
         .map_err(|e| e.to_string())?;
@@ -105,13 +126,16 @@ pub(crate) fn merged_png(path: &Path, limit: Option<u64>) -> Result<Vec<u8>, Str
     let raw = f.take(e.compressed);
     let mut out = Vec::new();
     let read = match e.method {
-        0 => raw.take(limit.unwrap_or(u64::MAX)).read_to_end(&mut out),
+        0 => raw.take(limit).read_to_end(&mut out),
         8 => flate2::read::DeflateDecoder::new(raw)
-            .take(limit.unwrap_or(u64::MAX))
+            .take(limit)
             .read_to_end(&mut out),
         m => return Err(format!("mergedimage.png uses unsupported ZIP method {m}")),
     };
     read.map_err(|e| format!("corrupt mergedimage.png: {e}"))?;
+    if out.len() as u64 > cap {
+        return Err(too_big());
+    }
     Ok(out)
 }
 
@@ -123,4 +147,51 @@ pub(crate) fn size(path: &Path) -> Result<(u32, u32), String> {
     }
     let be = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
     Ok((be(16), be(20)))
+}
+
+#[cfg(test)]
+mod tests {
+    /// One stored `mergedimage.png` whose central directory claims `claim` bytes; the data is `data`.
+    fn stored(data: &[u8], claim: u32) -> Vec<u8> {
+        let name = super::MERGED;
+        let mut z = b"PK\x03\x04".to_vec();
+        z.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // version, flags, method 0, time, date, crc
+        z.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        z.extend_from_slice(&claim.to_le_bytes());
+        z.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        z.extend_from_slice(&[0, 0]);
+        z.extend_from_slice(name);
+        z.extend_from_slice(data);
+        let cd_off = z.len() as u32;
+        z.extend_from_slice(b"PK\x01\x02");
+        z.extend_from_slice(&[20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // made by .. crc
+        z.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        z.extend_from_slice(&claim.to_le_bytes());
+        z.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        z.extend_from_slice(&[0; 12]);
+        z.extend_from_slice(&0u32.to_le_bytes());
+        z.extend_from_slice(name);
+        let cd_size = z.len() as u32 - cd_off;
+        z.extend_from_slice(b"PK\x05\x06\0\0\0\0\x01\0\x01\0");
+        z.extend_from_slice(&cd_size.to_le_bytes());
+        z.extend_from_slice(&cd_off.to_le_bytes());
+        z.extend_from_slice(&[0, 0]);
+        z
+    }
+
+    /// An entry that lies about its size is still cut off at the cap (the real cap is 1 GiB; 100 bytes here).
+    #[test]
+    fn inflation_past_the_cap_fails_even_when_the_entry_claims_less() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("liar.kra");
+        std::fs::write(&p, stored(&[7; 1000], 10)).unwrap();
+        let e = super::merged_png_capped(&p, None, 100).unwrap_err();
+        assert!(e.contains("larger than"), "{e}");
+        // Within the cap it reads.
+        assert_eq!(
+            super::merged_png_capped(&p, None, 1000).unwrap().len(),
+            1000
+        );
+        assert_eq!(super::merged_png(&p, Some(24)).unwrap().len(), 24);
+    }
 }

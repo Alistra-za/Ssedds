@@ -600,6 +600,67 @@ fn finish_leaves_out_sets_whose_outputs_did_not_export() {
         "{notes:?}"
     );
 }
+/// Audit 2026-10-13b H1 (DECISIONS AF1): delete sections alone never replace the JSON.
+#[test]
+fn finish_with_every_set_failed_keeps_the_old_json_even_with_a_delete_section() {
+    use sdc_gui::model::export::{Row, RowState};
+    use sdc_gui::pgp::writer::EntryInput;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("PBRNIFPatcher/x.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "old good json").unwrap();
+    let last = sdc_gui::model::history::sha256_of(&path);
+    let mut s = sdc_gui::pgp::settings::Settings::new();
+    s.insert("match2".into(), json!("landscape/rock01_n"));
+    let section = EntryInput {
+        settings: s,
+        section: true,
+        ..EntryInput::default()
+    };
+    let set = EntryInput {
+        derived_match: "a\\one".into(),
+        ..Default::default()
+    };
+    let p = PendingJson {
+        path: path.clone(),
+        entries: vec![
+            ("a/one".into(), vec!["a/one.dds".into()], set),
+            ("delete section 1".into(), vec![], section.clone()),
+        ],
+        copies: vec![],
+    };
+    let rows = vec![Row {
+        job_key: "a/one.dds".into(),
+        path: String::new(),
+        state: RowState::Failed("boom".into()),
+        warnings: vec![],
+    }];
+    let mut notes = vec![];
+    assert_eq!(
+        finish(&p, &rows, last.as_deref(), &mut notes),
+        Finish::Nothing
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "old good json");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("PGPatcher JSON not written: no PBR set exported")),
+        "{notes:?}"
+    );
+    // Zero sets at all: a sections-only plan writes nothing either.
+    let only = PendingJson {
+        path: path.clone(),
+        entries: vec![("delete section 1".into(), vec![], section)],
+        copies: vec![],
+    };
+    let mut notes = vec![];
+    assert_eq!(
+        finish(&only, &rows, last.as_deref(), &mut notes),
+        Finish::Nothing
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "old good json");
+}
+
 #[test]
 fn finish_copies_borrowed_slots_and_skips_what_did_not_export() {
     use sdc_gui::model::export::{Row, RowState};
