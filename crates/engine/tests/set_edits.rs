@@ -333,6 +333,57 @@ fn two_files_given_one_output_path_are_duplicates() {
     assert_eq!(dup.len(), 2, "{:?}", p.skipped);
 }
 
+/// Audit 2026-10-14 finding 4: a packed output path equal to another job's output is a duplicate, not two jobs
+/// racing for one file.
+#[test]
+fn a_packed_output_path_equal_to_a_file_output_is_a_duplicate() {
+    let d = fixture();
+    let mut r = req(&d);
+    r.set_edits = vec![
+        SetEdit::Move {
+            file: "stone/stone_roughness.png".into(),
+            to: "landscape/rock01".into(),
+        },
+        SetEdit::Move {
+            file: "stone/stone_ao.png".into(),
+            to: "landscape/rock01".into(),
+        },
+    ];
+    r.output_paths = BTreeMap::from([(
+        OutputKey::Packed {
+            set: "landscape/rock01".into(),
+            suffix: "rmaos".into(),
+        },
+        PathBuf::from("landscape/ROCK01_N.dds"),
+    )]);
+    let (p, events) = plan_events(r);
+    let o = outputs(&p);
+    assert_eq!(
+        o.iter()
+            .filter(|x| x.to_lowercase().ends_with("landscape/rock01_n.dds"))
+            .count(),
+        1,
+        "one job writes rock01_n.dds: {o:?}"
+    );
+    let dup: Vec<_> = p
+        .skipped
+        .iter()
+        .filter(|s| s.code == Some(Code::InDuplicate))
+        .collect();
+    assert_eq!(dup.len(), 1, "{:?}", p.skipped);
+    assert!(dup[0].reason.contains("rock01_n.png"), "{}", dup[0].reason);
+    let failed = events.iter().any(|e| match &e.kind {
+        EventKind::SetResolved { recipes, .. } => recipes.iter().any(|r| {
+            r.status == RecipeStatus::Failed
+                && r.reason
+                    .as_deref()
+                    .is_some_and(|s| s.contains("also written by"))
+        }),
+        _ => false,
+    });
+    assert!(failed, "the recipe reports why it did not run");
+}
+
 #[test]
 fn an_output_path_for_a_missing_file_is_ignored() {
     let d = fixture();
