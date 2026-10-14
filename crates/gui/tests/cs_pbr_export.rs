@@ -287,14 +287,14 @@ fn duplicate_and_invalid_edids_are_refused_per_file() {
     assert_eq!(edid_problem(""), Some("EDID: empty (\"\")".into()));
 }
 
-/// Task 4 review: `to_text` checks no shapes, so a wrong-typed known key (a 2-element colour, an empty glint
-/// object) is left out of the file with a note, never written malformed.
+/// Task 4 review: `to_text` checks no shapes, so a wrong-typed known key (a 2-element colour, a glint table with
+/// no key CS reads, which would be written as `{}`) is left out of the file with a note, never written malformed.
 #[test]
 fn wrong_typed_values_are_left_out_with_a_note() {
     let d = tempfile::tempdir().unwrap();
     let mut m = with_blocks(d.path());
     m.set_cs_value(ROCK, Kind::Txst, "subsurfaceColor", Some(json!([1.0, 1.0])));
-    m.set_cs_value(ROCK, Kind::Txst, "glintParameters", Some(json!({})));
+    m.set_cs_value(ROCK, Kind::Txst, "glintParameters.extra", Some(json!(1)));
     export_and_wait(&mut m);
     let text = std::fs::read_to_string(txst_file(&m, "LandscapeRock01")).unwrap();
     assert_eq!(text, lines(&["{", "    \"specularLevel\": 0.02", "}"]));
