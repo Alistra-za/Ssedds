@@ -81,17 +81,7 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
             {
                 bc7e_compress_blocks(bc, oc, params);
             }
-            for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
-                if src.iter().all(|t| t[3] == 255) {
-                    let blk: &mut [u8; 16] = blk.try_into().unwrap();
-                    if p.alpha.exact_opaque && !native {
-                        force_opaque_mode6(blk);
-                    }
-                    // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native flag
-                    // nor the mode-6 patch covers them. Lossless for RGB, so it runs with the flag off.
-                    force_opaque_rotated(blk);
-                }
-            }
+            bc7_opaque_fix(o, b, p.alpha.exact_opaque && !native);
         }
         f => {
             let bs = f.block_bytes().expect("block format");
@@ -129,9 +119,36 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
     }
 }
 
+/// The encoder-independent BC7 opaque fix-ups (DECISIONS Note NV6) on blocks `o` whose source texels `b` (16 per
+/// block) have alpha 255 throughout: the lossless rotated mode 4/5 fix always, and the S5b mode-6 byte patch when
+/// `mode6_patch` (bc7e without the native flag only).
+fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool) {
+    for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
+        if src.iter().all(|t| t[3] == 255) {
+            let blk: &mut [u8; 16] = blk.try_into().unwrap();
+            if mode6_patch {
+                force_opaque_mode6(blk);
+            }
+            // Rotated mode 4/5 carry alpha in a colour endpoint pair; neither the native flag
+            // nor the mode-6 patch covers them. Lossless for RGB, so it runs with the flag off.
+            force_opaque_rotated(blk);
+        }
+    }
+}
+
+/// The BC7 post steps for a level another encoder wrote (DECISIONS Note NV6): the rotated opaque fix (no mode-6
+/// patch: NVTT constrains the p-bit, spec §5.6), then the complex-grass corner guard, as the bc7e path runs them.
+/// `blocks` is `gather_blocks` of the level's texels.
+pub(crate) fn bc7_post_fix(out: &mut [u8], blocks: &[[u8; 4]], w: u32, h: u32, p: &Profile) {
+    bc7_opaque_fix(out, blocks, false);
+    if p.subtype == Subtype::ComplexGrass {
+        guard_grass_corner(out, blocks, w, h, p);
+    }
+}
+
 /// Uncompressed level bytes (DECISIONS S4): `rgba8` as B8G8R8A8, `r8` as R, `rg8` as R then G, `rgba16f` as four
 /// little-endian halves per texel. Rows are tightly packed (pitch `w * bytes_per_pixel`).
-fn pack_uncompressed(input: &EncoderInput, format: Format) -> Vec<u8> {
+pub(crate) fn pack_uncompressed(input: &EncoderInput, format: Format) -> Vec<u8> {
     match (input, format) {
         (EncoderInput::Ldr(px), Format::Rgba8) => {
             px.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).collect()

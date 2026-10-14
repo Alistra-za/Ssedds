@@ -558,7 +558,7 @@ If the `_n` base is larger than the roughness member's base, its mip 0 correctly
 
 ### 7.5 NVTT 3 as an optional external process
 
-**[Requirement]** NVTT 3 is optional, user-installed, run as a separate process, never redistributed or linked [PLAN §1]. **[Finding]** Its licence forbids use that would subject it to an open-source licence; a separate user-installed process is the clean path [EI §5]. **[Proposal]** Detection checks a configured path, then `C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe`; versions other than the tested 3.2.5 need confirmation. **[Finding]** Per-mip feeding works (spike S7 passed, DECISIONS): each pre-built level is sent as its own `nvcompress -nomips -bc7 -production` (or `-bc6 -production`) job on a temporary RGBA8 (RGBA16F) file and the engine assembles the chain; mip-0 PSNR equals the bench's direct encode to four decimals. Per-process overhead is 0.142 s with CUDA and 0.015 s with `-nocuda`; the cost is CUDA context creation, and BC7 Production runs on the CPU either way with byte-identical output. **[Proposal]** The backend always passes `-nocuda` for BC7 Production. The BC6H half (`-bc6` on RGBA16F levels) is untested and arrives with the NVTT backend in M5; if a level cannot be fed, NVTT encodes mip 0 only and bc7e the rest, with an event.
+**[Requirement]** NVTT 3 is optional, user-installed, run as a separate process, never redistributed or linked [PLAN §1]. **[Finding]** Its licence forbids use that would subject it to an open-source licence; a separate user-installed process is the clean path [EI §5]. **[Decided]** (M5, DECISIONS Note NV) Detection checks a configured path (missing → not found), then `PATH`, then `C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe`; versions other than the tested 3.2.5 need confirmation (`ENC-NVTT-VERSION`). **[Finding]** Per-mip feeding works (spike S7 passed, DECISIONS): each pre-built level is sent as its own `nvcompress -nomips -bc7 -production` (or `-bc6 -production`) job on a temporary RGBA8 (RGBA16F) file and the engine assembles the chain; mip-0 PSNR equals the bench's direct encode to four decimals. Per-process overhead is 0.142 s with CUDA and 0.015 s with `-nocuda`; the cost is CUDA context creation, and BC7 Production runs on the CPU either way with byte-identical output. **[Decided]** (M5, DECISIONS Note NV) The backend always passes `-nocuda`, for BC7 and BC6H. **[Finding]** Spike S7b: nvcompress reads an uncompressed DDS only with a legacy header, so levels are fed as legacy B8G8R8A8 (BC7) or RGBA16F FourCC 113 (BC6H); BC6H works on every level to 1×1 (mip 0 equals the bench's direct encode, peak ratio ≥ 0.95), and `-nocuda` is byte-identical for BC6H too. No partial fallback is needed. Previews use the built-in encoder; a failed process is `ENC-NVTT-FAILED` with no fallback.
 
 ### 7.6 Fallback, oracle, exclusions
 
@@ -689,7 +689,8 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `VAL-MIP-ERROR` | warning | A mip's channel PSNR against the encoder input is below `validation.min_mip_psnr_db` (default 30 dB; §5.8); names the mip and its PSNR | Check the source, raise the effort or accept |
 | `VAL-GRASS-DETECT` | error | The encoded bottom-left texel (0, height−1) of the first level still decodes at abs(L−1) ≥ 0.02 after the slowest-quality re-encode, so the game may not detect complex grass (file is written; validation fails) | Fix the source corner, or report a bug |
 | `ENC-NVTT-MISSING` | blocking | NVTT chosen but not found | Install, set path, or built-in |
-| `ENC-NVTT-VERSION` (M5) | blocking | Untested NVTT version | Acknowledge |
+| `ENC-NVTT-VERSION` | blocking | Untested NVTT version | Acknowledge |
+| `ENC-NVTT-FAILED` | error | nvcompress could not start, exited non-zero or wrote no or a wrong-sized payload; the file fails at Compress, no fallback (DECISIONS Note NV8) | Check NVTT, or choose the built-in encoder |
 | `IN-DUPLICATE` | blocking | Two inputs, one output | Exclude one |
 | `IN-DDS-SKIPPED` | info | DDS input not re-encoded by default | Opt in |
 | `DDS-HEADER-PATCHED` | info | `sdc patch-header` or the GUI rewrote a DDS header, payload byte-identical; lists the fixes (DECISIONS S7) | — |
@@ -790,11 +791,11 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | 3 | Coverage for `cutout_blend` | On (owner decision 2026-10-08); per-image switch | Blended edge fade at distance looks wrong in spot checks | Phase 6 |
 | 4 | Variance-bake clamp *t* | 0.25 (Unity HDRP value, owner-approved) | Over-rough distance or residual shimmer in spot checks → retune per preset | Phase 6 |
 | 5 | Exact opaque alpha, global default | Decided: on for `_m` / env masks only, off elsewhere (owner, Phase 0 exit; S5 cost −0.515 dB `rgb_real`, −1.020 dB `rgb_grad` exceeds 0.05 dB) | — | Closed |
-| 6 | Exact-opaque mechanism | Decided: native patch 0001 (alpha == 255 on 18/18 images, flag off bit-identical on 39/39 on the host ISA); byte patch last resort, NVTT second fallback (M5) | — | Closed |
+| 6 | Exact-opaque mechanism | Decided: native patch 0001 (alpha == 255 on 18/18 images, flag off bit-identical on 39/39 on the host ISA); byte patch last resort. The NVTT fallback is not built: the native patch passed (M5, DECISIONS Note NV) | — | Closed |
 | 7 | Complex `_m` 1×1 margin | 4 code values below 251/255 (`complex_m_warn_alpha` 247); **closed by S8**: the gate is exactly `alpha < 251/255` | S8 boundary | S8 |
 | 8 | BC6H peak threshold | Warn below 0.8 | Spot checks of highlight-heavy BC6H | Phase 6 |
 | 9 | Turning `exact_opaque` off for an `_m` | **Closed by S6:** blocking (`ALPHA-EXACT-OFF-M`; 7 of 28 real `_m` at ≥ 40%, max 57.95%) | S6 finds a file ≥ 40% → blocking | S6 |
-| 10 | NVTT per-mip feeding | Decided: one `-nomips` process per level, always `-nocuda` (S7 passed) | — | Closed |
+| 10 | NVTT per-mip feeding | Decided: one `-nomips` process per level, always `-nocuda` (S7 passed; BC6H and the legacy-header feed by S7b, DECISIONS Note NV) | — | Closed |
 | 11 | Scalar bc7e fallback | Not built (S4: not adopted, 0.0759 dB on 1 of 11 images, 3.8–4.8× slower) | ISPC objects fail on a needed configuration and the owner accepts a looser tolerance | Owner |
 | 12 | Isolated batch workers | Off | Crash rate in Phases 3–4 [D#18] | Phases 3–4 |
 | 13 | 16K preview | 8192, 16384 setting, smaller-mip fallback | Adapter limits on target hardware | GUI phase |

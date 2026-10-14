@@ -95,6 +95,7 @@ codes! {
     ValMipError = "VAL-MIP-ERROR" => Warning,
     EncNvttMissing = "ENC-NVTT-MISSING" => Blocking,
     EncNvttVersion = "ENC-NVTT-VERSION" => Blocking,
+    EncNvttFailed = "ENC-NVTT-FAILED" => Error,
     InDuplicate = "IN-DUPLICATE" => Blocking,
     InDdsSkipped = "IN-DDS-SKIPPED" => Info,
     InPackingInput = "IN-PACKING-INPUT" => Warning,
@@ -198,7 +199,8 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 89);
+        assert_eq!(Code::ALL.len(), 90);
+        assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
         assert_eq!(Code::GrassVanilla.severity(), Severity::Warning);

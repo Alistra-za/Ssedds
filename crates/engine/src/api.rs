@@ -110,6 +110,9 @@ pub struct BatchRequest {
     /// Memory budget in bytes for admitting files; 0 = half of physical RAM.
     pub mem_budget: u64,
     pub bc1_model: Bc1Model,
+    /// M5 (DECISIONS Note NV2): an explicit `nvcompress.exe` (`--nvtt`, the GUI's NVTT path). `None` looks on `PATH`,
+    /// then in the default install folder. Probed only when some profile uses `encoder.backend = "nvtt"`.
+    pub nvtt: Option<PathBuf>,
     /// Also write `<name>.dds.json` next to each output.
     pub sidecar: bool,
     pub dry_run: bool,
@@ -144,6 +147,7 @@ impl BatchRequest {
             jobs: 0,
             mem_budget: 0,
             bc1_model: Bc1Model::Ideal,
+            nvtt: None,
             sidecar: false,
             dry_run: false,
         }
@@ -220,6 +224,8 @@ pub struct Plan {
     pub cancelled: Vec<PathBuf>,
     /// M6 (DECISIONS Note S): set key → the set's shader pick.
     pub shaders: BTreeMap<String, ShaderPick>,
+    /// The NVTT probe, if any profile on `encoder.backend = "nvtt"` asked for it while planning (DECISIONS Note NV3).
+    pub nvtt: Option<crate::nvtt::NvttProbe>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -565,6 +571,7 @@ fn is_up_to_date(
     job: &ResolvedJob,
     encoders: &EncoderVersions,
     bc1_model: Bc1Model,
+    nvtt: Option<&str>,
 ) -> bool {
     let Some(rec) = e.encoders.as_ref() else {
         return false;
@@ -581,6 +588,8 @@ fn is_up_to_date(
                 &encoders.bc7e_patch,
             )
         || (rgbcx && rec.rgbcx_patch != encoders.rgbcx_patch)
+        // NV10: an NVTT output follows the NVTT version found now; a built-in one ignores it.
+        || (job.profile.encoder.backend == Backend::Nvtt && rec.nvtt.as_deref() != nvtt)
     {
         return false;
     }
@@ -846,6 +855,7 @@ impl Engine {
             overrides: file_overrides,
             allow: file_allow,
         };
+        let nvtt = crate::nvtt::NvttCell::new(req.nvtt.clone());
         let ctx = ResolveCtx {
             target,
             registry: &registry,
@@ -858,6 +868,7 @@ impl Engine {
             files: &file_scopes,
             shaders: &NO_SHADERS,
             mesh_alpha: &req.mesh_alpha,
+            nvtt: Some(&nvtt),
         };
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
@@ -1478,6 +1489,7 @@ impl Engine {
             peak_admitted_bytes,
             cancelled,
             shaders: picks,
+            nvtt: nvtt.into_probed(),
         })
     }
 
@@ -1492,6 +1504,7 @@ impl Engine {
         cancel: &CancelToken,
     ) -> Result<BatchSummary, EngineError> {
         let req = &plan.request;
+        let nvtt = plan.nvtt.as_ref().and_then(|p| p.tool());
         let mut summary = BatchSummary {
             failed: plan.failed.len() as u32,
             cancelled: plan.cancelled.clone(),
@@ -1684,7 +1697,15 @@ impl Engine {
                             && job.output.exists()
                             && existing
                                 .get(&output_key(&req.output_root, &job.output))
-                                .is_some_and(|e| is_up_to_date(e, job, &encoders, req.bc1_model))
+                                .is_some_and(|e| {
+                                    is_up_to_date(
+                                        e,
+                                        job,
+                                        &encoders,
+                                        req.bc1_model,
+                                        nvtt.map(|t| t.version.as_str()),
+                                    )
+                                })
                     })
                     .collect()
             })
@@ -1813,7 +1834,7 @@ impl Engine {
                         lock(state).cancelled.push(job.input.clone());
                         return;
                     }
-                    run_one(job, req, preset, cancel, rep, manifest, state);
+                    run_one(job, req, preset, cancel, rep, manifest, state, nvtt);
                 });
             }
         });
@@ -1827,6 +1848,7 @@ impl Engine {
 /// Convert one admitted file under `catch_unwind` and report its outcome. A file that fails or panics after its
 /// output was written (sidecar write or manifest append) has that output removed, best effort, so no output is
 /// left on disk without a record (review I1). A panic is reported at the last stage the file entered (review M10).
+#[allow(clippy::too_many_arguments)]
 fn run_one(
     job: &ResolvedJob,
     req: &BatchRequest,
@@ -1835,6 +1857,7 @@ fn run_one(
     rep: &Reporter,
     manifest: &Manifest,
     state: &Mutex<BatchSummary>,
+    nvtt: Option<&crate::nvtt::NvttTool>,
 ) {
     let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
     let key = output_key(&req.output_root, &job.output);
@@ -1842,7 +1865,7 @@ fn run_one(
     emit(EventKind::FileStarted);
     let tracker = FileTracker::default();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        process_file(job, req, preset, cancel, rep, manifest, &tracker)
+        process_file(job, req, preset, cancel, rep, manifest, &tracker, nvtt)
     }));
     let (stage, error) = match r {
         Ok(Ok(out)) => {
@@ -2368,7 +2391,9 @@ mod tests {
             output_stamp: SourceStamp::of(&job.output),
             raw: serde_json::json!({ "validation": { "passed": true } }),
         };
-        let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| is_up_to_date(e, job, &enc, m);
+        let up = |e: &ManifestEntry, job: &ResolvedJob, m: Bc1Model| {
+            is_up_to_date(e, job, &enc, m, None)
+        };
         let good = entry_for(&job);
         assert_eq!(job.profile.format, Format::Bc7);
         assert!(up(&good, &job, Bc1Model::Ideal));
@@ -2452,6 +2477,58 @@ mod tests {
                 "{format:?} pre-patch record"
             );
         }
+        // M5 (DECISIONS Note NV10): a record written before M5 has no `nvtt` key and stays current for built-in
+        // profiles, whatever NVTT is found now.
+        let pre_m5: EncoderVersions = serde_json::from_value(serde_json::json!({
+            "bc7enc_rdo": enc.bc7enc_rdo, "ispctc": enc.ispctc, "ispc": enc.ispc,
+            "bc7e_patch": enc.bc7e_patch, "rgbcx_patch": enc.rgbcx_patch,
+        }))
+        .unwrap();
+        assert_eq!(pre_m5.nvtt, None);
+        job.profile.format = Format::Bc7;
+        let built_in = with(&|e| e.encoders = Some(pre_m5.clone()));
+        assert!(is_up_to_date(
+            &built_in,
+            &job,
+            &enc,
+            Bc1Model::Ideal,
+            Some("3.3.0")
+        ));
+        // An NVTT output is current only while the NVTT found now is the version that encoded it.
+        job.profile.encoder.backend = Backend::Nvtt;
+        let nv = |v: Option<&str>| {
+            let mut e = entry_for(&job);
+            e.encoders.as_mut().unwrap().nvtt = v.map(String::from);
+            e
+        };
+        assert!(is_up_to_date(
+            &nv(Some("3.2.5")),
+            &job,
+            &enc,
+            Bc1Model::Ideal,
+            Some("3.2.5")
+        ));
+        assert!(!is_up_to_date(
+            &nv(Some("3.2.5")),
+            &job,
+            &enc,
+            Bc1Model::Ideal,
+            Some("3.3.0")
+        ));
+        assert!(!is_up_to_date(
+            &nv(Some("3.2.5")),
+            &job,
+            &enc,
+            Bc1Model::Ideal,
+            None
+        ));
+        assert!(!is_up_to_date(
+            &nv(None),
+            &job,
+            &enc,
+            Bc1Model::Ideal,
+            Some("3.2.5")
+        ));
     }
 
     /// M1: with bytes to spare, the file cap alone holds the next admission until a file finishes.

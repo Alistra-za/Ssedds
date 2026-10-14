@@ -199,3 +199,27 @@ fn normal_len_has_one_entry_per_encoded_level() {
         assert_eq!(p.normal_len.len(), p.levels.len());
     }
 }
+
+/// M5 (DECISIONS Note NV9): a texture on NVTT previews with the built-in encoder (no nvcompress runs) and the
+/// preview equals that of the same texture on the built-in backend.
+#[test]
+fn an_nvtt_texture_previews_with_the_built_in_encoder() {
+    let d = tempfile::tempdir().unwrap();
+    let sets = fixture(d.path());
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    let rep = Reporter::new(Arc::new(NullSink), "t");
+    let plan = s
+        .plan(request(d.path(), &sets), &rep, &CancelToken::default())
+        .unwrap();
+    let mut job = plan
+        .jobs
+        .iter()
+        .find(|j| j.input.ends_with("c7.png"))
+        .unwrap()
+        .clone();
+    assert_eq!(job.profile.format, engine::config::Format::Bc7);
+    let built_in = s.preview(&job, 4096, &CancelToken::default()).unwrap();
+    job.profile.encoder.backend = engine::config::Backend::Nvtt;
+    let nvtt = s.preview(&job, 4096, &CancelToken::default()).unwrap();
+    assert_eq!(nvtt.levels, built_in.levels);
+}

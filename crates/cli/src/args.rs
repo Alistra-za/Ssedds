@@ -155,7 +155,8 @@ pub struct ConvertArgs {
     /// Also write <name>.dds.json next to each output.
     #[arg(long)]
     pub sidecar: bool,
-    /// Path to nvcompress.exe. Not available yet (M5): passing it is a usage error.
+    /// Path to nvcompress.exe for `encoder.backend = "nvtt"` (default: PATH, then the NVIDIA install folder).
+    /// NVTT is never bundled; it is looked for only when a texture uses it.
     #[arg(long)]
     pub nvtt: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "ideal")]
@@ -164,7 +165,7 @@ pub struct ConvertArgs {
 
 #[derive(Args)]
 pub struct EncodersArgs {
-    /// Path to nvcompress.exe (default: look for it on PATH; NVTT is never bundled).
+    /// Path to nvcompress.exe (default: PATH, then the NVIDIA install folder; NVTT is never bundled).
     #[arg(long)]
     pub nvtt: Option<PathBuf>,
     /// BC1 decoder model to report as active (the batch-wide default is `ideal`).
