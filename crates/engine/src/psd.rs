@@ -4,7 +4,7 @@
 //! Supported: RGB and Grayscale documents, 8, 16 and 32 bits per channel, raw or RLE (PackBits) image data. RGB
 //! reads channels 0–2 as colour and channel 3, when present, as alpha (Grayscale: 0 and 1): that is the document's
 //! transparency, or its first alpha channel when it has a Background layer, as the Photoshop DDS plugins read it.
-//! Merged transparency (the `Mtrn`/`Mt16`/`Mt32` blocks) means Photoshop matted the colour against white, so the
+//! Merged transparency (a negative layer count, or the `Mtrn`/`Mt16`/`Mt32` blocks) means Photoshop matted the colour against white, so the
 //! colour is un-matted (`(c - (1 - a)) / a`, kept as stored where a = 0). A file saved without a real composite
 //! (Maximize Compatibility off) is refused. Embedded ICC profiles are detected and ignored (DECISIONS S8).
 use crate::image::{Rgba32F, SourceInfo};
@@ -157,7 +157,14 @@ fn resources(r: &mut In, end: u64) -> Result<(bool, bool), PsdError> {
     Ok((icc, merged))
 }
 
-/// Whether the global tagged blocks after the layer records hold merged transparency (`Mtrn`, `Mt16`, `Mt32`).
+/// A negative layer count (in the layer info, or at the start of an `Lr16`/`Lr32` block in a 16/32-bit document)
+/// means "the first alpha channel is the merged result's transparency".
+fn negative_count(r: &mut In, len: u64) -> Result<bool, PsdError> {
+    Ok(len >= 2 && (r.u16()? as i16) < 0)
+}
+
+/// Whether the merged image has transparency: a negative layer count, or the `Mtrn`, `Mt16` or `Mt32` global
+/// tagged block after the layer records.
 /// A block that does not parse ends the walk with what was found so far: the layers are never needed otherwise.
 fn merged_transparency(r: &mut In, h: &Header, end: u64) -> Result<bool, PsdError> {
     // Keys with a 64-bit length in a PSB.
@@ -169,13 +176,14 @@ fn merged_transparency(r: &mut In, h: &Header, end: u64) -> Result<bool, PsdErro
         return Ok(false);
     }
     let layers = r.len(h.big)?;
-    r.skip(layers)?;
+    let start = r.pos()?;
+    let mut found = negative_count(r, layers)?;
+    r.seek(start.saturating_add(layers))?;
     if r.pos()? + 4 > end {
         return Ok(false);
     }
     let mask = u64::from(r.u32()?);
     r.skip(mask)?;
-    let mut found = false;
     while r.pos()? + 12 <= end {
         // Block lengths are padded to 2 or 4 bytes depending on the writer: skip up to 3 bytes of padding.
         let mut sig = r.tag()?;
@@ -194,6 +202,9 @@ fn merged_transparency(r: &mut In, h: &Header, end: u64) -> Result<bool, PsdErro
         let next = r.pos()?.saturating_add(len);
         if next > end {
             break;
+        }
+        if matches!(&key, b"Lr16" | b"Lr32") {
+            found |= negative_count(r, len)?;
         }
         r.seek(next)?;
     }

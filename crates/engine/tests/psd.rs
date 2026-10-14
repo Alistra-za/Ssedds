@@ -13,6 +13,8 @@ struct Psd {
     mode: u16,
     res: Vec<(u16, Vec<u8>)>,
     blocks: Vec<(&'static [u8; 4], Vec<u8>)>,
+    /// The layer info's layer count, written alone (no layer records follow); 0 writes an empty layer info.
+    layer_count: i16,
     compression: u16,
     planes: Vec<Vec<u8>>,
 }
@@ -27,6 +29,7 @@ impl Psd {
             mode: 3,
             res: Vec::new(),
             blocks: Vec::new(),
+            layer_count: 0,
             compression: 0,
             planes,
         }
@@ -66,7 +69,12 @@ impl Psd {
             }
         };
         let mut lm = Vec::new();
-        len(&mut lm, 0, self.big); // no layer records
+        if self.layer_count == 0 {
+            len(&mut lm, 0, self.big); // no layer records
+        } else {
+            len(&mut lm, 2, self.big);
+            lm.extend_from_slice(&self.layer_count.to_be_bytes());
+        }
         lm.extend_from_slice(&0u32.to_be_bytes()); // no global layer mask
         for (key, data) in &self.blocks {
             lm.extend_from_slice(b"8BIM");
@@ -230,6 +238,19 @@ fn merged_transparency_is_unmatted() {
     psd.blocks = vec![(b"Patt", vec![0; 6])];
     let p = psd.write(d.path(), "n.psd");
     assert_eq!(load_image(&p).unwrap().0.at(0, 0)[0], 0.6);
+
+    // A negative layer count says the same (Photoshop's usual signal for a document without a Background layer),
+    // in the layer info or at the start of a 16/32-bit document's `Lr32` block; a positive one does not.
+    psd.layer_count = -1;
+    let p = psd.write(d.path(), "neg.psd");
+    assert!((load_image(&p).unwrap().0.at(0, 0)[0] - 0.2).abs() < 1e-6);
+    psd.layer_count = 1;
+    let p = psd.write(d.path(), "pos.psd");
+    assert_eq!(load_image(&p).unwrap().0.at(0, 0)[0], 0.6);
+    psd.layer_count = 0;
+    psd.blocks = vec![(b"Lr32", vec![0xFF, 0xFF, 0, 0])];
+    let p = psd.write(d.path(), "lr32.psd");
+    assert!((load_image(&p).unwrap().0.at(0, 0)[0] - 0.2).abs() < 1e-6);
 }
 
 /// A PSB: 64-bit section lengths (and `Mt16`'s), 32-bit RLE row counts.
