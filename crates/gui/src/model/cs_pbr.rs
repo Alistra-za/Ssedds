@@ -452,9 +452,9 @@ impl ScanRecords {
 }
 
 /// The scan database file's (mtime, length); `None` without one.
-type Stamp = Option<(Option<SystemTime>, u64)>;
+pub(crate) type Stamp = Option<(Option<SystemTime>, u64)>;
 
-fn stamp(db: Option<&Path>) -> Stamp {
+pub(crate) fn stamp(db: Option<&Path>) -> Stamp {
     let md = std::fs::metadata(db?).ok().filter(|m| m.is_file())?;
     Some((md.modified().ok(), md.len()))
 }
@@ -499,13 +499,28 @@ fn read_facts(db: Option<&Path>, key: &TexKey) -> Result<SetFacts, String> {
         .collect();
     txst_edids.sort();
     txst_edids.dedup();
-    let rows = s
-        .nifs_using_texture(key, STATICS_ROWS)
-        .map_err(|e| e.to_string())?;
+    let statics = statics_of(STATICS_ROWS, |n| {
+        s.nifs_using_texture(key, n).map_err(|e| e.to_string())
+    })?;
     Ok(SetFacts {
         txst_edids,
-        statics: non_lod_nifs(&rows),
+        statics,
     })
+}
+
+/// The non-LOD meshes of `read(cap)`; a full read of LOD meshes only is read again without the cap, so LOD shapes
+/// ahead of a static in the store's order never hide it.
+#[doc(hidden)]
+pub fn statics_of(
+    cap: usize,
+    read: impl Fn(usize) -> Result<Vec<MatchRow>, String>,
+) -> Result<Vec<String>, String> {
+    let rows = read(cap)?;
+    let statics = non_lod_nifs(&rows);
+    if statics.is_empty() && rows.len() >= cap {
+        return Ok(non_lod_nifs(&read(usize::MAX)?));
+    }
+    Ok(statics)
 }
 
 fn read_records(db: Option<&Path>) -> Result<Arc<ScanRecords>, String> {
