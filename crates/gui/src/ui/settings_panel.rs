@@ -2,16 +2,18 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use crate::model::fields::{
-    auto_subtype_reason, channel_text, edge_view, encoding_options, field_hidden, field_views,
-    filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on, provenance_text,
-    FieldView, NOT_VALID,
+    auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
+    field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
+    provenance_text, FieldView, NOT_VALID,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
 use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
-use engine::config::{AlphaPolicy, ColorTag, Format, GreenConvention, MipFilter, Subtype, Target};
+use engine::config::{
+    AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Subtype, Target,
+};
 use engine::policy::{offered, ResolvedJob};
 use serde_json::{json, Value};
 
@@ -221,6 +223,11 @@ fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options>
             .iter()
             .map(|(m, l)| opt(json!(m), l))
             .collect(),
+        // `set_field` writes "Built-in" as each texture's own format default (DECISIONS Note NV).
+        "encoder.backend" => vec![
+            opt(json!(engine::policy::default_backend(p.format)), "Built-in"),
+            opt(json!(Backend::Nvtt), "NVTT Production"),
+        ],
         _ => return None,
     })
 }
@@ -397,6 +404,8 @@ pub struct Ctx<'a> {
     pub toml_read_only: Option<String>,
     /// The item's warnings (the Compression group shows the HDR reason).
     pub warnings: &'a [Warning],
+    /// The NVTT probe found nvcompress (the Encoder row offers NVTT only then).
+    pub nvtt_found: bool,
 }
 
 /// What a field row asks of the model.
@@ -573,9 +582,12 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
                     if name == "Mipmaps" {
                         mipmaps_rows(ui, cx, actions);
                     }
-                    for f in field_views(cx.target, cx.job).into_iter().filter(|f| {
+                    for mut f in field_views(cx.target, cx.job).into_iter().filter(|f| {
                         group_of(f.field) == name && !field_hidden(&cx.job.profile, f.field)
                     }) {
+                        if f.field == "encoder.backend" && f.lock.is_none() {
+                            f.lock = backend_lock(&cx.job.profile, cx.nvtt_found);
+                        }
                         match field_row(ui, cx, &f) {
                             Some(RowEdit::Set(v)) => actions.push(Action::Set(f.field, v)),
                             Some(RowEdit::Clear) => actions.push(Action::Clear(f.field)),
@@ -887,6 +899,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 compact,
                 toml_read_only: toml_read_only.clone(),
                 warnings: &warnings,
+                nvtt_found: model.nvtt_found(),
             };
             match &status {
                 ItemStatus::Skipped(r) => {

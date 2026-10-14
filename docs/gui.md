@@ -14,10 +14,11 @@ The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `s
 - **Centre**: the settings of the selected texture, grouped (Type, Colour, Alpha, Mipmaps, Compression). Every value shows where it came from (preset, config, analysis, your `[files]` entry). Selecting a set shows its recipes instead.
   - *Compression* shows the `FMT-HDR-SOURCE` reason for an emissive (why it is BC6H or BC7 sRGB).
   - The format dropdown also lists the uncompressed formats (`RGBA8`, `R8`, `RG8`, and `RGBA16F` only under `cs`); Effort and Perceptual are locked for them.
+  - *Encoder* (Compression) is **Built-in** or **NVTT Production** (M5). NVTT is a quality option for BC7 and BC6H only, 40-60x slower; the row is locked for BC1-BC5 ("NVTT encodes BC7 and BC6H only"), hidden for uncompressed formats, and locked with "NVTT not found" while the NVTT status in Advanced says so (a texture already on NVTT can still go back). Changing the format away from BC7/BC6H returns the texture to the built-in encoder. A failed nvcompress fails that file (`ENC-NVTT-FAILED`); there is no silent fallback.
   - A DDS file shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder; the DDS itself is never changed.
 - **Sets** (right): textures grouped into material sets, with the recipe status (run, conflict, disabled, failed) of each packed output.
 
-The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector (with the loaded user presets), batch settings (worker threads, memory budget, BC1 decoder), packing fill values, the preview settings and a list of unmatched `[files]` entries.
+The columns can be collapsed to thin strips (**Collapse columns**). The **Advanced** drawer at the right edge holds the preset inspector (with the loaded user presets), batch settings (worker threads, memory budget, BC1 decoder), the NVTT path and status (**Choose nvcompress.exe…**, or **Automatic**: `PATH`, then the NVIDIA install folder; NVTT is never bundled; the status shows the version found and whether it is the tested 3.2.5, and is re-checked when the window regains focus), packing fill values, the preview settings and a list of unmatched `[files]` entries.
 
 ## Deciding
 
@@ -102,7 +103,7 @@ Apply is greyed out while a row is red: two files or sets would end up with one 
 Double-click a tile (or a set member) to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again.
 
 - **Live encode** is **off by default**. Encoding happens when you press **Encode now**; switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
-- Each previewed mip is byte-identical to the same mip of the DDS that Export writes.
+- Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
 - The preview encodes only mips whose larger side is at most the **preview size limit**: **4096 by default**, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and the preview says so.
 - Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
@@ -115,7 +116,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - If some textures are undecided, a dialog offers **Proceed anyway** or **Cancel**. Proceeding exports only the decided textures and skips the rest; it never decides for you.
 - If a source file changed on disk since it was planned, the textures concerned show "changed on disk" and the Textures column offers **Reload**. Reload plans again, re-reading only the changed files. Export checks first and plans again by itself, so the export uses current files. The GUI also checks whenever its window regains focus.
 - The **drawer** at the bottom opens when Export starts: a *Files* tab with per-file progress (queued, running, done, up to date, skipped, failed) and a *Warnings* tab grouped by code. Click a row to select that texture. **Cancel** stops the batch; **Save report…** writes the report; **Close** hides the drawer.
-- **Copy CLI command** copies the `sdc convert` command that reproduces this export from the command line (same folder, output, BC1 decoder and thread count). Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes.
+- **Copy CLI command** copies the `sdc convert` command that reproduces this export from the command line (same folder, output, BC1 decoder and thread count; an NVTT path chosen in Advanced is not included: add `--nvtt <path>`). Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes.
 
 ## Sets and the PGPatcher JSON
 
@@ -171,7 +172,7 @@ A complex-grass texture is one image twice as tall as it is wide: diffuse and al
 
 ## Where settings live
 
-GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.
+GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder, NVTT path) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart sdc-gui to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.
 
 sdc-gui ships no fonts. It loads the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at start-up and refuses to start, with a message, if they are missing.
 

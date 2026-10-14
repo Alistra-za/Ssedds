@@ -52,6 +52,8 @@ struct Info {
     /// The result on show, and the source chain (None for a DDS input).
     shown: Option<Arc<PreviewOut>>,
     has_source: bool,
+    /// The texture exports with NVTT; its preview uses the built-in encoder (DECISIONS Note NV9).
+    nvtt: bool,
 }
 
 impl Info {
@@ -61,10 +63,9 @@ impl Info {
             SourceState::Ready(s) => Some(s.clone()),
             _ => None,
         };
-        let job_format = model
-            .item(key)
-            .and_then(|i| i.job.as_ref())
-            .map(|j| j.profile.format);
+        let job = model.item(key).and_then(|i| i.job.as_ref());
+        let job_format = job.map(|j| j.profile.format);
+        let nvtt = job.is_some_and(|j| j.profile.encoder.backend == engine::config::Backend::Nvtt);
         let has_source = source.as_ref().is_some_and(|s| !s.levels.is_empty());
         let (dims, first, end) = match (&shown, &source) {
             (Some(o), _) => {
@@ -89,6 +90,7 @@ impl Info {
             format: shown.as_ref().map(|o| o.result.format).or(job_format),
             shown,
             has_source,
+            nvtt,
         }
     }
 
@@ -272,6 +274,9 @@ fn can_encode(model: &AppModel) -> bool {
 fn notes(ui: &mut egui::Ui, model: &AppModel, info: &Info, gpu: &GpuStatus) {
     let mut lines: Vec<String> = vec![];
     lines.extend(skipped_note(&info.dims, info.first));
+    if info.nvtt {
+        lines.push("Preview uses the built-in encoder; the export uses NVTT.".into());
+    }
     if let Some(UploadPath::CpuDecoded(why) | UploadPath::Skipped(why)) = gpu.encoded {
         lines.push(why.to_string());
     }

@@ -1011,7 +1011,7 @@ fn float_source_is_linear(p: &mut Profile, prov: &mut BTreeMap<String, Provenanc
 }
 
 /// Whether `b` can write format `f`.
-fn backend_fits(b: Backend, f: Format) -> bool {
+pub fn backend_fits(b: Backend, f: Format) -> bool {
     match b {
         Backend::Bc7e => f == Format::Bc7,
         Backend::Rgbcx => matches!(f, Format::Bc1 | Format::Bc3 | Format::Bc4 | Format::Bc5),
@@ -1022,7 +1022,7 @@ fn backend_fits(b: Backend, f: Format) -> bool {
 }
 
 /// The built-in encoder for a format (spec §3.2 `encoder.backend` default "Format"); never NVTT.
-pub(crate) fn default_backend(f: Format) -> Backend {
+pub fn default_backend(f: Format) -> Backend {
     match f {
         Format::Bc1 | Format::Bc3 | Format::Bc4 | Format::Bc5 => Backend::Rgbcx,
         Format::Bc6hUf16 => Backend::IspcBc6h,
