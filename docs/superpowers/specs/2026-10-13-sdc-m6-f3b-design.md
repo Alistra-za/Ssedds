@@ -38,7 +38,7 @@ Base: `main` ddae78d, branch `claude/project-thread-o2n463`. Inputs: the control
 
 ### 2.3 Codes
 
-- `IN-ALIAS-INVALID` (Blocking) on the file, with the reason: absolute or `..`; a different extension; equal to another file's real or aliased path (case-insensitive); an empty name. The file is planned under its real name so the rest of the plan stays intact, and the code blocks it.
+- `IN-ALIAS-INVALID` (Warning, batch-level), with the key and the reason: absolute or `..`; a different extension; outside the folder the file was found in; equal to another file's real or aliased path (case-insensitive); an empty name. The alias is not applied and the file is planned under its real name. (The GUI dialog never writes an invalid alias, so this only meets hand edits; see §9.)
 - `IN-ALIAS-STALE` (Info, batch-level, like `SET-EDIT-STALE`): an `[inputs]` key that matched no file.
 - Catalogue count +2. The codes doc and `schema/event.schema.json` follow the existing code-adding steps.
 
@@ -128,6 +128,8 @@ pub fn plan_rename(m: &AppModel, mode: RenameMode, keys: &[String], recipe: &Rec
 - D1 said "matched like a `[files]` key". The key match is `path_key_matches` on `project_rel`, so it is exactly the `[files]` rule.
 - D2's "explicit `output_paths` on every target" needed the early return in `engine_inputs` moved (§3.2). PBR candidates still run on CS only.
 - D4's "new kind" column depends on a name-only kind rule existing in the engine; if it does not, the plan adds one in `group.rs` rather than calling the analysing path.
+
+- D1 made an invalid alias a per-file Blocking code. The engine has no per-file block short of skipping the file, so it is a batch Warning and the alias is ignored (§2.3).
 
 ## 10. Owner checks (manual, after the code lands)
 

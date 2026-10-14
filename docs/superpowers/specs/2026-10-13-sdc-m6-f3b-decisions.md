@@ -25,7 +25,7 @@ What the code does today (facts the decisions rest on):
 - **Identity stays the real file.** The file's `[files]` key, its `add`/`remove` entries and borrows in `sdc-project.toml`, and its GUI item key stay on the real path. So adding, changing or clearing an alias never orphans a setting and needs no re-keying. (`overrides::project_rel` builds keys from the folder on disk plus `rel`'s file name today; it takes the real name for an aliased file.)
 - In code the feature is called "read as" (`InputFile::real_rel`, the config key `as`), because "alias" already names a preset's `suffix_aliases` (`FileFacts::alias`).
 - The extension is the real file's. A typed alias extension equal to it is dropped; a different one blocks ("an alias keeps the file's own extension").
-- An alias must stay under the project folder (no absolute path, no `..`), use `/` or `\` (stored as `/`), and must not equal another file's real or aliased path (case-insensitive). Breaking any of these is a plan error on that file (`IN-ALIAS-INVALID`, Blocking), with the reason.
+- An alias must stay under the project folder (no absolute path, no `..`), use `/` or `\` (stored as `/`), and must not equal another file's real or aliased path (case-insensitive). Breaking any of these is reported (`IN-ALIAS-INVALID`), with the reason (the spec makes it a batch Warning and ignores the alias, §9).
 - An alias whose real file is gone is reported, not fatal (`IN-ALIAS-STALE`, Info, like `SET-EDIT-STALE`). The GUI shows it with a Remove button.
 - An aliased file is marked in the GUI ("read as wall_n.png") so it never looks like the file was renamed on disk.
 
