@@ -602,6 +602,12 @@ pub fn finish(
         }
     }
     // DECISIONS AF1: delete sections alone would strip vanilla shapes with no PBR replacement; keep the old JSON.
+    if p.entries.iter().all(|(_, _, e)| e.section) {
+        notes.push(
+            "PGPatcher JSON not written: there is no PBR set, and delete sections alone are not written".into(),
+        );
+        return Finish::Nothing;
+    }
     if kept.iter().all(|e| e.section) {
         notes.push(
             "PGPatcher JSON not written: no PBR set exported completely (the previous JSON is kept; delete sections alone would remove shapes with no PBR replacement)"

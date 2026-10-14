@@ -119,6 +119,24 @@ fn a_probe_that_hangs_times_out() {
         "{:?}",
         t.elapsed()
     );
+    // Review round 1 M1: the whole tree is killed, the grandchild included.
+    let pid: u32 = std::fs::read_to_string(d.path().join("hang.grandchild.pid"))
+        .expect("the grandchild started")
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = || {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    };
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while alive() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(!alive(), "grandchild {pid} still runs");
 }
 
 #[test]

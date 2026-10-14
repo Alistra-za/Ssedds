@@ -498,3 +498,46 @@ fn an_explicit_packed_path_on_a_raw_inputs_path_is_not_a_duplicate() {
         packed_outputs_of(&p)
     );
 }
+
+/// Review round 1 M3 (DECISIONS AF7): a recipe that writes nothing (packing off, or failed: sources differ in size)
+/// does not hold its default path against an explicit packed path.
+#[test]
+fn a_recipe_that_writes_nothing_is_not_a_duplicate_of_an_explicit_path() {
+    for case in ["disabled", "failed"] {
+        let d = fixture();
+        let r_in = d.path().join("in");
+        gray(&r_in, "landscape/rock01_roughness.png", 90);
+        let mut r = req(&d);
+        if case == "disabled" {
+            r.overrides =
+                vec![
+                    engine::overrides::parse_set("file:**/stone_rmaos.png.packing.enabled=false")
+                        .unwrap(),
+                ];
+        } else {
+            image::ImageBuffer::from_fn(32, 32, |_, _| Luma([200u8]))
+                .save(r_in.join("stone/stone_ao.png"))
+                .unwrap();
+        }
+        r.output_paths = BTreeMap::from([(
+            OutputKey::Packed {
+                set: "landscape/rock01".into(),
+                suffix: "rmaos".into(),
+            },
+            PathBuf::from("stone/stone_rmaos.dds"),
+        )]);
+        let (p, _) = plan_events(r);
+        assert!(
+            !p.skipped.iter().any(|s| s.code == Some(Code::InDuplicate)),
+            "{case}: {:?}",
+            p.skipped
+        );
+        assert!(
+            packed_outputs_of(&p)
+                .iter()
+                .any(|o| o.ends_with("stone/stone_rmaos.dds")),
+            "{case}: {:?}",
+            packed_outputs_of(&p)
+        );
+    }
+}

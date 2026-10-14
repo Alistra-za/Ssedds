@@ -37,6 +37,9 @@ use engine::session::Session;
 use items::*;
 use serde_json::json;
 use std::path::PathBuf;
+
+/// The file an NVTT probe ran on: path, size and modified time (`AppModel::refresh_nvtt_if_changed`).
+type NvttKey = (PathBuf, u64, Option<std::time::SystemTime>);
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -274,6 +277,8 @@ pub struct AppModel {
     /// Generation of the latest NVTT probe, and whether it still runs (on a worker, DECISIONS AF3).
     nvtt_gen: u64,
     nvtt_pending: bool,
+    /// The file the last probe ran on (path, size, modified time; `None` inside: none found), `None` before any.
+    nvtt_key: Option<Option<NvttKey>>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -389,6 +394,7 @@ impl AppModel {
             nvtt: None,
             nvtt_gen: 0,
             nvtt_pending: false,
+            nvtt_key: None,
             plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
@@ -626,6 +632,11 @@ impl AppModel {
         else {
             return;
         };
+        // DECISIONS AF4: an Export waiting only for a scan-finished read is dropped by the edit that supersedes it;
+        // this plan is not the one it was clicked on.
+        if self.planning.is_none() && matches!(self.votes_pending, Some((_, false))) {
+            self.export_after_plan = false;
+        }
         if let Some(c) = self.planning.take() {
             c.cancel();
         }
@@ -695,7 +706,6 @@ impl AppModel {
                         self.run_after_export();
                     }
                     "preview" => self.preview_panicked(&message),
-                    "nvtt-probe" => self.nvtt_pending = false,
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -1679,11 +1689,39 @@ impl AppModel {
     pub fn refresh_nvtt(&mut self) {
         self.nvtt_gen += 1;
         self.nvtt_pending = true;
+        self.nvtt_key = Some(self.nvtt_file());
         let (generation, path) = (self.nvtt_gen, self.settings.nvtt_path.clone());
         spawn_guarded(self.tx.clone(), "nvtt-probe", move |tx| {
-            let probe = engine::nvtt::probe(path.as_deref());
+            // A panic is this generation's result, so a stale probe's panic never ends the current one's wait.
+            let probe = std::panic::catch_unwind(|| engine::nvtt::probe(path.as_deref()))
+                .unwrap_or_else(|p| {
+                    engine::nvtt::NvttProbe::Missing(format!(
+                        "the probe panicked: {}",
+                        crate::worker::panic_text(&*p)
+                    ))
+                });
             let _ = tx.send(WorkerMsg::Nvtt { generation, probe });
         });
+    }
+
+    /// Window focus (DECISIONS AF3): probe again only when the file NVTT resolves to changed (path, size or
+    /// modified time) since the last probe, so a wrong program that takes focus is not started over and over.
+    pub fn refresh_nvtt_if_changed(&mut self) {
+        if self.nvtt_key.as_ref() != Some(&self.nvtt_file()) {
+            self.refresh_nvtt();
+        }
+    }
+
+    /// The file a probe now would run: the configured or located path, with its size and modified time.
+    fn nvtt_file(&self) -> Option<NvttKey> {
+        let (p, _) = engine::nvtt::locate(
+            self.settings.nvtt_path.as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            std::path::Path::new(engine::nvtt::NVTT_DEFAULT),
+        )
+        .ok()?;
+        let md = std::fs::metadata(&p).ok()?;
+        Some((p, md.len(), md.modified().ok()))
     }
 
     fn nvtt_landed(&mut self, generation: u64, probe: engine::nvtt::NvttProbe) {

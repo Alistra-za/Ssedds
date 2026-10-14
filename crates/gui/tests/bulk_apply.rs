@@ -441,7 +441,7 @@ fn a_bulk_tag_skips_a_texture_whose_format_has_no_such_tag() {
     ]
     .into_iter()
     .find(|&t| pair_ok(&m, ROCK, t) && !pair_ok(&m, NORMAL, t))
-    .expect("fixture: a tag the albedo's format takes and the normal map's does not");
+    .expect("fixture: a tag the albedo takes and the normal map does not");
     let ks = strings(&[ROCK, NORMAL]);
     m.apply_bulk_edit(&ks, "color.tag", BulkOp::Set(json!(t)));
     idle(&mut m);
@@ -453,14 +453,13 @@ fn a_bulk_tag_skips_a_texture_whose_format_has_no_such_tag() {
     // Copy settings with only the tag ticked takes the same rule.
     m.undo();
     idle(&mut m);
-    m.set_field(LEAF, "color.tag", json!(t));
+    m.set_field(ROCK, "color.tag", json!(t));
     idle(&mut m);
-    if pair_ok(&m, LEAF, t) {
-        m.apply_copy_settings(LEAF, &ks, &["color.tag".to_string()]);
-        idle(&mut m);
-        assert_eq!(file(&m, NORMAL, "color.tag"), None, "copy skips it too");
-        assert_eq!(file(&m, ROCK, "color.tag"), Some(json!(t)));
-    }
+    m.apply_copy_settings(ROCK, &strings(&[NORMAL]), &["color.tag".to_string()]);
+    idle(&mut m);
+    assert_eq!(file(&m, NORMAL, "color.tag"), None, "copy skips it too");
+    let report = m.bulk.report.clone().unwrap_or_default();
+    assert!(report.contains("not valid for this map"), "{report}");
 }
 
 /// F3a ledger R15 (DECISIONS AF5): Copy with Format ticked from a source that has a tag but no format of its own

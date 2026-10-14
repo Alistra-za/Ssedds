@@ -385,7 +385,9 @@ fn an_rgb_grass_source_encodes_opaque_and_passes() {
 fn owner_example_encodes_and_stays_complex() {
     std::env::var("SDC_ACHERUS")
         .expect("owner-data test: set SDC_ACHERUS (it marks the owner's machine)");
-    let src = std::path::Path::new(r"F:\ai\dds\complexgrass\grassfieldtundra.png");
+    let src = std::path::Path::new(
+        r"F:\ai\dds\complexgrass\textures\landscape\grass\grassfieldtundra.png",
+    );
     assert!(src.is_file(), "{} is missing", src.display());
     let d = tempfile::tempdir().unwrap();
     let dst = d.path().join("in/textures/plants/g.png");

@@ -1,7 +1,8 @@
 //! Test-only stand-in for NVIDIA's `nvcompress` (DECISIONS Note NV), built only with `test-hooks`. It speaks the same
 //! command line the NVTT backend uses and writes deterministic, correctly sized BC7/BC6H payloads.
 //!
-//! - No arguments: when the executable's file name contains `hang`, sleep 60 s first (a program that never answers
+//! - No arguments: when the executable's file name contains `hang`, start a copy of itself (a grandchild that writes
+//!   its PID to `<exe>.grandchild.pid`) and sleep 60 s first (a launcher-like program that never answers
 //!   the probe). Then the banner `NVIDIA Texture Tools <SDC_FAKE_NVTT_VERSION or 3.2.5>` and a usage list; exit 0.
 //! - `<flags> <in.dds> <out.dds>`: every BC7 block is mode 6, alpha 255, colour from the block's first input texel;
 //!   every BC6H block is zeros. The argument list is written to `<out>.args`, one per line.
@@ -37,10 +38,22 @@ fn bc7_mode6(c: [u8; 3]) -> [u8; 16] {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        if std::env::current_exe().is_ok_and(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().contains("hang"))
-        }) {
+        let exe = std::env::current_exe().unwrap_or_default();
+        if exe
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().contains("hang"))
+        {
+            // A launcher-like program: a grandchild that keeps running (and holds the inherited output handles).
+            if std::env::var_os("SDC_FAKE_NVTT_GRANDCHILD").is_some() {
+                let _ = std::fs::write(
+                    exe.with_extension("grandchild.pid"),
+                    std::process::id().to_string(),
+                );
+            } else {
+                let _ = std::process::Command::new(&exe)
+                    .env("SDC_FAKE_NVTT_GRANDCHILD", "1")
+                    .spawn();
+            }
             std::thread::sleep(std::time::Duration::from_secs(60));
         }
         let v = std::env::var("SDC_FAKE_NVTT_VERSION").unwrap_or_else(|_| "3.2.5".into());

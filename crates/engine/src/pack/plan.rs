@@ -33,13 +33,13 @@ fn slash(p: &Path) -> String {
 
 /// The input of a job that writes (or will, once decided or acknowledged: not a raw input, an RNM layer or an
 /// error), or of another recipe, that also writes `output` (case-insensitive, either separator). The recipe's own
-/// raw sources are raw inputs (Note M8). `outputs` holds every recipe's
-/// output (explicit or default) and input in planning order, collected before any recipe is planned, so a later
-/// recipe counts too (DECISIONS AF7); `me` is this recipe's index in it.
+/// raw sources are raw inputs (Note M8). `outputs` holds every recipe's output (explicit or default), input and
+/// whether it writes, in planning order, collected before any recipe is planned, so a later recipe counts too
+/// (DECISIONS AF7); `me` is this recipe's index in it.
 fn other_output(
     output: &Path,
     jobs: &[ResolvedJob],
-    outputs: &[(PathBuf, PathBuf)],
+    outputs: &[(PathBuf, PathBuf, bool)],
     me: usize,
 ) -> Option<PathBuf> {
     let fold = |p: &Path| slash(p).to_lowercase();
@@ -59,8 +59,8 @@ fn other_output(
             outputs
                 .iter()
                 .enumerate()
-                .find(|(i, (o, _))| *i != me && fold(o) == want)
-                .map(|(_, (_, input))| input.clone())
+                .find(|(i, (o, _, writes))| *i != me && *writes && fold(o) == want)
+                .map(|(_, (_, input, _))| input.clone())
         })
 }
 
@@ -448,14 +448,26 @@ pub fn plan_packing(
         heads.push((set, members, recipe_note, recipes, unused));
     }
     // Every recipe's output (explicit or default) before any is planned: an explicit packed path is compared with
-    // recipes planned after it too (DECISIONS AF7).
-    let mut outputs: Vec<(PathBuf, PathBuf)> = vec![];
+    // recipes planned after it too (DECISIONS AF7). A recipe that writes nothing (a failed or cancelled source,
+    // packing off, sources that differ in size) holds no path. The planning loop below walks `heads` in this same
+    // order, so a recipe's index here is its `me` there.
+    let mut outputs: Vec<(PathBuf, PathBuf, bool)> = vec![];
     for (set, members, _, recipes, _) in &heads {
         for recipe in recipes {
-            let vin = virtual_input(members[&recipe.sources()[0].0], recipe.kind);
+            let sources: Vec<PathBuf> = recipe.sources().into_iter().map(|(p, _)| p).collect();
+            let mut vin = virtual_input(members[&sources[0]], recipe.kind);
             let key = (set.key.clone(), recipe.kind.suffix().to_string());
-            let output = packed_outputs.get(&key).unwrap_or(&vin.output).clone();
-            outputs.push((output, vin.path));
+            if let Some(p) = packed_outputs.get(&key) {
+                vin.output = p.clone();
+            }
+            let writes = !sources
+                .iter()
+                .any(|p| failed.contains(p) || cancelled.contains(p))
+                && pass1_profile(ctx, set, &vin, recipe.kind, &pa, &pinfo)
+                    .packing
+                    .enabled
+                && !matches!(check_sizes(&sources), Err(PackError::SizeMismatch(_)));
+            outputs.push((vin.output, vin.path, writes));
         }
     }
     let mut next = 0;

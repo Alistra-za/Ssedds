@@ -659,6 +659,11 @@ fn finish_with_every_set_failed_keeps_the_old_json_even_with_a_delete_section() 
         Finish::Nothing
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "old good json");
+    // Review round 1 M6: nothing failed there, and the note says so.
+    assert_eq!(
+        notes,
+        ["PGPatcher JSON not written: there is no PBR set, and delete sections alone are not written"]
+    );
 }
 
 #[test]

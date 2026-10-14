@@ -1699,3 +1699,17 @@ fn an_export_clicked_during_a_scan_finished_read_starts_when_it_lands() {
         );
     }
 }
+
+/// Review round 1 M5 (DECISIONS AF4): an edit that supersedes the scan-finished read the export was waiting for
+/// drops the queued export; the edit's plan never starts it unasked.
+#[test]
+fn an_edit_during_a_scan_finished_read_drops_the_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    m.replan();
+    idle(&mut m);
+    assert!(!export_started_or_asked(&m), "{:?}", m.dialog);
+}
