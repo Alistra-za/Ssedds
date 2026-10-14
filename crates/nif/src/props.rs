@@ -265,9 +265,19 @@ pub fn decode_effect(h: &Header, b: &[u8], block: usize) -> Result<Effect, NifEr
     })
 }
 
+/// Most slots a BSShaderTextureSet may declare. Skyrim writes 9, Fallout 4 writes 10; a larger count is a
+/// damaged file, refused before its slots are kept (audit 2026-10-14 finding 1).
+pub const MAX_TEXTURE_SLOTS: usize = 32;
+
 pub fn decode_texture_set(h: &Header, b: &[u8], block: usize) -> Result<TextureSet, NifError> {
     let (mut c, start, end) = block_cursor(h, b, block);
     let n = c.u32()? as usize;
+    if n > MAX_TEXTURE_SLOTS {
+        return Err(NifError::Geometry {
+            block: block as u32,
+            msg: format!("{n} texture slots (at most {MAX_TEXTURE_SLOTS})"),
+        });
+    }
     let slots = (0..n)
         .map(|_| c.sized_bytes().map(canon_texture))
         .collect::<Result<Vec<_>, _>>()?;

@@ -130,6 +130,19 @@ fn texture_set_reads_its_count() {
     }
 }
 
+/// Audit 2026-10-14 finding 1: a slot count past `MAX_TEXTURE_SLOTS` is refused before any slot is kept.
+#[test]
+fn texture_set_with_an_absurd_slot_count_is_an_error() {
+    let mut n = Nif::new(100);
+    n.block("BSShaderTextureSet", W::default().u32(2_000_000).0);
+    let b = n.bytes();
+    let h = Header::parse(&b).unwrap();
+    assert!(matches!(
+        decode_texture_set(&h, &b, 0),
+        Err(NifError::Geometry { block: 0, msg }) if msg.contains("2000000 texture slots")
+    ));
+}
+
 #[test]
 fn effect_has_two_inline_strings() {
     let body = W::default()

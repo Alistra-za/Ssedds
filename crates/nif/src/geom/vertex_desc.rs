@@ -83,6 +83,22 @@ pub(crate) fn read_vertices(
     let (pos, uv, nrm) = (has(Attr::Vertex), has(Attr::Uvs), has(Attr::Normals));
     let tan = nrm && has(Attr::Tangents); // cond (ARG & 0x18) == 0x18
     let (col, skin, eye) = (has(Attr::Colors), has(Attr::Skinned), has(Attr::EyeData));
+    // Audit 2026-10-14 finding 1: the bytes one record needs, checked before any reserve. Otherwise a block
+    // with vertex size 4 and every attribute set reserves nine Vecs of `data_size / 4` entries (about 20x
+    // the block) and only vertex 0 reports the mismatch; the allocation can abort the process first.
+    let need = 16 * usize::from(pos)
+        + 4 * usize::from(uv)
+        + 4 * usize::from(nrm)
+        + 4 * usize::from(tan)
+        + 4 * usize::from(col)
+        + 12 * usize::from(skin)
+        + 4 * usize::from(eye);
+    if need > stride {
+        return Err(format!(
+            "attributes {:#x} need {need} bytes but the vertex size is {stride}",
+            desc.flags()
+        ));
+    }
     let reserve = |on: bool| if on { count } else { 0 };
     m.positions.reserve(reserve(pos));
     m.uvs.reserve(reserve(uv));
@@ -147,4 +163,38 @@ pub(crate) fn read_vertices(
         c.skip(stride - used).map_err(e)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Audit 2026-10-14 finding 1: a hostile descriptor is refused before any `reserve`.
+    #[test]
+    fn attributes_wider_than_the_stride_are_refused_before_reserving() {
+        // Vertex size nibble 1 (stride 4) with Vertex, UVs, Normals, Tangents, Colors, Skinned and EyeData set.
+        let desc = VertexDesc(1 | (0x17b_u64 << 44));
+        let data = vec![0u8; 4 * 1_000_000];
+        let mut c = Cursor::new(&data, 0);
+        let mut m = Mesh::default();
+        let err = read_vertices(&mut c, desc, 1_000_000, 4, &mut m).unwrap_err();
+        assert!(
+            err.contains("need 48 bytes but the vertex size is 4"),
+            "{err}"
+        );
+        assert_eq!(m.positions.capacity(), 0);
+        assert_eq!(m.bone_weights.capacity(), 0);
+    }
+
+    /// The same count with a stride that fits reads every record.
+    #[test]
+    fn a_fitting_stride_still_reads() {
+        let desc = VertexDesc(12 | (0x17b_u64 << 44));
+        let data = vec![0u8; 48 * 3];
+        let mut c = Cursor::new(&data, 0);
+        let mut m = Mesh::default();
+        read_vertices(&mut c, desc, 3, 48, &mut m).unwrap();
+        assert_eq!(m.positions.len(), 3);
+        assert_eq!(m.eye.len(), 3);
+    }
 }
