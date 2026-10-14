@@ -131,6 +131,7 @@ pub fn draw(
                     ui.weak("This set has no TruePBR settings. Switch to 2D for its slot cards.");
                 }
                 under_grid(ui, model, &v);
+                super::cs_pbr::section(ui, model, &v);
             });
         return;
     }
@@ -151,6 +152,7 @@ pub fn draw(
                 .on_disabled_hover_text(&why);
                 under_grid(ui, model, &v);
                 super::plugin_refs::set_section(ui, model, &v);
+                super::cs_pbr::section(ui, model, &v);
                 if shows_json_panel(&v, model.target) {
                     super::pgp_fields::panel(&mut cols[1], model, &v.id);
                 }

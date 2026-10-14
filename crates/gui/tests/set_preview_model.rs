@@ -388,6 +388,7 @@ fn fp_of(entry: Option<EntryInput>, sig: &str) -> SetFingerprint {
     SetFingerprint {
         set_key: "k".into(),
         label: "x/rock".into(),
+        landscape: false,
         entry,
         prefix: Some(r"textures\pbr\x\rock".into()),
         members: vec![MemberSlot {
@@ -1887,4 +1888,35 @@ fn the_set_preview_tags_its_viewport_for_the_gap_watch() {
         SetPreview::new(None, None, None, DEFAULT_CAP).v3.panel,
         "set_preview"
     );
+}
+
+/// Design §7 (ruling R1): a texture-set block locks the plane; tiling multiplies the pgpsim `uv_scale` (2 at 2x = 4).
+#[test]
+fn a_texture_set_block_locks_the_plane_and_tiling_multiplies_after_pgpsim() {
+    use sdc_gui::model::cs_pbr::Kind;
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    m.set_json_value("landscape/rock01", "uv_scale", Some(json!(2.0)));
+    m.add_cs_block("landscape/rock01", Kind::Txst);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    let uv = |s: &SetPreview| match s.v3.content() {
+        Some(Content::Builtin {
+            shape: Builtin::Plane,
+            material,
+            ..
+        }) => material.params.uv_scale,
+        c => panic!("{c:?}"),
+    };
+    assert_eq!(uv(&s), [2.0, 2.0]);
+    s.choose(MeshChoice::Builtin(Builtin::Cube));
+    run(&mut s, &m);
+    assert_eq!(uv(&s), [2.0, 2.0], "the plane stays");
+    s.set_tiling(2.2);
+    assert_eq!(s.tiling, 2.0, "steps of 0.5");
+    assert_eq!(s.rows[0].material.params.uv_scale, [4.0, 4.0]);
+    run(&mut s, &m);
+    assert_eq!(uv(&s), [4.0, 4.0]);
 }

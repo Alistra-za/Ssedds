@@ -2,6 +2,7 @@
 pub mod advanced;
 pub mod bulk_panel;
 pub mod columns;
+pub mod cs_pbr;
 pub mod dialogs;
 pub mod drawer;
 pub mod header;

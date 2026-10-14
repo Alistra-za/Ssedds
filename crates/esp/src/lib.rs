@@ -61,6 +61,8 @@ pub struct Payload {
     /// HDPT DATA flags (xEdit: 0x01 Playable, 0x02 Male, 0x04 Female, 0x08 Is Extra Part, 0x10 Use Solid Tint);
     /// `None` on other records and when DATA is absent.
     pub hdpt_flags: Option<u8>,
+    /// MATO DATA flags (u32 at DATA offset 44; bit 0 = Single Pass); `None` when DATA is absent or shorter than 48 bytes.
+    pub mato_flags: Option<u32>,
     /// (role = subrecord signature, canonical texture path).
     pub textures: Vec<([u8; 4], String)>,
 }

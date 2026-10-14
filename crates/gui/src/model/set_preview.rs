@@ -1034,6 +1034,8 @@ pub const NO_MATCH: &str = "No scanned mesh uses this diffuse";
 pub const NO_BUILTIN_MATCH: &str =
     "A built-in shape cannot match this entry's match keys: it shows the plain textures; pick a game mesh";
 /// D4: the CS features the preview leaves off (03 §3.2 "off" rows), under the single CS toggle.
+/// Design §7: the landscape plane's preview-only tiling slider.
+pub const TILING: &str = "Tiling (preview only)";
 pub const LE_ONLY: &str =
     "Every mesh using this diffuse is an LE mesh, which is not drawn: showing a built-in shape";
 pub const OFF_FEATURES: &str = "Off in this preview: Light Limit Fix, Skylighting, Screen-Space Shadows, \
@@ -1100,6 +1102,8 @@ pub fn target_of(s: &MeshesSettings) -> Option<ScanTarget> {
 pub struct SetFingerprint {
     pub set_key: String,
     pub label: String,
+    /// Design §7 (plan ruling R1): the set has a texture-set block, so it is shown on the plane only.
+    pub landscape: bool,
     /// The PGPatcher entry; `None` when the simulation cannot run (not CS, or not a PBR set: D3).
     pub entry: Option<EntryInput>,
     pub prefix: Option<String>,
@@ -1116,6 +1120,9 @@ pub fn fingerprint(m: &AppModel, set_key: &str) -> Option<SetFingerprint> {
     Some(SetFingerprint {
         set_key: set_key.into(),
         label: v.label.clone(),
+        landscape: m
+            .cs_block(&v.id, crate::model::cs_pbr::Kind::Txst)
+            .is_some(),
         entry,
         prefix: v.prefix.clone(),
         members,
@@ -1575,6 +1582,8 @@ pub struct SetPreview {
     pub candidates: Candidates,
     /// The mesh per set key, this session only (spec §8).
     pub choice: HashMap<String, MeshChoice>,
+    /// Design §7: the landscape plane's tiling, 1.0-3.0 in steps of 0.5; this session only.
+    pub tiling: f32,
     pub rows: Vec<ShapeRow>,
     pub notices: Vec<String>,
     /// The NIF read's own notices (warnings, a failed read): dropped when the mesh pick changes.
@@ -1647,6 +1656,7 @@ impl SetPreview {
             fp: None,
             candidates: Candidates::NotAsked,
             choice: HashMap::new(),
+            tiling: 1.0,
             rows: vec![],
             notices: vec![],
             nif_notices: vec![],
@@ -1826,7 +1836,11 @@ impl SetPreview {
         };
         self.gone = None;
         let d = classify(self.fp.as_ref(), &fp, &self.default);
-        if d == Delta::default() {
+        let relock = self
+            .fp
+            .as_ref()
+            .is_some_and(|f| f.landscape != fp.landscape);
+        if d == Delta::default() && !relock {
             return;
         }
         if d.set {
@@ -1848,7 +1862,7 @@ impl SetPreview {
         if d.set || d.requery {
             self.requery();
         }
-        if d.set || d.encode || d.reload {
+        if d.set || d.encode || d.reload || relock {
             self.want_scene = true;
         } else if d.material {
             self.apply_materials();
@@ -1940,6 +1954,9 @@ impl SetPreview {
         let Some(fp) = &self.fp else {
             return Pick::Builtin(Builtin::Sphere);
         };
+        if fp.landscape {
+            return Pick::Builtin(Builtin::Plane);
+        }
         let choice = self
             .choice
             .get(&fp.set_key)
@@ -1969,6 +1986,24 @@ impl SetPreview {
             .as_ref()
             .and_then(|fp| self.choice.get(&fp.set_key).copied())
             .unwrap_or(MeshChoice::Auto)
+    }
+
+    /// Design §7: a landscape set's tiling. A constant-buffer change only (`SetMaterial`; samplers already WRAP).
+    pub fn set_tiling(&mut self, t: f32) {
+        let t = (t.clamp(1.0, 3.0) * 2.0).round() / 2.0;
+        if t != self.tiling {
+            self.tiling = t;
+            self.apply_materials();
+        }
+    }
+
+    /// The tiling on a landscape set's material, applied after the pgpsim patch (pgpsim overwrites `uv_scale`).
+    fn tiled(&self, mut m: MaterialState) -> MaterialState {
+        if self.fp.as_ref().is_some_and(|f| f.landscape) {
+            let [u, v] = m.params.uv_scale;
+            m.params.uv_scale = [u * self.tiling, v * self.tiling];
+        }
+        m
     }
 
     pub fn choose(&mut self, c: MeshChoice) {
@@ -2066,7 +2101,8 @@ impl SetPreview {
                     &[(ShapeId(0), name, src)],
                     &|p| self.exists(p),
                 );
-                let row = rows.remove(0);
+                let mut row = rows.remove(0);
+                row.material = self.tiled(row.material);
                 return (row.material.clone(), row);
             }
             if !self.notices.iter().any(|n| n == NO_BUILTIN_MATCH) {
@@ -2078,7 +2114,7 @@ impl SetPreview {
             .as_ref()
             .map(|f| f.members.clone())
             .unwrap_or_default();
-        let m = plain_material(&members);
+        let m = self.tiled(plain_material(&members));
         (
             m.clone(),
             ShapeRow {
@@ -2115,7 +2151,7 @@ impl SetPreview {
                 if let (Candidates::Ready(l), Some(fp)) = (&self.candidates, &self.fp) {
                     let auto =
                         !matches!(self.choice.get(&fp.set_key), Some(MeshChoice::Builtin(_)));
-                    if auto && !l.is_empty() && l.iter().all(|c| c.le_mesh) {
+                    if auto && !fp.landscape && !l.is_empty() && l.iter().all(|c| c.le_mesh) {
                         self.notice(LE_ONLY.into());
                     }
                 }
@@ -2320,18 +2356,20 @@ impl SetPreview {
     /// A JSON-only change (spec §2.3): simulate again on the stored source materials and send `SetMaterial` for
     /// the shapes whose material changed; a full push when the viewport has not sent a load of this scene yet.
     fn apply_materials(&mut self) {
-        let Some(entry) = self.entry.clone() else {
-            return;
-        };
         let rows = match self.on_screen {
             Some(Shown::Builtin(_)) => vec![self.builtin_scene().1],
-            Some(Shown::Nif(id)) => match self.nif.clone().filter(|n| n.load_copy_id == id) {
-                Some(nif) => self.nif_rows(&nif, &entry),
-                None => {
-                    self.want_scene = true;
+            Some(Shown::Nif(id)) => {
+                let Some(entry) = self.entry.clone() else {
                     return;
+                };
+                match self.nif.clone().filter(|n| n.load_copy_id == id) {
+                    Some(nif) => self.nif_rows(&nif, &entry),
+                    None => {
+                        self.want_scene = true;
+                        return;
+                    }
                 }
-            },
+            }
             None => {
                 self.want_scene = true;
                 return;

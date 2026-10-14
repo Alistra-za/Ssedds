@@ -1,6 +1,7 @@
 //! `sdc-project.toml` (M3b spec §7.1): the user's sets and JSON settings, next to `sdc.toml`. Format-preserving
 //! like `ProjectDoc`; written only on Save or Export. A file that does not parse makes set and JSON editing
 //! read-only (DECISIONS P8); `sdc.toml` editing is unaffected.
+use crate::model::cs_pbr::{self, block_of, field, fields, CsBlock, Kind, Template};
 use crate::pgp::settings::Settings;
 use crate::project::{dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError};
 use engine::policy::SourceStamp;
@@ -14,8 +15,10 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value
 pub const FILE_NAME: &str = "sdc-project.toml";
 /// GUI tweaks G4: the array of extra PGPatcher entries (delete sections).
 const SECTIONS: &str = "pgp_sections";
+/// Design §5: `[project] cs_pbr_sha256`, path under the export root → hash of the CS JSON sdc last wrote there.
+const CS_SHA: &str = "cs_pbr_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 9] = [
+const RESERVED: [&str; 11] = [
     "id",
     "created",
     "renamed_from",
@@ -25,6 +28,8 @@ const RESERVED: [&str; 9] = [
     "shader",
     "lock",
     "output_name",
+    "cs_txst",
+    "cs_mato",
 ];
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -43,6 +48,9 @@ pub struct SetEntry {
     /// F3b D2: the base name every output of the set takes (`output_name = "steel"`): `steel_n.dds`, `steel.dds`…
     /// in each output's own folder. Never on a CS PBR set, which renames through the PGPatcher `rename` key.
     pub output_name: Option<String>,
+    /// Design §3: the Community Shaders PBR texture-set and material-object blocks (`[sets.cs_txst]`, `[sets.cs_mato]`).
+    pub cs_txst: Option<CsBlock>,
+    pub cs_mato: Option<CsBlock>,
     pub settings: Settings,
 }
 
@@ -110,6 +118,15 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             }
         }
     }
+    let block = |k: Kind| {
+        t.get(k.key())
+            .and_then(Item::as_table_like)
+            .map(|b| block_of(b, k))
+    };
+    let (cs_txst, cs_mato) = (block(Kind::Txst), block(Kind::Mato));
+    if let Some(b) = &cs_txst {
+        cs_pbr::overlay(&mut settings, b);
+    }
     let borrow = t
         .get("borrow")
         .and_then(Item::as_table_like)
@@ -145,6 +162,8 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             .and_then(Item::as_str)
             .map(str::to_string)
             .filter(|n| !n.is_empty()),
+        cs_txst,
+        cs_mato,
         settings,
     })
 }
@@ -216,7 +235,7 @@ impl SetsDoc {
         }
     }
 
-    /// Undo/redo: `restore` that keeps the live `last_json_sha256`. The hash records the JSON on disk, which undo
+    /// Undo/redo: `restore` that keeps the live `last_json_sha256` and `cs_pbr_sha256`. The hash records the JSON on disk, which undo
     /// does not change, so it is outside the undoable state. When only the hash differs, nothing changes (and the
     /// document is not marked dirty).
     pub fn restore_keeping_json_sha(&mut self, text: &str) {
@@ -225,10 +244,14 @@ impl SetsDoc {
             return;
         }
         let (doc, dirty, sha) = (self.doc.clone(), self.dirty, self.last_json_sha256());
+        let cs = self.cs_pbr_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
             self.set_project("last_json_sha256", sha.map(Value::from));
+        }
+        if self.cs_pbr_shas() != cs {
+            self.set_cs_pbr_shas(&cs);
         }
         if self.text() == old {
             self.doc = doc;
@@ -293,6 +316,28 @@ impl SetsDoc {
     pub fn set_last_json_sha256(&mut self, sha: &str) {
         self.rev = next_rev();
         self.set_project("last_json_sha256", Some(Value::from(sha)));
+    }
+
+    pub fn cs_pbr_shas(&self) -> BTreeMap<String, String> {
+        self.doc
+            .get("project")
+            .and_then(|p| p.get(CS_SHA))
+            .and_then(Item::as_table_like)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, v)| Some((k.to_string(), v.as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.rev = next_rev();
+        let mut t = toml_edit::InlineTable::new();
+        for (k, v) in shas {
+            t.insert(k, Value::from(v.as_str()));
+        }
+        self.set_project(CS_SHA, (!shas.is_empty()).then_some(Value::InlineTable(t)));
     }
 
     pub fn order(&self) -> Vec<String> {
@@ -710,16 +755,138 @@ impl SetsDoc {
         self.dirty = true;
     }
 
-    /// Set (or with `None` remove) JSON setting `key` (a dotted schema path) of set `id`.
+    /// Set (or with `None` remove) JSON setting `key` (a dotted schema path) of set `id`. On a set with a texture-set
+    /// block a mapped key lands in the block (design §5.1: one source, so the two files cannot drift).
     pub fn set_value(&mut self, id: &str, key: &str, v: Option<Json>) {
         self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let t = self.table_mut(id);
+        if t.get(Kind::Txst.key()).is_some_and(Item::is_table_like) {
+            if let Some((cs, cv)) = cs_pbr::pgp_to_cs(key, v.as_ref()) {
+                write_path(t, key, None);
+                if let Some(b) = sub_table(t, Kind::Txst.key(), || Item::Table(Table::new())) {
+                    match &cv {
+                        Some(x) => write_json(b, cs, x),
+                        None => write_path(b, cs, None),
+                    };
+                }
+                self.dirty = true;
+                return;
+            }
+        }
         if write_path(t, key, v) {
             self.dirty = true;
         }
+    }
+
+    /// Design §3: set (or with `None` remove) key `key` (dotted, `glintParameters.enabled`) of set `id`'s `kind`
+    /// block, creating the block (`[sets.cs_txst]`) when missing.
+    pub fn set_cs_value(&mut self, id: &str, kind: Kind, key: &str, v: Option<Json>) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        // A new block takes over the set's mapped flat keys (and marks the document dirty), as `add_cs_block` does.
+        self.add_cs_block(id, kind);
+        let t = self.table_mut(id);
+        let Some(b) = sub_table(t, kind.key(), || Item::Table(Table::new())) else {
+            return;
+        };
+        let hit = match &v {
+            Some(v) => write_json(b, key, v),
+            None => write_path(b, key, None),
+        };
+        if hit {
+            self.dirty = true;
+        }
+    }
+
+    /// Design §3: start set `id`'s `kind` block (`edids = []`); nothing when it exists. A texture-set block takes
+    /// over the set's own values of the keys it maps (moved, so adding the block never drops them, design §5.1).
+    pub fn add_cs_block(&mut self, id: &str, kind: Kind) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        let own = self
+            .entries()
+            .into_iter()
+            .find(|e| same_id(&e.id, id))
+            .map(|e| e.settings)
+            .unwrap_or_default();
+        let t = self.table_mut(id);
+        if t.contains_key(kind.key()) {
+            return;
+        }
+        let Some(b) = sub_table(t, kind.key(), || Item::Table(Table::new())) else {
+            return;
+        };
+        set_value(b, "edids", Value::Array(Array::new()));
+        if kind == Kind::Txst {
+            for (_, pgp) in cs_pbr::PGP_MAP {
+                if let Some((cs, Some(v))) = cs_pbr::pgp_to_cs(pgp, own.get(pgp)) {
+                    write_json(b, cs, &v);
+                }
+            }
+            for (_, pgp) in cs_pbr::PGP_MAP {
+                write_path(t, pgp, None);
+            }
+        }
+        self.dirty = true;
+    }
+
+    pub fn remove_cs_block(&mut self, id: &str, kind: Kind) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        // Mirrors `add_cs_block`: the PGPatcher values the block took over move back to the set (design §5.1).
+        let back = (kind == Kind::Txst)
+            .then(|| self.entries().into_iter().find(|e| same_id(&e.id, id)))
+            .flatten()
+            .and_then(|e| e.cs_txst)
+            .map(|b| cs_pbr::cs_to_pgp(&b.values))
+            .unwrap_or_default();
+        let t = self.table_mut(id);
+        if t.remove(kind.key()).is_some() {
+            for (k, v) in back {
+                write_path(t, &k, Some(v));
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// Design §4: the template's values replace the block's known fields (unknown keys stay) and it is recorded as
+    /// `template`; a block with no EDIDs takes the template's (plan ruling R8).
+    pub fn apply_cs_template(&mut self, id: &str, t: &Template) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        self.add_cs_block(id, t.kind);
+        let tbl = self.table_mut(id);
+        let Some(b) = sub_table(tbl, t.kind.key(), || Item::Table(Table::new())) else {
+            return;
+        };
+        for f in fields(t.kind) {
+            b.remove(f.name);
+        }
+        for (k, v) in &t.values {
+            if field(t.kind, k).is_some() {
+                write_json(b, k, v);
+            }
+        }
+        set_value(b, "template", Value::from(t.name.as_str()));
+        if strings(b.get("edids")).is_empty() {
+            let mut arr = Array::new();
+            for e in &t.edids {
+                arr.push(e.as_str());
+            }
+            set_value(b, "edids", Value::Array(arr));
+        }
+        self.dirty = true;
     }
 }
 
@@ -759,5 +926,15 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
             }
             remove(t, &parts)
         }
+    }
+}
+
+/// `write_path` for a value that may be a JSON object (a block's `glintParameters`): its keys go one level down.
+fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
+    match v {
+        Json::Object(o) => o.iter().fold(false, |hit, (k, x)| {
+            write_json(t, &format!("{path}.{k}"), x) | hit
+        }),
+        _ => write_path(t, path, Some(v.clone())),
     }
 }

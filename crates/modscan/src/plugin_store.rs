@@ -148,7 +148,7 @@ impl Store {
             let local = i64::from(clamp_local(r.local_formid, nm));
             let t = r.payload.txst.as_ref();
             tx.prepare_cached(
-                "INSERT INTO rec(local, plugin_id, sig, edid, txst_flags, decal, hdpt_flags) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO rec(local, plugin_id, sig, edid, txst_flags, decal, hdpt_flags, mato_flags) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )?
             .execute(params![
                 local,
@@ -157,7 +157,8 @@ impl Store {
                 r.edid,
                 t.map(|t| i64::from(t.flags)),
                 t.map(|t| t.decal),
-                r.payload.hdpt_flags.map(i64::from)
+                r.payload.hdpt_flags.map(i64::from),
+                r.payload.mato_flags.map(i64::from)
             ])?;
             if let Some(t) = t {
                 for (slot, p) in t.slots.iter().enumerate() {
@@ -474,6 +475,17 @@ pub struct MissingRef {
     pub records: Vec<String>,
 }
 
+/// A winning record of one type that has an EDID (design §6): the material-object picker and the EDID checks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WinRec {
+    pub formid: u32,
+    pub edid: String,
+    /// The winning plugin.
+    pub plugin: String,
+    /// MATO `DATA` flags of the winning copy (bit 0 = single pass, at offset 44); `None` when DATA is under 48 bytes.
+    pub mato_flags: Option<u32>,
+}
+
 /// `alt_tex a` with its TXST's winning copy (`tr`); select list per query.
 const SWAP_JOINS: &str = "alt_tex a
      LEFT JOIN rec_winner tw ON tw.formid = a.txst_formid
@@ -706,5 +718,27 @@ impl Store {
         Ok(v.into_iter()
             .filter(|p| !nif::path::is_lod_path(p))
             .collect())
+    }
+
+    /// Winning records of type `sig` (`"TXST"`, `"MATO"`) that have an EDID, by EDID then FormID.
+    pub fn winning_records(&self, sig: &str) -> Result<Vec<WinRec>, ScanError> {
+        let mut st = self.conn.prepare(
+            "SELECT w.formid, r.edid, pl.name, r.mato_flags FROM rec r
+             JOIN rec_winner w ON w.formid = r.formid AND w.plugin_id = r.plugin_id
+             JOIN plugin pl ON pl.id = r.plugin_id
+             WHERE r.sig = ?1 AND r.owner_ok = 1 AND r.edid IS NOT NULL
+             ORDER BY r.edid, w.formid",
+        )?;
+        let v = st
+            .query_map([sig], |r| {
+                Ok(WinRec {
+                    formid: r.get::<_, i64>(0)? as u32,
+                    edid: r.get(1)?,
+                    plugin: r.get(2)?,
+                    mato_flags: r.get::<_, Option<i64>>(3)?.map(|f| f as u32),
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
     }
 }

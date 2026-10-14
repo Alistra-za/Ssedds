@@ -134,7 +134,12 @@ fn unresolved_slots(
 
 /// Why `name` cannot be the JSON file name (a single file name, without `.json`).
 fn json_name_problem(name: &str) -> Option<String> {
-    let bad = |why: &str| Some(format!("JSON name: {why} ({name:?})"));
+    file_name_problem("JSON name", name)
+}
+
+/// Why `name` cannot be a single Windows file name (without its extension); `what` starts the reason.
+pub(crate) fn file_name_problem(what: &str, name: &str) -> Option<String> {
+    let bad = |why: &str| Some(format!("{what}: {why} ({name:?})"));
     if name.trim().is_empty() {
         return bad("empty");
     }
@@ -189,6 +194,14 @@ pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
             };
             (v.clone(), e)
         })
+        .collect()
+}
+
+/// `json_entries` less the sets whose entry the statics rule drops (design §5.1): what the written file holds.
+pub fn written_json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
+    json_entries(m)
+        .into_iter()
+        .filter(|(v, _)| m.pgp_entry_wanted(v))
         .collect()
 }
 
@@ -276,6 +289,10 @@ pub fn export_blocks(m: &AppModel) -> Vec<ExportIssue> {
 fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
     let mut out = vec![];
     for v in &set_views(m) {
+        // Design §5.1: a set whose entry the statics rule drops writes no JSON, so nothing of it blocks.
+        if m.target == Target::Cs && !m.pgp_entry_wanted(v) {
+            continue;
+        }
         if has(v, SlotKind::Coat) && has(v, SlotKind::Fuzz) {
             out.push(issue(v, format!("{}: _cnr and _f both use slot 7", v.id)));
         }
@@ -319,14 +336,18 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
     }
     out.extend(path_collisions(m));
     if m.target == Target::Cs {
-        let entries: Vec<EntryInput> = json_entries(m).into_iter().map(|(_, e)| e).collect();
+        // A set whose entry the statics rule drops writes nothing, so it cannot block the JSON (design §5.1).
+        let entries: Vec<EntryInput> = written_json_entries(m)
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
         if !entries.is_empty() {
             // A filled slot with no path is reported only when nothing above already explains it (a dropped
             // duplicate or an unusable prefix is already a block of its own).
             if out.is_empty() {
                 let views = set_views(m);
                 let (_, paths) = engine_inputs(m);
-                for v in views.iter().filter(|v| v.pbr) {
+                for v in views.iter().filter(|v| v.pbr && m.pgp_entry_wanted(v)) {
                     for (n, from) in unresolved_slots(v, &views, &paths, m) {
                         let text = match from {
                             Some(from) => format!(
@@ -514,7 +535,8 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
             })
             .collect()
     };
-    let mut entries: Vec<_> = json_entries(m)
+    // Design §5.1: a set with a texture-set block gets its entry only for the statics that use its diffuse.
+    let mut entries: Vec<_> = written_json_entries(m)
         .into_iter()
         .map(|(v, e)| (v.id.clone(), deps(&v), e))
         .collect();
@@ -553,7 +575,7 @@ fn exported(rows: &[Row], key: &str) -> Result<(), String> {
     }
 }
 
-fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d)?;
     }
@@ -562,6 +584,15 @@ fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
+}
+
+/// The file was edited outside sdc since sdc last wrote it (DECISIONS Note P21): it exists, its hash is not the
+/// recorded one, and its bytes are not `text` (identical bytes need no question, even with no record).
+pub(crate) fn hand_edited(path: &std::path::Path, text: &str, last_sha: Option<&str>) -> bool {
+    let on_disk = sha256_of(path);
+    on_disk.is_some()
+        && on_disk.as_deref() != last_sha
+        && !std::fs::read_to_string(path).is_ok_and(|t| t == text)
 }
 
 /// After a successful export: the copies, then the JSON of the sets that fully exported (spec §6.1, §6.4).
@@ -609,10 +640,7 @@ pub fn finish(
         return Finish::Nothing;
     }
     let text = to_text(&doc);
-    let on_disk = sha256_of(&p.path);
-    // Identical bytes need no question, even when no hash was recorded.
-    let same = std::fs::read_to_string(&p.path).is_ok_and(|t| t == text);
-    if on_disk.is_some() && on_disk.as_deref() != last_sha && !same {
+    if hand_edited(&p.path, &text, last_sha) {
         return Finish::Overwrite(text);
     }
     match write_atomic(&p.path, &text) {

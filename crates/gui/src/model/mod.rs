@@ -1,5 +1,7 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod bulk;
+pub mod cs_pbr;
+pub mod cs_pbr_export;
 pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;
@@ -184,6 +186,8 @@ pub(crate) struct ViewKey {
     root: Option<PathBuf>,
     export_root: PathBuf,
     target: Target,
+    /// The scan database the statics rule read (design §5.1): a new scan changes the export blocks.
+    scan: cs_pbr::Stamp,
 }
 
 pub struct AppModel {
@@ -273,6 +277,8 @@ pub struct AppModel {
     pub nvtt: Option<engine::nvtt::NvttProbe>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
+    /// Design §5.1, §6: the CS PBR scan reads (statics, EDID checks, the material-object picker).
+    pub cs_pbr: cs_pbr::CsPbrScan,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -283,6 +289,8 @@ pub struct AppModel {
     pending_json: Option<pbr_export::PendingJson>,
     /// The JSON text waiting for the answer to `Dialog::OverwriteJson`.
     pending_text: Option<String>,
+    /// Design §5: the CS PBR files the running export writes afterwards.
+    pending_cs: Option<cs_pbr_export::PendingCs>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -380,11 +388,13 @@ impl AppModel {
             after_export: None,
             pending_json: None,
             pending_text: None,
+            pending_cs: None,
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
             nvtt: None,
             plugin_refs: Default::default(),
+            cs_pbr: Default::default(),
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -450,6 +460,7 @@ impl AppModel {
         self.after_export = None;
         self.pending_json = None;
         self.pending_text = None;
+        self.pending_cs = None;
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
         // were answered to get here). Audit 2026-10-14 finding 2: a `ProceedAnyway` left open would be closed by
         // the new folder's plan (`refresh_undecided_dialog`) and continue into an export of that folder.
@@ -743,6 +754,8 @@ impl AppModel {
                     }
                 }
                 self.finish_json();
+                let cs = self.pending_cs.take();
+                self.finish_cs_pbr(cs);
                 // A user who cancelled the export to leave does not need its error as a dialog.
                 if !self.run_after_export() {
                     if let Some(e) = failure {
@@ -1078,6 +1091,7 @@ impl AppModel {
         };
         req.on_existing = engine::api::OnExisting::IfChanged;
         self.pending_json = pbr_export::prepare(self);
+        self.pending_cs = cs_pbr_export::prepare(self);
         self.pending_text = None;
         self.export = export::ExportModel {
             open: true,
@@ -1363,6 +1377,7 @@ impl AppModel {
             root: self.root.clone(),
             export_root: self.export_root(),
             target: self.target,
+            scan: cs_pbr::stamp(self.scan_db.as_deref()),
         }
     }
 

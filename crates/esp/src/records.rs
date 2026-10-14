@@ -60,6 +60,7 @@ pub(crate) fn read(rec: &mut Rec, data: &[u8]) -> Result<(), usize> {
             // Skyrim ARMO MODL is an ARMA FormID (one per armature), not a path; world models are MOD2/MOD4 (ruling F-2).
             b"ARMO" if &sig == b"MODL" => form_ref(p, sig, d),
             b"HDPT" if &sig == b"DATA" => p.hdpt_flags = d.first().copied(),
+            b"MATO" if &sig == b"DATA" => p.mato_flags = (d.len() >= 48).then(|| u32_at(d, 44)),
             b"HDPT" if &sig == b"HNAM" => form_ref(p, sig, d),
             b"LTEX" if &sig == b"GNAM" => form_ref(p, sig, d),
             b"FLST" if &sig == b"LNAM" => form_ref(p, sig, d),
