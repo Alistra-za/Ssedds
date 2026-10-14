@@ -13,11 +13,13 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_SIZE: [f32; 2] = [1400.0, 900.0];
 /// A saved window must show at least this many pixels (both ways) on some monitor.
 const MIN_VISIBLE: f32 = 64.0;
+/// The top of the window that must be on a monitor so it can be dragged.
+const TITLE_BAR: f32 = 32.0;
 
 /// The saved rectangle (pixels) fitted to the monitors (pixels, the primary first), AG18. With no monitor info it is
 /// returned as it is. A rectangle that shows less than 64 x 64 px on every monitor is centred on the primary monitor
 /// at its saved size, at most 90% of the monitor. One that shows enough stays where it is, except that a side bigger
-/// than all the monitors together shrinks to them.
+/// than all the monitors together shrinks to them and a title bar off every monitor moves onto one.
 pub fn fit_window(saved: Rect, monitors: &[Rect]) -> Rect {
     let Some(primary) = monitors.first() else {
         return saved;
@@ -40,6 +42,23 @@ pub fn fit_window(saved: Rect, monitors: &[Rect]) -> Rect {
     }
     if size.y > all.height() {
         (size.y, min.y) = (all.height(), all.min.y);
+    }
+    let r = Rect::from_min_size(min, size);
+    // The title bar must be on a monitor, or the window cannot be dragged: else it comes down (or up) onto the monitor
+    // that shows the most of the window.
+    let bar = Rect::from_min_size(min, vec2(size.x, TITLE_BAR));
+    let bar_shown = monitors.iter().any(|m| {
+        let i = m.intersect(bar);
+        i.width() >= MIN_VISIBLE && i.height() >= TITLE_BAR
+    });
+    if !bar_shown {
+        let shown = |m: &&Rect| {
+            let i = m.intersect(r);
+            i.width().max(0.0) * i.height().max(0.0)
+        };
+        if let Some(m) = monitors.iter().max_by(|a, b| shown(a).total_cmp(&shown(b))) {
+            min.y = min.y.clamp(m.min.y, (m.max.y - TITLE_BAR).max(m.min.y));
+        }
     }
     Rect::from_min_size(min, size)
 }
@@ -169,6 +188,53 @@ fn panel_width(ctx: &egui::Context, name: &str) -> Option<f32> {
         return ctx.data_mut(|d| d.get_persisted::<f32>(chosen_id(name)));
     }
     PanelState::load(ctx, egui::Id::new(name)).map(|s| s.outer_rect.width())
+}
+
+/// Everything [`capture`] reads, in a form that is cheap to build and compare: the app captures (which allocates) only
+/// on a frame where this changed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    rects: [Option<Rect>; 2],
+    states: [Option<bool>; 3],
+    ppp: Option<f32>,
+    widths: [Option<f32>; WIDTH_IDS.len()],
+    meshes_view: bool,
+    filter: [bool; 4],
+    channel: Channel,
+    layout: Layout,
+    looks: (Look, Look),
+}
+
+pub fn probe(
+    ctx: &egui::Context,
+    filter: &Filter,
+    view: &ViewState,
+    looks: (&Look, &Look),
+) -> Probe {
+    let (rects, states, ppp) = ctx.input(|i| {
+        let v = i.viewport();
+        (
+            [v.inner_rect, v.outer_rect],
+            [v.maximized, v.minimized, v.fullscreen],
+            v.native_pixels_per_point,
+        )
+    });
+    Probe {
+        rects,
+        states,
+        ppp,
+        widths: WIDTH_IDS.map(|n| panel_width(ctx, n)),
+        meshes_view: crate::ui::header::meshes_view_active(ctx),
+        filter: [
+            filter.needs_decision,
+            filter.warnings,
+            filter.failed,
+            filter.not_in_set,
+        ],
+        channel: view.channel,
+        layout: view.layout,
+        looks: (*looks.0, *looks.1),
+    }
 }
 
 /// What the app shows now, as `[layout]`. A part that cannot be read this frame (no viewport info yet, a panel not

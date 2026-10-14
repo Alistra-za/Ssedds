@@ -333,10 +333,13 @@ fn a_new_app_starts_from_the_saved_layout() {
     let ctx = egui::Context::default();
     app.restore_ctx(&ctx);
     assert!(sdc_gui::ui::header::meshes_view_active(&ctx));
-    // The same layout comes back out of the context (the set look now holds all its fields).
+    // The same layout comes back out of the context, the partial set look included.
     app.sync_layout_at(&ctx, Instant::now());
     let mut want = full();
-    want.set_look = app.model.settings.layout.set_look;
+    want.set_look = Some(LookSettings {
+        sun: Some(0.5),
+        ..LookSettings::default()
+    });
     assert_eq!(app.model.settings.layout, want);
 }
 
@@ -369,4 +372,71 @@ fn the_monitor_list_has_positive_areas() {
     for m in sdc_gui::layout::monitors() {
         assert!(m.width() > 0.0 && m.height() > 0.0, "{m:?}");
     }
+}
+
+// ---- Task 3 review carry-over (Task 4)
+
+#[test]
+fn a_start_that_changes_nothing_writes_nothing() {
+    use sdc_gui::app::SdcApp;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("sdc/gui.toml");
+    let model = sdc_gui::model::AppModel::new(
+        GuiSettings::default(),
+        Some(path.clone()),
+        support::session(),
+    );
+    let mut app = SdcApp::new(model);
+    let ctx = egui::Context::default();
+    // The first frame reads parts the file did not have (here a panel width): that is the starting point, not a change.
+    sdc_gui::layout::restore_ctx(
+        &ctx,
+        &LayoutSettings {
+            widths: [("textures".to_string(), 500.0)].into(),
+            ..LayoutSettings::default()
+        },
+    );
+    let t0 = Instant::now();
+    app.sync_layout_at(&ctx, t0);
+    assert_eq!(
+        app.model.settings.layout.widths.get("textures"),
+        Some(&500.0)
+    );
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(3));
+    assert!(
+        !path.exists(),
+        "a start with nothing changed wrote gui.toml"
+    );
+    eframe::App::on_exit(&mut app);
+    assert!(!path.exists(), "and so did the exit");
+    // A real change still writes.
+    app.model.filter.failed = true;
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(4));
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(7));
+    assert_eq!(
+        GuiSettings::load(&path).0.layout.filters,
+        vec!["failed".to_string()]
+    );
+}
+
+#[test]
+fn the_title_bar_stays_on_a_monitor() {
+    // 100 px of the window show at the top of the monitor, but its title bar is 500 px above the screen.
+    let r = fit_window(rect(100.0, -500.0, 800.0, 600.0), &[mon()]);
+    assert_eq!(r.min, pos2(100.0, 0.0));
+    assert_eq!(r.size(), vec2(800.0, 600.0));
+    // A title bar a little above a second monitor's top that is above the first's comes down onto the second.
+    let upper = rect(0.0, -1080.0, 1920.0, 1080.0);
+    let r = fit_window(rect(300.0, -1100.0, 800.0, 600.0), &[mon(), upper]);
+    assert_eq!(r.min, pos2(300.0, -1080.0));
+    // One already on the screen stays.
+    let r = rect(100.0, 10.0, 800.0, 600.0);
+    assert_eq!(fit_window(r, &[mon()]), r);
+}
+
+#[test]
+fn the_preview_settings_panel_width_is_saved_too() {
+    assert!(WIDTH_IDS.contains(&"preview-settings"));
+    let (s, _) = load_text("[layout.widths]\npreview-settings = 300.0\n");
+    assert_eq!(s.layout.widths.get("preview-settings"), Some(&300.0));
 }

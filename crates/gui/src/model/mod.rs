@@ -43,6 +43,10 @@ type NvttKey = (PathBuf, u64, Option<std::time::SystemTime>);
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// How long the "Undid/Redid" note stays in the status line (AG15).
+const UNDO_NOTE_FOR: Duration = Duration::from_secs(5);
+
 /// Whether a warning counts toward the amber ⚠ badge and the "Has warnings" filter. Info lines (a note, not a
 /// problem) stay in the texture's own warnings list only. One predicate for the pill, the tile and the filter.
 pub fn counts_toward_badge(w: &engine::codes::Warning) -> bool {
@@ -1600,13 +1604,19 @@ impl AppModel {
         }
     }
 
-    /// The note is shown for at most 5 s (the UI's per-frame `tick`).
+    /// The note is shown for at most [`UNDO_NOTE_FOR`] (the UI's per-frame `tick`).
     pub(crate) fn expire_undo_note(&mut self, now: Instant) {
         if let Some((at, _)) = self.undo_note_at {
-            if now.saturating_duration_since(at) >= Duration::from_secs(5) {
+            if now.saturating_duration_since(at) >= UNDO_NOTE_FOR {
                 self.drop_undo_note();
             }
         }
+    }
+
+    /// How long the undo note has left at `now`: the app asks for a frame then, so an idle window drops it on time.
+    pub fn undo_note_left(&self, now: Instant) -> Option<Duration> {
+        let (at, _) = self.undo_note_at?;
+        Some(UNDO_NOTE_FOR.saturating_sub(now.saturating_duration_since(at)))
     }
 
     /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled

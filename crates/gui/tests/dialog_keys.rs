@@ -151,6 +151,28 @@ fn the_undo_note_stands_in_front_of_the_counts_and_goes_with_the_next_plan_or_af
 }
 
 #[test]
+fn the_undo_note_asks_for_a_frame_when_it_runs_out() {
+    use std::time::{Duration, Instant};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    let t0 = Instant::now();
+    assert_eq!(m.undo_note_left(t0), None, "no note, no repaint");
+    m.undo();
+    // An idle window gets a frame when the 5 s are over, so the note goes without waiting for input.
+    let left = m
+        .undo_note_left(t0 + Duration::from_secs(1))
+        .expect("a note");
+    assert!(
+        left > Duration::from_secs(3) && left <= Duration::from_secs(5),
+        "{left:?}"
+    );
+    let at_end = t0 + Duration::from_secs(1) + left + Duration::from_millis(50);
+    m.tick(at_end);
+    assert!(!m.status_line.contains("Undid"), "{}", m.status_line);
+    assert_eq!(m.undo_note_left(at_end), None);
+}
+
+#[test]
 fn ctrl_z_waits_while_a_sets_column_box_is_open() {
     let d = tempfile::tempdir().unwrap();
     let mut h = Harness::builder()

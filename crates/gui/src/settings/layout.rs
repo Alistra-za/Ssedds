@@ -3,9 +3,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// What `[layout.widths]` may name: the Textures and Sets columns, the set 3D panel, the Meshes tree and the Advanced
-/// drawer.
-pub const WIDTH_IDS: [&str; 5] = ["textures", "sets", "set-3d", "meshes-tree", "advanced"];
+/// What `[layout.widths]` may name: the Textures and Sets columns, the set 3D panel, the Meshes tree, the Advanced
+/// drawer and the 2D preview's settings panel (fixed at 280 pt today, so its saved width changes nothing yet).
+pub const WIDTH_IDS: [&str; 6] = [
+    "textures",
+    "sets",
+    "set-3d",
+    "meshes-tree",
+    "advanced",
+    "preview-settings",
+];
 /// The Textures filter toggles, by their `gui.toml` names.
 pub const FILTER_NAMES: [&str; 4] = ["needs-decision", "warnings", "failed", "not-in-set"];
 /// A saved panel width outside this range (points) is ignored.

@@ -36,6 +36,8 @@ pub struct SdcApp {
     was_focused: bool,
     /// Waits out 2 s after the layout changed before `gui.toml` is written (AG19).
     layout_save: crate::layout::SaveDebounce,
+    /// What the layout looked like last frame; `None` before the first.
+    layout_probe: Option<crate::layout::Probe>,
 }
 
 impl SdcApp {
@@ -64,6 +66,7 @@ impl SdcApp {
             uploaded: Uploaded::default(),
             was_focused: true,
             layout_save: Default::default(),
+            layout_probe: None,
         }
     }
 
@@ -76,16 +79,23 @@ impl SdcApp {
     /// waited 2 s from its first change (AG19), and at exit.
     pub fn sync_layout_at(&mut self, ctx: &egui::Context, now: std::time::Instant) {
         let looks = (&self.meshes.v3.look, &self.state.set3d.v3.look);
-        let cur = crate::layout::capture(
-            ctx,
-            &self.model.settings.layout,
-            &self.model.filter,
-            &self.model.view,
-            looks,
-        );
-        if cur != self.model.settings.layout {
-            self.model.settings.layout = cur;
-            self.layout_save.changed(now);
+        let probe = crate::layout::probe(ctx, &self.model.filter, &self.model.view, looks);
+        if self.layout_probe.as_ref() != Some(&probe) {
+            let cur = crate::layout::capture(
+                ctx,
+                &self.model.settings.layout,
+                &self.model.filter,
+                &self.model.view,
+                looks,
+            );
+            // The first frame is the starting point: what it reads that the file did not have is no change to write.
+            if cur != self.model.settings.layout {
+                self.model.settings.layout = cur;
+                if self.layout_probe.is_some() {
+                    self.layout_save.changed(now);
+                }
+            }
+            self.layout_probe = Some(probe);
         }
         if self.layout_save.due(now) {
             self.model.save_settings();
@@ -193,7 +203,11 @@ impl eframe::App for SdcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.model.poll();
-        self.model.tick(std::time::Instant::now());
+        let now = std::time::Instant::now();
+        self.model.tick(now);
+        if let Some(left) = self.model.undo_note_left(now) {
+            ctx.request_repaint_after(left);
+        }
 
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
             // A failed save raises its own dialog.
