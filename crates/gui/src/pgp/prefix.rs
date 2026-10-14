@@ -72,6 +72,20 @@ pub fn check_file_name(name: &str, field: &str) -> Result<(), PrefixError> {
     Ok(())
 }
 
+/// A typed path without its leading `\` or `/`: every path here is relative already, so the separator means nothing
+/// and is dropped rather than blocking export (owner, 2026-10-14; DECISIONS P13). A stored value is not rewritten.
+pub fn strip_lead(p: &str) -> &str {
+    p.trim().trim_start_matches(['\\', '/'])
+}
+
+/// The set keys that hold a path: a typed leading separator is dropped before they are stored.
+pub fn is_path_key(key: &str) -> bool {
+    key == "rename"
+        || key
+            .strip_prefix("match")
+            .is_some_and(|n| n.len() == 1 && (b'1'..=b'8').contains(&n.as_bytes()[0]))
+}
+
 /// Reject what could escape the export folder or that Windows cannot name (DECISIONS P13).
 pub fn check_rel_path(p: &str, field: &str) -> Result<(), PrefixError> {
     let err = |why: &str| Err(PrefixError(format!("{field}: {why} ({p:?})")));
@@ -195,7 +209,7 @@ pub fn active_matches(s: &Settings, derived: &str) -> Vec<(u8, String)> {
 /// What a typed `matchN` value stores: trimmed, one trailing `.dds` cut. Empty turns the match off: `match1 = ""`
 /// (removing the key would bring the derived default back), any other slot loses its key.
 pub fn stored_match(n: u8, typed: &str) -> Option<Value> {
-    let t = typed.trim();
+    let t = strip_lead(typed);
     let t = if has_dds(t) { &t[..t.len() - 4] } else { t };
     match (n, t.is_empty()) {
         (1, true) => Some(json!("")),

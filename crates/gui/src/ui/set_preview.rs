@@ -26,7 +26,30 @@ const LIST_MAX: f32 = 160.0;
 
 /// The panel is wanted while a set, or a texture of a set, is selected (it stays beside the expanded view).
 pub fn wanted(m: &AppModel) -> bool {
-    followed_set(m).is_some()
+    m.settings.set_view_3d && followed_set(m).is_some()
+}
+
+/// The 2D | 3D switch of a set: the slot cards, or this 3D preview. The TruePBR settings show in both.
+pub fn view_switch(ui: &mut egui::Ui, m: &mut AppModel) {
+    let mut three_d = m.settings.set_view_3d;
+    if ui
+        .selectable_label(!three_d, "2D")
+        .on_hover_text("Show the set's slot cards")
+        .clicked()
+    {
+        three_d = false;
+    }
+    if ui
+        .selectable_label(three_d, "3D")
+        .on_hover_text("Show the set on a mesh in 3D")
+        .clicked()
+    {
+        three_d = true;
+    }
+    if three_d != m.settings.set_view_3d {
+        m.settings.set_view_3d = three_d;
+        m.save_settings();
+    }
 }
 
 pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
@@ -45,7 +68,10 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     }) {
         s.input = true;
     }
-    ui.heading(PANEL_TITLE);
+    ui.horizontal(|ui| {
+        view_switch(ui, m);
+        ui.heading(PANEL_TITLE);
+    });
     if followed_set(m).is_none() {
         ui.label("Select a set to preview it in 3D.");
         return;

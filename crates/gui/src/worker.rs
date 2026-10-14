@@ -42,6 +42,8 @@ pub enum WorkerMsg {
         generation: u64,
         result: Result<MeshEvidence, String>,
     },
+    /// The scan's texture and mesh paths were read (`AppModel::refresh_known_paths`).
+    KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),
     ExportDone(Result<BatchSummary, String>),
     Source {

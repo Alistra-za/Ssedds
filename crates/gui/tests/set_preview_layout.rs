@@ -22,7 +22,9 @@ fn harness(d: &std::path::Path, collapsed: bool, w: f32) -> H {
         .0
         .key;
     m.select_set(&key);
-    m.settings.columns_collapsed = collapsed;
+    m.settings.textures_collapsed = collapsed;
+    m.settings.sets_collapsed = collapsed;
+    m.settings.set_view_3d = true;
     let state = State {
         set3d: SetPreview::new(None, None, None, DEFAULT_CAP),
         ..State::default()
