@@ -17,6 +17,7 @@ pub fn input(game: &str) -> InputFile {
         game_path: game.into(),
         output: PathBuf::from(name).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     }
 }
 

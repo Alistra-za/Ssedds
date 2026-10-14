@@ -595,6 +595,15 @@ fn menu(
         acts.push(Act::OpenRename(v.id.clone()));
         ui.close();
     }
+    // F3b D5: rename the set's outputs, or read its files under new names.
+    if tip(ui.button("Rename outputs…  F2")).clicked() {
+        acts.push(Act::Bulk(MenuAction::RenameOutputs));
+        ui.close();
+    }
+    if ui.button("Rename inputs…").clicked() {
+        acts.push(Act::Bulk(MenuAction::RenameInputs));
+        ui.close();
+    }
     if tip(ui.button("Edit match…")).clicked() && !v.key.is_empty() {
         acts.push(Act::Select(v.key.clone()));
         ui.close();

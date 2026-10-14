@@ -1,7 +1,9 @@
 //! Input discovery: turns the files and folders given on the command line into `InputFile`s,
 //! each with its game-relative path and the DDS path it will be written to.
+use crate::codes::{Code, Warning};
+use crate::presets::ReadAs;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub const IMAGE_EXTS: [&str; 9] = [
@@ -29,6 +31,10 @@ pub struct InputFile {
     /// `<output_root>/<rel>` with a `.dds` extension.
     pub output: PathBuf,
     pub kind: InputKind,
+    /// F3b: the `rel` found on disk when an `[inputs]` alias renamed it (`rel` then holds the alias). Keys
+    /// (`[files]`, set edits, output paths) stay on the real file through it (`overrides::project_rel`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub real_rel: Option<PathBuf>,
 }
 
 fn ext_lower(p: &Path) -> String {
@@ -76,6 +82,7 @@ fn make(path: PathBuf, rel: PathBuf, output_root: &Path) -> InputFile {
         game_path,
         output,
         kind,
+        real_rel: None,
     }
 }
 
@@ -147,6 +154,142 @@ pub fn discover_reporting(
     }
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
     Ok((files, skipped))
+}
+
+/// M6 Track F3b: apply the project's `[inputs]` aliases. A file whose project-relative path matches a key (as a
+/// `[files]` key does) takes the alias as its `rel`, `game_path` and output, and keeps its real `rel` in
+/// `real_rel`; its `path` (what is decoded) is unchanged. Call it right after discovery, before
+/// `canonicalise_outputs`. A refused alias leaves the file as it is (IN-ALIAS-INVALID); a key that matches no file
+/// is IN-ALIAS-STALE.
+pub fn apply_read_as(
+    files: &mut [InputFile],
+    root: &Path,
+    output_root: &Path,
+    inputs: &BTreeMap<String, ReadAs>,
+) -> Vec<Warning> {
+    let rels: Vec<Option<String>> = files
+        .iter()
+        .map(|f| crate::overrides::project_rel(root, f))
+        .collect();
+    // Every real path is taken, and so is every alias once applied: two files never share a name.
+    let mut taken: BTreeSet<String> = rels.iter().flatten().map(|r| r.to_lowercase()).collect();
+    let mut warnings = vec![];
+    for (key, read_as) in inputs {
+        let hits: Vec<usize> = (0..files.len())
+            .filter(|&i| {
+                rels[i]
+                    .as_deref()
+                    .is_some_and(|r| crate::overrides::path_key_matches(key, r))
+            })
+            .collect();
+        if hits.is_empty() {
+            warnings.push(
+                Warning::new(
+                    Code::InAliasStale,
+                    format!("[inputs.\"{key}\"] matches no file; the alias is unused"),
+                )
+                .with_data(serde_json::json!({ "key": key, "as": read_as.path })),
+            );
+            continue;
+        }
+        for i in hits {
+            let own = rels[i].as_deref().unwrap_or_default().to_lowercase();
+            let applied =
+                read_as_target(&files[i], root, output_root, &read_as.path).and_then(|t| {
+                    let lower = t.project_rel.to_lowercase();
+                    if lower != own && taken.contains(&lower) {
+                        Err(format!("{} is already another file's name", t.project_rel))
+                    } else {
+                        Ok((t, lower))
+                    }
+                });
+            match applied {
+                Ok((t, lower)) => {
+                    taken.insert(lower);
+                    let f = &mut files[i];
+                    f.real_rel = Some(std::mem::replace(&mut f.rel, t.rel));
+                    f.game_path = t.game_path;
+                    f.output = t.output;
+                }
+                Err(reason) => warnings.push(
+                    Warning::new(
+                        Code::InAliasInvalid,
+                        format!("[inputs.\"{key}\"] ignored: {reason}"),
+                    )
+                    .with_data(serde_json::json!({
+                        "key": key,
+                        "as": read_as.path,
+                        "reason": reason,
+                    })),
+                ),
+            }
+        }
+    }
+    warnings
+}
+
+/// Where an alias puts a file, or why it cannot.
+struct ReadAsTarget {
+    /// '/'-separated, relative to the project root, with the file's own extension.
+    project_rel: String,
+    rel: PathBuf,
+    game_path: String,
+    output: PathBuf,
+}
+
+fn read_as_target(
+    f: &InputFile,
+    root: &Path,
+    output_root: &Path,
+    alias: &str,
+) -> Result<ReadAsTarget, String> {
+    use std::path::Component;
+    let alias = alias.trim().replace('\\', "/");
+    let alias = alias.trim_start_matches("./");
+    let as_path = Path::new(alias);
+    if alias.is_empty() || alias.ends_with('/') || as_path.file_stem().is_none() {
+        return Err("the alias names no file".into());
+    }
+    if alias.starts_with('/') || as_path.is_absolute() || alias.contains(':') {
+        return Err("an alias is relative to the folder holding sdc.toml".into());
+    }
+    if as_path
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return Err("an alias cannot leave the folder holding sdc.toml (..)".into());
+    }
+    let real_ext = f
+        .path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let typed_ext = ext_lower(as_path);
+    let with_ext = if typed_ext == real_ext.to_ascii_lowercase() {
+        alias.to_string()
+    } else if typed_ext == "dds" || IMAGE_EXTS.contains(&typed_ext.as_str()) {
+        return Err(format!(
+            "an alias keeps the file's own extension (.{real_ext}, not .{typed_ext})"
+        ));
+    } else {
+        format!("{alias}.{real_ext}")
+    };
+    // The folder the file was found in: its path less the components of its rel.
+    let mut found_in = crate::overrides::absolute_or_same(&f.path);
+    for _ in f.rel.components() {
+        found_in.pop();
+    }
+    let abs = crate::overrides::absolute_or_same(root).join(&with_ext);
+    let rel = abs
+        .strip_prefix(&found_in)
+        .map_err(|_| "the alias is outside the folder the file was found in".to_string())?
+        .to_path_buf();
+    Ok(ReadAsTarget {
+        project_rel: with_ext,
+        game_path: game_path(&abs, &rel),
+        output: output_root.join(&rel).with_extension("dds"),
+        rel,
+    })
 }
 
 /// Spec §3.7, §4.4: an input whose stem ends in a preset suffix alias or an exporter vocabulary term is

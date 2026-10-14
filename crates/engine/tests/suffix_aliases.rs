@@ -118,6 +118,7 @@ fn resolve_img(
         game_path: format!("textures/armor/{}", name.to_ascii_lowercase()),
         output: PathBuf::from(name).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let set = TextureSet {
         key: "textures/armor/iron".into(),
@@ -499,6 +500,7 @@ fn accepted_fallback_keeps_the_alias_preset() {
         game_path: "textures/armor/iron_normalhq.png".into(),
         output: PathBuf::from("iron_n.dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     // The alias preset's rule names pbr_normal, unavailable under CPM; its fallback is normal, and the
     // fallback is resolved with the alias preset's chain too.

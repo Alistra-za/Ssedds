@@ -87,6 +87,16 @@ Every change of this kind is one undo step, and the folder is planned once. A re
 
 **Encoding follows type.** When a texture's sub-type changes (a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set on it that the new type does not allow are reset, so the new type's default applies; a note after the status line says which (hover it when there are several). Settings that are still valid are kept, and a texture in a locked slot is left alone and named in the note. One undo restores both the change and the reset.
 
+## Renaming
+
+Right-click a texture or a set (or press **F2**) for the rename dialog. It has two modes:
+- **Inputs** read files under corrected names, for a source saved with the wrong name (a normal map without `_n`, or a file in the wrong folder). The name is written to `sdc.toml` as `[inputs."<file>"] as = "<new path>"`; **the file on disk is never renamed**, and `sdc convert` reads the same alias. The tile shows *read as <name>*. The file keeps its own settings and set membership, whatever name it is read as. *Clear input alias* in the tile menu removes it.
+- **Outputs** give a set's outputs a new base name. Every output keeps its folder and its suffix (`steel.dds`, `steel_n.dds`, `steel_rmaos.dds`). On a TruePBR set (Community Shaders) this writes the set's PGPatcher **Rename**, so the JSON follows; on any other set it is saved in `sdc-project.toml`. Nothing on disk is renamed, and outputs already exported under the old name stay where they are.
+
+The dialog changes only the base name (the part before `_n`, `_normal` and so on): *Find* and *Replace* (tick *Regex* for a pattern, `$1` in *Replace* for a group), *Prefix*, *Suffix* and *Case*. Type in a row's *New* cell to set that row by hand, or untick it to leave it out. The table shows each new name, the kind its name now reads as, and the output.
+
+Apply is greyed out while a row is red: two files or sets would end up with one name, a name Windows cannot use, a changed file extension, or an output name ending in a map suffix. Amber rows are warnings: a file whose name now reads as another kind of map, or an output that scanned meshes still use under its old name (renaming it leaves those meshes pointing at a file nothing writes). Packed outputs and textures in a locked slot are skipped in Inputs mode. Apply is one undo step.
+
 ## The preview
 
 Double-click a tile (or a set member) to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again.

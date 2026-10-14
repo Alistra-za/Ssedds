@@ -841,6 +841,11 @@ pub enum MenuAction {
         n: u8,
         on: bool,
     },
+    /// F3b D5: open the rename dialog on input aliases or on output names.
+    RenameInputs,
+    RenameOutputs,
+    /// F3b D5: remove the `[inputs]` aliases of the selected textures.
+    ClearInputAlias,
 }
 
 /// One entry of a right-click menu; `disabled` is the hover reason.
@@ -1003,9 +1008,62 @@ impl AppModel {
             MenuEntry {
                 action: MenuAction::ResetAll,
                 label: format!("Reset all settings for {n} selected…"),
-                disabled: locked,
+                disabled: locked.clone(),
             },
         ]
+        .into_iter()
+        .chain(self.rename_entries(false))
+        .collect()
+    }
+
+    /// F3b D5: the rename entries both menus append. Inputs need `sdc.toml`, Outputs `sdc-project.toml`.
+    fn rename_entries(&self, sets: bool) -> Vec<MenuEntry> {
+        use super::rename::RenameMode;
+        let toml = self.toml_read_only_reason();
+        let project = self
+            .sets_doc
+            .as_ref()
+            .and_then(|d| d.error())
+            .map(|e| format!("sdc-project.toml is read-only: {e}"));
+        let plural = |n: usize, one: &str, many: &str| if n == 1 { one } else { many }.to_string();
+        let (ni, no) = (
+            self.rename_keys(RenameMode::Inputs).len(),
+            self.rename_keys(RenameMode::Outputs).len(),
+        );
+        let inputs = MenuEntry {
+            action: MenuAction::RenameInputs,
+            label: format!(
+                "{}…{}",
+                plural(ni, "Rename input", "Rename inputs"),
+                if sets { "" } else { "  F2" }
+            ),
+            disabled: toml
+                .clone()
+                .or_else(|| (ni == 0).then(|| "nothing to rename".into())),
+        };
+        let outputs = MenuEntry {
+            action: MenuAction::RenameOutputs,
+            label: format!(
+                "{}…{}",
+                plural(no, "Rename output", "Rename outputs"),
+                if sets { "  F2" } else { "" }
+            ),
+            disabled: project.or_else(|| (no == 0).then(|| "no set writes an output".into())),
+        };
+        let mut v = if sets {
+            vec![outputs, inputs]
+        } else {
+            vec![inputs, outputs]
+        };
+        let aliased = self.aliased_selection().len();
+        if aliased > 0 {
+            v.push(MenuEntry {
+                action: MenuAction::ClearInputAlias,
+                label: format!("Clear input alias ({aliased})"),
+                disabled: toml,
+            });
+        }
+        v
     }
 
     /// F3a D4: a pill's menu while two or more sets are selected.
@@ -1024,6 +1082,7 @@ impl AppModel {
                 disabled: self.toml_read_only_reason(),
             },
         ];
+        v.extend(self.rename_entries(true));
         v.extend(kind_chips(self, &sets).into_iter().map(|c| MenuEntry {
             action: MenuAction::SelectMembersOfKind(c.kind),
             label: format!("{} ({})", c.label, c.members.len()),
@@ -1137,6 +1196,12 @@ impl AppModel {
                 };
             }
             MenuAction::SlotLock { set, n, on } => return self.set_slot_lock(&set, n, on).err(),
+            MenuAction::RenameInputs => self.open_rename(super::rename::RenameMode::Inputs),
+            MenuAction::RenameOutputs => self.open_rename(super::rename::RenameMode::Outputs),
+            MenuAction::ClearInputAlias => {
+                let keys = self.aliased_selection();
+                self.clear_input_alias(&keys);
+            }
         }
         None
     }

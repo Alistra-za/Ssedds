@@ -417,6 +417,8 @@
         "IN-UNREADABLE",
         "IN-FLOAT-LDR",
         "IN-ICC-IGNORED",
+        "IN-ALIAS-INVALID",
+        "IN-ALIAS-STALE",
         "OUT-UNKNOWN-EXISTING",
         "PACK-DEFAULTED",
         "PACK-SIZE-MISMATCH",

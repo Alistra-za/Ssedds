@@ -53,7 +53,7 @@ pub(crate) fn absolute_or_same(p: &Path) -> PathBuf {
 }
 
 /// `input`'s path relative to `root`, '/'-separated: the folder of `input.path` relative to `root`, then the file
-/// name of `input.rel` (for a packed output, its virtual name). `None` when `input` is not under `root`.
+/// name of `input.rel` (for a packed output, its virtual name; for an `[inputs]` alias, the real name). `None` when `input` is not under `root`.
 pub fn project_rel(root: &Path, input: &InputFile) -> Option<String> {
     let lower = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
     // One path form: a relative root or input (e.g. `--config sdc.toml`) is resolved against the current directory.
@@ -77,7 +77,13 @@ pub fn project_rel(root: &Path, input: &InputFile) -> Option<String> {
     } else {
         rest
     };
-    let name = input.rel.file_name()?.to_string_lossy();
+    // F3b: an aliased file keeps its real name here, so its keys never move with the alias.
+    let name = input
+        .real_rel
+        .as_deref()
+        .unwrap_or(&input.rel)
+        .file_name()?
+        .to_string_lossy();
     Some(if rest_orig.is_empty() {
         name.into_owned()
     } else {

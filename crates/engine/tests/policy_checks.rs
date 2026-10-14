@@ -65,6 +65,7 @@ fn run_nvtt(
         game_path: game.into(),
         output: PathBuf::from(name).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let set = TextureSet {
         key: "k".into(),
@@ -348,6 +349,7 @@ fn run_with(
         game_path: format!("textures/{rel}"),
         output: PathBuf::from(rel).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let set = TextureSet {
         key: "k".into(),
@@ -821,6 +823,7 @@ fn preset_alpha_policy_counts_as_explicit() {
         game_path: "textures/a/x.png".into(),
         output: "x.dds".into(),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let set = TextureSet {
         key: "k".into(),
@@ -1008,6 +1011,7 @@ fn resolve_in(ctx: &ResolveCtx, rel: &str, suffix: Option<&str>, img: &Rgba32F) 
         game_path: format!("textures/{rel}"),
         output: PathBuf::from(rel).with_extension("dds"),
         kind: InputKind::Image,
+        real_rel: None,
     };
     let set = TextureSet {
         key: "k".into(),
