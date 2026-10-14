@@ -14,6 +14,14 @@ fn target_name(t: Target) -> &'static str {
     }
 }
 
+fn target_help(t: Target) -> &'static str {
+    match t {
+        Target::Cs => "Community Shaders: TruePBR sets and its packed maps",
+        Target::Vanilla => "The base game's shaders and texture layout",
+        Target::Cpm => "Complex Parallax Materials: packed maps with a height channel",
+    }
+}
+
 /// `Tessalith — <folder>`, plus ` ●` when there are unsaved edits.
 pub fn window_title(model: &AppModel) -> String {
     let mut t = match &model.root {
@@ -50,6 +58,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
             }
             recent_menu(ui, model);
+            undo_redo(ui, model);
             mode_combo(ui, model);
             view_toggle(ui);
             column_checkboxes(ui, model);
@@ -118,6 +127,52 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
+/// Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z. They leave a text field's own undo alone and wait while a dialog is open. They
+/// work in the Meshes view too (AG5): no code documented a reason to keep them off there.
+pub fn undo_redo_keys(ctx: &egui::Context, model: &mut AppModel) {
+    if model.dialog.is_some() || ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    let redo = ctx.input_mut(|i| {
+        i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
+            || i.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::Z,
+            )
+    });
+    if redo {
+        model.redo();
+    } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+        model.undo();
+    }
+}
+
+/// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
+fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
+    for (undo, name) in [(true, "Undo"), (false, "Redo")] {
+        let label = if undo {
+            model.undo_label()
+        } else {
+            model.redo_label()
+        };
+        let hover = match label {
+            Some(l) => format!("{name}: {l}  ({})", if undo { "Ctrl+Z" } else { "Ctrl+Y" }),
+            None => format!("Nothing to {}", name.to_lowercase()),
+        };
+        let r = ui.add_enabled(label.is_some(), egui::Button::new(name));
+        if r.on_hover_text(hover.clone())
+            .on_disabled_hover_text(hover)
+            .clicked()
+        {
+            if undo {
+                model.undo();
+            } else {
+                model.redo();
+            }
+        }
+    }
+}
+
 fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.label("Mode");
     let mut picked = model.target;
@@ -126,9 +181,14 @@ fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
             .selected_text(target_name(model.target))
             .show_ui(ui, |ui| {
                 for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
-                    ui.selectable_value(&mut picked, t, target_name(t));
+                    ui.selectable_value(&mut picked, t, target_name(t))
+                        .on_hover_text(target_help(t));
                 }
-            });
+            })
+            .response
+            .on_hover_text(
+                "The target the textures are converted for: cs, vanilla or cpm. Saved in sdc.toml as target.",
+            );
     });
     if picked != model.target {
         model.set_target(picked);

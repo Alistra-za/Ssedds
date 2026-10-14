@@ -163,24 +163,7 @@ impl eframe::App for SdcApp {
             // A failed save raises its own dialog.
             let _ = self.model.save();
         }
-        // Undo and redo leave a text field's own undo alone and wait while a dialog is open.
-        if self.model.dialog.is_none()
-            && !ctx.egui_wants_keyboard_input()
-            && !crate::ui::header::meshes_view_active(&ctx)
-        {
-            let redo = ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
-                    || i.consume_key(
-                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                        egui::Key::Z,
-                    )
-            });
-            if redo {
-                self.model.redo();
-            } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
-                self.model.undo();
-            }
-        }
+        crate::ui::header::undo_redo_keys(&ctx, &mut self.model);
         if ctx.input(|i| i.viewport().close_requested()) && !self.model.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }

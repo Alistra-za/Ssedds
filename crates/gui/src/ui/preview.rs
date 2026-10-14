@@ -160,6 +160,17 @@ fn escape_pressed(ui: &mut egui::Ui, model: &AppModel) -> bool {
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
+fn channel_help(c: Channel) -> &'static str {
+    match c {
+        Channel::Rgba => "All channels",
+        Channel::R => "Red channel as grey",
+        Channel::G => "Green channel as grey",
+        Channel::B => "Blue channel as grey",
+        Channel::A => "Alpha channel as grey",
+        Channel::AlphaMask => "Alpha as a mask over a checkerboard",
+    }
+}
+
 fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, info: &Info) -> Requests {
     let mut requests = Requests::default();
     ui.with_layout(UiLayout::right_to_left(Align::Min), |ui| {
@@ -177,6 +188,7 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     for (channel, name) in CHANNELS {
         if ui
             .selectable_label(model.view.channel == channel, name)
+            .on_hover_text(channel_help(channel))
             .clicked()
         {
             model.view.channel = channel;
@@ -208,6 +220,7 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     }
     if ui
         .selectable_label(layout == Layout::Split, "Split")
+        .on_hover_text("One viewport cut by a divider: source on the left, encoded on the right")
         .clicked()
     {
         model.view.layout = Layout::Split;
@@ -218,11 +231,21 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
             .on_disabled_hover_text("Needs an encoded result with a source image");
     });
     ui.separator();
-    requests.fit = ui.button("Fit").clicked();
-    requests.one_to_one = ui.button("1:1").clicked();
+    requests.fit = ui
+        .button("Fit")
+        .on_hover_text("Zoom to fit the viewport")
+        .clicked();
+    requests.one_to_one = ui
+        .button("1:1")
+        .on_hover_text("One image pixel per screen pixel")
+        .clicked();
     ui.separator();
     let mut live = model.preview.live;
-    if ui.checkbox(&mut live, "Live encode").changed() {
+    if ui
+        .checkbox(&mut live, "Live encode")
+        .on_hover_text("Encode after every edit. Off: press Encode now.")
+        .changed()
+    {
         model.set_live(live);
     }
     if encode_button(ui, model) {

@@ -248,10 +248,14 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         });
     }
     ui.horizontal_wrapped(|ui| {
-        ui.toggle_value(&mut model.filter.needs_decision, "Needs decision");
-        ui.toggle_value(&mut model.filter.warnings, "Has warnings");
-        ui.toggle_value(&mut model.filter.failed, "Failed");
-        ui.toggle_value(&mut model.filter.not_in_set, "Not in a set");
+        ui.toggle_value(&mut model.filter.needs_decision, "Needs decision")
+            .on_hover_text("Only textures that still need a decision from you");
+        ui.toggle_value(&mut model.filter.warnings, "Has warnings")
+            .on_hover_text("Only textures with warnings");
+        ui.toggle_value(&mut model.filter.failed, "Failed")
+            .on_hover_text("Only textures that failed to plan or export");
+        ui.toggle_value(&mut model.filter.not_in_set, "Not in a set")
+            .on_hover_text("Only textures that are not a member of any set");
     });
     ui.add(
         egui::TextEdit::singleline(&mut model.search)

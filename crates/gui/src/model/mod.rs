@@ -253,6 +253,8 @@ pub struct AppModel {
     pub status_line: String,
     /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
     status_note: Option<String>,
+    /// "Undid: <label>" / "Redid: <label>" in front of the status line until the next edit (item 2).
+    undo_note: Option<String>,
     pub banner: Option<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
@@ -374,6 +376,7 @@ impl AppModel {
             search: String::new(),
             status_line: String::new(),
             status_note: None,
+            undo_note: None,
             dropped_fills: Default::default(),
             banner: None,
             encoding_note: None,
@@ -482,6 +485,7 @@ impl AppModel {
         let project = ProjectDoc::open(&root);
         self.project = Some(project);
         self.sets_doc = Some(crate::sets_doc::SetsDoc::open(&root));
+        self.drop_undo_note();
         self.history.clear();
         self.refresh_banner();
         self.settings.push_recent(root.clone());
@@ -728,6 +732,7 @@ impl AppModel {
         if f.config && !from_user_config {
             if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
                 p.set_error(&f.message);
+                self.drop_undo_note();
                 self.history.clear();
                 self.refresh_banner();
                 self.ignored_by_plan = true;
@@ -739,6 +744,7 @@ impl AppModel {
             if std::mem::take(&mut self.ignored_by_plan) {
                 if let Some(p) = self.project.as_mut() {
                     p.reload();
+                    self.drop_undo_note();
                     self.history.clear();
                     self.refresh_banner();
                 }
@@ -965,6 +971,7 @@ impl AppModel {
         if after == before {
             return false;
         }
+        self.drop_undo_note();
         self.history.push(history::Command {
             label: label.into(),
             before,
@@ -1049,6 +1056,7 @@ impl AppModel {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
             }
+            self.drop_undo_note();
             self.history.clear();
             self.ignored_by_plan = false;
             self.refresh_banner();
@@ -1296,7 +1304,7 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
-        if let Some(n) = &self.status_note {
+        for n in [&self.status_note, &self.undo_note].into_iter().flatten() {
             self.status_line = format!("{n} {}", self.status_line);
         }
         self.prune_selection();
@@ -1516,6 +1524,7 @@ impl AppModel {
         if after == before {
             return;
         }
+        self.drop_undo_note();
         self.history.push(history::Command {
             label: label.into(),
             before,
@@ -1561,6 +1570,35 @@ impl AppModel {
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
     }
+    /// The label of the step Undo would take back, for the button's hover text.
+    pub fn undo_label(&self) -> Option<&str> {
+        self.history.undo.last().map(|c| c.label.as_str())
+    }
+    /// The label of the step Redo would re-apply.
+    pub fn redo_label(&self) -> Option<&str> {
+        self.history.redo.last().map(|c| c.label.as_str())
+    }
+
+    /// Remove the "Undid/Redid" note from the status line (an edit, or a new history).
+    fn drop_undo_note(&mut self) {
+        if let Some(n) = self.undo_note.take() {
+            self.status_line = self.status_line.replacen(&format!("{n} "), "", 1);
+            if self.status_line == n {
+                self.status_line.clear();
+            }
+        }
+    }
+
+    /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled
+    /// note (AF10, AF11), which stays; the encoding note went with the undo's `reset_type_follow`.
+    fn undo_noted(&mut self, verb: &str, label: &str) {
+        let n = format!("{verb}: {label}.");
+        self.status_line = match &self.status_note {
+            Some(c) => format!("{n} {c}"),
+            None => n.clone(),
+        };
+        self.undo_note = Some(n);
+    }
 
     /// Undo one step. A step that created a file (Duplicate source) deletes it first, and only if it is unchanged
     /// (spec §3.4); otherwise the undo is refused with the reason.
@@ -1576,6 +1614,7 @@ impl AppModel {
             }
         }
         self.apply_snapshot(&c.before);
+        self.undo_noted("Undid", &c.label);
     }
 
     /// Redo one step. A step that created a file copies it again from its source.
@@ -1594,6 +1633,7 @@ impl AppModel {
             }
         }
         self.apply_snapshot(&c.after);
+        self.undo_noted("Redid", &c.label);
     }
 
     /// The slot card's preset dropdown: format and tag together, one undo step (M3b §4.1).
@@ -1855,6 +1895,7 @@ impl AppModel {
             s.reload();
         }
         self.ignored_by_plan = false;
+        self.drop_undo_note();
         self.history.clear();
         self.refresh_banner();
         self.replan();
@@ -1897,6 +1938,7 @@ impl AppModel {
                     }
                 } else {
                     p.reload();
+                    self.drop_undo_note();
                     self.history.clear();
                     self.ignored_by_plan = false;
                     self.refresh_banner();
@@ -1913,6 +1955,7 @@ impl AppModel {
                     }
                 } else {
                     s.reload();
+                    self.drop_undo_note();
                     self.history.clear();
                     self.refresh_banner();
                     self.replan();
@@ -1967,10 +2010,12 @@ impl AppModel {
         } else {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
+                self.drop_undo_note();
                 self.history.clear();
             }
             if let Some(s) = self.sets_doc.as_mut() {
                 s.reload();
+                self.drop_undo_note();
                 self.history.clear();
             }
         }

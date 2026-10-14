@@ -37,7 +37,7 @@ fn export_issues(
     } else {
         "export-blocked"
     };
-    modal(ctx, id, |ui| {
+    let k = modal_keys(ctx, id, true, |ui| {
         ui.heading(if can_proceed {
             "Check before exporting"
         } else {
@@ -68,6 +68,8 @@ fn export_issues(
             }
         });
     });
+    // Esc cancels; Enter closes the blocked list, but never decides Proceed anyway (N3).
+    close |= k.cancel || (k.enter && !can_proceed);
     if let Some(k) = select {
         model.dialog = None;
         model.select_set(&k);
@@ -91,7 +93,7 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
         .iter()
         .any(|k| matches!(model.subtype_question(k), Some(Some(_))));
     let target = model.target;
-    modal(ctx, "proceed-anyway", |ui| {
+    let k = modal_keys(ctx, "proceed-anyway", false, |ui| {
         ui.heading("Undecided textures");
         ui.label(format!("{} textures still need a decision.", keys.len()));
         ui.label(
@@ -190,6 +192,8 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
             cancel = ui.button("Cancel").clicked();
         });
     });
+    // Esc cancels; Enter does nothing (N3: Proceed anyway never fires by itself).
+    cancel |= k.cancel;
     if let Some(k) = select {
         model.select_item(&k);
     }
@@ -208,11 +212,40 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
     }
 }
 
-fn modal(ctx: &egui::Context, id: &str, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Modal::new(egui::Id::new(id)).show(ctx, |ui| {
+/// What the keys (and a click outside) did to a dialog this frame (item 4, DECISIONS AG11).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Keys {
+    /// Esc, or a click outside when the dialog allows it: the dialog's Cancel.
+    pub cancel: bool,
+    /// Enter, while no widget has the keyboard focus (a focused button takes Enter itself) and not on the frame the
+    /// dialog opened: the dialog's safe default.
+    pub enter: bool,
+}
+
+/// A modal dialog. `outside`: whether a click outside cancels it; false where a stray click could lose typed input
+/// or an open choice. The caller decides what `Keys` mean for each dialog.
+pub fn modal_keys(
+    ctx: &egui::Context,
+    id: &str,
+    outside: bool,
+    add: impl FnOnce(&mut egui::Ui),
+) -> Keys {
+    let shown = egui::Modal::new(egui::Id::new(id)).show(ctx, |ui| {
         ui.set_max_width(420.0);
         add(ui);
     });
+    let (seen, frame) = (egui::Id::new(("modal-seen", id)), ctx.cumulative_frame_nr());
+    let was_open = ctx
+        .data(|d| d.get_temp::<u64>(seen))
+        .is_some_and(|f| f + 1 >= frame);
+    ctx.data_mut(|d| d.insert_temp(seen, frame));
+    let outside_click = shown.backdrop_response.clicked();
+    Keys {
+        cancel: shown.should_close() && (outside || !outside_click),
+        enter: was_open
+            && ctx.memory(|m| m.focused().is_none())
+            && ctx.input(|i| i.key_pressed(egui::Key::Enter)),
+    }
 }
 
 /// F3a D4: the copy checklist, every field ticked to start. The ticks live in the dialog itself.
@@ -227,7 +260,7 @@ fn copy_settings(
     let name = model
         .item(from)
         .map_or(from.to_string(), |i| i.name.clone());
-    modal(ctx, "copy-settings", |ui| {
+    let k = modal_keys(ctx, "copy-settings", false, |ui| {
         ui.heading(format!(
             "Copy settings from {name} to {} selected",
             to.len()
@@ -261,6 +294,7 @@ fn copy_settings(
             close = ui.button("Cancel").clicked();
         });
     });
+    close |= k.cancel;
     if apply {
         let ticked: Vec<String> = fields.iter().filter(|f| f.1).map(|f| f.0.clone()).collect();
         model.apply_copy_settings(from, to, &ticked);
@@ -274,7 +308,7 @@ fn copy_settings(
 /// F3a D4: Reset all asks first; it names how many textures lose their settings.
 fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
     let (mut reset, mut close) = (false, false);
-    modal(ctx, "confirm-reset-all", |ui| {
+    let k = modal_keys(ctx, "confirm-reset-all", true, |ui| {
         ui.heading(format!("Reset all settings of {} textures?", keys.len()));
         ui.label(
             "Their entries in sdc.toml are removed; acknowledged warnings are kept. Settings in \
@@ -285,6 +319,7 @@ fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String])
             close = ui.button("Cancel").clicked();
         });
     });
+    close |= k.cancel || k.enter;
     if reset {
         model.reset_all_settings(keys);
     } else if close {
@@ -294,7 +329,7 @@ fn confirm_reset_all(ctx: &egui::Context, model: &mut AppModel, keys: &[String])
 
 fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
     let (mut save, mut discard, mut cancel) = (false, false, false);
-    modal(ctx, "close-unsaved", |ui| {
+    let k = modal_keys(ctx, "close-unsaved", true, |ui| {
         ui.heading("Unsaved changes");
         ui.label("sdc.toml or sdc-project.toml has changes that are not saved.");
         ui.horizontal(|ui| {
@@ -303,6 +338,8 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
             cancel = ui.button("Cancel").clicked();
         });
     });
+    save |= k.enter;
+    cancel |= k.cancel;
     if save {
         model.dialog = None;
         // A failed save raises its own dialog (changed on disk, or an error) and the window stays open.
@@ -328,7 +365,7 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
 
 fn external_change(ctx: &egui::Context, model: &mut AppModel, which: DocKind) {
     let (mut reload, mut overwrite, mut cancel) = (false, false, false);
-    modal(ctx, "external-change", |ui| {
+    let k = modal_keys(ctx, "external-change", true, |ui| {
         ui.heading(format!("{} changed on disk", which.file()));
         ui.label("Another program changed the file after it was opened.");
         ui.horizontal(|ui| {
@@ -337,6 +374,8 @@ fn external_change(ctx: &egui::Context, model: &mut AppModel, which: DocKind) {
             cancel = ui.button("Cancel").clicked();
         });
     });
+    // Enter keeps the edits in memory and the file on disk as they are; it is never Overwrite (AG11).
+    cancel |= k.cancel || k.enter;
     if reload {
         model.resolve_external_change(which, false);
     } else if overwrite {
@@ -348,19 +387,19 @@ fn external_change(ctx: &egui::Context, model: &mut AppModel, which: DocKind) {
 
 fn error(ctx: &egui::Context, model: &mut AppModel, msg: &str) {
     let mut ok = false;
-    modal(ctx, "error", |ui| {
+    let k = modal_keys(ctx, "error", true, |ui| {
         ui.heading("Error");
         ui.label(msg);
         ok = ui.button("OK").clicked();
     });
-    if ok {
+    if ok || k.cancel || k.enter {
         model.dialog = None;
     }
 }
 
 fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::PathBuf) {
     let (mut save, mut discard, mut cancel) = (false, false, false);
-    modal(ctx, "open-unsaved", |ui| {
+    let k = modal_keys(ctx, "open-unsaved", true, |ui| {
         ui.heading("Unsaved changes");
         ui.label(
             "sdc.toml or sdc-project.toml has changes that are not saved. Opening another folder would lose them.",
@@ -371,6 +410,8 @@ fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::Path
             cancel = ui.button("Cancel").clicked();
         });
     });
+    save |= k.enter;
+    cancel |= k.cancel;
     if save {
         model.resolve_open_unsaved(root, true);
     } else if discard {
@@ -382,7 +423,7 @@ fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::Path
 
 fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport) {
     let (mut cancel_export, mut keep) = (false, false);
-    modal(ctx, "export-running", |ui| {
+    let k = modal_keys(ctx, "export-running", true, |ui| {
         ui.heading("An export is running");
         ui.label(match &action {
             AfterExport::Close => "Cancel it and close?",
@@ -393,6 +434,7 @@ fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport
             keep = ui.button("Keep running").clicked();
         });
     });
+    keep |= k.cancel || k.enter;
     if cancel_export {
         model.resolve_export_running(action, true);
     } else if keep {
@@ -402,7 +444,7 @@ fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport
 
 fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::Path) {
     let (mut overwrite, mut keep) = (false, false);
-    modal(ctx, "overwrite-json", |ui| {
+    let k = modal_keys(ctx, "overwrite-json", true, |ui| {
         ui.heading("The PGPatcher JSON was edited");
         let name = path
             .file_name()
@@ -416,6 +458,7 @@ fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::P
             keep = ui.button("Keep it").clicked();
         });
     });
+    keep |= k.cancel || k.enter;
     if overwrite {
         model.resolve_overwrite_json(true);
     } else if keep {

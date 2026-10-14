@@ -6,7 +6,9 @@
 
 Choose **Open folder…** (pick one from **Recent**, or drag a folder onto the window; a dropped file opens the folder that holds it). The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written to your textures. If the folder holds an `sdc.toml`, it is loaded; if that file cannot be parsed, or the engine rejects it (an unknown field or `allow` code in a `[files]` entry, an unknown sub-type, a value out of range), the folder is planned without it, a banner shows the error, and the GUI stays read-only (editing and **Export** are off, and the file is never written) until you fix the file and press **Reload** in the banner.
 
-The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `sdc.toml` as `target`.
+The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means.
+
+**Dialog keys.** **Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings** and the undecided-textures list ignore a click outside, so a stray click cannot lose what you typed or chose. **Enter** takes the safe default: Save in the unsaved-changes dialogs, Close, OK, Keep running, Keep it, and Cancel in the Reset all and Delete set confirms. In the "changed on disk" dialog Enter closes it without touching the file or your edits; it never overwrites. **Proceed anyway** is never taken by Enter.
 
 ## The three columns
 
@@ -127,9 +129,9 @@ The **Sets** column is editable. It changes which textures belong to which mater
 - **Drag a texture** from the Textures column onto a set to move it there, or onto empty space to start a new set. Dropping onto a slot that already holds a texture asks **Replace** or **Cancel**.
 - **Share** lets a set borrow a texture from another set; **Duplicate** copies it into the set. Both ask before replacing a filled slot. A shared `_rmaos` is never variance-baked, because the sets sharing it have different normal maps.
 - **Reorder** sets by dragging the **≡** handle.
-- **Right-click** a set or a member for its menu (move, share, duplicate, rename, delete). Rename opens a dialog. Only a set you created can be deleted; an automatic set would regroup at once. A set whose files are all gone still shows, as missing, so you can delete its entry.
+- **Right-click** a set or a member for its menu (move, share, duplicate, rename, delete). Rename is a submenu: **Rename…** (the set's name), **Rename outputs…** (F2; the files the set writes) and **Rename inputs…** (read the source files under other names), each with a hover line, and each opens a dialog. **Delete set** asks first ("Delete set 'name' (N members)? Its textures stay; only the set is removed.") and is one undo step. Only a set you created can be deleted; an automatic set would regroup at once. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Badges** on a set show what needs attention: a missing file, a borrowed slot, a blocking problem for export.
-- **Ctrl+Z** undoes and **Ctrl+Y** redoes (200 steps).
+- **Undo** and **Redo** in the header (also **Ctrl+Z** and **Ctrl+Y**, in the Textures and Meshes views; 200 steps) are greyed out with nothing to undo. Hovering one shows the step, for example "Undo: Format". After one, the status line says "Undid: Format." or "Redid: Format." until your next edit.
 
 Set edits are saved in `sdc-project.toml`, next to `sdc.toml`. It holds the set order, created sets, moves, borrows, the PGPatcher settings and each set's shader choice, and nothing else. If it cannot be parsed, the sets and the JSON go read-only (a banner says why) while `sdc.toml` editing carries on.
 
