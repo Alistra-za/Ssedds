@@ -21,6 +21,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ExportWarnings(issues) => export_issues(ctx, model, &issues, true),
         Dialog::CopySettings { from, to, fields } => copy_settings(ctx, model, &from, &to, fields),
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
+        Dialog::Rename(d) => super::rename_dialog::draw(ctx, model, d),
     }
 }
 
