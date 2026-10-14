@@ -13,6 +13,8 @@ pub const KEYWORDS: &[&str] = &[
     "items",
     "minItems",
     "maxItems",
+    "minimum",
+    "maximum",
     "$ref",
     "allOf",
     "anyOf",
@@ -88,6 +90,21 @@ fn check(root: &Value, s: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {
         if !ok {
             errs.push(format!("{at}: expected {t}"));
             return;
+        }
+    }
+    if let Some(x) = v.as_f64() {
+        // The alphaprop_* integer ranges (Task 4b).
+        if s.get("minimum")
+            .and_then(Value::as_f64)
+            .is_some_and(|m| x < m)
+        {
+            errs.push(format!("{at}: below the minimum"));
+        }
+        if s.get("maximum")
+            .and_then(Value::as_f64)
+            .is_some_and(|m| x > m)
+        {
+            errs.push(format!("{at}: above the maximum"));
         }
     }
     if let (Some(req), Some(o)) = (s.get("required").and_then(Value::as_array), v.as_object()) {

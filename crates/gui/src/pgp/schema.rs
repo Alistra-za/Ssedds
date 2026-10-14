@@ -40,6 +40,8 @@ pub enum NumRange {
     Unit,
     /// No bounds: `glint.log_microfacet_density` is a log value and may be negative (controller ruling).
     Any,
+    /// A whole number from 0 to this maximum: the `alphaprop_*` keys (DECISIONS AG27). Written as a JSON integer.
+    Int(u32),
 }
 
 impl NumRange {
@@ -48,6 +50,7 @@ impl NumRange {
             NumRange::Min0 => (0.0, f64::INFINITY),
             NumRange::Unit => (0.0, 1.0),
             NumRange::Any => (f64::NEG_INFINITY, f64::INFINITY),
+            NumRange::Int(max) => (0.0, f64::from(max)),
         }
     }
 
@@ -62,6 +65,7 @@ impl NumRange {
             NumRange::Min0 => "clamped to ≥ 0",
             NumRange::Unit => "clamped to 0–1",
             NumRange::Any => "",
+            NumRange::Int(_) => "clamped to the whole numbers in range",
         }
     }
 }
@@ -78,6 +82,8 @@ pub enum Group {
     Glint,
     Fuzz,
     Vertex,
+    /// The NiAlphaProperty keys; the card draws them as one section, not as a key grid.
+    Alpha,
     Locks,
     Uv,
     Slots,
@@ -171,6 +177,34 @@ pub const KEYS: &[KeySpec] = &[
         "Vertex colour saturation ×",
     ),
     k("zbuffer_write", K::Tri, G::Vertex, true, "Z-buffer write"),
+    k(
+        "alphaprop_flags",
+        K::Number(NumRange::Int(65535)),
+        G::Alpha,
+        false,
+        "Alpha flags",
+    ),
+    k(
+        "alphaprop_thresh",
+        K::Number(NumRange::Int(255)),
+        G::Alpha,
+        false,
+        "Alpha test threshold",
+    ),
+    k(
+        "alphaprop_create",
+        K::OnlyTrue,
+        G::Alpha,
+        false,
+        "Create NiAlphaProperty if missing",
+    ),
+    k(
+        "alphaprop_delete",
+        K::OnlyTrue,
+        G::Alpha,
+        false,
+        "Delete NiAlphaProperty",
+    ),
     k("lock_diffuse", K::Tri, G::Locks, true, "Lock diffuse"),
     k("lock_normal", K::Tri, G::Locks, true, "Lock normal"),
     k("emissive", K::OnlyTrue, G::Features, false, "Emissive"),

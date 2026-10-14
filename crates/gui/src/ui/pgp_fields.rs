@@ -3,10 +3,11 @@
 use super::columns::AMBER;
 use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
 use crate::model::AppModel;
+use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::pgp::prefix::{
     match_toggle, match_value, matches_nothing, stored_match, strip_lead, EMPTY_ROW, NO_MATCH,
 };
-use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
+use crate::pgp::schema::{Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
 };
@@ -69,6 +70,7 @@ fn group_title(g: Group) -> &'static str {
         Group::Glint => "Glint settings",
         Group::Fuzz => "Fuzz settings",
         Group::Vertex => "Vertex colours and depth",
+        Group::Alpha => "NiAlphaProperty",
         Group::Locks => "Texture locks",
         Group::Uv => "UV and cubemap",
         Group::Slots => "Slots",
@@ -161,6 +163,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
             .collect();
         group(ui, &c, "pgp", g, &keys, &mut edits);
     }
+    alpha_section(ui, &c, &mut edits);
     matching(ui, &c, &mut edits);
     egui::CollapsingHeader::new(egui::RichText::new("Advanced TruePBR settings").strong())
         .id_salt(("pgp-advanced", &c.set))
@@ -351,6 +354,15 @@ pub(crate) fn control(
                 edits.push((key, v));
             }
         }
+        KeyKind::Number(NumRange::Int(max)) => {
+            // A whole number inside its range; DragValue clamps what is typed (AG27).
+            let stored = value.as_ref().and_then(Value::as_i64);
+            let mut x = stored.unwrap_or_else(|| alpha_default(k.key));
+            let r = ui.add(egui::DragValue::new(&mut x).range(0..=i64::from(max)));
+            if r.changed() && stored != Some(x) {
+                edits.push((key, Some(json!(x))));
+            }
+        }
         KeyKind::Number(range) => {
             let default = GLINT_DEFAULTS
                 .iter()
@@ -467,4 +479,173 @@ fn parse_number(s: &str) -> Option<f64> {
         .collect::<String>()
         .parse()
         .ok()
+}
+
+/// What an `alphaprop_*` number starts from when the key is unset or first switched on (DECISIONS AG28).
+pub(crate) fn alpha_default(key: &str) -> i64 {
+    if key == "alphaprop_thresh" {
+        i64::from(DEFAULT_THRESH)
+    } else {
+        i64::from(DEFAULT_FLAGS)
+    }
+}
+
+const DELETE_WINS: &str = "Delete takes priority over the other alpha keys of this entry";
+const ALPHA_KEYS: [&str; 4] = [
+    "alphaprop_flags",
+    "alphaprop_thresh",
+    "alphaprop_create",
+    "alphaprop_delete",
+];
+
+/// The NiAlphaProperty section (Task 4b, DECISIONS AG27-AG31): NifSkope-style flag controls composed into
+/// `alphaprop_flags`, the test threshold, and the create and delete switches. Every change is one edit of the key.
+fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
+    let open = ALPHA_KEYS.iter().any(|k| c.own.contains_key(*k));
+    egui::CollapsingHeader::new(egui::RichText::new("NiAlphaProperty").strong())
+        .id_salt(("pgp-alpha", &c.set))
+        .default_open(open)
+        .show(ui, |ui| {
+            let flag = |k: &str| c.own.get(k).and_then(Value::as_bool) == Some(true);
+            let (deleting, editable) = (flag("alphaprop_delete"), c.read_only.is_none());
+            let cur = c
+                .own
+                .get("alphaprop_flags")
+                .and_then(Value::as_u64)
+                .map(|v| v.min(65535) as u16);
+            let thresh = c
+                .own
+                .get("alphaprop_thresh")
+                .and_then(Value::as_u64)
+                .map(|v| v.min(255) as u8);
+            let r = ui.add_enabled_ui(editable && !deleting, |ui| {
+                let mut on = cur.is_some();
+                if ui
+                    .checkbox(&mut on, "Override flags")
+                    .on_hover_text(
+                        "Sets the flags of the NiAlphaProperty: blending, testing and their modes",
+                    )
+                    .changed()
+                {
+                    edits.push(("alphaprop_flags".into(), on.then_some(json!(DEFAULT_FLAGS))));
+                }
+                ui.add_enabled_ui(cur.is_some(), |ui| {
+                    let f = AlphaFlags::from_raw(cur.unwrap_or(DEFAULT_FLAGS));
+                    alpha_flag_controls(ui, c, f, edits);
+                });
+                ui.horizontal(|ui| {
+                    let mut on = thresh.is_some();
+                    if ui
+                        .checkbox(&mut on, "Alpha test threshold")
+                        .on_hover_text("Sets the alpha test threshold, 0-255")
+                        .changed()
+                    {
+                        edits.push(("alphaprop_thresh".into(), on.then_some(json!(DEFAULT_THRESH))));
+                    }
+                    ui.add_enabled_ui(thresh.is_some(), |ui| {
+                        let mut x = thresh.unwrap_or(DEFAULT_THRESH);
+                        let r = ui.add(egui::DragValue::new(&mut x).range(0..=255));
+                        if r.changed() && thresh != Some(x) {
+                            edits.push(("alphaprop_thresh".into(), Some(json!(x))));
+                        }
+                    });
+                });
+                let mut create = flag("alphaprop_create");
+                if ui
+                    .checkbox(&mut create, "Create NiAlphaProperty if missing")
+                    .on_hover_text(
+                        "Gives a shape without one a new NiAlphaProperty (flags 4844, threshold 128 unless set \
+                         here). Off: only an existing one is changed",
+                    )
+                    .changed()
+                {
+                    edits.push(("alphaprop_create".into(), create.then_some(json!(true))));
+                }
+            });
+            if deleting {
+                r.response.on_disabled_hover_text(DELETE_WINS);
+            } else if let Some(why) = &c.read_only {
+                r.response.on_disabled_hover_text(why);
+            }
+            ui.add_enabled_ui(editable, |ui| {
+                let mut del = deleting;
+                if ui
+                    .checkbox(&mut del, "Delete NiAlphaProperty")
+                    .on_hover_text(
+                        "Removes the NiAlphaProperty and its controller. Other shapes sharing it keep it",
+                    )
+                    .changed()
+                {
+                    edits.push(("alphaprop_delete".into(), del.then_some(json!(true))));
+                }
+            });
+            ui.add_space(6.0);
+        });
+}
+
+/// The decoded flag controls and the raw value. One edit of `alphaprop_flags` per change.
+fn alpha_flag_controls(ui: &mut egui::Ui, c: &Ctx, f: AlphaFlags, edits: &mut Vec<Edit>) {
+    let mut n = f;
+    ui.checkbox(&mut n.blend, "Enable blending")
+        .on_hover_text("Bit 0: blend the shape with what is behind it");
+    for (label, v) in [
+        ("Source blend mode", &mut n.src),
+        ("Destination blend mode", &mut n.dst),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            alpha_combo(ui, (label, &c.set), v, &BLEND_MODES);
+        });
+    }
+    ui.checkbox(&mut n.test, "Enable testing")
+        .on_hover_text("Bit 9: drop pixels that fail the alpha test");
+    ui.horizontal(|ui| {
+        ui.label("Test function");
+        alpha_combo(ui, ("Test function", &c.set), &mut n.func, &TEST_FUNCS);
+    });
+    ui.checkbox(&mut n.no_sorter, "No sorter")
+        .on_hover_text("Bit 13: leave the shape out of the depth sorting");
+    if n != f {
+        edits.push(("alphaprop_flags".into(), Some(json!(n.raw()))));
+    }
+    // The raw value, and a box to type one (0-65535; anything else is refused, outlined red).
+    ui.horizontal(|ui| {
+        ui.label(format!("= {}", f.raw()));
+        let id = egui::Id::new(("pgp-alpha-raw", &c.set));
+        let mut text = ui
+            .data(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| f.raw().to_string());
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut text).desired_width(56.0))
+            .on_hover_text("edit raw: a whole number from 0 to 65535");
+        let ok = text.trim().parse::<u16>().ok();
+        if ok.is_none() {
+            ui.painter().rect_stroke(
+                r.rect,
+                2.0,
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(210, 60, 60)),
+                egui::StrokeKind::Outside,
+            );
+        }
+        if r.has_focus() || r.changed() {
+            ui.data_mut(|d| d.insert_temp(id, text.clone()));
+        }
+        if r.lost_focus() {
+            ui.data_mut(|d| d.remove::<String>(id));
+            let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if let Some(v) = ok.filter(|v| *v != f.raw() && !cancelled) {
+                edits.push(("alphaprop_flags".into(), Some(json!(v))));
+            }
+        }
+    });
+}
+
+fn alpha_combo(ui: &mut egui::Ui, id: (&str, &String), v: &mut u8, list: &[&str]) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(list.get(usize::from(*v)).copied().unwrap_or("?"))
+        .show_ui(ui, |ui| {
+            for (i, name) in list.iter().enumerate() {
+                ui.selectable_value(v, i as u8, *name);
+            }
+        });
 }

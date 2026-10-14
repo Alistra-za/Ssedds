@@ -60,6 +60,8 @@ fn colour(v: &Value, alpha: bool) -> Option<Node> {
 /// is not a number (the validator reports that), is written as it is.
 fn clamped(v: &Value, range: NumRange) -> Value {
     match v.as_f64() {
+        // A whole-number key is always written as an integer (the schema says integer).
+        Some(x) if matches!(range, NumRange::Int(_)) => json!(range.clamp(x).round() as u64),
         Some(x) if range.clamp(x) != x => json!(range.clamp(x)),
         _ => v.clone(),
     }

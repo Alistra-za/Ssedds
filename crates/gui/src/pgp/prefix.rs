@@ -346,6 +346,23 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
             "{NO_MATCH}, so it is left out of the PGPatcher JSON"
         ));
     }
+    let on = |k: &str| s.get(k).is_some_and(|v| v.as_bool() == Some(true));
+    if on("alphaprop_delete") {
+        if ["alphaprop_flags", "alphaprop_thresh", "alphaprop_create"]
+            .iter()
+            .any(|k| s.get(*k).is_some_and(|v| *v != json!(false)))
+        {
+            out.push("Delete wins; the other alpha keys of this entry do nothing".into());
+        }
+    } else if (s.contains_key("alphaprop_flags") || s.contains_key("alphaprop_thresh"))
+        && !on("alphaprop_create")
+    {
+        out.push(
+            "alphaprop_flags and alphaprop_thresh: only changes shapes that already have an NiAlphaProperty; turn on \
+             Create NiAlphaProperty if missing to add one to shapes without"
+                .into(),
+        );
+    }
     if let Some(v) = text(s, "match8") {
         if strip_ext(&v.to_lowercase()).ends_with("_s") {
             out.push(

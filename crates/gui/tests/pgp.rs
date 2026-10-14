@@ -98,6 +98,7 @@ fn number_keys_and_their_ranges() {
     let got: Vec<(&str, NumRange)> = KEYS
         .iter()
         .filter_map(|k| match k.kind {
+            KeyKind::Number(NumRange::Int(_)) => None, // the alphaprop_* whole numbers: alpha_prop.rs
             KeyKind::Number(r) => Some((k.key, r)),
             _ => None,
         })
@@ -141,6 +142,10 @@ fn pgpsim_warns_on_exactly_the_gui_ranges() {
         let KeyKind::Number(range) = k.kind else {
             continue;
         };
+        // Task 4b: pgpsim (NIF-owned) does not know the alphaprop_* keys yet; they are whole numbers, checked in alpha_prop.rs.
+        if matches!(range, NumRange::Int(_)) {
+            continue;
+        }
         // Indexing a Null `Value` by a string makes it an object.
         let entry = |x: f64| {
             let mut v = Value::Null;

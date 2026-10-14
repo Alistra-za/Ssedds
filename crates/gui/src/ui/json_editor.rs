@@ -3,13 +3,13 @@
 //! as the set editor's TruePBR box (`AppModel::set_json_value`), so the two always agree. Drawing only.
 use super::columns::{AMBER, RED};
 use super::path_picker;
-use super::pgp_fields::{context, control, disabled_reason, edit_key, Ctx};
+use super::pgp_fields::{alpha_default, context, control, disabled_reason, edit_key, Ctx};
 use crate::model::pbr_export::{json_entries, json_name};
 use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, stored_match};
-use crate::pgp::schema::{spec, KeyKind, KeySpec, KEYS};
+use crate::pgp::schema::{spec, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{Settings, GLINT_DEFAULTS};
 use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
 use eframe::egui;
@@ -498,6 +498,7 @@ fn set_keys(own: &Settings) -> Vec<&'static KeySpec> {
 fn start_value(k: &KeySpec) -> Option<Value> {
     match k.kind {
         KeyKind::OnlyTrue | KeyKind::Object | KeyKind::Tri => Some(json!(true)),
+        KeyKind::Number(NumRange::Int(_)) => Some(json!(alpha_default(k.key))),
         KeyKind::Number(_) => Some(json!(GLINT_DEFAULTS
             .iter()
             .chain(FIXED_NUMBERS.iter())
