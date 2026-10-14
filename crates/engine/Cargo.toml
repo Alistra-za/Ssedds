@@ -23,6 +23,7 @@ hex.workspace = true
 globset.workspace = true
 walkdir.workspace = true
 humantime.workspace = true
+flate2.workspace = true
 
 [features]
 # Env-driven test hooks (SDC_TEST_PANIC_ON, SDC_TEST_PANIC_ON_PLAN, SDC_TEST_FAIL_VALIDATION, SDC_TEST_CANCEL_ON). Off by default and never enabled by a

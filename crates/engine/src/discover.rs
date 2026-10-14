@@ -6,8 +6,9 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-pub const IMAGE_EXTS: [&str; 9] = [
-    "png", "tga", "tif", "tiff", "exr", "hdr", "bmp", "jpg", "jpeg",
+pub const IMAGE_EXTS: [&str; 14] = [
+    "png", "tga", "tif", "tiff", "exr", "hdr", "bmp", "jpg", "jpeg", "webp", "psd", "psb", "kra",
+    "ora",
 ];
 
 /// Folder the engine writes provenance to; never treated as input.
