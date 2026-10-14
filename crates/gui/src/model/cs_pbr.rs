@@ -145,7 +145,9 @@ pub fn templates() -> &'static [Template] {
 }
 
 pub fn template(kind: Kind, name: &str) -> Option<&'static Template> {
-    templates().iter().find(|t| t.kind == kind && t.name == name)
+    templates()
+        .iter()
+        .find(|t| t.kind == kind && t.name == name)
 }
 
 /// Every number as a float (`16` → `16.0`): CS silently drops a colour array of int literals (research §2).

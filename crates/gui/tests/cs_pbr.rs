@@ -52,7 +52,11 @@ fn every_resource_file_equals_its_template() {
                 .iter()
                 .find(|t| t.kind == kind && t.edids.contains(&edid))
                 .unwrap_or_else(|| panic!("no template lists {edid}"));
-            assert_eq!(floats(&v), floats(&Json::Object(t.values.clone())), "{edid}");
+            assert_eq!(
+                floats(&v),
+                floats(&Json::Object(t.values.clone())),
+                "{edid}"
+            );
             n += 1;
         }
     }
