@@ -194,6 +194,26 @@ fn an_external_edit_is_not_overwritten_silently() {
     assert_eq!(m.target, Target::Cs);
 }
 
+/// Audit 2026-10-14 finding 3: with no unsaved edits, a hand edit of `sdc.toml` is taken, never offered "Overwrite".
+#[test]
+fn a_hand_edit_of_a_clean_project_is_reloaded_and_never_overwritten() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let p = m.root.clone().unwrap().join("sdc.toml");
+    std::fs::write(&p, "target = \"vanilla\"\n").unwrap();
+    assert!(m.save().is_ok());
+    assert_eq!(m.dialog, None);
+    assert_eq!(
+        std::fs::read_to_string(&p).unwrap(),
+        "target = \"vanilla\"\n"
+    );
+    assert_eq!(m.check_sources(), 1);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.target, Target::Vanilla);
+    assert!(!m.project.as_ref().unwrap().is_dirty());
+    assert_eq!(m.check_sources(), 0);
+}
+
 #[test]
 fn sets_list_their_members_and_unmatched_file_keys_are_reported() {
     let d = tempfile::tempdir().unwrap();

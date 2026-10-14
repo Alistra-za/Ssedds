@@ -178,6 +178,22 @@ fn a_pending_continuation_does_not_outlive_the_export_the_user_clicked() {
     assert_eq!(m.dialog, None);
 }
 
+/// Audit 2026-10-14 finding 2: a folder opened while the dialog is up closes it and starts nothing in the new folder.
+#[test]
+fn opening_another_folder_closes_the_dialog_without_exporting() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.export_clicked();
+    assert!(matches!(m.dialog, Some(Dialog::ProceedAnyway(_))));
+    let d2 = tempfile::tempdir().unwrap();
+    let root2 = mod_folder(d2.path());
+    assert!(m.request_open(root2.clone()));
+    idle(&mut m);
+    assert_eq!(m.dialog, None);
+    assert!(m.export.summary.is_none(), "no export ran");
+    assert!(!root2.join("sdc.toml").exists(), "nothing was written");
+}
+
 #[test]
 fn rows_waiting_on_alpha_are_answered_inline_and_leave_when_decided() {
     let d = tempfile::tempdir().unwrap();

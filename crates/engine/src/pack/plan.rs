@@ -31,6 +31,28 @@ fn slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
+/// The input of a job, or of an earlier recipe, that already writes `output` (case-insensitive, either
+/// separator); the recipe's own raw sources are not counted, their jobs give way to it (Note M8).
+fn other_output(
+    output: &Path,
+    sources: &[PathBuf],
+    jobs: &[ResolvedJob],
+    candidates: &[Candidate],
+) -> Option<PathBuf> {
+    let fold = |p: &Path| slash(p).to_lowercase();
+    let want = fold(output);
+    jobs.iter()
+        .filter(|j| !sources.contains(&j.input))
+        .find(|j| fold(&j.output) == want)
+        .map(|j| j.input.clone())
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|c| fold(&c.virtual_input.output) == want)
+                .map(|c| c.virtual_input.path.clone())
+        })
+}
+
 fn list(paths: &[PathBuf]) -> String {
     paths.iter().map(|p| name(p)).collect::<Vec<_>>().join(", ")
 }
@@ -417,10 +439,12 @@ pub fn plan_packing(
         for recipe in recipes {
             let sources: Vec<PathBuf> = recipe.sources().into_iter().map(|(p, _)| p).collect();
             let mut vin = virtual_input(members[&sources[0]], recipe.kind);
+            let mut explicit = false;
             if let Some(p) =
                 packed_outputs.get(&(set.key.clone(), recipe.kind.suffix().to_string()))
             {
                 vin.output = p.clone();
+                explicit = true;
             }
             let st = recipe.kind.subtype();
             // Pass 1: the packed output's own profile decides `packing.*` (DECISIONS Note M6).
@@ -441,6 +465,34 @@ pub fn plan_packing(
                 status: RecipeStatus::Run,
                 reason: None,
             };
+            // Audit 2026-10-14 finding 4: an explicit packed path (GUI `OutputKey::Packed`) is set here, after
+            // step 5's duplicate check ran on the files, so it is checked against every other output now. Two
+            // jobs on one path would both write it (the last rename wins) and append two manifest records.
+            if explicit {
+                let taken = other_output(&vin.output, &sources, jobs, &out.candidates);
+                if let Some(other) = taken {
+                    report.status = RecipeStatus::Failed;
+                    report.reason = Some(format!(
+                        "output path {} is also written by {}",
+                        name(&vin.output),
+                        name(&other)
+                    ));
+                    reports.push(report);
+                    skipped.push(SkippedFile {
+                        path: vin.path.clone(),
+                        output: vin.output.clone(),
+                        set: Some(set.key.clone()),
+                        code: Some(Code::InDuplicate),
+                        reason: format!(
+                            "two outputs map to one path ({} and {}); change the packed output path",
+                            name(&vin.output),
+                            name(&other)
+                        ),
+                    });
+                    consumed.extend(sources.iter().cloned());
+                    continue;
+                }
+            }
             // DECISIONS Note M11: a source that failed to load fails the recipe. So does one whose Load was
             // cancelled: the report must not claim `default:` channels for sources that exist.
             if let Some(bad) = sources.iter().find(|p| failed.contains(p)) {

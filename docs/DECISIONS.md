@@ -855,3 +855,12 @@ Spec `docs/superpowers/specs/2026-10-14-sdc-gui-tweaks-design.md` (G1-G9).
 - **AB3 Delete hits** compare texture paths only (exact slot match, or `path_contains` in the diffuse path); a `nif_filter` is reported, not checked against meshes.
 - **AB4 2D | 3D** is one switch kept in `gui.toml`, default 2D; the 3D preview does no work in 2D.
 - **AB5 Version** stays 0.7.0 (Z7): no output changes unless the user adds sections or aliases.
+
+## Note AC — audit 2026-10-14 fixes (2026-10-14)
+
+Rulings for the must-fix findings of `docs/AUDIT-2026-10-14.md`. Cite as `audit 2026-10-14 finding N`.
+
+- **AC1 Parser caps (finding 1).** `read_vertices` refuses a vertex descriptor whose enabled attributes need more bytes than the stride before it reserves anything. A `BSShaderTextureSet` with more than `MAX_TEXTURE_SLOTS` (32; Skyrim writes 9, Fallout 4 writes 10) is a `Geometry` error. `Bsa::read` lets the decoder grow the output instead of reserving the entry's declared size. None of these change the result for a well-formed file.
+- **AC2 Opening a folder closes every dialog (finding 2).** `open_folder` sets `dialog = None`: every dialog that can be open there belongs to the previous folder, and a `ProceedAnyway` left open would be closed by the new folder's plan and continue into an export of that folder.
+- **AC3 A clean `sdc.toml` is never written, a hand edit of one is taken (finding 3).** `save` skips a project document that is not dirty, as it already did for `sdc-project.toml`. `check_sources` (focus regain, Export) reloads a clean `sdc.toml` that changed on disk, clears history and re-plans; it counts as one changed source so Export waits for that plan. The Reload / Overwrite dialog is only for a document with unsaved edits.
+- **AC4 An explicit packed output path is checked for duplicates (finding 4).** Step 5's duplicate check runs on the files; a GUI `OutputKey::Packed` path is applied later, in `plan_packing`, so it is checked there against every job's output and every earlier recipe's (case-insensitive, either separator). A clash fails the recipe ("output path X is also written by Y") and adds an `IN-DUPLICATE` skip for the packed output; the raw maps stay consumed. The file job keeps its output.
