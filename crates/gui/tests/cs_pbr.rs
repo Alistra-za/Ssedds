@@ -175,6 +175,23 @@ fn adding_a_texture_set_block_moves_the_sets_own_mapped_values_into_it() {
     );
 }
 
+/// Final review I2: removing the texture-set block moves its PGPatcher values back to the set (add, remove = identity).
+#[test]
+fn removing_a_texture_set_block_moves_its_mapped_values_back() {
+    let (_d, mut s) = doc(
+        "[[sets]]\nid = \"a/one\"\nroughness_scale = 0.3\nsubsurface_color = [255, 0, 51]\nglint_on = true\nglint.screen_space_scale = 2.0\nhair = true\n",
+    );
+    let before = s.entries()[0].settings.clone();
+    s.add_cs_block("a/one", Kind::Txst);
+    assert!(!s.text().contains("roughness_scale"));
+    s.remove_cs_block("a/one", Kind::Txst);
+    let e = &s.entries()[0];
+    assert!(e.cs_txst.is_none());
+    assert!(!s.text().contains("cs_txst"), "{}", s.text());
+    assert_eq!(floats(&json!(e.settings)), floats(&json!(before)));
+    assert_eq!(e.settings["subsurface_color"], json!([255, 0, 51]));
+}
+
 #[test]
 fn a_pgpatcher_edit_of_a_mapped_key_lands_in_the_block() {
     let (_d, mut s) = doc(TWO_SETS);

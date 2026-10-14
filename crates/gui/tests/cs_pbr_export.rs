@@ -307,3 +307,92 @@ fn wrong_typed_values_are_left_out_with_a_note() {
         );
     }
 }
+
+/// Final review (T5 deferred): the case-change rename never deletes an old-case file edited outside sdc.
+#[test]
+fn a_hand_edited_old_case_file_survives_the_rename() {
+    let d = tempfile::tempdir().unwrap();
+    let old = d.path().join("PBRTextureSets/landscapeRock01.json");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "{\"roughnessScale\": 1.0}").unwrap();
+    let sdc_wrote = sdc_gui::model::history::sha256_of(&old).unwrap();
+    std::fs::write(&old, "{\"roughnessScale\": 0.5}").unwrap(); // edited since
+    let shas = [("PBRTextureSets/landscapeRock01.json".to_string(), sdc_wrote)].into();
+    let p = PendingCs {
+        root: d.path().to_path_buf(),
+        files: vec![("PBRTextureSets/LandscapeRock01.json".into(), "{}".into())],
+        notes: vec![],
+    };
+    let mut notes = vec![];
+    finish(&p, &shas, &mut notes);
+    assert!(
+        names(&d.path().join("PBRTextureSets")).contains(&"landscapeRock01.json".to_string()),
+        "the old-case file is kept"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&old).unwrap(),
+        "{\"roughnessScale\": 0.5}"
+    );
+    // On Windows the new name is the same file, so it is the one reported as kept.
+    #[cfg(windows)]
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("kept as edited outside sdc")),
+        "{notes:?}"
+    );
+}
+
+/// Final review I3: a failed project save after the export never replaces the PGPatcher overwrite question.
+#[test]
+fn a_save_error_leaves_an_open_question_and_goes_to_the_notes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_blocks(d.path());
+    export_and_wait(&mut m);
+    m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.03)));
+    let toml = m.sets_doc.as_ref().unwrap().path().to_path_buf();
+    let text = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(&toml, format!("{text}\n# edited elsewhere\n")).unwrap();
+    let question = Dialog::OverwriteJson(d.path().join("x.json"));
+    m.dialog = Some(question.clone());
+    let p = prepare(&m);
+    m.finish_cs_pbr(p);
+    assert_eq!(m.dialog, Some(question));
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.starts_with("sdc-project.toml:")),
+        "{:?}",
+        m.export.notes
+    );
+    // With no question open the error is still a dialog.
+    m.dialog = None;
+    m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.01)));
+    let p = prepare(&m);
+    m.finish_cs_pbr(p);
+    assert!(matches!(m.dialog, Some(Dialog::Error(_))), "{:?}", m.dialog);
+}
+
+/// Final review M4: an unreadable scan database (an old schema before a rescan) is said once in the report.
+#[test]
+fn an_unreadable_scan_database_is_one_report_note() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_blocks(d.path());
+    let db = d.path().join("scan.db");
+    std::fs::write(&db, "not a database").unwrap();
+    m.scan_db = Some(db);
+    export_and_wait(&mut m);
+    let n: Vec<_> = m
+        .export
+        .notes
+        .iter()
+        .filter(|n| n.contains("Rescan"))
+        .collect();
+    assert_eq!(n.len(), 1, "{:?}", m.export.notes);
+    assert!(
+        n[0].starts_with("PGPatcher JSON: 1 texture-set set left out"),
+        "{}",
+        n[0]
+    );
+}

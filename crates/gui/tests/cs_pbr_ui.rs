@@ -2,7 +2,7 @@
 mod support;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use sdc_gui::model::cs_pbr::{Kind, NOT_CHECKED};
+use sdc_gui::model::cs_pbr::{Kind, Statics, NOT_CHECKED};
 use sdc_gui::model::sets::set_views;
 use sdc_gui::model::AppModel;
 use support::*;
@@ -20,6 +20,23 @@ fn tall(model: AppModel) -> Harness<'static, AppModel> {
 
 fn has(h: &Harness<'static, AppModel>, s: &str) -> bool {
     h.query_all_by_label_contains(s).next().is_some()
+}
+
+/// Final review I1: the JSON editor window lists only the entries the written file gets.
+#[test]
+fn the_json_editor_leaves_out_a_set_the_statics_rule_drops() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = pbr_opened(d.path());
+    model.add_cs_block("landscape/rock01", Kind::Txst); // no scan: the entry is dropped
+    model.json_editor_open = true;
+    let mut h = tall(model);
+    h.run();
+    assert!(has(&h, "0 set entries"));
+    assert!(has(&h, "No PBR set has an entry yet."));
+    h.state_mut()
+        .set_cs_statics("landscape/rock01", Statics::Always);
+    h.run();
+    assert!(has(&h, "1 set entry "));
 }
 
 #[test]

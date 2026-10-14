@@ -842,7 +842,18 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
-        if self.table_mut(id).remove(kind.key()).is_some() {
+        // Mirrors `add_cs_block`: the PGPatcher values the block took over move back to the set (design §5.1).
+        let back = (kind == Kind::Txst)
+            .then(|| self.entries().into_iter().find(|e| same_id(&e.id, id)))
+            .flatten()
+            .and_then(|e| e.cs_txst)
+            .map(|b| cs_pbr::cs_to_pgp(&b.values))
+            .unwrap_or_default();
+        let t = self.table_mut(id);
+        if t.remove(kind.key()).is_some() {
+            for (k, v) in back {
+                write_path(t, &k, Some(v));
+            }
             self.dirty = true;
         }
     }

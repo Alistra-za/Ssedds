@@ -4,7 +4,7 @@
 use super::columns::{AMBER, RED};
 use super::path_picker;
 use super::pgp_fields::{context, control, disabled_reason, edit_key, Ctx};
-use crate::model::pbr_export::{json_entries, json_name};
+use crate::model::pbr_export::{json_name, written_json_entries};
 use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
@@ -141,7 +141,8 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.weak("The TruePBR JSON is written in cs mode only.");
         return;
     }
-    let entries = json_entries(model);
+    // Only the entries the file gets: the statics rule's dropped sets are left out, as export does (design §5.1).
+    let entries = written_json_entries(model);
     let sections = model.sections();
     let hits = delete_hits(model);
     ui.weak(format!(
@@ -192,7 +193,7 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// The file as it would be written now (every set as if exported).
+/// The file as it would be written now (every written set as if exported).
 fn json_text(ui: &mut egui::Ui, entries: &[(SetView, EntryInput)], sections: &[Settings]) {
     egui::CollapsingHeader::new("JSON text")
         .id_salt("json-editor-text")

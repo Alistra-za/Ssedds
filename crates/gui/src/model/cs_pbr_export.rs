@@ -49,9 +49,9 @@ pub fn to_text(kind: Kind, values: &Map<String, Json>) -> String {
     String::from_utf8(out).expect("serde_json writes UTF-8")
 }
 
-use super::cs_pbr::{valid_value, CsBlock};
+use super::cs_pbr::{valid_value, CsBlock, StaticsStatus};
 use super::history::sha256_of;
-use super::pbr_export::{file_name_problem, hand_edited, write_atomic};
+use super::pbr_export::{file_name_problem, hand_edited, json_entries, write_atomic};
 use super::{AppModel, Dialog};
 use crate::sets_doc::SetEntry;
 use engine::config::Target;
@@ -169,6 +169,21 @@ pub fn prepare(m: &AppModel) -> Option<PendingCs> {
             }
         }
     }
+    // Final review M4: say once why texture-set sets got no PGPatcher entry while the scan cannot be read.
+    let no_scan: Vec<String> = json_entries(m)
+        .into_iter()
+        .filter_map(|(v, _)| match m.statics_status(&v) {
+            Some(StaticsStatus::NoScan(e)) => Some(e),
+            _ => None,
+        })
+        .collect();
+    if let Some(e) = no_scan.first() {
+        p.notes.push(format!(
+            "PGPatcher JSON: {} texture-set set{} left out, the scan database cannot be read ({e}). Rescan, then export again.",
+            no_scan.len(),
+            if no_scan.len() == 1 { "" } else { "s" },
+        ));
+    }
     Some(p)
 }
 
@@ -245,7 +260,8 @@ pub fn finish(
 impl AppModel {
     /// The export ended: after a clean export write the CS files of `p` (taken from `pending_cs` by the caller) and
     /// record their hashes (saved, like the PGPatcher JSON's); otherwise only a note.
-    pub(crate) fn finish_cs_pbr(&mut self, p: Option<PendingCs>) {
+    #[doc(hidden)]
+    pub fn finish_cs_pbr(&mut self, p: Option<PendingCs>) {
         let Some(p) = p else {
             return;
         };
@@ -282,7 +298,12 @@ impl AppModel {
         }
         d.set_cs_pbr_shas(&shas);
         if let Err(e) = d.save(false) {
-            self.dialog = Some(Dialog::Error(format!("sdc-project.toml: {e}")));
+            let e = format!("sdc-project.toml: {e}");
+            // An open question (the PGPatcher JSON overwrite) must stay: replacing it would drop that JSON unasked.
+            match self.dialog {
+                Some(_) => self.export.notes.push(e),
+                None => self.dialog = Some(Dialog::Error(e)),
+            }
         }
     }
 }
