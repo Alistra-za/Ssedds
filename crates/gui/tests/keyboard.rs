@@ -122,6 +122,11 @@ fn no_shortcut_fires_from_a_text_field_except_ctrl_k() {
             h.state_mut().1 = None;
             h.state_mut().0.nav.palette = None;
             h.run();
+            if a.id == actions::PALETTE {
+                // The cursor at the start: Ctrl+K reaching the field would delete the whole text.
+                h.key_press(Key::Home);
+                h.run();
+            }
             h.key_press_modifiers(s.mods, s.key);
             h.run();
             let want = (a.id == actions::PALETTE).then_some(actions::PALETTE);
@@ -358,6 +363,27 @@ fn enter_in_the_palette_selects_the_texture() {
         "and selects the texture"
     );
     assert_eq!(h.state().nav.reveal_item, None, "the grid scrolled to it");
+    // Down then Enter picks the second result at once (the arrows do not take the focus out of the field).
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run();
+    h.state_mut().nav.palette.as_mut().unwrap().query = "rock01".into();
+    h.run();
+    h.run();
+    let second = h
+        .state_mut()
+        .palette_hits("rock01", &[])
+        .get(1)
+        .map(|h| h.pick.clone())
+        .expect("two textures match");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().nav.palette.is_none(), "the first Enter picks");
+    let Pick::Texture(k) = second else {
+        panic!("{second:?}")
+    };
+    assert_eq!(h.state().selection, Selection::Item(k));
     // Esc closes the palette without picking.
     h.key_press_modifiers(Modifiers::COMMAND, Key::K);
     h.run();
@@ -399,4 +425,39 @@ fn the_user_guide_lists_every_shortcut() {
         doc.contains(&table),
         "docs/gui.md's Keyboard table is out of date; it should read:\n{table}"
     );
+}
+
+#[test]
+fn a_texture_moved_to_scrolls_into_view() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let base = m.items[0].clone();
+    m.items = (0..300)
+        .map(|n| {
+            let mut i = base.clone();
+            i.key = format!("t/tex_{n:03}");
+            i.name = format!("tex_{n:03}.png");
+            i
+        })
+        .collect();
+    m.invalidate_views();
+    let mut h = app_harness(m);
+    h.run();
+    let n = |h: &Harness<'static, AppModel>, l: &str| h.query_all_by_label(l).count();
+    assert_eq!(n(&h, "tex_299.png"), 0, "off screen at first");
+    h.state_mut()
+        .palette_pick(&Pick::Texture("t/tex_299".into()));
+    h.run();
+    h.run();
+    assert_eq!(
+        n(&h, "tex_299.png"),
+        2,
+        "the grid scrolled to it (the tile and the settings panel)"
+    );
+    h.state_mut()
+        .palette_pick(&Pick::Texture("t/tex_000".into()));
+    h.run();
+    h.run();
+    assert_eq!(n(&h, "tex_000.png"), 2, "and back to the top");
+    assert_eq!(n(&h, "tex_299.png"), 0);
 }

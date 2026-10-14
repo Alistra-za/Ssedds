@@ -603,8 +603,10 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
     let mut chosen = None;
     let k = super::dialogs::modal_keys(ctx, "palette", true, |ui| {
         ui.set_min_width(420.0);
-        // Before the field, so it does not move its cursor with them.
+        // Before the field, so it does not move its cursor with them; a second Ctrl+K must not reach it either (egui's
+        // Ctrl+K deletes to the end of the line).
         let (up, down) = ui.input_mut(|i| {
+            i.consume_key(Modifiers::COMMAND, Key::K);
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowUp),
                 i.consume_key(Modifiers::NONE, Key::ArrowDown),
@@ -621,6 +623,17 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
             r.request_focus();
             p.focus = false;
         }
+        // The arrows move the highlight: egui must not move the focus to a result row with them.
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                r.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            )
+        });
         if r.changed() {
             p.sel = 0;
         }
