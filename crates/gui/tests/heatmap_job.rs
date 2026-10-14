@@ -7,7 +7,7 @@ use sdc_gui::model::preview::{EncodedState, PreviewOut};
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::GuiSettings;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn model_with_result() -> AppModel {
     let mut m = AppModel::new(GuiSettings::default(), None, support::session());
@@ -38,7 +38,12 @@ fn model_with_result() -> AppModel {
 }
 
 fn settle(m: &mut AppModel) {
-    assert!(m.wait_idle(Duration::from_secs(30)));
+    let end = Instant::now() + Duration::from_secs(30);
+    while m.heatmap_pending() {
+        assert!(Instant::now() < end, "the heatmap job did not land");
+        m.poll();
+        std::thread::yield_now();
+    }
 }
 
 #[test]
@@ -47,14 +52,16 @@ fn the_frame_call_starts_a_job_and_the_result_arrives_through_poll() {
     m.heatmap_frame();
     // Only `poll` takes worker results, so nothing can have landed yet: the frame did not wait for the job.
     assert!(m.heatmap_image().is_none());
-    assert!(m.busy(), "the job counts as work, so frames keep coming");
+    assert!(m.heatmap_pending(), "the app keeps frames coming for it");
+    // View-only work: it does not lock edits the way `busy()` does.
+    assert!(!m.busy());
     settle(&mut m);
     let img = m.heatmap_image().expect("landed");
     assert_eq!((img.width, img.height), (2, 1));
     assert_eq!(&img.rgba[..3], &[0, 0, 0]);
     // The same key again starts nothing.
     m.heatmap_frame();
-    assert!(!m.busy());
+    assert!(!m.heatmap_pending());
 }
 
 #[test]
@@ -97,10 +104,10 @@ fn a_heatmap_off_or_without_a_result_starts_nothing() {
     let mut m = model_with_result();
     m.view.heatmap = false;
     m.heatmap_frame();
-    assert!(!m.busy());
+    assert!(!m.heatmap_pending());
     let mut m = AppModel::new(GuiSettings::default(), None, support::session());
     m.view.heatmap = true;
     m.heatmap_frame();
-    assert!(!m.busy());
+    assert!(!m.heatmap_pending());
     assert!(m.heatmap_image().is_none());
 }

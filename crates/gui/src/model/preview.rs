@@ -130,7 +130,7 @@ impl PreviewModel {
 
     /// True while a worker is reading or encoding for the preview.
     pub fn working(&self) -> bool {
-        self.inflight_source.is_some() || self.inflight_encode.is_some() || self.heat.working()
+        self.inflight_source.is_some() || self.inflight_encode.is_some()
     }
 
     fn cancel_source(&mut self) {

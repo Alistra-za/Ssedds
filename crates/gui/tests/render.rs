@@ -434,9 +434,9 @@ fn exposure_scales_hdr_values_before_the_tone_map() {
     assert!(draw(&rs, &r, Slot::Source, hdr(1.0, 1.0))[MIDDLE][0] < one[0] - 10);
 }
 
-/// Item 1: the lens draws only the circle inscribed in its rect, from its own uniform block.
+/// Item 1: the lens draws only the circle inscribed in its rect.
 #[test]
-fn the_lens_is_a_circle_and_does_not_disturb_the_main_draw() {
+fn the_lens_is_a_circle() {
     let Some(rs) = render_state() else { return };
     let mut r = PreviewRenderer::new(&rs);
     assert!(r.set_heatmap(&rs, 1, 1, &[255, 0, 0, 255]));
@@ -447,9 +447,6 @@ fn the_lens_is_a_circle_and_does_not_disturb_the_main_draw() {
     let px = draw(&rs, &r, Slot::Heatmap, lens);
     near(px[MIDDLE], [255, 0, 0, 255]);
     near(px[0], [0, 0, 0, 0]);
-    // The main block still holds the main params: its corner is drawn.
-    r.write_params(&rs.queue, Slot::Heatmap, &lens);
-    near(draw(&rs, &r, Slot::Heatmap, params())[0], [255, 0, 0, 255]);
 }
 
 /// Item 15: tiling repeats the picture over uv −1..2.

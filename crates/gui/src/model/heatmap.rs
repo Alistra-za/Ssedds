@@ -42,10 +42,6 @@ pub(crate) struct HeatJob {
 }
 
 impl HeatJob {
-    pub(crate) fn working(&self) -> bool {
-        self.running.is_some()
-    }
-
     /// Nothing in flight or on show; the ids go on, so a late result of a dropped job can never match a new one.
     pub(crate) fn cleared(&self) -> HeatJob {
         HeatJob {
@@ -112,6 +108,12 @@ impl AppModel {
         if let Some((_, key)) = h.running.take() {
             h.shown = Some((key, None));
         }
+    }
+
+    /// A heatmap job is in flight: the app keeps frames coming until it lands. Not part of `busy()`, which locks
+    /// edits; the heatmap is view-only.
+    pub fn heatmap_pending(&self) -> bool {
+        self.preview.heat.running.is_some()
     }
 
     /// The heatmap on show.

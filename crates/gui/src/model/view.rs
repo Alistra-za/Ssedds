@@ -121,11 +121,6 @@ pub fn pane_fraction(pos: [f32; 2], min: [f32; 2], size: [f32; 2]) -> [f32; 2] {
     ]
 }
 
-/// The point in the pane at `to` matching `pos` in the pane at `from` (side by side; in Split both are one rect).
-pub fn mirror(pos: [f32; 2], from: [f32; 2], to: [f32; 2]) -> [f32; 2] {
-    [pos[0] - from[0] + to[0], pos[1] - from[1] + to[1]]
-}
-
 /// The uv that is sampled for `uv`: itself inside the picture, wrapped into it over the 3×3 when tiled, `None` off
 /// the picture. Mirrors the shader.
 pub fn tile_uv(uv: [f32; 2], tile: bool) -> Option<[f32; 2]> {

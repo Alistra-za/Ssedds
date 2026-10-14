@@ -308,20 +308,27 @@ fn notes(
     if model.view.heatmap && gpu.heatmap {
         legend(ui, &mut model.view.full_scale);
     }
-    match readout {
-        Some(lines) => {
-            for l in lines {
-                ui.label(RichText::new(l).monospace().small());
+    // A fixed height (the five lines of a normal map), so the viewports do not move as the pointer enters them;
+    // otherwise a pointer near their bottom edge would flip the strip on and off every frame.
+    ui.scope(|ui| {
+        let line = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+        ui.set_min_height(5.0 * line);
+        match readout {
+            Some(lines) => {
+                for l in lines {
+                    // One line each (cut, not wrapped), so the height stays put.
+                    ui.add(egui::Label::new(RichText::new(l).monospace().small()).truncate());
+                }
+            }
+            None => {
+                ui.label(
+                    RichText::new("Point at the picture for the texel readout")
+                        .small()
+                        .weak(),
+                );
             }
         }
-        None => {
-            ui.label(
-                RichText::new("Point at the picture for the texel readout")
-                    .small()
-                    .weak(),
-            );
-        }
-    }
+    });
     let mut lines: Vec<String> = vec![];
     lines.extend(skipped_note(&info.dims, info.first));
     if info.nvtt {

@@ -270,16 +270,15 @@ fn both_panes_read_the_same_texel() {
     let size = [100.0, 80.0];
     let cursor = [37.0, 51.0];
     let s = pane_fraction(cursor, left, size);
-    let twin = mirror(cursor, left, right);
-    assert_eq!(twin, [143.0, 51.0]);
+    // The same place in the right pane: 106 px further right.
+    let twin = [143.0, 51.0];
     let s2 = pane_fraction(twin, right, size);
     assert_eq!(s, s2);
     assert_eq!(
         v.texel_at(size, (64, 64), s),
         v.texel_at(size, (64, 64), s2)
     );
-    // Split: one rect for both sides; the mirror is the cursor itself.
-    assert_eq!(mirror(cursor, left, left), cursor);
+    // Split: one rect for both sides, so one fraction and one texel by construction.
 }
 
 #[test]
