@@ -4,7 +4,7 @@ use super::columns::AMBER;
 use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
 use crate::model::AppModel;
 use crate::pgp::prefix::{
-    match_toggle, match_value, matches_nothing, stored_match, EMPTY_ROW, NO_MATCH,
+    match_toggle, match_value, matches_nothing, stored_match, strip_lead, EMPTY_ROW, NO_MATCH,
 };
 use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
 use crate::pgp::settings::{
@@ -227,7 +227,7 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                     // is no edit (F1 Review Focus 4).
                     if r.lost_focus() {
                         ui.data_mut(|d| d.remove::<String>(id));
-                        if match_value(&text) != match_value(&m.path) {
+                        if match_value(strip_lead(&text)) != match_value(&m.path) {
                             edits.push((format!("match{}", m.n), stored_match(m.n, &text)));
                         }
                     }

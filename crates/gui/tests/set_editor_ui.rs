@@ -211,6 +211,42 @@ fn a_bad_slot_path_is_refused_with_the_reason() {
     assert_eq!(e.settings["slot5"], serde_json::json!(""));
 }
 
+/// DECISIONS P13 (owner, 2026-10-14): a typed leading `\` or `/` is dropped, not refused.
+#[test]
+fn a_typed_leading_backslash_is_dropped_from_set_paths() {
+    use sdc_gui::model::sets::SlotCommand;
+    use serde_json::json;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_slot_command(
+        "landscape/rock01",
+        3,
+        SlotCommand::Path(r"\effects\white.dds".into()),
+    )
+    .unwrap();
+    m.set_json_value(
+        "landscape/rock01",
+        "match2",
+        Some(json!(r"/landscape\rock01_n")),
+    );
+    m.set_json_value("landscape/rock01", "path_contains", Some(json!(r"\rock")));
+    m.set_output_name("landscape/rock01", Some(r"\steel"))
+        .unwrap();
+    let e = m
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .entries()
+        .into_iter()
+        .find(|e| e.id == "landscape/rock01")
+        .unwrap();
+    assert_eq!(e.settings["slot3"], json!(r"effects\white.dds"));
+    assert_eq!(e.settings["match2"], json!(r"landscape\rock01_n"));
+    assert_eq!(e.settings["rename"], json!("steel"));
+    // Not a path: a leading `\` there means "a whole folder name", so it stays.
+    assert_eq!(e.settings["path_contains"], json!(r"\rock"));
+}
+
 #[test]
 fn a_member_links_back_to_its_set() {
     let d = tempfile::tempdir().unwrap();

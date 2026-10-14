@@ -4,8 +4,8 @@ use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{
-    active_matches, check_file_name, check_rel_path, derive_match_diffuse, output_rel, prefix_of,
-    slot_match_path, slot_suffixes,
+    active_matches, check_file_name, check_rel_path, derive_match_diffuse, is_path_key, output_rel,
+    prefix_of, slot_match_path, slot_suffixes, strip_lead,
 };
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
@@ -1461,7 +1461,7 @@ impl AppModel {
         let Some(v) = self.view_of(set) else {
             return Err(format!("no set {set}"));
         };
-        let name = name.map(str::trim).filter(|n| !n.is_empty());
+        let name = name.map(strip_lead).filter(|n| !n.is_empty());
         if let Some(n) = name {
             check_output_name(n)?;
         }
@@ -1503,6 +1503,10 @@ impl AppModel {
             return;
         }
         let replan = replans(key);
+        let v = match v {
+            Some(Value::String(t)) if is_path_key(key) => Some(Value::from(strip_lead(&t))),
+            v => v,
+        };
         let (s_id, k) = (set.to_string(), key.to_string());
         let merge = Some(format!("{set}:{key}"));
         self.edit_docs(&format!("Change {key}"), merge, replan, move |_, d| {
@@ -1532,11 +1536,12 @@ impl AppModel {
             SlotCommand::FromSet => None,
             SlotCommand::Clear => Some(Value::from("")),
             SlotCommand::Path(p) => {
-                check_rel_path(&p, &key).map_err(|e| e.0)?;
-                if !p.trim().to_ascii_lowercase().ends_with(".dds") {
+                let p = strip_lead(&p);
+                check_rel_path(p, &key).map_err(|e| e.0)?;
+                if !p.to_ascii_lowercase().ends_with(".dds") {
                     return Err(format!("{key}: the path must end in .dds"));
                 }
-                Some(Value::from(p.trim().replace('/', "\\")))
+                Some(Value::from(p.replace('/', "\\")))
             }
         };
         let id = set.to_string();

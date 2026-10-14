@@ -348,6 +348,24 @@ fn bad_paths_block() {
     assert!(check_rel_path(r"landscape\white.dds", "slot3").is_ok());
 }
 
+/// DECISIONS P13 (owner, 2026-10-14): a typed leading separator is dropped before a path is stored.
+#[test]
+fn a_typed_leading_separator_is_dropped() {
+    assert_eq!(strip_lead(r" \\landscape\x "), r"landscape\x");
+    assert_eq!(strip_lead("/landscape/x"), "landscape/x");
+    assert_eq!(strip_lead(r"landscape\x"), r"landscape\x");
+    assert_eq!(
+        stored_match(2, r"\landscape\x_n.dds"),
+        Some(json!(r"landscape\x_n"))
+    );
+    for k in ["match1", "match8", "rename"] {
+        assert!(is_path_key(k), "{k}");
+    }
+    for k in ["match9", "match", "path_contains", "nif_filter", "slot3"] {
+        assert!(!is_path_key(k), "{k}");
+    }
+}
+
 /// F1 spec Review Focus 2, DECISIONS V2: .dds exactly once, and no leading textures\ (PGPatcher's prepend check is
 /// case-sensitive, so a pasted Textures\ would become textures\Textures\ and never match).
 #[test]
