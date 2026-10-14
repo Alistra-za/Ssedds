@@ -55,7 +55,7 @@ CREATE INDEX shape_texset ON shape(texset_id);
 CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, path TEXT NOT NULL,
                      size INTEGER, mtime INTEGER NOT NULL, lo_index INTEGER, light INTEGER NOT NULL,
                      flags INTEGER NOT NULL, masters_json TEXT NOT NULL, error_text TEXT);
--- rec.mato_flags: the MATO DATA flags of that copy (bit 0 single pass), NULL when its DATA has no flags field.
+-- rec.mato_flags: the MATO DATA flags of that copy (bit 0 single pass, offset 44), NULL when DATA is under 48 bytes.
 CREATE TABLE rec (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL, edid TEXT,
                      owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER,
                      mato_flags INTEGER);

@@ -482,7 +482,7 @@ pub struct WinRec {
     pub edid: String,
     /// The winning plugin.
     pub plugin: String,
-    /// MATO `DATA` flags of the winning copy (bit 0 = single pass); `None` when its DATA has no flags field.
+    /// MATO `DATA` flags of the winning copy (bit 0 = single pass, at offset 44); `None` when DATA is under 48 bytes.
     pub mato_flags: Option<u32>,
 }
 
