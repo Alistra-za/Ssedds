@@ -431,9 +431,10 @@ impl AppModel {
         self.after_export = None;
         self.pending_json = None;
         self.pending_text = None;
-        if matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
-            self.dialog = None;
-        }
+        // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
+        // were answered to get here). Audit 2026-10-14 finding 2: a `ProceedAnyway` left open would be closed by
+        // the new folder's plan (`refresh_undecided_dialog`) and continue into an export of that folder.
+        self.dialog = None;
         // An export waiting for a plan of the previous folder no longer applies.
         self.export_after_plan = false;
         self.continue_after_plan = None;
@@ -974,6 +975,21 @@ impl AppModel {
     /// taken when it was listed). A packed output is checked against each of its sources, and a raw source feeding
     /// one is flagged with it. Returns the number of items flagged.
     pub fn check_sources(&mut self) -> usize {
+        // A hand edit of a clean `sdc.toml` is simply taken (nothing to lose): the next plan reads it. With unsaved
+        // edits the save dialog still asks (audit 2026-10-14 finding 3).
+        let hand_edited = self
+            .project
+            .as_ref()
+            .is_some_and(|p| !p.is_dirty() && p.changed_on_disk());
+        if hand_edited {
+            if let Some(p) = self.project.as_mut() {
+                p.reload();
+            }
+            self.history.clear();
+            self.ignored_by_plan = false;
+            self.refresh_banner();
+            self.replan();
+        }
         let mut changed_paths: std::collections::HashSet<PathBuf> = Default::default();
         for item in &self.items {
             let Some(job) = &item.job else {
@@ -1017,7 +1033,7 @@ impl AppModel {
                 });
             n += usize::from(item.changed_on_disk);
         }
-        n
+        n + usize::from(hand_edited)
     }
 
     /// Plan again after sources changed on disk; the session cache reloads only the changed files.
@@ -1680,9 +1696,11 @@ impl AppModel {
         self.replan();
     }
 
-    /// Save `sdc.toml`, then `sdc-project.toml`; the first error is returned (and raises its dialog).
+    /// Save `sdc.toml`, then `sdc-project.toml`; the first error is returned (and raises its dialog). A clean
+    /// document is not written (audit 2026-10-14 finding 3: writing it would offer "Overwrite" over a hand edit
+    /// the GUI never loaded).
     pub fn save(&mut self) -> Result<(), SaveError> {
-        if let Some(p) = self.project.as_mut() {
+        if let Some(p) = self.project.as_mut().filter(|p| p.is_dirty()) {
             if let Err(e) = p.save(false) {
                 self.save_failed(DocKind::SdcToml, &e);
                 return Err(e);
