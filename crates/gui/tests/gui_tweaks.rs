@@ -252,7 +252,8 @@ fn the_2d_3d_switch_swaps_the_slot_cards_for_the_preview_and_keeps_the_truepbr_s
     m.select_set(&key);
     let mut h = harness(m, true);
     h.run();
-    h.get_by_label("Match on this");
+    // One "Match on this" per slot card.
+    assert!(h.query_all_by_label("Match on this").count() >= 1);
     h.get_by_label("Specular level");
     assert!(h.query_by_label(PANEL_TITLE).is_none());
     h.get_by_label("3D").click();
@@ -264,7 +265,7 @@ fn the_2d_3d_switch_swaps_the_slot_cards_for_the_preview_and_keeps_the_truepbr_s
     h.query_all_by_label("2D").next().unwrap().click();
     h.run();
     assert!(!h.state().0.settings.set_view_3d);
-    h.get_by_label("Match on this");
+    assert!(h.query_all_by_label("Match on this").count() >= 1);
 }
 
 #[test]
