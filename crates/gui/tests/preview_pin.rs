@@ -171,7 +171,11 @@ fn captions_carry_both_settings_summaries_and_psnrs() {
     assert!(right.starts_with("Current"), "{right}");
     assert_ne!(left, right, "the effort differs");
     for (text, out) in [(&left, &pin_out), (&right, &cur)] {
-        assert!(text.contains(&out.result.format.id()), "{text}");
+        assert!(
+            text.to_lowercase()
+                .contains(&out.result.format.id().to_lowercase()),
+            "{text}"
+        );
         match out.result.validation.min_mip_psnr_db {
             Some(p) => assert!(text.contains(&format!("{p:.1} dB")), "{text}"),
             None => assert!(text.contains("PSNR —"), "{text}"),
@@ -270,4 +274,32 @@ fn p_is_in_the_actions_table() {
     m.encode_now();
     settle(&mut m);
     assert!((a.enabled)(&m));
+}
+
+#[test]
+fn unpinning_frees_the_pinned_buffers_even_after_a_heatmap_was_made() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pinned(d.path());
+    change_and_reencode(&mut m);
+    m.view.heatmap = true;
+    m.heatmap_frame();
+    settle(&mut m);
+    assert!(m.heatmap_image().is_some());
+    m.view.heatmap = false;
+    let weak = Arc::downgrade(&m.preview.pin.as_ref().unwrap().out);
+    m.unpin();
+    assert!(
+        weak.upgrade().is_none(),
+        "the heatmap job kept the pin alive"
+    );
+    // Pinning again frees the replaced pin too.
+    m.pin_this();
+    m.view.heatmap = true;
+    m.heatmap_frame();
+    settle(&mut m);
+    m.view.heatmap = false;
+    change_and_reencode(&mut m);
+    let weak = Arc::downgrade(&m.preview.pin.as_ref().unwrap().out);
+    m.pin_this();
+    assert!(weak.upgrade().is_none());
 }

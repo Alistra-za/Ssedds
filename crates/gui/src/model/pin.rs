@@ -20,16 +20,24 @@ pub struct Pin {
 }
 
 /// The settings that shape an encode, in one line.
+fn word<T: serde::Serialize>(v: &T) -> String {
+    match serde_json::to_value(v) {
+        Ok(serde_json::Value::String(s)) => s.replace('_', " "),
+        Ok(v) => v.to_string(),
+        Err(_) => String::new(),
+    }
+}
+
 pub fn summary_of(p: &Profile) -> String {
+    let encoder = word(&p.encoder.backend);
     format!(
-        "{} {:?}, {:?} effort {:?}, alpha {:?}, mips {:?} {:?}",
-        p.format.id(),
-        p.color.tag,
-        p.encoder.backend,
-        p.encoder.effort,
-        p.alpha.policy,
-        p.mips.levels,
-        p.mips.filter
+        "{}, {} {} effort, alpha {}, mips {} {}",
+        crate::model::fields::format_label(p.format, p.color.tag),
+        crate::model::texture_view::encoder_label(&encoder),
+        word(&p.encoder.effort),
+        word(&p.alpha.policy),
+        word(&p.mips.levels),
+        word(&p.mips.filter)
     )
 }
 
@@ -71,6 +79,7 @@ impl AppModel {
         };
         let out = out.clone();
         let summary = summary_of(self.expanded_profile().expect("can_pin checked it"));
+        self.preview.heat = self.preview.heat.cleared();
         self.preview.next_pin += 1;
         self.preview.pin = Some(Pin {
             id: self.preview.next_pin,
@@ -82,6 +91,7 @@ impl AppModel {
 
     pub fn unpin(&mut self) {
         self.preview.pin = None;
+        self.preview.heat = self.preview.heat.cleared();
         self.preview.compare_pinned = false;
     }
 
@@ -111,7 +121,11 @@ impl AppModel {
     pub fn pin_captions(&self) -> Option<(String, String)> {
         let pin = self.compared_pin()?;
         let cur = self.preview.encoded.shown()?;
-        let current = self.expanded_profile().map(summary_of).unwrap_or_default();
+        // Only a finished result was made by the settings now on show.
+        let current = match (&self.preview.encoded, self.expanded_profile()) {
+            (EncodedState::Done(_), Some(p)) => summary_of(p),
+            _ => "previous result, settings changed".into(),
+        };
         Some((
             format!("Pinned: {} · {}", pin.summary, psnr_text(&pin.out)),
             format!("Current: {current} · {}", psnr_text(cur)),

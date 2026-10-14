@@ -25,7 +25,7 @@ pub(crate) struct HeatKey {
     channel: Channel,
     full_scale: f32,
     /// The pinned encode the current one is compared with (DECISIONS AG69): its id and images.
-    pin: Option<(u64, Arc<PreviewOut>)>,
+    pin: Option<u64>,
 }
 
 impl HeatKey {
@@ -38,7 +38,7 @@ impl HeatKey {
     }
 
     fn pin_id(&self) -> Option<u64> {
-        self.pin.as_ref().map(|p| p.0)
+        self.pin
     }
 }
 
@@ -81,7 +81,7 @@ impl AppModel {
             mip: self.view.mip,
             channel: self.view.channel,
             full_scale: self.view.full_scale,
-            pin: self.compared_pin().map(|p| (p.id, p.out.clone())),
+            pin: self.compared_pin().map(|p| p.id),
         })
     }
 
@@ -95,12 +95,15 @@ impl AppModel {
         if h.running.is_some() || h.shown.as_ref().is_some_and(|(k, _)| *k == want) {
             return;
         }
+        // The pin's images go to the job only, never into the key: unpinning must free them (AG71).
+        let pin_out = self.compared_pin().map(|p| p.out.clone());
+        let h = &mut self.preview.heat;
         h.next_id += 1;
         let id = h.next_id;
         h.running = Some((id, want.clone()));
         spawn_guarded(self.tx.clone(), "heatmap", move |tx| {
-            let made = match &want.pin {
-                Some((_, pin)) => {
+            let made = match &pin_out {
+                Some(pin) => {
                     heatmap_vs_pin(&want.out, pin, want.mip, want.channel, want.full_scale)
                 }
                 None => heatmap_of(&want.out, want.mip, want.channel, want.full_scale),
