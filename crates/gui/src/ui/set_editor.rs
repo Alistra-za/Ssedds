@@ -128,17 +128,18 @@ pub fn draw(
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
     if view.three_d {
-        // 3D: the preview panel shows the set; the TruePBR settings stay here.
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if shows_json_panel(&v, model.target) {
-                    super::pgp_fields::panel(ui, model, &v.id);
-                } else {
-                    ui.weak("This set has no TruePBR settings. Switch to 2D for its slot cards.");
-                }
-                under_grid(ui, model, &v);
-            });
+        // 3D (AG78): the set's 3D view follows in this pane (`ui::centre`). The TruePBR settings fold above it, so an
+        // edit still shows live in 3D.
+        if shows_json_panel(&v, model.target) {
+            egui::CollapsingHeader::new("TruePBR settings")
+                .id_salt(("set-3d-pbr", &v.id))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("set-3d-pbr-scroll")
+                        .max_height(240.0)
+                        .show(ui, |ui| super::pgp_fields::panel(ui, model, &v.id));
+                });
+        }
         return;
     }
     egui::ScrollArea::vertical()

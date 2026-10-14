@@ -131,6 +131,19 @@ Double-click a tile (or a set member), or select it and press **Enter** or **Spa
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
 
+## The 3D preview
+
+The Meshes view's 3D panel and a set's 3D view work the same way.
+
+**A set in 3D.** The **2D | 3D** switch at the left of a set's header row (next to its name and *Input name…*) changes the centre pane in place. *2D* (the default) shows the set editor: the slot cards and the TruePBR settings. *3D* shows the set's 3D view across the whole centre instead, with its own controls (Shader folder…, the Community Shaders toggle, *View*, Copy image); the TruePBR settings fold in a *TruePBR settings* section above it, so an edit there shows in 3D right away. The header row stays above both. The switch is remembered in `gui.toml`, and the 3D view does no work while 2D is showing or while a single texture of the set is selected.
+
+- **Moving around.** Drag to orbit, scroll to zoom. Middle-drag, or Shift+drag, pans: the model follows the cursor, and the further away the camera is, the more a drag moves it. Double-click or **Home** recentres the camera.
+- **Turning the sun.** Shift+right-drag turns the sun around the model (about the vertical). The studio HDRI background does not turn with it: the renderer cannot rotate it yet. The turn is part of the View controls, so it is remembered with them.
+- **Debug view** (in *View*, or **V** to step through): *Lit* is the normal Community Shaders render. *UV checker* puts a grey checker in every shape's diffuse (base colour) slot, so stretched, mirrored or seamed UVs show; the rest of the material still draws. Albedo, normals, roughness, metallic and AO views are not offered: the renderer cannot draw them yet.
+- **Missing textures** show in solid magenta in the frame, and are listed under it in magenta. A path that is a texture of the open folder has a *Show in Textures* button that selects it in the Textures view. A missing cube map (an environment map) keeps the renderer's plain stand-in instead, because a flat colour cannot go in a cube slot.
+- **Reset view** (in *View*) puts the lights, the background and the camera back to their defaults.
+- **Copy image** (or **Ctrl+Shift+C**) copies the last frame to the clipboard, at the size it was rendered; the panel says "Copied 3D view (W×H)".
+
 ## Keyboard
 
 Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. Press **Ctrl+K** for the command palette: type part of an action's, a texture's or a set's name (the letters in order are enough; names that start with what you typed come first, then names that contain it). Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, Esc closes. The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
@@ -170,6 +183,9 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | Preview | PageUp | Larger mip |
 | Preview | PageDown | Smaller mip |
 | Sets | F2 | Rename the outputs of the selected sets, or the inputs of the selected textures |
+| 3D preview | Home | Recentre the 3D view (as a double-click) |
+| 3D preview | V | Next 3D debug view (Lit, UV checker) |
+| 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
 | Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
 | Dialogs | Esc | Cancel the dialog |
 
@@ -245,7 +261,7 @@ A complex-grass texture is one image twice as tall as it is wide: diffuse and al
 
 GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder, NVTT path) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart Tessalith to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.
 
-**What Tessalith remembers.** The window (its size, its position and whether it is maximised), the width of each column and panel you dragged, the Textures or Meshes view, the Textures filters, sort and tile size, the preview channel and layout, and the 3D View controls (background, sun, point light, radius) come back at the next start. They are saved in `gui.toml` a couple of seconds after you change them, and when you close the window. The zoom, the selection and the open folder are not remembered. If the saved window would be off every screen (a monitor was unplugged), it opens centred on the main screen instead; if only its title bar would be off the screen, it moves down so you can still drag it. Starting and closing without changing anything does not rewrite `gui.toml`. A value in `gui.toml` that makes no sense is ignored on its own; the rest of the file still applies.
+**What Tessalith remembers.** The window (its size, its position and whether it is maximised), the width of each column and panel you dragged, the Textures or Meshes view, the Textures filters, sort and tile size, the preview channel and layout, and the 3D View controls (background, sun and its turn, point light, radius) come back at the next start. They are saved in `gui.toml` a couple of seconds after you change them, and when you close the window. The zoom, the selection and the open folder are not remembered. If the saved window would be off every screen (a monitor was unplugged), it opens centred on the main screen instead; if only its title bar would be off the screen, it moves down so you can still drag it. Starting and closing without changing anything does not rewrite `gui.toml`. A value in `gui.toml` that makes no sense is ignored on its own; the rest of the file still applies.
 
 Tessalith ships no fonts. It loads the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at start-up and refuses to start, with a message, if they are missing.
 

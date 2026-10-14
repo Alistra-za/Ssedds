@@ -18,14 +18,18 @@ pub enum Area {
     Sets,
     /// An open dialog. Its keys are its own (`dialogs::modal_keys`); they are only listed here.
     Dialogs,
+    /// The 3D panel (Meshes view, set preview). `ui::viewport3d` handles its keys (the viewports are not in
+    /// `AppModel`); they are only listed here.
+    View3d,
 }
 
 impl Area {
-    pub const ALL: [Area; 5] = [
+    pub const ALL: [Area; 6] = [
         Area::Global,
         Area::Grid,
         Area::Preview,
         Area::Sets,
+        Area::View3d,
         Area::Dialogs,
     ];
 
@@ -36,6 +40,7 @@ impl Area {
             Area::Preview => "Preview",
             Area::Sets => "Sets",
             Area::Dialogs => "Dialogs",
+            Area::View3d => "3D preview",
         }
     }
 
@@ -44,7 +49,13 @@ impl Area {
     pub fn exclusive_with(self, other: Area) -> bool {
         use Area::*;
         let both = |a, b| (self == a && other == b) || (self == b && other == a);
-        self != other && self != Global && other != Global && !both(Grid, Sets)
+        // The set preview's 3D panel shows beside the grid: its keys never share with any other area.
+        self != other
+            && self != Global
+            && other != Global
+            && self != View3d
+            && other != View3d
+            && !both(Grid, Sets)
     }
 }
 
@@ -188,7 +199,7 @@ pub fn actions() -> &'static [Action] {
     ACTIONS
 }
 
-use Area::{Dialogs, Global, Grid, Preview, Sets};
+use Area::{Dialogs, Global, Grid, Preview, Sets, View3d};
 
 pub static ACTIONS: &[Action] = &[
     // Global
@@ -483,6 +494,25 @@ pub static ACTIONS: &[Action] = &[
             });
         },
     ),
+    // 3D preview (ui::viewport3d handles them)
+    listed(
+        "3d-reset",
+        "Recentre the 3D view (as a double-click)",
+        View3d,
+        &[key(Key::Home)],
+    ),
+    listed(
+        "3d-debug",
+        "Next 3D debug view (Lit, UV checker)",
+        View3d,
+        &[key(Key::V)],
+    ),
+    listed(
+        "3d-copy",
+        "Copy the 3D view as an image",
+        View3d,
+        &[ctrl_shift(Key::C)],
+    ),
     // Dialogs
     listed(
         "dialog-enter",
@@ -525,7 +555,7 @@ fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
         Area::Global => true,
         Area::Grid | Area::Sets => !meshes_view && model.expanded.is_none(),
         Area::Preview => !meshes_view && model.expanded.is_some(),
-        Area::Dialogs => false,
+        Area::Dialogs | Area::View3d => false,
     }
 }
 

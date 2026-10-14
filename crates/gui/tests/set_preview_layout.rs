@@ -1,5 +1,5 @@
-//! The set preview panel inside the whole Textures view (no GPU, no scan DB): it must not squeeze the columns
-//! below their minimum width, and its 3D image must stay inside the panel.
+//! The set's 3D view inside the whole Textures view (no GPU, no scan DB). AG78: the 2D | 3D switch swaps the
+//! centre pane in place; there is no side panel, and the 3D image stays inside the centre.
 mod support;
 use eframe::egui::{self, containers::panel::PanelState, Id};
 use egui_kittest::kittest::Queryable;
@@ -7,13 +7,13 @@ use egui_kittest::Harness;
 use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
 use sdc_gui::model::viewport3d::FRAME_LABEL;
 use sdc_gui::model::{pbr_export::json_entries, AppModel};
-use sdc_gui::ui::set_preview::{CENTRE_MIN, PANEL_MIN};
+use sdc_gui::ui::set_preview::CENTRE_MIN;
 use sdc_gui::ui::State;
 use support::*;
 
 type H = Harness<'static, (AppModel, State)>;
 
-fn harness(d: &std::path::Path, collapsed: bool, w: f32) -> H {
+fn harness(d: &std::path::Path, collapsed: bool, w: f32, three_d: bool) -> H {
     let mut m = pbr_opened(d);
     let key = json_entries(&m)
         .into_iter()
@@ -24,7 +24,7 @@ fn harness(d: &std::path::Path, collapsed: bool, w: f32) -> H {
     m.select_set(&key);
     m.settings.textures_collapsed = collapsed;
     m.settings.sets_collapsed = collapsed;
-    m.settings.set_view_3d = true;
+    m.settings.set_view_3d = three_d;
     let state = State {
         set3d: SetPreview::new(None, None, None, DEFAULT_CAP),
         ..State::default()
@@ -48,55 +48,63 @@ fn outer(h: &H, id: &str) -> Option<egui::Rect> {
     PanelState::load(&h.ctx, Id::new(id)).map(|p| p.outer_rect)
 }
 
-fn check(w: f32, collapsed: bool, visible: bool) {
+fn check(w: f32, collapsed: bool) {
     let d = tempfile::tempdir().unwrap();
-    let h = harness(d.path(), collapsed, w);
-    let panel = outer(&h, "set-3d");
-    let left: f32 = ["textures", "sets", "textures-strip", "sets-strip"]
+    let h = harness(d.path(), collapsed, w, true);
+    assert!(outer(&h, "set-3d").is_none(), "no side panel at {w}");
+    let left = ["textures", "sets", "textures-strip", "sets-strip"]
         .iter()
         .filter_map(|i| outer(&h, i))
-        .map(|r| r.width())
-        .sum();
-    assert!(panel.is_some() || !visible, "panel missing at {w}");
-    let Some(panel) = panel else {
-        // Hidden: only allowed when the window cannot hold the columns, the minimum centre and the minimum panel.
-        assert!(w - left < CENTRE_MIN + PANEL_MIN, "panel hidden at {w}");
-        return;
-    };
+        .map(|r| r.max.x)
+        .fold(0.0f32, f32::max);
+    // The Advanced drawer's strip is the only thing right of the centre.
+    let right = outer(&h, "advanced-strip").map_or(w, |r| r.min.x);
     assert!(
-        panel.width() >= PANEL_MIN - 0.5,
-        "panel {} at {w}",
-        panel.width()
+        right - left >= CENTRE_MIN - 0.5,
+        "centre {} at {w}",
+        right - left
     );
-    let centre = w - left - panel.width();
-    assert!(
-        centre >= CENTRE_MIN - 0.5,
-        "centre {centre} at {w}, panel {}",
-        panel.width()
-    );
+    // The frame takes the centre's width (less its margins), between the columns and the strip.
     let img = h.get_by_label(FRAME_LABEL).rect();
     assert!(
-        img.min.x >= panel.min.x - 0.5 && img.max.x <= panel.max.x + 0.5,
-        "image {img:?} outside panel {panel:?}"
+        img.min.x >= left - 0.5,
+        "image {img:?} over the columns at {left}"
     );
+    assert!(
+        img.max.x <= right + 0.5,
+        "image {img:?} past the centre's {right}"
+    );
+    assert!(
+        img.width() >= (right - left) - 24.0,
+        "image {} wide in a centre of {}",
+        img.width(),
+        right - left
+    );
+    // The set editor's header row stays above it; its slot cards are gone.
+    h.get_by_label("2D");
+    assert!(h.query_by_label("Match on this").is_none());
 }
 
 #[test]
 fn narrow_window_expanded_columns() {
-    check(900.0, false, false);
+    check(900.0, false);
 }
 
 #[test]
 fn wide_window_expanded_columns() {
-    check(1600.0, false, true);
-}
-
-#[test]
-fn the_default_window_expanded_columns() {
-    check(1280.0, false, true);
+    check(1600.0, false);
 }
 
 #[test]
 fn narrow_window_collapsed_columns() {
-    check(700.0, true, true);
+    check(700.0, true);
+}
+
+#[test]
+fn in_2d_the_centre_is_the_set_editor_and_no_3d_view_exists() {
+    let d = tempfile::tempdir().unwrap();
+    let h = harness(d.path(), false, 1280.0, false);
+    assert!(h.query_all_by_label("Match on this").count() >= 1);
+    assert!(h.query_by_label(FRAME_LABEL).is_none());
+    assert!(outer(&h, "set-3d").is_none());
 }

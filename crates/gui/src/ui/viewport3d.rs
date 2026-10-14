@@ -3,7 +3,7 @@
 use crate::model::meshes::LE_WARNING;
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::viewport3d::{
-    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
+    moved_text, off_line, DebugView, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
     FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
@@ -12,9 +12,48 @@ use render3d::ShapeStatus;
 
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
+/// A missing texture's colour, as the frame shows it (AG76).
+const MAGENTA: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
 /// Space kept under the image for the problem lists and the footer.
 const BELOW: f32 = 110.0;
-const MAX_LISTED: usize = 50;
+pub const MAX_LISTED: usize = 50;
+
+/// The real clipboard for Copy image.
+fn clipboard(w: usize, h: usize, rgba: &[u8]) -> Result<(), String> {
+    let image = arboard::ImageData {
+        width: w,
+        height: h,
+        bytes: std::borrow::Cow::Borrowed(rgba),
+    };
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_image(image))
+        .map_err(|e| e.to_string())
+}
+
+/// The 3D panel's keys (`ui::actions` area View3d): Home recentres, V cycles the debug view, Ctrl+Shift+C copies.
+/// Not while a text field, a dialog or a popup has them.
+fn keys(ctx: &egui::Context, v: &mut Viewport3d) {
+    let blocked = ctx.egui_wants_keyboard_input()
+        || egui::Popup::is_any_open(ctx)
+        || ctx.memory(|m| m.top_modal_layer().is_some());
+    if blocked {
+        return;
+    }
+    let pressed = |id: &str| {
+        let keys = super::actions::action(id).map_or(&[][..], |a| a.keys);
+        ctx.input_mut(|i| keys.iter().any(|s| i.consume_key(s.mods, s.key)))
+    };
+    // The modifier key first: egui ignores an extra Shift when it matches a plain key.
+    if pressed("3d-copy") {
+        v.copy_image(clipboard);
+    }
+    if pressed("3d-reset") {
+        v.orbit.reset();
+    }
+    if pressed("3d-debug") {
+        v.set_debug(v.debug().next());
+    }
+}
 
 fn pick_folder(ctx: &egui::Context, v: &Viewport3d) {
     let spec = PickerSpec {
@@ -32,6 +71,7 @@ fn gated(ui: &mut egui::Ui, v: &Viewport3d, b: egui::Button<'_>) -> bool {
 
 pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
     popup(ui.ctx(), v);
+    keys(ui.ctx(), v);
     ui.horizontal_wrapped(|ui| {
         let mut on = v.features_on;
         if ui.checkbox(&mut on, FEATURES_LABEL).changed() {
@@ -51,11 +91,24 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
         if r.clicked() {
             pick_folder(ui.ctx(), v);
         }
+        let copy = ui
+            .add_enabled(v.frame.is_some(), egui::Button::new("Copy image").small())
+            .on_hover_text(format!(
+                "Copy the 3D view to the clipboard ({})",
+                super::actions::keys_text("3d-copy")
+            ))
+            .on_disabled_hover_text("Nothing rendered yet");
+        if copy.clicked() {
+            v.copy_image(clipboard);
+        }
+        if let Some(s) = &v.status {
+            ui.weak(s);
+        }
         if v.show_spinner(std::time::Instant::now()) {
             ui.spinner();
         }
     });
-    look_controls(ui, &mut v.look);
+    look_controls(ui, v);
     if let Some(n) = v.notice.clone() {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(AMBER, n);
@@ -93,11 +146,25 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
     }
 }
 
-/// The "View" section: background and lights. Each change only re-renders (the model sends a new `Render`).
-fn look_controls(ui: &mut egui::Ui, l: &mut Look) {
+/// The "View" section: debug view, background and lights. A look change only re-renders (the model sends a new
+/// `Render`).
+fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
     egui::CollapsingHeader::new("View")
         .id_salt("viewport3d-look")
         .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Debug view");
+                let mut d = v.debug();
+                for o in DebugView::ALL {
+                    ui.radio_value(&mut d, o, o.label());
+                }
+                v.set_debug(d);
+                ui.weak(format!("({})", super::actions::keys_text("3d-debug")))
+                    .on_hover_text(
+                        "Albedo, normals, roughness, metallic and AO need the renderer's support (not offered yet)",
+                    );
+            });
+            let l = &mut v.look;
             ui.horizontal_wrapped(|ui| {
                 ui.label("Background");
                 ui.radio_value(&mut l.hdri, false, "Solid");
@@ -138,12 +205,18 @@ fn look_controls(ui: &mut egui::Ui, l: &mut Look) {
                         .logarithmic(true)
                         .text("Point light radius (x model size)"),
                 );
-                if ui.small_button("Reset view").clicked() {
+                if ui
+                    .small_button("Reset view")
+                    .on_hover_text("Lights, background and camera back to the defaults")
+                    .clicked()
+                {
                     *l = Look::default();
+                    v.orbit.reset();
                 }
             });
-            if l.hdri {
-                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light");
+            ui.weak("Drag: orbit · middle or Shift+drag: pan · Shift+right drag: turn the sun · wheel: zoom · double-click or Home: recentre");
+            if v.look.hdri {
+                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light. Shift+right drag turns the sun only.");
             }
         });
 }
@@ -153,10 +226,17 @@ fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let avail = ui.available_size();
     let size = egui::vec2(avail.x.max(1.0), (avail.y - BELOW).max(64.0));
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    let shift = ui.input(|i| i.modifiers.shift);
+    let d = resp.drag_delta();
     if resp.double_clicked() {
         v.orbit.reset();
+    } else if resp.dragged_by(egui::PointerButton::Middle)
+        || (shift && resp.dragged_by(egui::PointerButton::Primary))
+    {
+        v.orbit.pan(d.x, d.y);
+    } else if shift && resp.dragged_by(egui::PointerButton::Secondary) {
+        v.look.rotate_sun(d.x);
     } else if resp.dragged() {
-        let d = resp.drag_delta();
         v.orbit.drag(d.x, d.y);
     }
     if resp.hovered() {
@@ -209,13 +289,14 @@ fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     );
 }
 
-fn problems(ui: &mut egui::Ui, v: &Viewport3d) {
+fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let Some(r) = &v.report else {
         if let Some(e) = &v.render_error {
             ui.colored_label(RED, format!("Render error: {e}"));
         }
         return;
     };
+    let mut show = None;
     egui::ScrollArea::vertical()
         .id_salt("viewport3d-problems")
         .max_height(BELOW - 30.0)
@@ -247,8 +328,19 @@ fn problems(ui: &mut egui::Ui, v: &Viewport3d) {
                     ui.colored_label(RED, format!("{}: shader failed: {error}{kept}", i.name));
                 }
             }
-            for t in r.missing_textures.iter().take(MAX_LISTED) {
-                ui.colored_label(AMBER, format!("Missing texture: {t}"));
+            for (i, t) in r.missing_textures.iter().take(MAX_LISTED).enumerate() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(MAGENTA, format!("Missing texture: {t}"));
+                    if let Some(Some(k)) = v.missing_items.get(i) {
+                        if ui
+                            .small_button("Show in Textures")
+                            .on_hover_text(format!("Select {k} in the Textures view"))
+                            .clicked()
+                        {
+                            show = Some(k.clone());
+                        }
+                    }
+                });
             }
             if !r.warnings.is_empty() {
                 egui::CollapsingHeader::new(format!("{} notes", r.warnings.len()))
@@ -260,6 +352,9 @@ fn problems(ui: &mut egui::Ui, v: &Viewport3d) {
                     });
             }
         });
+    if show.is_some() {
+        v.show_in_textures = show;
+    }
 }
 
 fn footer(ui: &mut egui::Ui, v: &Viewport3d) {

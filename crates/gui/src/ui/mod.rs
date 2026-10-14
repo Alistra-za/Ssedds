@@ -100,19 +100,8 @@ pub fn draw_with_scan(
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
-    // The panel leaves the central columns their minimum width; too narrow a window for both hides the panel
-    // (narrowing a column brings it back).
-    let room = ui.available_width() - set_preview::CENTRE_MIN;
-    // The 2D | 3D switch: in 3D the set editor leaves its slot cards out and this panel shows the set.
-    let three_d =
-        state.set3d.enabled && set_preview::wanted(model) && room >= set_preview::PANEL_MIN;
-    if three_d {
-        egui::Panel::right("set-3d")
-            .default_size(480.0)
-            .min_size(set_preview::PANEL_MIN)
-            .max_size(room)
-            .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
-    }
+    // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
+    let three_d = state.set3d.enabled && set_preview::wanted(model);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
     // Here, not in the set editor: a pill member's slot menu opens it while a texture is selected (F3a Task 8).
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
@@ -157,6 +146,9 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
                 &mut state.slot_cmds,
                 view,
             );
+            if three_d {
+                set_preview::draw(ui, model, &mut state.set3d);
+            }
         }
         Selection::None => {
             ui.centered_and_justified(|ui| ui.label("Select a texture or a set."));

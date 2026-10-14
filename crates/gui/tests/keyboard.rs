@@ -78,7 +78,12 @@ fn every_shortcut_runs_its_action() {
     let mut checked = 0;
     for a in actions() {
         if a.run.is_none() {
-            assert_eq!(a.area, Area::Dialogs, "{} is only listed", a.id);
+            // A dialog's keys and the 3D panel's keys are handled where they belong (the 3D viewports are not in AppModel).
+            assert!(
+                matches!(a.area, Area::Dialogs | Area::View3d),
+                "{} is only listed",
+                a.id
+            );
             continue;
         }
         for s in a.keys {

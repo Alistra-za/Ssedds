@@ -260,8 +260,11 @@ fn the_2d_3d_switch_swaps_the_slot_cards_for_the_preview_and_keeps_the_truepbr_s
     h.run();
     assert!(h.state().0.settings.set_view_3d);
     h.get_by_label(PANEL_TITLE);
-    h.get_by_label("Specular level");
     assert!(h.query_by_label("Match on this").is_none());
+    // AG78: the TruePBR settings fold above the 3D view in the centre.
+    h.get_by_label("TruePBR settings").click();
+    h.run();
+    h.get_by_label("Specular level");
     h.query_all_by_label("2D").next().unwrap().click();
     h.run();
     assert!(!h.state().0.settings.set_view_3d);

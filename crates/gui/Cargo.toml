@@ -36,6 +36,8 @@ pgpsim = { path = "../pgpsim" }
 rusqlite.workspace = true
 # F3b: find/replace patterns in the rename dialog (linear time, no look-around).
 regex = "1"
+# Item 12 Copy image: already in the lock through egui-winit, with the same features.
+arboard = { version = "=3.6.1", default-features = false, features = ["image-data"] }
 
 # The monitor rectangles at start (layout.rs, AG18). 0.61.2 is the version eframe's winit already uses.
 [target.'cfg(windows)'.dependencies]

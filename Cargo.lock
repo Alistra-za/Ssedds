@@ -3254,6 +3254,7 @@ dependencies = [
 name = "sdc-gui"
 version = "0.7.0"
 dependencies = [
+ "arboard",
  "crc32fast",
  "eframe",
  "egui_kittest",

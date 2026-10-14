@@ -116,6 +116,27 @@ impl SdcApp {
         }
     }
 
+    /// Both 3D panels' links to the Textures view: which missing texture paths are items of the open folder, and a
+    /// "Show in Textures" click (selects the item and switches to the Textures view).
+    pub fn route_3d(&mut self, ctx: &egui::Context) {
+        let model = &mut self.model;
+        for v in [&mut self.meshes.v3, &mut self.state.set3d.v3] {
+            let missing = v
+                .report
+                .as_ref()
+                .map_or(&[][..], |r| &r.missing_textures[..]);
+            v.missing_items = missing
+                .iter()
+                .take(crate::ui::viewport3d::MAX_LISTED)
+                .map(|p| model.item_for_game_path(p))
+                .collect();
+            if let Some(k) = v.show_in_textures.take() {
+                crate::ui::header::set_meshes_view(ctx, false);
+                model.palette_pick(&crate::model::nav::Pick::Texture(k));
+            }
+        }
+    }
+
     /// Creates the preview renderer in egui_wgpu's callback resources. Without a render state (no usable adapter) the
     /// app runs without a preview.
     pub fn with_render_state(mut self, rs: Option<&egui_wgpu::RenderState>) -> SdcApp {
@@ -267,6 +288,7 @@ impl eframe::App for SdcApp {
         if let Some(req) = self.meshes.take_request() {
             self.meshes.start(req);
         }
+        self.route_3d(&ctx);
         if crate::ui::header::meshes_view_active(&ctx) {
             // The Textures view reads its keys in `ui::draw_with_scan`.
             crate::ui::actions::keys(&ctx, &mut self.model, self.state.drops.pending.is_some());
@@ -281,6 +303,8 @@ impl eframe::App for SdcApp {
         } else {
             crate::ui::draw_with_scan(ui, &mut self.model, &mut self.state, Some(&mut self.meshes));
         }
+        // A "Show in Textures" click of this frame.
+        self.route_3d(&ctx);
         // Explorer requests the drawer and the menus queued this frame (Task 5).
         for req in self.model.take_shell() {
             crate::model::shell::spawn(&req);

@@ -139,6 +139,28 @@ impl AppModel {
     }
 
     /// A texture or set picked in the palette: the same as clicking it, and its column scrolls to it.
+    /// The item in the open folder whose game path is `norm` (a mesh's texture path, any case, extension ignored).
+    /// shortcut: a linear scan, called per frame only for the 3D panel's missing paths; index it if that list grows.
+    pub fn item_for_game_path(&self, norm: &str) -> Option<String> {
+        fn stem(p: &str) -> &str {
+            match p.rfind('.') {
+                Some(i) if !p[i..].contains('/') => &p[..i],
+                _ => p,
+            }
+        }
+        // A job's game path is already lower case with `/`.
+        let norm = norm.replace('\\', "/");
+        let want = stem(&norm);
+        self.items
+            .iter()
+            .find(|i| {
+                i.job
+                    .as_ref()
+                    .is_some_and(|j| stem(&j.game_path).eq_ignore_ascii_case(want))
+            })
+            .map(|i| i.key.clone())
+    }
+
     pub fn palette_pick(&mut self, pick: &Pick) {
         match pick {
             Pick::Action(_) => {}

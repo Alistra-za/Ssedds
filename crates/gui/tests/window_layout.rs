@@ -38,6 +38,7 @@ fn full() -> LayoutSettings {
             sun: Some(2.0),
             point: Some(1.5),
             radius: Some(3.0),
+            sun_yaw: Some(0.5),
         }),
         set_look: None,
     }
@@ -162,6 +163,7 @@ fn channels_layouts_and_looks_convert_both_ways() {
         sun: 2.0,
         point: 1.0,
         radius: 4.0,
+        sun_yaw: 1.5,
     };
     assert_eq!(Look::from_settings(Some(&LookSettings::of(&look))), look);
     assert_eq!(Look::from_settings(None), Look::default());
@@ -332,7 +334,8 @@ fn a_new_app_starts_from_the_saved_layout() {
             grey: 0.25,
             sun: 2.0,
             point: 1.5,
-            radius: 3.0
+            radius: 3.0,
+            sun_yaw: 0.5
         }
     );
     assert_eq!(app.state.set3d.v3.look.sun, 0.5);
@@ -445,4 +448,37 @@ fn the_preview_settings_panel_width_is_saved_too() {
     assert!(WIDTH_IDS.contains(&"preview-settings"));
     let (s, _) = load_text("[layout.widths]\npreview-settings = 300.0\n");
     assert_eq!(s.layout.widths.get("preview-settings"), Some(&300.0));
+}
+
+#[test]
+fn the_3d_panels_requests_reach_the_app() {
+    use sdc_gui::app::SdcApp;
+    let d = tempfile::tempdir().unwrap();
+    let model = support::opened(d.path());
+    let key = model
+        .item_for_game_path("Textures/Landscape/Rock01.dds")
+        .expect("rock01 is in the open folder");
+    assert!(model
+        .item_for_game_path("textures/elsewhere/x.dds")
+        .is_none());
+    let mut app = SdcApp::new(model);
+    let ctx = egui::Context::default();
+    sdc_gui::ui::header::set_meshes_view(&ctx, true);
+    app.meshes.v3.report = Some(render3d::LoadReport {
+        missing_textures: vec![
+            "textures/landscape/rock01.dds".into(),
+            "textures/elsewhere/x.dds".into(),
+        ],
+        ..Default::default()
+    });
+    app.route_3d(&ctx);
+    assert_eq!(app.meshes.v3.missing_items, vec![Some(key.clone()), None]);
+    app.meshes.v3.show_in_textures = Some(key.clone());
+    app.route_3d(&ctx);
+    assert!(
+        !sdc_gui::ui::header::meshes_view_active(&ctx),
+        "back to Textures"
+    );
+    assert_eq!(app.model.selection, sdc_gui::model::Selection::Item(key));
+    assert!(app.meshes.v3.show_in_textures.is_none());
 }

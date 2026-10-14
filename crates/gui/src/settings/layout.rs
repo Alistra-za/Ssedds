@@ -3,12 +3,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// What `[layout.widths]` may name: the Textures and Sets columns, the set 3D panel, the Meshes tree, the Advanced
-/// drawer and the 2D preview's settings panel (fixed at 280 pt today, so its saved width changes nothing yet).
-pub const WIDTH_IDS: [&str; 6] = [
+/// What `[layout.widths]` may name: the Textures and Sets columns, the Meshes tree, the Advanced drawer and the 2D
+/// preview's settings panel (fixed at 280 pt today, so its saved width changes nothing yet). The set 3D side panel is
+/// gone (AG78): an old `set-3d` width is ignored like any unknown name.
+pub const WIDTH_IDS: [&str; 5] = [
     "textures",
     "sets",
-    "set-3d",
     "meshes-tree",
     "advanced",
     "preview-settings",
@@ -109,6 +109,9 @@ pub struct LookSettings {
     pub point: Option<f32>,
     #[serde(deserialize_with = "lenient")]
     pub radius: Option<f32>,
+    /// The sun's turn about the vertical, radians (Task 10, AG74).
+    #[serde(deserialize_with = "lenient")]
+    pub sun_yaw: Option<f32>,
 }
 
 impl LookSettings {
@@ -121,6 +124,10 @@ impl LookSettings {
         fix(&mut self.sun, (0.0, 4.0));
         fix(&mut self.point, (0.0, 4.0));
         fix(&mut self.radius, (0.1, 10.0));
+        self.sun_yaw = self
+            .sun_yaw
+            .filter(|f| f.is_finite())
+            .map(|f| f.rem_euclid(std::f32::consts::TAU));
     }
 }
 
