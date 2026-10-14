@@ -329,8 +329,8 @@ impl Orbit {
     }
 }
 
-/// The "View" controls of the panel: background and lights. Not saved; every start begins at the defaults (the
-/// look the preview always had).
+/// The "View" controls of the panel: background and lights. Saved in `gui.toml` (`[layout.look]`, AG17); a fresh
+/// install begins at the defaults (the look the preview always had).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
     /// The studio HDRI behind the model (and as ambient light) instead of a flat grey.
@@ -373,6 +373,33 @@ impl Look {
             );
         }
         s
+    }
+}
+
+impl Look {
+    /// The saved look; a field it lacks keeps the default.
+    pub fn from_settings(s: Option<&crate::settings::LookSettings>) -> Look {
+        let d = Look::default();
+        let Some(s) = s else { return d };
+        Look {
+            hdri: s.hdri.unwrap_or(d.hdri),
+            grey: s.grey.unwrap_or(d.grey),
+            sun: s.sun.unwrap_or(d.sun),
+            point: s.point.unwrap_or(d.point),
+            radius: s.radius.unwrap_or(d.radius),
+        }
+    }
+}
+
+impl crate::settings::LookSettings {
+    pub fn of(l: &Look) -> Self {
+        Self {
+            hdri: Some(l.hdri),
+            grey: Some(l.grey),
+            sun: Some(l.sun),
+            point: Some(l.point),
+            radius: Some(l.radius),
+        }
     }
 }
 

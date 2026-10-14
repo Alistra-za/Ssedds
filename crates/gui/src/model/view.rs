@@ -18,6 +18,19 @@ impl Channel {
     pub fn shader_id(self) -> u32 {
         self as u32
     }
+    /// The channel with this `shader_id`, `None` for a number that names none.
+    pub fn from_id(id: u32) -> Option<Channel> {
+        [
+            Channel::Rgba,
+            Channel::R,
+            Channel::G,
+            Channel::B,
+            Channel::A,
+            Channel::AlphaMask,
+        ]
+        .into_iter()
+        .find(|c| c.shader_id() == id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -25,6 +38,21 @@ pub enum Layout {
     #[default]
     SideBySide,
     Split,
+}
+
+impl Layout {
+    /// The name in `gui.toml`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Layout::SideBySide => "side-by-side",
+            Layout::Split => "split",
+        }
+    }
+    pub fn from_name(s: &str) -> Option<Layout> {
+        [Layout::SideBySide, Layout::Split]
+            .into_iter()
+            .find(|l| l.name() == s)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

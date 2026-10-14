@@ -206,8 +206,12 @@ pub fn view_toggle(ui: &mut egui::Ui) {
     if ui.selectable_label(meshes, "Meshes view").clicked() {
         meshes = true;
     }
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(egui::Id::new("sdc-meshes-view"), meshes));
+    set_meshes_view(ui.ctx(), meshes);
+}
+
+/// Switch the view (also the saved one coming back at start, AG17).
+pub fn set_meshes_view(ctx: &egui::Context, meshes: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("sdc-meshes-view"), meshes));
 }
 
 /// True when the Meshes view is shown instead of the Textures view.

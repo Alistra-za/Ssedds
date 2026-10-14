@@ -1,6 +1,9 @@
 //! GUI-only settings (M3a spec §5.5): `%APPDATA%\sdc\gui.toml`. Never part of `sdc.toml`.
 use encoders_sys::Bc1Model;
 use serde::{Deserialize, Serialize};
+mod layout;
+pub use layout::*;
+
 use std::path::{Path, PathBuf};
 
 /// Preview size limits offered (M3a spec §6.5); 16384 only when `allow_16k_preview` is set.
@@ -83,6 +86,9 @@ pub struct GuiSettings {
     pub meshes: MeshesSettings,
     /// The Meshes view's 3D panel (plan B Task B8), `[render3d]` in the file.
     pub render3d: Render3dSettings,
+    /// The window and arrangement the app comes back to, `[layout]` in the file (DECISIONS AG3).
+    #[serde(deserialize_with = "layout::lenient")]
+    pub layout: LayoutSettings,
 }
 
 /// `[render3d]`: the Community Shaders `Shaders` folder last used, re-checked on start and on focus.
@@ -123,6 +129,7 @@ impl Default for GuiSettings {
             nvtt_path: None,
             meshes: MeshesSettings::default(),
             render3d: Render3dSettings::default(),
+            layout: LayoutSettings::default(),
         }
     }
 }
@@ -147,6 +154,7 @@ impl GuiSettings {
                     if !PREVIEW_SIZES.contains(&s.preview_max) {
                         s.preview_max = GuiSettings::default().preview_max;
                     }
+                    s.layout.sanitize();
                     (s, None)
                 }
                 Err(e) => (

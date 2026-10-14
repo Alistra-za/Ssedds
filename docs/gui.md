@@ -177,6 +177,8 @@ A complex-grass texture is one image twice as tall as it is wide: diffuse and al
 
 GUI-only settings (recent folders, export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder, NVTT path) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart Tessalith to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. There is no preset picker yet: select a user preset in `sdc.toml` (`preset = "<id>"`) or the user config.
 
+**What Tessalith remembers.** The window (its size, its position and whether it is maximised), the width of each column and panel you dragged, the Textures or Meshes view, the Textures filter toggles, the preview channel and layout, and the 3D View controls (background, sun, point light, radius) come back at the next start. They are saved in `gui.toml` a couple of seconds after you change them, and when you close the window. The zoom, the selection and the open folder are not remembered. If the saved window would be off every screen (a monitor was unplugged), it opens centred on the main screen instead. A value in `gui.toml` that makes no sense is ignored on its own; the rest of the file still applies.
+
 Tessalith ships no fonts. It loads the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at start-up and refuses to start, with a message, if they are missing.
 
 ## When something goes wrong

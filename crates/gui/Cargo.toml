@@ -37,6 +37,10 @@ rusqlite.workspace = true
 # F3b: find/replace patterns in the rename dialog (linear time, no look-around).
 regex = "1"
 
+# The monitor rectangles at start (layout.rs, AG18). 0.61.2 is the version eframe's winit already uses.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi"] }
+
 [dev-dependencies]
 egui_kittest = "=0.36.2"
 tempfile.workspace = true

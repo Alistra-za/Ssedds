@@ -1,6 +1,7 @@
 //! The eframe application: owns the model, draws it each frame.
 use crate::model::preview::{PreviewOut, SourceState};
 use crate::model::view::{self, Channel};
+use crate::model::viewport3d::Look;
 use crate::model::AppModel;
 use crate::render::{PreviewRenderer, Slot};
 use eframe::{egui, egui_wgpu};
@@ -33,6 +34,8 @@ pub struct SdcApp {
     pub render_state: Option<egui_wgpu::RenderState>,
     uploaded: Uploaded,
     was_focused: bool,
+    /// Waits out 2 s after the layout changed before `gui.toml` is written (AG19).
+    layout_save: crate::layout::SaveDebounce,
 }
 
 impl SdcApp {
@@ -44,7 +47,12 @@ impl SdcApp {
         );
         meshes.v3 =
             crate::model::viewport3d::Viewport3d::new(model.settings.render3d.shaders.clone());
-        let set3d = crate::model::set_preview::SetPreview::from_settings(&model.settings);
+        let mut set3d = crate::model::set_preview::SetPreview::from_settings(&model.settings);
+        // The saved arrangement: filters, preview channel and layout, and both 3D looks (AG17).
+        let layout = model.settings.layout.clone();
+        crate::layout::restore_model(&layout, &mut model.filter, &mut model.view);
+        meshes.v3.look = Look::from_settings(layout.look.as_ref());
+        set3d.v3.look = Look::from_settings(layout.set_look.as_ref());
         SdcApp {
             model,
             meshes,
@@ -55,6 +63,34 @@ impl SdcApp {
             render_state: None,
             uploaded: Uploaded::default(),
             was_focused: true,
+            layout_save: Default::default(),
+        }
+    }
+
+    /// Puts the saved panel widths and the Textures | Meshes view into egui, before the first frame.
+    pub fn restore_ctx(&self, ctx: &egui::Context) {
+        crate::layout::restore_ctx(ctx, &self.model.settings.layout);
+    }
+
+    /// Takes the window and arrangement as they are now into the settings. `gui.toml` is written once the change has
+    /// waited 2 s from its first change (AG19), and at exit.
+    pub fn sync_layout_at(&mut self, ctx: &egui::Context, now: std::time::Instant) {
+        let looks = (&self.meshes.v3.look, &self.state.set3d.v3.look);
+        let cur = crate::layout::capture(
+            ctx,
+            &self.model.settings.layout,
+            &self.model.filter,
+            &self.model.view,
+            looks,
+        );
+        if cur != self.model.settings.layout {
+            self.model.settings.layout = cur;
+            self.layout_save.changed(now);
+        }
+        if self.layout_save.due(now) {
+            self.model.save_settings();
+        } else if self.layout_save.pending() {
+            ctx.request_repaint_after(crate::layout::SaveDebounce::DELAY);
         }
     }
 
@@ -241,6 +277,14 @@ impl eframe::App for SdcApp {
         }
         if self.model.preview.scheduled() {
             ctx.request_repaint_after(crate::model::preview::DEBOUNCE);
+        }
+        self.sync_layout_at(&ctx, std::time::Instant::now());
+    }
+
+    /// The last write: a layout change still inside its 2 s wait is not lost.
+    fn on_exit(&mut self) {
+        if self.layout_save.pending() {
+            self.model.save_settings();
         }
     }
 }
