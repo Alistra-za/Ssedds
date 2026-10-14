@@ -1,8 +1,8 @@
 //! GUI tweaks G4/G6: delete sections, the PGPatcher entries that belong to no set (`[[pgp_sections]]` in
 //! `sdc-project.toml`). A section matches shapes by texture (`match1`–`match8` exact, `path_contains`) and may be
-//! narrowed to meshes (`nif_filter`); with `delete = true` PGPatcher deletes the shapes it matches. A section is
-//! written after every set's entry, only while it has a texture match and `delete` is on (any other entry would
-//! switch the shapes it matches to TruePBR with nothing to show).
+//! narrowed to meshes (`nif_filter`). Every section is written with `delete: true`: PGPatcher deletes the trishapes
+//! it matches (a vanilla glow shape, say, when the PBR base shape is emissive instead). It is written after every
+//! set's entry, while it has a texture match.
 use super::sets::{views, SetView};
 use super::AppModel;
 use crate::pgp::settings::Settings;
@@ -50,16 +50,14 @@ pub fn tex_matches(s: &Settings) -> Vec<TexMatch> {
     out
 }
 
-/// Section `s` is written to the JSON: it deletes, and it matches a texture.
+/// Section `s` is written to the JSON: it matches a texture.
 pub fn written(s: &Settings) -> bool {
-    s.get("delete").and_then(Value::as_bool) == Some(true) && !tex_matches(s).is_empty()
+    !tex_matches(s).is_empty()
 }
 
 /// Why section `s` is not written, when it is not.
 pub fn not_written_reason(s: &Settings) -> Option<&'static str> {
-    if s.get("delete").and_then(Value::as_bool) != Some(true) {
-        Some("delete is off: this section is kept but not written")
-    } else if tex_matches(s).is_empty() {
+    if tex_matches(s).is_empty() {
         Some("this section matches no texture and is not written (a mesh filter alone matches nothing)")
     } else {
         None

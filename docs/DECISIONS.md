@@ -851,7 +851,7 @@ Real-NVTT checks (`cargo test --release -p engine --test nvtt_real -- --ignored 
 Spec `docs/superpowers/specs/2026-10-14-sdc-gui-tweaks-design.md` (G1-G9).
 
 - **AB1 Input name.** The set editor's input name is the set's base name, changed through `[inputs]` aliases (AA1), not the PGPatcher `rename` (AA3). The set's `sdc-project.toml` entry follows the new automatic id (`SetsDoc::retarget_auto`). Default picked in the thread; the owner may overrule.
-- **AB2 Delete sections** are `[[pgp_sections]]` in `sdc-project.toml`, written after every set's entry, and only with `delete = true` and a texture match. Supersedes the "`delete` is a later round" line of `pgp::schema::NOT_EXPOSED` for sections; set entries still never write `delete`.
+- **AB2 Delete sections** are `[[pgp_sections]]` in `sdc-project.toml`, written after every set's entry, always with `delete: true` (they exist to delete trishapes, such as a vanilla glow shape the PBR base replaces with emissive; owner, 2026-10-14), and only with a texture match. Supersedes the "`delete` is a later round" line of `pgp::schema::NOT_EXPOSED` for sections; set entries still never write `delete`.
 - **AB3 Delete hits** compare texture paths only (exact slot match, or `path_contains` in the diffuse path); a `nif_filter` is reported, not checked against meshes.
 - **AB4 2D | 3D** is one switch kept in `gui.toml`, default 2D; the 3D preview does no work in 2D.
 - **AB5 Version** stays 0.7.0 (Z7): no output changes unless the user adds sections or aliases.

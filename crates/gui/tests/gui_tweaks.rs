@@ -162,8 +162,14 @@ fn a_delete_section_is_written_last_with_only_its_keys() {
         v,
         json!({"match2": "landscape\\rock01_n.dds", "nif_filter": "architecture\\whiterun", "delete": true})
     );
-    s.insert("delete".into(), json!(false));
-    assert!(!written(&s), "a section with delete off is not written");
+    s.remove("delete");
+    let v = entry_node(&EntryInput {
+        settings: s.clone(),
+        section: true,
+        ..EntryInput::default()
+    })
+    .to_value();
+    assert_eq!(v["delete"], json!(true), "a section always deletes");
     let mut only_mesh = sdc_gui::pgp::settings::Settings::new();
     only_mesh.insert("nif_filter".into(), json!("x"));
     only_mesh.insert("delete".into(), json!(true));

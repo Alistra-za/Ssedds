@@ -767,14 +767,8 @@ fn section_entry(
                 nif_pill(ui, model, &owner, nif.as_deref().unwrap_or(""), acts);
             }
             pill(ui, |ui| {
-                let mut on = s.get("delete").and_then(Value::as_bool) == Some(true);
-                if ui
-                    .checkbox(&mut on, "delete")
-                    .on_hover_text("PGPatcher deletes every shape this section matches")
-                    .changed()
-                {
-                    acts.push(Act::Edit(owner.clone(), "delete".into(), Some(json!(on))));
-                }
+                ui.label(egui::RichText::new("delete: true").small())
+                    .on_hover_text("PGPatcher deletes every trishape this section matches");
             });
             ui.menu_button("+ key", |ui| {
                 for n in 1..=8u8 {

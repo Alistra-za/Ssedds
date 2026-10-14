@@ -238,7 +238,7 @@ pub fn entry_node(e: &EntryInput) -> Node {
 }
 
 /// A delete section (GUI tweaks G4): its exact matches (in the JSON form), `path_contains`, `nif_filter`, then
-/// `delete` when on.
+/// `delete: true` (always: a section exists to delete shapes).
 fn section_object(own: &Settings) -> Vec<(String, Node)> {
     let mut out = vec![];
     for key in crate::model::sections::SECTION_KEYS {
@@ -246,7 +246,7 @@ fn section_object(own: &Settings) -> Vec<(String, Node)> {
             continue;
         };
         let node = match key {
-            "delete" => (v.as_bool() == Some(true)).then_some(Node::Scalar(json!(true))),
+            "delete" => continue,
             k if k.starts_with("match") => v
                 .as_str()
                 .map(str::trim)
@@ -262,6 +262,7 @@ fn section_object(own: &Settings) -> Vec<(String, Node)> {
             out.push((key.to_string(), n));
         }
     }
+    out.push(("delete".to_string(), Node::Scalar(json!(true))));
     out
 }
 

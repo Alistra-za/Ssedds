@@ -49,11 +49,11 @@ Ask: "a global whole file json editor (separate window popup) for true pbr, each
 
 Ask: "the option to add sections to it (for delete keys)".
 
-- **+ Delete section** adds an entry that belongs to no set. Sections are `[[pgp_sections]]` tables in
-  `sdc-project.toml` (keys `match1`–`match8`, `path_contains`, `nif_filter`, `delete`).
-- They are written after every set's entry. A section is written only while `delete` is on and it has a texture match
-  (a mesh filter alone matches nothing, and a section without `delete` would switch the shapes it matches to TruePBR
-  with no textures). The editor says why a section is not written.
+- **+ Delete section** adds an entry that belongs to no set and deletes the trishapes it matches: for example a
+  vanilla glow shape, when the PBR base shape uses emissive instead (owner, 2026-10-14). Sections are
+  `[[pgp_sections]]` tables in `sdc-project.toml` (keys `match1`–`match8`, `path_contains`, `nif_filter`).
+- Every section is written with `delete: true`, after every set's entry. A section with no texture match is not
+  written (a mesh filter alone matches nothing); the editor says so.
 - A JSON with only delete sections is written too.
 
 ## G5 Key pills with exact or path matches
