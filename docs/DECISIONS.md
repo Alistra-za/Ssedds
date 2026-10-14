@@ -728,7 +728,7 @@ Spec `docs/superpowers/specs/2026-10-12-complex-grass-design.md`, plan `docs/sup
 - **Y6 Coverage under `smallest` (audit 13).** This amends T5. `validation.mips = smallest` checks PSNR on the last level only and coverage on every level, so `summary.coverage` has one entry per level again. The schema doc text says so.
 - **Y7 GUI caches (audit 7, 8).** Set views and export blocks are cached under `(items_rev, sets_doc rev, root, export_root, target)`: the view-cache revision key. `SetsDoc` revisions come from one global counter, so a replaced document never reuses a revision. Code that mutates `items` or `sets` in place calls `AppModel::invalidate_views()`. Engine thumbnails are `Arc`-shared. A GUI plan evicts cached files outside its inputs, and packs not in the plan (uncancelled plans only). `ThumbCache` clears when `items_rev` changes.
 - **Y8 Undo (audit 10, 11).** An undo or redo ends the merge run. "Accept all suggestions" is one history step and one re-plan, whatever the count.
-- **Y9 `--nvtt` (owner D3).** `sdc convert --nvtt` is a usage error (exit 2) until M5. `sdc encoders --nvtt` (detection only) is unchanged.
+- **Y9 `--nvtt` (owner D3).** `sdc convert --nvtt` is a usage error (exit 2) until M5. `sdc encoders --nvtt` (detection only) is unchanged. Superseded by Note NV (M5): `--nvtt` selects nvcompress.
 - **Y10 S4 spike (owner D4).** `spikes/s4-scalar` is deleted. It can be rebuilt from the pinned commit and SHA-256 in Spike S4.
 - **Y11 Bench (audit 18, left-out).** Corpus tests skip (and say so on stderr) when `SDC_BENCH_ROOT` is unset and the default folder is missing; an explicit root that is missing fails. The bench uses the engine's PSNR (`engine::validate::psnr`), so validation and the engine-parity gate cannot drift. `.gitattributes` marks `crates/*/tests/fixtures/**` and `crates/*/tests/data/**` as `-text`, which also reaches the NIF and render3d fixture folders (a root file; only the eol attribute).
 
@@ -777,3 +777,46 @@ Spec `docs/superpowers/specs/2026-10-12-complex-grass-design.md`, plan `docs/sup
   - Undo: the cleanup is folded into the user step that started the chain. That step is tracked explicitly: an edit that records a step and re-plans marks the chain. A change no step caused (scan votes, a document changed outside history) is its own step, "Encoding follows type". Plans of an undo, redo, open or reload never clean up.
   - A short note follows the status line ("g.png: complex grass → pbr albedo; format reset to the default (BC7 · sRGB)."). Several textures read as one count line with each listed on hover. No dialog. The next edit, an undo, redo, open or reload dismisses it.
   - Merge of main (Task 9 Part A): the bulk Format row offers the (format, tag) pairs every selected texture allows (`bulk_encodings`, from `fields::encoding_options`); when they share none, every pair any of them allows. A pair a texture's sub-type does not allow skips it ("not valid for this map", applies to K of N). Copy settings copies the format with its tag the same way (R13): the pair is written through `set_format`, the tag is not copied on its own, and a texture that does not allow the pair is skipped.
+
+## Note NV — M5: NVTT Production backend (plan rulings, 2026-10-13)
+
+Spec `docs/superpowers/specs/2026-10-13-sdc-m5-nvtt-design.md` (owner-approved, §9 at its proposed defaults). Supersedes
+Note Y9: `sdc convert --nvtt` works.
+
+- **NV1 Scope.** BC7 and BC6H UF16 only, Production only, one `-nomips` process per engine-built level. NVTT is never a
+  default and never suggested.
+- **NV2 Locate.** Explicit path (`--nvtt`, GUI NVTT path; missing → not found, no fallback), else `nvcompress.exe` on
+  `PATH`, else `C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe`. Under `cargo test` the target
+  folder, which holds the fake `nvcompress`, is on `PATH`, so the real-NVTT tests pass the default path explicitly.
+- **NV3 Version.** The probe runs `nvcompress` with no arguments (it exits 1; Spike S7b), parses the banner
+  `NVIDIA Texture Tools <x.y.z>` and requires the usage to list every flag NV4 passes. Tested = 3.2.5. Untested →
+  `ENC-NVTT-VERSION` (blocking, allowable). Not found or probe failed → `ENC-NVTT-MISSING` (blocking). The batch probes
+  lazily (`NvttCell`): a batch with no profile on NVTT never starts nvcompress.
+- **NV4 Flags.** `-silent -nomips -production`, then `-bc7` or `-bc6`; for BC7 `-noalpha` when `alpha.policy = remove`
+  and `-alpha` for every policy that keeps alpha (coordinator, pending the owner's card: nvcompress weights alpha 0
+  unless told the input has it); `-nocuda` always (S7, S7b: byte-identical, 0.13 s less per process). No colour flags;
+  the engine writes the header.
+- **NV5 Feed.** Each level as a DDS with a **legacy** header (S7b: NVTT reads uncompressed DX10 DDS as garbage): BC7 as
+  B8G8R8A8 via `dds_bytes(.., Legacy)`, BC6H as RGBA16F with FourCC 113, written by `nvtt.rs` (the engine's writer has
+  no legacy RGBA16F form). One temp folder per file, `%TEMP%\sdc-nvtt-<pid>-<n>`, removed on drop.
+- **NV6 Post.** `force_opaque_rotated` and the complex-grass corner guard run on NVTT BC7 output (`bc7_post_fix`); the
+  mode-6 byte patch does not.
+- **NV7 Slot.** One nvcompress process at a time per process (static mutex). Shortcut: fixed at 1; make it a setting if
+  cores idle.
+- **NV8 Failure.** `ENC-NVTT-FAILED` (error, Compress): the `file_failed` error starts `ENC-NVTT-FAILED:` and carries the
+  exit status and the last 5 output lines. No fallback to the built-in encoder. Cancel kills the child. No timeout
+  (shortcut: add one if a hung nvcompress is ever seen). No `ENC-NVTT-PARTIAL`: S7b encodes every BC6H level.
+- **NV9 Preview.** Previews of an NVTT texture encode with the format's built-in backend; the export uses NVTT. There is
+  no `PreviewResult` flag: the GUI reads `profile.encoder.backend` (its struct literals are in `crates/gui`).
+- **NV10 Records.** `EncoderVersions.nvtt` is set on NVTT records only; `if-changed` re-encodes an NVTT output when the
+  version found now differs or NVTT is missing. Built-in records ignore it, so pre-M5 records stay current. Engine
+  version stays 0.7.0.
+
+Real-NVTT checks (`cargo test --release -p engine --test nvtt_real -- --ignored --nocapture --test-threads 1`,
+2026-10-13, NVTT 3.2.5):
+- (a) `rgb_real/Bricks104`, `alpha.policy = remove`: engine mip 0 RGB PSNR 47.776810 dB = direct `nvtt_production`
+  47.776810 dB (Δ 0.000000); decoded alpha 255 on every level.
+- (b) `hdr_real/studio_small_08` as a float `_g` (BC6H): validation passed, peak ratio 0.9957.
+- (c) Engine run of that BC7 file 18.07 s vs direct per-level `-nocuda` processes 17.66 s (ratio 1.023, limit 1.10).
+- (d) `alpha_real/Fingerprints009`, `alpha.policy = blend`: mip 0 alpha PSNR 38.7786 dB on NVTT (`-alpha`), 38.9259 dB on
+  bc7e, bench direct `nvtt_production` 38.7883 dB. Not measured: the same file without `-alpha`.
