@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA: &str = r#"
 CREATE TABLE path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
@@ -55,8 +55,10 @@ CREATE INDEX shape_texset ON shape(texset_id);
 CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, path TEXT NOT NULL,
                      size INTEGER, mtime INTEGER NOT NULL, lo_index INTEGER, light INTEGER NOT NULL,
                      flags INTEGER NOT NULL, masters_json TEXT NOT NULL, error_text TEXT);
+-- rec.mato_flags: the MATO DATA flags of that copy (bit 0 single pass), NULL when its DATA has no flags field.
 CREATE TABLE rec (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL, edid TEXT,
-                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER);
+                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER,
+                     mato_flags INTEGER);
 CREATE TABLE rec_winner (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, n_overrides INTEGER NOT NULL);
 CREATE TABLE txst_slot (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, slot INTEGER NOT NULL,
                      path_id INTEGER NOT NULL);

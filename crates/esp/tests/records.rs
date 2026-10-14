@@ -574,3 +574,36 @@ fn a_worldspace_cloud_model_is_read_and_its_children_still_place() {
     let m = &f.records[0].payload.models;
     assert_eq!((m.len(), m[0].alt.len()), (1, 1));
 }
+
+/// Design §6 W3: the MATO DATA flags u32 (bit 0 = single pass) sits at offset 44; 52-byte records add a trailing word.
+#[test]
+fn mato_data_flags_are_read_when_present() {
+    let data = |n: usize, flags: u32| {
+        let mut d = vec![0u8; n];
+        if n >= 48 {
+            d[44..48].copy_from_slice(&flags.to_le_bytes());
+        }
+        if n >= 52 {
+            d[48..52].copy_from_slice(&7u32.to_le_bytes());
+        }
+        d
+    };
+    for (id, n) in [(0x0100_0A00, 48), (0x0100_0A01, 52)] {
+        let r = one(
+            b"MATO",
+            rec(b"MATO", id, &[edid("SnowMat1P"), sub(b"DATA", &data(n, 1))]),
+        );
+        assert_eq!(r.payload.mato_flags, Some(1));
+    }
+    let r = one(
+        b"MATO",
+        rec(
+            b"MATO",
+            0x0100_0A02,
+            &[edid("Short"), sub(b"DATA", &data(44, 1))],
+        ),
+    );
+    assert_eq!(r.payload.mato_flags, None);
+    let r = one(b"MATO", rec(b"MATO", 0x0100_0A03, &[edid("NoData")]));
+    assert_eq!(r.payload.mato_flags, None);
+}
