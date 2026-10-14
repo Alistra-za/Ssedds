@@ -68,6 +68,11 @@ pub enum WorkerMsg {
     Scanned(Result<modscan::scan::Report, modscan::ScanError>),
     /// Meshes view 3D panel (plan B Task B8): a reply of the render thread or the CS locate worker.
     Viewport3d(crate::model::viewport3d::V3Reply),
+    /// The NVTT probe of generation `generation` ended (`AppModel::refresh_nvtt`; a stale one is dropped).
+    Nvtt {
+        generation: u64,
+        probe: engine::nvtt::NvttProbe,
+    },
 }
 
 /// Forwards every engine event into the channel and nothing else, so it never slows the encoders (plan M3 carry).

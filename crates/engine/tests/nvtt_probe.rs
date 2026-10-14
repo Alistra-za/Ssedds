@@ -101,3 +101,33 @@ fn cell_probes_once_on_first_use() {
     assert!(matches!(cell.into_probed(), Some(NvttProbe::Found(_))));
     assert_eq!(NvttCell::new(Some(FAKE.into())).into_probed(), None);
 }
+
+/// Audit 2026-10-13b B-I1 (DECISIONS AF3): a program that never answers (a GUI exe, say) is killed and is not NVTT.
+/// The fake hangs on the no-argument run when its file name contains "hang".
+#[test]
+fn a_probe_that_hangs_times_out() {
+    let d = tempfile::tempdir().unwrap();
+    let hang = d.path().join("hang.exe");
+    std::fs::copy(FAKE, &hang).unwrap();
+    let t = std::time::Instant::now();
+    match probe_path(&hang) {
+        NvttProbe::Missing(why) => assert!(why.contains("no answer"), "{why}"),
+        f => panic!("{f:?}"),
+    }
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        t.elapsed()
+    );
+}
+
+#[test]
+fn nvtt_export_is_refused_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    let gui = d.path().join("NVTT_Export.exe");
+    std::fs::copy(FAKE, &gui).unwrap();
+    match probe_path(&gui) {
+        NvttProbe::Missing(why) => assert!(why.contains("not nvcompress"), "{why}"),
+        f => panic!("{f:?}"),
+    }
+}

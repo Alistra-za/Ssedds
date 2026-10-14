@@ -35,6 +35,7 @@ fn with_fake(dir: &std::path::Path) -> AppModel {
     let mut m = opened(dir);
     m.settings.nvtt_path = Some(fake());
     m.refresh_nvtt();
+    assert!(m.wait_idle(Duration::from_secs(60)));
     m
 }
 
@@ -123,6 +124,7 @@ fn the_status_reads_the_probe() {
     );
     m.settings.nvtt_path = Some(d.path().join("no/nvcompress.exe"));
     m.refresh_nvtt();
+    assert!(m.wait_idle(Duration::from_secs(60)));
     assert!(!m.nvtt_found());
     assert!(
         m.nvtt_status().starts_with("NVTT not found ("),
@@ -182,4 +184,18 @@ fn a_changed_probe_replans() {
     m.refresh_nvtt();
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert!(missing(&m));
+}
+
+/// Audit 2026-10-13b B-I1 (DECISIONS AF3): the probe runs on a worker; its result lands on a later poll, so a slow
+/// or wrong program never blocks the UI thread.
+#[test]
+fn the_probe_runs_off_the_ui_thread() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.settings.nvtt_path = Some(fake());
+    m.refresh_nvtt();
+    assert_eq!(m.nvtt, None, "nothing yet: the probe is on a worker");
+    assert!(m.busy(), "busy until it lands, so the UI keeps polling");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.nvtt_found(), "{}", m.nvtt_status());
 }

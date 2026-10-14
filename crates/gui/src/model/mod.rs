@@ -271,6 +271,9 @@ pub struct AppModel {
     /// M5 (DECISIONS Note NV3): the NVTT probe of `settings.nvtt_path`, run on start, on a path change and on window
     /// focus; `None` until the first run.
     pub nvtt: Option<engine::nvtt::NvttProbe>,
+    /// Generation of the latest NVTT probe, and whether it still runs (on a worker, DECISIONS AF3).
+    nvtt_gen: u64,
+    nvtt_pending: bool,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
@@ -384,6 +387,8 @@ impl AppModel {
             close_ready: false,
             restart_needed: false,
             nvtt: None,
+            nvtt_gen: 0,
+            nvtt_pending: false,
             plugin_refs: Default::default(),
             last_inputs: None,
             auto_replans: 0,
@@ -649,6 +654,7 @@ impl AppModel {
             || self.votes_pending.is_some()
             || self.export.running.is_some()
             || self.preview.working()
+            || self.nvtt_pending
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
@@ -677,6 +683,7 @@ impl AppModel {
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
             WorkerMsg::KnownPaths(result) => self.known_paths_landed(result),
+            WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => {
@@ -684,6 +691,7 @@ impl AppModel {
                         self.run_after_export();
                     }
                     "preview" => self.preview_panicked(&message),
+                    "nvtt-probe" => self.nvtt_pending = false,
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -1662,10 +1670,24 @@ impl AppModel {
     }
 
     /// The BC1 decoder for the next launch. The session's model is fixed, so a difference needs a restart.
-    /// Probe NVTT again (Spike S7b: about 30 ms, so on the UI thread). shortcut: synchronous, move it off the UI
-    /// thread if a slow nvcompress is ever seen.
+    /// Probe NVTT again, on a worker (DECISIONS AF3: a wrong program can take up to the probe timeout); the result
+    /// lands in `nvtt_landed`. A newer probe supersedes an older one still running.
     pub fn refresh_nvtt(&mut self) {
-        let now = Some(engine::nvtt::probe(self.settings.nvtt_path.as_deref()));
+        self.nvtt_gen += 1;
+        self.nvtt_pending = true;
+        let (generation, path) = (self.nvtt_gen, self.settings.nvtt_path.clone());
+        spawn_guarded(self.tx.clone(), "nvtt-probe", move |tx| {
+            let probe = engine::nvtt::probe(path.as_deref());
+            let _ = tx.send(WorkerMsg::Nvtt { generation, probe });
+        });
+    }
+
+    fn nvtt_landed(&mut self, generation: u64, probe: engine::nvtt::NvttProbe) {
+        if generation != self.nvtt_gen {
+            return;
+        }
+        self.nvtt_pending = false;
+        let now = Some(probe);
         // A change since the last probe (NVTT installed or removed meanwhile) re-plans, so textures on NVTT see it.
         let changed = self.nvtt.is_some() && self.nvtt != now;
         self.nvtt = now;

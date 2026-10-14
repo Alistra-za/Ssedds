@@ -109,20 +109,74 @@ pub fn probe(explicit: Option<&Path>) -> NvttProbe {
     }
 }
 
+/// How long the probe waits for the program to exit (nvcompress answers in about 30 ms, Spike S7b).
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Everything `r` yields, read on its own thread; the bytes arrive on the receiver once it ends.
+fn drain<R: std::io::Read + Send + 'static>(r: Option<R>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut b = vec![];
+        if let Some(mut r) = r {
+            let _ = r.read_to_end(&mut b);
+        }
+        let _ = tx.send(b);
+    });
+    rx
+}
+
 /// Runs `path` with no arguments (nvcompress has no `-h`; it prints the banner and usage and exits 1, Spike S7b),
 /// parses the banner and checks the usage lists every flag in [`NVTT_FLAGS`].
-/// shortcut: no timeout on the probe, add one if a hung nvcompress is ever seen.
+/// Never runs NVIDIA's exporter app or the running program itself, and kills a program that has not exited after
+/// [`PROBE_TIMEOUT`] (DECISIONS AF3): a wrong pick must not hang or relaunch the caller.
 pub fn probe_path(path: &Path) -> NvttProbe {
+    let missing = |why: &str| NvttProbe::Missing(format!("{}: {why}", path.display()));
+    if path
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case("nvtt_export.exe"))
+    {
+        return missing("NVIDIA's exporter app, not nvcompress (pick nvcompress.exe)");
+    }
+    let canon = |p: &Path| std::fs::canonicalize(p).ok();
+    let me = std::env::current_exe().ok().and_then(|p| canon(&p));
+    if me.is_some() && canon(path) == me {
+        return missing("this is sdc itself, not nvcompress");
+    }
     let mut cmd = Command::new(path);
-    cmd.stdin(Stdio::null());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NO_WINDOW);
-    let out = match cmd.output() {
-        Ok(o) => o,
-        Err(e) => return NvttProbe::Missing(format!("{}: {e}", path.display())),
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return missing(&e.to_string()),
+    };
+    // Read both pipes on threads, so a child filling one never stalls while we wait for it to exit.
+    let (out, err) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let end = std::time::Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < end => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return missing(&format!(
+                    "no answer within {} s, not nvcompress",
+                    PROBE_TIMEOUT.as_secs()
+                ));
+            }
+        }
+    }
+    // A grandchild may hold a pipe open after the child exits: take what arrived.
+    let take = |rx: std::sync::mpsc::Receiver<Vec<u8>>| {
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default()
     };
     let text =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+        String::from_utf8_lossy(&take(out)).to_string() + &String::from_utf8_lossy(&take(err));
     let version = match parse_banner(&text) {
         Ok(v) => v,
         Err(e) => return NvttProbe::Missing(format!("{}: {e}", path.display())),
