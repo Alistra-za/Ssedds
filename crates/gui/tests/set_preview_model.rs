@@ -376,6 +376,7 @@ fn entry(pairs: &[(&str, Value)]) -> EntryInput {
             .collect(),
         slots: Default::default(),
         derived_match: r"x\rock".into(),
+        section: false,
     }
 }
 

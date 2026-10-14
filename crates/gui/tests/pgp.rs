@@ -513,6 +513,7 @@ fn entry(pairs: &[(&str, Value)], derived: &str) -> EntryInput {
         settings: s(pairs),
         slots: BTreeMap::new(),
         derived_match: derived.into(),
+        section: false,
     }
 }
 

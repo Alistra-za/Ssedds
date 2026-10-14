@@ -23,7 +23,7 @@ const FUZZ_BLOCKED_BY_COAT: &str = "off: the set has a coat normal (_cnr)";
 const COAT_NORMAL_BLOCKED_BY_FUZZ: &str = "off: the set has a fuzz texture (_f)";
 
 /// `glint` and `fuzz` (the Object rows) are switched by `glint_on` / `fuzz_on`; every other key is its own switch.
-fn edit_key(key: &str) -> &str {
+pub(crate) fn edit_key(key: &str) -> &str {
     match key {
         "glint" => "glint_on",
         "fuzz" => "fuzz_on",
@@ -94,12 +94,12 @@ const ADVANCED: [Group; 5] = [
     Group::Multilayer,
 ];
 
-struct Ctx {
+pub(crate) struct Ctx {
     /// The set's own settings (there are no inherited ones: the `default` block is fixed).
-    own: Settings,
+    pub(crate) own: Settings,
     set: String,
     /// Why every control is disabled, when the sets document is read-only.
-    read_only: Option<String>,
+    pub(crate) read_only: Option<String>,
     coat_filled: bool,
     fuzz_filled: bool,
     /// The Matching header (F1 spec §3.2): the active slot matches, the + menu, and whether nothing matches.
@@ -108,7 +108,7 @@ struct Ctx {
     no_match: bool,
 }
 
-fn context(model: &AppModel, set: &str) -> Ctx {
+pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
     let v = set_views(model).into_iter().find(|v| same_id(&v.id, set));
     let filled =
         |v: &SetView, s: SlotKind| !matches!(v.slots.get(&s), None | Some(SlotFill::Empty));
@@ -138,6 +138,16 @@ fn context(model: &AppModel, set: &str) -> Ctx {
 pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
+    // G3: the whole file, every set and the delete sections, in its own window; both edit the same settings.
+    if ui
+        .small_button("Open the TruePBR JSON editor…")
+        .on_hover_text(
+            "Every set's entry and the delete sections of the PGPatcher JSON, in one window",
+        )
+        .clicked()
+    {
+        model.json_editor_open = true;
+    }
     for g in MAIN {
         if !group_open(g, &c.own) {
             continue;
@@ -257,7 +267,7 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
 }
 
 /// Why this key cannot be changed now, if it cannot. A key that is already on can always be turned off.
-fn disabled_reason(k: &KeySpec, c: &Ctx) -> Option<String> {
+pub(crate) fn disabled_reason(k: &KeySpec, c: &Ctx) -> Option<String> {
     if let Some(why) = &c.read_only {
         return Some(why.clone());
     }
@@ -309,7 +319,13 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
     }
 }
 
-fn control(ui: &mut egui::Ui, k: &KeySpec, value: Option<Value>, c: &Ctx, edits: &mut Vec<Edit>) {
+pub(crate) fn control(
+    ui: &mut egui::Ui,
+    k: &KeySpec,
+    value: Option<Value>,
+    c: &Ctx,
+    edits: &mut Vec<(String, Option<Value>)>,
+) {
     let key = edit_key(k.key).to_string();
     match k.kind {
         KeyKind::OnlyTrue | KeyKind::Object => {

@@ -973,7 +973,7 @@ impl AppModel {
             .find(|v| v.members.iter().any(|k| k == item))
     }
 
-    fn sets_editable(&self) -> bool {
+    pub(crate) fn sets_editable(&self) -> bool {
         self.sets_doc.as_ref().is_some_and(|d| !d.read_only())
     }
 

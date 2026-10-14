@@ -40,7 +40,8 @@ fn chip(ui: &mut egui::Ui, color: egui::Color32, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).small().color(color))
 }
 
-fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
+/// The scan source and its buttons: shared by the Meshes view's bar and the Textures view's scan row.
+pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
     ui.horizontal_wrapped(|ui| {
         let source = match &m.target {
             Some(ScanTarget::Mo2 { root, profile }) => {
@@ -85,6 +86,29 @@ fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
             m.request_scan(false);
         }
     });
+}
+
+/// The Textures view's scan row: the same source and buttons, the status, and an error. The details, banners and
+/// plugin references stay in the Meshes view.
+pub fn scan_row(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    scan_controls(ui, m);
+    // The MO2 question (and any other Meshes dialog) can come from these buttons too.
+    dialogs(ui.ctx(), m);
+    if !m.status.is_empty() {
+        ui.weak(&m.status);
+    }
+    if let Some(e) = m.error.clone() {
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(RED, e);
+            if ui.small_button("Dismiss").clicked() {
+                m.error = None;
+            }
+        });
+    }
+}
+
+fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    scan_controls(ui, m);
     if !m.status.is_empty() {
         ui.label(&m.status);
     }
