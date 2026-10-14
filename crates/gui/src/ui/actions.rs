@@ -1,6 +1,7 @@
 //! Items 5 and 19: one action list. The F1 shortcut sheet, the Ctrl+K command palette and the key handling all read
 //! [`actions`]; a menu that shows a shortcut takes its text from here ([`keys_text`]). DECISIONS AG22-AG26.
 use crate::model::nav::{Palette, Pick};
+use crate::model::picker::{PickerPurpose, PickerSpec};
 use crate::model::AppModel;
 use eframe::egui::{self, Key, Modifiers};
 
@@ -210,11 +211,12 @@ pub static ACTIONS: &[Action] = &[
         &[key(Key::F1), key(Key::Questionmark)],
         |m, _| m.nav.sheet = true,
     ),
-    a("open", "Open folder…", Global, &[], |m, _| {
-        if let Some(p) = rfd::FileDialog::new().pick_folder() {
-            m.request_open(p);
-        }
-    }),
+    when(
+        a("open", "Open folder…", Global, &[], |m, ctx| {
+            m.pick(ctx, PickerPurpose::OpenFolder, PickerSpec::folder());
+        }),
+        |m| !m.picker.busy(),
+    ),
     when(
         a("save", "Save", Global, &[ctrl(Key::S)], |m, _| {
             // A failed save raises its own dialog.

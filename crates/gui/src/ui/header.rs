@@ -1,8 +1,8 @@
 //! The header (M3a spec §2.1): open, recent, mode, collapse, export folder, save, export; then the status line and banner.
+use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Target;
-use std::path::PathBuf;
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 
@@ -44,18 +44,12 @@ fn set_title(ctx: &egui::Context, title: String) {
     }
 }
 
-fn pick_folder() -> Option<PathBuf> {
-    rfd::FileDialog::new().pick_folder()
-}
-
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     set_title(ui.ctx(), window_title(model));
     egui::Panel::top("header").show(ui, |ui| {
         ui.horizontal(|ui| {
-            if ui.button("Open folder…").clicked() {
-                if let Some(p) = pick_folder() {
-                    model.request_open(p);
-                }
+            if picker::button(ui, &model.picker, egui::Button::new("Open folder…")) {
+                model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
             }
             recent_menu(ui, model);
             undo_redo(ui, model);
@@ -213,17 +207,15 @@ fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
     } else {
         "not set".to_string()
     };
-    if ui
-        .button(format!("Export folder: {shown}"))
-        .on_hover_text("Choose where converted textures are written")
-        .clicked()
-    {
-        if let Some(p) = pick_folder() {
-            model.settings.export_folder = Some(p);
-            model.save_settings();
-            // Existing outputs decide which textures are up to date.
-            model.replan();
-        }
+    let b = egui::Button::new(format!("Export folder: {shown}"));
+    let r = ui.add_enabled(!model.picker.busy(), b);
+    let r = if model.picker.busy() {
+        r.on_disabled_hover_text(picker::BUSY_HOVER)
+    } else {
+        r.on_hover_text("Choose where converted textures are written")
+    };
+    if r.clicked() {
+        model.pick(ui.ctx(), PickerPurpose::ExportFolder, PickerSpec::folder());
     }
 }
 

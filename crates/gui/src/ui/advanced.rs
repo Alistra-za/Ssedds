@@ -5,6 +5,7 @@ use super::columns::{strip_button, AMBER, STRIP_WIDTH};
 use super::settings_panel::{field_row, toml_read_only_reason, Ctx, RowEdit};
 use crate::model::fields::{advanced_field_views, levels_view, provenance_text};
 use crate::model::inspector::{inspector_rows, InspectorRow};
+use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::{AppModel, Selection};
 use crate::settings::{Bc1Choice, PREVIEW_SIZES};
 use eframe::egui;
@@ -258,13 +259,16 @@ fn nvtt(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
             ui.label(egui::RichText::new(shown).small());
         });
         ui.horizontal(|ui| {
-            if ui.button("Choose nvcompress.exe…").clicked() {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("nvcompress", &["exe"])
-                    .pick_file()
-                {
-                    actions.push(Action::NvttPath(Some(p)));
-                }
+            if picker::button(
+                ui,
+                &model.picker,
+                egui::Button::new("Choose nvcompress.exe…"),
+            ) {
+                let kind = PickerKind::File {
+                    filter: ("nvcompress", &["exe"]),
+                };
+                let spec = PickerSpec { title: None, kind };
+                model.pick(ui.ctx(), PickerPurpose::NvttPath, spec);
             }
             if model.settings.nvtt_path.is_some() && ui.button("Automatic").clicked() {
                 actions.push(Action::NvttPath(None));

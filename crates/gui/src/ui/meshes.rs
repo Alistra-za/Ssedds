@@ -5,6 +5,7 @@ use crate::model::meshes::{
     ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, MISSING_NOTE,
     PLUGINS_NOT_READ_NOTE, SEARCH_DEBOUNCE, STALE_CHIP, UNUSED_NOTE,
 };
+use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use eframe::egui;
 use modscan::plugin_store::{record_label, MeshUse};
 use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA};
@@ -48,22 +49,31 @@ pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
             None => "No source chosen".into(),
         };
         ui.label(source);
-        let idle = !m.scanning();
-        if ui
-            .add_enabled(idle, egui::Button::new("Choose MO2 instance…"))
+        let (idle, busy) = (!m.scanning(), m.picker.busy());
+        let pick = |ui: &mut egui::Ui, label: &str| {
+            let r = ui.add_enabled(idle && !busy, egui::Button::new(label));
+            (if busy {
+                r.on_disabled_hover_text(picker::BUSY_HOVER)
+            } else {
+                r
+            })
             .clicked()
-        {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.choose_instance(p);
-            }
+        };
+        if pick(ui, "Choose MO2 instance…") {
+            m.picker.request(
+                ui.ctx(),
+                PickerPurpose::ChooseMo2,
+                None,
+                PickerSpec::folder(),
+            );
         }
-        if ui
-            .add_enabled(idle, egui::Button::new("Scan a folder…"))
-            .clicked()
-        {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.use_folder(p);
-            }
+        if pick(ui, "Scan a folder…") {
+            m.picker.request(
+                ui.ctx(),
+                PickerPurpose::ScanFolder,
+                None,
+                PickerSpec::folder(),
+            );
         }
         if m.scanning() {
             ui.spinner();
@@ -782,21 +792,18 @@ fn dialogs(ctx: &egui::Context, m: &mut MeshesModel) {
             ui.label(d.text());
             ui.horizontal(|ui| {
                 use_it = ui.button("Use").clicked();
-                choose = ui.button("Choose instance…").clicked();
-                folder = ui.button("Open a folder instead").clicked();
+                choose = picker::button(ui, &m.picker, egui::Button::new("Choose instance…"));
+                folder = picker::button(ui, &m.picker, egui::Button::new("Open a folder instead"));
             });
         });
         if use_it {
             m.dialog_use();
         } else if choose {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.dialog = None;
-                m.choose_instance(p);
-            }
+            m.picker
+                .request(ctx, PickerPurpose::ChooseMo2, None, PickerSpec::folder());
         } else if folder {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.use_folder(p);
-            }
+            m.picker
+                .request(ctx, PickerPurpose::ScanFolder, None, PickerSpec::folder());
         }
     }
     if let Some(list) = &m.stale_list {

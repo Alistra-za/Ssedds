@@ -14,6 +14,7 @@ pub mod nav;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
+pub mod picker;
 pub mod plugin_refs;
 pub mod preview;
 pub mod rename;
@@ -196,6 +197,8 @@ pub(crate) struct ViewKey {
 }
 
 pub struct AppModel {
+    /// The file pickers (Task 6); one dialog at a time, shared with the sub-models.
+    pub picker: picker::Picker,
     pub settings: GuiSettings,
     pub settings_path: Option<PathBuf>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
@@ -351,6 +354,7 @@ impl AppModel {
         let (tx, rx) = channel();
         let preview = preview::PreviewModel::new(settings.live_encode);
         AppModel {
+            picker: picker::Picker::default(),
             settings,
             settings_path: None,
             user_config: None,
@@ -692,6 +696,10 @@ impl AppModel {
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        for d in self.picker.take(&Self::PICKS) {
+            changed = true;
+            self.picked(d);
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             self.handle(msg);

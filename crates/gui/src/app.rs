@@ -281,6 +281,7 @@ impl eframe::App for SdcApp {
 
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
         if self.model.busy()
+            || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()
             || self.state.set3d.busy()

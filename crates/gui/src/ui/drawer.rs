@@ -2,8 +2,9 @@
 //! Task 5 (items 6 and 14): Open export folder, Show in Explorer, the progress line with pace, a virtualised Files
 //! list with filters, and a Warnings tab that shows each message. DECISIONS AG34-AG38.
 use crate::model::export::{cli_command, warning_line, FileFilter, FilesIndex, RowState};
+use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::shell::StatCache;
-use crate::model::{AppModel, Dialog};
+use crate::model::AppModel;
 use eframe::egui;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -116,9 +117,14 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         if running {
             cancel = ui.button("Cancel").clicked();
         }
-        save = ui
-            .add_enabled(!running, egui::Button::new("Save report…"))
-            .clicked();
+        let busy = model.picker.busy();
+        let r = ui.add_enabled(!running && !busy, egui::Button::new("Save report…"));
+        save = (if busy {
+            r.on_disabled_hover_text(picker::BUSY_HOVER)
+        } else {
+            r
+        })
+        .clicked();
         copy = ui
             .button("Copy CLI command")
             .on_hover_text("The command that reproduces this export from the saved sdc.toml")
@@ -154,24 +160,15 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         }
     }
     if save {
-        save_report(model);
-    }
-}
-
-fn save_report(model: &mut AppModel) {
-    let Some(path) = rfd::FileDialog::new()
-        .set_file_name("sdc-report.jsonl")
-        .add_filter("JSON Lines", &["jsonl"])
-        .add_filter("Markdown", &["md"])
-        .save_file()
-    else {
-        return;
-    };
-    if let Err(e) = write_report(model, &path) {
-        model.dialog = Some(Dialog::Error(format!(
-            "Could not write the report to {}: {e}",
-            path.display()
-        )));
+        let kind = PickerKind::Save {
+            file_name: "sdc-report.jsonl",
+            filters: &[("JSON Lines", &["jsonl"]), ("Markdown", &["md"])],
+        };
+        model.pick(
+            ui.ctx(),
+            PickerPurpose::SaveReport,
+            PickerSpec { title: None, kind },
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 //! The 3D panel of the Meshes view (plan B Task B8): draws `Viewport3d`, turns drag / scroll / double-click into
 //! orbit changes and uploads a new frame into an egui texture when its id changes (P0 CPU path).
 use crate::model::meshes::LE_WARNING;
+use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::viewport3d::{
     moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
     FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
@@ -15,10 +16,18 @@ const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
 const BELOW: f32 = 110.0;
 const MAX_LISTED: usize = 50;
 
-fn pick_folder() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new()
-        .set_title("Community Shaders folder (the mod folder or its Shaders folder)")
-        .pick_folder()
+fn pick_folder(ctx: &egui::Context, v: &Viewport3d) {
+    let spec = PickerSpec {
+        title: Some("Community Shaders folder (the mod folder or its Shaders folder)"),
+        kind: PickerKind::Folder,
+    };
+    v.picker
+        .request(ctx, PickerPurpose::ShaderFolder, None, spec);
+}
+
+/// A picker button: disabled with the shared hover text while a dialog is open.
+fn gated(ui: &mut egui::Ui, v: &Viewport3d, b: egui::Button<'_>) -> bool {
+    picker::button(ui, &v.picker, b)
 }
 
 pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
@@ -32,14 +41,15 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
             .shaders
             .as_ref()
             .map_or("none yet".into(), |f| f.root.display().to_string());
-        if ui
-            .small_button("Shader folder…")
-            .on_hover_text(format!("Community Shaders in use: {used}"))
-            .clicked()
-        {
-            if let Some(p) = pick_folder() {
-                v.choose_folder(p);
-            }
+        let busy = v.picker.busy();
+        let r = ui.add_enabled(!busy, egui::Button::new("Shader folder…").small());
+        let r = if busy {
+            r.on_disabled_hover_text(picker::BUSY_HOVER)
+        } else {
+            r.on_hover_text(format!("Community Shaders in use: {used}"))
+        };
+        if r.clicked() {
+            pick_folder(ui.ctx(), v);
         }
         if v.show_spinner(std::time::Instant::now()) {
             ui.spinner();
@@ -57,10 +67,8 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
     match v.state.clone() {
         V3State::NotFound => {
             ui.label(NOT_FOUND);
-            if ui.button(CHOOSE_FOLDER).clicked() {
-                if let Some(p) = pick_folder() {
-                    v.choose_folder(p);
-                }
+            if gated(ui, v, egui::Button::new(CHOOSE_FOLDER)) {
+                pick_folder(ui.ctx(), v);
             }
         }
         V3State::Error(e) => {
@@ -291,7 +299,7 @@ fn popup(ctx: &egui::Context, v: &mut Viewport3d) {
         ui.label(moved_text(&old, &new));
         ui.horizontal(|ui| {
             use_new = ui.button(USE_NEW).clicked();
-            choose = ui.button(CHOOSE_FOLDER).clicked();
+            choose = gated(ui, v, egui::Button::new(CHOOSE_FOLDER));
             if old.root.is_dir() {
                 keep = ui.button(KEEP_OLD).clicked();
             }
@@ -302,9 +310,6 @@ fn popup(ctx: &egui::Context, v: &mut Viewport3d) {
     } else if keep {
         v.keep_old();
     } else if choose {
-        if let Some(p) = pick_folder() {
-            v.popup = None;
-            v.choose_folder(p);
-        }
+        pick_folder(ctx, v);
     }
 }

@@ -6,6 +6,7 @@
 //! shader file, so it runs on a short-lived worker too. The model holds pixels, never egui textures: `ui::viewport3d`
 //! uploads a frame when its id changes.
 use crate::model::meshes::ScanTarget;
+use crate::model::picker::PickerPurpose;
 use crate::worker::{spawn_guarded, WorkerMsg};
 use nif::material::MaterialState;
 use render3d::builtin::Builtin;
@@ -573,6 +574,7 @@ enum MarkKind {
 }
 
 pub struct Viewport3d {
+    pub picker: super::picker::Picker,
     pub state: V3State,
     pub orbit: Orbit,
     /// Background and light controls; changing one re-renders (never reloads).
@@ -657,6 +659,7 @@ impl Viewport3d {
     pub fn new(saved: Option<Fingerprint>) -> Viewport3d {
         let (tx, rx) = channel();
         Viewport3d {
+            picker: super::picker::Picker::default(),
             state: V3State::Ready,
             orbit: Orbit::default(),
             look: Look::default(),
@@ -1313,6 +1316,13 @@ impl Viewport3d {
     /// [`Viewport3d::poll`] with the clock given (the gap watch reads it).
     pub fn poll_at(&mut self, now: Instant) -> bool {
         let mut changed = false;
+        for d in self.picker.take(&[PickerPurpose::ShaderFolder]) {
+            changed = true;
+            if let Some(p) = d.path {
+                self.popup = None;
+                self.choose_folder(p);
+            }
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {

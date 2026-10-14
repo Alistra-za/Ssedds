@@ -3,6 +3,7 @@
 //!
 //! The model owns its own worker channel, so the Textures view's model is untouched. Reads go through its own
 //! read-only `Store` connection and happen only on a selection change or when a scan ends, never per frame.
+use crate::model::picker::PickerPurpose;
 use crate::model::viewport3d::{FileSource, MeshSpec, Viewport3d};
 use crate::settings::MeshesSettings;
 use crate::worker::{start_scan, WorkerMsg};
@@ -398,6 +399,7 @@ pub fn log_plugins(r: &Report) {
 }
 
 pub struct MeshesModel {
+    pub picker: super::picker::Picker,
     pub store_path: Option<PathBuf>,
     pub target: Option<ScanTarget>,
     pub mods: Vec<ModRow>,
@@ -495,6 +497,7 @@ impl MeshesModel {
     pub fn new(store_path: Option<PathBuf>, settings: MeshesSettings) -> MeshesModel {
         let (tx, rx) = channel();
         MeshesModel {
+            picker: super::picker::Picker::default(),
             store_path,
             target: None,
             mods: vec![],
@@ -705,6 +708,21 @@ impl MeshesModel {
     /// Drain worker messages. True when anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.v3.poll();
+        for d in self
+            .picker
+            .take(&[PickerPurpose::ChooseMo2, PickerPurpose::ScanFolder])
+        {
+            changed = true;
+            if let Some(p) = d.path {
+                match d.purpose {
+                    PickerPurpose::ChooseMo2 => {
+                        self.dialog = None;
+                        self.choose_instance(p);
+                    }
+                    _ => self.use_folder(p),
+                }
+            }
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
