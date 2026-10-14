@@ -324,14 +324,19 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
     }
     out.extend(path_collisions(m));
     if m.target == Target::Cs {
-        let entries: Vec<EntryInput> = json_entries(m).into_iter().map(|(_, e)| e).collect();
+        // A set whose entry the statics rule drops writes nothing, so it cannot block the JSON (design §5.1).
+        let entries: Vec<EntryInput> = json_entries(m)
+            .into_iter()
+            .filter(|(v, _)| m.pgp_entry_wanted(v))
+            .map(|(_, e)| e)
+            .collect();
         if !entries.is_empty() {
             // A filled slot with no path is reported only when nothing above already explains it (a dropped
             // duplicate or an unusable prefix is already a block of its own).
             if out.is_empty() {
                 let views = set_views(m);
                 let (_, paths) = engine_inputs(m);
-                for v in views.iter().filter(|v| v.pbr) {
+                for v in views.iter().filter(|v| v.pbr && m.pgp_entry_wanted(v)) {
                     for (n, from) in unresolved_slots(v, &views, &paths, m) {
                         let text = match from {
                             Some(from) => format!(
@@ -521,6 +526,8 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
     };
     let mut entries: Vec<_> = json_entries(m)
         .into_iter()
+        // Design §5.1: a set with a texture-set block gets its entry only for the statics that use its diffuse.
+        .filter(|(v, _)| m.pgp_entry_wanted(v))
         .map(|(v, e)| (v.id.clone(), deps(&v), e))
         .collect();
     // GUI tweaks G4: the delete sections go last, so nothing after them changes the shapes they match.

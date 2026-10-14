@@ -280,3 +280,243 @@ fn a_block_made_by_an_edit_or_a_template_moves_the_sets_own_mapped_values() {
     assert!(!s.text().contains("roughness_scale") && !s.text().contains("glint_on"));
     assert_eq!(e.settings["hair"], json!(true));
 }
+
+use sdc_gui::model::plugin_refs::set_key;
+use sdc_gui::model::sets::{set_views, SetView};
+use sdc_gui::model::{AppModel, Dialog};
+
+fn row(path: &str) -> modscan::store::MatchRow {
+    modscan::store::MatchRow {
+        copy_id: 1,
+        nif_path: path.into(),
+        origin: "A".into(),
+        shape_block: 3,
+        shape_name: None,
+        le_mesh: false,
+        skinned: false,
+        derived: false,
+        load_copy_id: 1,
+    }
+}
+
+#[test]
+fn lod_meshes_do_not_count_as_statics() {
+    let rows = [
+        row("meshes/landscape/rocks/rock01.nif"),
+        row("meshes/landscape/rocks/rock01.nif"),
+        row("meshes/lod/rocks/rock01_lod_0.nif"),
+        row("meshes/dyndolod/x.nif"),
+        row("meshes/rocks/rock02_lod.nif"),
+    ];
+    assert_eq!(non_lod_nifs(&rows), ["meshes/landscape/rocks/rock01.nif"]);
+}
+
+const ROCK: &str = "landscape/rock01";
+
+fn rock(m: &AppModel) -> SetView {
+    set_views(m).into_iter().find(|v| v.id == ROCK).unwrap()
+}
+
+/// The fixture's rock set with a texture-set block (LandscapeMountainSlab values) and `facts` as the scan's answer.
+fn landscape(d: &std::path::Path, statics: &[&str]) -> AppModel {
+    let mut m = support::pbr_opened(d);
+    m.add_cs_block(ROCK, Kind::Txst);
+    m.apply_cs_template(ROCK, Kind::Txst, "LandscapeMountainSlab")
+        .unwrap();
+    m.set_cs_edids(ROCK, Kind::Txst, &["LandscapeRock01".into()]);
+    let key = set_key(&rock(&m)).unwrap();
+    m.cs_pbr.facts.borrow_mut().insert(
+        key,
+        Ok(SetFacts {
+            txst_edids: vec![],
+            statics: statics.iter().map(|s| s.to_string()).collect(),
+        }),
+    );
+    m
+}
+
+fn export_and_wait(m: &mut AppModel) {
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(
+        m.wait_idle(std::time::Duration::from_secs(120)),
+        "export did not finish"
+    );
+}
+
+fn pgp_json(m: &AppModel) -> Option<Json> {
+    let p = m
+        .export_root()
+        .join("PBRNIFPatcher")
+        .join(format!("{}.json", sdc_gui::model::pbr_export::json_name(m)));
+    std::fs::read_to_string(p)
+        .ok()
+        .map(|t| serde_json::from_str(&t).unwrap())
+}
+
+#[test]
+fn statics_using_the_diffuse_get_the_entry_with_the_blocks_values() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = landscape(d.path(), &["meshes/landscape/rocks/rock01.nif"]);
+    m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.02)));
+    m.set_cs_value(
+        ROCK,
+        Kind::Txst,
+        "glintParameters.logMicrofacetDensity",
+        Some(json!(16)),
+    );
+    let v = rock(&m);
+    assert_eq!(
+        m.statics_status(&v),
+        Some(StaticsStatus::Used(vec![
+            "meshes/landscape/rocks/rock01.nif".into()
+        ]))
+    );
+    assert_eq!(
+        statics_text(&m.statics_status(&v).unwrap()),
+        "Used by 1 meshes: PGPatcher entry written"
+    );
+    export_and_wait(&mut m);
+    let pgp =
+        pgp_json(&m).unwrap_or_else(|| panic!("no PGPatcher JSON; notes {:?}", m.export.notes));
+    let e = &pgp["entries"][0];
+    let cs: Json = serde_json::from_str(
+        &std::fs::read_to_string(m.export_root().join("PBRTextureSets/LandscapeRock01.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(e["specular_level"], json!(0.02));
+    assert_eq!(cs["specularLevel"], json!(0.02));
+    let g = &cs["glintParameters"];
+    assert_eq!(
+        e["glint"],
+        json!({"screen_space_scale": g["screenSpaceScale"], "log_microfacet_density": 16.0,
+               "microfacet_roughness": g["microfacetRoughness"], "density_randomization": g["densityRandomization"]})
+    );
+    assert_eq!(g["logMicrofacetDensity"], json!(16.0));
+}
+
+#[test]
+fn only_lod_users_or_never_write_the_texture_set_only() {
+    for never in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        let statics: &[&str] = if never {
+            &["meshes/landscape/rocks/rock01.nif"]
+        } else {
+            &[]
+        };
+        let mut m = landscape(d.path(), statics);
+        if never {
+            m.set_cs_statics(ROCK, Statics::Never);
+        }
+        assert!(!m.pgp_entry_wanted(&rock(&m)));
+        export_and_wait(&mut m);
+        assert!(pgp_json(&m).is_none(), "no entry, so no PGPatcher JSON");
+        assert!(m
+            .export_root()
+            .join("PBRTextureSets/LandscapeRock01.json")
+            .is_file());
+    }
+}
+
+#[test]
+fn a_disabled_glint_writes_no_glint() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = landscape(d.path(), &["meshes/landscape/rocks/rock01.nif"]);
+    m.set_cs_value(
+        ROCK,
+        Kind::Txst,
+        "glintParameters.enabled",
+        Some(json!(false)),
+    );
+    export_and_wait(&mut m);
+    assert!(pgp_json(&m).unwrap()["entries"][0].get("glint").is_none());
+}
+
+/// Review focus: a scan database that cannot be read is "no scan", never a crash and never an entry.
+#[test]
+fn an_unusable_scan_db_writes_no_statics_entry_unless_always() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    m.add_cs_block(ROCK, Kind::Txst);
+    let bad = d.path().join("scan.db");
+    std::fs::write(&bad, "not a database").unwrap();
+    m.scan_db = Some(bad);
+    let v = rock(&m);
+    assert!(matches!(
+        m.statics_status(&v),
+        Some(StaticsStatus::NoScan(_))
+    ));
+    assert!(!m.pgp_entry_wanted(&v));
+    m.set_cs_statics(ROCK, Statics::Always);
+    assert_eq!(m.statics_status(&rock(&m)), Some(StaticsStatus::Always));
+    assert!(m.pgp_entry_wanted(&rock(&m)));
+    // A set without a texture-set block is unchanged.
+    m.remove_cs_block(ROCK, Kind::Txst);
+    assert_eq!(m.statics_status(&rock(&m)), None);
+    assert!(m.pgp_entry_wanted(&rock(&m)));
+}
+
+/// Ruling P2: an answer (an error too) is kept while the database file is unchanged, and re-read once its length
+/// or mtime changes.
+#[test]
+fn scan_reads_are_cached_until_the_database_file_changes() {
+    let d = tempfile::tempdir().unwrap();
+    let m = support::pbr_opened(d.path());
+    let db = d.path().join("scan.db");
+    std::fs::write(&db, "not a database").unwrap();
+    let key = set_key(&rock(&m)).unwrap();
+    assert!(m.cs_pbr.facts(Some(&db), &key).is_err());
+    assert!(m.cs_pbr.records(Some(&db)).is_err());
+    let sentinel = SetFacts {
+        txst_edids: vec!["Cached".into()],
+        statics: vec![],
+    };
+    m.cs_pbr
+        .facts
+        .borrow_mut()
+        .insert(key.clone(), Ok(sentinel.clone()));
+    assert_eq!(
+        m.cs_pbr.facts(Some(&db), &key),
+        Ok(sentinel.clone()),
+        "unchanged file: not re-opened"
+    );
+    std::fs::write(&db, "not a database!").unwrap();
+    assert!(
+        m.cs_pbr.facts(Some(&db), &key).is_err(),
+        "a new length re-reads"
+    );
+    m.cs_pbr
+        .facts
+        .borrow_mut()
+        .insert(key.clone(), Ok(sentinel));
+    let f = std::fs::File::options().write(true).open(&db).unwrap();
+    f.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+    drop(f);
+    assert!(
+        m.cs_pbr.facts(Some(&db), &key).is_err(),
+        "a new mtime re-reads"
+    );
+}
+
+/// Ruling P5: a set whose entry the statics rule drops writes no JSON, so it cannot block the export.
+#[test]
+fn a_dropped_entry_does_not_block_the_export() {
+    use sdc_gui::model::pbr_export::export_blocks;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    m.sets_doc.as_mut().unwrap().set_json_name(Some("CON"));
+    let name_block = |m: &AppModel| {
+        export_blocks(m)
+            .iter()
+            .any(|i| i.text.starts_with("JSON name:"))
+    };
+    assert!(name_block(&m), "the only entry blocks on its JSON name");
+    m.add_cs_block(ROCK, Kind::Txst); // no scan: the entry is dropped
+    assert!(!m.pgp_entry_wanted(&rock(&m)));
+    assert!(!name_block(&m), "{:?}", export_blocks(&m));
+    m.set_cs_statics(ROCK, Statics::Always);
+    assert!(name_block(&m));
+}

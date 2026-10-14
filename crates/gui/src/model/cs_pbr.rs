@@ -577,3 +577,29 @@ pub fn statics_text(s: &StaticsStatus) -> String {
         StaticsStatus::Never => "statics = never: no PGPatcher entry".into(),
     }
 }
+
+impl AppModel {
+    /// `None` without a texture-set block (the set's entry is written as before).
+    pub fn statics_status(&self, v: &SetView) -> Option<StaticsStatus> {
+        let b = self.cs_block(&v.id, Kind::Txst)?;
+        Some(match b.statics {
+            Statics::Never => StaticsStatus::Never,
+            Statics::Always => StaticsStatus::Always,
+            Statics::Auto => match set_key(v) {
+                None => StaticsStatus::Unused,
+                Some(k) => match self.cs_pbr.facts(self.scan_db.as_deref(), &k) {
+                    Err(e) => StaticsStatus::NoScan(e),
+                    Ok(f) if f.statics.is_empty() => StaticsStatus::Unused,
+                    Ok(f) => StaticsStatus::Used(f.statics),
+                },
+            },
+        })
+    }
+
+    pub fn pgp_entry_wanted(&self, v: &SetView) -> bool {
+        matches!(
+            self.statics_status(v),
+            None | Some(StaticsStatus::Always | StaticsStatus::Used(_))
+        )
+    }
+}
