@@ -290,7 +290,7 @@ impl Session {
             &FileTracker::default(),
             Keep::Preview { max_size },
         )?;
-        let levels = encode_levels(&prep, p, cancel, &rep, "", None, None)?;
+        let levels = encode_levels(&prep, p, cancel, &rep, "", None, None, None)?;
         let srgb = p.srgb_tag();
         let (width, height) = prep.dims[prep.first_level];
         let desc = DdsDesc {

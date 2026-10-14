@@ -1487,6 +1487,7 @@ impl Engine {
         cancel: &CancelToken,
     ) -> Result<BatchSummary, EngineError> {
         let req = &plan.request;
+        let nvtt = plan.nvtt.as_ref().and_then(|p| p.tool());
         let mut summary = BatchSummary {
             failed: plan.failed.len() as u32,
             cancelled: plan.cancelled.clone(),
@@ -1808,7 +1809,7 @@ impl Engine {
                         lock(state).cancelled.push(job.input.clone());
                         return;
                     }
-                    run_one(job, req, preset, cancel, rep, manifest, state);
+                    run_one(job, req, preset, cancel, rep, manifest, state, nvtt);
                 });
             }
         });
@@ -1822,6 +1823,7 @@ impl Engine {
 /// Convert one admitted file under `catch_unwind` and report its outcome. A file that fails or panics after its
 /// output was written (sidecar write or manifest append) has that output removed, best effort, so no output is
 /// left on disk without a record (review I1). A panic is reported at the last stage the file entered (review M10).
+#[allow(clippy::too_many_arguments)]
 fn run_one(
     job: &ResolvedJob,
     req: &BatchRequest,
@@ -1830,6 +1832,7 @@ fn run_one(
     rep: &Reporter,
     manifest: &Manifest,
     state: &Mutex<BatchSummary>,
+    nvtt: Option<&crate::nvtt::NvttTool>,
 ) {
     let (set, path) = (Some(job.set_key.as_str()), Some(job.input.as_path()));
     let key = output_key(&req.output_root, &job.output);
@@ -1837,7 +1840,7 @@ fn run_one(
     emit(EventKind::FileStarted);
     let tracker = FileTracker::default();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        process_file(job, req, preset, cancel, rep, manifest, &tracker)
+        process_file(job, req, preset, cancel, rep, manifest, &tracker, nvtt)
     }));
     let (stage, error) = match r {
         Ok(Ok(out)) => {

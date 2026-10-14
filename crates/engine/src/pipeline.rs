@@ -8,7 +8,7 @@
 //! function of its own texels, so the written bytes are identical for any `--jobs`.
 use crate::api::{BatchRequest, CancelToken};
 use crate::bake::NormalVariance;
-use crate::config::{Format, Profile, Subtype};
+use crate::config::{Backend, Format, Profile, Subtype};
 use crate::coverage::{coverage_fraction, preserve_coverage};
 use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
@@ -21,6 +21,7 @@ use crate::manifest::{
     MANIFEST_SCHEMA,
 };
 use crate::mips::build_chain_with;
+use crate::nvtt::{encode_level_nvtt, NvttError, NvttTool, TempDir};
 use crate::ops::{preprocess_with, SourceTransfer};
 use crate::pack::assemble::assemble;
 use crate::pack::invert_of;
@@ -320,7 +321,9 @@ fn prepare_then<T>(
 }
 
 /// Encode `prep.inputs[i]` at `prep.dims[prep.first_level + i]`, emitting a `Compress` progress event per mip
-/// (`done` 1..=n, carrying `job_key`).
+/// (`done` 1..=n, carrying `job_key`). A profile on `encoder.backend = "nvtt"` encodes each level with `nvtt`
+/// (DECISIONS Note NV); a failure there is `ENC-NVTT-FAILED`, with no fallback to the built-in encoder (NV8).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_levels(
     prep: &Prepared,
     p: &Profile,
@@ -329,9 +332,21 @@ pub(crate) fn encode_levels(
     job_key: &str,
     set: Option<&str>,
     path: Option<&Path>,
+    nvtt: Option<&NvttTool>,
 ) -> Result<Vec<Vec<u8>>, FileError> {
     let ectx = EncodeCtx {
         cancel: Some(cancel.flag()),
+    };
+    let nvtt_failed =
+        |m: String| FileError::Failed(Stage::Compress, format!("ENC-NVTT-FAILED: {m}"));
+    let nvtt = match (p.encoder.backend == Backend::Nvtt, nvtt) {
+        (false, _) => None,
+        // Planning blocks this with ENC-NVTT-MISSING; it gets here only when that code was allowed.
+        (true, None) => return Err(nvtt_failed("NVTT not found".into())),
+        (true, Some(t)) => Some((
+            t,
+            TempDir::new().map_err(|e| nvtt_failed(format!("temporary folder: {e}")))?,
+        )),
     };
     let total = prep.inputs.len() as u32;
     let mut levels = Vec::with_capacity(prep.inputs.len());
@@ -341,7 +356,15 @@ pub(crate) fn encode_levels(
         .zip(&prep.dims[prep.first_level..])
         .enumerate()
     {
-        levels.push(encode_level(inp, w, h, p, &ectx).map_err(|_| FileError::Cancelled)?);
+        let level = match &nvtt {
+            Some((t, tmp)) => encode_level_nvtt(t, inp, w, h, p, tmp, i, &|| cancel.is_cancelled())
+                .map_err(|e| match e {
+                    NvttError::Cancelled => FileError::Cancelled,
+                    NvttError::Failed(m) => nvtt_failed(m),
+                })?,
+            None => encode_level(inp, w, h, p, &ectx).map_err(|_| FileError::Cancelled)?,
+        };
+        levels.push(level);
         rep.emit_job(
             Some(job_key),
             set,
@@ -363,6 +386,7 @@ pub(crate) fn encode_levels(
 /// or anything panics, `tracker.written` tells the caller to remove the output, so an output on disk has its
 /// record, except after a second Ctrl-C: that aborts the process (exit 3) and can leave `.sdc-*.tmp` files, or an
 /// output without a record (`OUT-UNKNOWN-EXISTING` on the next run). A failed validation (`passed = false`) is not a failure here: the output is written and recorded.
+#[allow(clippy::too_many_arguments)]
 pub fn process_file(
     job: &ResolvedJob,
     req: &BatchRequest,
@@ -371,6 +395,7 @@ pub fn process_file(
     rep: &Reporter,
     manifest: &Manifest,
     tracker: &FileTracker,
+    nvtt: Option<&NvttTool>,
 ) -> Result<FileOutcome, FileError> {
     let enter = |st: Stage| tracker.stage.set(st);
     enter(Stage::Load);
@@ -443,7 +468,7 @@ pub fn process_file(
     let (width, height) = prep.dims[0];
 
     enter(Stage::Compress);
-    let levels = encode_levels(&prep, p, cancel, rep, &key, set, path)?;
+    let levels = encode_levels(&prep, p, cancel, rep, &key, set, path, nvtt)?;
     let total = prep.inputs.len() as u32;
 
     enter(Stage::Write);

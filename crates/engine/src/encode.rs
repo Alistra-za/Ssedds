@@ -136,9 +136,19 @@ fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool) {
     }
 }
 
+/// The BC7 post steps for a level another encoder wrote (DECISIONS Note NV6): the rotated opaque fix (no mode-6
+/// patch: NVTT constrains the p-bit, spec §5.6), then the complex-grass corner guard, as the bc7e path runs them.
+/// `blocks` is `gather_blocks` of the level's texels.
+pub(crate) fn bc7_post_fix(out: &mut [u8], blocks: &[[u8; 4]], w: u32, h: u32, p: &Profile) {
+    bc7_opaque_fix(out, blocks, false);
+    if p.subtype == Subtype::ComplexGrass {
+        guard_grass_corner(out, blocks, w, h, p);
+    }
+}
+
 /// Uncompressed level bytes (DECISIONS S4): `rgba8` as B8G8R8A8, `r8` as R, `rg8` as R then G, `rgba16f` as four
 /// little-endian halves per texel. Rows are tightly packed (pitch `w * bytes_per_pixel`).
-fn pack_uncompressed(input: &EncoderInput, format: Format) -> Vec<u8> {
+pub(crate) fn pack_uncompressed(input: &EncoderInput, format: Format) -> Vec<u8> {
     match (input, format) {
         (EncoderInput::Ldr(px), Format::Rgba8) => {
             px.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).collect()
