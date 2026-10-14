@@ -58,4 +58,4 @@ The product is called Tessalith. The programs, files and crates keep their origi
 6. Builds mipmaps, encodes with the chosen encoder, writes the DDS atomically.
 7. Decodes the result again and validates it, then records it in the manifest.
 
-Files whose type cannot be worked out are not guessed at. They are reported as unresolved, and you fix them by renaming or by adding a `[files]` entry. See [Texture types](Texture-Types.md).
+Tessalith does not guess at files whose type it cannot work out. It reports them as unresolved, and you fix them by renaming or by adding a `[files]` entry. See [Texture types](Texture-Types.md).

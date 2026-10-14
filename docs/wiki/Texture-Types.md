@@ -26,7 +26,7 @@ textures\armor\iron\
   iron_trim.png     set "iron_trim", colour map (_trim is not a suffix)
 ```
 
-Sets matter because some decisions depend on the whole set: whether it is a PBR set, which shader it is for, which raw maps get packed together, and whether a normal map's detail is baked into roughness.
+Some decisions depend on the whole set: whether it is a PBR set, which shader it is for, which raw maps get packed together, and whether a normal map's detail is baked into roughness.
 
 ## Suffixes
 

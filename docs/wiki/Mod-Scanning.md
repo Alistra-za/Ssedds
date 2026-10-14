@@ -2,7 +2,7 @@
 
 `sdc-gui` can scan your installed mods: the meshes (NIF files, loose or in BSA archives) and, for a Mod Organizer 2 instance, the active plugins. The scan tells the GUI which meshes use each of your textures, and the GUI uses that to fill in decisions you would otherwise make by hand. Scanning is a GUI feature; `sdc` on the command line never reads the scan.
 
-Scanning only reads. It never changes your mods, your MO2 instance or your game folder.
+Scanning is read-only and never changes your mods, your MO2 instance or your game folder.
 
 ## What the scan is used for
 
@@ -18,7 +18,7 @@ Scanning only reads. It never changes your mods, your MO2 instance or your game 
 
 Your own choices in `sdc.toml` always win over scan evidence.
 
-Because the CLI does not read the scan, a folder decided partly from scan evidence can convert differently from the command line. Alpha meaning from meshes, mesh-voted shaders and the complex-grass auto-tag are evidence, not entries in `sdc.toml`. If you also convert with `sdc convert`, set those in `[files]` entries (`alpha.policy`, `alpha.threshold`, `subtype`) or with `--set set:<id>.shader=<shader>`.
+Because the CLI does not read the scan, a folder decided partly from scan evidence can convert differently from the command line. Alpha meaning from meshes, mesh-voted shaders and the complex-grass auto-tag come from the scan and are not stored in `sdc.toml`. If you also convert with `sdc convert`, set those in `[files]` entries (`alpha.policy`, `alpha.threshold`, `subtype`) or with `--set set:<id>.shader=<shader>`.
 
 ## Choosing what to scan
 
@@ -44,7 +44,7 @@ If you start `sdc-gui` from inside MO2, it detects that and asks: "Opened from M
 
 Press **Scan**. Progress shows on the scan row; **Cancel** stops it. Cancelling during the plugin pass keeps the mesh results and notes that plugin results are incomplete until the next scan.
 
-What is skipped: FaceGen meshes and LOD meshes. Meshes that are not Skyrim SE NIFs are counted and skipped. Meshes from Skyrim LE are read but not drawn in the 3D preview.
+The scan skips FaceGen meshes and LOD meshes. Meshes that are not Skyrim SE NIFs are counted and skipped. Meshes from Skyrim LE are read but not drawn in the 3D preview.
 
 The scan database is `%LOCALAPPDATA%\sdc\scan.db`. Only one scan can run on it at a time. After an update changes the database format, you are asked to scan again.
 

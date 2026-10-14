@@ -96,7 +96,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 
 ### What matters most
 
-- Picking the right format and colour space for a texture moves quality by 5 to 15 dB, and a Skyrim semantic mistake (wrong tag, lost alpha data) is simply broken. The top BC7 encoders sit within 0.16 to 0.32 dB of each other. So the priorities are: correct format and tag per map type and target, then correct mips, then the best encoder at a practical speed.
+- Picking the right format and colour space for a texture moves quality by 5 to 15 dB, and a Skyrim semantic mistake (wrong tag, lost alpha data) leaves the texture broken. The top BC7 encoders sit within 0.16 to 0.32 dB of each other. So the priorities are: correct format and tag per map type and target, then correct mips, then the best encoder at a practical speed.
 
 ### Encoders
 

@@ -1,6 +1,6 @@
 # Installation
 
-Tessalith has no prebuilt releases or installer yet. You build it from source. This page covers what you need and how to do it.
+Tessalith has no prebuilt releases or installer yet, so you build it from source.
 
 ## Requirements
 

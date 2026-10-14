@@ -35,7 +35,7 @@ Its sides are not powers of two. Resize the source, set `resize = "pot-down"` on
 
 ### DDS files in the folder are skipped
 
-DDS inputs are skipped by default (`IN-DDS-SKIPPED`), on purpose: re-encoding a compressed DDS loses quality. Use the source image instead, or set `reencode = true` on the file. To fix only a DDS header, use `sdc patch-header`.
+DDS inputs are skipped by default (`IN-DDS-SKIPPED`) because re-encoding a compressed DDS loses quality. Use the source image instead, or set `reencode = true` on the file. To fix only a DDS header, use `sdc patch-header`.
 
 ### Existing outputs are not replaced (OUT-UNKNOWN-EXISTING)
 
@@ -268,7 +268,7 @@ Every warning has a code and a severity:
 
 ## In-game checklist
 
-Tessalith's validation checks the files, not the game. After installing converted textures, check them in game. These checks follow the in-game tests that set Tessalith's defaults; the results that set the current defaults are noted.
+Tessalith's validation checks the files, not the game. After installing converted textures, check them in game. These checks follow the in-game tests behind Tessalith's defaults, and each notes the tested result where one set a current default.
 
 1. **Textures load.** Look at each converted object. If one is missing, compare the output path with the path the mesh uses (the GUI's Meshes view shows a mesh's texture slots).
 2. **Brightness of PBR colour maps.** Under Community Shaders, compare PBR albedo, emissive (`_g`) and fuzz (`_f`) with linear lighting on and off. They are written `_SRGB` (or BC6H for HDR emissive), which was the tested result; a washed-out look points to a UNORM override (`TAG-UNORM-PBR`).

@@ -94,7 +94,7 @@ The GUI writes only `target`, the `[files.*]` tables, `[inputs.*]` aliases and `
 - Closing the window or opening another folder with unsaved edits asks first. During an export, the dialog offers **Cancel export and continue** or **Keep running**.
 - **Ctrl+Z** undoes and **Ctrl+Y** redoes, up to 200 steps.
 
-**Encoding follows type.** When a texture's sub-type changes (by a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set that the new type does not allow are reset to the new type's default. A note after the status line says which. Textures in locked slots are left alone and named in the note. One undo restores both.
+When a texture's sub-type changes (by a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set that the new type does not allow are reset to the new type's default. A note after the status line says which. Textures in locked slots are left alone and named in the note. One undo restores both.
 
 **Resize** is in the Advanced drawer under *Advanced texture fields*: *None*, *Down to a power of two* (1000x600 becomes 512x512), or *Half size (larger side above 512)* (1024x512 becomes 512x256).
 

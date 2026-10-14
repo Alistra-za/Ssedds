@@ -11,7 +11,7 @@ Tessalith can hand BC7 and BC6H encoding to NVIDIA Texture Tools (`nvcompress.ex
 
 ## Installing
 
-Install NVIDIA Texture Tools 3.2.5. Version 3.2.5 is the version that has been tested. See [Installation](Installation.md#optional-nvtt-325).
+Install NVIDIA Texture Tools 3.2.5, the tested version. See [Installation](Installation.md#optional-nvtt-325).
 
 ## How Tessalith finds nvcompress
 
@@ -73,7 +73,7 @@ Select a texture and set **Encoder** in the Compression group to **NVTT Producti
 
 Changing the format away from BC7 or BC6H returns the texture to the built-in encoder.
 
-The 2D preview of an NVTT texture uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT." Export uses NVTT.
+The 2D preview of an NVTT texture uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
 
 **Copy CLI command** does not include the NVTT path you chose in the GUI. Add `--nvtt <path>` to the copied command.
 
