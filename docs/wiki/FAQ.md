@@ -1,8 +1,8 @@
 # FAQ
 
-### What is Tessalith, and why is the program called sdc?
+### What is Tessalith, and why is the command line called sdc?
 
-Tessalith is the product name. The programs, config files and crates kept the project's working names: `sdc.exe`, `sdc-gui.exe`, `sdc.toml`, `%APPDATA%\sdc`. Those are what you type.
+Tessalith is the product name. The GUI is `tessalith.exe` and its window says Tessalith. The command line, config files and folders kept the project's working name: `sdc.exe`, `sdc.toml`, `sdc-project.toml`, `%APPDATA%\sdc`, `%LOCALAPPDATA%\sdc` and the `SDC_*` environment variables. Those are what you type.
 
 ### Does it run on Linux or macOS?
 
@@ -30,7 +30,7 @@ No, not by default. DDS inputs are skipped (`IN-DDS-SKIPPED`) because re-encodin
 
 ### Does it change my source files?
 
-No. Tessalith only writes to the output folder, `sdc.toml`, `sdc-project.toml` (GUI), the manifest under `<output>\_sdc\`, the scan database and its own settings. Renaming in the GUI writes aliases; files on disk are never renamed.
+No. Tessalith only writes to the output folder, `sdc.toml`, `sdc-project.toml` (GUI), the manifest under `<output>\_sdc\`, the scan database with its `scan.lock`, the 3D preview's shader cache under `%LOCALAPPDATA%\sdc\shader-cache`, temporary NVTT folders under `%TEMP%`, and its own settings (plus `gui.toml.bad`, a copy of a settings file it could not read). Renaming in the GUI writes aliases; files on disk are never renamed.
 
 ### Why BC7 for almost everything?
 

@@ -21,7 +21,7 @@ C:\Work\IronPlate\                          C:\Work\IronPlate-out\
 | Output root | Default |
 |---|---|
 | `sdc convert` | `.\sdc-out` in the current directory, or `-o <dir>`. |
-| `sdc-gui` | `sdc-out` inside the opened folder, or the **Export folder** you set. The GUI refuses to write into the folder it reads. |
+| `tessalith.exe` (GUI) | `sdc-out` inside the opened folder, or the **Export folder** you set. The GUI refuses to write into the folder it reads. |
 
 The output root and any `_sdc` folder are never read as input, so an output folder inside the source folder is safe.
 
@@ -43,13 +43,13 @@ Tessalith writes its own DDS headers:
 
 ## Validation
 
-Every converted file is decoded again before it is written, and the decoded result is checked. `sdc validate` runs the same checks on DDS files that already exist.
+Every converted file is decoded again before it is written, and the decoded result is checked. `sdc validate` runs the checks that need no source on DDS files that already exist: `VAL-HEADER`, `VAL-ALPHA-GUARANTEE`, `ALPHA-254`, the `VAL-M-*` checks, `VAL-PGPATCHER-50` and `VAL-GRASS-DETECT`. Mip quality, cutout coverage and the BC6H peak need the encoder input, so `validate` cannot run them.
 
 | Check | Rule | Code | Severity |
 |---|---|---|---|
 | Header | Flags, caps, mip count, format and header form are correct. | `VAL-HEADER` | error |
-| Mip quality | Each mip's per-channel PSNR against the encoder input is at least `validation.min_mip_psnr_db` (30 dB). With `validation.mips = "smallest"`, only the smallest mip is checked. | `VAL-MIP-ERROR` | warning |
-| Opaque alpha | With `remove`, decoded alpha meets the encoder's guarantee: at least 254 for bc7e by default, exactly 255 with `exact_opaque`, NVTT, rgbcx BC1 and uncompressed formats. | `VAL-ALPHA-GUARANTEE` | error |
+| Mip quality | Each mip's PSNR (one value, with the error pooled over the channels that matter) against the encoder input is at least `validation.min_mip_psnr_db` (30 dB). With `validation.mips = "smallest"`, only the smallest mip is checked. | `VAL-MIP-ERROR` | warning |
+| Opaque alpha | With `remove`, decoded alpha meets the guarantee: at least 254 for any BC7 file without `exact_opaque` (NVTT's included), exactly 255 for BC7 with `exact_opaque` and for every other format. | `VAL-ALPHA-GUARANTEE` | error |
 | Decoded 254 | Opaque alpha that decodes as 254 is reported for information. Community Shaders' complex-material gate is not affected by it. | `ALPHA-254` | info |
 | Cutout coverage | With `cutout` or `cutout_blend`, each mip's alpha coverage stays within `validation.coverage_tolerance_pts` (2 points) of mip 0. Checked on levels of 256 texels or more. | `VAL-COVERAGE` | warning |
 | Complex `_m` margin | The smallest mip's alpha is at or above `validation.complex_m_warn_alpha` (247), close to or past the 251/255 point where Community Shaders turns complex material off. | `VAL-M-COMPLEX-MARGIN` | warning |
@@ -72,7 +72,7 @@ Different GPUs decode BC1 colour slightly differently. `--bc1-decoder` (and *BC1
 | `nvidia` | NVIDIA hardware. |
 | `amd` | AMD hardware. |
 
-The model is recorded for BC1 and BC3 outputs, and changing it re-encodes them on the next `if-changed` run.
+The model is recorded in every manifest record. Only BC1 and BC3 outputs compare it, so changing it re-encodes those on the next `if-changed` run.
 
 ## The manifest
 

@@ -29,8 +29,10 @@ sdc encoders --nvtt D:\tools\nvtt\nvcompress.exe
 ```
 
 ```text
-NVTT: 3.2.5 at C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe (tested)
+NVTT: 3.2.5 at C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvcompress.exe (tested)
 ```
+
+The path is printed with forward slashes.
 
 In the GUI, the NVTT section of the Advanced drawer shows the same status. **Choose nvcompress.exe…** sets a path, **Automatic** goes back to `PATH` and the default folder. The status is re-checked when the window regains focus.
 
@@ -54,7 +56,7 @@ encoder.backend = "nvtt"
 encoder.backend = "nvtt"
 ```
 
-In `[defaults]` (or a preset's defaults), the backend applies only where it fits: BC7 and BC6H textures use NVTT, and BC4 and BC5 textures stay on rgbcx. If you set `nvtt` on a specific texture together with a format NVTT cannot write, that texture's profile is invalid (`CFG-INVALID`).
+In `[defaults]` (or a preset's defaults), the backend applies only where it fits: BC7 and BC6H textures use NVTT; every other format keeps its own default backend (rgbcx for BC1, BC3, BC4 and BC5, `uncompressed` for the uncompressed formats). If you set `nvtt` on a specific texture together with a format NVTT cannot write, that texture's profile is invalid (`CFG-INVALID`).
 
 ### On the command line
 
@@ -95,4 +97,4 @@ The 2D preview of an NVTT texture uses the built-in encoder and says "Preview us
 
 ## When to use it
 
-`VAL-BC6H-PEAK` (a BC6H texture's peak brightness dropped below `validation.bc6h_min_peak_ratio`) suggests trying NVTT Production for that texture. Otherwise, use it on textures where you have compared both results and prefer NVTT's, keeping in mind that it is much slower.
+If `VAL-BC6H-PEAK` fires (a BC6H texture keeps less of the source peak than `validation.bc6h_min_peak_ratio`; the warning reads "BC6H keeps N% of the source peak"), NVTT Production is worth trying for that texture; the warning itself does not mention NVTT. Otherwise, use it on textures where you have compared both results and prefer NVTT's, keeping in mind that it is much slower.

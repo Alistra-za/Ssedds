@@ -3,9 +3,9 @@
 Tessalith converts source images (PNG, TGA, TIFF, EXR, PSD and others) into DDS textures for Skyrim Special Edition and Anniversary Edition. It runs on Windows only and ships as two programs that share one conversion engine:
 
 - `sdc`, the command-line tool.
-- `sdc-gui`, the desktop application.
+- `tessalith.exe`, the desktop application (the window says Tessalith).
 
-Each project folder can hold an `sdc.toml` file that records how its textures are converted. The CLI and the GUI both read and write the same file, so you can set a project up in the GUI and then run it from a script.
+Each project folder can hold an `sdc.toml` file that records how its textures are converted. The GUI writes it and both programs read it, so you can set a project up in the GUI and then run it from a script.
 
 Tessalith builds for three targets:
 
@@ -26,7 +26,7 @@ This wiki covers version 0.7.0. Tessalith is licensed GPL-3.0-or-later.
 | [CLI reference](CLI-Reference.md) | Every `sdc` subcommand and flag, exit codes, the JSON event stream. |
 | [Project config](Project-Config.md) | Every `sdc.toml` key, its default, and how settings layer. |
 | [Presets and targets](Presets-and-Targets.md) | The built-in presets, writing your own, and what each target allows. |
-| [GUI guide](GUI-Guide.md) | Every panel in `sdc-gui`: the converter, set editor, bulk editing, 3D preview, TruePBR JSON editor, settings. |
+| [GUI guide](GUI-Guide.md) | Every panel in the GUI: the converter, set editor, bulk editing, 3D preview, TruePBR JSON editor, settings. |
 | [Texture types](Texture-Types.md) | Sub-types, file suffixes, naming, formats, packing and set shaders. |
 | [Mod scanning](Mod-Scanning.md) | Scanning meshes and plugins from an MO2 instance or a folder, and what the scan feeds back. |
 | [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools 3.2.5 as an optional BC7/BC6H encoder. |
@@ -41,7 +41,7 @@ The product is called Tessalith. The programs, files and crates keep their origi
 | You type or see | What it is |
 |---|---|
 | `sdc` / `sdc.exe` | Command-line tool. Its `--help` text still calls itself a working name. |
-| `sdc-gui` / `sdc-gui.exe` | Desktop application. |
+| `tessalith` / `tessalith.exe` | Desktop application. |
 | `sdc.toml` | Project config file. |
 | `sdc-project.toml` | GUI-only set definitions, stored next to `sdc.toml`. |
 | `%APPDATA%\sdc\` | User config, user presets and GUI settings. |

@@ -64,7 +64,7 @@ Raw maps are packed only under the target that reads them. Under `vanilla`, only
 
 ### The GUI does not start
 
-It needs the Windows system fonts Segoe UI, Segoe UI Symbol, Segoe UI Emoji and Consolas, and says so if one is missing. The 2D preview and the 3D view need a GPU; without one, the preview is off and everything else works.
+It needs the Windows system font Segoe UI (`segoeui.ttf`) and says so if it is missing. Segoe UI Symbol, Segoe UI Emoji and Consolas are optional and skipped without a message. The 2D preview and the 3D view need a GPU; without one, the preview is off and everything else works.
 
 ### The 3D preview shows plain textures
 
@@ -85,7 +85,8 @@ A hard abort (a second Ctrl-C, a crash) can leave temporary files in the output 
 | `input not found: <path>` | An input path does not exist. |
 | `<path> is a folder; give .dds files` | `validate` and `patch-header` take files, not folders. |
 | `--mem-budget '<s>': must be greater than 0 (omit the flag for the default, 50% of RAM)` | `--mem-budget 0`. |
-| `--mem-budget '<s>': use bytes or a G/M suffix` | A bad size, such as `1.5G` or `8Q`. |
+| `--mem-budget '<s>': use bytes or a G/M suffix` | A size ending in something other than a digit, `G` or `M`, such as `8Q`. |
+| `--mem-budget '<s>': not a valid size` | A number that is not a whole number, such as `1.5G`. |
 | `--fill '<s>': unknown role '<role>' (one of …)` | A misspelt fill role. |
 | `--fill '<s>': the value must be a whole number 0..255` | A fill outside 0 to 255. |
 | `--allow <X>: unknown code` | A misspelt code. |
@@ -156,7 +157,7 @@ Every warning has a code and a severity:
 
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
-| `FMT-BC5-NORMAL` | blocking | BC4 or BC5 on a normal map: Z decodes as -1 and alpha is lost. | Use BC7. |
+| `FMT-BC5-NORMAL` | blocking | BC4, BC5, R8 or RG8 on a normal map: Z decodes as -1 and alpha is lost. | Use BC7. |
 | `FMT-LANDSCAPE-BC1` | blocking | BC1 on `landscape_diffuse` destroys the snow mask. | Use BC7 or BC3. |
 | `FMT-BC1-ALPHA` | blocking | BC1 with an alpha policy other than `remove`; BC1 output is opaque only. | Use BC7 or BC3, or `remove`. |
 | `FMT-PERCEPTUAL-DATA` | error | Perceptual encoding on a data map. | Turn `encoder.perceptual` off. |

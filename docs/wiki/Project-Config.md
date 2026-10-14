@@ -4,7 +4,7 @@ A project config records how one folder of textures is converted. It is a TOML f
 
 There is also a user config at `%APPDATA%\sdc\config.toml`. It has the same format, minus `[files]` and `[inputs]`, and applies to every project. Put personal defaults there, such as a preferred target.
 
-Unknown keys and values outside their allowed range are errors. The whole run stops with exit code 2 (CLI), or the GUI shows a banner and stays read-only until you fix the file and press Reload.
+Unknown keys, unknown values and values of the wrong type are errors. The whole run stops with exit code 2 (CLI), or the GUI shows a banner and stays read-only until you fix the file and press Reload. A value of the right type but outside its allowed range (for example `alpha.threshold = 0`) is reported per file as `CFG-INVALID`, and that file is not converted.
 
 ## A complete example
 
@@ -81,15 +81,15 @@ Every texture's final settings (its profile) are built from layers. Later layers
 6. Facts from analysing the image, such as a High-confidence alpha policy (no alpha channel means `remove`).
 7. The set shader's member settings, and alpha from scanned meshes (GUI only).
 8. Facts from the file's suffix.
-9. Accepted suggestions (`--accept-suggestions high`, or always in the GUI).
+9. Accepted suggestions (`--accept-suggestions high`, or always in the GUI). A suggestion only picks the sub-type, never a field value. In that choice it ranks below `--set`, `[files]`, rules and a shader you chose for the set.
 10. The file's `[files]` entry.
-11. `--set` on the command line: unscoped first, then `subtype:` scoped, then `file:` scoped; then `--fill`.
+11. `--set` on the command line: unscoped first (`--fill` counts as an unscoped `--set` applied after the others), then `subtype:` scoped, then `file:` scoped. So a scoped `--set packing.fill.<role>` beats `--fill`.
 
 `sdc presets show` and `sdc inspect --json` report the provenance of every field, so you can see which layer set it. The GUI shows it next to each value.
 
 ### Format and encoder
 
-When a layer changes only `format`, the encoder follows it: BC1, BC3, BC4 and BC5 use `rgbcx`, BC6H uses `ispc_bc6h`, BC7 uses `bc7e`, and uncompressed formats use `uncompressed`. A backend that does not fit the new format is kept only if the same layer set both, or a more specific layer pinned it, in which case the profile is invalid (`CFG-INVALID`). So `defaults.encoder.backend = "nvtt"` applies to BC7 and BC6H textures and leaves BC4 and BC5 textures on rgbcx.
+When a layer changes only `format`, the encoder follows it: BC1, BC3, BC4 and BC5 use `rgbcx`, BC6H uses `ispc_bc6h`, BC7 uses `bc7e`, and uncompressed formats use `uncompressed`. A backend that does not fit the new format is kept only if the same layer set both, or a pinning layer (a sub-type- or file-scoped `--set`, a rule, or `[files]`) set the backend at least as specifically as the format. Preset and config `[subtypes]` tables never pin. When the backend is kept, the profile is invalid (`CFG-INVALID`). So `defaults.encoder.backend = "nvtt"` applies to BC7 and BC6H textures and leaves BC4 and BC5 textures on rgbcx.
 
 ## [defaults] and [subtypes]
 
@@ -106,7 +106,7 @@ alpha.policy = "cutout"
 alpha.threshold = 100
 ```
 
-Sub-type ids are listed on [Texture types](Texture-Types.md). `subtype` itself cannot be set in a sub-type table.
+Sub-type ids are listed on [Texture types](Texture-Types.md). A `subtype` key in a sub-type table (or in `[defaults]`) is accepted but has no effect: the resolved sub-type overwrites it.
 
 ## [[rules]]
 
@@ -195,7 +195,7 @@ Every field below can be set in `[defaults]`, `[subtypes.<id>]`, a rule's `overr
 
 | Field | Values | Default | Notes |
 |---|---|---|---|
-| `subtype` | a sub-type id | from the file name | Not settable in `[defaults]`, `[subtypes]` or `subtype:` scopes. |
+| `subtype` | a sub-type id | from the file name | Refused in a `subtype:` scoped `--set`. In `[defaults]` and `[subtypes]` it is accepted but has no effect. |
 | `color.content` | `srgb`, `linear` | `linear`; `srgb` for colour sub-types | What the pixels mean. Affects mip filtering. |
 | `color.tag` | `srgb`, `unorm`, `n/a` | `unorm`; `srgb` for PBR colour under `cs`; `n/a` for HDR | The DDS format's `_SRGB` flag. `n/a` for BC6H and RGBA16F. See [Presets and targets](Presets-and-Targets.md#srgb-tagging). |
 
@@ -286,7 +286,7 @@ These apply to a base normal (`_n`, `pbr_normal`, `landscape_normal`, or `_cnr`)
 | `rnm.bent.mode` | `ao_blend`, `detail` | `ao_blend` | Blend the bent normal weighted by occlusion, or like a detail layer. |
 | `rnm.bent.ao_power` | 0.1 to 8 | 1.5 | Power on the occlusion (1 minus AO). |
 | `rnm.bent.ao` | `true`, `false` | `true` | Read the AO source (a raw `_ao` map, or the B channel of `_rmaos`/`_rfaos`); `false` uses a uniform weight. Supply normal AO (white = open); Tessalith inverts it. |
-| `rnm.target` | `n`, `cnr`, `both` | from the layer's name | Per layer file only (`[files]` or `file:` `--set`): which base normal it feeds when a set has both `_n` and `_cnr`. |
+| `rnm.target` | `n`, `cnr`, `both` | from the layer's name | Per layer file (`[files]` or `file:` `--set`), or an unscoped `--set` for every layer file; refused in a `subtype:` scope. Which base normal it feeds when a set has both `_n` and `_cnr`. |
 
 ### Re-encoding DDS inputs
 

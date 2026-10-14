@@ -1,6 +1,6 @@
 # GUI guide
 
-`sdc-gui` runs the same engine as `sdc convert`. A folder you decide and export in the GUI converts to the same files from the command line, because every decision is saved in the folder's `sdc.toml`.
+Tessalith (`tessalith.exe`) runs the same engine as `sdc convert`. A folder you decide and export in the GUI converts to the same files from the command line, because every decision is saved in the folder's `sdc.toml`.
 
 The window has two views, picked in the header: the Textures view (converter and set editor) and the Meshes view (mod scanning, covered in [Mod scanning](Mod-Scanning.md)).
 
@@ -25,6 +25,8 @@ When you open a folder, the GUI reads it recursively, analyses every image and p
 
 ## The three columns
 
+From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer and, when the set editor is in 3D, the set view.
+
 ### Textures (left)
 
 One tile per file, with a thumbnail, the name and badges. Filters: *Needs decision*, *Has warnings*, *Failed*, *Not in a set*, plus a search box. A raw map that feeds a packed output shows "Packed into …". The **◀** on the heading collapses the column to a strip; **▶** expands it.
@@ -35,7 +37,7 @@ The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, C
 
 | Row | Choices |
 |---|---|
-| Sub-type | Grouped as PBR (Community Shaders), Advanced skin (Community Shaders), Colour maps, Normal maps, Grayscale maps, Packed and data, HDR maps, Other. Only sub-types the current Mode allows are offered. |
+| Sub-type | Grouped as PBR (Community Shaders), Advanced skin (Community Shaders), Colour maps, Normal maps, Grayscale maps, Packed and data, HDR maps, Other. Only sub-types the current Mode allows are offered, plus the texture's current sub-type. |
 | Content | sRGB-encoded colour, or Linear data. |
 | DDS tag | _SRGB or UNORM (linear), limited to what the format and Mode allow. |
 | Alpha | Remove, Cutout, Blend, Cutout + Blend, Data. |
@@ -51,7 +53,7 @@ For an emissive, the Compression group shows the `FMT-HDR-SOURCE` reason (why it
 
 A DDS file in the folder shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder. The DDS itself is never changed.
 
-### Sets (right)
+### Sets (between Textures and the centre)
 
 Textures grouped into material sets, with the status of each packed output (run, conflict, disabled, failed). See [Sets and the set editor](#sets-and-the-set-editor).
 
@@ -63,7 +65,7 @@ A texture that still needs an answer has an amber border. The centre column then
 
 | Question | Controls |
 |---|---|
-| What kind of texture is this? | Sub-type buttons and **Confirm**. |
+| What kind of texture is this? | A sub-type dropdown and **Confirm**. |
 | What does the alpha channel mean? | *Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*. |
 | Which way does this normal map's green channel point? | *DirectX* or *OpenGL*. |
 | A blocking warning | **Acknowledge for this texture**. For `DIM-NPOT` there is also **Resize to a power of two**, which writes `resize = "pot-down"`. |
@@ -89,8 +91,8 @@ Change any field in the centre column. The change goes into `sdc.toml` as a `[fi
 
 The GUI writes only `target`, the `[files.*]` tables, `[inputs.*]` aliases and `defaults.packing.fill.*`. Comments, ordering, rules and every other table are left as they were.
 
-- Edited texture tiles are marked until you save. Export saves first.
-- If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it or overwrite it. Without unsaved edits, the GUI reloads it when the window regains focus or when you save or export.
+- Unsaved edits put a dot in the window title until you save. Tiles carry no mark. Export saves first.
+- If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it or overwrite it. Without unsaved edits, the GUI reloads it when the window regains focus or when you export.
 - Closing the window or opening another folder with unsaved edits asks first. During an export, the dialog offers **Cancel export and continue** or **Keep running**.
 - **Ctrl+Z** undoes and **Ctrl+Y** redoes, up to 200 steps.
 
@@ -160,7 +162,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - **Live encode** is off by default. Press **Encode now** to encode. With Live encode on, the preview re-encodes a moment after each edit. A result that no longer matches the settings is marked stale.
 - Each previewed mip is byte-identical to the same mip of the DDS that Export writes. The exception is a texture on NVTT: its preview uses the built-in encoder and says so.
 - Only mips whose larger side is at most the preview size limit are encoded. The limit is 4096 by default, settable to 1024, 2048, 4096 or 8192, and 16384 after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and says so.
-- Toolbar: channel isolation (RGBA and alpha mask), mip slider, sRGB / UNORM display, *Side by side* or *Split*, a *Heatmap* of the difference to the source, *Fit* and *1:1*. Scroll zooms, drag pans. HDR formats are tone-mapped for display.
+- Toolbar: channel isolation (RGBA, R, G, B, A and α-mask), mip slider, sRGB / UNORM display, *Side by side* or *Split*, a *Heatmap* of the difference to the source, *Fit* and *1:1*. Scroll zooms, drag pans. HDR formats are tone-mapped for display.
 - Readouts under the viewports show PSNR, alpha and normal-length checks for the mip on show.
 - A DDS file previews as stored (no source side). BC2 and signed BC6H cannot be previewed.
 - Without a usable GPU the preview is off, and everything else still works.
@@ -172,7 +174,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 1. Export saves `sdc.toml` and `sdc-project.toml`.
 2. If some textures are undecided, the *Undecided textures* dialog lets you decide them there, **Accept all suggestions**, **Proceed anyway** (export only the decided textures), or **Cancel**. It never decides for you.
 3. If a source changed on disk since it was planned, Export plans again first. The Textures column also offers **Reload** for changed files.
-4. The bottom drawer opens with a *Files* tab (queued, running, done, up to date, skipped, failed, per file) and a *Warnings* tab grouped by code. Click a row to select that texture.
+4. The bottom drawer opens with a *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled) and a *Warnings* tab grouped by code. Click a row to select that texture.
 5. After a complete export, the TruePBR JSON is written (see below).
 
 Drawer buttons: **Cancel** stops the batch. **Save report…** writes the report as JSON Lines or Markdown. **Close** hides the drawer. **Copy CLI command** copies an `sdc convert` command for this export: the same folder (with `--recursive`), output, BC1 decoder and thread count. Before you run it, check three things it does not carry over:
@@ -190,18 +192,16 @@ If an export is blocked, the *Export is blocked* dialog lists what to fix; click
 - **Drag a texture** from the Textures column onto a set to move it there, or onto empty space to start a new set. Dropping onto a filled slot asks **Replace** or **Cancel**.
 - **Share** lets a set borrow another set's finished output. **Duplicate** copies the source into the set. A shared `_rmaos` is never variance-baked.
 - **≡** drags a set to reorder.
-- **Right-click** a set or member for its menu: move, share, duplicate, **Rename…**, **Delete set**. Only sets you created can be deleted; an automatic set would regroup from the file names at once. A set whose files are all gone still shows, as missing, so you can delete its entry.
+- **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up** and **Move down**. **Delete set** asks first, naming the set and its member count. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON".
 
 Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot locks and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
-
-The drag-and-drop flows were checked by code review only, not by automated tests. Try them on a copy if you rely on them.
 
 ### The set editor
 
 Select a set to edit it. The heading has **Input name…** and a **2D | 3D** switch (remembered in `gui.toml`, default 2D).
 
-In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Emissive, Height, Cubemap, RMAOS, Coat normal / fuzz, Subsurface. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
+In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat _cnr, Fuzz _f, Subsurface. The cubemap slot has no card; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
 
 | Card control | What it does |
 |---|---|
@@ -230,16 +230,16 @@ A PBR set under `cs` has a TruePBR box with the settings PGPatcher reads. **Open
 | Emissive settings | Emissive scale, Emissive colour. |
 | Parallax settings | Displacement scale. |
 | Subsurface settings | Foliage subsurface, Subsurface colour, Subsurface opacity. |
-| Coat settings | Coat colour, Coat specular level, Coat roughness, Coat strength, Coat diffuse, Coat normal (_cnr), Coat parallax, Inner UV scale. |
+| Coat settings | Coat specular level, Coat roughness, Coat strength, Coat diffuse, Coat normal (_cnr), Coat parallax. Coat colour and Inner UV scale are under *Advanced TruePBR settings*. |
 | Glint settings, Fuzz settings | The glint parameters; Fuzz colour and weight. |
 | Matching | The exact texture paths the entry matches (PGPatcher's `match1` to `match8`). |
-| Advanced TruePBR settings | Path contains, Mesh path contains, Rename, UV and cubemap, Vertex colours and depth, Texture locks. |
+| Advanced TruePBR settings | Path contains, Mesh path contains, Rename; UV and cubemap (Smooth angle, Auto UV, UV scale, Cubemap path); Vertex colours and depth; Texture locks; and, with Multilayer on, Coat settings (Coat colour, Inner UV scale). |
 
 Rules:
 
 - Features that cannot go together are greyed, with the reason on hover. Hair excludes multilayer, glint, fuzz, emissive, parallax and subsurface; multilayer excludes subsurface; multilayer, glint and fuzz exclude each other; fuzz and coat normal share a slot. A switch already on stays enabled so you can turn it off.
 - A feature that is on without its texture blocks export.
-- **Reset** returns a field, or the whole set, to its default.
+- Each field's **reset** button returns it to its default. There is no reset for a whole set.
 - Numbers cannot go below 0; strengths, weights and opacities stay within 0 to 1. A typed value outside the range is clamped and the box says so. The glint log density has no limit.
 - PGPatcher's own `default` block is fixed and not editable.
 - **Matching**: the diffuse path is on by default. **+** adds a row for slot 3 to 8; **×** removes one. A row with no path matches nothing and is not written. A set that matches nothing is left out of the JSON, and Export asks first.
@@ -251,7 +251,7 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 
 ### The TruePBR JSON editor
 
-Open it with **Editor…** in the header or from a set's TruePBR box. It is a window of its own, titled "TruePBR JSON".
+Open it with **Editor…** in the header or from a set's TruePBR box. It is a window of its own, titled "TruePBR JSON — Tessalith".
 
 - Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set in the main window), then its keys as small pills with the same controls as the TruePBR box.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
@@ -272,7 +272,7 @@ Switch the set editor to **3D** to see the set on a mesh, rendered with Direct3D
 | **Mesh:** | *Auto* (a scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. |
 | **Shader folder…** | Point at your Community Shaders mod folder or its `Shaders` folder when it is not found automatically ("Community Shaders not found", **Choose folder…**). |
 | Community Shaders features | On by default. Off compiles the shaders without CS feature defines. |
-| Background | Studio HDRI (Poly Haven, CC0), Grey, Solid. |
+| Background | Solid or Studio HDRI (Poly Haven, CC0). For Solid, a colour swatch with a hex field and a *Grey* slider (0 to 100 %) set the grey level; a non-grey colour is turned into its grey. |
 | Sun brightness, Point light brightness and radius | Lighting. |
 | **Reset view** | Reset the camera. |
 
@@ -301,9 +301,9 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | Section | Contents |
 |---|---|
 | Preset inspector | The batch preset, the user presets that loaded (with their files), and how the selected texture's settings were resolved. *Show only differences* hides values equal to the base preset. Built-in presets are read-only. |
-| Batch | Worker threads, Memory budget (MiB), BC1 decoder (Ideal, Ideal (round 4), NVIDIA, AMD). The BC1 decoder is read at start, so a change shows "restart sdc-gui to apply". |
+| Batch | Worker threads, Memory budget (MiB), BC1 decoder (Ideal, Ideal (round 4), NVIDIA, AMD). The BC1 decoder is read at start, so a change shows "restart Tessalith to apply". |
 | NVTT | NVTT path, **Choose nvcompress.exe…**, **Automatic** (`PATH`, then the NVIDIA install folder). The status shows the version found and whether it is the tested 3.2.5, and is re-checked when the window regains focus. |
-| Project-wide fills (legacy) | Fills stored in `defaults.packing.fill.*`. **Clear** removes them; set fills on each packed output's card instead. |
+| Project-wide fills (legacy) | One line, shown only while `sdc.toml` holds fills in `defaults.packing.fill.*`. **Clear** removes them; set fills on each packed output's card instead. |
 | Preview | Largest previewed side, Allow 16384 previews, Live encode. |
 | Mipmaps | Levels for the selected texture. |
 | Advanced texture fields | Perceptual, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize. |
@@ -324,7 +324,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 
 - A background job that crashes shows an "internal error in …" dialog, and the window keeps running.
 - A failed plan or export shows its error in a dialog and in the status line.
-- `sdc-gui` needs the Windows system fonts Segoe UI, Segoe UI Symbol, Segoe UI Emoji and Consolas, and refuses to start with a message if they are missing.
+- Tessalith needs the Windows system font Segoe UI and refuses to start with a message if it is missing. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when not.
 
 See also [Troubleshooting](Troubleshooting.md).
 

@@ -7,7 +7,7 @@ Tessalith decides how to encode each file from its sub-type: what the texture is
 | Extension | Notes |
 |---|---|
 | `.png`, `.tga`, `.tif`, `.tiff`, `.bmp`, `.jpg`, `.jpeg`, `.webp` | Read as stored. |
-| `.exr`, `.hdr` | Float sources. Needed for BC6H output (HDR emissive, HDR sky). |
+| `.exr`, `.hdr` | Float sources. A TruePBR emissive needs one (peaking above 1.0) to become BC6H. `hdr_sky` is BC6H whatever the source. |
 | `.psd`, `.psb` | The merged composite image only; layers are never read. RGB and Grayscale documents, 8, 16 and 32 bits per channel. The file must be saved with Maximize Compatibility on; without it the file is refused. Colour that Photoshop matted against white is un-matted. |
 | `.kra`, `.ora` | Krita and OpenRaster: the `mergedimage.png` stored in the archive. Layers are never read. |
 | `.dds` | Skipped by default (`IN-DDS-SKIPPED`). Set `reencode = true` on the file to convert it anyway, at a quality cost (`LOSS-REENCODE`). |
@@ -34,8 +34,8 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 
 | Suffix | Suggested sub-type | Confidence |
 |---|---|---|
-| none, or `_d` | `diffuse`; `pbr_albedo` in a PBR set; `skin_albedo` in an Advanced skin set; `landscape_diffuse` under `textures/landscape/`; `ui_sky` under `interface` or `sky` folders; `hdr_sky` for a float source under `sky` | High (`hdr_sky` Medium) |
-| `_n` | `normal`; `pbr_normal` in a PBR set; `landscape_normal` under `textures/landscape/` | High |
+| none, or `_d` | `diffuse`; `pbr_albedo` in a PBR set; `skin_albedo` in an Advanced skin set; `landscape_diffuse` when a folder in the path is named `landscape`; `ui_sky` under `interface` or `sky` folders; `hdr_sky` for a float source under `sky` | High (`hdr_sky` Medium) |
+| `_n` | `normal`; `pbr_normal` in a PBR set; `landscape_normal` when a folder in the path is named `landscape` | High |
 | `_msn` | `msn` (model-space normal) | High |
 | `_s` | `msn_specular` when the set has `_msn`; `pbr_subsurface` in a PBR set; otherwise `subsurface_tint` | High, High, Low |
 | `_m`, `_em`, `_envmask` | `envmask`; under `cs` and `cpm`, `complex_material` when the alpha varies | High (vanilla, or no/constant alpha); High for complex with varying alpha |
@@ -277,13 +277,13 @@ A shader the target lacks falls back to `default` (`SHADER-UNAVAILABLE`).
 | `parallax` | `_p` is BC4. |
 | `complex_grass` | Colour becomes `complex_grass`. |
 
-When a sub-type changes this way, a format or tag you set that the new type does not allow is reset to the new type's default.
+In the GUI, when a sub-type changes this way, a format or tag you set that the new type does not allow is reset to the new type's default. On the command line the value you set stays, and the file is blocked or reports an error.
 
 ## Complex grass
 
 A complex-grass texture is one image twice as tall as it is wide, with power-of-two sides (for example 1024x2048): diffuse and alpha in the top half, normal and specular in the bottom half. Community Shaders detects it from the bottom-left texel.
 
-- Pick `complex_grass` as the sub-type (GUI: under *Packed and data*), set the set's shader to `complex_grass`, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half is tagged automatically.
+- Set the set's shader to `complex_grass`, set `subtype = "complex_grass"` on the file's `[files]` entry, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half gets a High-confidence `complex_grass` suggestion, which the GUI accepts. The GUI's sub-type picker does not offer `complex_grass`.
 - The CLI never tags it automatically. If you convert the same folder with `sdc convert`, add `subtype = "complex_grass"` to the file's `[files]` entry, or it is converted as a diffuse.
 - Codes: `GRASS-SHAPE` (error: not 1:2 or not power of two), `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE` (the source corner already fails the CS test), `GRASS-VANILLA`, and `VAL-GRASS-DETECT` (error: the encoded corner still fails after a slowest re-encode).
 

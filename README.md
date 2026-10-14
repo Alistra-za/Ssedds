@@ -10,7 +10,7 @@ Tessalith is a texture converter for Skyrim Special and Anniversary Edition modd
 
 It is meant for texture artists making new textures. It is not a tool for bulk "fixing" an installed game folder.
 
-Tessalith ships two programs that share one engine: `sdc` (command line) and `sdc-gui`. A folder you set up and export in the GUI converts to the same bytes with `sdc convert`, because both read the same per-project `sdc.toml`. There are three targets: `cs` (Community Shaders, including TruePBR; the default), `cpm` (CPM / ENB complex material) and `vanilla`.
+Tessalith ships two programs that share one engine: `sdc` (command line) and the Tessalith GUI (`tessalith.exe`). A folder you set up and export in the GUI converts to the same bytes with `sdc convert`, because both read the same per-project `sdc.toml`. There are three targets: `cs` (Community Shaders, including TruePBR; the default), `cpm` (CPM / ENB complex material) and `vanilla`.
 
 Windows x64 only. Version 0.7.0. GPL-3.0-or-later.
 
@@ -19,11 +19,11 @@ Windows x64 only. Version 0.7.0. GPL-3.0-or-later.
 ### Encoding
 
 - BC7 through bc7e (from bc7enc_rdo, Rich Geldreich), effort `ultrafast` to `slowest`, default `veryslow`.
-- BC1, BC3, BC4 and BC5 through rgbcx at level 18. BC6H (UF16) through Intel's ISPC Texture Compressor at `veryslow`.
+- BC1, BC3, BC4 and BC5 through rgbcx: level 18 for BC1 and the BC3 colour block, search radius 5 for BC4, BC5 and the BC3 alpha block. BC6H (UF16) through Intel's ISPC Texture Compressor at `veryslow`.
 - Uncompressed `rgba8`, `r8`, `rg8` and `rgba16f` outputs.
 - Two local patches to the vendored encoders. One makes bc7e's opaque blocks decode to exactly 255 alpha when asked (used for `_m` maps). The other makes rgbcx's BC4/BC5 search round the way the GPU does, which gained about 3 dB on BC4 and 2.6 dB on BC5.
 - Optional NVIDIA Texture Tools 3 backend for BC7 and BC6H. Tessalith runs a `nvcompress.exe` you installed yourself, one process per mip level at Production quality. It is never bundled and never a default.
-- DDS headers written by Tessalith's own writer: DX10 where the format needs it, legacy FourCC where it can, `_SRGB` only for TruePBR colour under `cs`.
+- DDS headers written by Tessalith's own writer: by default legacy FourCC for BC1, BC3 and RGBA8 UNORM and DX10 for everything else (BC4/BC5 legacy only on request), `_SRGB` only for TruePBR colour under `cs`.
 
 ### Mips, size and alpha
 
@@ -68,7 +68,7 @@ Windows x64 only. Version 0.7.0. GPL-3.0-or-later.
 
 ### The GUI
 
-- Three columns: textures, settings of the selection (each value shows its source), and material sets.
+- Three columns, left to right: textures, material sets, and the settings of the selection (each value shows its source).
 - Side-by-side or split preview of source and encoded mips, with channel isolation, a difference heatmap and the same bytes Export will write.
 - Bulk editing of several textures or sets, copy settings from one texture to others, a rename dialog for inputs and outputs, and undo (200 steps).
 - Set editor with PGPatcher slot cards, shared and duplicated slots, slot locks and a shader picker.
@@ -79,7 +79,7 @@ Windows x64 only. Version 0.7.0. GPL-3.0-or-later.
 
 - Reads a Mod Organizer 2 instance and profile (or a plain folder): loose files and SE BSA archives, every NIF shape's shader, flags and texture slots, and which mod's copy the game loads. PGPatcher output is tracked as a layer derived from its source mesh.
 - Reads the active plugins: which records use a texture set or mesh, plugin overrides, files plugins name that are missing, files nothing uses. Records nothing reaches are hidden behind a toggle.
-- The scan feeds the converter. A colour map takes its alpha meaning (blend, test, both, none, and the test threshold) from the meshes that use it. The meshes also vote for a set's shader. Grass textures used by GRAS records are tagged as complex grass.
+- The scan feeds the converter. A colour map takes its alpha meaning (blend, test, both, none, and the test threshold) from the meshes that use it. The meshes also vote for a set's shader. In the GUI, a grass texture used by a GRAS record that passes the complex-grass shape tests gets a High-confidence `complex_grass` suggestion (not under `vanilla`; the CLI never does this).
 - PGPatcher interaction: a renamed TruePBR set writes a `rename` with `match_diffuse`, the form real PGPatcher 1.2.0 applies (checked on a real load order). JSON paths PGPatcher would never match block export.
 
 ### Not yet
@@ -109,7 +109,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 
 ### Formats and Skyrim conventions
 
-- Community Shaders reads the `_n` blue channel directly and never rebuilds Z, so a BC5 `_n` decodes with Z = -1 and loses the specular alpha. Benchmarks that favour BC5 for normals rebuild Z, which Skyrim does not. Drove: normals are BC7; BC4/BC5 on a normal map is a blocking warning; BC5 is the default only for `_flow`.
+- Community Shaders reads the `_n` blue channel directly and never rebuilds Z, so a BC5 `_n` decodes with Z = -1 and loses the specular alpha. Benchmarks that favour BC5 for normals rebuild Z, which Skyrim does not. Drove: normals are BC7; BC4/BC5 on a normal map is a blocking warning; BC5 is the default only for `_flow` and the user-picked `generic_two_channel`.
 - Vanilla diffuse stores gamma-encoded colour in UNORM files, and an `_SRGB` tag darkens it in vanilla shaders, CS non-PBR paths and LOD. TruePBR expects albedo tagged `_SRGB`. Drove: `_SRGB` only for TruePBR colour (albedo, `_g`, `_s`, `_f`) and only under `cs`; `_SRGB` under a `lod` path is flagged.
 - BC1 alpha on cutouts lost anti-aliased edges and measured 6.5 to 11.9 dB worse in visible RGB than BC7. Drove: BC1 is opaque only; the compact presets use it only for colour without alpha.
 - Spike S2: 66 BC7 textures of 16 to 128 px with full chains ran in game with no crash. Drove: no small-texture fallback to another format.
@@ -147,9 +147,9 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 
 ### Requirements
 
-- Windows 10 or 11, x64.
-- Rust stable with the `x86_64-pc-windows-msvc` target. `rust-toolchain.toml` selects it; `sdc-gui` needs Rust 1.95 or newer.
-- Visual Studio 2022 Build Tools with the C++ workload (MSVC). `encoders-sys` compiles rgbcx and the ISPC TC wrapper with `cl.exe` and links the vendored ISPC objects. You do not need ISPC.
+- Windows x64.
+- Rust stable with the `x86_64-pc-windows-msvc` target. `rust-toolchain.toml` selects it; the GUI crate needs Rust 1.95 or newer.
+- Visual Studio Build Tools with the C++ workload (MSVC). `encoders-sys` compiles rgbcx and the ISPC TC wrapper with `cl.exe` and links the vendored ISPC objects. You do not need ISPC.
 - A GPU with BC texture support for the GUI preview. Without one, the preview is off and everything else works.
 - Optional: NVIDIA Texture Tools 3 (`nvcompress.exe`, 3.2.5 tested) for the NVTT backend.
 - Optional, for the 3D preview: Community Shaders installed in your MO2 setup.
@@ -160,7 +160,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 cargo build --release -p sdc -p sdc-gui
 ```
 
-The binaries land in `target\x86_64-pc-windows-msvc\release\` as `sdc.exe` and `sdc-gui.exe`. Both link the C runtime statically, so each is a single exe.
+The binaries land in `target\x86_64-pc-windows-msvc\release\` as `sdc.exe` and `tessalith.exe`. Both link the C runtime statically, so each is a single exe.
 
 ### Command line
 
@@ -185,7 +185,7 @@ Exit codes: 0 done, 1 some files failed or were skipped, 2 usage or config error
 
 ### GUI
 
-Run `sdc-gui.exe`, choose **Open folder…** (or drop a folder on the window), pick the target in the **Mode** menu, settle any texture with an amber border, then **Export**. Your decisions are saved to `sdc.toml` in that folder, and **Copy CLI command** gives the matching `sdc convert` line. The full guide is [docs/gui.md](docs/gui.md).
+Run `tessalith.exe`, choose **Open folder…** (or drop a folder on the window), pick the target in the **Mode** menu, settle any texture with an amber border, then **Export**. Your decisions are saved to `sdc.toml` in that folder, and **Copy CLI command** gives the matching `sdc convert` line. The full guide is [docs/gui.md](docs/gui.md).
 
 ## Documentation
 

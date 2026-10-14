@@ -29,7 +29,7 @@ Human-readable output from `convert` goes to stderr. The result verbs (`inspect`
 | `--config <file>` | `sdc.toml` in the first input folder | The project config file. |
 | `--set <override>` | none | Override a profile field. Repeatable. See [--set syntax](#--set-syntax). |
 | `--fill ROLE=VALUE` | none | Fill value (0 to 255) for a packed channel that has no source map. Roles: `roughness`, `metallic`, `ao`, `specular`, `glossiness`, `height`, `opacity`, `fuzz`. Repeatable. Same as `--set packing.fill.<role>=<value>`, applied after every `--set`. |
-| `--accept-suggestions none\|high` | `none` | `high` accepts every High-confidence sub-type and alpha suggestion. With `none`, a file whose sub-type is only suggested stays unresolved. |
+| `--accept-suggestions none\|high` | `none` | `high` accepts every High-confidence sub-type suggestion. High-confidence alpha suggestions apply either way. With `none`, a file whose sub-type is only suggested stays unresolved. |
 | `--allow <CODE>` | none | Acknowledge a blocking warning code for the whole batch. Repeatable. An unknown code is a usage error. |
 | `--json` | off | Write JSON Lines events to stdout. Human output stays on stderr. |
 
@@ -114,7 +114,7 @@ Plans the batch, then encodes every file whose status is ready.
 
 | Value | Behaviour |
 |---|---|
-| `if-changed` | Re-encode only when the manifest record differs: source content, resolved settings, engine version, encoder versions, NVTT version, BC1 decoder model (for BC1/BC3), a record that failed validation, or an output file whose size or modified time changed. An output with no manifest record is kept and reported as `OUT-UNKNOWN-EXISTING`. With `--sidecar`, a missing sidecar also triggers a re-encode. |
+| `if-changed` | Re-encode only when the manifest record differs: source content, resolved settings, engine version, encoder versions, NVTT version (only for outputs encoded with NVTT), BC1 decoder model (for BC1/BC3), a record that failed validation, or an output file whose size or modified time changed. An output with no manifest record is kept and reported as `OUT-UNKNOWN-EXISTING`. With `--sidecar`, a missing sidecar on an up-to-date output is written from the manifest record; the file re-encodes only if that write fails. |
 | `skip` | Keep every existing output. Counted as skipped on purpose. |
 | `overwrite` | Always re-encode. |
 
@@ -129,6 +129,8 @@ skip  <input>: <CODE> <reason>
 FAIL  <input> at <Stage>: <error>
 warning <input>: <CODE> <message>
 blocking <input>: <CODE> <message>
+error <input>: <CODE> <message>
+info  <input>: CFG-FILTER-IGNORED <message>
 done: N converted, N up to date, N skipped (N on purpose), N failed, N failed validation, N cancelled
 ```
 
@@ -140,7 +142,7 @@ The `done` counters:
 |---|---|
 | converted | Files encoded and written in this run. |
 | up to date | Outputs left alone by `if-changed`. |
-| skipped | Files not converted for any other reason: unresolved, blocked, duplicate output, DDS input, existing output with no record, `--on-existing skip`. |
+| skipped | Files not converted for any other reason: unresolved, blocked, duplicate output, DDS input, existing output with no record, `--on-existing skip`, a pre-packed file replaced under `packing.prefer = "raw"` (`PACK-CONFLICT`). |
 | on purpose | The part of skipped that you asked for: DDS inputs not opted in (`IN-DDS-SKIPPED`), `--on-existing skip`, a pre-packed file replaced under `packing.prefer = "raw"` (`PACK-CONFLICT`). |
 | failed | Files that failed to load, resolve, encode or write. |
 | failed validation | Files written whose validation reported an error. |
@@ -192,7 +194,7 @@ For a DDS input it prints the header and an alpha report per mip:
 
 ```text
 C:/out/textures/armor/iron/iron.dds
-  format Bc7 srgb  1024x1024  11 mips  dx10 header  cubemap false
+  format Bc7 srgb  1024x1024  11 mips  Dx10 header  cubemap false
   mip 0 1024x1024  alpha min 255 =255 100.0% =254 0.0% <254 0.0%
   mip 1 512x512  alpha min 255 =255 100.0% =254 0.0% <254 0.0%
   ...
@@ -220,7 +222,7 @@ and per file:
   <severity> <CODE> <message>
 ```
 
-Skipped and failed files are listed as `convert` would report them. `inspect` never re-encodes DDS inputs, even with `reencode`; a DDS is always reported by its header.
+Skipped and failed files are the ones `convert` would report, each as its path followed by an indented `skipped <CODE> <reason>` or `cannot be read: <error>` line. `inspect` never re-encodes DDS inputs, even with `reencode`; a DDS is always reported by its header.
 
 Exit codes: 0, or 1 if an input could not be read, or 2 for a usage or config error.
 
@@ -235,8 +237,8 @@ Runs the post-encode checks on DDS files that already exist, including files mad
 | Flag | Default | Meaning |
 |---|---|---|
 | `--target cs\|cpm\|vanilla` | `cs` | Whose rules apply. |
-| `--subtype <id>` | inferred from the file name | What the files are meant to be. A sub-type the target does not have is an error. |
-| `--alpha-policy remove\|cutout\|blend\|cutout_blend\|data` | inferred | The alpha meaning to check against. Inferred as `remove` when every mip-0 alpha value is at least 254, otherwise the sub-type's default. |
+| `--subtype <id>` | inferred from the file's suffix, its game path and, for formats with alpha, its mip-0 alpha | What the files are meant to be. A sub-type the target does not have is an error. |
+| `--alpha-policy remove\|cutout\|blend\|cutout_blend\|data` | inferred | The alpha meaning to check against. Inferred as `remove` when every mip-0 alpha value is at least 254. Otherwise the sub-type's default, except that a sub-type whose default is `remove` is inferred as `data`. |
 | `--exact-opaque` | off | Hold BC7 files under `remove` to Tessalith's own guarantee that opaque alpha decodes as exactly 255. Off by default because other encoders do not promise it. |
 | `--json` | off | One JSON object per file on stdout; the human report moves to stderr. |
 | `--bc1-decoder <model>` | `ideal` | Decoder model for BC1/BC3. |
@@ -307,7 +309,7 @@ The NVTT line is one of `(tested)`, `(untested: acknowledge with --allow ENC-NVT
 sdc patch-header (--out-dir <dir> | --in-place) [OPTIONS] <DDS>...
 ```
 
-Fixes DDS header faults that need no change to the pixel data: mip count, flags, caps, the legacy or DX10 header form, and the `_SRGB` tag. Exactly one of `--out-dir` or `--in-place` is required.
+Fixes DDS header faults that need no change to the pixel data: mip count, flags, caps, linear size or pitch, reserved fields, a non-standard DDPF_NORMAL flag, the legacy or DX10 header form, the DX10 dimension, array and misc fields, the header and pixel-format size fields, and the `_SRGB` tag. Exactly one of `--out-dir` or `--in-place` is required.
 
 | Flag | Meaning |
 |---|---|
@@ -415,4 +417,4 @@ sdc convert src --recursive --accept-suggestions high --json 2>$null |
   Select-Object path, stage, error
 ```
 
-`validate --json` writes a different record, one per file: `kind` = `dds_validation`, `path`, `readable`, `subtype`, `alpha_policy`, `judged`, `note`, `passed`, `summary`, `warnings`. `inspect --json` writes DDS info objects for DDS inputs (schema `dds-info`) and the event stream for images.
+`validate --json` writes a different record, one per file: `kind` = `dds_validation`, `schema` (1), `path`, `readable`, `subtype`, `alpha_policy`, `judged`, `note`, `passed`, `summary`, `warnings`. A file that cannot be read gets a shorter record: `kind`, `schema`, `path`, `readable` (false), `passed` (false) and `error`. `inspect --json` writes DDS info objects for DDS inputs (schema `dds-info`) and the event stream for images.

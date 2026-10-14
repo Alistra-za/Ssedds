@@ -10,7 +10,7 @@ Tessalith has no prebuilt releases or installer yet, so you build it from source
 | Rust | Installed through `rustup`. The repository's `rust-toolchain.toml` selects the stable channel, the MSVC target, and the `clippy` and `rustfmt` components. |
 | Minimum Rust version | 1.88 for the workspace. The GUI crate needs 1.95 or later because of its `eframe` 0.36.2 dependency. A current stable toolchain covers both. |
 | C++ compiler | Microsoft Visual C++ Build Tools (MSVC) with C++17 support. The `encoders-sys` crate compiles the rgbcx encoder, the ISPC Texture Compressor host code and a small C++ shim. |
-| Fonts (GUI only) | Segoe UI, Segoe UI Symbol, Segoe UI Emoji and Consolas. `sdc-gui` loads them from the system and will not start without them. They ship with Windows. |
+| Fonts (GUI only) | Segoe UI is required: `tessalith.exe` will not start without it. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when missing. All four ship with Windows. |
 | ISPC | Not needed for a normal build. See [ISPC objects](#ispc-objects). |
 | NVTT | Optional. See [Optional: NVTT 3.2.5](#optional-nvtt-325). |
 
@@ -32,7 +32,7 @@ The binaries land in the target-specific folder:
 
 ```text
 target\x86_64-pc-windows-msvc\release\sdc.exe
-target\x86_64-pc-windows-msvc\release\sdc-gui.exe
+target\x86_64-pc-windows-msvc\release\tessalith.exe
 ```
 
 To build only one of them:
@@ -58,7 +58,7 @@ sdc encoders
 | `crates/engine` | The conversion engine: discovery, grouping, config, packing, mips, encoding, validation. |
 | `crates/encoders-sys` | Native encoders: bc7e and bc7enc_rdo's rgbcx, ISPC Texture Compressor (BC6H). |
 | `crates/cli` | The `sdc` program. |
-| `crates/gui` | The `sdc-gui` program. |
+| `crates/gui` | The GUI, `tessalith.exe` (Cargo package `sdc-gui`). |
 | `crates/render3d` | Direct3D 11 renderer for the GUI's 3D set preview and mesh view. |
 | `crates/modscan`, `crates/nif`, `crates/esp`, `crates/vfs`, `crates/pgpsim` | Mod scanning: MO2 resolution, BSA archives, NIF meshes, ESP plugins, PGPatcher simulation. |
 | `crates/bench` | Benchmarks. |
@@ -117,8 +117,8 @@ sdc encoders
 The NVTT line reads one of:
 
 ```text
-NVTT: 3.2.5 at C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe (tested)
-NVTT: 3.3.0 at D:\nvtt\nvcompress.exe (untested: acknowledge with --allow ENC-NVTT-VERSION)
+NVTT: 3.2.5 at C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvcompress.exe (tested)
+NVTT: 3.3.0 at D:/nvtt/nvcompress.exe (untested: acknowledge with --allow ENC-NVTT-VERSION)
 NVTT: not found (<reason>)
 ```
 
@@ -132,11 +132,11 @@ Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-
 |---|---|---|
 | `%APPDATA%\sdc\config.toml` | User config: default target, preset and overrides for every project. | You |
 | `%APPDATA%\sdc\presets\*.toml` | Your own presets. Loaded by the CLI and the GUI on every run. | You |
-| `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, export folder, preview limits, threads, NVTT path, window layout. | `sdc-gui` |
-| `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. | `sdc-gui` |
-| `<project>\sdc.toml` | Project config. | You or `sdc-gui` |
-| `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `sdc-gui` |
-| `<output>\_sdc\manifest.jsonl` | Record of every converted file. | `sdc` and `sdc-gui` |
+| `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, export folder, preview limits, threads, NVTT path, window layout. | `tessalith.exe` |
+| `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. | `tessalith.exe` |
+| `<project>\sdc.toml` | Project config. | You or `tessalith.exe` |
+| `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `tessalith.exe` |
+| `<output>\_sdc\manifest.jsonl` | Record of every converted file. | `sdc` and `tessalith.exe` |
 
 ## Uninstalling
 

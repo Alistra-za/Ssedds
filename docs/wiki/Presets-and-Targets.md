@@ -8,7 +8,7 @@ A target says which renderer the textures are for. A preset is a named bundle of
 |---|---|---|
 | Community Shaders | `cs` | Everything: TruePBR materials, Advanced skin, `_SRGB` tags on PBR colour maps, BC6H and RGBA16F for HDR data, every set shader. The default. |
 | Complex Parallax Materials | `cpm` | Bethesda shaders plus the complex-material `_m` (environment, gloss, metal, height in one map). No `_SRGB`, no BC6H, no PBR. |
-| Vanilla | `vanilla` | Bethesda shaders only. No `_SRGB`, no BC6H, no complex `_m`, no PBR, no complex grass. |
+| Vanilla | `vanilla` | Bethesda shaders only. No `_SRGB`, no BC6H, no complex `_m`, no PBR, no complex grass set shader (a `complex_grass` sub-type you set is still written, with a `GRASS-VANILLA` warning). |
 
 How the target is chosen, highest first:
 
@@ -120,7 +120,7 @@ sdc presets diff cs-quality cs-compact --subtype diffuse
 
 ## Writing your own preset
 
-A preset is a TOML file. Put it in `%APPDATA%\sdc\presets\` and both `sdc` and `sdc-gui` load it on every run. Or load it for one run with `--preset-file <file>` (load only) or `--preset <file.toml>` (load and select).
+A preset is a TOML file. Put it in `%APPDATA%\sdc\presets\` and both `sdc` and the GUI load it on every run. Or load it for one run with `--preset-file <file>` (load only) or `--preset <file.toml>` (load and select).
 
 ```toml
 schema_version = 1

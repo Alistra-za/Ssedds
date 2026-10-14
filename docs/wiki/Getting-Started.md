@@ -1,6 +1,6 @@
 # Getting started
 
-This page takes one small texture set from source images to finished DDS files, first with the `sdc` command line and then with `sdc-gui`. It assumes you have built both programs (see [Installation](Installation.md)) and that `sdc` is on your `PATH`.
+This page takes one small texture set from source images to finished DDS files, first with the `sdc` command line and then with the Tessalith GUI (`tessalith.exe`). It assumes you have built both programs (see [Installation](Installation.md)) and that `sdc` is on your `PATH`.
 
 ## The example project
 
@@ -20,7 +20,7 @@ Things to notice:
 
 - The folder path contains `textures`. Tessalith takes the game path of each file from the last `textures` folder in its path, so `textures\pbr\armor\ironplate\ironplate.png` has the game path `textures/pbr/armor/ironplate/ironplate.png`. Rules and sub-type detection use that game path.
 - All five files share the base name `ironplate`, so they form one texture set.
-- The raw `_roughness`, `_metallic` and `_ao` maps are packing inputs. Under the `cs` target they are packed into a single `ironplate_rmaos.dds` (R roughness, G metallic, B AO, A specular). A raw roughness or metallic map, an `_rmaos` file, or a `pbr` folder in the path each make the set a PBR set.
+- The raw `_roughness`, `_metallic` and `_ao` maps are packing inputs. Under the `cs` target they are packed into a single `ironplate_rmaos.dds` (R roughness, G metallic, B AO, A specular). Under `cs`, any of these makes the set a PBR set: a raw roughness, glossiness, metallic or AO map; an `_rmaos`, `_rfaos`, `_cnr` or `_f` file; or a `pbr` folder in the path.
 - The output tree mirrors the input tree under the output folder, with `.dds` extensions.
 
 See [Texture types](Texture-Types.md) for the full naming rules.
@@ -64,7 +64,7 @@ What to check:
 | `set ... shader pbr (auto:pbr)` | The set's shader, and why it was chosen. `auto:<rule>` means Tessalith picked it; `set` means you did; `fallback` means the shader you asked for is not available under this target. |
 | `pack ... run` | A packed output that will be built. `conflict`, `failed` or `disabled` means it will not, and the reason follows. |
 | `R source:... A default:1` | Where each channel comes from. `source:<file>:R` reads the file's red channel (`:luma` when `channels.grayscale_source = "luma"`, and a `1-` prefix means inverted, as when gloss stands in for roughness). `default:` means no source map was found and the neutral default (on a 0 to 1 scale) is used; `fill:` means you set an 8-bit value. |
-| `status ready` | The file will be converted. `unresolved`, `blocked` or `error` means it will not, and the reasons follow on the same line. |
+| `status ready` | The file will be converted. `unresolved`, `blocked` or `error` means it will not, and the reasons follow on the same line. `packing_input` (a raw map waiting to be packed) and `normal_layer` (an RNM layer) are not converted on their own either; they feed another output. |
 | Lines starting with `warning` or `blocking` | Diagnostic codes. See [Troubleshooting](Troubleshooting.md). |
 
 If a file shows `status unresolved`, the reason says what is missing: usually a sub-type that is only a Medium or Low confidence guess, the meaning of a varying alpha channel, or the green-channel direction of a normal map named plain `_normal`. Fix it with one of the methods in Step 2.
@@ -160,7 +160,7 @@ Copy the contents of the output folder (everything except `_sdc`) into your mod,
 
 The GUI runs the same engine and reads and writes the same `sdc.toml`, so you can switch between the two at any point.
 
-1. Start `sdc-gui`. Choose **Open folder…** and pick `C:\Work\IronPlate`, or drag the folder onto the window. The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written yet.
+1. Start `tessalith.exe`. Choose **Open folder…** and pick `C:\Work\IronPlate`, or drag the folder onto the window. The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written yet.
 2. Check **Mode** in the header. It should read `cs`. Changing it writes `target` to `sdc.toml`.
 3. The Textures column on the left shows a tile per file. The three raw maps show "Packed into ..." because they feed the `_rmaos`. A tile with an amber border needs a decision. Use the **Needs decision** filter to see only those.
 4. Click a tile. The centre column shows its settings in groups (Type, Colour, Alpha, Mipmaps, Compression), and each value says where it came from. A sub-type the GUI accepted reads **(auto)**; hover it to see why.
