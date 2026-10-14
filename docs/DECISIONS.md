@@ -251,7 +251,7 @@ Found in the Task 45 real-folder run: PBR normal maps re-exported from BC7 DDS c
 
 Defaults for spec §14 #18–#22 and the M2.5 design choices; confirmed by the owner at plan review.
 
-- **M1 (#18) Env mask:** a packed `cpm`/`vanilla` `_m` R is the metallic source, else the specular source. Under `cpm` with neither it is `packing.fill.metallic`, else `packing.fill.specular`, else 0. The `cpm` `_m` height default is 0 (owner 2026-10-10): alpha 0–4 keeps CS complex material on with parallax off; 0.5 ran parallax on a flat height (Spike S8 DXBC).
+- **M1 (#18) Env mask:** a packed `cpm`/`vanilla` `_m` R is the metallic source, else the specular source. Under `cpm` with neither it is `packing.fill.metallic`, else `packing.fill.specular`, else 0. The `cpm` `_m` height default is 0 (owner 2026-10-10): alpha 0–4 keeps CS complex material on with parallax off; 0.5 ran parallax on a flat height (Spike S8 DXBC). Widened by AH1 and AH2 (2026-10-14): any complex `_m` without source alpha, or with `alpha.parallax` off, writes 0.
 - **M2 (#19) Raw maps without a recipe** (`_opacity`, specular-only and fuzz-only `cs` sets, height under `vanilla`, AO and fuzz under `cpm`, …) raise `PACK-UNUSED-INPUT` and are not written.
 - **M3 (#20) Specular** is copied unchanged into `_rmaos`/`_rfaos` A.
 - **M4 (#21) Exit code:** raw inputs reported `IN-PACKING-INPUT` or `PACK-UNUSED-INPUT` do not make the batch exit 1.
@@ -939,3 +939,37 @@ Rulings for the Important findings of the 2026-10-13 reliability audit (round b)
 - **AG29 The card section.** `NiAlphaProperty` is a collapsible group on the TruePBR card (open when any alpha key is set), between the visual groups and Matching. Each change of a flag control is one `set_json_value` of the composed integer, so merge key, undo, provenance and reset work as for the other keys. The "edit raw" box takes 0-65535 on Enter or focus loss; other text is outlined red and not written, Esc cancels. Delete greys the flags, threshold and create controls (hover: "Delete takes priority over the other alpha keys of this entry"); a stored value stays as it was.
 - **AG30 Pitfalls.** `alphaprop_flags` or `alphaprop_thresh` set while `alphaprop_create` is off warns that it only changes shapes that already have an NiAlphaProperty. `alphaprop_delete` on together with any other alpha key warns that Delete wins. Like the other pitfalls they are reported at export, never corrected.
 - **AG31 JSON editor.** The JSON editor needs no change: it lists the keys from `KEYS`, and the shared `control` draws the integer boxes; a key added from its + menu starts at 4844 / 128 / true.
+
+## Note AH — Complex `_m` alpha and Enable parallax (2026-10-14)
+
+- **AH1 Complex `_m` without source alpha writes alpha 0 (owner, 2026-10-14; widens Note M1).**
+  - **Before:** M1/P24 set the 0 default only for a packed `cpm` `_m` height. A loose `_m` typed `complex_material` whose source has no alpha channel resolved `alpha.policy = remove`, from the analysis `suggest_alpha` "source has no alpha channel". It was written with a synthesised 255, which CS reads as a plain env mask (smallest-mip alpha >= 251/255, Spike S8).
+  - **Now:** `suggest_alpha` gives `data` for `complex_material` with no alpha, with the reason "source has no alpha channel: alpha 0 (complex material on, parallax off)". The pipeline fills alpha with 0 before Preprocess (`ops::complex_alpha_zero`), so every mip is 0. The fill is 0, not 128: mid values run parallax on a flat height and pick up compression noise.
+  - **BC7 exactness:** bc7e can encode a constant alpha-0 block as mode 6 with p-bit 1, which decodes alpha 1. So `encoders_sys::bc7_fixup::force_zero_alpha` runs after the encode, on both the bc7e and the NVTT paths. It applies to a `complex_material` with `alpha.parallax` not on, and only to blocks whose source alpha is 0 throughout.
+    - It clears the alpha endpoints and, in modes 6 and 7, the p-bits they share with RGB.
+    - RGB endpoints that had p-bit 1 move down, unoptimised, like the S5b mode-6 opaque patch: one LSB (1/255) in mode 6, one step of the 6-bit value (about 4/255) in mode 7. Modes 4 and 5 lose nothing.
+    - BC3's alpha block stores 0 exactly.
+    - Parallax on keeps a source that has alpha byte for byte. So the warned parallax-on-without-alpha state (AH2) may decode 1, which is still <= 4.
+  - **`exact_opaque` on `complex_material`:** kept `true`, because it still matters for an `_m` with alpha whose flat regions are 255. It is irrelevant for a 0 fill, so `ALPHA-EXACT-OFF-M` is not raised for an alpha-0 `_m`, even with `exact_opaque` off.
+  - **Warnings:** the `SUG-CONTRADICTION` "reads as a plain envmask" fires only when a solid 255 is actually written (parallax on). `CHAN-CONSTANT-ALPHA-DATA` is not raised for a 0 fill. `VAL-M-GRAYSCALE` (grey, non-black RGB) still applies.
+  - **Output identity:** the engine version stays 0.7.0 (owner rule). The `profile_sha256` of every `complex_material` changes once, because of AH2's new field, so `--on-existing if-changed` re-encodes them.
+- **AH2 "Enable parallax" on the complex `_m` (owner, 2026-10-14: "a button labeled enable parallax (off sets alpha to 0) on the cpm card").**
+  - **Field:** new per-file `alpha.parallax` (`Option<bool>`). It is serialised only when set, so only `complex_material` profiles change.
+    - Off: the output alpha is 0 at every mip, whatever the source alpha.
+    - On: the source alpha is kept as height (`data`).
+  - **Default (fix round 1):** resolved at the analysis position, below every explicit layer, so `[files]`, rules and `--set` win.
+    - On only when the source alpha really varies: analysis `Varying` and alpha min < max (`analysis:varying-alpha`).
+    - Off for any constant alpha (0, 128 or 255) and for Note L's near-opaque noise (`analysis:constant-alpha`).
+    - Off for no alpha (`analysis:no-alpha`).
+  - **Solid 255:** a solid-255 `_m` typed `complex_material` writes 0 unless parallax is turned on. With parallax on, 255 stays and raises `SUG-CONTRADICTION` and `VAL-M-COMPLEX-MARGIN`.
+  - **No source alpha:** parallax on is not available. It raises `ALPHA-PARALLAX-NO-ALPHA` (warning), and the output stays 0.
+  - **Packed cpm `_m`:** the default follows the same rule, read from the assembled image. With no height source, the alpha is the constant M1 default 0, so parallax reads off. A `packing.fill.height` is a constant alpha too (fix round 2, coordinator ruling): parallax stays off and the alpha is 0, because the owner rejected a flat height such as 128. To write the fill, turn "Enable parallax" on (`alpha.parallax = true`). The checks see that final value, so a 255 fill with parallax on and `exact_opaque` off on BC7 raises `ALPHA-EXACT-OFF-M`.
+  - **Explicit `alpha.policy = remove`:** wins, and 255 is synthesised. The parallax row is hidden ("alpha removed: 255"), and `ALPHA-PARALLAX-NO-ALPHA` is not raised.
+  - **GUI:**
+    - An "Enable parallax" row in the Alpha group, for complex material only.
+    - The same box under the set editor's slot cards, for a packed or loose complex `_m`, because it has no slot card.
+    - Hover text: "Off writes alpha 0: complex material on, parallax off". The box is greyed out, with the reason, when the source has no alpha.
+    - A ↺ next to the box clears the texture's own value, because a locked, ticked box cannot be unticked.
+    - Each toggle is one `set_field` edit: one undo step and a replan.
+  - **Bulk:** picks the row up from `FIELDS`. A hidden field's skip reason now comes from `fields::hidden_reason`, one reason per field. It used to say "cutout only" for every hidden field.
+  - **Tests changed:** the golden `exact_opaque_m_decodes_alpha_255_at_every_mip` gains `alpha.parallax=true` on its solid-255 `iron_m`, so it still tests the 255 path. `policy_checks::contradictions_are_warnings` gets the same addition.

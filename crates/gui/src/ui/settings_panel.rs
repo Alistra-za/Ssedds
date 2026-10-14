@@ -4,7 +4,7 @@ use super::columns::{AMBER, RED};
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
     field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
-    provenance_text, FieldView, NOT_VALID,
+    provenance_text, FieldView, NOT_VALID, PARALLAX_HOVER,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -365,6 +365,13 @@ pub(super) fn editor(
         "alpha.threshold" => {
             let cur = f.value.as_u64().unwrap_or(128).clamp(1, 254) as u8;
             threshold(ui, busy, key, cur, mixed)
+        }
+        "alpha.parallax" => {
+            let mut b = f.value.as_bool().unwrap_or(false);
+            let r = ui
+                .add(egui::Checkbox::new(&mut b, "").indeterminate(mixed))
+                .on_hover_text(PARALLAX_HOVER);
+            (r.changed().then(|| json!(b)), r)
         }
         "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
             let mut b = f.value.as_bool().unwrap_or(false);

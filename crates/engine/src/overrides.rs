@@ -136,6 +136,7 @@ pub const FIELD_PATHS: &[&str] = &[
     "alpha.threshold",
     "alpha.compare",
     "alpha.exact_opaque",
+    "alpha.parallax",
     "channels.swizzle",
     "channels.flip_green",
     "channels.green_convention",
