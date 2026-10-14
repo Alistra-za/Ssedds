@@ -161,7 +161,9 @@ impl Bsa {
                 e.norm
             )));
         }
-        let mut out = Vec::with_capacity(orig);
+        // Grown by the decoder: a capacity of `orig` would commit up to MAX_ENTRY per reader on the word of the
+        // entry header, before one byte is decoded (audit 2026-10-14 finding 1).
+        let mut out = Vec::new();
         lz4_flex::frame::FrameDecoder::new(&data[p + 4..])
             .take(orig as u64 + 1)
             .read_to_end(&mut out)
