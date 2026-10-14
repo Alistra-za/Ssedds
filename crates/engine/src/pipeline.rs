@@ -216,19 +216,21 @@ fn prepare_then<T>(
         None => None,
     };
     stop()?;
-    let (img, transfer) = match &job.pack {
+    let (mut img, info) = match &job.pack {
         Some(pk) => {
             // The gray source fixed at plan time (Note M6), not `p.channels.grayscale_source` of the final profile.
             let asm = assemble(pk, pk.gray).map_err(|e| fail(Stage::Load)(e.to_string()))?;
-            let t = SourceTransfer::of(&asm.info);
-            (asm.image, t)
+            (asm.image, asm.info)
         }
-        None => {
-            let (img, info) =
-                load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?;
-            (img, SourceTransfer::of(&info))
-        }
+        None => load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?,
     };
+    let transfer = SourceTransfer::of(&info);
+    if crate::ops::complex_alpha_zero(p, info.has_alpha) {
+        // Constant, so every mip stays 0.
+        for px in &mut img.px {
+            px[3] = 0.0;
+        }
+    }
     let bake = match (lengths, &job.bake) {
         (Some(l), Some(b)) => {
             let member = crate::resize::target_dims((img.width, img.height), p.resize);

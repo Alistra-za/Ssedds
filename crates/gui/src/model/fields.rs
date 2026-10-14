@@ -5,7 +5,7 @@ use engine::suggest::Confidence;
 use serde_json::Value;
 
 /// The editable fields in display order, with the label each row shows.
-pub const FIELDS: [(&str, &str); 14] = [
+pub const FIELDS: [(&str, &str); 15] = [
     ("subtype", "Sub-type"),
     ("color.content", "Content"),
     ("color.tag", "DDS tag"),
@@ -14,6 +14,7 @@ pub const FIELDS: [(&str, &str); 14] = [
     ("alpha.compare", "Comparison"),
     ("mips.coverage", "Coverage"),
     ("alpha.exact_opaque", "Exact opaque alpha"),
+    ("alpha.parallax", "Enable parallax"),
     ("mips.normal", "Normal handling"),
     ("mips.normal_base", "Normal base level"),
     ("format", "Format"),
@@ -102,6 +103,7 @@ pub fn is_cutout(p: &Profile) -> bool {
 pub fn field_hidden(p: &Profile, field: &str) -> bool {
     (field == "mips.coverage" && !is_cutout(p))
         || (field == "encoder.backend" && !p.format.is_block())
+        || (field == "alpha.parallax" && p.subtype != Subtype::ComplexMaterial)
 }
 
 /// The Encoder row's lock when NVTT was not found (DECISIONS Note NV): a texture already on NVTT keeps the row open
@@ -154,6 +156,23 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
         }
         _ => None,
     }
+}
+
+/// Hover text of the "Enable parallax" check box (DECISIONS AG18).
+pub const PARALLAX_HOVER: &str = "Off writes alpha 0: complex material on, parallax off";
+
+/// Why a complex `_m` cannot turn parallax on (DECISIONS AG18): its source has no alpha channel. Read from the
+/// resolve's analysis fact, or its ALPHA-PARALLAX-NO-ALPHA warning once the texture's own entry turned it on.
+pub fn parallax_lock(job: &ResolvedJob) -> Option<&'static str> {
+    let no_alpha = job
+        .provenance
+        .get("alpha.parallax")
+        .is_some_and(|p| p.to_string() == "analysis:no-alpha")
+        || job
+            .warnings
+            .iter()
+            .any(|w| w.code == engine::codes::Code::AlphaParallaxNoAlpha);
+    no_alpha.then_some("the source has no alpha channel: alpha 0 is written")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,7 +272,10 @@ pub(crate) fn views_of(
             // The set's shader decided it: change the shader, not the row.
             let lock = field_lock(target, &job.profile, field)
                 .or((provenance == "shader:complex_grass" && field == "subtype")
-                    .then_some("set by the set's Complex grass shader"));
+                    .then_some("set by the set's Complex grass shader"))
+                .or((field == "alpha.parallax")
+                    .then(|| parallax_lock(job))
+                    .flatten());
             FieldView {
                 field,
                 label,

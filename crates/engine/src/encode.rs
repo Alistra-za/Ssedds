@@ -5,7 +5,7 @@
 use crate::config::*;
 use crate::grass::{unit_err, CS_GRASS_THRESHOLD, GRASS_GUARD_MARGIN};
 use crate::quantize::EncoderInput;
-use encoders_sys::bc7_fixup::{force_opaque_mode6, force_opaque_rotated};
+use encoders_sys::bc7_fixup::{force_opaque_mode6, force_opaque_rotated, force_zero_alpha};
 use encoders_sys::*;
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -81,7 +81,7 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
             {
                 bc7e_compress_blocks(bc, oc, params);
             }
-            bc7_opaque_fix(o, b, p.alpha.exact_opaque && !native);
+            bc7_opaque_fix(o, b, p.alpha.exact_opaque && !native, zero_fix(p));
         }
         f => {
             let bs = f.block_bytes().expect("block format");
@@ -119,12 +119,20 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
     }
 }
 
+/// The exact-0 alpha fix is for the complex `_m` only: its alpha 0 means "complex material on, parallax off".
+fn zero_fix(p: &Profile) -> bool {
+    p.subtype == Subtype::ComplexMaterial
+}
+
 /// The encoder-independent BC7 opaque fix-ups (DECISIONS Note NV6) on blocks `o` whose source texels `b` (16 per
 /// block) have alpha 255 throughout: the lossless rotated mode 4/5 fix always, and the S5b mode-6 byte patch when
-/// `mode6_patch` (bc7e without the native flag only).
-fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool) {
+/// `mode6_patch` (bc7e without the native flag only). With `zero`, blocks whose source alpha is 0 throughout get the
+/// exact-0 fix (DECISIONS AG17: bc7e's mode-6 p-bit can decode them as 1).
+fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool, zero: bool) {
     for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
-        if src.iter().all(|t| t[3] == 255) {
+        if zero && src.iter().all(|t| t[3] == 0) {
+            force_zero_alpha(blk.try_into().unwrap());
+        } else if src.iter().all(|t| t[3] == 255) {
             let blk: &mut [u8; 16] = blk.try_into().unwrap();
             if mode6_patch {
                 force_opaque_mode6(blk);
@@ -140,7 +148,7 @@ fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool) {
 /// patch: NVTT constrains the p-bit, spec §5.6), then the complex-grass corner guard, as the bc7e path runs them.
 /// `blocks` is `gather_blocks` of the level's texels.
 pub(crate) fn bc7_post_fix(out: &mut [u8], blocks: &[[u8; 4]], w: u32, h: u32, p: &Profile) {
-    bc7_opaque_fix(out, blocks, false);
+    bc7_opaque_fix(out, blocks, false, zero_fix(p));
     if p.subtype == Subtype::ComplexGrass {
         guard_grass_corner(out, blocks, w, h, p);
     }

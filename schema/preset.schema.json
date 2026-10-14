@@ -34,6 +34,13 @@
         "exact_opaque": {
           "type": "boolean"
         },
+        "parallax": {
+          "description": "`complex_material` only (DECISIONS AG18): `false` writes alpha 0 at every mip (complex material on, parallax\noff); `true` keeps the source alpha as height. Resolve sets it from the source alpha; `None` elsewhere.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "policy": {
           "$ref": "#/$defs/AlphaPolicy"
         },
@@ -537,6 +544,13 @@
         },
         "exact_opaque": {
           "type": "boolean"
+        },
+        "parallax": {
+          "description": "`complex_material` only (DECISIONS AG18): `false` writes alpha 0 at every mip (complex material on, parallax\noff); `true` keeps the source alpha as height. Resolve sets it from the source alpha; `None` elsewhere.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "policy": {
           "$ref": "#/$defs/AlphaPolicy"

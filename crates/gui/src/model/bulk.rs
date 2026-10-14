@@ -279,6 +279,7 @@ impl AppModel {
 pub const NO_SETTINGS: &str = "has no settings of its own (packed, skipped or failed)";
 const INVALID: &str = "not a valid value for this setting";
 const CUTOUT_ONLY: &str = "used only by cutout and cutout + blend";
+const COMPLEX_M_ONLY: &str = "complex material _m only";
 const NOT_ALLOWED: &str = "not valid for this map";
 
 /// What a bulk edit does to one field.
@@ -330,7 +331,14 @@ fn skip_of(
         return Some(NO_SETTINGS.into());
     };
     if field_hidden(&job.profile, field) {
-        return Some(CUTOUT_ONLY.into());
+        return Some(
+            if field == "alpha.parallax" {
+                COMPLEX_M_ONLY
+            } else {
+                CUTOUT_ONLY
+            }
+            .into(),
+        );
     }
     let Some(view) = view else {
         return Some(format!("{field} is not a texture setting"));

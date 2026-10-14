@@ -853,8 +853,10 @@ fn exact_opaque_m_decodes_alpha_255_at_every_mip() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "textures/a/iron_m.png", dark_ramp(64, 255));
     put(d.path(), "textures/b/rock_m.png", dark_ramp(64, 255));
+    // DECISIONS AG18: a solid-255 complex `_m` defaults to parallax off (alpha 0); parallax on keeps the 255 tested here.
     let sets = [
         "file:**/iron_m.png.subtype=complex_material",
+        "file:**/iron_m.png.alpha.parallax=true",
         "file:**/rock_m.png.subtype=envmask",
         "subtype:envmask.format=bc7",
         "subtype:envmask.encoder.backend=bc7e",

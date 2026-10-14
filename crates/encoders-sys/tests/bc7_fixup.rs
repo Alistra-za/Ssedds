@@ -294,3 +294,102 @@ fn bc7e_opaque_noise_rotated_blocks_fixed_losslessly() {
         "no rotated mode 4/5 block decoded alpha below 255"
     );
 }
+
+/// DECISIONS AG17: a mode-6 block with alpha endpoints 0 but p-bit 1 decodes alpha 1; the fix makes it exactly 0.
+#[test]
+fn zero_alpha_fix_clears_mode6_pbits() {
+    let mut b = mode6_block(10, 0, 1, 1);
+    assert_eq!(decode(&b)[3], 1);
+    assert!(encoders_sys::bc7_fixup::force_zero_alpha(&mut b));
+    let d = decode(&b);
+    assert!(d.chunks(4).all(|p| p[3] == 0));
+    assert_eq!(d[0], 20); // RGB endpoint shifts down one LSB: (10 << 1 | 0)
+}
+
+/// Every bc7e mode choice on noisy RGB with alpha 0 throughout decodes to exactly 0 after the fix.
+#[test]
+fn zero_alpha_fix_gives_exact_0_on_bc7e_output() {
+    let mut seed = 12345u32;
+    let mut rnd = || {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        (seed >> 16) as u8
+    };
+    let texels: Vec<[u8; 4]> = (0..64 * 64).map(|_| [rnd(), rnd(), rnd(), 0]).collect();
+    let blocks = gather_blocks(&texels, 64, 64);
+    for level in [Bc7Level::Ultrafast, Bc7Level::Basic, Bc7Level::Slow] {
+        let mut out = vec![0u8; blocks.len() / 16 * 16];
+        bc7e_compress_blocks(
+            &blocks,
+            &mut out,
+            Bc7Params {
+                level,
+                perceptual: false,
+                exact_opaque: false,
+            },
+        );
+        for blk in out.chunks_mut(16) {
+            let blk: &mut [u8; 16] = blk.try_into().unwrap();
+            encoders_sys::bc7_fixup::force_zero_alpha(blk);
+            assert!(
+                decode(blk).chunks(4).all(|p| p[3] == 0),
+                "{level:?}: {blk:?}"
+            );
+        }
+    }
+}
+
+/// Mode 7 and rotated mode 4/5 blocks: alpha endpoints (and mode 7's p-bits) cleared give alpha 0.
+#[test]
+fn zero_alpha_fix_covers_modes_4_5_and_7() {
+    for mut b in [
+        [
+            0x80u8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff,
+        ],
+        [
+            0x10 | (2 << 5),
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+        [
+            0x20 | (3 << 6),
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0xff,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+        [
+            0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
+        [
+            0x20, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0,
+        ],
+    ] {
+        assert!(encoders_sys::bc7_fixup::force_zero_alpha(&mut b));
+        assert!(decode(&b).chunks(4).all(|p| p[3] == 0), "{b:?}");
+    }
+}

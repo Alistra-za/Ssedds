@@ -598,6 +598,10 @@ pub struct AlphaSpec {
     pub threshold: u8,
     pub compare: AlphaCompare,
     pub exact_opaque: bool,
+    /// `complex_material` only (DECISIONS AG18): `false` writes alpha 0 at every mip (complex material on, parallax
+    /// off); `true` keeps the source alpha as height. Resolve sets it from the source alpha; `None` elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallax: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

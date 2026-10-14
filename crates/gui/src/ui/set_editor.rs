@@ -5,7 +5,9 @@ use super::rnm_section::RNM_OUTLINE;
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
-use crate::model::fields::{channel_text, encoding_options, field_lock, format_label};
+use crate::model::fields::{
+    channel_text, encoding_options, field_lock, field_view, format_label, PARALLAX_HOVER,
+};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
@@ -16,7 +18,7 @@ use crate::model::sets::{
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
 use eframe::egui;
-use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
+use engine::config::{ColorTag, Format, PackRecipe, RawMap, Subtype, Target};
 use engine::events::RecipeReport;
 use engine::pack::RecipeKind;
 use serde_json::Value;
@@ -35,6 +37,8 @@ enum Act {
     Expand(String),
     Format(String, Format, ColorTag),
     Opaque(String, bool),
+    /// "Enable parallax" on a complex `_m` (DECISIONS AG18).
+    Parallax(String, bool),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
@@ -163,6 +167,7 @@ pub fn draw(
             Act::Expand(k) => expand = Some(k),
             Act::Format(k, f, t) => model.set_format(&k, f, t),
             Act::Opaque(k, on) => model.set_opaque(&k, on),
+            Act::Parallax(k, on) => model.set_field(&k, "alpha.parallax", serde_json::json!(on)),
             Act::Recipe(k, r) => {
                 model.set_packing_recipe(&k, r);
             }
@@ -599,22 +604,44 @@ fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<
     }
 }
 
-/// Packed outputs that fill no slot card (the cpm `_m`) get their fill rows here, under the cards.
+/// Outputs that fill no slot card get their controls here, under the cards: the complex `_m` (packed cpm or loose)
+/// its "Enable parallax" box (DECISIONS AG18), a packed output its fill rows.
 fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut Vec<Act>) {
     let why = super::settings_panel::toml_read_only_reason(model);
     for item in v
         .members
         .iter()
         .filter_map(|m| model.item(m))
-        .filter(|i| i.kind == ItemKind::Packed && slot_of(i).is_none())
+        .filter(|i| slot_of(i).is_none())
     {
-        if fill_rows(model, &item.key).is_empty() {
+        let parallax = item
+            .job
+            .as_ref()
+            .filter(|j| j.profile.subtype == Subtype::ComplexMaterial)
+            .and_then(|j| field_view(model.target, j, "alpha.parallax"));
+        let fills = item.kind == ItemKind::Packed && !fill_rows(model, &item.key).is_empty();
+        if parallax.is_none() && !fills {
             continue;
         }
         ui.add_space(6.0);
         ui.label(egui::RichText::new(&item.name).strong());
         ui.add_enabled_ui(why.is_none(), |ui| {
-            fill_controls(ui, model, &item.key, acts)
+            if let Some(f) = &parallax {
+                let mut on = f.value.as_bool().unwrap_or(false);
+                let r = ui
+                    .add_enabled(
+                        f.lock.is_none(),
+                        egui::Checkbox::new(&mut on, "Enable parallax"),
+                    )
+                    .on_hover_text(PARALLAX_HOVER)
+                    .on_disabled_hover_text(f.lock.unwrap_or_default());
+                if r.changed() {
+                    acts.push(Act::Parallax(item.key.clone(), on));
+                }
+            }
+            if fills {
+                fill_controls(ui, model, &item.key, acts)
+            }
         })
         .response
         .on_disabled_hover_text(why.clone().unwrap_or_default());
