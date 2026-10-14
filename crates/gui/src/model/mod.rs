@@ -275,6 +275,8 @@ pub struct AppModel {
     pub nvtt: Option<engine::nvtt::NvttProbe>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
+    /// Design §5.1, §6: the CS PBR scan reads (statics, EDID checks, the material-object picker).
+    pub cs_pbr: cs_pbr::CsPbrScan,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -390,6 +392,7 @@ impl AppModel {
             restart_needed: false,
             nvtt: None,
             plugin_refs: Default::default(),
+            cs_pbr: Default::default(),
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
