@@ -1,6 +1,6 @@
 //! The eframe application: owns the model, draws it each frame.
+use crate::model::heatmap::HeatImage;
 use crate::model::preview::{PreviewOut, SourceState};
-use crate::model::view::{self, Channel};
 use crate::model::viewport3d::Look;
 use crate::model::AppModel;
 use crate::render::{PreviewRenderer, Slot};
@@ -8,13 +8,12 @@ use eframe::{egui, egui_wgpu};
 use engine::session::SourcePreview;
 use std::sync::Arc;
 
-/// The model values currently on the GPU. A texture is uploaded again only when its `Arc` (or the mip and channel
-/// of a heatmap) changes.
+/// The model values currently on the GPU. A texture is uploaded again only when its `Arc` changes.
 #[derive(Default)]
 struct Uploaded {
     source: Option<Arc<SourcePreview>>,
     encoded: Option<Arc<PreviewOut>>,
-    heatmap: Option<(Arc<PreviewOut>, usize, Channel)>,
+    heatmap: Option<Arc<HeatImage>>,
 }
 
 fn same<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
@@ -148,11 +147,11 @@ impl SdcApp {
             .shown()
             .filter(|_| expanded)
             .cloned();
-        let (mip, channel) = (self.model.view.mip, self.model.view.channel);
-        let want_heatmap = want_encoded
-            .clone()
-            .filter(|_| self.model.view.heatmap)
-            .map(|o| (o, mip, channel));
+        // Made off the UI thread (`heatmap_frame`); the one on show stays until the next lands.
+        let want_heatmap = self
+            .model
+            .heatmap_image()
+            .filter(|_| expanded && self.model.view.heatmap);
 
         let mut resources = rs.renderer.write();
         let Some(renderer) = resources.callback_resources.get_mut::<PreviewRenderer>() else {
@@ -179,20 +178,9 @@ impl SdcApp {
             };
             self.uploaded.encoded = want_encoded;
         }
-        let heatmap_unchanged = match (&self.uploaded.heatmap, &want_heatmap) {
-            (Some((a, m, c)), Some((b, n, d))) => Arc::ptr_eq(a, b) && m == n && c == d,
-            (None, None) => true,
-            _ => false,
-        };
-        if !heatmap_unchanged {
+        if !same(&self.uploaded.heatmap, &want_heatmap) {
             gpu.heatmap = match &want_heatmap {
-                Some((o, mip, channel)) => match view::heatmap_of(o, *mip, *channel) {
-                    Some((w, h, rgba)) => renderer.set_heatmap(&rs, w, h, &rgba),
-                    None => {
-                        renderer.clear(Slot::Heatmap);
-                        false
-                    }
-                },
+                Some(i) => renderer.set_heatmap(&rs, i.width, i.height, &i.rgba),
                 None => {
                     renderer.clear(Slot::Heatmap);
                     false
@@ -246,6 +234,7 @@ impl eframe::App for SdcApp {
         self.was_focused = focused;
 
         // Upload before drawing: the paint callbacks run after this frame's UI and read what is on the GPU.
+        self.model.heatmap_frame();
         self.sync_renderer();
         let scanning = self.meshes.scanning();
         self.meshes.poll();

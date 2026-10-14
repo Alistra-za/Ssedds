@@ -391,6 +391,20 @@ pub static ACTIONS: &[Action] = &[
         &[key(Key::CloseBracket)],
         |m, _| m.expand_step(1),
     ),
+    a(
+        "lens",
+        "Magnifier lens on or off",
+        Preview,
+        &[key(Key::L)],
+        |m, _| m.view.lens = !m.view.lens,
+    ),
+    a(
+        "tile",
+        "Tile the picture 3×3 on or off",
+        Preview,
+        &[key(Key::T)],
+        |m, _| m.view.tile = !m.view.tile,
+    ),
     unlisted(a(
         "channel-rgba",
         "Show RGBA",

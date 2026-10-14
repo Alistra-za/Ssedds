@@ -4,7 +4,7 @@
 use crate::model::items::ItemKind;
 use crate::model::preview::NO_GPU;
 use crate::model::preview::{EncodedState, PreviewOut, SourceState};
-use crate::model::view::{readouts, skipped_note, Channel, Layout, ViewState};
+use crate::model::view::{self, readouts, skipped_note, Channel, Layout, ViewState};
 use crate::model::AppModel;
 use crate::render::{self, Params, Slot, UploadPath};
 use crate::ui::settings_panel;
@@ -40,6 +40,8 @@ pub struct GpuStatus {
 pub struct PreviewUi {
     /// The item the view was last fitted for: a newly expanded texture starts fitted.
     fitted_for: Option<String>,
+    /// The pixel readout of the texel under the cursor, shown in the notes strip (laid out before the viewports).
+    readout: Option<Vec<String>>,
 }
 
 /// The facts about the expanded texture's mips that the toolbar, the viewports and the notes share.
@@ -122,7 +124,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
         model.collapse();
         return;
     }
-    egui::Panel::bottom("preview-notes").show(ui, |ui| notes(ui, model, &info, gpu));
+    egui::Panel::bottom("preview-notes").show(ui, |ui| {
+        notes(ui, model, &info, gpu, state.readout.as_deref())
+    });
     let rect = ui.available_rect_before_wrap();
     if viewports(ui, model, &info, gpu, rect, requests, state, &key) {
         model.collapse();
@@ -206,6 +210,30 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
         ui.toggle_value(&mut model.view.heatmap, "Heatmap")
             .on_disabled_hover_text("Needs an encoded result with a source image");
     });
+    ui.toggle_value(&mut model.view.lens, "Lens")
+        .on_hover_text(format!(
+            "A magnifier circle at 8x that follows the cursor ({})",
+            super::actions::keys_text("lens")
+        ));
+    ui.toggle_value(&mut model.view.tile, "Tile 3×3")
+        .on_hover_text(format!(
+            "Repeat the picture 3×3 to check the seams ({})",
+            super::actions::keys_text("tile")
+        ));
+    if hdr {
+        ui.separator();
+        ui.spacing_mut().slider_width = 90.0;
+        let (lo, hi) = view::EXPOSURE_RANGE;
+        let r = ui
+            .add(
+                egui::Slider::new(&mut model.view.exposure, lo..=hi)
+                    .step_by(0.1)
+                    .suffix(" EV"),
+            )
+            .on_hover_text("Exposure: scales the HDR values by 2^EV before the tone map");
+        let ev = f64::from(model.view.exposure);
+        r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), ev, "Exposure"));
+    }
     ui.separator();
     requests.fit = ui
         .button("Fit")
@@ -270,7 +298,30 @@ fn can_encode(model: &AppModel) -> bool {
     job && !encoding && matches!(model.preview.source, SourceState::Ready(_))
 }
 
-fn notes(ui: &mut egui::Ui, model: &AppModel, info: &Info, gpu: &GpuStatus) {
+fn notes(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    info: &Info,
+    gpu: &GpuStatus,
+    readout: Option<&[String]>,
+) {
+    if model.view.heatmap && gpu.heatmap {
+        legend(ui, &mut model.view.full_scale);
+    }
+    match readout {
+        Some(lines) => {
+            for l in lines {
+                ui.label(RichText::new(l).monospace().small());
+            }
+        }
+        None => {
+            ui.label(
+                RichText::new("Point at the picture for the texel readout")
+                    .small()
+                    .weak(),
+            );
+        }
+    }
     let mut lines: Vec<String> = vec![];
     lines.extend(skipped_note(&info.dims, info.first));
     if info.nvtt {
@@ -294,6 +345,54 @@ fn notes(ui: &mut egui::Ui, model: &AppModel, info: &Info, gpu: &GpuStatus) {
             ui.label(value);
             ui.add_space(8.0);
         }
+    });
+}
+
+/// The heatmap's colour bar from 0 to the full scale, with ticks, and the full-scale slider (log, 0.005 to 0.5).
+fn legend(ui: &mut egui::Ui, full_scale: &mut f32) {
+    const STEPS: usize = 32;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Heatmap |Δ|").small());
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 22.0), Sense::hover());
+        let bar = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 10.0));
+        let w = bar.width() / STEPS as f32;
+        for i in 0..STEPS {
+            let [r, g, b] = view::ramp((i as f32 + 0.5) / STEPS as f32);
+            let cell = Rect::from_min_size(
+                egui::pos2(bar.min.x + w * i as f32, bar.min.y),
+                egui::vec2(w + 0.5, bar.height()),
+            );
+            ui.painter()
+                .rect_filled(cell, 0.0, Color32::from_rgb(r, g, b));
+        }
+        let text = ui.visuals().text_color();
+        for (f, align) in [
+            (0.0, egui::Align2::LEFT_TOP),
+            (0.5, egui::Align2::CENTER_TOP),
+            (1.0, egui::Align2::RIGHT_TOP),
+        ] {
+            let x = bar.min.x + bar.width() * f;
+            ui.painter().vline(
+                x,
+                bar.bottom()..=bar.bottom() + 3.0,
+                egui::Stroke::new(1.0, text),
+            );
+            ui.painter().text(
+                egui::pos2(x, bar.bottom() + 2.0),
+                align,
+                format!("{:.3}", *full_scale * f),
+                egui::FontId::proportional(9.0),
+                text,
+            );
+        }
+        let (lo, hi) = view::FULL_SCALE_RANGE;
+        ui.add(
+            egui::Slider::new(full_scale, lo..=hi)
+                .logarithmic(true)
+                .max_decimals(3)
+                .text("full scale"),
+        )
+        .on_hover_text("The difference drawn white; 0.1 is about 25 codes of 255");
     });
 }
 
@@ -373,8 +472,8 @@ fn viewports(
         (left, right)
     };
     let mut encode = false;
-    draw_source_pane(ui, model, info, gpu, left, left_vis, size);
-    draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
+    let left_draw = draw_source_pane(ui, model, info, gpu, left, left_vis, size);
+    let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
     if split {
         ui.painter().vline(
             divider_x,
@@ -382,10 +481,66 @@ fn viewports(
             egui::Stroke::new(1.5, Color32::from_gray(200)),
         );
     }
+    // The cursor as a fraction of the pane it is over: both panes (or both sides of Split) share it.
+    let hover = responses
+        .iter()
+        .find_map(|r| r.hover_pos().map(|p| (r.rect.min, p)))
+        .filter(|_| info.known())
+        .map(|(min, p)| view::pane_fraction([p.x, p.y], [min.x, min.y], size));
+    let readout = hover.and_then(|s| {
+        let t = model.view.texel_at(size, mip_size, s)?;
+        Some(model.preview_texel(mip, t).lines())
+    });
+    if readout != state.readout {
+        state.readout = readout;
+        ui.ctx().request_repaint();
+    }
+    if let (true, Some(s)) = (model.view.lens, hover) {
+        let (uv_offset, uv_scale) = model.view.lens_uv(size, mip_size, s);
+        for (pane, vis, drawn) in [(left, left_vis, left_draw), (right, right_vis, right_draw)] {
+            let centre = pane.min + egui::vec2(s[0] * size[0], s[1] * size[1]);
+            lens(ui, centre, vis, drawn, uv_offset, uv_scale);
+        }
+    }
     if encode {
         model.encode_now();
     }
     responses.iter().any(|r| r.double_clicked())
+}
+
+/// The magnifier in one pane: the pane's own slot drawn again at `centre` through the lens uv rect (a circle,
+/// nearest sampling; its own uniform block), clipped to the pane, with a rim and a centre crosshair.
+fn lens(
+    ui: &mut egui::Ui,
+    centre: egui::Pos2,
+    visible: Rect,
+    drawn: Option<(Slot, Params)>,
+    uv_offset: [f32; 2],
+    uv_scale: [f32; 2],
+) {
+    let Some((slot, params)) = drawn else {
+        return;
+    };
+    let r = Rect::from_center_size(centre, egui::Vec2::splat(view::LENS_PX));
+    let params = Params {
+        uv_offset,
+        uv_scale,
+        lens: 1,
+        ..params
+    };
+    let clip = visible.intersect(ui.clip_rect());
+    let painter = ui.painter().with_clip_rect(clip);
+    painter.circle_filled(centre, view::LENS_PX / 2.0, PANE_BG);
+    paint_clipped(ui, r, visible, slot, params);
+    let stroke = egui::Stroke::new(1.0, Color32::from_gray(220));
+    painter.circle_stroke(
+        centre,
+        view::LENS_PX / 2.0,
+        egui::Stroke::new(1.5, Color32::from_gray(200)),
+    );
+    let arm = 6.0;
+    painter.hline(centre.x - arm..=centre.x + arm, centre.y, stroke);
+    painter.vline(centre.x, centre.y - arm..=centre.y + arm, stroke);
 }
 
 /// Scroll or pinch zooms about the pointer; dragging pans. Both viewports share the one view.
@@ -435,6 +590,9 @@ fn params_for(
         // The tone map already ends in sRGB; the two are never applied together.
         view_linear: (view.view_linear && !tonemap) as u32,
         tonemap: tonemap as u32,
+        exposure: view::exposure_factor(view.exposure),
+        tile: view.tile as u32,
+        lens: 0,
     }
 }
 
@@ -454,7 +612,7 @@ fn draw_source_pane(
     viewport: Rect,
     visible: Rect,
     size: [f32; 2],
-) {
+) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let text = match &model.preview.source {
         SourceState::Loading => Some("Loading source…".to_string()),
@@ -466,6 +624,7 @@ fn draw_source_pane(
         }
         SourceState::Ready(_) => None,
     };
+    let mut drawn = None;
     if let (None, SourceState::Ready(s)) = (&text, &model.preview.source) {
         let mip = model.view.mip;
         let tonemap = info.format.is_some_and(Format::is_hdr);
@@ -477,8 +636,10 @@ fn draw_source_pane(
             tonemap,
         );
         paint_clipped(ui, viewport, visible, Slot::Source, params);
+        drawn = Some((Slot::Source, params));
     }
     pane_overlay(ui, visible, "Source", None, text.as_deref(), false);
+    drawn
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -491,7 +652,7 @@ fn draw_encoded_pane(
     visible: Rect,
     size: [f32; 2],
     encode: &mut bool,
-) {
+) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let heat = model.view.heatmap && gpu.heatmap;
     let (badge, text, offer_encode) = match &model.preview.encoded {
@@ -521,7 +682,7 @@ fn draw_encoded_pane(
             text = Some("No preview of this result".to_string());
         }
     }
-    let mut drawn = false;
+    let mut drawn = None;
     if gpu.renderer && info.shown.is_some() {
         let mip = model.view.mip;
         if heat {
@@ -529,7 +690,7 @@ fn draw_encoded_pane(
             params.channel = 0;
             params.view_linear = 0;
             paint_clipped(ui, viewport, visible, Slot::Heatmap, params);
-            drawn = true;
+            drawn = Some((Slot::Heatmap, params));
         } else if let (true, Some(out)) = (uploaded, &info.shown) {
             let tonemap = out.result.format.is_hdr();
             let first = out.result.source.first_level;
@@ -541,10 +702,10 @@ fn draw_encoded_pane(
                 tonemap,
             );
             paint_clipped(ui, viewport, visible, Slot::Encoded, params);
-            drawn = true;
+            drawn = Some((Slot::Encoded, params));
         }
     }
-    if drawn && matches!(model.preview.encoded, EncodedState::Encoding { .. }) {
+    if drawn.is_some() && matches!(model.preview.encoded, EncodedState::Encoding { .. }) {
         ui.painter()
             .rect_filled(visible, 0.0, Color32::from_black_alpha(128));
     }
@@ -553,6 +714,7 @@ fn draw_encoded_pane(
     if pane_overlay(ui, visible, title, badge, text.as_deref(), button) {
         *encode = true;
     }
+    drawn
 }
 
 /// The pane's title and badge in its corner and, when there is nothing to draw, a centred message (with an

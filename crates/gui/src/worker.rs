@@ -50,6 +50,11 @@ pub enum WorkerMsg {
         token: u64,
         result: Result<Arc<SourcePreview>, String>,
     },
+    /// The error heatmap of job `id` (`AppModel::heatmap_frame`); `None` when that mip has no source side.
+    Heatmap {
+        id: u64,
+        image: Option<Arc<crate::model::heatmap::HeatImage>>,
+    },
     Encoded {
         token: u64,
         result: Result<Arc<PreviewOut>, String>,

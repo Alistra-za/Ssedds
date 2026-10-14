@@ -70,6 +70,14 @@ pub struct ViewState {
     pub zoom: f32,
     /// The uv at the viewport centre.
     pub center: [f32; 2],
+    /// Exposure in EV for HDR formats, applied as `2^EV` before the tone map; 0 on every texture change.
+    pub exposure: f32,
+    /// The heatmap's full scale: the difference drawn white.
+    pub full_scale: f32,
+    /// The magnifier lens follows the cursor.
+    pub lens: bool,
+    /// Repeat the picture 3×3 to check seams.
+    pub tile: bool,
 }
 
 impl Default for ViewState {
@@ -83,13 +91,94 @@ impl Default for ViewState {
             mip: 0,
             zoom: 1.0,
             center: [0.5, 0.5],
+            exposure: 0.0,
+            full_scale: FULL_SCALE_DEFAULT,
+            lens: false,
+            tile: false,
         }
     }
 }
 
 const ZOOM_RANGE: (f32, f32) = (1.0 / 64.0, 64.0);
+pub const EXPOSURE_RANGE: (f32, f32) = (-8.0, 8.0);
+/// About 25 codes of 255 is white.
+pub const FULL_SCALE_DEFAULT: f32 = 0.1;
+pub const FULL_SCALE_RANGE: (f32, f32) = (0.005, 0.5);
+/// The lens: its width in points and its magnification over the view.
+pub const LENS_PX: f32 = 160.0;
+pub const LENS_ZOOM: f32 = 8.0;
+
+/// What the shader multiplies an HDR value by before the tone map.
+pub fn exposure_factor(ev: f32) -> f32 {
+    ev.exp2()
+}
+
+/// Where `pos` sits in a pane at `min` of `size`, as 0..1 of each side.
+pub fn pane_fraction(pos: [f32; 2], min: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+    [
+        (pos[0] - min[0]) / size[0].max(1.0),
+        (pos[1] - min[1]) / size[1].max(1.0),
+    ]
+}
+
+/// The point in the pane at `to` matching `pos` in the pane at `from` (side by side; in Split both are one rect).
+pub fn mirror(pos: [f32; 2], from: [f32; 2], to: [f32; 2]) -> [f32; 2] {
+    [pos[0] - from[0] + to[0], pos[1] - from[1] + to[1]]
+}
+
+/// The uv that is sampled for `uv`: itself inside the picture, wrapped into it over the 3×3 when tiled, `None` off
+/// the picture. Mirrors the shader.
+pub fn tile_uv(uv: [f32; 2], tile: bool) -> Option<[f32; 2]> {
+    let (lo, hi) = if tile { (-1.0, 2.0) } else { (0.0, 1.0) };
+    if uv.iter().any(|&u| !(lo..hi).contains(&u)) {
+        return None;
+    }
+    Some(if tile { uv.map(|u| u - u.floor()) } else { uv })
+}
 
 impl ViewState {
+    /// The uv under the point `s` (0..1 of the pane).
+    pub fn uv_at(&self, viewport: [f32; 2], mip_size: (u32, u32), s: [f32; 2]) -> [f32; 2] {
+        let (offset, scale) = self.uv_rect(viewport, mip_size);
+        [offset[0] + s[0] * scale[0], offset[1] + s[1] * scale[1]]
+    }
+
+    /// The texel of the shown mip under the point `s` (0..1 of the pane); `None` off the picture.
+    pub fn texel_at(
+        &self,
+        viewport: [f32; 2],
+        mip_size: (u32, u32),
+        s: [f32; 2],
+    ) -> Option<(u32, u32)> {
+        let uv = tile_uv(self.uv_at(viewport, mip_size, s), self.tile)?;
+        let t = |u: f32, n: u32| ((u * n as f32) as u32).min(n.saturating_sub(1));
+        Some((t(uv[0], mip_size.0), t(uv[1], mip_size.1)))
+    }
+
+    /// `(uv_offset, uv_scale)` of the lens at the point `s`: [`LENS_PX`] at [`LENS_ZOOM`]× the view, centred on the
+    /// texel under the point. Off the picture the texel clamps to its edge; tiled, it wraps.
+    pub fn lens_uv(
+        &self,
+        viewport: [f32; 2],
+        mip_size: (u32, u32),
+        s: [f32; 2],
+    ) -> ([f32; 2], [f32; 2]) {
+        let uv = self.uv_at(viewport, mip_size, s);
+        let wrapped = if self.tile {
+            uv.map(|u| u - u.floor())
+        } else {
+            uv
+        };
+        let size = [mip_size.0.max(1) as f32, mip_size.1.max(1) as f32];
+        let centre = |u: f32, n: f32| ((u * n).floor().clamp(0.0, n - 1.0) + 0.5) / n;
+        let c = [centre(wrapped[0], size[0]), centre(wrapped[1], size[1])];
+        let scale = [
+            LENS_PX / (LENS_ZOOM * self.zoom * size[0]),
+            LENS_PX / (LENS_ZOOM * self.zoom * size[1]),
+        ];
+        ([c[0] - scale[0] / 2.0, c[1] - scale[1] / 2.0], scale)
+    }
+
     /// `(uv_offset, uv_scale)` mapping the viewport's [0, 1]² to texture uv.
     pub fn uv_rect(&self, viewport: [f32; 2], mip_size: (u32, u32)) -> ([f32; 2], [f32; 2]) {
         let scale = [
@@ -119,9 +208,10 @@ impl ViewState {
         self.center[1] -= delta[1] / (self.zoom * mip_size.1 as f32);
     }
 
-    /// Show the whole mip, centred.
+    /// Show the whole mip (all nine copies when tiled), centred.
     pub fn fit(&mut self, viewport: [f32; 2], mip_size: (u32, u32)) {
-        let z = (viewport[0] / mip_size.0 as f32).min(viewport[1] / mip_size.1 as f32);
+        let n = if self.tile { 3.0 } else { 1.0 };
+        let z = (viewport[0] / (n * mip_size.0 as f32)).min(viewport[1] / (n * mip_size.1 as f32));
         if z.is_finite() && z > 0.0 {
             self.zoom = z.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
         }
@@ -149,34 +239,53 @@ impl ViewState {
 }
 
 /// |source − decoded| of `channel` (RGB: the largest of the three), as a black → red → yellow → white ramp.
-pub fn heatmap(source: &Rgba32F, decoded: &[[f32; 4]], channel: Channel) -> (u32, u32, Vec<u8>) {
+pub fn heatmap(
+    source: &Rgba32F,
+    decoded: &[[f32; 4]],
+    channel: Channel,
+    full_scale: f32,
+) -> (u32, u32, Vec<u8>) {
     let mut out = Vec::with_capacity(decoded.len() * 4);
     for (s, d) in source.px.iter().zip(decoded) {
-        let e = |c: usize| (s[c] - d[c]).abs();
-        let err = match channel {
-            Channel::R => e(0),
-            Channel::G => e(1),
-            Channel::B => e(2),
-            Channel::A | Channel::AlphaMask => e(3),
-            Channel::Rgba => e(0).max(e(1)).max(e(2)),
-        };
-        // 0.1 (about 25 codes) is full scale.
-        let t = (err / 0.1).clamp(0.0, 1.0);
-        let r = (t * 3.0).min(1.0);
-        let g = (t * 3.0 - 1.0).clamp(0.0, 1.0);
-        let b = (t * 3.0 - 2.0).clamp(0.0, 1.0);
-        out.extend([(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255]);
+        let e: [f32; 4] = std::array::from_fn(|c| (s[c] - d[c]).abs());
+        let t = (channel_error(e, channel) / full_scale.max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
+        out.extend(ramp(t));
+        out.push(255);
     }
     (source.width, source.height, out)
 }
 
+/// The error `channel` measures: that channel, alpha for the mask, the largest of R, G and B for RGBA.
+pub fn channel_error(e: [f32; 4], channel: Channel) -> f32 {
+    match channel {
+        Channel::R => e[0],
+        Channel::G => e[1],
+        Channel::B => e[2],
+        Channel::A | Channel::AlphaMask => e[3],
+        Channel::Rgba => e[0].max(e[1]).max(e[2]),
+    }
+}
+
+/// The heatmap colour of `t` (0..1 of full scale): black → red → yellow → white.
+pub fn ramp(t: f32) -> [u8; 3] {
+    let r = (t * 3.0).clamp(0.0, 1.0);
+    let g = (t * 3.0 - 1.0).clamp(0.0, 1.0);
+    let b = (t * 3.0 - 2.0).clamp(0.0, 1.0);
+    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]
+}
+
 /// The heatmap of absolute mip `mip` of `out`, against the source it was encoded from. `None` when that mip has no
 /// source side (a DDS input) or the sides disagree in size.
-pub fn heatmap_of(out: &PreviewOut, mip: usize, channel: Channel) -> Option<(u32, u32, Vec<u8>)> {
+pub fn heatmap_of(
+    out: &PreviewOut,
+    mip: usize,
+    channel: Channel,
+    full_scale: f32,
+) -> Option<(u32, u32, Vec<u8>)> {
     let i = mip.checked_sub(out.result.source.first_level)?;
     let src = out.result.source.levels.get(i)?;
     let dec = out.decoded.get(i)?;
-    (dec.len() == src.px.len()).then(|| heatmap(src, dec, channel))
+    (dec.len() == src.px.len()).then(|| heatmap(src, dec, channel, full_scale))
 }
 
 /// One line naming every mip left out because it is above the preview limit.

@@ -113,12 +113,17 @@ Apply is greyed out while a row is red: two files or sets would end up with one 
 
 ## The preview
 
-Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. In the preview, **[** and **]** step to the previous and next texture in the order the Textures column shows, **1** to **6** pick the channel buttons from left to right, and **PageUp** and **PageDown** step through the mips.
+Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. In the preview, **[** and **]** step to the previous and next texture in the order the Textures column shows, **1** to **6** pick the channel buttons from left to right, **PageUp** and **PageDown** step through the mips, **L** turns the lens on or off and **T** the 3×3 tiling.
 
 - **Live encode** is **off by default**. Encoding happens when you press **Encode now**; switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
 - Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
 - The preview encodes only mips whose larger side is at most the **preview size limit**: **4096 by default**, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and the preview says so.
-- Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
+- Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*, *Lens* and *Tile 3×3*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
+- **Texel readout:** point at the picture and the strip under the viewports shows the texel under the cursor: its coordinates at the mip on show, the source and the encoded RGBA as 0–255 and as floats, and the difference per channel with its largest (the channel the heatmap measures). The numbers are the stored values; the first line says how the view reads them (sRGB-encoded, or linear under UNORM; HDR formats show floats only). A channel button narrows the readout to that channel. For a normal map it also shows both normals as vectors, the encoded one's length and the angle between them in degrees. A side the preview does not hold (no encode yet, a DDS input's source, a mip above the limit) shows "—". Side by side and Split read the same texel for both sides.
+- **Lens** (**L**): a circle 160 points across that follows the cursor and magnifies the view 8× with no smoothing, centred on the texel under the cursor with a crosshair. It shows in both viewports (in Split, each side of the divider shows its own side).
+- **Tile 3×3** (**T**): the picture repeats three by three, to check the seams. Zoom, pan and the readout work on the tiled view; *Fit* fits all nine copies.
+- **Exposure:** for HDR formats (BC6H, RGBA16F) a slider from −8 to +8 EV scales the values by 2^EV before the tone map. It starts at 0 for every texture.
+- **Heatmap legend:** with the heatmap on, a colour bar under the viewports shows the scale from 0 to the *full scale* (the difference drawn white), which a slider sets from 0.005 to 0.5 (0.1 by default, about 25 codes of 255). The heatmap is made in the background: the previous one stays on show until the new one is ready.
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
 
@@ -149,6 +154,8 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | Preview | Esc | Close the preview |
 | Preview | [ | Previous texture |
 | Preview | ] | Next texture |
+| Preview | L | Magnifier lens on or off |
+| Preview | T | Tile the picture 3×3 on or off |
 | Preview | 1 | Show RGBA |
 | Preview | 2 | Show R |
 | Preview | 3 | Show G |

@@ -46,10 +46,16 @@ pub struct Params {
     pub channel: u32,
     pub view_linear: u32,
     pub tonemap: u32,
+    /// What an HDR value is multiplied by before the tone map: `2^EV` (1 is no change).
+    pub exposure: f32,
+    /// 1: the picture repeats 3×3 (uv −1..2 wraps).
+    pub tile: u32,
+    /// 1: the magnifier lens: a circle in the rect, nearest sampling, its own uniform block.
+    pub lens: u32,
 }
 
-/// The uniform buffer: the [`Params`] fields, then the slot's own `kind` (how its channels map to colour), padded
-/// to the uniform block's 16-byte alignment.
+/// The uniform buffer: `uv_offset`, `uv_scale`, `mip`, `channel`, `view_linear`, `tonemap`, the slot's own `kind`
+/// (how its channels map to colour), then `exposure`, `tile` and `lens`: 48 bytes, the block's 16-byte alignment.
 const PARAMS_BYTES: usize = 48;
 
 impl Params {
@@ -69,6 +75,9 @@ impl Params {
         for (i, w) in words.iter().enumerate() {
             b[20 + i * 4..24 + i * 4].copy_from_slice(&w.to_le_bytes());
         }
+        b[36..40].copy_from_slice(&self.exposure.to_le_bytes());
+        b[40..44].copy_from_slice(&self.tile.to_le_bytes());
+        b[44..48].copy_from_slice(&self.lens.to_le_bytes());
         b
     }
 }
@@ -102,6 +111,9 @@ struct SlotTexture {
     params: wgpu::Buffer,
     bind_nearest: wgpu::BindGroup,
     bind_linear: wgpu::BindGroup,
+    /// The lens draws the slot a second time in the same frame, so it has its own uniform block (nearest only).
+    lens_params: wgpu::Buffer,
+    bind_lens: wgpu::BindGroup,
     /// Size of mip 0.
     base: (u32, u32),
     kind: u32,
@@ -243,14 +255,17 @@ impl PreviewRenderer {
         base: (u32, u32),
         kind: u32,
     ) {
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sdc preview params"),
-            size: PARAMS_BYTES as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let buffer = || {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sdc preview params"),
+                size: PARAMS_BYTES as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let (params, lens_params) = (buffer(), buffer());
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind = |sampler: &wgpu::Sampler| {
+        let bind = |sampler: &wgpu::Sampler, params: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("sdc preview bind group"),
                 layout: &self.layout,
@@ -270,12 +285,16 @@ impl PreviewRenderer {
                 ],
             })
         };
-        let (bind_nearest, bind_linear) = (bind(&self.nearest), bind(&self.linear));
+        let (bind_nearest, bind_linear) =
+            (bind(&self.nearest, &params), bind(&self.linear, &params));
+        let bind_lens = bind(&self.nearest, &lens_params);
         self.slots[slot.index()] = Some(SlotTexture {
             _texture: texture,
             params,
             bind_nearest,
             bind_linear,
+            lens_params,
+            bind_lens,
             base,
             kind,
         });
@@ -371,10 +390,16 @@ impl PreviewRenderer {
         }
     }
 
-    /// Writes the slot's uniform block (before the render pass). A slot is drawn with one set of params per frame.
+    /// Writes the slot's uniform block (before the render pass). A slot is drawn with one set of params per frame,
+    /// plus one for the lens.
     pub fn write_params(&self, queue: &wgpu::Queue, slot: Slot, params: &Params) {
         if let Some(s) = &self.slots[slot.index()] {
-            queue.write_buffer(&s.params, 0, &params.to_bytes(s.kind));
+            let buffer = if params.lens == 1 {
+                &s.lens_params
+            } else {
+                &s.params
+            };
+            queue.write_buffer(buffer, 0, &params.to_bytes(s.kind));
         }
     }
 
@@ -390,17 +415,15 @@ impl PreviewRenderer {
         let Some(s) = &self.slots[slot.index()] else {
             return;
         };
-        let nearest = pixels_per_texel(s.base.0, params, viewport_px_width) >= 1.0;
+        let bind = if params.lens == 1 {
+            &s.bind_lens
+        } else if pixels_per_texel(s.base.0, params, viewport_px_width) >= 1.0 {
+            &s.bind_nearest
+        } else {
+            &s.bind_linear
+        };
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(
-            0,
-            if nearest {
-                &s.bind_nearest
-            } else {
-                &s.bind_linear
-            },
-            &[],
-        );
+        pass.set_bind_group(0, bind, &[]);
         pass.draw(0..3, 0..1);
     }
 }
@@ -490,6 +513,9 @@ mod tests {
             channel: 0,
             view_linear: 0,
             tonemap: 0,
+            exposure: 1.0,
+            tile: 0,
+            lens: 0,
         }
     }
 
@@ -502,6 +528,9 @@ mod tests {
             channel: 4,
             view_linear: 1,
             tonemap: 1,
+            exposure: 2.0,
+            tile: 1,
+            lens: 1,
         };
         let b = p.to_bytes(2);
         assert_eq!(b.len(), 48);
@@ -511,7 +540,10 @@ mod tests {
         assert_eq!(&b[20..24], &4u32.to_le_bytes());
         assert_eq!(&b[28..32], &1u32.to_le_bytes());
         assert_eq!(&b[32..36], &2u32.to_le_bytes());
-        assert!(b[36..].iter().all(|&x| x == 0));
+        // Exposure (2^EV), tile and lens fill the last 12 bytes.
+        assert_eq!(&b[36..40], &2.0f32.to_le_bytes());
+        assert_eq!(&b[40..44], &1u32.to_le_bytes());
+        assert_eq!(&b[44..48], &1u32.to_le_bytes());
     }
 
     #[test]

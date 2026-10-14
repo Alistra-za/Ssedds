@@ -12,6 +12,12 @@ struct Params {
     // How the texture's channels map to colour. 0: as sampled. 1: BC4 (the R channel is grey, as the CPU decode
     // makes it). 2: BC5 (a normal map: blue is rebuilt from red and green).
     kind: u32,
+    // What an HDR value is multiplied by before the tone map: 2^EV.
+    exposure: f32,
+    // 1: the picture repeats 3x3 (uv -1..2 wraps into 0..1).
+    tile: u32,
+    // 1: the magnifier lens: only the circle inscribed in the rect is drawn.
+    lens: u32,
 };
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -41,10 +47,24 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    if (any(in.uv < vec2<f32>(0.0)) || any(in.uv > vec2<f32>(1.0))) {
+    if (params.lens == 1u) {
+        let d = (in.uv - (params.uv_offset + params.uv_scale * 0.5)) / (params.uv_scale * 0.5);
+        if (dot(d, d) > 1.0) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+    }
+    var uv = in.uv;
+    if (params.tile == 1u) {
+        // The same rule as `model::view::tile_uv`.
+        if (any(uv < vec2<f32>(-1.0)) || any(uv >= vec2<f32>(2.0))) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+        uv = fract(uv);
+    }
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    var c = textureSampleLevel(tex, samp, in.uv, params.mip);
+    var c = textureSampleLevel(tex, samp, uv, params.mip);
     if (params.kind == 1u) {
         c = vec4<f32>(c.r, c.r, c.r, 1.0);
     } else if (params.kind == 2u) {
@@ -53,7 +73,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         c = vec4<f32>(c.rg, z * 0.5 + 0.5, 1.0);
     }
     if (params.tonemap == 1u) {
-        c = vec4<f32>(linear_to_srgb(c.rgb / (vec3<f32>(1.0) + c.rgb)), 1.0);
+        let e = c.rgb * params.exposure;
+        c = vec4<f32>(linear_to_srgb(e / (vec3<f32>(1.0) + e)), 1.0);
     }
     var rgb = c.rgb;
     switch params.channel {

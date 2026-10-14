@@ -83,6 +83,8 @@ pub struct PreviewModel {
     profile_sig: Option<String>,
     /// The stamp of the DDS input the preview was made from; a plan that finds another one reads the file again.
     dds_stamp: Option<SourceStamp>,
+    /// The error heatmap job and the heatmap on show (dropped with the texture).
+    pub(crate) heat: crate::model::heatmap::HeatJob,
 }
 
 impl PreviewModel {
@@ -103,6 +105,7 @@ impl PreviewModel {
             next_token: 0,
             profile_sig: None,
             dds_stamp: None,
+            heat: Default::default(),
         }
     }
 
@@ -127,7 +130,7 @@ impl PreviewModel {
 
     /// True while a worker is reading or encoding for the preview.
     pub fn working(&self) -> bool {
-        self.inflight_source.is_some() || self.inflight_encode.is_some()
+        self.inflight_source.is_some() || self.inflight_encode.is_some() || self.heat.working()
     }
 
     fn cancel_source(&mut self) {
@@ -147,8 +150,10 @@ impl PreviewModel {
         self.cancel_source();
         self.cancel_encode();
         let next_token = self.next_token;
+        let heat = self.heat.cleared();
         *self = PreviewModel::new(self.live);
         self.next_token = next_token;
+        self.heat = heat;
     }
 
     fn fresh_token(&mut self) -> (u64, CancelToken) {
@@ -330,6 +335,7 @@ impl AppModel {
     pub(super) fn preview_open(&mut self, key: &str) {
         self.preview.clear();
         self.preview.item = Some(key.to_string());
+        self.view.exposure = 0.0;
         let Some(item) = self.item(key) else {
             return;
         };

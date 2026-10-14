@@ -4,6 +4,7 @@ pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;
 pub mod fields;
+pub mod heatmap;
 pub mod history;
 pub mod input_name;
 pub mod inspector;
@@ -17,6 +18,7 @@ mod pbr_follow;
 pub mod picker;
 pub mod plugin_refs;
 pub mod preview;
+pub mod readout;
 pub mod rename;
 pub mod rnm;
 pub mod sections;
@@ -731,6 +733,7 @@ impl AppModel {
                         self.run_after_export();
                     }
                     "preview" => self.preview_panicked(&message),
+                    "heatmap" => self.heatmap_panicked(),
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -804,6 +807,7 @@ impl AppModel {
             }
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
+            WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
             _ => {}
         }
     }

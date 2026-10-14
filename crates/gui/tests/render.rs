@@ -185,6 +185,9 @@ fn params() -> Params {
         channel: 0,
         view_linear: 0,
         tonemap: 0,
+        exposure: 1.0,
+        tile: 0,
+        lens: 0,
     }
 }
 
@@ -397,4 +400,73 @@ fn a_bc_chain_down_to_one_texel_uploads_every_mip() {
             [128, 128, 128, 255],
         );
     }
+}
+
+/// Item 15: exposure multiplies before the tone map. EV 0 (factor 1) is the old output; EV +1 (factor 2) shows 0.5 as
+/// EV 0 shows 1.0.
+#[test]
+fn exposure_scales_hdr_values_before_the_tone_map() {
+    let Some(rs) = render_state() else { return };
+    let mut r = PreviewRenderer::new(&rs);
+    let level = |w: u32, h: u32, v: f32| Rgba32F {
+        width: w,
+        height: h,
+        px: vec![[v, v, v, 1.0]; (w * h) as usize],
+    };
+    let src = SourcePreview {
+        first_level: 0,
+        dims: vec![(2, 2), (1, 1)],
+        levels: vec![level(2, 2, 1.0), level(1, 1, 0.5)],
+    };
+    assert!(r.set_source(&rs, &src));
+    let hdr = |mip: f32, exposure: f32| Params {
+        mip,
+        tonemap: 1,
+        exposure,
+        ..params()
+    };
+    // 1.0 tone-maps to 0.5 linear, 0.735 in sRGB: 188, as before exposure existed.
+    let one = draw(&rs, &r, Slot::Source, hdr(0.0, 1.0))[MIDDLE];
+    near(one, [188, 188, 188, 255]);
+    // Mip 1 holds 0.5: one stop up it shows exactly as 1.0 does.
+    near(draw(&rs, &r, Slot::Source, hdr(1.0, 2.0))[MIDDLE], one);
+    // And it is brighter than 0.5 at EV 0.
+    assert!(draw(&rs, &r, Slot::Source, hdr(1.0, 1.0))[MIDDLE][0] < one[0] - 10);
+}
+
+/// Item 1: the lens draws only the circle inscribed in its rect, from its own uniform block.
+#[test]
+fn the_lens_is_a_circle_and_does_not_disturb_the_main_draw() {
+    let Some(rs) = render_state() else { return };
+    let mut r = PreviewRenderer::new(&rs);
+    assert!(r.set_heatmap(&rs, 1, 1, &[255, 0, 0, 255]));
+    let lens = Params {
+        lens: 1,
+        ..params()
+    };
+    let px = draw(&rs, &r, Slot::Heatmap, lens);
+    near(px[MIDDLE], [255, 0, 0, 255]);
+    near(px[0], [0, 0, 0, 0]);
+    // The main block still holds the main params: its corner is drawn.
+    r.write_params(&rs.queue, Slot::Heatmap, &lens);
+    near(draw(&rs, &r, Slot::Heatmap, params())[0], [255, 0, 0, 255]);
+}
+
+/// Item 15: tiling repeats the picture over uv −1..2.
+#[test]
+fn tiling_draws_the_neighbouring_copies() {
+    let Some(rs) = render_state() else { return };
+    let mut r = PreviewRenderer::new(&rs);
+    assert!(r.set_heatmap(&rs, 1, 1, &[0, 255, 0, 255]));
+    // The rect shows uv −1..2: the corner pixel is in the top left copy.
+    let wide = Params {
+        uv_offset: [-1.0, -1.0],
+        uv_scale: [3.0, 3.0],
+        ..params()
+    };
+    near(draw(&rs, &r, Slot::Heatmap, wide)[0], [0, 0, 0, 0]);
+    let tiled = Params { tile: 1, ..wide };
+    let px = draw(&rs, &r, Slot::Heatmap, tiled);
+    near(px[0], [0, 255, 0, 255]);
+    near(px[MIDDLE], [0, 255, 0, 255]);
 }
