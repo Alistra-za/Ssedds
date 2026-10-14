@@ -294,7 +294,7 @@ fn the_filter_combos_and_the_tile_slider_are_drawn() {
         combos >= 5,
         "sub-type, format, encoder, set membership, sort: {combos}"
     );
-    h.get_by_label("Tile size");
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Tile size");
 }
 
 #[test]

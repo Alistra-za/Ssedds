@@ -281,13 +281,14 @@ struct Pending {
 }
 
 /// A slider over `range` that returns a value only when the drag ends (or a click or key press settles it).
-/// `id` keeps the in-progress value between frames.
+/// `id` keeps the in-progress value between frames; `name` is the accessible name.
 pub fn commit_slider(
     ui: &mut egui::Ui,
     model_busy: bool,
     id: egui::Id,
     current: u32,
     range: std::ops::RangeInclusive<u32>,
+    name: &str,
     mixed: bool,
 ) -> (Option<u32>, egui::Response) {
     let mut pending: Option<Pending> = ui.data(|d| d.get_temp(id));
@@ -303,6 +304,7 @@ pub fn commit_slider(
         slider = slider.custom_formatter(|_, _| "— mixed".to_string());
     }
     let r = ui.add(slider);
+    r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), f64::from(value), name));
     if r.changed() {
         pending = Some(Pending {
             value,
@@ -348,7 +350,15 @@ fn threshold(
     mixed: bool,
 ) -> (Option<Value>, egui::Response) {
     let id = egui::Id::new(("threshold", key));
-    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 1..=254, mixed);
+    let (out, r) = commit_slider(
+        ui,
+        model_busy,
+        id,
+        u32::from(current),
+        1..=254,
+        "Alpha threshold",
+        mixed,
+    );
     (out.map(|v| json!(v)), r)
 }
 
@@ -385,7 +395,8 @@ pub(super) fn editor(
                 .unwrap_or(0)
                 .min(u64::from(RGBCX_MAX_LEVEL)) as u32;
             let id = egui::Id::new(("rgbcx-level", key));
-            let (out, r) = commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL, mixed);
+            let (out, r) =
+                commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL, "rgbcx level", mixed);
             (out.map(|v| json!(v)), r)
         }
         field => {

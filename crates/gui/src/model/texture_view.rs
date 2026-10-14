@@ -116,11 +116,15 @@ pub fn encoder_label(id: &str) -> &str {
     ENCODERS.iter().find(|e| e.0 == id).map_or(id, |e| e.1)
 }
 
-fn backend_id(b: Backend) -> String {
-    serde_json::to_value(b)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
+/// Exhaustive on purpose: a new `Backend` fails to build here until it has an `ENCODERS` row.
+fn backend_id(b: Backend) -> &'static str {
+    match b {
+        Backend::Bc7e => ENCODERS[0].0,
+        Backend::Rgbcx => ENCODERS[1].0,
+        Backend::IspcBc6h => ENCODERS[2].0,
+        Backend::Nvtt => ENCODERS[3].0,
+        Backend::Uncompressed => ENCODERS[4].0,
+    }
 }
 
 /// The values the combos list: only those in the folder.

@@ -450,8 +450,11 @@ fn combo_filters(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.label("Tile size");
         let (lo, hi) = ColumnPrefs::TILE_RANGE;
         ui.spacing_mut().slider_width = 70.0;
-        ui.add(egui::Slider::new(&mut model.prefs.tile, lo..=hi).show_value(false))
+        let r = ui
+            .add(egui::Slider::new(&mut model.prefs.tile, lo..=hi).show_value(false))
             .on_hover_text("How large the thumbnails are, in points (64 to 192)");
+        let tile = f64::from(model.prefs.tile);
+        r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), tile, "Tile size"));
     });
 }
 
