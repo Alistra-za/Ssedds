@@ -119,9 +119,10 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
     }
 }
 
-/// The exact-0 alpha fix is for the complex `_m` only: its alpha 0 means "complex material on, parallax off".
+/// The exact-0 alpha fix is for the complex `_m` written with alpha 0 only; parallax on keeps the source alpha as
+/// data, byte for byte as before (DECISIONS AG17).
 fn zero_fix(p: &Profile) -> bool {
-    p.subtype == Subtype::ComplexMaterial
+    p.subtype == Subtype::ComplexMaterial && p.alpha.parallax != Some(true)
 }
 
 /// The encoder-independent BC7 opaque fix-ups (DECISIONS Note NV6) on blocks `o` whose source texels `b` (16 per
