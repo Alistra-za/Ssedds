@@ -152,6 +152,37 @@ The flag controls only the mode-6 p-bit constraint (native patch or byte fallbac
 - Verdict for open item §14 #10: **one `-nomips` process per level** works and meets every pass criterion; the engine can build the chain itself and feed NVTT level by level (with `-nocuda`). Caveat: Production BC7 is slow (mip 0 dominates, about 14–27 s per 1 Mpix), so it is a quality option, not a default.
   Reproduce: `cargo run --release -p sdc-bench -- s7-nvtt` or `cargo test --release -p sdc-bench --test s7 -- --ignored --nocapture`.
 
+## Spike S7b — NVTT BC6H per level and DDS input (2026-10-13)
+
+M5 spec §8, NVTT 3.2.5 at the default install path (RTX 4090 present). Reproduce: `cargo run --release -p sdc-bench -- s7b-nvtt`
+or `cargo test --release -p sdc-bench --test s7b -- --ignored --nocapture`. Report: PASS.
+
+1. **DDS input: yes, but only with a legacy header.** `rgb_real/Bricks104` mip 0 (1024x512) as B8G8R8A8 written by `dds_bytes`:
+   with the DX10 header (DXGI 87) nvcompress reads garbage (RGB PSNR 5.05 dB; `nvddsinfo` shows a valid header, so NVTT's
+   loader just does not decode uncompressed DX10 formats). With the legacy header (`ResolvedHeader::Legacy`, BGRA masks) the
+   BC7 payload is byte-identical to the PNG feed (RGB PSNR 47.7768, same as S7's direct encode). For RGBA16F the DX10 header
+   also reads as garbage (peak ratio 0.0000); a legacy header with FourCC 113 (`D3DFMT_A16B16G16R16F`, `DDPF_FOURCC` only,
+   payload unchanged) works. EXR written by the `image` crate is refused ("Error opening input file"); Radiance HDR works but
+   is RGBE (lossy) and is not needed.
+2. **BC6H per level: yes, every level to 1x1.** First 3 `hdr_real` images (1024x512), each level box-filtered in f32
+   (`box_down_rgba16f`) and fed as legacy RGBA16F with `-silent -nomips -bc6 -production`: 33/33 levels have a payload of
+   exactly `ceil(w/4)*ceil(h/4)*16` bytes and a DX10 header with DXGI 95 (`BC6H_UF16`; the bench's unsigned decoder agrees).
+   Mip 0 equals the bench's direct `bc6_nvtt_production` rows: mPSNR 41.6678 / 58.5623 / 52.6373 dB (Δ 0.0000), peak ratio
+   1.0060 / 0.9514 / 0.9957 (all ≥ 0.95; kloofendal is NVTT's own 0.9514 in results2.csv too). No ISPC fallback for small
+   levels is needed, so `ENC-NVTT-PARTIAL` is not added.
+3. **`-nocuda` with BC6H: byte-identical** on 33/33 levels. Per-level wall time for levels of at most 32x32 (n=18): 0.151 s
+   with CUDA, 0.016 s with `-nocuda`; mip 0 1.25–1.85 s with `-nocuda` vs 1.41–2.00 s with CUDA; whole chains 6.55 s vs
+   10.91 s. CUDA buys nothing for BC6H Production either.
+4. **Banner and exit codes.** First line `NVIDIA Texture Tools 3.2.5 - Copyright NVIDIA Corporation 2007 - 2024`; the
+   version is the token after the prefix. The no-argument run **exits 1** (the probe must not require success). A truncated
+   input exits 1 with `Error opening input file '<path>'.` and writes no output.
+
+Choices:
+- **NV4:** `-nocuda` always, for BC6H as for BC7.
+- **NV5:** each level is fed as a DDS with a **legacy header**: BC7 as B8G8R8A8 via `dds_bytes(.., header: Legacy)`, BC6H as
+  RGBA16F with FourCC 113 (the engine's writer has no legacy RGBA16F form, so the NVTT module writes that header itself).
+  Never the DX10 header.
+
 ## Phase 0 exit (2026-10-09)
 
 | Gate | Result |

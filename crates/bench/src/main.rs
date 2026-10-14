@@ -28,6 +28,8 @@ enum Cmd {
     SpeedBc7e,
     /// Spike S7: NVTT fed one mip at a time.
     S7Nvtt,
+    /// Spike S7b: NVTT on the engine's DDS levels; BC6H per level down to 1x1.
+    S7bNvtt,
     /// Write the S2 small-texture and S8 `_m` variant source PNGs (owner in-game spikes).
     GenSpikeAssets {
         #[arg(long)]
@@ -133,10 +135,20 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Cmd::S7Nvtt => {
-            let work = std::path::PathBuf::from("target/bench/s7");
+        Cmd::S7Nvtt | Cmd::S7bNvtt => {
+            let b = matches!(cmd, Cmd::S7bNvtt);
+            let work = std::path::PathBuf::from(if b {
+                "target/bench/s7b"
+            } else {
+                "target/bench/s7"
+            });
             std::fs::create_dir_all(&work).unwrap();
-            match sdc_bench::s7::run(&root, &work) {
+            let r = if b {
+                sdc_bench::s7b::run(&root, &work)
+            } else {
+                sdc_bench::s7::run(&root, &work)
+            };
+            match r {
                 Ok(r) => {
                     println!("{r}");
                     if r.pass {
