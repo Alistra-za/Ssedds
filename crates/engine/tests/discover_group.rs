@@ -204,7 +204,7 @@ fn folders_discover_every_supported_image_extension() {
     std::fs::create_dir_all(&t).unwrap();
     for n in [
         "a.png", "b.tga", "c.tif", "d.tiff", "e.exr", "f.hdr", "g.bmp", "h.jpg", "i.JPEG", "j.dds",
-        "k.psd", "l.PSB", "m.txt",
+        "k.psd", "l.PSB", "n.webp", "o.kra", "p.ora", "m.txt",
     ] {
         std::fs::write(t.join(n), b"x").unwrap();
     }
@@ -213,7 +213,7 @@ fn folders_discover_every_supported_image_extension() {
         .iter()
         .map(|f| f.rel.to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names.len(), 12, "{names:?}");
+    assert_eq!(names.len(), 15, "{names:?}");
     assert!(!names.iter().any(|n| n.ends_with(".txt")));
 }
 

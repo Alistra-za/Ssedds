@@ -8,7 +8,7 @@ sdc is GPL-3.0-or-later. It statically links:
   sdc ships a modified `rgbcx.h`: patch "rgbcx BC4 round-to-nearest" (see `crates/encoders-sys/vendor/README-VENDOR.md`).
 - **Intel ISPC Texture Compressor** (commit 79ddbc9), Copyright (c) 2016-2019 Intel Corporation, MIT (LICENSES/ISPCTextureCompressor-license.txt).
 - **bcdec_rs** (crate), MIT. Other Rust crates: see `cargo about`/`cargo deny` output in release notes.
-- **image** (0.25, png/tga/tiff/exr/hdr/bmp/jpeg decoders), MIT or Apache-2.0; **exr** (1.74) and **lebe** (0.5), BSD-3-Clause; **zune-jpeg**, **zune-core**, **zune-inflate**, MIT or Apache-2.0 or Zlib; **pulp**, MIT. sdc uses the permissive option compatible with GPL-3.0-or-later.
+- **image** (0.25, png/tga/tiff/exr/hdr/bmp/jpeg/webp decoders), MIT or Apache-2.0; **image-webp** (0.2), MIT or Apache-2.0; **flate2** (1, Krita/OpenRaster archives), MIT or Apache-2.0; **exr** (1.74) and **lebe** (0.5), BSD-3-Clause; **zune-jpeg**, **zune-core**, **zune-inflate**, MIT or Apache-2.0 or Zlib; **pulp**, MIT. sdc uses the permissive option compatible with GPL-3.0-or-later.
 
 ISPC objects were compiled with Intel ISPC 1.31.0 (BSD-3-Clause compiler; the objects carry the source files' licences).
 NVIDIA Texture Tools is never redistributed or linked; sdc can call a user-installed nvcompress.exe as a separate process.
