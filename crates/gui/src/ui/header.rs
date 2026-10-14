@@ -52,12 +52,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             recent_menu(ui, model);
             mode_combo(ui, model);
             view_toggle(ui);
-            if ui
-                .toggle_value(&mut model.settings.columns_collapsed, "Collapse columns")
-                .changed()
-            {
-                model.save_settings();
-            }
+            column_checkboxes(ui, model);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Not while `sdc.toml` is ignored (M3a spec §7.4): an export would not be the project's settings.
                 let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
@@ -84,6 +79,26 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
         });
     });
     status(ui, model);
+}
+
+/// Which of the Textures and Sets columns are shown at all. Each column's own arrow collapses it to a strip.
+fn column_checkboxes(ui: &mut egui::Ui, model: &mut AppModel) {
+    let st = &mut model.settings;
+    let mut textures = !st.textures_hidden;
+    let mut sets = !st.sets_hidden;
+    let mut changed = ui
+        .checkbox(&mut textures, "Textures column")
+        .on_hover_text("Show the Textures column")
+        .changed();
+    changed |= ui
+        .checkbox(&mut sets, "Sets column")
+        .on_hover_text("Show the Sets column")
+        .changed();
+    if changed {
+        st.textures_hidden = !textures;
+        st.sets_hidden = !sets;
+        model.save_settings();
+    }
 }
 
 fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
@@ -186,6 +201,14 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
         "The PGPatcher JSON is written to {}\\PBRNIFPatcher\\<name>.json",
         model.export_root().display()
     );
+    // Right-to-left: added first, so it ends up right of the name field.
+    if ui
+        .button("Editor…")
+        .on_hover_text("Edit the whole TruePBR JSON: every set's entry and the delete sections")
+        .clicked()
+    {
+        model.json_editor_open = true;
+    }
     let r = ui
         .add_enabled(
             editable,

@@ -846,6 +846,12 @@ impl MeshesModel {
         }
     }
 
+    /// Closes the open mod's NIF list (the selected NIF's details stay).
+    pub fn close_mod(&mut self) {
+        self.selected_mod = None;
+        self.nifs.clear();
+    }
+
     fn find_row(&self, id: i64) -> Option<&NifRow> {
         self.nifs
             .iter()

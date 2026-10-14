@@ -302,7 +302,7 @@ The owner approved the M3b design section by section (spec `docs/superpowers/spe
 - **P10 Colours are stored 0–255** (owner: edited as 0–255) and written as 0–1 with 4 decimals; `emissive_color` gets alpha 1.0 (owner).
 - **P11 Borrowed slot paths are written with `textures\`** (plan).
 - **P12 In-tree schema validation** (plan): no new dependency; a test fails if the vendored schema uses a keyword the validator lacks.
-- **P13 Invalid path characters block export** (plan) rather than being rewritten: a changed path is not where PGPatcher looks.
+- **P13 Invalid path characters block export** (plan) rather than being rewritten: a changed path is not where PGPatcher looks. Amended (owner, 2026-10-14): a leading `\` or `/` typed into a slot path, `match1`–`match8` or `rename` (set editor or output name) is dropped as it is stored, since every one of these paths is relative and the separator changes nothing. `..`, a drive letter and invalid characters still block, a value already stored with a leading `\` still blocks, and `path_contains` keeps its leading `\` (it means "a whole folder name").
 - **P14 GUI = CLI holds for non-PBR sets only** (owner: the JSON is GUI-only): a PBR set on CS is written under `textures\pbr\` by the GUI alone.
 - **P15 "Not in a set" is a clickable count** in the Textures header (plan), not an automatically switched filter.
 - **P16 The PGPatcher `default` block is fixed** (owner, 2026-10-10): in schema order `emissive` = `false`, `parallax` = `false`, `displacement_scale` = 1.0, `specular_level` = 0.04, `roughness_scale` = 1.0, `subsurface` = `false`. Users cannot edit defaults (no Defaults card, no `[defaults]` in `sdc-project.toml`; a hand-written one is ignored). Entries write `emissive`/`parallax`/`subsurface` only as `true`, and omit the three numbers when unset or equal to the fixed value; everything else comes from the set.
@@ -846,11 +846,21 @@ Real-NVTT checks (`cargo test --release -p engine --test nvtt_real -- --ignored 
 - (d) `alpha_real/Fingerprints009`, `alpha.policy = blend`: mip 0 alpha PSNR 38.7786 dB on NVTT (`-alpha`), 38.9259 dB on
   bc7e, bench direct `nvtt_production` 38.7883 dB. Not measured: the same file without `-alpha`.
 
-## Note AB — audit 2026-10-14 fixes (2026-10-14)
+## Note AB — GUI tweaks (owner request, 2026-10-14)
+
+Spec `docs/superpowers/specs/2026-10-14-sdc-gui-tweaks-design.md` (G1-G9).
+
+- **AB1 Input name.** The set editor's input name is the set's base name, changed through `[inputs]` aliases (AA1), not the PGPatcher `rename` (AA3). The set's `sdc-project.toml` entry follows the new automatic id (`SetsDoc::retarget_auto`). Default picked in the thread; the owner may overrule.
+- **AB2 Delete sections** are `[[pgp_sections]]` in `sdc-project.toml`, written after every set's entry, always with `delete: true` (they exist to delete trishapes, such as a vanilla glow shape the PBR base replaces with emissive; owner, 2026-10-14), and only with a texture match. Supersedes the "`delete` is a later round" line of `pgp::schema::NOT_EXPOSED` for sections; set entries still never write `delete`.
+- **AB3 Delete hits** compare texture paths only (exact slot match, or `path_contains` in the diffuse path); a `nif_filter` is reported, not checked against meshes.
+- **AB4 2D | 3D** is one switch kept in `gui.toml`, default 2D; the 3D preview does no work in 2D.
+- **AB5 Version** stays 0.7.0 (Z7): no output changes unless the user adds sections or aliases.
+
+## Note AC — audit 2026-10-14 fixes (2026-10-14)
 
 Rulings for the must-fix findings of `docs/AUDIT-2026-10-14.md`. Cite as `audit 2026-10-14 finding N`.
 
-- **AB1 Parser caps (finding 1).** `read_vertices` refuses a vertex descriptor whose enabled attributes need more bytes than the stride before it reserves anything. A `BSShaderTextureSet` with more than `MAX_TEXTURE_SLOTS` (32; Skyrim writes 9, Fallout 4 writes 10) is a `Geometry` error. `Bsa::read` lets the decoder grow the output instead of reserving the entry's declared size. None of these change the result for a well-formed file.
-- **AB2 Opening a folder closes every dialog (finding 2).** `open_folder` sets `dialog = None`: every dialog that can be open there belongs to the previous folder, and a `ProceedAnyway` left open would be closed by the new folder's plan and continue into an export of that folder.
-- **AB3 A clean `sdc.toml` is never written, a hand edit of one is taken (finding 3).** `save` skips a project document that is not dirty, as it already did for `sdc-project.toml`. `check_sources` (focus regain, Export) reloads a clean `sdc.toml` that changed on disk, clears history and re-plans; it counts as one changed source so Export waits for that plan. The Reload / Overwrite dialog is only for a document with unsaved edits.
-- **AB4 An explicit packed output path is checked for duplicates (finding 4).** Step 5's duplicate check runs on the files; a GUI `OutputKey::Packed` path is applied later, in `plan_packing`, so it is checked there against every job's output and every earlier recipe's (case-insensitive, either separator). A clash fails the recipe ("output path X is also written by Y") and adds an `IN-DUPLICATE` skip for the packed output; the raw maps stay consumed. The file job keeps its output.
+- **AC1 Parser caps (finding 1).** `read_vertices` refuses a vertex descriptor whose enabled attributes need more bytes than the stride before it reserves anything. A `BSShaderTextureSet` with more than `MAX_TEXTURE_SLOTS` (32; Skyrim writes 9, Fallout 4 writes 10) is a `Geometry` error. `Bsa::read` lets the decoder grow the output instead of reserving the entry's declared size. None of these change the result for a well-formed file.
+- **AC2 Opening a folder closes every dialog (finding 2).** `open_folder` sets `dialog = None`: every dialog that can be open there belongs to the previous folder, and a `ProceedAnyway` left open would be closed by the new folder's plan and continue into an export of that folder.
+- **AC3 A clean `sdc.toml` is never written, a hand edit of one is taken (finding 3).** `save` skips a project document that is not dirty, as it already did for `sdc-project.toml`. `check_sources` (focus regain, Export) reloads a clean `sdc.toml` that changed on disk, clears history and re-plans; it counts as one changed source so Export waits for that plan. The Reload / Overwrite dialog is only for a document with unsaved edits.
+- **AC4 An explicit packed output path is checked for duplicates (finding 4).** Step 5's duplicate check runs on the files; a GUI `OutputKey::Packed` path is applied later, in `plan_packing`, so it is checked there against every job's output and every earlier recipe's (case-insensitive, either separator). A clash fails the recipe ("output path X is also written by Y") and adds an `IN-DUPLICATE` skip for the packed output; the raw maps stay consumed. The file job keeps its output.

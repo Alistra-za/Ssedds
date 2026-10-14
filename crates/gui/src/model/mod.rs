@@ -5,8 +5,10 @@ pub mod encoding_follow;
 pub mod export;
 pub mod fields;
 pub mod history;
+pub mod input_name;
 pub mod inspector;
 pub mod items;
+pub mod known_paths;
 pub mod meshes;
 pub mod pack_fills;
 pub mod pbr_export;
@@ -15,6 +17,7 @@ pub mod plugin_refs;
 pub mod preview;
 pub mod rename;
 pub mod rnm;
+pub mod sections;
 pub mod set_preview;
 pub mod sets;
 pub mod view;
@@ -205,6 +208,10 @@ pub struct AppModel {
     /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
     /// evidence; sent as `BatchRequest::gras_diffuses`.
     pub gras_diffuses: std::collections::BTreeSet<String>,
+    /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
+    pub known: Arc<known_paths::KnownPaths>,
+    /// G3: the TruePBR JSON editor window is open.
+    pub json_editor_open: bool,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
     /// fixtures set `None` to keep their High members undecided, as the CLI does without the flag.
     pub accept: AcceptSuggestions,
@@ -330,6 +337,8 @@ impl AppModel {
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
             gras_diffuses: Default::default(),
+            known: Default::default(),
+            json_editor_open: false,
             accept: AcceptSuggestions::High,
             session: None,
             root: None,
@@ -667,6 +676,7 @@ impl AppModel {
             }
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
+            WorkerMsg::KnownPaths(result) => self.known_paths_landed(result),
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => {

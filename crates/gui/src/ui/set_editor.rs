@@ -43,19 +43,33 @@ enum Act {
     Slot(MenuAction),
 }
 
+/// How the set editor shares the view with the 3D preview panel.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct View {
+    /// The 2D | 3D switch is offered (the app has a 3D preview).
+    pub switch: bool,
+    /// The 3D panel shows this set: the slot cards are left out, the TruePBR settings stay.
+    pub three_d: bool,
+}
+
 pub fn draw(
     ui: &mut egui::Ui,
     model: &mut AppModel,
     key: &str,
     thumbs: &mut ThumbCache,
     cmds: &mut SlotCmdState,
+    view: View,
 ) {
     let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
         ui.weak("This set is no longer in the plan.");
         return;
     };
     ui.horizontal_wrapped(|ui| {
+        if view.switch {
+            super::set_preview::view_switch(ui, model);
+        }
         ui.heading(&v.label);
+        super::input_name::picker(ui, model, &v);
         // The output prefix and its error are PGPatcher JSON facts: only a JSON set shows them.
         if shows_json_panel(&v, model.target) {
             match (&v.prefix, &v.prefix_error) {
@@ -83,10 +97,43 @@ pub fn draw(
     if clear_name {
         model.clear_output_name(&v.id);
     }
+    // G6: a delete section that matches this set's textures deletes the shapes the set is for.
+    for h in crate::model::sections::delete_hits(model)
+        .into_iter()
+        .filter(|h| engine::sets::same_id(&h.set_id, &v.id))
+    {
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                AMBER,
+                format!(
+                    "⚠ Delete section {} deletes this set's shapes: {}",
+                    h.section + 1,
+                    h.why
+                ),
+            );
+            if ui.small_button("Open the JSON editor").clicked() {
+                model.json_editor_open = true;
+            }
+        });
+    }
     ui.separator();
     let mut acts = vec![];
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
+    if view.three_d {
+        // 3D: the preview panel shows the set; the TruePBR settings stay here.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if shows_json_panel(&v, model.target) {
+                    super::pgp_fields::panel(ui, model, &v.id);
+                } else {
+                    ui.weak("This set has no TruePBR settings. Switch to 2D for its slot cards.");
+                }
+                under_grid(ui, model, &v);
+            });
+        return;
+    }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {

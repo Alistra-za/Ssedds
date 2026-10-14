@@ -5,7 +5,10 @@ pub mod columns;
 pub mod dialogs;
 pub mod drawer;
 pub mod header;
+pub mod input_name;
+pub mod json_editor;
 pub mod meshes;
+pub mod path_picker;
 pub mod pgp_fields;
 pub mod plugin_refs;
 pub mod preview;
@@ -51,18 +54,29 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
+    draw_with_scan(ui, model, state, None);
+}
+
+/// [`draw_with`] with the mod scan's row under the header (the app passes its Meshes model; tests pass `None`).
+pub fn draw_with_scan(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    state: &mut State,
+    scan: Option<&mut crate::model::meshes::MeshesModel>,
+) {
     state.thumbs.sweep(model.items_rev());
     let keys_free = selection_keys_free(ui, model);
     header::draw(ui, model);
+    if let Some(m) = scan {
+        egui::Panel::top("textures-scan").show(ui, |ui| meshes::scan_row(ui, m));
+    }
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
     // Each column stops at its minimum and leaves the columns after it theirs and the centre CENTRE_MIN.
     let textures_max = ui.available_width() - columns::SETS_MIN - set_preview::CENTRE_MIN;
     column_panel(
         ui,
-        "textures",
-        "textures-strip",
-        "Textures",
+        Column::Textures,
         380.0,
         columns::TEXTURES_MIN..=textures_max,
         model,
@@ -72,9 +86,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     );
     column_panel(
         ui,
-        "sets",
-        "sets-strip",
-        "Sets",
+        Column::Sets,
         260.0,
         columns::SETS_MIN..=ui.available_width() - set_preview::CENTRE_MIN,
         model,
@@ -86,17 +98,21 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     // The panel leaves the central columns their minimum width; too narrow a window for both hides the panel
     // (narrowing a column brings it back).
     let room = ui.available_width() - set_preview::CENTRE_MIN;
-    if state.set3d.enabled && set_preview::wanted(model) && room >= set_preview::PANEL_MIN {
+    // The 2D | 3D switch: in 3D the set editor leaves its slot cards out and this panel shows the set.
+    let three_d =
+        state.set3d.enabled && set_preview::wanted(model) && room >= set_preview::PANEL_MIN;
+    if three_d {
         egui::Panel::right("set-3d")
-            .default_size(380.0)
+            .default_size(480.0)
             .min_size(set_preview::PANEL_MIN)
             .max_size(room)
             .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
     }
-    egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state));
+    egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
     // Here, not in the set editor: a pill member's slot menu opens it while a texture is selected (F3a Task 8).
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
+    json_editor::draw(ui.ctx(), model);
     // Last, so every modal, menu and the preview has had its chance to consume the key first.
     if keys_free {
         selection_keys(ui, model);
@@ -104,7 +120,7 @@ pub fn draw_with(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
-fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
+fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: bool) {
     if model.root.is_none() {
         ui.centered_and_justified(|ui| ui.label("Open a folder of source textures to begin."));
         return;
@@ -128,7 +144,18 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
                 .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
         }
         Selection::Set(key) => {
-            set_editor::draw(ui, model, &key, &mut state.thumbs, &mut state.slot_cmds);
+            let view = set_editor::View {
+                switch: state.set3d.enabled,
+                three_d,
+            };
+            set_editor::draw(
+                ui,
+                model,
+                &key,
+                &mut state.thumbs,
+                &mut state.slot_cmds,
+                view,
+            );
         }
         Selection::None => {
             ui.centered_and_justified(|ui| ui.label("Select a texture or a set."));
@@ -136,26 +163,64 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State) {
     }
 }
 
-/// A resizable column, or a thin named strip when the columns are collapsed. The strip has its own id: egui keeps a panel's size per id, and the strip's 24 px must not become the column's width.
-#[allow(clippy::too_many_arguments)]
+/// The two resizable columns of the Textures view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    Textures,
+    Sets,
+}
+
+impl Column {
+    fn ids(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Column::Textures => ("textures", "textures-strip", "Textures"),
+            Column::Sets => ("sets", "sets-strip", "Sets"),
+        }
+    }
+
+    /// (hidden by the header checkbox, collapsed to a strip by its arrow).
+    pub fn flags(self, s: &mut crate::settings::GuiSettings) -> (&mut bool, &mut bool) {
+        match self {
+            Column::Textures => (&mut s.textures_hidden, &mut s.textures_collapsed),
+            Column::Sets => (&mut s.sets_hidden, &mut s.sets_collapsed),
+        }
+    }
+}
+
+/// A resizable column, a thin named strip when it is collapsed, or nothing when the header hides it. The strip has
+/// its own id: egui keeps a panel's size per id, and the strip's 24 px must not become the column's width.
 fn column_panel(
     ui: &mut egui::Ui,
-    id: &'static str,
-    strip_id: &'static str,
-    name: &str,
+    column: Column,
     width: f32,
     range: std::ops::RangeInclusive<f32>,
     model: &mut AppModel,
     content: impl FnOnce(&mut egui::Ui, &mut AppModel),
 ) {
+    let (id, strip_id, name) = column.ids();
+    let (hidden, collapsed) = {
+        let (h, c) = column.flags(&mut model.settings);
+        (*h, *c)
+    };
+    if hidden {
+        return;
+    }
     // Too narrow a window: the minimum wins, and egui caps the column at the width left (never below zero).
     let range = *range.start()..=range.end().max(*range.start());
-    if model.settings.columns_collapsed {
-        egui::Panel::left(strip_id)
+    if collapsed {
+        let expand = egui::Panel::left(strip_id)
             .resizable(false)
             .exact_size(columns::STRIP_WIDTH)
             .frame(egui::Frame::new())
-            .show(ui, |ui| columns::strip(ui, name));
+            .show(ui, |ui| {
+                columns::strip_button(ui, name).on_hover_text(format!("Expand the {name} column"))
+            })
+            .inner
+            .clicked();
+        if expand {
+            *column.flags(&mut model.settings).1 = false;
+            model.save_settings();
+        }
     } else {
         // egui stores the width it drew, clamped to the window; keep the width the user dragged to apart, so a
         // window narrowed and widened again gets it back.

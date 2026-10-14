@@ -110,6 +110,7 @@ pub fn draw(
     cmds: &mut SlotCmdState,
 ) {
     ui.horizontal_wrapped(|ui| {
+        super::columns::collapse_arrow(ui, model, crate::ui::Column::Sets);
         ui.heading("Sets");
         if let Some(s) = model.selection_summary(true) {
             ui.label(egui::RichText::new(s).strong());
