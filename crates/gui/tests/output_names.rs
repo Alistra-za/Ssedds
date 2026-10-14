@@ -157,4 +157,9 @@ fn renamed_output_keeps_folder_and_suffix() {
         renamed_output("a/b/rock_rmaos.dds", "x"),
         Some(PathBuf::from("a/b/x_rmaos.dds"))
     );
+    // An exporter term an output keeps stays too, so it never lands on the diffuse's name.
+    assert_eq!(
+        renamed_output("a/rock01_roughness.dds", "x"),
+        Some(PathBuf::from("a/x_roughness.dds"))
+    );
 }

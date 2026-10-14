@@ -687,15 +687,15 @@ pub fn output_name_paths(m: &AppModel, views: &[SetView]) -> Vec<(OutputKey, Pat
 }
 
 /// `job_key` (an output path relative to the export root) with its base name replaced by `name`: the folder and the
-/// Skyrim suffix stay (`armor/wall_n.dds`, `steel` → `armor/steel_n.dds`). Applying it twice gives the same path,
+/// suffix stay (`armor/wall_n.dds`, `steel` → `armor/steel_n.dds`). Applying it twice gives the same path,
 /// because `check_output_name` refuses a name that ends in a suffix.
 pub fn renamed_output(job_key: &str, name: &str) -> Option<PathBuf> {
     let p = Path::new(job_key);
     let stem = p.file_stem()?.to_string_lossy();
-    let file = match split_suffix(&stem).1 {
-        Some(s) => format!("{name}_{s}.dds"),
-        None => format!("{name}.dds"),
-    };
+    // Everything after the base stays: a Skyrim suffix, or an exporter term an output keeps (`_roughness` on a
+    // target that packs nothing), so two members never land on one name.
+    let base = base_of(&stem);
+    let file = format!("{name}{}.dds", &stem[base.len().min(stem.len())..]);
     Some(match p.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.join(file),
         _ => PathBuf::from(file),
@@ -706,9 +706,11 @@ pub fn renamed_output(job_key: &str, name: &str) -> Option<PathBuf> {
 /// suffix belongs to each output, and the name would be read back as a base plus that suffix.
 pub fn check_output_name(name: &str) -> Result<(), String> {
     check_file_name(name, "output name").map_err(|e| e.0)?;
-    if let (_, Some(s)) = split_suffix(name) {
+    let base = base_of(name);
+    if base.len() < name.len() {
         return Err(format!(
-            "output name: ends in _{s}, a map suffix; each output keeps its own ({name:?})"
+            "output name: ends in {}, a map suffix; each output keeps its own ({name:?})",
+            &name[base.len()..]
         ));
     }
     Ok(())

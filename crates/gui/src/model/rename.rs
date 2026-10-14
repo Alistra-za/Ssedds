@@ -374,7 +374,7 @@ fn output_rows(m: &AppModel, d: &RenameDialog, re: Option<&Regex>) -> Vec<Rename
             continue;
         };
         let stem = split_ext(split_path(&first).1).0.to_string();
-        let old = split_suffix(&stem).0;
+        let old = base_of(&stem).to_string();
         let mut r = row(&v.id, old.clone());
         let new = match d.typed.get(&v.id) {
             Some(t) => {
