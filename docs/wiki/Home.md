@@ -33,10 +33,11 @@ This wiki covers version 0.7.0. Tessalith is licensed GPL-3.0-or-later.
 | [Validation and output](Validation-and-Output.md) | What gets checked after encoding, the output layout, the manifest, re-run behaviour. |
 | [Troubleshooting](Troubleshooting.md) | Every diagnostic code, common errors, and the in-game checklist. |
 | [FAQ](FAQ.md) | Short answers to common questions. |
+| [Research behind the defaults](Research.md) | The benchmarks, spikes and literature behind each default. |
 
 ## Names you will see
 
-The product is called Tessalith. The programs, files and crates keep their original names, and those are what you type:
+The product is called Tessalith, and the GUI program is `tessalith.exe`. The command line, files and folders keep the working name `sdc`, and those are what you type:
 
 | You type or see | What it is |
 |---|---|
