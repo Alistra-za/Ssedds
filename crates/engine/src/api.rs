@@ -110,6 +110,9 @@ pub struct BatchRequest {
     /// Memory budget in bytes for admitting files; 0 = half of physical RAM.
     pub mem_budget: u64,
     pub bc1_model: Bc1Model,
+    /// M5 (DECISIONS Note NV2): an explicit `nvcompress.exe` (`--nvtt`, the GUI's NVTT path). `None` looks on `PATH`,
+    /// then in the default install folder. Probed only when some profile uses `encoder.backend = "nvtt"`.
+    pub nvtt: Option<PathBuf>,
     /// Also write `<name>.dds.json` next to each output.
     pub sidecar: bool,
     pub dry_run: bool,
@@ -144,6 +147,7 @@ impl BatchRequest {
             jobs: 0,
             mem_budget: 0,
             bc1_model: Bc1Model::Ideal,
+            nvtt: None,
             sidecar: false,
             dry_run: false,
         }
@@ -220,6 +224,8 @@ pub struct Plan {
     pub cancelled: Vec<PathBuf>,
     /// M6 (DECISIONS Note S): set key → the set's shader pick.
     pub shaders: BTreeMap<String, ShaderPick>,
+    /// The NVTT probe, if any profile on `encoder.backend = "nvtt"` asked for it while planning (DECISIONS Note NV3).
+    pub nvtt: Option<crate::nvtt::NvttProbe>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -833,6 +839,7 @@ impl Engine {
             overrides: file_overrides,
             allow: file_allow,
         };
+        let nvtt = crate::nvtt::NvttCell::new(req.nvtt.clone());
         let ctx = ResolveCtx {
             target,
             registry: &registry,
@@ -845,6 +852,7 @@ impl Engine {
             files: &file_scopes,
             shaders: &NO_SHADERS,
             mesh_alpha: &req.mesh_alpha,
+            nvtt: Some(&nvtt),
         };
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
@@ -1464,6 +1472,7 @@ impl Engine {
             peak_admitted_bytes,
             cancelled,
             shaders: picks,
+            nvtt: nvtt.into_probed(),
         })
     }
 

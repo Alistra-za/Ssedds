@@ -53,6 +53,7 @@ fn explicit_set_decides_subtype_and_beats_presets() {
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
         mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
     };
     let img = Rgba32F::new(4, 4, [0.5, 0.5, 1.0, 0.5]);
     let a = analyse(&img, &RGBA8);
@@ -117,6 +118,7 @@ fn suggestions_decide_only_when_high_and_accepted() {
             files: &NO_FILE_SCOPES,
             shaders: &NO_SHADERS,
             mesh_alpha: &NO_MESH_ALPHA,
+            nvtt: None,
         };
         let d = decide_subtype(&ctx, &facts);
         assert_eq!((d.subtype, d.decided), (Subtype::Rmaos, decided));
@@ -134,6 +136,7 @@ fn suggestions_decide_only_when_high_and_accepted() {
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
         mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
     };
     let (p, prov) = layered_profile(&ctx, &facts, Subtype::Rmaos).unwrap();
     assert_eq!(
@@ -162,6 +165,7 @@ fn rules_and_project_config_layer_in_order() {
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
         mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
     };
     let img = Rgba32F::new(4, 4, [0.5, 0.5, 0.5, 1.0]);
     let a = analyse(&img, &RGB8);
@@ -236,6 +240,7 @@ fn set_scopes_rank_above_command_line_order() {
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
         mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
     };
     let d = decide_subtype(&ctx, &facts);
     assert_eq!((d.subtype, d.decided), (Subtype::Normal, true));
@@ -293,6 +298,7 @@ fn content_of(
         files: &NO_FILE_SCOPES,
         shaders: &NO_SHADERS,
         mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
     };
     let img = Rgba32F::new(4, 4, [4.0, 2.0, 0.5, 1.0]);
     let a = analyse(&img, info);

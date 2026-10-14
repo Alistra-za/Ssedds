@@ -48,6 +48,9 @@ pub struct ResolveCtx<'a> {
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
     /// the colour member (`BatchRequest::mesh_alpha`). Empty (`NO_MESH_ALPHA`) = no evidence.
     pub mesh_alpha: &'a BTreeMap<String, Vec<crate::shader::MeshAlpha>>,
+    /// M5 (DECISIONS Note NV3): the batch's NVTT probe, run on the first profile on `encoder.backend = "nvtt"`.
+    /// `None` = not probed (tests, `inspect`): such a profile reports ENC-NVTT-MISSING.
+    pub nvtt: Option<&'a crate::nvtt::NvttCell>,
 }
 
 /// For `ResolveCtx` literals made before the shaders are picked (pass 1, tests, `inspect`).
@@ -1435,7 +1438,12 @@ pub fn allowed_encodings(st: Subtype, target: Target) -> Vec<(Format, ColorTag)>
 ///
 /// A sub-type unavailable under the target (spec §3.1, §4.2) reports CFG-UNAVAILABLE only: that profile is never
 /// written, so its format, tag, alpha and dimension checks would be a cascade of the one root cause.
-pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Warning> {
+pub fn check_profile(
+    p: &Profile,
+    f: &FileFacts,
+    alpha_explicit: bool,
+    nvtt: Option<&crate::nvtt::NvttCell>,
+) -> Vec<Warning> {
     use Code::*;
     let a = f.analysis;
     let st = p.subtype;
@@ -1849,11 +1857,28 @@ pub fn check_profile(p: &Profile, f: &FileFacts, alpha_explicit: bool) -> Vec<Wa
             format!("compressed DDS ({name}) re-encoded: its compression error is kept and a new one is added; convert the source image if you have it"),
         );
     }
+    // DECISIONS Note NV3.
     if p.encoder.backend == Backend::Nvtt {
-        add(
-            EncNvttMissing,
-            "the NVTT backend arrives in milestone M5".into(),
-        );
+        use crate::nvtt::{NvttProbe, NVTT_TESTED};
+        match nvtt.map(|c| c.get()) {
+            Some(NvttProbe::Found(t)) if t.tested() => {}
+            Some(NvttProbe::Found(t)) => add(
+                EncNvttVersion,
+                format!(
+                    "NVTT {} at {} is untested ({NVTT_TESTED} is); acknowledge to use it",
+                    t.version,
+                    t.path.display()
+                ),
+            ),
+            Some(NvttProbe::Missing(why)) => add(
+                EncNvttMissing,
+                format!("NVTT not found ({why}): install NVTT 3, set the NVTT path, or choose the built-in encoder"),
+            ),
+            None => add(
+                EncNvttMissing,
+                "NVTT was not probed for this batch".into(),
+            ),
+        }
     }
     for c in contradictions(p, f) {
         add(SugContradiction, c);
@@ -2142,6 +2167,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
         &profile,
         f,
         alpha_policy_explicit(ctx, &provenance),
+        ctx.nvtt,
     ));
     warnings.extend(green_conflict(ctx, &profile, &provenance));
     if available && profile.subtype == Subtype::SkinWet {

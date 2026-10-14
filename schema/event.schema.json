@@ -407,6 +407,7 @@
         "VAL-MIP-ERROR",
         "ENC-NVTT-MISSING",
         "ENC-NVTT-VERSION",
+        "ENC-NVTT-FAILED",
         "IN-DUPLICATE",
         "IN-DDS-SKIPPED",
         "IN-PACKING-INPUT",
