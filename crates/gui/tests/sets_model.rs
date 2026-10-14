@@ -1673,3 +1673,29 @@ fn resetting_format_also_clears_the_tag_it_wrote() {
         "tag outlived the format reset"
     );
 }
+
+/// Audit 2026-10-13b E-I1 (DECISIONS AF4): Export clicked during a scan-finished read (not a plan's own) starts
+/// when that read lands, with unchanged evidence and with a read error; it never waits for an unrelated plan.
+#[test]
+fn an_export_clicked_during_a_scan_finished_read_starts_when_it_lands() {
+    for broken in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, db) = pending_read(d.path());
+        idle(&mut m);
+        assert!(!m.mesh_votes.is_empty());
+        if broken {
+            let bad = db.path().join("broken.db");
+            std::fs::write(&bad, b"not a database").unwrap();
+            m.scan_db = Some(bad);
+        }
+        m.refresh_mesh_votes(false);
+        assert!(m.votes_pending(), "broken={broken}");
+        m.export_clicked();
+        assert!(!export_started_or_asked(&m), "waits for the read");
+        idle(&mut m);
+        assert!(
+            export_started_or_asked(&m),
+            "broken={broken}: started when the read landed"
+        );
+    }
+}

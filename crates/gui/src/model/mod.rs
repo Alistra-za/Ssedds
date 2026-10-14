@@ -611,7 +611,11 @@ impl AppModel {
                 self.finish_plan();
             }
         } else if changed {
+            // The plan this starts carries a queued export to its end (`finish_plan`).
             self.replan();
+        } else if std::mem::take(&mut self.export_after_plan) {
+            // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
+            self.export_clicked();
         }
     }
 
