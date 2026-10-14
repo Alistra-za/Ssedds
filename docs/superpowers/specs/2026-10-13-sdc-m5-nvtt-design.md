@@ -1,7 +1,9 @@
 # M5: NVTT Production as an optional encoder (design)
 
 Status: **approved by the owner** (2026-10-13), with every §9 question taken at its proposed default; those
-defaults are now decided (DECISIONS Note NV records them).
+defaults are now decided (DECISIONS Note NV records them). As built, Note NV is authoritative where it differs from
+this text: levels are fed as legacy-header DDS (Spike S7b; never DX10), BC6H also gets `-nocuda`, and BC7 gets `-alpha`
+for every alpha policy except `remove`.
 
 Sources: design spec §3.2 (`encoder.backend`), §5.6, §7.3 table, §7.4, §7.5, §9 codes `ENC-NVTT-MISSING` / `ENC-NVTT-VERSION` /
 `VAL-BC6H-PEAK`, §14 items 6 and 10; DECISIONS Spike S7, Note Y9; plan phase 0-2 Task 16.

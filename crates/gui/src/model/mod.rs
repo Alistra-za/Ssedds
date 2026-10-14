@@ -1639,7 +1639,13 @@ impl AppModel {
     /// Probe NVTT again (Spike S7b: about 30 ms, so on the UI thread). shortcut: synchronous, move it off the UI
     /// thread if a slow nvcompress is ever seen.
     pub fn refresh_nvtt(&mut self) {
-        self.nvtt = Some(engine::nvtt::probe(self.settings.nvtt_path.as_deref()));
+        let now = Some(engine::nvtt::probe(self.settings.nvtt_path.as_deref()));
+        // A change since the last probe (NVTT installed or removed meanwhile) re-plans, so textures on NVTT see it.
+        let changed = self.nvtt.is_some() && self.nvtt != now;
+        self.nvtt = now;
+        if changed {
+            self.replan();
+        }
     }
 
     pub fn nvtt_found(&self) -> bool {

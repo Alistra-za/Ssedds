@@ -159,3 +159,27 @@ fn the_panel_shows_the_encoder_row_and_the_drawer_the_status() {
     h.get_by_label(NVTT_NOT_FOUND);
     h.get_by_label_contains("NVTT not found (not on PATH)");
 }
+
+/// A re-probe that finds something else (on window focus) re-plans: a texture on NVTT then reports it missing.
+#[test]
+fn a_changed_probe_replans() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_fake(d.path());
+    m.set_field(ROCK, "encoder.backend", json!(Backend::Nvtt));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let missing = |m: &AppModel| {
+        m.item(ROCK)
+            .unwrap()
+            .job
+            .as_ref()
+            .unwrap()
+            .warnings
+            .iter()
+            .any(|w| w.code == engine::codes::Code::EncNvttMissing)
+    };
+    assert!(!missing(&m));
+    m.settings.nvtt_path = Some(d.path().join("no/nvcompress.exe"));
+    m.refresh_nvtt();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(missing(&m));
+}
