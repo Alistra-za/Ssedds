@@ -249,3 +249,34 @@ fn model_edits_are_undoable_steps_and_cs_keys_never_reach_the_pgpatcher_json() {
         .apply_cs_template(id, Kind::Txst, "NoSuchTemplate")
         .is_err());
 }
+
+/// Fix round 1: a block created by a value edit or a template moves the set's own mapped values; none stay flat.
+#[test]
+fn a_block_made_by_an_edit_or_a_template_moves_the_sets_own_mapped_values() {
+    const FLAT: &str =
+        "[[sets]]\nid = \"a/one\"\nroughness_scale = 0.3\nglint_on = true\nglint.screen_space_scale = 2.0\nhair = true\n";
+    let (_d, mut s) = doc(FLAT);
+    s.set_cs_value("a/one", Kind::Txst, "statics", None);
+    let e = &s.entries()[0];
+    let b = e.cs_txst.as_ref().unwrap();
+    assert_eq!(b.values["roughnessScale"], json!(0.3));
+    assert_eq!(
+        b.values["glintParameters"],
+        json!({"enabled": true, "screenSpaceScale": 2.0})
+    );
+    assert_eq!(e.settings["roughness_scale"], json!(0.3));
+    assert!(s.is_dirty(), "a created block marks the document dirty");
+    assert!(!s.text().contains("roughness_scale") && !s.text().contains("glint_on"));
+
+    // A template replaces the block's known fields (design §4); nothing of the flat keys is left behind.
+    let (_d, mut s) = doc(FLAT);
+    let slab = template(Kind::Txst, "LandscapeMountainSlab").unwrap();
+    s.apply_cs_template("a/one", slab);
+    let e = &s.entries()[0];
+    assert_eq!(
+        floats(&Json::Object(e.cs_txst.clone().unwrap().values)),
+        floats(&Json::Object(slab.values.clone()))
+    );
+    assert!(!s.text().contains("roughness_scale") && !s.text().contains("glint_on"));
+    assert_eq!(e.settings["hair"], json!(true));
+}

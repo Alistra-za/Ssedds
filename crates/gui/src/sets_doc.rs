@@ -760,6 +760,8 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
+        // A new block takes over the set's mapped flat keys (and marks the document dirty), as `add_cs_block` does.
+        self.add_cs_block(id, kind);
         let t = self.table_mut(id);
         let Some(b) = sub_table(t, kind.key(), || Item::Table(Table::new())) else {
             return;
@@ -824,6 +826,7 @@ impl SetsDoc {
         if self.read_only() {
             return;
         }
+        self.add_cs_block(id, t.kind);
         let tbl = self.table_mut(id);
         let Some(b) = sub_table(tbl, t.kind.key(), || Item::Table(Table::new())) else {
             return;
