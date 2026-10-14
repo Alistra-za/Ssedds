@@ -186,6 +186,8 @@ pub(crate) struct ViewKey {
     root: Option<PathBuf>,
     export_root: PathBuf,
     target: Target,
+    /// The scan database the statics rule read (design §5.1): a new scan changes the export blocks.
+    scan: cs_pbr::Stamp,
 }
 
 pub struct AppModel {
@@ -1375,6 +1377,7 @@ impl AppModel {
             root: self.root.clone(),
             export_root: self.export_root(),
             target: self.target,
+            scan: cs_pbr::stamp(self.scan_db.as_deref()),
         }
     }
 
