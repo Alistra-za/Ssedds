@@ -68,7 +68,14 @@ pub struct GuiSettings {
     pub jobs: usize,
     /// Memory budget in MiB; 0 = half of physical memory.
     pub mem_budget_mb: u64,
-    pub columns_collapsed: bool,
+    /// The Textures and Sets columns: shown at all (the header's checkboxes), and collapsed to a strip (the
+    /// arrows on each column).
+    pub textures_hidden: bool,
+    pub sets_hidden: bool,
+    pub textures_collapsed: bool,
+    pub sets_collapsed: bool,
+    /// A set shows its 3D preview instead of its slot cards (the set editor's 2D | 3D switch).
+    pub set_view_3d: bool,
     pub advanced_open: bool,
     /// M5 (DECISIONS Note NV2): an explicit `nvcompress.exe`; `None` looks on PATH, then in the NVIDIA install folder.
     pub nvtt_path: Option<PathBuf>,
@@ -107,7 +114,11 @@ impl Default for GuiSettings {
             bc1_decoder: Bc1Choice::Ideal,
             jobs: 0,
             mem_budget_mb: 0,
-            columns_collapsed: false,
+            textures_hidden: false,
+            sets_hidden: false,
+            textures_collapsed: false,
+            sets_collapsed: false,
+            set_view_3d: false,
             advanced_open: false,
             nvtt_path: None,
             meshes: MeshesSettings::default(),

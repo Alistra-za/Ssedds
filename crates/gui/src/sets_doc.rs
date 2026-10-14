@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 
 pub const FILE_NAME: &str = "sdc-project.toml";
+/// GUI tweaks G4: the array of extra PGPatcher entries (delete sections).
+const SECTIONS: &str = "pgp_sections";
 /// Keys of a `[[sets]]` table that are not JSON settings.
 const RESERVED: [&str; 9] = [
     "id",
@@ -327,6 +329,86 @@ impl SetsDoc {
             .unwrap_or_default()
     }
 
+    /// GUI tweaks G4: the `[[pgp_sections]]` tables, in file order: extra PGPatcher entries that belong to no set
+    /// (delete entries). Each is its JSON keys, flattened like a set's settings.
+    pub fn sections(&self) -> Vec<Settings> {
+        self.doc
+            .get(SECTIONS)
+            .and_then(Item::as_array_of_tables)
+            .map(|a| {
+                a.iter()
+                    .map(|t| {
+                        let mut out = Settings::new();
+                        flatten(t, "", &mut out);
+                        out
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Append a section with `keys` (values JSON can hold; others are left out).
+    pub fn add_section(&mut self, keys: &Settings) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        if !self.doc.get(SECTIONS).is_some_and(Item::is_array_of_tables) {
+            self.doc
+                .insert(SECTIONS, Item::ArrayOfTables(ArrayOfTables::new()));
+        }
+        let mut t = Table::new();
+        for (k, v) in keys {
+            write_path(&mut t, k, Some(v.clone()));
+        }
+        self.doc[SECTIONS]
+            .as_array_of_tables_mut()
+            .expect("just made")
+            .push(t);
+        self.dirty = true;
+    }
+
+    /// Remove section `i` (the array goes when it is empty).
+    pub fn remove_section(&mut self, i: usize) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        let Some(a) = self
+            .doc
+            .get_mut(SECTIONS)
+            .and_then(Item::as_array_of_tables_mut)
+        else {
+            return;
+        };
+        if i < a.len() {
+            a.remove(i);
+            if a.is_empty() {
+                self.doc.remove(SECTIONS);
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// Set (or with `None` remove) key `key` of section `i`.
+    pub fn set_section_value(&mut self, i: usize, key: &str, v: Option<Json>) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        let Some(t) = self
+            .doc
+            .get_mut(SECTIONS)
+            .and_then(Item::as_array_of_tables_mut)
+            .and_then(|a| a.get_mut(i))
+        else {
+            return;
+        };
+        if write_path(t, key, v) {
+            self.dirty = true;
+        }
+    }
+
     fn tables_mut(&mut self) -> &mut ArrayOfTables {
         if !self.doc.get("sets").is_some_and(Item::is_array_of_tables) {
             self.doc
@@ -442,6 +524,38 @@ impl SetsDoc {
             }
         }
         self.dirty = true;
+    }
+
+    /// GUI tweaks G1: the automatic set `from` is now named `to` by the engine (its members were given new input
+    /// names). The entry that applies to it follows: a renamed entry (`renamed_from = from`) gets
+    /// `renamed_from = to`; an entry under the automatic id itself takes the new id, with the order list and other
+    /// entries' borrows. Created sets are never touched.
+    pub fn retarget_auto(&mut self, from: &str, to: &str) {
+        self.rev = next_rev();
+        if self.read_only() || same_id(from, to) {
+            return;
+        }
+        let entries = self.entries();
+        if let Some(e) = entries
+            .iter()
+            .find(|e| !e.created && e.renamed_from.as_deref().is_some_and(|r| same_id(r, from)))
+        {
+            let id = e.id.clone();
+            let t = self.table_mut(&id);
+            if same_id(&id, to) {
+                t.remove("renamed_from");
+            } else {
+                t.insert("renamed_from", toml_edit::value(to));
+            }
+            self.dirty = true;
+        } else if entries
+            .iter()
+            .any(|e| !e.created && e.renamed_from.is_none() && same_id(&e.id, from))
+        {
+            self.rename_set(from, to);
+            self.table_mut(to).remove("renamed_from");
+            self.dirty = true;
+        }
     }
 
     fn list_edit(&mut self, id: &str, key: &str, file: &str, add: bool) {

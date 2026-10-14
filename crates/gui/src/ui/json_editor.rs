@@ -1,0 +1,798 @@
+//! GUI tweaks G3–G6: the TruePBR JSON editor, a window of its own over the whole PGPatcher JSON: every PBR set's
+//! entry and the delete sections, each in its own pill, each key a small pill of its own. It edits the same settings
+//! as the set editor's TruePBR box (`AppModel::set_json_value`), so the two always agree. Drawing only.
+use super::columns::{AMBER, RED};
+use super::path_picker;
+use super::pgp_fields::{context, control, disabled_reason, edit_key, Ctx};
+use crate::model::pbr_export::{json_entries, json_name};
+use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
+use crate::model::sets::{slot_matches, SetView};
+use crate::model::AppModel;
+use crate::pgp::prefix::{active_matches, match_toggle, stored_match};
+use crate::pgp::schema::{spec, KeyKind, KeySpec, KEYS};
+use crate::pgp::settings::{Settings, GLINT_DEFAULTS};
+use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
+use eframe::egui;
+use engine::config::Target;
+use engine::sets::same_id;
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+pub const WINDOW_TITLE: &str = "TruePBR JSON";
+const ENTRY_RADIUS: u8 = 12;
+const PILL_RADIUS: u8 = 10;
+/// The slot names of `match1`–`match8`.
+const SLOT_NAMES: [&str; 8] = [
+    "diffuse",
+    "normal",
+    "glow",
+    "parallax",
+    "cubemap",
+    "env mask",
+    "multilayer",
+    "backlight",
+];
+
+/// Whose key an edit changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Owner {
+    Set(String),
+    Section(usize),
+}
+
+impl Owner {
+    fn salt(&self) -> String {
+        match self {
+            Owner::Set(id) => format!("set:{id}"),
+            Owner::Section(i) => format!("section:{i}"),
+        }
+    }
+}
+
+/// How a texture match matches: exactly in slot N (1-based), or anywhere in the diffuse path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Exact(u8),
+    Contains,
+}
+
+impl Mode {
+    fn key(self) -> String {
+        match self {
+            Mode::Exact(n) => format!("match{n}"),
+            Mode::Contains => "path_contains".into(),
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Mode::Exact(n) => format!("exact · slot {n} {}", SLOT_NAMES[n as usize - 1]),
+            Mode::Contains => "path contains".into(),
+        }
+    }
+}
+
+enum Act {
+    Edit(Owner, String, Option<Value>),
+    AddSection,
+    RemoveSection(usize),
+    Select(String),
+    /// A key added from the + menu was removed before it had a value.
+    Unpend(Owner, String),
+}
+
+/// The window, while `AppModel::json_editor_open`: a native window of its own where the platform has them, an
+/// embedded one otherwise (and in tests).
+pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
+    if !model.json_editor_open {
+        return;
+    }
+    let id = egui::ViewportId::from_hash_of("sdc-pgp-json-editor");
+    let builder = egui::ViewportBuilder::default()
+        .with_title(format!("{WINDOW_TITLE} — sdc"))
+        .with_inner_size([980.0, 760.0]);
+    ctx.show_viewport_immediate(id, builder, |ui, class| {
+        if ui.ctx().input(|i| i.viewport().close_requested()) {
+            model.json_editor_open = false;
+        }
+        match class {
+            egui::ViewportClass::EmbeddedWindow => body(ui, model),
+            _ => {
+                egui::CentralPanel::default().show(ui, |ui| body(ui, model));
+            }
+        }
+    });
+}
+
+fn body(ui: &mut egui::Ui, model: &mut AppModel) {
+    let mut acts: Vec<Act> = vec![];
+    let read_only = model.sets_doc.as_ref().and_then(|d| {
+        d.read_only().then(|| {
+            d.error()
+                .unwrap_or("sdc-project.toml is read-only")
+                .to_string()
+        })
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.heading(WINDOW_TITLE);
+        if model.root.is_some() {
+            ui.weak(format!(
+                "{}\\PBRNIFPatcher\\{}.json",
+                model.export_root().display(),
+                json_name(model)
+            ));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() {
+                model.json_editor_open = false;
+            }
+            let r = ui
+                .add_enabled(read_only.is_none(), egui::Button::new("+ Delete section"))
+                .on_hover_text("An entry of its own that deletes the shapes it matches");
+            if r.clicked() {
+                acts.push(Act::AddSection);
+            }
+        });
+    });
+    if let Some(why) = &read_only {
+        ui.colored_label(AMBER, why);
+    }
+    if model.target != Target::Cs {
+        ui.weak("The TruePBR JSON is written in cs mode only.");
+        return;
+    }
+    let entries = json_entries(model);
+    let sections = model.sections();
+    let hits = delete_hits(model);
+    ui.weak(format!(
+        "{} set entr{} · {} delete section{}. Edits here and in a set's TruePBR settings are the same edits.",
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" },
+        sections.len(),
+        if sections.len() == 1 { "" } else { "s" },
+    ));
+    json_text(ui, &entries, &sections);
+    ui.separator();
+    egui::ScrollArea::vertical()
+        .id_salt("json-editor-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_enabled_ui(read_only.is_none(), |ui| {
+                if entries.is_empty() {
+                    ui.weak("No PBR set has an entry yet.");
+                }
+                for (v, _) in &entries {
+                    set_entry(ui, model, v, &hits, &mut acts);
+                    ui.add_space(6.0);
+                }
+                if !sections.is_empty() {
+                    ui.label(egui::RichText::new("Delete sections").strong());
+                }
+                for (i, s) in sections.iter().enumerate() {
+                    section_entry(ui, model, i, s, &hits, &mut acts);
+                    ui.add_space(6.0);
+                }
+            });
+        });
+    for a in acts {
+        match a {
+            Act::Edit(Owner::Set(id), k, v) => model.set_json_value(&id, &k, v),
+            Act::Edit(Owner::Section(i), k, v) => model.set_section_value(i, &k, v),
+            Act::AddSection => model.add_section(""),
+            Act::RemoveSection(i) => model.remove_section(i),
+            Act::Select(key) => model.select_set(&key),
+            Act::Unpend(owner, key) => {
+                let left = pending(ui, &owner)
+                    .into_iter()
+                    .filter(|k| *k != key)
+                    .collect();
+                set_pending(ui, &owner, left);
+            }
+        }
+    }
+}
+
+/// The file as it would be written now (every set as if exported).
+fn json_text(ui: &mut egui::Ui, entries: &[(SetView, EntryInput)], sections: &[Settings]) {
+    egui::CollapsingHeader::new("JSON text")
+        .id_salt("json-editor-text")
+        .show(ui, |ui| {
+            let mut inputs: Vec<EntryInput> = entries.iter().map(|(_, e)| e.clone()).collect();
+            inputs.extend(
+                sections
+                    .iter()
+                    .filter(|s| crate::model::sections::written(s))
+                    .map(|s| EntryInput {
+                        settings: s.clone(),
+                        section: true,
+                        ..EntryInput::default()
+                    }),
+            );
+            let text = to_text(&document(&inputs));
+            if ui.small_button("Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("json-editor-text-scroll")
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap());
+                });
+        });
+}
+
+fn entry_frame(ui: &egui::Ui, stroke: egui::Color32) -> egui::Frame {
+    egui::Frame::group(ui.style())
+        .corner_radius(ENTRY_RADIUS)
+        .stroke(egui::Stroke::new(1.5, stroke))
+}
+
+/// One key as a small rounded pill.
+fn pill<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .corner_radius(PILL_RADIUS)
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(egui::Stroke::new(
+            1.0,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        ))
+        .inner_margin(egui::Margin::symmetric(8, 3))
+        .show(ui, |ui| ui.horizontal(add).inner)
+        .inner
+}
+
+fn remove_button(ui: &mut egui::Ui) -> bool {
+    ui.small_button("×")
+        .on_hover_text("Remove this key")
+        .clicked()
+}
+
+/// Keys added from the + menu that have no value yet (a text key cannot be stored empty).
+fn pending(ui: &egui::Ui, owner: &Owner) -> Vec<String> {
+    ui.data(|d| d.get_temp::<Vec<String>>(egui::Id::new(("json-pending", owner.salt()))))
+        .unwrap_or_default()
+}
+
+fn set_pending(ui: &egui::Ui, owner: &Owner, keys: Vec<String>) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::new(("json-pending", owner.salt())), keys));
+}
+
+fn text_of<'a>(s: &'a Settings, key: &str) -> Option<&'a str> {
+    s.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+}
+
+/// A text box committed on Enter or focus loss: the new text, when it changed.
+fn text_box(ui: &mut egui::Ui, id: egui::Id, current: &str, width: f32) -> Option<String> {
+    let mut t = ui
+        .data(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| current.to_string());
+    let r = ui.add(egui::TextEdit::singleline(&mut t).desired_width(width));
+    if r.changed() {
+        ui.data_mut(|d| d.insert_temp(id, t.clone()));
+    }
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        if t.trim() != current.trim() {
+            return Some(t.trim().to_string());
+        }
+    }
+    None
+}
+
+/// A known-paths list for a picker, cached while the scan and the plan stay the same.
+fn known(
+    ui: &egui::Ui,
+    model: &AppModel,
+    which: &str,
+    make: impl FnOnce() -> Vec<String>,
+) -> Arc<Vec<String>> {
+    let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
+    path_picker::cached(ui, which, key, make)
+}
+
+/// The edits that store `path` under `mode` for `owner` (a set's `match1` of its derived path stays derived).
+fn store(owner: &Owner, mode: Mode, path: &str, derived: &str) -> (String, Option<Value>) {
+    match (owner, mode) {
+        (Owner::Set(_), Mode::Exact(1))
+            if crate::pgp::prefix::match_value(path)
+                == crate::pgp::prefix::match_value(derived) =>
+        {
+            ("match1".into(), None)
+        }
+        (Owner::Set(_), Mode::Exact(n)) => (format!("match{n}"), stored_match(n, path)),
+        (_, m) => {
+            let t = path.trim().replace('/', "\\");
+            (m.key(), (!t.is_empty()).then(|| json!(t)))
+        }
+    }
+}
+
+/// The edit that removes `mode` for `owner` (a set's slot 1 match turns off as `match1 = ""`).
+fn unstore(owner: &Owner, mode: Mode) -> (String, Option<Value>) {
+    match (owner, mode) {
+        (Owner::Set(_), Mode::Exact(n)) => match_toggle(n, false, ""),
+        (_, m) => (m.key(), None),
+    }
+}
+
+/// A texture match pill: how it matches (a drop-down: exact in a slot, or path contains), the path, a picker of
+/// known paths for that kind of match, and ×.
+#[allow(clippy::too_many_arguments)]
+fn match_pill(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    owner: &Owner,
+    mode: Mode,
+    path: &str,
+    derived: &str,
+    taken: &[Mode],
+    acts: &mut Vec<Act>,
+) {
+    pill(ui, |ui| {
+        let mut picked_mode = mode;
+        egui::ComboBox::from_id_salt(("json-mode", owner.salt(), mode.key()))
+            .selected_text(egui::RichText::new(mode.label()).small())
+            .show_ui(ui, |ui| {
+                for m in (1..=8u8).map(Mode::Exact).chain([Mode::Contains]) {
+                    let free = m == mode || !taken.contains(&m);
+                    ui.add_enabled_ui(free, |ui| {
+                        ui.selectable_value(&mut picked_mode, m, m.label());
+                    });
+                }
+            })
+            .response
+            .on_hover_text("Exact: a mesh's texture in this slot is exactly this path. Path contains: the diffuse path contains this text.");
+        if picked_mode != mode {
+            let (k, v) = unstore(owner, mode);
+            acts.push(Act::Edit(owner.clone(), k, v));
+            let (k, v) = store(owner, picked_mode, path, derived);
+            acts.push(Act::Edit(owner.clone(), k, v));
+        }
+        let id = egui::Id::new(("json-match", owner.salt(), mode.key()));
+        if let Some(t) = text_box(ui, id, path, 260.0) {
+            let (k, v) = if t.is_empty() {
+                acts.push(Act::Unpend(owner.clone(), mode.key()));
+                unstore(owner, mode)
+            } else {
+                store(owner, mode, &t, derived)
+            };
+            acts.push(Act::Edit(owner.clone(), k, v));
+        }
+        if matches!(owner, Owner::Set(_)) && mode == Mode::Exact(1) && path == derived {
+            ui.weak("derived")
+                .on_hover_text("The diffuse's own path; type another to change it");
+        }
+        let hover = match mode {
+            Mode::Exact(_) => "Pick an exact texture path the scan found in this slot",
+            Mode::Contains => "Pick a texture path; any diffuse path containing it matches",
+        };
+        ui.menu_button("▾", |ui| {
+            let list = match mode {
+                Mode::Exact(n) => known(ui, model, &format!("slot{n}"), || {
+                    model.known_textures(Some(n - 1))
+                }),
+                Mode::Contains => known(ui, model, "any", || model.known_textures(None)),
+            };
+            if let Some(p) =
+                path_picker::list(ui, ("json-pick", owner.salt(), mode.key()), &list, false)
+            {
+                let (k, v) = store(owner, mode, &p, derived);
+                acts.push(Act::Edit(owner.clone(), k, v));
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text(hover);
+        if remove_button(ui) {
+            acts.push(Act::Unpend(owner.clone(), mode.key()));
+            let (k, v) = unstore(owner, mode);
+            acts.push(Act::Edit(owner.clone(), k, v));
+        }
+    });
+}
+
+/// The `nif_filter` pill: the text, a picker of known mesh folders, and ×.
+fn nif_pill(ui: &mut egui::Ui, model: &AppModel, owner: &Owner, value: &str, acts: &mut Vec<Act>) {
+    pill(ui, |ui| {
+        ui.label(egui::RichText::new("mesh path contains").small())
+            .on_hover_text("nif_filter: only meshes whose path contains this text");
+        let id = egui::Id::new(("json-nif", owner.salt()));
+        if let Some(t) = text_box(ui, id, value, 220.0) {
+            let t = t.replace('/', "\\");
+            acts.push(Act::Edit(
+                owner.clone(),
+                "nif_filter".into(),
+                (!t.is_empty()).then(|| json!(t)),
+            ));
+        }
+        ui.menu_button("▾", |ui| {
+            let dirs: Vec<String> = model
+                .known_mesh_dirs()
+                .iter()
+                .map(|d| d.replace('/', "\\"))
+                .collect();
+            if let Some(p) = path_picker::list(ui, ("json-nif-pick", owner.salt()), &dirs, false) {
+                acts.push(Act::Edit(
+                    owner.clone(),
+                    "nif_filter".into(),
+                    Some(json!(p)),
+                ));
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("Pick a mesh folder the scan found");
+        if remove_button(ui) {
+            acts.push(Act::Unpend(owner.clone(), "nif_filter".into()));
+            acts.push(Act::Edit(owner.clone(), "nif_filter".into(), None));
+        }
+    });
+}
+
+/// A schema key's pill on a set: the same control as the TruePBR box.
+fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<Act>) {
+    let key = edit_key(k.key);
+    pill(ui, |ui| {
+        if k.kind == KeyKind::Slot {
+            // A slot command: set in the Slot commands dialog, shown here as written.
+            let val = c.own.get(key).map(Value::to_string).unwrap_or_default();
+            ui.label(egui::RichText::new(format!("{}: {val}", k.label)).small())
+                .on_hover_text("A slot command; change it with Slot commands…");
+            if c.read_only.is_none() && remove_button(ui) {
+                acts.push(Act::Edit(
+                    Owner::Set(set.to_string()),
+                    key.to_string(),
+                    None,
+                ));
+            }
+            return;
+        }
+        if !matches!(k.kind, KeyKind::OnlyTrue | KeyKind::Object) {
+            ui.label(egui::RichText::new(k.label).small())
+                .on_hover_text(k.key);
+        }
+        let reason = disabled_reason(k, c);
+        let mut edits = vec![];
+        let r = ui.add_enabled_ui(reason.is_none(), |ui| {
+            control(ui, k, c.own.get(key).cloned(), c, &mut edits);
+        });
+        if let Some(why) = reason {
+            r.response.on_disabled_hover_text(why);
+        }
+        if c.read_only.is_none() && remove_button(ui) {
+            acts.push(Act::Unpend(Owner::Set(set.to_string()), k.key.to_string()));
+            edits.push((key.to_string(), None));
+        }
+        acts.extend(
+            edits
+                .into_iter()
+                .map(|(k, v)| Act::Edit(Owner::Set(set.to_string()), k, v)),
+        );
+    });
+}
+
+/// The match and filter keys a pill of their own draws.
+fn is_match_key(key: &str) -> bool {
+    key == "path_contains" || key == "nif_filter" || key.starts_with("match")
+}
+
+/// The keys a set has, other than the matches: in schema order.
+fn set_keys(own: &Settings) -> Vec<&'static KeySpec> {
+    KEYS.iter()
+        .filter(|k| !is_match_key(k.key))
+        .filter(|k| own.contains_key(edit_key(k.key)))
+        .collect()
+}
+
+/// The value a key added from the + menu starts with (`None`: a text key, which waits for its text).
+fn start_value(k: &KeySpec) -> Option<Value> {
+    match k.kind {
+        KeyKind::OnlyTrue | KeyKind::Object | KeyKind::Tri => Some(json!(true)),
+        KeyKind::Number(_) => Some(json!(GLINT_DEFAULTS
+            .iter()
+            .chain(FIXED_NUMBERS.iter())
+            .find(|(d, _)| *d == k.key)
+            .map_or(0.0, |(_, x)| *x))),
+        KeyKind::Rgb | KeyKind::Rgba => Some(json!([255, 255, 255])),
+        KeyKind::Text | KeyKind::Slot => None,
+    }
+}
+
+fn set_entry(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    hits: &[DeleteHit],
+    acts: &mut Vec<Act>,
+) {
+    let c = context(model, &v.id);
+    let owner = Owner::Set(v.id.clone());
+    let mine: Vec<&DeleteHit> = hits.iter().filter(|h| same_id(&h.set_id, &v.id)).collect();
+    let stroke = if mine.is_empty() {
+        ui.visuals().widgets.noninteractive.bg_stroke.color
+    } else {
+        AMBER
+    };
+    entry_frame(ui, stroke).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            let mut title = egui::RichText::new(&v.label).strong();
+            if !mine.is_empty() {
+                title = title.strikethrough().color(AMBER);
+            }
+            ui.label(title);
+            if let Some(p) = &v.prefix {
+                ui.weak(format!("→ {p}"));
+            }
+            if ui
+                .small_button("Show")
+                .on_hover_text("Select this set in the main window")
+                .clicked()
+            {
+                acts.push(Act::Select(v.key.clone()));
+            }
+        });
+        for h in &mine {
+            ui.colored_label(
+                AMBER,
+                format!(
+                    "⚠ Delete section {} deletes the shapes this set is for: {}",
+                    h.section + 1,
+                    h.why
+                ),
+            );
+        }
+        let derived = v.derived_match.clone().unwrap_or_default();
+        let mut taken: Vec<Mode> = active_matches(&c.own, &derived)
+            .iter()
+            .map(|(n, _)| Mode::Exact(*n))
+            .collect();
+        let contains = text_of(&c.own, "path_contains").map(str::to_string);
+        if contains.is_some() {
+            taken.push(Mode::Contains);
+        }
+        let waiting = pending(ui, &owner);
+        ui.horizontal_wrapped(|ui| {
+            for (n, path) in active_matches(&c.own, &derived) {
+                match_pill(
+                    ui,
+                    model,
+                    &owner,
+                    Mode::Exact(n),
+                    &path,
+                    &derived,
+                    &taken,
+                    acts,
+                );
+            }
+            if contains.is_some() || waiting.iter().any(|k| k == "path_contains") {
+                let p = contains.clone().unwrap_or_default();
+                match_pill(
+                    ui,
+                    model,
+                    &owner,
+                    Mode::Contains,
+                    &p,
+                    &derived,
+                    &taken,
+                    acts,
+                );
+            }
+            let nif = text_of(&c.own, "nif_filter").map(str::to_string);
+            if nif.is_some() || waiting.iter().any(|k| k == "nif_filter") {
+                nif_pill(ui, model, &owner, nif.as_deref().unwrap_or(""), acts);
+            }
+            for k in set_keys(&c.own) {
+                key_pill(ui, k, &c, &v.id, acts);
+            }
+            for key in waiting.iter().filter(|k| !is_match_key(k)) {
+                if let Some(k) = spec(key).filter(|_| !c.own.contains_key(key.as_str())) {
+                    key_pill(ui, k, &c, &v.id, acts);
+                }
+            }
+            // Hand-written keys sdc does not know: shown, and removable.
+            for (k, val) in c
+                .own
+                .iter()
+                .filter(|(k, _)| spec(k).is_none() && !k.ends_with("_on") && !is_match_key(k))
+            {
+                pill(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{k}: {val}"))
+                            .small()
+                            .color(AMBER),
+                    )
+                    .on_hover_text("A key sdc does not know; it is kept as written");
+                    if remove_button(ui) {
+                        acts.push(Act::Edit(owner.clone(), k.clone(), None));
+                    }
+                });
+            }
+            add_set_key_menu(ui, v, &c, &owner, &taken, &waiting, acts);
+        });
+    });
+    // A pending key that now has a value is no longer pending (read again: the + menu may have added one).
+    let left: Vec<String> = pending(ui, &owner)
+        .into_iter()
+        .filter(|k| !c.own.contains_key(edit_key(k)))
+        .collect();
+    set_pending(ui, &owner, left);
+}
+
+fn add_set_key_menu(
+    ui: &mut egui::Ui,
+    v: &SetView,
+    c: &Ctx,
+    owner: &Owner,
+    taken: &[Mode],
+    waiting: &[String],
+    acts: &mut Vec<Act>,
+) {
+    let derived = v.derived_match.clone().unwrap_or_default();
+    ui.menu_button("+ key", |ui| {
+        ui.menu_button("Match", |ui| {
+            let (_, addable) = slot_matches(v);
+            for n in 1..=8u8 {
+                if taken.contains(&Mode::Exact(n)) {
+                    continue;
+                }
+                if ui.button(Mode::Exact(n).label()).clicked() {
+                    let path = if n == 1 {
+                        derived.clone()
+                    } else {
+                        addable
+                            .iter()
+                            .find(|a| a.n == n)
+                            .map(|a| a.path.clone())
+                            .unwrap_or_default()
+                    };
+                    let (k, val) = match_toggle(n, true, &path);
+                    acts.push(Act::Edit(owner.clone(), k, val));
+                    ui.close();
+                }
+            }
+            if !taken.contains(&Mode::Contains) && ui.button("path contains").clicked() {
+                add_pending(ui, owner, waiting, "path_contains");
+                ui.close();
+            }
+            if !c.own.contains_key("nif_filter")
+                && ui.button("mesh path contains (nif_filter)").clicked()
+            {
+                add_pending(ui, owner, waiting, "nif_filter");
+                ui.close();
+            }
+        });
+        ui.separator();
+        for k in KEYS.iter().filter(|k| {
+            !is_match_key(k.key) && k.kind != KeyKind::Slot && !c.own.contains_key(edit_key(k.key))
+        }) {
+            // A sub-key of glint or fuzz is offered while the feature is on.
+            if let Some((obj, _)) = k.key.split_once('.') {
+                if c.own.get(&format!("{obj}_on")).and_then(Value::as_bool) != Some(true) {
+                    continue;
+                }
+            }
+            let reason = disabled_reason(k, c);
+            let r = ui
+                .add_enabled(reason.is_none(), egui::Button::new(k.label))
+                .on_hover_text(k.key);
+            let r = match reason {
+                Some(why) => r.on_disabled_hover_text(why),
+                None => r,
+            };
+            if r.clicked() {
+                match start_value(k) {
+                    Some(val) => acts.push(Act::Edit(
+                        owner.clone(),
+                        edit_key(k.key).to_string(),
+                        Some(val),
+                    )),
+                    None => add_pending(ui, owner, waiting, k.key),
+                }
+                ui.close();
+            }
+        }
+    });
+}
+
+fn add_pending(ui: &egui::Ui, owner: &Owner, waiting: &[String], key: &str) {
+    let mut w = waiting.to_vec();
+    if !w.iter().any(|k| k == key) {
+        w.push(key.to_string());
+    }
+    set_pending(ui, owner, w);
+}
+
+fn section_entry(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    i: usize,
+    s: &Settings,
+    hits: &[DeleteHit],
+    acts: &mut Vec<Act>,
+) {
+    let owner = Owner::Section(i);
+    entry_frame(ui, RED).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(format!("Delete section {}", i + 1)).strong());
+            if ui
+                .small_button("Remove")
+                .on_hover_text("Remove this section")
+                .clicked()
+            {
+                acts.push(Act::RemoveSection(i));
+            }
+        });
+        if let Some(why) = not_written_reason(s) {
+            ui.colored_label(AMBER, why);
+        }
+        for h in hits.iter().filter(|h| h.section == i) {
+            ui.colored_label(
+                AMBER,
+                format!("⚠ Deletes shapes of set {}: {}", h.set_id, h.why),
+            );
+        }
+        let mut taken: Vec<Mode> = (1..=8u8)
+            .filter(|n| s.contains_key(&format!("match{n}")))
+            .map(Mode::Exact)
+            .collect();
+        if s.contains_key("path_contains") {
+            taken.push(Mode::Contains);
+        }
+        let waiting = pending(ui, &owner);
+        ui.horizontal_wrapped(|ui| {
+            for m in taken.clone() {
+                let p = text_of(s, &m.key()).unwrap_or("").to_string();
+                match_pill(ui, model, &owner, m, &p, "", &taken, acts);
+            }
+            for key in waiting
+                .iter()
+                .filter(|k| is_match_key(k) && *k != "nif_filter")
+            {
+                let m = if key == "path_contains" {
+                    Mode::Contains
+                } else {
+                    Mode::Exact(key[5..].parse().unwrap_or(1))
+                };
+                if !taken.contains(&m) {
+                    match_pill(ui, model, &owner, m, "", "", &taken, acts);
+                }
+            }
+            let nif = text_of(s, "nif_filter").map(str::to_string);
+            if nif.is_some() || waiting.iter().any(|k| k == "nif_filter") {
+                nif_pill(ui, model, &owner, nif.as_deref().unwrap_or(""), acts);
+            }
+            pill(ui, |ui| {
+                ui.label(egui::RichText::new("delete: true").small())
+                    .on_hover_text("PGPatcher deletes every trishape this section matches");
+            });
+            ui.menu_button("+ key", |ui| {
+                for n in 1..=8u8 {
+                    if !taken.contains(&Mode::Exact(n))
+                        && ui.button(Mode::Exact(n).label()).clicked()
+                    {
+                        add_pending(ui, &owner, &waiting, &format!("match{n}"));
+                        ui.close();
+                    }
+                }
+                if !taken.contains(&Mode::Contains) && ui.button("path contains").clicked() {
+                    add_pending(ui, &owner, &waiting, "path_contains");
+                    ui.close();
+                }
+                if nif.is_none() && ui.button("mesh path contains (nif_filter)").clicked() {
+                    add_pending(ui, &owner, &waiting, "nif_filter");
+                    ui.close();
+                }
+            });
+        });
+    });
+    let left: Vec<String> = pending(ui, &owner)
+        .into_iter()
+        .filter(|k| !s.contains_key(k.as_str()))
+        .collect();
+    set_pending(ui, &owner, left);
+}

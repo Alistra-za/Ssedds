@@ -436,6 +436,7 @@ fn glint_and_fuzz_switches_save_with_their_sub_settings_and_reach_the_json() {
             settings: s,
             slots: Default::default(),
             derived_match: "ax".into(),
+            section: false,
         })
         .to_value()
     };

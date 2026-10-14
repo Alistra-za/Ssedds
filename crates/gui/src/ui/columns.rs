@@ -35,7 +35,23 @@ pub fn strip(ui: &mut egui::Ui, name: &str) {
     strip_sensing(ui, name, egui::Sense::hover());
 }
 
-/// A strip that can be clicked (the collapsed Advanced drawer opens with it).
+/// The arrow beside a column heading that collapses the column to its strip (the strip's own arrow expands it).
+pub fn collapse_arrow(ui: &mut egui::Ui, model: &mut AppModel, column: crate::ui::Column) {
+    let name = match column {
+        crate::ui::Column::Textures => "Textures",
+        crate::ui::Column::Sets => "Sets",
+    };
+    if ui
+        .small_button("◀")
+        .on_hover_text(format!("Collapse the {name} column"))
+        .clicked()
+    {
+        *column.flags(&mut model.settings).1 = true;
+        model.save_settings();
+    }
+}
+
+/// A strip that can be clicked (a collapsed column, and the collapsed Advanced drawer, open with it).
 pub fn strip_button(ui: &mut egui::Ui, name: &str) -> egui::Response {
     strip_sensing(ui, name, egui::Sense::click())
 }
@@ -57,10 +73,23 @@ fn strip_sensing(ui: &mut egui::Ui, name: &str, sense: egui::Sense) -> egui::Res
     let galley =
         ui.painter()
             .layout_no_wrap(name.to_string(), egui::FontId::proportional(14.0), color);
+    // A clickable strip shows the arrow that opens it, above the name.
+    let top = if sense.senses_click() {
+        ui.painter().text(
+            egui::pos2(rect.center().x, rect.top() + 4.0),
+            egui::Align2::CENTER_TOP,
+            "▶",
+            egui::FontId::proportional(12.0),
+            color,
+        );
+        20.0
+    } else {
+        0.0
+    };
     // Rotated a quarter turn counter-clockwise: the text runs upward, its top edge on the left.
     let pos = egui::pos2(
         rect.center().x - galley.size().y / 2.0,
-        rect.top() + 12.0 + galley.size().x,
+        rect.top() + 12.0 + top + galley.size().x,
     );
     ui.painter().add(
         egui::epaint::TextShape::new(pos, galley, color).with_angle(-std::f32::consts::FRAC_PI_2),
@@ -191,6 +220,7 @@ fn tile(
 pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
     // Wrapped: the counts move under the heading in a narrow column instead of holding it wider.
     ui.horizontal_wrapped(|ui| {
+        collapse_arrow(ui, model, crate::ui::Column::Textures);
         ui.heading("Textures");
         if let Some(s) = model.selection_summary(false) {
             ui.label(egui::RichText::new(s).strong());

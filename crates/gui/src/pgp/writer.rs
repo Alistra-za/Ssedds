@@ -33,6 +33,8 @@ pub struct EntryInput {
     pub slots: BTreeMap<u8, String>,
     /// The derived diffuse path: `match1` while the set has no `match1` key (DECISIONS V2).
     pub derived_match: String,
+    /// GUI tweaks G4: a delete section (no set): only its match keys, `nif_filter` and `delete` are written.
+    pub section: bool,
 }
 
 fn colour(v: &Value, alpha: bool) -> Option<Node> {
@@ -229,7 +231,39 @@ fn sub_object(obj: &str, own: &Settings) -> Vec<(String, Node)> {
 }
 
 pub fn entry_node(e: &EntryInput) -> Node {
+    if e.section {
+        return Node::Obj(section_object(&e.settings));
+    }
     Node::Obj(object(&e.settings, &e.derived_match, &e.slots))
+}
+
+/// A delete section (GUI tweaks G4): its exact matches (in the JSON form), `path_contains`, `nif_filter`, then
+/// `delete: true` (always: a section exists to delete shapes).
+fn section_object(own: &Settings) -> Vec<(String, Node)> {
+    let mut out = vec![];
+    for key in crate::model::sections::SECTION_KEYS {
+        let Some(v) = own.get(key).filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let node = match key {
+            "delete" => continue,
+            k if k.starts_with("match") => v
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| Node::Scalar(json!(match_value(&s.replace('/', "\\"))))),
+            _ => v
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| Node::Scalar(json!(s.replace('/', "\\")))),
+        };
+        if let Some(n) = node {
+            out.push((key.to_string(), n));
+        }
+    }
+    out.push(("delete".to_string(), Node::Scalar(json!(true))));
+    out
 }
 
 pub fn document(entries: &[EntryInput]) -> Node {

@@ -36,7 +36,8 @@ pub struct SdcApp {
 }
 
 impl SdcApp {
-    pub fn new(model: AppModel) -> SdcApp {
+    pub fn new(mut model: AppModel) -> SdcApp {
+        model.refresh_known_paths();
         let mut meshes = crate::model::meshes::MeshesModel::new(
             crate::model::meshes::default_store_path(),
             model.settings.meshes.clone(),
@@ -211,18 +212,16 @@ impl eframe::App for SdcApp {
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).
         if scanning && !self.meshes.scanning() {
             self.model.refresh_mesh_votes(false);
+            self.model.refresh_known_paths();
         }
         self.state.set3d.poll(&self.model);
+        // Both views offer the scan (the Textures view has its row under the header).
+        self.meshes.activate();
+        if let Some(req) = self.meshes.take_request() {
+            self.meshes.start(req);
+        }
         if crate::ui::header::meshes_view_active(&ctx) {
-            self.meshes.activate();
-            if let Some(req) = self.meshes.take_request() {
-                self.meshes.start(req);
-            }
             crate::ui::meshes::page(ui, &mut self.meshes);
-            if let Some(s) = self.meshes.take_settings() {
-                self.model.settings.meshes = s;
-                self.model.save_settings();
-            }
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {
                 self.model.settings.render3d.shaders = Some(fp);
                 self.model.save_settings();
@@ -230,7 +229,11 @@ impl eframe::App for SdcApp {
             // The Textures model's dialogs (close with unsaved edits, an export error) must show in this view too.
             crate::ui::dialogs::draw(&ctx, &mut self.model);
         } else {
-            crate::ui::draw_with(ui, &mut self.model, &mut self.state);
+            crate::ui::draw_with_scan(ui, &mut self.model, &mut self.state, Some(&mut self.meshes));
+        }
+        if let Some(s) = self.meshes.take_settings() {
+            self.model.settings.meshes = s;
+            self.model.save_settings();
         }
         if let Some(fp) = self.state.set3d.v3.take_shaders_changed() {
             self.model.settings.render3d.shaders = Some(fp);

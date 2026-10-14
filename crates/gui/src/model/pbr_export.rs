@@ -185,6 +185,7 @@ pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
                 settings: v.settings.clone(),
                 slots: slots_of(v, &views, &paths, m),
                 derived_match: v.derived_match.clone().unwrap_or_default(),
+                section: false,
             };
             (v.clone(), e)
         })
@@ -513,10 +514,21 @@ pub fn prepare(m: &AppModel) -> Option<PendingJson> {
             })
             .collect()
     };
-    let entries: Vec<_> = json_entries(m)
+    let mut entries: Vec<_> = json_entries(m)
         .into_iter()
         .map(|(v, e)| (v.id.clone(), deps(&v), e))
         .collect();
+    // GUI tweaks G4: the delete sections go last, so nothing after them changes the shapes they match.
+    for (i, s) in m.sections().into_iter().enumerate() {
+        if crate::model::sections::written(&s) {
+            let e = EntryInput {
+                settings: s,
+                section: true,
+                ..EntryInput::default()
+            };
+            entries.push((format!("delete section {}", i + 1), vec![], e));
+        }
+    }
     if entries.is_empty() {
         return None;
     }

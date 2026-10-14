@@ -59,7 +59,8 @@ fn an_opened_folder_shows_items_filters_and_the_undecided_count() {
 fn collapsing_the_columns_hides_the_thumbnails() {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened(d.path());
-    model.settings.columns_collapsed = true;
+    model.settings.textures_collapsed = true;
+    model.settings.sets_collapsed = true;
     let mut h = harness(model);
     h.run();
     assert!(h.query_by_label_contains("leaf.png").is_none());
@@ -111,12 +112,14 @@ fn the_columns_keep_their_width_through_a_collapse_and_expand() {
     // The Sets column starts where the Textures column ends.
     let before = h.get_by_label("Sets").rect().min.x;
     assert!(before > 300.0, "Sets starts at {before}");
-    h.state_mut().settings.columns_collapsed = true;
+    h.state_mut().settings.textures_collapsed = true;
+    h.state_mut().settings.sets_collapsed = true;
     h.run();
     assert!(h
         .query_by_label("Sets")
         .is_some_and(|n| n.rect().width() < 30.0));
-    h.state_mut().settings.columns_collapsed = false;
+    h.state_mut().settings.textures_collapsed = false;
+    h.state_mut().settings.sets_collapsed = false;
     h.run();
     let after = h.get_by_label("Sets").rect().min.x;
     assert!(after > 300.0, "Sets starts at {after} after expanding");

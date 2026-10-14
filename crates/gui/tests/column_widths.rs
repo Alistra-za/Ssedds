@@ -11,8 +11,7 @@ use support::*;
 type H = Harness<'static, (AppModel, State)>;
 
 fn harness(d: &std::path::Path, w: f32) -> H {
-    let mut m = pbr_opened(d);
-    m.settings.columns_collapsed = false;
+    let m = pbr_opened(d);
     let mut h = Harness::builder()
         .with_size(egui::vec2(w, 800.0))
         .build_ui_state(

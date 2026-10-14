@@ -150,7 +150,7 @@ const PACKED: &str = "skipped (a packed output has no file of its own)";
 const LOCKED: &str = "skipped (locked)";
 
 /// The part of a file stem before its map suffix or exporter term (`wall_normal` → `wall`).
-fn base_of(stem: &str) -> &str {
+pub(crate) fn base_of(stem: &str) -> &str {
     let base = split_vocab(stem).map_or_else(|| split_suffix(stem).0, |(b, _)| b);
     // Both splits cut a tail off `stem`, so the base is a prefix of it.
     &stem[..base.len().min(stem.len())]
@@ -164,14 +164,14 @@ fn role_of(stem: &str) -> String {
     }
 }
 
-fn split_path(p: &str) -> (&str, &str) {
+pub(crate) fn split_path(p: &str) -> (&str, &str) {
     match p.rfind('/') {
         Some(i) => (&p[..i + 1], &p[i + 1..]),
         None => ("", p),
     }
 }
 
-fn split_ext(name: &str) -> (&str, &str) {
+pub(crate) fn split_ext(name: &str) -> (&str, &str) {
     match name.rfind('.') {
         Some(i) if i > 0 => (&name[..i], &name[i + 1..]),
         _ => (name, ""),
@@ -183,7 +183,7 @@ fn lower(p: &str) -> String {
 }
 
 /// The output path the engine gives a file read as `rel` (Skyrim suffix names applied).
-fn input_output(rel: &str) -> String {
+pub(crate) fn input_output(rel: &str) -> String {
     let mut f = [InputFile {
         path: PathBuf::from(rel),
         rel: PathBuf::from(rel),

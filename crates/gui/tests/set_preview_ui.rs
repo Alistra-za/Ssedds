@@ -57,6 +57,8 @@ fn rock_selected(d: &std::path::Path) -> AppModel {
         .0
         .key;
     m.select_set(&key);
+    // The 3D panel shows in the 3D view of the set (the 2D | 3D switch).
+    m.settings.set_view_3d = true;
     m
 }
 
