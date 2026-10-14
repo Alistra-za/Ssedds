@@ -251,6 +251,8 @@ pub struct AppModel {
     pub filter: Filter,
     pub search: String,
     pub status_line: String,
+    /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
+    status_note: Option<String>,
     pub banner: Option<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
@@ -371,6 +373,7 @@ impl AppModel {
             filter: Filter::default(),
             search: String::new(),
             status_line: String::new(),
+            status_note: None,
             dropped_fills: Default::default(),
             banner: None,
             encoding_note: None,
@@ -632,11 +635,6 @@ impl AppModel {
         else {
             return;
         };
-        // DECISIONS AF4: an Export waiting only for a scan-finished read is dropped by the edit that supersedes it;
-        // this plan is not the one it was clicked on.
-        if self.planning.is_none() && matches!(self.votes_pending, Some((_, false))) {
-            self.export_after_plan = false;
-        }
         if let Some(c) = self.planning.take() {
             c.cancel();
         }
@@ -781,6 +779,7 @@ impl AppModel {
     /// Export the folder; first the checks that need an answer (M3a spec §2.5). Sources that changed since the plan
     /// are flagged and the plan is made again first, so the export starts from fresh plans (M3a spec §7).
     pub fn export_clicked(&mut self) {
+        self.status_note = None;
         if self.root.is_none() {
             return;
         }
@@ -934,6 +933,24 @@ impl AppModel {
 
     /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
     /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
+    /// A user edit recorded a step: re-plan. DECISIONS AF4: an Export waiting only for a scan-finished read is
+    /// cancelled by the edit (the plan it was clicked on is gone), with a note; any other re-plan keeps it.
+    fn replan_after_edit(&mut self) {
+        let cancel = self.export_after_plan
+            && self.planning.is_none()
+            && matches!(self.votes_pending, Some((_, false)));
+        self.type_edit_recorded();
+        self.replan();
+        if cancel {
+            self.export_after_plan = false;
+            self.status_note = Some(
+                "Export cancelled: the project changed while scan results were loading — click Export again."
+                    .into(),
+            );
+            self.status_line = self.status_note.clone().unwrap_or_default();
+        }
+    }
+
     fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
         let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
         self.batch = true;
@@ -951,8 +968,7 @@ impl AppModel {
             created_file: None,
         });
         self.auto_replans = 0;
-        self.type_edit_recorded();
-        self.replan();
+        self.replan_after_edit();
         true
     }
 
@@ -1275,6 +1291,9 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        if let Some(n) = &self.status_note {
+            self.status_line = format!("{n} {}", self.status_line);
+        }
         self.prune_selection();
         // Keep the selection when its item or set still exists; else nothing.
         let gone = match &self.selection {
@@ -1501,8 +1520,7 @@ impl AppModel {
         });
         self.auto_replans = 0;
         if replan {
-            self.type_edit_recorded();
-            self.replan();
+            self.replan_after_edit();
         }
     }
 

@@ -1709,7 +1709,39 @@ fn an_edit_during_a_scan_finished_read_drops_the_queued_export() {
     idle(&mut m);
     m.refresh_mesh_votes(false);
     m.export_clicked();
-    m.replan();
+    m.set_field("landscape/rock01.png", "header", json!("dx10"));
     idle(&mut m);
     assert!(!export_started_or_asked(&m), "{:?}", m.dialog);
+    assert!(
+        m.status_line
+            .contains("Export cancelled: the project changed while scan results were loading"),
+        "{}",
+        m.status_line
+    );
+}
+
+/// Fix round 2 (DECISIONS AF4): a re-plan that is no edit (here an NVTT probe whose result changed) keeps an Export
+/// queued behind a scan-finished read; that plan carries it to its end.
+#[test]
+fn a_non_edit_replan_during_a_scan_finished_read_keeps_the_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.nvtt = Some(engine::nvtt::NvttProbe::Missing("before".into()));
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    assert!(m.votes_pending() && !export_started_or_asked(&m));
+    // A probe result that differs (generation 0: this model never probed) re-plans. Sent at once, it is queued
+    // ahead of the database read, which still has to open the file.
+    m.sender()
+        .send(sdc_gui::worker::WorkerMsg::Nvtt {
+            generation: 0,
+            probe: engine::nvtt::NvttProbe::Missing("after".into()),
+        })
+        .unwrap();
+    idle(&mut m);
+    assert!(
+        export_started_or_asked(&m),
+        "the probe's re-plan kept the export"
+    );
 }
