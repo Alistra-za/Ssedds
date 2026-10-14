@@ -69,6 +69,8 @@ pub fn draw_with_scan(
     state.thumbs.sweep(model.items_rev());
     // First, before any widget sees the keys (items 5 and 19).
     actions::keys(ui.ctx(), model, state.drops.pending.is_some());
+    // The column sets it again if it draws; a hidden or collapsed column leaves Up and Down off.
+    model.nav.cols = 0;
     header::draw(ui, model);
     if let Some(m) = scan {
         egui::Panel::top("textures-scan").show(ui, |ui| meshes::scan_row(ui, m));

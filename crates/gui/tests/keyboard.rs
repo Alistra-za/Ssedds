@@ -89,8 +89,10 @@ fn every_shortcut_runs_its_action() {
                 m.nav.sheet = false;
                 m.expanded = (a.area == Area::Preview).then(|| "x".to_string());
             }
+            // A key of a disabled action does nothing (the palette hides it as well).
+            let want = (a.enabled)(&h.state().0).then_some(a.id);
             press(&mut h, s.mods, s.key);
-            assert_eq!(h.state().1, Some(a.id), "{}", s.text());
+            assert_eq!(h.state().1, want, "{}", s.text());
             checked += 1;
         }
     }
@@ -460,4 +462,72 @@ fn a_texture_moved_to_scrolls_into_view() {
     h.run();
     assert_eq!(n(&h, "tex_000.png"), 2, "and back to the top");
     assert_eq!(n(&h, "tex_299.png"), 0);
+}
+
+#[test]
+fn a_disabled_action_does_not_run_from_its_key() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = keys_only(opened(d.path()));
+    assert!(!h.state().0.is_dirty() && !h.state().0.can_undo());
+    press(&mut h, Modifiers::COMMAND, Key::S);
+    assert_eq!(h.state().1, None, "Ctrl+S on a clean project");
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(h.state().1, None, "Ctrl+Z with no history");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(h.state().1, None, "Enter with no texture selected");
+}
+
+#[test]
+fn up_and_down_wait_for_a_drawn_grid() {
+    let d = tempfile::tempdir().unwrap();
+    // Never drawn: nav.cols is 0, so Up and Down do nothing instead of stepping by one.
+    let mut h = keys_only(ten(d.path()));
+    press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    let at = h.state().0.selected_items();
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    assert_eq!(h.state().1, None);
+    assert_eq!(h.state().0.selected_items(), at);
+    // The Textures column drew: it knows its width.
+    let mut h = app_harness(ten(d.path()));
+    h.run();
+    assert!(h.state().nav.cols >= 1, "the drawn grid sets the width");
+    // Hidden: the next frame has no row width again.
+    h.state_mut().settings.textures_hidden = true;
+    h.run();
+    h.run();
+    assert_eq!(h.state().nav.cols, 0, "a hidden column has no rows");
+}
+
+#[test]
+fn ctrl_s_in_a_text_field_says_so_in_the_status_line() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field(
+        "landscape/rock01.png",
+        "alpha.policy",
+        serde_json::json!("remove"),
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(m.is_dirty());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(400.0, 300.0))
+        .build_ui_state(
+            |ui, (m, text): &mut (AppModel, String)| {
+                actions::keys(ui.ctx(), m, false);
+                let r = ui.text_edit_singleline(text);
+                if !r.has_focus() {
+                    r.request_focus();
+                }
+            },
+            (m, "x".to_string()),
+        );
+    h.run();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run();
+    assert_eq!(
+        h.state().0.status_line,
+        "Ctrl+S: leave the text field first"
+    );
+    assert!(h.state().0.is_dirty(), "and nothing was saved");
 }

@@ -303,20 +303,26 @@ pub static ACTIONS: &[Action] = &[
         &[key(Key::ArrowRight)],
         |m, _| m.grid_move(1, false),
     )),
-    unlisted(a(
-        "up",
-        "Select the texture above",
-        Grid,
-        &[key(Key::ArrowUp)],
-        |m, _| m.grid_move(-m.grid_row_step(), false),
-    )),
-    unlisted(a(
-        "down",
-        "Select the texture below",
-        Grid,
-        &[key(Key::ArrowDown)],
-        |m, _| m.grid_move(m.grid_row_step(), false),
-    )),
+    when(
+        unlisted(a(
+            "up",
+            "Select the texture above",
+            Grid,
+            &[key(Key::ArrowUp)],
+            |m, _| m.grid_move(-m.grid_row_step(), false),
+        )),
+        AppModel::can_step_rows,
+    ),
+    when(
+        unlisted(a(
+            "down",
+            "Select the texture below",
+            Grid,
+            &[key(Key::ArrowDown)],
+            |m, _| m.grid_move(m.grid_row_step(), false),
+        )),
+        AppModel::can_step_rows,
+    ),
     unlisted(a(
         "extend-left",
         "Extend the selection to the left",
@@ -331,20 +337,26 @@ pub static ACTIONS: &[Action] = &[
         &[shift(Key::ArrowRight)],
         |m, _| m.grid_move(1, true),
     )),
-    unlisted(a(
-        "extend-up",
-        "Extend the selection up a row",
-        Grid,
-        &[shift(Key::ArrowUp)],
-        |m, _| m.grid_move(-m.grid_row_step(), true),
-    )),
-    unlisted(a(
-        "extend-down",
-        "Extend the selection down a row",
-        Grid,
-        &[shift(Key::ArrowDown)],
-        |m, _| m.grid_move(m.grid_row_step(), true),
-    )),
+    when(
+        unlisted(a(
+            "extend-up",
+            "Extend the selection up a row",
+            Grid,
+            &[shift(Key::ArrowUp)],
+            |m, _| m.grid_move(-m.grid_row_step(), true),
+        )),
+        AppModel::can_step_rows,
+    ),
+    when(
+        unlisted(a(
+            "extend-down",
+            "Extend the selection down a row",
+            Grid,
+            &[shift(Key::ArrowDown)],
+            |m, _| m.grid_move(m.grid_row_step(), true),
+        )),
+        AppModel::can_step_rows,
+    ),
     when(
         a(
             "open-preview",
@@ -522,10 +534,26 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
     if blocked {
         return None;
     }
+    // AG23: Ctrl+S waits for the field; say so instead of doing nothing.
+    if text && model.is_dirty() {
+        let save = action("save").map_or(&[][..], |a| a.keys);
+        let pressed = ctx.input(|i| {
+            save.iter()
+                .any(|s| i.key_pressed(s.key) && i.modifiers.matches_logically(s.mods))
+        });
+        if pressed {
+            model.status_line = "Ctrl+S: leave the text field first".into();
+        }
+    }
     let meshes = super::header::meshes_view_active(ctx);
     let mut pairs: Vec<(&'static Action, Shortcut)> = actions()
         .iter()
-        .filter(|a| a.run.is_some() && live(a.area, model, meshes) && (!text || a.id == PALETTE))
+        .filter(|a| {
+            a.run.is_some()
+                && live(a.area, model, meshes)
+                && (a.enabled)(model)
+                && (!text || a.id == PALETTE)
+        })
         .flat_map(|a| a.keys.iter().map(move |s| (a, *s)))
         .collect();
     pairs.sort_by_key(|(_, s)| std::cmp::Reverse(s.weight()));

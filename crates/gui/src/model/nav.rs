@@ -11,7 +11,8 @@ pub const PALETTE_CAP: usize = 200;
 /// What the keyboard and the palette keep between frames.
 #[derive(Default)]
 pub struct Nav {
-    /// Tiles per row in the Textures grid as last drawn: Up and Down move by this many.
+    /// Tiles per row in the Textures grid as drawn last frame: Up and Down move by this many. 0: the grid is not on
+    /// screen (not drawn yet, or its column is hidden), and Up and Down do nothing.
     pub cols: usize,
     /// The texture the arrow keys last moved to. Shift+arrow keeps the active texture as the anchor (F3a D1), so the
     /// moving end of the range is kept here.
@@ -194,7 +195,13 @@ impl AppModel {
 
     /// Up and Down move by a row of the grid.
     pub fn grid_row_step(&self) -> isize {
-        self.nav.cols.max(1) as isize
+        self.nav.cols as isize
+    }
+
+    /// The Up and Down keys work once the Textures column has drawn its grid (it sets `nav.cols`; a hidden or
+    /// collapsed column leaves it 0, see `ui::draw_with_scan`).
+    pub fn can_step_rows(&self) -> bool {
+        self.nav.cols > 0
     }
 
     /// Enter or Space in the grid: the expanded preview of the active texture.
