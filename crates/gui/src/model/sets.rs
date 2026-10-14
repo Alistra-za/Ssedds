@@ -4,8 +4,8 @@ use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{
-    active_matches, check_rel_path, derive_match_diffuse, output_rel, prefix_of, slot_match_path,
-    slot_suffixes,
+    active_matches, check_file_name, check_rel_path, derive_match_diffuse, output_rel, prefix_of,
+    slot_match_path, slot_suffixes,
 };
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
@@ -596,16 +596,20 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
         }
     }
     let mut paths = BTreeMap::new();
+    let views = set_views(m);
+    // F3b D2: a set's `output_name` on any target; on CS a PBR set's prefix names its outputs instead.
+    let named = output_name_paths(m, &views);
     if m.target != Target::Cs {
+        paths.extend(named);
         return (edits, paths);
     }
-    let views = set_views(m);
     let candidates = output_candidates(m, &views);
     // Mirrored outputs: textures with no explicit path, now or in the plan on screen, write their job key. An owned
     // path on one is held back too (the engine would skip both as IN-DUPLICATE and the plan would not settle);
     // `path_collisions` reports it.
     let explicit = |k: &OutputKey| {
         candidates.iter().any(|(_, c, _)| c == k)
+            || named.iter().any(|(c, _)| c == k)
             || m.last_inputs
                 .as_ref()
                 .is_some_and(|l| l.output_paths.contains_key(k))
@@ -622,7 +626,8 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
         .map(|it| it.job_key.replace('\\', "/").to_lowercase())
         .collect();
     let mut seen = BTreeSet::new();
-    for (_, key, rel) in candidates {
+    let named = named.into_iter().map(|(k, rel)| (String::new(), k, rel));
+    for (_, key, rel) in named.chain(candidates) {
         if mirrored.contains(&rel.to_string_lossy().replace('\\', "/").to_lowercase()) {
             continue;
         }
@@ -635,6 +640,78 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
         }
     }
     (edits, paths)
+}
+
+/// F3b D2: the explicit path of every output of each set with an `output_name`: the output's own folder and Skyrim
+/// suffix, the new base name. A PBR set on CS is left out (its prefix and PGPatcher `rename` name its outputs), and
+/// so is a name `check_output_name` refuses (a hand edit).
+pub fn output_name_paths(m: &AppModel, views: &[SetView]) -> Vec<(OutputKey, PathBuf)> {
+    let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
+    let mut out = vec![];
+    for e in &entries {
+        let Some(name) = e.output_name.as_deref() else {
+            continue;
+        };
+        if check_output_name(name).is_err() {
+            continue;
+        }
+        let Some(v) = views.iter().find(|v| same_id(&v.id, &e.id)) else {
+            continue;
+        };
+        if v.pbr && m.target == Target::Cs {
+            continue;
+        }
+        for key in &v.members {
+            let Some(item) = m.item(key) else { continue };
+            if item.job.is_none() || item.job_key.is_empty() {
+                continue;
+            }
+            let Some(rel) = renamed_output(&item.job_key, name) else {
+                continue;
+            };
+            let k = if item.kind == ItemKind::Packed {
+                let Some(suffix) = recipe_suffix(item) else {
+                    continue;
+                };
+                OutputKey::Packed {
+                    set: v.id.clone(),
+                    suffix,
+                }
+            } else {
+                OutputKey::File(item.key.clone())
+            };
+            out.push((k, rel));
+        }
+    }
+    out
+}
+
+/// `job_key` (an output path relative to the export root) with its base name replaced by `name`: the folder and the
+/// Skyrim suffix stay (`armor/wall_n.dds`, `steel` → `armor/steel_n.dds`). Applying it twice gives the same path,
+/// because `check_output_name` refuses a name that ends in a suffix.
+pub fn renamed_output(job_key: &str, name: &str) -> Option<PathBuf> {
+    let p = Path::new(job_key);
+    let stem = p.file_stem()?.to_string_lossy();
+    let file = match split_suffix(&stem).1 {
+        Some(s) => format!("{name}_{s}.dds"),
+        None => format!("{name}.dds"),
+    };
+    Some(match p.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.join(file),
+        _ => PathBuf::from(file),
+    })
+}
+
+/// F3b: whether `name` can be an output base name. A name ending in a map suffix (`wall_n`) is refused: the
+/// suffix belongs to each output, and the name would be read back as a base plus that suffix.
+pub fn check_output_name(name: &str) -> Result<(), String> {
+    check_file_name(name, "output name").map_err(|e| e.0)?;
+    if let (_, Some(s)) = split_suffix(name) {
+        return Err(format!(
+            "output name: ends in _{s}, a map suffix; each output keeps its own ({name:?})"
+        ));
+    }
+    Ok(())
 }
 
 /// Ids of every set whose Rmaos slot (`_rmaos`/`_rfaos`) holds an output another set's Rmaos slot holds too, owner
@@ -1370,6 +1447,52 @@ impl AppModel {
         }
         let id = set.to_string();
         self.edit_docs("Shader", None, true, move |_, d| d.set_shader(&id, shader));
+    }
+
+    /// F3b D2/D3: rename set `set`'s outputs to base name `name` (`None` restores the names that mirror the sources).
+    /// A PBR set on CS writes its PGPatcher `rename` key (V3: a file name; the outputs and the JSON follow the
+    /// prefix); any other set writes `output_name`. A re-plan follows; inside `batch_edit` it joins the batch.
+    pub fn set_output_name(&mut self, set: &str, name: Option<&str>) -> Result<(), String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
+        }
+        let Some(v) = self.view_of(set) else {
+            return Err(format!("no set {set}"));
+        };
+        let name = name.map(str::trim).filter(|n| !n.is_empty());
+        if let Some(n) = name {
+            check_output_name(n)?;
+        }
+        let (id, name) = (v.id.clone(), name.map(str::to_string));
+        if v.pbr && self.target == Target::Cs {
+            let value = name.map(Value::String);
+            self.edit_docs("Rename outputs", None, true, move |_, d| {
+                d.set_value(&id, "rename", value);
+                d.set_output_name(&id, None);
+            });
+        } else {
+            self.edit_docs("Rename outputs", None, true, move |_, d| {
+                d.set_output_name(&id, name.as_deref())
+            });
+        }
+        Ok(())
+    }
+
+    /// F3b: set `set`'s `output_name`, if it has one (on a CS PBR set it is ignored; the set editor says so).
+    pub fn output_name_of(&self, set: &str) -> Option<String> {
+        let entries = self.sets_doc.as_ref()?.entries();
+        entry_of(&entries, set)?.output_name.clone()
+    }
+
+    /// F3b: remove set `set`'s `output_name` only (its PGPatcher `rename` stays).
+    pub fn clear_output_name(&mut self, set: &str) {
+        if !self.sets_editable() {
+            return;
+        }
+        let id = set.to_string();
+        self.edit_docs("Clear output name", None, true, move |_, d| {
+            d.set_output_name(&id, None)
+        });
     }
 
     /// A JSON value of set `set`. Material values do not plan; match fields do (P7).

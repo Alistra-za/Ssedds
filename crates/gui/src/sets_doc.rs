@@ -13,7 +13,7 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value
 
 pub const FILE_NAME: &str = "sdc-project.toml";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 8] = [
+const RESERVED: [&str; 9] = [
     "id",
     "created",
     "renamed_from",
@@ -22,6 +22,7 @@ const RESERVED: [&str; 8] = [
     "borrow",
     "shader",
     "lock",
+    "output_name",
 ];
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -37,6 +38,9 @@ pub struct SetEntry {
     pub shader: Option<engine::shader::Shader>,
     /// F3a Task 8: locked slot numbers (`lock = ["slot2"]`), kept as they are by drops, slot commands and bulk edits.
     pub lock: BTreeSet<u8>,
+    /// F3b D2: the base name every output of the set takes (`output_name = "steel"`): `steel_n.dds`, `steel.dds`…
+    /// in each output's own folder. Never on a CS PBR set, which renames through the PGPatcher `rename` key.
+    pub output_name: Option<String>,
     pub settings: Settings,
 }
 
@@ -134,6 +138,11 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             .iter()
             .filter_map(|s| s.strip_prefix("slot")?.parse().ok())
             .collect(),
+        output_name: t
+            .get("output_name")
+            .and_then(Item::as_str)
+            .map(str::to_string)
+            .filter(|n| !n.is_empty()),
         settings,
     })
 }
@@ -549,6 +558,39 @@ impl SetsDoc {
             }
             None => {
                 t.remove("shader");
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// F3b D2: set (or with `None` remove) the base name of set `id`'s outputs.
+    pub fn set_output_name(&mut self, id: &str, name: Option<&str>) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        let lower = fold_id(id);
+        let has_table = self
+            .doc
+            .get("sets")
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(|ts| {
+                ts.iter().any(|t| {
+                    t.get("id")
+                        .and_then(Item::as_str)
+                        .is_some_and(|s| fold_id(s) == lower)
+                })
+            });
+        if name.is_none() && !has_table {
+            return;
+        }
+        let t = self.table_mut(id);
+        match name {
+            Some(n) => {
+                t.insert("output_name", toml_edit::value(n));
+            }
+            None => {
+                t.remove("output_name");
             }
         }
         self.dirty = true;
