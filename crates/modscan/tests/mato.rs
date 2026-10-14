@@ -72,3 +72,36 @@ fn winning_matos_carry_the_winners_data_flags() {
     );
     assert!(s.winning_records("TXST").unwrap().is_empty());
 }
+
+/// Owner data (design §9): the MATO query and single-pass flags on the owner's load order. Read-only; the store is
+/// a temp file. `$env:SDC_ACHERUS='C:\_mount\moddingvol\Acherus'; cargo test -p modscan --release --test mato -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn owner_matos_and_single_pass_flags() {
+    use modscan::mo2::loose_origins;
+    use modscan::plugins::scan_plugins;
+    let root = std::path::PathBuf::from(
+        std::env::var("SDC_ACHERUS").expect("set SDC_ACHERUS to the MO2 instance root"),
+    );
+    let db = tempfile::tempdir().unwrap();
+    let inst = Instance::load(&root, None).unwrap();
+    let (loose, _) = loose_origins(&inst).unwrap();
+    let mut store = Store::open(&db.path().join("scan.db")).unwrap();
+    scan_plugins(&inst, &loose, &mut store, &AtomicBool::new(false), &|_| {}).unwrap();
+    let m = store.winning_records("MATO").unwrap();
+    let single = m
+        .iter()
+        .filter(|w| w.mato_flags.is_some_and(|f| f & 1 == 1))
+        .count();
+    let unknown = m.iter().filter(|w| w.mato_flags.is_none()).count();
+    println!(
+        "MATO winners: {} (single-pass {single}, flags unknown (DATA < 48 bytes) {unknown})",
+        m.len()
+    );
+    for w in m.iter().filter(|w| {
+        w.edid.starts_with("SnowMaterialObject") || w.edid.starts_with("AshMaterialSolstheim")
+    }) {
+        println!("{w:?}");
+    }
+    assert!(!m.is_empty() && single > 0);
+}
