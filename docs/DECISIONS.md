@@ -845,3 +845,13 @@ Real-NVTT checks (`cargo test --release -p engine --test nvtt_real -- --ignored 
 - (c) Engine run of that BC7 file 18.07 s vs direct per-level `-nocuda` processes 17.66 s (ratio 1.023, limit 1.10).
 - (d) `alpha_real/Fingerprints009`, `alpha.policy = blend`: mip 0 alpha PSNR 38.7786 dB on NVTT (`-alpha`), 38.9259 dB on
   bc7e, bench direct `nvtt_production` 38.7883 dB. Not measured: the same file without `-alpha`.
+
+## Note AB — GUI tweaks (owner request, 2026-10-14)
+
+Spec `docs/superpowers/specs/2026-10-14-sdc-gui-tweaks-design.md` (G1-G9).
+
+- **AB1 Input name.** The set editor's input name is the set's base name, changed through `[inputs]` aliases (AA1), not the PGPatcher `rename` (AA3). The set's `sdc-project.toml` entry follows the new automatic id (`SetsDoc::retarget_auto`). Default picked in the thread; the owner may overrule.
+- **AB2 Delete sections** are `[[pgp_sections]]` in `sdc-project.toml`, written after every set's entry, and only with `delete = true` and a texture match. Supersedes the "`delete` is a later round" line of `pgp::schema::NOT_EXPOSED` for sections; set entries still never write `delete`.
+- **AB3 Delete hits** compare texture paths only (exact slot match, or `path_contains` in the diffuse path); a `nif_filter` is reported, not checked against meshes.
+- **AB4 2D | 3D** is one switch kept in `gui.toml`, default 2D; the 3D preview does no work in 2D.
+- **AB5 Version** stays 0.7.0 (Z7): no output changes unless the user adds sections or aliases.

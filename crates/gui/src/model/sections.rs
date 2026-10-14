@@ -5,7 +5,6 @@
 //! switch the shapes it matches to TruePBR with nothing to show).
 use super::sets::{views, SetView};
 use super::AppModel;
-use crate::pgp::prefix::match_value;
 use crate::pgp::settings::Settings;
 use serde_json::{json, Value};
 
@@ -67,9 +66,18 @@ pub fn not_written_reason(s: &Settings) -> Option<&'static str> {
     }
 }
 
-/// A path as matches compare it: lower case, `\`, no leading `textures\`, `.dds` once.
+/// A texture path as an exact match compares it: lower case, `\`, no leading `textures\`, no extension (a source's
+/// game path ends in its own image extension; a match path in `.dds`).
 fn norm(p: &str) -> String {
-    match_value(&p.replace('/', "\\")).to_lowercase()
+    let p = p.trim().replace('/', "\\").to_lowercase();
+    let p = p.strip_prefix("textures\\").unwrap_or(&p);
+    let (dir, name) = p.rsplit_once('\\').unwrap_or(("", p));
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    if dir.is_empty() {
+        stem.to_string()
+    } else {
+        format!("{dir}\\{stem}")
+    }
 }
 
 /// A set whose textures a delete section matches: the section (0-based), the set id and how.
