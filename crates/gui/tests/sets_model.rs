@@ -1728,20 +1728,42 @@ fn a_non_edit_replan_during_a_scan_finished_read_keeps_the_queued_export() {
     let (mut m, _db) = pending_read(d.path());
     idle(&mut m);
     m.nvtt = Some(engine::nvtt::NvttProbe::Missing("before".into()));
-    m.refresh_mesh_votes(false);
-    m.export_clicked();
-    assert!(m.votes_pending() && !export_started_or_asked(&m));
-    // A probe result that differs (generation 0: this model never probed) re-plans. Sent at once, it is queued
-    // ahead of the database read, which still has to open the file.
+    // A probe result that differs (generation 0: this model never probed) re-plans. It is queued before the read
+    // starts, so the channel (first in, first out) hands it over first: the re-plan runs while the read is pending.
     m.sender()
         .send(sdc_gui::worker::WorkerMsg::Nvtt {
             generation: 0,
             probe: engine::nvtt::NvttProbe::Missing("after".into()),
         })
         .unwrap();
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    assert!(m.votes_pending() && !export_started_or_asked(&m));
     idle(&mut m);
     assert!(
         export_started_or_asked(&m),
         "the probe's re-plan kept the export"
+    );
+}
+
+/// Fix round 3 (DECISIONS AF11): an undo changes the project like an edit, so it cancels an Export queued behind a
+/// scan-finished read, with the note.
+#[test]
+fn an_undo_during_a_scan_finished_read_cancels_the_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.set_field("landscape/rock01.png", "header", json!("dx10"));
+    idle(&mut m);
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    m.undo();
+    idle(&mut m);
+    assert!(!export_started_or_asked(&m), "{:?}", m.dialog);
+    assert!(
+        m.status_line
+            .contains("Export cancelled: the project changed while scan results were loading"),
+        "{}",
+        m.status_line
     );
 }

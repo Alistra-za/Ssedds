@@ -931,15 +931,18 @@ impl AppModel {
         self.refresh_if_settled();
     }
 
-    /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
-    /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
-    /// A user edit recorded a step: re-plan. DECISIONS AF4: an Export waiting only for a scan-finished read is
-    /// cancelled by the edit (the plan it was clicked on is gone), with a note; any other re-plan keeps it.
+    /// A user edit recorded a step: re-plan as a change (`replan_changed`).
     fn replan_after_edit(&mut self) {
+        self.type_edit_recorded();
+        self.replan_changed();
+    }
+
+    /// `replan` for a change the user made to the project (an edit, an undo or a redo): an Export queued behind a
+    /// scan-finished read is cancelled with a note (DECISIONS AF4, AF10, AF11).
+    fn replan_changed(&mut self) {
         let cancel = self.export_after_plan
             && self.planning.is_none()
             && matches!(self.votes_pending, Some((_, false)));
-        self.type_edit_recorded();
         self.replan();
         if cancel {
             self.export_after_plan = false;
@@ -951,6 +954,8 @@ impl AppModel {
         }
     }
 
+    /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
+    /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
     fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
         let before = Self::snapshot_of(self.project.as_ref(), self.sets_doc.as_ref());
         self.batch = true;
@@ -1546,7 +1551,8 @@ impl AppModel {
         if let Some(d) = self.sets_doc.as_mut() {
             d.restore_keeping_json_sha(&s.project);
         }
-        self.replan();
+        // An undo or redo changes the project like an edit (AF11), without the edit's type-follow bookkeeping.
+        self.replan_changed();
     }
 
     pub fn can_undo(&self) -> bool {
