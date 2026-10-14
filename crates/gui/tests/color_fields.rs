@@ -77,6 +77,20 @@ fn colour(h: &Harness<'static, AppModel>) -> Option<Value> {
 }
 
 fn type_hex<S: 'static>(h: &mut Harness<'static, S>, shown: &str, text: &str) {
+    type_hex_then(h, shown, text, eframe::egui::Key::Enter);
+}
+
+fn hex_box_shows<S: 'static>(h: &Harness<'static, S>, shown: &str) -> bool {
+    h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+        .any(|n| n.value().as_deref() == Some(shown))
+}
+
+fn type_hex_then<S: 'static>(
+    h: &mut Harness<'static, S>,
+    shown: &str,
+    text: &str,
+    end: eframe::egui::Key,
+) {
     let role = eframe::egui::accesskit::Role::TextInput;
     h.query_all_by_role(role)
         .find(|n| n.value().as_deref() == Some(shown))
@@ -90,7 +104,8 @@ fn type_hex<S: 'static>(h: &mut Harness<'static, S>, shown: &str, text: &str) {
         .unwrap()
         .type_text(text);
     h.run();
-    h.key_press(eframe::egui::Key::Enter);
+    h.key_press(end);
+    h.run();
     h.run();
 }
 
@@ -105,7 +120,21 @@ fn hex_commit_is_one_undo_step_and_reset_works() {
     h.state_mut().undo();
     assert_eq!(colour(&h), Some(json!([10, 20, 30])), "one step");
     h.run();
-    h.get_all_by_label("reset").last().unwrap().click();
+    // The reset button on the emissive_color row: the one level with its hex box.
+    let hex_y = h
+        .query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+        .find(|n| n.value().as_deref() == Some("#0A141E"))
+        .unwrap()
+        .rect()
+        .center()
+        .y;
+    h.get_all_by_label("reset")
+        .min_by(|a, b| {
+            let d = |n: &egui_kittest::Node<'_>| (n.rect().center().y - hex_y).abs();
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap()
+        .click();
     h.run();
     assert_eq!(colour(&h), None);
 }
@@ -117,6 +146,7 @@ fn invalid_hex_commits_nothing_and_reverts() {
     h.run();
     type_hex(&mut h, "#0A141E", "#1A2B3");
     assert_eq!(colour(&h), Some(json!([10, 20, 30])));
+    assert!(hex_box_shows(&h, "#0A141E"), "the box text reverts");
     // No step was added: the one undo reverts the "emissive" toggle, which was the last real step.
     h.state_mut().undo();
     assert_eq!(colour(&h), Some(json!([10, 20, 30])));
@@ -147,4 +177,55 @@ fn background_grey_renders_a_hex_box() {
         .expect("grey hex box");
     type_hex(&mut h, "#000000", "#808080");
     assert!((h.state().look.grey - 128.0 / 255.0).abs() < 1e-6);
+}
+
+#[test]
+fn esc_cancels_a_hex_edit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = panel(rock_with_emissive(d.path()));
+    h.run();
+    type_hex_then(&mut h, "#0A141E", "#1A2B3C", eframe::egui::Key::Escape);
+    assert_eq!(colour(&h), Some(json!([10, 20, 30])), "nothing committed");
+    assert!(hex_box_shows(&h, "#0A141E"), "the box text reverts");
+}
+
+#[test]
+fn a_stale_edit_buffer_is_dropped_when_the_row_goes_away() {
+    let d = tempfile::tempdir().unwrap();
+    let shown = std::rc::Rc::new(std::cell::Cell::new(true));
+    let flag = shown.clone();
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 900.0))
+        .build_ui_state(
+            move |ui, m: &mut AppModel| {
+                if flag.get() {
+                    sdc_gui::ui::pgp_fields::panel(ui, m, "landscape/rock01");
+                }
+            },
+            rock_with_emissive(d.path()),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let role = eframe::egui::accesskit::Role::TextInput;
+    h.query_all_by_role(role)
+        .find(|n| n.value().as_deref() == Some("#0A141E"))
+        .unwrap()
+        .focus();
+    h.run();
+    h.query_all_by_role(role)
+        .find(|n| n.value().as_deref() == Some("#0A141E"))
+        .unwrap()
+        .type_text("1");
+    h.run();
+    assert!(
+        !hex_box_shows(&h, "#0A141E"),
+        "a half-typed edit is showing"
+    );
+    shown.set(false);
+    h.run();
+    h.run();
+    h.run();
+    shown.set(true);
+    h.run();
+    assert!(hex_box_shows(&h, "#0A141E"), "no stale text");
 }

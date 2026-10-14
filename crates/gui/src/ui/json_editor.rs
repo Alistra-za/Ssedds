@@ -612,7 +612,7 @@ fn set_entry(
                             .small()
                             .color(AMBER),
                     )
-                    .on_hover_text("A key sdc does not know; it is kept as written");
+                    .on_hover_text("A key Tessalith does not know; it is kept as written");
                     if remove_button(ui) {
                         acts.push(Act::Edit(owner.clone(), k.clone(), None));
                     }

@@ -36,9 +36,12 @@ pub fn color_field(ui: &mut egui::Ui, id: egui::Id, rgb: [u8; 3]) -> Option<[u8;
         out = Some(picked);
     }
     let buf = id.with("hex");
+    // The edit buffer carries the frame it was last drawn in; one from an earlier frame belongs to a row that went away.
+    let frame = ui.ctx().cumulative_frame_nr();
     let mut text = ui
-        .data(|d| d.get_temp::<String>(buf))
-        .unwrap_or_else(|| format_hex(rgb));
+        .data(|d| d.get_temp::<(String, u64)>(buf))
+        .filter(|(_, f)| f + 1 >= frame)
+        .map_or_else(|| format_hex(rgb), |(t, _)| t);
     let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(64.0));
     if parse_hex(&text).is_none() {
         ui.painter().rect_stroke(
@@ -48,12 +51,14 @@ pub fn color_field(ui: &mut egui::Ui, id: egui::Id, rgb: [u8; 3]) -> Option<[u8;
             egui::StrokeKind::Outside,
         );
     }
-    if r.changed() {
-        ui.data_mut(|d| d.insert_temp(buf, text.clone()));
+    if r.has_focus() || r.changed() {
+        ui.data_mut(|d| d.insert_temp(buf, (text.clone(), frame)));
     }
     if r.lost_focus() {
-        ui.data_mut(|d| d.remove::<String>(buf));
-        if let Some(v) = parse_hex(&text).filter(|v| *v != rgb) {
+        ui.data_mut(|d| d.remove::<(String, u64)>(buf));
+        // Esc cancels the edit (AG10): revert, commit nothing.
+        let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if let Some(v) = parse_hex(&text).filter(|v| *v != rgb && !cancelled) {
             out.get_or_insert(v);
         }
     }
