@@ -310,11 +310,11 @@ fn the_restart_notice_appears_when_the_bc1_choice_differs() {
     let mut h = harness(model);
     h.run();
     assert!(h
-        .query_by_label_contains("restart sdc-gui to apply")
+        .query_by_label_contains("restart Tessalith to apply")
         .is_none());
     h.state_mut().set_bc1_choice(Bc1Choice::Amd);
     h.run();
-    h.get_by_label_contains("restart sdc-gui to apply");
+    h.get_by_label_contains("restart Tessalith to apply");
 }
 
 #[test]

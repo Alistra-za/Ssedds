@@ -89,7 +89,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     }
     let id = egui::ViewportId::from_hash_of("sdc-pgp-json-editor");
     let builder = egui::ViewportBuilder::default()
-        .with_title(format!("{WINDOW_TITLE} — sdc"))
+        .with_title(format!("{WINDOW_TITLE} — {}", crate::PRODUCT_NAME))
         .with_inner_size([980.0, 760.0]);
     ctx.show_viewport_immediate(id, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {

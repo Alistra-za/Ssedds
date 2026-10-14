@@ -609,7 +609,7 @@ impl AppModel {
             }
             Err(e) => {
                 eprintln!(
-                    "sdc-gui: scan database read failed, keeping the previous mesh evidence: {e}"
+                    "tessalith: scan database read failed, keeping the previous mesh evidence: {e}"
                 );
                 false
             }

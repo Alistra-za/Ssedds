@@ -235,7 +235,7 @@ fn batch(ui: &mut egui::Ui, model: &mut AppModel, actions: &mut Vec<Action>) {
                 .weak(),
         );
         if model.restart_needed {
-            ui.colored_label(AMBER, "restart sdc-gui to apply");
+            ui.colored_label(AMBER, "restart Tessalith to apply");
         }
         if settled {
             model.save_settings();

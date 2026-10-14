@@ -100,7 +100,7 @@ impl AppModel {
     pub(super) fn known_paths_landed(&mut self, result: Result<KnownPaths, String>) {
         match result {
             Ok(k) => self.known = Arc::new(k),
-            Err(e) => eprintln!("sdc-gui: reading the scan's texture paths failed: {e}"),
+            Err(e) => eprintln!("tessalith: reading the scan's texture paths failed: {e}"),
         }
     }
 

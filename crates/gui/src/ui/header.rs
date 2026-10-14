@@ -14,11 +14,11 @@ fn target_name(t: Target) -> &'static str {
     }
 }
 
-/// `sdc — <folder>`, plus ` ●` when there are unsaved edits.
-fn window_title(model: &AppModel) -> String {
+/// `Tessalith — <folder>`, plus ` ●` when there are unsaved edits.
+pub fn window_title(model: &AppModel) -> String {
     let mut t = match &model.root {
-        Some(r) => format!("sdc — {}", r.display()),
-        None => "sdc".to_string(),
+        Some(r) => format!("{} — {}", crate::PRODUCT_NAME, r.display()),
+        None => crate::PRODUCT_NAME.to_string(),
     };
     if model.is_dirty() {
         t.push_str(" ●");

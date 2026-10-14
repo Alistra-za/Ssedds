@@ -12,7 +12,7 @@ name = "sdc_gui"
 path = "src/lib.rs"
 
 [[bin]]
-name = "sdc-gui"
+name = "tessalith"
 path = "src/main.rs"
 
 [dependencies]

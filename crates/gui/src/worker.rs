@@ -117,7 +117,7 @@ pub fn spawn_guarded(
     f: impl FnOnce(&Sender<WorkerMsg>) + Send + 'static,
 ) {
     std::thread::Builder::new()
-        .name(format!("sdc-gui-{what}"))
+        .name(format!("tessalith-{what}"))
         .spawn(move || {
             if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&tx))) {
                 let _ = tx.send(WorkerMsg::Panicked {

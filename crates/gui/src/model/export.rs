@@ -206,7 +206,7 @@ impl ExportModel {
     }
 
     pub fn to_markdown(&self) -> String {
-        let mut s = String::from("# sdc export report\n\n");
+        let mut s = String::from("# Tessalith export report\n\n");
         if let Some(b) = &self.summary {
             s += &format!(
                 "Converted {}, up to date {}, skipped {}, failed {}, validation failed {}.\n\n",
@@ -244,7 +244,7 @@ fn norm(p: &Path) -> String {
 pub fn export_folder_problem(root: &Path, export: &Path) -> Option<String> {
     let (r, e) = (norm(root), norm(export));
     (r == e || r.starts_with(&format!("{e}/"))).then(|| {
-        "The export folder must not be the opened folder or contain it: sdc would not find the sources next time. \
+        "The export folder must not be the opened folder or contain it: Tessalith would not find the sources next time. \
          Choose another folder."
             .to_string()
     })

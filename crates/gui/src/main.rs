@@ -1,5 +1,5 @@
 #![windows_subsystem = "windows"]
-//! `sdc-gui.exe`.
+//! `tessalith.exe`.
 use engine::session::Session;
 use sdc_gui::model::{AppModel, Dialog};
 use sdc_gui::{app::SdcApp, fonts, render, settings};
@@ -53,19 +53,19 @@ fn main() -> eframe::Result {
         // BC texture compression and the adapter's own limits, for the preview textures.
         wgpu_options: render::wgpu_configuration(),
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("sdc")
+            .with_title(sdc_gui::PRODUCT_NAME)
             .with_inner_size([1400.0, 900.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "sdc",
+        sdc_gui::PRODUCT_NAME,
         options,
         Box::new(|cc| {
             // The app has no usable font without the system fonts: show why and exit.
             if let Err(e) = fonts::install_system_fonts(&cc.egui_ctx) {
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
-                    .set_title("sdc")
+                    .set_title(sdc_gui::PRODUCT_NAME)
                     .set_description(e.as_str())
                     .show();
                 return Err(e.into());

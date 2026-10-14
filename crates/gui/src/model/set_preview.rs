@@ -435,7 +435,7 @@ pub(crate) fn spawn<M: Send + 'static>(
     panicked: impl FnOnce(String) -> M + Send + 'static,
 ) {
     std::thread::Builder::new()
-        .name("sdc-gui-set-preview".into())
+        .name("tessalith-set-preview".into())
         .spawn(move || {
             let msg = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
                 .unwrap_or_else(|p| panicked(panic_text(&*p)));
@@ -1028,7 +1028,7 @@ impl Encoder {
 
 pub const PANEL_TITLE: &str = "Set preview (3D)";
 pub const NEEDS_CS: &str = "PGPatcher preview needs the CS target and a PBR set";
-pub const JSON_WINS: &str = "Assumes your sdc JSON wins over other mods' PGPatcher configs.";
+pub const JSON_WINS: &str = "Assumes your Tessalith JSON wins over other mods' PGPatcher configs.";
 pub const NO_SCAN: &str = "Scan your mods in the Meshes view to preview on a real mesh";
 pub const NO_MATCH: &str = "No scanned mesh uses this diffuse";
 pub const NO_BUILTIN_MATCH: &str =

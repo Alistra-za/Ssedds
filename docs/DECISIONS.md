@@ -898,3 +898,18 @@ Rulings for the Important findings of the 2026-10-13 reliability audit (round b)
   - AF1: with no PBR set at all, the note says "there is no PBR set, and delete sections alone are not written". The "previous JSON is kept" note is for sets that all failed.
 - **AF10 Fix round 2 (2026-10-14): only a user edit cancels an Export queued behind a scan-finished read (amends AF9/AF4).** The cancel runs in the edit path (`edit_docs`, `batch_edit` through `replan_after_edit`), not in `replan`. A re-plan that is no edit (an NVTT probe whose result changed, a changed source on focus) keeps the queued Export, and that plan carries it to its end. When an edit cancels it, the status line says "Export cancelled: the project changed while scan results were loading — click Export again." The note stays in front of the status line until the next Export click.
 - **AF11 Fix round 3 (owner ruling via coordinator, 2026-10-14): undo and redo count as edits for the queued Export (amends AF10).** `apply_snapshot` re-plans through `replan_changed`, the same cancel-with-note rule as `edit_docs` and `batch_edit`, without the edit's type-follow bookkeeping: undo still resets it, per Z11. Re-plans that are no change to the project (an NVTT probe, a changed source on focus) keep the queued Export.
+
+## Note AG — GUI suggestions, Tessalith (2026-10-14)
+
+- **AG1 Rename scope (owner, 2026-10-14: the CLI stays `sdc`).** Rename what the user sees, keep what is on disk. Renamed: the GUI binary (`[[bin]] name = "tessalith"`, `tessalith.exe`), the window titles ("Tessalith", `sdc_gui::PRODUCT_NAME`), the product name in GUI text, docs and `THIRD_PARTY_NOTICES.md`, the export report header, thread names and stderr prefixes. The CLI binary, clap `name` and "Copy CLI command" stay `sdc`; its `--help` about line says "sdc — the Tessalith command line". Kept: `sdc.toml`, `sdc-project.toml`, `%LOCALAPPDATA%\sdc\` and `%APPDATA%\sdc\` (scan.db, gui.toml, logs, config, presets), the `SDC_*` env vars, the package and lib names (`sdc-gui`, `sdc_gui`), the `_sdc/` folder, code ids, engine version 0.7.0. Why: renaming those orphans every existing project and the scan DB; doing it properly is a migration item, which needs the owner's word.
+- **AG2 Colour inputs:** every colour input gets two things.
+  - A swatch that opens egui's colour-square popup (`egui::color_picker::color_picker_color32`, Alpha::Opaque).
+  - A hex text field: `#RRGGBB`, `#` optional, case-insensitive. An invalid string turns the field red and does not commit; the value commits on Enter or focus loss.
+  - Stored values keep their current type and range. TruePBR fields stay integers 0-255 with the existing clamping and reset, so the JSON is unchanged.
+  - This overrides item 16's "no hex entry (Note P)" on the owner's word of 2026-10-14.
+- **AG3 Item 3 persistence:** save in `gui.toml` via `settings.rs`, not eframe `persistence`. One settings file the user can read and delete. Column widths move out of egui temp memory into gui.toml.
+- **AG4 Item 8 sort:** Name (default), Source size, Status. Status order: errors, warnings, undecided, ok. Ties break by name. Saved in gui.toml.
+- **AG5 Item 2 Ctrl+Z in Meshes:** enable it unless `app.rs:169` documents a reason. If it does, keep it off and quote the reason in the report.
+- **AG6 Item 6 taskbar progress:** skip it unless `windows` crate `ITaskbarList3` is already in the lock with the right features. Say which.
+- **AG7 Item 13 streaming thumbnails:** only if the plan worker can send per-file results without reordering the grid. Otherwise do the progress bar only and record why.
+- **AG8 Item 10 pin:** one pin, held in memory. Dropped on Close, on a texture change and on folder open.

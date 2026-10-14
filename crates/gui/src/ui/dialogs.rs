@@ -409,7 +409,7 @@ fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::P
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         ui.label(format!(
-            "{name} was edited outside sdc since the last export."
+            "{name} was edited outside Tessalith since the last export."
         ));
         ui.horizontal(|ui| {
             overwrite = ui.button("Overwrite edited JSON").clicked();

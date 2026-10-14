@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub const AO_NOTE: &str =
-    "sdc inverts this for you. Supply normal AO (white = open); don't invert it yourself.";
+    "Tessalith inverts this for you. Supply normal AO (white = open); don't invert it yourself.";
 
 pub struct RnmRow {
     pub id: LayerId,
