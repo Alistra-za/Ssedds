@@ -2,7 +2,7 @@
 
 <h1 align="center">Tessalith</h1>
 
-<p align="center">Turns texture source images into DDS files that load and look right in Skyrim SE/AE.</p>
+<p align="center">Converts texture source images to DDS for Skyrim SE/AE.</p>
 
 ---
 
@@ -19,7 +19,7 @@ What each tool does for a Skyrim texture without extra scripting.
 | `_SRGB` / UNORM tag chosen per map type and target | ✅ | ⚠️ [3] | ⚠️ [3] | ⚠️ [3] | ⚠️ [1] |
 | Cutout alpha: coverage-preserving mips, on by default | ✅ | ⚠️ [4] | ⚠️ [4] | ⚠️ [5] | ⚠️ [5] |
 | Exact-opaque alpha (255, not 254) on `_m` maps | ✅ | ⚠️ [6] | ✅ [6] | ⚠️ [5] | ⚠️ [5] |
-| Normal mips renormalised | ✅ | ⚠️ [5] | ✅ | ⚠️ [5] | ⚠️ [5] |
+| Normal mips renormalised | ✅ | ⚠️ [5] | ⚠️ [12] | ⚠️ [5] | ⚠️ [5] |
 | Normal-mip variance baked into TruePBR roughness | ✅ | ❌ | ❌ | ❌ | ❌ |
 | RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Loose maps packed into `_rmaos` / `_rfaos` / complex `_m` | ✅ | ⚠️ [7] | ❌ | ❌ | ❌ |
@@ -36,21 +36,22 @@ What each tool does for a Skyrim texture without extra scripting.
 1. CAO converts through DirectXTex with fixed rules for making existing mod files load. Not compared in detail.
 2. Common formats; PSD, Krita and OpenRaster support varies. Not checked one by one.
 3. You set the tag per file or per run.
-4. An option you turn on (texconv `-keepcoverage`, the NVTT exporter's alpha-coverage mips), not set from the texture's role.
+4. An option you turn on (texconv `-keepcoverage`; NVTT has an alpha-coverage option in its library, exporter UI not checked), not set from the texture's role.
 5. No documented option found. Not tested.
-6. Local benchmark, RGB-only BC7: texconv decoded 254 on 2.4% of pixels, NVTT on 0% ([Research](docs/wiki/Research.md#alpha)).
+6. Local benchmark, RGB-only BC7: texconv decoded 254 on 2.4% of pixels, NVTT (`nvcompress`) on 0% ([Research](docs/wiki/Research.md#alpha)).
 7. `texassemble` merges channels but knows no Skyrim layout.
 8. GUI only.
 9. Compares an encode with its source (PSNR, SSIM); no Skyrim rules.
 10. `texdiag` reports header and pixel data; no Skyrim rules.
 11. Optional, never bundled: runs your installed `nvcompress.exe` (3.2.5 tested) at Production, BC7 and BC6H only.
+12. An option for normal maps (normalise mipmaps); not set from the texture's role.
 
 PGPatcher (ParallaxGen) is left out: it patches meshes and reads the JSON Tessalith writes, so it complements rather than competes.
 
-## How it's different
+## What it does differently
 
-- **Starts from what the file is.** Suffix and folder give a sub-type; the sub-type sets format, tag, alpha and mips. Unclear files are reported, never guessed.
-- **Knows Skyrim's shaders.** `_SRGB` only on TruePBR colour under `cs`; BC4/BC5 on a normal map is blocked, since Skyrim reads Z directly.
+- **Starts from what the file is.** Suffix and folder give a sub-type; the sub-type sets format, tag, alpha and mips. Unclear files are skipped until you decide them.
+- **Follows Skyrim's shader rules.** `_SRGB` only on TruePBR colour under `cs`; BC4/BC5 on a normal map is blocked, since Skyrim reads Z directly.
 - **Reads your load order.** A GUI scan of MO2 meshes and plugins gives each diffuse its alpha meaning.
 - **Checks its own output.** Every file is decoded and checked; a manifest lets re-runs redo only what changed.
 
@@ -61,13 +62,13 @@ Ways to put a detail normal on a base normal:
 | Method | How it combines | Preserves | Artifacts | Cost | Use for |
 |---|---|---|---|---|---|
 | Linear / overlay | Per-channel add or overlay, renormalise | Neither map exactly | Flattened detail; overlay treats vectors as colour | Lowest | Faint detail, previews |
-| Partial derivative (PD) / UDN | PD adds slopes (xy/z); UDN adds xy, keeps base z | Slopes at small angles | Weak detail on steep bases (UDN); over-tilt on big slopes (PD) | Low | Real-time multi-layer shaders |
+| Partial derivative (PD) / UDN | PD adds slopes (xy/z); UDN adds xy, keeps base z | Slopes at small angles | UDN flattens detail; both lose accuracy as the base tilts | Low | Real-time multi-layer shaders |
 | Whiteout | Adds xy, multiplies z, renormalise | More detail than UDN | Still approximate on steep bases | Low | Cheap shader blends |
-| RNM (Barré-Brisebois and Hill) | Rotates the detail into the base normal's frame | Detail as seen on the tilted surface; flat inputs leave the other unchanged | None in normal use; needs unit vectors | A little more | Offline baking |
+| RNM (Barré-Brisebois and Hill) | Rotates the detail into the base normal's frame | Detail as seen on the tilted surface; flat inputs leave the other unchanged | None in normal use; needs unit vectors | A little more | Highest quality: baking or high-end shaders |
 
 What Tessalith does (`crates/engine/src/rnm/`):
 
-- **Method:** RNM for `_bump`, `_bump2`, `_detailnorm` and `_detailnorm2`. Bump layers are height: slopes from the mean of RGB become normals first. `_bent` defaults to an AO blend: a renormalised linear mix weighted by strength × (1 − AO)^1.5 × mask, AO from `_ao` (R) or `_rmaos`/`_rfaos` (B). `rnm.bent.mode = "detail"` blends it with RNM instead.
+- **Method:** RNM for `_bump`, `_bump2`, `_detailnorm` and `_detailnorm2`. Bump layers are height: slopes from the mean of RGB become normals first. `_bent` defaults to an AO blend: a renormalised linear mix weighted by strength × (1 − AO)^1.5 × mask, AO from `_ao` (R) or `_rmaos`/`_rfaos` (B). With no AO map the weight is uniform and `RNM-AO-MISSING` is reported. `rnm.bent.mode = "detail"` blends it with RNM instead.
 - **Order and strength:** `bent` 0.35, `bump` 0.4, `bump2` 0.4, `detail` 0.6, `detail2` 0.3, in that order; `rnm.order` moves listed layers to the front. Strength scales the layer's slope (0 flat, 1 as authored); a mask's R channel scales it per texel.
 - **Where:** into the set's `_n` or `_cnr`, after decode and green flip, before mips. Layers are resampled to the base size. Alpha is untouched, so `_cnr` coat roughness passes through. The TruePBR roughness bake reads the blended normal.
 
