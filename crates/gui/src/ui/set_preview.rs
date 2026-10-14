@@ -4,7 +4,7 @@
 use crate::model::set_preview::{
     badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
     Outcome, Pick, PreviewMode, SetPreview, BUILTINS, JSON_WINS, MODE_LABEL_ENCODED,
-    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, PANEL_TITLE, WAITS_FOR_EXPORT,
+    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, PANEL_TITLE, TILING, WAITS_FOR_EXPORT,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -91,7 +91,22 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
         ui.colored_label(AMBER, WAITS_FOR_EXPORT);
     }
     mode_toggle(ui, s);
-    mesh_picker(ui, s, fp.entry.is_some());
+    if fp.landscape {
+        ui.label("Mesh: Plane (a PBR texture set previews on the plane)");
+        let mut t = s.tiling;
+        if ui
+            .add(
+                egui::Slider::new(&mut t, 1.0..=3.0)
+                    .step_by(0.5)
+                    .text(TILING),
+            )
+            .changed()
+        {
+            s.set_tiling(t);
+        }
+    } else {
+        mesh_picker(ui, s, fp.entry.is_some());
+    }
     members(ui, s);
     shapes(ui, s);
     if emissive_shown(s) {

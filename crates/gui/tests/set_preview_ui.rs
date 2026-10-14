@@ -474,3 +474,19 @@ fn the_timings_section_shows_the_log_path_and_a_copy_button() {
     h.get_by_label_contains("Timing log:");
     h.get_by_label("Copy log path");
 }
+
+#[test]
+fn a_texture_set_block_shows_tiling_instead_of_the_mesh_picker() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = rock_selected(d.path());
+    m.add_cs_block("landscape/rock01", sdc_gui::model::cs_pbr::Kind::Txst);
+    let mut h = harness(m, SetPreview::new(None, None, None, DEFAULT_CAP));
+    settle(&mut h);
+    assert!(
+        h.get_all_by_label_contains(TILING).count() >= 1,
+        "the slider is drawn"
+    );
+    assert!(h
+        .query_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .is_none());
+}
