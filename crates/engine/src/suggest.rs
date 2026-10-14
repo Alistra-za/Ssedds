@@ -174,14 +174,14 @@ pub fn apply_vocabulary(suggestions: &mut Vec<Suggestion>, v: &Vocab) {
 }
 
 /// Alpha-policy proposals. No alpha (or constant 255 where alpha is optional) resolves to remove with high
-/// confidence, except a `complex_material`, whose missing alpha is written as 0 under `data` (DECISIONS AG17); varying alpha on a mesh-dependent sub-type is only ever a low-confidence proposal.
+/// confidence, except a `complex_material`, whose missing alpha is written as 0 under `data` (DECISIONS AH1); varying alpha on a mesh-dependent sub-type is only ever a low-confidence proposal.
 pub fn suggest_alpha(
     st: Subtype,
     alpha: AlphaContent,
     near_binary_share: f64,
 ) -> Option<(AlphaPolicy, Confidence, String)> {
     match alpha {
-        // DECISIONS AG17: the complex `_m` keeps a written alpha, filled with 0 (`ops::complex_alpha_zero`).
+        // DECISIONS AH1: the complex `_m` keeps a written alpha, filled with 0 (`ops::complex_alpha_zero`).
         AlphaContent::None if st == Subtype::ComplexMaterial => Some((
             AlphaPolicy::Data,
             Confidence::High,

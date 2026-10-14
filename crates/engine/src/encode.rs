@@ -120,7 +120,7 @@ fn encode_band(b: &[[u8; 4]], o: &mut [u8], p: &Profile, native: bool) {
 }
 
 /// The exact-0 alpha fix is for the complex `_m` written with alpha 0 only; parallax on keeps the source alpha as
-/// data, byte for byte as before (DECISIONS AG17).
+/// data, byte for byte as before (DECISIONS AH1).
 fn zero_fix(p: &Profile) -> bool {
     p.subtype == Subtype::ComplexMaterial && p.alpha.parallax != Some(true)
 }
@@ -128,7 +128,7 @@ fn zero_fix(p: &Profile) -> bool {
 /// The encoder-independent BC7 opaque fix-ups (DECISIONS Note NV6) on blocks `o` whose source texels `b` (16 per
 /// block) have alpha 255 throughout: the lossless rotated mode 4/5 fix always, and the S5b mode-6 byte patch when
 /// `mode6_patch` (bc7e without the native flag only). With `zero`, blocks whose source alpha is 0 throughout get the
-/// exact-0 fix (DECISIONS AG17: bc7e's mode-6 p-bit can decode them as 1).
+/// exact-0 fix (DECISIONS AH1: bc7e's mode-6 p-bit can decode them as 1).
 fn bc7_opaque_fix(o: &mut [u8], b: &[[u8; 4]], mode6_patch: bool, zero: bool) {
     for (blk, src) in o.chunks_mut(BC7_BLOCK_BYTES).zip(b.chunks(BLOCK_TEXELS)) {
         if zero && src.iter().all(|t| t[3] == 0) {

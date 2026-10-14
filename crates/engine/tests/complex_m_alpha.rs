@@ -1,4 +1,4 @@
-//! DECISIONS Note AG17/AG18 (owner, 2026-10-14): a complex-material `_m` writes alpha 0 (complex material on,
+//! DECISIONS Note AH1/AH2 (owner, 2026-10-14): a complex-material `_m` writes alpha 0 (complex material on,
 //! parallax off) when its source has no alpha or `alpha.parallax` is off; parallax on keeps the source alpha as height.
 use engine::api::*;
 use engine::codes::Code;
@@ -238,7 +238,7 @@ fn a_solid_255_alpha_m_defaults_to_parallax_off() {
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     let j = planned(&o, "iron_m.png");
     assert_eq!(j["profile"]["alpha"]["parallax"], false);
-    assert_eq!(j["provenance"]["alpha.parallax"], "analysis:solid-alpha");
+    assert_eq!(j["provenance"]["alpha.parallax"], "analysis:constant-alpha");
     assert_all_zero(d.path());
     assert_quiet(&o);
 }
@@ -272,7 +272,44 @@ fn a_packed_cpm_m_without_height_is_still_0() {
     put_gray(d.path(), "iron_metallic.png", |_, _| 40);
     let o = convert(d.path(), Target::Cpm, &[]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    // The M1 height default is a constant 0: nothing to enable, so parallax reads off (DECISIONS AH2).
+    let j = planned(&o, "iron_metallic.png");
+    assert_eq!(j["profile"]["alpha"]["parallax"], false);
+    assert_eq!(j["provenance"]["alpha.parallax"], "analysis:constant-alpha");
     assert_all_zero(d.path());
+}
+
+/// Any constant alpha is non-varying (DECISIONS AH2): a mid-grey 128 would run parallax on a flat height, so it
+/// defaults to off and writes 0.
+#[test]
+fn a_constant_mid_alpha_m_defaults_to_parallax_off() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgba(d.path(), |_, _| 128);
+    let o = convert(d.path(), Target::Cs, &[SUB]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let j = planned(&o, "iron_m.png");
+    assert_eq!(j["profile"]["alpha"]["parallax"], false);
+    assert_eq!(j["provenance"]["alpha.parallax"], "analysis:constant-alpha");
+    assert_all_zero(d.path());
+    assert_quiet(&o);
+}
+
+/// DECISIONS AH2: an explicit `remove` writes 255; parallax has nothing to say and its no-alpha warning stays quiet.
+#[test]
+fn an_explicit_remove_raises_no_parallax_warning() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path());
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &[
+            SUB,
+            "file:**/iron_m.png.alpha.policy=remove",
+            "file:**/iron_m.png.alpha.parallax=true",
+        ],
+    );
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert!(!warnings(&o).contains(&Code::AlphaParallaxNoAlpha));
 }
 
 #[test]

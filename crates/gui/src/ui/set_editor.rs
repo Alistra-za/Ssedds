@@ -6,7 +6,8 @@ use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
 use crate::model::fields::{
-    channel_text, encoding_options, field_lock, field_view, format_label, PARALLAX_HOVER,
+    channel_text, encoding_options, field_hidden, field_lock, field_view, format_label,
+    PARALLAX_HOVER,
 };
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
@@ -18,7 +19,7 @@ use crate::model::sets::{
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
 use eframe::egui;
-use engine::config::{ColorTag, Format, PackRecipe, RawMap, Subtype, Target};
+use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
 use engine::events::RecipeReport;
 use engine::pack::RecipeKind;
 use serde_json::Value;
@@ -37,8 +38,10 @@ enum Act {
     Expand(String),
     Format(String, Format, ColorTag),
     Opaque(String, bool),
-    /// "Enable parallax" on a complex `_m` (DECISIONS AG18).
+    /// "Enable parallax" on a complex `_m` (DECISIONS AH2).
     Parallax(String, bool),
+    /// Clear the `_m`'s own `alpha.parallax` (the reset next to a locked box).
+    ParallaxReset(String),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
@@ -168,6 +171,7 @@ pub fn draw(
             Act::Format(k, f, t) => model.set_format(&k, f, t),
             Act::Opaque(k, on) => model.set_opaque(&k, on),
             Act::Parallax(k, on) => model.set_field(&k, "alpha.parallax", serde_json::json!(on)),
+            Act::ParallaxReset(k) => model.clear_field(&k, "alpha.parallax"),
             Act::Recipe(k, r) => {
                 model.set_packing_recipe(&k, r);
             }
@@ -605,7 +609,7 @@ fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<
 }
 
 /// Outputs that fill no slot card get their controls here, under the cards: the complex `_m` (packed cpm or loose)
-/// its "Enable parallax" box (DECISIONS AG18), a packed output its fill rows.
+/// its "Enable parallax" box (DECISIONS AH2), a packed output its fill rows.
 fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut Vec<Act>) {
     let why = super::settings_panel::toml_read_only_reason(model);
     for item in v
@@ -617,7 +621,7 @@ fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut
         let parallax = item
             .job
             .as_ref()
-            .filter(|j| j.profile.subtype == Subtype::ComplexMaterial)
+            .filter(|j| !field_hidden(&j.profile, "alpha.parallax"))
             .and_then(|j| field_view(model.target, j, "alpha.parallax"));
         let fills = item.kind == ItemKind::Packed && !fill_rows(model, &item.key).is_empty();
         if parallax.is_none() && !fills {
@@ -627,17 +631,28 @@ fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut
         ui.label(egui::RichText::new(&item.name).strong());
         ui.add_enabled_ui(why.is_none(), |ui| {
             if let Some(f) = &parallax {
-                let mut on = f.value.as_bool().unwrap_or(false);
-                let r = ui
-                    .add_enabled(
-                        f.lock.is_none(),
-                        egui::Checkbox::new(&mut on, "Enable parallax"),
-                    )
-                    .on_hover_text(PARALLAX_HOVER)
-                    .on_disabled_hover_text(f.lock.unwrap_or_default());
-                if r.changed() {
-                    acts.push(Act::Parallax(item.key.clone(), on));
-                }
+                ui.horizontal(|ui| {
+                    let mut on = f.value.as_bool().unwrap_or(false);
+                    let r = ui
+                        .add_enabled(
+                            f.lock.is_none(),
+                            egui::Checkbox::new(&mut on, "Enable parallax"),
+                        )
+                        .on_hover_text(PARALLAX_HOVER)
+                        .on_disabled_hover_text(f.lock.unwrap_or_default());
+                    if r.changed() {
+                        acts.push(Act::Parallax(item.key.clone(), on));
+                    }
+                    // A locked box the texture's own entry ticked (no source alpha) cannot be unticked: reset it.
+                    if f.edited
+                        && ui
+                            .small_button("↺")
+                            .on_hover_text("Use the inherited value")
+                            .clicked()
+                    {
+                        acts.push(Act::ParallaxReset(item.key.clone()));
+                    }
+                });
             }
             if fills {
                 fill_controls(ui, model, &item.key, acts)

@@ -132,7 +132,7 @@ impl SourceTransfer {
     }
 }
 
-/// DECISIONS AG17/AG18: a `complex_material` writes alpha 0 (complex material on, parallax off) when parallax is off
+/// DECISIONS AH1/AH2: a `complex_material` writes alpha 0 (complex material on, parallax off) when parallax is off
 /// or the source has no alpha channel. CS runs parallax only for 4/255 < alpha < 251/255 (Spike S8).
 pub fn complex_alpha_zero(p: &Profile, source_has_alpha: bool) -> bool {
     p.subtype == Subtype::ComplexMaterial

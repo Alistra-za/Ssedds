@@ -173,3 +173,26 @@ fn grass_guard_runs_on_nvtt_output() {
     );
     assert_eq!(t[3], 255);
 }
+
+/// DECISIONS AH1: the NVTT path runs the exact-0 fix too (`bc7_post_fix`). The fake writes every block as mode 6 with
+/// alpha 255 (p-bits 1), so without the fix a complex `_m` with parallax off would decode 255.
+#[test]
+fn a_parallax_off_complex_m_decodes_alpha_0_through_nvtt() {
+    use engine::dds::DdsPixelFormat;
+    use engine::decode::{decode_level, Decoded};
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let input = EncoderInput::Ldr((0..64).map(|i| [i as u8 * 3, 90, 40, 0]).collect());
+    let decoded_alpha = |parallax: bool, level: usize| {
+        let mut p = profile(Subtype::ComplexMaterial, Format::Bc7, AlphaPolicy::Data);
+        p.alpha.parallax = Some(parallax);
+        let out = encode_level_nvtt(&fake(), &input, 8, 8, &p, &tmp, level, &never).unwrap();
+        match decode_level(DdsPixelFormat::Bc7 { srgb: false }, 8, 8, &out, None).unwrap() {
+            Decoded::Ldr(px) => px.iter().map(|q| q[3]).collect::<Vec<_>>(),
+            Decoded::Hdr(_) => unreachable!(),
+        }
+    };
+    assert!(decoded_alpha(false, 0).iter().all(|&a| a == 0));
+    // Parallax on keeps the encoder's alpha untouched (the fake's 255 shows the fix did not run).
+    assert!(decoded_alpha(true, 1).iter().all(|&a| a == 255));
+}

@@ -2,7 +2,7 @@
 //! commands. No egui types.
 use super::fields::encoding_options;
 use super::fields::{
-    all_fields, field_hidden, field_view, filter_option_lock, views_of, FieldView, EDGE_FIELD,
+    all_fields, field_view, filter_option_lock, hidden_reason, views_of, FieldView, EDGE_FIELD,
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
 use super::sets::{
@@ -278,8 +278,6 @@ impl AppModel {
 /// Why a texture without a job takes no write.
 pub const NO_SETTINGS: &str = "has no settings of its own (packed, skipped or failed)";
 const INVALID: &str = "not a valid value for this setting";
-const CUTOUT_ONLY: &str = "used only by cutout and cutout + blend";
-const COMPLEX_M_ONLY: &str = "complex material _m only";
 const NOT_ALLOWED: &str = "not valid for this map";
 
 /// What a bulk edit does to one field.
@@ -330,15 +328,8 @@ fn skip_of(
     let Some(job) = job else {
         return Some(NO_SETTINGS.into());
     };
-    if field_hidden(&job.profile, field) {
-        return Some(
-            if field == "alpha.parallax" {
-                COMPLEX_M_ONLY
-            } else {
-                CUTOUT_ONLY
-            }
-            .into(),
-        );
+    if let Some(why) = hidden_reason(&job.profile, field) {
+        return Some(why.into());
     }
     let Some(view) = view else {
         return Some(format!("{field} is not a texture setting"));

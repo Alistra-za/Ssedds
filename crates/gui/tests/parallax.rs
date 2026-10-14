@@ -1,4 +1,4 @@
-//! DECISIONS AG18 (owner, 2026-10-14): "Enable parallax" on the complex `_m`. Off writes alpha 0 (complex material on,
+//! DECISIONS AH2 (owner, 2026-10-14): "Enable parallax" on the complex `_m`. Off writes alpha 0 (complex material on,
 //! parallax off); a source without alpha cannot turn it on.
 mod support;
 use egui_kittest::kittest::Queryable;
@@ -150,5 +150,63 @@ fn the_settings_row_shows_only_for_complex_material_and_locks_without_source_alp
         v.lock.is_some_and(|w| w.contains("no alpha")),
         "{:?}",
         v.lock
+    );
+}
+
+/// Fix round 1: a box ticked by the texture's own entry on a source without alpha is locked; the reset next to it
+/// clears the entry.
+#[test]
+fn a_locked_ticked_box_has_a_reset() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_field(BOLT_M, "subtype", json!(Subtype::ComplexMaterial));
+    idle(&mut m);
+    m.set_field(BOLT_M, "alpha.parallax", json!(true));
+    idle(&mut m);
+    let job = m.item(BOLT_M).unwrap().job.clone().unwrap();
+    let v = field_view(Target::Cs, &job, "alpha.parallax").unwrap();
+    assert!(v.lock.is_some() && v.edited, "{v:?}");
+    let mut h = editor(m, "m/bolt");
+    h.run();
+    h.get_by_label("↺").click();
+    settle(&mut h);
+    let m = h.state_mut();
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value(BOLT_M, "alpha.parallax"),
+        None
+    );
+    assert_eq!(parallax(m, BOLT_M), Some(false));
+}
+
+/// Fix round 1: an explicit `remove` hides the row with its own reason; each hidden field has its own reason.
+#[test]
+fn hidden_rows_say_why() {
+    use sdc_gui::model::fields::hidden_reason;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_field(IRON_M, "alpha.policy", json!("remove"));
+    idle(&mut m);
+    let p = m.item(IRON_M).unwrap().job.clone().unwrap().profile;
+    assert_eq!(
+        hidden_reason(&p, "alpha.parallax"),
+        Some("alpha removed: 255")
+    );
+    let diffuse = m.item("m/iron.png").unwrap().job.clone().unwrap().profile;
+    assert_eq!(
+        hidden_reason(&diffuse, "alpha.parallax"),
+        Some("complex material _m only")
+    );
+    assert_eq!(
+        hidden_reason(&diffuse, "mips.coverage"),
+        Some("used only by cutout and cutout + blend")
+    );
+    let mut raw = diffuse.clone();
+    raw.format = engine::config::Format::Rgba8;
+    assert_eq!(
+        hidden_reason(&raw, "encoder.backend"),
+        Some("no encoder runs for uncompressed formats")
     );
 }

@@ -617,12 +617,16 @@ fn layered_profile_with(
             );
         }
     }
-    // DECISIONS AG18: complex material parallax defaults on only for a varying source alpha (a height map).
+    // DECISIONS AH2: complex material parallax defaults on only for an alpha that really varies (a height map). Any
+    // constant alpha (0, 128, 255) and Note L's near-opaque noise (classed Constant255) is off.
     if st == Subtype::ComplexMaterial && !field_explicit(ctx, &prov, "alpha.parallax") {
-        let (on, fact) = match f.analysis.alpha {
-            AlphaContent::Varying => (true, "varying-alpha"),
-            AlphaContent::Constant255 => (false, "solid-alpha"),
+        let a = &f.analysis;
+        let (on, fact) = match a.alpha {
             AlphaContent::None => (false, "no-alpha"),
+            AlphaContent::Varying if a.channels[3].min < a.channels[3].max => {
+                (true, "varying-alpha")
+            }
+            _ => (false, "constant-alpha"),
         };
         apply(
             &mut doc,
@@ -1261,7 +1265,7 @@ fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
             ));
         }
     }
-    // DECISIONS AG17/AG18: only a written solid 255 reads as a plain envmask; a 0 fill keeps complex material on.
+    // DECISIONS AH1/AH2: only a written solid 255 reads as a plain envmask; a 0 fill keeps complex material on.
     if st == Subtype::ComplexMaterial
         && a.alpha == AlphaContent::Constant255
         && !crate::ops::complex_alpha_zero(p, f.info.has_alpha)
@@ -1761,7 +1765,7 @@ pub fn check_profile(
     if matches!(st, Subtype::Envmask | Subtype::ComplexMaterial)
         && p.format == Format::Bc7
         && !p.alpha.exact_opaque
-        // An alpha-0 complex `_m` (DECISIONS AG17/AG18) has no opaque block to round to 254.
+        // An alpha-0 complex `_m` (DECISIONS AH1/AH2) has no opaque block to round to 254.
         && !crate::ops::complex_alpha_zero(p, f.info.has_alpha)
     {
         // BC7 only: its alpha endpoints are quantised, so opaque alpha can decode as 254 unless exact-opaque
@@ -1773,7 +1777,11 @@ pub fn check_profile(
             "exact opaque alpha is off on an _m written as BC7; 254 may reach PGPatcher/ENB".into(),
         );
     }
-    if st == Subtype::ComplexMaterial && p.alpha.parallax == Some(true) && !f.info.has_alpha {
+    if st == Subtype::ComplexMaterial
+        && p.alpha.parallax == Some(true)
+        && p.alpha.policy != AlphaPolicy::Remove
+        && !f.info.has_alpha
+    {
         add(
             AlphaParallaxNoAlpha,
             "parallax is on but the source has no alpha channel: alpha 0 is written (complex material on, \

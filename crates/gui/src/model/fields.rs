@@ -101,9 +101,23 @@ pub fn is_cutout(p: &Profile) -> bool {
 
 /// A field the panel leaves out entirely for this profile (coverage outside the cutout policies).
 pub fn field_hidden(p: &Profile, field: &str) -> bool {
-    (field == "mips.coverage" && !is_cutout(p))
-        || (field == "encoder.backend" && !p.format.is_block())
-        || (field == "alpha.parallax" && p.subtype != Subtype::ComplexMaterial)
+    hidden_reason(p, field).is_some()
+}
+
+/// Why `field_hidden` leaves `field` out, per field (bulk reports it as the skip reason), or `None`.
+pub fn hidden_reason(p: &Profile, field: &str) -> Option<&'static str> {
+    match field {
+        "mips.coverage" if !is_cutout(p) => Some("used only by cutout and cutout + blend"),
+        "encoder.backend" if !p.format.is_block() => {
+            Some("no encoder runs for uncompressed formats")
+        }
+        "alpha.parallax" if p.subtype != Subtype::ComplexMaterial => {
+            Some("complex material _m only")
+        }
+        // DECISIONS AH2: an explicit `remove` writes 255, so parallax has nothing to switch.
+        "alpha.parallax" if p.alpha.policy == AlphaPolicy::Remove => Some("alpha removed: 255"),
+        _ => None,
+    }
 }
 
 /// The Encoder row's lock when NVTT was not found (DECISIONS Note NV): a texture already on NVTT keeps the row open
@@ -158,10 +172,10 @@ pub fn field_lock(target: Target, p: &Profile, field: &str) -> Option<&'static s
     }
 }
 
-/// Hover text of the "Enable parallax" check box (DECISIONS AG18).
+/// Hover text of the "Enable parallax" check box (DECISIONS AH2).
 pub const PARALLAX_HOVER: &str = "Off writes alpha 0: complex material on, parallax off";
 
-/// Why a complex `_m` cannot turn parallax on (DECISIONS AG18): its source has no alpha channel. Read from the
+/// Why a complex `_m` cannot turn parallax on (DECISIONS AH2): its source has no alpha channel. Read from the
 /// resolve's analysis fact, or its ALPHA-PARALLAX-NO-ALPHA warning once the texture's own entry turned it on.
 pub fn parallax_lock(job: &ResolvedJob) -> Option<&'static str> {
     let no_alpha = job

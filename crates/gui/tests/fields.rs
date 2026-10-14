@@ -81,7 +81,7 @@ fn every_field_is_a_real_engine_path() {
     let d = tempfile::tempdir().unwrap();
     let m = opened(d.path());
     let job = m.item("landscape/leaf.png").unwrap().job.clone().unwrap();
-    // A hidden row (`alpha.parallax` outside complex_material, DECISIONS AG18) may be unset.
+    // A hidden row (`alpha.parallax` outside complex_material, DECISIONS AH2) may be unset.
     for v in field_views(m.target, &job)
         .into_iter()
         .filter(|v| !field_hidden(&job.profile, v.field))

@@ -42,10 +42,10 @@ pub fn force_opaque_rotated(block: &mut [u8; 16]) -> bool {
     true
 }
 
-/// Exact alpha 0 (DECISIONS AG17): only valid on blocks whose source alpha is 0 throughout. Sets both alpha endpoints
+/// Exact alpha 0 (DECISIONS AH1): only valid on blocks whose source alpha is 0 throughout. Sets both alpha endpoints
 /// of every subset to 0 (and, in modes 6 and 7, the p-bits they share with RGB to 0), so alpha decodes to exactly 0.
-/// Modes 6 and 7: RGB endpoints that had p-bit 1 move down by one LSB (unoptimised). Modes 4 and 5 are lossless for
-/// RGB. Modes 0-3 store no alpha (it decodes as 255) and are left alone. Returns true if the block was rewritten.
+/// RGB endpoints that had p-bit 1 move down (unoptimised): one LSB in mode 6 (7-bit + p, 1/255), one step of the
+/// 6-bit value in mode 7 (5-bit + p, about 4/255). Modes 4 and 5 are lossless for RGB. Modes 0-3 store no alpha (it decodes as 255) and are left alone. Returns true if the block was rewritten.
 ///
 /// Layouts (bit 0 = LSB of byte 0): mode 4 alpha 6-bit x2 at 38, colour 5-bit; mode 5 alpha 8-bit x2 at 50, colour
 /// 7-bit; with rotation r the alpha sits in colour pair r-1 from bit 8. Mode 6 alpha 7-bit x2 at 49, p-bits 63, 64.

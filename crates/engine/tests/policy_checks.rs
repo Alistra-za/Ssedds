@@ -763,7 +763,7 @@ fn contradictions_are_warnings() {
         .message
         .contains("grayscale"));
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
-    // complex_material writing a solid 255 alpha (parallax on; off writes 0 and does not contradict, DECISIONS AG18)
+    // complex_material writing a solid 255 alpha (parallax on; off writes 0 and does not contradict, DECISIONS AH2)
     let j = run(
         Target::Cs,
         "textures/a/x_m.png",

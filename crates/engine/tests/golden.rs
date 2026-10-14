@@ -827,7 +827,13 @@ fn complex_m_near_251_warns_and_plain_m_is_bc4() {
         rgba(64, |_, _| [80, 160, 40, 250]),
     );
     put(d.path(), "textures/b/rock_m.png", gray_ramp(64));
-    let o = convert(d.path(), Target::Cs, &[], &[]);
+    // DECISIONS AH2: a constant alpha defaults to parallax off (alpha 0); on keeps the 250 this margin test needs.
+    let o = convert(
+        d.path(),
+        Target::Cs,
+        &["file:**/iron_m.png.alpha.parallax=true"],
+        &[],
+    );
     assert_eq!(o.summary.converted, 2, "{:?}", warnings(&o));
     assert!(warnings(&o).contains(&Code::ValMComplexMargin));
     assert_profile(&o, "iron_m.png", "complex_material", "data", true, "bc7");
@@ -853,7 +859,7 @@ fn exact_opaque_m_decodes_alpha_255_at_every_mip() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "textures/a/iron_m.png", dark_ramp(64, 255));
     put(d.path(), "textures/b/rock_m.png", dark_ramp(64, 255));
-    // DECISIONS AG18: a solid-255 complex `_m` defaults to parallax off (alpha 0); parallax on keeps the 255 tested here.
+    // DECISIONS AH2: a solid-255 complex `_m` defaults to parallax off (alpha 0); parallax on keeps the 255 tested here.
     let sets = [
         "file:**/iron_m.png.subtype=complex_material",
         "file:**/iron_m.png.alpha.parallax=true",
