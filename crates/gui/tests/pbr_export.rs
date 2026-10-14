@@ -1059,3 +1059,23 @@ fn a_set_that_matches_nothing_asks_and_is_left_out_of_the_json() {
         .iter()
         .all(|(v, _)| v.id != "landscape/rock01"));
 }
+
+/// Audit 2026-10-13b G-I1 (DECISIONS AF8): the same-name pitfall reaches the export's questions.
+#[test]
+fn a_renamed_set_whose_name_the_scan_knows_elsewhere_asks_before_export() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "rename", Some(json!("rock09")));
+    idle(&mut m);
+    let asks = |m: &sdc_gui::model::AppModel| {
+        export_asks(m)
+            .iter()
+            .any(|i| i.text.contains("textures/dlc/landscape/rock01"))
+    };
+    assert!(!asks(&m));
+    m.known = std::sync::Arc::new(sdc_gui::model::known_paths::KnownPaths {
+        textures: [("textures/dlc/landscape/rock01.dds".to_string(), 1u16)].into(),
+        mesh_dirs: vec![],
+    });
+    assert!(asks(&m), "{:?}", export_asks(&m));
+}

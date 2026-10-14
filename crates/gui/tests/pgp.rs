@@ -1278,3 +1278,28 @@ fn an_empty_match_row_is_not_written() {
     assert_eq!(written(&e), json!({ "match1": r"landscape\rock01.dds" }));
     assert!(pitfalls(&e.settings, r"landscape\rock01").is_empty());
 }
+
+/// Audit 2026-10-13b G-I1 (DECISIONS AF8): PGPatcher matches `match_diffuse` by its last path components, so a
+/// renamed set whose match is short or has no folder also hits same-named textures in other folders (and PGPatcher
+/// skips those meshes: the renamed file does not exist there). A pitfall says so when a known texture shows it.
+#[test]
+fn a_short_renamed_match_warns_when_the_name_is_known_in_another_folder() {
+    use sdc_gui::pgp::prefix::rename_hits_elsewhere;
+    let renamed = s(&[("rename", json!("iron2"))]);
+    let known: Vec<String> = ["textures/armor/iron", "textures/iron", "textures/pbr/iron"]
+        .map(String::from)
+        .to_vec();
+    let w = rename_hits_elsewhere(&renamed, "iron", &known).expect("warns");
+    assert!(
+        w.contains("textures/armor/iron") && w.contains("skip"),
+        "{w}"
+    );
+    // Its own paths (vanilla and PBR) only: no warning.
+    assert_eq!(rename_hits_elsewhere(&renamed, "iron", &known[1..]), None);
+    // Not renamed: no match_diffuse, no warning.
+    assert_eq!(rename_hits_elsewhere(&s(&[]), "iron", &known), None);
+    // A folder in the match narrows it; a longer path ending with it is still hit.
+    assert_eq!(rename_hits_elsewhere(&renamed, r"armor\iron", &known), None);
+    let deeper = vec!["textures/dlc01/armor/iron".to_string()];
+    assert!(rename_hits_elsewhere(&renamed, r"armor\iron", &deeper).is_some());
+}

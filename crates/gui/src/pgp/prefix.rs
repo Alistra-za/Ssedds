@@ -357,6 +357,26 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
     out
 }
 
+/// DECISIONS AF8: PGPatcher matches a renamed entry's `match_diffuse` by its last path components, so a short or
+/// folderless one also hits a same-named texture in another folder; those meshes get the rename in their own folder,
+/// where no such file exists, and PGPatcher skips them. The warning names the first such path in `known` (texture
+/// paths, `/` or `\`, any case, with or without `textures/` and `.dds`), the set's own paths aside.
+pub fn rename_hits_elsewhere(s: &Settings, derived: &str, known: &[String]) -> Option<String> {
+    let (md, _) = json_rename(s, derived)?;
+    let md = md.replace('/', "\\").to_lowercase();
+    let other = known.iter().find(|k| {
+        let k = k.replace('/', "\\").to_lowercase();
+        let k = strip_ext(&k);
+        let rel = strip_ci(strip_ci(k, "textures\\"), "pbr\\");
+        rel != md && rel.ends_with(&format!("\\{md}"))
+    })?;
+    Some(format!(
+        "PGPatcher matches the renamed entry's match_diffuse \"{md}\" by its end, so it also hits {other} in another \
+         folder; meshes using that texture get the rename there, where the renamed file does not exist, and \
+         PGPatcher skips them; give the set a match path with more of its folder"
+    ))
+}
+
 /// The output path, relative to the export folder, of the file with canonical `suffix` (`""` for the diffuse).
 pub fn output_rel(prefix: &str, suffix: &str) -> PathBuf {
     let name = if suffix.is_empty() {
