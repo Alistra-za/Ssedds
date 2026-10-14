@@ -1,6 +1,6 @@
 //! The PGPatcher JSON document (M3b spec §5.2–5.3, §5.6): `{ "$schema", "default", "entries" }`, keys in schema
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
-use super::prefix::{active_matches, json_rename, match_texture, match_value};
+use super::prefix::{active_matches, json_rename, match_value};
 use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
 use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
@@ -141,12 +141,7 @@ fn fixed_default_block() -> Vec<(String, Node)> {
 /// The entry for one set: only the set's own settings, under the per-kind rules, in schema order.
 fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(String, Node)> {
     let mut out = vec![];
-    let mut matches = active_matches(own, derived);
-    // PGPatcher renames only the part `texture` matched (wiki, Mod Authors: rename), so a renamed entry matches its
-    // diffuse through `texture`; a match slot naming that same texture would only repeat it (DECISIONS AA8).
-    if let Some((texture, _)) = json_rename(own, derived) {
-        matches.retain(|(n, v)| !match_texture(*n, v).eq_ignore_ascii_case(&texture));
-    }
+    let matches = active_matches(own, derived);
     for k in KEYS.iter().filter(|k| !k.key.contains('.')) {
         if let Some(f) = group_feature(k.group) {
             if !live(own, f) {
@@ -181,10 +176,10 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                     .iter()
                     .find(|(m, _)| *m == n)
                     .map(|(_, v)| Node::Scalar(json!(match_value(v)))),
-                // The typed file name becomes the renamed path, with the `texture` PGPatcher needs to apply it
-                // (owner, 2026-10-14; DECISIONS V3, AA8).
-                None if k.key == "rename" => json_rename(own, derived).map(|(texture, r)| {
-                    out.push(("texture".to_string(), Node::Scalar(json!(texture))));
+                // The typed file name becomes the renamed path, with the `match_diffuse` PGPatcher renames from
+                // (owner, 2026-10-14; DECISIONS V3, AA8). The match slots stay the entry's matches.
+                None if k.key == "rename" => json_rename(own, derived).map(|(diffuse, r)| {
+                    out.push(("match_diffuse".to_string(), Node::Scalar(json!(diffuse))));
                     Node::Scalar(json!(r))
                 }),
                 None => v

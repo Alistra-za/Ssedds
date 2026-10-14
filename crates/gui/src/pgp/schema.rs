@@ -7,7 +7,7 @@ pub const SCHEMA_URL: &str =
 /// Never written: removed by PGPatcher 2.0.0.
 pub const REMOVED: &[&str] = &["pbr", "env_mapping", "env_map_scale", "env_map_scale_mult"];
 /// Not offered: `delete` is a later round (spec §9); `texture`, `match_diffuse` and `match_normal` are the partial
-/// ends-with matches, no longer offered (M6 F1 spec §3.1, DECISIONS V2). The writer adds `texture` itself next to a
+/// ends-with matches, no longer offered (M6 F1 spec §3.1, DECISIONS V2). The writer adds `match_diffuse` itself next to a
 /// rename (DECISIONS AA8).
 pub const NOT_EXPOSED: &[&str] = &["texture", "delete", "match_diffuse", "match_normal"];
 

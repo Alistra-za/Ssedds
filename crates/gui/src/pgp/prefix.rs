@@ -296,23 +296,18 @@ fn matched_prefix(s: &Settings, derived: &str) -> Result<String, PrefixError> {
     })
 }
 
-/// The `texture` and `rename` a renamed set's entry carries, both relative to `textures\pbr\` (owner, 2026-10-14;
-/// DECISIONS AA8). With `texture`, PGPatcher keeps `textures\pbr` in front of the match and appends the rename, the
-/// form every working rename in the owner's load order uses. Without it, PGPatcher substitutes `\` + rename for the
-/// whole path and then finds no file, so the entry patches nothing (seen with PGPatcher 1.2.0). The hit lands on
-/// the renamed files only when its texture is `texture` (PGPatcher cuts the matched path by `texture`'s length);
-/// `pitfalls` warns otherwise. `None` without a rename or with a bad one.
+/// The `match_diffuse` and `rename` a renamed set's entry carries, both relative to `textures\pbr\` (owner,
+/// 2026-10-14; DECISIONS AA8). PGPatcher renames "the matching part (from match_diffuse or match_normal)": with
+/// `match_diffuse` it keeps `textures\pbr` in front of the match and appends the rename. Without it, it substitutes
+/// `\` + rename for the whole path and finds no file, so the entry patches nothing (PGPatcher 1.2.0 log). A hit
+/// lands on the renamed files only when its texture is that `match_diffuse` (PGPatcher cuts the matched path by its
+/// length); `pitfalls` warns otherwise. `None` without a rename or with a bad one.
 pub fn json_rename(s: &Settings, derived: &str) -> Option<(String, String)> {
     text(s, "rename")?;
     let full = prefix_of(s, derived).ok()?;
     let base = matched_prefix(s, derived).ok()?;
     let rel = |p: &str| strip_ci(p, "textures\\pbr\\").to_string();
     Some((rel(&base), rel(&full)))
-}
-
-/// The texture `matchN = v` names, relative to `textures\pbr\` and without its slot suffix: the form `texture` takes.
-pub fn match_texture(n: u8, v: &str) -> String {
-    strip_ci(&match_prefix(n, v), "textures\\pbr\\").to_string()
 }
 
 /// The prefix PGPatcher derives when `matchN = v` is the match that hits.
@@ -338,7 +333,7 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
                 .into(),
         );
     }
-    // A rename lands right only for meshes whose matched texture is the entry's `texture` (DECISIONS AA8).
+    // A rename lands right only for meshes whose matched texture is the entry's `match_diffuse` (DECISIONS AA8).
     if renamed && (prefixes.len() > 1 || text(s, "path_contains").is_some()) {
         out.push(
             "with a rename, only meshes using the first matched texture get the renamed files; meshes hit through \
