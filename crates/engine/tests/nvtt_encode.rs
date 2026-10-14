@@ -73,7 +73,11 @@ fn bc7_levels_have_the_right_size_and_flags() {
 
     let p = profile(Subtype::Diffuse, Format::Bc7, AlphaPolicy::Blend);
     encode_level_nvtt(&fake(), &ldr(4, 4), 4, 4, &p, &tmp, 2, &never).unwrap();
-    assert!(!args(&tmp, 2).iter().any(|x| x == "-noalpha"));
+    let a = args(&tmp, 2);
+    assert!(
+        a.iter().any(|x| x == "-alpha") && !a.iter().any(|x| x == "-noalpha"),
+        "{a:?}"
+    );
 }
 
 #[test]

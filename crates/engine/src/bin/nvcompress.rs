@@ -10,12 +10,13 @@ use engine::config::Format;
 use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};
 use std::process::ExitCode;
 
-const USAGE_FLAGS: [&str; 7] = [
+const USAGE_FLAGS: [&str; 8] = [
     "-nomips",
     "-bc7",
     "-bc6",
     "-production",
     "-noalpha",
+    "-alpha",
     "-nocuda",
     "-silent",
 ];

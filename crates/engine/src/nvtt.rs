@@ -17,13 +17,14 @@ pub const NVTT_DEFAULT: &str =
     r"C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\nvcompress.exe";
 
 /// Every flag the backend passes (DECISIONS Note NV4); the probe checks the usage lists each one.
-pub const NVTT_FLAGS: [&str; 7] = [
+pub const NVTT_FLAGS: [&str; 8] = [
     "-silent",
     "-nomips",
     "-production",
     "-bc7",
     "-bc6",
     "-noalpha",
+    "-alpha",
     "-nocuda",
 ];
 
@@ -254,10 +255,13 @@ fn level_args(p: &Profile) -> Vec<&'static str> {
     let mut a = vec!["-silent", "-nomips", "-production"];
     if p.format == Format::Bc7 {
         a.push("-bc7");
-        // What Spike S7 measured: decoded alpha 255 on every level.
-        if p.alpha.policy == AlphaPolicy::Remove {
-            a.push("-noalpha");
-        }
+        // `remove` is what Spike S7 measured (decoded alpha 255 on every level). Every other policy keeps alpha,
+        // and nvcompress weights alpha 0 unless told the input has it.
+        a.push(if p.alpha.policy == AlphaPolicy::Remove {
+            "-noalpha"
+        } else {
+            "-alpha"
+        });
     } else {
         a.push("-bc6");
     }
