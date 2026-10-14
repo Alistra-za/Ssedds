@@ -310,6 +310,11 @@ pub fn json_rename(s: &Settings, derived: &str) -> Option<(String, String)> {
     Some((rel(&base), rel(&full)))
 }
 
+/// The texture `matchN = v` names, relative to `textures\pbr\` and without its slot suffix: the form `texture` takes.
+pub fn match_texture(n: u8, v: &str) -> String {
+    strip_ci(&match_prefix(n, v), "textures\\pbr\\").to_string()
+}
+
 /// The prefix PGPatcher derives when `matchN = v` is the match that hits.
 fn match_prefix(n: u8, v: &str) -> String {
     let full = match_value(v);

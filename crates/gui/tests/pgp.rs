@@ -1185,6 +1185,8 @@ fn a_rename_is_a_file_name_in_the_matched_folder() {
     let v = written(&entry(&[("rename", json!("boulder"))], r"landscape\rock01"));
     assert_eq!(v["texture"], json!(r"landscape\rock01"));
     assert_eq!(v["rename"], json!(r"landscape\boulder"));
+    // The diffuse is matched through `texture`, so match1 naming the same texture is left out (wiki: rename).
+    assert!(v.get("match1").is_none(), "{v}");
     assert!(written(&entry(&[], r"landscape\rock01"))
         .get("texture")
         .is_none());
@@ -1238,6 +1240,7 @@ fn a_renamed_entry_lands_on_the_sdc_prefix_for_slot_matches_and_path_contains() 
     // The old form, without `texture`: the whole path is replaced and starts with `\`.
     let mut old = written(&entry(&[("rename", json!("boulder"))], derived));
     old.as_object_mut().unwrap().remove("texture");
+    old["match1"] = json!(r"landscape\rock01.dds");
     old["rename"] = json!(r"textures\pbr\landscape\boulder");
     assert_eq!(
         pgpsim::matched_path(&pgpsim::prepare(&old, &default), &mesh.slots),
