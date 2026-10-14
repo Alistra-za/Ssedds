@@ -30,6 +30,12 @@ humantime.workspace = true
 # features out of `cargo build`). DECISIONS Note K.
 test-hooks = []
 
+# Test-only stand-in for NVIDIA's nvcompress (DECISIONS Note NV); built only with test-hooks, so never shipped.
+[[bin]]
+name = "nvcompress"
+path = "src/bin/nvcompress.rs"
+required-features = ["test-hooks"]
+
 [dev-dependencies]
 tempfile.workspace = true
 engine = { path = ".", features = ["test-hooks"] }
