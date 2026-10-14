@@ -356,12 +356,26 @@ pub(crate) fn control(
         }
         KeyKind::Number(NumRange::Int(max)) => {
             // A whole number inside its range; DragValue clamps what is typed (AG27).
-            let stored = value.as_ref().and_then(Value::as_i64);
-            let mut x = stored.unwrap_or_else(|| alpha_default(k.key));
-            let r = ui.add(egui::DragValue::new(&mut x).range(0..=i64::from(max)));
-            if r.changed() && stored != Some(x) {
-                edits.push((key, Some(json!(x))));
-            }
+            // Read as a float so a hand-edited `4844.0` is 4844; a negative or fractional value is invalid, not unset.
+            let stored = value.as_ref().and_then(|v| NumRange::whole(v, max));
+            let invalid = value.as_ref().filter(|_| stored.is_none());
+            let mut x = stored.map_or_else(|| alpha_default(k.key), i64::from);
+            ui.horizontal(|ui| {
+                let r = ui.add(egui::DragValue::new(&mut x).range(0..=i64::from(max)));
+                if r.changed() && stored.map(i64::from) != Some(x) {
+                    edits.push((key, Some(json!(x))));
+                }
+                if let Some(v) = invalid {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "stored {v} is not valid; {}",
+                            NumRange::Int(max).note()
+                        ))
+                        .small()
+                        .color(AMBER),
+                    );
+                }
+            });
         }
         KeyKind::Number(range) => {
             let default = GLINT_DEFAULTS
@@ -498,6 +512,33 @@ const ALPHA_KEYS: [&str; 4] = [
     "alphaprop_delete",
 ];
 
+/// A small reset button beside an alpha key that is set: removes the key, as the other rows' reset does.
+fn alpha_reset(ui: &mut egui::Ui, c: &Ctx, key: &str, edits: &mut Vec<Edit>) {
+    if c.own.contains_key(key)
+        && c.read_only.is_none()
+        && ui
+            .small_button("reset")
+            .on_hover_text("Remove this setting (the default applies)")
+            .clicked()
+    {
+        edits.push((key.to_string(), None));
+    }
+}
+
+/// A key whose stored value is not a whole number in range says so beside its control.
+fn alpha_invalid_note(ui: &mut egui::Ui, c: &Ctx, key: &str, max: u32, valid: bool) {
+    if let Some(v) = c.own.get(key).filter(|_| !valid) {
+        ui.label(
+            egui::RichText::new(format!(
+                "stored {v} is not valid; {}",
+                NumRange::Int(max).note()
+            ))
+            .small()
+            .color(AMBER),
+        );
+    }
+}
+
 /// The NiAlphaProperty section (Task 4b, DECISIONS AG27-AG31): NifSkope-style flag controls composed into
 /// `alphaprop_flags`, the test threshold, and the create and delete switches. Every change is one edit of the key.
 fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
@@ -508,33 +549,41 @@ fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
         .show(ui, |ui| {
             let flag = |k: &str| c.own.get(k).and_then(Value::as_bool) == Some(true);
             let (deleting, editable) = (flag("alphaprop_delete"), c.read_only.is_none());
+            // A float read: a hand-edited 4844.0 is 4844. A key that is set but not a whole number in range is
+            // "set and invalid" (its box is ticked and a note says why), never "not set".
+            let flags_set = c.own.contains_key("alphaprop_flags");
             let cur = c
                 .own
                 .get("alphaprop_flags")
-                .and_then(Value::as_u64)
-                .map(|v| v.min(65535) as u16);
+                .and_then(|v| NumRange::whole(v, 65535))
+                .map(|v| v as u16);
+            let thresh_set = c.own.contains_key("alphaprop_thresh");
             let thresh = c
                 .own
                 .get("alphaprop_thresh")
-                .and_then(Value::as_u64)
-                .map(|v| v.min(255) as u8);
+                .and_then(|v| NumRange::whole(v, 255))
+                .map(|v| v as u8);
             let r = ui.add_enabled_ui(editable && !deleting, |ui| {
-                let mut on = cur.is_some();
-                if ui
-                    .checkbox(&mut on, "Override flags")
-                    .on_hover_text(
-                        "Sets the flags of the NiAlphaProperty: blending, testing and their modes",
-                    )
-                    .changed()
-                {
-                    edits.push(("alphaprop_flags".into(), on.then_some(json!(DEFAULT_FLAGS))));
-                }
-                ui.add_enabled_ui(cur.is_some(), |ui| {
+                ui.horizontal(|ui| {
+                    let mut on = flags_set;
+                    if ui
+                        .checkbox(&mut on, "Override flags")
+                        .on_hover_text(
+                            "Sets the flags of the NiAlphaProperty: blending, testing and their modes",
+                        )
+                        .changed()
+                    {
+                        edits.push(("alphaprop_flags".into(), on.then_some(json!(DEFAULT_FLAGS))));
+                    }
+                    alpha_reset(ui, c, "alphaprop_flags", edits);
+                    alpha_invalid_note(ui, c, "alphaprop_flags", 65535, cur.is_some());
+                });
+                ui.add_enabled_ui(flags_set, |ui| {
                     let f = AlphaFlags::from_raw(cur.unwrap_or(DEFAULT_FLAGS));
                     alpha_flag_controls(ui, c, f, edits);
                 });
                 ui.horizontal(|ui| {
-                    let mut on = thresh.is_some();
+                    let mut on = thresh_set;
                     if ui
                         .checkbox(&mut on, "Alpha test threshold")
                         .on_hover_text("Sets the alpha test threshold, 0-255")
@@ -542,42 +591,55 @@ fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                     {
                         edits.push(("alphaprop_thresh".into(), on.then_some(json!(DEFAULT_THRESH))));
                     }
-                    ui.add_enabled_ui(thresh.is_some(), |ui| {
+                    ui.add_enabled_ui(thresh_set, |ui| {
                         let mut x = thresh.unwrap_or(DEFAULT_THRESH);
                         let r = ui.add(egui::DragValue::new(&mut x).range(0..=255));
                         if r.changed() && thresh != Some(x) {
                             edits.push(("alphaprop_thresh".into(), Some(json!(x))));
                         }
                     });
+                    alpha_reset(ui, c, "alphaprop_thresh", edits);
+                    alpha_invalid_note(ui, c, "alphaprop_thresh", 255, thresh.is_some());
                 });
-                let mut create = flag("alphaprop_create");
-                if ui
-                    .checkbox(&mut create, "Create NiAlphaProperty if missing")
-                    .on_hover_text(
-                        "Gives a shape without one a new NiAlphaProperty (flags 4844, threshold 128 unless set \
-                         here). Off: only an existing one is changed",
-                    )
-                    .changed()
-                {
-                    edits.push(("alphaprop_create".into(), create.then_some(json!(true))));
-                }
+                ui.horizontal(|ui| {
+                    let mut create = flag("alphaprop_create");
+                    if ui
+                        .checkbox(&mut create, "Create NiAlphaProperty if missing")
+                        .on_hover_text(
+                            "Gives a shape without one a new NiAlphaProperty (flags 4844, threshold 128 unless set \
+                             here). Off: only an existing one is changed",
+                        )
+                        .changed()
+                    {
+                        edits.push(("alphaprop_create".into(), create.then_some(json!(true))));
+                    }
+                    alpha_reset(ui, c, "alphaprop_create", edits);
+                });
             });
-            if deleting {
-                r.response.on_disabled_hover_text(DELETE_WINS);
-            } else if let Some(why) = &c.read_only {
-                r.response.on_disabled_hover_text(why);
+            if !deleting {
+                if let Some(why) = &c.read_only {
+                    r.response.on_disabled_hover_text(why);
+                }
             }
             ui.add_enabled_ui(editable, |ui| {
-                let mut del = deleting;
-                if ui
-                    .checkbox(&mut del, "Delete NiAlphaProperty")
-                    .on_hover_text(
-                        "Removes the NiAlphaProperty and its controller. Other shapes sharing it keep it",
-                    )
-                    .changed()
-                {
-                    edits.push(("alphaprop_delete".into(), del.then_some(json!(true))));
-                }
+                ui.horizontal(|ui| {
+                    let mut del = deleting;
+                    // The hover is on the checkbox itself: a disabled group does not reliably report hover.
+                    let mut hover =
+                        "Removes the NiAlphaProperty and its controller. Other shapes sharing it keep it"
+                            .to_string();
+                    if deleting {
+                        hover = format!("{DELETE_WINS}. {hover}");
+                    }
+                    if ui
+                        .checkbox(&mut del, "Delete NiAlphaProperty")
+                        .on_hover_text(hover)
+                        .changed()
+                    {
+                        edits.push(("alphaprop_delete".into(), del.then_some(json!(true))));
+                    }
+                    alpha_reset(ui, c, "alphaprop_delete", edits);
+                });
             });
             ui.add_space(6.0);
         });
@@ -612,9 +674,12 @@ fn alpha_flag_controls(ui: &mut egui::Ui, c: &Ctx, f: AlphaFlags, edits: &mut Ve
     ui.horizontal(|ui| {
         ui.label(format!("= {}", f.raw()));
         let id = egui::Id::new(("pgp-alpha-raw", &c.set));
+        // The buffer carries the frame it was last drawn in: one left by a collapsed section is stale (as color.rs).
+        let frame = ui.ctx().cumulative_frame_nr();
         let mut text = ui
-            .data(|d| d.get_temp::<String>(id))
-            .unwrap_or_else(|| f.raw().to_string());
+            .data(|d| d.get_temp::<(String, u64)>(id))
+            .filter(|(_, at)| at + 1 >= frame)
+            .map_or_else(|| f.raw().to_string(), |(t, _)| t);
         let r = ui
             .add(egui::TextEdit::singleline(&mut text).desired_width(56.0))
             .on_hover_text("edit raw: a whole number from 0 to 65535");
@@ -628,10 +693,10 @@ fn alpha_flag_controls(ui: &mut egui::Ui, c: &Ctx, f: AlphaFlags, edits: &mut Ve
             );
         }
         if r.has_focus() || r.changed() {
-            ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            ui.data_mut(|d| d.insert_temp(id, (text.clone(), frame)));
         }
         if r.lost_focus() {
-            ui.data_mut(|d| d.remove::<String>(id));
+            ui.data_mut(|d| d.remove::<(String, u64)>(id));
             let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
             if let Some(v) = ok.filter(|v| *v != f.raw() && !cancelled) {
                 edits.push(("alphaprop_flags".into(), Some(json!(v))));

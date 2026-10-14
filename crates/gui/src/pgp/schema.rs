@@ -60,13 +60,20 @@ impl NumRange {
     }
 
     /// The note a typed value outside the range shows next to its box.
-    pub fn note(self) -> &'static str {
+    pub fn note(self) -> String {
         match self {
-            NumRange::Min0 => "clamped to ≥ 0",
-            NumRange::Unit => "clamped to 0–1",
-            NumRange::Any => "",
-            NumRange::Int(_) => "clamped to the whole numbers in range",
+            NumRange::Min0 => "clamped to ≥ 0".into(),
+            NumRange::Unit => "clamped to 0–1".into(),
+            NumRange::Any => String::new(),
+            NumRange::Int(max) => format!("clamped to a whole number 0-{max}"),
         }
+    }
+
+    /// A stored `alphaprop_*` value as a whole number 0 to `max`: JSON `4844.0` reads as 4844 (the writer and the
+    /// validator accept it); a negative, fractional or too large one is `None` (shown as invalid, not as "not set").
+    pub fn whole(v: &serde_json::Value, max: u32) -> Option<u32> {
+        let x = v.as_f64()?;
+        (x.fract() == 0.0 && (0.0..=f64::from(max)).contains(&x)).then_some(x as u32)
     }
 }
 
