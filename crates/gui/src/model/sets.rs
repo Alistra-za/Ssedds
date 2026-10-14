@@ -1502,6 +1502,11 @@ impl AppModel {
         if !self.sets_editable() {
             return;
         }
+        // DECISIONS AF6: a locked slot's command is changed by nothing, the JSON editor's x on its pill included.
+        let slot = key.strip_prefix("slot").and_then(|n| n.parse::<u8>().ok());
+        if slot.is_some_and(|n| self.slot_locked(set, n)) {
+            return;
+        }
         let replan = replans(key);
         let v = match v {
             Some(Value::String(t)) if is_path_key(key) => Some(Value::from(strip_lead(&t))),

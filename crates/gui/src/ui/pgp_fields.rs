@@ -106,6 +106,8 @@ pub(crate) struct Ctx {
     matches: Vec<SlotMatch>,
     addable: Vec<SlotMatch>,
     no_match: bool,
+    /// The set's locked slots: a locked slot command shows no remove button (DECISIONS AF6).
+    pub(crate) locks: std::collections::BTreeSet<u8>,
 }
 
 pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
@@ -117,6 +119,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
     let derived = v.as_ref().and_then(|v| v.derived_match.clone());
     let (matches, addable) = v.as_ref().map(slot_matches).unwrap_or_default();
     Ctx {
+        locks: v.as_ref().map(|v| v.locks.clone()).unwrap_or_default(),
         no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
