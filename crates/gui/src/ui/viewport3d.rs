@@ -95,6 +95,14 @@ fn look_controls(ui: &mut egui::Ui, l: &mut Look) {
                 ui.radio_value(&mut l.hdri, false, "Solid");
                 ui.radio_value(&mut l.hdri, true, "Studio HDRI");
                 if !l.hdri {
+                    // AG9: the background is one sRGB grey; swatch + hex edit it, a non-grey pick keeps its Rec.709 luma.
+                    let g = super::color::unit_to_u8(l.grey);
+                    let id = egui::Id::new("viewport3d-bg");
+                    if let Some([r, gg, b]) = super::color::color_field(ui, id, [g; 3]) {
+                        let y =
+                            0.2126 * f32::from(r) + 0.7152 * f32::from(gg) + 0.0722 * f32::from(b);
+                        l.grey = y.round() / 255.0;
+                    }
                     let mut pct = l.grey * 100.0;
                     if ui
                         .add(

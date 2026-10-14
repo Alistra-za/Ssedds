@@ -437,6 +437,13 @@ pub(crate) fn control(
                 .unwrap_or([0, 0, 0]);
             let mut changed = false;
             ui.horizontal(|ui| {
+                // Swatch + hex (AG2) commit through the same edit as the number boxes; sRGB bytes as stored.
+                let cur = rgb.map(|x| x.clamp(0, 255) as u8);
+                let id = egui::Id::new(("pgp-rgb", k.key, &c.set));
+                if let Some(n) = super::color::color_field(ui, id, cur) {
+                    rgb = n.map(i64::from);
+                    changed = true;
+                }
                 for (i, l) in ["R", "G", "B"].iter().enumerate() {
                     ui.label(*l);
                     changed |= ui

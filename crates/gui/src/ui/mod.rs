@@ -1,6 +1,7 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
 pub mod advanced;
 pub mod bulk_panel;
+pub mod color;
 pub mod columns;
 pub mod dialogs;
 pub mod drawer;
