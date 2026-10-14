@@ -9,7 +9,7 @@ use super::{
 use crate::analyse::{analyse, Analysis};
 use crate::api::SkippedFile;
 use crate::codes::{Code, Warning};
-use crate::config::{GraySource, PackPrefer, PackRecipe, Profile, RawMap, Subtype, Target};
+use crate::config::{GraySource, PackPrefer, PackRecipe, Profile, RawMap, Target};
 use crate::discover::{InputFile, InputKind};
 use crate::events::{RecipeReport, RecipeStatus};
 use crate::group::{member_split, split_suffix_with, split_vocab, TextureSet, VocabRole};
@@ -714,21 +714,6 @@ pub fn finish_recipe(
         suggestions: vec![],
     };
     let mut job = resolve_decided(ctx, &facts, decision);
-    // DECISIONS AH2: an explicit height fill is the user's alpha, so it keeps parallax on unless an explicit layer
-    // chose otherwise (the analysis default would read the constant fill as "off" and write 0).
-    if job.profile.subtype == Subtype::ComplexMaterial
-        && matches!(c.job.channels[3], ChannelSource::Fill { .. })
-        && matches!(
-            job.provenance.get("alpha.parallax"),
-            Some(Provenance::AnalysisFact(_))
-        )
-    {
-        job.profile.alpha.parallax = Some(true);
-        job.provenance.insert(
-            "alpha.parallax".into(),
-            Provenance::AnalysisFact("height-fill".into()),
-        );
-    }
     for (ch, src) in ["r", "g", "b", "a"].iter().zip(&c.job.channels) {
         if let Some(p) = src.provenance(c.job.gray) {
             job.provenance.insert(format!("pack.{ch}"), p);

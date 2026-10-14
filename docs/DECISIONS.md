@@ -948,7 +948,7 @@ Rulings for the Important findings of the 2026-10-13 reliability audit (round b)
     - Off for no alpha (`analysis:no-alpha`).
   - **Solid 255:** a solid-255 `_m` typed `complex_material` writes 0 unless parallax is turned on. With parallax on, 255 stays and raises `SUG-CONTRADICTION` and `VAL-M-COMPLEX-MARGIN`.
   - **No source alpha:** parallax on is not available. It raises `ALPHA-PARALLAX-NO-ALPHA` (warning), and the output stays 0.
-  - **Packed cpm `_m`:** the default follows the same rule, read from the assembled image. With no height source, the alpha is the constant M1 default 0, so parallax reads off. An explicit `packing.fill.height` is the user's alpha: it keeps parallax on (`analysis:height-fill`, set in `pack::plan::finish_recipe`) unless an explicit layer sets `alpha.parallax`.
+  - **Packed cpm `_m`:** the default follows the same rule, read from the assembled image. With no height source, the alpha is the constant M1 default 0, so parallax reads off. A `packing.fill.height` is a constant alpha too (fix round 2, coordinator ruling): parallax stays off and the alpha is 0, because the owner rejected a flat height such as 128. To write the fill, turn "Enable parallax" on (`alpha.parallax = true`). The checks see that final value, so a 255 fill with parallax on and `exact_opaque` off on BC7 raises `ALPHA-EXACT-OFF-M`.
   - **Explicit `alpha.policy = remove`:** wins, and 255 is synthesised. The parallax row is hidden ("alpha removed: 255"), and `ALPHA-PARALLAX-NO-ALPHA` is not raised.
   - **GUI:**
     - An "Enable parallax" row in the Alpha group, for complex material only.
