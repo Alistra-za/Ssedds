@@ -1017,6 +1017,14 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
         .as_ref()
         .ok()
         .map(|(p, _)| p.to_string_lossy().replace('\\', "/"));
+    // The same probe a batch runs (DECISIONS Note NV3); `why` says where it looked or why the probe failed.
+    let (tool, why) = match &nvtt {
+        Ok((p, _)) => match engine::nvtt::probe_path(p) {
+            engine::nvtt::NvttProbe::Found(t) => (Some(t), None),
+            engine::nvtt::NvttProbe::Missing(why) => (None, Some(why)),
+        },
+        Err(why) => (None, Some(why.clone())),
+    };
     if a.json {
         println!(
             "{}",
@@ -1024,7 +1032,11 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
                 "kind": "encoders",
                 "bc7enc_rdo": v.bc7enc_rdo, "ispc_texture_compressor": v.ispctc, "ispc": v.ispc,
                 "bc7e_patch": v.bc7e_patch, "rgbcx_patch": v.rgbcx_patch, "isa": isa, "bc1_model": model,
-                "nvtt": { "found": nvtt.is_ok(), "path": nvtt_path, "source": source },
+                "nvtt": {
+                    "found": tool.is_some(), "path": nvtt_path, "source": source,
+                    "version": tool.as_ref().map(|t| &t.version), "tested": tool.as_ref().map(|t| t.tested()),
+                    "error": why,
+                },
             })
         );
         return Ok(0);
@@ -1042,12 +1054,13 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
     println!("ISPC Texture Compressor {} (BC6H)", v.ispctc);
     println!("ISPC {} objects; dispatched ISA on this CPU: {isa}", v.ispc);
     println!("BC1 decoder model: {model}");
-    match nvtt_path {
-        Some(p) => println!("NVTT: found at {p} (backend arrives in milestone M5)"),
-        None => println!(
-            "NVTT: not found ({}; backend arrives in milestone M5)",
-            nvtt.err().unwrap_or_default()
+    match (&tool, nvtt_path) {
+        (Some(t), Some(p)) if t.tested() => println!("NVTT: {} at {p} (tested)", t.version),
+        (Some(t), Some(p)) => println!(
+            "NVTT: {} at {p} (untested: acknowledge with --allow ENC-NVTT-VERSION)",
+            t.version
         ),
+        _ => println!("NVTT: not found ({})", why.unwrap_or_default()),
     }
     Ok(0)
 }
