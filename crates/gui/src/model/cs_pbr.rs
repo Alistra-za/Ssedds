@@ -159,3 +159,256 @@ pub fn floats(v: &Json) -> Json {
         _ => v.clone(),
     }
 }
+
+use super::AppModel;
+use crate::pgp::settings::Settings;
+use crate::sets_doc::SetsDoc;
+use engine::sets::same_id;
+use serde_json::json;
+use toml_edit::{Item, TableLike};
+
+/// Texture sets: when the set's PGPatcher entry is written (design §5.1). `statics = "auto" | "always" | "never"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Statics {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl Statics {
+    pub fn parse(s: Option<&str>) -> Statics {
+        match s {
+            Some("always") => Statics::Always,
+            Some("never") => Statics::Never,
+            _ => Statics::Auto,
+        }
+    }
+    /// The value written; `None` for the default.
+    pub fn as_str(self) -> Option<&'static str> {
+        match self {
+            Statics::Auto => None,
+            Statics::Always => Some("always"),
+            Statics::Never => Some("never"),
+        }
+    }
+}
+
+/// One block as read from `sdc-project.toml` (design §3).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CsBlock {
+    pub edids: Vec<String>,
+    /// The last applied template (informational).
+    pub template: Option<String>,
+    pub statics: Statics,
+    /// Known fields with a usable value, as read (`glintParameters` an object).
+    pub values: Map<String, Json>,
+    /// Known fields whose value has the wrong type: kept in the file, warned about, not exported (design §8).
+    pub bad: Vec<String>,
+}
+
+/// A TOML item as JSON; a `[table]` (or dotted keys) becomes an object.
+fn item_json(item: &Item) -> Option<Json> {
+    match item {
+        Item::Table(t) => Some(Json::Object(
+            t.iter()
+                .filter_map(|(k, i)| Some((k.to_string(), item_json(i)?)))
+                .collect(),
+        )),
+        _ => crate::project::toml_to_json(item),
+    }
+}
+
+/// Reads a block table. Unknown keys are left alone: they stay in the file and are never exported.
+pub(crate) fn block_of(t: &dyn TableLike, kind: Kind) -> CsBlock {
+    let mut b = CsBlock::default();
+    for (k, item) in t.iter() {
+        match k {
+            "edids" => {
+                b.edids = item
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            "template" => b.template = item.as_str().map(str::to_string),
+            "statics" => b.statics = Statics::parse(item.as_str()),
+            _ => {
+                if let Some(f) = field(kind, k) {
+                    match item_json(item).filter(|v| valid_value(f.kind, v)) {
+                        Some(v) => {
+                            b.values.insert(k.to_string(), v);
+                        }
+                        None => b.bad.push(k.to_string()),
+                    }
+                }
+            }
+        }
+    }
+    b
+}
+
+/// CS texture-set field → PGPatcher settings key (design §5.1, research §1.5). The `subsurface` and `multilayer`
+/// switches stay the user's: they need textures and NIF flags a texture set cannot know (plan ruling R7).
+pub const PGP_MAP: [(&str, &str); 14] = [
+    ("roughnessScale", "roughness_scale"),
+    ("specularLevel", "specular_level"),
+    ("displacementScale", "displacement_scale"),
+    ("subsurfaceColor", "subsurface_color"),
+    ("subsurfaceOpacity", "subsurface_opacity"),
+    ("coatColor", "coat_color"),
+    ("coatStrength", "coat_strength"),
+    ("coatRoughness", "coat_roughness"),
+    ("coatSpecularLevel", "coat_specular_level"),
+    ("glintParameters.enabled", "glint_on"),
+    (
+        "glintParameters.screenSpaceScale",
+        "glint.screen_space_scale",
+    ),
+    (
+        "glintParameters.logMicrofacetDensity",
+        "glint.log_microfacet_density",
+    ),
+    (
+        "glintParameters.microfacetRoughness",
+        "glint.microfacet_roughness",
+    ),
+    (
+        "glintParameters.densityRandomization",
+        "glint.density_randomization",
+    ),
+];
+
+/// The PGPatcher settings a texture-set block stands for: colours as 0–255 ints (DECISIONS P10), numbers as floats.
+pub fn cs_to_pgp(values: &Map<String, Json>) -> Settings {
+    let mut out = Settings::new();
+    for (cs, pgp) in PGP_MAP {
+        let v = match cs.split_once('.') {
+            Some((o, k)) => values.get(o).and_then(|g| g.get(k)),
+            None => values.get(cs),
+        };
+        let Some(v) = v else { continue };
+        let v = if cs.ends_with("Color") {
+            Json::Array(
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|c| {
+                        json!((c.as_f64().unwrap_or(0.0) * 255.0)
+                            .round()
+                            .clamp(0.0, 255.0) as i64)
+                    })
+                    .collect(),
+            )
+        } else {
+            floats(v)
+        };
+        out.insert(pgp.to_string(), v);
+    }
+    out
+}
+
+/// A PGPatcher edit of a mapped key in CS form: (dotted block key, value); `None` when `key` is not mapped.
+pub fn pgp_to_cs(key: &str, v: Option<&Json>) -> Option<(&'static str, Option<Json>)> {
+    let &(cs, _) = PGP_MAP.iter().find(|(_, p)| *p == key)?;
+    let v = v.map(|v| {
+        if cs.ends_with("Color") {
+            Json::Array(
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|c| {
+                        json!((c.as_f64().unwrap_or(0.0) / 255.0 * 10_000.0).round() / 10_000.0)
+                    })
+                    .collect(),
+            )
+        } else {
+            floats(v)
+        }
+    });
+    Some((cs, v))
+}
+
+/// Design §5.1: a texture-set block is the single source of the keys it maps; the set's own copies are dropped.
+pub fn overlay(settings: &mut Settings, b: &CsBlock) {
+    for (_, pgp) in PGP_MAP {
+        settings.remove(pgp);
+    }
+    settings.extend(cs_to_pgp(&b.values));
+}
+
+impl AppModel {
+    /// Set `set`'s block of `kind`, as the document holds it.
+    pub fn cs_block(&self, set: &str, kind: Kind) -> Option<CsBlock> {
+        let e = self
+            .sets_doc
+            .as_ref()?
+            .entries()
+            .into_iter()
+            .find(|e| same_id(&e.id, set))?;
+        match kind {
+            Kind::Txst => e.cs_txst,
+            Kind::Mato => e.cs_mato,
+        }
+    }
+
+    /// One undoable, JSON-only edit of the sets document (design §3; nothing is planned, DECISIONS P7).
+    fn cs_edit(
+        &mut self,
+        set: &str,
+        label: &str,
+        merge: Option<String>,
+        f: impl FnOnce(&mut SetsDoc, &str),
+    ) {
+        if !self.sets_editable() {
+            return;
+        }
+        let s = set.to_string();
+        self.edit_docs(label, merge, false, move |_, d| f(d, &s));
+    }
+
+    pub fn add_cs_block(&mut self, set: &str, kind: Kind) {
+        self.cs_edit(set, &format!("Add {}", kind.label()), None, |d, s| {
+            d.add_cs_block(s, kind)
+        });
+    }
+
+    pub fn remove_cs_block(&mut self, set: &str, kind: Kind) {
+        self.cs_edit(set, &format!("Remove {}", kind.label()), None, |d, s| {
+            d.remove_cs_block(s, kind)
+        });
+    }
+
+    /// Set (or with `None` remove) block key `key` (dotted: `glintParameters.enabled`). Drags merge into one step.
+    pub fn set_cs_value(&mut self, set: &str, kind: Kind, key: &str, v: Option<Json>) {
+        let merge = Some(format!("{set}:{}:{key}", kind.key()));
+        let k = key.to_string();
+        self.cs_edit(set, &format!("Change {key}"), merge, move |d, s| {
+            d.set_cs_value(s, kind, &k, v)
+        });
+    }
+
+    pub fn set_cs_edids(&mut self, set: &str, kind: Kind, edids: &[String]) {
+        let v = json!(edids);
+        self.cs_edit(set, "Change EDIDs", None, move |d, s| {
+            d.set_cs_value(s, kind, "edids", Some(v))
+        });
+    }
+
+    /// Design §4: one undo step; see `SetsDoc::apply_cs_template`.
+    pub fn apply_cs_template(&mut self, set: &str, kind: Kind, name: &str) -> Result<(), String> {
+        let t =
+            template(kind, name).ok_or_else(|| format!("no {} template {name}", kind.label()))?;
+        self.cs_edit(set, &format!("Apply template {name}"), None, move |d, s| {
+            d.apply_cs_template(s, t)
+        });
+        Ok(())
+    }
+
+    pub fn set_cs_statics(&mut self, set: &str, statics: Statics) {
+        self.set_cs_value(set, Kind::Txst, "statics", statics.as_str().map(Json::from));
+    }
+}
