@@ -71,6 +71,7 @@ fn gras_db(dir: &std::path::Path, tex: &str) -> std::path::PathBuf {
         le_mesh: false,
         shapes: vec![lighting_shape(3, &[tex])],
         problems: vec![],
+        index3d: Default::default(),
     };
     let id = s
         .upsert_copy(mesh, o, 1, 1, CopyResult::Scanned(scan), None)

@@ -779,6 +779,7 @@ pub fn scan_db_with(dir: &Path, slots: &[&str], le_mesh: bool) -> PathBuf {
         le_mesh,
         shapes: vec![lighting_shape(3, slots)],
         problems: vec![],
+        index3d: Default::default(),
     };
     let path = "meshes/landscape/rocks/rock01.nif";
     let id = s

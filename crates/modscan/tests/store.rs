@@ -78,6 +78,7 @@ fn scan_of(shapes: Vec<ShapeRow>) -> NifScan {
         le_mesh: false,
         shapes,
         problems: vec![],
+        index3d: Default::default(),
     }
 }
 

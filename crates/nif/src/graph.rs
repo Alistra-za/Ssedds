@@ -5,8 +5,9 @@
 use crate::geom::av::read_av_head;
 use crate::geom::skin_partition::block_cursor;
 use crate::header::Header;
+use crate::shape_head::ShapeKind;
 use crate::NifError;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub type Mat3x4 = [[f32; 4]; 3];
 pub const IDENTITY: Mat3x4 = [
@@ -191,6 +192,53 @@ pub fn world(g: &NodeGraph, shape_block: u32, shape_local: &Mat3x4) -> Mat3x4 {
     m
 }
 
+/// A block that takes PGPatcher's next 3D index: every [`ShapeKind`] (nifly's NiShape family plus the two particle
+/// systems sdc scans) and `NiMeshParticleSystem` (a nif.xml NiParticleSystem sdc does not scan; PGPatcher counts it).
+pub(crate) fn takes_index(kind: &[u8]) -> bool {
+    ShapeKind::from_name(kind).is_some() || kind == b"NiMeshParticleSystem"
+}
+
+/// PGPatcher's 3D index (PGNIFUtil::shapesWith3DIdx over nifly's GetTree): a pre-order walk from the root over node
+/// `children`, first visit wins, iterative, nodes deeper than [`MAX_DEPTH`] not expanded. Every block
+/// [`takes_index`] takes the next index (a particle system too: PGPatcher increments for it). Unreachable blocks are
+/// absent. The root is block 0 when it is a [`NODE_TYPES`] block, else the first block that is.
+/// Assumption: property, collision, controller and effect refs never reach a shape in a Skyrim NIF, so walking
+/// `children` alone matches nifly's `GetChildIndices` order.
+pub fn index3d(header: &Header, bytes: &[u8]) -> BTreeMap<u32, u32> {
+    let total = header.sizes.len();
+    let is_node = |i: usize| NODE_TYPES.iter().any(|t| t.as_bytes() == header.kind(i));
+    let mut out = BTreeMap::new();
+    let Some(root) = (0..total).find(|&i| is_node(i)) else {
+        return out;
+    };
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut stack = vec![(root, 0usize)];
+    let mut next = 0u32;
+    while let Some((b, depth)) = stack.pop() {
+        if !seen.insert(b) {
+            continue;
+        }
+        if takes_index(header.kind(b)) {
+            out.insert(b as u32, next);
+            next += 1;
+            continue;
+        }
+        if !is_node(b) || depth >= MAX_DEPTH {
+            continue;
+        }
+        let Ok((_, kids)) = children(header, bytes, b) else {
+            continue;
+        };
+        // Reversed so the first child pops first (pre-order).
+        for k in kids.into_iter().rev() {
+            if let Some(c) = usize::try_from(k).ok().filter(|&c| c < total) {
+                stack.push((c, depth + 1));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +338,46 @@ mod tests {
         let mut want: Vec<&str> = inherit.keys().copied().filter(|n| is_node(n)).collect();
         want.sort_unstable();
         assert_eq!(want, NODE_TYPES, "regenerate NODE_TYPES from nif.xml");
+    }
+
+    /// The blocks that take a 3D index are the nif.xml closures of NiTriBasedGeom, BSTriShape and NiParticleSystem
+    /// (nifly's NiShape plus PGPatcher's particle increment), minus the abstract NiTriBasedGeom and the non-Skyrim
+    /// NiClod, NiLines and NiScreenElements (nifly does not read them). `ShapeKind` covers all but
+    /// NiMeshParticleSystem, which `takes_index` adds.
+    #[test]
+    fn index_takers_match_the_nifxml_shape_and_particle_closures() {
+        let mut inherit: HashMap<&str, &str> = HashMap::new();
+        for l in include_str!("../tests/fixtures/nifxml_inherit.txt").lines() {
+            let (n, p) = l.split_once(' ').unwrap();
+            inherit.insert(n, p);
+        }
+        let under = |mut n: &str| loop {
+            if matches!(n, "NiTriBasedGeom" | "BSTriShape" | "NiParticleSystem") {
+                return true;
+            }
+            match inherit.get(n) {
+                Some(p) => n = p,
+                None => return false,
+            }
+        };
+        let not_skyrim = ["NiTriBasedGeom", "NiClod", "NiLines", "NiScreenElements"];
+        let mut want: Vec<&str> = inherit
+            .keys()
+            .copied()
+            .filter(|n| under(n) && !not_skyrim.contains(n))
+            .collect();
+        want.sort_unstable();
+        let mut got: Vec<&str> = inherit
+            .keys()
+            .copied()
+            .filter(|n| takes_index(n.as_bytes()))
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, want);
+        assert_eq!(
+            want.len(),
+            11,
+            "the 10 ShapeKind names and NiMeshParticleSystem"
+        );
     }
 }

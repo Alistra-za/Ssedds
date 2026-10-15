@@ -57,3 +57,17 @@ fn corpus() {
     println!("{files} files, {} with problems", bad.len());
     assert!(bad.is_empty(), "{:#?}", &bad[..bad.len().min(20)]);
 }
+
+#[test]
+fn every_furniture_shape_has_a_3d_index_numbered_from_zero() {
+    let s = scan(&read("TestNifFile_Furniture_Col_SE.nif")).unwrap();
+    assert!(
+        s.shapes.iter().all(|r| s.index3d.contains_key(&r.block)),
+        "{:?} vs {:?}",
+        s.index3d,
+        s.shapes.iter().map(|r| r.block).collect::<Vec<_>>()
+    );
+    let mut v: Vec<u32> = s.index3d.values().copied().collect();
+    v.sort_unstable();
+    assert_eq!(v, (0..v.len() as u32).collect::<Vec<_>>());
+}

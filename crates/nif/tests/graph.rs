@@ -151,3 +151,81 @@ fn a_ring_longer_than_the_depth_cap_is_cut_at_its_closing_edge() {
     assert!(!g.parent.contains_key(&0));
     assert_eq!(world(&g, 0, &ID), ID);
 }
+
+// ---- PGPatcher 3D index (GUI suggestions item 6) ----
+
+fn idx(f: &Nif) -> Vec<(u32, u32)> {
+    let bytes = f.bytes();
+    nif::graph::index3d(&Header::parse(&bytes).unwrap(), &bytes)
+        .into_iter()
+        .collect()
+}
+
+#[test]
+fn shapes_are_numbered_in_tree_order_not_block_order() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[3, 1])); // 0
+    f.block("NiNode", node([0.0; 3], &[2])); // 1
+    f.block("BSTriShape", vec![]); // 2
+    f.block("BSTriShape", vec![]); // 3
+    assert_eq!(idx(&f), [(2, 1), (3, 0)]);
+}
+
+#[test]
+fn a_particle_system_takes_an_index() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[1, 2, 3]));
+    f.block("BSTriShape", vec![]);
+    f.block("NiParticleSystem", vec![]);
+    f.block("BSTriShape", vec![]);
+    assert_eq!(idx(&f), [(1, 0), (2, 1), (3, 2)]);
+}
+
+#[test]
+fn an_unreachable_shape_has_no_index() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[1]));
+    f.block("BSTriShape", vec![]);
+    f.block("BSTriShape", vec![]); // nobody's child
+    assert_eq!(idx(&f), [(1, 0)]);
+}
+
+#[test]
+fn a_shared_shape_keeps_its_first_visit() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[1, 3])); // 0
+    f.block("NiNode", node([0.0; 3], &[2])); // 1
+    f.block("BSTriShape", vec![]); // 2: under 1 and 3
+    f.block("NiNode", node([0.0; 3], &[2, 4])); // 3
+    f.block("BSTriShape", vec![]); // 4
+    assert_eq!(idx(&f), [(2, 0), (4, 1)]);
+}
+
+#[test]
+fn a_cycle_terminates_and_a_shape_below_max_depth_is_absent() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[1])); // 0
+    f.block("NiNode", node([0.0; 3], &[0, 2])); // 1: points back at the root
+    f.block("BSTriShape", vec![]); // 2
+    assert_eq!(idx(&f), [(2, 0)], "the cycle is walked once");
+    let mut g = Nif::new(100);
+    g.block("BSFadeNode", node([0.0; 3], &[1, 302]));
+    for i in 1..=300 {
+        g.block("NiNode", node([0.0; 3], &[i + 1])); // a chain 1 → 2 → … → 301
+    }
+    g.block("BSTriShape", vec![]); // 301, depth 301 > MAX_DEPTH
+    g.block("BSTriShape", vec![]); // 302, a child of the root
+    assert_eq!(idx(&g), [(302, 0)]);
+}
+
+#[test]
+fn the_root_is_the_first_node_when_block_0_is_not_one() {
+    let mut f = Nif::new(100);
+    f.block("BSTriShape", vec![]); // 0: not a node, not under the root
+    f.block("BSFadeNode", node([0.0; 3], &[2])); // 1
+    f.block("BSTriShape", vec![]); // 2
+    assert_eq!(idx(&f), [(2, 0)]);
+    let mut g = Nif::new(100);
+    g.block("BSTriShape", vec![]);
+    assert!(idx(&g).is_empty(), "no node at all: no index");
+}
