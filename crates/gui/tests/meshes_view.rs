@@ -1545,7 +1545,11 @@ fn shapes_toggle_swaps_the_column_and_is_off_with_no_selection() {
     h.state_mut().selected_nif = Some(7);
     h.state_mut().shapes = vec![shape(vec![None])];
     h.run();
-    assert_eq!(h.query_all_by_label("x.nif").count(), 2, "heading and list row");
+    assert_eq!(
+        h.query_all_by_label("x.nif").count(),
+        2,
+        "heading and list row"
+    );
     h.get_by_label("Shapes").click();
     h.run();
     assert!(h.state().shapes_col);
@@ -1555,7 +1559,11 @@ fn shapes_toggle_swaps_the_column_and_is_off_with_no_selection() {
     assert!(h.query_by_label("3D").is_none());
     h.get_by_label("Shapes").click();
     h.run();
-    assert_eq!(h.query_all_by_label("x.nif").count(), 2, "heading and list row");
+    assert_eq!(
+        h.query_all_by_label("x.nif").count(),
+        2,
+        "heading and list row"
+    );
     // The selection clearing while on falls back to the list.
     h.state_mut().shapes_col = true;
     h.state_mut().selected_nif = None;
