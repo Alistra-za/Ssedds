@@ -295,3 +295,21 @@ fn an_idle_window_after_a_folder_change_asks_for_no_frames() {
     m.open_folder(mod_folder(&d.path().join("other")));
     assert!(!m.used_by_pending(), "after a folder change");
 }
+
+#[test]
+fn a_wanted_read_keeps_frames_coming_only_while_it_is_asked_for() {
+    use sdc_gui::model::used_by::USED_BY_SETTLE;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    db_with(&db, "textures/none.dds", &[]);
+    m.scan_db = Some(db);
+    m.used_by_for("landscape/leaf.png");
+    // Past the settle, still asked for by each draw: pending until the read starts.
+    std::thread::sleep(USED_BY_SETTLE * 2);
+    assert!(m.used_by_pending(), "the settle is not missed");
+    // Nobody draws it any more (a set got selected): the frames stop.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert!(!m.used_by_pending());
+}

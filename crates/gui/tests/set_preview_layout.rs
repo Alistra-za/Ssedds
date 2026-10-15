@@ -236,23 +236,25 @@ fn settle(h: &mut H) {
 
 #[test]
 fn in_3d_the_viewport_takes_most_of_the_centre() {
-    let d = tempfile::tempdir().unwrap();
-    let h = harness_at(d.path(), egui::vec2(1400.0, 900.0), |_| {});
-    let top = ["header", "status"]
-        .iter()
-        .filter_map(|i| outer(&h, i))
-        .map(|r| r.max.y)
-        .fold(0.0f32, f32::max);
-    let bottom = outer(&h, "report").map_or(900.0, |r| r.min.y);
-    let img = h.get_by_label(FRAME_LABEL).rect();
-    let centre = bottom - top;
-    assert!(
-        img.height() >= 0.7 * centre,
-        "frame {} high in a centre of {centre}",
-        img.height()
-    );
-    // The compact layout: no heading, no second path line.
-    assert!(h.query_by_label("Set preview (3D)").is_none());
+    for (w, hh) in [(1400.0, 900.0), (1024.0, 768.0)] {
+        let d = tempfile::tempdir().unwrap();
+        let h = harness_at(d.path(), egui::vec2(w, hh), |_| {});
+        let top = ["header", "status"]
+            .iter()
+            .filter_map(|i| outer(&h, i))
+            .map(|r| r.max.y)
+            .fold(0.0f32, f32::max);
+        let bottom = outer(&h, "report").map_or(hh, |r| r.min.y);
+        let img = h.get_by_label(FRAME_LABEL).rect();
+        let centre = bottom - top;
+        assert!(
+            img.height() >= 0.7 * centre,
+            "{w}x{hh}: frame {} high in a centre of {centre}",
+            img.height()
+        );
+        // The compact layout: no heading, no second path line.
+        assert!(h.query_by_label("Set preview (3D)").is_none());
+    }
 }
 
 #[test]
@@ -325,12 +327,22 @@ fn warnings_stay_above_the_viewport_outside_details() {
     // Not a PGPatcher simulation: its notice is a warning, shown with Details closed.
     let frame = h.get_by_label(FRAME_LABEL).rect();
     assert!(h.get_by_label(NEEDS_CS).rect().max.y <= frame.min.y + 0.5);
-    // A failed map, the same.
-    if let Some(mem) = h.state_mut().1.set3d.enc.members.values_mut().next() {
+    // A failed map, the same: that member's own line.
+    let label = {
+        let mem = h
+            .state_mut()
+            .1
+            .set3d
+            .enc
+            .members
+            .values_mut()
+            .next()
+            .expect("the set has a member");
         mem.state = EncState::Failed("boom".into());
-    }
+        format!("{}: {}", mem.slot.kind.label(), mem.state.label())
+    };
     h.run_steps(3);
-    let failed = h.get_by_label_contains("failed").rect();
+    let failed = h.get_by_label(&label).rect();
     assert!(failed.max.y <= frame.min.y + 0.5);
     assert!(!sdc_gui::ui::viewport3d::details_open(
         &h.ctx,

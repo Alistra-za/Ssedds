@@ -264,3 +264,26 @@ fn an_old_integer_colour_loads_equal_and_round_trips() {
     assert_eq!(stored(&h, "fuzz.color"), Some(json!([20, 40, 255])));
     assert!(hex_box(&h, "#1428FF"));
 }
+
+/// AG133: a float colour is saved as floats and reads back the same, 1.0 included (it must not turn into the old
+/// integer form).
+#[test]
+fn a_float_colour_round_trips_through_save_and_reopen() {
+    use sdc_gui::pgp::settings::{rgb_is_legacy, rgb_of};
+    for c in [[1.0, 1.0, 1.0], [1.25, 1.25, 1.25]] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = model(
+            d.path(),
+            &[("fuzz_on", json!(true)), ("fuzz.color", json!(c))],
+        );
+        m.save().unwrap();
+        let root = m.root.clone().unwrap();
+        let mut again = AppModel::new(sdc_gui::settings::GuiSettings::default(), None, session());
+        again.open_folder(root);
+        assert!(again.wait_idle(std::time::Duration::from_secs(60)));
+        let h = panel(again);
+        let v = stored(&h, "fuzz.color").expect("stored");
+        assert_eq!(rgb_of(&v), Some(c), "{v}");
+        assert!(!rgb_is_legacy(&v), "{v} read as the old 0-255 form");
+    }
+}

@@ -568,6 +568,7 @@ impl AppModel {
         self.drop_pending_votes();
         // Another folder's item keys can be the same strings: its list must not show here.
         self.used_by.current = None;
+        self.used_by.wanted = None;
         self.used_by_scan_changed();
         // The source sizes read for the previous folder (AG129: the cache would grow for the whole session).
         self.sizes.clear_folder();

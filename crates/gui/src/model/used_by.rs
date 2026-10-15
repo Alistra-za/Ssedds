@@ -48,10 +48,14 @@ pub struct UsedByState {
     pub pending: Option<String>,
     /// The texture asked for last and since when: its read starts once it has stayed [`USED_BY_SETTLE`] (AG128).
     pub wanted: Option<(String, Instant)>,
+    /// When a draw last asked (`used_by_for`): the wait above keeps frames coming only while something still asks.
+    pub asked_at: Option<Instant>,
 }
 
 /// How long a selection must stay before its read starts, so holding Up or Down starts one read, not one per step.
 pub const USED_BY_SETTLE: Duration = Duration::from_millis(150);
+/// A wanted read keeps frames coming this long after the last draw asked for it.
+const ASK_TTL: Duration = Duration::from_millis(500);
 
 /// Every NIF copy of enabled origins whose shapes use `tex`, winner first (loose before BSA, then MO2 priority, the
 /// order `modscan::resolve` picks winners by). `alpha`: the texture's alpha meaning came from the meshes
@@ -174,6 +178,7 @@ impl AppModel {
         if !fresh && st.pending.as_deref() != Some(key) {
             let now = Instant::now();
             let st = &mut self.used_by;
+            st.asked_at = Some(now);
             if st.wanted.as_ref().map(|w| w.0.as_str()) != Some(key) {
                 // A new texture: a read still in flight is for an older one and is dropped when it lands.
                 st.wanted = Some((key.to_string(), now));
@@ -213,13 +218,13 @@ impl AppModel {
     /// A read is waiting for the selection to settle or is in flight: the app keeps frames coming.
     pub fn used_by_pending(&self) -> bool {
         let st = &self.used_by;
+        // Until the wanted texture is read or being read, so a settle cannot be missed; but only while a draw still
+        // asks for it, so a texture nobody shows any more (another folder, a set selected) stops the frames.
         st.pending.is_some()
-            // Only while a new selection waits out its settle: an old `wanted` (after a folder change or a scan) is
-            // not a reason to keep frames coming.
-            || st
-                .wanted
-                .as_ref()
-                .is_some_and(|(_, since)| since.elapsed() < USED_BY_SETTLE)
+            || st.wanted.as_ref().is_some_and(|(k, _)| {
+                st.current.as_ref().is_none_or(|c| &c.item != k)
+                    && st.asked_at.is_some_and(|t| t.elapsed() < ASK_TTL)
+            })
     }
 
     /// AG128: a read that panicked shows its error in the list instead of staying "reading" for good.
