@@ -336,6 +336,14 @@ pub fn gras_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {
     Ok(paths.iter().map(|p| engine::grass::path_key(p)).collect())
 }
 
+/// PBR grass design §4.2 (ruling R5): every GRAS slot-0 diffuse of the scan, TruePBR shapes kept, as
+/// `engine::grass::path_key` keys (sent as `BatchRequest::gras_all_diffuses`).
+pub fn gras_all_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    let paths = store.gras_all_diffuse_textures().map_err(db_err)?;
+    Ok(paths.iter().map(|p| engine::grass::path_key(p)).collect())
+}
+
 /// "Plugin file references" (esp spec §4.4): information only.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FileRefs {
