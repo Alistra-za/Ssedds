@@ -476,3 +476,216 @@ fn exporting_targets_on_one_path_are_refused_and_the_first_duplicate_entry_decid
         Err("iron_m.json is written by two complex _m (names ignore case)".into())
     );
 }
+
+use sdc_gui::model::Dialog;
+use std::path::PathBuf;
+
+fn export_and_wait(m: &mut AppModel) {
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(
+        m.wait_idle(Duration::from_secs(120)),
+        "export did not finish"
+    );
+}
+
+fn out(m: &AppModel, rel: &str) -> PathBuf {
+    m.export_root().join(rel)
+}
+
+fn notes(m: &AppModel) -> String {
+    m.export.notes.join("\n")
+}
+
+#[test]
+fn nothing_is_written_without_a_ticked_export() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_value(&iron, "glossiness", Some(json!(80.0)));
+    export_and_wait(&mut m);
+    assert!(out(&m, "m/iron_m.dds").is_file(), "{}", notes(&m));
+    assert!(!out(&m, "m/iron_m.json").exists());
+    assert!(!out(&m, "m/axe_em.json").exists());
+    assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
+}
+
+/// Design §6/§9: the file sits next to the `_m`, holds only the set keys, and is recorded. A `--sidecar` record
+/// (`<name>.dds.json`) is another file and stays. The GUI exports with `sidecar = false`, and the engine reads or
+/// removes `<name>.dds.json` only under `--sidecar` (`api.rs:1798`, `:1934`), so the stub is never read.
+#[test]
+fn export_writes_the_json_next_to_the_m_and_records_its_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let side = out(&m, "m/iron_m.dds.json");
+    std::fs::create_dir_all(side.parent().unwrap()).unwrap();
+    std::fs::write(&side, "{\"sidecar\": true}").unwrap();
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    m.set_cm_value(&iron, "glossiness", Some(json!(80)));
+    export_and_wait(&mut m);
+    assert!(out(&m, "m/iron_m.dds").is_file(), "{}", notes(&m));
+    assert_eq!(
+        std::fs::read_to_string(out(&m, "m/iron_m.json")).unwrap(),
+        format!("{{\n  \"$schema\": \"{SCHEMA_URL}\",\n  \"glossiness\": 80.0\n}}\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&side).unwrap(),
+        "{\"sidecar\": true}"
+    );
+    assert!(!out(&m, "m/axe_em.json").exists(), "axe's set exports none");
+    let shas = m.sets_doc.as_ref().unwrap().cm_json_shas();
+    assert_eq!(shas.keys().collect::<Vec<_>>(), ["m/iron_m.json"]);
+    assert!(
+        notes(&m).contains("Complex material JSON written: 1 file"),
+        "{}",
+        notes(&m)
+    );
+}
+
+#[test]
+fn a_hand_edited_file_is_kept_and_reported() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    let f = out(&m, "m/iron_m.json");
+    std::fs::write(&f, "{}\n").unwrap();
+    m.set_cm_value(&iron, "glossiness", Some(json!(50.0)));
+    export_and_wait(&mut m);
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "{}\n");
+    assert!(
+        notes(&m).contains("kept as edited outside Tessalith"),
+        "{}",
+        notes(&m)
+    );
+}
+
+/// D7: unticking leaves the file and its record, with a note; sdc never deletes it.
+#[test]
+fn unticking_leaves_the_file_in_place_with_a_note() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    m.set_cm_export(&iron, false);
+    export_and_wait(&mut m);
+    assert!(out(&m, "m/iron_m.json").is_file());
+    assert!(
+        notes(&m).contains("complex material export is off for its set"),
+        "{}",
+        notes(&m)
+    );
+    assert!(m
+        .sets_doc
+        .as_ref()
+        .unwrap()
+        .cm_json_shas()
+        .contains_key("m/iron_m.json"));
+}
+
+/// Review focus 3.
+#[test]
+fn a_set_without_a_complex_m_gets_a_note() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let bolt = set_id(&m, "m/bolt");
+    m.set_cm_export(&bolt, true);
+    export_and_wait(&mut m);
+    assert!(!out(&m, "m/bolt_m.json").exists());
+    assert!(
+        notes(&m).contains(&format!(
+            "set {bolt}: no complex _m; complex material JSON not written"
+        )),
+        "{}",
+        notes(&m)
+    );
+}
+
+#[test]
+fn wrong_typed_keys_are_left_out_with_a_note() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    m.set_cm_value(&iron, "specular_color", Some(json!([1.0, 2.0])));
+    let p = prepare(&m).unwrap();
+    assert!(
+        p.notes.contains(&format!(
+            "{iron}: cm.specular_color has the wrong type and was left out"
+        )),
+        "{:?}",
+        p.notes
+    );
+    assert!(!p.files[0].1.contains("specular_color"));
+}
+
+#[test]
+fn an_unfinished_export_writes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    let p = prepare(&m).unwrap();
+    assert_eq!(p.files.len(), 1);
+    m.export.error = Some("boom".into());
+    m.finish_cm_json(Some(p));
+    assert!(!out(&m, "m/iron_m.json").exists());
+    assert!(notes(&m).contains("Complex material JSON not written: the export did not finish"));
+}
+
+#[test]
+fn a_member_whose_dds_is_missing_gets_a_note_and_no_json() {
+    let d = tempfile::tempdir().unwrap();
+    let p = PendingCm {
+        root: d.path().to_path_buf(),
+        files: vec![("textures/a/x_m.json".into(), to_text(&Map::new()))],
+        notes: vec![],
+    };
+    let mut n = vec![];
+    let shas = finish(&p, &BTreeMap::new(), &mut n);
+    assert!(shas.is_empty());
+    assert!(!d.path().join("textures/a/x_m.json").exists());
+    assert!(
+        n.iter()
+            .any(|x| x.contains("x_m.dds was not exported; JSON not written")),
+        "{n:?}"
+    );
+}
+
+/// D16: a Vanilla complex `_m` gets its JSON too.
+#[test]
+fn a_vanilla_complex_m_writes_its_json() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Vanilla);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    assert!(out(&m, "m/iron_m.json").is_file(), "{}", notes(&m));
+}
+
+/// Ruling C7: the files are written, but a read-only `sdc-project.toml` takes no hash record (a note says so).
+#[test]
+fn a_read_only_document_records_no_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    let p = prepare(&m).unwrap();
+    std::fs::remove_file(out(&m, "m/iron_m.json")).unwrap();
+    let (_b, broken) = doc("[[sets]\nbroken");
+    m.sets_doc = Some(broken);
+    m.finish_cm_json(Some(p));
+    assert!(out(&m, "m/iron_m.json").is_file(), "{}", notes(&m));
+    assert!(
+        notes(&m).contains("hashes were not recorded: sdc-project.toml is read-only"),
+        "{}",
+        notes(&m)
+    );
+    assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
+}
