@@ -162,3 +162,183 @@ fn the_set_button_stores_the_default_and_the_reset_clears_it() {
     h.run();
     assert!(h.state().skin_values(SKIN).is_empty());
 }
+
+// ---- Task 10 fix round 1: the 10b review carry-over and the owner's no-JSON ruling for skin sets (AG88-AG90)
+
+#[test]
+fn every_default_group_and_range_is_the_briefs_table() {
+    use sdc_gui::model::skin::Kind;
+    let want: [(&str, &str, Kind); 20] = [
+        ("SkinMainRoughness", "Specular", n(0.7, 0.0, 1.0)),
+        ("SkinSecondRoughness", "Specular", n(0.35, 0.0, 1.0)),
+        ("SkinSpecularTexMultiplier", "Specular", n(1.0, 0.0, 4.0)),
+        ("SecondarySpecularStrength", "Specular", n(0.15, 0.0, 1.0)),
+        ("F0", "Specular", n(0.0278, 0.0, 1.0)),
+        ("BaseColorMultiplier", "Physical", n(1.0, 0.0, 4.0)),
+        (
+            "PhysicalMainRoughnessMultiplier",
+            "Physical",
+            n(1.3, 0.0, 4.0),
+        ),
+        (
+            "PhysicalSecondRoughnessMultiplier",
+            "Physical",
+            n(0.75, 0.0, 4.0),
+        ),
+        ("PhysicalSpecularStrength", "Physical", n(1.0, 0.0, 4.0)),
+        ("ExtraEdgeRoughness", "Edge & detail", n(0.25, 0.0, 1.0)),
+        (
+            "EnableSkinDetail",
+            "Edge & detail",
+            Kind::Flag { default: true },
+        ),
+        ("SkinDetailStrength", "Edge & detail", n(0.25, 0.0, 1.0)),
+        ("SkinDetailTiling", "Edge & detail", n(10.0, 0.1, 100.0)),
+        ("BodyTilingMultiplier", "Edge & detail", n(2.0, 0.0, 4.0)),
+        ("Translucency", "SSS", n(0.1, 0.0, 1.0)),
+        ("sssWidth", "SSS", n(0.2, 0.0, 1.0)),
+        ("UseSSS", "SSS", Kind::Flag { default: true }),
+        ("FuzzStrength", "Fuzz", n(1.0, 0.0, 1.0)),
+        ("FuzzRoughness", "Fuzz", n(0.35, 0.0, 1.0)),
+        ("FuzzF0", "Fuzz", n(0.045, 0.0, 1.0)),
+    ];
+    for (f, (key, group, kind)) in FIELDS.iter().zip(want) {
+        assert_eq!((f.key, f.group, f.kind), (key, group, kind), "{key}");
+    }
+}
+
+fn n(default: f64, lo: f64, hi: f64) -> sdc_gui::model::skin::Kind {
+    sdc_gui::model::skin::Kind::Num { default, lo, hi }
+}
+
+#[test]
+fn a_drag_on_one_field_is_one_undo_step_and_is_rounded() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = skin_opened(d.path());
+    for x in [0.70, 0.705, 0.7100000000000001] {
+        m.set_skin_value(SKIN, "SkinMainRoughness", Some(json!(x)));
+    }
+    assert_eq!(m.skin_values(SKIN)["SkinMainRoughness"], json!(0.71));
+    m.undo();
+    assert!(m.skin_values(SKIN).is_empty(), "the drag was one step");
+}
+
+#[test]
+fn unknown_skin_keys_and_comments_survive_a_real_load_and_save() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = skin_opened(d.path());
+    m.set_skin_value(SKIN, "F0", Some(json!(0.04)));
+    let root = m.root.clone().unwrap();
+    m.sets_doc.as_mut().unwrap().save(true).unwrap();
+    let path = root.join(sdc_gui::sets_doc::FILE_NAME);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let text = text.replacen(
+        "skin.F0 = 0.04",
+        "# kept by hand\nskin.Future = \"x\"\nskin.F0 = 0.04",
+        1,
+    );
+    assert!(text.contains("Future"), "{text}");
+    std::fs::write(&path, &text).unwrap();
+    // The real load path: open the folder again.
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(
+        m.skin_values(SKIN).get("Future"),
+        Some(&json!("x")),
+        "{text}
+{:?}",
+        m.skin_values(SKIN)
+    );
+    m.set_skin_value(SKIN, "F0", Some(json!(0.05)));
+    m.sets_doc.as_mut().unwrap().save(true).unwrap();
+    let out = std::fs::read_to_string(&path).unwrap();
+    assert!(out.contains("# kept by hand"), "{out}");
+    assert!(out.contains("Future = \"x\""), "{out}");
+    assert!(out.contains("F0 = 0.05"), "{out}");
+    // Not a PGPatcher setting: no JSON entry carries it.
+    for (_, e) in sdc_gui::model::pbr_export::json_entries(&m) {
+        assert!(
+            e.settings.keys().all(|k| !k.contains("Future")),
+            "{:?}",
+            e.settings
+        );
+    }
+}
+
+#[test]
+fn a_skin_set_has_no_json_entry_no_truepbr_card_and_an_export_placeholder() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = skin_opened(d.path());
+    assert!(sdc_gui::model::pbr_export::json_entries(&m).is_empty());
+    assert!(sdc_gui::model::pbr_export::export_blocks(&m)
+        .iter()
+        .all(|b| !b.set_id.contains("rock01")));
+    let k = set_key(&m);
+    m.select_set(&k);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains(TITLE);
+    assert!(
+        h.query_by_label("Specular level").is_none(),
+        "no TruePBR card"
+    );
+    h.get_by_label("Advanced skin (no JSON)");
+    {
+        use egui_kittest::kittest::NodeT;
+        assert!(h
+            .get_by_label("Export JSON…")
+            .accesskit_node()
+            .is_disabled());
+    }
+
+    // A PBR set is unchanged.
+    let d2 = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d2.path());
+    assert_eq!(sdc_gui::model::pbr_export::json_entries(&m).len(), 1);
+    let k = set_key(&m);
+    m.select_set(&k);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Specular level");
+    h.get_by_label("PBR → JSON");
+}
+
+#[test]
+fn an_old_skin_entry_drops_at_the_next_export_under_the_keep_rules() {
+    use sdc_gui::model::export::{Row, RowState};
+    use sdc_gui::model::pbr_export::{finish, prepare, Finish};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.decide("landscape/leaf.png", Answer::Subtype(Subtype::SkinAlbedo));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let views = sdc_gui::model::sets::set_views(&m);
+    assert!(views.iter().any(|v| v.skin), "leaf is a skin set");
+    let p = prepare(&m).expect("the PBR set is written");
+    assert_eq!(p.entries.len(), 1, "only the PBR set");
+    std::fs::create_dir_all(p.path.parent().unwrap()).unwrap();
+    std::fs::write(&p.path, "{\"entries\": [\"landscape\\\\leaf skin\"]}").unwrap();
+    let rows: Vec<Row> = p
+        .entries
+        .iter()
+        .flat_map(|(_, deps, _)| deps.clone())
+        .map(|job_key| Row {
+            job_key,
+            path: String::new(),
+            state: RowState::Done { passed: true },
+            warnings: vec![],
+        })
+        .collect();
+    // Edited outside the GUI: the overwrite question, with text that has no skin entry.
+    let mut notes = vec![];
+    match finish(&p, &rows, None, &mut notes) {
+        Finish::Overwrite(t) => assert!(!t.contains("leaf"), "{t}"),
+        r => panic!("{r:?} {notes:?}"),
+    }
+    // Written by us last time: replaced, and the skin entry is gone.
+    let last = sdc_gui::model::history::sha256_of(&p.path);
+    assert!(matches!(
+        finish(&p, &rows, last.as_deref(), &mut notes),
+        Finish::Written(_)
+    ));
+    assert!(!std::fs::read_to_string(&p.path).unwrap().contains("leaf"));
+}

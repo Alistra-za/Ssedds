@@ -194,10 +194,10 @@ pub struct SetView {
     /// Item keys of every member, packed outputs and raw sources included.
     pub members: Vec<String>,
     pub slots: BTreeMap<SlotKind, SlotFill>,
-    /// The diffuse resolves to a PBR diffuse, `pbr_albedo` or `skin_albedo` ([`is_pbr_diffuse`], DECISIONS P5 as
-    /// amended by Note R, final review C1).
+    /// A TruePBR JSON set: the diffuse resolves to `pbr_albedo`. Not `skin_albedo` since AG90 (owner: Advanced skin
+    /// sets get no PGPatcher JSON); the engine's PBR follow-ons still use [`is_pbr_diffuse`].
     pub pbr: bool,
-    /// The diffuse resolves to `skin_albedo`: an Advanced skin set (a PBR set too, final review C1).
+    /// The diffuse resolves to `skin_albedo`: an Advanced skin set (no JSON, the skin card, AG90).
     pub skin: bool,
     pub created: bool,
     /// `add`/`remove` entries of `sdc-project.toml` that match no file (Review focus 1).
@@ -244,19 +244,20 @@ impl SetView {
     }
 }
 
-/// Whether `v` is written as PGPatcher JSON: a skin or PBR set under Community Shaders (the set card badge).
+/// Whether `v` is written as PGPatcher JSON: a PBR set under Community Shaders (the set card badge). An Advanced
+/// skin set is not (AG90).
 pub fn is_json_set(v: &SetView, target: Target) -> bool {
-    (v.skin || v.pbr) && target == Target::Cs
+    v.pbr && target == Target::Cs
 }
 
-/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set that already has
-/// JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr` itself.
+/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set but a skin set
+/// that already has JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr`.
 pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
-    is_json_set(v, target) || !v.settings.is_empty()
+    is_json_set(v, target) || (!v.skin && !v.settings.is_empty())
 }
 
-/// A diffuse sub-type that makes its set a PBR set (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
-/// `skin_albedo`, which is Community Shaders TruePBR too and so belongs in the PGPatcher JSON (final review C1).
+/// A diffuse sub-type whose members follow as PBR (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
+/// `skin_albedo` (final review C1). It no longer puts a skin set in the PGPatcher JSON: `SetView::pbr` does (AG90).
 /// Not the engine's `is_pbr_color`, which decides sRGB and leaves `skin_albedo` (UNORM) out.
 pub fn is_pbr_diffuse(st: Subtype) -> bool {
     matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
@@ -499,7 +500,8 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
         let st = diffuse
             .and_then(|i| i.job.as_ref())
             .map(|j| j.profile.subtype);
-        v.pbr = st.is_some_and(is_pbr_diffuse);
+        // AG90: everything that reads `pbr` is PGPatcher JSON (entries, blocks, pitfalls, prefixes, ownership, rename).
+        v.pbr = st == Some(Subtype::PbrAlbedo);
         v.skin = st == Some(Subtype::SkinAlbedo);
         v.derived_match = diffuse.map(|i| derive_match_diffuse(dir_of(&i.key), &mirrored_stem(i)));
         match prefix_of(&v.settings, v.derived_match.as_deref().unwrap_or("")) {

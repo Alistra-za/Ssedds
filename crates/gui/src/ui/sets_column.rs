@@ -402,10 +402,11 @@ fn pill(
                     ui.label(egui::RichText::new(&v.label).strong());
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if !is_json_set(v, model.target) {
+                    if v.skin {
+                        // AG90: an Advanced skin set gets no PGPatcher JSON.
+                        badge(ui, "Advanced skin (no JSON)", None);
+                    } else if !is_json_set(v, model.target) {
                         badge(ui, "vanilla set (no JSON)", None);
-                    } else if v.skin {
-                        badge(ui, "skin → JSON", None);
                     } else {
                         badge(ui, "PBR → JSON", None);
                     }

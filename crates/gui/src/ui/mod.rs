@@ -45,6 +45,8 @@ pub struct State {
     pub gpu: preview::GpuStatus,
     /// The set preview (P1-A). `Default` is disabled and does no IO; `SdcApp::new` builds the enabled one.
     pub set3d: crate::model::set_preview::SetPreview,
+    /// The set last shown in 3D: a texture of it keeps the 3D view up (AG87); a texture of another set does not.
+    pub set3d_for: Option<String>,
 }
 
 thread_local! {
@@ -129,6 +131,29 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
     }
     let selection = model.selection.clone();
     match selection {
+        // AG87: on 3D, a member of a set keeps the set's 3D view up, its own settings folded above it.
+        Selection::Item(key)
+            if three_d
+                && crate::model::set_preview::followed_set(model)
+                    .is_some_and(|s| state.set3d_for.as_deref() == Some(s.as_str())) =>
+        {
+            let name = model.item(&key).map_or(key.clone(), |i| i.name.clone());
+            ui.horizontal_wrapped(|ui| {
+                set_preview::view_switch(ui, model);
+                ui.heading(&name);
+            });
+            egui::CollapsingHeader::new(format!("{name} settings"))
+                .id_salt(("set-3d-member", &key))
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("set-3d-member-scroll")
+                        .max_height((ui.available_height() * 0.45).max(240.0))
+                        .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
+                });
+            ui.separator();
+            set_preview::draw(ui, model, &mut state.set3d);
+        }
         Selection::Item(key) => {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -148,6 +173,7 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
                 view,
             );
             if three_d {
+                state.set3d_for = Some(key);
                 set_preview::draw(ui, model, &mut state.set3d);
             }
         }

@@ -92,6 +92,11 @@ impl AppModel {
         if !self.sets_editable() {
             return;
         }
+        // AG89: a drag's f64 is rounded to the card's 4 shown decimals, so 0.7100000000000001 is stored as 0.71.
+        let v = v.map(|x| match x.as_f64() {
+            Some(f) if x.is_f64() => Value::from((f * 1e4).round() / 1e4),
+            _ => x,
+        });
         let (s, path) = (set.to_string(), format!("skin.{key}"));
         let merge = Some(format!("{set}:{path}"));
         self.edit_docs(&format!("Change {path}"), merge, false, move |_, d| {

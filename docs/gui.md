@@ -135,7 +135,7 @@ Double-click a tile (or a set member), or select it and press **Enter** or **Spa
 
 The Meshes view's 3D panel and a set's 3D view work the same way.
 
-**A set in 3D.** The **2D | 3D** switch at the left of a set's header row (next to its name and *Input name…*) changes the centre pane in place. *2D* (the default) shows the set editor: the slot cards and the TruePBR settings. *3D* shows the set's 3D view across the whole centre instead, with its own controls (Shader folder…, the Community Shaders toggle, *View*, Copy image); the TruePBR settings fold in a *TruePBR settings* section above it, so an edit there shows in 3D right away. The header row stays above both. The switch is remembered in `gui.toml`, and the 3D view does no work while 2D is showing or while a single texture of the set is selected.
+**A set in 3D.** The **2D | 3D** switch at the left of a set's header row (next to its name and *Input name…*) changes the centre pane in place. *2D* (the default) shows the set editor: the slot cards and the TruePBR settings. *3D* shows the set's 3D view across the whole centre instead, with its own controls (Shader folder…, the Community Shaders toggle, *View*, Copy image); the TruePBR settings (with the coat settings under Multilayer) and, for an Advanced skin set, the skin settings fold in sections above it, so an edit there shows in 3D right away. The header row stays above both. Selecting one of the set's textures keeps the 3D view up: the texture's own settings fold in a *<name> settings* section above it (open the first time, then as you left it), and an edit there shows in 3D too. Selecting a texture of another set, or of no set, shows its normal settings; the switch stays on 3D for the next set. The switch is remembered in `gui.toml`, and the 3D view does no work while 2D is showing.
 
 - **Moving around.** Drag to orbit, scroll to zoom. Middle-drag, or Shift+drag, pans: the model follows the cursor, and the further away the camera is, the more a drag moves it. Double-click or **Home** recentres the camera.
 - **Turning the sun.** Shift+right-drag turns the sun around the model (about the vertical). The studio HDRI background does not turn with it: the renderer cannot rotate it yet. The turn is part of the View controls, so it is remembered with them.
@@ -249,12 +249,13 @@ The set's **Shader** dropdown lists the shaders the current mode offers. The pic
 
 ### Advanced skin card
 
-A set whose diffuse is an **Advanced skin** (`skin_albedo`) gets an **Advanced skin (Community Shaders)** card under the TruePBR card. It lists the set's skin textures (`_rfaos`, `_sk`, `_wet`) and the 20 per-material Community Shaders skin settings in five groups: Specular, Physical, Edge & detail, SSS and Fuzz. Wetness is not here: Community Shaders keeps it global.
+A set whose diffuse is an **Advanced skin** (`skin_albedo`) gets an **Advanced skin (Community Shaders)** card instead of the TruePBR card. It lists the set's skin textures (`_rfaos`, `_sk`, `_wet`) and the 20 per-material Community Shaders skin settings in five groups: Specular, Physical, Edge & detail, SSS and Fuzz. Wetness is not here: Community Shaders keeps it global.
 
 - Each setting is **not set** (the Community Shaders default shows beside it, e.g. "default 0.7", and nothing is stored) or an explicit value on this set. **set** stores the default as a value you can then change; **↺** returns it to not set. Presets, defaults and rules never fill these, and sets do not inherit from each other.
 - Values are saved in the set's `skin` table of `sdc-project.toml` under the Community Shaders key names. Keys Tessalith does not know are kept.
-- **Saved in the project; not written to Community Shaders yet (export spec pending).** Export does not change for these. A skin set still gets its TruePBR card and PGPatcher entry as before.
-- Number boxes clamp to a sensible range (0-1, 0-4 for multipliers, 0.1-100 for the detail tiling). Each edit is one undo step. Bulk edit does not touch these.
+- **Saved in the project; not written to Community Shaders yet (export spec pending).** Export does not change for these. The card's **Export JSON** section is a greyed-out placeholder until that export is specified.
+- **No PGPatcher JSON.** A skin set has no TruePBR card, no PGPatcher JSON entry (the next export that writes the JSON leaves it out), no entry in the JSON editor and no PGPatcher checks; its set badge reads "Advanced skin (no JSON)". Its textures still encode as skin textures. If no PBR set is left, the JSON is not written at all and the old file stays as it was.
+- Number boxes clamp to a sensible range (0-1, 0-4 for multipliers, 0.1-100 for the detail tiling) and keep 4 decimals. Each edit is one undo step, and a drag on one value is one step. Bulk edit does not touch these.
 
 ### NiAlphaProperty
 
