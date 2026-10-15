@@ -80,6 +80,9 @@ fn main() -> eframe::Result {
                     .show();
                 return Err(e.into());
             }
+            if let Some(rs) = &cc.wgpu_render_state {
+                sdc_gui::crash_log::watch_device(rs, sdc_gui::crash_log::run_log_path());
+            }
             // No render state means no usable adapter: the app still starts, without a preview.
             let app = SdcApp::new(build_model()).with_render_state(cc.wgpu_render_state.as_ref());
             app.restore_ctx(&cc.egui_ctx);

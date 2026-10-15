@@ -2181,6 +2181,22 @@ impl AppModel {
                 .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
     }
 
+    /// The unsaved documents as `(file, text)`, for the panic hook's recovery files (Note AR).
+    pub fn recovery_snapshot(&self) -> Vec<(std::path::PathBuf, String)> {
+        let mut out = vec![];
+        if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty()) {
+            out.push((p.path().to_path_buf(), p.text()));
+        }
+        if let Some(s) = self
+            .sets_doc
+            .as_ref()
+            .filter(|s| s.is_dirty() && !s.read_only())
+        {
+            out.push((s.path().to_path_buf(), s.text()));
+        }
+        out
+    }
+
     /// Raise the dialog for a failed save of `kind`; the error text names the file.
     fn save_failed(&mut self, kind: DocKind, e: &SaveError) {
         self.dialog = Some(match e {
@@ -2210,6 +2226,16 @@ impl AppModel {
                 self.fallback_preset()
             ));
         }
+        // Note AR: a crash's recovery file newer than its document.
+        let docs = [
+            self.project.as_ref().map(ProjectDoc::path),
+            self.sets_doc.as_ref().map(crate::sets_doc::SetsDoc::path),
+        ];
+        lines.extend(
+            docs.into_iter()
+                .flatten()
+                .filter_map(crate::crash_log::recovery_note),
+        );
         if let Some(e) = self.project.as_ref().and_then(ProjectDoc::error) {
             lines.push(read_only_banner(e));
         }
@@ -2267,6 +2293,7 @@ impl AppModel {
             wrote = true;
         }
         if wrote {
+            self.refresh_banner(); // the save removed any recovery file
             self.messages.notify(messages::Severity::Info, "Saved");
         }
         Ok(())
