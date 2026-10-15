@@ -1060,3 +1060,7 @@ Rulings for the Important findings of the 2026-10-13 reliability audit (round b)
 - **AJ9. A feature an explicit one rules out stays off.** Keys are resolved in order against the exclusion table, so an explicit `hair` keeps multilayer, fuzz and the rest from turning on.
 - **AJ10. The writer uses the resolved value** (`json_entries`): a set with a `_cnr` writes `multilayer: true` and `coat_normal: true` with no explicit value. Export pitfalls still read the explicit settings only.
 - **AJ11. Fuzz and coat normal keep their own reason.** A filled coat slot greys Fuzz with "the set has a coat normal", and a filled fuzz slot greys the coat normal switch; the member reason is now checked before "off: multilayer is on", because a coat normal turns multilayer on by itself.
+
+## Note AK — Hair diffuse is cutout + blend (owner, 2026-10-14)
+
+- **AK1 Hair member default (amends S-shader-5).** A `hair` diffuse now defaults to `alpha.policy = cutout_blend`, with `mips.coverage = on` (was `cutout`). Owner: "Hair usually has two shapes, a no-suffix hair nif with alpha blending and testing, then another with just testing." `cutout_blend` keeps coverage-preserving mips for the tested shape and keeps the soft edge for the blended one. Mesh evidence still beats the shader default (Note U7). The engine version stays 0.7.0. Hair diffuse outputs change bytes once, so `if-changed` re-encodes them.

@@ -269,7 +269,7 @@ A shader the target lacks falls back to `default` (`SHADER-UNAVAILABLE`).
 
 | Shader | Effect on members |
 |---|---|
-| `hair` | Diffuse: `alpha.policy = "cutout"` and `mips.coverage = "on"`. |
+| `hair` | Diffuse: `alpha.policy = "cutout_blend"` (cutout + blend) and `mips.coverage = "on"`. |
 | `eye` | `_n` becomes `msn` (model-space). `_m` is BC4. |
 | `landscape` | Colour becomes `landscape_diffuse` (alpha is the snow mask). |
 | `multilayer` | Diffuse alpha is `data`. |

@@ -3144,7 +3144,7 @@ fn shader_hair_auto_from_path() {
         &[Code::ShaderAuto],
     );
     let p = &planned(&o, "braid.png")["profile"];
-    assert_eq!(p["alpha"]["policy"].as_str(), Some("cutout"), "{p}");
+    assert_eq!(p["alpha"]["policy"].as_str(), Some("cutout_blend"), "{p}");
     assert_eq!(p["mips"]["coverage"].as_str(), Some("on"), "{p}");
 }
 
