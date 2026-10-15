@@ -331,3 +331,14 @@ fn an_unknown_shader_id_reads_as_none_and_survives_a_save() {
     assert!(text.contains("shader = \"toon\""), "{text}");
     assert!(text.contains("hair = true"), "{text}");
 }
+
+/// AG100: a file moved back into the set that removed it lifts the remove (an `add` beside it would leave it out).
+#[test]
+fn moving_a_file_back_lifts_its_own_remove() {
+    let (_d, mut s) = doc(None);
+    s.remove_member("a/wall", "a/wall_n.png");
+    assert_eq!(s.entries()[0].remove, vec!["a/wall_n.png".to_string()]);
+    s.add_member("a/wall", "a/wall_n.png");
+    let e = &s.entries()[0];
+    assert!(e.remove.is_empty() && e.add.is_empty(), "{e:?}");
+}

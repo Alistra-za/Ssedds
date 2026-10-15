@@ -1557,6 +1557,191 @@ impl AppModel {
         });
         Ok(())
     }
+
+    /// Item 17 (DECISIONS AG98): files dropped from Explorer on slot card `slot` of set `set`. The first file, when it
+    /// is a texture of the open folder that fills that slot, moves in as the Sets column's move does (`drop_choice`
+    /// with Move: Replace / Cancel on a filled slot, refused on a locked one). Nothing is ever copied: a file outside
+    /// the folder is refused, and Share or Duplicate are not offered.
+    pub fn drop_file_on_slot(
+        &mut self,
+        set: &str,
+        slot: SlotKind,
+        paths: &[PathBuf],
+    ) -> SlotFileDrop {
+        let note = (paths.len() > 1).then_some(ONLY_FIRST_FILE);
+        let refused = |why: String| SlotFileDrop {
+            item: None,
+            outcome: DropOutcome::Refused(why),
+            note,
+        };
+        let Some(first) = paths.first() else {
+            return refused("nothing was dropped".into());
+        };
+        let name = first.file_name().map_or_else(
+            || first.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        // Explorer's case can differ from the folder walk's: compare without case, `/` for `\`.
+        let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
+        let rel = self.root.as_deref().and_then(|r| {
+            let (r, f) = (norm(r), norm(first));
+            f.strip_prefix(&format!("{}/", r.trim_end_matches('/')))
+                .map(str::to_string)
+        });
+        let Some(rel) = rel else {
+            return refused(format!(
+                "{name} is outside the open folder; files are never copied"
+            ));
+        };
+        let Some(it) = self.items.iter().find(|i| i.key.to_lowercase() == rel) else {
+            return refused(format!("{name} is not a texture of the open folder"));
+        };
+        let key = it.key.clone();
+        match slot_of(it) {
+            Some(k) if k == slot => {}
+            Some(k) => {
+                return refused(format!(
+                    "{name} goes in the {} slot, not {}",
+                    k.label(),
+                    slot.label()
+                ))
+            }
+            None => {
+                return refused(format!(
+                    "{name} fills no slot card; drag it onto the set in the Sets column"
+                ))
+            }
+        }
+        let outcome = if self.set_of_item(&key).is_some_and(|f| same_id(&f.id, set)) {
+            DropOutcome::Joined
+        } else {
+            self.drop_choice(&key, set, DropChoice::Move)
+        };
+        SlotFileDrop {
+            item: Some(key),
+            outcome,
+            note,
+        }
+    }
+
+    /// Item 18 (DECISIONS AG99): move the ticked proposals of `fill_proposals` into set `set` as one step and one
+    /// plan, each emptying its slot first. A blocked row (a locked slot, …) is never applied. Returns how many moved.
+    pub fn fill_from_names(&mut self, set: &str, ticked: &[String]) -> Result<usize, String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
+        }
+        let v = self.view_of(set).ok_or_else(|| format!("no set {set}"))?;
+        let moves: Vec<(String, SlotKind, Option<SlotFill>)> = fill_proposals(self, set)
+            .into_iter()
+            .filter(|r| r.blocked.is_none() && ticked.contains(&r.item))
+            .map(|r| (r.item, r.slot, v.slots.get(&r.slot).cloned()))
+            .collect();
+        if moves.is_empty() {
+            return Err("nothing to fill".into());
+        }
+        let (id, n) = (v.id.clone(), moves.len());
+        self.edit_docs(&format!("Fill {id} from names"), None, true, move |_, s| {
+            for (item, slot, existing) in &moves {
+                clear_slot(s, &id, Some(*slot), existing);
+                s.add_member(&id, item);
+            }
+        });
+        Ok(n)
+    }
+}
+
+/// Item 17: what a file drop on a slot card did. `item` is the texture it named, when it is one of the folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotFileDrop {
+    pub item: Option<String>,
+    pub outcome: DropOutcome,
+    pub note: Option<&'static str>,
+}
+
+/// Item 17: several files dropped on one slot.
+pub const ONLY_FIRST_FILE: &str = "only the first file was used";
+
+/// Item 18: one row of the Fill from names dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FillProposal {
+    pub item: String,
+    /// The file name.
+    pub name: String,
+    pub slot: SlotKind,
+    /// The file name of what fills that slot now.
+    pub replaces: Option<String>,
+    /// Why the row cannot be ticked: "locked" for a locked slot, else the move's own refusal.
+    pub blocked: Option<String>,
+}
+
+/// Item 18 (DECISIONS AG99): the textures of set `set`'s folder that are not its members and whose name is the set's
+/// base name plus a tail the engine recognises (its §6.1 suffixes and §4.4 vocabulary, through `base_of`), each with
+/// the slot its sub-type fills. By item key; a second file for one slot is blocked.
+pub fn fill_proposals(m: &AppModel, set: &str) -> Vec<FillProposal> {
+    let views = views(m);
+    let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
+        return vec![];
+    };
+    // The base name of the diffuse's file (a renamed set keeps its files' names), else of the set's id.
+    let src = match v.slots.get(&SlotKind::Diffuse) {
+        Some(SlotFill::Own { item }) => {
+            let stem = Path::new(item)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            format!("{}/{}", dir_of(item), base_of(&stem))
+        }
+        _ => v.id.clone(),
+    };
+    let (dir, base) = (dir_of(&src), src.rsplit('/').next().unwrap_or(&src));
+    let mut cands: Vec<&TextureItem> = m
+        .items
+        .iter()
+        .filter(|i| i.kind != ItemKind::Packed && !v.members.contains(&i.key))
+        .filter(|i| dir_of(&i.key).eq_ignore_ascii_case(dir))
+        .filter(|i| {
+            let stem = Path::new(&i.key)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            stem.len() > base.len() && base_of(&stem).eq_ignore_ascii_case(base)
+        })
+        .collect();
+    cands.sort_by(|a, b| a.key.cmp(&b.key));
+    let name_of = |k: &str| m.item(k).map_or(k.to_string(), |i| i.name.clone());
+    let existing: Vec<SlotKind> = v.slots.keys().copied().collect();
+    let mut taken = BTreeSet::new();
+    cands
+        .into_iter()
+        .filter_map(|i| {
+            let slot = slot_of(i)?;
+            let replaces = match v.slots.get(&slot) {
+                Some(SlotFill::Own { item } | SlotFill::Borrowed { item, .. }) => {
+                    Some(name_of(item))
+                }
+                _ => None,
+            };
+            let blocked = if v.locks.contains(&slot.slot_number()) {
+                Some("locked".to_string())
+            } else if !taken.insert(slot) {
+                Some("another file above takes this slot".to_string())
+            } else {
+                // The move's own checks, as `drop_choice` makes them (a packed occupant, leaving a locked slot, …).
+                slot_conflict(&existing, slot).or_else(|| {
+                    m.occupant(v, Some(slot), None)
+                        .and_then(|_| m.choice_allowed(&i.key, Some(slot), DropChoice::Move))
+                        .err()
+                })
+            };
+            Some(FillProposal {
+                item: i.key.clone(),
+                name: i.name.clone(),
+                slot,
+                replaces,
+                blocked,
+            })
+        })
+        .collect()
 }
 
 /// The engine key of the output `item` writes: its file, or its set and recipe for a packed output. `None` for an

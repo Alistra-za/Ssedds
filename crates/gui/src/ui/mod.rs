@@ -68,6 +68,18 @@ pub fn draw_with_scan(
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
     state.thumbs.sweep(model.items_rev());
+    // Item 17: files dropped from Explorer wait for a slot card to take them (see the end of this function).
+    let paths: Vec<std::path::PathBuf> = ui.input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().to_path_buf())
+            .collect()
+    });
+    state.drops.file = (!paths.is_empty()).then(|| sets_column::FileDrop {
+        paths,
+        pos: drop_pos(ui.ctx()),
+    });
     // First, before any widget sees the keys (items 5 and 19).
     actions::keys(ui.ctx(), model, state.drops.pending.is_some());
     // The column sets it again if it draws; a hidden or collapsed column leaves Up and Down off.
@@ -104,6 +116,13 @@ pub fn draw_with_scan(
     // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
     let three_d = state.set3d.enabled && set_preview::wanted(model);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
+    // (spec §5.1).
+    if let Some(f) = state.drops.file.take() {
+        model.dropped(&f.paths);
+    }
+    // Here, not in the Sets column: a hidden column must still show a drop's Replace prompt (item 17).
+    sets_column::pending_modal(ui.ctx(), model, &mut state.drops);
     // Here, not in the set editor: a pill member's slot menu opens it while a texture is selected (F3a Task 8).
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
@@ -165,6 +184,7 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
                 &key,
                 &mut state.thumbs,
                 &mut state.slot_cmds,
+                &mut state.drops,
                 view,
             );
             if three_d {
@@ -175,6 +195,41 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
             ui.centered_and_justified(|ui| ui.label("Select a texture or a set."));
         }
     }
+}
+
+/// Item 17 (DECISIONS AG98): where a file from Explorer was dropped, in this window's points. winit 0.30 reports a
+/// drop without a position and no mouse moves reach the window during the drag, so the pointer egui knows is stale:
+/// on Windows the cursor is read from the OS and placed with the window's inner position. Elsewhere, and without
+/// viewport information (tests), the last pointer position egui has.
+fn drop_pos(ctx: &egui::Context) -> Option<egui::Pos2> {
+    os_cursor(ctx).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
+}
+
+#[cfg(windows)]
+fn os_cursor(ctx: &egui::Context) -> Option<egui::Pos2> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let (inner, native) = ctx.input(|i| {
+        let v = i.viewport();
+        (v.inner_rect, v.native_pixels_per_point)
+    });
+    let (inner, native) = (inner?, native?);
+    let mut p = POINT { x: 0, y: 0 };
+    // SAFETY: GetCursorPos writes one POINT through a valid pointer.
+    if unsafe { GetCursorPos(&mut p) } == 0 {
+        return None;
+    }
+    // `inner_rect` is in native points (pixels / native ppp); widgets are in pixels / ppp (zoom included).
+    let ppp = ctx.pixels_per_point();
+    Some(egui::pos2(
+        (p.x as f32 - inner.min.x * native) / ppp,
+        (p.y as f32 - inner.min.y * native) / ppp,
+    ))
+}
+
+#[cfg(not(windows))]
+fn os_cursor(_: &egui::Context) -> Option<egui::Pos2> {
+    None
 }
 
 /// The two resizable columns of the Textures view.

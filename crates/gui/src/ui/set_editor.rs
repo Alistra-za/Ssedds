@@ -2,6 +2,7 @@
 //! Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
+use super::sets_column::{DropState, Pending, SlotNote};
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
@@ -48,6 +49,8 @@ enum Act {
     Json(String, String, Option<Value>),
     /// F3a Task 8: a slot menu pick.
     Slot(MenuAction),
+    /// Item 17: files from Explorer dropped on this set's slot card.
+    FileDrop(String, SlotKind),
 }
 
 /// How the set editor shares the view with the 3D preview panel.
@@ -65,6 +68,7 @@ pub fn draw(
     key: &str,
     thumbs: &mut ThumbCache,
     cmds: &mut SlotCmdState,
+    drops: &mut DropState,
     view: View,
 ) {
     let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
@@ -125,6 +129,8 @@ pub fn draw(
     }
     ui.separator();
     let mut acts = vec![];
+    // Item 17: where a file from Explorer was dropped this frame, if one waits for a slot card.
+    let drop_at = drops.file.as_ref().and_then(|f| f.pos);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
     if view.three_d {
@@ -158,7 +164,8 @@ pub fn draw(
         .show(ui, |ui| {
             ui.columns(2, |cols| {
                 let ui = &mut cols[0];
-                cards(ui, model, &v, thumbs, &mut acts);
+                cards(ui, model, &v, thumbs, &mut acts, drop_at);
+                slot_note(ui, drops, &v.id);
                 unslotted_packed(ui, model, &v, &mut acts);
                 ui.add_space(6.0);
                 ui.add_enabled_ui(editable, |ui| {
@@ -193,9 +200,49 @@ pub fn draw(
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
             Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
+            Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
         }
     }
     select_or_expand(ui, model, select, expand);
+}
+
+/// Item 17: a file from Explorer dropped on slot `slot` of `set`. The drop is taken (its folder is not opened); a
+/// filled slot asks Replace / Cancel as a texture dragged onto the set does, anything refused is the error line.
+fn file_drop(model: &mut AppModel, drops: &mut DropState, set: &str, slot: SlotKind) {
+    let Some(f) = drops.file.take() else { return };
+    let r = model.drop_file_on_slot(set, slot, &f.paths);
+    let line = |text: String, error: bool| SlotNote {
+        set: set.to_string(),
+        text,
+        error,
+    };
+    drops.slot_note = match r.outcome {
+        crate::model::sets::DropOutcome::Refused(why) => Some(line(why, true)),
+        crate::model::sets::DropOutcome::AskReplace { existing } => {
+            if let Some(item) = r.item {
+                drops.pending = Some(Pending::Replace {
+                    item,
+                    set: set.to_string(),
+                    existing,
+                    choice: crate::model::sets::DropChoice::Move,
+                });
+            }
+            r.note.map(|n| line(n.into(), false))
+        }
+        // `drop_choice` with Move never asks the Share / Duplicate choice.
+        _ => r.note.map(|n| line(n.into(), false)),
+    };
+}
+
+/// Item 17: the last file drop's error or note, under the slot cards of the set it was for.
+fn slot_note(ui: &mut egui::Ui, drops: &DropState, set: &str) {
+    if let Some(n) = drops.slot_note.as_ref().filter(|n| n.set == set) {
+        if n.error {
+            ui.colored_label(RED, &n.text);
+        } else {
+            ui.weak(&n.text);
+        }
+    }
 }
 
 /// The recipe lines, the set's warnings (each member's, each once) and what matches nothing.
@@ -254,6 +301,7 @@ fn cards(
     v: &SetView,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
+    drop_at: Option<egui::Pos2>,
 ) {
     // Four per row when they fit; fewer in a narrow column, so no card ends up outside the panel.
     let per_row = ((ui.available_width() / (CARD + CARD_CHROME)) as usize).clamp(1, 4);
@@ -262,7 +310,7 @@ fn cards(
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
             for (i, cell) in slot_row(v.shader.as_ref(), &v.slots).iter().enumerate() {
-                card(ui, model, v, cell, thumbs, acts);
+                card(ui, model, v, cell, thumbs, acts, drop_at);
                 if i % per_row == per_row - 1 {
                     ui.end_row();
                 }
@@ -277,6 +325,7 @@ fn card(
     cell: &SlotCell,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
+    drop_at: Option<egui::Pos2>,
 ) {
     let slot = cell.kind;
     let fill = cell.fill.clone();
@@ -459,6 +508,10 @@ fn card(
         })
     });
     slot_menu(&scoped.response, model, v, slot, acts);
+    // Item 17: a file from Explorer dropped on this card.
+    if drop_at.is_some_and(|p| scoped.response.rect.contains(p)) {
+        acts.push(Act::FileDrop(v.id.clone(), slot));
+    }
 }
 
 /// F3a Task 8: the slot menu of card `slot` (the model's list, drawn as the bulk menus are).

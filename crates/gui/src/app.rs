@@ -270,7 +270,8 @@ impl eframe::App for SdcApp {
         if self.model.take_close_ready() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        // Folders (or files, which stand for their folder) dropped on the window open like Open folder (spec §5.1).
+        // Folders (or files, which stand for their folder) dropped on the Meshes view open like Open folder (spec
+        // §5.1). The Textures view handles its drops in `ui::draw_with_scan` (a slot card may take them, item 17).
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -278,7 +279,7 @@ impl eframe::App for SdcApp {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        if !dropped.is_empty() {
+        if !dropped.is_empty() && crate::ui::header::meshes_view_active(&ctx) {
             self.model.dropped(&dropped);
         }
         let focused = ctx.input(|i| i.focused);

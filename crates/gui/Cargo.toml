@@ -39,9 +39,10 @@ regex = "1"
 # Item 12 Copy image: already in the lock through egui-winit, with the same features.
 arboard = { version = "=3.6.1", default-features = false, features = ["image-data"] }
 
-# The monitor rectangles at start (layout.rs, AG18). 0.61.2 is the version eframe's winit already uses.
+# The monitor rectangles at start (layout.rs, AG18) and the cursor at a file drop (ui::drop_pos, AG98). 0.61.2 is the
+# version eframe's winit already uses.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 egui_kittest = "=0.36.2"

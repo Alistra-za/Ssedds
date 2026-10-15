@@ -601,7 +601,17 @@ impl SetsDoc {
                 }
             }
         }
-        self.list_edit(id, "add", file, true);
+        // A file this set removed belongs to it by its name: lifting the remove brings it back (an `add` beside the
+        // `remove` would leave it out, AG100).
+        let removed_here = self
+            .entries()
+            .iter()
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
+        if removed_here {
+            self.list_edit(id, "remove", file, false);
+        } else {
+            self.list_edit(id, "add", file, true);
+        }
     }
 
     /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.
