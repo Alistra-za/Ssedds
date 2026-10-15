@@ -14,6 +14,7 @@ pub mod messages;
 pub mod path_picker;
 pub mod pgp_fields;
 pub mod plugin_refs;
+pub mod presets;
 pub mod preview;
 pub mod rename_dialog;
 pub mod rnm_section;
@@ -133,6 +134,7 @@ pub fn draw_with_scan(
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
     json_editor::draw(ui.ctx(), model);
+    presets::window(ui.ctx(), model);
     // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
     let shows_3d = three_d && model.root.is_some() && model.expanded.is_none() && !model.in_bulk();
     set_preview::settings_window(ui.ctx(), model, shows_3d);

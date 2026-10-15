@@ -21,6 +21,7 @@ mod pbr_follow;
 pub mod picker;
 pub mod pin;
 pub mod plugin_refs;
+pub mod presets;
 pub mod preview;
 pub mod readout;
 pub mod rename;
@@ -257,6 +258,10 @@ pub struct AppModel {
     pub used_by: used_by::UsedByState,
     /// G3: the TruePBR JSON editor window is open.
     pub json_editor_open: bool,
+    /// Note AM: the preset creator window is open.
+    pub presets_open: bool,
+    /// Note AM: the presets folder as last scanned, and the creator's draft; made on first use (`presets_model`).
+    pub presets: Option<presets::PresetsModel>,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
     /// fixtures set `None` to keep their High members undecided, as the CLI does without the flag.
     pub accept: AcceptSuggestions,
@@ -424,6 +429,8 @@ impl AppModel {
             known: Default::default(),
             used_by: Default::default(),
             json_editor_open: false,
+            presets_open: false,
+            presets: None,
             accept: AcceptSuggestions::High,
             session: None,
             root: None,
@@ -1966,6 +1973,22 @@ impl AppModel {
         self.edit_docs("JSON name", Some("json_name".into()), false, move |_, s| {
             s.set_json_name(if n.is_empty() { None } else { Some(&n) })
         });
+    }
+
+    /// The preset creator's model over `user_presets` (`None` in tests: no folder, so nothing is ever written).
+    pub fn presets_model(&mut self) -> &mut presets::PresetsModel {
+        let (dir, target) = (self.user_presets.clone(), self.target);
+        let pm = self
+            .presets
+            .get_or_insert_with(|| presets::PresetsModel::new(dir, target));
+        pm.fallback = target;
+        pm
+    }
+
+    /// "Presets…": open the creator on a fresh scan of the presets folder.
+    pub fn open_presets(&mut self) {
+        self.presets_model().rescan();
+        self.presets_open = true;
     }
 
     pub fn set_target(&mut self, t: Target) {

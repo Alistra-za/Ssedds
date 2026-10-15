@@ -42,6 +42,7 @@ fn full() -> LayoutSettings {
         }),
         set_look: None,
         settings_window: Some([300.0, 140.0, 460.0, 600.0]),
+        presets_window: Some([80.0, 60.0, 900.0, 700.0]),
         details: vec!["set-3d-details".into()],
     }
 }

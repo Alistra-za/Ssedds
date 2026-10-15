@@ -646,8 +646,9 @@ impl PresetRegistry {
         self.tables.get(id)
     }
 
-    /// Forget a preset and its aliases (a user folder file that failed its check).
-    pub(crate) fn remove(&mut self, id: &str) {
+    /// Forget a preset and its aliases (a user folder file that failed its check; the GUI preset creator validates an
+    /// edited user preset in a copy without its old self, DECISIONS AM8).
+    pub fn remove(&mut self, id: &str) {
         self.presets.remove(id);
         self.sources.remove(id);
         self.tables.remove(id);

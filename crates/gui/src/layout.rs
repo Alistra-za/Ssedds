@@ -207,6 +207,7 @@ pub struct Probe {
     layout: Layout,
     looks: (Look, Look),
     settings_window: Option<Rect>,
+    presets_window: Option<Rect>,
     details: [bool; DETAILS_NAMES.len()],
 }
 
@@ -242,6 +243,7 @@ pub fn probe(
         layout: view.layout,
         looks: (*looks.0, *looks.1),
         settings_window: settings_window_now(ctx),
+        presets_window: ctx.memory(|m| m.area_rect(crate::ui::presets::window_id())),
         details: DETAILS_NAMES.map(|n| crate::ui::viewport3d::details_open(ctx, n)),
     }
 }
@@ -298,6 +300,15 @@ pub fn capture(
             .is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() >= 0.5));
         if moved {
             l.settings_window = Some(now);
+        }
+    }
+    if let Some(r) = ctx.memory(|m| m.area_rect(crate::ui::presets::window_id())) {
+        let now = [r.min.x, r.min.y, r.width(), r.height()];
+        if prev
+            .presets_window
+            .is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() >= 0.5))
+        {
+            l.presets_window = Some(now);
         }
     }
     l.details = DETAILS_NAMES

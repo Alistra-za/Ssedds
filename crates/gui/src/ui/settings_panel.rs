@@ -12,7 +12,7 @@ use eframe::egui;
 use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
 use engine::config::{
-    AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Subtype, Target,
+    AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Profile, Subtype, Target,
 };
 use engine::policy::{offered, ResolvedJob};
 use serde_json::{json, Value};
@@ -43,7 +43,7 @@ const FILTER_OPTIONS: [(MipFilter, &str); 4] = [
 ];
 
 /// An enum's options as (JSON value, label).
-pub(super) type Options = Vec<(Value, String)>;
+pub type Options = Vec<(Value, String)>;
 
 fn opt(v: Value, label: &str) -> (Value, String) {
     (v, label.to_string())
@@ -127,8 +127,7 @@ fn capitalised(s: &str) -> String {
 }
 
 /// Options for the fields that pick from a list; `None` for the checkboxes and the slider.
-fn options_of(field: &str, target: Target, job: &ResolvedJob) -> Option<Options> {
-    let p = &job.profile;
+pub(super) fn options_of(field: &str, target: Target, p: &Profile) -> Option<Options> {
     Some(match field {
         "subtype" => subtype_groups(|s| s == p.subtype || offered(target, s))
             .into_iter()
@@ -400,7 +399,7 @@ pub(super) fn editor(
             (out.map(|v| json!(v)), r)
         }
         field => {
-            let options = options_of(field, target, job).unwrap_or_default();
+            let options = options_of(field, target, &job.profile).unwrap_or_default();
             let current = if field == "format" {
                 json!((job.profile.format, job.profile.color.tag))
             } else {

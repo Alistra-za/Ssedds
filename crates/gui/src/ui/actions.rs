@@ -296,6 +296,9 @@ pub static ACTIONS: &[Action] = &[
         ),
         |m| m.target == engine::config::Target::Cs && m.root.is_some() && m.sets_doc.is_some(),
     ),
+    a("presets", "Open the preset creator", Global, &[], |m, _| {
+        m.open_presets()
+    }),
     // Textures grid
     a(
         "select-all",

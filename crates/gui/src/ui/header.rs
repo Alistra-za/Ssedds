@@ -71,6 +71,14 @@ pub fn draw(
                 super::meshes::mo2_button(ui, m);
             }
             mode_combo(ui, model);
+            fit(ui, button_width(ui, "Presets…"));
+            if ui
+                .button("Presets…")
+                .on_hover_text("Make and edit your own presets (saved in %APPDATA%\\sdc\\presets)")
+                .clicked()
+            {
+                model.open_presets();
+            }
             column_checkboxes(ui, model);
             json_name_field(ui, model);
             export_folder_button(ui, model);
