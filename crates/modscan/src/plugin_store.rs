@@ -351,7 +351,22 @@ impl Store {
     /// (model slot 0) of each winning GRAS record names, in an enabled origin (a derived winner is read through its
     /// source copy; TruePBR shapes are skipped). Store form: lower case, `/`.
     pub fn gras_diffuse_textures(&self) -> Result<BTreeSet<String>, ScanError> {
-        let mut st = self.conn.prepare(
+        self.gras_slot0_textures(false)
+    }
+
+    /// PBR grass design §4.2 (ruling R5): [`Self::gras_diffuse_textures`] with TruePBR (SLSF2.23) shapes kept, so a
+    /// pre-patched PBR grass NIF counts as well as a vanilla one: the evidence for the `pbr_grass` auto-pick.
+    pub fn gras_all_diffuse_textures(&self) -> Result<BTreeSet<String>, ScanError> {
+        self.gras_slot0_textures(true)
+    }
+
+    fn gras_slot0_textures(&self, keep_truepbr: bool) -> Result<BTreeSet<String>, ScanError> {
+        let truepbr = if keep_truepbr {
+            ""
+        } else {
+            " AND (ifnull(s.slsf2,0) & 8388608) = 0"
+        };
+        let mut st = self.conn.prepare(&format!(
             // CROSS JOIN pins the join order (SQLite never reorders it): start from the few GRAS records. Left to
             // the planner (no ANALYZE stats) it scanned `path` first and hung the GUI for minutes on a real modlist.
             "SELECT DISTINCT tp.p
@@ -365,11 +380,11 @@ impl Store {
              CROSS JOIN nif_copy c ON c.id = CASE WHEN wc.is_derived = 1
                                             THEN coalesce(ws.copy_id, wc.source_copy_id, wc.id) ELSE wc.id END
              CROSS JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
-             CROSS JOIN shape s ON s.copy_id = c.id AND s.shader_kind = 1 AND (ifnull(s.slsf2,0) & 8388608) = 0
+             CROSS JOIN shape s ON s.copy_id = c.id AND s.shader_kind = 1{truepbr}
              CROSS JOIN tex_use tu ON tu.texset_id = s.texset_id AND tu.slot = 0
              CROSS JOIN path tp ON tp.id = tu.tex_path_id
-             WHERE r.sig = 'GRAS' AND r.owner_ok = 1",
-        )?;
+             WHERE r.sig = 'GRAS' AND r.owner_ok = 1"
+        ))?;
         let v = st
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<Result<_, _>>()?;

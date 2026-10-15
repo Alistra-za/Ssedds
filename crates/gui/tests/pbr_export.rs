@@ -998,3 +998,43 @@ fn a_set_that_matches_nothing_asks_and_is_left_out_of_the_json() {
         .iter()
         .all(|(v, _)| v.id != "landscape/rock01"));
 }
+
+/// PBR grass design R3, R4: a pbr set switched to pbr_grass exports only grass keys and loses its emissive block;
+/// the project file keeps the rest, so switching back restores them.
+#[test]
+fn a_pbr_grass_set_drops_the_keys_grass_ignores() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
+    m.set_json_value("landscape/rock01", "uv_scale", Some(json!(2.0)));
+    m.set_json_value("landscape/rock01", "roughness_scale", Some(json!(0.8)));
+    idle(&mut m);
+    assert!(export_blocks(&m)
+        .iter()
+        .any(|i| i.text.contains("emissive is on")));
+    m.set_shader("landscape/rock01", Some(Shader::PbrGrass));
+    idle(&mut m);
+    assert_eq!(export_blocks(&m), vec![]);
+    let rock = |m: &sdc_gui::model::AppModel| {
+        json_entries(m)
+            .into_iter()
+            .find(|(v, _)| v.id == "landscape/rock01")
+            .unwrap()
+            .1
+            .settings
+    };
+    let s = rock(&m);
+    assert!(
+        !s.contains_key("emissive") && !s.contains_key("uv_scale"),
+        "{s:?}"
+    );
+    assert_eq!(s.get("roughness_scale"), Some(&json!(0.8)));
+    assert!(
+        !s.contains_key("subsurface"),
+        "no _s, so no subsurface default"
+    );
+    m.set_shader("landscape/rock01", Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(rock(&m).get("uv_scale"), Some(&json!(2.0)));
+}

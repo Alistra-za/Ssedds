@@ -1278,3 +1278,71 @@ fn an_empty_match_row_is_not_written() {
     assert_eq!(written(&e), json!({ "match1": r"landscape\rock01.dds" }));
     assert!(pitfalls(&e.settings, r"landscape\rock01").is_empty());
 }
+
+/// PBR grass design R4: the keys CS's grass shader never reads, in KEYS order, and the GUI switches of glint/fuzz.
+#[test]
+fn grass_hides_exactly_the_keys_rungrass_ignores() {
+    let hidden: Vec<&str> = KEYS
+        .iter()
+        .map(|k| k.key)
+        .filter(|k| grass_ignores(k))
+        .collect();
+    assert_eq!(
+        hidden,
+        [
+            "auto_uv",
+            "uv_scale",
+            "emissive",
+            "lock_emissive",
+            "emissive_scale",
+            "emissive_color",
+            "parallax",
+            "lock_parallax",
+            "displacement_scale",
+            "hair",
+            "multilayer",
+            "coat_color",
+            "coat_specular_level",
+            "coat_roughness",
+            "coat_strength",
+            "coat_diffuse",
+            "coat_normal",
+            "coat_parallax",
+            "lock_cnr",
+            "inner_uv_scale",
+            "glint",
+            "fuzz",
+            "glint.screen_space_scale",
+            "glint.log_microfacet_density",
+            "glint.microfacet_roughness",
+            "glint.density_randomization",
+            "fuzz.texture",
+            "fuzz.color",
+            "fuzz.weight",
+        ]
+    );
+    assert!(grass_ignores("glint_on") && grass_ignores("fuzz_on"));
+}
+
+/// PBR grass design R2, R3: hidden keys dropped; subsurface on by default only with an `_s`; an explicit off sticks.
+#[test]
+fn the_grass_view_drops_hidden_keys_and_defaults_subsurface_with_an_s() {
+    let raw = s(&[
+        ("emissive", json!(true)),
+        ("uv_scale", json!(2.0)),
+        ("roughness_scale", json!(0.8)),
+    ]);
+    let mut with_s = raw.clone();
+    grass_view(&mut with_s, true);
+    assert_eq!(
+        with_s,
+        s(&[("roughness_scale", json!(0.8)), ("subsurface", json!(true))])
+    );
+    let mut no_s = raw.clone();
+    grass_view(&mut no_s, false);
+    assert_eq!(no_s, s(&[("roughness_scale", json!(0.8))]));
+    let mut off = s(&[("subsurface", json!(false))]);
+    grass_view(&mut off, true);
+    assert_eq!(off, s(&[("subsurface", json!(false))]));
+    assert!(!feature_on(&off, Feature::Subsurface));
+}

@@ -294,3 +294,26 @@ fn the_json_editor_shows_each_set_and_adds_a_delete_section_that_crosses_out_the
     h.run();
     assert!(!h.state().0.json_editor_open);
 }
+
+/// PBR grass (Task 5 fix round 1): the JSON editor's "+ key" menu offers no key grass ignores on a pbr_grass set,
+/// since it would be stored, never shown, and come back on a switch to pbr; a pbr set still offers it.
+#[test]
+fn the_json_editor_add_menu_hides_grass_ignored_keys_on_a_pbr_grass_set() {
+    let offers_emissive = |grass: bool| {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = pbr_opened(d.path());
+        if grass {
+            m.set_shader(ROCK_SET, Some(engine::shader::Shader::PbrGrass));
+            idle(&mut m);
+        }
+        m.json_editor_open = true;
+        let mut h = harness(m, false);
+        h.run();
+        let before = h.query_all_by_label("Emissive").count();
+        h.query_all_by_label("+ key").next().unwrap().click();
+        h.run();
+        h.query_all_by_label("Emissive").count() > before
+    };
+    assert!(offers_emissive(false), "a pbr set offers emissive");
+    assert!(!offers_emissive(true), "a pbr_grass set does not");
+}

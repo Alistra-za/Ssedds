@@ -1028,6 +1028,8 @@ impl Encoder {
 
 pub const PANEL_TITLE: &str = "Set preview (3D)";
 pub const NEEDS_CS: &str = "PGPatcher preview needs the CS target and a PBR set";
+/// PBR grass design §4.5 (owner D5): the object PBR path stands in for CS's `RunGrass.hlsl`.
+pub const GRASS_APPROX: &str = "PBR grass approximated: drawn with the object PBR shader (no wrapped diffuse, wind or grass LOD; micro-shadows still apply).";
 pub const JSON_WINS: &str = "Assumes your sdc JSON wins over other mods' PGPatcher configs.";
 pub const NO_SCAN: &str = "Scan your mods in the Meshes view to preview on a real mesh";
 pub const NO_MATCH: &str = "No scanned mesh uses this diffuse";
@@ -1104,6 +1106,8 @@ pub struct SetFingerprint {
     pub label: String,
     /// Design §7 (plan ruling R1): the set has a texture-set block, so it is shown on the plane only.
     pub landscape: bool,
+    /// PBR grass design §4.5: the set's pick is `pbr_grass` (the "approximated" badge).
+    pub grass: bool,
     /// The PGPatcher entry; `None` when the simulation cannot run (not CS, or not a PBR set: D3).
     pub entry: Option<EntryInput>,
     pub prefix: Option<String>,
@@ -1123,6 +1127,7 @@ pub fn fingerprint(m: &AppModel, set_key: &str) -> Option<SetFingerprint> {
         landscape: m
             .cs_block(&v.id, crate::model::cs_pbr::Kind::Txst)
             .is_some(),
+        grass: crate::model::sets::is_pbr_grass(&v),
         entry,
         prefix: v.prefix.clone(),
         members,
@@ -1841,6 +1846,10 @@ impl SetPreview {
             .as_ref()
             .is_some_and(|f| f.landscape != fp.landscape);
         if d == Delta::default() && !relock {
+            // Only the badge differs (pbr <-> pbr_grass): no rebuild, but keep the new fingerprint.
+            if self.fp.as_ref().is_some_and(|f| f.grass != fp.grass) {
+                self.fp = Some(fp);
+            }
             return;
         }
         if d.set {

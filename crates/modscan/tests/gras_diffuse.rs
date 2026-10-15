@@ -135,3 +135,23 @@ fn a_large_store_answers_quickly() {
     assert_eq!(s.gras_diffuse_textures().unwrap(), want);
     assert!(t.elapsed().as_secs_f64() < 2.0, "took {:?}", t.elapsed());
 }
+
+/// PBR grass design §4.2 (ruling R5): the `all` variant keeps TruePBR shapes; the complex-grass query still drops them.
+#[test]
+fn the_all_variant_keeps_truepbr_shapes() {
+    let (_d, s) = scanned(b"GRAS");
+    let want = x_diffuses(&s);
+    assert!(!want.is_empty());
+    assert_eq!(s.gras_all_diffuse_textures().unwrap(), want);
+    s.conn()
+        .execute("UPDATE shape SET slsf2 = ifnull(slsf2,0) | 8388608", [])
+        .unwrap();
+    assert_eq!(s.gras_all_diffuse_textures().unwrap(), want);
+    assert!(s.gras_diffuse_textures().unwrap().is_empty());
+}
+
+#[test]
+fn the_all_variant_names_none_for_a_stat() {
+    let (_d, s) = scanned(b"STAT");
+    assert!(s.gras_all_diffuse_textures().unwrap().is_empty());
+}

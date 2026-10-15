@@ -65,6 +65,9 @@ pub struct Analysis {
     pub nonfinite: [u64; 4],
     /// Complex grass facts (design §4, §5), for an image whose height is twice its width; `None` otherwise.
     pub grass: Option<crate::grass::GrassFacts>,
+    /// `|L - 1|` of the bottom-left texel `(0, h - 1)`, the one CS's complex-grass detector reads, for every shape
+    /// (PBR grass design R1); infinite for an empty image.
+    pub corner_err: f32,
 }
 
 /// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
@@ -170,6 +173,12 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         dds_dxgi: None,
         nonfinite,
         grass: crate::grass::facts(img),
+        corner_err: img
+            .px
+            .get(img.height.saturating_sub(1) as usize * img.width as usize)
+            .map_or(f32::INFINITY, |c| {
+                crate::grass::unit_err([c[0], c[1], c[2]])
+            }),
     }
 }
 
@@ -184,6 +193,39 @@ mod tests {
         has_alpha: true,
         is_float: false,
     };
+
+    /// PBR grass design R1: `corner_err` reads texel `(0, h - 1)` of any shape, ignores alpha, and is infinite for an
+    /// empty image.
+    #[test]
+    fn corner_err_reads_the_bottom_left_texel_of_any_shape() {
+        const UNIT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
+        const OFF: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+        let corner = |w, h, at: (u32, u32), px: [f32; 4]| {
+            let mut img = Rgba32F::new(w, h, OFF);
+            *img.at_mut(at.0, at.1) = px;
+            analyse(&img, &RGBA8).corner_err
+        };
+        for (w, h) in [(3, 5), (1, 4), (4, 1), (1, 1)] {
+            assert!(corner(w, h, (0, h - 1), UNIT) < 1e-6, "{w}x{h}");
+            assert!(
+                (corner(w, h, (0, h - 1), [0.5, 0.5, 1.0, 0.0]) < 1e-6),
+                "{w}x{h} alpha"
+            );
+            for at in [(w - 1, h - 1), (0, 0), (w - 1, 0)] {
+                if at != (0, h - 1) {
+                    assert!(corner(w, h, at, UNIT) > 0.9, "{w}x{h} {at:?}");
+                }
+            }
+        }
+        assert_eq!(
+            analyse(&Rgba32F::new(0, 0, OFF), &RGBA8).corner_err,
+            f32::INFINITY
+        );
+        assert_eq!(
+            analyse(&Rgba32F::new(4, 0, OFF), &RGBA8).corner_err,
+            f32::INFINITY
+        );
+    }
 
     #[test]
     fn alpha_classification() {

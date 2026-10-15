@@ -1,12 +1,14 @@
 //! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced keys for the
 //! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
 use super::columns::AMBER;
-use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
+use crate::model::sets::{
+    is_pbr_grass, set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch,
+};
 use crate::model::AppModel;
 use crate::pgp::prefix::{
     match_toggle, match_value, matches_nothing, stored_match, strip_lead, EMPTY_ROW, NO_MATCH,
 };
-use crate::pgp::schema::{Group, KeyKind, KeySpec, KEYS};
+use crate::pgp::schema::{grass_ignores, Group, KeyKind, KeySpec, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
 };
@@ -102,6 +104,8 @@ pub(crate) struct Ctx {
     pub(crate) read_only: Option<String>,
     coat_filled: bool,
     fuzz_filled: bool,
+    /// PBR grass design §4.3: the set is `pbr_grass`, so the keys grass ignores are not drawn.
+    pub(crate) grass: bool,
     /// The Matching header (F1 spec §3.2): the active slot matches, the + menu, and whether nothing matches.
     matches: Vec<SlotMatch>,
     addable: Vec<SlotMatch>,
@@ -120,6 +124,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
+        grass: v.as_ref().is_some_and(is_pbr_grass),
         own,
         matches,
         addable,
@@ -155,6 +160,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         let keys: Vec<&KeySpec> = KEYS
             .iter()
             .filter(|k| k.group == g && !k.advanced && k.kind != KeyKind::Slot)
+            .filter(|k| !(c.grass && grass_ignores(k.key)))
             .collect();
         group(ui, &c, "pgp", g, &keys, &mut edits);
     }
@@ -167,8 +173,11 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
                 if !group_open(g, &c.own) {
                     continue;
                 }
-                let keys: Vec<&KeySpec> =
-                    KEYS.iter().filter(|k| k.group == g && k.advanced).collect();
+                let keys: Vec<&KeySpec> = KEYS
+                    .iter()
+                    .filter(|k| k.group == g && k.advanced)
+                    .filter(|k| !(c.grass && grass_ignores(k.key)))
+                    .collect();
                 group(ui, &c, "pgp-adv", g, &keys, &mut edits);
             }
         });
@@ -331,7 +340,9 @@ pub(crate) fn control(
         KeyKind::OnlyTrue | KeyKind::Object => {
             let mut on = value.and_then(|v| v.as_bool()).unwrap_or(false);
             if ui.checkbox(&mut on, k.label).changed() {
-                edits.push((key, on.then_some(json!(true))));
+                // PBR grass: subsurface defaults on (`grass_view`), so off is stored to stick; reset restores it.
+                let keep_off = c.grass && key == "subsurface";
+                edits.push((key, (on || keep_off).then_some(json!(on))));
             }
         }
         KeyKind::Tri => {

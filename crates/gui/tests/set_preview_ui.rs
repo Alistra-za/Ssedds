@@ -490,3 +490,44 @@ fn a_texture_set_block_shows_tiling_instead_of_the_mesh_picker() {
         .query_by_role(eframe::egui::accesskit::Role::ComboBox)
         .is_none());
 }
+
+/// PBR grass design §4.5: a pbr_grass set says its preview is approximated; a pbr set does not.
+#[test]
+fn a_pbr_grass_set_shows_the_approximation_badge() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(
+        rock_selected(d.path()),
+        SetPreview::new(None, None, None, DEFAULT_CAP),
+    );
+    settle(&mut h);
+    assert!(h.query_by_label(GRASS_APPROX).is_none());
+    let d = tempfile::tempdir().unwrap();
+    let mut m = rock_selected(d.path());
+    m.set_shader("landscape/rock01", Some(engine::shader::Shader::PbrGrass));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = harness(m, SetPreview::new(None, None, None, DEFAULT_CAP));
+    settle(&mut h);
+    h.get_by_label(GRASS_APPROX);
+}
+
+/// The badge follows the shader within one open preview, both ways (fingerprint-only change).
+#[test]
+fn the_approximation_badge_follows_the_shader_in_the_same_preview() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(
+        rock_selected(d.path()),
+        SetPreview::new(None, None, None, DEFAULT_CAP),
+    );
+    settle(&mut h);
+    assert!(h.query_by_label(GRASS_APPROX).is_none());
+    for (shader, shown) in [
+        (engine::shader::Shader::PbrGrass, true),
+        (engine::shader::Shader::Pbr, false),
+    ] {
+        h.state_mut().0.set_shader("landscape/rock01", Some(shader));
+        assert!(h.state_mut().0.wait_idle(Duration::from_secs(60)));
+        std::thread::sleep(THROTTLE);
+        settle(&mut h);
+        assert_eq!(h.query_by_label(GRASS_APPROX).is_some(), shown);
+    }
+}

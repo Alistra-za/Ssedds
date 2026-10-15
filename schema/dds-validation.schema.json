@@ -140,7 +140,8 @@
         "GRASS-NORMALS",
         "GRASS-DETECT-SOURCE",
         "GRASS-VANILLA",
-        "VAL-GRASS-DETECT"
+        "VAL-GRASS-DETECT",
+        "PBR-GRASS-DETECT"
       ],
       "type": "string"
     },

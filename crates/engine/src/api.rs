@@ -103,6 +103,9 @@ pub struct BatchRequest {
     /// as `grass::path_key` keys. A listed 1:2 file that passes the detection tests gets a high-confidence
     /// `complex_grass` suggestion. Empty for the CLI, which therefore never auto-tags.
     pub gras_diffuses: BTreeSet<String>,
+    /// GUI (PBR grass design §4.2): as `gras_diffuses` with TruePBR shapes kept (`Store::gras_all_diffuse_textures`).
+    /// A PBR set with a member listed here auto-picks `pbr_grass`. Empty for the CLI, which never auto-picks it.
+    pub gras_all_diffuses: BTreeSet<String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -142,6 +145,7 @@ impl BatchRequest {
             mesh_shaders: BTreeMap::new(),
             mesh_alpha: BTreeMap::new(),
             gras_diffuses: BTreeSet::new(),
+            gras_all_diffuses: BTreeSet::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -1138,6 +1142,7 @@ impl Engine {
                     &index,
                     explicit.get(&s.key).copied(),
                     &req.mesh_shaders,
+                    &req.gras_all_diffuses,
                 );
                 (s.key.clone(), pick)
             })
@@ -1148,13 +1153,21 @@ impl Engine {
         };
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
-        for (old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
+        for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
+            // PBR grass design §4.4: the albedo's corner texel against CS's grass shadow-pass detector, judged on the
+            // job's final sub-type (a re-resolve can turn a GRAS complex_grass guess into an albedo).
+            let grass_note = |j: &ResolvedJob| {
+                picks.get(&j.set_key).and_then(|p| {
+                    crate::shader::pbr_grass_albedo_note(p, j.profile.subtype, a.corner_err)
+                })
+            };
             // An explicit set shader also re-resolves a GRAS diffuse: it suppresses the auto-detect (`suggest_grass`).
             let is_gras = gras.contains(&crate::grass::path_key(&work[wi].1.game_path));
             if !picks.get(&old.set_key).is_some_and(|p| {
                 p.shader.has_member_defaults()
                     || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
             }) {
+                old.warnings.extend(grass_note(&old));
                 jobs.push(old);
                 continue;
             }
@@ -1178,6 +1191,7 @@ impl Engine {
             match r {
                 Ok(mut job) => {
                     job.source = old.source;
+                    job.warnings.extend(grass_note(&job));
                     job.provenance.insert("target".into(), target_src.clone());
                     jobs.push(job);
                 }
