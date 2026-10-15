@@ -176,7 +176,7 @@ fn a_branch_shows_its_overrides_hints_the_sub_type_and_resets() {
     h.run();
     h.get_by_label("_d — BC7 · linear (overrides 1)").click();
     h.run();
-    h.get_by_label_contains("sub-type: None");
+    h.get_by_label_contains("inherits: None");
     h.get_by_label("↺").click();
     h.run();
     assert_eq!(

@@ -71,7 +71,7 @@ fn reset_on_a_branch_field_removes_it_and_an_emptied_branch_writes_no_rule() {
 }
 
 #[test]
-fn an_alias_branch_saves_a_glob_rule_before_the_suffix_rules_and_removing_the_alias_drops_it() {
+fn an_alias_branch_saves_a_glob_rule_after_the_suffix_rules_and_removing_the_alias_drops_it() {
     let d = tempfile::tempdir().unwrap();
     let mut pm = copy_of_quality(d.path());
     pm.set_branch_field(Subtype::Diffuse, "d", "resize", json!("half"));
@@ -245,4 +245,42 @@ fn a_branch_layers_on_a_duplicated_compacts_bc1_rule() {
     assert_eq!((xd.format, xd.resize), (Format::Bc1, ResizeMode::Half));
     let x = profile(&m, "a/x.png");
     assert_eq!((x.format, x.resize), (Format::Bc1, ResizeMode::None));
+}
+
+#[test]
+fn an_alias_branch_shows_what_its_files_get_on_top_of_the_canonical_branch() {
+    // AP11: the `_foo` header and hints show the `_d` branch underneath.
+    let d = tempfile::tempdir().unwrap();
+    let mut pm = copy_of_quality(d.path());
+    pm.set_branch_field(Subtype::Diffuse, "d", "format", bc1_of(Subtype::Diffuse));
+    pm.add_alias("foo", "d").unwrap();
+    pm.set_branch_field(Subtype::Diffuse, "foo", "resize", json!("half"));
+    let row = pm.row(Subtype::Diffuse).unwrap();
+    let foo = row.branches.iter().find(|b| b.suffix == "foo").unwrap();
+    let p = foo.profile.as_ref().unwrap();
+    assert_eq!((p.format, p.resize), (Format::Bc1, ResizeMode::Half));
+    let i = foo.inherited.as_ref().unwrap();
+    assert_eq!((i.format, i.resize), (Format::Bc1, ResizeMode::None));
+    assert!(!foo.by_alpha);
+    // A rule on alpha content is not guessed: the header says so.
+    pm.select("cs-compact");
+    pm.duplicate();
+    let row = pm.row(Subtype::Diffuse).unwrap();
+    let b = row.branches.iter().find(|b| b.suffix == "d").unwrap();
+    assert!(b.by_alpha);
+    assert_eq!(b.profile.as_ref().unwrap().format, Format::Bc7);
+}
+
+#[test]
+fn a_new_built_in_branch_goes_after_every_hand_written_rule() {
+    let d = tempfile::tempdir().unwrap();
+    let text = "schema_version = 1\nid = \"mixed\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n\n[suffix_aliases]\nfoo = \"d\"\n\n[[rules]]\nmatch = { glob = \"*_foo.*\", subtypes = [\"diffuse\"] }\noverrides = { resize = \"half\" }\n\n[[rules]]\nmatch = { glob = \"**/armor/**\" }\noverrides = { mips = { levels = 3 } }\n";
+    std::fs::write(d.path().join("mixed.toml"), text).unwrap();
+    let mut pm = PresetsModel::new(Some(d.path().to_path_buf()), Target::Cs);
+    pm.select("mixed");
+    pm.set_branch_field(Subtype::Diffuse, "d", "mips.levels", json!(5));
+    let r = rules(&pm);
+    assert_eq!(r[0]["match"]["glob"].as_str(), Some("*_foo.*"));
+    assert_eq!(r[1]["match"]["glob"].as_str(), Some("**/armor/**"));
+    assert_eq!(r[2]["match"]["suffix"].as_str(), Some("d"));
 }

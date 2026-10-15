@@ -433,7 +433,8 @@ fn accepted_suggestion_loses_to_rules_which_lose_to_set() {
     let o = fx.convert(&["--dry-run"]);
     assert_eq!(jobs_state(&o, "wall_n.png"), "unresolved");
 
-    // Project rules beat the suggestion; within one source the first matching rule wins.
+    // Project rules beat the suggestion; within one source the first matching rule decides the sub-type (field
+    // overrides layer, AP10).
     fx.project_config(
         "[[rules]]\nmatch = { glob = \"**/wall_n.png\" }\nsubtype = \"height\"\n\
          [[rules]]\nmatch = { glob = \"**/*.png\" }\nsubtype = \"glow\"\n",

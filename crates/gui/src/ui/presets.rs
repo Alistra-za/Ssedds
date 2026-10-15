@@ -501,11 +501,17 @@ fn grid(
         .show(ui, body);
 }
 
-/// What a field's hint shows: the base's profile for the sub-type, the sub-type's for a branch.
+/// What a field's hint shows: the base's profile for the sub-type; for a branch, what its files get without it (AP11).
 fn hint_profile<'a>(row: &'a Row, scope: Scope) -> (Option<&'a Profile>, &'static str) {
     match scope {
         None => (row.base.as_ref(), "base"),
-        Some(_) => (row.profile.as_ref().ok(), "sub-type"),
+        Some(s) => (
+            row.branches
+                .iter()
+                .find(|b| b.suffix == s)
+                .and_then(|b| b.inherited.as_ref().ok()),
+            "inherits",
+        ),
     }
 }
 
@@ -750,8 +756,13 @@ fn suffixes(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, acts: &mut Vec<Act>
                 0 => String::new(),
                 n => format!(" (overrides {n})"),
             };
+            let alpha = if b.by_alpha {
+                " (+ rules by alpha)"
+            } else {
+                ""
+            };
             let open = ui.data_mut(|d| d.remove_temp::<bool>(open_branch_id(st, &b.suffix)));
-            egui::CollapsingHeader::new(format!("{name} — {fmt}{count}"))
+            egui::CollapsingHeader::new(format!("{name} — {fmt}{count}{alpha}"))
                 .id_salt(("preset-branch", st, &b.suffix))
                 .open(open)
                 .show(ui, |ui| {

@@ -1,7 +1,8 @@
 //! Resolve (spec §5.2): merge preset, config, rules, analysis and overrides into an immutable ResolvedJob.
 //!
 //! Precedence (spec §8, lowest first): built-in (`sdc-base`) → preset chain → user config → project config →
-//! rule matches (first match per source, sources in the same order) → analysis facts → the project config's
+//! rule matches (every matching rule of a source, in file order, field by field; sources in the same order;
+//! DECISIONS AP10) → analysis facts → the project config's
 //! `[files]` entries (DECISIONS N2) → `--set` (unscoped, then sub-type-scoped, then file-scoped, each in
 //! command-line order).
 use crate::analyse::Analysis;

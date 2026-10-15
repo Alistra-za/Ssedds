@@ -164,9 +164,57 @@ pub struct Branch {
     /// The canonical suffix or the alias, without '_'.
     pub suffix: String,
     pub alias: bool,
+    /// What a file with this suffix gets (AP11): the row's document, then every rule a plan would apply to it in
+    /// order (the chain's and the draft's, so a canonical suffix's branch under an alias's), this branch included.
     pub profile: Result<Profile, String>,
+    /// The same without this branch's own rule: what its fields' hints show.
+    pub inherited: Result<Profile, String>,
+    /// A rule on alpha content may also apply; it is left out of `profile`.
+    pub by_alpha: bool,
     /// The fields the branch sets (a format and its tag count once).
     pub overrides: usize,
+}
+
+/// What is known of a file a branch addresses: its sub-type, its canonical suffix, and the alias it is named with.
+struct BranchFacts<'a> {
+    st: Subtype,
+    canon: &'a str,
+    alias: Option<&'a str>,
+}
+
+impl BranchFacts<'_> {
+    /// Whether `r` applies to such a file (`policy::rule_matches` on these facts): `None` when it turns on alpha
+    /// content. A rule on a path (other than the alias's glob) or a set's members cannot be known and is left out.
+    fn applies(&self, r: &engine::presets::Rule) -> Option<bool> {
+        let m = &r.matcher;
+        let known = r.subtype.is_none_or(|s| s == self.st)
+            && (m.subtypes.is_empty() || m.subtypes.contains(&self.st))
+            && m.suffix
+                .as_deref()
+                .is_none_or(|s| s.eq_ignore_ascii_case(self.canon))
+            && m.glob
+                .as_deref()
+                .is_none_or(|g| self.alias.is_some_and(|a| g == remap_glob(a)))
+            && m.set_has.is_none();
+        match (known, m.alpha) {
+            (true, Some(_)) => None,
+            (k, _) => Some(k),
+        }
+    }
+
+    /// The branch's own rule (AP3's shape for this sub-type and suffix).
+    fn is_own(&self, r: &engine::presets::Rule) -> bool {
+        let m = &r.matcher;
+        let shape = r.subtype.is_none()
+            && m.subtypes == [self.st]
+            && m.set_has.is_none()
+            && m.alpha.is_none();
+        shape
+            && match self.alias {
+                Some(a) => m.suffix.is_none() && m.glob.as_deref() == Some(remap_glob(a).as_str()),
+                None => m.glob.is_none() && m.suffix.as_deref() == Some(self.canon),
+            }
+    }
 }
 
 /// The preset being shown.
@@ -495,10 +543,15 @@ impl PresetsModel {
         let insert = if alias {
             rules.len()
         } else {
-            rules
+            // After the last hand-written rule, then before the first alias branch that follows it.
+            let start = rules
+                .iter()
+                .rposition(|r| self.branch_key(r).is_none())
+                .map_or(0, |i| i + 1);
+            rules[start..]
                 .iter()
                 .position(|r| self.branch_key(r).is_some_and(|(_, _, a)| a))
-                .unwrap_or(rules.len())
+                .map_or(rules.len(), |i| start + i)
         };
         let rule = branch_rule(&id, sfx, alias);
         self.edit(move |t| {
@@ -759,6 +812,11 @@ impl PresetsModel {
                 Subtype::ALL.map(|st| suffixes_of(st, target)).to_vec(),
             );
         }
+        // Every rule a plan sees for this preset, in order: the chain's (base first), then the draft's (AP11).
+        let rules: Vec<&engine::presets::Rule> = match (&parsed, &chain) {
+            (Ok(p), Ok(c)) => c.iter().flat_map(|x| &x.rules).chain(&p.rules).collect(),
+            _ => vec![],
+        };
         let rows = Subtype::ALL
             .into_iter()
             .map(|st| {
@@ -782,21 +840,38 @@ impl PresetsModel {
                 let branches = self
                     .suffixes(st)
                     .into_iter()
-                    .map(|s| (s.to_string(), false))
-                    .chain(self.aliases_for(st).into_iter().map(|(a, _)| (a, true)))
-                    .map(|(suffix, alias)| {
+                    .map(|s| (s.to_string(), s.to_string(), false))
+                    .chain(self.aliases_for(st).into_iter().map(|(a, c)| (a, c, true)))
+                    .map(|(suffix, canon, alias)| {
                         let own = self.scope(st, Some(&suffix));
-                        let profile = doc.clone().and_then(|mut d| {
-                            if let Some(o) = own {
-                                merge_json(&mut d, &json_of(&toml::Value::Table(o.clone())));
-                            }
-                            finish(d)
-                        });
+                        let facts = BranchFacts {
+                            st,
+                            canon: &canon,
+                            alias: alias.then_some(suffix.as_str()),
+                        };
+                        let layered = |with_own: bool| {
+                            doc.clone().map(|mut d| {
+                                let mut by_alpha = false;
+                                for r in &rules {
+                                    match facts.applies(r) {
+                                        Some(true) if with_own || !facts.is_own(r) => {
+                                            merge_json(&mut d, &r.overrides)
+                                        }
+                                        None => by_alpha = true,
+                                        _ => {}
+                                    }
+                                }
+                                (d, by_alpha)
+                            })
+                        };
+                        let by_alpha = layered(true).is_ok_and(|(_, a)| a);
                         Branch {
                             overrides: own.map_or(0, count_fields),
+                            profile: layered(true).and_then(|(d, _)| finish(d)),
+                            inherited: layered(false).and_then(|(d, _)| finish(d)),
+                            by_alpha,
                             suffix,
                             alias,
-                            profile,
                         }
                     })
                     .collect();
