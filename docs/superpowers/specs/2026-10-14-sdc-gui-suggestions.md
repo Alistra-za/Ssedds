@@ -274,3 +274,38 @@ Use the wording from `docs/gui.md` where it exists.
   - Copy settings and Reset all,
   - the Proceed anyway decision dialog.
 - The rename dialog with regex and live validation. The searchable path picker. Copy CLI command.
+
+---
+
+## Status (feat/gui-suggestions, 2026-10-14)
+
+Decisions are in `docs/DECISIONS.md`, Note AG (index at its top). Items 6, 12 and 13 are partial; nothing is skipped outright.
+
+| Item | Status | Notes |
+|---|---|---|
+| 1 Pixel readout and lens | done | AG54-AG57 |
+| 2 Undo visible | done | AG12, AG15; Ctrl+Z also works in the Meshes view (AG5) |
+| 3 Remember window and layout | done | AG17-AG21; saved in `gui.toml` (AG3) |
+| 4 Dialog keys, Delete set confirm | done | AG11, AG13 |
+| 5 Keyboard navigation and sheet | done | AG22-AG26; Ctrl+arrow not added |
+| 6 Open export folder, progress | partial | Open export folder, files/s and ETA done (AG34, AG35); no taskbar progress (AG36, AG6) |
+| 7 Non-blocking file pickers | done | AG40-AG45 |
+| 8 Textures filters, sort, tile size | done | AG46-AG53 |
+| 9 Textures, meshes and mods both ways | done | Used by meshes, Open in Textures (AG96, AG97), plus the Meshes Shapes column (Note AI) |
+| 10 Pin and compare | done | AG64-AG71 |
+| 11 JSON errors in the editor | done | AG106-AG109 |
+| 12 3D preview | partial | Pan, sun turn, Reset view, magenta missing slots, Copy image done (AG72-AG77); debug views limited to Lit and UV checker, the sun turns but the HDRI does not; render3d API requested in `NIF-HANDOFF.md` (AG75) |
+| 13 Real progress while opening | partial | Progress bar and Cancel done (AG91-AG93); no streaming thumbnails, the plan has no per-file result (AG94, AG7) |
+| 14 Scalable export drawer | done | AG37, AG38 |
+| 15 Exposure, tiling, heatmap legend | done | AG58-AG63 |
+| 16 Colour swatch | done | Superseded by AG2 (owner): swatch plus a hex box on every colour input |
+| 17 Drop files on a slot | done | AG98 |
+| 18 Fill from names | done | AG99, AG100 |
+| 19 Command palette | done | AG22, AG26 |
+| 20 Toasts and a log | done | AG112-AG114 |
+| 21 Blended RNM preview | done | AG115-AG117 |
+| 22 Output size and VRAM estimate | done | AG118-AG120 |
+| 23 Rename menu | done | AG13 |
+| 24 Hover text | done | AG14 |
+
+Owner additions, all done: the Tessalith rename (AG1), the NiAlphaProperty card (AG27-AG33), the `_m` alpha and Enable parallax setting (Note AH), the Meshes Shapes column (Note AI), coat settings under Multilayer with auto flags (Note AJ), hair cutout + blend (Note AK), the Advanced skin card and skin sets with no JSON (AG79-AG90), in-place 3D (AG78, AG87, AG88), the subsurface selector (AG101-AG104, AG110) and per-key drag specs (AG121-AG123).

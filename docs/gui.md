@@ -117,121 +117,6 @@ The dialog changes only the base name (the part before `_n`, `_normal` and so on
 
 Apply is greyed out while a row is red: two files or sets would end up with one name, a name Windows cannot use, a changed file extension, or an output name ending in a map suffix. Amber rows are warnings: a file whose name now reads as another kind of map, or an output that scanned meshes still use under its old name (renaming it leaves those meshes pointing at a file nothing writes). Packed outputs and textures in a locked slot are skipped in Inputs mode. Apply is one undo step.
 
-## The preview
-
-Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. In the preview, **[** and **]** step to the previous and next texture in the order the Textures column shows, **1** to **6** pick the channel buttons from left to right, **PageUp** and **PageDown** step through the mips, **L** turns the lens on or off and **T** the 3×3 tiling.
-
-- **Live encode** is **off by default**. Encoding happens when you press **Encode now**; switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
-- Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
-- The preview encodes only mips whose larger side is at most the **preview size limit**: **4096 by default**, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and the preview says so.
-- Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*, *Lens* and *Tile 3×3*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
-- **Texel readout:** point at the picture and the strip under the viewports shows the texel under the cursor: its coordinates at the mip on show, the source and the encoded RGBA as 0–255 and as floats, and the difference per channel with its largest (the channel the heatmap measures). The numbers are the stored values; the first line says how the view reads them (sRGB-encoded, or linear under UNORM; HDR formats show floats only). A channel button narrows the readout to that channel. For a normal map it also shows both normals as vectors, the encoded one's length and the angle between them in degrees. A side the preview does not hold (no encode yet, a DDS input's source, a mip above the limit) shows "—". Side by side and Split read the same texel for both sides.
-- **Lens** (**L**): a circle 160 points across that follows the cursor and magnifies the view 8× with no smoothing, centred on the texel under the cursor with a crosshair. It shows in both viewports (in Split, each side of the divider shows its own side).
-- **Tile 3×3** (**T**): the picture repeats three by three, to check the seams. Zoom, pan and the readout work on the tiled view; *Fit* fits all nine copies.
-- **Exposure:** for HDR formats (BC6H, RGBA16F) a slider from −8 to +8 EV scales the values by 2^EV before the tone map. It starts at 0 for every texture.
-- **Heatmap legend:** with the heatmap on, a colour bar under the viewports shows the scale from 0 to the *full scale* (the difference drawn white), which a slider sets from 0.005 to 0.5 (0.1 by default, about 25 codes of 255). The heatmap is made in the background. While a new one is made after a full-scale change the previous one stays on show (a result for an older scale is shown as soon as it lands, so dragging the slider never blanks it); after a mip change the plain image shows instead, because a heatmap of another mip does not fit. The legend label reads "updating…" greyed until the current heatmap is ready.
-- **Pin and compare:** *Pin this result* (**P**) in the toolbar keeps the encode on show, with the settings that made it, so that the next encode can be compared against it ("is NVTT, or a higher effort, worth it on this texture").
-  - **What it keeps.** The finished encode for all its mips (not re-encoded), and a summary of its format, colour tag, encoder and effort, alpha policy and mip options, and its PSNR against the source. The button is off until the encode on show is finished and matches the settings (not stale). Pinning again replaces the old pin, so there is at most one.
-  - **When it goes.** Closing the preview, moving to another texture and opening a folder drop the pin and free its images and its GPU texture. *Unpin* drops it too. Changing settings on the same texture keeps it: that is the point.
-  - **While pinned.** *Compare: Source | Pinned* sets what the left side shows in *Side by side* and *Split*. *Pinned* puts the pinned encode on the left and the current encode on the right (pinning turns it on). Each side has a caption with its settings summary and its PSNR against the source. The texel readout adds the pinned values and the difference between the pinned and the current encode (two more lines), the lens magnifies both sides, and the heatmap shows the difference between the current and the pinned encode, labelled "Current vs Pinned". If the pinned encode has no mip you are on (it was made under another size limit), the left side shows "— not in the pinned encode".
-- A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
-- With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
-
-## The 3D preview
-
-The Meshes view's 3D panel and a set's 3D view work the same way.
-
-**A set in 3D.** The **2D | 3D** switch at the left of a set's header row (next to its name and *Input name…*) changes the centre pane in place. *2D* (the default) shows the set editor: the slot cards and the TruePBR settings. *3D* shows the set's 3D view across the whole centre instead, with its own controls (Shader folder…, the Community Shaders toggle, *View*, Copy image); the TruePBR settings (with the coat settings under Multilayer) and, for an Advanced skin set, the skin settings fold in sections above it, so an edit there shows in 3D right away. The header row stays above both. While the switch is on 3D, selecting any texture of a set (from the set or straight from the Textures column) shows that set's 3D view: the texture's own settings fold in a *<name> settings* section above it (open the first time, then as you left it), and an edit there shows in 3D too. A texture in no set shows its normal settings; the switch stays on 3D. The switch is remembered in `gui.toml`, and the 3D view does no work while 2D is showing.
-
-- **Moving around.** Drag to orbit, scroll to zoom. Middle-drag, or Shift+drag, pans: the model follows the cursor, and the further away the camera is, the more a drag moves it. Double-click or **Home** recentres the camera.
-- **Turning the sun.** Shift+right-drag turns the sun around the model (about the vertical). The studio HDRI background does not turn with it: the renderer cannot rotate it yet. The turn is part of the View controls, so it is remembered with them.
-- **Debug view** (in *View*, or **V** to step through): *Lit* is the normal Community Shaders render. *UV checker* puts a grey checker in every shape's diffuse (base colour) slot, so stretched, mirrored or seamed UVs show; the rest of the material still draws. Albedo, normals, roughness, metallic and AO views are not offered: the renderer cannot draw them yet.
-- **Missing textures** show in solid magenta in the frame, and are listed under it in magenta. A path that is a texture of the open folder has a *Open in Textures* button that selects it in the Textures view. A missing cube map (an environment map) keeps the renderer's plain stand-in instead, because a flat colour cannot go in a cube slot.
-- **Reset view** (in *View*) puts the lights, the background and the camera back to their defaults.
-- **Copy image** (or **Ctrl+Shift+C**) copies the last frame to the clipboard, at the size it was rendered; the panel says "Copied 3D view (W×H)".
-
-## The Meshes view: shapes
-
-**Scan progress.** While a scan runs, the scan row (in the Meshes view and in the Textures view) shows a bar with the phase and its count, for example `reading 120/4000 · ETA 0:42`. The ETA appears once the phase has finished 3 items or run for 2 seconds. The ETA is the average over the last 10 seconds, as in the export drawer, and starts over with each phase.
-
-Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Select a mesh first", until a mesh is selected). Switched on, it replaces the mods and meshes list with the shape cards of the selected mesh; switched off, or when the selection clears, the list is back. The right-hand pane always shows the 3D view.
-
-A shape card shows, from the top:
-
-- **#N name — type.** N counts only the shapes of the NIF, from 0, in the order the NIF lists them; bones and other non-shapes are skipped. Hover for the NIF block index ("NIF block 12").
-- **The shader**, in bold: the lighting shader type, for example **Hair Tint (6)**, or "Effect shader".
-- **SLSF1 0x… and SLSF2 0x…** as collapsed headers. Open one to list its set flags by name, one per line, for example "Specular (0)". A bit with no known name reads "bit N".
-- The geometry line (skinned, vertices, triangles).
-- **Alpha**, in words: "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5". Blending or testing is left out when it is off, and "Alpha: none" shows when both are. Hover for the raw flags, for example "flags 0x12ED (4845)".
-- The texture-set slots, indented under the shape.
-
-A texture path that is a texture of the open folder has an **Open in Textures** button, on the shape card and on the "Users of" list's title. It switches to the Textures view, selects that texture and scrolls it into view.
-
-## Keyboard
-
-Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. Press **Ctrl+K** for the command palette: type part of an action's, a texture's or a set's name (the letters in order are enough; names that start with what you typed come first, then names that contain it). Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, Esc closes. The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
-
-While a text field has the keyboard (the search box, a name, a number), the shortcuts leave it alone: only **Ctrl+K** opens the palette, and **Esc** leaves the field. Pressing **Ctrl+S** there says "Ctrl+S: leave the text field first" in the status line. A key does nothing while its action is off (Ctrl+S with nothing to save, Ctrl+Z with nothing to undo). No shortcut acts while a dialog, a menu or a box is open; a dialog has its own Enter and Esc. In the Textures grid the arrow keys follow the order on show (search and filters applied): Left and Right step one texture, Up and Down one row. Shift with an arrow selects the range from the active texture, as a Shift-click does.
-
-| Area | Keys | Action |
-|---|---|---|
-| Global | Ctrl+K | Command palette |
-| Global | F1 or ? | Keyboard shortcuts |
-| Global | Ctrl+M | Messages |
-| Global | Ctrl+S | Save |
-| Global | Ctrl+Z | Undo |
-| Global | Ctrl+Y or Ctrl+Shift+Z | Redo |
-| Textures grid | Ctrl+A | Select every visible texture (every set when a set is active) |
-| Textures grid | Esc | Clear the selection |
-| Textures grid | Left | Select the texture to the left |
-| Textures grid | Right | Select the texture to the right |
-| Textures grid | Up | Select the texture above |
-| Textures grid | Down | Select the texture below |
-| Textures grid | Shift+Left | Extend the selection to the left |
-| Textures grid | Shift+Right | Extend the selection to the right |
-| Textures grid | Shift+Up | Extend the selection up a row |
-| Textures grid | Shift+Down | Extend the selection down a row |
-| Textures grid | Enter or Space | Open the expanded preview of the active texture |
-| Preview | Esc | Close the preview |
-| Preview | [ | Previous texture |
-| Preview | ] | Next texture |
-| Preview | L | Magnifier lens on or off |
-| Preview | T | Tile the picture 3×3 on or off |
-| Preview | P | Pin this result |
-| Preview | 1 | Show RGBA |
-| Preview | 2 | Show R |
-| Preview | 3 | Show G |
-| Preview | 4 | Show B |
-| Preview | 5 | Show A |
-| Preview | 6 | Show the α-mask |
-| Preview | PageUp | Larger mip |
-| Preview | PageDown | Smaller mip |
-| Sets | F2 | Rename the outputs of the selected sets, or the inputs of the selected textures |
-| 3D preview | Home | Recentre the 3D view (as a double-click) |
-| 3D preview | V | Next 3D debug view (Lit, UV checker) |
-| 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
-| JSON editor | F8 | Next error in the PGPatcher JSON editor |
-| JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
-| Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
-| Dialogs | Esc | Cancel the dialog |
-
-## Messages and toasts
-
-Routine results show as **toasts**: short notices at the bottom right that do not block anything. *Saved*, *Export finished: N written, M skipped, K failed*, *Scan finished: …*, *Copied 3D view*, *Picker result ignored* and the *Undid / Redid* note each appear as one. A toast fades after 4 seconds (8 seconds for a warning); at most 3 are on screen and the rest wait their turn. Holding the pointer over a toast keeps it. Anything that needs a decision (Proceed anyway, Replace or Cancel, an external change, an error that blocks) stays a dialog.
-
-The **Messages** button in the header (or **Ctrl+M**) opens the Messages panel: the last 500 entries, newest first, with the time, the severity and the text. The button shows the number of entries you have not seen yet. Every note that shows in the status line (the encoding-follows-type note, *Export cancelled*, *Picker result ignored*, *Ctrl+S: leave the text field first*) is also logged here, as are the toasts. **Clear** empties the list. The log lives in memory only; it is gone when you close the window.
-
-## Export
-
-**Export** converts the folder into the export folder (the **Export folder** button; by default `sdc-out` inside the opened folder). It cannot write into the folder it reads.
-
-- If some textures are undecided, a dialog offers **Proceed anyway** or **Cancel**. Proceeding exports only the decided textures and skips the rest; it never decides for you.
-- If a source file changed on disk since it was planned, the textures concerned show "changed on disk" and the Textures column offers **Reload**. Reload plans again, re-reading only the changed files. Export checks first and plans again by itself, so the export uses current files. The GUI also checks whenever its window regains focus.
-- The **drawer** at the bottom opens when Export starts. While the export runs its line reads *done/total · elapsed · files/s · ETA*: files per second is the average of the last 10 seconds, and the ETA appears once 3 files have finished or 2 seconds have passed. **Cancel** stops the batch; **Save report…** writes the report; **Copy CLI command** copies the matching `sdc` command; **Open export folder** opens the export folder in Explorer (greyed out, with the reason, until Export has created it); **Close** hides the drawer.
-  - The *Files* tab lists each file with its state and handles thousands of files: only the rows on screen are drawn. **Failed only** (failed, or failed validation) and **Has warnings** narrow it, and together they show the files that match both. Click a row to select that texture. **Show in Explorer** on a row selects the written output once it exists, otherwise the source file.
-  - The *Warnings* tab lists every warning on its own row: the code, the severity, then the message (wrapped; a very long one is cut at three lines and shows whole on hover) and the file, which you can click. **By code** groups them: one row per code with its count; click a code to list its files.
-- **Copy CLI command** copies the `sdc convert` command that reproduces this export from the command line (same folder, output, BC1 decoder and thread count; an NVTT path chosen in Advanced is not included: add `--nvtt <path>`). Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes.
-
 ## Sets and the PGPatcher JSON
 
 The **Sets** column is editable. It changes which textures belong to which material set, and it can write the PGPatcher JSON that tells PGPatcher how to use each PBR set.
@@ -315,6 +200,122 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 ## Complex grass
 
 A complex-grass texture is one image twice as tall as it is wide: diffuse and alpha on top, normal and specular below. Pick **complex grass** as its sub-type (under *Packed and data*), or let sdc tag it after a Meshes-page scan that included plugins: a texture used by a GRAS (grass) record, 1:2, with a valid detection corner and a normal-map bottom half is tagged automatically. The vanilla target does not list it (the vanilla shader has no complex grass). Warnings name what is wrong: `GRASS-SHAPE`, `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE`, `GRASS-VANILLA`. The CLI never auto-tags: if you later run `sdc convert` on the same folder, tag the grass files in `sdc.toml` (`[files]`) or the CLI re-encodes them as diffuse.
+
+## The preview
+
+Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. In the preview, **[** and **]** step to the previous and next texture in the order the Textures column shows, **1** to **6** pick the channel buttons from left to right, **PageUp** and **PageDown** step through the mips, **L** turns the lens on or off and **T** the 3×3 tiling.
+
+- **Live encode** is **off by default**. Encoding happens when you press **Encode now**; switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
+- Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
+- The preview encodes only mips whose larger side is at most the **preview size limit**: **4096 by default**, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and the preview says so.
+- Toolbar: channel isolation (RGBA and an alpha mask), the mip slider, sRGB / UNORM display, *Side by side* or *Split* layout, a *Heatmap* of the difference to the source, *Fit* and *1:1*, *Lens* and *Tile 3×3*. Scroll zooms and dragging pans. Readouts under the viewports show the PSNR, alpha and normal-length checks for the mip on show.
+- **Texel readout:** point at the picture and the strip under the viewports shows the texel under the cursor: its coordinates at the mip on show, the source and the encoded RGBA as 0–255 and as floats, and the difference per channel with its largest (the channel the heatmap measures). The numbers are the stored values; the first line says how the view reads them (sRGB-encoded, or linear under UNORM; HDR formats show floats only). A channel button narrows the readout to that channel. For a normal map it also shows both normals as vectors, the encoded one's length and the angle between them in degrees. A side the preview does not hold (no encode yet, a DDS input's source, a mip above the limit) shows "—". Side by side and Split read the same texel for both sides.
+- **Lens** (**L**): a circle 160 points across that follows the cursor and magnifies the view 8× with no smoothing, centred on the texel under the cursor with a crosshair. It shows in both viewports (in Split, each side of the divider shows its own side).
+- **Tile 3×3** (**T**): the picture repeats three by three, to check the seams. Zoom, pan and the readout work on the tiled view; *Fit* fits all nine copies.
+- **Exposure:** for HDR formats (BC6H, RGBA16F) a slider from −8 to +8 EV scales the values by 2^EV before the tone map. It starts at 0 for every texture.
+- **Heatmap legend:** with the heatmap on, a colour bar under the viewports shows the scale from 0 to the *full scale* (the difference drawn white), which a slider sets from 0.005 to 0.5 (0.1 by default, about 25 codes of 255). The heatmap is made in the background. While a new one is made after a full-scale change the previous one stays on show (a result for an older scale is shown as soon as it lands, so dragging the slider never blanks it); after a mip change the plain image shows instead, because a heatmap of another mip does not fit. The legend label reads "updating…" greyed until the current heatmap is ready.
+- **Pin and compare:** *Pin this result* (**P**) in the toolbar keeps the encode on show, with the settings that made it, so that the next encode can be compared against it ("is NVTT, or a higher effort, worth it on this texture").
+  - **What it keeps.** The finished encode for all its mips (not re-encoded), and a summary of its format, colour tag, encoder and effort, alpha policy and mip options, and its PSNR against the source. The button is off until the encode on show is finished and matches the settings (not stale). Pinning again replaces the old pin, so there is at most one.
+  - **When it goes.** Closing the preview, moving to another texture and opening a folder drop the pin and free its images and its GPU texture. *Unpin* drops it too. Changing settings on the same texture keeps it: that is the point.
+  - **While pinned.** *Compare: Source | Pinned* sets what the left side shows in *Side by side* and *Split*. *Pinned* puts the pinned encode on the left and the current encode on the right (pinning turns it on). Each side has a caption with its settings summary and its PSNR against the source. The texel readout adds the pinned values and the difference between the pinned and the current encode (two more lines), the lens magnifies both sides, and the heatmap shows the difference between the current and the pinned encode, labelled "Current vs Pinned". If the pinned encode has no mip you are on (it was made under another size limit), the left side shows "— not in the pinned encode".
+- A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
+- With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
+
+
+## The 3D preview
+
+The Meshes view's 3D panel and a set's 3D view work the same way.
+
+**A set in 3D.** The **2D | 3D** switch at the left of a set's header row (next to its name and *Input name…*) changes the centre pane in place. *2D* (the default) shows the set editor: the slot cards and the TruePBR settings. *3D* shows the set's 3D view across the whole centre instead, with its own controls (Shader folder…, the Community Shaders toggle, *View*, Copy image); the TruePBR settings (with the coat settings under Multilayer) and, for an Advanced skin set, the skin settings fold in sections above it, so an edit there shows in 3D right away. The header row stays above both. While the switch is on 3D, selecting any texture of a set (from the set or straight from the Textures column) shows that set's 3D view: the texture's own settings fold in a *<name> settings* section above it (open the first time, then as you left it), and an edit there shows in 3D too. A texture in no set shows its normal settings; the switch stays on 3D. The switch is remembered in `gui.toml`, and the 3D view does no work while 2D is showing.
+
+- **Moving around.** Drag to orbit, scroll to zoom. Middle-drag, or Shift+drag, pans: the model follows the cursor, and the further away the camera is, the more a drag moves it. Double-click or **Home** recentres the camera.
+- **Turning the sun.** Shift+right-drag turns the sun around the model (about the vertical). The studio HDRI background does not turn with it: the renderer cannot rotate it yet. The turn is part of the View controls, so it is remembered with them.
+- **Debug view** (in *View*, or **V** to step through): *Lit* is the normal Community Shaders render. *UV checker* puts a grey checker in every shape's diffuse (base colour) slot, so stretched, mirrored or seamed UVs show; the rest of the material still draws. Albedo, normals, roughness, metallic and AO views are not offered: the renderer cannot draw them yet.
+- **Missing textures** show in solid magenta in the frame, and are listed under it in magenta. A path that is a texture of the open folder has a *Open in Textures* button that selects it in the Textures view. A missing cube map (an environment map) keeps the renderer's plain stand-in instead, because a flat colour cannot go in a cube slot.
+- **Reset view** (in *View*) puts the lights, the background and the camera back to their defaults.
+- **Copy image** (or **Ctrl+Shift+C**) copies the last frame to the clipboard, at the size it was rendered; the panel says "Copied 3D view (W×H)".
+
+## The Meshes view: shapes
+
+**Scan progress.** While a scan runs, the scan row (in the Meshes view and in the Textures view) shows a bar with the phase and its count, for example `reading 120/4000 · ETA 0:42`. The ETA appears once the phase has finished 3 items or run for 2 seconds. The ETA is the average over the last 10 seconds, as in the export drawer, and starts over with each phase.
+
+Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Select a mesh first", until a mesh is selected). Switched on, it replaces the mods and meshes list with the shape cards of the selected mesh; switched off, or when the selection clears, the list is back. The right-hand pane always shows the 3D view.
+
+A shape card shows, from the top:
+
+- **#N name — type.** N counts only the shapes of the NIF, from 0, in the order the NIF lists them; bones and other non-shapes are skipped. Hover for the NIF block index ("NIF block 12").
+- **The shader**, in bold: the lighting shader type, for example **Hair Tint (6)**, or "Effect shader".
+- **SLSF1 0x… and SLSF2 0x…** as collapsed headers. Open one to list its set flags by name, one per line, for example "Specular (0)". A bit with no known name reads "bit N".
+- The geometry line (skinned, vertices, triangles).
+- **Alpha**, in words: "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5". Blending or testing is left out when it is off, and "Alpha: none" shows when both are. Hover for the raw flags, for example "flags 0x12ED (4845)".
+- The texture-set slots, indented under the shape.
+
+A texture path that is a texture of the open folder has an **Open in Textures** button, on the shape card and on the "Users of" list's title. It switches to the Textures view, selects that texture and scrolls it into view.
+
+## Export
+
+**Export** converts the folder into the export folder (the **Export folder** button; by default `sdc-out` inside the opened folder). It cannot write into the folder it reads.
+
+- If some textures are undecided, a dialog offers **Proceed anyway** or **Cancel**. Proceeding exports only the decided textures and skips the rest; it never decides for you.
+- If a source file changed on disk since it was planned, the textures concerned show "changed on disk" and the Textures column offers **Reload**. Reload plans again, re-reading only the changed files. Export checks first and plans again by itself, so the export uses current files. The GUI also checks whenever its window regains focus.
+- The **drawer** at the bottom opens when Export starts. While the export runs its line reads *done/total · elapsed · files/s · ETA*: files per second is the average of the last 10 seconds, and the ETA appears once 3 files have finished or 2 seconds have passed. **Cancel** stops the batch; **Save report…** writes the report; **Copy CLI command** copies the matching `sdc` command; **Open export folder** opens the export folder in Explorer (greyed out, with the reason, until Export has created it); **Close** hides the drawer.
+  - The *Files* tab lists each file with its state and handles thousands of files: only the rows on screen are drawn. **Failed only** (failed, or failed validation) and **Has warnings** narrow it, and together they show the files that match both. Click a row to select that texture. **Show in Explorer** on a row selects the written output once it exists, otherwise the source file.
+  - The *Warnings* tab lists every warning on its own row: the code, the severity, then the message (wrapped; a very long one is cut at three lines and shows whole on hover) and the file, which you can click. **By code** groups them: one row per code with its count; click a code to list its files.
+- **Copy CLI command** copies the `sdc convert` command that reproduces this export from the command line (same folder, output, BC1 decoder and thread count; an NVTT path chosen in Advanced is not included: add `--nvtt <path>`). Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes.
+
+## Messages and toasts
+
+Routine results show as **toasts**: short notices at the bottom right that do not block anything. *Saved*, *Export finished: N written, M skipped, K failed*, *Scan finished: …*, *Copied 3D view*, *Picker result ignored* and the *Undid / Redid* note each appear as one. A toast fades after 4 seconds (8 seconds for a warning); at most 3 are on screen and the rest wait their turn. Holding the pointer over a toast keeps it. Anything that needs a decision (Proceed anyway, Replace or Cancel, an external change, an error that blocks) stays a dialog.
+
+The **Messages** button in the header (or **Ctrl+M**) opens the Messages panel: the last 500 entries, newest first, with the time, the severity and the text. The button shows the number of entries you have not seen yet. Every note that shows in the status line (the encoding-follows-type note, *Export cancelled*, *Picker result ignored*, *Ctrl+S: leave the text field first*) is also logged here, as are the toasts. **Clear** empties the list. The log lives in memory only; it is gone when you close the window.
+
+## Keyboard
+
+Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. Press **Ctrl+K** for the command palette: type part of an action's, a texture's or a set's name (the letters in order are enough; names that start with what you typed come first, then names that contain it). Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, Esc closes. The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
+
+While a text field has the keyboard (the search box, a name, a number), the shortcuts leave it alone: only **Ctrl+K** opens the palette, and **Esc** leaves the field. Pressing **Ctrl+S** there says "Ctrl+S: leave the text field first" in the status line. A key does nothing while its action is off (Ctrl+S with nothing to save, Ctrl+Z with nothing to undo). No shortcut acts while a dialog, a menu or a box is open; a dialog has its own Enter and Esc. In the Textures grid the arrow keys follow the order on show (search and filters applied): Left and Right step one texture, Up and Down one row. Shift with an arrow selects the range from the active texture, as a Shift-click does.
+
+| Area | Keys | Action |
+|---|---|---|
+| Global | Ctrl+K | Command palette |
+| Global | F1 or ? | Keyboard shortcuts |
+| Global | Ctrl+M | Messages |
+| Global | Ctrl+S | Save |
+| Global | Ctrl+Z | Undo |
+| Global | Ctrl+Y or Ctrl+Shift+Z | Redo |
+| Textures grid | Ctrl+A | Select every visible texture (every set when a set is active) |
+| Textures grid | Esc | Clear the selection |
+| Textures grid | Left | Select the texture to the left |
+| Textures grid | Right | Select the texture to the right |
+| Textures grid | Up | Select the texture above |
+| Textures grid | Down | Select the texture below |
+| Textures grid | Shift+Left | Extend the selection to the left |
+| Textures grid | Shift+Right | Extend the selection to the right |
+| Textures grid | Shift+Up | Extend the selection up a row |
+| Textures grid | Shift+Down | Extend the selection down a row |
+| Textures grid | Enter or Space | Open the expanded preview of the active texture |
+| Preview | Esc | Close the preview |
+| Preview | [ | Previous texture |
+| Preview | ] | Next texture |
+| Preview | L | Magnifier lens on or off |
+| Preview | T | Tile the picture 3×3 on or off |
+| Preview | P | Pin this result |
+| Preview | 1 | Show RGBA |
+| Preview | 2 | Show R |
+| Preview | 3 | Show G |
+| Preview | 4 | Show B |
+| Preview | 5 | Show A |
+| Preview | 6 | Show the α-mask |
+| Preview | PageUp | Larger mip |
+| Preview | PageDown | Smaller mip |
+| Sets | F2 | Rename the outputs of the selected sets, or the inputs of the selected textures |
+| 3D preview | Home | Recentre the 3D view (as a double-click) |
+| 3D preview | V | Next 3D debug view (Lit, UV checker) |
+| 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
+| JSON editor | F8 | Next error in the PGPatcher JSON editor |
+| JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
+| Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
+| Dialogs | Esc | Cancel the dialog |
 
 ## Where settings live
 

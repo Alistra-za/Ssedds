@@ -901,6 +901,26 @@ Rulings for the Important findings of the 2026-10-13 reliability audit (round b)
 
 ## Note AG — GUI suggestions, Tessalith (2026-10-14)
 
+Index by task (numbers are never reassigned, so a task's rulings can be non-contiguous):
+- Plan rulings: AG1-AG8. Task 0 rename: AG1. Task 1 colour fields: AG9 (AG2, AG10).
+- Task 2 undo, dialog keys, Delete set, Rename menu, hover text: AG10-AG16.
+- Task 3 layout memory: AG17-AG21.
+- Task 4 keyboard, sheet, palette: AG22-AG26.
+- Task 4b NiAlphaProperty: AG27-AG31, AG33.
+- Task 5 export folder, Explorer, progress, drawer: AG32, AG34-AG39 (AG6 taskbar skipped: AG36).
+- Task 6 file pickers: AG40-AG45.
+- Task 7 Textures filters, sort, tile size: AG46-AG53.
+- Task 8 readout, lens, exposure, tiling, heatmap: AG54-AG63.
+- Task 9 pin and compare: AG64-AG71.
+- Task 10 3D pan, sun, debug views, magenta, Copy image, in-place 3D: AG72-AG78, AG87-AG88.
+- Task 10b Advanced skin card, skin sets with no JSON: AG79-AG86, AG89-AG90.
+- Task 11 open progress, Cancel: AG91-AG95 (no streaming thumbnails: AG94).
+- Task 12 Used by meshes, Open in Textures, drop on slot, Fill from names: AG96-AG100, AG105.
+- Task 12b subsurface selector: AG101-AG104, AG110.
+- Task 13 JSON errors in the editor: AG106-AG109.
+- Task 14 toasts, Messages, RNM preview, size estimate: AG111-AG120a.
+- Task 14b per-key drag: AG121-AG123.
+- Later notes: AH (`_m` alpha, Enable parallax), AI (Meshes shapes), AJ (coat under Multilayer, auto flags), AK (hair cutout + blend).
 - **AG1 Rename scope (owner, 2026-10-14: the CLI stays `sdc`).** Rename what the user sees, keep what is on disk. Renamed: the GUI binary (`[[bin]] name = "tessalith"`, `tessalith.exe`), the window titles ("Tessalith", `sdc_gui::PRODUCT_NAME`), the product name in GUI text, docs and `THIRD_PARTY_NOTICES.md`, the export report header, thread names and stderr prefixes. The CLI binary, clap `name` and "Copy CLI command" stay `sdc`; its `--help` about line says "sdc — the Tessalith command line". Kept: `sdc.toml`, `sdc-project.toml`, `%LOCALAPPDATA%\sdc\` and `%APPDATA%\sdc\` (scan.db, gui.toml, logs, config, presets), the `SDC_*` env vars, the package and lib names (`sdc-gui`, `sdc_gui`), the `_sdc/` folder, code ids, engine version 0.7.0. Why: renaming those orphans every existing project and the scan DB; doing it properly is a migration item, which needs the owner's word.
 - **AG2 Colour inputs:** every colour input gets two things.
   - A swatch that opens egui's colour-square popup (`egui::color_picker::color_picker_color32`, Alpha::Opaque).

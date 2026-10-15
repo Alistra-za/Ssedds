@@ -91,7 +91,7 @@ The left column lists mods in priority order. Click a mod's name or its **▼** 
 Select a mesh to see:
 
 - **In game** / **Source**: the copy that wins in game, or the source mod's copy of a PGPatcher-patched mesh.
-- **Shapes**: each shape with its shader, texture slots and alpha settings. **3D** shows the mesh.
+- **Shapes**: the **Shapes** button next to the list title swaps the list for the selected mesh's shape cards: number and type, shader, SLSF1/SLSF2 flags by name, geometry, alpha in words (blend, test, threshold) and the texture slots, with **Open in Textures** for files in the open folder. The right pane shows the mesh in 3D.
 - **Plugin overrides**: plugin records that use this mesh. **Show inert** includes records that have no effect.
 - Override and conflict information ("Overridden by …").
 

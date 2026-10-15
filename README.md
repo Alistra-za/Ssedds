@@ -29,7 +29,8 @@ What each tool does for a Skyrim texture without extra scripting.
 | Mod scan: meshes decide alpha meaning and set shader | ✅ [8] | ❌ | ❌ | ❌ | ❌ |
 | Decode-and-check after every encode, with Skyrim rules | ✅ | ❌ | ❌ | ⚠️ [9] | ❌ |
 | Validate DDS files made by other tools | ✅ | ⚠️ [10] | ❌ | ⚠️ [9] | ⚠️ [1] |
-| GUI with encoded-mip preview | ✅ | ❌ | ✅ | ✅ | ❌ |
+| GUI with encoded-mip preview, pixel readout, pin and compare | ✅ | ❌ | ✅ | ✅ | ❌ |
+| NiAlphaProperty (alpha blend/test) edited per TruePBR set | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Batch / command line | ✅ | ✅ | ✅ | ✅ | ✅ |
 | NVTT as the BC7 / BC6H encoder | ⚠️ [11] | ❌ | ✅ | ❌ | ❌ |
 
