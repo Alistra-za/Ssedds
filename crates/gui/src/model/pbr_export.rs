@@ -5,12 +5,15 @@ use super::sets::{
     engine_inputs, item_output_key, output_candidates, set_views, SetView, SlotFill, SlotKind,
 };
 use super::{AppModel, ViewCache};
-use crate::pgp::prefix::{check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls};
+use crate::pgp::prefix::{
+    check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls, rename_hits_elsewhere,
+    subsurface_pitfalls,
+};
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, to_text, EntryInput};
 use engine::config::Target;
-use engine::sets::OutputKey;
+use engine::sets::{same_id, OutputKey};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -187,7 +190,12 @@ pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
         })
         .map(|v| {
             let e = EntryInput {
-                settings: v.settings.clone(),
+                settings: crate::model::auto_flags::resolved_for(
+                    v.pbr,
+                    &v.slots,
+                    &v.settings,
+                    &crate::model::auto_flags::hint(m, v),
+                ),
                 slots: slots_of(v, &views, &paths, m),
                 derived_match: v.derived_match.clone().unwrap_or_default(),
                 section: false,
@@ -241,6 +249,15 @@ pub fn missing_texture_texts(
         if feature_on(s, f) && blocked_by(s, f).is_none() && !has(slot) {
             out.push(format!("{id}: {name} is on but the set has no {what}"));
         }
+    }
+    // Foliage reads the same `_s` slot 8 as Standard (AG101).
+    if s.get(crate::pgp::settings::FOLIAGE_KEY) == Some(&Value::Bool(true))
+        && blocked_by(s, Feature::Subsurface).is_none()
+        && !has(SlotKind::Subsurface)
+    {
+        out.push(format!(
+            "{id}: subsurface foliage is on but the set has no subsurface texture (_s)"
+        ));
     }
     if feature_on(s, Feature::Multilayer)
         && s.get("coat_normal") == Some(&Value::Bool(true))
@@ -447,12 +464,19 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
     if m.target != Target::Cs {
         return vec![];
     }
+    let known = m.known_textures(Some(0));
     set_views(m)
         .iter()
         .filter(|v| v.pbr)
         .flat_map(|v| {
-            pitfalls(&v.settings, v.derived_match.as_deref().unwrap_or(""))
+            let derived = v.derived_match.as_deref().unwrap_or("");
+            pitfalls(&v.settings, derived)
                 .into_iter()
+                .chain(subsurface_pitfalls(
+                    &v.settings,
+                    crate::model::auto_flags::hint(m, v).tree_anim,
+                ))
+                .chain(rename_hits_elsewhere(&v.settings, derived, &known))
                 .map(move |w| issue(v, format!("{}: {w}", v.id)))
         })
         .collect()
@@ -627,8 +651,18 @@ pub fn finish(
             Some(why) => notes.push(format!("not in JSON: {id} ({why})")),
         }
     }
-    if kept.is_empty() {
-        notes.push("PGPatcher JSON not written: no PBR set exported completely".into());
+    // DECISIONS AF1: delete sections alone would strip vanilla shapes with no PBR replacement; keep the old JSON.
+    if p.entries.iter().all(|(_, _, e)| e.section) {
+        notes.push(
+            "PGPatcher JSON not written: there is no PBR set, and delete sections alone are not written".into(),
+        );
+        return Finish::Nothing;
+    }
+    if kept.iter().all(|e| e.section) {
+        notes.push(
+            "PGPatcher JSON not written: no PBR set exported completely (the previous JSON is kept; delete sections alone would remove shapes with no PBR replacement)"
+                .into(),
+        );
         return Finish::Nothing;
     }
     let doc = document(&kept);
@@ -681,4 +715,60 @@ pub fn unfinished_note(p: &PendingJson, failed: bool) -> Option<String> {
     }
     let why = if failed { "failed" } else { "was cancelled" };
     Some(format!("PGPatcher JSON not written: the export {why}"))
+}
+
+/// What the PGPatcher JSON editor shows (DECISIONS AG106): the export blocks (errors) and the pitfalls the export
+/// asks about (warnings), each on its entry or in the general box. An Advanced skin set (AG90) or any set that is
+/// not a TruePBR set has no entry and no line here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JsonIssues {
+    /// `(set id, text)` for an entry in the editor.
+    pub errors: Vec<(String, String)>,
+    pub warnings: Vec<(String, String)>,
+    /// Belong to no entry: project-wide blocks, and a TruePBR set that has no entry.
+    pub general_errors: Vec<String>,
+    pub general_warnings: Vec<String>,
+}
+
+impl JsonIssues {
+    pub fn error_count(&self) -> usize {
+        self.errors.len() + self.general_errors.len()
+    }
+    pub fn warning_count(&self) -> usize {
+        self.warnings.len() + self.general_warnings.len()
+    }
+}
+
+/// Sorts the blocks and the pitfalls onto `entry_ids` (the sets that have an entry), by set id.
+pub fn json_issues(m: &AppModel, entry_ids: &[&str]) -> JsonIssues {
+    let views = set_views(m);
+    let mut out = JsonIssues::default();
+    let mut place = |i: ExportIssue, error: bool| {
+        let owned = entry_ids.iter().any(|e| same_id(e, &i.set_id));
+        if owned {
+            // "<set id>: <message>" shows as the message, under the entry that says whose it is.
+            let text = i.text.strip_prefix(&format!("{}: ", i.set_id));
+            let text = text.unwrap_or(&i.text).to_string();
+            let to = if error {
+                &mut out.errors
+            } else {
+                &mut out.warnings
+            };
+            to.push((i.set_id, text));
+        } else if i.set_id.is_empty() || views.iter().any(|v| v.pbr && same_id(&v.id, &i.set_id)) {
+            let to = if error {
+                &mut out.general_errors
+            } else {
+                &mut out.general_warnings
+            };
+            to.push(i.text);
+        }
+    };
+    for i in export_blocks(m) {
+        place(i, true);
+    }
+    for i in export_asks(m) {
+        place(i, false);
+    }
+    out
 }

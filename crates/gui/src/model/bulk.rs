@@ -2,7 +2,7 @@
 //! commands. No egui types.
 use super::fields::encoding_options;
 use super::fields::{
-    all_fields, field_hidden, field_view, filter_option_lock, views_of, FieldView, EDGE_FIELD,
+    all_fields, field_view, filter_option_lock, hidden_reason, views_of, FieldView, EDGE_FIELD,
     FIELDS, FILTER_FIELD, LEVELS_FIELD,
 };
 use super::sets::{
@@ -115,10 +115,10 @@ impl AppModel {
         self.multi_in_effect()
     }
 
-    fn visible_keys(&self) -> Vec<String> {
-        self.visible_items()
-            .into_iter()
-            .map(|i| self.items[i].key.clone())
+    pub(super) fn visible_keys(&self) -> Vec<String> {
+        self.visible_shared()
+            .iter()
+            .map(|&i| self.items[i].key.clone())
             .collect()
     }
 
@@ -278,7 +278,6 @@ impl AppModel {
 /// Why a texture without a job takes no write.
 pub const NO_SETTINGS: &str = "has no settings of its own (packed, skipped or failed)";
 const INVALID: &str = "not a valid value for this setting";
-const CUTOUT_ONLY: &str = "used only by cutout and cutout + blend";
 const NOT_ALLOWED: &str = "not valid for this map";
 
 /// What a bulk edit does to one field.
@@ -329,8 +328,8 @@ fn skip_of(
     let Some(job) = job else {
         return Some(NO_SETTINGS.into());
     };
-    if field_hidden(&job.profile, field) {
-        return Some(CUTOUT_ONLY.into());
+    if let Some(why) = hidden_reason(&job.profile, field) {
+        return Some(why.into());
     }
     let Some(view) = view else {
         return Some(format!("{field} is not a texture setting"));
@@ -357,7 +356,12 @@ fn skip_of(
             return Some(lock.into());
         }
         // The Format row writes a (format, tag) pair: one this texture's sub-type does not allow is skipped.
-        if let Some(e) = encoding_of(field, v) {
+        // A lone tag pairs with the texture's own (explicit or effective) format (DECISIONS AF5).
+        let tag = (field == "color.tag")
+            .then(|| serde_json::from_value::<ColorTag>(v.clone()).ok())
+            .flatten()
+            .map(|t| (job.profile.format, t));
+        if let Some(e) = encoding_of(field, v).or(tag) {
             if !engine::policy::allowed_encodings(job.profile.subtype, target).contains(&e) {
                 return Some(NOT_ALLOWED.into());
             }
@@ -648,7 +652,8 @@ impl AppModel {
         };
         // R13: the format goes with its tag, as a pair (the Format row's value), so `skip_of` checks it against
         // each target's sub-type and the write is `set_format`; the tag is then not copied on its own.
-        let pair = fields.iter().any(|f| f == "format");
+        // A source with a tag but no format of its own copies the tag alone (F3a ledger R15, DECISIONS AF5).
+        let pair = fields.iter().any(|f| f == "format") && p.file_value(from, "format").is_some();
         let from_job = self.item(from).and_then(|i| i.job.as_ref());
         let writes: Vec<CopyWrite> = fields
             .iter()
@@ -846,6 +851,8 @@ pub enum MenuAction {
     RenameOutputs,
     /// F3b D5: remove the `[inputs]` aliases of the selected textures.
     ClearInputAlias,
+    /// Task 5: select the source file of texture `key` in Explorer.
+    ShowInExplorer(String),
 }
 
 /// One entry of a right-click menu; `disabled` is the hover reason.
@@ -1013,7 +1020,17 @@ impl AppModel {
         ]
         .into_iter()
         .chain(self.rename_entries(false))
+        .chain(active.filter(|_| n == 1).map(|k| self.show_entry(k)))
         .collect()
+    }
+
+    /// "Show in Explorer" for the source of texture `key`; off, with the reason, when the file is gone.
+    fn show_entry(&self, key: &str) -> MenuEntry {
+        MenuEntry {
+            action: MenuAction::ShowInExplorer(key.to_string()),
+            label: "Show in Explorer".into(),
+            disabled: self.reveal_problem(key),
+        }
     }
 
     /// F3b D5: the rename entries both menus append. Inputs need `sdc.toml`, Outputs `sdc-project.toml`.
@@ -1026,6 +1043,8 @@ impl AppModel {
             .and_then(|d| d.error())
             .map(|e| format!("sdc-project.toml is read-only: {e}"));
         let plural = |n: usize, one: &str, many: &str| if n == 1 { one } else { many }.to_string();
+        // The key comes from the action list (item 5), which the shortcut sheet shows too.
+        let f2 = format!("  {}", crate::ui::actions::keys_text("rename"));
         let (ni, no) = (
             self.rename_keys(RenameMode::Inputs).len(),
             self.rename_keys(RenameMode::Outputs).len(),
@@ -1035,7 +1054,7 @@ impl AppModel {
             label: format!(
                 "{}…{}",
                 plural(ni, "Rename input", "Rename inputs"),
-                if sets { "" } else { "  F2" }
+                if sets { "" } else { f2.as_str() }
             ),
             disabled: toml
                 .clone()
@@ -1046,7 +1065,7 @@ impl AppModel {
             label: format!(
                 "{}…{}",
                 plural(no, "Rename output", "Rename outputs"),
-                if sets { "  F2" } else { "" }
+                if sets { f2.as_str() } else { "" }
             ),
             disabled: project.or_else(|| (no == 0).then(|| "no set writes an output".into())),
         };
@@ -1165,6 +1184,11 @@ impl AppModel {
             },
         ];
         menu.extend(links);
+        // The member that fills this slot has a source file to show.
+        let own = v.slots.iter().find(|(k, _)| **k == kind);
+        if let Some((_, super::sets::SlotFill::Own { item })) = own {
+            menu.push(self.show_entry(item));
+        }
         menu.push(MenuEntry {
             action: MenuAction::SlotLock {
                 set: id.clone(),
@@ -1202,6 +1226,7 @@ impl AppModel {
                 let keys = self.aliased_selection();
                 self.clear_input_alias(&keys);
             }
+            MenuAction::ShowInExplorer(key) => return self.reveal_item(&key).err(),
         }
         None
     }

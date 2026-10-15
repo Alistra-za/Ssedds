@@ -863,7 +863,7 @@ pub fn member_defaults(shader: Shader, st: Subtype) -> Vec<(&'static str, serde_
     match (shader, st) {
         (Shader::Hair, Subtype::Diffuse) => {
             vec![
-                ("alpha.policy", json!("cutout")),
+                ("alpha.policy", json!("cutout_blend")),
                 ("mips.coverage", json!("on")),
             ]
         }

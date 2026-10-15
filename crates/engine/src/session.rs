@@ -137,6 +137,13 @@ impl AnalysisCache {
     pub(crate) fn make_thumb(&self, img: &Rgba32F, info: &SourceInfo) -> Option<Arc<Thumbnail>> {
         self.thumbnails.then(|| Arc::new(make_thumbnail(img, info)))
     }
+    /// The pixel size of the source analysed at `path` while its size and mtime still match `stamp`; no file is read.
+    pub fn dims(&self, path: &Path, stamp: SourceStamp) -> Option<(u32, u32)> {
+        lock(&self.files)
+            .get(path)
+            .filter(|e| e.stamp == stamp)
+            .map(|e| (e.analysis.width, e.analysis.height))
+    }
     pub(crate) fn file(&self, path: &Path, stamp: SourceStamp) -> Option<(Analysis, SourceInfo)> {
         lock(&self.files)
             .get(path)

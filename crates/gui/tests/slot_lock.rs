@@ -295,3 +295,35 @@ fn auto_retyping_leaves_a_texture_borrowed_into_a_locked_slot_alone() {
         before
     );
 }
+
+/// Audit 2026-10-13b F-I2 (DECISIONS AF6): the JSON editor's x on a slotN pill goes through `set_json_value`, which
+/// keeps a locked slot's command, as the Slot commands dialog does.
+#[test]
+fn the_json_editor_cannot_remove_a_locked_slots_command() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    m.set_slot_command(SET, 6, SlotCommand::Clear).unwrap();
+    m.set_slot_lock(SET, 6, true).unwrap();
+    let slot6 = |m: &AppModel| {
+        set_views(m)
+            .into_iter()
+            .find(|v| v.id == SET)
+            .unwrap()
+            .settings
+            .get("slot6")
+            .cloned()
+    };
+    assert_eq!(slot6(&m), Some(json!("")));
+    m.set_json_value(SET, "slot6", None);
+    idle(&mut m);
+    assert_eq!(
+        slot6(&m),
+        Some(json!("")),
+        "the locked slot keeps its command"
+    );
+    m.set_slot_lock(SET, 6, false).unwrap();
+    m.set_json_value(SET, "slot6", None);
+    idle(&mut m);
+    assert_eq!(slot6(&m), None, "unlocked, the x removes it");
+}

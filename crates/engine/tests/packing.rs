@@ -468,11 +468,61 @@ fn an_explicit_height_fill_still_applies() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "iron_roughness.png", r);
     put(d.path(), "iron_metallic.png", |_, _| 40);
-    let o = convert(d.path(), Target::Cpm, &["packing.fill.height=128"]);
+    // DECISIONS AH2: a fill is a constant alpha, so it is written only with parallax turned on.
+    let o = convert(
+        d.path(),
+        Target::Cpm,
+        &[
+            "packing.fill.height=128",
+            "subtype:complex_material.alpha.parallax=true",
+        ],
+    );
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     assert!(!defaulted(&o, "iron_metallic.png").contains(&"A".to_string()));
     let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
     assert_channel(px, 3, 1, |_, _| 128);
+}
+
+/// DECISIONS AH2: a height fill alone is a constant alpha, so parallax stays off and the alpha is exactly 0.
+#[test]
+fn a_height_fill_without_parallax_writes_alpha_0() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", r);
+    put(d.path(), "iron_metallic.png", |_, _| 40);
+    let o = convert(d.path(), Target::Cpm, &["packing.fill.height=128"]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let job = planned(&o, "iron_metallic.png");
+    assert_eq!(job["profile"]["alpha"]["parallax"], false);
+    assert_eq!(
+        job["provenance"]["alpha.parallax"],
+        "analysis:constant-alpha"
+    );
+    for (l, px) in levels(&dds(d.path(), "iron_m.dds")).iter().enumerate() {
+        assert!(px.iter().all(|p| p[3] == 0), "mip {l}");
+    }
+}
+
+/// DECISIONS AH1/AH2: the checks see the final parallax value. A 255 fill with parallax on writes 255, so turning
+/// exact opaque off on BC7 is ALPHA-EXACT-OFF-M again.
+#[test]
+fn a_255_fill_with_parallax_on_and_exact_opaque_off_is_flagged() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "iron_roughness.png", r);
+    put(d.path(), "iron_metallic.png", |_, _| 40);
+    let o = convert(
+        d.path(),
+        Target::Cpm,
+        &[
+            "packing.fill.height=255",
+            "subtype:complex_material.alpha.parallax=true",
+            "subtype:complex_material.alpha.exact_opaque=false",
+        ],
+    );
+    assert!(
+        warnings(&o).contains(&Code::AlphaExactOffM),
+        "{:?}",
+        warnings(&o)
+    );
 }
 
 /// Note R-fills-1: a forced `_rfaos` without a fuzz source writes G = 0, or the fuzz fill.

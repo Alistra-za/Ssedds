@@ -14,7 +14,7 @@ use std::path::PathBuf;
 #[command(
     name = "sdc",
     version,
-    about = "Skyrim SE/AE DDS converter (working name)"
+    about = "sdc — the Tessalith command line: Skyrim SE/AE DDS converter"
 )]
 pub struct Cli {
     #[command(subcommand)]

@@ -67,6 +67,7 @@
         "FMT-PERCEPTUAL-DATA",
         "FMT-HDR-SOURCE",
         "ALPHA-EXACT-OFF-M",
+        "ALPHA-PARALLAX-NO-ALPHA",
         "ALPHA-254",
         "ALPHA-NEAR-OPAQUE",
         "ALPHA-PBR-NORMAL-DROPPED",

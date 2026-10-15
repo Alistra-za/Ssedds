@@ -5,12 +5,13 @@ use serde_json::Value;
 pub type Settings = std::collections::BTreeMap<String, Value>;
 
 /// Glint values a freshly enabled glint starts from (spec §4.3; TruePBR-Manager's widget values, which it then
-/// overwrote with zeros).
+/// overwrote with zeros). Three moved in Task 14b (DECISIONS AG123): a value outside the observed p1-p99 band is now the
+/// observed median.
 pub const GLINT_DEFAULTS: [(&str, f64); 4] = [
     ("glint.screen_space_scale", 1.5),
-    ("glint.log_microfacet_density", 40.0),
-    ("glint.microfacet_roughness", 0.015),
-    ("glint.density_randomization", 2.0),
+    ("glint.log_microfacet_density", 10.0),
+    ("glint.microfacet_roughness", 1.0),
+    ("glint.density_randomization", 5.0),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -80,13 +81,52 @@ pub fn blocked_by(s: &Settings, f: Feature) -> Option<Feature> {
     })
 }
 
-/// PBR grass design §4.3 (rulings R2, R3): the settings a `pbr_grass` set shows, checks and exports. The keys the
-/// grass shader ignores are dropped; subsurface, the only translucency grass has, is on unless the set says `false`,
-/// when the set has an `_s` (without one, export would block on it).
-pub fn grass_view(s: &mut Settings, has_subsurface_map: bool) {
+/// PBR grass design §4.3 (rulings R2, R3): the settings a `pbr_grass` set shows, checks and exports: the keys the
+/// grass shader ignores are dropped. Subsurface for an `_s` comes from the auto flags, which switch on no key this
+/// view drops (`SsHint::grass`, DECISIONS AL8).
+pub fn grass_view(s: &mut Settings) {
     s.retain(|k, _| !super::schema::grass_ignores(k));
-    if has_subsurface_map {
-        s.entry("subsurface".to_string())
-            .or_insert(Value::Bool(true));
+}
+
+/// The TruePBR card's Subsurface selector (owner, 2026-10-14; DECISIONS AG101): `subsurface` is Standard,
+/// `subsurface_foliage` is Foliage, and both stored is a conflict that is shown, never rewritten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubMode {
+    Off,
+    Standard,
+    Foliage,
+    Conflict,
+}
+
+pub const FOLIAGE_KEY: &str = "subsurface_foliage";
+
+pub fn sub_mode(s: &Settings) -> SubMode {
+    let on = |k| s.get(k).and_then(Value::as_bool) == Some(true);
+    match (on("subsurface"), on(FOLIAGE_KEY)) {
+        (false, false) => SubMode::Off,
+        (true, false) => SubMode::Standard,
+        (false, true) => SubMode::Foliage,
+        (true, true) => SubMode::Conflict,
+    }
+}
+
+/// Whether the "Subsurface settings" group (colour, opacity) applies: both kinds read `SubsurfaceColor` and
+/// `Thickness` (CS `PBR.hlsli:174-187`). Hair and multilayer rule it out.
+pub fn subsurface_group_open(s: &Settings) -> bool {
+    sub_mode(s) != SubMode::Off && blocked_by(s, Feature::Subsurface).is_none()
+}
+
+/// The settings edits for choosing `mode` (`None` removes the key). It never stores both keys. Off stores an
+/// explicit `subsurface: false` while the set has an `_s` (`auto_s`), so the auto value stays off (AJ8); the writer
+/// still writes no `false` (OnlyTrue).
+pub fn sub_edits(mode: SubMode, auto_s: bool) -> Vec<(&'static str, Option<Value>)> {
+    let t = Some(Value::Bool(true));
+    match mode {
+        SubMode::Standard => vec![("subsurface", t), (FOLIAGE_KEY, None)],
+        SubMode::Foliage => vec![(FOLIAGE_KEY, t), ("subsurface", None)],
+        _ => vec![
+            ("subsurface", auto_s.then_some(Value::Bool(false))),
+            (FOLIAGE_KEY, None),
+        ],
     }
 }

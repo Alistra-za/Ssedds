@@ -13,7 +13,8 @@
 //! CFG-PRESET-SKIPPED (a user preset folder file that failed to load, skipped) and CFG-GREEN-CONFLICT (an explicit
 //! `flip_green` that contradicts `green_convention`) (M6 Track D) and the five `RNM-*` codes of RNM normal layers (M6 Track F2).
 //! and the five `GRASS-*` codes and VAL-GRASS-DETECT (complex grass design 2026-10-12 §3.6, §3.7, §4)
-//! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b).
+//! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b)
+//! and ALPHA-PARALLAX-NO-ALPHA (`alpha.parallax` on for a complex `_m` whose source has no alpha, DECISIONS AH2).
 //! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,7 @@ codes! {
     FmtPerceptualData = "FMT-PERCEPTUAL-DATA" => Error,
     FmtHdrSource = "FMT-HDR-SOURCE" => Info,
     AlphaExactOffM = "ALPHA-EXACT-OFF-M" => Blocking,
+    AlphaParallaxNoAlpha = "ALPHA-PARALLAX-NO-ALPHA" => Warning,
     Alpha254 = "ALPHA-254" => Info,
     AlphaNearOpaque = "ALPHA-NEAR-OPAQUE" => Info,
     AlphaPbrNormalDropped = "ALPHA-PBR-NORMAL-DROPPED" => Info,
@@ -201,7 +203,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 91);
+        assert_eq!(Code::ALL.len(), 92);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);

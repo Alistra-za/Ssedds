@@ -763,14 +763,14 @@ fn contradictions_are_warnings() {
         .message
         .contains("grayscale"));
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
-    // complex_material without varying alpha
+    // complex_material writing a solid 255 alpha (parallax on; off writes 0 and does not contradict, DECISIONS AH2)
     let j = run(
         Target::Cs,
         "textures/a/x_m.png",
         Some("m"),
         &["m"],
         Rgba32F::new(64, 64, [0.2, 0.6, 0.1, 1.0]),
-        &["subtype=complex_material"],
+        &["subtype=complex_material", "alpha.parallax=true"],
         &[],
     );
     assert!(warning(&j, Code::SugContradiction)

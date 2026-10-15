@@ -83,6 +83,15 @@ pub struct PreviewModel {
     profile_sig: Option<String>,
     /// The stamp of the DDS input the preview was made from; a plan that finds another one reads the file again.
     dds_stamp: Option<SourceStamp>,
+    /// The error heatmap job and the heatmap on show (dropped with the texture).
+    pub(crate) heat: crate::model::heatmap::HeatJob,
+    /// The pinned encode (item 10): dropped with the preview (close, texture change, folder open), kept across
+    /// settings changes.
+    pub pin: Option<crate::model::pin::Pin>,
+    /// "Compare: Source | Pinned": the layouts show the pin against the current encode.
+    pub compare_pinned: bool,
+    /// Pin ids go on across `clear`, so a heatmap result for a dropped pin can never match a new one.
+    pub next_pin: u64,
 }
 
 impl PreviewModel {
@@ -103,6 +112,10 @@ impl PreviewModel {
             next_token: 0,
             profile_sig: None,
             dds_stamp: None,
+            heat: Default::default(),
+            pin: None,
+            compare_pinned: false,
+            next_pin: 0,
         }
     }
 
@@ -147,8 +160,12 @@ impl PreviewModel {
         self.cancel_source();
         self.cancel_encode();
         let next_token = self.next_token;
+        let heat = self.heat.cleared();
+        let next_pin = self.next_pin;
         *self = PreviewModel::new(self.live);
         self.next_token = next_token;
+        self.heat = heat;
+        self.next_pin = next_pin;
     }
 
     fn fresh_token(&mut self) -> (u64, CancelToken) {
@@ -330,6 +347,7 @@ impl AppModel {
     pub(super) fn preview_open(&mut self, key: &str) {
         self.preview.clear();
         self.preview.item = Some(key.to_string());
+        self.view.exposure = 0.0;
         let Some(item) = self.item(key) else {
             return;
         };
@@ -466,6 +484,7 @@ impl AppModel {
 
     /// Start whatever has waited out the debounce. The UI calls this every frame with `Instant::now()`.
     pub fn tick(&mut self, now: Instant) {
+        self.expire_undo_note(now);
         let p = &mut self.preview;
         if !p.scheduled() {
             p.pending_since = None;

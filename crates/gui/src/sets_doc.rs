@@ -18,7 +18,7 @@ const SECTIONS: &str = "pgp_sections";
 /// Design §5: `[project] cs_pbr_sha256`, path under the export root → hash of the CS JSON sdc last wrote there.
 const CS_SHA: &str = "cs_pbr_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 11] = [
+const RESERVED: [&str; 12] = [
     "id",
     "created",
     "renamed_from",
@@ -30,6 +30,7 @@ const RESERVED: [&str; 11] = [
     "output_name",
     "cs_txst",
     "cs_mato",
+    "skin",
 ];
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -51,6 +52,8 @@ pub struct SetEntry {
     /// Design §3: the Community Shaders PBR texture-set and material-object blocks (`[sets.cs_txst]`, `[sets.cs_mato]`).
     pub cs_txst: Option<CsBlock>,
     pub cs_mato: Option<CsBlock>,
+    /// Task 10b: the Advanced skin card's explicit values (`skin.<CS key>`). Not PGPatcher settings; unknown keys stay.
+    pub skin: Settings,
     pub settings: Settings,
 }
 
@@ -127,6 +130,10 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
     if let Some(b) = &cs_txst {
         cs_pbr::overlay(&mut settings, b);
     }
+    let mut skin = Settings::new();
+    if let Some(sub) = t.get("skin").and_then(Item::as_table_like) {
+        flatten(sub, "", &mut skin);
+    }
     let borrow = t
         .get("borrow")
         .and_then(Item::as_table_like)
@@ -164,6 +171,7 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             .filter(|n| !n.is_empty()),
         cs_txst,
         cs_mato,
+        skin,
         settings,
     })
 }
@@ -638,7 +646,17 @@ impl SetsDoc {
                 }
             }
         }
-        self.list_edit(id, "add", file, true);
+        // A file this set removed belongs to it by its name: lifting the remove brings it back (an `add` beside the
+        // `remove` would leave it out, AG100).
+        let removed_here = self
+            .entries()
+            .iter()
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
+        if removed_here {
+            self.list_edit(id, "remove", file, false);
+        } else {
+            self.list_edit(id, "add", file, true);
+        }
     }
 
     /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.

@@ -212,7 +212,7 @@ pub fn finish(
         let last = shas.get(rel).map(String::as_str);
         if hand_edited(&path, text, last) {
             notes.push(format!(
-                "{} kept as edited outside sdc (delete it to let sdc write it again)",
+                "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
                 path.display()
             ));
             if let Some(s) = last {

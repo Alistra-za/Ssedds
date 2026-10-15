@@ -346,6 +346,23 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
             "{NO_MATCH}, so it is left out of the PGPatcher JSON"
         ));
     }
+    let on = |k: &str| s.get(k).is_some_and(|v| v.as_bool() == Some(true));
+    if on("alphaprop_delete") {
+        if ["alphaprop_flags", "alphaprop_thresh", "alphaprop_create"]
+            .iter()
+            .any(|k| s.get(*k).is_some_and(|v| *v != json!(false)))
+        {
+            out.push("Delete wins; the other alpha keys of this entry do nothing".into());
+        }
+    } else if (s.contains_key("alphaprop_flags") || s.contains_key("alphaprop_thresh"))
+        && !on("alphaprop_create")
+    {
+        out.push(
+            "alphaprop_flags and alphaprop_thresh: only changes shapes that already have an NiAlphaProperty; turn on \
+             Create NiAlphaProperty if missing to add one to shapes without"
+                .into(),
+        );
+    }
     if let Some(v) = text(s, "match8") {
         if strip_ext(&v.to_lowercase()).ends_with("_s") {
             out.push(
@@ -357,6 +374,26 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
     out
 }
 
+/// DECISIONS AF8: PGPatcher matches a renamed entry's `match_diffuse` by its last path components, so a short or
+/// folderless one also hits a same-named texture in another folder; those meshes get the rename in their own folder,
+/// where no such file exists, and PGPatcher skips them. The warning names the first such path in `known` (texture
+/// paths, `/` or `\`, any case, with or without `textures/` and `.dds`), the set's own paths aside.
+pub fn rename_hits_elsewhere(s: &Settings, derived: &str, known: &[String]) -> Option<String> {
+    let (md, _) = json_rename(s, derived)?;
+    let md = md.replace('/', "\\").to_lowercase();
+    let other = known.iter().find(|k| {
+        let k = k.replace('/', "\\").to_lowercase();
+        let k = strip_ext(&k);
+        let rel = strip_ci(strip_ci(k, "textures\\"), "pbr\\");
+        rel != md && rel.ends_with(&format!("\\{md}"))
+    })?;
+    Some(format!(
+        "PGPatcher matches the renamed entry's match_diffuse \"{md}\" by its end, so it also hits {other} in another \
+         folder; meshes using that texture get the rename there, where the renamed file does not exist, and \
+         PGPatcher skips them; give the set a match path with more of its folder"
+    ))
+}
+
 /// The output path, relative to the export folder, of the file with canonical `suffix` (`""` for the diffuse).
 pub fn output_rel(prefix: &str, suffix: &str) -> PathBuf {
     let name = if suffix.is_empty() {
@@ -365,4 +402,21 @@ pub fn output_rel(prefix: &str, suffix: &str) -> PathBuf {
         format!("{prefix}_{suffix}.dds")
     };
     PathBuf::from(name.replace('\\', "/"))
+}
+
+/// Subsurface pitfalls (DECISIONS AG104). `tree_anim`: whether the set's scanned meshes use Tree_Anim, `None` with no
+/// scan (then only the conflict can fire).
+pub fn subsurface_pitfalls(s: &Settings, tree_anim: Option<bool>) -> Vec<String> {
+    use crate::pgp::settings::{sub_mode, SubMode};
+    let t = match (sub_mode(s), tree_anim) {
+        (SubMode::Conflict, _) => {
+            "subsurface and subsurface_foliage are both on; pick Standard or Foliage"
+        }
+        (SubMode::Foliage, Some(false)) => "Foliage subsurface only shades on Tree Anim meshes.",
+        (SubMode::Standard, Some(true)) => {
+            "Standard subsurface sets Rim_Lighting on a Tree Anim mesh; Foliage is likely meant."
+        }
+        _ => return vec![],
+    };
+    vec![t.into()]
 }

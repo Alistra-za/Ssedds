@@ -194,10 +194,10 @@ pub struct SetView {
     /// Item keys of every member, packed outputs and raw sources included.
     pub members: Vec<String>,
     pub slots: BTreeMap<SlotKind, SlotFill>,
-    /// The diffuse resolves to a PBR diffuse, `pbr_albedo` or `skin_albedo` ([`is_pbr_diffuse`], DECISIONS P5 as
-    /// amended by Note R, final review C1).
+    /// A TruePBR JSON set: the diffuse resolves to `pbr_albedo`. Not `skin_albedo` since AG90 (owner: Advanced skin
+    /// sets get no PGPatcher JSON); the engine's PBR follow-ons still use [`is_pbr_diffuse`].
     pub pbr: bool,
-    /// The diffuse resolves to `skin_albedo`: an Advanced skin set (a PBR set too, final review C1).
+    /// The diffuse resolves to `skin_albedo`: an Advanced skin set (no JSON, the skin card, AG90).
     pub skin: bool,
     pub created: bool,
     /// `add`/`remove` entries of `sdc-project.toml` that match no file (Review focus 1).
@@ -244,9 +244,10 @@ impl SetView {
     }
 }
 
-/// Whether `v` is written as PGPatcher JSON: a skin or PBR set under Community Shaders (the set card badge).
+/// Whether `v` is written as PGPatcher JSON: a PBR set under Community Shaders (the set card badge). An Advanced
+/// skin set is not (AG90).
 pub fn is_json_set(v: &SetView, target: Target) -> bool {
-    (v.skin || v.pbr) && target == Target::Cs
+    v.pbr && target == Target::Cs
 }
 
 /// The set's pick is `pbr_grass` (PBR grass design §4.3): its PGPatcher settings are the grass view.
@@ -256,14 +257,14 @@ pub fn is_pbr_grass(v: &SetView) -> bool {
         .is_some_and(|p| p.shader == Shader::PbrGrass)
 }
 
-/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set that already has
-/// JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr` itself.
+/// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set but a skin set
+/// that already has JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr`.
 pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
-    is_json_set(v, target) || !v.settings.is_empty()
+    is_json_set(v, target) || (!v.skin && !v.settings.is_empty())
 }
 
-/// A diffuse sub-type that makes its set a PBR set (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
-/// `skin_albedo`, which is Community Shaders TruePBR too and so belongs in the PGPatcher JSON (final review C1).
+/// A diffuse sub-type whose members follow as PBR (DECISIONS P5, Note R): `pbr_albedo`, or the Advanced skin
+/// `skin_albedo` (final review C1). It no longer puts a skin set in the PGPatcher JSON: `SetView::pbr` does (AG90).
 /// Not the engine's `is_pbr_color`, which decides sRGB and leaves `skin_albedo` (UNORM) out.
 pub fn is_pbr_diffuse(st: Subtype) -> bool {
     matches!(st, Subtype::PbrAlbedo | Subtype::SkinAlbedo)
@@ -506,14 +507,11 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
         let st = diffuse
             .and_then(|i| i.job.as_ref())
             .map(|j| j.profile.subtype);
-        v.pbr = st.is_some_and(is_pbr_diffuse);
+        // AG90: everything that reads `pbr` is PGPatcher JSON (entries, blocks, pitfalls, prefixes, ownership, rename).
+        v.pbr = st == Some(Subtype::PbrAlbedo);
         v.skin = st == Some(Subtype::SkinAlbedo);
         if is_pbr_grass(v) {
-            let has_s = !matches!(
-                v.slots.get(&SlotKind::Subsurface),
-                None | Some(SlotFill::Empty)
-            );
-            crate::pgp::settings::grass_view(&mut v.settings, has_s);
+            crate::pgp::settings::grass_view(&mut v.settings);
         }
         v.derived_match = diffuse.map(|i| derive_match_diffuse(dir_of(&i.key), &mirrored_stem(i)));
         match prefix_of(&v.settings, v.derived_match.as_deref().unwrap_or("")) {
@@ -1511,9 +1509,38 @@ impl AppModel {
         });
     }
 
+    /// Several keys of one set as one undo step and one plan (the Subsurface selector writes two). One key keeps
+    /// `set_json_value`'s merge with the edit before it.
+    pub fn set_json_values(&mut self, set: &str, edits: Vec<(String, Option<Value>)>) {
+        if let [(k, v)] = edits.as_slice() {
+            return self.set_json_value(set, k, v.clone());
+        }
+        if edits.is_empty() || !self.sets_editable() {
+            return;
+        }
+        let label = format!(
+            "Change {}",
+            edits
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        self.batch_edit(&label, |m| {
+            for (k, v) in edits {
+                m.set_json_value(set, &k, v);
+            }
+        });
+    }
+
     /// A JSON value of set `set`. Material values do not plan; match fields do (P7).
     pub fn set_json_value(&mut self, set: &str, key: &str, v: Option<Value>) {
         if !self.sets_editable() {
+            return;
+        }
+        // DECISIONS AF6: a locked slot's command is changed by nothing, the JSON editor's x on its pill included.
+        let slot = key.strip_prefix("slot").and_then(|n| n.parse::<u8>().ok());
+        if slot.is_some_and(|n| self.slot_locked(set, n)) {
             return;
         }
         let replan = replans(key);
@@ -1564,6 +1591,191 @@ impl AppModel {
         });
         Ok(())
     }
+
+    /// Item 17 (DECISIONS AG98): files dropped from Explorer on slot card `slot` of set `set`. The first file, when it
+    /// is a texture of the open folder that fills that slot, moves in as the Sets column's move does (`drop_choice`
+    /// with Move: Replace / Cancel on a filled slot, refused on a locked one). Nothing is ever copied: a file outside
+    /// the folder is refused, and Share or Duplicate are not offered.
+    pub fn drop_file_on_slot(
+        &mut self,
+        set: &str,
+        slot: SlotKind,
+        paths: &[PathBuf],
+    ) -> SlotFileDrop {
+        let note = (paths.len() > 1).then_some(ONLY_FIRST_FILE);
+        let refused = |why: String| SlotFileDrop {
+            item: None,
+            outcome: DropOutcome::Refused(why),
+            note,
+        };
+        let Some(first) = paths.first() else {
+            return refused("nothing was dropped".into());
+        };
+        let name = first.file_name().map_or_else(
+            || first.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        // Explorer's case can differ from the folder walk's: compare without case, `/` for `\`.
+        let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
+        let rel = self.root.as_deref().and_then(|r| {
+            let (r, f) = (norm(r), norm(first));
+            f.strip_prefix(&format!("{}/", r.trim_end_matches('/')))
+                .map(str::to_string)
+        });
+        let Some(rel) = rel else {
+            return refused(format!(
+                "{name} is outside the open folder; files are never copied"
+            ));
+        };
+        let Some(it) = self.items.iter().find(|i| i.key.to_lowercase() == rel) else {
+            return refused(format!("{name} is not a texture of the open folder"));
+        };
+        let key = it.key.clone();
+        match slot_of(it) {
+            Some(k) if k == slot => {}
+            Some(k) => {
+                return refused(format!(
+                    "{name} goes in the {} slot, not {}",
+                    k.label(),
+                    slot.label()
+                ))
+            }
+            None => {
+                return refused(format!(
+                    "{name} fills no slot card; drag it onto the set in the Sets column"
+                ))
+            }
+        }
+        let outcome = if self.set_of_item(&key).is_some_and(|f| same_id(&f.id, set)) {
+            DropOutcome::Joined
+        } else {
+            self.drop_choice(&key, set, DropChoice::Move)
+        };
+        SlotFileDrop {
+            item: Some(key),
+            outcome,
+            note,
+        }
+    }
+
+    /// Item 18 (DECISIONS AG99): move the ticked proposals of `fill_proposals` into set `set` as one step and one
+    /// plan, each emptying its slot first. A blocked row (a locked slot, …) is never applied. Returns how many moved.
+    pub fn fill_from_names(&mut self, set: &str, ticked: &[String]) -> Result<usize, String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
+        }
+        let v = self.view_of(set).ok_or_else(|| format!("no set {set}"))?;
+        let moves: Vec<(String, SlotKind, Option<SlotFill>)> = fill_proposals(self, set)
+            .into_iter()
+            .filter(|r| r.blocked.is_none() && ticked.contains(&r.item))
+            .map(|r| (r.item, r.slot, v.slots.get(&r.slot).cloned()))
+            .collect();
+        if moves.is_empty() {
+            return Err("nothing to fill".into());
+        }
+        let (id, n) = (v.id.clone(), moves.len());
+        self.edit_docs(&format!("Fill {id} from names"), None, true, move |_, s| {
+            for (item, slot, existing) in &moves {
+                clear_slot(s, &id, Some(*slot), existing);
+                s.add_member(&id, item);
+            }
+        });
+        Ok(n)
+    }
+}
+
+/// Item 17: what a file drop on a slot card did. `item` is the texture it named, when it is one of the folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotFileDrop {
+    pub item: Option<String>,
+    pub outcome: DropOutcome,
+    pub note: Option<&'static str>,
+}
+
+/// Item 17: several files dropped on one slot.
+pub const ONLY_FIRST_FILE: &str = "only the first file was used";
+
+/// Item 18: one row of the Fill from names dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FillProposal {
+    pub item: String,
+    /// The file name.
+    pub name: String,
+    pub slot: SlotKind,
+    /// The file name of what fills that slot now.
+    pub replaces: Option<String>,
+    /// Why the row cannot be ticked: "locked" for a locked slot, else the move's own refusal.
+    pub blocked: Option<String>,
+}
+
+/// Item 18 (DECISIONS AG99): the textures of set `set`'s folder that are not its members and whose name is the set's
+/// base name plus a tail the engine recognises (its §6.1 suffixes and §4.4 vocabulary, through `base_of`), each with
+/// the slot its sub-type fills. By item key; a second file for one slot is blocked.
+pub fn fill_proposals(m: &AppModel, set: &str) -> Vec<FillProposal> {
+    let views = views(m);
+    let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
+        return vec![];
+    };
+    // The base name of the diffuse's file (a renamed set keeps its files' names), else of the set's id.
+    let src = match v.slots.get(&SlotKind::Diffuse) {
+        Some(SlotFill::Own { item }) => {
+            let stem = Path::new(item)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            format!("{}/{}", dir_of(item), base_of(&stem))
+        }
+        _ => v.id.clone(),
+    };
+    let (dir, base) = (dir_of(&src), src.rsplit('/').next().unwrap_or(&src));
+    let mut cands: Vec<&TextureItem> = m
+        .items
+        .iter()
+        .filter(|i| i.kind != ItemKind::Packed && !v.members.contains(&i.key))
+        .filter(|i| dir_of(&i.key).eq_ignore_ascii_case(dir))
+        .filter(|i| {
+            let stem = Path::new(&i.key)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            stem.len() > base.len() && base_of(&stem).eq_ignore_ascii_case(base)
+        })
+        .collect();
+    cands.sort_by(|a, b| a.key.cmp(&b.key));
+    let name_of = |k: &str| m.item(k).map_or(k.to_string(), |i| i.name.clone());
+    let existing: Vec<SlotKind> = v.slots.keys().copied().collect();
+    let mut taken = BTreeSet::new();
+    cands
+        .into_iter()
+        .filter_map(|i| {
+            let slot = slot_of(i)?;
+            let replaces = match v.slots.get(&slot) {
+                Some(SlotFill::Own { item } | SlotFill::Borrowed { item, .. }) => {
+                    Some(name_of(item))
+                }
+                _ => None,
+            };
+            let blocked = if v.locks.contains(&slot.slot_number()) {
+                Some("locked".to_string())
+            } else if !taken.insert(slot) {
+                Some("another file above takes this slot".to_string())
+            } else {
+                // The move's own checks, as `drop_choice` makes them (a packed occupant, leaving a locked slot, …).
+                slot_conflict(&existing, slot).or_else(|| {
+                    m.occupant(v, Some(slot), None)
+                        .and_then(|_| m.choice_allowed(&i.key, Some(slot), DropChoice::Move))
+                        .err()
+                })
+            };
+            Some(FillProposal {
+                item: i.key.clone(),
+                name: i.name.clone(),
+                slot,
+                replaces,
+                blocked,
+            })
+        })
+        .collect()
 }
 
 /// The engine key of the output `item` writes: its file, or its set and recipe for a packed output. `None` for an

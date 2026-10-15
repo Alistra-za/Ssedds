@@ -376,8 +376,8 @@ fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     h.get_by_label("Glint").click();
     h.run();
     let v = spin_values(&h);
-    for (_, x) in GLINT_DEFAULTS {
-        let t = format!("{x:?}");
+    for (key, x) in GLINT_DEFAULTS {
+        let t = sdc_gui::pgp::schema::spec(key).unwrap().drag.format(x);
         assert!(v.contains(&t), "glint default {t} in {v:?}");
     }
 }
@@ -443,7 +443,9 @@ fn every_number_box_reports_its_range() {
     for (v, min, max) in &spins {
         assert_eq!(*min, Some(0.0), "{v:?}");
         let unit = v.as_deref() == Some("0.5");
-        assert_eq!(*max, unit.then_some(1.0), "{v:?}");
+        // The coat colour's R/G/B boxes (now in the main view, AJ1) run 0-255.
+        let want = if unit { Some(1.0) } else { None };
+        assert!(*max == want || *max == Some(255.0), "{v:?} {max:?}");
     }
 }
 
@@ -542,6 +544,17 @@ fn rock_with(keys: &[(&str, serde_json::Value)]) -> Harness<'static, AppModel> {
 }
 
 fn disabled(h: &Harness<'static, AppModel>, label: &str) -> bool {
+    if label == "Subsurface" {
+        // The Subsurface selector (AG101) is a combo box named by its value.
+        let role = eframe::egui::accesskit::Role::ComboBox;
+        let names = ["Off", "Standard", "Foliage"];
+        return h
+            .query_all_by_role(role)
+            .find(|n| n.value().is_some_and(|v| names.contains(&v.as_str())))
+            .unwrap()
+            .accesskit_node()
+            .is_disabled();
+    }
     h.get_by_label(label).accesskit_node().is_disabled()
 }
 
@@ -1276,7 +1289,7 @@ fn amber_outlines(h: &Harness<'static, AppModel>) -> usize {
 }
 
 /// PBR grass design §4.3: a pbr_grass panel has no emissive, parallax, hair, coat, glint or fuzz switch, keeps the
-/// grass keys, and unticking Subsurface stores `false` (the default would turn a removed key back on).
+/// grass keys, and the Subsurface selector's Off removes the stored key (no grass default since AL8).
 #[test]
 fn a_pbr_grass_panel_shows_only_the_grass_keys() {
     let d = tempfile::tempdir().unwrap();
@@ -1305,7 +1318,13 @@ fn a_pbr_grass_panel_shows_only_the_grass_keys() {
     }
     h.get_by_label("Roughness scale");
     h.get_by_label("Specular level");
-    h.get_by_label("Subsurface").click();
+    // DECISIONS AL8: main's selector replaces the checkbox; without an `_s` nothing turns it back on, so Off removes it.
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Standard"))
+        .unwrap()
+        .click();
     h.run();
-    assert_eq!(rock_settings(&h)["subsurface"], serde_json::json!(false));
+    h.get_by_label("Off").click();
+    h.run();
+    assert!(!rock_settings(&h).contains_key("subsurface"));
 }

@@ -1674,3 +1674,101 @@ fn resetting_format_also_clears_the_tag_it_wrote() {
         "tag outlived the format reset"
     );
 }
+
+/// Audit 2026-10-13b E-I1 (DECISIONS AF4): Export clicked during a scan-finished read (not a plan's own) starts
+/// when that read lands, with unchanged evidence and with a read error; it never waits for an unrelated plan.
+#[test]
+fn an_export_clicked_during_a_scan_finished_read_starts_when_it_lands() {
+    for broken in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, db) = pending_read(d.path());
+        idle(&mut m);
+        assert!(!m.mesh_votes.is_empty());
+        if broken {
+            let bad = db.path().join("broken.db");
+            std::fs::write(&bad, b"not a database").unwrap();
+            m.scan_db = Some(bad);
+        }
+        m.refresh_mesh_votes(false);
+        assert!(m.votes_pending(), "broken={broken}");
+        m.export_clicked();
+        assert!(!export_started_or_asked(&m), "waits for the read");
+        idle(&mut m);
+        assert!(
+            export_started_or_asked(&m),
+            "broken={broken}: started when the read landed"
+        );
+    }
+}
+
+/// Review round 1 M5 (DECISIONS AF4): an edit that supersedes the scan-finished read the export was waiting for
+/// drops the queued export; the edit's plan never starts it unasked.
+#[test]
+fn an_edit_during_a_scan_finished_read_drops_the_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    m.set_field("landscape/rock01.png", "header", json!("dx10"));
+    idle(&mut m);
+    assert!(!export_started_or_asked(&m), "{:?}", m.dialog);
+    assert!(
+        m.status_line
+            .contains("Export cancelled: the project changed while scan results were loading"),
+        "{}",
+        m.status_line
+    );
+    assert!(m
+        .messages
+        .entries()
+        .any(|e| e.text.starts_with("Export cancelled: the project changed")));
+}
+
+/// Fix round 2 (DECISIONS AF4): a re-plan that is no edit (here an NVTT probe whose result changed) keeps an Export
+/// queued behind a scan-finished read; that plan carries it to its end.
+#[test]
+fn a_non_edit_replan_during_a_scan_finished_read_keeps_the_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.nvtt = Some(engine::nvtt::NvttProbe::Missing("before".into()));
+    // A probe result that differs (generation 0: this model never probed) re-plans. It is queued before the read
+    // starts, so the channel (first in, first out) hands it over first: the re-plan runs while the read is pending.
+    m.sender()
+        .send(sdc_gui::worker::WorkerMsg::Nvtt {
+            generation: 0,
+            probe: engine::nvtt::NvttProbe::Missing("after".into()),
+        })
+        .unwrap();
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    assert!(m.votes_pending() && !export_started_or_asked(&m));
+    idle(&mut m);
+    assert!(
+        export_started_or_asked(&m),
+        "the probe's re-plan kept the export"
+    );
+}
+
+/// Fix round 3 (DECISIONS AF11): an undo changes the project like an edit, so it cancels an Export queued behind a
+/// scan-finished read, with the note.
+#[test]
+fn an_undo_during_a_scan_finished_read_cancels_the_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _db) = pending_read(d.path());
+    idle(&mut m);
+    m.set_field("landscape/rock01.png", "header", json!("dx10"));
+    idle(&mut m);
+    m.refresh_mesh_votes(false);
+    m.export_clicked();
+    m.undo();
+    idle(&mut m);
+    assert!(!export_started_or_asked(&m), "{:?}", m.dialog);
+    assert!(
+        m.status_line
+            .contains("Export cancelled: the project changed while scan results were loading"),
+        "{}",
+        m.status_line
+    );
+}

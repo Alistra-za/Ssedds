@@ -144,17 +144,14 @@ fn encoders_json_is_one_object_and_nvtt_comes_from_the_flag() {
     assert!(["sse2", "sse4", "avx", "avx2"].contains(&v["isa"].as_str().unwrap()));
     assert_eq!(v["nvtt"]["found"], false);
     assert_eq!(v["nvtt"]["source"], "--nvtt");
-    // M5 (DECISIONS Note NV3): an existing file is probed; one that prints no NVTT banner is not found.
+    // M5 (DECISIONS Note NV3, AF3): an existing file that is sdc itself is refused, never run.
     let exe = env!("CARGO_BIN_EXE_sdc");
     let (_, out, _) = stdout_of(&["encoders", "--json", "--nvtt", exe]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["nvtt"]["found"], false);
     assert!(v["nvtt"]["path"].as_str().unwrap().ends_with("sdc.exe"));
     assert!(
-        v["nvtt"]["error"]
-            .as_str()
-            .unwrap()
-            .contains("unexpected banner"),
+        v["nvtt"]["error"].as_str().unwrap().contains("sdc itself"),
         "{v}"
     );
 }

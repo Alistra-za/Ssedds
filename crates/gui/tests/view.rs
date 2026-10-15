@@ -43,7 +43,7 @@ fn the_mip_is_clamped_to_what_was_previewed() {
 fn the_heatmap_is_black_where_equal_and_bright_where_different() {
     let src = Rgba32F::new(2, 1, [0.5, 0.5, 0.5, 1.0]);
     let dec = vec![[0.5, 0.5, 0.5, 1.0], [1.0, 0.5, 0.5, 1.0]];
-    let (w, h, px) = heatmap(&src, &dec, Channel::R);
+    let (w, h, px) = heatmap(&src, &dec, Channel::R, 0.1);
     assert_eq!((w, h), (2, 1));
     assert_eq!(&px[..3], &[0, 0, 0]);
     assert!(px[4] > 100 || px[5] > 100 || px[6] > 100);

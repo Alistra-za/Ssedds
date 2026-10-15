@@ -1,10 +1,12 @@
 //! The Meshes view (plan A Task 12): mods, with the NIFs of the open mod under it (GUI tweaks G9) | shapes of the
 //! selected NIF. Draws `MeshesModel`; every store read happens in the model on a click, never here.
 use crate::model::meshes::{
-    display_path, overridden_text, plugins_line, shader_type_name, slot_name, Banner, MeshesModel,
-    ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING, MISSING_NOTE,
-    PLUGINS_NOT_READ_NOTE, SEARCH_DEBOUNCE, STALE_CHIP, UNUSED_NOTE,
+    alpha_line, display_path, flag_bits, overridden_text, plugins_line, shader_type_name,
+    slot_name, Banner, MeshesModel, ModLine, ScanTarget, ALL_MIN_CHARS, DERIVED_CHIP, LE_WARNING,
+    MISSING_NOTE, PLUGINS_NOT_READ_NOTE, SEARCH_DEBOUNCE, SLSF1_NAMES, SLSF2_NAMES, STALE_CHIP,
+    UNUSED_NOTE,
 };
+use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use eframe::egui;
 use modscan::plugin_store::{record_label, MeshUse};
 use modscan::store::{NifRow, ShapeView, TexResolution, KIND_BSA, KIND_DATA};
@@ -48,27 +50,43 @@ pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
             None => "No source chosen".into(),
         };
         ui.label(source);
-        let idle = !m.scanning();
-        if ui
-            .add_enabled(idle, egui::Button::new("Choose MO2 instance…"))
+        let (idle, busy) = (!m.scanning(), m.picker.busy());
+        let pick = |ui: &mut egui::Ui, label: &str| {
+            let r = ui.add_enabled(idle && !busy, egui::Button::new(label));
+            (if busy {
+                r.on_disabled_hover_text(picker::BUSY_HOVER)
+            } else {
+                r
+            })
             .clicked()
-        {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.choose_instance(p);
-            }
+        };
+        if pick(ui, "Choose MO2 instance…") {
+            m.picker.request(
+                ui.ctx(),
+                PickerPurpose::ChooseMo2,
+                None,
+                PickerSpec::folder(),
+            );
         }
-        if ui
-            .add_enabled(idle, egui::Button::new("Scan a folder…"))
-            .clicked()
-        {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.use_folder(p);
-            }
+        if pick(ui, "Scan a folder…") {
+            m.picker.request(
+                ui.ctx(),
+                PickerPurpose::ScanFolder,
+                None,
+                PickerSpec::folder(),
+            );
         }
         if m.scanning() {
             ui.spinner();
-            if let Some((phase, done, total)) = m.progress {
-                ui.label(format!("{phase} {done}/{total}"));
+            if let (Some((_, done, total)), Some(text)) =
+                (m.progress, m.scan_line(std::time::Instant::now()))
+            {
+                let frac = if total == 0 {
+                    0.0
+                } else {
+                    done as f32 / total as f32
+                };
+                ui.add(egui::ProgressBar::new(frac).desired_width(260.0).text(text));
             }
             if ui.button("Cancel").clicked() {
                 m.cancel_scan();
@@ -207,7 +225,27 @@ enum TreeRow {
 /// GUI tweaks G9: mods and their meshes in one column. A mod opens (its arrow, or a click on its name) to list its
 /// NIFs under it; the chips and the path filter narrow those. With All meshes the column lists the search instead.
 fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    ui.heading("Mods and meshes");
+    let can = m.selected_row().is_some();
+    if !can {
+        m.shapes_col = false;
+    }
+    ui.horizontal(|ui| {
+        ui.heading("Mods and meshes");
+        let on = m.shapes_col;
+        let r = ui.add_enabled(can, egui::Button::selectable(on, "Shapes"));
+        let r = r.on_hover_text(if can {
+            "Show the shape list instead of the mods and meshes"
+        } else {
+            "Select a mesh first"
+        });
+        if r.clicked() {
+            m.shapes_col = !on;
+        }
+    });
+    if m.shapes_col {
+        shapes_column(ui, m);
+        return;
+    }
     if m.mods.is_empty() {
         ui.label("No scan yet.");
         return;
@@ -458,26 +496,23 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             }
         });
     }
-    ui.horizontal(|ui| {
-        if ui.selectable_label(!m.tab_3d, "Shapes").clicked() {
-            m.tab_3d = false;
-        }
-        if ui.selectable_label(m.tab_3d, "3D").clicked() {
-            m.tab_3d = true;
-        }
-    });
-    if m.tab_3d {
-        super::viewport3d::show(ui, &mut m.v3);
-        return;
-    }
-    let mut clicked = None;
+    super::viewport3d::show(ui, &mut m.v3);
+}
+
+/// The shape cards of the selected NIF, in the left column (owner, 2026-10-14). A click on a texture asks who else
+/// uses it.
+fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let (mut clicked, mut open) = (None, None);
     egui::ScrollArea::vertical()
         .id_salt("meshes-shapes-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if let Some((path, users)) = &m.tex_users {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.label(egui::RichText::new(format!("Users of {path}")).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(format!("Users of {path}")).strong());
+                        open_button(ui, m, path, &mut open);
+                    });
                     if users.is_empty() {
                         ui.label("No NIF of the latest scan uses it.");
                     }
@@ -496,8 +531,8 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             if m.shapes.is_empty() {
                 ui.label("No shapes.");
             }
-            for s in &m.shapes {
-                if let Some(p) = shape(ui, m, s) {
+            for (i, s) in m.shapes.iter().enumerate() {
+                if let Some(p) = shape(ui, m, s, i, &mut open) {
                     clicked = Some(p);
                 }
                 ui.separator();
@@ -505,6 +540,22 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         });
     if let Some(p) = clicked {
         m.show_users(&p);
+    }
+    if open.is_some() {
+        m.open_in_textures = open;
+    }
+}
+
+/// Item 9: "Open in Textures" after a texture path that is an item of the open folder.
+fn open_button(ui: &mut egui::Ui, m: &MeshesModel, path: &str, open: &mut Option<String>) {
+    if let Some(k) = m.folder_items.get(path) {
+        if ui
+            .small_button("Open in Textures")
+            .on_hover_text("Select this texture in the Textures view")
+            .clicked()
+        {
+            *open = Some(k.clone());
+        }
     }
 }
 
@@ -674,33 +725,51 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         });
 }
 
-/// One shape; returns the texture path that was clicked.
-fn shape(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView) -> Option<String> {
+/// One shape card; `index` counts shapes only, from 0. Returns the texture path that was clicked.
+fn shape(
+    ui: &mut egui::Ui,
+    m: &MeshesModel,
+    s: &ShapeView,
+    index: usize,
+    open: &mut Option<String>,
+) -> Option<String> {
     let mut clicked = None;
     ui.label(
         egui::RichText::new(format!(
-            "#{} {} — {}",
-            s.block,
+            "#{index} {} — {}",
             s.name.as_deref().unwrap_or("(unnamed)"),
             s.kind
         ))
         .strong(),
-    );
-    let flags = |s: &ShapeView| match (s.slsf1, s.slsf2) {
-        (Some(a), Some(b)) => format!(" · SLSF1 0x{a:08X} · SLSF2 0x{b:08X}"),
-        _ => String::new(),
-    };
+    )
+    .on_hover_text(format!("NIF block {}", s.block));
+    let bold = |t: String| egui::RichText::new(t).strong();
     ui.label(match s.shader_kind {
-        1 => format!(
-            "Lighting: {}{}",
+        1 => bold(
             s.shader_type
                 .map_or_else(|| "type ?".into(), shader_type_name),
-            flags(s)
         ),
-        2 => format!("Effect shader{}", flags(s)),
-        3 => format!("Other shader {}", s.params.as_deref().unwrap_or("")),
-        _ => "No shader".into(),
+        2 => bold("Effect shader".into()),
+        3 => bold(format!(
+            "Other shader {}",
+            s.params.as_deref().unwrap_or("")
+        )),
+        _ => egui::RichText::new("No shader"),
     });
+    for (label, v, names) in [
+        ("SLSF1", s.slsf1, &SLSF1_NAMES),
+        ("SLSF2", s.slsf2, &SLSF2_NAMES),
+    ] {
+        if let Some(v) = v {
+            egui::CollapsingHeader::new(format!("{label} 0x{v:08X}"))
+                .id_salt(("slsf", s.block, index, label))
+                .show(ui, |ui| {
+                    for l in flag_bits(names, v) {
+                        ui.label(l);
+                    }
+                });
+        }
+    }
     let mut geo = vec![];
     if s.skinned {
         geo.push("skinned".to_string());
@@ -711,65 +780,66 @@ fn shape(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView) -> Option<String> {
     if let Some(t) = s.num_triangles {
         geo.push(format!("{t} triangles"));
     }
-    if let Some(a) = s.alpha_flags {
-        geo.push(format!(
-            "alpha 0x{a:04X} / {}",
-            s.alpha_threshold.unwrap_or(0)
-        ));
-    }
     if !geo.is_empty() {
         ui.label(geo.join(" · "));
     }
-    for (i, t) in s.textures.iter().enumerate() {
-        ui.horizontal_wrapped(|ui| {
-            let name = slot_name(s.shader_kind, i);
-            ui.label(if name.is_empty() {
-                format!("slot {i}:")
-            } else {
-                format!("slot {i} ({name}):")
-            });
-            match t {
-                None => {
-                    ui.weak("(empty)");
-                }
-                Some(p) => {
-                    if ui.link(p).clicked() {
-                        clicked = Some(p.clone());
-                    }
-                    match m.resolved.get(p) {
-                        Some(TexResolution::Found { origin, n_copies }) if *n_copies > 1 => {
-                            ui.label(format!("→ {origin} ({n_copies} copies)"));
-                        }
-                        Some(TexResolution::Found { origin, .. }) => {
-                            ui.label(format!("→ {origin}"));
-                        }
-                        Some(TexResolution::Missing) => {
-                            ui.colored_label(RED, "→ missing");
-                        }
-                        None => {}
-                    }
-                }
-            }
-            if let Some(Some(raw)) = s.raw.get(i) {
-                let f = &raw.flags;
-                let names: Vec<&str> = [
-                    (f.empty, "empty"),
-                    (f.rebased, "rebased"),
-                    (f.prefixed, "prefixed"),
-                    (f.non_dds, "not .dds"),
-                ]
-                .into_iter()
-                .filter_map(|(on, n)| on.then_some(n))
-                .collect();
-                let tail = if names.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", names.join(", "))
-                };
-                ui.weak(format!("raw: {}{tail}", raw.raw));
-            }
-        });
+    if let Some(a) = s.alpha_flags {
+        ui.label(alpha_line(a, s.alpha_threshold.unwrap_or(0)))
+            .on_hover_text(format!("flags 0x{a:04X} ({a})"));
     }
+    ui.indent(("slots", s.block, index), |ui| {
+        for (i, t) in s.textures.iter().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                let name = slot_name(s.shader_kind, i);
+                ui.label(if name.is_empty() {
+                    format!("slot {i}:")
+                } else {
+                    format!("slot {i} ({name}):")
+                });
+                match t {
+                    None => {
+                        ui.weak("(empty)");
+                    }
+                    Some(p) => {
+                        if ui.link(p).clicked() {
+                            clicked = Some(p.clone());
+                        }
+                        open_button(ui, m, p, open);
+                        match m.resolved.get(p) {
+                            Some(TexResolution::Found { origin, n_copies }) if *n_copies > 1 => {
+                                ui.label(format!("→ {origin} ({n_copies} copies)"));
+                            }
+                            Some(TexResolution::Found { origin, .. }) => {
+                                ui.label(format!("→ {origin}"));
+                            }
+                            Some(TexResolution::Missing) => {
+                                ui.colored_label(RED, "→ missing");
+                            }
+                            None => {}
+                        }
+                    }
+                }
+                if let Some(Some(raw)) = s.raw.get(i) {
+                    let f = &raw.flags;
+                    let names: Vec<&str> = [
+                        (f.empty, "empty"),
+                        (f.rebased, "rebased"),
+                        (f.prefixed, "prefixed"),
+                        (f.non_dds, "not .dds"),
+                    ]
+                    .into_iter()
+                    .filter_map(|(on, n)| on.then_some(n))
+                    .collect();
+                    let tail = if names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", names.join(", "))
+                    };
+                    ui.weak(format!("raw: {}{tail}", raw.raw));
+                }
+            });
+        }
+    });
     clicked
 }
 
@@ -782,21 +852,18 @@ fn dialogs(ctx: &egui::Context, m: &mut MeshesModel) {
             ui.label(d.text());
             ui.horizontal(|ui| {
                 use_it = ui.button("Use").clicked();
-                choose = ui.button("Choose instance…").clicked();
-                folder = ui.button("Open a folder instead").clicked();
+                choose = picker::button(ui, &m.picker, egui::Button::new("Choose instance…"));
+                folder = picker::button(ui, &m.picker, egui::Button::new("Open a folder instead"));
             });
         });
         if use_it {
             m.dialog_use();
         } else if choose {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.dialog = None;
-                m.choose_instance(p);
-            }
+            m.picker
+                .request(ctx, PickerPurpose::ChooseMo2, None, PickerSpec::folder());
         } else if folder {
-            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                m.use_folder(p);
-            }
+            m.picker
+                .request(ctx, PickerPurpose::ScanFolder, None, PickerSpec::folder());
         }
     }
     if let Some(list) = &m.stale_list {

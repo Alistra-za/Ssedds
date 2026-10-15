@@ -3,19 +3,21 @@
 //! as the set editor's TruePBR box (`AppModel::set_json_value`), so the two always agree. Drawing only.
 use super::columns::{AMBER, RED};
 use super::path_picker;
-use super::pgp_fields::{context, control, disabled_reason, edit_key, Ctx};
-use crate::model::pbr_export::{json_name, written_json_entries};
+use super::pgp_fields::{alpha_default, context, control, disabled_reason, edit_key, Ctx};
+use crate::model::pbr_export::{json_issues, json_name, written_json_entries, JsonIssues};
 use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, stored_match};
-use crate::pgp::schema::{grass_ignores, spec, KeyKind, KeySpec, KEYS};
+use crate::pgp::schema::{grass_ignores, spec, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{Settings, GLINT_DEFAULTS};
 use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
 use eframe::egui;
 use engine::config::Target;
 use engine::sets::same_id;
 use serde_json::{json, Value};
+use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub const WINDOW_TITLE: &str = "TruePBR JSON";
@@ -73,6 +75,8 @@ impl Mode {
 }
 
 enum Act {
+    /// Fold or unfold a set's entry.
+    Fold(String),
     Edit(Owner, String, Option<Value>),
     AddSection,
     RemoveSection(usize),
@@ -89,7 +93,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     }
     let id = egui::ViewportId::from_hash_of("sdc-pgp-json-editor");
     let builder = egui::ViewportBuilder::default()
-        .with_title(format!("{WINDOW_TITLE} — sdc"))
+        .with_title(format!("{WINDOW_TITLE} — {}", crate::PRODUCT_NAME))
         .with_inner_size([980.0, 760.0]);
     ctx.show_viewport_immediate(id, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -141,10 +145,12 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.weak("The TruePBR JSON is written in cs mode only.");
         return;
     }
-    // Only the entries the file gets: the statics rule's dropped sets are left out, as export does (design §5.1).
-    let entries = written_json_entries(model);
+    let built = built(ui, model);
+    let (entries, issues) = (&built.entries, &built.issues);
     let sections = model.sections();
     let hits = delete_hits(model);
+    let nav_id = egui::Id::new("json-editor-nav");
+    let mut nav = ui.data(|d| d.get_temp::<Nav>(nav_id)).unwrap_or_default();
     ui.weak(format!(
         "{} set entr{} · {} delete section{}. Edits here and in a set's TruePBR settings are the same edits.",
         entries.len(),
@@ -152,7 +158,21 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
         sections.len(),
         if sections.len() == 1 { "" } else { "s" },
     ));
-    json_text(ui, &entries, &sections);
+    let spots = error_spots(entries, issues);
+    let (prev, next) = toolbar(ui, &mut nav, issues, entries, &spots);
+    let key_next = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F8));
+    let key_prev = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F8));
+    let dir = if prev || key_prev {
+        Some(false)
+    } else if next || key_next {
+        Some(true)
+    } else {
+        None
+    };
+    if let Some(spot) = dir.and_then(|fwd| step(&spots, &nav.current, fwd)) {
+        jump(&mut nav, entries, spot);
+    }
+    json_text(ui, &built.text);
     ui.separator();
     egui::ScrollArea::vertical()
         .id_salt("json-editor-scroll")
@@ -162,8 +182,10 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
                 if entries.is_empty() {
                     ui.weak("No PBR set has an entry yet.");
                 }
-                for (v, _) in &entries {
-                    set_entry(ui, model, v, &hits, &mut acts);
+                general_box(ui, issues, &mut nav);
+                let q = nav.query.clone();
+                for (v, _) in entries.iter().filter(|(v, e)| matches(v, e, &q)) {
+                    set_entry(ui, model, v, &hits, issues, &mut nav, &mut acts);
                     ui.add_space(6.0);
                 }
                 if !sections.is_empty() {
@@ -175,6 +197,7 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
             });
         });
+    nav.scroll = None;
     for a in acts {
         match a {
             Act::Edit(Owner::Set(id), k, v) => model.set_json_value(&id, &k, v),
@@ -182,6 +205,11 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
             Act::AddSection => model.add_section(""),
             Act::RemoveSection(i) => model.remove_section(i),
             Act::Select(key) => model.select_set(&key),
+            Act::Fold(id) => {
+                if !nav.closed.remove(&id) {
+                    nav.closed.insert(id);
+                }
+            }
             Act::Unpend(owner, key) => {
                 let left = pending(ui, &owner)
                     .into_iter()
@@ -191,33 +219,22 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
             }
         }
     }
+    ui.data_mut(|d| d.insert_temp(nav_id, nav));
 }
 
-/// The file as it would be written now (every written set as if exported).
-fn json_text(ui: &mut egui::Ui, entries: &[(SetView, EntryInput)], sections: &[Settings]) {
+/// The file as it would be written now (every written set as if exported), built once per revision (`built`).
+fn json_text(ui: &mut egui::Ui, text: &Arc<String>) {
     egui::CollapsingHeader::new("JSON text")
         .id_salt("json-editor-text")
         .show(ui, |ui| {
-            let mut inputs: Vec<EntryInput> = entries.iter().map(|(_, e)| e.clone()).collect();
-            inputs.extend(
-                sections
-                    .iter()
-                    .filter(|s| crate::model::sections::written(s))
-                    .map(|s| EntryInput {
-                        settings: s.clone(),
-                        section: true,
-                        ..EntryInput::default()
-                    }),
-            );
-            let text = to_text(&document(&inputs));
             if ui.small_button("Copy").clicked() {
-                ui.ctx().copy_text(text.clone());
+                ui.ctx().copy_text(text.to_string());
             }
             egui::ScrollArea::vertical()
                 .id_salt("json-editor-text-scroll")
                 .max_height(240.0)
                 .show(ui, |ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap());
+                    ui.add(egui::Label::new(egui::RichText::new(text.as_str()).monospace()).wrap());
                 });
         });
 }
@@ -442,7 +459,14 @@ fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<A
             let val = c.own.get(key).map(Value::to_string).unwrap_or_default();
             ui.label(egui::RichText::new(format!("{}: {val}", k.label)).small())
                 .on_hover_text("A slot command; change it with Slot commands…");
-            if c.read_only.is_none() && remove_button(ui) {
+            let locked = key
+                .strip_prefix("slot")
+                .and_then(|n| n.parse::<u8>().ok())
+                .is_some_and(|n| c.locks.contains(&n));
+            if locked {
+                ui.label(egui::RichText::new("locked").small().weak())
+                    .on_hover_text("The slot is locked; unlock it to change its command");
+            } else if c.read_only.is_none() && remove_button(ui) {
                 acts.push(Act::Edit(
                     Owner::Set(set.to_string()),
                     key.to_string(),
@@ -492,6 +516,7 @@ fn set_keys(own: &Settings) -> Vec<&'static KeySpec> {
 fn start_value(k: &KeySpec) -> Option<Value> {
     match k.kind {
         KeyKind::OnlyTrue | KeyKind::Object | KeyKind::Tri => Some(json!(true)),
+        KeyKind::Number(NumRange::Int(_)) => Some(json!(alpha_default(k.key))),
         KeyKind::Number(_) => Some(json!(GLINT_DEFAULTS
             .iter()
             .chain(FIXED_NUMBERS.iter())
@@ -507,22 +532,40 @@ fn set_entry(
     model: &AppModel,
     v: &SetView,
     hits: &[DeleteHit],
+    issues: &JsonIssues,
+    nav: &mut Nav,
     acts: &mut Vec<Act>,
 ) {
     let c = context(model, &v.id);
     let owner = Owner::Set(v.id.clone());
     let mine: Vec<&DeleteHit> = hits.iter().filter(|h| same_id(&h.set_id, &v.id)).collect();
-    let stroke = if mine.is_empty() {
-        ui.visuals().widgets.noninteractive.bg_stroke.color
-    } else {
-        AMBER
+    let mine_of = |l: &[(String, String)]| -> Vec<String> {
+        l.iter()
+            .filter(|(id, _)| same_id(id, &v.id))
+            .map(|(_, t)| t.clone())
+            .collect()
     };
-    entry_frame(ui, stroke).show(ui, |ui| {
+    let (errors, warnings) = (mine_of(&issues.errors), mine_of(&issues.warnings));
+    let open = !nav.closed.contains(&v.id);
+    let stroke = if !errors.is_empty() {
+        RED
+    } else if !mine.is_empty() || !warnings.is_empty() {
+        AMBER
+    } else {
+        ui.visuals().widgets.noninteractive.bg_stroke.color
+    };
+    let framed = entry_frame(ui, stroke).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
             let mut title = egui::RichText::new(&v.label).strong();
             if !mine.is_empty() {
                 title = title.strikethrough().color(AMBER);
+            }
+            if ui
+                .small_button(if open { "Collapse" } else { "Expand" })
+                .clicked()
+            {
+                acts.push(Act::Fold(v.id.clone()));
             }
             ui.label(title);
             if let Some(p) = &v.prefix {
@@ -545,6 +588,10 @@ fn set_entry(
                     h.why
                 ),
             );
+        }
+        issue_lines(ui, errors.iter(), warnings.iter());
+        if !open {
+            return;
         }
         let derived = v.derived_match.clone().unwrap_or_default();
         let mut taken: Vec<Mode> = active_matches(&c.own, &derived)
@@ -606,7 +653,7 @@ fn set_entry(
                             .small()
                             .color(AMBER),
                     )
-                    .on_hover_text("A key sdc does not know; it is kept as written");
+                    .on_hover_text("A key Tessalith does not know; it is kept as written");
                     if remove_button(ui) {
                         acts.push(Act::Edit(owner.clone(), k.clone(), None));
                     }
@@ -615,6 +662,9 @@ fn set_entry(
             add_set_key_menu(ui, v, &c, &owner, &taken, &waiting, acts);
         });
     });
+    if nav.scroll == Some(Spot::Entry(v.id.clone())) {
+        ui.scroll_to_rect(framed.response.rect, Some(egui::Align::Center));
+    }
     // A pending key that now has a value is no longer pending (read again: the + menu may have added one).
     let left: Vec<String> = pending(ui, &owner)
         .into_iter()
@@ -800,4 +850,229 @@ fn section_entry(
         .filter(|k| !s.contains_key(k.as_str()))
         .collect();
     set_pending(ui, &owner, left);
+}
+
+thread_local! {
+    // Per thread: tests run side by side, each drawing on its own thread.
+    static BUILDS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// How often this thread's editor rebuilt its JSON text and issues (tests: once per revision, not once per frame).
+pub fn cache_builds() -> usize {
+    BUILDS.get()
+}
+
+/// Everything the editor derives from the model, rebuilt only when `AppModel::json_key` changes (DECISIONS AG109).
+#[derive(Clone)]
+struct Built {
+    key: (crate::model::ViewKey, u64, String),
+    entries: Arc<Vec<(SetView, EntryInput)>>,
+    text: Arc<String>,
+    issues: Arc<JsonIssues>,
+}
+
+fn built(ui: &egui::Ui, model: &AppModel) -> Built {
+    let id = egui::Id::new("json-editor-built");
+    let key = model.json_key();
+    if let Some(b) = ui
+        .data(|d| d.get_temp::<Built>(id))
+        .filter(|b| b.key == key)
+    {
+        return b;
+    }
+    BUILDS.set(BUILDS.get() + 1);
+    // Only the entries the file gets: the statics rule's dropped sets are left out, as export does (design §5.1).
+    let entries = written_json_entries(model);
+    let mut inputs: Vec<EntryInput> = entries.iter().map(|(_, e)| e.clone()).collect();
+    inputs.extend(
+        model
+            .sections()
+            .iter()
+            .filter(|s| crate::model::sections::written(s))
+            .map(|s| EntryInput {
+                settings: s.clone(),
+                section: true,
+                ..EntryInput::default()
+            }),
+    );
+    let ids: Vec<&str> = entries.iter().map(|(v, _)| v.id.as_str()).collect();
+    let b = Built {
+        key,
+        text: Arc::new(to_text(&document(&inputs))),
+        issues: Arc::new(json_issues(model, &ids)),
+        entries: Arc::new(entries.clone()),
+    };
+    ui.data_mut(|d| d.insert_temp(id, b.clone()));
+    b
+}
+
+/// A place Next error can go to: the General box, or a set's entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Spot {
+    General,
+    Entry(String),
+}
+
+/// The editor's view state: the search text, the folded entries and where Next error is.
+#[derive(Clone, Default)]
+struct Nav {
+    query: String,
+    closed: BTreeSet<String>,
+    current: Option<Spot>,
+    /// Scroll to this at the next draw.
+    scroll: Option<Spot>,
+}
+
+type Entries = [(SetView, EntryInput)];
+
+/// The spots with an error, in the order they are shown (never filtered, AG108).
+fn error_spots(entries: &Entries, issues: &JsonIssues) -> Vec<Spot> {
+    let general = (!issues.general_errors.is_empty()).then_some(Spot::General);
+    general
+        .into_iter()
+        .chain(
+            entries
+                .iter()
+                .filter(|(v, _)| issues.errors.iter().any(|(id, _)| same_id(id, &v.id)))
+                .map(|(v, _)| Spot::Entry(v.id.clone())),
+        )
+        .collect()
+}
+
+/// The spot after (or before) `cur`, wrapping; the first (or last) when `cur` is none or gone.
+fn step(spots: &[Spot], cur: &Option<Spot>, forward: bool) -> Option<Spot> {
+    let n = spots.len();
+    let at = cur.as_ref().and_then(|c| spots.iter().position(|s| s == c));
+    let i = match (at, forward) {
+        (Some(i), true) => (i + 1) % n,
+        (Some(i), false) => (i + n - 1) % n,
+        (None, true) => 0,
+        (None, false) => n.checked_sub(1)?,
+    };
+    spots.get(i).cloned()
+}
+
+/// Go to `spot`: unfold it, scroll to it, and drop a search that hides it.
+fn jump(nav: &mut Nav, entries: &Entries, spot: Spot) {
+    if let Spot::Entry(id) = &spot {
+        nav.closed.remove(id);
+        let hidden = entries
+            .iter()
+            .any(|(v, e)| same_id(&v.id, id) && !matches(v, e, &nav.query));
+        if hidden {
+            nav.query.clear();
+        }
+    }
+    nav.scroll = Some(spot.clone());
+    nav.current = Some(spot);
+}
+
+/// Whether the entry shows under the search text: a case-insensitive substring of the set's name or of any path in it.
+fn matches(v: &SetView, e: &EntryInput, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let paths = active_matches(&e.settings, &e.derived_match)
+        .into_iter()
+        .map(|(_, p)| p)
+        .chain(e.slots.values().cloned())
+        .chain(
+            e.settings
+                .iter()
+                .filter(|(k, _)| is_match_key(k) || k.starts_with("slot"))
+                .filter_map(|(_, val)| val.as_str().map(str::to_string)),
+        );
+    [v.id.clone(), v.label.clone()]
+        .into_iter()
+        .chain(paths)
+        .any(|s| s.to_lowercase().contains(&q))
+}
+
+fn plural(n: usize, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The counts, Prev / Next error, and the search box. Returns whether Prev and Next were clicked.
+fn toolbar(
+    ui: &mut egui::Ui,
+    nav: &mut Nav,
+    issues: &JsonIssues,
+    entries: &Entries,
+    spots: &[Spot],
+) -> (bool, bool) {
+    let (errors, warnings) = (issues.error_count(), issues.warning_count());
+    let mut clicked = (false, false);
+    ui.horizontal_wrapped(|ui| {
+        let text = format!(
+            "{}, {}",
+            plural(errors, "error"),
+            plural(warnings, "warning")
+        );
+        let text = egui::RichText::new(text).strong();
+        ui.label(match (errors, warnings) {
+            (0, 0) => text.weak(),
+            (0, _) => text.color(AMBER),
+            _ => text.color(RED),
+        });
+        let on = !spots.is_empty();
+        clicked.0 = ui
+            .add_enabled(on, egui::Button::new("Prev"))
+            .on_hover_text("The previous entry with an error (Shift+F8)")
+            .clicked();
+        clicked.1 = ui
+            .add_enabled(on, egui::Button::new("Next error"))
+            .on_hover_text("The next entry with an error, wrapping at the end (F8)")
+            .clicked();
+        ui.add(
+            egui::TextEdit::singleline(&mut nav.query)
+                .hint_text("Search sets and paths")
+                .desired_width(220.0),
+        );
+        let shown = entries
+            .iter()
+            .filter(|(v, e)| matches(v, e, &nav.query))
+            .count();
+        ui.weak(format!("showing {shown} of {}", entries.len()));
+    });
+    clicked
+}
+
+/// Errors and warnings that belong to no entry.
+fn general_box(ui: &mut egui::Ui, issues: &JsonIssues, nav: &mut Nav) {
+    if issues.general_errors.is_empty() && issues.general_warnings.is_empty() {
+        return;
+    }
+    let stroke = if issues.general_errors.is_empty() {
+        AMBER
+    } else {
+        RED
+    };
+    let r = entry_frame(ui, stroke).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new("General").strong());
+        issue_lines(
+            ui,
+            issues.general_errors.iter(),
+            issues.general_warnings.iter(),
+        );
+    });
+    if nav.scroll == Some(Spot::General) {
+        ui.scroll_to_rect(r.response.rect, Some(egui::Align::Center));
+    }
+    ui.add_space(6.0);
+}
+
+/// Red lines for errors, amber for warnings.
+fn issue_lines<'a>(
+    ui: &mut egui::Ui,
+    errors: impl Iterator<Item = &'a String>,
+    warnings: impl Iterator<Item = &'a String>,
+) {
+    for t in errors {
+        ui.colored_label(RED, format!("✖ {t}"));
+    }
+    for t in warnings {
+        ui.colored_label(AMBER, format!("⚠ {t}"));
+    }
 }

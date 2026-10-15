@@ -299,7 +299,7 @@ fn prov(j: &engine::policy::ResolvedJob, f: &str) -> String {
 }
 
 #[test]
-fn hair_diffuse_is_cutout_with_coverage() {
+fn hair_diffuse_is_cutout_blend_with_coverage() {
     let d = tempfile::tempdir().unwrap();
     put_rgba(d.path(), "textures/hair/braid.png", |x, _| {
         [90, 60, 30, if x < 8 { 255 } else { 0 }]
@@ -309,7 +309,7 @@ fn hair_diffuse_is_cutout_with_coverage() {
     let j = job(&p, "braid.dds");
     assert_eq!(
         serde_json::to_value(j.profile.alpha.policy).unwrap(),
-        "cutout"
+        "cutout_blend"
     );
     assert_eq!(serde_json::to_value(j.profile.mips.coverage).unwrap(), "on");
     assert_eq!(prov(j, "alpha.policy"), "shader:hair");
@@ -340,7 +340,7 @@ fn the_set_pick_changes_a_members_profile_through_the_re_resolve() {
     assert_eq!(prov(j, "alpha.policy"), "shader:hair");
     assert_eq!(
         serde_json::to_value(j.profile.alpha.policy).unwrap(),
-        "cutout"
+        "cutout_blend"
     );
     let d = make();
     let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);

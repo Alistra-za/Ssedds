@@ -1,5 +1,5 @@
-//! The set preview panel (P1-A, spec §2.3): the right side of the Textures view while a set, or a texture of a set,
-//! is selected. Draws `SetPreview`; the frame, the CS toggle and the problem lists are the shared
+//! The set preview (P1-A, spec §2.3): the set's 3D view, in the centre pane under the set editor's header row while
+//! the 2D | 3D switch is on 3D (AG78). Draws `SetPreview`; the frame, the CS toggle and the problem lists are the shared
 //! `ui::viewport3d::show`. No logic beyond mapping input to model calls.
 use crate::model::set_preview::{
     badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
@@ -18,13 +18,13 @@ const EMISSIVE_APPROX: &str =
 const SLSF1_EMISSIVE: u32 = 1 << 29;
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
-/// The panel's narrowest width, and the width the central columns keep at the least.
-pub const PANEL_MIN: f32 = 240.0;
+/// The width the centre pane keeps at the least.
 pub const CENTRE_MIN: f32 = 360.0;
 /// Height of the shape list before the frame.
 const LIST_MAX: f32 = 160.0;
 
-/// The panel is wanted while a set, or a texture of a set, is selected (it stays beside the expanded view).
+/// The switch is on 3D and a set is followed; the view draws in the centre in place of the set editor's body
+/// while the set itself is selected (AG78).
 pub fn wanted(m: &AppModel) -> bool {
     m.settings.set_view_3d && followed_set(m).is_some()
 }
@@ -68,10 +68,8 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     }) {
         s.input = true;
     }
-    ui.horizontal(|ui| {
-        view_switch(ui, m);
-        ui.heading(PANEL_TITLE);
-    });
+    // The 2D | 3D switch and the set's name are the set editor's header row, above this view (AG78).
+    ui.strong(PANEL_TITLE);
     if followed_set(m).is_none() {
         ui.label("Select a set to preview it in 3D.");
         return;

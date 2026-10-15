@@ -345,3 +345,11 @@ fn unwritable_output_root_is_fatal_exit_3() {
         .unwrap();
     assert_eq!(code(&o), 3, "{}", text(&o.stderr));
 }
+
+#[test]
+fn the_cli_command_is_still_named_sdc() {
+    let o = sdc().arg("--help").output().unwrap();
+    let t = text(&o.stdout);
+    assert!(t.contains("Usage: sdc"), "{t}");
+    assert!(t.contains("the Tessalith command line"), "{t}");
+}

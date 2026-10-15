@@ -2323,7 +2323,57 @@ fn owner_chosen_folder_settings_come_through_the_mo2_target() {
         s.notes
     );
     assert_ne!(s.hash, CsSettings::default().hash);
-    assert!(defines.iter().any(|d| d == "CS_SKIN") && defines.iter().any(|d| d == "CS_HAIR"));
+    // Each feature as the owner's own files say (read directly, CS mod under overwrite): the owner turned Hair
+    // Specular off (2026-10-14), so not every feature is on.
+    let cs = root_of(&target).join(r"mods\CommunityShaders_AIO-2026-10-03T06-46Z");
+    let origins = vec![
+        ("cs".to_string(), cs.clone(), 0),
+        (
+            "overwrite".to_string(),
+            root_of(&target).join("overwrite"),
+            i32::MAX,
+        ),
+    ];
+    let direct = render3d::cs_settings::read_settings(&render3d::locate::settings_paths(
+        Some(&origins),
+        &cs.join("Shaders"),
+    ));
+    assert_eq!(
+        defines,
+        render3d::cs_settings::preview_defines(&direct, true),
+        "the GUI reads what the owner's files enable"
+    );
+    for (name, define) in render3d::cs_settings::PREVIEW_FEATURES {
+        assert_eq!(
+            defines.iter().any(|d| d == define),
+            owner_enables(&direct, name),
+            "{name}"
+        );
+    }
+}
+
+/// Whether the settings as read turn feature `name` on: CS loaded it and its own master switch (Vanilla Fresnel's
+/// `Enable`, Hair Specular's `Enabled`) is not 0.
+fn owner_enables(s: &CsSettings, name: &str) -> bool {
+    let switch = match name {
+        "VanillaFresnel" => Some(("Vanilla Fresnel", "Enable")),
+        "HairSpecular" => Some(("Hair Specular", "Enabled")),
+        _ => None,
+    };
+    let off = switch.is_some_and(|(section, key)| {
+        s.merged
+            .get(section)
+            .and_then(|v| v.get(key))
+            .is_some_and(|v| v.as_f64() == Some(0.0) || v.as_bool() == Some(false))
+    });
+    s.loaded.contains(name) && !off
+}
+
+fn root_of(t: &ScanTarget) -> PathBuf {
+    match t {
+        ScanTarget::Mo2 { root, .. } => root.clone(),
+        _ => unreachable!("an MO2 target"),
+    }
 }
 
 /// Review I1: "Choose folder…" after a locate with an MO2 target reads through that target (overwrite wins over
@@ -2431,4 +2481,223 @@ fn a_late_ack_after_failed_does_not_overcount_reconfigurations() {
     assert!(v.busy(), "the next command is waited for again");
     v.handle(v3::V3Reply::Reconfigured(1));
     assert!(!v.busy());
+}
+
+// ---- Task 10 (item 12): pan, sun rotation, debug views, magenta missing slots, Copy image
+
+fn target(o: &v3::Orbit, b: Option<([f32; 3], f32)>) -> [f32; 3] {
+    match o.camera(b) {
+        render3d::scene::Camera::Orbit { target, .. } => target,
+        c => panic!("orbit camera wanted, got {c:?}"),
+    }
+}
+
+#[test]
+fn pan_moves_the_target_in_the_view_plane_scaled_by_distance() {
+    let b = Some(([1.0, 2.0, 3.0], 2.0));
+    let mut o = v3::Orbit::default();
+    assert_eq!(target(&o, b), [1.0, 2.0, 3.0]);
+    // The default camera sits on +Y looking towards -Y, so its screen right is world -X. A drag to the right moves
+    // the model right, so the target goes to the left of the screen: +X.
+    o.pan(10.0, 0.0);
+    let t = target(&o, b);
+    assert!(t[0] > 1.0, "{t:?}");
+    assert!(
+        (t[1] - 2.0).abs() < 1e-5 && (t[2] - 3.0).abs() < 1e-5,
+        "{t:?}"
+    );
+    // A drag down moves the model down: the target goes up (+Z at this small pitch).
+    let mut d = v3::Orbit::default();
+    d.pan(0.0, 10.0);
+    let up = target(&d, b);
+    assert!(up[2] > 3.0, "{up:?}");
+    // The offset stays in the view plane: nothing along the view direction.
+    let (y, p) = (d.yaw, d.pitch);
+    let view = [p.cos() * y.sin(), -p.cos() * y.cos(), p.sin()];
+    let dot = (up[0] - 1.0) * view[0] + (up[1] - 2.0) * view[1] + (up[2] - 3.0) * view[2];
+    assert!(dot.abs() < 1e-4, "{dot}");
+    // Twice as far away, the same drag moves twice as much.
+    let mut far = v3::Orbit::default();
+    far.zoom(2.0);
+    far.pan(10.0, 0.0);
+    let (near_dx, far_dx) = (t[0] - 1.0, target(&far, b)[0] - 1.0);
+    assert!((far_dx - 2.0 * near_dx).abs() < 1e-4, "{near_dx} {far_dx}");
+    // Reset (double-click, Home, Reset view) recentres.
+    o.reset();
+    assert_eq!(target(&o, b), [1.0, 2.0, 3.0]);
+    assert_eq!(o, v3::Orbit::default());
+}
+
+#[test]
+fn shift_right_drag_turns_the_sun_about_the_vertical() {
+    use render3d::scene::Camera;
+    let mut l = v3::Look::default();
+    let a = l.scene(Camera::Auto, None).dir_light.direction;
+    l.rotate_sun(std::f32::consts::FRAC_PI_2 / 0.01);
+    let b = l.scene(Camera::Auto, None).dir_light.direction;
+    assert!((a[2] - b[2]).abs() < 1e-5, "the height stays");
+    let dot = a[0] * b[0] + a[1] * b[1];
+    let len_a = (a[0] * a[0] + a[1] * a[1]).sqrt();
+    let len_b = (b[0] * b[0] + b[1] * b[1]).sqrt();
+    assert!((len_a - len_b).abs() < 1e-5);
+    assert!(dot.abs() < 1e-4, "a quarter turn: {a:?} -> {b:?}");
+    // The angle wraps into one turn.
+    for _ in 0..10 {
+        l.rotate_sun(-300.0);
+    }
+    assert!(
+        (0.0..std::f32::consts::TAU).contains(&l.sun_yaw),
+        "{}",
+        l.sun_yaw
+    );
+}
+
+#[test]
+fn the_sun_turn_round_trips_through_gui_toml() {
+    use sdc_gui::settings::LookSettings;
+    let mut l = v3::Look::default();
+    l.rotate_sun(123.0);
+    let s = LookSettings::of(&l);
+    let text = toml::to_string(&s).unwrap();
+    assert!(text.contains("sun_yaw"), "{text}");
+    let back: LookSettings = toml::from_str(&text).unwrap();
+    assert_eq!(v3::Look::from_settings(Some(&back)), l);
+    // An old gui.toml without it keeps the default sun.
+    let old: LookSettings = toml::from_str("sun = 2.0").unwrap();
+    assert_eq!(v3::Look::from_settings(Some(&old)).sun_yaw, 0.0);
+}
+
+#[test]
+fn the_debug_selector_lists_only_views_the_renderer_can_make() {
+    use v3::DebugView;
+    // Albedo, Normals, Roughness, Metallic and AO need render3d support (nif-request-3d-debug-views.md).
+    assert_eq!(DebugView::ALL, [DebugView::Lit, DebugView::UvChecker]);
+    let mut h = harness(Viewport3d::with_state(V3State::Ready));
+    h.run();
+    h.get_by_label("View").click();
+    h.run();
+    h.get_by_label("Lit");
+    for missing in ["Albedo", "Normals", "Roughness", "Metallic", "AO"] {
+        assert!(h.query_by_label(missing).is_none(), "{missing} is offered");
+    }
+    h.get_by_label("UV checker").click();
+    h.run();
+    assert_eq!(h.state().debug(), DebugView::UvChecker);
+}
+
+#[test]
+fn a_debug_view_change_goes_to_the_render_thread_and_waits_for_its_answer() {
+    let (mut v, cmds) = rendered();
+    v.set_debug(v3::DebugView::UvChecker);
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetDebug(v3::DebugView::UvChecker))
+    ));
+    assert!(v.busy());
+    v.handle(v3::V3Reply::Reconfigured(1));
+    v.set_debug(v3::DebugView::UvChecker);
+    assert!(cmds.try_recv().is_err(), "no change, nothing sent");
+}
+
+#[test]
+fn the_uv_checker_is_a_checker_and_replaces_the_diffuse_slot() {
+    let rgba = v3::checker_rgba();
+    let n = v3::CHECKER_SIZE as usize;
+    assert_eq!(rgba.len(), n * n * 4);
+    let px = |x: usize, y: usize| rgba[(y * n + x) * 4..(y * n + x) * 4 + 4].to_vec();
+    let cell = n / 8;
+    assert_ne!(px(0, 0), px(cell, 0), "neighbours differ");
+    assert_ne!(px(0, 0), px(0, cell));
+    assert_eq!(px(0, 0), px(cell, cell), "diagonals match");
+    assert_eq!(px(0, 0)[3], 255);
+    let f = engine::dds::read_dds(&v3::checker_dds()).unwrap();
+    assert_eq!((f.width, f.height), (v3::CHECKER_SIZE, v3::CHECKER_SIZE));
+    // The paths swapped: every shape's slot 0, once each, never an empty slot.
+    let mut a = nif::material::MaterialState::builtin_default();
+    a.slots[0] = nif::path::canon_texture(b"Textures\\Rock\\A.dds");
+    a.slots[1] = nif::path::canon_texture(b"Textures\\Rock\\A_n.dds");
+    let b = a.clone();
+    let mut c = a.clone();
+    c.slots[0] = nif::path::canon_texture(b"");
+    assert_eq!(v3::diffuse_paths([&a, &b, &c]), ["textures/rock/a.dds"]);
+}
+
+#[test]
+fn magenta_is_a_solid_magenta_dds() {
+    let bytes = v3::magenta_dds();
+    let f = engine::dds::read_dds(&bytes).unwrap();
+    assert_eq!((f.width, f.height), (1, 1));
+    assert_eq!(&bytes[bytes.len() - 4..], &[255, 0, 255, 255]);
+}
+
+#[test]
+fn missing_textures_are_listed_in_magenta_with_show_in_textures() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.report = Some(render3d::LoadReport {
+        missing_textures: vec!["textures/a.dds".into(), "textures/b.dds".into()],
+        ..Default::default()
+    });
+    v.missing_items = vec![Some("landscape/a.png".into()), None];
+    let mut h = harness(v);
+    h.run();
+    h.get_by_label("Missing texture: textures/a.dds");
+    h.get_by_label("Missing texture: textures/b.dds");
+    // Only the path in the open folder has the button.
+    h.get_by_label("Open in Textures").click();
+    h.run();
+    assert_eq!(
+        h.state().show_in_textures.as_deref(),
+        Some("landscape/a.png")
+    );
+}
+
+#[test]
+fn copy_image_puts_the_last_frame_on_the_clipboard() {
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.copy_image(|_, _, _| panic!("no frame yet"));
+    assert_eq!(v.status.take().as_deref(), Some("Nothing to copy yet"));
+    let rgba: Vec<u8> = (0..8).collect();
+    v.frame = Some(std::sync::Arc::new(v3::Frame {
+        width: 2,
+        height: 1,
+        rgba: rgba.clone(),
+        id: 1,
+    }));
+    let mut got = None;
+    v.copy_image(|w, h, b| {
+        got = Some((w, h, b.to_vec()));
+        Ok(())
+    });
+    assert_eq!(got, Some((2, 1, rgba)));
+    assert_eq!(v.status.take().as_deref(), Some("Copied 3D view (2×1)"));
+    v.copy_image(|_, _, _| Err("busy".into()));
+    assert_eq!(v.status.take().as_deref(), Some("Copy failed: busy"));
+}
+
+#[test]
+fn the_3d_keys_reset_cycle_and_are_listed() {
+    use eframe::egui::Key;
+    use sdc_gui::ui::actions::{action, keys_text, Area};
+    for (id, keys) in [
+        ("3d-reset", "Home"),
+        ("3d-debug", "V"),
+        ("3d-copy", "Ctrl+Shift+C"),
+    ] {
+        let a = action(id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(a.area, Area::View3d);
+        assert_eq!(keys_text(id), keys);
+    }
+    let mut v = Viewport3d::with_state(V3State::Ready);
+    v.orbit.pan(30.0, 5.0);
+    let mut h = harness(v);
+    h.run();
+    h.key_press(Key::Home);
+    h.run();
+    assert_eq!(h.state().orbit, v3::Orbit::default());
+    h.key_press(Key::V);
+    h.run();
+    assert_eq!(h.state().debug(), v3::DebugView::UvChecker);
+    h.key_press(Key::V);
+    h.run();
+    assert_eq!(h.state().debug(), v3::DebugView::Lit);
 }

@@ -1,6 +1,8 @@
 //! egui drawing of the model (M3a spec §2). No logic beyond mapping input to model calls.
+pub mod actions;
 pub mod advanced;
 pub mod bulk_panel;
+pub mod color;
 pub mod columns;
 pub mod cs_pbr;
 pub mod dialogs;
@@ -9,6 +11,7 @@ pub mod header;
 pub mod input_name;
 pub mod json_editor;
 pub mod meshes;
+pub mod messages;
 pub mod path_picker;
 pub mod pgp_fields;
 pub mod plugin_refs;
@@ -19,6 +22,7 @@ pub mod set_editor;
 pub mod set_preview;
 pub mod sets_column;
 pub mod settings_panel;
+pub mod skin_card;
 pub mod slot_commands;
 pub mod thumbs;
 pub mod viewport3d;
@@ -66,7 +70,22 @@ pub fn draw_with_scan(
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
     state.thumbs.sweep(model.items_rev());
-    let keys_free = selection_keys_free(ui, model);
+    // Item 17: files dropped from Explorer wait for a slot card to take them (see the end of this function).
+    let paths: Vec<std::path::PathBuf> = ui.input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().to_path_buf())
+            .collect()
+    });
+    state.drops.file = (!paths.is_empty()).then(|| sets_column::FileDrop {
+        paths,
+        pos: drop_pos(ui.ctx()),
+    });
+    // First, before any widget sees the keys (items 5 and 19).
+    actions::keys(ui.ctx(), model, state.drops.pending.is_some());
+    // The column sets it again if it draws; a hidden or collapsed column leaves Up and Down off.
+    model.nav.cols = 0;
     header::draw(ui, model);
     if let Some(m) = scan {
         egui::Panel::top("textures-scan").show(ui, |ui| meshes::scan_row(ui, m));
@@ -96,34 +115,26 @@ pub fn draw_with_scan(
         },
     );
     drawer::draw(ui, model, &mut state.drawer);
-    // The panel leaves the central columns their minimum width; too narrow a window for both hides the panel
-    // (narrowing a column brings it back).
-    let room = ui.available_width() - set_preview::CENTRE_MIN;
-    // The 2D | 3D switch: in 3D the set editor leaves its slot cards out and this panel shows the set.
-    let three_d =
-        state.set3d.enabled && set_preview::wanted(model) && room >= set_preview::PANEL_MIN;
-    if three_d {
-        egui::Panel::right("set-3d")
-            .default_size(480.0)
-            .min_size(set_preview::PANEL_MIN)
-            .max_size(room)
-            .show(ui, |ui| set_preview::draw(ui, model, &mut state.set3d));
-    }
+    // The 2D | 3D switch (AB4, AG78): in 3D the set's 3D view takes the centre in place of the set editor's body.
+    let three_d = state.set3d.enabled && set_preview::wanted(model);
     egui::CentralPanel::default().show(ui, |ui| centre(ui, model, state, three_d));
+    // Folders (or files, which stand for their folder) dropped anywhere but on a slot card open like Open folder
+    // (spec §5.1).
+    if let Some(f) = state.drops.file.take() {
+        model.dropped(&f.paths);
+    }
+    // Here, not in the Sets column: a hidden column must still show a drop's Replace prompt (item 17).
+    sets_column::pending_modal(ui.ctx(), model, &mut state.drops);
     // Here, not in the set editor: a pill member's slot menu opens it while a texture is selected (F3a Task 8).
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
     json_editor::draw(ui.ctx(), model);
-    // Last, so every modal, menu and the preview has had its chance to consume the key first.
-    if keys_free {
-        selection_keys(ui, model);
-    }
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
 fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: bool) {
     if model.root.is_none() {
-        ui.centered_and_justified(|ui| ui.label("Open a folder of source textures to begin."));
+        ui.centered_and_justified(|ui| ui.label(model.empty_hint()));
         return;
     }
     if model.expanded.is_some() {
@@ -139,6 +150,26 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
     }
     let selection = model.selection.clone();
     match selection {
+        // AG87: on 3D, any member of a set opens or keeps that set's 3D view (`three_d` needs `followed_set`), its own
+        // settings folded above it.
+        Selection::Item(key) if three_d => {
+            let name = model.item(&key).map_or(key.clone(), |i| i.name.clone());
+            ui.horizontal_wrapped(|ui| {
+                set_preview::view_switch(ui, model);
+                ui.heading(&name);
+            });
+            egui::CollapsingHeader::new(format!("{name} settings"))
+                .id_salt(("set-3d-member", &key))
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("set-3d-member-scroll")
+                        .max_height((ui.available_height() * 0.45).max(240.0))
+                        .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
+                });
+            ui.separator();
+            set_preview::draw(ui, model, &mut state.set3d);
+        }
         Selection::Item(key) => {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -155,13 +186,45 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
                 &key,
                 &mut state.thumbs,
                 &mut state.slot_cmds,
+                &mut state.drops,
                 view,
             );
+            if three_d {
+                set_preview::draw(ui, model, &mut state.set3d);
+            }
         }
         Selection::None => {
             ui.centered_and_justified(|ui| ui.label("Select a texture or a set."));
         }
     }
+}
+
+/// Item 17 (DECISIONS AG98): where a file from Explorer was dropped, in this window's points. winit 0.30 reports a
+/// drop without a position and no mouse moves reach the window during the drag, so the pointer egui knows is stale:
+/// on Windows the cursor is read from the OS and placed with the window's inner position. Elsewhere, and without
+/// viewport information (tests), the last pointer position egui has.
+fn drop_pos(ctx: &egui::Context) -> Option<egui::Pos2> {
+    os_cursor(ctx).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
+}
+
+#[cfg(windows)]
+fn os_cursor(ctx: &egui::Context) -> Option<egui::Pos2> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let inner = ctx.input(|i| i.viewport().inner_rect)?;
+    let mut p = POINT { x: 0, y: 0 };
+    // SAFETY: GetCursorPos writes one POINT through a valid pointer.
+    if unsafe { GetCursorPos(&mut p) } == 0 {
+        return None;
+    }
+    // egui-winit gives `inner_rect` in the same points as the widgets (pixels / (native scale × zoom)).
+    let ppp = ctx.pixels_per_point();
+    Some(egui::pos2(p.x as f32 / ppp, p.y as f32 / ppp) - inner.min.to_vec2())
+}
+
+#[cfg(not(windows))]
+fn os_cursor(_: &egui::Context) -> Option<egui::Pos2> {
+    None
 }
 
 /// The two resizable columns of the Textures view.
@@ -251,38 +314,5 @@ fn column_panel(
         if let Some(s) = PanelState::load(ui.ctx(), panel).filter(|_| released) {
             ui.data_mut(|d| d.insert_persisted(chosen, s.outer_rect.width()));
         }
-    }
-}
-
-/// F3a D1: whether Ctrl+A / Esc may act this frame: not while a widget has focus (the search box keeps its own
-/// Ctrl+A), a dialog, popup or any modal layer is open, or a texture is expanded (the preview owns Esc). Read at the
-/// start of the frame, before anything draws or consumes.
-fn selection_keys_free(ui: &egui::Ui, model: &AppModel) -> bool {
-    !(model.dialog.is_some()
-        || model.expanded.is_some()
-        || egui::Popup::is_any_open(ui.ctx())
-        || ui
-            .ctx()
-            .memory(|m| m.focused().is_some() || m.top_modal_layer().is_some()))
-}
-
-/// Ctrl+A selects everything visible and Esc clears. Runs after the whole UI has drawn, so a key a modal or menu
-/// consumed this frame (Esc closing it) is gone and does not also clear the selection.
-fn selection_keys(ui: &egui::Ui, model: &mut AppModel) {
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
-        model.select_all_visible();
-    }
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        model.clear_selection();
-    }
-    // F3b D5: F2 renames the outputs of selected sets, or the selected textures' inputs.
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2)) {
-        use crate::model::rename::RenameMode;
-        let sets = !model.selected_sets().is_empty();
-        model.open_rename(if sets {
-            RenameMode::Outputs
-        } else {
-            RenameMode::Inputs
-        });
     }
 }

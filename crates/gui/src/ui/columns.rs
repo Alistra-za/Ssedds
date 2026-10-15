@@ -2,6 +2,7 @@
 use super::thumbs::ThumbCache;
 use crate::model::bulk::{MenuAction, MenuEntry};
 use crate::model::items::{ItemStatus, TextureItem};
+use crate::model::texture_view::{encoder_label, ColumnPrefs, FilterOptions, SetFilter, SortKey};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::events::RecipeStatus;
@@ -11,8 +12,12 @@ pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
 /// Width of a collapsed column.
 pub const STRIP_WIDTH: f32 = 24.0;
-const TILE: f32 = 96.0;
+/// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.
+const TILE: f32 = crate::model::texture_view::ColumnPrefs::TILE_DEFAULT;
 const MEMBER: f32 = 32.0;
+const COMBO_WIDTH: f32 = 100.0;
+/// What a combo takes beyond its width (measured).
+const COMBO_PAD: f32 = 7.0;
 const TILE_MARGIN: f32 = 4.0;
 const TILE_STROKE: f32 = 2.0;
 /// Scroll bar and margin allowance when fitting tiles to a row.
@@ -103,8 +108,8 @@ fn small_line_height(ui: &egui::Ui) -> f32 {
 
 /// A tile's outer height: the thumbnail, a name line and a badge line, plus margin and stroke. Fixed, so the
 /// grid can draw only the rows in view.
-fn tile_height(ui: &egui::Ui) -> f32 {
-    TILE + 2.0 * (small_line_height(ui) + ui.spacing().item_spacing.y)
+fn tile_height(ui: &egui::Ui, tile: f32) -> f32 {
+    tile + 2.0 * (small_line_height(ui) + ui.spacing().item_spacing.y)
         + 2.0 * (TILE_MARGIN + TILE_STROKE)
 }
 
@@ -144,8 +149,9 @@ fn tile(
     thumbs: &mut ThumbCache,
     idx: usize,
     chosen: &HashSet<String>,
+    size: f32,
 ) {
-    let inner_h = tile_height(ui) - 2.0 * (TILE_MARGIN + TILE_STROKE);
+    let inner_h = tile_height(ui, size) - 2.0 * (TILE_MARGIN + TILE_STROKE);
     let item = &model.items[idx];
     let selected = chosen.contains(&item.key);
     let fill = if selected {
@@ -164,15 +170,15 @@ fn tile(
         .inner_margin(TILE_MARGIN)
         .show(ui, |ui| {
             ui.style_mut().interaction.selectable_labels = false;
-            ui.set_width(TILE);
+            ui.set_width(size);
             ui.set_height(inner_h);
             ui.vertical_centered(|ui| {
                 match thumbs.get(ui.ctx(), item) {
                     Some(t) => {
-                        ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(TILE, TILE)));
+                        ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(size, size)));
                     }
                     None => {
-                        ui.allocate_space(egui::vec2(TILE, TILE));
+                        ui.allocate_space(egui::vec2(size, size));
                     }
                 }
                 ui.add(egui::Label::new(egui::RichText::new(&item.name).small()).truncate());
@@ -248,34 +254,74 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         });
     }
     ui.horizontal_wrapped(|ui| {
-        ui.toggle_value(&mut model.filter.needs_decision, "Needs decision");
-        ui.toggle_value(&mut model.filter.warnings, "Has warnings");
-        ui.toggle_value(&mut model.filter.failed, "Failed");
-        ui.toggle_value(&mut model.filter.not_in_set, "Not in a set");
+        ui.toggle_value(&mut model.filter.needs_decision, "Needs decision")
+            .on_hover_text("Only textures that still need a decision from you");
+        ui.toggle_value(&mut model.filter.warnings, "Has warnings")
+            .on_hover_text("Only textures with warnings");
+        ui.toggle_value(&mut model.filter.failed, "Failed")
+            .on_hover_text("Only textures that failed to plan or export");
+        ui.toggle_value(&mut model.filter.not_in_set, "Not in a set")
+            .on_hover_text("Only textures that are not a member of any set");
     });
+    combo_filters(ui, model);
     ui.add(
         egui::TextEdit::singleline(&mut model.search)
             .hint_text("Search")
             .desired_width(f32::INFINITY),
     );
     ui.separator();
-    let visible = model.visible_items();
+    let visible = model.visible_shared();
     if visible.is_empty() {
         if model.root.is_some() && !model.busy() {
-            ui.weak("No textures to show.");
+            if model.filters_active() && !model.items.is_empty() {
+                ui.label(format!(
+                    "No textures match the filters ({} hidden)",
+                    model.hidden_by_filters()
+                ));
+                if ui.button("Clear filters").clicked() {
+                    model.clear_filters();
+                }
+            } else {
+                ui.weak("No textures to show.");
+            }
         }
         return;
     }
     // One set per frame keeps the per-tile test O(1) however many are selected.
     let chosen: HashSet<String> = model.selected_items().into_iter().collect();
-    let tile_h = tile_height(ui);
-    let tile_w = TILE + 2.0 * (TILE_MARGIN + TILE_STROKE);
+    // A tile never runs wider than the column, so a narrow column still shows one.
+    let chrome = 2.0 * (TILE_MARGIN + TILE_STROKE);
+    let size = model
+        .prefs
+        .tile
+        .min(ui.available_width() - SCROLL_ALLOWANCE - chrome)
+        .max(ColumnPrefs::TILE_RANGE.0);
+    let tile_h = tile_height(ui, size);
+    let tile_w = size + chrome;
     let gap = ui.spacing().item_spacing.x;
     let cols = (((ui.available_width() - SCROLL_ALLOWANCE + gap) / (tile_w + gap)) as usize).max(1);
     let rows = visible.len().div_ceil(cols);
+    // Item 5: Up and Down move by this row's width, and a texture the keys or the palette moved to scrolls into view.
+    model.nav.cols = cols;
+    let reveal = model
+        .nav
+        .reveal_item
+        .take()
+        .and_then(|k| visible.iter().position(|&i| model.items[i].key == k))
+        .map(|n| n / cols);
+    let row_step = tile_h + ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_rows(ui, tile_h, rows, |ui, range| {
+            // The rows outside `range` are not drawn: the reveal's rectangle is worked out from the first drawn one.
+            if let Some(r) = reveal {
+                let top = ui.max_rect().top() + (r as f32 - range.start as f32) * row_step;
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(ui.max_rect().left(), top),
+                    egui::vec2(ui.max_rect().width(), tile_h),
+                );
+                ui.scroll_to_rect(rect, None);
+            }
             for r in range {
                 let row = &visible[r * cols..((r + 1) * cols).min(visible.len())];
                 ui.allocate_ui_with_layout(
@@ -283,12 +329,133 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                     egui::Layout::left_to_right(egui::Align::Min),
                     |ui| {
                         for &idx in row {
-                            tile(ui, model, thumbs, idx, &chosen);
+                            tile(ui, model, thumbs, idx, &chosen, size);
                         }
                     },
                 );
             }
         });
+}
+
+/// A compact combo: `name` and the current choice in one box (a label beside it would hold the column wider), the
+/// hover text says what it filters.
+fn pick<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    name: &str,
+    hover: &str,
+    current: &mut T,
+    options: &[(T, String)],
+) {
+    let text = options
+        .iter()
+        .find(|o| o.0 == *current)
+        .map_or("?", |o| o.1.as_str());
+    egui::ComboBox::from_id_salt(name)
+        .width(COMBO_WIDTH)
+        .selected_text(format!("{name}: {text}"))
+        .show_ui(ui, |ui| {
+            for (v, label) in options {
+                ui.selectable_value(current, *v, label);
+            }
+        })
+        .response
+        .on_hover_text(hover);
+}
+
+/// "Any or a value" over a filter's `Option<String>`. The current value is listed even if the folder has none of it,
+/// so a saved filter is never invisible.
+fn value_combo(
+    ui: &mut egui::Ui,
+    name: &str,
+    hover: &str,
+    current: &mut Option<String>,
+    present: &[String],
+    show: impl Fn(&str) -> String,
+) {
+    let mut values: Vec<&String> = present.iter().collect();
+    if let Some(c) = current.as_ref().filter(|c| !present.contains(c)) {
+        values.push(c);
+    }
+    let mut options = vec![(None, "Any".to_string())];
+    options.extend(values.into_iter().map(|v| (Some(v.as_str()), show(v))));
+    let mut now = current.as_deref();
+    pick(ui, name, hover, &mut now, &options);
+    if now != current.as_deref() {
+        *current = now.map(str::to_string);
+    }
+}
+
+/// The combos of the filter row, by position.
+const COMBOS: usize = 5;
+
+fn combo_at(ui: &mut egui::Ui, model: &mut AppModel, o: &FilterOptions, n: usize) {
+    match n {
+        0 => value_combo(
+            ui,
+            "Sub-type",
+            "Only textures of this sub-type (the sub-types in this folder)",
+            &mut model.filter.subtype,
+            &o.subtypes,
+            str::to_string,
+        ),
+        1 => value_combo(
+            ui,
+            "Output format",
+            "Only textures that will be written in this DDS format",
+            &mut model.filter.format,
+            &o.formats,
+            str::to_uppercase,
+        ),
+        2 => value_combo(
+            ui,
+            "Encoder",
+            "Only textures that this encoder will compress",
+            &mut model.filter.encoder,
+            &o.encoders,
+            |s| encoder_label(s).to_string(),
+        ),
+        3 => pick(
+            ui,
+            "Set membership",
+            "Only textures in a set of more than one texture, or only those that are not",
+            &mut model.filter.set,
+            &SetFilter::ALL.map(|s| (s, s.label().to_string())),
+        ),
+        _ => pick(
+            ui,
+            "Sort",
+            "Order of the tiles. Source size lists the largest first; Status lists errors, warnings, undecided, \
+             then the rest. Ties go by name.",
+            &mut model.prefs.sort,
+            &SortKey::ALL.map(|s| (s, s.label().to_string())),
+        ),
+    }
+}
+
+/// The sub-type, format, encoder and set-membership combos, the sort and the tile size, under the four toggles. A
+/// combo is a nested layout, which `horizontal_wrapped` cannot wrap, so the rows are cut here by the column's width.
+fn combo_filters(ui: &mut egui::Ui, model: &mut AppModel) {
+    let o = model.filter_options();
+    let gap = ui.spacing().item_spacing.x;
+    let per = (((ui.available_width() + gap) / (COMBO_WIDTH + COMBO_PAD + gap)) as usize)
+        .clamp(1, COMBOS);
+    for row in (0..COMBOS).collect::<Vec<_>>().chunks(per) {
+        ui.horizontal(|ui| {
+            for &n in row {
+                combo_at(ui, model, &o, n);
+            }
+        });
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Tile size");
+        let (lo, hi) = ColumnPrefs::TILE_RANGE;
+        ui.spacing_mut().slider_width = 70.0;
+        let r = ui
+            .add(egui::Slider::new(&mut model.prefs.tile, lo..=hi).show_value(false))
+            .on_hover_text("How large the thumbnails are, in points (64 to 192)");
+        let tile = f64::from(model.prefs.tile);
+        r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), tile, "Tile size"));
+    });
 }
 
 pub(super) fn status_text(s: RecipeStatus) -> (&'static str, Option<egui::Color32>) {

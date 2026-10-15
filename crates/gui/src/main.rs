@@ -1,8 +1,8 @@
 #![windows_subsystem = "windows"]
-//! `sdc-gui.exe`.
+//! `tessalith.exe`.
 use engine::session::Session;
 use sdc_gui::model::{AppModel, Dialog};
-use sdc_gui::{app::SdcApp, fonts, render, settings};
+use sdc_gui::{app::SdcApp, fonts, layout, render, settings};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -48,30 +48,41 @@ fn main() -> eframe::Result {
     sdc_gui::crash_log::install();
     // The preview timing log (SDC_PREVIEW_LOG=0 turns it off); kept alive for the whole run.
     let _perf = render3d::perf_log::start();
+    // The saved window (AG17, AG18), fitted to the monitors before the window exists.
+    let saved = settings::settings_path()
+        .map(|p| settings::GuiSettings::load(&p).0.layout)
+        .unwrap_or_default();
+    let win = layout::initial_window(&saved, &layout::monitors());
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title(sdc_gui::PRODUCT_NAME)
+        .with_inner_size(win.size)
+        .with_maximized(win.maximized);
+    if let Some(p) = win.pos {
+        viewport = viewport.with_position(p);
+    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         // BC texture compression and the adapter's own limits, for the preview textures.
         wgpu_options: render::wgpu_configuration(),
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("sdc")
-            .with_inner_size([1400.0, 900.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
-        "sdc",
+        sdc_gui::PRODUCT_NAME,
         options,
         Box::new(|cc| {
             // The app has no usable font without the system fonts: show why and exit.
             if let Err(e) = fonts::install_system_fonts(&cc.egui_ctx) {
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
-                    .set_title("sdc")
+                    .set_title(sdc_gui::PRODUCT_NAME)
                     .set_description(e.as_str())
                     .show();
                 return Err(e.into());
             }
             // No render state means no usable adapter: the app still starts, without a preview.
             let app = SdcApp::new(build_model()).with_render_state(cc.wgpu_render_state.as_ref());
+            app.restore_ctx(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     )

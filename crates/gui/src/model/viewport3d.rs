@@ -290,6 +290,8 @@ pub struct Orbit {
     pub pitch: f32,
     /// Distance in multiples of the auto distance.
     pub zoom: f32,
+    /// Pan: the target's offset from the bounds centre, in bounding radii (world axes).
+    pub pan: [f32; 3],
 }
 
 impl Default for Orbit {
@@ -298,16 +300,22 @@ impl Default for Orbit {
             yaw: AUTO_YAW,
             pitch: AUTO_PITCH,
             zoom: 1.0,
+            pan: [0.0; 3],
         }
     }
 }
+
+/// Pan per point of drag, in camera distances: about a pixel at the model in a 500 px tall frame.
+const PAN_SPEED: f32 = 0.002;
+/// Sun turn per point of Shift+right drag, in radians.
+const SUN_SPEED: f32 = 0.01;
 
 impl Orbit {
     pub fn camera(&self, bounds: Option<([f32; 3], f32)>) -> Camera {
         match bounds {
             None => Camera::Auto,
             Some((c, r)) => Camera::Orbit {
-                target: c,
+                target: [0, 1, 2].map(|i| c[i] + self.pan[i] * r.max(1e-3)),
                 yaw: self.yaw,
                 pitch: self.pitch,
                 distance: r.max(1e-3) * AUTO_DISTANCE * self.zoom,
@@ -319,6 +327,19 @@ impl Orbit {
         self.yaw -= dx * 0.01;
         self.pitch = (self.pitch + dy * 0.01).clamp(-1.55, 1.55);
     }
+    /// A pan drag of (dx, dy) points (middle, or Shift+left): the model follows the cursor in the view plane, by an
+    /// amount that grows with the camera distance.
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        let s = PAN_SPEED * AUTO_DISTANCE * self.zoom;
+        let (sy, cy) = self.yaw.sin_cos();
+        let (sp, cp) = self.pitch.sin_cos();
+        // The view's right and up vectors as `render3d::scene::View::new` builds them (Z-up world).
+        let right = [cy, sy, 0.0];
+        let up = [-sy * sp, cy * sp, cp];
+        for i in 0..3 {
+            self.pan[i] += (up[i] * dy - right[i] * dx) * s;
+        }
+    }
     /// Multiplies the distance by `factor` (> 1 is further away).
     pub fn zoom(&mut self, factor: f32) {
         self.zoom = (self.zoom * factor).clamp(0.05, 20.0);
@@ -329,8 +350,8 @@ impl Orbit {
     }
 }
 
-/// The "View" controls of the panel: background and lights. Not saved; every start begins at the defaults (the
-/// look the preview always had).
+/// The "View" controls of the panel: background and lights. Saved in `gui.toml` (`[layout.look]`, AG17); a fresh
+/// install begins at the defaults (the look the preview always had).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
     /// The studio HDRI behind the model (and as ambient light) instead of a flat grey.
@@ -343,6 +364,9 @@ pub struct Look {
     pub point: f32,
     /// Point light falloff radius in multiples of the model's bounding radius, [`Look::RADIUS_RANGE`].
     pub radius: f32,
+    /// The sun's turn about the vertical (world Z), radians in 0..2π (Shift+right drag). The HDRI does not turn:
+    /// render3d has no environment rotation (AG74).
+    pub sun_yaw: f32,
 }
 
 impl Look {
@@ -362,6 +386,9 @@ impl Look {
             sun_brightness: self.sun.clamp(Self::SUN_RANGE.0, Self::SUN_RANGE.1),
             ..Scene::neutral()
         };
+        let [x, y, z] = s.dir_light.direction;
+        let (sn, cs) = self.sun_yaw.sin_cos();
+        s.dir_light.direction = [x * cs - y * sn, x * sn + y * cs, z];
         if let Some(b) = bounds {
             let radius = self
                 .radius
@@ -374,6 +401,42 @@ impl Look {
         }
         s
     }
+
+    /// A Shift+right drag of `dx` points turns the sun about the vertical.
+    pub fn rotate_sun(&mut self, dx: f32) {
+        let a = (self.sun_yaw + dx * SUN_SPEED).rem_euclid(std::f32::consts::TAU);
+        // rem_euclid of a tiny negative rounds up to TAU itself.
+        self.sun_yaw = if a < std::f32::consts::TAU { a } else { 0.0 };
+    }
+}
+
+impl Look {
+    /// The saved look; a field it lacks keeps the default.
+    pub fn from_settings(s: Option<&crate::settings::LookSettings>) -> Look {
+        let d = Look::default();
+        let Some(s) = s else { return d };
+        Look {
+            hdri: s.hdri.unwrap_or(d.hdri),
+            grey: s.grey.unwrap_or(d.grey),
+            sun: s.sun.unwrap_or(d.sun),
+            point: s.point.unwrap_or(d.point),
+            radius: s.radius.unwrap_or(d.radius),
+            sun_yaw: s.sun_yaw.unwrap_or(d.sun_yaw),
+        }
+    }
+}
+
+impl crate::settings::LookSettings {
+    pub fn of(l: &Look) -> Self {
+        Self {
+            hdri: Some(l.hdri),
+            grey: Some(l.grey),
+            sun: Some(l.sun),
+            point: Some(l.point),
+            radius: Some(l.radius),
+            sun_yaw: Some(l.sun_yaw),
+        }
+    }
 }
 
 impl Default for Look {
@@ -384,8 +447,92 @@ impl Default for Look {
             sun: 1.0,
             point: 0.0,
             radius: 2.0,
+            sun_yaw: 0.0,
         }
     }
+}
+
+/// The 3D panel's debug views: only those render3d's public API can draw (AG75). Albedo, Normals, Roughness,
+/// Metallic and AO need render3d support (`.superpowers/sdd/2026-10-14-gui-suggestions/nif-request-3d-debug-views.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DebugView {
+    #[default]
+    Lit,
+    /// A generated checker in every shape's slot 0 (diffuse / base colour), swapped in with `replace_texture`.
+    UvChecker,
+}
+
+impl DebugView {
+    pub const ALL: [DebugView; 2] = [DebugView::Lit, DebugView::UvChecker];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DebugView::Lit => "Lit",
+            DebugView::UvChecker => "UV checker",
+        }
+    }
+
+    /// The next view in [`DebugView::ALL`], wrapping (the V key).
+    pub fn next(self) -> DebugView {
+        let i = Self::ALL.iter().position(|d| *d == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
+/// Side of the UV checker texture; 8×8 cells.
+pub const CHECKER_SIZE: u32 = 256;
+
+/// The UV checker's RGBA8 pixels: 8×8 cells of two greys (grey, so the engine's BGRA order does not matter).
+pub fn checker_rgba() -> Vec<u8> {
+    let n = CHECKER_SIZE;
+    let cell = n / 8;
+    (0..n * n)
+        .flat_map(|i| {
+            let g = if ((i % n) / cell + (i / n) / cell).is_multiple_of(2) {
+                60
+            } else {
+                200
+            };
+            [g, g, g, 255]
+        })
+        .collect()
+}
+
+/// An uncompressed one-level DDS of `rgba` (`w × h`, symmetric in R and B: the engine's Rgba8 is BGRA).
+fn rgba_dds(w: u32, h: u32, rgba: Vec<u8>) -> Vec<u8> {
+    use engine::config::Format;
+    use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+    let desc = DdsDesc {
+        width: w,
+        height: h,
+        format: Format::Rgba8,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    dds_bytes(&desc, &[rgba]).expect("a valid RGBA8 level")
+}
+
+/// The UV checker as DDS bytes for `Renderer::replace_texture`.
+pub fn checker_dds() -> Vec<u8> {
+    rgba_dds(CHECKER_SIZE, CHECKER_SIZE, checker_rgba())
+}
+
+/// A 1×1 solid magenta DDS: what a texture slot the resolver could not find shows (AG76).
+pub fn magenta_dds() -> Vec<u8> {
+    rgba_dds(1, 1, vec![255, 0, 255, 255])
+}
+
+/// Slot 0 (diffuse / base colour) of each material, once each, empty slots left out.
+pub fn diffuse_paths<'a>(materials: impl IntoIterator<Item = &'a MaterialState>) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for m in materials {
+        if let Some(p) = m.slots.first().filter(|p| !p.norm.is_empty()) {
+            if !out.contains(&p.norm) {
+                out.push(p.norm.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Commands to the render thread.
@@ -434,6 +581,9 @@ pub enum V3Cmd {
     },
     /// The variant the next loads' resolver bytes count as (`Renderer::set_load_variant`); sticky.
     SetLoadVariant(Variant),
+    /// The debug view (sticky, answered with `Reconfigured`): the UV checker goes over every slot 0 now and after
+    /// each load, swap and edit; Lit loads the content again (its swaps and edits replayed).
+    SetDebug(DebugView),
     Render {
         id: u64,
         camera: Camera,
@@ -546,6 +696,7 @@ enum MarkKind {
 }
 
 pub struct Viewport3d {
+    pub picker: super::picker::Picker,
     pub state: V3State,
     pub orbit: Orbit,
     /// Background and light controls; changing one re-renders (never reloads).
@@ -579,6 +730,17 @@ pub struct Viewport3d {
     pub last_edit: Option<(EditKind, f64)>,
     /// Texture swaps the render thread refused (a bad DDS, a kind the slot does not read); the set preview lists them.
     pub swap_errors: Vec<String>,
+    /// The last Copy image note ("Copied 3D view (W×H)"), shown in the panel's toolbar: the Meshes view has no
+    /// status bar.
+    pub status: Option<String>,
+    /// Copy results for the toast and the Messages log (item 20); `SdcApp` drains them.
+    notices: Vec<(bool, String)>,
+    /// For each `report.missing_textures` entry, the Textures item with that game path in the open folder; filled
+    /// by `SdcApp::route_3d`.
+    pub missing_items: Vec<Option<String>>,
+    /// "Open in Textures" clicked on a missing path: the item key, taken by `SdcApp::route_3d`.
+    pub show_in_textures: Option<String>,
+    debug: DebugView,
     /// The variant the next load's resolver bytes count as, and the one the render thread was last told.
     load_variant: Variant,
     load_variant_sent: Variant,
@@ -630,6 +792,7 @@ impl Viewport3d {
     pub fn new(saved: Option<Fingerprint>) -> Viewport3d {
         let (tx, rx) = channel();
         Viewport3d {
+            picker: super::picker::Picker::default(),
             state: V3State::Ready,
             orbit: Orbit::default(),
             look: Look::default(),
@@ -652,6 +815,11 @@ impl Viewport3d {
             shapes: vec![],
             last_edit: None,
             swap_errors: vec![],
+            status: None,
+            notices: vec![],
+            missing_items: vec![],
+            show_in_textures: None,
+            debug: DebugView::Lit,
             load_variant: Variant::Source,
             load_variant_sent: Variant::Source,
             edits_sent: 0,
@@ -1192,8 +1360,47 @@ impl Viewport3d {
             render_loop(crx, me, tx, shaders, cache, features, settings)
         });
         self.load_variant_sent = Variant::Source; // a new thread starts at the default
+        if self.debug != DebugView::Lit && ctx.send(V3Cmd::SetDebug(self.debug)).is_ok() {
+            self.reconf_sent += 1;
+        }
         self.thread = Some(ctx);
         true
+    }
+
+    pub fn debug(&self) -> DebugView {
+        self.debug
+    }
+
+    /// The debug view selector (AG75). The render thread applies it without a new load of the content.
+    pub fn set_debug(&mut self, d: DebugView) {
+        if self.debug == d {
+            return;
+        }
+        self.debug = d;
+        if let Some(t) = &self.thread {
+            if t.send(V3Cmd::SetDebug(d)).is_ok() {
+                self.reconf_sent += 1;
+            }
+        }
+    }
+
+    /// Copy image (Ctrl+Shift+C): the last frame's RGBA8 to `put` (the clipboard), and the status note.
+    pub fn copy_image(&mut self, put: impl FnOnce(usize, usize, &[u8]) -> Result<(), String>) {
+        let Some(f) = &self.frame else {
+            self.status = Some("Nothing to copy yet".into());
+            return;
+        };
+        let (ok, text) = match put(f.width as usize, f.height as usize, &f.rgba) {
+            Ok(()) => (true, format!("Copied 3D view ({}×{})", f.width, f.height)),
+            Err(e) => (false, format!("Copy failed: {e}")),
+        };
+        self.notices.push((ok, text.clone()));
+        self.status = Some(text);
+    }
+
+    /// The copy results since the last call: (copied, text).
+    pub fn take_notices(&mut self) -> Vec<(bool, String)> {
+        std::mem::take(&mut self.notices)
     }
 
     /// The panel wants a `w × h` frame of the current content and orbit: loads and renders only what changed.
@@ -1286,6 +1493,13 @@ impl Viewport3d {
     /// [`Viewport3d::poll`] with the clock given (the gap watch reads it).
     pub fn poll_at(&mut self, now: Instant) -> bool {
         let mut changed = false;
+        for d in self.picker.take() {
+            changed = true;
+            if let Some(p) = d.path {
+                self.popup = None;
+                self.choose_folder(p);
+            }
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
@@ -1707,6 +1921,8 @@ struct TexState {
     load: Variant,
     swaps: BTreeMap<(String, Variant), Arc<Vec<u8>>>,
     active: BTreeMap<String, Variant>,
+    /// The UV checker debug view is on (sticky across loads, like `load`).
+    checker: bool,
 }
 
 impl TexState {
@@ -1748,8 +1964,28 @@ fn load_all(
 ) -> LoadReport {
     r.set_load_variant(tex.load);
     let rep = load(r, c, edits);
+    // AG76: a slot the resolver could not find shows magenta, in the load's variant only and before the replay, so a
+    // real swap still wins. A cube slot refuses a 2D texture and keeps render3d's fallback.
+    let magenta = magenta_dds();
+    for p in &rep.missing_textures {
+        let _ = r.replace_texture(p, &magenta, tex.load);
+    }
     tex.replay(r);
+    if tex.checker {
+        checker_over(r);
+    }
     rep
+}
+
+/// The UV checker over both variants of every shape's slot 0 (AG75). Not logged: Lit loads the content again.
+fn checker_over(r: &mut Renderer) {
+    let bytes = checker_dds();
+    let shapes = r.shapes();
+    for p in diffuse_paths(shapes.iter().map(|s| &s.material)) {
+        for v in [Variant::Source, Variant::Encoded] {
+            let _ = r.replace_texture(&p, &bytes, v);
+        }
+    }
 }
 
 /// One material edit on the loaded content.
@@ -1859,6 +2095,7 @@ fn render_loop(
         let mut compiled_changed = false;
         // A settings or features change: cbuffers rewritten, programs maybe swapped or queued; no reload.
         let mut restyled = false;
+        let mut debug_changed = false;
         let mut pending: Vec<(u64, ShapeId, MaterialState)> = vec![];
         let mut tex_cmds: Vec<TexCmd> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
@@ -1918,6 +2155,17 @@ fn render_loop(
                 }
                 V3Cmd::SetLoadVariant(v) => {
                     tex.load = v;
+                    None
+                }
+                V3Cmd::SetDebug(d) => {
+                    let on = d == DebugView::UvChecker;
+                    if tex.checker != on {
+                        tex.checker = on;
+                        // Off: the real textures come back with a reload (swaps and edits replayed).
+                        reload |= !on;
+                        debug_changed = true;
+                    }
+                    ack.0 += 1;
                     None
                 }
                 V3Cmd::SwapTexture {
@@ -2001,7 +2249,8 @@ fn render_loop(
                 send(V3Reply::Shapes(r.shapes()));
             }
         }
-        if !tex_cmds.is_empty() {
+        let swapped = !tex_cmds.is_empty();
+        if swapped {
             if let Some((lid, _)) = &last {
                 for t in tex_cmds {
                     match t {
@@ -2028,6 +2277,10 @@ fn render_loop(
                 }
             }
         }
+        // The checker goes (back) over a slot 0 that a swap or an edit just replaced.
+        if tex.checker && last.is_some() && (debug_changed || swapped || !pending_was_empty) {
+            checker_over(&mut r);
+        }
         pump(&mut r);
         // A settings apply or a new program can change it; sent only on change.
         let coverage = r.settings_coverage().line();
@@ -2039,7 +2292,7 @@ fn render_loop(
             send(V3Reply::OffInPreview(r.off_in_preview()));
         }
         // Redraw from the last camera, and report the shapes (now pending or swapped) like a landed program.
-        compiled_changed |= restyled;
+        compiled_changed |= restyled || debug_changed;
         // A landed program changed a shape and nothing above reported it: tell the panel.
         // Sent after the refresh frame: the panel stays busy (Pending) until it reads this, so it also reads the frame.
         let shapes_due = compiled_changed && !reload && pending_was_empty;

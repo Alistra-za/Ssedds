@@ -617,6 +617,26 @@ fn layered_profile_with(
             );
         }
     }
+    // DECISIONS AH2: complex material parallax defaults on only for an alpha that really varies (a height map). Any
+    // constant alpha (0, 128, 255) and Note L's near-opaque noise (classed Constant255) is off.
+    if st == Subtype::ComplexMaterial && !field_explicit(ctx, &prov, "alpha.parallax") {
+        let a = &f.analysis;
+        let (on, fact) = match a.alpha {
+            AlphaContent::None => (false, "no-alpha"),
+            AlphaContent::Varying if a.channels[3].min < a.channels[3].max => {
+                (true, "varying-alpha")
+            }
+            _ => (false, "constant-alpha"),
+        };
+        apply(
+            &mut doc,
+            &mut prov,
+            &mut sources,
+            &to_patch("alpha.parallax", &json!(on)),
+            Provenance::AnalysisFact(fact.into()),
+            GENERIC,
+        );
+    }
     if st == Subtype::SkinWet {
         skin_wet_form(ctx, f, &mut doc, &mut prov, &mut sources);
     }
@@ -1245,8 +1265,15 @@ fn contradictions(p: &Profile, f: &FileFacts) -> Vec<String> {
             ));
         }
     }
-    if st == Subtype::ComplexMaterial && a.alpha != AlphaContent::Varying {
-        v.push("complex_material without varying alpha: this reads as a plain envmask".into());
+    // DECISIONS AH1/AH2: only a written solid 255 reads as a plain envmask; a 0 fill keeps complex material on.
+    if st == Subtype::ComplexMaterial
+        && a.alpha == AlphaContent::Constant255
+        && !crate::ops::complex_alpha_zero(p, f.info.has_alpha)
+    {
+        v.push(
+            "complex_material with parallax on and solid 255 alpha: this reads as a plain envmask"
+                .into(),
+        );
     }
     // A tangent-space normal decodes to unit length with Z >= 0, so blue sits high.
     if p.category == Category::Color
@@ -1677,7 +1704,10 @@ pub fn check_profile(
             ),
         );
     }
-    if p.alpha.policy == AlphaPolicy::Data && a.alpha == AlphaContent::Constant255 {
+    if p.alpha.policy == AlphaPolicy::Data
+        && a.alpha == AlphaContent::Constant255
+        && !crate::ops::complex_alpha_zero(p, f.info.has_alpha)
+    {
         // DECISIONS Note L: near-opaque alpha (minimum 251..=254) is classed constant too; say what it holds.
         let msg = if a.alpha_near_opaque {
             format!(
@@ -1735,6 +1765,8 @@ pub fn check_profile(
     if matches!(st, Subtype::Envmask | Subtype::ComplexMaterial)
         && p.format == Format::Bc7
         && !p.alpha.exact_opaque
+        // An alpha-0 complex `_m` (DECISIONS AH1/AH2) has no opaque block to round to 254.
+        && !crate::ops::complex_alpha_zero(p, f.info.has_alpha)
     {
         // BC7 only: its alpha endpoints are quantised, so opaque alpha can decode as 254 unless exact-opaque
         // handling is on. BC3's alpha block stores 255 exactly, so it carries no such risk. Not conditional on
@@ -1743,6 +1775,18 @@ pub fn check_profile(
         add(
             AlphaExactOffM,
             "exact opaque alpha is off on an _m written as BC7; 254 may reach PGPatcher/ENB".into(),
+        );
+    }
+    if st == Subtype::ComplexMaterial
+        && p.alpha.parallax == Some(true)
+        && p.alpha.policy != AlphaPolicy::Remove
+        && !f.info.has_alpha
+    {
+        add(
+            AlphaParallaxNoAlpha,
+            "parallax is on but the source has no alpha channel: alpha 0 is written (complex material on, \
+             parallax off)"
+                .into(),
         );
     }
     // S-mips-7: the DIM checks read the size Preprocess writes. DIM-RESIZED is pushed after the last `add` (ruling F3).

@@ -582,22 +582,17 @@ fn rock01_entry(m: &AppModel) -> Option<sdc_gui::pgp::writer::EntryInput> {
         .map(|(_, e)| e)
 }
 
-/// Final review C1: an Advanced skin set is a PBR set for the PGPatcher JSON and every PBR export check.
+/// AG90 (owner, 2026-10-14, replaces final review C1): an Advanced skin set is not a PGPatcher JSON set.
 #[test]
-fn an_rfaos_set_is_in_the_json_with_its_slots() {
+fn an_rfaos_set_is_a_skin_set_with_no_json_entry() {
     let d = tempfile::tempdir().unwrap();
     let m = skin_fixture(d.path());
     assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
     let v = set_views(&m);
     let v = v.iter().find(|v| v.id == "m/rock01").unwrap();
-    assert!(v.pbr && v.skin, "pbr {} skin {}", v.pbr, v.skin);
-    let e = rock01_entry(&m).expect("a JSON entry for the skin set");
-    let slot6 = e.slots.get(&6).expect("slot6 names the _rfaos");
-    assert!(
-        slot6.to_lowercase().ends_with("rock01_rfaos.dds"),
-        "{slot6}"
-    );
-    // The packed file keeps its `_rfaos` name under the set prefix (never `_rmaos`).
+    assert!(!v.pbr && v.skin, "pbr {} skin {}", v.pbr, v.skin);
+    assert!(rock01_entry(&m).is_none());
+    // The packed file keeps its `_rfaos` name (never `_rmaos`).
     let out = &m
         .item("m/rock01_rfaos.png")
         .unwrap()
@@ -609,41 +604,35 @@ fn an_rfaos_set_is_in_the_json_with_its_slots() {
         out.to_string_lossy().ends_with("rock01_rfaos.dds"),
         "{out:?}"
     );
-    let slot3 = e.slots.get(&3).expect("slot3 names the _sk");
-    assert!(slot3.to_lowercase().ends_with("rock01_sk.dds"), "{slot3}");
     assert_eq!(export_blocks(&m), vec![]);
 }
 
-/// Final review C1: emissive on with no `_g` blocks a skin set, as it does any PBR set.
+/// AG90 (owner, 2026-10-14, replaces final review C1): a skin set has no PGPatcher pitfalls or blocks, even with a
+/// leftover JSON value.
 #[test]
-fn a_skin_set_with_emissive_on_and_no_g_is_blocked() {
+fn a_skin_set_with_emissive_on_and_no_g_is_not_blocked() {
     let d = tempfile::tempdir().unwrap();
     let mut m = skin_fixture(d.path());
     m.set_json_value("m/rock01", "emissive", Some(json!(true)));
     idle(&mut m);
     let b = export_blocks(&m);
-    assert!(
-        b.iter().any(|i| i.set_id == "m/rock01"
-            && i.text == "m/rock01: emissive is on but the set has no emissive texture (_g)"),
-        "{b:?}"
-    );
+    assert!(b.iter().all(|i| i.set_id != "m/rock01"), "{b:?}");
 }
 
-/// Final review C1: picking RFAOS on the card keeps the set in the JSON, and the set badge says so.
+/// AG90: picking RFAOS on the card makes the set an Advanced skin set, which leaves the JSON; the badge says so.
 #[test]
-fn picking_rfaos_keeps_the_set_in_the_json() {
+fn picking_rfaos_takes_the_set_out_of_the_json() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path());
     assert!(rock01_entry(&m).is_some());
     m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
     idle(&mut m);
     assert_eq!(resolved(&m, DIFFUSE), Subtype::SkinAlbedo);
-    let e = rock01_entry(&m).expect("still in the JSON");
-    assert!(e.slots.contains_key(&6), "{:?}", e.slots);
+    assert!(rock01_entry(&m).is_none());
     let mut h = editor(m);
     h.run();
     h.run();
-    h.get_by_label("skin → JSON");
+    h.get_by_label("Advanced skin (no JSON)");
 }
 
 /// A metallic-only cs set: `_rmaos` from a metallic map, which `_rfaos` (no metallic channel) cannot be built from.

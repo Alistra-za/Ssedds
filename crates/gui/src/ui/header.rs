@@ -1,8 +1,8 @@
 //! The header (M3a spec §2.1): open, recent, mode, collapse, export folder, save, export; then the status line and banner.
+use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::config::Target;
-use std::path::PathBuf;
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 
@@ -14,11 +14,19 @@ fn target_name(t: Target) -> &'static str {
     }
 }
 
-/// `sdc — <folder>`, plus ` ●` when there are unsaved edits.
-fn window_title(model: &AppModel) -> String {
+fn target_help(t: Target) -> &'static str {
+    match t {
+        Target::Cs => "Community Shaders: TruePBR sets and its packed maps",
+        Target::Vanilla => "The base game's shaders and texture layout",
+        Target::Cpm => "Complex Parallax Materials: packed maps with a height channel",
+    }
+}
+
+/// `Tessalith — <folder>`, plus ` ●` when there are unsaved edits.
+pub fn window_title(model: &AppModel) -> String {
     let mut t = match &model.root {
-        Some(r) => format!("sdc — {}", r.display()),
-        None => "sdc".to_string(),
+        Some(r) => format!("{} — {}", crate::PRODUCT_NAME, r.display()),
+        None => crate::PRODUCT_NAME.to_string(),
     };
     if model.is_dirty() {
         t.push_str(" ●");
@@ -36,28 +44,20 @@ fn set_title(ctx: &egui::Context, title: String) {
     }
 }
 
-fn pick_folder() -> Option<PathBuf> {
-    rfd::FileDialog::new().pick_folder()
-}
-
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     set_title(ui.ctx(), window_title(model));
     egui::Panel::top("header").show(ui, |ui| {
         ui.horizontal(|ui| {
-            if ui.button("Open folder…").clicked() {
-                if let Some(p) = pick_folder() {
-                    model.request_open(p);
-                }
+            if picker::button(ui, &model.picker, egui::Button::new("Open folder…")) {
+                model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
             }
             recent_menu(ui, model);
+            undo_redo(ui, model);
             mode_combo(ui, model);
             view_toggle(ui);
             column_checkboxes(ui, model);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Not while `sdc.toml` is ignored (M3a spec §7.4): an export would not be the project's settings.
-                let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
-                let can_export =
-                    model.root.is_some() && model.export.running.is_none() && !read_only;
+                let can_export = can_export(model);
                 let mut export = egui::Button::new(egui::RichText::new("Export").strong())
                     .min_size(egui::vec2(120.0, 30.0));
                 if can_export {
@@ -73,6 +73,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                     // A failed save raises its own dialog.
                     let _ = model.save();
                 }
+                super::messages::button(ui, model);
                 export_folder_button(ui, model);
                 json_name_field(ui, model);
             });
@@ -118,6 +119,42 @@ fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
+/// Export can start: a folder is open, no export runs, and `sdc.toml` is not ignored (M3a spec §7.4: an export would
+/// not be the project's settings).
+pub fn can_export(model: &AppModel) -> bool {
+    let read_only = model.project.as_ref().is_some_and(|p| p.read_only());
+    model.root.is_some() && model.export.running.is_none() && !read_only
+}
+
+/// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
+fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
+    for (undo, name) in [(true, "Undo"), (false, "Redo")] {
+        let label = if undo {
+            model.undo_label()
+        } else {
+            model.redo_label()
+        };
+        let hover = match label {
+            Some(l) => format!(
+                "{name}: {l}  ({})",
+                super::actions::keys_text(if undo { "undo" } else { "redo" })
+            ),
+            None => format!("Nothing to {}", name.to_lowercase()),
+        };
+        let r = ui.add_enabled(label.is_some(), egui::Button::new(name));
+        if r.on_hover_text(hover.clone())
+            .on_disabled_hover_text(hover)
+            .clicked()
+        {
+            if undo {
+                model.undo();
+            } else {
+                model.redo();
+            }
+        }
+    }
+}
+
 fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.label("Mode");
     let mut picked = model.target;
@@ -126,9 +163,14 @@ fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
             .selected_text(target_name(model.target))
             .show_ui(ui, |ui| {
                 for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
-                    ui.selectable_value(&mut picked, t, target_name(t));
+                    ui.selectable_value(&mut picked, t, target_name(t))
+                        .on_hover_text(target_help(t));
                 }
-            });
+            })
+            .response
+            .on_hover_text(
+                "The target the textures are converted for: cs, vanilla or cpm. Saved in sdc.toml as target.",
+            );
     });
     if picked != model.target {
         model.set_target(picked);
@@ -145,8 +187,12 @@ pub fn view_toggle(ui: &mut egui::Ui) {
     if ui.selectable_label(meshes, "Meshes view").clicked() {
         meshes = true;
     }
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(egui::Id::new("sdc-meshes-view"), meshes));
+    set_meshes_view(ui.ctx(), meshes);
+}
+
+/// Switch the view (also the saved one coming back at start, AG17).
+pub fn set_meshes_view(ctx: &egui::Context, meshes: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("sdc-meshes-view"), meshes));
 }
 
 /// True when the Meshes view is shown instead of the Textures view.
@@ -162,17 +208,15 @@ fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
     } else {
         "not set".to_string()
     };
-    if ui
-        .button(format!("Export folder: {shown}"))
-        .on_hover_text("Choose where converted textures are written")
-        .clicked()
-    {
-        if let Some(p) = pick_folder() {
-            model.settings.export_folder = Some(p);
-            model.save_settings();
-            // Existing outputs decide which textures are up to date.
-            model.replan();
-        }
+    let b = egui::Button::new(format!("Export folder: {shown}"));
+    let r = ui.add_enabled(!model.picker.busy(), b);
+    let r = if model.picker.busy() {
+        r.on_disabled_hover_text(picker::BUSY_HOVER)
+    } else {
+        r.on_hover_text("Choose where converted textures are written")
+    };
+    if r.clicked() {
+        model.pick(ui.ctx(), PickerPurpose::ExportFolder, PickerSpec::folder());
     }
 }
 
@@ -234,7 +278,39 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
     }
     egui::Panel::top("status").show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.label(&model.status_line);
+            // Item 13: a bar with Cancel while a folder opens; a re-plan after an edit keeps the plain line.
+            match model.plan_progress.filter(|_| model.can_cancel_open()) {
+                Some((done, total)) => {
+                    let frac = if total == 0 {
+                        0.0
+                    } else {
+                        done as f32 / total as f32
+                    };
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_width(320.0)
+                            .text(&model.status_line),
+                    );
+                }
+                None => {
+                    ui.label(&model.status_line);
+                }
+            }
+            if model.can_cancel_open()
+                && ui
+                    .button("Cancel")
+                    .on_hover_text(model.cancel_open_hover())
+                    .clicked()
+            {
+                model.cancel_open();
+            }
+            if !model.items.is_empty() {
+                let sel = model.selected_items();
+                let text = model.vram_text(&sel);
+                ui.weak(format!("· {text}")).on_hover_text(
+                    "File sizes of the DDS files an export writes; a compressed size is also its video memory",
+                );
+            }
             // Task 9 (Z11): the last "encoding follows type" cleanup; every texture on hover.
             if let Some((line, all)) = &model.encoding_note {
                 ui.weak(format!("· {line}")).on_hover_text(all);

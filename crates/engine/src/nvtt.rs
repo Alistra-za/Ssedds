@@ -109,20 +109,87 @@ pub fn probe(explicit: Option<&Path>) -> NvttProbe {
     }
 }
 
+/// How long the probe waits for the program to exit (nvcompress answers in about 30 ms, Spike S7b).
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Kill `child` and every process it started (a launcher's grandchild would keep running otherwise), then reap it.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut tk = Command::new(Path::new(&root).join("System32").join("taskkill.exe"));
+        tk.args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        std::os::windows::process::CommandExt::creation_flags(&mut tk, CREATE_NO_WINDOW);
+        let _ = tk.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Runs `path` with no arguments (nvcompress has no `-h`; it prints the banner and usage and exits 1, Spike S7b),
 /// parses the banner and checks the usage lists every flag in [`NVTT_FLAGS`].
-/// shortcut: no timeout on the probe, add one if a hung nvcompress is ever seen.
+/// Never runs NVIDIA's exporter app or the running program itself, and kills a program that has not exited after
+/// [`PROBE_TIMEOUT`], with every process it started (DECISIONS AF3): a wrong pick must not hang or relaunch the
+/// caller. Its output goes to files, not pipes, so nothing waits on a handle a grandchild still holds.
 pub fn probe_path(path: &Path) -> NvttProbe {
+    let missing = |why: &str| NvttProbe::Missing(format!("{}: {why}", path.display()));
+    if path
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case("nvtt_export.exe"))
+    {
+        return missing("NVIDIA's exporter app, not nvcompress (pick nvcompress.exe)");
+    }
+    let canon = |p: &Path| std::fs::canonicalize(p).ok();
+    let me = std::env::current_exe().ok().and_then(|p| canon(&p));
+    if me.is_some() && canon(path) == me {
+        return missing("this is sdc itself, not nvcompress");
+    }
+    let tmp = match TempDir::new() {
+        Ok(t) => t,
+        Err(e) => return missing(&format!("temporary folder: {e}")),
+    };
+    let (out_path, err_path) = (tmp.path().join("probe.out"), tmp.path().join("probe.err"));
+    let (out, err) = match (
+        std::fs::File::create(&out_path),
+        std::fs::File::create(&err_path),
+    ) {
+        (Ok(o), Ok(e)) => (o, e),
+        (Err(e), _) | (_, Err(e)) => return missing(&format!("temporary file: {e}")),
+    };
     let mut cmd = Command::new(path);
-    cmd.stdin(Stdio::null());
+    cmd.stdin(Stdio::null()).stdout(out).stderr(err);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NO_WINDOW);
-    let out = match cmd.output() {
-        Ok(o) => o,
-        Err(e) => return NvttProbe::Missing(format!("{}: {e}", path.display())),
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return missing(&e.to_string()),
     };
-    let text =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    let end = std::time::Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < end => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                kill_tree(&mut child);
+                return missing(&format!(
+                    "no answer within {} s, not nvcompress",
+                    PROBE_TIMEOUT.as_secs()
+                ));
+            }
+            Err(e) => {
+                kill_tree(&mut child);
+                return missing(&format!("waiting for it failed: {e}"));
+            }
+        }
+    }
+    let read =
+        |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap_or_default()).into_owned();
+    let text = read(&out_path) + &read(&err_path);
     let version = match parse_banner(&text) {
         Ok(v) => v,
         Err(e) => return NvttProbe::Missing(format!("{}: {e}", path.display())),

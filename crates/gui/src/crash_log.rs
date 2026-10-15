@@ -1,4 +1,4 @@
-//! Panic log: `sdc-gui.exe` has no console (`windows_subsystem = "windows"`), so a panic message would be lost.
+//! Panic log: `tessalith.exe` has no console (`windows_subsystem = "windows"`), so a panic message would be lost.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

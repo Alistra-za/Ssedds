@@ -6,7 +6,10 @@ use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
-use crate::model::sets::{is_json_set, shader_options, DropChoice, DropOutcome, SetView, SlotFill};
+use crate::model::sets::{
+    fill_proposals, is_json_set, shader_options, DropChoice, DropOutcome, FillProposal, SetView,
+    SlotFill,
+};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::codes::Warning;
@@ -35,12 +38,38 @@ pub enum Pending {
         choice: DropChoice,
     },
     Refused(String),
+    /// Delete set asks first: the set and how many members it has (item 4).
+    ConfirmDelete {
+        id: String,
+        members: usize,
+    },
     /// The rename dialog: the set, the name being typed, and why the last try was refused.
     Rename {
         id: String,
         text: String,
         error: Option<String>,
     },
+    /// Item 18: Fill from names, one tick per proposal (all ticked to start; a blocked row stays unticked).
+    FillNames {
+        set: String,
+        rows: Vec<FillProposal>,
+        ticks: Vec<bool>,
+    },
+}
+
+/// Item 17: files dropped from Explorer this frame, and where (`None` when the position is unknown).
+#[derive(Debug, Clone)]
+pub struct FileDrop {
+    pub paths: Vec<std::path::PathBuf>,
+    pub pos: Option<egui::Pos2>,
+}
+
+/// Item 17: the line the set editor shows under the slot cards after a file drop: set id, text, is an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotNote {
+    pub set: String,
+    pub text: String,
+    pub error: bool,
 }
 
 #[derive(Debug, Default)]
@@ -48,6 +77,9 @@ pub struct DropState {
     pub pending: Option<Pending>,
     /// The set that was just reordered and when (egui time): its border flashes for `FLASH_SECS`.
     pub flash: Option<(String, f64)>,
+    /// Item 17: a file drop not yet taken by a slot card this frame (`ui::draw_with_scan` opens its folder after).
+    pub file: Option<FileDrop>,
+    pub slot_note: Option<SlotNote>,
 }
 
 /// How long the moved pill flashes after a reorder.
@@ -63,7 +95,9 @@ enum Act {
     NewSet(String),
     Reorder(String, usize),
     OpenRename(String),
-    Delete(String),
+    Delete(String, usize),
+    /// Item 18: open Fill from names on a set.
+    FillNames(String),
     RemoveMember(String, String),
     /// The Shader dropdown: `None` is Auto.
     Shader(String, Option<Shader>),
@@ -155,6 +189,8 @@ pub fn draw(
         .as_ref()
         .map(|(id, t)| (id.as_str(), (now - t) / FLASH_SECS));
     let mut rects = vec![];
+    // A set the palette picked scrolls into view (item 19).
+    let reveal = model.nav.reveal_set.take();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -169,6 +205,12 @@ pub fn draw(
                 let out = pill(
                     ui, model, thumbs, v, index, &editing, is_blocked, look, &sel_items, &mut acts,
                 );
+                if reveal
+                    .as_deref()
+                    .is_some_and(|k| !v.key.is_empty() && k == v.key)
+                {
+                    ui.scroll_to_rect(out.rect, None);
+                }
                 rects.push(out.rect);
                 if out.handle_released {
                     released = Some(v.id.clone());
@@ -199,7 +241,6 @@ pub fn draw(
             acts.push(Act::Reorder(id, to));
         }
     }
-    pending_modal(ui.ctx(), model, st);
     for a in acts {
         match a {
             Act::Select(k) => model.select_set(&k),
@@ -246,8 +287,22 @@ pub fn draw(
                     error: None,
                 })
             }
-            Act::Delete(id) => {
-                model.delete_set(&id);
+            Act::Delete(id, members) => {
+                st.pending = Some(Pending::ConfirmDelete { id, members });
+            }
+            Act::FillNames(set) => {
+                let rows = fill_proposals(model, &set);
+                st.pending = Some(if rows.is_empty() {
+                    Pending::Refused(format!(
+                        "No other file in {set}'s folder has its base name and a suffix Tessalith knows."
+                    ))
+                } else {
+                    Pending::FillNames {
+                        set,
+                        ticks: rows.iter().map(|r| r.blocked.is_none()).collect(),
+                        rows,
+                    }
+                });
             }
             Act::RemoveMember(id, item) => {
                 if let Err(why) = model.remove_member(&id, &item) {
@@ -389,10 +444,11 @@ fn pill(
                     ui.label(egui::RichText::new(&v.label).strong());
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if !is_json_set(v, model.target) {
+                    if v.skin {
+                        // AG90: an Advanced skin set gets no PGPatcher JSON.
+                        badge(ui, "Advanced skin (no JSON)", None);
+                    } else if !is_json_set(v, model.target) {
                         badge(ui, "vanilla set (no JSON)", None);
-                    } else if v.skin {
-                        badge(ui, "skin → JSON", None);
                     } else {
                         badge(ui, "PBR → JSON", None);
                     }
@@ -574,6 +630,27 @@ fn shader_combo(
     });
 }
 
+/// The Rename submenu of a set's menu: label, one-line hover text, and what it does. F3b D5 for the last two.
+fn rename_entries(set: &str) -> [(String, &'static str, Act); 3] {
+    [
+        (
+            "Rename…".to_string(),
+            "Change the set's name only",
+            Act::OpenRename(set.to_string()),
+        ),
+        (
+            format!("Rename outputs…  {}", super::actions::keys_text("rename")),
+            "Change the names of the files this set writes",
+            Act::Bulk(MenuAction::RenameOutputs),
+        ),
+        (
+            "Rename inputs…".to_string(),
+            "Read the source files under other names; the files on disk keep theirs",
+            Act::Bulk(MenuAction::RenameInputs),
+        ),
+    ]
+}
+
 fn menu(
     ui: &mut egui::Ui,
     v: &SetView,
@@ -582,6 +659,22 @@ fn menu(
     model: &AppModel,
     acts: &mut Vec<Act>,
 ) {
+    // First: it only reads, so it works while sets are not editable (the disable below cannot be undone).
+    ui.menu_button("Show in Explorer", |ui| {
+        for mk in &v.members {
+            let name = model.item(mk).map_or(mk.as_str(), |i| i.name.as_str());
+            let off = model.reveal_problem(mk);
+            let r = ui.add_enabled(off.is_none(), egui::Button::new(name));
+            let r = match &off {
+                Some(why) => r.on_disabled_hover_text(why),
+                None => r,
+            };
+            if r.clicked() {
+                acts.push(Act::Bulk(MenuAction::ShowInExplorer(mk.clone())));
+                ui.close();
+            }
+        }
+    });
     if !editing.on {
         ui.disable();
     }
@@ -592,19 +685,16 @@ fn menu(
             r.on_disabled_hover_text(editing.why)
         }
     };
-    if tip(ui.button("Rename…")).clicked() {
-        acts.push(Act::OpenRename(v.id.clone()));
-        ui.close();
-    }
-    // F3b D5: rename the set's outputs, or read its files under new names.
-    if tip(ui.button("Rename outputs…  F2")).clicked() {
-        acts.push(Act::Bulk(MenuAction::RenameOutputs));
-        ui.close();
-    }
-    if ui.button("Rename inputs…").clicked() {
-        acts.push(Act::Bulk(MenuAction::RenameInputs));
-        ui.close();
-    }
+    // Item 23: one "Rename" submenu; each entry says what it renames. F2 stays on Rename outputs.
+    let rename = ui.menu_button("Rename", |ui| {
+        for (label, hover, act) in rename_entries(&v.id) {
+            if tip(ui.button(label).on_hover_text(hover)).clicked() {
+                acts.push(act);
+                ui.close();
+            }
+        }
+    });
+    tip(rename.response);
     if tip(ui.button("Edit match…")).clicked() && !v.key.is_empty() {
         acts.push(Act::Select(v.key.clone()));
         ui.close();
@@ -629,7 +719,7 @@ fn menu(
         editing.why
     });
     if del.clicked() {
-        acts.push(Act::Delete(v.id.clone()));
+        acts.push(Act::Delete(v.id.clone(), v.members.len()));
         ui.close();
     }
     if tip(ui.button("Move up")).clicked() && index > 0 {
@@ -640,67 +730,95 @@ fn menu(
         acts.push(Act::Reorder(v.id.clone(), index + 1));
         ui.close();
     }
+    let fill = ui.button("Fill from names…").on_hover_text(
+        "Move in the files of this folder named like the set with a known suffix (_n, _p, _rmaos, …)",
+    );
+    if tip(fill).clicked() {
+        acts.push(Act::FillNames(v.id.clone()));
+        ui.close();
+    }
 }
 
 /// What a button in the drop modal asked for; applied after the modal is drawn (the modal only reads the model).
 enum ModalAnswer {
     Choice(DropChoice),
     Replace,
+    Delete,
     Close,
 }
 
-fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
+/// The drop, delete and rename dialogs. Drawn by `ui::draw_with_scan` whether or not this column shows: a file
+/// dropped on a slot card asks its Replace here too (item 17).
+pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
     if matches!(st.pending, Some(Pending::Rename { .. })) {
         rename_modal(ctx, model, st);
         return;
     }
+    if matches!(st.pending, Some(Pending::FillNames { .. })) {
+        fill_modal(ctx, model, st);
+        return;
+    }
     let Some(p) = st.pending.clone() else { return };
     let mut answer = None;
-    let shown = egui::Modal::new(egui::Id::new("set-drop")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
-        match &p {
-            Pending::Choice { item, from, .. } => {
-                let name = model.item(item).map_or(item.clone(), |i| i.name.clone());
-                ui.heading(format!("{name} is in {from}"));
-                if ui.button("Move it here").clicked() {
-                    answer = Some(ModalAnswer::Choice(DropChoice::Move));
-                }
-                if ui.button("Share (borrow its finished output)").clicked() {
-                    answer = Some(ModalAnswer::Choice(DropChoice::Share));
-                }
-                if ui.button("Duplicate the source for this set").clicked() {
-                    answer = Some(ModalAnswer::Choice(DropChoice::Duplicate));
+    let keys = super::dialogs::modal_keys(ctx, "set-drop", true, |ui| match &p {
+        Pending::Choice { item, from, .. } => {
+            let name = model.item(item).map_or(item.clone(), |i| i.name.clone());
+            ui.heading(format!("{name} is in {from}"));
+            if ui.button("Move it here").clicked() {
+                answer = Some(ModalAnswer::Choice(DropChoice::Move));
+            }
+            if ui.button("Share (borrow its finished output)").clicked() {
+                answer = Some(ModalAnswer::Choice(DropChoice::Share));
+            }
+            if ui.button("Duplicate the source for this set").clicked() {
+                answer = Some(ModalAnswer::Choice(DropChoice::Duplicate));
+            }
+            if ui.button("Cancel").clicked() {
+                answer = Some(ModalAnswer::Close);
+            }
+        }
+        Pending::Replace { set, existing, .. } => {
+            let name = model
+                .item(existing)
+                .map_or(existing.clone(), |i| i.name.clone());
+            ui.heading("Replace?");
+            ui.label(format!("{set} already has {name} in that slot."));
+            ui.horizontal(|ui| {
+                if ui.button(format!("Replace {name}")).clicked() {
+                    answer = Some(ModalAnswer::Replace);
                 }
                 if ui.button("Cancel").clicked() {
                     answer = Some(ModalAnswer::Close);
                 }
+            });
+        }
+        Pending::Refused(why) => {
+            ui.heading("Can't do that");
+            ui.label(why);
+            if ui.button("OK").clicked() {
+                answer = Some(ModalAnswer::Close);
             }
-            Pending::Replace { set, existing, .. } => {
-                let name = model
-                    .item(existing)
-                    .map_or(existing.clone(), |i| i.name.clone());
-                ui.heading("Replace?");
-                ui.label(format!("{set} already has {name} in that slot."));
-                ui.horizontal(|ui| {
-                    if ui.button(format!("Replace {name}")).clicked() {
-                        answer = Some(ModalAnswer::Replace);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        answer = Some(ModalAnswer::Close);
-                    }
-                });
-            }
-            Pending::Refused(why) => {
-                ui.heading("Can't do that");
-                ui.label(why);
-                if ui.button("OK").clicked() {
+        }
+        Pending::ConfirmDelete { id, members } => {
+            ui.heading(format!(
+                "Delete set '{id}' ({members} member{})?",
+                if *members == 1 { "" } else { "s" }
+            ));
+            ui.label("Its textures stay; only the set is removed.");
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    answer = Some(ModalAnswer::Delete);
+                }
+                if ui.button("Cancel").clicked() {
                     answer = Some(ModalAnswer::Close);
                 }
-            }
-            Pending::Rename { .. } => {}
+            });
         }
+        Pending::Rename { .. } | Pending::FillNames { .. } => {}
     });
-    if answer.is_none() && shown.should_close() {
+    // Esc and a click outside cancel; Enter takes the safe default of a confirm (Cancel) and presses the OK of a refusal.
+    let confirm = matches!(p, Pending::ConfirmDelete { .. } | Pending::Refused(_));
+    if answer.is_none() && (keys.cancel || (keys.enter && confirm)) {
         answer = Some(ModalAnswer::Close);
     }
     let Some(answer) = answer else { return };
@@ -727,8 +845,71 @@ fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) 
             .drop_replace(&item, &set, choice)
             .err()
             .map(Pending::Refused),
+        (ModalAnswer::Delete, Pending::ConfirmDelete { id, .. }) => {
+            model.delete_set(&id);
+            None
+        }
         _ => None,
     };
+}
+
+/// Item 18: Fill from names. A row per file with its slot; a filled slot says what it replaces and a blocked row
+/// (a locked slot) cannot be ticked. Esc or Cancel closes, Enter or Fill applies the ticked rows as one step. Ticks
+/// are typed state, so a click outside does nothing (AG11).
+fn fill_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
+    let Some(Pending::FillNames { set, rows, ticks }) = &mut st.pending else {
+        return;
+    };
+    let (mut apply, mut cancel, mut error) = (false, false, None);
+    let keys = super::dialogs::modal_keys(ctx, "fill-names", false, |ui| {
+        ui.heading(format!("Fill {set} from names"));
+        ui.label("Each ticked file moves into the set's slot; nothing is copied.");
+        egui::Grid::new("fill-names-grid")
+            .num_columns(2)
+            .show(ui, |ui| {
+                for (r, tick) in rows.iter().zip(ticks.iter_mut()) {
+                    let mut on = *tick && r.blocked.is_none();
+                    let resp =
+                        ui.add_enabled(r.blocked.is_none(), egui::Checkbox::new(&mut on, &r.name));
+                    if let Some(why) = &r.blocked {
+                        resp.on_disabled_hover_text(why);
+                    }
+                    *tick = on;
+                    let mut what = format!("→ {}", r.slot.label());
+                    match (&r.blocked, &r.replaces) {
+                        (Some(why), _) => what.push_str(&format!(" · {why}")),
+                        (None, Some(cur)) => what.push_str(&format!(" · replaces {cur}")),
+                        _ => {}
+                    }
+                    ui.label(what);
+                    ui.end_row();
+                }
+            });
+        ui.horizontal(|ui| {
+            if ui.button("Fill").clicked() {
+                apply = true;
+            }
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+        });
+    });
+    if keys.cancel || cancel {
+        st.pending = None;
+        return;
+    }
+    if apply || keys.enter {
+        let picked: Vec<String> = rows
+            .iter()
+            .zip(ticks.iter())
+            .filter(|(_, t)| **t)
+            .map(|(r, _)| r.item.clone())
+            .collect();
+        if let Err(e) = model.fill_from_names(set, &picked) {
+            error = Some(e);
+        }
+        st.pending = error.map(Pending::Refused);
+    }
 }
 
 /// The rename dialog: Enter or OK renames, a refusal (a name already taken) is shown under the field, and
@@ -738,8 +919,8 @@ fn rename_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
         return;
     };
     let (mut submit, mut cancel) = (false, false);
-    let shown = egui::Modal::new(egui::Id::new("set-rename")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
+    // Only Esc cancels: a click outside could lose the typed name (AG11).
+    let keys = super::dialogs::modal_keys(ctx, "set-rename", false, |ui| {
         ui.heading(format!("Rename {id}"));
         let field = ui.text_edit_singleline(text);
         if !field.has_focus() && !field.lost_focus() {
@@ -760,7 +941,7 @@ fn rename_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropState) {
             }
         });
     });
-    if shown.should_close() {
+    if keys.cancel {
         cancel = true;
     }
     if cancel {

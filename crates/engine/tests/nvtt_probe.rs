@@ -101,3 +101,51 @@ fn cell_probes_once_on_first_use() {
     assert!(matches!(cell.into_probed(), Some(NvttProbe::Found(_))));
     assert_eq!(NvttCell::new(Some(FAKE.into())).into_probed(), None);
 }
+
+/// Audit 2026-10-13b B-I1 (DECISIONS AF3): a program that never answers (a GUI exe, say) is killed and is not NVTT.
+/// The fake hangs on the no-argument run when its file name contains "hang".
+#[test]
+fn a_probe_that_hangs_times_out() {
+    let d = tempfile::tempdir().unwrap();
+    let hang = d.path().join("hang.exe");
+    std::fs::copy(FAKE, &hang).unwrap();
+    let t = std::time::Instant::now();
+    match probe_path(&hang) {
+        NvttProbe::Missing(why) => assert!(why.contains("no answer"), "{why}"),
+        f => panic!("{f:?}"),
+    }
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        t.elapsed()
+    );
+    // Review round 1 M1: the whole tree is killed, the grandchild included.
+    let pid: u32 = std::fs::read_to_string(d.path().join("hang.grandchild.pid"))
+        .expect("the grandchild started")
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = || {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    };
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while alive() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(!alive(), "grandchild {pid} still runs");
+}
+
+#[test]
+fn nvtt_export_is_refused_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    let gui = d.path().join("NVTT_Export.exe");
+    std::fs::copy(FAKE, &gui).unwrap();
+    match probe_path(&gui) {
+        NvttProbe::Missing(why) => assert!(why.contains("not nvcompress"), "{why}"),
+        f => panic!("{f:?}"),
+    }
+}

@@ -2,7 +2,7 @@
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
 use super::prefix::{active_matches, json_rename, match_value};
 use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
-use super::settings::{feature_on, Feature, Settings, GLINT_DEFAULTS};
+use super::settings::{feature_on, subsurface_group_open, Feature, Settings, GLINT_DEFAULTS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -60,6 +60,8 @@ fn colour(v: &Value, alpha: bool) -> Option<Node> {
 /// is not a number (the validator reports that), is written as it is.
 fn clamped(v: &Value, range: NumRange) -> Value {
     match v.as_f64() {
+        // A whole-number key is always written as an integer (the schema says integer).
+        Some(x) if matches!(range, NumRange::Int(_)) => json!(range.clamp(x).round() as u64),
         Some(x) if range.clamp(x) != x => json!(range.clamp(x)),
         _ => v.clone(),
     }
@@ -143,7 +145,12 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
     let mut out = vec![];
     let matches = active_matches(own, derived);
     for k in KEYS.iter().filter(|k| !k.key.contains('.')) {
-        if let Some(f) = group_feature(k.group) {
+        if k.group == Group::Subsurface {
+            // Standard and Foliage share the group (AG101); hair and multilayer rule both out (`blocked_by`).
+            if !subsurface_group_open(own) {
+                continue;
+            }
+        } else if let Some(f) = group_feature(k.group) {
             if !live(own, f) {
                 continue;
             }

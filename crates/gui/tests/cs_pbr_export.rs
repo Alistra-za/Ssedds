@@ -198,7 +198,7 @@ fn a_hand_edited_or_foreign_file_is_kept_and_reported() {
         .export
         .notes
         .iter()
-        .filter(|n| n.contains("kept as edited outside sdc"))
+        .filter(|n| n.contains("kept as edited outside Tessalith"))
         .collect();
     assert_eq!(kept.len(), 2, "{:?}", m.export.notes);
 }
@@ -338,7 +338,7 @@ fn a_hand_edited_old_case_file_survives_the_rename() {
     assert!(
         notes
             .iter()
-            .any(|n| n.contains("kept as edited outside sdc")),
+            .any(|n| n.contains("kept as edited outside Tessalith")),
         "{notes:?}"
     );
 }

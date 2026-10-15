@@ -41,3 +41,36 @@ pub fn force_opaque_rotated(block: &mut [u8; 16]) -> bool {
     *block = v.to_le_bytes();
     true
 }
+
+/// Exact alpha 0 (DECISIONS AH1): only valid on blocks whose source alpha is 0 throughout. Sets both alpha endpoints
+/// of every subset to 0 (and, in modes 6 and 7, the p-bits they share with RGB to 0), so alpha decodes to exactly 0.
+/// RGB endpoints that had p-bit 1 move down (unoptimised): one LSB in mode 6 (7-bit + p, 1/255), one step of the
+/// 6-bit value in mode 7 (5-bit + p, about 4/255). Modes 4 and 5 are lossless for RGB. Modes 0-3 store no alpha (it decodes as 255) and are left alone. Returns true if the block was rewritten.
+///
+/// Layouts (bit 0 = LSB of byte 0): mode 4 alpha 6-bit x2 at 38, colour 5-bit; mode 5 alpha 8-bit x2 at 50, colour
+/// 7-bit; with rotation r the alpha sits in colour pair r-1 from bit 8. Mode 6 alpha 7-bit x2 at 49, p-bits 63, 64.
+/// Mode 7 (two subsets) alpha 5-bit x4 at 74, p-bits 94..98.
+pub fn force_zero_alpha(block: &mut [u8; 16]) -> bool {
+    let mut v = u128::from_le_bytes(*block);
+    let field = |at: u32, len: u32| ((1u128 << len) - 1) << at;
+    let mask = if block[0] & 0x1f == 0x10 {
+        match (v >> 5) & 3 {
+            0 => field(38, 12),
+            r => field(8 + 10 * (r as u32 - 1), 10),
+        }
+    } else if block[0] & 0x3f == 0x20 {
+        match (v >> 6) & 3 {
+            0 => field(50, 16),
+            r => field(8 + 14 * (r as u32 - 1), 14),
+        }
+    } else if block[0] & 0x7f == 0x40 {
+        field(49, 16)
+    } else if block[0] == 0x80 {
+        field(74, 24)
+    } else {
+        return false;
+    };
+    v &= !mask;
+    *block = v.to_le_bytes();
+    true
+}

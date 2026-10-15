@@ -52,7 +52,10 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
             path: path.to_path_buf(),
             msg,
         };
-        let png = crate::archive::merged_png(path, None).map_err(bad)?;
+        // DECISIONS AF2: the IHDR first (MAX_DIM, `DIM-TOO-LARGE`), then an inflation capped by that size.
+        let (w, h) = image_size(path)?;
+        let png = crate::archive::merged_png_capped(path, crate::archive::merged_cap(w, h))
+            .map_err(bad)?;
         let reader =
             image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
         return decode(reader, path);

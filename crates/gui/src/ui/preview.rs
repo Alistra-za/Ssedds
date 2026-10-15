@@ -4,7 +4,7 @@
 use crate::model::items::ItemKind;
 use crate::model::preview::NO_GPU;
 use crate::model::preview::{EncodedState, PreviewOut, SourceState};
-use crate::model::view::{readouts, skipped_note, Channel, Layout, ViewState};
+use crate::model::view::{self, readouts, skipped_note, Channel, Layout, ViewState};
 use crate::model::AppModel;
 use crate::render::{self, Params, Slot, UploadPath};
 use crate::ui::settings_panel;
@@ -33,6 +33,8 @@ pub struct GpuStatus {
     pub source: bool,
     pub encoded: Option<UploadPath>,
     pub heatmap: bool,
+    /// The pinned encode, while it is compared.
+    pub pinned: Option<UploadPath>,
 }
 
 /// Drawing state that is not part of the model.
@@ -40,6 +42,8 @@ pub struct GpuStatus {
 pub struct PreviewUi {
     /// The item the view was last fitted for: a newly expanded texture starts fitted.
     fitted_for: Option<String>,
+    /// The pixel readout of the texel under the cursor, shown in the notes strip (laid out before the viewports).
+    readout: Option<Vec<String>>,
 }
 
 /// The facts about the expanded texture's mips that the toolbar, the viewports and the notes share.
@@ -59,30 +63,12 @@ struct Info {
 impl Info {
     fn new(model: &AppModel, key: &str) -> Info {
         let shown = model.preview.encoded.shown().cloned();
-        let source = match &model.preview.source {
-            SourceState::Ready(s) => Some(s.clone()),
-            _ => None,
-        };
         let job = model.item(key).and_then(|i| i.job.as_ref());
         let job_format = job.map(|j| j.profile.format);
         let nvtt = job.is_some_and(|j| j.profile.encoder.backend == engine::config::Backend::Nvtt);
-        let has_source = source.as_ref().is_some_and(|s| !s.levels.is_empty());
-        let (dims, first, end) = match (&shown, &source) {
-            (Some(o), _) => {
-                let s = &o.result.source;
-                (
-                    s.dims.clone(),
-                    s.first_level,
-                    s.first_level + o.result.levels.len(),
-                )
-            }
-            (None, Some(s)) if has_source => (
-                s.dims.clone(),
-                s.first_level,
-                s.first_level + s.levels.len(),
-            ),
-            _ => (vec![], 0, 0),
-        };
+        let has_source =
+            matches!(&model.preview.source, SourceState::Ready(s) if !s.levels.is_empty());
+        let (dims, first, end) = model.preview_mips();
         Info {
             dims,
             first,
@@ -122,10 +108,6 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
     let Some(key) = model.expanded.clone() else {
         return;
     };
-    if escape_pressed(ui, model) {
-        model.collapse();
-        return;
-    }
     let info = Info::new(model, &key);
     if info.known() {
         model.view.clamp_mip(info.first, info.end);
@@ -144,26 +126,37 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
         model.collapse();
         return;
     }
-    egui::Panel::bottom("preview-notes").show(ui, |ui| notes(ui, model, &info, gpu));
+    egui::Panel::bottom("preview-notes").show(ui, |ui| {
+        notes(ui, model, &info, gpu, state.readout.as_deref())
+    });
     let rect = ui.available_rect_before_wrap();
     if viewports(ui, model, &info, gpu, rect, requests, state, &key) {
         model.collapse();
     }
 }
 
-/// Esc collapses, unless something else wants it: a dialog, a popup, or a text field being edited.
-fn escape_pressed(ui: &mut egui::Ui, model: &AppModel) -> bool {
-    let ctx = ui.ctx().clone();
-    model.dialog.is_none()
-        && !egui::Popup::is_any_open(&ctx)
-        && !ctx.egui_wants_keyboard_input()
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+fn channel_help(c: Channel) -> &'static str {
+    match c {
+        Channel::Rgba => "All channels",
+        Channel::R => "Red channel as grey",
+        Channel::G => "Green channel as grey",
+        Channel::B => "Blue channel as grey",
+        Channel::A => "Alpha channel as grey",
+        Channel::AlphaMask => "Alpha as a mask over a checkerboard",
+    }
 }
 
 fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, info: &Info) -> Requests {
     let mut requests = Requests::default();
     ui.with_layout(UiLayout::right_to_left(Align::Min), |ui| {
-        if ui.button("✕ Close").on_hover_text("Close (Esc)").clicked() {
+        if ui
+            .button("✕ Close")
+            .on_hover_text(format!(
+                "Close ({})",
+                super::actions::keys_text("close-preview")
+            ))
+            .clicked()
+        {
             requests.close = true;
         }
         ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
@@ -177,6 +170,7 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     for (channel, name) in CHANNELS {
         if ui
             .selectable_label(model.view.channel == channel, name)
+            .on_hover_text(channel_help(channel))
             .clicked()
         {
             model.view.channel = channel;
@@ -208,25 +202,93 @@ fn toolbar_row(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: &
     }
     if ui
         .selectable_label(layout == Layout::Split, "Split")
+        .on_hover_text("One viewport cut by a divider: source on the left, encoded on the right")
         .clicked()
     {
         model.view.layout = Layout::Split;
     }
+    pin_controls(ui, model);
     let possible = info.heatmap_possible();
     ui.add_enabled_ui(possible, |ui| {
         ui.toggle_value(&mut model.view.heatmap, "Heatmap")
             .on_disabled_hover_text("Needs an encoded result with a source image");
     });
+    ui.toggle_value(&mut model.view.lens, "Lens")
+        .on_hover_text(format!(
+            "A magnifier circle at 8x that follows the cursor ({})",
+            super::actions::keys_text("lens")
+        ));
+    ui.toggle_value(&mut model.view.tile, "Tile 3×3")
+        .on_hover_text(format!(
+            "Repeat the picture 3×3 to check the seams ({})",
+            super::actions::keys_text("tile")
+        ));
+    if hdr {
+        ui.separator();
+        ui.spacing_mut().slider_width = 90.0;
+        let (lo, hi) = view::EXPOSURE_RANGE;
+        let r = ui
+            .add(
+                egui::Slider::new(&mut model.view.exposure, lo..=hi)
+                    .step_by(0.1)
+                    .suffix(" EV"),
+            )
+            .on_hover_text("Exposure: scales the HDR values by 2^EV before the tone map");
+        let ev = f64::from(model.view.exposure);
+        r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), ev, "Exposure"));
+    }
     ui.separator();
-    requests.fit = ui.button("Fit").clicked();
-    requests.one_to_one = ui.button("1:1").clicked();
+    requests.fit = ui
+        .button("Fit")
+        .on_hover_text("Zoom to fit the viewport")
+        .clicked();
+    requests.one_to_one = ui
+        .button("1:1")
+        .on_hover_text("One image pixel per screen pixel")
+        .clicked();
     ui.separator();
     let mut live = model.preview.live;
-    if ui.checkbox(&mut live, "Live encode").changed() {
+    if ui
+        .checkbox(&mut live, "Live encode")
+        .on_hover_text("Encode after every edit. Off: press Encode now.")
+        .changed()
+    {
         model.set_live(live);
     }
     if encode_button(ui, model) {
         model.encode_now();
+    }
+}
+
+/// **Pin this result**, and while a result is pinned: **Compare: Source | Pinned** and **Unpin**.
+fn pin_controls(ui: &mut egui::Ui, model: &mut AppModel) {
+    let pin = ui
+        .add_enabled(model.can_pin(), egui::Button::new("Pin this result"))
+        .on_hover_text(format!(
+            "Keep this encode to compare against the next one ({})",
+            super::actions::keys_text("pin")
+        ))
+        .on_disabled_hover_text("Needs a finished encode of the current settings");
+    if pin.clicked() {
+        model.pin_this();
+    }
+    if model.preview.pin.is_none() {
+        return;
+    }
+    let pinned = model.comparing_pin();
+    ui.label("Compare:");
+    if ui.selectable_label(!pinned, "Source").clicked() {
+        model.set_compare_pinned(false);
+    }
+    if ui
+        .selectable_label(pinned, "Pinned")
+        .on_hover_text("Side by side and Split show the pinned encode against the current one")
+        .clicked()
+    {
+        model.set_compare_pinned(true);
+    }
+    if ui.small_button("Unpin").clicked() {
+        model.unpin();
     }
 }
 
@@ -271,7 +333,40 @@ fn can_encode(model: &AppModel) -> bool {
     job && !encoding && matches!(model.preview.source, SourceState::Ready(_))
 }
 
-fn notes(ui: &mut egui::Ui, model: &AppModel, info: &Info, gpu: &GpuStatus) {
+fn notes(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    info: &Info,
+    gpu: &GpuStatus,
+    readout: Option<&[String]>,
+) {
+    if model.view.heatmap && info.heatmap_possible() {
+        let (label, updating) = (model.heatmap_label(), model.heatmap_updating());
+        legend(ui, &mut model.view.full_scale, label, updating);
+    }
+    // A fixed height (the five lines of a normal map), so the viewports do not move as the pointer enters them;
+    // otherwise a pointer near their bottom edge would flip the strip on and off every frame.
+    ui.scope(|ui| {
+        let line = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+        // Two more lines while a pin is compared (the pinned values and their difference).
+        let lines = if model.comparing_pin() { 7.0 } else { 5.0 };
+        ui.set_min_height(lines * line);
+        match readout {
+            Some(lines) => {
+                for l in lines {
+                    // One line each (cut, not wrapped), so the height stays put.
+                    ui.add(egui::Label::new(RichText::new(l).monospace().small()).truncate());
+                }
+            }
+            None => {
+                ui.label(
+                    RichText::new("Point at the picture for the texel readout")
+                        .small()
+                        .weak(),
+                );
+            }
+        }
+    });
     let mut lines: Vec<String> = vec![];
     lines.extend(skipped_note(&info.dims, info.first));
     if info.nvtt {
@@ -295,6 +390,58 @@ fn notes(ui: &mut egui::Ui, model: &AppModel, info: &Info, gpu: &GpuStatus) {
             ui.label(value);
             ui.add_space(8.0);
         }
+    });
+}
+
+/// The heatmap's colour bar from 0 to the full scale, with ticks, and the full-scale slider (log, 0.005 to 0.5).
+fn legend(ui: &mut egui::Ui, full_scale: &mut f32, label: &str, updating: bool) {
+    const STEPS: usize = 32;
+    ui.horizontal(|ui| {
+        if updating {
+            ui.label(RichText::new(format!("{label} updating…")).small().weak());
+        } else {
+            ui.label(RichText::new(label).small());
+        }
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 22.0), Sense::hover());
+        let bar = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 10.0));
+        let w = bar.width() / STEPS as f32;
+        for i in 0..STEPS {
+            let [r, g, b] = view::ramp((i as f32 + 0.5) / STEPS as f32);
+            let cell = Rect::from_min_size(
+                egui::pos2(bar.min.x + w * i as f32, bar.min.y),
+                egui::vec2(w + 0.5, bar.height()),
+            );
+            ui.painter()
+                .rect_filled(cell, 0.0, Color32::from_rgb(r, g, b));
+        }
+        let text = ui.visuals().text_color();
+        for (f, align) in [
+            (0.0, egui::Align2::LEFT_TOP),
+            (0.5, egui::Align2::CENTER_TOP),
+            (1.0, egui::Align2::RIGHT_TOP),
+        ] {
+            let x = bar.min.x + bar.width() * f;
+            ui.painter().vline(
+                x,
+                bar.bottom()..=bar.bottom() + 3.0,
+                egui::Stroke::new(1.0, text),
+            );
+            ui.painter().text(
+                egui::pos2(x, bar.bottom() + 2.0),
+                align,
+                format!("{:.3}", *full_scale * f),
+                egui::FontId::proportional(9.0),
+                text,
+            );
+        }
+        let (lo, hi) = view::FULL_SCALE_RANGE;
+        ui.add(
+            egui::Slider::new(full_scale, lo..=hi)
+                .logarithmic(true)
+                .max_decimals(3)
+                .text("full scale"),
+        )
+        .on_hover_text("The difference drawn white; 0.1 is about 25 codes of 255");
     });
 }
 
@@ -374,8 +521,16 @@ fn viewports(
         (left, right)
     };
     let mut encode = false;
-    draw_source_pane(ui, model, info, gpu, left, left_vis, size);
-    draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
+    let left_draw = if model.comparing_pin() {
+        draw_pinned_pane(ui, model, gpu, left, left_vis, size)
+    } else {
+        draw_source_pane(ui, model, info, gpu, left, left_vis, size)
+    };
+    let right_draw = draw_encoded_pane(ui, model, info, gpu, right, right_vis, size, &mut encode);
+    if let Some((pinned, current)) = model.pin_captions() {
+        caption(ui, left_vis, &pinned, false);
+        caption(ui, right_vis, &current, true);
+    }
     if split {
         ui.painter().vline(
             divider_x,
@@ -383,10 +538,66 @@ fn viewports(
             egui::Stroke::new(1.5, Color32::from_gray(200)),
         );
     }
+    // The cursor as a fraction of the pane it is over: both panes (or both sides of Split) share it.
+    let hover = responses
+        .iter()
+        .find_map(|r| r.hover_pos().map(|p| (r.rect.min, p)))
+        .filter(|_| info.known())
+        .map(|(min, p)| view::pane_fraction([p.x, p.y], [min.x, min.y], size));
+    let readout = hover.and_then(|s| {
+        let t = model.view.texel_at(size, mip_size, s)?;
+        Some(model.preview_texel(mip, t).lines())
+    });
+    if readout != state.readout {
+        state.readout = readout;
+        ui.ctx().request_repaint();
+    }
+    if let (true, Some(s)) = (model.view.lens, hover) {
+        let (uv_offset, uv_scale) = model.view.lens_uv(size, mip_size, s);
+        for (pane, vis, drawn) in [(left, left_vis, left_draw), (right, right_vis, right_draw)] {
+            let centre = pane.min + egui::vec2(s[0] * size[0], s[1] * size[1]);
+            lens(ui, centre, vis, drawn, uv_offset, uv_scale);
+        }
+    }
     if encode {
         model.encode_now();
     }
     responses.iter().any(|r| r.double_clicked())
+}
+
+/// The magnifier in one pane: the pane's own slot drawn again at `centre` through the lens uv rect (a circle,
+/// nearest sampling; its own uniform block), clipped to the pane, with a rim and a centre crosshair.
+fn lens(
+    ui: &mut egui::Ui,
+    centre: egui::Pos2,
+    visible: Rect,
+    drawn: Option<(Slot, Params)>,
+    uv_offset: [f32; 2],
+    uv_scale: [f32; 2],
+) {
+    let Some((slot, params)) = drawn else {
+        return;
+    };
+    let r = Rect::from_center_size(centre, egui::Vec2::splat(view::LENS_PX));
+    let params = Params {
+        uv_offset,
+        uv_scale,
+        lens: 1,
+        ..params
+    };
+    let clip = visible.intersect(ui.clip_rect());
+    let painter = ui.painter().with_clip_rect(clip);
+    painter.circle_filled(centre, view::LENS_PX / 2.0, PANE_BG);
+    paint_clipped(ui, r, visible, slot, params);
+    let stroke = egui::Stroke::new(1.0, Color32::from_gray(220));
+    painter.circle_stroke(
+        centre,
+        view::LENS_PX / 2.0,
+        egui::Stroke::new(1.5, Color32::from_gray(200)),
+    );
+    let arm = 6.0;
+    painter.hline(centre.x - arm..=centre.x + arm, centre.y, stroke);
+    painter.vline(centre.x, centre.y - arm..=centre.y + arm, stroke);
 }
 
 /// Scroll or pinch zooms about the pointer; dragging pans. Both viewports share the one view.
@@ -436,6 +647,9 @@ fn params_for(
         // The tone map already ends in sRGB; the two are never applied together.
         view_linear: (view.view_linear && !tonemap) as u32,
         tonemap: tonemap as u32,
+        exposure: view::exposure_factor(view.exposure),
+        tile: view.tile as u32,
+        lens: 0,
     }
 }
 
@@ -455,7 +669,7 @@ fn draw_source_pane(
     viewport: Rect,
     visible: Rect,
     size: [f32; 2],
-) {
+) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let text = match &model.preview.source {
         SourceState::Loading => Some("Loading source…".to_string()),
@@ -467,6 +681,7 @@ fn draw_source_pane(
         }
         SourceState::Ready(_) => None,
     };
+    let mut drawn = None;
     if let (None, SourceState::Ready(s)) = (&text, &model.preview.source) {
         let mip = model.view.mip;
         let tonemap = info.format.is_some_and(Format::is_hdr);
@@ -478,8 +693,74 @@ fn draw_source_pane(
             tonemap,
         );
         paint_clipped(ui, viewport, visible, Slot::Source, params);
+        drawn = Some((Slot::Source, params));
     }
     pane_overlay(ui, visible, "Source", None, text.as_deref(), false);
+    drawn
+}
+
+/// The left pane while comparing with a pin: the pinned encode, or the dash when it lacks the mip on view.
+fn draw_pinned_pane(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    gpu: &GpuStatus,
+    viewport: Rect,
+    visible: Rect,
+    size: [f32; 2],
+) -> Option<(Slot, Params)> {
+    ui.painter().rect_filled(visible, 0.0, PANE_BG);
+    let mip = model.view.mip;
+    let pin = model.compared_pin()?;
+    let uploaded = matches!(gpu.pinned, Some(UploadPath::Bc | UploadPath::CpuDecoded(_)));
+    let text = if let Some(missing) = model.pin_missing_text(mip) {
+        Some(missing)
+    } else if !gpu.renderer {
+        Some("No GPU preview")
+    } else if !uploaded {
+        Some("No preview of the pinned result")
+    } else {
+        None
+    };
+    let mut drawn = None;
+    if text.is_none() {
+        let first = pin.out.result.source.first_level;
+        let params = params_for(
+            &model.view,
+            size,
+            (pin.out.result.source.dims.get(mip).copied()).unwrap_or((1, 1)),
+            mip.saturating_sub(first),
+            pin.out.result.format.is_hdr(),
+        );
+        paint_clipped(ui, viewport, visible, Slot::Pinned, params);
+        drawn = Some((Slot::Pinned, params));
+    }
+    pane_overlay(ui, visible, "Pinned", None, text, false);
+    drawn
+}
+
+/// A small caption under a pane's title, wrapped to the pane (the current side's right-aligned).
+fn caption(ui: &egui::Ui, visible: Rect, text: &str, right: bool) {
+    let colour = Color32::from_gray(230);
+    let wrap = (visible.width() - 12.0).max(20.0);
+    let galley = ui.painter().layout(
+        text.to_string(),
+        egui::FontId::proportional(11.0),
+        colour,
+        wrap,
+    );
+    let x = if right {
+        visible.max.x - 6.0 - galley.size().x
+    } else {
+        visible.min.x + 6.0
+    };
+    let pos = egui::pos2(x, visible.min.y + 26.0);
+    let painter = ui.painter().with_clip_rect(visible);
+    painter.rect_filled(
+        Rect::from_min_size(pos, galley.size()).expand(2.0),
+        2.0,
+        Color32::from_black_alpha(150),
+    );
+    painter.galley(pos, galley, colour);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -492,7 +773,7 @@ fn draw_encoded_pane(
     visible: Rect,
     size: [f32; 2],
     encode: &mut bool,
-) {
+) -> Option<(Slot, Params)> {
     ui.painter().rect_filled(visible, 0.0, PANE_BG);
     let heat = model.view.heatmap && gpu.heatmap;
     let (badge, text, offer_encode) = match &model.preview.encoded {
@@ -522,7 +803,7 @@ fn draw_encoded_pane(
             text = Some("No preview of this result".to_string());
         }
     }
-    let mut drawn = false;
+    let mut drawn = None;
     if gpu.renderer && info.shown.is_some() {
         let mip = model.view.mip;
         if heat {
@@ -530,7 +811,7 @@ fn draw_encoded_pane(
             params.channel = 0;
             params.view_linear = 0;
             paint_clipped(ui, viewport, visible, Slot::Heatmap, params);
-            drawn = true;
+            drawn = Some((Slot::Heatmap, params));
         } else if let (true, Some(out)) = (uploaded, &info.shown) {
             let tonemap = out.result.format.is_hdr();
             let first = out.result.source.first_level;
@@ -542,18 +823,25 @@ fn draw_encoded_pane(
                 tonemap,
             );
             paint_clipped(ui, viewport, visible, Slot::Encoded, params);
-            drawn = true;
+            drawn = Some((Slot::Encoded, params));
         }
     }
-    if drawn && matches!(model.preview.encoded, EncodedState::Encoding { .. }) {
+    if drawn.is_some() && matches!(model.preview.encoded, EncodedState::Encoding { .. }) {
         ui.painter()
             .rect_filled(visible, 0.0, Color32::from_black_alpha(128));
     }
-    let title = if heat { "Difference" } else { "Encoded" };
+    let comparing = model.comparing_pin();
+    let title = match (heat, comparing) {
+        (true, true) => "Current vs Pinned |Δ|",
+        (true, false) => "Difference",
+        (false, true) => "Current",
+        (false, false) => "Encoded",
+    };
     let button = offer_encode && can_encode(model);
     if pane_overlay(ui, visible, title, badge, text.as_deref(), button) {
         *encode = true;
     }
+    drawn
 }
 
 /// The pane's title and badge in its corner and, when there is nothing to draw, a centred message (with an

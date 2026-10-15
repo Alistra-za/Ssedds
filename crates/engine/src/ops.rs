@@ -132,6 +132,14 @@ impl SourceTransfer {
     }
 }
 
+/// DECISIONS AH1/AH2: a `complex_material` writes alpha 0 (complex material on, parallax off) when parallax is off
+/// or the source has no alpha channel. CS runs parallax only for 4/255 < alpha < 251/255 (Spike S8).
+pub fn complex_alpha_zero(p: &Profile, source_has_alpha: bool) -> bool {
+    p.subtype == Subtype::ComplexMaterial
+        && p.alpha.policy != AlphaPolicy::Remove
+        && (p.alpha.parallax == Some(false) || !source_has_alpha)
+}
+
 /// `preprocess_with` for an integer source (tests, bench and callers without a `SourceInfo`).
 pub fn preprocess(img: Rgba32F, p: &Profile) -> Work {
     preprocess_with(img, p, SourceTransfer::Stored)

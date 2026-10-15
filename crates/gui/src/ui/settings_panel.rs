@@ -4,7 +4,7 @@ use super::columns::{AMBER, RED};
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
     field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
-    provenance_text, FieldView, NOT_VALID,
+    provenance_text, FieldView, NOT_VALID, PARALLAX_HOVER,
 };
 use crate::model::items::{Decision, ItemKind, ItemStatus};
 use crate::model::{Answer, AppModel};
@@ -281,13 +281,14 @@ struct Pending {
 }
 
 /// A slider over `range` that returns a value only when the drag ends (or a click or key press settles it).
-/// `id` keeps the in-progress value between frames.
+/// `id` keeps the in-progress value between frames; `name` is the accessible name.
 pub fn commit_slider(
     ui: &mut egui::Ui,
     model_busy: bool,
     id: egui::Id,
     current: u32,
     range: std::ops::RangeInclusive<u32>,
+    name: &str,
     mixed: bool,
 ) -> (Option<u32>, egui::Response) {
     let mut pending: Option<Pending> = ui.data(|d| d.get_temp(id));
@@ -303,6 +304,7 @@ pub fn commit_slider(
         slider = slider.custom_formatter(|_, _| "— mixed".to_string());
     }
     let r = ui.add(slider);
+    r.widget_info(|| egui::WidgetInfo::slider(r.enabled(), f64::from(value), name));
     if r.changed() {
         pending = Some(Pending {
             value,
@@ -348,7 +350,15 @@ fn threshold(
     mixed: bool,
 ) -> (Option<Value>, egui::Response) {
     let id = egui::Id::new(("threshold", key));
-    let (out, r) = commit_slider(ui, model_busy, id, u32::from(current), 1..=254, mixed);
+    let (out, r) = commit_slider(
+        ui,
+        model_busy,
+        id,
+        u32::from(current),
+        1..=254,
+        "Alpha threshold",
+        mixed,
+    );
     (out.map(|v| json!(v)), r)
 }
 
@@ -366,6 +376,13 @@ pub(super) fn editor(
             let cur = f.value.as_u64().unwrap_or(128).clamp(1, 254) as u8;
             threshold(ui, busy, key, cur, mixed)
         }
+        "alpha.parallax" => {
+            let mut b = f.value.as_bool().unwrap_or(false);
+            let r = ui
+                .add(egui::Checkbox::new(&mut b, "").indeterminate(mixed))
+                .on_hover_text(PARALLAX_HOVER);
+            (r.changed().then(|| json!(b)), r)
+        }
         "alpha.exact_opaque" | "encoder.perceptual" | "encoder.bc1_transparent_black" => {
             let mut b = f.value.as_bool().unwrap_or(false);
             let r = ui.add(egui::Checkbox::new(&mut b, "").indeterminate(mixed));
@@ -378,7 +395,8 @@ pub(super) fn editor(
                 .unwrap_or(0)
                 .min(u64::from(RGBCX_MAX_LEVEL)) as u32;
             let id = egui::Id::new(("rgbcx-level", key));
-            let (out, r) = commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL, mixed);
+            let (out, r) =
+                commit_slider(ui, busy, id, cur, 0..=RGBCX_MAX_LEVEL, "rgbcx level", mixed);
             (out.map(|v| json!(v)), r)
         }
         field => {
@@ -818,6 +836,50 @@ fn dds_header_panel(
 }
 
 /// Why `sdc.toml` cannot take an edit, when its file is read-only.
+/// Item 9: the meshes that use this texture, winner first, from the scan database (read off the UI thread).
+fn used_by(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
+    let Some(u) = model.used_by_for(key) else {
+        return;
+    };
+    let title = match &u {
+        Some(u) => format!("Used by meshes ({})", u.rows.len() + u.more),
+        None => "Used by meshes".to_string(),
+    };
+    egui::CollapsingHeader::new(title)
+        .id_salt("used-by-meshes")
+        .show(ui, |ui| {
+            let Some(u) = u else {
+                ui.weak("Reading the scan database…");
+                return;
+            };
+            if let Some(e) = &u.error {
+                ui.colored_label(RED, e);
+            }
+            if u.rows.is_empty() && u.error.is_none() {
+                ui.weak(format!("No mesh of the latest scan uses {}.", u.tex));
+            }
+            for r in &u.rows {
+                let prio = if r.bsa {
+                    format!("BSA rank {}", r.priority)
+                } else {
+                    format!("priority {}", r.priority)
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(&r.nif);
+                    ui.weak(format!("{} · {prio}", r.mod_name));
+                    if r.decided_alpha {
+                        ui.colored_label(AMBER, "decided alpha").on_hover_text(
+                            "This mesh's alpha property decided the texture's alpha meaning",
+                        );
+                    }
+                });
+            }
+            if u.more > 0 {
+                ui.weak(format!("and {} more", u.more));
+            }
+        });
+}
+
 pub fn toml_read_only_reason(model: &AppModel) -> Option<String> {
     model.toml_read_only_reason()
 }
@@ -916,6 +978,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             if kind == ItemKind::Packed && !compact {
                 channels(ui, job);
             }
+            if !compact {
+                size_line(ui, model, key);
+            }
             let shown: &[&str] = if compact { &COMPACT_GROUPS } else { &GROUPS };
             for g in shown {
                 group(ui, g, &cx, &mut actions);
@@ -926,6 +991,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             }
         }
     });
+    if !compact {
+        used_by(ui, model, key);
+    }
     for a in actions {
         match a {
             Action::Set("format", v) => {
@@ -944,6 +1012,33 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 // The result line lands in `dds_patch.last`, shown under the panel.
                 let _ = model.patch_dds_header(key);
             }
+        }
+    }
+}
+
+/// Item 22 (DECISIONS AG118): the DDS this texture writes: format, size after any resize, mips, bytes. A compressed
+/// size is also its video memory.
+fn size_line(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
+    use crate::model::out_size::{format_name, human};
+    match model.size_of(key) {
+        Some(e) => {
+            ui.label(format!(
+                "Output: {} · {}×{} · {} mips · {} ≈ VRAM",
+                format_name(e.format),
+                e.width,
+                e.height,
+                e.mips,
+                human(e.chain_bytes)
+            ))
+            .on_hover_text(format!(
+                "{} bytes of mip data + {} bytes of header = {} bytes on disk",
+                e.chain_bytes,
+                e.header_bytes,
+                e.file_bytes()
+            ));
+        }
+        None => {
+            ui.weak("Output size unknown: the source size could not be read.");
         }
     }
 }

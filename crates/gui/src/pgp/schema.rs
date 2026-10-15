@@ -40,6 +40,8 @@ pub enum NumRange {
     Unit,
     /// No bounds: `glint.log_microfacet_density` is a log value and may be negative (controller ruling).
     Any,
+    /// A whole number from 0 to this maximum: the `alphaprop_*` keys (DECISIONS AG27). Written as a JSON integer.
+    Int(u32),
 }
 
 impl NumRange {
@@ -48,6 +50,7 @@ impl NumRange {
             NumRange::Min0 => (0.0, f64::INFINITY),
             NumRange::Unit => (0.0, 1.0),
             NumRange::Any => (f64::NEG_INFINITY, f64::INFINITY),
+            NumRange::Int(max) => (0.0, f64::from(max)),
         }
     }
 
@@ -57,12 +60,20 @@ impl NumRange {
     }
 
     /// The note a typed value outside the range shows next to its box.
-    pub fn note(self) -> &'static str {
+    pub fn note(self) -> String {
         match self {
-            NumRange::Min0 => "clamped to ≥ 0",
-            NumRange::Unit => "clamped to 0–1",
-            NumRange::Any => "",
+            NumRange::Min0 => "clamped to ≥ 0".into(),
+            NumRange::Unit => "clamped to 0–1".into(),
+            NumRange::Any => String::new(),
+            NumRange::Int(max) => format!("clamped to a whole number 0-{max}"),
         }
+    }
+
+    /// A stored `alphaprop_*` value as a whole number 0 to `max`: JSON `4844.0` reads as 4844 (the writer and the
+    /// validator accept it); a negative, fractional or too large one is `None` (shown as invalid, not as "not set").
+    pub fn whole(v: &serde_json::Value, max: u32) -> Option<u32> {
+        let x = v.as_f64()?;
+        (x.fract() == 0.0 && (0.0..=f64::from(max)).contains(&x)).then_some(x as u32)
     }
 }
 
@@ -78,12 +89,52 @@ pub enum Group {
     Glint,
     Fuzz,
     Vertex,
+    /// The NiAlphaProperty keys; the card draws them as one section, not as a key grid.
+    Alpha,
     Locks,
     Uv,
     Slots,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How a number key drags and reads (Task 14b, DECISIONS AG121): `speed` per pixel, `decimals` shown, and `log` when
+/// the useful values span orders of magnitude. egui 0.36's `DragValue` has no logarithmic mode, so a log key scales
+/// its speed with the value instead (`speed_at`). Only the feel and the display change: the range clamps and the
+/// stored values are the key's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DragSpec {
+    pub speed: f64,
+    pub decimals: usize,
+    pub log: bool,
+}
+
+impl DragSpec {
+    pub const fn new(speed: f64, decimals: usize, log: bool) -> Self {
+        Self {
+            speed,
+            decimals,
+            log,
+        }
+    }
+
+    /// The speed at value `v`: a log key drags at least 1% of its value per pixel, never below `speed`.
+    pub fn speed_at(self, v: f64) -> f64 {
+        if self.log {
+            self.speed.max(v.abs() * 0.01)
+        } else {
+            self.speed
+        }
+    }
+
+    /// The value as the box shows it: at most `decimals` places, no trailing zeros beyond one (`1.0`, `0.04`).
+    pub fn format(self, v: f64) -> String {
+        if self.decimals == 0 {
+            return format!("{v:.0}");
+        }
+        let p = 10f64.powi(self.decimals as i32);
+        format!("{:?}", (v * p).round() / p)
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KeySpec {
     pub key: &'static str,
     pub kind: KeyKind,
@@ -91,6 +142,15 @@ pub struct KeySpec {
     /// Shown in the Advanced drawer rather than the main view.
     pub advanced: bool,
     pub label: &'static str,
+    /// Drag speed and display of a number key; unused by the other kinds.
+    pub drag: DragSpec,
+}
+
+impl KeySpec {
+    pub const fn with(mut self, drag: DragSpec) -> Self {
+        self.drag = drag;
+        self
+    }
 }
 
 const fn k(
@@ -106,6 +166,7 @@ const fn k(
         group,
         advanced,
         label,
+        drag: DragSpec::new(0.01, 4, false),
     }
 }
 
@@ -152,9 +213,11 @@ pub const KEYS: &[KeySpec] = &[
     ),
     k("nif_filter", K::Text, G::Match, true, "Mesh path contains"),
     k("rename", K::Text, G::Match, true, "Rename"),
-    k("smooth_angle", MIN0, G::Uv, true, "Smooth angle"),
-    k("auto_uv", MIN0, G::Uv, true, "Auto UV"),
-    k("uv_scale", MIN0, G::Uv, true, "UV scale"),
+    k("smooth_angle", MIN0, G::Uv, true, "Smooth angle").with(DragSpec::new(0.5, 1, false)),
+    // shortcut: no field data, retune when seen
+    k("auto_uv", MIN0, G::Uv, true, "Auto UV").with(DragSpec::new(0.01, 3, false)),
+    // shortcut: no field data, retune when seen
+    k("uv_scale", MIN0, G::Uv, true, "UV scale").with(DragSpec::new(0.01, 3, true)),
     k("vertex_colors", K::Tri, G::Vertex, true, "Vertex colours"),
     k(
         "vertex_color_lum_mult",
@@ -162,20 +225,55 @@ pub const KEYS: &[KeySpec] = &[
         G::Vertex,
         true,
         "Vertex colour luminance ×",
-    ),
+    )
+    .with(DragSpec::new(0.005, 3, false)),
     k(
         "vertex_color_sat_mult",
         MIN0,
         G::Vertex,
         true,
         "Vertex colour saturation ×",
-    ),
+    )
+    .with(DragSpec::new(0.005, 2, false)),
     k("zbuffer_write", K::Tri, G::Vertex, true, "Z-buffer write"),
+    // shortcut: no field data, retune when seen
+    k(
+        "alphaprop_flags",
+        K::Number(NumRange::Int(65535)),
+        G::Alpha,
+        false,
+        "Alpha flags",
+    )
+    .with(DragSpec::new(16.0, 0, false)),
+    // shortcut: no field data, retune when seen
+    k(
+        "alphaprop_thresh",
+        K::Number(NumRange::Int(255)),
+        G::Alpha,
+        false,
+        "Alpha test threshold",
+    )
+    .with(DragSpec::new(1.0, 0, false)),
+    k(
+        "alphaprop_create",
+        K::OnlyTrue,
+        G::Alpha,
+        false,
+        "Create NiAlphaProperty if missing",
+    ),
+    k(
+        "alphaprop_delete",
+        K::OnlyTrue,
+        G::Alpha,
+        false,
+        "Delete NiAlphaProperty",
+    ),
     k("lock_diffuse", K::Tri, G::Locks, true, "Lock diffuse"),
     k("lock_normal", K::Tri, G::Locks, true, "Lock normal"),
     k("emissive", K::OnlyTrue, G::Features, false, "Emissive"),
     k("lock_emissive", K::Tri, G::Locks, true, "Lock emissive"),
-    k("emissive_scale", MIN0, G::Emissive, false, "Emissive scale"),
+    k("emissive_scale", MIN0, G::Emissive, false, "Emissive scale")
+        .with(DragSpec::new(0.02, 2, true)),
     k(
         "emissive_color",
         K::Rgba,
@@ -191,18 +289,21 @@ pub const KEYS: &[KeySpec] = &[
         G::Parallax,
         false,
         "Displacement scale",
-    ),
+    )
+    .with(DragSpec::new(0.01, 2, true)),
     k("cubemap", K::Text, G::Uv, true, "Cubemap path"),
     k("lock_cubemap", K::Tri, G::Locks, true, "Lock cubemap"),
     k("lock_rmaos", K::Tri, G::Locks, true, "Lock RMAOS"),
-    k("specular_level", MIN0, G::Material, false, "Specular level"),
+    k("specular_level", MIN0, G::Material, false, "Specular level")
+        .with(DragSpec::new(0.001, 5, true)),
     k(
         "roughness_scale",
         MIN0,
         G::Material,
         false,
         "Roughness scale",
-    ),
+    )
+    .with(DragSpec::new(0.01, 2, false)),
     k("subsurface", K::OnlyTrue, G::Features, false, "Subsurface"),
     k(
         "subsurface_foliage",
@@ -224,7 +325,8 @@ pub const KEYS: &[KeySpec] = &[
         G::Subsurface,
         false,
         "Subsurface opacity",
-    ),
+    )
+    .with(DragSpec::new(0.005, 2, false)),
     k("lock_subsurface", K::Tri, G::Locks, true, "Lock subsurface"),
     k("hair", K::OnlyTrue, G::Features, false, "Hair"),
     k(
@@ -234,22 +336,25 @@ pub const KEYS: &[KeySpec] = &[
         false,
         "Multilayer (coat)",
     ),
-    k("coat_color", K::Rgb, G::Multilayer, true, "Coat colour"),
+    k("coat_color", K::Rgb, G::Multilayer, false, "Coat colour"),
     k(
         "coat_specular_level",
         MIN0,
         G::Multilayer,
         false,
         "Coat specular level",
-    ),
+    )
+    .with(DragSpec::new(0.001, 4, true)),
     k(
         "coat_roughness",
         MIN0,
         G::Multilayer,
         false,
         "Coat roughness",
-    ),
-    k("coat_strength", UNIT, G::Multilayer, false, "Coat strength"),
+    )
+    .with(DragSpec::new(0.005, 2, false)),
+    k("coat_strength", UNIT, G::Multilayer, false, "Coat strength")
+        .with(DragSpec::new(0.005, 2, false)),
     k(
         "coat_diffuse",
         K::OnlyTrue,
@@ -272,13 +377,15 @@ pub const KEYS: &[KeySpec] = &[
         "Coat parallax",
     ),
     k("lock_cnr", K::Tri, G::Locks, true, "Lock coat normal"),
+    // shortcut: no field data, retune when seen
     k(
         "inner_uv_scale",
         MIN0,
         G::Multilayer,
-        true,
+        false,
         "Inner UV scale",
-    ),
+    )
+    .with(DragSpec::new(0.01, 3, true)),
     k("glint", K::Object, G::Features, false, "Glint"),
     k("fuzz", K::Object, G::Features, false, "Fuzz"),
     k("slot1", K::Slot, G::Slots, false, "Slot 1"),
@@ -295,28 +402,32 @@ pub const KEYS: &[KeySpec] = &[
         G::Glint,
         false,
         "Screen-space scale",
-    ),
+    )
+    .with(DragSpec::new(0.02, 2, false)),
     k(
         "glint.log_microfacet_density",
         ANY,
         G::Glint,
         false,
         "Log microfacet density",
-    ),
+    )
+    .with(DragSpec::new(0.1, 3, false)),
     k(
         "glint.microfacet_roughness",
         MIN0,
         G::Glint,
         false,
         "Microfacet roughness",
-    ),
+    )
+    .with(DragSpec::new(0.005, 3, true)),
     k(
         "glint.density_randomization",
         MIN0,
         G::Glint,
         false,
         "Density randomisation",
-    ),
+    )
+    .with(DragSpec::new(1.0, 3, true)),
     k(
         "fuzz.texture",
         K::OnlyTrue,
@@ -325,7 +436,7 @@ pub const KEYS: &[KeySpec] = &[
         "Fuzz texture (_f)",
     ),
     k("fuzz.color", K::Rgb, G::Fuzz, false, "Fuzz colour"),
-    k("fuzz.weight", UNIT, G::Fuzz, false, "Fuzz weight"),
+    k("fuzz.weight", UNIT, G::Fuzz, false, "Fuzz weight").with(DragSpec::new(0.005, 2, false)),
 ];
 
 pub fn spec(key: &str) -> Option<&'static KeySpec> {

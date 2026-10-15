@@ -2,10 +2,14 @@
 //! Drawing only: every change is a model call, made after drawing.
 use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
+use super::sets_column::{DropState, Pending, SlotNote};
 use super::slot_commands::SlotCmdState;
 use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
-use crate::model::fields::{channel_text, encoding_options, field_lock, format_label};
+use crate::model::fields::{
+    channel_text, encoding_options, field_hidden, field_lock, field_view, format_label,
+    PARALLAX_HOVER,
+};
 use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
@@ -35,12 +39,18 @@ enum Act {
     Expand(String),
     Format(String, Format, ColorTag),
     Opaque(String, bool),
+    /// "Enable parallax" on a complex `_m` (DECISIONS AH2).
+    Parallax(String, bool),
+    /// Clear the `_m`'s own `alpha.parallax` (the reset next to a locked box).
+    ParallaxReset(String),
     Recipe(String, PackRecipe),
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
     /// F3a Task 8: a slot menu pick.
     Slot(MenuAction),
+    /// Item 17: files from Explorer dropped on this set's slot card.
+    FileDrop(String, SlotKind),
 }
 
 /// How the set editor shares the view with the 3D preview panel.
@@ -58,6 +68,7 @@ pub fn draw(
     key: &str,
     thumbs: &mut ThumbCache,
     cmds: &mut SlotCmdState,
+    drops: &mut DropState,
     view: View,
 ) {
     let Some(v) = set_views(model).into_iter().find(|v| v.key == key) else {
@@ -118,21 +129,39 @@ pub fn draw(
     }
     ui.separator();
     let mut acts = vec![];
+    // Item 17: where a file from Explorer was dropped this frame, if one waits for a slot card.
+    let drop_at = drops.file.as_ref().and_then(|f| f.pos);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
     if view.three_d {
-        // 3D: the preview panel shows the set; the TruePBR settings stay here.
+        // 3D (AG78): the set's 3D view follows in this pane (`ui::centre`). The TruePBR settings (coat group
+        // included) and the skin card fold above it, so an edit still shows live in 3D.
+        let tall = (ui.available_height() * 0.45).max(240.0);
+        if shows_json_panel(&v, model.target) {
+            egui::CollapsingHeader::new("TruePBR settings")
+                .id_salt(("set-3d-pbr", &v.id))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("set-3d-pbr-scroll")
+                        .max_height(tall)
+                        .show(ui, |ui| super::pgp_fields::panel(ui, model, &v.id));
+                });
+        }
+        if v.skin {
+            egui::CollapsingHeader::new("Advanced skin settings")
+                .id_salt(("set-3d-skin", &v.id))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("set-3d-skin-scroll")
+                        .max_height(tall)
+                        .show(ui, |ui| super::skin_card::card(ui, model, &v));
+                });
+        }
+        // The CS PBR texture-set/material-object section folds here too (design §3).
         egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if shows_json_panel(&v, model.target) {
-                    super::pgp_fields::panel(ui, model, &v.id);
-                } else {
-                    ui.weak("This set has no TruePBR settings. Switch to 2D for its slot cards.");
-                }
-                under_grid(ui, model, &v);
-                super::cs_pbr::section(ui, model, &v);
-            });
+            .id_salt("set-3d-cs-scroll")
+            .max_height(tall)
+            .show(ui, |ui| super::cs_pbr::section(ui, model, &v));
         return;
     }
     egui::ScrollArea::vertical()
@@ -140,7 +169,8 @@ pub fn draw(
         .show(ui, |ui| {
             ui.columns(2, |cols| {
                 let ui = &mut cols[0];
-                cards(ui, model, &v, thumbs, &mut acts);
+                cards(ui, model, &v, thumbs, &mut acts, drop_at);
+                slot_note(ui, drops, &v.id);
                 unslotted_packed(ui, model, &v, &mut acts);
                 ui.add_space(6.0);
                 ui.add_enabled_ui(editable, |ui| {
@@ -156,6 +186,9 @@ pub fn draw(
                 if shows_json_panel(&v, model.target) {
                     super::pgp_fields::panel(&mut cols[1], model, &v.id);
                 }
+                if v.skin {
+                    super::skin_card::card(&mut cols[1], model, &v);
+                }
             });
         });
     let (mut select, mut expand) = (None, None);
@@ -165,15 +198,57 @@ pub fn draw(
             Act::Expand(k) => expand = Some(k),
             Act::Format(k, f, t) => model.set_format(&k, f, t),
             Act::Opaque(k, on) => model.set_opaque(&k, on),
+            Act::Parallax(k, on) => model.set_field(&k, "alpha.parallax", serde_json::json!(on)),
+            Act::ParallaxReset(k) => model.clear_field(&k, "alpha.parallax"),
             Act::Recipe(k, r) => {
                 model.set_packing_recipe(&k, r);
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
             Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
+            Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
         }
     }
     select_or_expand(ui, model, select, expand);
+}
+
+/// Item 17: a file from Explorer dropped on slot `slot` of `set`. The drop is taken (its folder is not opened); a
+/// filled slot asks Replace / Cancel as a texture dragged onto the set does, anything refused is the error line.
+fn file_drop(model: &mut AppModel, drops: &mut DropState, set: &str, slot: SlotKind) {
+    let Some(f) = drops.file.take() else { return };
+    let r = model.drop_file_on_slot(set, slot, &f.paths);
+    let line = |text: String, error: bool| SlotNote {
+        set: set.to_string(),
+        text,
+        error,
+    };
+    drops.slot_note = match r.outcome {
+        crate::model::sets::DropOutcome::Refused(why) => Some(line(why, true)),
+        crate::model::sets::DropOutcome::AskReplace { existing } => {
+            if let Some(item) = r.item {
+                drops.pending = Some(Pending::Replace {
+                    item,
+                    set: set.to_string(),
+                    existing,
+                    choice: crate::model::sets::DropChoice::Move,
+                });
+            }
+            r.note.map(|n| line(n.into(), false))
+        }
+        // `drop_choice` with Move never asks the Share / Duplicate choice.
+        _ => r.note.map(|n| line(n.into(), false)),
+    };
+}
+
+/// Item 17: the last file drop's error or note, under the slot cards of the set it was for.
+fn slot_note(ui: &mut egui::Ui, drops: &DropState, set: &str) {
+    if let Some(n) = drops.slot_note.as_ref().filter(|n| n.set == set) {
+        if n.error {
+            ui.colored_label(RED, &n.text);
+        } else {
+            ui.weak(&n.text);
+        }
+    }
 }
 
 /// The recipe lines, the set's warnings (each member's, each once) and what matches nothing.
@@ -232,6 +307,7 @@ fn cards(
     v: &SetView,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
+    drop_at: Option<egui::Pos2>,
 ) {
     // Four per row when they fit; fewer in a narrow column, so no card ends up outside the panel.
     let per_row = ((ui.available_width() / (CARD + CARD_CHROME)) as usize).clamp(1, 4);
@@ -240,7 +316,7 @@ fn cards(
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
             for (i, cell) in slot_row(v.shader.as_ref(), &v.slots).iter().enumerate() {
-                card(ui, model, v, cell, thumbs, acts);
+                card(ui, model, v, cell, thumbs, acts, drop_at);
                 if i % per_row == per_row - 1 {
                     ui.end_row();
                 }
@@ -255,6 +331,7 @@ fn card(
     cell: &SlotCell,
     thumbs: &mut ThumbCache,
     acts: &mut Vec<Act>,
+    drop_at: Option<egui::Pos2>,
 ) {
     let slot = cell.kind;
     let fill = cell.fill.clone();
@@ -437,6 +514,10 @@ fn card(
         })
     });
     slot_menu(&scoped.response, model, v, slot, acts);
+    // Item 17: a file from Explorer dropped on this card.
+    if drop_at.is_some_and(|p| scoped.response.rect.contains(p)) {
+        acts.push(Act::FileDrop(v.id.clone(), slot));
+    }
 }
 
 /// F3a Task 8: the slot menu of card `slot` (the model's list, drawn as the bulk menus are).
@@ -601,22 +682,55 @@ fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<
     }
 }
 
-/// Packed outputs that fill no slot card (the cpm `_m`) get their fill rows here, under the cards.
+/// Outputs that fill no slot card get their controls here, under the cards: the complex `_m` (packed cpm or loose)
+/// its "Enable parallax" box (DECISIONS AH2), a packed output its fill rows.
 fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut Vec<Act>) {
     let why = super::settings_panel::toml_read_only_reason(model);
     for item in v
         .members
         .iter()
         .filter_map(|m| model.item(m))
-        .filter(|i| i.kind == ItemKind::Packed && slot_of(i).is_none())
+        .filter(|i| slot_of(i).is_none())
     {
-        if fill_rows(model, &item.key).is_empty() {
+        let parallax = item
+            .job
+            .as_ref()
+            .filter(|j| !field_hidden(&j.profile, "alpha.parallax"))
+            .and_then(|j| field_view(model.target, j, "alpha.parallax"));
+        let fills = item.kind == ItemKind::Packed && !fill_rows(model, &item.key).is_empty();
+        if parallax.is_none() && !fills {
             continue;
         }
         ui.add_space(6.0);
         ui.label(egui::RichText::new(&item.name).strong());
         ui.add_enabled_ui(why.is_none(), |ui| {
-            fill_controls(ui, model, &item.key, acts)
+            if let Some(f) = &parallax {
+                ui.horizontal(|ui| {
+                    let mut on = f.value.as_bool().unwrap_or(false);
+                    let r = ui
+                        .add_enabled(
+                            f.lock.is_none(),
+                            egui::Checkbox::new(&mut on, "Enable parallax"),
+                        )
+                        .on_hover_text(PARALLAX_HOVER)
+                        .on_disabled_hover_text(f.lock.unwrap_or_default());
+                    if r.changed() {
+                        acts.push(Act::Parallax(item.key.clone(), on));
+                    }
+                    // A locked box the texture's own entry ticked (no source alpha) cannot be unticked: reset it.
+                    if f.edited
+                        && ui
+                            .small_button("↺")
+                            .on_hover_text("Use the inherited value")
+                            .clicked()
+                    {
+                        acts.push(Act::ParallaxReset(item.key.clone()));
+                    }
+                });
+            }
+            if fills {
+                fill_controls(ui, model, &item.key, acts)
+            }
         })
         .response
         .on_disabled_hover_text(why.clone().unwrap_or_default());

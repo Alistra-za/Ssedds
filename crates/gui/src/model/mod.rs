@@ -1,4 +1,5 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
+pub mod auto_flags;
 pub mod bulk;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
@@ -6,22 +7,34 @@ pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;
 pub mod fields;
+pub mod heatmap;
 pub mod history;
 pub mod input_name;
 pub mod inspector;
 pub mod items;
 pub mod known_paths;
 pub mod meshes;
+pub mod messages;
+pub mod nav;
+pub mod out_size;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
+pub mod picker;
+pub mod pin;
 pub mod plugin_refs;
 pub mod preview;
+pub mod readout;
 pub mod rename;
 pub mod rnm;
+pub mod rnm_preview;
 pub mod sections;
 pub mod set_preview;
 pub mod sets;
+pub mod shell;
+pub mod skin;
+pub mod texture_view;
+pub mod used_by;
 pub mod view;
 pub mod viewport3d;
 
@@ -39,9 +52,16 @@ use engine::session::Session;
 use items::*;
 use serde_json::json;
 use std::path::PathBuf;
+
+/// The file an NVTT probe ran on: path, size and modified time (`AppModel::refresh_nvtt_if_changed`).
+type NvttKey = (PathBuf, u64, Option<std::time::SystemTime>);
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// How long the "Undid/Redid" note stays in the status line (AG15).
+const UNDO_NOTE_FOR: Duration = Duration::from_secs(5);
+
 /// Whether a warning counts toward the amber ⚠ badge and the "Has warnings" filter. Info lines (a note, not a
 /// problem) stay in the texture's own warnings list only. One predicate for the pill, the tile and the filter.
 pub fn counts_toward_badge(w: &engine::codes::Warning) -> bool {
@@ -52,6 +72,28 @@ pub fn counts_toward_badge(w: &engine::codes::Warning) -> bool {
     )
 }
 
+/// Item 13: the plan bar's text, "Analysing 1,234 / 5,000 files…".
+pub fn plan_bar_text(done: usize, total: usize) -> String {
+    format!(
+        "Analysing {} / {} files…",
+        thousands(done),
+        thousands(total)
+    )
+}
+
+/// `n` with a comma between each group of three digits.
+fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selection {
     None,
@@ -59,13 +101,7 @@ pub enum Selection {
     Set(String),
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct Filter {
-    pub needs_decision: bool,
-    pub warnings: bool,
-    pub failed: bool,
-    pub not_in_set: bool,
-}
+pub use texture_view::Filter;
 
 /// Which of the two project files a dialog or save error is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +229,8 @@ pub(crate) struct ViewKey {
 }
 
 pub struct AppModel {
+    /// The file pickers (Task 6); one dialog at a time, shared with the sub-models.
+    pub picker: picker::Picker,
     pub settings: GuiSettings,
     pub settings_path: Option<PathBuf>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
@@ -211,6 +249,11 @@ pub struct AppModel {
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
     /// the colour member; sent as `BatchRequest::mesh_alpha`.
     pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    /// Scan evidence for the Subsurface auto mode (DECISIONS AG102): `shader::colour_mesh_key` → whether any scanned
+    /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine.
+    pub mesh_tree_anim: std::collections::BTreeMap<String, bool>,
+    /// Bumped whenever `mesh_tree_anim` or `known` is replaced (DECISIONS AG109); part of `json_key`.
+    pub evidence_rev: u64,
     /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
     /// evidence; sent as `BatchRequest::gras_diffuses`.
     pub gras_diffuses: std::collections::BTreeSet<String>,
@@ -219,6 +262,8 @@ pub struct AppModel {
     pub gras_all_diffuses: std::collections::BTreeSet<String>,
     /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
     pub known: Arc<known_paths::KnownPaths>,
+    /// Item 9: the selected texture's "Used by meshes" read (`used_by_for`).
+    pub used_by: used_by::UsedByState,
     /// G3: the TruePBR JSON editor window is open.
     pub json_editor_open: bool,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
@@ -255,8 +300,23 @@ pub struct AppModel {
     /// F3a: the bulk panel's chip and last report.
     pub bulk: bulk::BulkState,
     pub filter: Filter,
+    /// The Textures column's sort and tile size (item 8).
+    pub prefs: texture_view::ColumnPrefs,
+    pub(crate) texture_cache: std::cell::RefCell<texture_view::TextureViewCache>,
     pub search: String,
     pub status_line: String,
+    /// Item 20: the toasts and the Messages log (DECISIONS AG112-AG114); every status-line note also lands here.
+    pub messages: messages::Messages,
+    /// Item 22: per-item DDS sizes by plan revision.
+    pub sizes: out_size::SizeCache,
+    /// Item 21: the RNM blended thumbnail job.
+    pub rnm_preview: rnm_preview::RnmPreview,
+    /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
+    pub status_note: Option<String>,
+    /// "Undid: <label>" / "Redid: <label>" in front of the status line until the next edit (item 2).
+    undo_note: Option<String>,
+    /// When the note was set, and whether a plan has shown it: it goes with the next plan after that, or after 5 s.
+    undo_note_at: Option<(Instant, bool)>,
     pub banner: Option<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
@@ -280,10 +340,19 @@ pub struct AppModel {
     /// M5 (DECISIONS Note NV3): the NVTT probe of `settings.nvtt_path`, run on start, on a path change and on window
     /// focus; `None` until the first run.
     pub nvtt: Option<engine::nvtt::NvttProbe>,
+    /// Generation of the latest NVTT probe, and whether it still runs (on a worker, DECISIONS AF3).
+    nvtt_gen: u64,
+    nvtt_pending: bool,
+    /// The file the last probe ran on (path, size, modified time; `None` inside: none found), `None` before any.
+    nvtt_key: Option<Option<NvttKey>>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
     /// Design §5.1, §6: the CS PBR scan reads (statics, EDID checks, the material-object picker).
     pub cs_pbr: cs_pbr::CsPbrScan,
+    /// Keyboard navigation, the shortcut sheet and the command palette (items 5 and 19).
+    pub nav: nav::Nav,
+    /// Explorer requests the app has not started yet (Task 5, `model::shell`).
+    pub shell: Vec<shell::ShellRequest>,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -319,6 +388,13 @@ pub struct AppModel {
     votes_pending: Option<(u64, bool)>,
     generation: u64,
     planning: Option<CancelToken>,
+    /// Item 13: (done, total) of the plan in flight, from `PlanProgress`; `None` once it lands.
+    pub plan_progress: Option<(usize, usize)>,
+    /// While a folder's first plan is in flight: the folder open before it (`None`: none) and Recent as it was.
+    /// Cancel goes back to both.
+    opening: Option<(Option<PathBuf>, Vec<PathBuf>)>,
+    /// The last open was cancelled with no folder to go back to (the empty state says so).
+    open_cancelled: bool,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
 }
@@ -340,6 +416,7 @@ impl AppModel {
         let (tx, rx) = channel();
         let preview = preview::PreviewModel::new(settings.live_encode);
         AppModel {
+            picker: picker::Picker::default(),
             settings,
             settings_path: None,
             user_config: None,
@@ -349,9 +426,12 @@ impl AppModel {
             scan_db: None,
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
+            mesh_tree_anim: Default::default(),
+            evidence_rev: 0,
             gras_diffuses: Default::default(),
             gras_all_diffuses: Default::default(),
             known: Default::default(),
+            used_by: Default::default(),
             json_editor_open: false,
             accept: AcceptSuggestions::High,
             session: None,
@@ -375,8 +455,16 @@ impl AppModel {
             multi: Default::default(),
             bulk: Default::default(),
             filter: Filter::default(),
+            prefs: Default::default(),
+            texture_cache: Default::default(),
             search: String::new(),
             status_line: String::new(),
+            messages: Default::default(),
+            sizes: Default::default(),
+            rnm_preview: Default::default(),
+            status_note: None,
+            undo_note: None,
+            undo_note_at: None,
             dropped_fills: Default::default(),
             banner: None,
             encoding_note: None,
@@ -399,8 +487,13 @@ impl AppModel {
             close_ready: false,
             restart_needed: false,
             nvtt: None,
+            nvtt_gen: 0,
+            nvtt_pending: false,
+            nvtt_key: None,
             plugin_refs: Default::default(),
             cs_pbr: Default::default(),
+            nav: Default::default(),
+            shell: Vec::new(),
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -412,6 +505,9 @@ impl AppModel {
             votes_pending: None,
             generation: 0,
             planning: None,
+            plan_progress: None,
+            opening: None,
+            open_cancelled: false,
             tx,
             rx,
         }
@@ -462,6 +558,7 @@ impl AppModel {
     }
 
     pub fn open_folder(&mut self, root: PathBuf) {
+        self.open_cancelled = false;
         // Whatever was pending for the previous folder no longer applies (spec §8).
         self.after_export = None;
         self.pending_json = None;
@@ -479,17 +576,26 @@ impl AppModel {
         self.auto_replans = 0;
         self.reset_type_follow();
         self.drop_pending_votes();
+        // Another folder's item keys can be the same strings: its list must not show here.
+        self.used_by.current = None;
+        self.used_by_scan_changed();
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
         self.project = Some(project);
         self.sets_doc = Some(crate::sets_doc::SetsDoc::open(&root));
+        self.drop_undo_note();
         self.history.clear();
         self.refresh_banner();
+        let recent = self.settings.recent.clone();
         self.settings.push_recent(root.clone());
         self.save_settings();
-        self.root = Some(root);
+        let previous = self.root.replace(root);
+        // A second open while the first is still planning goes back to the folder before both.
+        if !(self.opening.is_some() && self.planning.is_some()) {
+            self.opening = Some((previous, recent));
+        }
         self.items.clear();
         self.invalidate_views();
         self.sets.clear();
@@ -567,6 +673,10 @@ impl AppModel {
             })
             .collect();
         // A scan-finished refresh must not drop the continuation of a pending post-plan read.
+        if !after_plan {
+            // A finished scan (or another database): the "Used by meshes" list reads again.
+            self.used_by_scan_changed();
+        }
         let after_plan = after_plan || self.votes_pending.is_some_and(|(_, a)| a);
         self.votes_gen += 1;
         let generation = self.votes_gen;
@@ -579,6 +689,7 @@ impl AppModel {
                 Ok(MeshEvidence {
                     votes: meshes::mesh_votes(&db, &keys)?,
                     alpha: meshes::mesh_alpha(&db, &keys)?,
+                    tree_anim: meshes::mesh_tree_anim(&db, &keys).unwrap_or_default(),
                     gras: meshes::gras_diffuses(&db)?,
                     gras_all: meshes::gras_all_diffuses(&db)?,
                 })
@@ -612,11 +723,12 @@ impl AppModel {
                     || e.gras_all != self.gras_all_diffuses;
                 (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
                 self.gras_all_diffuses = e.gras_all;
+                self.set_tree_anim(e.tree_anim);
                 changed
             }
             Err(e) => {
                 eprintln!(
-                    "sdc-gui: scan database read failed, keeping the previous mesh evidence: {e}"
+                    "tessalith: scan database read failed, keeping the previous mesh evidence: {e}"
                 );
                 false
             }
@@ -627,7 +739,11 @@ impl AppModel {
                 self.finish_plan();
             }
         } else if changed {
+            // The plan this starts carries a queued export to its end (`finish_plan`).
             self.replan();
+        } else if std::mem::take(&mut self.export_after_plan) {
+            // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
+            self.export_clicked();
         }
     }
 
@@ -645,6 +761,7 @@ impl AppModel {
         self.drop_pending_votes();
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
+        self.plan_progress = None;
         self.status_line = "Planning…".into();
         self.inputs_rev += 1;
         self.last_inputs = Some(EngineInputs {
@@ -661,6 +778,65 @@ impl AppModel {
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
 
+    /// Item 13: the header offers Cancel while a folder's first plan is in flight (not for a re-plan, AG93).
+    pub fn can_cancel_open(&self) -> bool {
+        self.opening.is_some() && self.planning.is_some()
+    }
+
+    /// Cancel the open in flight (AG92): its plan is cancelled and, by the generation bump, dropped when it reports.
+    /// The previous folder opens again (its analyses are still cached), else the window is empty with a note.
+    pub fn cancel_open(&mut self) {
+        if !self.can_cancel_open() {
+            return;
+        }
+        if let Some(c) = self.planning.take() {
+            c.cancel();
+        }
+        self.generation += 1;
+        self.plan_progress = None;
+        let Some((previous, recent)) = self.opening.take() else {
+            return;
+        };
+        // AG93: Recent is as it was before the open, so a cancelled folder new to it is not listed.
+        self.settings.recent = recent;
+        self.save_settings();
+        match previous {
+            Some(previous) => {
+                self.open_folder(previous);
+                // Going back is not an open the user can cancel.
+                self.opening = None;
+            }
+            None => {
+                self.root = None;
+                self.project = None;
+                self.sets_doc = None;
+                self.last_inputs = None;
+                self.refresh_banner();
+                self.status_line.clear();
+                self.open_cancelled = true;
+            }
+        }
+    }
+
+    /// The hover of the header's Cancel while a folder opens.
+    pub fn cancel_open_hover(&self) -> &'static str {
+        match &self.opening {
+            Some((Some(_), _)) => {
+                "Stops opening and re-opens the previous folder (selection and undo history are reset)"
+            }
+            _ => "Stops opening; no folder stays open",
+        }
+    }
+
+    /// The centre's text with no folder open.
+    pub fn empty_hint(&self) -> &'static str {
+        if self.open_cancelled {
+            "Opening cancelled"
+        } else {
+            "Open a folder of source textures to begin."
+        }
+    }
+
     /// A sender into the model's own channel (tests inject worker messages with it).
     pub fn sender(&self) -> Sender<WorkerMsg> {
         self.tx.clone()
@@ -671,11 +847,16 @@ impl AppModel {
             || self.votes_pending.is_some()
             || self.export.running.is_some()
             || self.preview.working()
+            || self.nvtt_pending
     }
 
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        for d in self.picker.take() {
+            changed = true;
+            self.picked(d);
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             self.handle(msg);
@@ -685,12 +866,19 @@ impl AppModel {
 
     fn handle(&mut self, msg: WorkerMsg) {
         match msg {
-            WorkerMsg::PlanProgress { generation, total } if generation == self.generation => {
-                self.status_line = format!("Analysing {total} files…");
+            WorkerMsg::PlanProgress {
+                generation,
+                done,
+                total,
+            } if generation == self.generation => {
+                self.plan_progress = Some((done, total));
+                self.status_line = plan_bar_text(done, total);
             }
             WorkerMsg::PlanProgress { .. } => {}
             WorkerMsg::Planned { generation, result } if generation == self.generation => {
                 self.planning = None;
+                self.plan_progress = None;
+                self.opening = None;
                 match result {
                     Ok(view) => self.apply_plan(view),
                     Err(f) => self.plan_failed(f),
@@ -698,7 +886,9 @@ impl AppModel {
             }
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
+            WorkerMsg::UsedBy { generation, result } => self.used_by_landed(generation, result),
             WorkerMsg::KnownPaths(result) => self.known_paths_landed(result),
+            WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
                     "export" => {
@@ -706,6 +896,9 @@ impl AppModel {
                         self.run_after_export();
                     }
                     "preview" => self.preview_panicked(&message),
+                    "heatmap" => self.heatmap_panicked(),
+                    "rnm-preview" => self.rnm_preview_panicked(),
+                    "dims" => self.dims_panicked(),
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -730,6 +923,7 @@ impl AppModel {
         if f.config && !from_user_config {
             if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
                 p.set_error(&f.message);
+                self.drop_undo_note();
                 self.history.clear();
                 self.refresh_banner();
                 self.ignored_by_plan = true;
@@ -741,6 +935,7 @@ impl AppModel {
             if std::mem::take(&mut self.ignored_by_plan) {
                 if let Some(p) = self.project.as_mut() {
                     p.reload();
+                    self.drop_undo_note();
                     self.history.clear();
                     self.refresh_banner();
                 }
@@ -756,9 +951,20 @@ impl AppModel {
             WorkerMsg::Event(e) => self.export.on_event(e),
             WorkerMsg::ExportDone(result) => {
                 self.export.running = None;
+                if let Some(p) = self.export.pace.as_mut() {
+                    p.stop(Instant::now());
+                }
                 let mut failure = None;
                 match result {
-                    Ok(summary) => self.export.summary = Some(summary),
+                    Ok(summary) => {
+                        let sev = if summary.failed > 0 {
+                            messages::Severity::Warning
+                        } else {
+                            messages::Severity::Info
+                        };
+                        self.messages.notify(sev, export_finished_text(&summary));
+                        self.export.summary = Some(summary);
+                    }
                     Err(e) => {
                         self.export.error = Some(e.clone());
                         failure = Some(e);
@@ -776,6 +982,9 @@ impl AppModel {
             }
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
+            WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
+            WorkerMsg::Dims(dims) => self.dims_landed(dims),
+            WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}
         }
     }
@@ -783,6 +992,7 @@ impl AppModel {
     /// Export the folder; first the checks that need an answer (M3a spec §2.5). Sources that changed since the plan
     /// are flagged and the plan is made again first, so the export starts from fresh plans (M3a spec §7).
     pub fn export_clicked(&mut self) {
+        self.status_note = None;
         if self.root.is_none() {
             return;
         }
@@ -934,6 +1144,31 @@ impl AppModel {
         self.refresh_if_settled();
     }
 
+    /// A user edit recorded a step: re-plan as a change (`replan_changed`).
+    fn replan_after_edit(&mut self) {
+        self.type_edit_recorded();
+        self.replan_changed();
+    }
+
+    /// `replan` for a change the user made to the project (an edit, an undo or a redo): an Export queued behind a
+    /// scan-finished read is cancelled with a note (DECISIONS AF4, AF10, AF11).
+    fn replan_changed(&mut self) {
+        let cancel = self.export_after_plan
+            && self.planning.is_none()
+            && matches!(self.votes_pending, Some((_, false)));
+        self.replan();
+        if cancel {
+            self.export_after_plan = false;
+            self.status_note = Some(
+                "Export cancelled: the project changed while scan results were loading — click Export again."
+                    .into(),
+            );
+            self.status_line = self.status_note.clone().unwrap_or_default();
+            self.messages
+                .log(messages::Severity::Warning, self.status_line.clone());
+        }
+    }
+
     /// Run `f`'s edits as one undo step and one plan (audit 11, F3a D5, Note Z3): one snapshot before, `edit_docs`
     /// writes without steps or plans meanwhile, then one step and one `replan` when the text changed. True when it did.
     fn batch_edit(&mut self, label: &str, f: impl FnOnce(&mut AppModel)) -> bool {
@@ -945,6 +1180,7 @@ impl AppModel {
         if after == before {
             return false;
         }
+        self.drop_undo_note();
         self.history.push(history::Command {
             label: label.into(),
             before,
@@ -953,8 +1189,7 @@ impl AppModel {
             created_file: None,
         });
         self.auto_replans = 0;
-        self.type_edit_recorded();
-        self.replan();
+        self.replan_after_edit();
         true
     }
 
@@ -1030,6 +1265,7 @@ impl AppModel {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
             }
+            self.drop_undo_note();
             self.history.clear();
             self.ignored_by_plan = false;
             self.refresh_banner();
@@ -1106,6 +1342,7 @@ impl AppModel {
         self.pending_text = None;
         self.export = export::ExportModel {
             open: true,
+            pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
         };
         let cancel = CancelToken::default();
@@ -1278,6 +1515,16 @@ impl AppModel {
         self.skipped_user_presets = view.skipped_user_presets;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        // The undo note stays through the plan the undo started, and goes with the next one.
+        if matches!(self.undo_note_at, Some((_, true))) {
+            self.drop_undo_note();
+        }
+        if let Some((_, shown)) = self.undo_note_at.as_mut() {
+            *shown = true;
+        }
+        for n in [&self.status_note, &self.undo_note].into_iter().flatten() {
+            self.status_line = format!("{n} {}", self.status_line);
+        }
         self.prune_selection();
         // Keep the selection when its item or set still exists; else nothing.
         let gone = match &self.selection {
@@ -1376,6 +1623,32 @@ impl AppModel {
             .collect();
     }
 
+    /// Replace the Tree_Anim scan evidence; the JSON editor's cache sees it (DECISIONS AG109).
+    pub fn set_tree_anim(&mut self, t: std::collections::BTreeMap<String, bool>) {
+        if self.mesh_tree_anim != t {
+            self.mesh_tree_anim = t;
+            self.evidence_rev += 1;
+        }
+    }
+
+    /// Replace the scan's known paths; the JSON editor's cache sees it (DECISIONS AG109).
+    pub fn set_known(&mut self, k: known_paths::KnownPaths) {
+        if *self.known != k {
+            self.known = Arc::new(k);
+            self.evidence_rev += 1;
+        }
+    }
+
+    /// What the PGPatcher JSON editor's text and issues are built from (DECISIONS AG109): the set-view key, the
+    /// mesh evidence the auto flags read, and the file name.
+    pub(crate) fn json_key(&self) -> (ViewKey, u64, String) {
+        (
+            self.view_key(),
+            self.evidence_rev,
+            crate::model::pbr_export::json_name(self),
+        )
+    }
+
     /// Everything `sets::views` and `pbr_export::export_blocks` read (DECISIONS Note Y7).
     pub(crate) fn view_key(&self) -> ViewKey {
         ViewKey {
@@ -1404,36 +1677,6 @@ impl AppModel {
             .iter()
             .filter(|i| i.status == ItemStatus::NeedsDecision)
             .count()
-    }
-
-    /// Whether a texture is in a set of more than itself (the rule of the "Not in a set" filter).
-    fn in_set(&self, i: &TextureItem) -> bool {
-        i.set_key
-            .as_ref()
-            .is_some_and(|k| self.sets.iter().any(|s| &s.key == k && s.members.len() > 1))
-    }
-
-    /// How many textures the "Not in a set" filter would show.
-    pub fn not_in_set_count(&self) -> usize {
-        self.items.iter().filter(|i| !self.in_set(i)).count()
-    }
-
-    pub fn visible_items(&self) -> Vec<usize> {
-        let q = self.search.to_lowercase();
-        let in_set = |i: &TextureItem| self.in_set(i);
-        self.items
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| q.is_empty() || i.key.to_lowercase().contains(&q))
-            .filter(|(_, i)| !self.filter.needs_decision || i.status == ItemStatus::NeedsDecision)
-            .filter(|(_, i)| !self.filter.warnings || i.warnings.iter().any(counts_toward_badge))
-            .filter(|(_, i)| {
-                !self.filter.failed
-                    || matches!(i.status, ItemStatus::Failed(_) | ItemStatus::Error(_))
-            })
-            .filter(|(_, i)| !self.filter.not_in_set || !in_set(i))
-            .map(|(n, _)| n)
-            .collect()
     }
 
     /// Select one texture; any multi-selection ends (F3a D1).
@@ -1496,6 +1739,7 @@ impl AppModel {
         if after == before {
             return;
         }
+        self.drop_undo_note();
         self.history.push(history::Command {
             label: label.into(),
             before,
@@ -1505,8 +1749,7 @@ impl AppModel {
         });
         self.auto_replans = 0;
         if replan {
-            self.type_edit_recorded();
-            self.replan();
+            self.replan_after_edit();
         }
     }
 
@@ -1532,7 +1775,8 @@ impl AppModel {
         if let Some(d) = self.sets_doc.as_mut() {
             d.restore_keeping_json_sha(&s.project);
         }
-        self.replan();
+        // An undo or redo changes the project like an edit (AF11), without the edit's type-follow bookkeeping.
+        self.replan_changed();
     }
 
     pub fn can_undo(&self) -> bool {
@@ -1540,6 +1784,56 @@ impl AppModel {
     }
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
+    }
+    /// The label of the step Undo would take back, for the button's hover text.
+    pub fn undo_label(&self) -> Option<&str> {
+        self.history.undo.last().map(|c| c.label.as_str())
+    }
+    /// The label of the step Redo would re-apply.
+    pub fn redo_label(&self) -> Option<&str> {
+        self.history.redo.last().map(|c| c.label.as_str())
+    }
+
+    /// Remove the "Undid/Redid" note from the status line (an edit, or a new history).
+    fn drop_undo_note(&mut self) {
+        self.undo_note_at = None;
+        if let Some(n) = self.undo_note.take() {
+            self.status_line = self.status_line.replacen(&format!("{n} "), "", 1);
+            if self.status_line == n {
+                self.status_line.clear();
+            }
+        }
+    }
+
+    /// The note is shown for at most [`UNDO_NOTE_FOR`] (the UI's per-frame `tick`).
+    pub(crate) fn expire_undo_note(&mut self, now: Instant) {
+        if let Some((at, _)) = self.undo_note_at {
+            if now.saturating_duration_since(at) >= UNDO_NOTE_FOR {
+                self.drop_undo_note();
+            }
+        }
+    }
+
+    /// How long the undo note has left at `now`: the app asks for a frame then, so an idle window drops it on time.
+    pub fn undo_note_left(&self, now: Instant) -> Option<Duration> {
+        let (at, _) = self.undo_note_at?;
+        Some(UNDO_NOTE_FOR.saturating_sub(now.saturating_duration_since(at)))
+    }
+
+    /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled
+    /// note (AF10, AF11), which stays; the encoding note went with the undo's `reset_type_follow`.
+    fn undo_noted(&mut self, verb: &str, label: &str) {
+        self.drop_undo_note();
+        let n = format!("{verb}: {label}.");
+        // In front of the normal status text, not in place of it; the plan the step started rewrites the counts.
+        let counts = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        self.status_line = match &self.status_note {
+            Some(c) => format!("{n} {c} {counts}"),
+            None => format!("{n} {counts}"),
+        };
+        self.messages.notify(messages::Severity::Info, n.clone());
+        self.undo_note = Some(n);
+        self.undo_note_at = Some((Instant::now(), false));
     }
 
     /// Undo one step. A step that created a file (Duplicate source) deletes it first, and only if it is unchanged
@@ -1556,6 +1850,7 @@ impl AppModel {
             }
         }
         self.apply_snapshot(&c.before);
+        self.undo_noted("Undid", &c.label);
     }
 
     /// Redo one step. A step that created a file copies it again from its source.
@@ -1574,6 +1869,7 @@ impl AppModel {
             }
         }
         self.apply_snapshot(&c.after);
+        self.undo_noted("Redid", &c.label);
     }
 
     /// The slot card's preset dropdown: format and tag together, one undo step (M3b §4.1).
@@ -1688,10 +1984,52 @@ impl AppModel {
     }
 
     /// The BC1 decoder for the next launch. The session's model is fixed, so a difference needs a restart.
-    /// Probe NVTT again (Spike S7b: about 30 ms, so on the UI thread). shortcut: synchronous, move it off the UI
-    /// thread if a slow nvcompress is ever seen.
+    /// Probe NVTT again, on a worker (DECISIONS AF3: a wrong program can take up to the probe timeout); the result
+    /// lands in `nvtt_landed`. A newer probe supersedes an older one still running.
     pub fn refresh_nvtt(&mut self) {
-        let now = Some(engine::nvtt::probe(self.settings.nvtt_path.as_deref()));
+        self.nvtt_gen += 1;
+        self.nvtt_pending = true;
+        self.nvtt_key = Some(self.nvtt_file());
+        let (generation, path) = (self.nvtt_gen, self.settings.nvtt_path.clone());
+        spawn_guarded(self.tx.clone(), "nvtt-probe", move |tx| {
+            // A panic is this generation's result, so a stale probe's panic never ends the current one's wait.
+            let probe = std::panic::catch_unwind(|| engine::nvtt::probe(path.as_deref()))
+                .unwrap_or_else(|p| {
+                    engine::nvtt::NvttProbe::Missing(format!(
+                        "the probe panicked: {}",
+                        crate::worker::panic_text(&*p)
+                    ))
+                });
+            let _ = tx.send(WorkerMsg::Nvtt { generation, probe });
+        });
+    }
+
+    /// Window focus (DECISIONS AF3): probe again only when the file NVTT resolves to changed (path, size or
+    /// modified time) since the last probe, so a wrong program that takes focus is not started over and over.
+    pub fn refresh_nvtt_if_changed(&mut self) {
+        if self.nvtt_key.as_ref() != Some(&self.nvtt_file()) {
+            self.refresh_nvtt();
+        }
+    }
+
+    /// The file a probe now would run: the configured or located path, with its size and modified time.
+    fn nvtt_file(&self) -> Option<NvttKey> {
+        let (p, _) = engine::nvtt::locate(
+            self.settings.nvtt_path.as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            std::path::Path::new(engine::nvtt::NVTT_DEFAULT),
+        )
+        .ok()?;
+        let md = std::fs::metadata(&p).ok()?;
+        Some((p, md.len(), md.modified().ok()))
+    }
+
+    fn nvtt_landed(&mut self, generation: u64, probe: engine::nvtt::NvttProbe) {
+        if generation != self.nvtt_gen {
+            return;
+        }
+        self.nvtt_pending = false;
+        let now = Some(probe);
         // A change since the last probe (NVTT installed or removed meanwhile) re-plans, so textures on NVTT see it.
         let changed = self.nvtt.is_some() && self.nvtt != now;
         self.nvtt = now;
@@ -1793,6 +2131,7 @@ impl AppModel {
             s.reload();
         }
         self.ignored_by_plan = false;
+        self.drop_undo_note();
         self.history.clear();
         self.refresh_banner();
         self.replan();
@@ -1802,11 +2141,13 @@ impl AppModel {
     /// document is not written (audit 2026-10-14 finding 3: writing it would offer "Overwrite" over a hand edit
     /// the GUI never loaded).
     pub fn save(&mut self) -> Result<(), SaveError> {
+        let mut wrote = false;
         if let Some(p) = self.project.as_mut().filter(|p| p.is_dirty()) {
             if let Err(e) = p.save(false) {
                 self.save_failed(DocKind::SdcToml, &e);
                 return Err(e);
             }
+            wrote = true;
         }
         // A clean sdc-project.toml is not written (no empty file, no spurious conflict); a read-only one never has edits.
         if let Some(s) = self
@@ -1818,6 +2159,10 @@ impl AppModel {
                 self.save_failed(DocKind::Project, &e);
                 return Err(e);
             }
+            wrote = true;
+        }
+        if wrote {
+            self.messages.notify(messages::Severity::Info, "Saved");
         }
         Ok(())
     }
@@ -1835,6 +2180,7 @@ impl AppModel {
                     }
                 } else {
                     p.reload();
+                    self.drop_undo_note();
                     self.history.clear();
                     self.ignored_by_plan = false;
                     self.refresh_banner();
@@ -1851,6 +2197,7 @@ impl AppModel {
                     }
                 } else {
                     s.reload();
+                    self.drop_undo_note();
                     self.history.clear();
                     self.refresh_banner();
                     self.replan();
@@ -1905,10 +2252,12 @@ impl AppModel {
         } else {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
+                self.drop_undo_note();
                 self.history.clear();
             }
             if let Some(s) = self.sets_doc.as_mut() {
                 s.reload();
+                self.drop_undo_note();
                 self.history.clear();
             }
         }
@@ -1939,4 +2288,12 @@ fn remove_created(cf: &history::CreatedFile) -> Result<(), String> {
             cf.path.display()
         )),
     }
+}
+
+/// The toast of a finished export: "Export finished: 12 written, 3 skipped, 0 failed".
+pub fn export_finished_text(s: &engine::api::BatchSummary) -> String {
+    format!(
+        "Export finished: {} written, {} skipped, {} failed",
+        s.converted, s.skipped, s.failed
+    )
 }

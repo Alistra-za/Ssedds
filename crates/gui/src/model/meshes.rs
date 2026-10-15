@@ -3,6 +3,7 @@
 //!
 //! The model owns its own worker channel, so the Textures view's model is untouched. Reads go through its own
 //! read-only `Store` connection and happen only on a selection change or when a scan ends, never per frame.
+use crate::model::picker::PickerPurpose;
 use crate::model::viewport3d::{FileSource, MeshSpec, Viewport3d};
 use crate::settings::MeshesSettings;
 use crate::worker::{start_scan, WorkerMsg};
@@ -218,7 +219,8 @@ pub fn default_store_path() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("sdc").join("scan.db"))
 }
 
-fn no_procs() -> Vec<String> {
+/// A process lister that sees nothing: what tests give a model so the host's PGPatcher cannot pause their scan.
+pub fn no_procs() -> Vec<String> {
     vec![]
 }
 
@@ -328,6 +330,36 @@ pub fn mesh_alpha(
     Ok(out)
 }
 
+/// SLSF2 bit 29, Tree_Anim: the shader flag that makes Community Shaders take the foliage subsurface term.
+const TREE_ANIM: i64 = 1 << 29;
+
+/// DECISIONS AG102: for each key, whether any source lighting shape that uses `<key>.dds` in slot 0 is Tree_Anim.
+/// Keys without a shape are left out (no evidence).
+pub fn mesh_tree_anim(
+    db: &Path,
+    keys: &BTreeSet<String>,
+) -> Result<BTreeMap<String, bool>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    // shortcut: raw SQL on `Store::conn()`, as `mesh_votes`.
+    let mut st = store
+        .conn()
+        .prepare(&format!(
+            "SELECT DISTINCT c.path_id, s.block, ifnull(s.slsf2, 0) {SLOT0_SOURCE_SHAPES}"
+        ))
+        .map_err(db_err)?;
+    let mut out = BTreeMap::new();
+    for k in keys {
+        let flags = st
+            .query_map([format!("{k}.dds")], |r| r.get::<_, i64>(2))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(db_err)?;
+        if !flags.is_empty() {
+            out.insert(k.clone(), flags.iter().any(|f| f & TREE_ANIM != 0));
+        }
+    }
+    Ok(out)
+}
+
 /// Complex grass design §5 condition 1: the GRAS diffuses of the scan, as `engine::grass::path_key` keys (sent as
 /// `BatchRequest::gras_diffuses`).
 pub fn gras_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {
@@ -406,6 +438,7 @@ pub fn log_plugins(r: &Report) {
 }
 
 pub struct MeshesModel {
+    pub picker: super::picker::Picker,
     pub store_path: Option<PathBuf>,
     pub target: Option<ScanTarget>,
     pub mods: Vec<ModRow>,
@@ -464,9 +497,18 @@ pub struct MeshesModel {
     pub report: Option<Report>,
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
+    /// The running scan phase's rate (Task 5's `Pace`); a new phase starts a new one.
+    scan_pace: Option<crate::model::export::Pace>,
     pub status: String,
-    /// The right column shows the 3D panel instead of the shapes (plan B Task B8).
-    pub tab_3d: bool,
+    /// The left column lists the selected NIF's shapes instead of the mods and meshes (owner, 2026-10-14).
+    pub shapes_col: bool,
+    /// Item 9: the texture paths listed here that are items of the open folder (path → item key); `SdcApp::route_3d`
+    /// fills it each frame.
+    pub folder_items: HashMap<String, String>,
+    /// An "Open in Textures" click (an item key), taken by `SdcApp::route_3d`.
+    pub open_in_textures: Option<String>,
+    /// What `folder_items` was built from: the listed paths and the items revision.
+    pub folder_items_for: (Vec<String>, u64),
     /// The 3D panel.
     pub v3: Viewport3d,
     /// Process lister for the PGPatcher gate; tests replace it.
@@ -503,6 +545,7 @@ impl MeshesModel {
     pub fn new(store_path: Option<PathBuf>, settings: MeshesSettings) -> MeshesModel {
         let (tx, rx) = channel();
         MeshesModel {
+            picker: super::picker::Picker::default(),
             store_path,
             target: None,
             mods: vec![],
@@ -543,8 +586,12 @@ impl MeshesModel {
             dialog: None,
             report: None,
             progress: None,
+            scan_pace: None,
             status: String::new(),
-            tab_3d: false,
+            shapes_col: false,
+            folder_items: HashMap::new(),
+            open_in_textures: None,
+            folder_items_for: (vec![], u64::MAX),
             v3: Viewport3d::new(None),
             procs: system_procs,
             settings,
@@ -649,6 +696,46 @@ impl MeshesModel {
         self.cancel.is_some()
     }
 
+    /// A scan phase reported `done` of `total` at `now`. Each newly done item is one finish for the phase's `Pace`;
+    /// a new phase (or a count that went back) starts a fresh one, so its ETA waits for the `Pace` minimums again.
+    pub fn scan_progressed(
+        &mut self,
+        phase: &'static str,
+        done: usize,
+        total: usize,
+        now: Instant,
+    ) {
+        let prev = match self.progress {
+            Some((p, d, _)) if p == phase && d <= done && self.scan_pace.is_some() => d,
+            _ => {
+                self.scan_pace = Some(crate::model::export::Pace::new(now));
+                0
+            }
+        };
+        if let Some(pace) = &mut self.scan_pace {
+            for _ in prev..done {
+                pace.finished(now);
+            }
+        }
+        self.progress = Some((phase, done, total));
+    }
+
+    /// The running phase's ETA, by Task 5's `Pace` rules (`None` until enough samples exist).
+    pub fn scan_eta(&self, now: Instant) -> Option<Duration> {
+        let (_, done, total) = self.progress?;
+        self.scan_pace.as_ref()?.eta(done, total, now)
+    }
+
+    /// The scan row's bar text: `phase done/total`, then ` · ETA m:ss` once there is one.
+    pub fn scan_line(&self, now: Instant) -> Option<String> {
+        let (phase, done, total) = self.progress?;
+        let mut s = format!("{phase} {done}/{total}");
+        if let Some(eta) = self.scan_eta(now) {
+            s += &format!(" · ETA {}", crate::model::export::fmt_duration(eta));
+        }
+        Some(s)
+    }
+
     /// Start the scan on a worker. Nothing is read from the store until it ends (`begin_scan` disables every origin).
     pub fn start(&mut self, req: ScanRequest) {
         if self.scanning() {
@@ -713,11 +800,23 @@ impl MeshesModel {
     /// Drain worker messages. True when anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.v3.poll();
+        for d in self.picker.take() {
+            changed = true;
+            if let Some(p) = d.path {
+                match d.purpose {
+                    PickerPurpose::ChooseMo2 => {
+                        self.dialog = None;
+                        self.choose_instance(p);
+                    }
+                    _ => self.use_folder(p),
+                }
+            }
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
                 WorkerMsg::ScanProgress { done, total, phase } => {
-                    self.progress = Some((phase, done, total))
+                    self.scan_progressed(phase, done, total, Instant::now())
                 }
                 WorkerMsg::Scanned(r) => self.finished(r),
                 WorkerMsg::Panicked { message, .. } => {
@@ -1141,6 +1240,19 @@ impl MeshesModel {
         }
     }
 
+    /// Item 9: every texture path the shape cards and the users list show (each may get "Open in Textures").
+    pub fn listed_textures(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .shapes
+            .iter()
+            .flat_map(|s| s.textures.iter().flatten().cloned())
+            .chain(self.tex_users.as_ref().map(|(p, _)| p.clone()))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
     /// Click on a texture path: every NIF slot of the latest run that uses it.
     pub fn show_users(&mut self, path: &str) {
         let users = match &self.store {
@@ -1323,4 +1435,107 @@ fn detect_mo2() -> Option<(PathBuf, String)> {
 #[cfg(not(windows))]
 fn detect_mo2() -> Option<(PathBuf, String)> {
     None
+}
+
+/// SkyrimShaderPropertyFlags1 bit names (nif.xml / NifSkope); the nif crate exposes only the bits it uses.
+pub const SLSF1_NAMES: [&str; 32] = [
+    "Specular",
+    "Skinned",
+    "Temp_Refraction",
+    "Vertex_Alpha",
+    "Greyscale_To_PaletteColor",
+    "Greyscale_To_PaletteAlpha",
+    "Use_Falloff",
+    "Environment_Mapping",
+    "Receive_Shadows",
+    "Cast_Shadows",
+    "Facegen_Detail_Map",
+    "Parallax",
+    "Model_Space_Normals",
+    "Non_Projective_Shadows",
+    "Landscape",
+    "Refraction",
+    "Fire_Refraction",
+    "Eye_Environment_Mapping",
+    "Hair_Soft_Lighting",
+    "Screendoor_Alpha_Fade",
+    "Localmap_Hide_Secret",
+    "FaceGen_RGB_Tint",
+    "Own_Emit",
+    "Projected_UV",
+    "Multiple_Textures",
+    "Remappable_Textures",
+    "Decal",
+    "Dynamic_Decal",
+    "Parallax_Occlusion",
+    "External_Emittance",
+    "Soft_Effect",
+    "ZBuffer_Test",
+];
+
+/// SkyrimShaderPropertyFlags2 bit names. Bit 23 is the TruePBR marker in sdc (`nif::material::SLSF2_TRUE_PBR`).
+pub const SLSF2_NAMES: [&str; 32] = [
+    "ZBuffer_Write",
+    "LOD_Landscape",
+    "LOD_Objects",
+    "No_Fade",
+    "Double_Sided",
+    "Vertex_Colors",
+    "Glow_Map",
+    "Assume_Shadowmask",
+    "Packed_Tangent",
+    "Multi_Index_Snow",
+    "Vertex_Lighting",
+    "Uniform_Scale",
+    "Fit_Slope",
+    "Billboard",
+    "No_LOD_Land_Blend",
+    "EnvMap_Light_Fade",
+    "Wireframe",
+    "Weapon_Blood",
+    "Hide_On_Local_Map",
+    "Premult_Alpha",
+    "Cloud_LOD",
+    "Anisotropic_Lighting",
+    "No_Transparency_Multisampling",
+    "Unused01 (TruePBR)",
+    "Multi_Layer_Parallax",
+    "Soft_Lighting",
+    "Rim_Lighting",
+    "Back_Lighting",
+    "Unused02",
+    "Tree_Anim",
+    "Effect_Lighting",
+    "HD_LOD_Objects",
+];
+
+/// The set bits of a flags word, lowest first: `Name (bit)`. A bit past the table reads `bit N`.
+pub fn flag_bits(names: &[&str], v: u32) -> Vec<String> {
+    (0..32)
+        .filter(|b| v >> b & 1 != 0)
+        .map(|b| match names.get(b as usize) {
+            Some(n) => format!("{n} ({b})"),
+            None => format!("bit {b}"),
+        })
+        .collect()
+}
+
+/// The NiAlphaProperty in plain words: `Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5`.
+pub fn alpha_line(flags: u16, threshold: u8) -> String {
+    use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, TEST_FUNCS};
+    let a = AlphaFlags::from_raw(flags);
+    let mut parts = vec![];
+    if a.blend {
+        let m = |i: u8| BLEND_MODES.get(i as usize).map_or("?", |s| s);
+        parts.push(format!("blend {} → {}", m(a.src), m(a.dst)));
+    }
+    if a.test {
+        let f = TEST_FUNCS.get(a.func as usize).map_or("?", |s| s);
+        parts.push(format!("test {f}, threshold {threshold}"));
+    }
+    if parts.is_empty() {
+        "Alpha: none".into()
+    } else {
+        format!("Alpha: {}", parts.join(" · "))
+    }
 }

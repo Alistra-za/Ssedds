@@ -295,9 +295,7 @@ fn the_threshold_commits_when_the_drag_stops_not_while_dragging() {
         .alpha
         .threshold;
     let rect = h
-        .query_all_by_role(eframe::egui::accesskit::Role::Slider)
-        .next()
-        .expect("the threshold slider")
+        .get_by_role_and_label(eframe::egui::accesskit::Role::Slider, "Alpha threshold")
         .rect();
     let at = |f: f32| {
         eframe::egui::pos2(

@@ -98,6 +98,7 @@ fn number_keys_and_their_ranges() {
     let got: Vec<(&str, NumRange)> = KEYS
         .iter()
         .filter_map(|k| match k.kind {
+            KeyKind::Number(NumRange::Int(_)) => None, // the alphaprop_* whole numbers: alpha_prop.rs
             KeyKind::Number(r) => Some((k.key, r)),
             _ => None,
         })
@@ -141,6 +142,10 @@ fn pgpsim_warns_on_exactly_the_gui_ranges() {
         let KeyKind::Number(range) = k.kind else {
             continue;
         };
+        // Task 4b: pgpsim (NIF-owned) does not know the alphaprop_* keys yet; they are whole numbers, checked in alpha_prop.rs.
+        if matches!(range, NumRange::Int(_)) {
+            continue;
+        }
         // Indexing a Null `Value` by a string makes it an object.
         let entry = |x: f64| {
             let mut v = Value::Null;
@@ -738,7 +743,7 @@ fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
     ));
     assert_eq!(
         v["glint"],
-        json!({ "screen_space_scale": 1.5, "log_microfacet_density": 40.0, "microfacet_roughness": 0.02, "density_randomization": 2.0 })
+        json!({ "screen_space_scale": 1.5, "log_microfacet_density": 10.0, "microfacet_roughness": 0.02, "density_randomization": 5.0 })
     );
     let v = written(&entry(
         &[
@@ -1324,25 +1329,47 @@ fn grass_hides_exactly_the_keys_rungrass_ignores() {
     assert!(grass_ignores("glint_on") && grass_ignores("fuzz_on"));
 }
 
-/// PBR grass design R2, R3: hidden keys dropped; subsurface on by default only with an `_s`; an explicit off sticks.
+/// PBR grass design R2, R3: hidden keys dropped. The view adds nothing: an `_s` turns subsurface on through the
+/// auto flags (DECISIONS AL8), and stored subsurface keys (either kind, even false) stay.
 #[test]
-fn the_grass_view_drops_hidden_keys_and_defaults_subsurface_with_an_s() {
-    let raw = s(&[
+fn the_grass_view_drops_hidden_keys_and_adds_none() {
+    let mut raw = s(&[
         ("emissive", json!(true)),
         ("uv_scale", json!(2.0)),
         ("roughness_scale", json!(0.8)),
     ]);
-    let mut with_s = raw.clone();
-    grass_view(&mut with_s, true);
-    assert_eq!(
-        with_s,
-        s(&[("roughness_scale", json!(0.8)), ("subsurface", json!(true))])
+    grass_view(&mut raw);
+    assert_eq!(raw, s(&[("roughness_scale", json!(0.8))]));
+    let kept = s(&[
+        ("subsurface", json!(false)),
+        ("subsurface_foliage", json!(true)),
+    ]);
+    let mut v = kept.clone();
+    grass_view(&mut v);
+    assert_eq!(v, kept);
+}
+
+/// Audit 2026-10-13b G-I1 (DECISIONS AF8): PGPatcher matches `match_diffuse` by its last path components, so a
+/// renamed set whose match is short or has no folder also hits same-named textures in other folders (and PGPatcher
+/// skips those meshes: the renamed file does not exist there). A pitfall says so when a known texture shows it.
+#[test]
+fn a_short_renamed_match_warns_when_the_name_is_known_in_another_folder() {
+    use sdc_gui::pgp::prefix::rename_hits_elsewhere;
+    let renamed = s(&[("rename", json!("iron2"))]);
+    let known: Vec<String> = ["textures/armor/iron", "textures/iron", "textures/pbr/iron"]
+        .map(String::from)
+        .to_vec();
+    let w = rename_hits_elsewhere(&renamed, "iron", &known).expect("warns");
+    assert!(
+        w.contains("textures/armor/iron") && w.contains("skip"),
+        "{w}"
     );
-    let mut no_s = raw.clone();
-    grass_view(&mut no_s, false);
-    assert_eq!(no_s, s(&[("roughness_scale", json!(0.8))]));
-    let mut off = s(&[("subsurface", json!(false))]);
-    grass_view(&mut off, true);
-    assert_eq!(off, s(&[("subsurface", json!(false))]));
-    assert!(!feature_on(&off, Feature::Subsurface));
+    // Its own paths (vanilla and PBR) only: no warning.
+    assert_eq!(rename_hits_elsewhere(&renamed, "iron", &known[1..]), None);
+    // Not renamed: no match_diffuse, no warning.
+    assert_eq!(rename_hits_elsewhere(&s(&[]), "iron", &known), None);
+    // A folder in the match narrows it; a longer path ending with it is still hit.
+    assert_eq!(rename_hits_elsewhere(&renamed, r"armor\iron", &known), None);
+    let deeper = vec!["textures/dlc01/armor/iron".to_string()];
+    assert!(rename_hits_elsewhere(&renamed, r"armor\iron", &deeper).is_some());
 }

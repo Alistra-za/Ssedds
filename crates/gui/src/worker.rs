@@ -3,13 +3,15 @@
 use crate::model::items::PlanView;
 use crate::model::preview::{dds_preview, decode_levels, PreviewOut};
 use encoders_sys::Bc1Model;
-use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError};
-use engine::events::{EngineEvent, EventKind, EventSink, Reporter, VecSink};
+use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError, PlanProgress};
+use engine::events::{EngineEvent, EventSink, Reporter, VecSink};
 use engine::policy::ResolvedJob;
 use engine::session::{Session, SourcePreview};
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Why a plan failed; `config` is true for an invalid preset or config file (`EngineError::Config`), which the
 /// model answers by ignoring `sdc.toml` (M3a spec §7.4).
@@ -27,12 +29,14 @@ pub struct MeshEvidence {
     pub gras: std::collections::BTreeSet<String>,
     /// PBR grass design §4.2: `meshes::gras_all_diffuses`.
     pub gras_all: std::collections::BTreeSet<String>,
+    pub tree_anim: std::collections::BTreeMap<String, bool>,
 }
 
 pub enum WorkerMsg {
-    /// Planning discovered `total` files (the status line reads "Analysing {total} files…").
+    /// Planning has decoded `done` of `total` discovered files (DECISIONS AG91; the header shows a bar).
     PlanProgress {
         generation: u64,
+        done: usize,
         total: usize,
     },
     Planned {
@@ -44,6 +48,11 @@ pub enum WorkerMsg {
         generation: u64,
         result: Result<MeshEvidence, String>,
     },
+    /// Item 9: the "Used by meshes" read of generation `generation` ended (a stale one is dropped).
+    UsedBy {
+        generation: u64,
+        result: crate::model::used_by::UsedBy,
+    },
     /// The scan's texture and mesh paths were read (`AppModel::refresh_known_paths`).
     KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),
@@ -52,6 +61,18 @@ pub enum WorkerMsg {
         token: u64,
         result: Result<Arc<SourcePreview>, String>,
     },
+    /// The error heatmap of job `id` (`AppModel::heatmap_frame`); `None` when that mip has no source side.
+    Heatmap {
+        id: u64,
+        image: Option<Arc<crate::model::heatmap::HeatImage>>,
+    },
+    /// The RNM blended thumbnail of job `id` (`AppModel::rnm_preview_frame`); `None` when the blend failed.
+    RnmPreview {
+        id: u64,
+        image: Option<Arc<crate::model::rnm_preview::RnmThumb>>,
+    },
+    /// Source sizes read from file headers (`AppModel::kick_dims`).
+    Dims(Vec<(crate::model::out_size::DimKey, Option<(u32, u32)>)>),
     Encoded {
         token: u64,
         result: Result<Arc<PreviewOut>, String>,
@@ -70,6 +91,11 @@ pub enum WorkerMsg {
     Scanned(Result<modscan::scan::Report, modscan::ScanError>),
     /// Meshes view 3D panel (plan B Task B8): a reply of the render thread or the CS locate worker.
     Viewport3d(crate::model::viewport3d::V3Reply),
+    /// The NVTT probe of generation `generation` ended (`AppModel::refresh_nvtt`; a stale one is dropped).
+    Nvtt {
+        generation: u64,
+        probe: engine::nvtt::NvttProbe,
+    },
 }
 
 /// Forwards every engine event into the channel and nothing else, so it never slows the encoders (plan M3 carry).
@@ -81,23 +107,36 @@ impl EventSink for ChannelSink {
     }
 }
 
-/// Collects a plan's events for `PlanView::build` and reports the file count once `batch_started` arrives.
-struct PlanSink {
-    events: Arc<VecSink>,
-    tx: Sender<WorkerMsg>,
-    generation: u64,
-}
+/// How often the plan ticker reports.
+const PLAN_TICK: Duration = Duration::from_millis(100);
 
-impl EventSink for PlanSink {
-    fn emit(&self, ev: &EngineEvent) {
-        if let EventKind::BatchStarted { inputs, .. } = &ev.kind {
-            let _ = self.tx.send(WorkerMsg::PlanProgress {
-                generation: self.generation,
-                total: *inputs,
-            });
+/// AG91: the planner counts each planned file (cache hits included) in the request's `PlanProgress`, and nothing
+/// else; this ticker reports those counters until `stop` is dropped. Each plan has its own counters, so a cancelled
+/// plan still draining never moves the next plan's bar.
+fn plan_ticker(
+    tx: Sender<WorkerMsg>,
+    progress: PlanProgress,
+    generation: u64,
+    stop: Receiver<()>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut last = None;
+        while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(PLAN_TICK) {
+            let total = progress.total.load(Ordering::Relaxed);
+            if total == 0 {
+                continue;
+            }
+            let done = progress.done.load(Ordering::Relaxed);
+            if last != Some(done) {
+                last = Some(done);
+                let _ = tx.send(WorkerMsg::PlanProgress {
+                    generation,
+                    done,
+                    total,
+                });
+            }
         }
-        self.events.emit(ev);
-    }
+    })
 }
 
 pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
@@ -114,7 +153,7 @@ pub fn spawn_guarded(
     f: impl FnOnce(&Sender<WorkerMsg>) + Send + 'static,
 ) {
     std::thread::Builder::new()
-        .name(format!("sdc-gui-{what}"))
+        .name(format!("tessalith-{what}"))
         .spawn(move || {
             if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&tx))) {
                 let _ = tx.send(WorkerMsg::Panicked {
@@ -166,13 +205,13 @@ pub fn spawn_plan(
     root: PathBuf,
 ) {
     spawn_guarded(tx, "plan", move |tx| {
+        let mut req = req;
+        let progress = PlanProgress::default();
+        req.plan_progress = Some(progress.clone());
         let events = Arc::new(VecSink::default());
-        let sink = Arc::new(PlanSink {
-            events: events.clone(),
-            tx: tx.clone(),
-            generation,
-        });
-        let rep = Reporter::new(sink, engine::events::new_batch_id());
+        let (stop, stop_rx) = std::sync::mpsc::channel();
+        let ticker = plan_ticker(tx.clone(), progress, generation, stop_rx);
+        let rep = Reporter::new(events.clone(), engine::events::new_batch_id());
         let result = plan_result(|| {
             session
                 .plan(req, &rep, &cancel)
@@ -182,6 +221,9 @@ pub fn spawn_plan(
                     message: e.to_string(),
                 })
         });
+        // The ticker's last report is queued before `Planned`, so none of this generation follows it.
+        drop(stop);
+        let _ = ticker.join();
         let _ = tx.send(WorkerMsg::Planned { generation, result });
     });
 }
