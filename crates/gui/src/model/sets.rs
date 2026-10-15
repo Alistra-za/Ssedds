@@ -100,12 +100,25 @@ pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
             "Coat colour + strength"
         }
         _ if slot.slot_number() == 7 => SLOT7_CARD,
+        _ if key.is_empty() && slot.slot_number() == 3 => SLOT3_CARD,
         _ => slot.label(),
     }
 }
 
 /// Note AO: the one card of PGPatcher slot 7, which holds the coat normal `_cnr` or the fuzz `_f`.
 pub const SLOT7_CARD: &str = "Coat normal / Fuzz (slot 7)";
+/// Note AO: the empty card of PGPatcher slot 3, which holds the emissive `_g` or the Advanced skin `_sk`.
+pub const SLOT3_CARD: &str = "Emissive / Skin (slot 3)";
+
+/// Note AO: the kinds a card of `slot`'s PGPatcher slot takes (`Coat _cnr or Fuzz _f` for slot 7).
+pub fn slot_kinds_label(slot: SlotKind) -> String {
+    let kinds: Vec<&str> = SlotKind::ALL
+        .iter()
+        .filter(|k| k.slot_number() == slot.slot_number())
+        .map(|k| k.label())
+        .collect();
+    kinds.join(" or ")
+}
 
 /// The card title of `slot` holding `key` in a set drawn by `shader`: a grass file in the Diffuse card is "Complex grass".
 pub fn card_title(slot: SlotKind, key: &str, shader: Option<Shader>) -> &'static str {

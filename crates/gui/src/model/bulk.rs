@@ -1191,9 +1191,9 @@ impl AppModel {
                 action: MenuAction::FromAnotherSet,
                 label: "From another set".into(),
                 disabled: off.or_else(|| {
-                    links
-                        .is_empty()
-                        .then(|| format!("no other set has a {}", kind.label()))
+                    links.is_empty().then(|| {
+                        format!("no other set has a {}", super::sets::slot_kinds_label(kind))
+                    })
                 }),
             },
         ];

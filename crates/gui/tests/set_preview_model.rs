@@ -1933,3 +1933,25 @@ fn mesh_candidates_prefer_loose_then_leave_ground_and_first_person_last() {
     assert!(!is_ground_or_first_person(r"meshes\a\dragon.nif"));
     assert!(!is_ground_or_first_person(r"meshes\a\gone.nif"));
 }
+
+/// Review fix: `gnd` and `_go` are whole tokens (or the stem's end), not any substring.
+#[test]
+fn ground_models_are_whole_tokens() {
+    for (p, ground) in [
+        (r"meshes\a\bootsgnd.nif", true),
+        (r"meshes\a\boots_gnd.nif", true),
+        (r"meshes\a\gnd_boots.nif", true),
+        (r"meshes\a\boots-gnd-1.nif", true),
+        (r"meshes\a\boots gnd.nif", true),
+        (r"meshes\a\boots2gnd3.nif", true),
+        (r"meshes\a\boots_go.nif", true),
+        (r"meshes\a\1stpersonboots.nif", true),
+        (r"meshes\a\signdoor.nif", false),
+        (r"meshes\a\designdetail.nif", false),
+        (r"meshes\a\dragon.nif", false),
+        (r"meshes\a\gone_1.nif", false),
+        (r"meshes\a\boots_gone.nif", false),
+    ] {
+        assert_eq!(is_ground_or_first_person(p), ground, "{p}");
+    }
+}

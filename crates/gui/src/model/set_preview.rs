@@ -1306,7 +1306,7 @@ pub fn group_rows(
     out
 }
 
-/// Note AO9: a ground model (`gnd` in the file name, or a stem ending `_go`) or a first-person mesh (`1stperson…`).
+/// Note AO9: a ground model (a `gnd` token or a stem ending `gnd` or `_go`) or a first-person mesh (`1stperson…`).
 pub fn is_ground_or_first_person(nif_path: &str) -> bool {
     let name = nif_path
         .rsplit(['\\', '/'])
@@ -1314,7 +1314,11 @@ pub fn is_ground_or_first_person(nif_path: &str) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
     let stem = name.strip_suffix(".nif").unwrap_or(&name);
-    stem.contains("gnd") || stem.ends_with("_go") || stem.starts_with("1stperson")
+    // Whole tokens only (split on `_`, `-`, space and digits), so "signdoor" and "designdetail" are not ground models.
+    let gnd_token = stem
+        .split(|c: char| c == '_' || c == '-' || c == ' ' || c.is_ascii_digit())
+        .any(|t| t == "gnd");
+    gnd_token || stem.ends_with("gnd") || stem.ends_with("_go") || stem.starts_with("1stperson")
 }
 
 /// Note AO9 (owner): loose meshes before BSA ones, ground and first-person meshes last: loose, BSA, loose ground,

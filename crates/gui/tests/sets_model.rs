@@ -1813,3 +1813,25 @@ fn one_card_per_pgpatcher_slot_and_the_slot_7_card_holds_cnr_or_f() {
     assert_eq!(slot_label(SlotKind::Fuzz, "x/rock01_f.png"), SLOT7_CARD);
     assert_eq!(slot_label(SlotKind::Coat, ""), SLOT7_CARD);
 }
+
+/// Review fix: an empty slot 3 card is titled as slot 7's is, and "From another set" names both kinds of the slot.
+#[test]
+fn slot_3_and_7_cards_name_both_kinds() {
+    assert_eq!(slot_label(SlotKind::Emissive, ""), SLOT3_CARD);
+    assert_eq!(SLOT3_CARD, "Emissive / Skin (slot 3)");
+    assert_eq!(
+        slot_label(SlotKind::Emissive, "x/rock01_g.png"),
+        "Emissive _g"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    for (kind, both) in [
+        (SlotKind::Coat, "Coat _cnr or Fuzz _f"),
+        (SlotKind::Emissive, "Emissive _g or Skin _sk"),
+    ] {
+        let menu = m.slot_menu("landscape/rock01", kind);
+        let e = menu.iter().find(|e| e.label == "From another set").unwrap();
+        let why = e.disabled.clone().unwrap_or_default();
+        assert!(why.contains(both), "{why}");
+    }
+}

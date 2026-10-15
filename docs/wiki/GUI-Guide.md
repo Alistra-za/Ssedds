@@ -219,7 +219,7 @@ Select a set to edit it. The heading has the input name box and a **2D | 3D** sw
 
 A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR box: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
 
-In 2D, each PGPatcher slot is one card (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that card, and export warns about it. The cubemap slot has no card; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
+In 2D, each PGPatcher slot is one card (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that card, with both files listed and a ✕ beside each to take one out of the set, and export warns about it. The cubemap slot has no card; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
 
 | Card control | What it does |
 |---|---|

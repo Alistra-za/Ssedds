@@ -59,6 +59,8 @@ enum Act {
     Slot(MenuAction),
     /// Item 17: files from Explorer dropped on this set's slot card.
     FileDrop(String, SlotKind),
+    /// Note AO7: take a member out of the set (set id, item), from a clashing slot card.
+    RemoveMember(String, String),
 }
 
 /// How the set editor shares the view with the 3D preview panel.
@@ -192,6 +194,15 @@ pub fn draw(
             Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
             Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
+            Act::RemoveMember(set, item) => {
+                if let Err(why) = model.remove_member(&set, &item) {
+                    drops.slot_note = Some(SlotNote {
+                        set,
+                        text: why,
+                        error: true,
+                    });
+                }
+            }
         }
     }
     select_or_expand(ui, model, select, expand);
@@ -370,9 +381,10 @@ fn card(
                 } else {
                     ui.label(egui::RichText::new(title).strong())
                 };
-                // Note AO: both kinds of a shared slot (slot 7: `_cnr` and `_f`) are a conflict, not a silent pick.
-                if let Some(why) = slot_clash_text(cell) {
-                    ui.colored_label(RED, why);
+                // Note AO7: both kinds of a shared slot (slot 7: `_cnr` and `_f`) are a conflict, not a silent pick: the card
+                // names and shows both, and either can be taken out of the set here.
+                if slot_clash_text(cell).is_some() {
+                    clash_rows(ui, model, v, cell, thumbs, acts);
                 }
                 if cell.usable && !rnm_layers.is_empty() {
                     t.clone()
@@ -797,5 +809,62 @@ fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut
         })
         .response
         .on_disabled_hover_text(why.clone().unwrap_or_default());
+    }
+}
+
+/// Note AO7: a card whose PGPatcher slot holds two members: a red line naming both files, then a row per member with
+/// its thumbnail and file name (click selects, double-click expands) and ✕, which takes it out of the set.
+fn clash_rows(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    cell: &SlotCell,
+    thumbs: &mut ThumbCache,
+    acts: &mut Vec<Act>,
+) {
+    let item_of = |fill: Option<&SlotFill>| match fill {
+        Some(SlotFill::Own { item } | SlotFill::Borrowed { item, .. }) => model.item(item),
+        _ => None,
+    };
+    let both: Vec<&TextureItem> = [Some(&cell.fill), cell.clash.and_then(|k| v.slots.get(&k))]
+        .into_iter()
+        .filter_map(item_of)
+        .collect();
+    let names: Vec<&str> = both.iter().map(|i| i.name.as_str()).collect();
+    ui.colored_label(
+        RED,
+        format!(
+            "{} both use slot {}: remove one",
+            names.join(" and "),
+            cell.kind.slot_number()
+        ),
+    );
+    for i in both {
+        ui.horizontal(|ui| {
+            if let Some(t) = thumbs.get(ui.ctx(), i) {
+                ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+            }
+            let r = ui
+                .add(
+                    egui::Label::new(egui::RichText::new(&i.name).small())
+                        .truncate()
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(&i.key);
+            if r.double_clicked() {
+                acts.push(Act::Expand(i.key.clone()));
+            } else if r.clicked() {
+                acts.push(Act::Select(i.key.clone()));
+            }
+            let x = ui
+                .small_button("✕")
+                .on_hover_text("Take it out of this set");
+            let label = format!("Remove {}", i.name);
+            ui.ctx()
+                .accesskit_node_builder(x.id, |b| b.set_label(label));
+            if x.clicked() {
+                acts.push(Act::RemoveMember(v.id.clone(), i.key.clone()));
+            }
+        });
     }
 }
