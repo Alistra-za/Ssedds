@@ -35,6 +35,46 @@ pub fn group_of(st: Subtype) -> &'static str {
     }
 }
 
+/// The top-level families (AP9), in order, with their hint.
+pub const FAMILIES: [(&str, &str); 3] = [
+    ("PBR / Community Shaders", "used under the cs target"),
+    (
+        "Complex Parallax Materials (cpm)",
+        "used under the cs and cpm targets",
+    ),
+    ("Vanilla", "used under every target"),
+];
+
+/// AP9: the most specific family a sub-type is available in, from `policy::availability`: cs only → PBR / CS,
+/// cs and cpm only → CPM, anything vanilla also has (or that no rule places cleanly) → Vanilla.
+pub fn family_of(st: Subtype) -> &'static str {
+    use engine::policy::{availability, Availability};
+    let on = |t| availability(t, st) == Availability::Available;
+    let i = match (on(Target::Cpm), on(Target::Vanilla)) {
+        (false, false) => 0,
+        (true, false) => 1,
+        _ => 2,
+    };
+    FAMILIES[i].0
+}
+
+/// The body's layout: `(family, group, sub-types)` in family order, then `GROUPS` order, then `Subtype::ALL`
+/// order; empty groups left out.
+pub fn layout() -> Vec<(&'static str, &'static str, Vec<Subtype>)> {
+    FAMILIES
+        .iter()
+        .flat_map(|(f, _)| GROUPS.iter().map(move |g| (*f, *g)))
+        .map(|(f, g)| {
+            let sts = Subtype::ALL
+                .into_iter()
+                .filter(|st| family_of(*st) == f && group_of(*st) == g)
+                .collect();
+            (f, g, sts)
+        })
+        .filter(|(_, _, s): &(_, _, Vec<Subtype>)| !s.is_empty())
+        .collect()
+}
+
 /// Data sub-types get the Channel remap and Packing fills subheaders.
 pub fn is_data(st: Subtype) -> bool {
     group_of(st) == "Data"

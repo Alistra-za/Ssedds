@@ -6,7 +6,7 @@ use crate::model::fields::{
     encoding_options, field_lock, filter_option_lock, format_label, is_cutout,
 };
 use crate::model::presets::{
-    group_of, is_data, PresetsModel, Row, FILL_ROLES, GROUPS, ORM_EXAMPLE, SWIZZLE_SOURCES,
+    is_data, layout, PresetsModel, Row, FAMILIES, FILL_ROLES, ORM_EXAMPLE, SWIZZLE_SOURCES,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -371,27 +371,41 @@ fn body(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
                 }
             });
     }
-    for g in GROUPS {
-        ui.heading(g);
-        for row in pm.rows().iter().filter(|r| group_of(r.subtype) == g) {
-            let st = row.subtype;
-            let fmt = match &row.profile {
-                Ok(p) => format_label(p.format, p.color.tag),
-                Err(_) => "does not load".into(),
-            };
-            egui::CollapsingHeader::new(format!("{} — {fmt}", subtype_label(st)))
-                .id_salt(("preset-row", st))
-                .show(ui, |ui| match &row.profile {
-                    Ok(p) => {
-                        ui.add_enabled_ui(!ro, |ui| subtype_body(ui, pm, row, p, acts))
-                            .inner
+    // AP9: PBR / CS, then CPM, then Vanilla; inside each, the Colour, Normal, Data and Special groups it has.
+    let layout = layout();
+    for (family, hint) in FAMILIES {
+        egui::CollapsingHeader::new(egui::RichText::new(family).heading())
+            .id_salt(("preset-family", family))
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.weak(format!("{family} — {hint}"));
+                for (_, g, sts) in layout.iter().filter(|(f, _, _)| *f == family) {
+                    ui.strong(*g);
+                    for row in pm.rows().iter().filter(|r| sts.contains(&r.subtype)) {
+                        row_header(ui, pm, row, ro, acts);
                     }
-                    Err(e) => {
-                        ui.colored_label(RED, e);
-                    }
-                });
-        }
+                }
+            });
     }
+}
+
+fn row_header(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, ro: bool, acts: &mut Vec<Act>) {
+    let st = row.subtype;
+    let fmt = match &row.profile {
+        Ok(p) => format_label(p.format, p.color.tag),
+        Err(_) => "does not load".into(),
+    };
+    egui::CollapsingHeader::new(format!("{} — {fmt}", subtype_label(st)))
+        .id_salt(("preset-row", st))
+        .show(ui, |ui| match &row.profile {
+            Ok(p) => {
+                ui.add_enabled_ui(!ro, |ui| subtype_body(ui, pm, row, p, acts))
+                    .inner
+            }
+            Err(e) => {
+                ui.colored_label(RED, e);
+            }
+        });
 }
 
 /// Where a field edit lands (Note AP): the sub-type's own table (`None`, the "no suffix" default) or a suffix branch.

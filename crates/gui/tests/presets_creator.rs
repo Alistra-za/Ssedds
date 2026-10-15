@@ -429,3 +429,39 @@ fn a_startup_banner_survives_a_replan_until_dismissed() {
         Some("preset ghost not found: using cs-quality")
     );
 }
+
+#[test]
+fn rows_are_grouped_pbr_cs_then_cpm_then_vanilla_each_sub_type_once() {
+    // Note AP9: the family comes from the engine's availability per target.
+    use sdc_gui::model::presets::{family_of, layout, FAMILIES};
+    let names: Vec<&str> = FAMILIES.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        names,
+        [
+            "PBR / Community Shaders",
+            "Complex Parallax Materials (cpm)",
+            "Vanilla"
+        ]
+    );
+    let l = layout();
+    let order: Vec<&str> = l.iter().map(|(f, _, _)| *f).collect();
+    let mut dedup = order.clone();
+    dedup.dedup();
+    assert_eq!(dedup, names, "families in order, each once");
+    let all: Vec<Subtype> = l.iter().flat_map(|(_, _, s)| s.clone()).collect();
+    assert_eq!(all.len(), Subtype::ALL.len());
+    for st in Subtype::ALL {
+        assert_eq!(all.iter().filter(|s| **s == st).count(), 1, "{st:?}");
+    }
+    assert!(
+        l.iter().all(|(_, _, s)| !s.is_empty()),
+        "no empty sub-group"
+    );
+    assert_eq!(family_of(Subtype::PbrEmissive), "PBR / Community Shaders");
+    assert_eq!(family_of(Subtype::Glow), "Vanilla");
+    assert_eq!(
+        family_of(Subtype::ComplexMaterial),
+        "Complex Parallax Materials (cpm)"
+    );
+    assert_eq!(family_of(Subtype::Diffuse), "Vanilla");
+}

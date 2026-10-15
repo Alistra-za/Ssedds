@@ -60,6 +60,7 @@ fn the_reset_arrow_drops_an_override() {
         .set_field(Subtype::Diffuse, "resize", serde_json::json!("half"));
     let mut h = harness(m);
     h.run();
+    collapse_pbr(&mut h);
     h.get_by_label("diffuse — BC7 · linear").click();
     h.run();
     h.get_by_label("Suffixes");
@@ -170,6 +171,7 @@ fn a_branch_shows_its_overrides_hints_the_sub_type_and_resets() {
         .set_branch_field(Subtype::Diffuse, "d", "resize", serde_json::json!("half"));
     let mut h = harness(m);
     h.run();
+    collapse_pbr(&mut h);
     h.get_by_label("diffuse — BC7 · linear").click();
     h.run();
     h.get_by_label("_d — BC7 · linear (overrides 1)").click();
@@ -195,6 +197,7 @@ fn add_alias_opens_its_empty_branch() {
     m.presets_model().duplicate();
     let mut h = harness(m);
     h.run();
+    collapse_pbr(&mut h);
     h.get_by_label("diffuse — BC7 · linear").click();
     h.run();
     h.get_by_role_and_label(TEXT, "New alias _").focus();
@@ -207,4 +210,31 @@ fn add_alias_opens_its_empty_branch() {
     h.run();
     h.get_by_label("_foo → _d — BC7 · linear");
     h.get_by_label("Remove alias");
+}
+
+#[test]
+fn the_families_show_in_order_with_their_hints() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.open_presets();
+    m.presets_model().select("cs-quality");
+    let h = harness(m);
+    let y = |label: &str| h.get_by_label(label).rect().top();
+    let (pbr, cpm, van) = (
+        y("PBR / Community Shaders"),
+        y("Complex Parallax Materials (cpm)"),
+        y("Vanilla"),
+    );
+    assert!(pbr < cpm && cpm < van, "{pbr} {cpm} {van}");
+    h.get_by_label("PBR / Community Shaders — used under the cs target");
+    // pbr_emissive under PBR / CS, glow under Vanilla.
+    let emissive = h.get_by_label_contains("emissive —").rect().top();
+    let glow = h.get_by_label_contains("glow —").rect().top();
+    assert!(pbr < emissive && emissive < cpm, "{emissive}");
+    assert!(van < glow, "{glow}");
+}
+
+/// The PBR / CS family comes first and is long: fold it so the Vanilla rows are on screen.
+fn collapse_pbr(h: &mut Harness<'static, AppModel>) {
+    h.get_by_label("PBR / Community Shaders").click();
+    h.run();
 }
