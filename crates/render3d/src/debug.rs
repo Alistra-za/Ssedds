@@ -127,11 +127,20 @@ pub const BLOCK: &str = "#if defined(SDC_DEBUG)
 #endif
 ";
 
-/// `text` has `name` as a whole identifier: not followed by an identifier character, so a renamed `worldNormalWS`
-/// does not pass for `worldNormal` (the block would then fail to compile instead of the view being refused).
+/// `text` declares `name` with whole identifiers: no identifier character right before it or right after its
+/// variable name, so a renamed `worldNormalWS` does not pass for `worldNormal` (the block would then fail to compile
+/// instead of the view being refused). A trailing ` =` is matched as optional whitespace then `=`.
 fn declares(text: &str, name: &str) -> bool {
-    text.match_indices(name).any(|(i, _)| {
-        !text[i + name.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let (decl, eq) = match name.strip_suffix('=') {
+        Some(d) => (d.trim_end(), true),
+        None => (name, false),
+    };
+    text.match_indices(decl).any(|(i, _)| {
+        let after = &text[i + decl.len()..];
+        !text[..i].ends_with(ident)
+            && !after.starts_with(ident)
+            && (!eq || after.trim_start().starts_with('='))
     })
 }
 
@@ -198,6 +207,24 @@ mod tests {
             let e = inject(&MINI.replace(name, renamed)).unwrap_err();
             assert!(e.contains(name), "{e}");
         }
+        let e = inject(&MINI.replace("float vertexAO", "float xvertexAO")).unwrap_err();
+        assert!(e.contains("float vertexAO"), "a prefix rename too: {e}");
+        let e = inject(&MINI.replace(
+            "MaterialProperties material =",
+            "MaterialProperties material;",
+        ))
+        .unwrap_err();
+        assert!(e.contains("MaterialProperties material ="), "{e}");
+    }
+
+    #[test]
+    fn the_material_declaration_needs_no_space_before_its_value() {
+        let src = MINI.replace(
+            "MaterialProperties material = (MaterialProperties)0;",
+            "MaterialProperties material =MakeMaterial();",
+        );
+        assert!(inject(&src).is_ok());
+        assert!(inject(&src.replace("material =", "material=")).is_ok());
     }
 
     #[test]
