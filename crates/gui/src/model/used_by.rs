@@ -1,0 +1,199 @@
+//! Item 9 (Task 12, DECISIONS AG96-AG97): the settings panel's "Used by meshes" list. One read of the scan database
+//! per selected texture, on a worker thread and tagged with a generation, so a stale answer is dropped.
+use super::AppModel;
+use crate::worker::{spawn_guarded, WorkerMsg};
+use engine::config::AlphaPolicy;
+use engine::shader::{mesh_alpha_policy, MeshAlpha};
+use modscan::store::{Store, KIND_BSA};
+use std::path::Path;
+use std::sync::Arc;
+
+/// The list shows this many meshes, then "and N more".
+pub const USED_BY_CAP: usize = 200;
+
+/// One NIF copy (a mesh in a mod) whose shapes use the texture, in any slot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MeshUser {
+    pub nif: String,
+    pub mod_name: String,
+    pub priority: i32,
+    /// From a BSA: loses to every loose copy whatever its number (archive rank).
+    pub bsa: bool,
+    /// Its shapes carry the alpha evidence that decided the texture's alpha meaning (AG96).
+    pub decided_alpha: bool,
+}
+
+/// The answer for one texture: winner first, at most `USED_BY_CAP` rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsedBy {
+    /// The item key it was read for.
+    pub item: String,
+    /// The scan-database path asked for (`<mesh_key>.dds`).
+    pub tex: String,
+    pub rows: Vec<MeshUser>,
+    /// Rows past the cap.
+    pub more: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct UsedByState {
+    /// The last answer that landed (kept on screen while a newer read runs).
+    pub current: Option<Arc<UsedBy>>,
+    /// A finished scan made `current` old: the next ask reads again.
+    pub stale: bool,
+    pub generation: u64,
+    /// The item key of the read in flight.
+    pub pending: Option<String>,
+}
+
+/// Every NIF copy of enabled origins whose shapes use `tex`, winner first (loose before BSA, then MO2 priority, the
+/// order `modscan::resolve` picks winners by). `alpha`: the texture's alpha meaning came from the meshes
+/// (`mesh:alpha`), so the copies whose slot-0 source shapes gave that answer are marked (AG96).
+pub fn read_users(db: &Path, item: &str, tex: &str, alpha: bool) -> UsedBy {
+    let mut out = UsedBy {
+        item: item.into(),
+        tex: tex.into(),
+        ..UsedBy::default()
+    };
+    match query(db, tex) {
+        Ok(rows) => (out.rows, out.more) = users(rows, alpha),
+        Err(e) => out.error = Some(format!("Scan database: {e}")),
+    }
+    out
+}
+
+/// One shape row: NIF, mod, kind, priority, and whether it is a slot-0 source lighting shape with its alpha (the
+/// shapes `meshes::mesh_alpha` counts).
+type ShapeRow = (String, String, i32, i32, Option<MeshAlpha>);
+
+fn query(db: &Path, tex: &str) -> Result<Vec<ShapeRow>, String> {
+    let store = Store::open_read_only(db).map_err(|e| e.to_string())?;
+    // shortcut: raw SQL on `Store::conn()` against modscan's schema, as `meshes::mesh_alpha`; move it into
+    // `modscan::store` as a typed query when modscan is next edited.
+    let mut st = store
+        .conn()
+        .prepare(
+            "SELECT np.p, o.name, o.kind, o.priority, tu.slot, s.shader_kind, ifnull(s.slsf2, 0), c.is_derived,
+                    s.alpha_flags, s.alpha_threshold
+             FROM path tp
+             JOIN tex_use tu ON tu.tex_path_id = tp.id
+             JOIN shape s ON s.texset_id = tu.texset_id
+             JOIN nif_copy c ON c.id = s.copy_id
+             JOIN origin o ON o.id = c.origin_id AND o.enabled = 1
+             JOIN path np ON np.id = c.path_id
+             WHERE tp.p = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = st
+        .query_map([tex], |r| {
+            let (slot, kind, slsf2, derived): (i64, i64, i64, bool) =
+                (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
+            // `meshes::SLOT0_SOURCE_SHAPES`: slot 0 of a lighting shape, not TruePBR (SLSF2 bit 23), not derived.
+            let source = slot == 0 && kind == 1 && slsf2 & (1 << 23) == 0 && !derived;
+            let flags = r.get::<_, Option<i64>>(8)?.unwrap_or(0);
+            let threshold = r.get::<_, Option<i64>>(9)?.unwrap_or(0);
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                source.then(|| MeshAlpha {
+                    blend: flags & 1 != 0,
+                    test: flags & (1 << 9) != 0,
+                    threshold: threshold.clamp(0, 255) as u8,
+                }),
+            ))
+        })
+        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// One row per (NIF, mod), sorted and capped. The decided mark follows `mesh_alpha_policy`: blend comes from every
+/// blending shape, the cutout threshold from the shapes testing at the largest one; "remove" singles none out.
+fn users(rows: Vec<ShapeRow>, alpha: bool) -> (Vec<MeshUser>, usize) {
+    let shapes: Vec<MeshAlpha> = rows.iter().filter_map(|r| r.4).collect();
+    let policy = alpha.then(|| mesh_alpha_policy(&shapes)).flatten();
+    let decides = |a: &MeshAlpha| match policy {
+        Some((AlphaPolicy::Blend, _)) => a.blend,
+        Some((AlphaPolicy::Cutout, t)) => a.test && Some(a.threshold.clamp(1, 254)) == t,
+        Some((AlphaPolicy::CutoutBlend, t)) => {
+            a.blend || (a.test && Some(a.threshold.clamp(1, 254)) == t)
+        }
+        _ => false,
+    };
+    let mut by: std::collections::BTreeMap<(String, String), MeshUser> = Default::default();
+    for (nif, mod_name, kind, priority, a) in rows {
+        let u = by
+            .entry((nif.clone(), mod_name.clone()))
+            .or_insert(MeshUser {
+                nif,
+                mod_name,
+                priority,
+                bsa: kind == KIND_BSA,
+                decided_alpha: false,
+            });
+        u.decided_alpha |= a.as_ref().is_some_and(decides);
+    }
+    let mut v: Vec<MeshUser> = by.into_values().collect();
+    v.sort_by(|a, b| {
+        (a.bsa, std::cmp::Reverse(a.priority), &a.nif, &a.mod_name).cmp(&(
+            b.bsa,
+            std::cmp::Reverse(b.priority),
+            &b.nif,
+            &b.mod_name,
+        ))
+    });
+    let more = v.len().saturating_sub(USED_BY_CAP);
+    v.truncate(USED_BY_CAP);
+    (v, more)
+}
+
+impl AppModel {
+    /// The "Used by meshes" list of texture `key`: `None` hides it (no scan database, or the texture has no job);
+    /// `Some(None)` while the first read runs. The first ask for a texture, or after a finished scan, starts the read.
+    pub fn used_by_for(&mut self, key: &str) -> Option<Option<Arc<UsedBy>>> {
+        let db = self.scan_db.clone().filter(|d| d.is_file())?;
+        let j = self.item(key)?.job.as_ref()?;
+        let stem = j.output.file_stem()?.to_string_lossy().into_owned();
+        let tex = format!("{}.dds", engine::shader::mesh_key(&j.game_path, &stem));
+        let alpha = j
+            .provenance
+            .get("alpha.policy")
+            .is_some_and(|p| p.to_string() == "mesh:alpha");
+        let st = &self.used_by;
+        let have = st.current.clone().filter(|c| c.item == key);
+        let fresh = have.is_some() && !st.stale;
+        if !fresh && st.pending.as_deref() != Some(key) {
+            self.used_by.generation += 1;
+            self.used_by.pending = Some(key.to_string());
+            let (generation, item) = (self.used_by.generation, key.to_string());
+            spawn_guarded(self.tx.clone(), "used-by", move |tx| {
+                let u = read_users(&db, &item, &tex, alpha);
+                let _ = tx.send(WorkerMsg::UsedBy {
+                    generation,
+                    result: u,
+                });
+            });
+        }
+        Some(have)
+    }
+
+    /// A read of generation `generation` ended; an older one (another texture was asked for since) is dropped.
+    pub fn used_by_landed(&mut self, generation: u64, result: UsedBy) {
+        if generation != self.used_by.generation {
+            return;
+        }
+        self.used_by.pending = None;
+        self.used_by.stale = false;
+        self.used_by.current = Some(Arc::new(result));
+    }
+
+    /// A finished scan: the list is read again on the next ask (the old one stays on screen until then).
+    pub(super) fn used_by_scan_changed(&mut self) {
+        self.used_by.stale = true;
+        self.used_by.generation += 1;
+        self.used_by.pending = None;
+    }
+}

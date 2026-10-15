@@ -135,6 +135,21 @@ impl SdcApp {
                 model.palette_pick(&crate::model::nav::Pick::Texture(k));
             }
         }
+        // Item 9: the Meshes view's texture paths, looked up again only when they or the items change.
+        let m = &mut self.meshes;
+        let listed = (m.listed_textures(), model.items_rev());
+        if listed != m.folder_items_for {
+            m.folder_items = listed
+                .0
+                .iter()
+                .filter_map(|p| Some((p.clone(), model.item_for_game_path(p)?)))
+                .collect();
+            m.folder_items_for = listed;
+        }
+        if let Some(k) = m.open_in_textures.take() {
+            crate::ui::header::set_meshes_view(ctx, false);
+            model.palette_pick(&crate::model::nav::Pick::Texture(k));
+        }
     }
 
     /// Creates the preview renderer in egui_wgpu's callback resources. Without a render state (no usable adapter) the

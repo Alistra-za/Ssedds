@@ -836,6 +836,50 @@ fn dds_header_panel(
 }
 
 /// Why `sdc.toml` cannot take an edit, when its file is read-only.
+/// Item 9: the meshes that use this texture, winner first, from the scan database (read off the UI thread).
+fn used_by(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
+    let Some(u) = model.used_by_for(key) else {
+        return;
+    };
+    let title = match &u {
+        Some(u) => format!("Used by meshes ({})", u.rows.len() + u.more),
+        None => "Used by meshes".to_string(),
+    };
+    egui::CollapsingHeader::new(title)
+        .id_salt("used-by-meshes")
+        .show(ui, |ui| {
+            let Some(u) = u else {
+                ui.weak("Reading the scan database…");
+                return;
+            };
+            if let Some(e) = &u.error {
+                ui.colored_label(RED, e);
+            }
+            if u.rows.is_empty() && u.error.is_none() {
+                ui.weak(format!("No mesh of the latest scan uses {}.", u.tex));
+            }
+            for r in &u.rows {
+                let prio = if r.bsa {
+                    format!("BSA rank {}", r.priority)
+                } else {
+                    format!("priority {}", r.priority)
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(&r.nif);
+                    ui.weak(format!("{} · {prio}", r.mod_name));
+                    if r.decided_alpha {
+                        ui.colored_label(AMBER, "decided alpha").on_hover_text(
+                            "This mesh's alpha property decided the texture's alpha meaning",
+                        );
+                    }
+                });
+            }
+            if u.more > 0 {
+                ui.weak(format!("and {} more", u.more));
+            }
+        });
+}
+
 pub fn toml_read_only_reason(model: &AppModel) -> Option<String> {
     model.toml_read_only_reason()
 }
@@ -944,6 +988,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             }
         }
     });
+    if !compact {
+        used_by(ui, model, key);
+    }
     for a in actions {
         match a {
             Action::Set("format", v) => {

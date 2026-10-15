@@ -502,14 +502,17 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
 /// The shape cards of the selected NIF, in the left column (owner, 2026-10-14). A click on a texture asks who else
 /// uses it.
 fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    let mut clicked = None;
+    let (mut clicked, mut open) = (None, None);
     egui::ScrollArea::vertical()
         .id_salt("meshes-shapes-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if let Some((path, users)) = &m.tex_users {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.label(egui::RichText::new(format!("Users of {path}")).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(format!("Users of {path}")).strong());
+                        open_button(ui, m, path, &mut open);
+                    });
                     if users.is_empty() {
                         ui.label("No NIF of the latest scan uses it.");
                     }
@@ -529,7 +532,7 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 ui.label("No shapes.");
             }
             for (i, s) in m.shapes.iter().enumerate() {
-                if let Some(p) = shape(ui, m, s, i) {
+                if let Some(p) = shape(ui, m, s, i, &mut open) {
                     clicked = Some(p);
                 }
                 ui.separator();
@@ -537,6 +540,22 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
         });
     if let Some(p) = clicked {
         m.show_users(&p);
+    }
+    if open.is_some() {
+        m.open_in_textures = open;
+    }
+}
+
+/// Item 9: "Open in Textures" after a texture path that is an item of the open folder.
+fn open_button(ui: &mut egui::Ui, m: &MeshesModel, path: &str, open: &mut Option<String>) {
+    if let Some(k) = m.folder_items.get(path) {
+        if ui
+            .small_button("Open in Textures")
+            .on_hover_text("Select this texture in the Textures view")
+            .clicked()
+        {
+            *open = Some(k.clone());
+        }
     }
 }
 
@@ -707,7 +726,13 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
 }
 
 /// One shape card; `index` counts shapes only, from 0. Returns the texture path that was clicked.
-fn shape(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView, index: usize) -> Option<String> {
+fn shape(
+    ui: &mut egui::Ui,
+    m: &MeshesModel,
+    s: &ShapeView,
+    index: usize,
+    open: &mut Option<String>,
+) -> Option<String> {
     let mut clicked = None;
     ui.label(
         egui::RichText::new(format!(
@@ -779,6 +804,7 @@ fn shape(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView, index: usize) -> Opt
                         if ui.link(p).clicked() {
                             clicked = Some(p.clone());
                         }
+                        open_button(ui, m, p, open);
                         match m.resolved.get(p) {
                             Some(TexResolution::Found { origin, n_copies }) if *n_copies > 1 => {
                                 ui.label(format!("→ {origin} ({n_copies} copies)"));

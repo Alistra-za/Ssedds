@@ -45,6 +45,11 @@ pub enum WorkerMsg {
         generation: u64,
         result: Result<MeshEvidence, String>,
     },
+    /// Item 9: the "Used by meshes" read of generation `generation` ended (a stale one is dropped).
+    UsedBy {
+        generation: u64,
+        result: crate::model::used_by::UsedBy,
+    },
     /// The scan's texture and mesh paths were read (`AppModel::refresh_known_paths`).
     KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),

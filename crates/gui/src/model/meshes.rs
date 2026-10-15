@@ -463,6 +463,13 @@ pub struct MeshesModel {
     pub status: String,
     /// The left column lists the selected NIF's shapes instead of the mods and meshes (owner, 2026-10-14).
     pub shapes_col: bool,
+    /// Item 9: the texture paths listed here that are items of the open folder (path → item key); `SdcApp::route_3d`
+    /// fills it each frame.
+    pub folder_items: HashMap<String, String>,
+    /// An "Open in Textures" click (an item key), taken by `SdcApp::route_3d`.
+    pub open_in_textures: Option<String>,
+    /// What `folder_items` was built from: the listed paths and the items revision.
+    pub folder_items_for: (Vec<String>, u64),
     /// The 3D panel.
     pub v3: Viewport3d,
     /// Process lister for the PGPatcher gate; tests replace it.
@@ -543,6 +550,9 @@ impl MeshesModel {
             scan_pace: None,
             status: String::new(),
             shapes_col: false,
+            folder_items: HashMap::new(),
+            open_in_textures: None,
+            folder_items_for: (vec![], u64::MAX),
             v3: Viewport3d::new(None),
             procs: system_procs,
             settings,
@@ -1189,6 +1199,19 @@ impl MeshesModel {
                 self.error = Some(db_err(e));
             }
         }
+    }
+
+    /// Item 9: every texture path the shape cards and the users list show (each may get "Open in Textures").
+    pub fn listed_textures(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .shapes
+            .iter()
+            .flat_map(|s| s.textures.iter().flatten().cloned())
+            .chain(self.tex_users.as_ref().map(|(p, _)| p.clone()))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// Click on a texture path: every NIF slot of the latest run that uses it.

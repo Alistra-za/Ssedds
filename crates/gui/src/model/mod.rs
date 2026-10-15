@@ -29,6 +29,7 @@ pub mod sets;
 pub mod shell;
 pub mod skin;
 pub mod texture_view;
+pub mod used_by;
 pub mod view;
 pub mod viewport3d;
 
@@ -244,6 +245,8 @@ pub struct AppModel {
     pub gras_diffuses: std::collections::BTreeSet<String>,
     /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
     pub known: Arc<known_paths::KnownPaths>,
+    /// Item 9: the selected texture's "Used by meshes" read (`used_by_for`).
+    pub used_by: used_by::UsedByState,
     /// G3: the TruePBR JSON editor window is open.
     pub json_editor_open: bool,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
@@ -398,6 +401,7 @@ impl AppModel {
             mesh_alpha: Default::default(),
             gras_diffuses: Default::default(),
             known: Default::default(),
+            used_by: Default::default(),
             json_editor_open: false,
             accept: AcceptSuggestions::High,
             session: None,
@@ -536,6 +540,9 @@ impl AppModel {
         self.auto_replans = 0;
         self.reset_type_follow();
         self.drop_pending_votes();
+        // Another folder's item keys can be the same strings: its list must not show here.
+        self.used_by.current = None;
+        self.used_by_scan_changed();
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
@@ -629,6 +636,10 @@ impl AppModel {
             })
             .collect();
         // A scan-finished refresh must not drop the continuation of a pending post-plan read.
+        if !after_plan {
+            // A finished scan (or another database): the "Used by meshes" list reads again.
+            self.used_by_scan_changed();
+        }
         let after_plan = after_plan || self.votes_pending.is_some_and(|(_, a)| a);
         self.votes_gen += 1;
         let generation = self.votes_gen;
@@ -832,6 +843,7 @@ impl AppModel {
             }
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
+            WorkerMsg::UsedBy { generation, result } => self.used_by_landed(generation, result),
             WorkerMsg::KnownPaths(result) => self.known_paths_landed(result),
             WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
