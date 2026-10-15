@@ -340,9 +340,9 @@ fn the_blend_and_function_dropdowns_edit_their_fields() {
     let d = tempfile::tempdir().unwrap();
     let mut h = with_flags(d.path(), json!(4844));
     let role = eframe::egui::accesskit::Role::ComboBox;
-    // Source blend, destination blend and test function, in the card's order.
+    // The Subsurface selector is the first combo box (AG101); then source blend, destination blend and test function.
     for (n, pick) in [(0, "One"), (1, "Zero"), (2, "Less")] {
-        h.query_all_by_role(role).nth(n).unwrap().click();
+        h.query_all_by_role(role).nth(n + 1).unwrap().click();
         h.run();
         h.get_by_label(pick).click();
         h.run();

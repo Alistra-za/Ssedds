@@ -240,6 +240,9 @@ pub struct AppModel {
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
     /// the colour member; sent as `BatchRequest::mesh_alpha`.
     pub mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
+    /// Scan evidence for the Subsurface auto mode (DECISIONS AG102): `shader::colour_mesh_key` → whether any scanned
+    /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine.
+    pub mesh_tree_anim: std::collections::BTreeMap<String, bool>,
     /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
     /// evidence; sent as `BatchRequest::gras_diffuses`.
     pub gras_diffuses: std::collections::BTreeSet<String>,
@@ -399,6 +402,7 @@ impl AppModel {
             scan_db: None,
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
+            mesh_tree_anim: Default::default(),
             gras_diffuses: Default::default(),
             known: Default::default(),
             used_by: Default::default(),
@@ -652,6 +656,7 @@ impl AppModel {
                 Ok(MeshEvidence {
                     votes: meshes::mesh_votes(&db, &keys)?,
                     alpha: meshes::mesh_alpha(&db, &keys)?,
+                    tree_anim: meshes::mesh_tree_anim(&db, &keys)?,
                     gras: meshes::gras_diffuses(&db)?,
                 })
             };
@@ -682,6 +687,7 @@ impl AppModel {
                     || e.alpha != self.mesh_alpha
                     || e.gras != self.gras_diffuses;
                 (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
+                self.mesh_tree_anim = e.tree_anim;
                 changed
             }
             Err(e) => {

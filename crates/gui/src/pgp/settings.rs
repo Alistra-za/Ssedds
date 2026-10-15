@@ -79,3 +79,46 @@ pub fn blocked_by(s: &Settings, f: Feature) -> Option<Feature> {
         }
     })
 }
+
+/// The TruePBR card's Subsurface selector (owner, 2026-10-14; DECISIONS AG101): `subsurface` is Standard,
+/// `subsurface_foliage` is Foliage, and both stored is a conflict that is shown, never rewritten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubMode {
+    Off,
+    Standard,
+    Foliage,
+    Conflict,
+}
+
+pub const FOLIAGE_KEY: &str = "subsurface_foliage";
+
+pub fn sub_mode(s: &Settings) -> SubMode {
+    let on = |k| s.get(k).and_then(Value::as_bool) == Some(true);
+    match (on("subsurface"), on(FOLIAGE_KEY)) {
+        (false, false) => SubMode::Off,
+        (true, false) => SubMode::Standard,
+        (false, true) => SubMode::Foliage,
+        (true, true) => SubMode::Conflict,
+    }
+}
+
+/// Whether the "Subsurface settings" group (colour, opacity) applies: both kinds read `SubsurfaceColor` and
+/// `Thickness` (CS `PBR.hlsli:174-187`). Hair and multilayer rule it out.
+pub fn subsurface_group_open(s: &Settings) -> bool {
+    sub_mode(s) != SubMode::Off && blocked_by(s, Feature::Subsurface).is_none()
+}
+
+/// The settings edits for choosing `mode` (`None` removes the key). It never stores both keys. Off stores an
+/// explicit `subsurface: false` while the set has an `_s` (`auto_s`), so the auto value stays off (AJ8); the writer
+/// still writes no `false` (OnlyTrue).
+pub fn sub_edits(mode: SubMode, auto_s: bool) -> Vec<(&'static str, Option<Value>)> {
+    let t = Some(Value::Bool(true));
+    match mode {
+        SubMode::Standard => vec![("subsurface", t), (FOLIAGE_KEY, None)],
+        SubMode::Foliage => vec![(FOLIAGE_KEY, t), ("subsurface", None)],
+        _ => vec![
+            ("subsurface", auto_s.then_some(Value::Bool(false))),
+            (FOLIAGE_KEY, None),
+        ],
+    }
+}

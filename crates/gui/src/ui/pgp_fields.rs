@@ -1,16 +1,18 @@
 //! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced keys for the
 //! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
 use super::columns::AMBER;
-use crate::model::auto_flags::{auto_flags, resolved};
+use crate::model::auto_flags::{auto_flags_for, hint, resolved_for};
 use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
 use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::pgp::prefix::{
-    match_toggle, match_value, matches_nothing, stored_match, strip_lead, EMPTY_ROW, NO_MATCH,
+    match_toggle, match_value, matches_nothing, stored_match, strip_lead, subsurface_pitfalls,
+    EMPTY_ROW, NO_MATCH,
 };
 use crate::pgp::schema::{Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
-    blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS, GLINT_DEFAULTS,
+    blocked_by, feature_key, feature_on, sub_edits, sub_mode, subsurface_group_open, Feature,
+    Settings, SubMode, FEATURE_KEYS, FOLIAGE_KEY, GLINT_DEFAULTS,
 };
 use crate::pgp::writer::FIXED_NUMBERS;
 use eframe::egui;
@@ -47,10 +49,12 @@ fn feature_name(f: Feature) -> &'static str {
 }
 
 fn group_open(g: Group, own: &Settings) -> bool {
+    if g == Group::Subsurface {
+        return subsurface_group_open(own);
+    }
     let f = match g {
         Group::Emissive => Feature::Emissive,
         Group::Parallax => Feature::Parallax,
-        Group::Subsurface => Feature::Subsurface,
         Group::Multilayer => Feature::Multilayer,
         Group::Glint => Feature::Glint,
         Group::Fuzz => Feature::Fuzz,
@@ -102,6 +106,8 @@ pub(crate) struct Ctx {
     /// Why every control is disabled, when the sets document is read-only.
     pub(crate) read_only: Option<String>,
     coat_filled: bool,
+    sub_filled: bool,
+    tree_anim: Option<bool>,
     fuzz_filled: bool,
     /// The Matching header (F1 spec §3.2): the active slot matches, the + menu, and whether nothing matches.
     matches: Vec<SlotMatch>,
@@ -118,13 +124,14 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let own: Settings = v.as_ref().map(|v| v.settings.clone()).unwrap_or_default();
     let derived = v.as_ref().and_then(|v| v.derived_match.clone());
+    let ss = v.as_ref().map(|v| hint(model, v)).unwrap_or_default();
     let auto = v
         .as_ref()
-        .map(|v| auto_flags(v.pbr, &v.slots, &own))
+        .map(|v| auto_flags_for(v.pbr, &v.slots, &own, &ss))
         .unwrap_or_default();
     let eff = v
         .as_ref()
-        .map(|v| resolved(v.pbr, &v.slots, &own))
+        .map(|v| resolved_for(v.pbr, &v.slots, &own, &ss))
         .unwrap_or_else(|| own.clone());
     let (matches, addable) = v.as_ref().map(slot_matches).unwrap_or_default();
     Ctx {
@@ -132,6 +139,8 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
+        sub_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Subsurface)),
+        tree_anim: ss.tree_anim,
         own,
         eff,
         auto,
@@ -168,10 +177,13 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         }
         let keys: Vec<&KeySpec> = KEYS
             .iter()
-            .filter(|k| k.group == g && !k.advanced && k.kind != KeyKind::Slot)
+            .filter(|k| {
+                k.group == g && !k.advanced && k.kind != KeyKind::Slot && !is_sub_key(k.key)
+            })
             .collect();
         group(ui, &c, "pgp", g, &keys, &mut edits);
         if g == Group::Features {
+            subsurface_selector(ui, &c, &mut edits);
             coat_kept_note(ui, &c);
         }
     }
@@ -192,6 +204,74 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         });
     for (k, v) in edits {
         model.set_json_value(set, &k, v);
+    }
+}
+
+/// Subsurface keys the selector owns instead of the generic rows.
+fn is_sub_key(k: &str) -> bool {
+    k == "subsurface" || k == FOLIAGE_KEY
+}
+
+/// "Subsurface: Off / Standard / Foliage" (owner, 2026-10-14; DECISIONS AG101): one choice, one key. Auto (AG102) and
+/// the pitfalls (AG104) show beside it.
+fn subsurface_selector(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
+    let mode = sub_mode(&c.eff);
+    let set_by_hand = c.own.contains_key("subsurface") || c.own.contains_key(FOLIAGE_KEY);
+    let auto = c
+        .auto
+        .iter()
+        .find(|(k, _)| is_sub_key(k))
+        .map(|(_, why)| *why)
+        .filter(|_| !set_by_hand);
+    let reason = c.read_only.clone().or_else(|| {
+        blocked_by(&c.eff, Feature::Subsurface)
+            .filter(|_| mode == SubMode::Off)
+            .map(|b| format!("off: {} is on", feature_name(b)))
+    });
+    ui.horizontal(|ui| {
+        ui.label("Subsurface");
+        let r = ui.add_enabled_ui(reason.is_none(), |ui| {
+            let text = match mode {
+                SubMode::Off => "Off",
+                SubMode::Standard => "Standard",
+                SubMode::Foliage => "Foliage",
+                SubMode::Conflict => "Standard + Foliage (conflict)",
+            };
+            egui::ComboBox::from_id_salt(("pgp-subsurface", &c.set))
+                .selected_text(text)
+                .show_ui(ui, |ui| {
+                    for (m, l) in [
+                        (SubMode::Off, "Off"),
+                        (SubMode::Standard, "Standard"),
+                        (SubMode::Foliage, "Foliage"),
+                    ] {
+                        if ui.selectable_label(mode == m, l).clicked() && mode != m {
+                            for (k, v) in sub_edits(m, c.sub_filled) {
+                                edits.push((k.to_string(), v));
+                            }
+                        }
+                    }
+                });
+        });
+        if let Some(why) = reason {
+            r.response.on_disabled_hover_text(why);
+        }
+        if let Some(why) = auto {
+            ui.label(egui::RichText::new("(auto)").small().weak())
+                .on_hover_text(why);
+        } else if set_by_hand
+            && c.read_only.is_none()
+            && ui
+                .small_button("reset")
+                .on_hover_text("Remove this setting (the default applies)")
+                .clicked()
+        {
+            edits.push(("subsurface".into(), None));
+            edits.push((FOLIAGE_KEY.into(), None));
+        }
+    });
+    for w in subsurface_pitfalls(&c.eff, c.tree_anim) {
+        ui.colored_label(AMBER, w);
     }
 }
 

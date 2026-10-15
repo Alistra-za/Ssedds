@@ -329,6 +329,36 @@ pub fn mesh_alpha(
     Ok(out)
 }
 
+/// SLSF2 bit 29, Tree_Anim: the shader flag that makes Community Shaders take the foliage subsurface term.
+const TREE_ANIM: i64 = 1 << 29;
+
+/// DECISIONS AG102: for each key, whether any source lighting shape that uses `<key>.dds` in slot 0 is Tree_Anim.
+/// Keys without a shape are left out (no evidence).
+pub fn mesh_tree_anim(
+    db: &Path,
+    keys: &BTreeSet<String>,
+) -> Result<BTreeMap<String, bool>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    // shortcut: raw SQL on `Store::conn()`, as `mesh_votes`.
+    let mut st = store
+        .conn()
+        .prepare(&format!(
+            "SELECT DISTINCT c.path_id, s.block, ifnull(s.slsf2, 0) {SLOT0_SOURCE_SHAPES}"
+        ))
+        .map_err(db_err)?;
+    let mut out = BTreeMap::new();
+    for k in keys {
+        let flags = st
+            .query_map([format!("{k}.dds")], |r| r.get::<_, i64>(2))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(db_err)?;
+        if !flags.is_empty() {
+            out.insert(k.clone(), flags.iter().any(|f| f & TREE_ANIM != 0));
+        }
+    }
+    Ok(out)
+}
+
 /// Complex grass design §5 condition 1: the GRAS diffuses of the scan, as `engine::grass::path_key` keys (sent as
 /// `BatchRequest::gras_diffuses`).
 pub fn gras_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {

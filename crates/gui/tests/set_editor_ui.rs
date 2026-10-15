@@ -544,6 +544,17 @@ fn rock_with(keys: &[(&str, serde_json::Value)]) -> Harness<'static, AppModel> {
 }
 
 fn disabled(h: &Harness<'static, AppModel>, label: &str) -> bool {
+    if label == "Subsurface" {
+        // The Subsurface selector (AG101) is a combo box named by its value.
+        let role = eframe::egui::accesskit::Role::ComboBox;
+        let names = ["Off", "Standard", "Foliage"];
+        return h
+            .query_all_by_role(role)
+            .find(|n| n.value().is_some_and(|v| names.contains(&v.as_str())))
+            .unwrap()
+            .accesskit_node()
+            .is_disabled();
+    }
     h.get_by_label(label).accesskit_node().is_disabled()
 }
 

@@ -403,3 +403,20 @@ pub fn output_rel(prefix: &str, suffix: &str) -> PathBuf {
     };
     PathBuf::from(name.replace('\\', "/"))
 }
+
+/// Subsurface pitfalls (DECISIONS AG104). `tree_anim`: whether the set's scanned meshes use Tree_Anim, `None` with no
+/// scan (then only the conflict can fire).
+pub fn subsurface_pitfalls(s: &Settings, tree_anim: Option<bool>) -> Vec<String> {
+    use crate::pgp::settings::{sub_mode, SubMode};
+    let t = match (sub_mode(s), tree_anim) {
+        (SubMode::Conflict, _) => {
+            "subsurface and subsurface_foliage are both on; pick Standard or Foliage"
+        }
+        (SubMode::Foliage, Some(false)) => "Foliage subsurface only shades on Tree Anim meshes.",
+        (SubMode::Standard, Some(true)) => {
+            "Standard subsurface sets Rim_Lighting on a Tree Anim mesh; Foliage is likely meant."
+        }
+        _ => return vec![],
+    };
+    vec![t.into()]
+}

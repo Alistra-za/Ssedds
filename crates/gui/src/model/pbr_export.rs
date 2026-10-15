@@ -7,6 +7,7 @@ use super::sets::{
 use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{
     check_json_path, check_rel_path, matches_nothing, output_rel, pitfalls, rename_hits_elsewhere,
+    subsurface_pitfalls,
 };
 use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Settings, FEATURE_KEYS};
 use crate::pgp::validate::validate;
@@ -184,7 +185,12 @@ pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
         })
         .map(|v| {
             let e = EntryInput {
-                settings: crate::model::auto_flags::resolved(v.pbr, &v.slots, &v.settings),
+                settings: crate::model::auto_flags::resolved_for(
+                    v.pbr,
+                    &v.slots,
+                    &v.settings,
+                    &crate::model::auto_flags::hint(m, v),
+                ),
                 slots: slots_of(v, &views, &paths, m),
                 derived_match: v.derived_match.clone().unwrap_or_default(),
                 section: false,
@@ -230,6 +236,15 @@ pub fn missing_texture_texts(
         if feature_on(s, f) && blocked_by(s, f).is_none() && !has(slot) {
             out.push(format!("{id}: {name} is on but the set has no {what}"));
         }
+    }
+    // Foliage reads the same `_s` slot 8 as Standard (AG101).
+    if s.get(crate::pgp::settings::FOLIAGE_KEY) == Some(&Value::Bool(true))
+        && blocked_by(s, Feature::Subsurface).is_none()
+        && !has(SlotKind::Subsurface)
+    {
+        out.push(format!(
+            "{id}: subsurface foliage is on but the set has no subsurface texture (_s)"
+        ));
     }
     if feature_on(s, Feature::Multilayer)
         && s.get("coat_normal") == Some(&Value::Bool(true))
@@ -436,6 +451,10 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
             let derived = v.derived_match.as_deref().unwrap_or("");
             pitfalls(&v.settings, derived)
                 .into_iter()
+                .chain(subsurface_pitfalls(
+                    &v.settings,
+                    crate::model::auto_flags::hint(m, v).tree_anim,
+                ))
                 .chain(rename_hits_elsewhere(&v.settings, derived, &known))
                 .map(move |w| issue(v, format!("{}: {w}", v.id)))
         })

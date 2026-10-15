@@ -27,6 +27,7 @@ pub struct MeshEvidence {
     pub votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     pub alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     pub gras: std::collections::BTreeSet<String>,
+    pub tree_anim: std::collections::BTreeMap<String, bool>,
 }
 
 pub enum WorkerMsg {
