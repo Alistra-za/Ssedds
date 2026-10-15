@@ -2623,14 +2623,6 @@ fn the_uv_checker_is_a_checker_and_replaces_the_diffuse_slot() {
 }
 
 #[test]
-fn magenta_is_a_solid_magenta_dds() {
-    let bytes = v3::magenta_dds();
-    let f = engine::dds::read_dds(&bytes).unwrap();
-    assert_eq!((f.width, f.height), (1, 1));
-    assert_eq!(&bytes[bytes.len() - 4..], &[255, 0, 255, 255]);
-}
-
-#[test]
 fn missing_textures_are_listed_in_magenta_with_show_in_textures() {
     let mut v = Viewport3d::with_state(V3State::Ready);
     v.report = Some(render3d::LoadReport {

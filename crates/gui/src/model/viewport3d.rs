@@ -517,11 +517,6 @@ pub fn checker_dds() -> Vec<u8> {
     rgba_dds(CHECKER_SIZE, CHECKER_SIZE, checker_rgba())
 }
 
-/// A 1×1 solid magenta DDS: what a texture slot the resolver could not find shows (AG76).
-pub fn magenta_dds() -> Vec<u8> {
-    rgba_dds(1, 1, vec![255, 0, 255, 255])
-}
-
 /// Slot 0 (diffuse / base colour) of each material, once each, empty slots left out.
 pub fn diffuse_paths<'a>(materials: impl IntoIterator<Item = &'a MaterialState>) -> Vec<String> {
     let mut out: Vec<String> = vec![];
@@ -1964,12 +1959,6 @@ fn load_all(
 ) -> LoadReport {
     r.set_load_variant(tex.load);
     let rep = load(r, c, edits);
-    // AG76: a slot the resolver could not find shows magenta, in the load's variant only and before the replay, so a
-    // real swap still wins. A cube slot refuses a 2D texture and keeps render3d's fallback.
-    let magenta = magenta_dds();
-    for p in &rep.missing_textures {
-        let _ = r.replace_texture(p, &magenta, tex.load);
-    }
     tex.replay(r);
     if tex.checker {
         checker_over(r);
@@ -2027,6 +2016,8 @@ fn render_loop(
     let make = |shaders: Fingerprint, features: bool| -> Result<Renderer, String> {
         let mut r = Renderer::new(shaders, cache.clone())?;
         r.set_async_compile(true);
+        // AG76 → render3d's fill (GUI suggestions item 3): colour slots only, so a missing normal no longer tints.
+        r.set_missing_texture(Some([255, 0, 255, 255]));
         r.set_features_on(features);
         apply_settings(&mut r, settings.clone());
         Ok(r)
