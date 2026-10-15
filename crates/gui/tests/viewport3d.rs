@@ -1462,6 +1462,29 @@ fn a_real_load_compiles_in_the_background_then_draws_and_goes_idle() {
     }
 }
 
+/// GUI suggestions item 4: the UV checker goes on and off through render3d's slot override. Neither direction loads
+/// the content again: a `Loaded` reply for the loaded id would set `report` (R14).
+#[test]
+fn the_uv_checker_toggles_without_a_reload() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut m = MaterialState::builtin_default();
+    m.alpha = Some(nif::props::Alpha {
+        flags: 0x200,
+        threshold: 0,
+    }); // DO_ALPHA_TEST: the stand-in's pixel permutation compiles
+    let mut v = real_viewport(cache.path(), m);
+    run_idle(&mut v);
+    v.report = None;
+    v.set_debug(v3::DebugView::UvChecker);
+    run_idle(&mut v);
+    v.set_debug(v3::DebugView::Lit);
+    run_idle(&mut v);
+    assert!(
+        v.report.is_none(),
+        "no Loaded reply: nothing was loaded again"
+    );
+}
+
 #[test]
 fn a_real_compile_failure_is_listed_and_the_panel_goes_idle() {
     let cache = tempfile::tempdir().unwrap();
@@ -2604,7 +2627,7 @@ fn a_debug_view_change_goes_to_the_render_thread_and_waits_for_its_answer() {
 }
 
 #[test]
-fn the_uv_checker_is_a_checker_and_replaces_the_diffuse_slot() {
+fn the_uv_checker_is_a_checker() {
     let rgba = v3::checker_rgba();
     let n = v3::CHECKER_SIZE as usize;
     assert_eq!(rgba.len(), n * n * 4);
@@ -2616,14 +2639,6 @@ fn the_uv_checker_is_a_checker_and_replaces_the_diffuse_slot() {
     assert_eq!(px(0, 0)[3], 255);
     let f = engine::dds::read_dds(&v3::checker_dds()).unwrap();
     assert_eq!((f.width, f.height), (v3::CHECKER_SIZE, v3::CHECKER_SIZE));
-    // The paths swapped: every shape's slot 0, once each, never an empty slot.
-    let mut a = nif::material::MaterialState::builtin_default();
-    a.slots[0] = nif::path::canon_texture(b"Textures\\Rock\\A.dds");
-    a.slots[1] = nif::path::canon_texture(b"Textures\\Rock\\A_n.dds");
-    let b = a.clone();
-    let mut c = a.clone();
-    c.slots[0] = nif::path::canon_texture(b"");
-    assert_eq!(v3::diffuse_paths([&a, &b, &c]), ["textures/rock/a.dds"]);
 }
 
 #[test]

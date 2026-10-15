@@ -460,7 +460,7 @@ impl Default for Look {
 pub enum DebugView {
     #[default]
     Lit,
-    /// A generated checker in every shape's slot 0 (diffuse / base colour), swapped in with `replace_texture`.
+    /// A generated checker in every shape's slot 0 (diffuse / base colour), shown through `Renderer::override_slot`.
     UvChecker,
 }
 
@@ -514,22 +514,9 @@ fn rgba_dds(w: u32, h: u32, rgba: Vec<u8>) -> Vec<u8> {
     dds_bytes(&desc, &[rgba]).expect("a valid RGBA8 level")
 }
 
-/// The UV checker as DDS bytes for `Renderer::replace_texture`.
+/// The UV checker as DDS bytes for `Renderer::override_slot`.
 pub fn checker_dds() -> Vec<u8> {
     rgba_dds(CHECKER_SIZE, CHECKER_SIZE, checker_rgba())
-}
-
-/// Slot 0 (diffuse / base colour) of each material, once each, empty slots left out.
-pub fn diffuse_paths<'a>(materials: impl IntoIterator<Item = &'a MaterialState>) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
-    for m in materials {
-        if let Some(p) = m.slots.first().filter(|p| !p.norm.is_empty()) {
-            if !out.contains(&p.norm) {
-                out.push(p.norm.clone());
-            }
-        }
-    }
-    out
 }
 
 /// Commands to the render thread.
@@ -578,8 +565,8 @@ pub enum V3Cmd {
     },
     /// The variant the next loads' resolver bytes count as (`Renderer::set_load_variant`); sticky.
     SetLoadVariant(Variant),
-    /// The debug view (sticky, answered with `Reconfigured`): the UV checker goes over every slot 0 now and after
-    /// each load, swap and edit; Lit loads the content again (its swaps and edits replayed).
+    /// The debug view (sticky, answered with `Reconfigured`). UV checker = render3d's slot-0 override (kept across
+    /// loads, no reload either way).
     SetDebug(DebugView),
     Render {
         id: u64,
@@ -1918,7 +1905,7 @@ struct TexState {
     load: Variant,
     swaps: BTreeMap<(String, Variant), Arc<Vec<u8>>>,
     active: BTreeMap<String, Variant>,
-    /// The UV checker debug view is on (sticky across loads, like `load`).
+    /// The UV checker debug view is on (render3d's slot-0 override is set).
     checker: bool,
 }
 
@@ -1962,21 +1949,7 @@ fn load_all(
     r.set_load_variant(tex.load);
     let rep = load(r, c, edits);
     tex.replay(r);
-    if tex.checker {
-        checker_over(r);
-    }
     rep
-}
-
-/// The UV checker over both variants of every shape's slot 0 (AG75). Not logged: Lit loads the content again.
-fn checker_over(r: &mut Renderer) {
-    let bytes = checker_dds();
-    let shapes = r.shapes();
-    for p in diffuse_paths(shapes.iter().map(|s| &s.material)) {
-        for v in [Variant::Source, Variant::Encoded] {
-            let _ = r.replace_texture(&p, &bytes, v);
-        }
-    }
 }
 
 /// One material edit on the loaded content.
@@ -2154,8 +2127,8 @@ fn render_loop(
                     let on = d == DebugView::UvChecker;
                     if tex.checker != on {
                         tex.checker = on;
-                        // Off: the real textures come back with a reload (swaps and edits replayed).
-                        reload |= !on;
+                        // render3d keeps the override across loads, swaps and edits: no reload either way.
+                        let _ = r.override_slot(0, on.then(checker_dds).as_deref());
                         debug_changed = true;
                     }
                     ack.0 += 1;
@@ -2269,10 +2242,6 @@ fn render_loop(
                     }
                 }
             }
-        }
-        // The checker goes (back) over a slot 0 that a swap or an edit just replaced.
-        if tex.checker && last.is_some() && (debug_changed || swapped || !pending_was_empty) {
-            checker_over(&mut r);
         }
         pump(&mut r);
         // A settings apply or a new program can change it; sent only on change.
