@@ -459,8 +459,8 @@ pub struct MeshesModel {
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
     pub status: String,
-    /// The right column shows the 3D panel instead of the shapes (plan B Task B8).
-    pub tab_3d: bool,
+    /// The left column lists the selected NIF's shapes instead of the mods and meshes (owner, 2026-10-14).
+    pub shapes_col: bool,
     /// The 3D panel.
     pub v3: Viewport3d,
     /// Process lister for the PGPatcher gate; tests replace it.
@@ -539,7 +539,7 @@ impl MeshesModel {
             report: None,
             progress: None,
             status: String::new(),
-            tab_3d: false,
+            shapes_col: false,
             v3: Viewport3d::new(None),
             procs: system_procs,
             settings,
@@ -1330,4 +1330,107 @@ fn detect_mo2() -> Option<(PathBuf, String)> {
 #[cfg(not(windows))]
 fn detect_mo2() -> Option<(PathBuf, String)> {
     None
+}
+
+/// SkyrimShaderPropertyFlags1 bit names (nif.xml / NifSkope); the nif crate exposes only the bits it uses.
+pub const SLSF1_NAMES: [&str; 32] = [
+    "Specular",
+    "Skinned",
+    "Temp_Refraction",
+    "Vertex_Alpha",
+    "Greyscale_To_PaletteColor",
+    "Greyscale_To_PaletteAlpha",
+    "Use_Falloff",
+    "Environment_Mapping",
+    "Receive_Shadows",
+    "Cast_Shadows",
+    "Facegen_Detail_Map",
+    "Parallax",
+    "Model_Space_Normals",
+    "Non_Projective_Shadows",
+    "Landscape",
+    "Refraction",
+    "Fire_Refraction",
+    "Eye_Environment_Mapping",
+    "Hair_Soft_Lighting",
+    "Screendoor_Alpha_Fade",
+    "Localmap_Hide_Secret",
+    "FaceGen_RGB_Tint",
+    "Own_Emit",
+    "Projected_UV",
+    "Multiple_Textures",
+    "Remappable_Textures",
+    "Decal",
+    "Dynamic_Decal",
+    "Parallax_Occlusion",
+    "External_Emittance",
+    "Soft_Effect",
+    "ZBuffer_Test",
+];
+
+/// SkyrimShaderPropertyFlags2 bit names. Bit 23 is the TruePBR marker in sdc (`nif::material::SLSF2_TRUE_PBR`).
+pub const SLSF2_NAMES: [&str; 32] = [
+    "ZBuffer_Write",
+    "LOD_Landscape",
+    "LOD_Objects",
+    "No_Fade",
+    "Double_Sided",
+    "Vertex_Colors",
+    "Glow_Map",
+    "Assume_Shadowmask",
+    "Packed_Tangent",
+    "Multi_Index_Snow",
+    "Vertex_Lighting",
+    "Uniform_Scale",
+    "Fit_Slope",
+    "Billboard",
+    "No_LOD_Land_Blend",
+    "EnvMap_Light_Fade",
+    "Wireframe",
+    "Weapon_Blood",
+    "Hide_On_Local_Map",
+    "Premult_Alpha",
+    "Cloud_LOD",
+    "Anisotropic_Lighting",
+    "No_Transparency_Multisampling",
+    "Unused01 (TruePBR)",
+    "Multi_Layer_Parallax",
+    "Soft_Lighting",
+    "Rim_Lighting",
+    "Back_Lighting",
+    "Unused02",
+    "Tree_Anim",
+    "Effect_Lighting",
+    "HD_LOD_Objects",
+];
+
+/// The set bits of a flags word, lowest first: `Name (bit)`. A bit past the table reads `bit N`.
+pub fn flag_bits(names: &[&str], v: u32) -> Vec<String> {
+    (0..32)
+        .filter(|b| v >> b & 1 != 0)
+        .map(|b| match names.get(b as usize) {
+            Some(n) => format!("{n} ({b})"),
+            None => format!("bit {b}"),
+        })
+        .collect()
+}
+
+/// The NiAlphaProperty in plain words: `Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5`.
+pub fn alpha_line(flags: u16, threshold: u8) -> String {
+    use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, TEST_FUNCS};
+    let a = AlphaFlags::from_raw(flags);
+    let mut parts = vec![];
+    if a.blend {
+        let m = |i: u8| BLEND_MODES.get(i as usize).map_or("?", |s| s);
+        parts.push(format!("blend {} → {}", m(a.src), m(a.dst)));
+    }
+    if a.test {
+        let f = TEST_FUNCS.get(a.func as usize).map_or("?", |s| s);
+        parts.push(format!("test {f}, threshold {threshold}"));
+    }
+    if parts.is_empty() {
+        "Alpha: none".into()
+    } else {
+        format!("Alpha: {}", parts.join(" · "))
+    }
 }

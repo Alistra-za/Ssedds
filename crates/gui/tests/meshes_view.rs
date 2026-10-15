@@ -1,5 +1,5 @@
 //! The Meshes view (plan A Task 12): per-mod NIF list with PGPatcher-aware badges and texture slots.
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use modscan::plugin_store::{MeshUse, MissingRef, ShapeSwap};
 use modscan::plugins::PluginStats;
@@ -221,6 +221,7 @@ fn shapes_show_shader_type_flags_and_slot_resolution() {
         },
     });
     m.shapes = vec![s];
+    m.shapes_col = true;
     m.resolved.insert(
         "textures/a.dds".into(),
         TexResolution::Found {
@@ -1522,4 +1523,107 @@ fn reloading_file_references_replaces_the_cached_inert_lines() {
     m.load_file_refs(); // the store has no inert paths
     assert!(m.missing_inert.is_empty());
     assert!(m.refs_inert_lines().is_empty(), "stale cached lines");
+}
+
+fn shapes_model(shapes: Vec<ShapeView>) -> MeshesModel {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(7, "meshes/x.nif")];
+    m.selected_nif = Some(7);
+    m.shapes = shapes;
+    m.shapes_col = true;
+    m
+}
+
+#[test]
+fn shapes_toggle_swaps_the_column_and_is_off_with_no_selection() {
+    let mut m = model_with(None);
+    m.nifs = vec![nif(7, "meshes/x.nif")];
+    let mut h = harness(m);
+    h.run();
+    // No mesh selected: disabled.
+    assert!(h.get_by_label("Shapes").accesskit_node().is_disabled());
+    h.state_mut().selected_nif = Some(7);
+    h.state_mut().shapes = vec![shape(vec![None])];
+    h.run();
+    assert_eq!(h.query_all_by_label("x.nif").count(), 2, "heading and list row");
+    h.get_by_label("Shapes").click();
+    h.run();
+    assert!(h.state().shapes_col);
+    h.get_by_label_contains("#0 Body");
+    assert_eq!(h.query_all_by_label("x.nif").count(), 1, "heading only");
+    // The detail pane has no Shapes | 3D selector any more.
+    assert!(h.query_by_label("3D").is_none());
+    h.get_by_label("Shapes").click();
+    h.run();
+    assert_eq!(h.query_all_by_label("x.nif").count(), 2, "heading and list row");
+    // The selection clearing while on falls back to the list.
+    h.state_mut().shapes_col = true;
+    h.state_mut().selected_nif = None;
+    h.run();
+    assert!(!h.state().shapes_col);
+}
+
+#[test]
+fn shape_cards_number_from_zero_and_show_the_block_in_the_hover() {
+    let a = ShapeView {
+        block: 12,
+        name: Some("First".into()),
+        ..shape(vec![None])
+    };
+    let b = ShapeView {
+        block: 20,
+        name: Some("Second".into()),
+        ..shape(vec![None])
+    };
+    let mut h = harness(shapes_model(vec![a, b]));
+    h.run();
+    h.get_by_label_contains("#0 First");
+    h.get_by_label_contains("#1 Second");
+    assert!(h.query_by_label_contains("#12").is_none());
+    h.get_by_label_contains("#0 First").hover();
+    h.run();
+    h.get_by_label("NIF block 12");
+}
+
+#[test]
+fn shader_line_is_the_bare_type_name_and_slots_are_indented() {
+    let mut h = harness(shapes_model(vec![shape(vec![Some("textures/a.dds")])]));
+    h.run();
+    assert!(h.query_by_label_contains("Lighting:").is_none());
+    h.get_by_label("Environment Map (1)");
+    let head = h.get_by_label_contains("#0 Body").rect().min.x;
+    let slot = h.get_by_label_contains("slot 0").rect().min.x;
+    assert!(slot > head + 4.0, "slot x {slot} vs header x {head}");
+}
+
+#[test]
+fn slsf_expander_lists_set_bits_by_name() {
+    let mut h = harness(shapes_model(vec![shape(vec![None])]));
+    h.run();
+    assert!(h.query_by_label("Specular (0)").is_none());
+    h.get_by_label_contains("SLSF1 0x80000101").click();
+    h.run();
+    h.get_by_label("Specular (0)");
+    h.get_by_label("Receive_Shadows (8)");
+}
+
+#[test]
+fn flag_bits_name_every_bit_and_alpha_reads_in_words() {
+    use sdc_gui::model::meshes::{alpha_line, flag_bits, SLSF1_NAMES};
+    assert_eq!(
+        flag_bits(&SLSF1_NAMES, 0x8000_0101),
+        ["Specular (0)", "Receive_Shadows (8)", "ZBuffer_Test (31)"]
+    );
+    // A bit past the table.
+    assert_eq!(flag_bits(&["A"], 0b110), ["bit 1", "bit 2"]);
+    assert_eq!(
+        alpha_line(0x12ED, 5),
+        "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5"
+    );
+    assert_eq!(
+        alpha_line(0x12ED & !0x200, 5),
+        "Alpha: blend Src Alpha → Inv Src Alpha"
+    );
+    assert_eq!(alpha_line(0x12EC, 7), "Alpha: test Greater, threshold 7");
+    assert_eq!(alpha_line(0x0000, 7), "Alpha: none");
 }

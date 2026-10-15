@@ -1028,3 +1028,12 @@ Rulings for the Important findings of the 2026-10-13 reliability audit (round b)
     - Each toggle is one `set_field` edit: one undo step and a replan.
   - **Bulk:** picks the row up from `FIELDS`. A hidden field's skip reason now comes from `fields::hidden_reason`, one reason per field. It used to say "cutout only" for every hidden field.
   - **Tests changed:** the golden `exact_opaque_m_decodes_alpha_255_at_every_mip` gains `alpha.parallax=true` on its solid-255 `iron_m`, so it still tests the 255 path. `policy_checks::contradictions_are_warnings` gets the same addition.
+
+## Note AI — Meshes shape detail (2026-10-14)
+
+- **AI1 The Shapes toggle moves the left column, not the detail pane (owner, 2026-10-14; replaces the Shapes | 3D selector).** A "Shapes" selectable button next to the "Mods and meshes" title swaps that column to the selected mesh's shape cards; off shows the mods and meshes list. The detail pane always draws 3D. The button is disabled with "Select a mesh first" when no mesh is selected, and the column falls back to the list if the selection clears. The state is `MeshesModel::shapes_col` (replaces `tab_3d`); neither was ever saved to `gui.toml`.
+- **AI2 Shape numbers count shapes from 0 (owner).** The `#N` is the index in the shape list the GUI holds (the scan stores shapes only, ordered by NIF block), so bones and other non-shapes are skipped. The NIF block shows in the hover text. pgpsim has no shape index of its own (it matches by `nif_filter` on the path), so there was no order to match. Whether PGPatcher's texture-set order is block order or a tree walk is not confirmed; see `.superpowers/sdd/meshes/nif-request-shape-index.md`.
+- **AI3 Shader line.** No "Lighting:" prefix; the shader type name is bold. Effect and other shaders are bold the same way.
+- **AI4 SLSF1/SLSF2 expanders.** Collapsed headers "SLSF1 0x…" and "SLSF2 0x…"; open lists the set bits by name, lowest first, `Name (bit)`, and an unknown bit as `bit N`. The nif crate exposes only the few bits it uses, so the names are GUI-side tables (`SLSF1_NAMES`, `SLSF2_NAMES`, the nif.xml names). SLSF2 bit 23 reads "Unused01 (TruePBR)". Open state is egui memory, per shape.
+- **AI5 Alpha in words.** "Alpha: blend <src> → <dst> · test <func>, threshold N", decoded by `pgp::alpha::AlphaFlags` (no second decoder); blend or test is omitted when off, "Alpha: none" when both are. The raw value stays in the hover text.
+- **AI6 Slot rows are indented** one `ui.indent` level under the shape's header lines.
