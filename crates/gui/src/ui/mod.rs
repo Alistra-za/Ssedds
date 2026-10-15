@@ -274,7 +274,7 @@ fn column_panel(
         let expand = egui::Panel::left(strip_id)
             .resizable(false)
             .exact_size(columns::STRIP_WIDTH)
-            .frame(egui::Frame::new())
+            .frame(egui::Frame::new().fill(ui.visuals().panel_fill))
             .show(ui, |ui| {
                 columns::strip_button(ui, name).on_hover_text(format!("Expand the {name} column"))
             })

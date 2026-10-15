@@ -384,6 +384,11 @@ impl eframe::App for SdcApp {
         self.sync_layout_at(&ctx, std::time::Instant::now());
     }
 
+    /// AG124: the panel fill, so a strip no panel paints never shows as a black bar (eframe's default is near black).
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     /// The last write: a layout change still inside its 2 s wait is not lost.
     fn on_exit(&mut self) {
         if self.layout_save.pending() {

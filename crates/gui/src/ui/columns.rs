@@ -15,9 +15,8 @@ pub const STRIP_WIDTH: f32 = 24.0;
 /// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.
 const TILE: f32 = crate::model::texture_view::ColumnPrefs::TILE_DEFAULT;
 const MEMBER: f32 = 32.0;
+/// The narrowest a filter combo gets before the row moves one to the next line.
 const COMBO_WIDTH: f32 = 100.0;
-/// What a combo takes beyond its width (measured).
-const COMBO_PAD: f32 = 7.0;
 const TILE_MARGIN: f32 = 4.0;
 const TILE_STROKE: f32 = 2.0;
 /// Scroll bar and margin allowance when fitting tiles to a row.
@@ -351,7 +350,7 @@ fn pick<T: PartialEq + Copy>(
         .find(|o| o.0 == *current)
         .map_or("?", |o| o.1.as_str());
     egui::ComboBox::from_id_salt(name)
-        .width(COMBO_WIDTH)
+        .width(ui.available_width())
         .selected_text(format!("{name}: {text}"))
         .show_ui(ui, |ui| {
             for (v, label) in options {
@@ -437,12 +436,16 @@ fn combo_at(ui: &mut egui::Ui, model: &mut AppModel, o: &FilterOptions, n: usize
 fn combo_filters(ui: &mut egui::Ui, model: &mut AppModel) {
     let o = model.filter_options();
     let gap = ui.spacing().item_spacing.x;
-    let per = (((ui.available_width() + gap) / (COMBO_WIDTH + COMBO_PAD + gap)) as usize)
-        .clamp(1, COMBOS);
+    let avail = ui.available_width();
+    let per = (((avail + gap) / (COMBO_WIDTH + gap)) as usize).clamp(1, COMBOS);
+    // AG124: each combo gets an exact share of the row. `ComboBox::width` is only a minimum and a truncated combo
+    // takes all the room left, so a row of them ran wider than the column (the black bar).
+    let slot = ((avail + gap) / per as f32 - gap).floor().max(1.0);
+    let height = ui.spacing().interact_size.y;
     for row in (0..COMBOS).collect::<Vec<_>>().chunks(per) {
         ui.horizontal(|ui| {
             for &n in row {
-                combo_at(ui, model, &o, n);
+                ui.allocate_ui(egui::vec2(slot, height), |ui| combo_at(ui, model, &o, n));
             }
         });
     }

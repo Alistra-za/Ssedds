@@ -36,7 +36,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
         egui::Panel::right("advanced-strip")
             .resizable(false)
             .exact_size(STRIP_WIDTH)
-            .frame(egui::Frame::new())
+            .frame(egui::Frame::new().fill(ui.visuals().panel_fill))
             .show(ui, |ui| {
                 if strip_button(ui, "Advanced")
                     .on_hover_text("Open the Advanced drawer")

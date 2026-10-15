@@ -601,11 +601,13 @@ fn shader_combo(
     });
     // A ComboBox never wraps and is at least `combo_width` wide, which held the Sets column open: start a new row
     // when it would not fit, and never be wider than the row.
+    // AG124: in a wrapped row `available_width` is the whole row's, not what is left after the badges.
+    let left = |ui: &egui::Ui| ui.max_rect().right() - ui.cursor().min.x;
     let w = ui.spacing().combo_width;
-    if ui.available_width() < w {
+    if left(ui) < w {
         ui.end_row();
     }
-    let w = ui.available_width().min(w);
+    let w = left(ui).min(w);
     ui.add_enabled_ui(editing.on, |ui| {
         egui::ComboBox::from_id_salt(("shader", &v.id))
             .width(w)

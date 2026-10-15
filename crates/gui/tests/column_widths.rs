@@ -184,3 +184,81 @@ fn a_window_narrowed_and_widened_again_restores_the_column_widths() {
         );
     }
 }
+
+/// x positions on row `y` that no opaque fill covers, within its clip: there the window's clear colour shows (the
+/// black bar, AG124). The harness's own background (the whole window) does not count; the app has none.
+fn unpainted(h: &H, y: f32) -> Vec<f32> {
+    let w = h.ctx.content_rect().width();
+    let shapes = &h.output().shapes;
+    let covered = |p: egui::Pos2| {
+        shapes.iter().any(|c| {
+            c.clip_rect.contains(p)
+                && matches!(&c.shape, egui::Shape::Rect(r)
+                    if r.fill.a() == 255 && r.rect.contains(p) && r.rect.width() < w - 20.0)
+        })
+    };
+    // The harness keeps an 8 px margin round the ui.
+    (9..(w as i32 - 9))
+        .step_by(2)
+        .map(|x| x as f32)
+        .filter(|&x| !covered(egui::pos2(x, y)))
+        .collect()
+}
+
+#[test]
+fn every_column_width_paints_the_whole_row() {
+    let d = tempfile::tempdir().unwrap();
+    for (w, id) in [(1280.0, "textures"), (1280.0, "sets"), (800.0, "textures")] {
+        let mut h = harness(d.path(), w);
+        for chosen in (140..900).step_by(23) {
+            h.ctx
+                .data_mut(|m| m.insert_persisted(Id::new(id).with("chosen"), chosen as f32));
+            h.run_steps(2);
+            let holes = unpainted(&h, 400.0);
+            assert!(
+                holes.is_empty(),
+                "window {w}, {id} at {chosen}: unpainted {holes:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_divider_drag_with_files_hovering_leaves_no_gap() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(d.path(), 1280.0);
+    h.input_mut()
+        .hovered_files
+        .push(egui::HoveredFile::default());
+    let left = outer(&h, "textures").left();
+    let from = egui::pos2(divider(&h, "textures"), 400.0);
+    ev(&mut h, Event::PointerMoved(from));
+    ev(&mut h, button(from, true));
+    for x in (0..=24).map(|i| left + 100.0 + i as f32 * 25.0) {
+        ev(&mut h, Event::PointerMoved(egui::pos2(x, 400.0)));
+        let holes = unpainted(&h, 400.0);
+        assert!(holes.is_empty(), "divider at {x}: unpainted {holes:?}");
+    }
+    ev(&mut h, button(egui::pos2(left + 700.0, 400.0), false));
+}
+
+#[test]
+fn collapsed_and_hidden_columns_leave_no_gap() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(d.path(), 1024.0);
+    for (tc, sc, sh) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+    ] {
+        let s = &mut h.state_mut().0.settings;
+        (s.textures_collapsed, s.sets_collapsed, s.sets_hidden) = (tc, sc, sh);
+        h.run_steps(2);
+        let holes = unpainted(&h, 400.0);
+        assert!(
+            holes.is_empty(),
+            "collapsed {tc} {sc} hidden {sh}: unpainted {holes:?}"
+        );
+    }
+}
