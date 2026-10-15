@@ -2,7 +2,7 @@
 //! GRAS evidence and the PBR grass warnings, at plan level.
 use engine::api::*;
 use engine::codes::Code;
-use engine::config::Target;
+use engine::config::{Subtype, Target};
 use engine::events::*;
 use engine::overrides::parse_set;
 use engine::policy::AcceptSuggestions;
@@ -179,4 +179,84 @@ fn an_albedo_that_reads_as_complex_grass_warns_only_on_pbr_grass() {
     pbr_set(d.path(), BROWN);
     let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
     assert!(!albedo_codes(&p).contains(&Code::PbrGrassDetect));
+}
+
+/// Writes a `w` × `h` RGB image whose texel `(x, y)` is `px(x, y)`.
+fn put_with(dir: &Path, rel: &str, w: u32, h: u32, px: impl Fn(u32, u32) -> [u8; 3]) {
+    let p = dir.join("in").join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    ImageBuffer::from_fn(w, h, |x, y| Rgb(px(x, y)))
+        .save(p)
+        .unwrap();
+}
+
+/// The bottom-left texel `(0, h - 1)` is the one read: a unit vector there warns, unit vectors on the other three
+/// corners of a brown albedo do not.
+#[test]
+fn only_the_bottom_left_texel_of_the_albedo_counts() {
+    let corner = |at_bl: bool| {
+        move |x: u32, y: u32| {
+            let bl = x == 0 && y == 23;
+            let other = (x == 0 || x == 15) && (y == 0 || y == 23) && !bl;
+            if (at_bl && bl) || (!at_bl && other) {
+                UNIT_BLUE
+            } else {
+                BROWN
+            }
+        }
+    };
+    for (at_bl, want) in [(true, true), (false, false)] {
+        let d = tempfile::tempdir().unwrap();
+        pbr_set(d.path(), BROWN);
+        put_with(d.path(), "textures/plants/g.png", 16, 24, corner(at_bl));
+        let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
+        assert_eq!(
+            albedo_codes(&p).contains(&Code::PbrGrassDetect),
+            want,
+            "{at_bl}"
+        );
+    }
+}
+
+/// Review fix 1: a lone GRAS 1:2 diffuse whose bottom half is unit vectors guesses complex_grass in pass 1; an
+/// explicit pbr_grass re-resolves it to a diffuse, and the note follows that final sub-type, once.
+#[test]
+fn a_gras_diffuse_re_resolved_by_an_explicit_pbr_grass_is_noted_once() {
+    let d = tempfile::tempdir().unwrap();
+    put_with(d.path(), "textures/plants/g.png", 16, 32, |_, y| {
+        if y < 16 {
+            BROWN
+        } else {
+            UNIT_BLUE
+        }
+    });
+    let plan_with = |shader: Option<Shader>| {
+        let mut req =
+            BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+        req.recursive = true;
+        req.accept = AcceptSuggestions::High;
+        // A non-PBR GRAS diffuse is on both lists (`gras_diffuses` drives the complex-grass guess).
+        req.gras_diffuses = [SET.to_string()].into();
+        req.gras_all_diffuses = req.gras_diffuses.clone();
+        req.set_shaders = shader.map(|s| (SET.to_string(), s)).into_iter().collect();
+        let rep = Reporter::new(Arc::new(VecSink::default()), "pbr_grass");
+        Engine::new()
+            .unwrap()
+            .plan(req, &rep, &CancelToken::default())
+            .unwrap()
+    };
+    let job = |p: &Plan| p.jobs[0].profile.subtype;
+    assert_eq!(
+        job(&plan_with(None)),
+        Subtype::ComplexGrass,
+        "pass 1 guesses complex grass"
+    );
+    let p = plan_with(Some(Shader::PbrGrass));
+    assert_eq!(job(&p), Subtype::Diffuse);
+    let codes = albedo_codes(&p);
+    assert_eq!(
+        codes.iter().filter(|c| **c == Code::PbrGrassDetect).count(),
+        1,
+        "{codes:?}"
+    );
 }
