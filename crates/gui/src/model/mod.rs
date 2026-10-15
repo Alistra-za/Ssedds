@@ -656,7 +656,7 @@ impl AppModel {
                 Ok(MeshEvidence {
                     votes: meshes::mesh_votes(&db, &keys)?,
                     alpha: meshes::mesh_alpha(&db, &keys)?,
-                    tree_anim: meshes::mesh_tree_anim(&db, &keys)?,
+                    tree_anim: meshes::mesh_tree_anim(&db, &keys).unwrap_or_default(),
                     gras: meshes::gras_diffuses(&db)?,
                 })
             };

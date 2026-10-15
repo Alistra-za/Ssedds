@@ -243,7 +243,10 @@ fn subsurface_selector(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                         (SubMode::Standard, "Standard"),
                         (SubMode::Foliage, "Foliage"),
                     ] {
-                        if ui.selectable_label(mode == m, l).clicked() && mode != m {
+                        // An auto value can be pinned: choosing it stores it (AG110).
+                        if ui.selectable_label(mode == m, l).clicked()
+                            && (mode != m || !set_by_hand)
+                        {
                             for (k, v) in sub_edits(m, c.sub_filled) {
                                 edits.push((k.to_string(), v));
                             }

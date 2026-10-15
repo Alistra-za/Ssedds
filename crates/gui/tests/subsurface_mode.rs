@@ -263,3 +263,72 @@ fn a_selector_change_is_one_undo_step() {
         "one undo restores Foliage"
     );
 }
+
+#[test]
+fn choosing_the_auto_mode_pins_it() {
+    use egui_kittest::kittest::Queryable;
+    const SET: &str = "landscape/rock01";
+    let d = tempfile::tempdir().unwrap();
+    let dir = support::mod_folder(d.path()).join("landscape");
+    image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([200u8, 100, 50]))
+        .save(dir.join("rock01_s.png"))
+        .unwrap();
+    let mut m = support::pbr_opened(d.path());
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with(SET))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 1100.0))
+        .build_ui_state(
+            |ui, m: &mut sdc_gui::model::AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, SET),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label("(auto)");
+    let stored = |h: &egui_kittest::Harness<'_, sdc_gui::model::AppModel>| {
+        h.state()
+            .sets_doc
+            .as_ref()
+            .unwrap()
+            .entries()
+            .into_iter()
+            .find(|e| e.id == SET)
+            .into_iter()
+            .flat_map(|e| e.settings)
+            .find(|(n, _)| n == "subsurface")
+            .map(|(_, v)| v)
+    };
+    assert_eq!(stored(&h), None);
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Standard"))
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Standard").click();
+    h.run();
+    assert_eq!(
+        stored(&h),
+        Some(json!(true)),
+        "the auto value is now pinned"
+    );
+    assert!(h.query_by_label("(auto)").is_none());
+}
+
+#[test]
+fn foliage_without_an_s_texture_blocks_the_export() {
+    use sdc_gui::model::pbr_export::missing_texture_texts;
+    let on = s(&[("subsurface_foliage", json!(true))]);
+    let t = missing_texture_texts("a/b", &on, |_| false);
+    assert_eq!(t.len(), 1);
+    assert!(t[0].contains("subsurface foliage"));
+    assert!(missing_texture_texts("a/b", &on, |k| k == SlotKind::Subsurface).is_empty());
+    // Hair blocks the Subsurface feature, so no texture is asked for.
+    let hair = s(&[("subsurface_foliage", json!(true)), ("hair", json!(true))]);
+    assert!(missing_texture_texts("a/b", &hair, |_| false).is_empty());
+}
