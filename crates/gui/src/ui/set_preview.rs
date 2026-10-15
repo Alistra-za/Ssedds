@@ -356,7 +356,7 @@ pub fn settings_window_id() -> egui::Id {
     egui::Id::new("set-3d-settings-window")
 }
 
-/// The settings toggle, beside Input name… (or the texture's name) in the 3D header row.
+/// The settings toggle, beside the input name box (or the texture's name) in the 3D header row.
 pub fn settings_toggle(ui: &mut egui::Ui, m: &mut AppModel) {
     let mut on = m.settings.set_settings_open;
     if ui

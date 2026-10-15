@@ -146,3 +146,50 @@ impl AppModel {
         Ok(())
     }
 }
+
+/// Note AO: the paths of `paths` that start with `typed` (case-insensitive, `\` read as `/`), in list order.
+fn starting_with<'a>(paths: &'a [String], typed: &str) -> impl Iterator<Item = &'a str> {
+    let t = typed.replace('\\', "/");
+    paths
+        .iter()
+        .map(String::as_str)
+        .filter(move |p| p.get(..t.len()).is_some_and(|h| h.eq_ignore_ascii_case(&t)))
+}
+
+/// Note AO: the gray ghost after `typed`: the rest of the first known path that starts with it. `None` when no path
+/// does, or when `typed` already is the first one.
+pub fn completion(paths: &[String], typed: &str) -> Option<String> {
+    let first = starting_with(paths, typed).next()?;
+    let rest = &first[typed.len()..];
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
+/// Note AO: what Tab accepts of the ghost: up to and including its next separator, or all of it when only one path
+/// is left.
+pub fn tab_part(paths: &[String], typed: &str) -> Option<String> {
+    let ghost = completion(paths, typed)?;
+    if starting_with(paths, typed).nth(1).is_none() {
+        return Some(ghost);
+    }
+    Some(match ghost.find(['/', '\\']) {
+        Some(i) => ghost[..=i].to_string(),
+        None => ghost,
+    })
+}
+
+/// Note AO: the path lock's stops: the byte index of each `/` or `\` in `s`.
+pub fn separator_stops(s: &str) -> Vec<usize> {
+    s.match_indices(['/', '\\']).map(|(i, _)| i).collect()
+}
+
+/// Note AO: where lock `n` cuts `s`: just past its `n`-th separator (0 keeps nothing; past the last keeps the folder).
+pub fn lock_cut(s: &str, n: usize) -> usize {
+    n.checked_sub(1)
+        .and_then(|i| {
+            separator_stops(s)
+                .get(i)
+                .or(separator_stops(s).last())
+                .copied()
+        })
+        .map_or(0, |i| i + 1)
+}

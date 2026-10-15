@@ -160,9 +160,11 @@ The dialog changes only the base name (the part before `_n`, `_normal` and so on
 
 Apply is greyed out while any row is red: two names collide, a name Windows cannot use, a changed extension, or an output name ending in a map suffix. Amber rows are warnings: a file whose name now reads as another kind of map, or an output that scanned meshes still use under its old name.
 
-### Input name picker
+### Input name box
 
-On the set editor heading, **Input name…** lists known texture paths: every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths. A filter box narrows the list (all words must appear), and you can type a path. Picking one gives every member of the set an `[inputs]` alias with its own suffix and extension. The set's TruePBR settings, pins and borrows follow it. The menu refuses, with the reason, a path outside the project's folder, a name another file already has, a pinned slot, or the same name.
+On the set editor heading, the **input name** box shows the path the set's textures are read as, and you can type a new one. While you type, the best known texture path (every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths) shows in gray after the text: **Tab** takes it up to the next `/`, Tab again keeps going, and **Right arrow** at the end takes all of it. **Enter**, or clicking away, gives every member of the set an `[inputs]` alias with its own suffix and extension, as one undo step; **Esc** puts the old name back. The set's TruePBR settings, pins and borrows follow it. A name that cannot be used (outside the project's folder, a name another file already has, a pinned slot) gets a red outline, with the reason on hover, and is never applied.
+
+The folder part of the name is locked: it is dimmed and you edit only the file name. The thin rail along the bottom of the box has a stop at each `/`; drag it (or press **Ctrl+Left / Ctrl+Right** in the box) to lock more or less of the path. The **▾** at the right lists the known paths under the locked part, with a filter box (all words must appear); click one to use it.
 
 ## The 2D preview
 
@@ -213,7 +215,7 @@ Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created
 
 ### The set editor
 
-Select a set to edit it. The heading has **Input name…** and a **2D | 3D** switch (remembered in `gui.toml`, default 2D) that swaps the centre pane in place; in 3D the settings fold in sections above the view.
+Select a set to edit it. The heading has the input name box and a **2D | 3D** switch (remembered in `gui.toml`, default 2D) that swaps the centre pane in place; in 3D the settings fold in sections above the view.
 
 A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR box: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
 

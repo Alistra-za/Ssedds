@@ -31,7 +31,7 @@ fn harness() -> (tempfile::TempDir, H) {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    h.get_by_label("Input name…").click();
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
     h.get_by_label(HEADING);
     (d, h)
@@ -86,9 +86,15 @@ fn typing_in_the_input_name_filter_keeps_the_popup_open() {
 #[test]
 fn a_click_outside_or_esc_closes_the_input_name_popup() {
     let (_d, mut h) = harness();
-    click_at(&mut h, egui::pos2(800.0, 880.0));
+    // A spot on the background (not on a slot card, whose click opens its own window).
+    let outside = egui::pos2(1500.0, 300.0);
+    assert_eq!(
+        h.ctx.layer_id_at(outside).map(|l| l.order),
+        Some(egui::Order::Background)
+    );
+    click_at(&mut h, outside);
     assert!(h.query_by_label(HEADING).is_none(), "click outside");
-    h.get_by_label("Input name…").click();
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
     h.get_by_label(HEADING);
     h.key_press(egui::Key::Escape);
