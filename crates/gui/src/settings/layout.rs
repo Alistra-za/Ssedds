@@ -113,7 +113,7 @@ pub struct LookSettings {
     pub point: Option<f32>,
     #[serde(deserialize_with = "lenient")]
     pub radius: Option<f32>,
-    /// The sun's turn about the vertical, radians (Task 10, AG74).
+    /// The sun's turn about the vertical, radians (Task 10, AG74). The HDRI backdrop and its ambient turn with it (AN4).
     #[serde(deserialize_with = "lenient")]
     pub sun_yaw: Option<f32>,
 }
