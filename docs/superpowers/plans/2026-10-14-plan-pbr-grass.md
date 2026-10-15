@@ -1,5 +1,7 @@
 # PBR Grass Material Type Implementation Plan
 
+> Note (2026-10-15): after main was merged into nif/main, this work's DECISIONS note is **Note AL** (main already had a Note AG). Read every "Note AG" / "AG1-AG7" below as AL / AL1-AL7. AL8 records that the grass subsurface default was dropped in favour of main's auto rule.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** sdc gets a `pbr_grass` set shader (CS only) that a PBR set used by a GRAS record picks automatically. Its PGPatcher form shows only the keys Community Shaders' grass shader reads. It warns that PGPatcher 1.2.0 does not patch grass meshes and when the albedo would trip CS's complex-grass detector, and its 3D preview says it is approximated.

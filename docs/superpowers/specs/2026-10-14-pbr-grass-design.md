@@ -1,5 +1,7 @@
 # PBR grass material type (design)
 
+> Note (2026-10-15): after main was merged into nif/main, this work's DECISIONS note is **Note AL** (main already had a Note AG). Read every "Note AG" / "AG1-AG7" below as AL / AL1-AL7. AL8 records that the grass subsurface default was dropped in favour of main's auto rule.
+
 Date: 2026-10-14. Status: design approved by the owner in chat (2026-10-14, "approved, go ahead"); this file writes it down with the rulings needed to build it. Evidence: `01-research.md` in this folder. Plan: `2026-10-14-plan-pbr-grass.md`.
 
 Code base read: `F:\ai\dds\converter-nif-p1`, `nif/main` at `b4c228e`. Conflict check against `main` at `3be490a` (the local `main` ref; `d5bd603` is PR #9, docs only, and is older than `3be490a` for `docs/DECISIONS.md`).
