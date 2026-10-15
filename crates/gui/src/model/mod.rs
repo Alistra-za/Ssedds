@@ -345,6 +345,8 @@ pub struct AppModel {
     /// File-exists answers asked while drawing (the scan DB, Show in Explorer), re-checked at most once a second
     /// (AG128).
     pub stats: std::cell::RefCell<shell::StatCache>,
+    /// A Save report write is on a worker (AG130); the app keeps frames coming until it lands.
+    pub report_saving: bool,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -482,6 +484,7 @@ impl AppModel {
             nav: Default::default(),
             shell: Vec::new(),
             stats: Default::default(),
+            report_saving: false,
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -887,6 +890,7 @@ impl AppModel {
                     "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
+                    "save-report" => self.report_saving = false,
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -936,6 +940,7 @@ impl AppModel {
     /// Messages the export and the preview handle.
     fn handle_more(&mut self, msg: WorkerMsg) {
         match msg {
+            WorkerMsg::ReportSaved { path, result } => self.report_saved(&path, result),
             WorkerMsg::Event(e) => self.export.on_event(e),
             WorkerMsg::ExportDone(result) => {
                 self.export.running = None;

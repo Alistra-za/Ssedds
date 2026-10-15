@@ -53,24 +53,40 @@ pub fn group_of(field: &str) -> &'static str {
     }
 }
 
+/// "BC7": the one format-name table (AG130); `format_label` and the output size line read it.
+pub fn format_name(format: Format) -> &'static str {
+    match format {
+        Format::Bc1 => "BC1",
+        Format::Bc3 => "BC3",
+        Format::Bc7 => "BC7",
+        Format::Bc4 => "BC4",
+        Format::Bc5 => "BC5",
+        Format::Bc6hUf16 => "BC6H",
+        Format::Rgba8 => "RGBA8",
+        Format::R8 => "R8",
+        Format::Rg8 => "RG8",
+        Format::Rgba16f => "RGBA16F",
+    }
+}
+
+/// "BC7 · sRGB": the name and what the format stores.
 pub fn format_label(format: Format, tag: ColorTag) -> String {
     let space = if tag == ColorTag::Srgb {
         "sRGB"
     } else {
         "linear"
     };
-    match format {
-        Format::Bc1 => format!("BC1 · {space}"),
-        Format::Bc3 => format!("BC3 · {space}"),
-        Format::Bc7 => format!("BC7 · {space}"),
-        Format::Bc4 => "BC4 · linear (one channel)".into(),
-        Format::Bc5 => "BC5 · linear (two channels)".into(),
-        Format::Bc6hUf16 => "BC6H · HDR linear".into(),
-        Format::Rgba8 => format!("RGBA8 · {space} (uncompressed)"),
-        Format::R8 => "R8 · linear (one channel, uncompressed)".into(),
-        Format::Rg8 => "RG8 · linear (two channels, uncompressed)".into(),
-        Format::Rgba16f => "RGBA16F · HDR linear (uncompressed)".into(),
-    }
+    let what = match format {
+        Format::Bc1 | Format::Bc3 | Format::Bc7 => space.to_string(),
+        Format::Bc4 => "linear (one channel)".into(),
+        Format::Bc5 => "linear (two channels)".into(),
+        Format::Bc6hUf16 => "HDR linear".into(),
+        Format::Rgba8 => format!("{space} (uncompressed)"),
+        Format::R8 => "linear (one channel, uncompressed)".into(),
+        Format::Rg8 => "linear (two channels, uncompressed)".into(),
+        Format::Rgba16f => "HDR linear (uncompressed)".into(),
+    };
+    format!("{} · {what}", format_name(format))
 }
 
 /// Appended to the label of a current value a picker keeps although the engine does not allow it.

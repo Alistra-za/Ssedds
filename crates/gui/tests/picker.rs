@@ -129,6 +129,7 @@ fn each_purpose_reaches_its_own_handler() {
         Some(report.clone()),
     );
     m.poll();
+    settle_report(&mut m);
     assert!(report.is_file(), "the report was written");
 
     let mut m = opened(&d.path().join("a"));
@@ -321,4 +322,56 @@ fn the_export_folder_cannot_change_while_an_export_runs() {
     h.run();
     let b = h.get_by_label_contains("Export folder:");
     assert!(b.accesskit_node().is_disabled());
+}
+
+/// Polls until the Save report worker has answered.
+fn settle_report(m: &mut AppModel) {
+    let end = std::time::Instant::now() + Duration::from_secs(30);
+    while m.report_saving {
+        assert!(std::time::Instant::now() < end, "the report write landed");
+        m.poll();
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn save_report_writes_on_a_worker_and_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = model();
+    let report = d.path().join("r.md");
+    ask(
+        &m.picker,
+        PickerPurpose::SaveReport,
+        None,
+        Some(report.clone()),
+    );
+    m.poll();
+    assert!(m.report_saving, "the write runs on a worker");
+    settle_report(&mut m);
+    assert!(report.is_file());
+    assert!(
+        m.status_line.starts_with("Saved report: "),
+        "{}",
+        m.status_line
+    );
+    assert!(m
+        .messages
+        .toasts()
+        .iter()
+        .any(|t| t.text.starts_with("Saved report: ")));
+    // A path that cannot be written: the error goes to the status line and a toast, no dialog.
+    ask(
+        &m.picker,
+        PickerPurpose::SaveReport,
+        None,
+        Some(d.path().to_path_buf()),
+    );
+    m.poll();
+    settle_report(&mut m);
+    assert!(
+        m.status_line.starts_with("Could not write the report"),
+        "{}",
+        m.status_line
+    );
+    assert!(m.dialog.is_none());
 }

@@ -372,6 +372,7 @@ impl eframe::App for SdcApp {
             || self.model.rnm_preview_pending()
             || self.model.dims_pending()
             || self.model.used_by_pending()
+            || self.model.report_saving
             || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()

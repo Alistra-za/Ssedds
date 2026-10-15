@@ -51,14 +51,6 @@ pub fn estimate(src: (u32, u32), p: &Profile) -> SizeEst {
     }
 }
 
-/// "BC7".
-pub fn format_name(f: Format) -> String {
-    serde_json::to_value(f)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_uppercase))
-        .unwrap_or_else(|| format!("{f:?}"))
-}
-
 thread_local! {
     static HEADER_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }

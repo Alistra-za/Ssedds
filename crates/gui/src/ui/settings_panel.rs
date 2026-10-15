@@ -1019,7 +1019,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
 /// Item 22 (DECISIONS AG118): the DDS this texture writes: format, size after any resize, mips, bytes. A compressed
 /// size is also its video memory.
 fn size_line(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
-    use crate::model::out_size::{format_name, human};
+    use crate::model::{fields::format_name, out_size::human};
     match model.size_of(key) {
         Some(e) => {
             ui.label(format!(

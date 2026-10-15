@@ -172,17 +172,21 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
     }
 }
 
-/// `.md` writes the Markdown report; anything else the JSON Lines event stream.
-pub fn write_report(model: &AppModel, path: &Path) -> std::io::Result<()> {
+/// The report text for `path`: `.md` is the Markdown report, anything else the JSON Lines event stream.
+pub fn report_text(model: &AppModel, path: &Path) -> String {
     let markdown = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("md"));
-    let text = if markdown {
+    if markdown {
         model.export.to_markdown()
     } else {
         model.export.to_jsonl()
-    };
-    std::fs::write(path, text)
+    }
+}
+
+/// Write the report on the calling thread (tests; the app writes it on a worker, `AppModel::save_report`).
+pub fn write_report(model: &AppModel, path: &Path) -> std::io::Result<()> {
+    std::fs::write(path, report_text(model, path))
 }
 
 /// The Files tab: only the rows on screen are laid out (`show_rows`), over the cached filtered index.

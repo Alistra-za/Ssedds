@@ -116,7 +116,7 @@ fn the_settings_panel_and_the_status_line_show_the_estimate() {
     h.run();
     let line = format!(
         "Output: {} · 64×64 · {} mips · {} ≈ VRAM",
-        sdc_gui::model::out_size::format_name(e.format),
+        sdc_gui::model::fields::format_name(e.format),
         e.mips,
         human(e.chain_bytes)
     );

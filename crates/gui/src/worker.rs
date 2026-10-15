@@ -94,6 +94,11 @@ pub enum WorkerMsg {
         generation: u64,
         probe: engine::nvtt::NvttProbe,
     },
+    /// A Save report write ended (AG130): the path and the error, if any.
+    ReportSaved {
+        path: std::path::PathBuf,
+        result: Result<(), String>,
+    },
 }
 
 /// Forwards every engine event into the channel and nothing else, so it never slows the encoders (plan M3 carry).

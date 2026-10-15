@@ -465,3 +465,23 @@ fn the_delete_hover_is_on_the_delete_checkbox() {
     h.run();
     h.get_by_label_contains("Delete takes priority");
 }
+
+#[test]
+fn no_sorter_is_last_says_it_has_no_effect_and_round_trips() {
+    use sdc_gui::ui::pgp_fields::NO_SORTER_LABEL;
+    let d = tempfile::tempdir().unwrap();
+    // 0x12ED and 0x32ED: the captured hair, bit 13 off and on (AG131).
+    let mut h = with_flags(d.path(), json!(0x32ED));
+    let ns = h.get_by_label(NO_SORTER_LABEL);
+    let raw = h
+        .query_all_by_role(TEXT)
+        .find(|n| n.value().as_deref() == Some("13037"))
+        .expect("the raw box");
+    assert!(ns.rect().top() > raw.rect().top(), "drawn last");
+    ns.click();
+    h.run();
+    assert_eq!(stored(h.state(), "alphaprop_flags"), Some(json!(0x12ED)));
+    h.get_by_label(NO_SORTER_LABEL).click();
+    h.run();
+    assert_eq!(stored(h.state(), "alphaprop_flags"), Some(json!(0x32ED)));
+}

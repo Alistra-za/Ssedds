@@ -340,3 +340,26 @@ fn an_incompatible_current_encoding_is_kept_and_marked() {
         format!("BC7 · linear{NOT_VALID}")
     )));
 }
+
+#[test]
+fn every_format_label_starts_with_its_one_name() {
+    for f in [
+        Format::Bc1,
+        Format::Bc3,
+        Format::Bc7,
+        Format::Bc4,
+        Format::Bc5,
+        Format::Bc6hUf16,
+        Format::Rgba8,
+        Format::R8,
+        Format::Rg8,
+        Format::Rgba16f,
+    ] {
+        let label = format_label(f, ColorTag::Srgb);
+        assert!(
+            label.starts_with(&format!("{} · ", format_name(f))),
+            "{label}"
+        );
+    }
+    assert_eq!(format_name(Format::Bc6hUf16), "BC6H");
+}

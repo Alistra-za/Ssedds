@@ -641,6 +641,12 @@ pub(crate) fn alpha_default(key: &str) -> i64 {
 }
 
 const DELETE_WINS: &str = "Delete takes priority over the other alpha keys of this entry";
+/// AG131: NiAlphaProperty bit 13. A capture (frame15011) showed Skyrim SE draws a blended shape in its stored triangle
+/// order with the bit on or off.
+pub const NO_SORTER_LABEL: &str = "No sorter (no effect in Skyrim SE)";
+const NO_SORTER_HOVER: &str = "Bit 13. Skyrim SE does not sort the triangles of an alpha-blended shape, so this \
+     bit changes nothing: a RenderDoc capture drew the same hair with it off and on from byte-identical index lists, \
+     in the order stored in the NIF. Kept so a stored value round-trips; Tessalith never sets it.";
 const ALPHA_KEYS: [&str; 4] = [
     "alphaprop_flags",
     "alphaprop_thresh",
@@ -805,8 +811,6 @@ fn alpha_flag_controls(ui: &mut egui::Ui, c: &Ctx, f: AlphaFlags, edits: &mut Ve
         ui.label("Test function");
         alpha_combo(ui, ("Test function", &c.set), &mut n.func, &TEST_FUNCS);
     });
-    ui.checkbox(&mut n.no_sorter, "No sorter")
-        .on_hover_text("Bit 13: leave the shape out of the depth sorting");
     if n != f {
         edits.push(("alphaprop_flags".into(), Some(json!(n.raw()))));
     }
@@ -843,6 +847,15 @@ fn alpha_flag_controls(ui: &mut egui::Ui, c: &Ctx, f: AlphaFlags, edits: &mut Ve
             }
         }
     });
+    // AG131: last, as it does nothing in Skyrim SE; kept so a stored bit 13 round-trips, never set automatically.
+    let mut ns = f;
+    if ui
+        .checkbox(&mut ns.no_sorter, NO_SORTER_LABEL)
+        .on_hover_text(NO_SORTER_HOVER)
+        .changed()
+    {
+        edits.push(("alphaprop_flags".into(), Some(json!(ns.raw()))));
+    }
 }
 
 fn alpha_combo(ui: &mut egui::Ui, id: (&str, &String), v: &mut u8, list: &[&str]) {

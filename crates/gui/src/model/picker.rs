@@ -277,16 +277,38 @@ impl AppModel {
                 self.replan();
             }
             PickerPurpose::NvttPath => self.set_nvtt_path(Some(path)),
-            PickerPurpose::SaveReport => {
-                if let Err(e) = crate::ui::drawer::write_report(self, &path) {
-                    self.dialog = Some(super::Dialog::Error(format!(
-                        "Could not write the report to {}: {e}",
-                        path.display()
-                    )));
-                }
-            }
+            PickerPurpose::SaveReport => self.save_report(path),
             // The meshes and 3D models handle their own.
             PickerPurpose::ChooseMo2 | PickerPurpose::ScanFolder | PickerPurpose::ShaderFolder => {}
         }
+    }
+}
+
+impl AppModel {
+    /// AG130: the report text is built here, the file is written on a worker; the result goes to the status line
+    /// and a toast (`report_saved`).
+    pub fn save_report(&mut self, path: std::path::PathBuf) {
+        let text = crate::ui::drawer::report_text(self, &path);
+        self.report_saving = true;
+        crate::worker::spawn_guarded(self.tx.clone(), "save-report", move |tx| {
+            let result = std::fs::write(&path, text).map_err(|e| e.to_string());
+            let _ = tx.send(crate::worker::WorkerMsg::ReportSaved { path, result });
+        });
+    }
+
+    pub(super) fn report_saved(&mut self, path: &std::path::Path, result: Result<(), String>) {
+        self.report_saving = false;
+        let (sev, note) = match result {
+            Ok(()) => (
+                super::messages::Severity::Info,
+                format!("Saved report: {}", path.display()),
+            ),
+            Err(e) => (
+                super::messages::Severity::Error,
+                format!("Could not write the report to {}: {e}", path.display()),
+            ),
+        };
+        self.status_line = note.clone();
+        self.messages.notify(sev, note);
     }
 }
