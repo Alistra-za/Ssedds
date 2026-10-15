@@ -74,15 +74,16 @@ fn append(path: &Path, line: &str) {
 
 /// Note AR: wgpu reports a lost device to no one (egui-wgpu then panics on the next frame with "Failed to create
 /// staging buffer"), so the reason goes to the crash log and the timing log.
-pub fn watch_device(device: &eframe::egui_wgpu::wgpu::Device, log: Option<PathBuf>) {
-    device.set_device_lost_callback(move |reason, message| {
-        let line = format!("{} wgpu device lost ({reason:?}): {message}\n", now_stamp());
+pub fn watch_device(rs: &eframe::egui_wgpu::RenderState, log: Option<PathBuf>) {
+    let backend = format!("{:?}", rs.adapter.get_info().backend);
+    rs.device.set_device_lost_callback(move |reason, message| {
+        let line = format!("{} wgpu device lost ({reason:?}, {backend}): {message}\n", now_stamp());
         if let Some(path) = &log {
             append(path, &line);
         }
         render3d::perf_log::emit(
             "device_lost",
-            serde_json::json!({ "reason": format!("{reason:?}"), "message": message }),
+            serde_json::json!({ "reason": format!("{reason:?}"), "backend": backend, "message": message }),
         );
     });
 }
