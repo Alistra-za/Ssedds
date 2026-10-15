@@ -519,6 +519,8 @@ pub struct MeshesModel {
     settings: MeshesSettings,
     settings_changed: bool,
     activated: bool,
+    /// The profiles of the chosen MO2 instance (Note AM), read when the instance is set.
+    profiles: Vec<String>,
     store: Option<Store>,
     request: Option<ScanRequest>,
     cancel: Option<Arc<AtomicBool>>,
@@ -589,6 +591,7 @@ impl MeshesModel {
             settings,
             settings_changed: false,
             activated: false,
+            profiles: vec![],
             store: None,
             request: None,
             cancel: None,
@@ -625,6 +628,7 @@ impl MeshesModel {
                 self.dialog = Some(MeshesDialog::Mo2 { root, profile });
             }
         }
+        self.read_profiles();
         self.v3.locate(self.target.clone());
         if let Some(p) = self.store_path.clone() {
             match Store::open(&p) {
@@ -651,6 +655,44 @@ impl MeshesModel {
         self.settings.folder = None;
         self.settings_changed = true;
         self.target = Some(ScanTarget::Mo2 { root, profile });
+        self.read_profiles();
+    }
+
+    /// The profiles of the chosen instance: folders under its profiles folder that hold a `modlist.txt`, by name.
+    pub fn profiles(&self) -> &[String] {
+        &self.profiles
+    }
+
+    fn read_profiles(&mut self) {
+        let profiles = match &self.target {
+            Some(ScanTarget::Mo2 { root, profile }) => Instance::load(root, Some(profile))
+                .or_else(|_| Instance::load(root, None))
+                .ok()
+                .and_then(|i| std::fs::read_dir(i.profiles).ok())
+                .map(|rd| {
+                    let mut v: Vec<String> = rd
+                        .flatten()
+                        .filter(|e| e.path().join("modlist.txt").is_file())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect();
+                    v.sort_by_key(|s| s.to_lowercase());
+                    v
+                })
+                .unwrap_or_default(),
+            _ => vec![],
+        };
+        self.profiles = profiles;
+    }
+
+    /// What the scan reads, in words (the MO2… button's hover text).
+    pub fn source_text(&self) -> String {
+        match &self.target {
+            Some(ScanTarget::Mo2 { root, profile }) => {
+                format!("MO2 instance {}, profile {profile}", root.display())
+            }
+            Some(ScanTarget::Folder(f)) => format!("Folder {}", f.display()),
+            None => "No source chosen".into(),
+        }
     }
 
     /// "Choose instance…": an MO2 instance folder (with `ModOrganizer.ini`), its selected profile.
@@ -669,6 +711,7 @@ impl MeshesModel {
         self.settings.folder = Some(folder.clone());
         self.settings_changed = true;
         self.target = Some(ScanTarget::Folder(folder));
+        self.profiles.clear();
     }
 
     /// The `[meshes]` settings when they changed since the last call (`app.rs` saves them in `gui.toml`).

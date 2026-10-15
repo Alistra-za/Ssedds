@@ -21,7 +21,7 @@ The window has two views, picked in the header: the Textures view (converter and
 | **JSON:** | The name of the TruePBR JSON file. By default the folder name. |
 | **Editor…** | Open the TruePBR JSON editor window. |
 
-The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). On the Textures view, a scan row under the header holds the scan source, **Choose MO2 instance…**, **Scan a folder…** and **Scan** / **Cancel**.
+The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). The **MO2…** header button opens the scan source popup: the MO2 instance with **Choose…**, its profiles, **Scan a folder…** and **Scan** / **Cancel**; the button's hover text names the instance and profile. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
 
 When you open a folder, the GUI reads it recursively, analyses every image and plans the conversion. Nothing is written to your textures. If `sdc.toml` cannot be parsed or the engine rejects it (an unknown field, an unknown `allow` code, an unknown sub-type; most out-of-range values are reported per file as `CFG-INVALID` instead), the folder is planned without it, the banner shows the error, and the GUI stays read-only until you fix the file and press **Reload**.
 

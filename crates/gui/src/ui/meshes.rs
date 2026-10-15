@@ -21,7 +21,10 @@ const MAX_LISTED: usize = 200;
 /// The whole page in the app: the view toggle, then the view.
 pub fn page(ui: &mut egui::Ui, m: &mut MeshesModel) {
     egui::Panel::top("meshes-header").show(ui, |ui| {
-        ui.horizontal(super::header::view_toggle);
+        ui.horizontal(|ui| {
+            super::header::view_toggle(ui);
+            mo2_button(ui, m);
+        });
     });
     show(ui, m);
 }
@@ -39,17 +42,11 @@ fn chip(ui: &mut egui::Ui, color: egui::Color32, text: &str) -> egui::Response {
     ui.label(egui::RichText::new(text).small().color(color))
 }
 
-/// The scan source and its buttons: shared by the Meshes view's bar and the Textures view's scan row.
-pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    ui.horizontal_wrapped(|ui| {
-        let source = match &m.target {
-            Some(ScanTarget::Mo2 { root, profile }) => {
-                format!("MO2 instance {}, profile {profile}", root.display())
-            }
-            Some(ScanTarget::Folder(f)) => format!("Folder {}", f.display()),
-            None => "No source chosen".into(),
-        };
-        ui.label(source);
+/// The header's "MO2…" button (Note AM): a popup with the instance and its Choose…, the profiles, Scan a folder…
+/// and Scan or Cancel. A click inside keeps it open; a click outside or Esc closes it.
+pub fn mo2_button(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let hover = m.source_text();
+    let r = super::path_picker::menu(ui, "MO2…", |ui| {
         let (idle, busy) = (!m.scanning(), m.picker.busy());
         let pick = |ui: &mut egui::Ui, label: &str| {
             let r = ui.add_enabled(idle && !busy, egui::Button::new(label));
@@ -60,14 +57,36 @@ pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
             })
             .clicked()
         };
-        if pick(ui, "Choose MO2 instance…") {
-            m.picker.request(
-                ui.ctx(),
-                PickerPurpose::ChooseMo2,
-                None,
-                PickerSpec::folder(),
-            );
+        ui.horizontal(|ui| {
+            let shown = match &m.target {
+                Some(ScanTarget::Mo2 { root, .. }) => format!("Instance: {}", root.display()),
+                _ => "Instance: none".into(),
+            };
+            ui.label(shown);
+            if pick(ui, "Choose…") {
+                m.picker.request(
+                    ui.ctx(),
+                    PickerPurpose::ChooseMo2,
+                    None,
+                    PickerSpec::folder(),
+                );
+            }
+        });
+        if let Some(ScanTarget::Mo2 { root, profile }) = m.target.clone() {
+            ui.label("Profile:");
+            let mut picked = None;
+            ui.add_enabled_ui(idle, |ui| {
+                for p in m.profiles() {
+                    if ui.selectable_label(*p == profile, p).clicked() && *p != profile {
+                        picked = Some(p.clone());
+                    }
+                }
+            });
+            if let Some(p) = picked {
+                m.use_instance(root, p);
+            }
         }
+        ui.separator();
         if pick(ui, "Scan a folder…") {
             m.picker.request(
                 ui.ctx(),
@@ -76,6 +95,27 @@ pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
                 PickerSpec::folder(),
             );
         }
+        if m.scanning() {
+            if ui.button("Cancel").clicked() {
+                m.cancel_scan();
+            }
+        } else if ui
+            .add_enabled(
+                m.target.is_some(),
+                egui::Button::new(egui::RichText::new("Scan").strong()),
+            )
+            .clicked()
+        {
+            m.request_scan(false);
+        }
+    });
+    r.response.on_hover_text(hover);
+}
+
+/// The scan's progress and ETA with its Cancel, while a scan runs: shared by the Meshes view's bar and the Textures
+/// view's scan row.
+pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    ui.horizontal_wrapped(|ui| {
         if m.scanning() {
             ui.spinner();
             if let (Some((_, done, total)), Some(text)) =
@@ -91,24 +131,26 @@ pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
             if ui.button("Cancel").clicked() {
                 m.cancel_scan();
             }
-        } else if ui
-            .add_enabled(
-                m.target.is_some(),
-                egui::Button::new(egui::RichText::new("Scan").strong()),
-            )
-            .clicked()
-        {
-            m.request_scan(false);
         }
     });
 }
 
-/// The Textures view's scan row: the same source and buttons, the status, and an error. The details, banners and
-/// plugin references stay in the Meshes view.
+/// The Textures view draws its scan row only when it has something to show (Note AM: the source moved to MO2…).
+pub fn scan_row_shown(m: &MeshesModel) -> bool {
+    m.scanning() || !m.status.is_empty() || m.error.is_some()
+}
+
+/// The Meshes dialogs (the MO2 question can come from the header's MO2… button in either view).
+pub fn scan_dialogs(ctx: &egui::Context, m: &mut MeshesModel) {
+    dialogs(ctx, m);
+}
+
+/// The Textures view's scan row: the progress, the status, and an error. The details, banners and plugin references
+/// stay in the Meshes view.
 pub fn scan_row(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    scan_controls(ui, m);
-    // The MO2 question (and any other Meshes dialog) can come from these buttons too.
-    dialogs(ui.ctx(), m);
+    if m.scanning() {
+        scan_controls(ui, m);
+    }
     if !m.status.is_empty() {
         ui.weak(&m.status);
     }
@@ -123,7 +165,9 @@ pub fn scan_row(ui: &mut egui::Ui, m: &mut MeshesModel) {
 }
 
 fn bar(ui: &mut egui::Ui, m: &mut MeshesModel) {
-    scan_controls(ui, m);
+    if m.scanning() {
+        scan_controls(ui, m);
+    }
     if !m.status.is_empty() {
         ui.label(&m.status);
     }

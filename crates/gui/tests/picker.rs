@@ -264,7 +264,10 @@ fn the_actions_and_buttons_are_disabled_while_a_dialog_is_open() {
     );
     let mut h = Harness::builder()
         .with_size(egui::vec2(900.0, 200.0))
-        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::header::draw(ui, m), m);
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::header::draw(ui, m, None),
+            m,
+        );
     h.run();
     let b = h.get_by_label("Open folder…");
     assert!(b.accesskit_node().is_disabled());

@@ -50,7 +50,11 @@ fn set_title(ctx: &egui::Context, title: String) {
     }
 }
 
-pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
+pub fn draw(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    scan: Option<&mut crate::model::meshes::MeshesModel>,
+) {
     set_title(ui.ctx(), window_title(model));
     egui::Panel::top("header").show(ui, |ui| {
         // AG126: one wrapped row, so a narrow window moves controls to a second line instead of drawing them on top
@@ -62,6 +66,10 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
             recent_menu(ui, model);
             undo_redo(ui, model);
             view_toggle(ui);
+            if let Some(m) = scan {
+                fit(ui, button_width(ui, "MO2…"));
+                super::meshes::mo2_button(ui, m);
+            }
             mode_combo(ui, model);
             column_checkboxes(ui, model);
             json_name_field(ui, model);

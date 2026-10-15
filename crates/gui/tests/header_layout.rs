@@ -14,7 +14,8 @@ type H = Harness<'static, (AppModel, State, MeshesModel)>;
 const WIDTHS: [f32; 4] = [1440.0, 1024.0, 800.0, 640.0];
 
 /// The controls every Textures header must show.
-const CONTROLS: [&str; 12] = [
+const CONTROLS: [&str; 13] = [
+    "MO2…",
     "Open folder…",
     "Recent",
     "Undo",
@@ -89,7 +90,8 @@ fn the_textures_header_never_overlaps() {
     for w in WIDTHS {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, false);
         assert_no_overlap(&h, "header", w);
-        assert_no_overlap(&h, "textures-scan", w);
+        // Note AM: an idle scan row is not drawn (the source moved to MO2…).
+        assert!(PanelState::load(&h.ctx, Id::new("textures-scan")).is_none());
         for c in CONTROLS {
             h.get_by_label(c);
         }
@@ -113,6 +115,10 @@ fn the_meshes_header_never_overlaps() {
     for w in WIDTHS {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, true);
         assert_no_overlap(&h, "meshes-header", w);
-        assert_no_overlap(&h, "meshes-bar", w);
+        h.get_by_label("MO2…");
+        // Note AM: an idle bar with no status holds nothing.
+        if !widgets(&h, "meshes-bar").is_empty() {
+            assert_no_overlap(&h, "meshes-bar", w);
+        }
     }
 }

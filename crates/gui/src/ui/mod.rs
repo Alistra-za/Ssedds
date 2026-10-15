@@ -85,9 +85,14 @@ pub fn draw_with_scan(
     actions::keys(ui.ctx(), model, state.drops.pending.is_some());
     // The column sets it again if it draws; a hidden or collapsed column leaves Up and Down off.
     model.nav.cols = 0;
-    header::draw(ui, model);
     if let Some(m) = scan {
-        egui::Panel::top("textures-scan").show(ui, |ui| meshes::scan_row(ui, m));
+        header::draw(ui, model, Some(&mut *m));
+        if meshes::scan_row_shown(m) {
+            egui::Panel::top("textures-scan").show(ui, |ui| meshes::scan_row(ui, m));
+        }
+        meshes::scan_dialogs(ui.ctx(), m);
+    } else {
+        header::draw(ui, model, None);
     }
     advanced::draw(ui, model, &mut state.advanced);
     let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);

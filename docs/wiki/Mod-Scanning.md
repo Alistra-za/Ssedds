@@ -22,11 +22,11 @@ Because the CLI does not read the scan, a folder decided partly from scan eviden
 
 ## Choosing what to scan
 
-The scan source is shown on the scan row (on both the Textures view and the Meshes view) as "MO2 instance X, profile Y" or "Folder X".
+The scan source sits behind the **MO2…** button in the header (on both the Textures view and the Meshes view); its hover text reads "MO2 instance X, profile Y" or "Folder X". The button opens a popup with the instance and **Choose…**, the instance's profiles (click one to switch), **Scan a folder…** and **Scan** / **Cancel**. A click inside the popup keeps it open; a click outside or Esc closes it. While a scan runs, its progress bar and ETA show on the scan row under the header.
 
 ### A Mod Organizer 2 instance
 
-**Choose MO2 instance…** picks the instance. Tessalith reads `ModOrganizer.ini` for the game path, the mods, overwrite and profiles folders, and the profile. It then follows that profile's mod list:
+**Choose…** in the MO2… popup picks the instance. Tessalith reads `ModOrganizer.ini` for the game path, the mods, overwrite and profiles folders, and the profile. It then follows that profile's mod list:
 
 - Enabled mods (`+` in `modlist.txt`) in priority order, with the game's `Data` folder lowest and `overwrite` highest. Disabled mods and separators are skipped. An enabled mod whose folder is missing is reported.
 - The active BSA archives: every `Skyrim - *.bsa` in the game's `Data` folder (always active), then the archives the game INIs list (falling back to `Skyrim_Default.ini` in the game folder when the profile's INIs list none), then the archives the active plugins load.
