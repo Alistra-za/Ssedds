@@ -211,6 +211,25 @@ impl ProjectDoc {
         }
     }
 
+    /// `preset`, read from the document (no parse: the header asks every frame).
+    pub fn preset(&self) -> Option<String> {
+        self.doc.get("preset")?.as_str().map(str::to_string)
+    }
+
+    /// `preset = "<id>"`, or removed with `None` (the target's default preset then applies).
+    pub fn set_preset(&mut self, id: Option<&str>) {
+        if self.read_only() {
+            return;
+        }
+        match id {
+            Some(id) => set_value(self.doc.as_table_mut(), "preset", Value::from(id)),
+            None => {
+                self.doc.as_table_mut().remove("preset");
+            }
+        }
+        self.dirty = true;
+    }
+
     /// The `[files]` table (or inline table), if there is one.
     fn files(&self) -> Option<&dyn TableLike> {
         self.doc.get("files")?.as_table_like()

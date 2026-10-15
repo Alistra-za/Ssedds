@@ -71,6 +71,7 @@ pub fn draw(
                 super::meshes::mo2_button(ui, m);
             }
             mode_combo(ui, model);
+            preset_combo(ui, model);
             fit(ui, button_width(ui, "Presets…"));
             if ui
                 .button("Presets…")
@@ -221,6 +222,44 @@ fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     });
     if picked != model.target {
         model.set_target(picked);
+    }
+}
+
+/// The project's preset (AM12): the target's default, or a preset of this target (a user preset appears once saved).
+fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
+    let default = format!(
+        "default ({})",
+        engine::presets::default_preset_for(model.target)
+    );
+    let cur = model.project_preset();
+    let gap = ui.spacing().item_spacing.x;
+    fit(
+        ui,
+        button_width(ui, "Preset") + gap + ui.spacing().combo_width,
+    );
+    ui.label("Preset");
+    let mut picked = None;
+    ui.add_enabled_ui(model.project.is_some(), |ui| {
+        egui::ComboBox::from_id_salt("preset")
+            .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(cur.is_none(), &default).clicked() {
+                    picked = Some(None);
+                }
+                for id in model.preset_choices() {
+                    if ui
+                        .selectable_label(cur.as_deref() == Some(id.as_str()), &id)
+                        .clicked()
+                    {
+                        picked = Some(Some(id));
+                    }
+                }
+            })
+            .response
+            .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
+    });
+    if let Some(p) = picked.filter(|p| *p != cur) {
+        model.set_preset(p);
     }
 }
 

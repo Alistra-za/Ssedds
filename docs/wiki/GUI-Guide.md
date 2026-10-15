@@ -11,6 +11,9 @@ The window has two views, picked in the header: the Textures view (converter and
 | **Open folder…** | Pick a source folder. You can also drag a folder onto the window; a dropped file opens the folder that holds it. |
 | **Recent** | The last ten folders. |
 | **Mode** | The target: `cs`, `vanilla` or `cpm`. Saved in `sdc.toml` as `target`. |
+| **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. |
+| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. |
+| **Presets…** | The preset creator (see [Presets](#presets)). |
 | **Textures view** / **Meshes view** | Switch views. |
 | **Textures column**, **Sets column** | Show or hide each column. |
 | **Export** | Convert the folder. |
@@ -327,6 +330,21 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | Mipmaps | Levels for the selected texture. |
 | Advanced texture fields | Perceptual, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize. |
 | Unmatched [files] entries | `[files]` entries that name no file under the current target, with **Remove**. |
+
+## Presets
+
+**Presets…** in the header (or *Open the preset creator* in the command palette) opens the preset creator, a window you can move and resize; where it was is remembered in `gui.toml`. It edits your own presets, the files in `%APPDATA%\sdc\presets\` that the command line also loads.
+
+- **The top bar.** Pick a preset. The built-in ones are read-only: **Duplicate** makes an editable copy (named `<id>-copy`, without the original's suffix aliases), and **New** starts an empty preset on the current target's quality preset. **Name** is the preset's id and file name (lower-case letters, digits and `-`); **Base** is the preset it builds on; **Target** is cs, vanilla, cpm, or "from the base". **Save preset**, **Revert**, **Reset preset** (drops every per-sub-type change, so the base shows through) and **Delete…** (your presets only, after a confirmation). The line beside them says whether the preset loads, or why not, in the engine's own words. **TOML preview** shows exactly what Save writes.
+- **The sub-types.** One row per sub-type, grouped Colour, Normal, Data and Special. A row's title shows its format; open it for:
+  - **Suffixes**: the built-in suffixes that name the sub-type, and your aliases for them (`_bumpy` for `_n`, say). A new alias is checked as you type, with the engine's message when it is refused (not lower-case letters and digits, a built-in suffix, an exporter term such as `orm`, or an alias another preset already declares).
+  - **Compression**: format (only the formats and tags the engine allows for the sub-type and target), encoder and effort.
+  - **Resize & mips**: resize, mip levels, mip filter, and coverage for the cutout policies.
+  - **Alpha**: policy, and the threshold for cutout; shown where the format keeps alpha.
+  - **Channel remap** (data sub-types): a remap is a new suffix alias whose files get a channel swizzle; pick the source of R, G, B and A (r, g, b, a, 0 or 1). It is saved as the alias plus a rule matching `*_<alias>.*` that sets `channels.swizzle`. The RMAOS row shows the built-in ORM → RMAOS packing as an example (read-only; it needs no preset).
+  - **Packing fills** (data sub-types): the values for packed channels without a source map (roughness, metallic, AO, specular, height, 0-255).
+- Each field shows the base's value as a hint. A field you changed has **↺**, which removes your change. A sub-type's category, colour space and the other built-in rules are never offered.
+- **Saving.** The preset is loaded through the same loader as the presets folder before the file is written; a preset that would not load is never written. Your preset goes back to its own file, a new one to `<name>.toml`. After a save the folder is read again, the preset is listed in the header's **Preset** menu and the folder is planned again, without a restart.
 
 ## Where settings live
 

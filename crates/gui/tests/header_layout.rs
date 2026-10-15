@@ -14,7 +14,9 @@ type H = Harness<'static, (AppModel, State, MeshesModel)>;
 const WIDTHS: [f32; 4] = [1440.0, 1024.0, 800.0, 640.0];
 
 /// The controls every Textures header must show.
-const CONTROLS: [&str; 13] = [
+const CONTROLS: [&str; 15] = [
+    "Presets…",
+    "Preset",
     "MO2…",
     "Open folder…",
     "Recent",

@@ -1991,6 +1991,33 @@ impl AppModel {
         self.presets_open = true;
     }
 
+    /// The header's Preset menu (AM12): every selectable preset whose chain targets this target, or none.
+    pub fn preset_choices(&mut self) -> Vec<String> {
+        let t = self.target;
+        let pm = self.presets_model();
+        let r = pm.registry();
+        pm.list()
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| {
+                r.chain(id)
+                    .ok()
+                    .and_then(|c| c.iter().rev().find_map(|p| p.target))
+                    .is_none_or(|pt| pt == t)
+            })
+            .collect()
+    }
+
+    /// `preset` in `sdc.toml`, if it names one.
+    pub fn project_preset(&self) -> Option<String> {
+        self.project.as_ref()?.preset()
+    }
+
+    /// Pick the project's preset (`None`: the target's default), one undo step, re-planned.
+    pub fn set_preset(&mut self, id: Option<String>) {
+        self.edit("Preset", move |p| p.set_preset(id.as_deref()));
+    }
+
     pub fn set_target(&mut self, t: Target) {
         self.edit("Mode", move |p| p.set_target(t));
     }

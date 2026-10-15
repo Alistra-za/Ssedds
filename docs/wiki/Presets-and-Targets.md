@@ -96,7 +96,7 @@ How the preset is chosen, highest first:
 3. `preset` in the user config.
 4. The default for the target: `cs-quality`, `cpm-quality` or `vanilla-quality`.
 
-The GUI has no preset picker. To use a preset there, set `preset = "<id>"` in `sdc.toml` or in the user config. The Advanced drawer's Preset inspector shows the batch preset and lists the user presets that loaded.
+In the GUI, the header's **Preset** menu picks the preset (it writes `preset = "<id>"` to `sdc.toml`; it lists the presets of the current Mode), and **Presets…** opens the preset creator, which makes and edits user presets without writing TOML by hand (see the GUI guide). The Advanced drawer's Preset inspector shows the batch preset and lists the user presets that loaded.
 
 ### What the compact presets do
 

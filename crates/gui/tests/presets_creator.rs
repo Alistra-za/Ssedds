@@ -249,3 +249,41 @@ fn a_saved_remap_reaches_the_plan_without_a_restart() {
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     assert_eq!(swizzle(&m).as_deref(), Some("bgr1"));
 }
+
+#[test]
+fn a_saved_preset_is_offered_in_the_header_and_picking_it_plans_with_it() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Rgb([x as u8, 10, 200]))
+        .save(root.join("a/box.png"))
+        .unwrap();
+    let mut m = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..Default::default()
+        },
+        None,
+        std::sync::Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap()),
+    );
+    m.user_presets = Some(d.path().join("presets"));
+    m.open_folder(root);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.batch_preset, "cs-quality");
+    let pm = m.presets_model();
+    pm.select("cs-compact");
+    pm.duplicate();
+    pm.set_id("mine");
+    pm.save().unwrap();
+    let choices = m.preset_choices();
+    assert!(choices.contains(&"mine".to_string()), "{choices:?}");
+    // Only presets of this target.
+    assert!(!choices.contains(&"vanilla-quality".to_string()));
+    m.set_preset(Some("mine".into()));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.project_preset().as_deref(), Some("mine"));
+    assert_eq!(m.batch_preset, "mine");
+    m.set_preset(None);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.project_preset(), None);
+}
