@@ -10,9 +10,11 @@ use crate::decode::{decode_level, Decoded};
 use crate::events::{NullSink, Reporter, Stage};
 use crate::image::{Rgba32F, SourceInfo};
 use crate::manifest::sha256_json;
+use crate::ops::Domain;
 use crate::pack::PackJob;
 use crate::pipeline::{encode_levels, prepare, FileError, FileTracker, Keep};
 use crate::policy::{ResolvedJob, SourceStamp};
+use crate::quantize::stored_rgb;
 use crate::validate::{validate, ValidationInput, ValidationSummary};
 use encoders_sys::Bc1Model;
 use std::collections::HashMap;
@@ -258,8 +260,8 @@ impl Session {
         self.cache.thumbnail(job)
     }
 
-    /// The source side of the preview (M3a spec §6.2): the chain the encoder would receive, from the first mip
-    /// within `max_size`. Nothing is encoded or written.
+    /// The float chain the encoder works on (M3a spec §6.2), in its working domain (linear light for sRGB colour,
+    /// −1..1 for vectors), from the first mip within `max_size`. Nothing is encoded or written.
     pub fn preview_source(
         &self,
         job: &ResolvedJob,
@@ -277,6 +279,28 @@ impl Session {
             dims: prep.dims,
             levels: prep.chain,
         })
+    }
+
+    /// The source side the preview shows (DECISIONS Note AQ): [`Self::preview_source`] in stored values, mapped as
+    /// the encoder input is, so it compares with the decoded encode.
+    pub fn preview_source_stored(
+        &self,
+        job: &ResolvedJob,
+        max_size: u32,
+        cancel: &CancelToken,
+    ) -> Result<SourcePreview, FileError> {
+        let prep = prepare(
+            job,
+            cancel,
+            &FileTracker::default(),
+            Keep::SourceOnly { max_size },
+        )?;
+        Ok(stored_source(
+            prep.first_level,
+            prep.dims,
+            prep.chain,
+            prep.domain,
+        ))
     }
 
     /// Source and encoded sides (M3a spec §4.5): every mip within `max_size`, byte-identical to the same mips of
@@ -334,11 +358,7 @@ impl Session {
             vec![]
         };
         Ok(PreviewResult {
-            source: SourcePreview {
-                first_level: prep.first_level,
-                dims: prep.dims,
-                levels: prep.chain,
-            },
+            source: stored_source(prep.first_level, prep.dims, prep.chain, prep.domain),
             format: p.format,
             srgb,
             levels,
@@ -346,6 +366,24 @@ impl Session {
             warnings: report.warnings,
             normal_len,
         })
+    }
+}
+
+/// The source side in stored values, mapped as the encoder input is (Note AQ).
+fn stored_source(
+    first_level: usize,
+    dims: Vec<(u32, u32)>,
+    mut levels: Vec<Rgba32F>,
+    domain: Domain,
+) -> SourcePreview {
+    for p in levels.iter_mut().flat_map(|l| l.px.iter_mut()) {
+        let rgb = stored_rgb(p, domain);
+        p[..3].copy_from_slice(&rgb);
+    }
+    SourcePreview {
+        first_level,
+        dims,
+        levels,
     }
 }
 
@@ -357,7 +395,8 @@ pub fn first_level_within(dims: &[(u32, u32)], max_size: u32) -> usize {
 }
 
 /// The source side of a preview: `dims` of every mip, `levels` from `first_level` on (the chain after Preprocess,
-/// Mipmaps and coverage, the values the encoder receives).
+/// Mipmaps and coverage). `Session::preview` and `preview_source_stored` hold stored values (Note AQ);
+/// `preview_source` the working domain.
 #[derive(Debug, Clone)]
 pub struct SourcePreview {
     pub first_level: usize,

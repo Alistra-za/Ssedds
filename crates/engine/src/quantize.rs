@@ -15,6 +15,19 @@ pub enum EncoderInput {
     Hdr(Vec<[u16; 4]>),
 }
 
+/// A working-domain pixel's RGB as the file stores it (0..1, before rounding to 8 bits): sRGB-encoded for linear
+/// light, `v * 0.5 + 0.5` for vectors, as is for stored values and HDR.
+pub fn stored_rgb(q: &[f32; 4], domain: Domain) -> [f32; 3] {
+    let enc = |v: f32| linear_to_srgb(v.clamp(0.0, 1.0));
+    let signed = |v: f32| v * 0.5 + 0.5;
+    match domain {
+        Domain::LinearLight => [enc(q[0]), enc(q[1]), enc(q[2])],
+        Domain::Normal | Domain::Msn => [signed(q[0]), signed(q[1]), signed(q[2])],
+        Domain::SignedRg => [signed(q[0]), signed(q[1]), 0.0],
+        Domain::Stored | Domain::Hdr => [q[0], q[1], q[2]],
+    }
+}
+
 /// Largest finite half-float value.
 const HALF_MAX: f32 = 65504.0;
 
@@ -68,19 +81,12 @@ pub fn to_encoder_input(level: &Rgba32F, work: &Work, p: &Profile) -> EncoderInp
                 .collect(),
         );
     }
-    let enc = |v: f32| linear_to_srgb(v.clamp(0.0, 1.0));
-    let signed = |v: f32| v * 0.5 + 0.5;
     EncoderInput::Ldr(
         level
             .px
             .iter()
             .map(|q| {
-                let rgb = match work.domain {
-                    Domain::LinearLight => [enc(q[0]), enc(q[1]), enc(q[2])],
-                    Domain::Normal | Domain::Msn => [signed(q[0]), signed(q[1]), signed(q[2])],
-                    Domain::SignedRg => [signed(q[0]), signed(q[1]), 0.0],
-                    Domain::Stored | Domain::Hdr => [q[0], q[1], q[2]],
-                };
+                let rgb = stored_rgb(q, work.domain);
                 let a = if work.alpha_present {
                     unorm8(q[3])
                 } else {

@@ -248,7 +248,7 @@ pub fn spawn_source(
 ) {
     spawn_guarded(tx, "preview", move |tx| {
         let result = session
-            .preview_source(&job, max, &cancel)
+            .preview_source_stored(&job, max, &cancel)
             .map(Arc::new)
             .map_err(|e| format!("{e:?}"));
         let _ = tx.send(WorkerMsg::Source { token, result });
