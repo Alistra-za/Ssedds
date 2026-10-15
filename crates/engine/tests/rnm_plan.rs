@@ -195,3 +195,17 @@ fn disabled_rnm_keeps_the_list_but_is_inactive() {
     let n = job(&p, "iron_n.png");
     assert!(n.rnm.is_some() && n.active_rnm().is_none());
 }
+
+/// DECISIONS Note AL4: without a loose `_ao`, the bent layer reads AO from an `_orm`'s R, before any `_rmaos`.
+#[test]
+fn an_orm_gives_the_bent_layer_its_ao() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["iron.png", "iron_n.png", "iron_bent.png", "iron_orm.png"] {
+        png(d.path(), n);
+    }
+    let p = plan_dir(d.path(), vec![]);
+    let n = job(&p, "iron_n.png");
+    let ao = n.rnm.as_ref().unwrap().ao.clone().unwrap();
+    assert!(ao.file.path.ends_with("iron_orm.png") && ao.channel == 0);
+    assert!(!codes(n).contains(&Code::RnmAoMissing));
+}

@@ -458,3 +458,18 @@ fn a_loose_map_wins_over_the_orm_channel() {
         );
     }
 }
+
+/// DECISIONS Note AL5: `_rfaos` has no metallic channel, so the ORM's B is dropped with a note.
+#[test]
+fn rfaos_notes_the_dropped_orm_metallic() {
+    let (r, _) = recipes_for(
+        Target::Cs,
+        &raw(&[("iron_orm.png", Orm), ("iron_fuzz.png", Fuzz)]),
+    );
+    assert_eq!(kinds(&r), [RecipeKind::Rfaos]);
+    assert_eq!(r[0].notes.len(), 1, "{:?}", r[0].notes);
+    assert!(r[0].notes[0].contains("metallic"), "{}", r[0].notes[0]);
+    // an `_rmaos` from the same ORM drops nothing
+    let (r, _) = recipes_for(Target::Cs, &raw(&[("iron_orm.png", Orm)]));
+    assert!(r[0].notes.is_empty());
+}

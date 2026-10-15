@@ -511,6 +511,7 @@ fn aliases_may_not_shadow_the_vocabulary() {
         "roughness = \"rmaos\"",
         "basecolor = \"d\"",
         "spec = \"s\"",
+        "orm = \"m\"",
     ] {
         let toml = format!("schema_version = 1\nid = \"bad\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[suffix_aliases]\n{bad}\n");
         let e = r.add_toml(&toml);
@@ -522,6 +523,13 @@ fn aliases_may_not_shadow_the_vocabulary() {
         assert!(r.get("bad").is_none(), "{bad}");
     }
     assert!(is_vocabulary("normalgl") && !is_vocabulary("n") && !is_vocabulary("rmaosultrahigh"));
+    // DECISIONS Note AL6: an `orm` alias written before Note AL is told why it no longer loads
+    let toml = "schema_version = 1\nid = \"old\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n[suffix_aliases]\norm = \"m\"\n";
+    let e = r.add_toml(toml).unwrap_err().to_string();
+    assert!(
+        e.contains("orm is a built-in packing input since Note AL"),
+        "{e}"
+    );
 }
 
 /// 27a review: the unstated green convention is its own blocking code, never allowable, with a file-scoped hint.

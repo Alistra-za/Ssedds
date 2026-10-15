@@ -309,9 +309,18 @@ pub fn recipes_for_with(
                 };
                 match fuzz {
                     Some(fuzz) => recipes.push(Recipe {
+                        // Note AL5: an ORM's B has nowhere to go; say so, as a loose metallic map would be unused.
+                        notes: {
+                            if let Some(ChannelNeed::Source { path, .. }) = orm(2, false) {
+                                notes.push(format!(
+                                    "_rfaos has no metallic channel; the metallic (B) of {} is not used",
+                                    file_name(&path)
+                                ));
+                            }
+                            notes
+                        },
                         kind: RecipeKind::Rfaos,
                         channels: [rough, fuzz, ao, spec],
-                        notes,
                     }),
                     None => {
                         let metal =

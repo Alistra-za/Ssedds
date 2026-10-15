@@ -665,6 +665,7 @@ mod tests {
             ("glossiness", true),
             ("metallic", true),
             ("ao", true),
+            ("orm", true),
             ("specular", false),
             ("fuzz", false),
             ("height", false),
