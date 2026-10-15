@@ -375,7 +375,7 @@ fn a_scan_through_the_worker_fills_mods_nifs_and_both_sides_of_a_patched_mesh() 
         Some(diff.as_bytes()),
     );
     let db = d.path().join("store/scan.db");
-    let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
+    let mut m = scan_model(db);
     m.activate_with(None);
     m.use_instance(d.path().to_path_buf(), "Default".into());
     m.request_scan(false);
@@ -421,7 +421,7 @@ fn a_running_pgpatcher_is_a_banner_and_skip_scans_without_its_output() {
     put(d.path(), "mods/PGP/PGPatcher.esp", Some(b"e"));
     put(d.path(), "mods/PGP/ParallaxGen_Diff.json", Some(b"{}"));
     let db = d.path().join("scan.db");
-    let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
+    let mut m = scan_model(db);
     m.procs = || vec!["pgpatcher.exe".to_string()];
     m.activate_with(None);
     m.use_instance(d.path().to_path_buf(), "Default".into());
@@ -450,7 +450,7 @@ fn stale_output_raises_the_stale_banner_with_its_list() {
         "mods/PGP/ParallaxGen_Diff.json",
         Some(br#"{"meshes\\x.nif":{"crc32original":1,"crc32patched":2}}"#),
     );
-    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    let mut m = scan_model(d.path().join("scan.db"));
     m.activate_with(None);
     m.use_instance(d.path().to_path_buf(), "Default".into());
     m.request_scan(false);
@@ -471,7 +471,7 @@ fn a_database_error_is_shown_not_swallowed() {
     // A directory where the database file should be: the store cannot open.
     let db = d.path().join("scan.db");
     std::fs::create_dir_all(&db).unwrap();
-    let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
+    let mut m = scan_model(db);
     m.activate_with(None);
     assert!(m.error.is_some());
     let mut h = harness(m);
@@ -532,7 +532,7 @@ fn owner_meshes_view() {
     for ext in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{ext}", db.display()));
     }
-    let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
+    let mut m = scan_model(db);
     m.activate_with(None);
     m.choose_instance(root);
     println!("target: {:?}", m.target);
@@ -780,7 +780,7 @@ fn scanned() -> (tempfile::TempDir, MeshesModel) {
     put(d.path(), "mods/A/meshes/rock.nif", None);
     put(d.path(), "mods/A/meshes/tree/oak.nif", None);
     put(d.path(), "mods/B/meshes/rock.nif", None);
-    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    let mut m = scan_model(d.path().join("scan.db"));
     m.procs = || vec![];
     m.activate_with(None);
     m.use_instance(d.path().to_path_buf(), "Default".into());
@@ -1634,4 +1634,27 @@ fn flag_bits_name_every_bit_and_alpha_reads_in_words() {
     );
     assert_eq!(alpha_line(0x12EC, 7), "Alpha: test Greater, threshold 7");
     assert_eq!(alpha_line(0x0000, 7), "Alpha: none");
+}
+
+/// A model on a scan database whose host has no PGPatcher running, whatever the machine runs.
+fn scan_model(db: PathBuf) -> MeshesModel {
+    let mut m = MeshesModel::new(Some(db), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    m
+}
+
+#[test]
+fn a_running_pgpatcher_pauses_the_scan() {
+    let d = instance("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let mut m = scan_model(d.path().join("scan.db"));
+    m.procs = || vec!["pgpatcher.exe".to_string()];
+    m.activate_with(None);
+    m.use_instance(d.path().to_path_buf(), "Default".into());
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    wait(&mut m);
+    assert_eq!(m.status, "Scan paused: PGPatcher is running.");
+    assert_eq!(m.banner, Some(Banner::PgpRunning));
 }

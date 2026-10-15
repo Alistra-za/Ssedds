@@ -219,7 +219,8 @@ pub fn default_store_path() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("sdc").join("scan.db"))
 }
 
-fn no_procs() -> Vec<String> {
+/// A process lister that sees nothing: what tests give a model so the host's PGPatcher cannot pause their scan.
+pub fn no_procs() -> Vec<String> {
     vec![]
 }
 
