@@ -395,3 +395,74 @@ fn the_lock_entry_is_off_on_a_set_that_writes_no_pgpatcher_entry() {
         "{e:?}"
     );
 }
+
+/// Review M3: an explicit slot command next to its lock is still written (PGPatcher applies it after the lock).
+#[test]
+fn an_explicit_slot_command_next_to_its_lock_is_written() {
+    let v = written(
+        &[
+            ("lock_normal", json!(true)),
+            ("slot2", json!(r"textures\a_n.dds")),
+        ],
+        &[(2, r"textures\a_n.dds")],
+    );
+    assert_eq!(v["lock_normal"], json!(true));
+    assert_eq!(v["slot2"], json!(r"textures\a_n.dds"));
+}
+
+/// Review M1: a read that panicked keeps its error as the answer, so it is not started again every frame.
+#[test]
+fn a_panicked_original_textures_read_keeps_its_error() {
+    use sdc_gui::worker::WorkerMsg;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = ("textures/x.dds".to_string(), 2u8);
+    m.original.pending.insert(key.clone());
+    m.sender()
+        .send(WorkerMsg::Panicked {
+            what: "original-textures",
+            message: "boom".into(),
+        })
+        .unwrap();
+    m.poll();
+    assert!(m.original.pending.is_empty(), "no longer reading");
+    let e = m.original.done.get(&key).expect("the error is the answer");
+    assert!(e[0].contains("boom"), "{e:?}");
+}
+
+/// Review M2: a lock key on a set that writes no JSON gets a note, not the cross.
+#[test]
+fn a_lock_on_a_set_without_json_shows_a_note_not_the_cross() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let leaf = "landscape/leaf";
+    m.set_json_value(leaf, "lock_diffuse", Some(json!(true)));
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with(leaf))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+    let mut h = harness(m);
+    h.run();
+    assert_eq!(
+        settings_of_set(h.state(), leaf).get("lock_diffuse"),
+        Some(&json!(true))
+    );
+    assert_eq!(h.query_all_by_label(CAPTION).count(), 0);
+    assert_eq!(
+        h.query_all_by_label("lock stored, not written (no PGPatcher entry)")
+            .count(),
+        1
+    );
+}
+
+fn settings_of_set(m: &AppModel, id: &str) -> Settings {
+    set_views(m)
+        .into_iter()
+        .find(|v| v.id == id)
+        .unwrap()
+        .settings
+}

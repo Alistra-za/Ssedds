@@ -14,8 +14,8 @@ use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    card_title, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell, SlotFill,
-    SlotKind,
+    card_title, is_json_set, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell,
+    SlotFill, SlotKind,
 };
 use crate::model::AppModel;
 use crate::pgp::prefix::{
@@ -29,6 +29,8 @@ use serde_json::Value;
 
 /// Note AN: the caption across a PGPatcher-locked slot card.
 pub const PGP_LOCK_CAPTION: &str = "The original texture in this spot is used";
+/// Review M2: a lock key on a set that writes no JSON.
+pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
 const CARD: f32 = 150.0;
 const THUMB: f32 = 72.0;
@@ -412,7 +414,12 @@ fn card(
                     }
                 }
                 if pgp_locked(&v.settings, slot.slot_number()) {
-                    pgp_lock_cross(ui, model, v, slot, rect, acts);
+                    // Only a set that writes JSON gives PGPatcher the lock (review M2).
+                    if is_json_set(v, model.target) {
+                        pgp_lock_cross(ui, model, v, slot, rect, acts);
+                    } else {
+                        ui.weak(PGP_LOCK_UNWRITTEN);
+                    }
                 }
                 let Some(i) = item else {
                     ui.weak("empty");

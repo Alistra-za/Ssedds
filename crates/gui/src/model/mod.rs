@@ -899,7 +899,7 @@ impl AppModel {
                     "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
-                    "original-textures" => self.original_panicked(),
+                    "original-textures" => self.original_panicked(&message),
                     "save-report" => self.report_saving = false,
                     _ => {}
                 }

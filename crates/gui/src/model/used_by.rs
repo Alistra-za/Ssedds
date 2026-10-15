@@ -350,9 +350,14 @@ impl AppModel {
         st.done.insert(key, Arc::new(list));
     }
 
-    /// A read that panicked: nothing is waiting any more (the next hover asks again).
-    pub(super) fn original_panicked(&mut self) {
-        self.original.pending.clear();
+    /// A read that panicked: its error is the answer, so a read that keeps panicking is not started every frame (a
+    /// finished scan clears it, like any answer).
+    pub(super) fn original_panicked(&mut self, message: &str) {
+        let st = &mut self.original;
+        let error = Arc::new(vec![format!("Reading the scan database failed: {message}")]);
+        for key in std::mem::take(&mut st.pending) {
+            st.done.insert(key, error.clone());
+        }
     }
 
     /// A finished scan or another folder: every list is read again.
