@@ -163,7 +163,12 @@ fn unused_reason(
     role: RawMap,
     have: &BTreeMap<RawMap, &RawInput>,
 ) -> String {
-    let has = |r: RawMap| have.contains_key(&r);
+    // An `_orm` counts as a roughness, metallic and AO source (Note AL1).
+    let has = |r: RawMap| {
+        have.contains_key(&r)
+            || (matches!(r, RawMap::Roughness | RawMap::Metallic | RawMap::Ao)
+                && have.contains_key(&RawMap::Orm))
+    };
     match (target, role) {
         (_, RawMap::Orm) => "a loose map is used for each channel it could supply".into(),
         (_, RawMap::Opacity) => "no recipe packs opacity yet (spec §14 #19)".into(),

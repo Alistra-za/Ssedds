@@ -444,4 +444,17 @@ fn a_loose_map_wins_over_the_orm_channel() {
     assert_eq!(r[0].channels[0], src("iron_metal.png", Metallic, false));
     assert_eq!(unused_names(&u), ["iron_orm.png"]);
     assert!(u[0].reason.contains("loose"), "{}", u[0].reason);
+    // the ORM's metallic beats a loose specular for the env mask, and the reason says so
+    for target in [Target::Cpm, Target::Vanilla] {
+        let (_, u) = recipes_for(
+            target,
+            &raw(&[("iron_orm.png", Orm), ("iron_spec.png", Specular)]),
+        );
+        assert_eq!(unused_names(&u), ["iron_spec.png"]);
+        assert!(
+            u[0].reason.contains("env mask comes from the metallic"),
+            "{}",
+            u[0].reason
+        );
+    }
 }
