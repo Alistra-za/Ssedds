@@ -22,7 +22,7 @@ use crate::manifest::{
 };
 use crate::mips::build_chain_with;
 use crate::nvtt::{encode_level_nvtt, NvttError, NvttTool, TempDir};
-use crate::ops::{preprocess_with, SourceTransfer};
+use crate::ops::{preprocess_with, Domain, SourceTransfer};
 use crate::pack::assemble::assemble;
 use crate::pack::invert_of;
 use crate::policy::{ResolvedJob, SourceStamp};
@@ -126,6 +126,8 @@ pub(crate) struct Prepared {
     pub first_level: usize,
     pub dims: Vec<(u32, u32)>,
     pub chain: Vec<Rgba32F>,
+    /// What `chain`'s values mean (the working domain, not the stored values).
+    pub domain: Domain,
     pub inputs: Vec<EncoderInput>,
     pub base_coverage: Option<f64>,
     pub source_peak: Option<f32>,
@@ -307,6 +309,7 @@ fn prepare_then<T>(
         }
         _ => chain.split_off(first_level),
     };
+    let domain = work.domain;
     drop(work);
     stop()?;
     Ok((
@@ -314,6 +317,7 @@ fn prepare_then<T>(
             first_level,
             dims,
             chain,
+            domain,
             inputs,
             base_coverage,
             source_peak,

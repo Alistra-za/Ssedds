@@ -10,9 +10,11 @@ use crate::decode::{decode_level, Decoded};
 use crate::events::{NullSink, Reporter, Stage};
 use crate::image::{Rgba32F, SourceInfo};
 use crate::manifest::sha256_json;
+use crate::ops::Domain;
 use crate::pack::PackJob;
 use crate::pipeline::{encode_levels, prepare, FileError, FileTracker, Keep};
 use crate::policy::{ResolvedJob, SourceStamp};
+use crate::quantize::stored_rgb;
 use crate::validate::{validate, ValidationInput, ValidationSummary};
 use encoders_sys::Bc1Model;
 use std::collections::HashMap;
@@ -258,8 +260,8 @@ impl Session {
         self.cache.thumbnail(job)
     }
 
-    /// The source side of the preview (M3a spec §6.2): the chain the encoder would receive, from the first mip
-    /// within `max_size`. Nothing is encoded or written.
+    /// The float chain the encoder works on (M3a spec §6.2), in its working domain (linear light for sRGB colour,
+    /// −1..1 for vectors), from the first mip within `max_size`. Nothing is encoded or written.
     pub fn preview_source(
         &self,
         job: &ResolvedJob,
@@ -277,6 +279,28 @@ impl Session {
             dims: prep.dims,
             levels: prep.chain,
         })
+    }
+
+    /// The source side the preview shows (DECISIONS Note AQ): [`Self::preview_source`] in stored values, mapped as
+    /// the encoder input is, so it compares with the decoded encode.
+    pub fn preview_source_stored(
+        &self,
+        job: &ResolvedJob,
+        max_size: u32,
+        cancel: &CancelToken,
+    ) -> Result<SourcePreview, FileError> {
+        let prep = prepare(
+            job,
+            cancel,
+            &FileTracker::default(),
+            Keep::SourceOnly { max_size },
+        )?;
+        Ok(stored_source(
+            prep.first_level,
+            prep.dims,
+            prep.chain,
+            prep.domain,
+        ))
     }
 
     /// Source and encoded sides (M3a spec §4.5): every mip within `max_size`, byte-identical to the same mips of
@@ -334,11 +358,7 @@ impl Session {
             vec![]
         };
         Ok(PreviewResult {
-            source: SourcePreview {
-                first_level: prep.first_level,
-                dims: prep.dims,
-                levels: prep.chain,
-            },
+            source: stored_source(prep.first_level, prep.dims, prep.chain, prep.domain),
             format: p.format,
             srgb,
             levels,
@@ -346,6 +366,24 @@ impl Session {
             warnings: report.warnings,
             normal_len,
         })
+    }
+}
+
+/// The source side in stored values, mapped as the encoder input is (Note AQ).
+fn stored_source(
+    first_level: usize,
+    dims: Vec<(u32, u32)>,
+    mut levels: Vec<Rgba32F>,
+    domain: Domain,
+) -> SourcePreview {
+    for p in levels.iter_mut().flat_map(|l| l.px.iter_mut()) {
+        let rgb = stored_rgb(p, domain);
+        p[..3].copy_from_slice(&rgb);
+    }
+    SourcePreview {
+        first_level,
+        dims,
+        levels,
     }
 }
 
@@ -357,7 +395,8 @@ pub fn first_level_within(dims: &[(u32, u32)], max_size: u32) -> usize {
 }
 
 /// The source side of a preview: `dims` of every mip, `levels` from `first_level` on (the chain after Preprocess,
-/// Mipmaps and coverage, the values the encoder receives).
+/// Mipmaps and coverage). `Session::preview` and `preview_source_stored` hold stored values (Note AQ);
+/// `preview_source` the working domain.
 #[derive(Debug, Clone)]
 pub struct SourcePreview {
     pub first_level: usize,
@@ -428,5 +467,84 @@ mod tests {
     fn session_is_send_and_sync() {
         fn check<T: Send + Sync>() {}
         check::<super::Session>();
+    }
+
+    /// Note AQ: the stored source of MSN, flow and complex grass is the encoder input before rounding. Grass builds
+    /// its own work (`Stored`); the source takes the domain from the work, not from the profile.
+    #[test]
+    fn the_stored_source_is_the_encoder_input() {
+        use super::*;
+        use crate::api::{Engine, OnExisting};
+        use crate::config::{Subtype, Target};
+        use crate::policy::AcceptSuggestions;
+        use crate::quantize::{unorm8, EncoderInput};
+        use image::{ImageBuffer, Rgb, Rgba};
+        let d = tempfile::tempdir().unwrap();
+        let put = |rel: &str| {
+            let p = d.path().join("in/textures").join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            p
+        };
+        let tilted = |x: u32, _| Rgb([if x.is_multiple_of(2) { 204u8 } else { 51 }, 128, 230]);
+        for rel in ["a/w_msn.png", "hair/h_flow.png"] {
+            ImageBuffer::from_fn(64, 64, tilted).save(put(rel)).unwrap();
+        }
+        // Top half colour with a cutout alpha, bottom half normals with specular in alpha.
+        ImageBuffer::from_fn(32, 64, |x, y| {
+            if y < 32 {
+                Rgba([64, 128, 38, if (x * 7 + y * 13) % 10 < 3 { 255 } else { 0 }])
+            } else {
+                Rgba([160 + (x % 8) as u8, 128, 230, 12])
+            }
+        })
+        .save(put("plants/g.png"))
+        .unwrap();
+        let mut r = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+        r.recursive = true;
+        r.accept = AcceptSuggestions::High;
+        r.on_existing = OnExisting::Overwrite;
+        r.overrides = [
+            "file:**/g.png.subtype=complex_grass",
+            "file:**/g.png.alpha.policy=cutout",
+        ]
+        .iter()
+        .map(|s| crate::overrides::parse_set(s).unwrap())
+        .collect();
+        let rep = Reporter::new(Arc::new(NullSink), "t");
+        let plan = Engine::new()
+            .unwrap()
+            .plan(r, &rep, &CancelToken::default())
+            .unwrap();
+        for (name, subtype) in [
+            ("w_msn.png", Subtype::Msn),
+            ("h_flow.png", Subtype::Flow),
+            ("g.png", Subtype::ComplexGrass),
+        ] {
+            let job = plan.jobs.iter().find(|j| j.input.ends_with(name)).unwrap();
+            assert_eq!(job.profile.subtype, subtype);
+            let prep = prepare(
+                job,
+                &CancelToken::default(),
+                &FileTracker::default(),
+                Keep::Preview { max_size: 16384 },
+            )
+            .unwrap();
+            if subtype == Subtype::ComplexGrass {
+                assert_eq!(prep.domain, Domain::Stored);
+            }
+            let src = stored_source(prep.first_level, prep.dims, prep.chain, prep.domain);
+            for (level, input) in src.levels.iter().zip(&prep.inputs) {
+                let EncoderInput::Ldr(want) = input else {
+                    panic!("{name}: not LDR")
+                };
+                for (p, w) in level.px.iter().zip(want) {
+                    assert_eq!(
+                        p[..3].iter().map(|&v| unorm8(v)).collect::<Vec<_>>(),
+                        w[..3],
+                        "{name}"
+                    );
+                }
+            }
+        }
     }
 }

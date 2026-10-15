@@ -28,7 +28,6 @@ use engine::dds::{
 use engine::image::Rgba32F;
 use engine::manifest::sha256_json;
 use engine::policy::ResolvedJob;
-use engine::quantize::EncoderInput;
 use engine::session::{pack_key, Session};
 use modscan::store::{MatchRow, ShapeView, Store, TexKey};
 use nif::material::MaterialState;
@@ -463,46 +462,18 @@ pub fn f16_bits(v: f32) -> u16 {
     half::f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits()
 }
 
-/// The prepared chain is in the engine's working space (linear light for sRGB colour, signed vectors for normals):
-/// quantise it as the export does before its BCn encode, so Source differs from Encoded only by the compression.
-fn stored_levels(levels: &[Rgba32F], p: &engine::config::Profile) -> Vec<Rgba32F> {
-    let work = engine::ops::Work {
-        img: Rgba32F {
-            width: 0,
-            height: 0,
-            px: vec![],
-        },
-        alpha_present: p.alpha.policy != engine::config::AlphaPolicy::Remove,
-        domain: engine::ops::domain_for(p),
-        roughness_r_squared: false,
-        nonfinite_samples: 0,
-    };
+/// The stored source (Note AQ) as the GPU samples `format`: (r, 0, 0, 1) for one channel, (r, g, 0, 1) for two, no
+/// alpha for BC6H; so Source differs from Encoded only by the compression.
+fn as_sampled(mut levels: Vec<Rgba32F>, format: Format) -> Vec<Rgba32F> {
+    for f in levels.iter_mut().flat_map(|l| l.px.iter_mut()) {
+        match format {
+            Format::Bc4 | Format::R8 => *f = [f[0], 0.0, 0.0, 1.0],
+            Format::Bc5 | Format::Rg8 => *f = [f[0], f[1], 0.0, 1.0],
+            Format::Bc6hUf16 => f[3] = 1.0,
+            _ => {}
+        }
+    }
     levels
-        .iter()
-        .map(|l| Rgba32F {
-            width: l.width,
-            height: l.height,
-            px: match engine::quantize::to_encoder_input(l, &work, p) {
-                EncoderInput::Ldr(v) => v
-                    .iter()
-                    .map(|c| {
-                        let mut f = c.map(|b| f32::from(b) / 255.0);
-                        // What the GPU samples from a one- or two-channel format: (r, 0, 0, 1) / (r, g, 0, 1).
-                        match p.format {
-                            Format::Bc4 | Format::R8 => f = [f[0], 0.0, 0.0, 1.0],
-                            Format::Bc5 | Format::Rg8 => f = [f[0], f[1], 0.0, 1.0],
-                            _ => {}
-                        }
-                        f
-                    })
-                    .collect(),
-                EncoderInput::Hdr(v) => v
-                    .iter()
-                    .map(|c| c.map(|h| half::f16::from_bits(h).to_f32()))
-                    .collect(),
-            },
-        })
-        .collect()
 }
 
 /// An uncompressed DX10 DDS of `levels` (mip 0 first, tightly packed): `R8G8B8A8_UNORM[_SRGB]`, or
@@ -559,10 +530,10 @@ pub fn encode(
     match source {
         Source::Job(job) if mode == PreviewMode::Source => {
             let r = session
-                .preview_source(job, cap, cancel)
+                .preview_source_stored(job, cap, cancel)
                 .map_err(|e| format!("{e:?}"))?;
             uncompressed_dds(
-                &stored_levels(&r.levels, &job.profile),
+                &as_sampled(r.levels, job.profile.format),
                 job.profile.format.is_hdr(),
                 // As the Encoded file: formats without an _SRGB form (BC4/BC5/R8/RG8) are written UNORM.
                 job.profile.srgb_tag()

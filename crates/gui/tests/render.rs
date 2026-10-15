@@ -1,3 +1,4 @@
+mod support;
 use eframe::egui_wgpu::wgpu;
 use eframe::egui_wgpu::{RenderState, RendererOptions};
 use engine::config::Format;
@@ -457,4 +458,88 @@ fn tiling_draws_the_neighbouring_copies() {
     let px = draw(rs, &r, Slot::Heatmap, tiled);
     near(px[0], [0, 255, 0, 255]);
     near(px[MIDDLE], [0, 255, 0, 255]);
+}
+
+/// DECISIONS Note AQ: an sRGB colour map's source pane and its encoded pane show the same stored values. Rock01 is a
+/// PBR albedo (sRGB colour, filtered in linear light) encoded to lossless RGBA8, so the two sides differ only by
+/// rounding.
+#[test]
+fn an_srgb_colour_source_shows_like_its_lossless_encode() {
+    use sdc_gui::model::preview::{EncodedState, SourceState};
+    use std::time::Duration;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    const ROCK: &str = "landscape/rock01.png";
+    m.set_field(ROCK, "format", serde_json::json!("rgba8"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.expand(ROCK);
+    m.encode_now();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    let SourceState::Ready(src) = &m.preview.source else {
+        panic!("no source")
+    };
+    let EncodedState::Done(out) = &m.preview.encoded else {
+        panic!("not encoded")
+    };
+    assert_eq!(out.result.format, Format::Rgba8);
+    // The images the readout, the heatmap and the lens compare.
+    let worst = |a: &[[f32; 4]], b: &[[f32; 4]]| {
+        a.iter()
+            .zip(b)
+            .flat_map(|(s, e)| (0..3).map(move |c| (s[c] - e[c]).abs()))
+            .fold(0f32, f32::max)
+    };
+    let (left, right) = m.compare_sides(0);
+    let (left, right) = (left.unwrap(), right.unwrap());
+    assert!(
+        worst(left.px, right.px) <= 1.0 / 255.0,
+        "{}",
+        worst(left.px, right.px) * 255.0
+    );
+    assert!(worst(&src.levels[0].px, &out.decoded[0]) <= 1.0 / 255.0);
+    let Some(rs) = render_state() else { return };
+    let mut r = PreviewRenderer::new(rs);
+    assert!(r.set_source(rs, src));
+    r.set_encoded(rs, out);
+    for view_linear in [0, 1] {
+        let p = Params {
+            view_linear,
+            ..params()
+        };
+        let (s, e) = (
+            draw(rs, &r, Slot::Source, p),
+            draw(rs, &r, Slot::Encoded, p),
+        );
+        for (s, e) in s.iter().zip(&e) {
+            for c in 0..3 {
+                assert!(
+                    (s[c] as i32 - e[c] as i32).abs() <= 2,
+                    "view_linear {view_linear}: source {s:?}, encoded {e:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Note AQ: a normal map's source side is stored values too (0..1, not the working −1..1 vectors), so it matches
+/// the decoded encode of the flat (128, 128, 255) normal.
+#[test]
+fn a_normal_source_is_in_stored_values() {
+    use sdc_gui::model::preview::EncodedState;
+    use std::time::Duration;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    m.expand("landscape/rock01_normal.png");
+    m.encode_now();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(matches!(m.preview.encoded, EncodedState::Done(_)));
+    let (left, right) = m.compare_sides(0);
+    for (s, e) in left.unwrap().px.iter().zip(right.unwrap().px) {
+        for c in 0..2 {
+            assert!(
+                (s[c] - e[c]).abs() <= 2.0 / 255.0,
+                "source {s:?}, encoded {e:?}"
+            );
+        }
+    }
 }
