@@ -229,3 +229,131 @@ fn the_root_is_the_first_node_when_block_0_is_not_one() {
     g.block("BSTriShape", vec![]);
     assert!(idx(&g).is_empty(), "no node at all: no index");
 }
+
+/// NiObjectNET + NiAVObject prefix (no name, identity transform) shared by the bodies below.
+fn av() -> W {
+    W::default()
+        .i32(-1)
+        .u32(0)
+        .i32(-1)
+        .u32(14)
+        .fs(&[0.0; 3])
+        .fs(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+        .f(1.0)
+        .i32(-1)
+}
+
+/// An NiParticleSystem body at `bsver` (nifly NiParticleSystem::Sync) with these modifiers and no data.
+fn particles(bsver: u32, modifiers: &[i32]) -> Vec<u8> {
+    let mut w = av();
+    w = if bsver >= 100 {
+        // bounds, skin, shader, alpha, vertex flags, far/near, psys data
+        w.fs(&[0.0; 4])
+            .i32(-1)
+            .i32(-1)
+            .i32(-1)
+            .u64(0)
+            .u16(0)
+            .u16(0)
+            .u16(0)
+            .u16(0)
+            .i32(-1)
+    } else {
+        // data, skin, 1 material (name + extra data), active material, needs update, shader, alpha, far/near
+        w.i32(-1)
+            .i32(-1)
+            .u32(1)
+            .i32(-1)
+            .i32(-1)
+            .i32(0)
+            .u8(0)
+            .i32(-1)
+            .i32(-1)
+            .u16(0)
+            .u16(0)
+            .u16(0)
+            .u16(0)
+    };
+    w = w.u8(0).u32(modifiers.len() as u32);
+    for m in modifiers {
+        w = w.i32(*m);
+    }
+    w.0
+}
+
+/// NiPSysModifier (name, order, target, active) + `u32 n` + mesh refs.
+fn mesh_update(meshes: &[i32]) -> Vec<u8> {
+    let mut w = W::default()
+        .i32(-1)
+        .u32(0)
+        .i32(-1)
+        .u8(1)
+        .u32(meshes.len() as u32);
+    for m in meshes {
+        w = w.i32(*m);
+    }
+    w.0
+}
+
+#[test]
+fn a_shape_listed_by_a_particle_mesh_update_modifier_is_numbered_inside_the_particle_system() {
+    for bsver in [100, 83] {
+        let mut f = Nif::new(bsver);
+        f.block("BSFadeNode", node([0.0; 3], &[1, 3])); // 0
+        f.block("NiParticleSystem", particles(bsver, &[2])); // 1
+        f.block("NiPSysMeshUpdateModifier", mesh_update(&[4])); // 2
+        f.block("BSTriShape", vec![]); // 3: B, the root's second child
+        f.block("NiTriShape", vec![]); // 4: A, only the modifier lists it
+        assert_eq!(
+            idx(&f),
+            [(1, 0), (3, 2), (4, 1)],
+            "nifly GetTree order at BSVER {bsver}"
+        );
+    }
+}
+
+#[test]
+fn a_field_modifier_object_and_a_master_particle_system_are_followed() {
+    let mut f = Nif::new(100);
+    let master = W::default()
+        .raw(&node([0.0; 3], &[]))
+        .u16(20)
+        .u32(1)
+        .i32(1)
+        .0;
+    f.block("BSMasterParticleSystem", master); // 0: no children, one particle system
+    f.block("NiParticleSystem", particles(100, &[2])); // 1
+    let field = W::default()
+        .i32(-1)
+        .u32(0)
+        .i32(-1)
+        .u8(1)
+        .i32(3)
+        .f(1.0)
+        .f(0.0)
+        .u8(0)
+        .f(0.0)
+        .0;
+    f.block("NiPSysGravityFieldModifier", field); // 2
+    f.block("BSTriShape", vec![]); // 3
+    assert_eq!(idx(&f), [(1, 0), (3, 1)]);
+}
+
+#[test]
+fn bstreenode_bones_are_followed_after_children_and_effects() {
+    let mut f = Nif::new(100);
+    let tree = W::default()
+        .raw(&node([0.0; 3], &[1]))
+        .u32(1)
+        .i32(2) // bones1
+        .u32(1)
+        .i32(4) // bones2
+        .0;
+    f.block("BSTreeNode", tree); // 0
+    f.block("BSTriShape", vec![]); // 1: a child
+    f.block("NiNode", node([0.0; 3], &[3])); // 2: a bones1 node
+    f.block("BSTriShape", vec![]); // 3: only under a bone
+    f.block("NiNode", node([0.0; 3], &[5])); // 4: a bones2 node
+    f.block("BSTriShape", vec![]); // 5
+    assert_eq!(idx(&f), [(1, 0), (3, 1), (5, 2)]);
+}

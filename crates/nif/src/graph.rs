@@ -2,6 +2,7 @@
 //! fields come after NiNode's children and effects lists, so `NiObjectNET + NiAVObject + u32 n + n refs` is
 //! valid for every type in [`NODE_TYPES`]. Nothing here fails a file: problems are strings, a bad link is
 //! skipped.
+use crate::cursor::Cursor;
 use crate::geom::av::read_av_head;
 use crate::geom::skin_partition::block_cursor;
 use crate::header::Header;
@@ -198,12 +199,105 @@ pub(crate) fn takes_index(kind: &[u8]) -> bool {
     ShapeKind::from_name(kind).is_some() || kind == b"NiMeshParticleSystem"
 }
 
-/// PGPatcher's 3D index (PGNIFUtil::shapesWith3DIdx over nifly's GetTree): a pre-order walk from the root over node
-/// `children`, first visit wins, iterative, nodes deeper than [`MAX_DEPTH`] not expanded. Every block
-/// [`takes_index`] takes the next index (a particle system too: PGPatcher increments for it). Unreachable blocks are
-/// absent. The root is block 0 when it is a [`NODE_TYPES`] block, else the first block that is.
-/// Assumption: property, collision, controller and effect refs never reach a shape in a Skyrim NIF, so walking
-/// `children` alone matches nifly's `GetChildIndices` order.
+/// nif.xml closure of NiPSysMeshUpdateModifier: NiPSysModifier, then `u32 n` + `n` NiAVObject refs.
+const MESH_UPDATE_MODIFIERS: &[&str] = &["BSPSysHavokUpdateModifier", "NiPSysMeshUpdateModifier"];
+/// nif.xml closure of NiPSysFieldModifier: NiPSysModifier, then the Field Object ref.
+const FIELD_MODIFIERS: &[&str] = &[
+    "NiPSysAirFieldModifier",
+    "NiPSysDragFieldModifier",
+    "NiPSysFieldModifier",
+    "NiPSysGravityFieldModifier",
+    "NiPSysRadialFieldModifier",
+    "NiPSysTurbulenceFieldModifier",
+    "NiPSysVortexFieldModifier",
+];
+
+fn refs(c: &mut Cursor, n: usize) -> Result<Vec<i32>, NifError> {
+    if n.saturating_mul(4) > c.remaining() {
+        return Err(NifError::Truncated {
+            at: c.pos(),
+            need: n.saturating_mul(4),
+        });
+    }
+    (0..n).map(|_| c.i32()).collect()
+}
+
+/// The refs of `block` that nifly's `GetChildIndices` lists and that can lead to an NiAVObject, in nifly's order
+/// (NiObjectNET/NiAVObject refs first in nifly, but extra data, controllers and collision never reach one):
+/// node `children` + `effects` (+ BSTreeNode `bones1`/`bones2`, + BSMasterParticleSystem `particleSysRefs`); a
+/// particle system's data and modifiers; a mesh-update modifier's meshes; a field modifier's field object;
+/// NiCamera's scene. A block that fails to read part-way keeps the refs read before the fault.
+/// shortcut: NiMeshPSysData's `nodeRef` is not followed (NiPSysData is variable-length); add it if a Skyrim NIF needs it.
+fn av_refs(h: &Header, b: &[u8], block: usize) -> Vec<i32> {
+    let mut out = vec![];
+    let _ = av_refs_into(h, b, block, &mut out);
+    out
+}
+
+fn av_refs_into(h: &Header, b: &[u8], block: usize, out: &mut Vec<i32>) -> Result<(), NifError> {
+    let kind = h.kind(block);
+    let is = |names: &[&str]| names.iter().any(|t| t.as_bytes() == kind);
+    let mut c = block_cursor(h, b, block)?;
+    if is(NODE_TYPES) {
+        read_av_head(h, &mut c)?;
+        for _ in 0..2 {
+            // children, then effects (both present below FO4)
+            let n = c.u32()? as usize;
+            out.extend(refs(&mut c, n)?);
+        }
+        if kind == b"BSTreeNode" {
+            for _ in 0..2 {
+                let n = c.u32()? as usize;
+                out.extend(refs(&mut c, n)?);
+            }
+        } else if kind == b"BSMasterParticleSystem" {
+            c.u16()?; // max emitter objects
+            let n = c.u32()? as usize;
+            out.extend(refs(&mut c, n)?);
+        }
+    } else if takes_index(kind) && kind.ends_with(b"ParticleSystem") {
+        // nifly NiParticleSystem::Sync; dataRef and psysDataRef are one ref in Skyrim, listed first.
+        read_av_head(h, &mut c)?;
+        let data;
+        if h.bsver >= 100 {
+            c.skip(16)?; // bounds
+            c.skip(12)?; // skin, shader, alpha
+            c.skip(8)?; // vertex flags
+            c.skip(8)?; // far/near begin/end
+            data = c.i32()?;
+        } else {
+            data = c.i32()?;
+            c.i32()?; // skin
+            let m = c.u32()? as usize;
+            c.skip(m.saturating_mul(8))?; // material names + extra data
+            c.skip(4 + 1 + 8)?; // active material, needs update, shader, alpha
+            c.skip(8)?; // far/near begin/end
+        }
+        out.push(data);
+        c.u8()?; // world space
+        let n = c.u32()? as usize;
+        out.extend(refs(&mut c, n)?);
+    } else if is(MESH_UPDATE_MODIFIERS) || is(FIELD_MODIFIERS) {
+        c.skip(4 + 4 + 4 + 1)?; // NiPSysModifier: name, order, target, active
+        if is(FIELD_MODIFIERS) {
+            out.push(c.i32()?);
+        } else {
+            let n = c.u32()? as usize;
+            out.extend(refs(&mut c, n)?);
+        }
+    } else if kind == b"NiCamera" {
+        read_av_head(h, &mut c)?;
+        c.skip(2 + 24 + 1 + 16 + 4)?; // flags, frustum, ortho, viewport, LOD adjust
+        out.push(c.i32()?);
+    }
+    Ok(())
+}
+
+/// PGPatcher's 3D index (PGNIFUtil::shapesWith3DIdx over nifly's GetTree): a pre-order walk from the root over
+/// [`av_refs`], first visit wins, iterative, blocks deeper than [`MAX_DEPTH`] not expanded. Every block
+/// [`takes_index`] takes the next index (a particle system too: PGPatcher increments for it), then is expanded like
+/// any other block (a particle system's modifiers can list shapes). Unreachable blocks are absent. The root is block
+/// 0 when it is a [`NODE_TYPES`] block, else the first block that is.
 pub fn index3d(header: &Header, bytes: &[u8]) -> BTreeMap<u32, u32> {
     let total = header.sizes.len();
     let is_node = |i: usize| NODE_TYPES.iter().any(|t| t.as_bytes() == header.kind(i));
@@ -221,16 +315,12 @@ pub fn index3d(header: &Header, bytes: &[u8]) -> BTreeMap<u32, u32> {
         if takes_index(header.kind(b)) {
             out.insert(b as u32, next);
             next += 1;
+        }
+        if depth >= MAX_DEPTH {
             continue;
         }
-        if !is_node(b) || depth >= MAX_DEPTH {
-            continue;
-        }
-        let Ok((_, kids)) = children(header, bytes, b) else {
-            continue;
-        };
-        // Reversed so the first child pops first (pre-order).
-        for k in kids.into_iter().rev() {
+        // Reversed so the first ref pops first (pre-order).
+        for k in av_refs(header, bytes, b).into_iter().rev() {
             if let Some(c) = usize::try_from(k).ok().filter(|&c| c < total) {
                 stack.push((c, depth + 1));
             }
@@ -379,5 +469,36 @@ mod tests {
             11,
             "the 10 ShapeKind names and NiMeshParticleSystem"
         );
+    }
+
+    #[test]
+    fn modifier_lists_match_the_nifxml_closures() {
+        let mut inherit: HashMap<&str, &str> = HashMap::new();
+        for l in include_str!("../tests/fixtures/nifxml_inherit.txt").lines() {
+            let (n, p) = l.split_once(' ').unwrap();
+            inherit.insert(n, p);
+        }
+        let closure = |base: &str| {
+            let mut v: Vec<&str> = inherit
+                .keys()
+                .copied()
+                .filter(|&k| {
+                    let mut n = k;
+                    loop {
+                        if n == base {
+                            return true;
+                        }
+                        match inherit.get(n) {
+                            Some(p) => n = p,
+                            None => return false,
+                        }
+                    }
+                })
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(closure("NiPSysMeshUpdateModifier"), MESH_UPDATE_MODIFIERS);
+        assert_eq!(closure("NiPSysFieldModifier"), FIELD_MODIFIERS);
     }
 }
