@@ -103,7 +103,7 @@ pub(crate) fn block_of(t: &dyn TableLike) -> CmBlock {
 }
 
 use super::AppModel;
-use crate::sets_doc::SetsDoc;
+use crate::sets_doc::{SetEntry, SetsDoc};
 use engine::sets::same_id;
 
 impl AppModel {
@@ -259,17 +259,23 @@ pub fn targets(m: &AppModel) -> Vec<CmTarget> {
             });
         }
     }
-    // Ruling C5: one parse of the document for every target, not one per target.
-    let exporting_ids: Vec<String> = m
-        .sets_doc
-        .as_ref()
-        .map(|d| d.entries())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|e| e.cm.as_ref().is_some_and(|b| b.export))
-        .map(|e| e.id)
-        .collect();
-    let exporting = |set: &str| exporting_ids.iter().any(|id| same_id(id, set));
+    // Ruling C5: one parse of the document for every target.
+    let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
+    refuse_clashes(&mut out, |s| exports(&entries, s));
+    out
+}
+
+/// Whether `set`'s `[sets.cm]` has `export` on. The first entry with the id decides, as in `cm_block`.
+pub fn exports(entries: &[SetEntry], set: &str) -> bool {
+    entries
+        .iter()
+        .find(|e| same_id(&e.id, set))
+        .is_some_and(|e| e.cm.as_ref().is_some_and(|b| b.export))
+}
+
+/// Refuses the targets of exporting sets that share a path with another exporting target. The planner never gives
+/// two outputs one path, so this guards hand edits and future planner changes.
+pub fn refuse_clashes(out: &mut [CmTarget], exporting: impl Fn(&str) -> bool) {
     let twice = clashes(
         out.iter()
             .filter(|t| exporting(&t.set))
@@ -287,5 +293,4 @@ pub fn targets(m: &AppModel) -> Vec<CmTarget> {
             ));
         }
     }
-    out
 }

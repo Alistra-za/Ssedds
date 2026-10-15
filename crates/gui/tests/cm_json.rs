@@ -409,3 +409,70 @@ fn a_packed_cpm_m_gets_its_json_next_to_the_packed_output() {
     let r = rels(&m);
     assert!(r.contains(&ok("steel_m", "p/steel_m.json")), "{r:?}");
 }
+
+fn target(set: &str, rel: &str) -> CmTarget {
+    let name = rel.rsplit('/').next().unwrap().trim_end_matches(".json");
+    CmTarget {
+        set: set.into(),
+        key: format!("{set}_m.png"),
+        name: name.into(),
+        rel: Ok(rel.into()),
+    }
+}
+
+/// Review fix round 1. The planner never gives two outputs one path (a case-only rename is dropped, a packed and a
+/// plain `steel_m` make one target), so the refusal is driven with hand-made targets and a real document.
+#[test]
+fn exporting_targets_on_one_path_are_refused_and_the_first_duplicate_entry_decides() {
+    let run = |toml: &str| {
+        let (_d, s) = doc(toml);
+        let entries = s.entries();
+        let mut t = vec![
+            target("m/iron", "m/iron_m.json"),
+            target("m/bolt", "m/IRON_m.json"),
+            target("m/axe", "m/axe_em.json"),
+        ];
+        refuse_clashes(&mut t, |set| exports(&entries, set));
+        t.into_iter().map(|t| t.rel.is_ok()).collect::<Vec<_>>()
+    };
+    let on = |id: &str| format!("[[sets]]\nid = \"{id}\"\n\n[sets.cm]\nexport = true\n\n");
+    let off = |id: &str| format!("[[sets]]\nid = \"{id}\"\n\n[sets.cm]\nexport = false\n\n");
+    let all = format!("{}{}{}", on("m/iron"), on("m/bolt"), on("m/axe"));
+    assert_eq!(
+        run(&all),
+        [false, false, true],
+        "both colliding exports are refused"
+    );
+    assert_eq!(run(&on("m/iron")), [true, true, true], "only one exports");
+    assert_eq!(
+        run(&on("m/bolt")),
+        [true, true, true],
+        "only the other exports"
+    );
+    let dup = format!("{}{}{}", off("m/iron"), on("m/bolt"), on("m/iron"));
+    assert_eq!(
+        run(&dup),
+        [true, true, true],
+        "the first m/iron entry is off"
+    );
+    let dup = format!("{}{}{}", on("m/iron"), on("m/bolt"), off("m/iron"));
+    assert_eq!(
+        run(&dup),
+        [false, false, true],
+        "the first m/iron entry is on"
+    );
+    let r = {
+        let (_d, s) = doc(&all);
+        let entries = s.entries();
+        let mut t = vec![
+            target("m/iron", "m/iron_m.json"),
+            target("m/bolt", "m/IRON_m.json"),
+        ];
+        refuse_clashes(&mut t, |set| exports(&entries, set));
+        t[0].rel.clone()
+    };
+    assert_eq!(
+        r,
+        Err("iron_m.json is written by two complex _m (names ignore case)".into())
+    );
+}
