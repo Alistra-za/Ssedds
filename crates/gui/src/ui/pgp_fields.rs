@@ -11,8 +11,8 @@ use crate::pgp::prefix::{
 };
 use crate::pgp::schema::{spec, Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
-    blocked_by, feature_key, feature_on, sub_edits, sub_mode, subsurface_group_open, Feature,
-    Settings, SubMode, FEATURE_KEYS, FOLIAGE_KEY, GLINT_DEFAULTS,
+    blocked_by, feature_key, feature_on, number_default, rgb_default, rgb_of, sub_edits, sub_mode,
+    subsurface_group_open, Feature, Settings, SubMode, FEATURE_KEYS, FOLIAGE_KEY, RGB_MAX,
 };
 use crate::pgp::writer::FIXED_NUMBERS;
 use eframe::egui;
@@ -513,11 +513,12 @@ pub(crate) fn control(
             });
         }
         KeyKind::Number(range) => {
-            let default = GLINT_DEFAULTS
-                .iter()
-                .chain(FIXED_NUMBERS.iter())
-                .find(|(d, _)| *d == k.key)
-                .map(|(_, x)| *x);
+            let default = number_default(k.key).or_else(|| {
+                FIXED_NUMBERS
+                    .iter()
+                    .find(|(d, _)| *d == k.key)
+                    .map(|(_, x)| *x)
+            });
             let unset_unknown = value.is_none() && default.is_none();
             let stored = value.as_ref().and_then(Value::as_f64);
             let mut x = stored.or(default).unwrap_or(0.0);
@@ -587,29 +588,31 @@ pub(crate) fn control(
             }
         }
         KeyKind::Rgb | KeyKind::Rgba => {
-            let mut rgb: [i64; 3] = value
-                .and_then(|v| v.as_array().cloned())
-                .map(|a| {
-                    [0, 1, 2].map(|i| {
-                        a.get(i)
-                            .and_then(Value::as_f64)
-                            .map_or(0, |x| x.round() as i64)
-                    })
-                })
-                .unwrap_or([0, 0, 0]);
+            // AG133: a float per channel, 0..=RGB_MAX; an old 0-255 colour reads as value/255.
+            let mut rgb = value
+                .as_ref()
+                .and_then(rgb_of)
+                .or(rgb_default(k.key))
+                .unwrap_or([0.0; 3]);
             let mut changed = false;
             ui.horizontal(|ui| {
-                // Swatch + hex (AG2) commit through the same edit as the number boxes; sRGB bytes as stored.
-                let cur = rgb.map(|x| x.clamp(0, 255) as u8);
+                // Swatch + hex (AG2) show the colour clamped to 1.0; only a change made through them writes, as
+                // 0-1 values, so a stored 1.25 survives opening the picker.
+                let shown = rgb.map(|x| super::color::unit_to_u8(x as f32));
                 let id = egui::Id::new(("pgp-rgb", k.key, &c.set));
-                if let Some(n) = super::color::color_field(ui, id, cur) {
-                    rgb = n.map(i64::from);
+                if let Some(n) = super::color::color_field(ui, id, shown) {
+                    rgb = n.map(|b| f64::from(b) / 255.0);
                     changed = true;
                 }
                 for (i, l) in ["R", "G", "B"].iter().enumerate() {
                     ui.label(*l);
                     changed |= ui
-                        .add(egui::DragValue::new(&mut rgb[i]).range(0..=255))
+                        .add(
+                            egui::DragValue::new(&mut rgb[i])
+                                .range(0.0..=RGB_MAX)
+                                .speed(0.005)
+                                .fixed_decimals(3),
+                        )
                         .changed();
                 }
             });

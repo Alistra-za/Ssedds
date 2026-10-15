@@ -1,5 +1,5 @@
-//! A set's JSON settings, by schema key path (`glint.screen_space_scale`). Colours are 0–255
-//! integer arrays here; the writer converts them (DECISIONS P10). Features and their mutual exclusion (spec §5.4).
+//! A set's JSON settings, by schema key path (`glint.screen_space_scale`). Colours are float arrays (AG133;
+//! older 0–255 integer arrays read as value/255, `rgb_of`). Features and their mutual exclusion (spec §5.4).
 use serde_json::Value;
 
 pub type Settings = std::collections::BTreeMap<String, Value>;
@@ -13,6 +13,49 @@ pub const GLINT_DEFAULTS: [(&str, f64); 4] = [
     ("glint.microfacet_roughness", 1.0),
     ("glint.density_randomization", 5.0),
 ];
+
+/// What a freshly enabled Fuzz starts from (AG133, owner 2026-10-15). In the owner's mod JSONs `fuzz.color` is
+/// [0.08, 0.08, 0.08] 231 times, [0.04, 0.04, 0.04] 110 times and [1.25, 1.25, 1.25] 39 times.
+pub const FUZZ_COLOR_DEFAULT: [f64; 3] = [0.08, 0.08, 0.08];
+pub const FUZZ_WEIGHT_DEFAULT: f64 = 1.0;
+
+/// The value an unset number key of an enabled feature object starts from (the card shows it, the writer writes it).
+pub fn number_default(key: &str) -> Option<f64> {
+    GLINT_DEFAULTS
+        .iter()
+        .chain(&[("fuzz.weight", FUZZ_WEIGHT_DEFAULT)])
+        .find(|(k, _)| *k == key)
+        .map(|(_, x)| *x)
+}
+
+/// The colour an unset colour key starts from: only `fuzz.color` has one.
+pub fn rgb_default(key: &str) -> Option<[f64; 3]> {
+    (key == "fuzz.color").then_some(FUZZ_COLOR_DEFAULT)
+}
+
+/// The largest a colour channel may be (AG133): above 1.0 is real (fuzz.color 1.25 in 39 mod JSONs).
+pub const RGB_MAX: f64 = 10.0;
+
+/// A stored colour's channels as floats (AG133). Colours are stored as floats now; a colour whose channels are all
+/// integers is the 0-255 form older projects stored, and reads as value/255. `None`: not an array of three or more.
+pub fn rgb_of(v: &Value) -> Option<[f64; 3]> {
+    let a = v.as_array().filter(|a| a.len() >= 3)?;
+    let legacy = rgb_is_legacy(v);
+    Some([0, 1, 2].map(|i| {
+        let x = a[i].as_f64().unwrap_or(0.0);
+        if legacy {
+            x / 255.0
+        } else {
+            x
+        }
+    }))
+}
+
+/// Every channel is an integer: the 0-255 form of projects before AG133.
+pub fn rgb_is_legacy(v: &Value) -> bool {
+    v.as_array()
+        .is_some_and(|a| a.iter().take(3).all(|c| c.is_i64() || c.is_u64()))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Feature {

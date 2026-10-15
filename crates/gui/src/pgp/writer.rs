@@ -2,7 +2,9 @@
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
 use super::prefix::{active_matches, json_rename, match_value};
 use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
-use super::settings::{feature_on, subsurface_group_open, Feature, Settings, GLINT_DEFAULTS};
+use super::settings::{
+    feature_on, number_default, rgb_default, subsurface_group_open, Feature, Settings,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -38,18 +40,20 @@ pub struct EntryInput {
 }
 
 fn colour(v: &Value, alpha: bool) -> Option<Node> {
-    let mut out: Vec<Node> = v
-        .as_array()?
+    let c = super::settings::rgb_of(v)?;
+    // AG133: a float is written as stored (0.08 stays 0.08, 1.25 stays 1.25), within 0..=RGB_MAX; an old 0-255 colour
+    // keeps the 4-place rounding it always had, so its JSON does not change.
+    let legacy = super::settings::rgb_is_legacy(v);
+    let mut out: Vec<Node> = c
         .iter()
-        .take(3)
-        .map(|c| {
-            let x = c.as_f64().unwrap_or(0.0) / 255.0;
-            Node::Scalar(json!((x * 10_000.0).round() / 10_000.0))
+        .map(|x| {
+            Node::Scalar(if legacy {
+                json!((x * 10_000.0).round() / 10_000.0)
+            } else {
+                json!(x.clamp(0.0, super::settings::RGB_MAX))
+            })
         })
         .collect();
-    if out.len() != 3 {
-        return None;
-    }
     if alpha {
         out.push(Node::Scalar(json!(1.0)));
     }
@@ -219,17 +223,15 @@ fn sub_object(obj: &str, own: &Settings) -> Vec<(String, Node)> {
         let node = match k.kind {
             KeyKind::Number(range) => v
                 .map(|v| clamped(v, range))
-                .or_else(|| {
-                    GLINT_DEFAULTS
-                        .iter()
-                        .find(|(d, _)| *d == k.key)
-                        .map(|(_, x)| json!(x))
-                })
+                .or_else(|| number_default(k.key).map(|x| json!(x)))
                 .map(Node::Scalar),
             KeyKind::OnlyTrue => {
                 (v.and_then(Value::as_bool) == Some(true)).then_some(Node::Scalar(json!(true)))
             }
-            KeyKind::Rgb => v.and_then(|v| colour(v, false)),
+            // AG133: an unset fuzz colour writes its default, like the glint numbers.
+            KeyKind::Rgb => v
+                .and_then(|v| colour(v, false))
+                .or_else(|| rgb_default(k.key).and_then(|c| colour(&json!(c), false))),
             _ => None,
         };
         if let Some(n) = node {

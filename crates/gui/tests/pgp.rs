@@ -755,7 +755,8 @@ fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
     ));
     assert_eq!(
         v["fuzz"],
-        json!({ "texture": true, "color": [0.0, 0.0, 0.0] })
+        // AG133: an unset weight writes its default, 1.
+        json!({ "texture": true, "color": [0.0, 0.0, 0.0], "weight": 1.0 })
     );
 }
 
@@ -1307,4 +1308,51 @@ fn a_short_renamed_match_warns_when_the_name_is_known_in_another_folder() {
     assert_eq!(rename_hits_elsewhere(&renamed, r"armor\iron", &known), None);
     let deeper = vec!["textures/dlc01/armor/iron".to_string()];
     assert!(rename_hits_elsewhere(&renamed, r"armor\iron", &deeper).is_some());
+}
+
+/// AG133: Fuzz switched on writes the owner's defaults (fuzz.color 0.08: 231 of the mod JSONs).
+#[test]
+fn enabling_fuzz_writes_its_defaults_and_an_explicit_value_is_kept() {
+    let v = written(&entry(&[("fuzz_on", json!(true))], "x"));
+    assert_eq!(
+        v["fuzz"],
+        json!({ "color": [0.08, 0.08, 0.08], "weight": 1.0 })
+    );
+    let v = written(&entry(
+        &[
+            ("fuzz_on", json!(true)),
+            ("fuzz.color", json!([1.25, 1.25, 1.25])),
+            ("fuzz.weight", json!(0.5)),
+        ],
+        "x",
+    ));
+    assert_eq!(
+        v["fuzz"],
+        json!({ "color": [1.25, 1.25, 1.25], "weight": 0.5 })
+    );
+}
+
+/// AG133: a float colour is written as stored; an old 0-255 colour is written exactly as before (value/255, 4 places).
+#[test]
+fn colours_write_floats_as_stored_and_old_integers_as_before() {
+    use sdc_gui::pgp::settings::rgb_of;
+    let v = written(&entry(
+        &[
+            ("emissive", json!(true)),
+            ("emissive_color", json!([0.08, 1.25, 0.0])),
+        ],
+        "x",
+    ));
+    assert_eq!(v["emissive_color"], json!([0.08, 1.25, 0.0, 1.0]));
+    let v = written(&entry(
+        &[
+            ("emissive", json!(true)),
+            ("emissive_color", json!([20, 255, 0])),
+        ],
+        "x",
+    ));
+    assert_eq!(v["emissive_color"], json!([0.0784, 1.0, 0.0, 1.0]));
+    // Read for the card: the old form is value/255 with no loss.
+    assert_eq!(rgb_of(&json!([20, 255, 0])), Some([20.0 / 255.0, 1.0, 0.0]));
+    assert_eq!(rgb_of(&json!([1.0, 0.5, 0.25])), Some([1.0, 0.5, 0.25]));
 }

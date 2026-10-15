@@ -10,7 +10,7 @@ use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, stored_match};
 use crate::pgp::schema::{spec, KeyKind, KeySpec, NumRange, KEYS};
-use crate::pgp::settings::{Settings, GLINT_DEFAULTS};
+use crate::pgp::settings::{number_default, rgb_default, Settings};
 use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
 use eframe::egui;
 use engine::config::Target;
@@ -517,12 +517,16 @@ fn start_value(k: &KeySpec) -> Option<Value> {
     match k.kind {
         KeyKind::OnlyTrue | KeyKind::Object | KeyKind::Tri => Some(json!(true)),
         KeyKind::Number(NumRange::Int(_)) => Some(json!(alpha_default(k.key))),
-        KeyKind::Number(_) => Some(json!(GLINT_DEFAULTS
-            .iter()
-            .chain(FIXED_NUMBERS.iter())
-            .find(|(d, _)| *d == k.key)
-            .map_or(0.0, |(_, x)| *x))),
-        KeyKind::Rgb | KeyKind::Rgba => Some(json!([255, 255, 255])),
+        KeyKind::Number(_) => Some(json!(number_default(k.key)
+            .or_else(|| {
+                FIXED_NUMBERS
+                    .iter()
+                    .find(|(d, _)| *d == k.key)
+                    .map(|(_, x)| *x)
+            })
+            .unwrap_or(0.0))),
+        // AG133: floats; the fuzz colour starts from its default, the others from white.
+        KeyKind::Rgb | KeyKind::Rgba => Some(json!(rgb_default(k.key).unwrap_or([1.0; 3]))),
         KeyKind::Text | KeyKind::Slot => None,
     }
 }

@@ -443,9 +443,9 @@ fn every_number_box_reports_its_range() {
     for (v, min, max) in &spins {
         assert_eq!(*min, Some(0.0), "{v:?}");
         let unit = v.as_deref() == Some("0.5");
-        // The coat colour's R/G/B boxes (now in the main view, AJ1) run 0-255.
+        // The coat colour's R/G/B boxes (now in the main view, AJ1) run 0-10 (AG133).
         let want = if unit { Some(1.0) } else { None };
-        assert!(*max == want || *max == Some(255.0), "{v:?} {max:?}");
+        assert!(*max == want || *max == Some(10.0), "{v:?} {max:?}");
     }
 }
 
@@ -666,7 +666,7 @@ fn glint_and_fuzz_switch_the_gui_keys_and_exclude_each_other() {
 }
 
 #[test]
-fn colours_are_edited_as_rgb_0_to_255() {
+fn colours_are_edited_as_a_float_per_channel() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     rock_selected(&mut m);
@@ -683,8 +683,8 @@ fn colours_are_edited_as_rgb_0_to_255() {
     let mut h = harness(m);
     h.run();
     h.get_by_label("Emissive colour");
-    // Three drag values (R, G, B) hold the 0-255 integers.
-    for v in ["10", "20", "30"] {
+    // AG133: an old 0-255 colour shows as value/255, one float per channel.
+    for v in ["0.039", "0.078", "0.118"] {
         assert!(
             h.query_all_by_role(eframe::egui::accesskit::Role::SpinButton)
                 .any(|n| n.value().as_deref() == Some(v)),

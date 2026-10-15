@@ -116,7 +116,11 @@ fn hex_commit_is_one_undo_step_and_reset_works() {
     h.run();
     type_hex(&mut h, "#0A141E", "#1A2B3C");
     // The same document value the number boxes write, one step.
-    assert_eq!(colour(&h), Some(json!([26, 43, 60])));
+    // AG133: a hex commit stores 0-1 floats.
+    assert_eq!(
+        colour(&h),
+        Some(json!([26.0 / 255.0, 43.0 / 255.0, 60.0 / 255.0]))
+    );
     h.state_mut().undo();
     assert_eq!(colour(&h), Some(json!([10, 20, 30])), "one step");
     h.run();

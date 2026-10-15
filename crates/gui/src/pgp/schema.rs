@@ -20,7 +20,7 @@ pub enum KeyKind {
     /// A number, kept inside its range (F1 spec §2, DECISIONS V5).
     Number(NumRange),
     Text,
-    /// 0–255 RGB in the GUI; written as 0–1.
+    /// A float per channel, 0-10 (AG133; an old 0-255 integer colour reads as value/255).
     Rgb,
     /// As `Rgb`, written with a fourth component 1.0.
     Rgba,
