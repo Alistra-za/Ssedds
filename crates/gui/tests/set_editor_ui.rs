@@ -1274,3 +1274,38 @@ fn amber_outlines(h: &Harness<'static, AppModel>) -> usize {
     }
     n
 }
+
+/// PBR grass design §4.3: a pbr_grass panel has no emissive, parallax, hair, coat, glint or fuzz switch, keeps the
+/// grass keys, and unticking Subsurface stores `false` (the default would turn a removed key back on).
+#[test]
+fn a_pbr_grass_panel_shows_only_the_grass_keys() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_shader("landscape/rock01", Some(engine::shader::Shader::PbrGrass));
+    m.set_json_value(
+        "landscape/rock01",
+        "subsurface",
+        Some(serde_json::json!(true)),
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = panel_harness(m);
+    h.run();
+    for gone in [
+        "Emissive",
+        "Parallax",
+        "Hair",
+        "Multilayer (coat)",
+        "Glint",
+        "Fuzz",
+    ] {
+        assert!(
+            h.query_by_label(gone).is_none(),
+            "{gone} is hidden on PBR grass"
+        );
+    }
+    h.get_by_label("Roughness scale");
+    h.get_by_label("Specular level");
+    h.get_by_label("Subsurface").click();
+    h.run();
+    assert_eq!(rock_settings(&h)["subsurface"], serde_json::json!(false));
+}

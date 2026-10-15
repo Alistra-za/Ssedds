@@ -249,6 +249,13 @@ pub fn is_json_set(v: &SetView, target: Target) -> bool {
     (v.skin || v.pbr) && target == Target::Cs
 }
 
+/// The set's pick is `pbr_grass` (PBR grass design §4.3): its PGPatcher settings are the grass view.
+pub fn is_pbr_grass(v: &SetView) -> bool {
+    v.shader
+        .as_ref()
+        .is_some_and(|p| p.shader == Shader::PbrGrass)
+}
+
 /// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set that already has
 /// JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr` itself.
 pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
@@ -501,6 +508,13 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
             .map(|j| j.profile.subtype);
         v.pbr = st.is_some_and(is_pbr_diffuse);
         v.skin = st == Some(Subtype::SkinAlbedo);
+        if is_pbr_grass(v) {
+            let has_s = !matches!(
+                v.slots.get(&SlotKind::Subsurface),
+                None | Some(SlotFill::Empty)
+            );
+            crate::pgp::settings::grass_view(&mut v.settings, has_s);
+        }
         v.derived_match = diffuse.map(|i| derive_match_diffuse(dir_of(&i.key), &mirrored_stem(i)));
         match prefix_of(&v.settings, v.derived_match.as_deref().unwrap_or("")) {
             Ok(p) => v.prefix = Some(p),

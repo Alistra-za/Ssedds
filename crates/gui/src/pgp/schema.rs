@@ -331,3 +331,24 @@ pub const KEYS: &[KeySpec] = &[
 pub fn spec(key: &str) -> Option<&'static KeySpec> {
     KEYS.iter().find(|k| k.key == key)
 }
+
+/// PBR grass design §4.3 (ruling R4): the keys CS's `RunGrass.hlsl` never reads, hidden from a `pbr_grass` set's
+/// form and dropped from its entry. `glint_on`/`fuzz_on` are the GUI switches of `glint`/`fuzz`.
+pub fn grass_ignores(key: &str) -> bool {
+    ["emissive", "coat_", "glint", "fuzz"]
+        .iter()
+        .any(|p| key.starts_with(p))
+        || matches!(
+            key,
+            "lock_emissive"
+                | "parallax"
+                | "displacement_scale"
+                | "lock_parallax"
+                | "hair"
+                | "multilayer"
+                | "inner_uv_scale"
+                | "lock_cnr"
+                | "uv_scale"
+                | "auto_uv"
+        )
+}

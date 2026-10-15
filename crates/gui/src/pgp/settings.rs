@@ -79,3 +79,14 @@ pub fn blocked_by(s: &Settings, f: Feature) -> Option<Feature> {
         }
     })
 }
+
+/// PBR grass design §4.3 (rulings R2, R3): the settings a `pbr_grass` set shows, checks and exports. The keys the
+/// grass shader ignores are dropped; subsurface, the only translucency grass has, is on unless the set says `false`,
+/// when the set has an `_s` (without one, export would block on it).
+pub fn grass_view(s: &mut Settings, has_subsurface_map: bool) {
+    s.retain(|k, _| !super::schema::grass_ignores(k));
+    if has_subsurface_map {
+        s.entry("subsurface".to_string())
+            .or_insert(Value::Bool(true));
+    }
+}
