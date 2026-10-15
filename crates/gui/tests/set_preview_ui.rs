@@ -509,3 +509,25 @@ fn a_pbr_grass_set_shows_the_approximation_badge() {
     settle(&mut h);
     h.get_by_label(GRASS_APPROX);
 }
+
+/// The badge follows the shader within one open preview, both ways (fingerprint-only change).
+#[test]
+fn the_approximation_badge_follows_the_shader_in_the_same_preview() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(
+        rock_selected(d.path()),
+        SetPreview::new(None, None, None, DEFAULT_CAP),
+    );
+    settle(&mut h);
+    assert!(h.query_by_label(GRASS_APPROX).is_none());
+    for (shader, shown) in [
+        (engine::shader::Shader::PbrGrass, true),
+        (engine::shader::Shader::Pbr, false),
+    ] {
+        h.state_mut().0.set_shader("landscape/rock01", Some(shader));
+        assert!(h.state_mut().0.wait_idle(Duration::from_secs(60)));
+        std::thread::sleep(THROTTLE);
+        settle(&mut h);
+        assert_eq!(h.query_by_label(GRASS_APPROX).is_some(), shown);
+    }
+}

@@ -1846,6 +1846,10 @@ impl SetPreview {
             .as_ref()
             .is_some_and(|f| f.landscape != fp.landscape);
         if d == Delta::default() && !relock {
+            // Only the badge differs (pbr <-> pbr_grass): no rebuild, but keep the new fingerprint.
+            if self.fp.as_ref().is_some_and(|f| f.grass != fp.grass) {
+                self.fp = Some(fp);
+            }
             return;
         }
         if d.set {
