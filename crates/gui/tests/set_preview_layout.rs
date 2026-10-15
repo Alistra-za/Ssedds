@@ -141,6 +141,8 @@ fn a_member_keeps_the_3d_view_and_2d_shows_its_normal_view() {
         .iter()
         .find(|i| i.set_key.is_some() && i.set_key.as_deref() != Some(set.as_str()))
         .map(|i| (i.key.clone(), i.name.clone()));
+    // AG132: the member's own settings are in the settings window, titled with its name.
+    h.state_mut().0.settings.set_settings_open = true;
     h.state_mut().0.selection = Selection::Item(key);
     h.run_steps(3);
     h.get_by_label(FRAME_LABEL);
@@ -168,7 +170,8 @@ fn the_3d_layout_truepbr_settings_show_the_coat_group() {
             Some(serde_json::json!(true)),
         );
     });
-    h.get_by_label("TruePBR settings").click();
+    h.get_by_label(sdc_gui::ui::set_preview::SETTINGS_BUTTON)
+        .click();
     h.run_steps(3);
     h.get_by_label("Coat settings");
     h.get_by_label("Coat colour");
@@ -191,7 +194,146 @@ fn a_member_selected_first_opens_its_sets_3d_view() {
             .unwrap();
         name = i.name.clone();
         m.selection = Selection::Item(i.key.clone());
+        m.settings.set_settings_open = true;
     });
     h.get_by_label(FRAME_LABEL);
     h.get_by_label(&format!("{name} settings"));
+}
+
+// ---- AG132: the compact 3D layout ----
+
+fn harness_at(d: &std::path::Path, size: egui::Vec2, prep: impl FnOnce(&mut AppModel)) -> H {
+    let mut m = pbr_opened(d);
+    let key = json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == "landscape/rock01")
+        .unwrap()
+        .0
+        .key;
+    m.select_set(&key);
+    m.settings.set_view_3d = true;
+    prep(&mut m);
+    let state = State {
+        set3d: SetPreview::new(None, None, None, DEFAULT_CAP),
+        ..State::default()
+    };
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+        (m, state),
+    );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    settle(&mut h);
+    h
+}
+
+fn settle(h: &mut H) {
+    for _ in 0..6 {
+        h.run_steps(3);
+        let (m, s) = h.state_mut();
+        s.set3d.poll(&*m);
+    }
+}
+
+#[test]
+fn in_3d_the_viewport_takes_most_of_the_centre() {
+    let d = tempfile::tempdir().unwrap();
+    let h = harness_at(d.path(), egui::vec2(1400.0, 900.0), |_| {});
+    let top = ["header", "status"]
+        .iter()
+        .filter_map(|i| outer(&h, i))
+        .map(|r| r.max.y)
+        .fold(0.0f32, f32::max);
+    let bottom = outer(&h, "report").map_or(900.0, |r| r.min.y);
+    let img = h.get_by_label(FRAME_LABEL).rect();
+    let centre = bottom - top;
+    assert!(
+        img.height() >= 0.7 * centre,
+        "frame {} high in a centre of {centre}",
+        img.height()
+    );
+    // The compact layout: no heading, no second path line.
+    assert!(h.query_by_label("Set preview (3D)").is_none());
+}
+
+#[test]
+fn the_settings_window_toggles_and_its_edits_reach_the_preview() {
+    use sdc_gui::ui::set_preview::SETTINGS_BUTTON;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness_at(d.path(), egui::vec2(1400.0, 900.0), |_| {});
+    assert!(h.query_by_label("Specular level").is_none(), "closed");
+    h.get_by_label(SETTINGS_BUTTON).click();
+    settle(&mut h);
+    assert!(h.state().0.settings.set_settings_open, "remembered");
+    h.get_by_label("TruePBR settings");
+    h.get_by_label("Specular level");
+    let before = h.state().1.set3d.fp.clone().expect("a fingerprint");
+    h.get(
+        egui_kittest::kittest::by()
+            .role(egui::accesskit::Role::CheckBox)
+            .label("Emissive"),
+    )
+    .click();
+    settle(&mut h);
+    let after = h.state().1.set3d.fp.clone().expect("a fingerprint");
+    assert_ne!(before.entry, after.entry, "the preview follows the edit");
+    // The toggle closes it.
+    h.get_by_label(SETTINGS_BUTTON).click();
+    settle(&mut h);
+    assert!(!h.state().0.settings.set_settings_open);
+    assert!(h.query_by_label("Specular level").is_none());
+}
+
+#[test]
+fn details_is_collapsed_by_default_and_holds_the_tech_lines() {
+    use sdc_gui::model::set_preview::{cap_text, JSON_WINS};
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness_at(d.path(), egui::vec2(1400.0, 900.0), |_| {});
+    h.get_by_label("Details");
+    for t in [
+        JSON_WINS,
+        "Timings",
+        sdc_gui::model::viewport3d::FEATURES_LABEL,
+    ] {
+        assert!(h.query_by_label(t).is_none(), "{t} is in Details");
+    }
+    assert!(h.query_by_label(&cap_text(2048)).is_none());
+    let tall = h.get_by_label(FRAME_LABEL).rect().height();
+    h.get_by_label("Details").click();
+    h.run_steps(3);
+    assert!(sdc_gui::ui::viewport3d::details_open(
+        &h.ctx,
+        sdc_gui::ui::viewport3d::SET_DETAILS
+    ));
+    h.get_by_label(JSON_WINS);
+    h.get_by_label(&cap_text(2048));
+    h.get_by_label("Timings");
+    h.get_by_label(sdc_gui::model::viewport3d::FEATURES_LABEL);
+    assert!(
+        h.get_by_label(FRAME_LABEL).rect().height() < tall,
+        "the frame makes room"
+    );
+}
+
+#[test]
+fn warnings_stay_above_the_viewport_outside_details() {
+    use sdc_gui::model::set_preview::{EncState, NEEDS_CS};
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness_at(d.path(), egui::vec2(1400.0, 900.0), |m| {
+        m.set_target(engine::config::Target::Vanilla);
+        assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    });
+    // Not a PGPatcher simulation: its notice is a warning, shown with Details closed.
+    let frame = h.get_by_label(FRAME_LABEL).rect();
+    assert!(h.get_by_label(NEEDS_CS).rect().max.y <= frame.min.y + 0.5);
+    // A failed map, the same.
+    if let Some(mem) = h.state_mut().1.set3d.enc.members.values_mut().next() {
+        mem.state = EncState::Failed("boom".into());
+    }
+    h.run_steps(3);
+    let failed = h.get_by_label_contains("failed").rect();
+    assert!(failed.max.y <= frame.min.y + 0.5);
+    assert!(!sdc_gui::ui::viewport3d::details_open(
+        &h.ctx,
+        sdc_gui::ui::viewport3d::SET_DETAILS
+    ));
 }

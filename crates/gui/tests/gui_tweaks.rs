@@ -6,10 +6,12 @@ use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use sdc_gui::model::pbr_export::json_entries;
 use sdc_gui::model::sections::{delete_hits, written};
-use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP, PANEL_TITLE};
+use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
+use sdc_gui::model::viewport3d::FRAME_LABEL;
 use sdc_gui::model::AppModel;
 use sdc_gui::pgp::writer::{entry_node, EntryInput};
 use sdc_gui::sets_doc::SetsDoc;
+use sdc_gui::ui::set_preview::{PREPARING, SETTINGS_BUTTON};
 use sdc_gui::ui::State;
 use serde_json::json;
 use std::time::Duration;
@@ -255,14 +257,16 @@ fn the_2d_3d_switch_swaps_the_slot_cards_for_the_preview_and_keeps_the_truepbr_s
     // One "Match on this" per slot card.
     assert!(h.query_all_by_label("Match on this").count() >= 1);
     h.get_by_label("Specular level");
-    assert!(h.query_by_label(PANEL_TITLE).is_none());
+    assert!(h.query_by_label(FRAME_LABEL).is_none());
     h.get_by_label("3D").click();
     h.run();
     assert!(h.state().0.settings.set_view_3d);
-    h.get_by_label(PANEL_TITLE);
+    // The 3D view (no poll in this harness, so it may still be preparing).
+    assert!(h.query_by_label(FRAME_LABEL).is_some() || h.query_by_label(PREPARING).is_some());
     assert!(h.query_by_label("Match on this").is_none());
-    // AG78: the TruePBR settings fold above the 3D view in the centre.
-    h.get_by_label("TruePBR settings").click();
+    // AG132: the TruePBR settings are in their window.
+    assert!(h.query_by_label("Specular level").is_none());
+    h.get_by_label(SETTINGS_BUTTON).click();
     h.run();
     h.get_by_label("Specular level");
     h.query_all_by_label("2D").next().unwrap().click();

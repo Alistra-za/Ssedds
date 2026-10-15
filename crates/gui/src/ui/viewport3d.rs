@@ -14,8 +14,10 @@ const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
 /// A missing texture's colour, as the frame shows it (AG76).
 const MAGENTA: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
-/// Space kept under the image for the problem lists and the footer.
-const BELOW: f32 = 110.0;
+/// The tallest the problem list above the frame gets; it scrolls past that.
+const PROBLEMS_MAX: f32 = 100.0;
+/// The View menu's width.
+const LOOK_WIDTH: f32 = 520.0;
 pub const MAX_LISTED: usize = 50;
 
 /// The real clipboard for Copy image.
@@ -69,46 +71,82 @@ fn gated(ui: &mut egui::Ui, v: &Viewport3d, b: egui::Button<'_>) -> bool {
     picker::button(ui, &v.picker, b)
 }
 
+/// The Meshes view's 3D panel (AG132): one toolbar line and the warnings above, the frame in all the height left,
+/// and the collapsed Details footer under it. The set preview composes the same parts (`ui::set_preview`).
 pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
-    popup(ui.ctx(), v);
-    keys(ui.ctx(), v);
-    ui.horizontal_wrapped(|ui| {
-        let mut on = v.features_on;
-        if ui.checkbox(&mut on, FEATURES_LABEL).changed() {
-            v.set_features(on);
-        }
-        let used = v
-            .shaders
-            .as_ref()
-            .map_or("none yet".into(), |f| f.root.display().to_string());
-        let busy = v.picker.busy();
-        let r = ui.add_enabled(!busy, egui::Button::new("Shader folder…").small());
-        let r = if busy {
-            r.on_disabled_hover_text(picker::BUSY_HOVER)
-        } else {
-            r.on_hover_text(format!("Community Shaders in use: {used}"))
-        };
-        if r.clicked() {
-            pick_folder(ui.ctx(), v);
-        }
-        let copy = ui
-            .add_enabled(v.frame.is_some(), egui::Button::new("Copy image").small())
-            .on_hover_text(format!(
-                "Copy the 3D view to the clipboard ({})",
-                super::actions::keys_text("3d-copy")
-            ))
-            .on_disabled_hover_text("Nothing rendered yet");
-        if copy.clicked() {
-            v.copy_image(clipboard);
-        }
-        if let Some(s) = &v.status {
-            ui.weak(s);
-        }
-        if v.show_spinner(std::time::Instant::now()) {
-            ui.spinner();
-        }
-    });
-    look_controls(ui, v);
+    prelude(ui.ctx(), v);
+    egui::Panel::top("meshes-3d-bar")
+        .frame(egui::Frame::new())
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| toolbar(ui, v));
+            warnings(ui, v);
+        });
+    egui::Panel::bottom("meshes-3d-details")
+        .frame(egui::Frame::new())
+        .resizable(false)
+        .show(ui, |ui| {
+            details_footer(ui, MESHES_DETAILS, |ui| details(ui, v))
+        });
+    if !le_mesh(v) {
+        image(ui, v);
+    }
+    if v.busy() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
+/// The Moved popup and the panel's keys: first, before the panel's widgets.
+pub fn prelude(ctx: &egui::Context, v: &mut Viewport3d) {
+    popup(ctx, v);
+    keys(ctx, v);
+}
+
+/// The toolbar's 3D part, on the caller's line: View ▾ (debug views, background, lights, Reset view), Copy image,
+/// Shader folder…, and the render status.
+pub fn toolbar(ui: &mut egui::Ui, v: &mut Viewport3d) {
+    // The View menu holds sliders and a hex box: it stays open while they are used (AG125's menu).
+    super::path_picker::menu(ui, VIEW_MENU, |ui| look_controls(ui, v))
+        .response
+        .on_hover_text("Debug view, background, lights and Reset view");
+    let copy = ui
+        .add_enabled(v.frame.is_some(), egui::Button::new("Copy image"))
+        .on_hover_text(format!(
+            "Copy the 3D view to the clipboard ({})",
+            super::actions::keys_text("3d-copy")
+        ))
+        .on_disabled_hover_text("Nothing rendered yet");
+    if copy.clicked() {
+        v.copy_image(clipboard);
+    }
+    let used = v
+        .shaders
+        .as_ref()
+        .map_or("none yet".into(), |f| f.root.display().to_string());
+    let busy = v.picker.busy();
+    let r = ui.add_enabled(!busy, egui::Button::new("Shader folder…"));
+    let r = if busy {
+        r.on_disabled_hover_text(picker::BUSY_HOVER)
+    } else {
+        r.on_hover_text(format!("Community Shaders in use: {used}"))
+    };
+    if r.clicked() {
+        pick_folder(ui.ctx(), v);
+    }
+    if let Some(s) = &v.status {
+        ui.weak(s);
+    }
+    if v.show_spinner(std::time::Instant::now()) {
+        ui.spinner();
+    }
+}
+
+/// The View menu's button.
+pub const VIEW_MENU: &str = "View ▾";
+
+/// What needs attention, kept above the frame (never in Details): the notice, a missing or failed Community Shaders,
+/// an LE mesh, render and compile errors, failed shaders and missing textures.
+pub fn warnings(ui: &mut egui::Ui, v: &mut Viewport3d) {
     if let Some(n) = v.notice.clone() {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(AMBER, n);
@@ -119,10 +157,12 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
     }
     match v.state.clone() {
         V3State::NotFound => {
-            ui.label(NOT_FOUND);
-            if gated(ui, v, egui::Button::new(CHOOSE_FOLDER)) {
-                pick_folder(ui.ctx(), v);
-            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label(NOT_FOUND);
+                if gated(ui, v, egui::Button::new(CHOOSE_FOLDER)) {
+                    pick_folder(ui.ctx(), v);
+                }
+            });
         }
         V3State::Error(e) => {
             ui.colored_label(RED, e);
@@ -132,26 +172,77 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
     if v.shaders.is_none() && v.state != V3State::NotFound && v.locating() {
         ui.label("Looking for Community Shaders…");
     }
-    let le = v.report.as_ref().is_some_and(|r| r.le_mesh);
-    if le {
+    if le_mesh(v) {
         ui.colored_label(AMBER, LE_WARNING);
-    } else {
-        image(ui, v);
     }
     problems(ui, v);
-    footer(ui, v);
-    if v.busy() {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(16));
+}
+
+/// An LE mesh is not drawn (its warning says why).
+pub fn le_mesh(v: &Viewport3d) -> bool {
+    v.report.as_ref().is_some_and(|r| r.le_mesh)
+}
+
+/// The Details footer's 3D part: the Community Shaders toggle, what is off in the preview, the frame stats and the
+/// renderer's notes.
+pub fn details(ui: &mut egui::Ui, v: &mut Viewport3d) {
+    let mut on = v.features_on;
+    if ui.checkbox(&mut on, FEATURES_LABEL).changed() {
+        v.set_features(on);
     }
+    footer(ui, v);
+    if let Some(r) = v.report.as_ref().filter(|r| !r.warnings.is_empty()) {
+        egui::CollapsingHeader::new(format!("{} notes", r.warnings.len()))
+            .id_salt("viewport3d-warnings")
+            .show(ui, |ui| {
+                for w in r.warnings.iter().take(MAX_LISTED) {
+                    ui.weak(w);
+                }
+            });
+    }
+}
+
+/// The Meshes view's and the set preview's Details footers: their open state is remembered in `gui.toml` (AG132).
+pub const MESHES_DETAILS: &str = "meshes-3d-details";
+pub const SET_DETAILS: &str = "set-3d-details";
+
+/// A "Details" section, collapsed until opened; its state is kept in egui memory under `id` (and saved with the
+/// layout).
+pub fn details_footer(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let key = egui::Id::new(id);
+    let open = details_open(ui.ctx(), id);
+    let r = egui::CollapsingHeader::new("Details")
+        .id_salt(key)
+        .open(Some(open))
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt(key.with("scroll"))
+                .max_height(DETAILS_MAX)
+                .show(ui, add);
+        });
+    if r.header_response.clicked() {
+        set_details_open(ui.ctx(), id, !open);
+    }
+}
+
+/// The tallest an open Details footer gets; it scrolls past that.
+const DETAILS_MAX: f32 = 220.0;
+
+/// Whether the Details footer `id` is open (closed until the user opens it).
+pub fn details_open(ctx: &egui::Context, id: &str) -> bool {
+    ctx.data_mut(|d| d.get_persisted::<bool>(egui::Id::new(id).with("open")))
+        .unwrap_or(false)
+}
+
+pub fn set_details_open(ctx: &egui::Context, id: &str, open: bool) {
+    ctx.data_mut(|d| d.insert_persisted(egui::Id::new(id).with("open"), open));
 }
 
 /// The "View" section: debug view, background and lights. A look change only re-renders (the model sends a new
 /// `Render`).
 fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
-    egui::CollapsingHeader::new("View")
-        .id_salt("viewport3d-look")
-        .show(ui, |ui| {
+    ui.set_max_width(LOOK_WIDTH);
+    ui.vertical(|ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Debug view");
                 let mut d = v.debug();
@@ -222,9 +313,9 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
 }
 
 /// The frame, sized to the space left; asks the model for a frame of that size (physical pixels).
-fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
+pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let avail = ui.available_size();
-    let size = egui::vec2(avail.x.max(1.0), (avail.y - BELOW).max(64.0));
+    let size = egui::vec2(avail.x.max(1.0), avail.y.max(64.0));
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     let shift = ui.input(|i| i.modifiers.shift);
     let d = resp.drag_delta();
@@ -299,7 +390,7 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let mut show = None;
     egui::ScrollArea::vertical()
         .id_salt("viewport3d-problems")
-        .max_height(BELOW - 30.0)
+        .max_height(PROBLEMS_MAX)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             if let Some(e) = &v.render_error {
@@ -341,15 +432,6 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
                         }
                     }
                 });
-            }
-            if !r.warnings.is_empty() {
-                egui::CollapsingHeader::new(format!("{} notes", r.warnings.len()))
-                    .id_salt("viewport3d-warnings")
-                    .show(ui, |ui| {
-                        for w in r.warnings.iter().take(MAX_LISTED) {
-                            ui.weak(w);
-                        }
-                    });
             }
         });
     if show.is_some() {

@@ -5,7 +5,8 @@ use crate::model::view::{Channel, Layout, ViewState};
 use crate::model::viewport3d::Look;
 use crate::model::Filter;
 use crate::settings::{
-    LayoutSettings, LookSettings, WindowSettings, FILTER_NAMES, WIDTH_IDS, WIDTH_RANGE,
+    LayoutSettings, LookSettings, WindowSettings, DETAILS_NAMES, FILTER_NAMES, WIDTH_IDS,
+    WIDTH_RANGE,
 };
 use eframe::egui::{self, containers::panel::PanelState, pos2, vec2, Rect};
 use std::time::{Duration, Instant};
@@ -205,6 +206,13 @@ pub struct Probe {
     channel: Channel,
     layout: Layout,
     looks: (Look, Look),
+    settings_window: Option<Rect>,
+    details: [bool; DETAILS_NAMES.len()],
+}
+
+/// The 3D settings window's rectangle this frame, if it has been shown (AG132).
+fn settings_window_now(ctx: &egui::Context) -> Option<Rect> {
+    ctx.memory(|m| m.area_rect(crate::ui::set_preview::settings_window_id()))
 }
 
 pub fn probe(
@@ -233,6 +241,8 @@ pub fn probe(
         channel: view.channel,
         layout: view.layout,
         looks: (*looks.0, *looks.1),
+        settings_window: settings_window_now(ctx),
+        details: DETAILS_NAMES.map(|n| crate::ui::viewport3d::details_open(ctx, n)),
     }
 }
 
@@ -281,6 +291,20 @@ pub fn capture(
     l.preview_layout = view.layout.name().to_string();
     l.look = look_now(looks.0, &prev.look);
     l.set_look = look_now(looks.1, &prev.set_look);
+    if let Some(r) = settings_window_now(ctx) {
+        let now = [r.min.x, r.min.y, r.width(), r.height()];
+        let moved = prev
+            .settings_window
+            .is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() >= 0.5));
+        if moved {
+            l.settings_window = Some(now);
+        }
+    }
+    l.details = DETAILS_NAMES
+        .iter()
+        .filter(|n| crate::ui::viewport3d::details_open(ctx, n))
+        .map(|n| n.to_string())
+        .collect();
     l
 }
 
@@ -362,6 +386,9 @@ pub fn restore_ctx(ctx: &egui::Context, l: &LayoutSettings) {
         }
     }
     crate::ui::header::set_meshes_view(ctx, l.meshes_view);
+    for n in DETAILS_NAMES {
+        crate::ui::viewport3d::set_details_open(ctx, n, l.details.iter().any(|d| d == n));
+    }
 }
 
 /// The Textures filters, the preview channel and layout the file names; an unknown one is skipped.

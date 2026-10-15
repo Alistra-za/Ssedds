@@ -170,7 +170,7 @@ fn background_grey_renders_a_hex_box() {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    h.get_by_label("View").click();
+    h.get_by_label(sdc_gui::ui::viewport3d::VIEW_MENU).click();
     h.run();
     h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
         .find(|n| n.value().as_deref() == Some("#000000"))

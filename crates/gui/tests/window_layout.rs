@@ -41,6 +41,8 @@ fn full() -> LayoutSettings {
             sun_yaw: Some(0.5),
         }),
         set_look: None,
+        settings_window: Some([300.0, 140.0, 460.0, 600.0]),
+        details: vec!["set-3d-details".into()],
     }
 }
 
@@ -504,4 +506,30 @@ fn a_window_saved_at_egui_zoom_restores_at_the_same_size() {
     };
     let w = initial_window(&l, &[rect(0.0, 0.0, 4000.0, 3000.0)]);
     assert_eq!((w.size, w.pos), ([1400.0, 900.0], Some([100.0, 80.0])));
+}
+
+#[test]
+fn the_details_footers_open_state_is_saved_and_restored() {
+    use sdc_gui::ui::viewport3d::{details_open, set_details_open, MESHES_DETAILS, SET_DETAILS};
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("sdc/gui.toml");
+    let model = sdc_gui::model::AppModel::new(
+        GuiSettings::default(),
+        Some(path.clone()),
+        support::session(),
+    );
+    let mut app = sdc_gui::app::SdcApp::new(model);
+    let ctx = egui::Context::default();
+    let t0 = Instant::now();
+    app.sync_layout_at(&ctx, t0);
+    set_details_open(&ctx, SET_DETAILS, true);
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(1));
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(4));
+    let saved = GuiSettings::load(&path).0.layout;
+    assert_eq!(saved.details, vec![SET_DETAILS.to_string()]);
+    // A new start opens it again, and only it.
+    let ctx = egui::Context::default();
+    sdc_gui::layout::restore_ctx(&ctx, &saved);
+    assert!(details_open(&ctx, SET_DETAILS));
+    assert!(!details_open(&ctx, MESHES_DETAILS));
 }

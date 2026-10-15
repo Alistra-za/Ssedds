@@ -128,6 +128,9 @@ pub fn draw_with_scan(
     slot_commands::draw(ui.ctx(), model, &mut state.slot_cmds);
     dialogs::draw(ui.ctx(), model);
     json_editor::draw(ui.ctx(), model);
+    // AG132: only while the centre shows the 3D view (not over an expanded preview or the bulk panel).
+    let shows_3d = three_d && model.root.is_some() && model.expanded.is_none() && !model.in_bulk();
+    set_preview::settings_window(ui.ctx(), model, shows_3d);
 }
 
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
@@ -150,22 +153,15 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
     let selection = model.selection.clone();
     match selection {
         // AG87: on 3D, any member of a set opens or keeps that set's 3D view (`three_d` needs `followed_set`), its own
-        // settings folded above it.
+        // settings in the settings window (AG132).
         Selection::Item(key) if three_d => {
             let name = model.item(&key).map_or(key.clone(), |i| i.name.clone());
             ui.horizontal_wrapped(|ui| {
                 set_preview::view_switch(ui, model);
                 ui.heading(&name);
+                // AG132: its own settings are in the settings window, with the set's.
+                set_preview::settings_toggle(ui, model);
             });
-            egui::CollapsingHeader::new(format!("{name} settings"))
-                .id_salt(("set-3d-member", &key))
-                .default_open(true)
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("set-3d-member-scroll")
-                        .max_height((ui.available_height() * 0.45).max(240.0))
-                        .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
-                });
             ui.separator();
             set_preview::draw(ui, model, &mut state.set3d);
         }

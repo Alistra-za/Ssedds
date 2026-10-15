@@ -79,6 +79,8 @@ pub struct GuiSettings {
     pub sets_collapsed: bool,
     /// A set shows its 3D preview instead of its slot cards (the set editor's 2D | 3D switch).
     pub set_view_3d: bool,
+    /// The 3D view's settings window (TruePBR settings…) is open (AG132).
+    pub set_settings_open: bool,
     pub advanced_open: bool,
     /// M5 (DECISIONS Note NV2): an explicit `nvcompress.exe`; `None` looks on PATH, then in the NVIDIA install folder.
     pub nvtt_path: Option<PathBuf>,
@@ -125,6 +127,7 @@ impl Default for GuiSettings {
             textures_collapsed: false,
             sets_collapsed: false,
             set_view_3d: false,
+            set_settings_open: false,
             advanced_open: false,
             nvtt_path: None,
             meshes: MeshesSettings::default(),

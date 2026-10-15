@@ -18,6 +18,12 @@ fn harness(v: Viewport3d) -> Harness<'static, Viewport3d> {
             v,
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    // The toggle, the footer and the notes these tests read are in the Details footer (AG132).
+    sdc_gui::ui::viewport3d::set_details_open(
+        &h.ctx,
+        sdc_gui::ui::viewport3d::MESHES_DETAILS,
+        true,
+    );
     h
 }
 
@@ -1059,7 +1065,7 @@ fn the_default_look_is_the_unchanged_scene() {
 fn view_section_offers_background_and_lights() {
     let mut h = harness(Viewport3d::with_state(V3State::Ready));
     h.run();
-    h.get_by_label("View").click();
+    h.get_by_label(sdc_gui::ui::viewport3d::VIEW_MENU).click();
     h.run();
     h.get_by_label("Solid");
     h.get_by_label("Studio HDRI").click();
@@ -2574,7 +2580,7 @@ fn the_debug_selector_lists_only_views_the_renderer_can_make() {
     assert_eq!(DebugView::ALL, [DebugView::Lit, DebugView::UvChecker]);
     let mut h = harness(Viewport3d::with_state(V3State::Ready));
     h.run();
-    h.get_by_label("View").click();
+    h.get_by_label(sdc_gui::ui::viewport3d::VIEW_MENU).click();
     h.run();
     h.get_by_label("Lit");
     for missing in ["Albedo", "Normals", "Roughness", "Metallic", "AO"] {

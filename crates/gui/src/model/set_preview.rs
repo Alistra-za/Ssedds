@@ -1026,7 +1026,6 @@ impl Encoder {
 
 // ---- Part 2: fingerprint, change classification, mesh candidates, PGPatcher simulation, the panel's model ----
 
-pub const PANEL_TITLE: &str = "Set preview (3D)";
 pub const NEEDS_CS: &str = "PGPatcher preview needs the CS target and a PBR set";
 pub const JSON_WINS: &str = "Assumes your Tessalith JSON wins over other mods' PGPatcher configs.";
 pub const NO_SCAN: &str = "Scan your mods in the Meshes view to preview on a real mesh";

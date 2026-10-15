@@ -4,7 +4,7 @@
 use crate::model::set_preview::{
     badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
     Outcome, Pick, PreviewMode, SetPreview, BUILTINS, JSON_WINS, MODE_LABEL_ENCODED,
-    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, PANEL_TITLE, WAITS_FOR_EXPORT,
+    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, WAITS_FOR_EXPORT,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -20,8 +20,8 @@ const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
 /// The width the centre pane keeps at the least.
 pub const CENTRE_MIN: f32 = 360.0;
-/// Height of the shape list before the frame.
-const LIST_MAX: f32 = 160.0;
+/// The tallest the shape warnings above the frame get.
+const LIST_MAX: f32 = 80.0;
 
 /// The switch is on 3D and a set is followed; the view draws in the centre in place of the set editor's body
 /// while the set itself is selected (AG78).
@@ -68,94 +68,121 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
     }) {
         s.input = true;
     }
-    // The 2D | 3D switch and the set's name are the set editor's header row, above this view (AG78).
-    ui.strong(PANEL_TITLE);
+    // AG132: the set's name and path are the set editor's header row above this view; no heading of its own.
     if followed_set(m).is_none() {
         ui.label("Select a set to preview it in 3D.");
         return;
     }
     let Some(fp) = s.fp.clone() else {
-        ui.label("Preparing the preview…");
+        ui.label(PREPARING);
         return;
     };
-    ui.label(egui::RichText::new(&fp.label).strong());
-    if fp.entry.is_some() {
-        ui.label(JSON_WINS);
-    } else {
-        ui.colored_label(AMBER, NEEDS_CS);
+    let simulated = fp.entry.is_some();
+    crate::ui::viewport3d::prelude(ui.ctx(), &mut s.v3);
+    // One toolbar line, then what needs attention; the frame takes the rest above the collapsed Details.
+    egui::Panel::top("set-3d-bar")
+        .frame(egui::Frame::new())
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                mode_toggle(ui, s);
+                mesh_picker(ui, s);
+                crate::ui::viewport3d::toolbar(ui, &mut s.v3);
+            });
+            if !simulated {
+                ui.colored_label(AMBER, NEEDS_CS);
+            }
+            if s.enc.paused {
+                ui.colored_label(AMBER, WAITS_FOR_EXPORT);
+            }
+            if let Candidates::Error(e) = &s.candidates {
+                ui.colored_label(RED, e);
+            }
+            members(ui, s, true);
+            shapes(ui, s, true);
+            for n in &s.notices {
+                ui.colored_label(AMBER, n);
+            }
+            crate::ui::viewport3d::warnings(ui, &mut s.v3);
+        });
+    egui::Panel::bottom("set-3d-details")
+        .frame(egui::Frame::new())
+        .resizable(false)
+        .show(ui, |ui| {
+            crate::ui::viewport3d::details_footer(ui, crate::ui::viewport3d::SET_DETAILS, |ui| {
+                if simulated {
+                    ui.label(JSON_WINS);
+                }
+                ui.label(egui::RichText::new(cap_text(s.enc.cap)).small());
+                mesh_line(ui, s, simulated);
+                members(ui, s, false);
+                shapes(ui, s, false);
+                if emissive_shown(s) {
+                    ui.label(EMISSIVE_APPROX);
+                }
+                timings(ui, s);
+                // Until the CS settings are read the 3D part names only Dynamic Cubemaps: keep the P0 list here.
+                if s.v3.off_in_preview.is_empty() {
+                    ui.label(egui::RichText::new(OFF_FEATURES).small());
+                }
+                crate::ui::viewport3d::details(ui, &mut s.v3);
+            });
+        });
+    if !crate::ui::viewport3d::le_mesh(&s.v3) {
+        crate::ui::viewport3d::image(ui, &mut s.v3);
     }
-    ui.label(egui::RichText::new(cap_text(s.enc.cap)).small());
-    if s.enc.paused {
-        ui.colored_label(AMBER, WAITS_FOR_EXPORT);
-    }
-    mode_toggle(ui, s);
-    mesh_picker(ui, s, fp.entry.is_some());
-    members(ui, s);
-    shapes(ui, s);
-    if emissive_shown(s) {
-        ui.label(EMISSIVE_APPROX);
-    }
-    for n in &s.notices {
-        ui.colored_label(AMBER, n);
-    }
-    // Until the CS settings are read the shared footer names only Dynamic Cubemaps: keep the P0 list here.
-    if s.v3.off_in_preview.is_empty() {
-        ui.label(egui::RichText::new(OFF_FEATURES).small());
-    }
-    timings(ui, s);
-    ui.separator();
-    crate::ui::viewport3d::show(ui, &mut s.v3);
-    if s.busy() {
+    if s.busy() || s.v3.busy() {
         ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(50));
+            .request_repaint_after(std::time::Duration::from_millis(16));
     }
 }
 
-fn mesh_picker(ui: &mut egui::Ui, s: &mut SetPreview, simulated: bool) {
+/// The mesh combo, on the toolbar line: "Mesh: Auto (Sphere)" and its list.
+fn mesh_picker(ui: &mut egui::Ui, s: &mut SetPreview) {
     let pick = s.pick();
     let mut chosen = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Mesh:");
-        let pick_name = match &pick {
-            Pick::Nif(c) => c.label(),
-            Pick::Builtin(b) => builtin_name(*b).to_string(),
-        };
-        let current = match s.choice() {
-            MeshChoice::Auto => format!("Auto ({pick_name})"),
-            _ => pick_name,
-        };
-        egui::ComboBox::from_id_salt("set-3d-mesh")
-            .selected_text(current)
-            .show_ui(ui, |ui| {
-                if ui
-                    .selectable_label(s.choice() == MeshChoice::Auto, "Auto")
-                    .clicked()
-                {
-                    chosen = Some(MeshChoice::Auto);
-                }
-                if let Candidates::Ready(list) = &s.candidates {
-                    for c in list {
-                        let sel = matches!(&pick, Pick::Nif(p) if p.load_copy_id == c.load_copy_id);
-                        let r = ui
-                            .add_enabled_ui(!c.le_mesh, |ui| ui.selectable_label(sel, c.label()))
-                            .inner;
-                        if r.clicked() {
-                            chosen = Some(MeshChoice::Nif(c.load_copy_id));
-                        }
+    let pick_name = match &pick {
+        Pick::Nif(c) => c.label(),
+        Pick::Builtin(b) => builtin_name(*b).to_string(),
+    };
+    let current = match s.choice() {
+        MeshChoice::Auto => format!("Mesh: Auto ({pick_name})"),
+        _ => format!("Mesh: {pick_name}"),
+    };
+    egui::ComboBox::from_id_salt("set-3d-mesh")
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(s.choice() == MeshChoice::Auto, "Auto")
+                .clicked()
+            {
+                chosen = Some(MeshChoice::Auto);
+            }
+            if let Candidates::Ready(list) = &s.candidates {
+                for c in list {
+                    let sel = matches!(&pick, Pick::Nif(p) if p.load_copy_id == c.load_copy_id);
+                    let r = ui
+                        .add_enabled_ui(!c.le_mesh, |ui| ui.selectable_label(sel, c.label()))
+                        .inner;
+                    if r.clicked() {
+                        chosen = Some(MeshChoice::Nif(c.load_copy_id));
                     }
                 }
-                ui.separator();
-                for (b, name) in BUILTINS {
-                    let sel = matches!(pick, Pick::Builtin(x) if x == b);
-                    if ui.selectable_label(sel, name).clicked() {
-                        chosen = Some(MeshChoice::Builtin(b));
-                    }
+            }
+            ui.separator();
+            for (b, name) in BUILTINS {
+                let sel = matches!(pick, Pick::Builtin(x) if x == b);
+                if ui.selectable_label(sel, name).clicked() {
+                    chosen = Some(MeshChoice::Builtin(b));
                 }
-            });
-    });
+            }
+        });
     if let Some(c) = chosen {
         s.choose(c);
     }
+}
+
+/// Where the mesh list comes from, in Details (an error is a warning above the frame instead).
+fn mesh_line(ui: &mut egui::Ui, s: &SetPreview, simulated: bool) {
     match &s.candidates {
         Candidates::NoStore(t) => {
             ui.label(t);
@@ -169,16 +196,30 @@ fn mesh_picker(ui: &mut egui::Ui, s: &mut SetPreview, simulated: bool) {
         Candidates::Ready(v) if !v.is_empty() => {
             ui.label(count_text(v.len()));
         }
-        Candidates::Error(e) => {
-            ui.colored_label(RED, e);
-        }
         _ => {}
     }
 }
 
-fn members(ui: &mut egui::Ui, s: &SetPreview) {
+/// The maps' encode states: with `attention`, the failed, stale and blocked ones (above the frame); else the others
+/// (Details).
+fn members(ui: &mut egui::Ui, s: &SetPreview, attention: bool) {
+    let shown: Vec<_> = s
+        .enc
+        .members
+        .values()
+        .filter(|m| {
+            attention
+                == matches!(
+                    m.state,
+                    EncState::Failed(_) | EncState::Stale(_) | EncState::Blocked(_)
+                )
+        })
+        .collect();
+    if shown.is_empty() {
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
-        for m in s.enc.members.values() {
+        for m in shown {
             let mut text = format!("{}: {}", m.slot.kind.label(), m.state.label());
             // The time of the bytes on show, so the two modes can be compared (Fresh already says it).
             if let (false, Some(e)) = (matches!(m.state, EncState::Fresh(_)), m.state.shown()) {
@@ -195,10 +236,8 @@ fn members(ui: &mut egui::Ui, s: &SetPreview) {
 
 fn mode_toggle(ui: &mut egui::Ui, s: &mut SetPreview) {
     let mut mode = s.mode();
-    ui.horizontal_wrapped(|ui| {
-        ui.radio_value(&mut mode, PreviewMode::Encoded, MODE_LABEL_ENCODED);
-        ui.radio_value(&mut mode, PreviewMode::Source, MODE_LABEL_SOURCE);
-    });
+    ui.radio_value(&mut mode, PreviewMode::Encoded, MODE_LABEL_ENCODED);
+    ui.radio_value(&mut mode, PreviewMode::Source, MODE_LABEL_SOURCE);
     if mode != s.mode() {
         s.set_mode(mode);
     }
@@ -214,14 +253,16 @@ fn emissive_shown(s: &SetPreview) -> bool {
             .any(|i| i.status != ShapeStatus::Hidden && on(&i.material))
 }
 
-fn shapes(ui: &mut egui::Ui, s: &SetPreview) {
-    // Spec §1 criterion 4: a shader that failed to compile is named here, and one still compiling says so.
+/// The shapes: with `attention`, the failed shaders, the skipped shapes and the patch badges (above the frame); else
+/// the rest, compiling and patched lines (Details).
+fn shapes(ui: &mut egui::Ui, s: &SetPreview, attention: bool) {
+    // Spec §1 criterion 4: a shader that failed to compile is named, and one still compiling says so.
     for i in &s.v3.shapes {
         match &i.status {
             ShapeStatus::Failed {
                 error,
                 showing_previous,
-            } => {
+            } if attention => {
                 let kept = if *showing_previous {
                     " (previous look kept)"
                 } else {
@@ -229,36 +270,52 @@ fn shapes(ui: &mut egui::Ui, s: &SetPreview) {
                 };
                 ui.colored_label(RED, format!("{}: shader failed: {error}{kept}", i.name));
             }
-            ShapeStatus::Pending { .. } => {
+            ShapeStatus::Pending { .. } if !attention => {
                 ui.label(format!("{}: compiling…", i.name));
             }
-            ShapeStatus::Drawing | ShapeStatus::Hidden => {}
+            _ => {}
         }
     }
-    if s.rows.is_empty() {
+    let needs = |o: &Outcome| match o {
+        Outcome::Skip(_) => true,
+        Outcome::Patched { badges } => !badges.is_empty(),
+        Outcome::NoMatch | Outcome::Plain => false,
+    };
+    let rows: Vec<_> = s
+        .rows
+        .iter()
+        .filter(|r| needs(&r.outcome) == attention)
+        .collect();
+    if rows.is_empty() {
         return;
     }
-    egui::ScrollArea::vertical()
-        .id_salt("set-3d-shapes")
-        .max_height(LIST_MAX)
-        .show(ui, |ui| {
-            for r in &s.rows {
-                match &r.outcome {
-                    Outcome::Skip(_) => {
-                        ui.colored_label(RED, r.text());
-                    }
-                    Outcome::Patched { badges } => {
-                        ui.label(r.text());
-                        for b in badges {
-                            ui.colored_label(AMBER, badge_text(b));
-                        }
-                    }
-                    Outcome::NoMatch | Outcome::Plain => {
-                        ui.label(r.text());
+    let list = |ui: &mut egui::Ui| {
+        for r in rows {
+            match &r.outcome {
+                Outcome::Skip(_) => {
+                    ui.colored_label(RED, r.text());
+                }
+                Outcome::Patched { badges } => {
+                    ui.label(r.text());
+                    for b in badges {
+                        ui.colored_label(AMBER, badge_text(b));
                     }
                 }
+                Outcome::NoMatch | Outcome::Plain => {
+                    ui.label(r.text());
+                }
             }
-        });
+        }
+    };
+    // Above the frame the list is capped; Details scrolls as a whole.
+    if attention {
+        egui::ScrollArea::vertical()
+            .id_salt("set-3d-shapes")
+            .max_height(LIST_MAX)
+            .show(ui, list);
+    } else {
+        list(ui);
+    }
 }
 
 fn timings(ui: &mut egui::Ui, s: &SetPreview) {
@@ -288,4 +345,95 @@ fn timings(ui: &mut egui::Ui, s: &SetPreview) {
                 ui.label("Timing log: off (SDC_PREVIEW_LOG=0)");
             }
         });
+}
+
+/// What the 3D view says until its first fingerprint is ready.
+pub const PREPARING: &str = "Preparing the preview…";
+/// The header-row button that shows or hides the 3D view's settings window (AG132).
+pub const SETTINGS_BUTTON: &str = "TruePBR settings…";
+/// The settings window's id: one window whatever it shows, so its place and size carry over.
+pub fn settings_window_id() -> egui::Id {
+    egui::Id::new("set-3d-settings-window")
+}
+
+/// The settings toggle, beside Input name… (or the texture's name) in the 3D header row.
+pub fn settings_toggle(ui: &mut egui::Ui, m: &mut AppModel) {
+    let mut on = m.settings.set_settings_open;
+    if ui
+        .toggle_value(&mut on, SETTINGS_BUTTON)
+        .on_hover_text(
+            "A window with the set's TruePBR settings (and a selected texture's own settings); edits show in 3D",
+        )
+        .changed()
+    {
+        m.settings.set_settings_open = on;
+        m.save_settings();
+    }
+}
+
+/// AG132: the 3D view's settings in a movable, resizable window: a selected member's own settings, then the set's
+/// TruePBR settings (coat group, NiAlphaProperty and the rest) and, for an Advanced skin set, the skin card. It follows
+/// the selection; a selection with none of them closes it. Nothing shows while the switch is on 2D.
+pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
+    if !three_d || !m.settings.set_settings_open {
+        return;
+    }
+    let item = match &m.selection {
+        crate::model::Selection::Item(k) => Some(k.clone()),
+        _ => None,
+    };
+    let set = followed_set(m).and_then(|k| {
+        crate::model::sets::set_views(m)
+            .into_iter()
+            .find(|v| v.key == k)
+    });
+    let json = set
+        .as_ref()
+        .is_some_and(|v| crate::model::sets::shows_json_panel(v, m.target));
+    let skin = set.as_ref().is_some_and(|v| v.skin);
+    if item.is_none() && !json && !skin {
+        m.settings.set_settings_open = false;
+        m.save_settings();
+        return;
+    }
+    let title = match &item {
+        Some(k) => format!(
+            "{} settings",
+            m.item(k).map_or(k.as_str(), |i| i.name.as_str())
+        ),
+        None => "TruePBR settings".to_string(),
+    };
+    let rect = m.settings.layout.settings_window.map_or(
+        egui::Rect::from_min_size(egui::pos2(120.0, 120.0), egui::vec2(460.0, 620.0)),
+        |[x, y, w, h]| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)),
+    );
+    let mut open = true;
+    egui::Window::new(title)
+        .id(settings_window_id())
+        .open(&mut open)
+        .resizable(true)
+        .default_rect(rect)
+        .constrain(true)
+        .scroll([false, true])
+        .show(ctx, |ui| {
+            if let Some(k) = &item {
+                crate::ui::settings_panel::draw(ui, m, k, false);
+            }
+            if let Some(v) = &set {
+                if item.is_some() && (json || skin) {
+                    ui.separator();
+                    ui.strong(format!("Set {}", v.label));
+                }
+                if json {
+                    crate::ui::pgp_fields::panel(ui, m, &v.id);
+                }
+                if skin {
+                    crate::ui::skin_card::card(ui, m, v);
+                }
+            }
+        });
+    if !open {
+        m.settings.set_settings_open = false;
+        m.save_settings();
+    }
 }

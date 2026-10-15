@@ -8,7 +8,7 @@ use render3d::builtin::Builtin;
 use render3d::{ShapeId, ShapeInfo, ShapeStatus};
 use sdc_gui::model::pbr_export::json_entries;
 use sdc_gui::model::set_preview::*;
-use sdc_gui::model::viewport3d::Content;
+use sdc_gui::model::viewport3d::{Content, FRAME_LABEL};
 use sdc_gui::model::AppModel;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +24,8 @@ fn harness(m: AppModel, s: SetPreview) -> H {
             (m, s),
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    // The tech lines these tests read are in the Details footer, collapsed by default (AG132).
+    sdc_gui::ui::viewport3d::set_details_open(&h.ctx, sdc_gui::ui::viewport3d::SET_DETAILS, true);
     h
 }
 
@@ -70,7 +72,7 @@ fn without_a_scan_db_the_panel_says_so_and_shows_the_simulated_sphere() {
         SetPreview::new(None, None, None, DEFAULT_CAP),
     );
     settle(&mut h);
-    h.get_by_label(PANEL_TITLE);
+    h.get_by_label(FRAME_LABEL);
     h.get_by_label(NO_SCAN);
     h.get_by_label(JSON_WINS);
     h.get_by_label(&cap_text(2048));
@@ -325,10 +327,16 @@ fn the_textures_view_shows_the_panel_for_a_set_only_when_the_app_enables_it() {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    h.get_by_label(PANEL_TITLE);
+    // No poll in this harness: the 3D view may still be preparing.
+    let shown = |h: &Harness<'static, (AppModel, sdc_gui::ui::State)>| {
+        h.query_by_label(FRAME_LABEL).is_some()
+            || h.query_by_label(sdc_gui::ui::set_preview::PREPARING)
+                .is_some()
+    };
+    assert!(shown(&h));
     h.state_mut().0.selection = sdc_gui::model::Selection::None;
     h.run();
-    assert!(h.query_by_label(PANEL_TITLE).is_none());
+    assert!(!shown(&h));
     // `ui::draw` (every existing kittest) uses `State::default()`: the panel stays off.
     let mut h = Harness::builder()
         .with_size(eframe::egui::vec2(1400.0, 900.0))
@@ -338,7 +346,10 @@ fn the_textures_view_shows_the_panel_for_a_set_only_when_the_app_enables_it() {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    assert!(h.query_by_label(PANEL_TITLE).is_none());
+    assert!(h.query_by_label(FRAME_LABEL).is_none());
+    assert!(h
+        .query_by_label(sdc_gui::ui::set_preview::PREPARING)
+        .is_none());
 }
 
 const EMISSIVE_TEXT: &str =
@@ -469,6 +480,9 @@ fn the_timings_section_shows_the_log_path_and_a_copy_button() {
     let log_dir = tempfile::tempdir().unwrap();
     let _log = render3d::perf_log::start_in(log_dir.path()).expect("a log");
     let (_d, mut h) = plain_rock();
+    // Details scrolls when it is taller than its cap.
+    h.get_by_label("Timings").scroll_to_me();
+    h.run();
     h.get_by_label("Timings").click();
     h.run();
     h.get_by_label_contains("Timing log:");

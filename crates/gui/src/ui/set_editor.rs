@@ -81,6 +81,9 @@ pub fn draw(
         }
         ui.heading(&v.label);
         super::input_name::picker(ui, model, &v);
+        if view.three_d {
+            super::set_preview::settings_toggle(ui, model);
+        }
         // The output prefix and its error are PGPatcher JSON facts: only a JSON set shows them.
         if shows_json_panel(&v, model.target) {
             match (&v.prefix, &v.prefix_error) {
@@ -134,29 +137,8 @@ pub fn draw(
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let why = model.banner.clone().unwrap_or_default();
     if view.three_d {
-        // 3D (AG78): the set's 3D view follows in this pane (`ui::centre`). The TruePBR settings (coat group
-        // included) and the skin card fold above it, so an edit still shows live in 3D.
-        let tall = (ui.available_height() * 0.45).max(240.0);
-        if shows_json_panel(&v, model.target) {
-            egui::CollapsingHeader::new("TruePBR settings")
-                .id_salt(("set-3d-pbr", &v.id))
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("set-3d-pbr-scroll")
-                        .max_height(tall)
-                        .show(ui, |ui| super::pgp_fields::panel(ui, model, &v.id));
-                });
-        }
-        if v.skin {
-            egui::CollapsingHeader::new("Advanced skin settings")
-                .id_salt(("set-3d-skin", &v.id))
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("set-3d-skin-scroll")
-                        .max_height(tall)
-                        .show(ui, |ui| super::skin_card::card(ui, model, &v));
-                });
-        }
+        // 3D (AG132): the set's 3D view takes the rest of this pane (`ui::centre`); the TruePBR settings and the skin
+        // card are in the TruePBR settings… window, so an edit still shows live in 3D.
         return;
     }
     egui::ScrollArea::vertical()
