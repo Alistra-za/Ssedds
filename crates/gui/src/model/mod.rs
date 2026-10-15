@@ -246,6 +246,8 @@ pub struct AppModel {
     /// Scan evidence for the Subsurface auto mode (DECISIONS AG102): `shader::colour_mesh_key` → whether any scanned
     /// source shape that uses the colour member is Tree_Anim (SLSF2 bit 29). Not sent to the engine.
     pub mesh_tree_anim: std::collections::BTreeMap<String, bool>,
+    /// Bumped whenever `mesh_tree_anim` or `known` is replaced (DECISIONS AG109); part of `json_key`.
+    pub evidence_rev: u64,
     /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
     /// evidence; sent as `BatchRequest::gras_diffuses`.
     pub gras_diffuses: std::collections::BTreeSet<String>,
@@ -412,6 +414,7 @@ impl AppModel {
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
             mesh_tree_anim: Default::default(),
+            evidence_rev: 0,
             gras_diffuses: Default::default(),
             known: Default::default(),
             used_by: Default::default(),
@@ -699,7 +702,7 @@ impl AppModel {
                     || e.alpha != self.mesh_alpha
                     || e.gras != self.gras_diffuses;
                 (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
-                self.mesh_tree_anim = e.tree_anim;
+                self.set_tree_anim(e.tree_anim);
                 changed
             }
             Err(e) => {
@@ -1593,12 +1596,24 @@ impl AppModel {
             .collect();
     }
 
+    /// Replace the Tree_Anim scan evidence; the JSON editor's cache sees it (DECISIONS AG109).
+    pub fn set_tree_anim(&mut self, t: std::collections::BTreeMap<String, bool>) {
+        self.mesh_tree_anim = t;
+        self.evidence_rev += 1;
+    }
+
+    /// Replace the scan's known paths; the JSON editor's cache sees it (DECISIONS AG109).
+    pub fn set_known(&mut self, k: known_paths::KnownPaths) {
+        self.known = Arc::new(k);
+        self.evidence_rev += 1;
+    }
+
     /// What the PGPatcher JSON editor's text and issues are built from (DECISIONS AG109): the set-view key, the
     /// mesh evidence the auto flags read, and the file name.
-    pub(crate) fn json_key(&self) -> (ViewKey, usize, String) {
+    pub(crate) fn json_key(&self) -> (ViewKey, u64, String) {
         (
             self.view_key(),
-            self.mesh_tree_anim.len(),
+            self.evidence_rev,
             crate::model::pbr_export::json_name(self),
         )
     }

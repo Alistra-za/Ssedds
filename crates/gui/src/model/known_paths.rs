@@ -7,7 +7,6 @@ use crate::worker::{spawn_guarded, WorkerMsg};
 use modscan::store::Store;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Arc;
 
 /// What the scan knows. Paths are canonical: lower case, `/`, starting `textures/` or `meshes/`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -99,7 +98,7 @@ impl AppModel {
 
     pub(super) fn known_paths_landed(&mut self, result: Result<KnownPaths, String>) {
         match result {
-            Ok(k) => self.known = Arc::new(k),
+            Ok(k) => self.set_known(k),
             Err(e) => eprintln!("tessalith: reading the scan's texture paths failed: {e}"),
         }
     }

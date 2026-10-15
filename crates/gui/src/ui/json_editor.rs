@@ -861,7 +861,7 @@ pub fn cache_builds() -> usize {
 /// Everything the editor derives from the model, rebuilt only when `AppModel::json_key` changes (DECISIONS AG109).
 #[derive(Clone)]
 struct Built {
-    key: (crate::model::ViewKey, usize, String),
+    key: (crate::model::ViewKey, u64, String),
     entries: Arc<Vec<(SetView, EntryInput)>>,
     text: Arc<String>,
     issues: Arc<JsonIssues>,

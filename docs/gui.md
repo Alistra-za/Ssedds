@@ -295,7 +295,7 @@ After a complete export, **Export** writes `<export>\PBRNIFPatcher\<name>.json`.
 
 - The header reads "N errors, M warnings". Errors are what blocks Export (a red line under the entry they belong to); warnings are what Export asks about (an amber line). A problem that belongs to no entry (the JSON name, a set that matches nothing) is listed in a **General** box at the top.
 - **Next error** and **Prev** (F8 and Shift+F8) jump to the next or previous entry with an error, unfold it and scroll to it. They wrap at the end. Each entry has a **Collapse** / **Expand** button.
-- The search box keeps the entries whose set name or any path in them (match, slot, path_contains, nif_filter) contains the text, ignoring case; "showing K of N" says how many are left. The counts and Next error ignore the search: if the next error is hidden by it, Next error clears the search.
+- The search box keeps the entries whose set name or any path in them (match, slot, path_contains, nif_filter) contains the text, ignoring case; "showing K of N" says how many are left. The counts and Next error ignore the search: if the next error is hidden by it, Next error clears the search. An entry shown struck through because a delete section hits it carries no count: "0 warnings" can sit above it.
 - The JSON text is built again only when something it is made from changes, not on every frame.
 
 ### Check by hand

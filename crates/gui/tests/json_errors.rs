@@ -226,3 +226,36 @@ fn f8_is_in_the_actions_table() {
         .collect();
     assert_eq!(keys, ["F8", "Shift+F8"]);
 }
+
+#[test]
+fn a_rescan_refreshes_the_editor_without_an_edit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = two_sets(d.path(), Subtype::PbrAlbedo);
+    m.set_json_value(ROCK, "rename", Some(json!("rock09")));
+    let mut h = harness(m);
+    h.run();
+    let before = json_editor::cache_builds();
+    h.state_mut()
+        .set_tree_anim([("landscape/rock01".to_string(), true)].into());
+    h.run();
+    assert_eq!(
+        json_editor::cache_builds(),
+        before + 1,
+        "new Tree_Anim values rebuild"
+    );
+    assert!(h
+        .query_by_label_contains("textures/dlc/landscape/rock01")
+        .is_none());
+    h.state_mut()
+        .set_known(sdc_gui::model::known_paths::KnownPaths {
+            textures: [("textures/dlc/landscape/rock01.dds".to_string(), 1u16)].into(),
+            mesh_dirs: vec![],
+        });
+    h.run();
+    assert_eq!(
+        json_editor::cache_builds(),
+        before + 2,
+        "new known paths rebuild"
+    );
+    h.get_by_label_contains("textures/dlc/landscape/rock01");
+}
