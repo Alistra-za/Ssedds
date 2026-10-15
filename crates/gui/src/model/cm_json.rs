@@ -294,3 +294,194 @@ pub fn refuse_clashes(out: &mut [CmTarget], exporting: impl Fn(&str) -> bool) {
         }
     }
 }
+
+use super::history::sha256_of;
+use super::pbr_export::{hand_edited, write_atomic};
+use super::Dialog;
+use std::path::PathBuf;
+
+/// What an export about to start writes once it has ended (computed when it starts, like the CS PBR files).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PendingCm {
+    pub root: PathBuf,
+    /// (path under the root, `/`-separated; text).
+    pub files: Vec<(String, String)>,
+    /// Refused files and left-out keys, for the export report.
+    pub notes: Vec<String>,
+}
+
+/// Design §6: one file per complex `_m` of every set whose export is ticked, on every target (D2). `Some` even when
+/// nothing is ticked: the untick/orphan report needs it.
+pub fn prepare(m: &AppModel) -> Option<PendingCm> {
+    let entries = m.sets_doc.as_ref()?.entries();
+    let ts = targets(m);
+    let mut p = PendingCm {
+        root: m.export_root(),
+        ..Default::default()
+    };
+    for (i, e) in entries.iter().enumerate() {
+        // The first entry with an id decides, as in `exports`.
+        if entries[..i].iter().any(|f| same_id(&f.id, &e.id)) {
+            continue;
+        }
+        let Some(b) = e.cm.as_ref().filter(|b| b.export) else {
+            continue;
+        };
+        for k in &b.bad {
+            p.notes.push(format!(
+                "{}: cm.{k} has the wrong type and was left out",
+                e.id
+            ));
+        }
+        let mine: Vec<&CmTarget> = ts.iter().filter(|t| same_id(&t.set, &e.id)).collect();
+        if mine.is_empty() {
+            p.notes.push(format!(
+                "set {}: no complex _m; complex material JSON not written",
+                e.id
+            ));
+            continue;
+        }
+        let text = to_text(&b.values);
+        let doc: Json = serde_json::from_str(&text).expect("to_text writes JSON");
+        // A safety net that should never fire: `to_text` writes only schema keys with their schema types.
+        if let Err(errs) = crate::pgp::validate::validate_cm(&doc) {
+            p.notes.push(format!(
+                "set {}: complex material JSON not written: {}",
+                e.id,
+                errs.join("; ")
+            ));
+            continue;
+        }
+        for t in mine {
+            match &t.rel {
+                Ok(r) => p.files.push((r.clone(), text.clone())),
+                Err(why) => p.notes.push(format!(
+                    "{}: complex material JSON not written: {why}",
+                    t.name
+                )),
+            }
+        }
+    }
+    Some(p)
+}
+
+/// After a clean export (design §6): write each file whose `_m` is on disk, unless it was edited outside Tessalith,
+/// then report the recorded files this run did not write (D7: never deleted). `shas` is the record (path → hash of
+/// what was last written there); returns the new record.
+pub fn finish(
+    p: &PendingCm,
+    shas: &BTreeMap<String, String>,
+    notes: &mut Vec<String>,
+) -> BTreeMap<String, String> {
+    notes.extend(p.notes.iter().cloned());
+    let mut out = BTreeMap::new();
+    let mut written = 0;
+    for (rel, text) in &p.files {
+        let path = p.root.join(rel);
+        let last = shas.get(rel).map(String::as_str);
+        let dds = path.with_extension("dds");
+        let skip = if !dds.is_file() {
+            Some(format!(
+                "{}: {} was not exported; JSON not written",
+                path.display(),
+                dds.file_name().unwrap_or_default().to_string_lossy()
+            ))
+        } else if hand_edited(&path, text, last) {
+            Some(format!(
+                "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
+                path.display()
+            ))
+        } else {
+            match write_atomic(&path, text) {
+                Ok(()) => {
+                    written += 1;
+                    if let Some(s) = sha256_of(&path) {
+                        out.insert(rel.clone(), s);
+                    }
+                    None
+                }
+                Err(e) => Some(format!("{} not written: {e}", path.display())),
+            }
+        };
+        if let Some(n) = skip {
+            notes.push(n);
+            if let Some(s) = last {
+                out.insert(rel.clone(), s.to_string());
+            }
+        }
+    }
+    if written > 0 {
+        notes.push(format!(
+            "Complex material JSON written: {written} file{} under {}",
+            if written == 1 { "" } else { "s" },
+            p.root.display()
+        ));
+    }
+    for (rel, sha) in shas {
+        if p.files.iter().any(|(r, _)| r.eq_ignore_ascii_case(rel)) {
+            continue;
+        }
+        let path = p.root.join(rel);
+        if path.is_file() {
+            notes.push(format!(
+                "{}: complex material export is off for its set (or the _m left the set); the file was left in \
+                 place. Delete it to drop the overrides.",
+                path.display()
+            ));
+            out.insert(rel.clone(), sha.clone());
+        }
+    }
+    out
+}
+
+impl AppModel {
+    /// The export ended. After a clean export, write the files of `p` (taken from `pending_cm` by the caller) and
+    /// record their hashes (saved, like the CS PBR record). Otherwise only add a note.
+    #[doc(hidden)]
+    pub fn finish_cm_json(&mut self, p: Option<PendingCm>) {
+        let Some(p) = p else {
+            return;
+        };
+        let ok = self.export.error.is_none()
+            && self
+                .export
+                .summary
+                .as_ref()
+                .is_some_and(|s| s.cancelled.is_empty());
+        if !ok {
+            if !p.files.is_empty() {
+                self.export
+                    .notes
+                    .push("Complex material JSON not written: the export did not finish".into());
+            }
+            return;
+        }
+        let recorded = match self.sets_doc.as_ref() {
+            Some(d) => d.cm_json_shas(),
+            None => return,
+        };
+        let shas = finish(&p, &recorded, &mut self.export.notes);
+        if shas == recorded {
+            return;
+        }
+        let Some(d) = self.sets_doc.as_mut() else {
+            return;
+        };
+        if d.read_only() {
+            self.export.notes.push(
+                "the complex material JSON hashes were not recorded: sdc-project.toml is read-only"
+                    .into(),
+            );
+            return;
+        }
+        d.set_cm_json_shas(&shas);
+        if let Err(e) = d.save(false) {
+            let e = format!("sdc-project.toml: {e}");
+            // An open question (the PGPatcher JSON overwrite) must stay.
+            match self.dialog {
+                Some(_) => self.export.notes.push(e),
+                None => self.dialog = Some(Dialog::Error(e)),
+            }
+        }
+    }
+}
