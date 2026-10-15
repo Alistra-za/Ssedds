@@ -4,6 +4,7 @@ pub mod cache;
 pub mod cbuffer;
 pub mod compile;
 pub mod cs_settings;
+pub mod debug;
 pub mod device;
 pub mod draw;
 pub mod hdri;
@@ -20,6 +21,7 @@ pub mod source;
 pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
+pub use debug::{Availability, DebugOutput};
 pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
@@ -333,6 +335,8 @@ pub struct Renderer {
     /// [`Renderer::override_slot`]: NIF slot → the DDS bytes (kept to re-upload on a new device) and the texture every
     /// shape shows there. Not cleared by a load.
     overrides: BTreeMap<usize, (Arc<[u8]>, textures::Texture)>,
+    /// [`Renderer::set_debug_output`]: the term the next permutations write instead of the lit colour.
+    debug: DebugOutput,
 }
 
 impl Renderer {
@@ -414,6 +418,7 @@ impl Renderer {
             backdrop: None,
             missing_fill: None,
             overrides: BTreeMap::new(),
+            debug: DebugOutput::Lit,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -623,6 +628,28 @@ impl Renderer {
     /// `Bound` is not changed (material flags stay those of a missing file). Applies from the next load or rebind.
     pub fn set_missing_texture(&mut self, fill: Option<[u8; 4]>) {
         self.missing_fill = fill;
+    }
+
+    /// The debug view for every shape (GUI suggestions item 1). Err, with nothing changed, when `d` is not Lit and this
+    /// CS build has no usable anchor ([`Renderer::debug_supported`]). Otherwise stores `d` and re-permutes every shape
+    /// (`begin_all`): the old draw stays on screen while programs compile. Never short-circuits on an unchanged value.
+    pub fn set_debug_output(&mut self, d: DebugOutput) -> Result<(), String> {
+        if d != DebugOutput::Lit {
+            self.sources.get_debug(Path::new("Lighting.hlsl"))?;
+        }
+        self.debug = d;
+        self.begin_all();
+        Ok(())
+    }
+
+    pub fn debug_output(&self) -> DebugOutput {
+        self.debug
+    }
+
+    /// The loaded CS `Lighting.hlsl` has the single `return psout;` and the names the debug block reads. After
+    /// `set_shaders` to a build without them, `debug_output()` keeps the request but every shape compiles Lit.
+    pub fn debug_supported(&self) -> bool {
+        self.sources.get_debug(Path::new("Lighting.hlsl")).is_ok()
     }
 
     /// Timing of the last successful [`Renderer::render`].
@@ -912,8 +939,24 @@ impl Renderer {
             .filter(|d| !(old_ll && *d == "ENABLE_LL"))
             .collect();
         let vs = defines(&pm, Stage::Vertex, &f, false);
-        let ps = defines(&pm, Stage::Pixel, &f, false);
-        let src = self.sources.get(Path::new("Lighting.hlsl"))?;
+        let mut ps = defines(&pm, Stage::Pixel, &f, false);
+        let lighting = Path::new("Lighting.hlsl");
+        // A debug view: the injected source for both stages (one extra VS compile per permutation, shared by the
+        // five views) and SDC_DEBUG on the PS only. Without an anchor, Lit (no failure per shape).
+        let debug = match self.debug.define() {
+            Some(n) => self.sources.get_debug(lighting).ok().map(|s| (n, s)),
+            None => None,
+        };
+        let src = match debug {
+            Some((n, s)) => {
+                ps.0.push(("SDC_DEBUG".into(), n.to_string()));
+                if self.encode_srgb {
+                    ps.0.push(("SDC_DEBUG_PRELINEAR".into(), "1".into()));
+                }
+                s
+            }
+            None => self.sources.get(lighting)?,
+        };
         let key = ProgramKey::pair(
             &program_key(&src, "main", "vs_5_0", &vs.0),
             &program_key(&src, "main", "ps_5_0", &ps.0),
@@ -1117,6 +1160,7 @@ impl Renderer {
         n.reference_writer = self.reference_writer;
         n.compiled = std::mem::take(&mut self.compiled);
         n.missing_fill = self.missing_fill;
+        n.debug = self.debug;
         // Device objects do not move: upload each override again (it decoded before, so a failure is not expected).
         for (slot, (bytes, _)) in std::mem::take(&mut self.overrides) {
             match textures::load_dds(&n.gpu, &bytes) {
