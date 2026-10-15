@@ -214,10 +214,12 @@ impl AppModel {
     pub fn used_by_pending(&self) -> bool {
         let st = &self.used_by;
         st.pending.is_some()
+            // Only while a new selection waits out its settle: an old `wanted` (after a folder change or a scan) is
+            // not a reason to keep frames coming.
             || st
                 .wanted
                 .as_ref()
-                .is_some_and(|(k, _)| st.current.as_ref().is_none_or(|c| &c.item != k || st.stale))
+                .is_some_and(|(_, since)| since.elapsed() < USED_BY_SETTLE)
     }
 
     /// AG128: a read that panicked shows its error in the list instead of staying "reading" for good.

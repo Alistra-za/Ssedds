@@ -276,3 +276,22 @@ fn the_scan_database_and_show_in_explorer_are_not_statted_every_frame() {
     }
     assert_eq!(m.stats.borrow().stats, before + 2, "one stat per file");
 }
+
+#[test]
+fn an_idle_window_after_a_folder_change_asks_for_no_frames() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    db_with(&db, "textures/none.dds", &[]);
+    m.scan_db = Some(db);
+    m.used_by_for("landscape/leaf.png");
+    std::thread::sleep(sdc_gui::model::used_by::USED_BY_SETTLE);
+    wait_used_by(&mut m, "landscape/leaf.png");
+    assert!(!m.used_by_pending());
+    // Nothing asks again after a scan or another folder: no repaint loop.
+    m.refresh_mesh_votes(false);
+    assert!(!m.used_by_pending(), "after a scan");
+    m.open_folder(mod_folder(&d.path().join("other")));
+    assert!(!m.used_by_pending(), "after a folder change");
+}
