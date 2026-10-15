@@ -3,6 +3,7 @@
 mod common;
 use common::{cache_files, channel, dds_cube_rgba8, dds_rgba8, fixture, renderer, FLAT};
 use nif::material::MaterialState;
+use render3d::compile::SrvKind;
 use render3d::device::Gpu;
 use render3d::scene::Scene;
 use render3d::{parse, EditKind, Renderer, ShapeId, Variant};
@@ -155,4 +156,88 @@ fn the_override_survives_a_device_rebuild() {
     r.load(&fixture("TestNifFile_Furniture_Col_SE.nif"), &|_| None);
     let f = frame(&mut r);
     assert!(channel(&f, 1) > channel(&f, 0) + 1000);
+}
+
+const MAGENTA: [u8; 4] = [255, 0, 255, 255];
+const MISSING: &str = "textures/standin/missing_d.dds";
+
+/// cylinder_1 with slot 0 naming `MISSING` (never resolved) and the missing-texture fill on.
+fn missing_diffuse(cache: &Path) -> Renderer {
+    let mut r = renderer(cache, FLAT);
+    r.set_missing_texture(Some(MAGENTA));
+    r.load(&fixture("TestNifFile_Furniture_Col_SE.nif"), &|_| None);
+    let mut m = cyl1(&r);
+    m.set_slot_raw(0, r"textures\standin\missing_d.dds");
+    r.set_material(CYL1, m, &|_| None).unwrap();
+    assert_eq!(r.draw_default_at(CYL1, 0), Some((SrvKind::Tex2D, MAGENTA)));
+    r
+}
+
+fn cyl1(r: &Renderer) -> MaterialState {
+    r.shapes()
+        .into_iter()
+        .find(|s| s.id == CYL1)
+        .unwrap()
+        .material
+}
+
+#[test]
+fn clearing_the_override_after_an_edit_evicted_the_missing_entry_restores_the_fill() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = missing_diffuse(cache.path());
+    r.override_slot(0, Some(&green())).unwrap();
+    // A cbuffer edit evicts the texture-less entry (Task 3's `evicted_missing`).
+    let mut m = cyl1(&r);
+    m.params.uv_scale = [2.0, 2.0];
+    r.set_material(CYL1, m, &|_| None).unwrap();
+    assert!(r.override_slot(0, None).unwrap().contains(&(CYL1, 0)));
+    assert_eq!(r.draw_default_at(CYL1, 0), Some((SrvKind::Tex2D, MAGENTA)));
+}
+
+#[test]
+fn a_swap_under_the_override_tracks_bound_and_shows_once_cleared() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = missing_diffuse(cache.path());
+    r.override_slot(0, Some(&green())).unwrap();
+    let covered = frame(&mut r);
+    let red = dds_rgba8(1, 1, &[[255, 0, 0, 255]]);
+    assert_eq!(
+        r.replace_texture(MISSING, &red, Variant::Source),
+        Ok(vec![]),
+        "covered: not returned"
+    );
+    assert_eq!(
+        r.draw_bound(CYL1),
+        Some(vec![0]),
+        "Bound follows the real texture"
+    );
+    assert_eq!(frame(&mut r), covered, "the override still shows");
+    r.override_slot(0, None).unwrap();
+    assert_eq!(r.draw_default_at(CYL1, 0), None, "the replacement is bound");
+    let f = frame(&mut r);
+    assert!(channel(&f, 0) > channel(&f, 1) + 1000, "red shows");
+    // Dropped under the override: Bound loses it, and clearing falls back to the fill.
+    r.override_slot(0, Some(&green())).unwrap();
+    assert_eq!(r.replace_texture(MISSING, &[], Variant::Source), Ok(vec![]));
+    assert_eq!(r.draw_bound(CYL1), Some(vec![]));
+    assert_eq!(frame(&mut r), covered);
+    r.override_slot(0, None).unwrap();
+    assert_eq!(r.draw_default_at(CYL1, 0), Some((SrvKind::Tex2D, MAGENTA)));
+}
+
+#[test]
+fn a_wrong_kind_swap_under_the_override_is_an_error_and_changes_nothing() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = furniture(cache.path());
+    let plain = frame(&mut r);
+    r.override_slot(0, Some(&green())).unwrap();
+    let covered = frame(&mut r);
+    let bound = r.draw_bound(CYL1);
+    assert!(r
+        .replace_texture(PATH, &dds_cube_rgba8([0, 0, 255, 255]), Variant::Source)
+        .is_err());
+    assert_eq!(r.draw_bound(CYL1), bound);
+    assert_eq!(frame(&mut r), covered);
+    r.override_slot(0, None).unwrap();
+    assert_eq!(frame(&mut r), plain, "the red texture is still the entry's");
 }

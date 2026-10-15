@@ -1554,7 +1554,8 @@ impl Renderer {
     }
 
     /// What `bind_textures` binds at `reg` for slot `slot` of `m` without an override: the active texture of the
-    /// slot's path, else the missing fill (colour registers of a missing path) or the register's default.
+    /// slot's path, else the missing fill (colour registers of a missing path, cached or evicted) or the register's
+    /// default.
     fn plain_srv(
         &mut self,
         m: &MaterialState,
@@ -1562,15 +1563,20 @@ impl Renderer {
         reg: u32,
         kind: SrvKind,
     ) -> Result<ID3D11ShaderResourceView, String> {
-        let entry = m
+        let norm = m
             .slots
             .get(slot)
-            .filter(|p| !p.norm.is_empty())
-            .and_then(|p| self.tex_cache.get(&p.norm));
+            .map(|p| p.norm.as_str())
+            .filter(|n| !n.is_empty());
+        let entry = norm.and_then(|n| self.tex_cache.get(n));
         if let Some(t) = entry.and_then(TexEntry::current).filter(|t| t.kind == kind) {
             return Ok(t.srv.clone());
         }
-        let missing = entry.is_some_and(|e| e.missing);
+        // An edit evicts a texture-less missing entry; its provenance lives on in `evicted_missing`.
+        let missing = match entry {
+            Some(e) => e.missing,
+            None => norm.is_some_and(|n| self.evicted_missing.contains(n)),
+        };
         let rgba = match self.missing_fill {
             Some(fill) if missing && colour_register(reg, kind) => fill,
             _ => textures::default_for(reg, m.shader_type, m.is_pbr()),
