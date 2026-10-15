@@ -2,7 +2,7 @@
 //! and a ▾ list of known paths. Drawing only; the change is `AppModel::set_input_name`.
 use super::columns::RED;
 use super::path_picker;
-use crate::model::input_name::{completion, lock_cut, separator_stops, tab_part};
+use crate::model::input_name::{completion, live_rows, lock_cut, separator_stops, tab_part};
 use crate::model::known_paths::strip_dds;
 use crate::model::sets::SetView;
 use crate::model::AppModel;
@@ -17,6 +17,25 @@ pub const DROPDOWN: &str = "▾";
 pub const HEADING: &str = "Read this set's textures as";
 /// The free (editable) part of the box is never narrower than this.
 const MIN_FREE: f32 = 56.0;
+/// The set's path is never shortened below this to keep the box on its row.
+const HEADING_MIN: f32 = 40.0;
+/// What the box needs besides its text: its margins, the ▾ and the spacing between them.
+const CHROME: f32 = 44.0;
+
+/// Rows in the live list under the box.
+const LIVE_ROWS: usize = 12;
+
+/// Note AO4: the live list's state, per set, in egui memory.
+#[derive(Clone, Default)]
+struct Live {
+    open: bool,
+    /// The highlighted row (Up/Down); `None` until an arrow is pressed, so Enter takes the typed text.
+    sel: Option<usize>,
+    /// Last frame's rows and where they were drawn, for a press on one.
+    rows: Vec<(String, egui::Rect)>,
+    /// A row pressed with the mouse: the focus loss that press causes commits it, not the typed text.
+    clicked: Option<String>,
+}
 
 /// The same input name: case, `\` and a `.dds` ending aside.
 fn same(a: &str, b: &str) -> bool {
@@ -24,8 +43,10 @@ fn same(a: &str, b: &str) -> bool {
     n(a) == n(b)
 }
 
+/// The set's path as the row's heading, then its input name box (none without an own diffuse).
 pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     let Some(current) = model.input_name_of(&v.id) else {
+        ui.heading(&v.label);
         return;
     };
     let why = model
@@ -59,19 +80,66 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             .size()
             .x
     };
-    // Too little room left in the row: the box starts the next one (decided here: the enabled scope below is one block).
+    // The heading takes what the box leaves of the row, shortened with … (full on hover), but at least HEADING_MIN; with
+    // less room the box starts the next row (decided here: the enabled scope below is one block). AO5.
     let locked_w = width(&text[..lock_cut(&text, lock)]);
-    if ui.available_size_before_wrap().x - 64.0 - locked_w < (160.0 - locked_w).max(MIN_FREE) {
+    let box_w = (160.0 - locked_w).max(MIN_FREE) + locked_w + CHROME;
+    let heading = egui::RichText::new(&v.label).heading();
+    let room = ui.available_size_before_wrap().x - box_w - ui.spacing().item_spacing.x;
+    let full = ctx
+        .fonts_mut(|f| {
+            f.layout_no_wrap(
+                v.label.clone(),
+                egui::TextStyle::Heading.resolve(ui.style()),
+                egui::Color32::WHITE,
+            )
+        })
+        .size();
+    if full.x <= room {
+        ui.label(heading);
+    } else if room >= HEADING_MIN {
+        // Shortened, it is set in the body size, so the row is no taller than the box (the 3D view keeps its height).
+        let body = ui.text_style_height(&egui::TextStyle::Body);
+        ui.add_sized(
+            [room, body],
+            egui::Label::new(egui::RichText::new(&v.label).strong()).truncate(),
+        );
+    } else {
+        ui.label(heading);
         ui.end_row();
     }
     ui.add_enabled_ui(why.is_none(), |ui| {
         let focused = ui.memory(|m| m.has_focus(edit_id));
+        let live_id = id.with("live");
+        let mut live = ui
+            .data(|d| d.get_temp::<Live>(live_id))
+            .unwrap_or_default();
+        let shown = focused && live.open && !live.rows.is_empty();
         if focused {
             if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::ArrowLeft)) {
                 lock = lock.saturating_sub(1);
             }
             if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::ArrowRight)) {
                 lock = (lock + 1).min(stops);
+            }
+        }
+        if shown {
+            // Before the box sees the press (and loses focus to it): which row was pressed.
+            let press = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
+            if let Some(p) = press {
+                live.clicked = live.rows.iter().find(|(_, r)| r.contains(p)).map(|(s, _)| s.clone());
+            }
+            let n = live.rows.len();
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
+                live.sel = Some(live.sel.map_or(0, |s| (s + 1).min(n - 1)));
+            }
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp)) {
+                live.sel = live.sel.and_then(|s| s.checked_sub(1));
+            }
+            // The first Esc closes the list; the box keeps its text and its focus.
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                live.open = false;
+                live.sel = None;
             }
         }
         let cut = lock_cut(&text, lock);
@@ -111,7 +179,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         // The box is at least 160 pt (its free part at least MIN_FREE) and grows with its text and ghost, up to the room left
         // in the row and 480 pt (AO5). `room` leaves the margins and the ▾.
         let min_free = (160.0 - locked_w).max(MIN_FREE);
-        let room = |ui: &egui::Ui| ui.available_size_before_wrap().x - 64.0 - locked_w;
+        let room = |ui: &egui::Ui| ui.available_size_before_wrap().x - CHROME - locked_w;
         let want = width(&free) + ghost.as_deref().map_or(0.0, width) + 24.0;
         let free_w = want.min(room(ui)).clamp(min_free, 480.0);
         let mut commit = None;
@@ -131,7 +199,13 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                         .id(edit_id)
                         .hint_text(HINT)
                         .frame(egui::Frame::NONE)
-                        .lock_focus(ghost.is_some())
+                        // Tab stays in the box while a ghost shows; Esc while the live list shows (AO2, AO4).
+                        .event_filter(egui::EventFilter {
+                            tab: ghost.is_some(),
+                            escape: shown && live.open,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                        })
                         .desired_width(free_w)
                         .show(ui);
                     ui.ctx().accesskit_node_builder(edit_id, |b| {
@@ -171,14 +245,56 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         if r.has_focus() || r.changed() {
             ui.data_mut(|d| d.insert_temp(buf, (text.clone(), frame)));
         }
+        // AO4: the live list follows the text while the box has focus.
+        let rows = if r.has_focus() || r.lost_focus() {
+            live_rows(&paths, &text, cut, LIVE_ROWS)
+        } else {
+            vec![]
+        };
+        if r.changed() {
+            live.open = true;
+            live.sel = None;
+        }
         if r.lost_focus() {
             ui.data_mut(|d| d.remove::<(String, u64)>(buf));
-            // Esc reverts; an invalid or unchanged value reverts; a valid change commits (one commit path, AO).
+            // A pressed row, else the highlighted row on Enter, else the typed text (AO4). Esc reverts; an invalid or
+            // unchanged value reverts; a valid change commits (one commit path, AO1).
             let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-            if !cancelled && err.is_none() && !same(&text, &current) {
+            let row = live.clicked.take().or_else(|| {
+                live.sel
+                    .filter(|_| live.open && ui.input(|i| i.key_pressed(Key::Enter)))
+                    .and_then(|s| rows.get(s).cloned())
+            });
+            if let Some(p) = row {
+                commit = (!same(&p, &current)).then_some(p);
+            } else if !cancelled && err.is_none() && !same(&text, &current) {
                 commit = Some(text.clone());
             }
+            live = Live::default();
         }
+        let list_rect = egui::Rect::from_min_size(
+            box_rect.left_bottom() + egui::vec2(0.0, 2.0),
+            egui::vec2(box_rect.width().max(320.0), 0.0),
+        );
+        live.rows.clear();
+        if r.has_focus() && live.open && !rows.is_empty() {
+            egui::Area::new(live_id.with("area"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(list_rect.min)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(list_rect.width());
+                        for (i, p) in rows.iter().enumerate() {
+                            // The top row is the best match, the ghost's (AO4).
+                            let text = egui::RichText::new(p);
+                            let text = if i == 0 { text.strong() } else { text };
+                            let rr = ui.add(egui::Button::selectable(live.sel == Some(i), text));
+                            live.rows.push((p.clone(), rr.rect));
+                        }
+                    });
+                });
+        }
+        ui.data_mut(|d| d.insert_temp(live_id, live.clone()));
         // The lock rail along the box's lower edge: a stop at the start and at each separator.
         let xs: Vec<f32> = std::iter::once(left)
             .chain(separator_stops(&text).into_iter().map(|i| {

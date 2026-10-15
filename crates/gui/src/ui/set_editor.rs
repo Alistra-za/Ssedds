@@ -87,7 +87,7 @@ pub fn draw(
         if view.switch {
             super::set_preview::view_switch(ui, model);
         }
-        ui.heading(&v.label);
+        // The set's path and its input name box share the row where the width allows (AO5).
         super::input_name::picker(ui, model, &v);
         if view.three_d {
             super::set_preview::settings_toggle(ui, model);

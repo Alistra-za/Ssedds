@@ -189,6 +189,28 @@ pub fn tab_part(paths: &[String], typed: &str) -> Option<String> {
     })
 }
 
+/// Note AO4: the live list under the box: the first `limit` paths that start with `text` (the top one is the ghost);
+/// with none, the paths under the locked part (`text[..cut]`) that contain every word of the free part.
+pub fn live_rows(paths: &[String], text: &str, cut: usize, limit: usize) -> Vec<String> {
+    let rows: Vec<String> = starting_with(paths, text)
+        .take(limit)
+        .map(str::to_string)
+        .collect();
+    if !rows.is_empty() {
+        return rows;
+    }
+    let q = text[cut..].trim().replace('\\', "/").to_lowercase();
+    let words: Vec<&str> = q.split_whitespace().collect();
+    starting_with(paths, &text[..cut])
+        .filter(|p| {
+            let l = p.to_lowercase();
+            words.iter().all(|w| l.contains(w))
+        })
+        .take(limit)
+        .map(str::to_string)
+        .collect()
+}
+
 /// Note AO: the path lock's stops: the byte index of each `/` or `\` in `s`.
 pub fn separator_stops(s: &str) -> Vec<usize> {
     s.match_indices(['/', '\\']).map(|(i, _)| i).collect()

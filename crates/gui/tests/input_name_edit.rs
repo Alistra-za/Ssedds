@@ -195,6 +195,8 @@ fn enter_commits_one_step_esc_reverts_and_invalid_text_does_not_commit() {
     let steps = h.state().0.history.undo.len();
     focus(&mut h);
     clear_and_type(&mut h, "rock02");
+    // The first Esc closes the live list, the second reverts (AO4).
+    key(&mut h, Key::Escape, Modifiers::NONE);
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert_eq!(free(&h), "rock01", "Esc reverts");
     assert_eq!(h.state().0.history.undo.len(), steps);
@@ -254,4 +256,86 @@ fn pbr_output_paths_are_never_offered() {
     h.run();
     h.get_by_label("textures/landscape/rock02");
     assert!(h.query_by_label("textures/pbr/landscape/rock02").is_none());
+}
+
+const BIG: &str = "textures/landscape/rocks/big";
+const SMALL: &str = "textures/landscape/rocks/small";
+
+fn click_at(h: &mut H, p: egui::Pos2) {
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run();
+}
+
+fn settle(h: &mut H) {
+    assert!(h.state_mut().0.wait_idle(Duration::from_secs(120)));
+    h.run();
+}
+
+/// Note AO4: typing shows a live list under the box; Down then Enter commits the highlighted row.
+#[test]
+fn typing_filters_the_live_list_and_down_enter_commits_its_row() {
+    let (_d, mut h) = harness();
+    let steps = h.state().0.history.undo.len();
+    focus(&mut h);
+    clear_and_type(&mut h, "rocks");
+    h.get_by_label(BIG);
+    h.get_by_label(SMALL);
+    assert!(h.query_by_label("textures/landscape/rock02").is_none());
+    assert!(
+        h.query_by_label("Read this set's textures as").is_none(),
+        "not the ▾ list"
+    );
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().0.history.undo.len(), steps + 1, "one undo step");
+    settle(&mut h);
+    assert_eq!(
+        h.state().0.input_name_of("landscape/rocks/big").as_deref(),
+        Some(BIG)
+    );
+    assert!(h.query_by_label(SMALL).is_none(), "the list closed");
+}
+
+/// Note AO4: a click on a live row commits that row, not the half-typed text the click's focus loss would.
+#[test]
+fn a_click_on_a_live_row_commits_that_row() {
+    let (_d, mut h) = harness();
+    let steps = h.state().0.history.undo.len();
+    focus(&mut h);
+    clear_and_type(&mut h, "rocks");
+    let p = h.get_by_label(SMALL).rect().center();
+    click_at(&mut h, p);
+    h.run();
+    assert_eq!(h.state().0.history.undo.len(), steps + 1, "one undo step");
+    settle(&mut h);
+    assert_eq!(
+        h.state()
+            .0
+            .input_name_of("landscape/rocks/small")
+            .as_deref(),
+        Some(SMALL)
+    );
+}
+
+/// Note AO4: the first Esc closes the live list and keeps the text; the second reverts.
+#[test]
+fn esc_closes_the_live_list_then_reverts() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    clear_and_type(&mut h, "rocks");
+    h.get_by_label(BIG);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.query_by_label(BIG).is_none(), "closed");
+    assert_eq!(free(&h), "rocks");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(free(&h), "rock01");
 }
