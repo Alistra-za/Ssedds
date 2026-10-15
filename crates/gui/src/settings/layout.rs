@@ -129,6 +129,8 @@ impl LookSettings {
             .bg
             .filter(|c| c.iter().all(|f| f.is_finite()))
             .map(|c| c.map(|f| f.clamp(0.0, 1.0)));
+        // A legacy `grey` becomes `bg` on load, so a look saved back unchanged (`look_now`) never writes `grey`.
+        self.bg = self.bg.or(self.grey.take().map(|g| [g; 3]));
         fix(&mut self.sun, (0.0, 4.0));
         fix(&mut self.point, (0.0, 4.0));
         fix(&mut self.radius, (0.1, 10.0));

@@ -127,8 +127,12 @@ radius = 0.0
     );
     assert_eq!(l.window, None, "a window with a bad field is ignored");
     let look = l.look.expect("the look table is read");
-    assert_eq!(look.grey, Some(1.0), "clamped to its range");
-    assert_eq!(look.bg, None, "no bg in that file");
+    assert_eq!(look.grey, None, "folded into bg on load");
+    assert_eq!(
+        look.bg,
+        Some([1.0; 3]),
+        "the legacy grey, clamped to its range"
+    );
     assert_eq!(look.sun, None, "text is ignored");
     assert_eq!(look.point, Some(1.0));
     assert_eq!(look.radius, Some(0.1), "clamped to its range");
@@ -539,4 +543,32 @@ fn an_old_grey_background_loads_as_that_grey_and_a_bad_bg_falls_back() {
     }))
     .unwrap();
     assert!(text.contains("bg") && !text.contains("grey"), "{text}");
+}
+
+/// Task 4 review: an untouched legacy look is saved back as it was loaded (`look_now`), so the load must already have
+/// turned `grey` into `bg`; an unrelated layout change then writes `bg` (same colour) and no `grey`.
+#[test]
+fn a_legacy_grey_is_saved_back_as_bg_after_an_unrelated_change() {
+    use sdc_gui::app::SdcApp;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("gui.toml");
+    std::fs::write(&path, "[layout.look]\ngrey = 0.25\n").unwrap();
+    let (settings, err) = GuiSettings::load(&path);
+    assert_eq!(err, None);
+    let model = sdc_gui::model::AppModel::new(settings, Some(path.clone()), support::session());
+    let mut app = SdcApp::new(model);
+    let ctx = egui::Context::default();
+    let t0 = Instant::now();
+    app.sync_layout_at(&ctx, t0);
+    app.model.filter.failed = true;
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(3));
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(6));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("failed"),
+        "the unrelated change was written: {text}"
+    );
+    assert!(text.contains("bg") && !text.contains("grey"), "{text}");
+    let (back, _) = GuiSettings::load(&path);
+    assert_eq!(back.layout.look.unwrap().bg, Some([0.25; 3]));
 }
