@@ -145,3 +145,66 @@ fn delete_names_the_file_and_broken_files_are_listed_with_open_folder() {
     h.run();
     h.get_by_label_contains("other-name.toml?");
 }
+
+#[test]
+fn the_orm_example_is_a_read_only_branch_under_rmaos() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.open_presets();
+    m.presets_model().select("cs-quality");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label_contains("rmaos —").click();
+    h.run();
+    h.get_by_label_contains("_orm → _rmaos — ORM → RMAOS");
+    assert_eq!(h.query_all_by_label_contains("_rmaos — ").count(), 2);
+}
+
+#[test]
+fn a_branch_shows_its_overrides_hints_the_sub_type_and_resets() {
+    use engine::config::Subtype;
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.open_presets();
+    m.presets_model().select("cs-quality");
+    m.presets_model().duplicate();
+    m.presets_model()
+        .set_branch_field(Subtype::Diffuse, "d", "resize", serde_json::json!("half"));
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("diffuse — BC7 · linear").click();
+    h.run();
+    h.get_by_label("_d — BC7 · linear (overrides 1)").click();
+    h.run();
+    h.get_by_label_contains("sub-type: None");
+    h.get_by_label("↺").click();
+    h.run();
+    assert_eq!(
+        h.state_mut()
+            .presets_model()
+            .branch_field(Subtype::Diffuse, "d", "resize"),
+        None
+    );
+    assert!(!h.state_mut().presets_model().toml_text().contains("rules"));
+}
+
+#[test]
+fn add_alias_opens_its_empty_branch() {
+    const TEXT: eframe::egui::accesskit::Role = eframe::egui::accesskit::Role::TextInput;
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.open_presets();
+    m.presets_model().select("cs-quality");
+    m.presets_model().duplicate();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("diffuse — BC7 · linear").click();
+    h.run();
+    h.get_by_role_and_label(TEXT, "New alias _").focus();
+    h.run();
+    h.get_by_role_and_label(TEXT, "New alias _")
+        .type_text("foo");
+    h.run();
+    h.get_by_label("Add alias").click();
+    h.run();
+    h.run();
+    h.get_by_label("_foo → _d — BC7 · linear");
+    h.get_by_label("Remove alias");
+}

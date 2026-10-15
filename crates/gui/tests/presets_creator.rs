@@ -133,23 +133,23 @@ fn reset_drops_the_override_so_the_base_shows_through() {
     pm.reset_all();
     assert_eq!(pm.toml_text(), before);
 }
-
 #[test]
-fn a_swizzle_remap_writes_the_alias_and_the_rule() {
+fn a_swizzle_remap_is_its_alias_branchs_channels() {
+    // Note AP6: a remap is `channels.swizzle` in the alias's branch rule.
     let d = tempfile::tempdir().unwrap();
     let mut pm = copy_of_quality(d.path());
-    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.add_alias("dmask", "m").unwrap();
+    pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     let t: toml::Table = toml::from_str(&pm.toml_text()).unwrap();
     assert_eq!(t["suffix_aliases"]["dmask"].as_str(), Some("m"));
     let rule = &t["rules"].as_array().unwrap()[0];
     assert_eq!(rule["match"]["glob"].as_str(), Some("*_dmask.*"));
+    assert_eq!(rule["match"]["subtypes"][0].as_str(), Some("envmask"));
     assert_eq!(
         rule["overrides"]["channels"]["swizzle"].as_str(),
         Some("bgr1")
     );
-    assert_eq!(pm.remaps(), [("dmask".into(), "m".into(), "bgr1".into())]);
     assert_eq!(pm.status(), &Ok(()));
-    assert!(pm.add_remap("dmask2", "m", "rgbx").is_err());
     // Removing the alias removes its rule.
     pm.remove_alias("dmask");
     assert!(!pm.toml_text().contains("dmask"));
@@ -242,7 +242,8 @@ fn a_saved_remap_reaches_the_plan_without_a_restart() {
     let pm = m.presets_model();
     pm.select("cs-quality");
     pm.duplicate();
-    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.add_alias("dmask", "m").unwrap();
+    pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     pm.save().unwrap();
     // What the window does after a save.
     m.replan();
@@ -292,7 +293,8 @@ fn a_saved_preset_is_offered_in_the_header_and_picking_it_plans_with_it() {
 fn duplicate_drops_the_remap_rules_of_the_aliases_it_drops() {
     let d = tempfile::tempdir().unwrap();
     let mut pm = copy_of_quality(d.path());
-    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.add_alias("dmask", "m").unwrap();
+    pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     pm.save().unwrap();
     pm.duplicate();
     let text = pm.toml_text();
