@@ -25,7 +25,7 @@
 |---|---|
 | `cs` — Community Shaders (**default**) | CS including TruePBR (`textures/pbr/**`), CS Extended Materials complex `_m`, hair `_flow`, BC6H emissive |
 | `cpm` — CPM / ENB complex material | Non-PBR shading; complex `_m` (R env, G gloss, B metal, A height); landscape diffuse alpha as parallax height |
-| `vanilla` — Vanilla SE/AE | Bethesda shaders: no `_SRGB`, no BC6H, no complex `_m`; landscape diffuse alpha as snow mask |
+| `vanilla` — Vanilla SE/AE | Bethesda shaders: no `_SRGB`, no BC6H; landscape diffuse alpha as snow mask |
 
 **Inputs.** **[Requirement]** Artists' source images: PNG (8/16-bit), TGA, TIFF (8/16-bit, 32-bit float), OpenEXR, Radiance HDR, BMP and JPEG, as single files or folders. DDS input is secondary: read for preview, inspection, validation and, on explicit request (opt-in `reencode`, §8), re-encoding [D, scope]. **[Proposal]** The DDS reader accepts BC1–BC7 with legacy (`DXT1`–`DXT5`, `ATI1`, `ATI2`, `BC4U`, `BC5U`) or DX10 headers, the common uncompressed layouts (RGBA8, BGRA8, BGRX8, R8, RG8, RGBA16F, RGBA32F) and cubemaps.
 
@@ -249,7 +249,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | `pbr_normal` | BC7_UNORM (BC1 option) | — (→ `normal`) | — (→ `normal`) |
 | `coat_normal` | BC7_UNORM | — | — |
 | `envmask`, `height`, `msn_specular` | BC4_UNORM | same | same |
-| `complex_material` | BC7_UNORM (BC3 option) | BC7_UNORM (BC3 option) | — (→ `envmask`, `LOSS-ALPHA-DATA`) |
+| `complex_material` | BC7_UNORM (BC3 option) | BC7_UNORM (BC3 option) | BC7_UNORM (BC3 option) |
 | `rmaos`, `skin_rfaos` | BC7_UNORM; BC1_UNORM if A removed | — | — |
 | `flow` | **BC5_UNORM** [Requirement] | — (CS feature) | — (CS feature) |
 | `generic_two_channel` | BC5_UNORM | same | same |
@@ -268,7 +268,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 
 1. **PBR sets.** Under `cs`, a set is PBR if its path has a `pbr` component or it contains `_rmaos`, `_rfaos`, `_cnr` or `_f`. **[Proposal]** It is also PBR if it contains a raw packing input that starts the `_rmaos`/`_rfaos` recipe (roughness, glossiness, metallic or AO; §4.4, §6.4), because the packed map will join the set; this applies from Phase 1, before packing exists. Otherwise a no-suffix colour file is `diffuse` (medium confidence). **[Requirement]** `_d` and the colour vocabulary (§4.4) are high confidence for the colour role; the path and set still pick `diffuse`, `pbr_albedo`, `landscape_diffuse` or `ui_sky`, and alpha meaning is never assumed [D-H]. **[Proposal]** An `hdr_sky` reading (float source under `sky/`) stays medium.
 2. **`_s` has four readings** [SC §1], [TPM README]: MSN specular (set has `_msn` → `msn_specular`); TruePBR subsurface and coat colour (both slot TX07 → `pbr_subsurface`); PGPatcher's "Subsurface Tint" (otherwise → `subsurface_tint`, low confidence).
-3. **`_m`** → `complex_material` if alpha is not constant 255, else `envmask`; always `envmask` under `vanilla`.
+3. **`_m`** → `complex_material` if the source alpha has a minimum below 251, else `envmask` (no alpha, or alpha within 251-255; a constant 128 is complex), under every target (DECISIONS Note AM).
 4. **`_rfaos`** → `skin_rfaos`, high confidence [D-B]; green is a fuzz mask, not metalness.
 5. Analysis can raise or lower confidence but never overrides an explicit choice; contradictions (an `_n` with constant alpha in a non-PBR set, a `pbr` path with a vanilla `_s`) are reported.
 6. **Suffix aliases** (§3.7) are read as their canonical suffix; an alias match raises the top suggestion to high confidence, except for `_s` [D-G].

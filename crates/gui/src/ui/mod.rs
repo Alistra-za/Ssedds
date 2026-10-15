@@ -2,6 +2,7 @@
 pub mod actions;
 pub mod advanced;
 pub mod bulk_panel;
+pub mod cm_card;
 pub mod color;
 pub mod columns;
 pub mod cs_pbr;

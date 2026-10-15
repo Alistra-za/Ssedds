@@ -1,6 +1,7 @@
 //! `sdc-project.toml` (M3b spec §7.1): the user's sets and JSON settings, next to `sdc.toml`. Format-preserving
 //! like `ProjectDoc`; written only on Save or Export. A file that does not parse makes set and JSON editing
 //! read-only (DECISIONS P8); `sdc.toml` editing is unaffected.
+use crate::model::cm_json::{block_of as cm_block_of, CmBlock};
 use crate::model::cs_pbr::{self, block_of, field, fields, CsBlock, Kind, Template};
 use crate::pgp::settings::Settings;
 use crate::project::{dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError};
@@ -17,8 +18,11 @@ pub const FILE_NAME: &str = "sdc-project.toml";
 const SECTIONS: &str = "pgp_sections";
 /// Design §5: `[project] cs_pbr_sha256`, path under the export root → hash of the CS JSON sdc last wrote there.
 const CS_SHA: &str = "cs_pbr_sha256";
+/// Complex material design §3: `[project] cm_json_sha256`, path under the export root → hash of the
+/// `<texture>.json` sdc last wrote there.
+const CM_SHA: &str = "cm_json_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 12] = [
+const RESERVED: [&str; 13] = [
     "id",
     "created",
     "renamed_from",
@@ -31,6 +35,7 @@ const RESERVED: [&str; 12] = [
     "cs_txst",
     "cs_mato",
     "skin",
+    "cm",
 ];
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -52,6 +57,8 @@ pub struct SetEntry {
     /// Design §3: the Community Shaders PBR texture-set and material-object blocks (`[sets.cs_txst]`, `[sets.cs_mato]`).
     pub cs_txst: Option<CsBlock>,
     pub cs_mato: Option<CsBlock>,
+    /// Complex material design §3: the PGPatcher complex material JSON block (`[sets.cm]`).
+    pub cm: Option<CmBlock>,
     /// Task 10b: the Advanced skin card's explicit values (`skin.<CS key>`). Not PGPatcher settings; unknown keys stay.
     pub skin: Settings,
     pub settings: Settings,
@@ -171,6 +178,7 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             .filter(|n| !n.is_empty()),
         cs_txst,
         cs_mato,
+        cm: t.get("cm").and_then(Item::as_table_like).map(cm_block_of),
         skin,
         settings,
     })
@@ -243,7 +251,7 @@ impl SetsDoc {
         }
     }
 
-    /// Undo/redo: `restore` that keeps the live `last_json_sha256` and `cs_pbr_sha256`. The hash records the JSON on disk, which undo
+    /// Undo/redo: `restore` that keeps the live `last_json_sha256`, `cs_pbr_sha256` and `cm_json_sha256`. The hash records the JSON on disk, which undo
     /// does not change, so it is outside the undoable state. When only the hash differs, nothing changes (and the
     /// document is not marked dirty).
     pub fn restore_keeping_json_sha(&mut self, text: &str) {
@@ -253,6 +261,7 @@ impl SetsDoc {
         }
         let (doc, dirty, sha) = (self.doc.clone(), self.dirty, self.last_json_sha256());
         let cs = self.cs_pbr_shas();
+        let cm = self.cm_json_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
@@ -260,6 +269,9 @@ impl SetsDoc {
         }
         if self.cs_pbr_shas() != cs {
             self.set_cs_pbr_shas(&cs);
+        }
+        if self.cm_json_shas() != cm {
+            self.set_cm_json_shas(&cm);
         }
         if self.text() == old {
             self.doc = doc;
@@ -326,10 +338,10 @@ impl SetsDoc {
         self.set_project("last_json_sha256", Some(Value::from(sha)));
     }
 
-    pub fn cs_pbr_shas(&self) -> BTreeMap<String, String> {
+    fn shas(&self, key: &str) -> BTreeMap<String, String> {
         self.doc
             .get("project")
-            .and_then(|p| p.get(CS_SHA))
+            .and_then(|p| p.get(key))
             .and_then(Item::as_table_like)
             .map(|t| {
                 t.iter()
@@ -339,13 +351,29 @@ impl SetsDoc {
             .unwrap_or_default()
     }
 
-    pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
+    fn set_shas(&mut self, key: &str, shas: &BTreeMap<String, String>) {
         self.rev = next_rev();
         let mut t = toml_edit::InlineTable::new();
         for (k, v) in shas {
             t.insert(k, Value::from(v.as_str()));
         }
-        self.set_project(CS_SHA, (!shas.is_empty()).then_some(Value::InlineTable(t)));
+        self.set_project(key, (!shas.is_empty()).then_some(Value::InlineTable(t)));
+    }
+
+    pub fn cs_pbr_shas(&self) -> BTreeMap<String, String> {
+        self.shas(CS_SHA)
+    }
+
+    pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.set_shas(CS_SHA, shas)
+    }
+
+    pub fn cm_json_shas(&self) -> BTreeMap<String, String> {
+        self.shas(CM_SHA)
+    }
+
+    pub fn set_cm_json_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.set_shas(CM_SHA, shas)
     }
 
     pub fn order(&self) -> Vec<String> {
@@ -819,6 +847,37 @@ impl SetsDoc {
         if hit {
             self.dirty = true;
         }
+    }
+
+    /// Complex material design §3: set (or with `None` remove) key `key` of set `id`'s `[sets.cm]`, creating the block
+    /// when missing. Keys are written as given; `cm_json::block_of` decides what is used.
+    pub fn set_cm_value(&mut self, id: &str, key: &str, v: Option<Json>) {
+        self.rev = next_rev();
+        if self.read_only() {
+            return;
+        }
+        // Removing from a set with no block changes nothing (no table, no dirty, no undo step).
+        if v.is_none()
+            && !self
+                .entries()
+                .iter()
+                .any(|e| same_id(&e.id, id) && e.cm.is_some())
+        {
+            return;
+        }
+        let t = self.table_mut(id);
+        let Some(b) = sub_table(t, "cm", || Item::Table(Table::new())) else {
+            return;
+        };
+        if write_path(b, key, v) {
+            self.dirty = true;
+        }
+    }
+
+    /// Tick or untick the export (D3). Unticking writes `export = false` and keeps the values, so ticking again
+    /// restores them.
+    pub fn set_cm_export(&mut self, id: &str, on: bool) {
+        self.set_cm_value(id, "export", Some(Json::Bool(on)));
     }
 
     /// Design §3: start set `id`'s `kind` block (`edids = []`); nothing when it exists. A texture-set block takes

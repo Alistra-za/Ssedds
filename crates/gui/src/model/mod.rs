@@ -1,6 +1,7 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod auto_flags;
 pub mod bulk;
+pub mod cm_json;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
 pub mod dds_patch;
@@ -365,6 +366,8 @@ pub struct AppModel {
     pending_text: Option<String>,
     /// Design §5: the CS PBR files the running export writes afterwards.
     pending_cs: Option<cs_pbr_export::PendingCs>,
+    /// Complex material design §6: the `<texture>.json` files the running export writes afterwards.
+    pending_cm: Option<cm_json::PendingCm>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -483,6 +486,7 @@ impl AppModel {
             pending_json: None,
             pending_text: None,
             pending_cs: None,
+            pending_cm: None,
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -564,6 +568,7 @@ impl AppModel {
         self.pending_json = None;
         self.pending_text = None;
         self.pending_cs = None;
+        self.pending_cm = None;
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
         // were answered to get here). Audit 2026-10-14 finding 2: a `ProceedAnyway` left open would be closed by
         // the new folder's plan (`refresh_undecided_dialog`) and continue into an export of that folder.
@@ -973,6 +978,8 @@ impl AppModel {
                 self.finish_json();
                 let cs = self.pending_cs.take();
                 self.finish_cs_pbr(cs);
+                let cm = self.pending_cm.take();
+                self.finish_cm_json(cm);
                 // A user who cancelled the export to leave does not need its error as a dialog.
                 if !self.run_after_export() {
                     if let Some(e) = failure {
@@ -1339,6 +1346,7 @@ impl AppModel {
         req.on_existing = engine::api::OnExisting::IfChanged;
         self.pending_json = pbr_export::prepare(self);
         self.pending_cs = cs_pbr_export::prepare(self);
+        self.pending_cm = cm_json::prepare(self);
         self.pending_text = None;
         self.export = export::ExportModel {
             open: true,

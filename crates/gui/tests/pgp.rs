@@ -916,24 +916,55 @@ fn keywords_in(v: &Value, out: &mut std::collections::BTreeSet<String>, under_pr
 
 #[test]
 fn the_validator_covers_every_keyword_the_schema_uses() {
-    let schema: Value = serde_json::from_str(sdc_gui::pgp::schema::SCHEMA_JSON).unwrap();
-    let mut used = std::collections::BTreeSet::new();
-    keywords_in(&schema, &mut used, false);
-    let annotations = [
-        "$schema",
-        "$id",
-        "title",
-        "description",
-        "examples",
-        "default",
-        "definitions",
-        "properties",
-    ];
-    for k in used {
-        assert!(
-            KEYWORDS.contains(&k.as_str()) || annotations.contains(&k.as_str()),
-            "the vendored schema uses '{k}', which validate.rs does not implement (DECISIONS P12)"
-        );
+    for (name, text) in [
+        ("pbr.schema.json", sdc_gui::pgp::schema::SCHEMA_JSON),
+        ("complex_material.schema.json", CM_SCHEMA_JSON),
+    ] {
+        let schema: Value = serde_json::from_str(text).unwrap();
+        let mut used = std::collections::BTreeSet::new();
+        keywords_in(&schema, &mut used, false);
+        let annotations = [
+            "$schema",
+            "$id",
+            "title",
+            "description",
+            "examples",
+            "default",
+            "definitions",
+            "properties",
+        ];
+        for k in used {
+            assert!(
+                KEYWORDS.contains(&k.as_str()) || annotations.contains(&k.as_str()),
+                "{name} uses '{k}', which validate.rs does not implement (DECISIONS P12)"
+            );
+        }
+    }
+}
+
+/// Complex material design section 7: both schema examples pass; an unknown key, a short colour and a non-number fail.
+#[test]
+fn validate_cm_accepts_the_schema_examples_and_rejects_bad_documents() {
+    let schema: Value = serde_json::from_str(CM_SCHEMA_JSON).unwrap();
+    let examples = schema["examples"].as_array().unwrap();
+    assert_eq!(examples.len(), 2);
+    for ex in examples {
+        assert_eq!(validate_cm(ex), Ok(()), "{ex}");
+    }
+    for (bad, why) in [
+        (json!({"specular": 1.0}), "unknown key 'specular'"),
+        (
+            json!({"specular_color": [1.0, 1.0]}),
+            "needs at least 3 items",
+        ),
+        (
+            json!({"specular_color": [1.0, "1", 1.0]}),
+            "specular_color[1]: expected",
+        ),
+        (json!({"glossiness": "80"}), "glossiness: expected"),
+    ] {
+        let e = validate_cm(&bad).unwrap_err();
+        assert!(e.iter().any(|x| x.contains(why)), "{bad}: {e:?}");
     }
 }
 

@@ -1143,3 +1143,35 @@ Spec `docs/superpowers/specs/2026-10-14-pbr-grass-design.md` (owner-approved 202
 - **AL6 Not built.** Flat-lit, opacity ≥ 1 and hidden-key lints; the SLSF2.30 sphere-normal warning; pgpsim's GRAS skip under 1.2.0; hiding the CS texture-set block for grass sets.
 - **AL7 Versions.** Engine version stays 0.7.0 (no preset or output change); scan database schema stays 7 (query only).
 - **AL8 Merged with main's auto flags (owner, 2026-10-14; amends AL3).** This note was AG on nif/main; main's Note AG (GUI suggestions) kept the letter, so it is AL here. Main's member auto flags (AJ7-AJ11, subsurface Standard/Foliage AG102) run for `pbr_grass` sets too, with one guard: `SsHint::grass` (set by `auto_flags::hint`) lets only the `_s` switch a key on, so a `_g`/`_p`/`_cnr`/`_f` member (`SHADER-EXTRA-MAP`) never puts back `emissive`, `parallax`, `multilayer` + `coat_normal` or `fuzz_on`, in the export (`json_entries`) or the form (`pgp_fields::context`), and a `_cnr` cannot turn the `_s` into `coat_diffuse`. The grass view no longer inserts `subsurface = true`: the `_s` turns on `subsurface`, or `subsurface_foliage` by main's Tree Anim/path rule, shown "(auto)"; Off stores `subsurface = false` (main's `sub_edits`). The Subsurface checkbox's grass-only `keep_off` is gone (main's selector replaces the checkbox). Codes 91 → 92 with main's `ALPHA-PARALLAX-NO-ALPHA`.
+
+## Note AM — PGPatcher complex material JSON and the Vanilla complex `_m` (plan rulings, 2026-10-15)
+
+Spec `F:\ai\dds\nifparseref\plan\complex-material\2026-10-14-complex-material-design.md` (owner-approved 2026-10-14, including edits to `sets_doc.rs`, `pgp/validate.rs`, engine `policy.rs`/`suggest.rs`, the `vanilla-quality` description, `schema/` and two golden tests).
+
+- **AM1 Vanilla keeps a complex `_m` (D16).** The `(Vanilla, complex_material) → envmask` fallback and the "_m under vanilla" suggestion are gone.
+  - Vanilla uses the CS rule: a Note L alpha (minimum below 251) gives `complex_material` (High, BC7 UNORM with alpha, BC3 option, Note AH unchanged), and anything else gives `envmask` (BC4, no alpha).
+  - Side effects: a Vanilla set with a complex `_m` auto-picks the Complex Material shader. A varying-alpha `_m` that used to be skipped (`LOSS-ALPHA-DATA`) or written as BC4 is now BC7, twice the size, and its `profile_sha256` changes once, so `if-changed` re-encodes it. The engine version stays 0.7.0.
+  - The vanilla shader ignores the alpha without ENB. The owner accepted this.
+  - Two golden tests changed (both owner-approved). `vanilla_fallbacks_are_written_with_allow_cfg_unavailable` drops `iron_m`: three fallbacks. `vanilla_g_is_glow_and_m_with_alpha_is_envmask_with_loss` now expects BC7 `complex_material` plus `VAL-M-GRAYSCALE` (its RGB is grey); the test name predates AM. It also dropped its `skip_code(None)` assert, because that helper panics when there is no skip event.
+- **AM2 `[sets.cm]`.** Per set: `export` plus the schema keys under their schema names. A key that is present is set, and an absent key is unset.
+  - `RESERVED` has 13 entries with `cm`.
+  - Keys with the wrong type, including a non-bool `export`, stay in the file, are listed and are not exported.
+  - Unticking writes `export = false` and keeps the values.
+  - The JSON carries only the keys the user set. PGPatcher resets specular colour, specular strength and environment scale to 1 unless the JSON overrides them. This is intended and is documented in the card note (D11).
+- **AM3 File and text.** The file is `<job output>.json` under the export root, so `_em`, renames and packed cpm `_m` follow.
+  - The text is `$schema` (the schema `$id`) plus the set, well-typed keys, every number a float, serde_json pretty with a final newline.
+  - It is validated against the vendored `complex_material.schema.json` (upstream `0176567`, identical at 2.2.0) by `pgp::validate::validate_cm`.
+  - Written after a clean export only, on every target; the JSON is written only when the export had no failures. A missing `.dds`, a path clash or an output outside the export root gets a note.
+  - The guard is stricter than the CS PBR and PGPatcher exports, which share `pbr_export.rs` (not changed here): the CM export replaces an existing JSON only when its hash matches `[project] cm_json_sha256`. An existing file with no recorded hash is not adopted, even if identical, and an unreadable existing file is kept with a note. Undo keeps the recorded hash.
+  - Untick or orphan: the file is left in place, with a note. It is never deleted.
+  - Duplicate set ids in `prepare` and `targets`: the first entry decides.
+- **AM4 Card.** It shows when the set has a complex `_m`: resolved `complex_material`, or `envmask` under the Complex Material shader. It also shows when a `[sets.cm]` block exists.
+  - It holds the export box, the target paths, the D11 note and six key rows, which start unset. A ticked key starts at 1, (1, 1, 1), `true` or glossiness 80. It is never prefilled from a mesh.
+  - `card_warnings` takes the targets already computed for the frame, so nothing is re-parsed per target.
+  - Amber lines: bad types; written as an env mask (`alpha.policy = remove`); and, after an export only, the `VAL-M-COMPLEX-MARGIN` smallest alpha. That alpha is rounded: 251–254 means CS env mask but PGPatcher complex, and 255 means PGPatcher likely env mask.
+  - Placement: in 2D the right column, after the TruePBR panel and the skin card. In 3D, next to the CS PBR section.
+- **AM5 Plan rulings.**
+  - Engine Vanilla tests live in `complex_m_alpha.rs`, not `policy_checks.rs`, because its helpers take a target.
+  - `_em`, rename and packed cpm paths are tested at the `targets` level. The write itself is tested once, on `iron_m`, through the same code. One small `finish` test covers a read-only doc.
+  - `targets` builds the exporting-sets lookup from one `entries()` call.
+  - Notes say "Tessalith", as the CS export does.

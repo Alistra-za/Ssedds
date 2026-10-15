@@ -333,3 +333,61 @@ fn suggestion_text_names_alpha_0_not_255() {
     assert!(why.contains("alpha 0"), "{why}");
     assert!(!why.contains("255"), "{why}");
 }
+
+/// Note AM (D16): under vanilla a varying-alpha `_m` is a complex `_m` too: BC7 with its alpha as height, parallax on.
+#[test]
+fn vanilla_keeps_a_varying_alpha_m_as_complex_material() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgba(d.path(), height);
+    let o = convert(d.path(), Target::Vanilla, &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let j = planned(&o, "iron_m.png");
+    assert_eq!(j["profile"]["subtype"], "complex_material");
+    assert_eq!(j["profile"]["format"], "bc7");
+    assert_eq!(j["profile"]["alpha"]["policy"], "data");
+    assert_eq!(j["profile"]["alpha"]["parallax"], true);
+    let w = warnings(&o);
+    assert!(
+        !w.contains(&Code::LossAlphaData) && !w.contains(&Code::CfgUnavailable),
+        "{w:?}"
+    );
+    let a = alphas(d.path());
+    for (i, &v) in a[0].iter().enumerate() {
+        let (x, y) = (i as u32 % W, i as u32 / W);
+        assert!(
+            (i32::from(v) - i32::from(height(x, y))).abs() <= 8,
+            "{x},{y}: {v}"
+        );
+    }
+}
+
+/// Note AM: a plain `_m` (solid 255 or no alpha) stays a BC4 env mask under vanilla.
+#[test]
+fn vanilla_m_with_solid_or_no_alpha_stays_an_envmask() {
+    let cases: [fn(&Path); 2] = [|d| put_rgba(d, |_, _| 255), put_rgb];
+    for put in cases {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path());
+        let o = convert(d.path(), Target::Vanilla, &[]);
+        assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+        let j = planned(&o, "iron_m.png");
+        assert_eq!(
+            (
+                j["profile"]["subtype"].as_str(),
+                j["profile"]["format"].as_str()
+            ),
+            (Some("envmask"), Some("bc4"))
+        );
+    }
+}
+
+/// Note AM + AH1: an explicit `complex_material` without source alpha under vanilla writes alpha 0, not a fallback.
+#[test]
+fn vanilla_explicit_complex_material_without_alpha_writes_0() {
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path());
+    let o = convert(d.path(), Target::Vanilla, &[SUB]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert!(!warnings(&o).contains(&Code::CfgUnavailable));
+    assert_all_zero(d.path());
+}

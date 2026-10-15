@@ -880,3 +880,16 @@ fn export_refuses_a_loaded_new_id() {
         .to_string();
     assert!(e.contains("already loaded") && e.contains("builtin"), "{e}");
 }
+
+/// Note AM: vanilla-compact halves a complex `_m` (BC7 with alpha), as cs-compact does.
+#[test]
+fn vanilla_compact_halves_a_complex_m() {
+    let r = PresetRegistry::builtin().unwrap();
+    let p = r
+        .profile("vanilla-compact", Target::Vanilla, Subtype::ComplexMaterial)
+        .unwrap();
+    assert_eq!(
+        (p.format, p.resize, p.alpha.policy),
+        (Format::Bc7, ResizeMode::Half, AlphaPolicy::Data)
+    );
+}
