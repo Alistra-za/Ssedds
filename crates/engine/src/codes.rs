@@ -14,6 +14,7 @@
 //! `flip_green` that contradicts `green_convention`) (M6 Track D) and the five `RNM-*` codes of RNM normal layers (M6 Track F2).
 //! and the five `GRASS-*` codes and VAL-GRASS-DETECT (complex grass design 2026-10-12 §3.6, §3.7, §4)
 //! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b).
+//! and PBR-GRASS-PGPATCHER (PGPatcher before 2.1.0 does not patch grass meshes, PBR grass design 2026-10-14 §4.4).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +134,7 @@ codes! {
     GrassDetectSource = "GRASS-DETECT-SOURCE" => Warning,
     GrassVanilla = "GRASS-VANILLA" => Warning,
     ValGrassDetect = "VAL-GRASS-DETECT" => Error,
+    PbrGrassPgpatcher = "PBR-GRASS-PGPATCHER" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -199,7 +201,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 90);
+        assert_eq!(Code::ALL.len(), 91);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -208,7 +210,12 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::ValGrassDetect));
+        assert_eq!(Code::ALL.last(), Some(&Code::PbrGrassPgpatcher));
+        assert_eq!(Code::PbrGrassPgpatcher.severity(), Severity::Warning);
+        assert_eq!(
+            Code::parse("PBR-GRASS-PGPATCHER"),
+            Some(Code::PbrGrassPgpatcher)
+        );
         assert_eq!(Code::CfgPresetSkipped.severity(), Severity::Warning);
         assert_eq!(
             Code::parse("CFG-GREEN-CONFLICT"),

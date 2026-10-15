@@ -1,6 +1,7 @@
 //! PBR grass (design `F:\ai\dds\nifparseref\plan\pbr-grass\2026-10-14-pbr-grass-design.md`): the auto-pick from
 //! GRAS evidence and the PBR grass warnings, at plan level.
 use engine::api::*;
+use engine::codes::Code;
 use engine::config::Target;
 use engine::events::*;
 use engine::overrides::parse_set;
@@ -122,4 +123,28 @@ fn gras_evidence_on_a_set_that_is_not_pbr_is_not_pbr_grass() {
     put(d.path(), "textures/plants/g_n.png", [128, 128, 255]);
     let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
     assert_ne!(picked(&p).0, Shader::PbrGrass);
+}
+
+/// The `SetResolved` event of the fixture set.
+fn set_warnings(ev: &[EngineEvent]) -> Vec<Code> {
+    ev.iter()
+        .find_map(|e| match &e.kind {
+            EventKind::SetResolved { warnings, .. }
+                if e.set.as_deref().is_some_and(|s| s.ends_with(SET)) =>
+            {
+                Some(warnings.iter().map(|w| w.code).collect())
+            }
+            _ => None,
+        })
+        .expect("the set event")
+}
+
+#[test]
+fn only_a_pbr_grass_set_gets_the_pgpatcher_note() {
+    let d = tempfile::tempdir().unwrap();
+    pbr_set(d.path(), BROWN);
+    let (_, ev) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
+    assert!(set_warnings(&ev).contains(&Code::PbrGrassPgpatcher));
+    let (_, ev) = plan(d.path(), Target::Cs, &[SET], &[], &[(SET, Shader::Pbr)]);
+    assert!(!set_warnings(&ev).contains(&Code::PbrGrassPgpatcher));
 }
