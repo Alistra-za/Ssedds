@@ -443,7 +443,9 @@ fn every_number_box_reports_its_range() {
     for (v, min, max) in &spins {
         assert_eq!(*min, Some(0.0), "{v:?}");
         let unit = v.as_deref() == Some("0.5");
-        assert_eq!(*max, unit.then_some(1.0), "{v:?}");
+        // The coat colour's R/G/B boxes (now in the main view, AJ1) run 0-255.
+        let want = if unit { Some(1.0) } else { None };
+        assert!(*max == want || *max == Some(255.0), "{v:?} {max:?}");
     }
 }
 
