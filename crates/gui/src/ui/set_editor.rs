@@ -157,11 +157,14 @@ pub fn draw(
                         .show(ui, |ui| super::skin_card::card(ui, model, &v));
                 });
         }
-        // The CS PBR texture-set/material-object section folds here too (design §3).
+        // The CS PBR texture-set/material-object section and the complex material card fold here too.
         egui::ScrollArea::vertical()
             .id_salt("set-3d-cs-scroll")
             .max_height(tall)
-            .show(ui, |ui| super::cs_pbr::section(ui, model, &v));
+            .show(ui, |ui| {
+                super::cs_pbr::section(ui, model, &v);
+                super::cm_card::section(ui, model, &v);
+            });
         return;
     }
     egui::ScrollArea::vertical()
@@ -189,6 +192,7 @@ pub fn draw(
                 if v.skin {
                     super::skin_card::card(&mut cols[1], model, &v);
                 }
+                super::cm_card::section(&mut cols[1], model, &v);
             });
         });
     let (mut select, mut expand) = (None, None);

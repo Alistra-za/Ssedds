@@ -768,3 +768,124 @@ fn prepare_follows_the_first_entry_of_a_duplicated_id() {
         f[0].1
     );
 }
+
+use egui_kittest::kittest::Queryable;
+use egui_kittest::Harness;
+use engine::codes::{Code, Warning};
+use sdc_gui::model::export::{Row, RowState};
+
+fn margin_row(m: &AppModel, key: &str, alpha: f64) -> Row {
+    Row {
+        job_key: m.item(key).unwrap().job_key.clone(),
+        path: String::new(),
+        state: RowState::Done { passed: true },
+        warnings: vec![Warning::new(Code::ValMComplexMargin, "margin")
+            .with_data(json!({"smallest_alpha": alpha, "complex": alpha < 251.0}))],
+    }
+}
+
+/// `card_warnings` with the targets computed once, as the card does (ruling C5).
+fn warns(m: &AppModel, v: &SetView) -> Vec<String> {
+    card_warnings(m, v, &targets(m))
+}
+
+/// D12/D17 and Review focus 5: the 251–254 line and the 255 line come from the latest export row only; a fractional
+/// alpha is rounded.
+#[test]
+fn the_alpha_lines_follow_the_latest_export_row() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = view(&m, "m/iron");
+    assert!(
+        warns(&m, &iron).is_empty(),
+        "before an export nothing shows"
+    );
+    for (a, want) in [
+        (
+            252.0,
+            Some("iron_m: smallest-mip alpha 252. PGPatcher treats it as complex material and applies iron_m.json"),
+        ),
+        (250.6, Some("iron_m: smallest-mip alpha 251.")),
+        (250.0, None),
+        (
+            255.0,
+            Some("PGPatcher likely reads iron_m as an env mask; the JSON will not be applied."),
+        ),
+    ] {
+        m.export.rows = vec![margin_row(&m, IRON_M, a)];
+        let w = warns(&m, &iron);
+        match want {
+            Some(s) => assert!(w.iter().any(|l| l.contains(s)), "{a}: {w:?}"),
+            None => assert!(w.is_empty(), "{a}: {w:?}"),
+        }
+    }
+}
+
+/// Design §5: env-mask members warn; a Vanilla complex `_m` does not (D16); a wrong-typed key is listed.
+#[test]
+fn env_mask_members_and_bad_keys_warn_and_a_vanilla_complex_m_does_not() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let bolt = set_id(&m, "m/bolt");
+    m.set_shader(&bolt, Some(Shader::ComplexMaterial));
+    idle(&mut m);
+    let w = warns(&m, &view(&m, "m/bolt"));
+    assert!(
+        w.iter()
+            .any(|l| l.contains("bolt_m is written as an env mask without alpha")),
+        "{w:?}"
+    );
+    m.set_field(IRON_M, "alpha.policy", json!("remove"));
+    idle(&mut m);
+    let w = warns(&m, &view(&m, "m/iron"));
+    assert!(
+        w.iter()
+            .any(|l| l.contains("iron_m is written as an env mask")),
+        "{w:?}"
+    );
+    m.clear_field(IRON_M, "alpha.policy");
+    idle(&mut m);
+    m.set_target(Target::Vanilla);
+    idle(&mut m);
+    assert_eq!(warns(&m, &view(&m, "m/iron")), Vec::<String>::new());
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_value(&iron, "glossiness", Some(json!("high")));
+    assert_eq!(
+        warns(&m, &view(&m, "m/iron")),
+        ["glossiness: wrong type in sdc-project.toml; not exported"]
+    );
+}
+
+/// The card in the set editor: the note, the target path, and one undo step per tick.
+#[test]
+fn the_card_ticks_export_and_a_key_in_one_undo_step_each() {
+    use sdc_gui::ui::cm_card::{EXPORT, NOTE, SECTION};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let v = view(&m, "m/iron");
+    m.select_set(&v.key);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 2400.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label(SECTION).click();
+    h.run();
+    assert!(h.query_all_by_label_contains(NOTE).next().is_some());
+    assert!(h
+        .query_all_by_label_contains("m\\iron_m.json")
+        .next()
+        .is_some());
+    h.get_by_label(EXPORT).click();
+    h.run();
+    h.get_by_label("glossiness").click();
+    h.run();
+    let m = h.state_mut();
+    let b = m.cm_block(&v.id).unwrap();
+    assert!(b.export);
+    assert_eq!(b.values["glossiness"], json!(80.0));
+    m.undo();
+    idle(m);
+    let b = m.cm_block(&v.id).unwrap();
+    assert!(b.export && !b.values.contains_key("glossiness"), "{b:?}");
+}

@@ -501,3 +501,70 @@ impl AppModel {
         }
     }
 }
+
+use engine::codes::Code;
+use engine::config::AlphaPolicy;
+
+/// The smallest-mip alpha of `key`'s latest export, from its `VAL-M-COMPLEX-MARGIN` data, rounded (an averaged
+/// non-square smallest mip can be fractional). `None` before an export, or when the engine raised no margin warning
+/// (alpha below `validation.complex_m_warn_alpha`, 247 by default) (D17).
+pub fn smallest_alpha(m: &AppModel, key: &str) -> Option<u8> {
+    let jk = &m.item(key)?.job_key;
+    let a = m
+        .export
+        .rows
+        .iter()
+        .find(|r| r.job_key.eq_ignore_ascii_case(jk))?
+        .warnings
+        .iter()
+        .find(|w| w.code == Code::ValMComplexMargin)?
+        .data
+        .get("smallest_alpha")?
+        .as_f64()?;
+    Some(a.round().clamp(0.0, 255.0) as u8)
+}
+
+/// Written without alpha (an `envmask`, or an explicit `alpha.policy = remove`): PGPatcher reads it as an env mask.
+fn env_written(m: &AppModel, key: &str) -> bool {
+    m.item(key)
+        .and_then(|i| i.job.as_ref())
+        .is_some_and(|j| j.profile.alpha.policy == AlphaPolicy::Remove)
+}
+
+/// The card's amber lines (design §5), in order: wrong-typed keys, then per member its env-mask or alpha case and
+/// its refusal. `ts` is `targets(m)`, computed once by the caller (ruling C5).
+pub fn card_warnings(m: &AppModel, v: &SetView, ts: &[CmTarget]) -> Vec<String> {
+    let mut out: Vec<String> = m
+        .cm_block(&v.id)
+        .map(|b| {
+            b.bad
+                .iter()
+                .map(|k| format!("{k}: wrong type in sdc-project.toml; not exported"))
+                .collect()
+        })
+        .unwrap_or_default();
+    for t in ts.iter().filter(|t| same_id(&t.set, &v.id)) {
+        let n = &t.name;
+        if env_written(m, &t.key) {
+            out.push(format!(
+                "{n} is written as an env mask without alpha, so PGPatcher ignores the JSON. Set its sub-type to \
+                 complex material."
+            ));
+        } else {
+            match smallest_alpha(m, &t.key) {
+                Some(a @ 251..=254) => out.push(format!(
+                    "{n}: smallest-mip alpha {a}. PGPatcher treats it as complex material and applies {n}.json, but \
+                     Community Shaders renders it as a plain env mask (alpha ≥ 251)."
+                )),
+                Some(255) => out.push(format!(
+                    "PGPatcher likely reads {n} as an env mask; the JSON will not be applied."
+                )),
+                _ => {}
+            }
+        }
+        if let Err(why) = &t.rel {
+            out.push(format!("{n}: complex material JSON not written: {why}"));
+        }
+    }
+    out
+}
