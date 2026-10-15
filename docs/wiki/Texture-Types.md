@@ -38,7 +38,7 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 | `_n` | `normal`; `pbr_normal` in a PBR set; `landscape_normal` when a folder in the path is named `landscape` | High |
 | `_msn` | `msn` (model-space normal) | High |
 | `_s` | `msn_specular` when the set has `_msn`; `pbr_subsurface` in a PBR set; otherwise `subsurface_tint` | High, High, Low |
-| `_m`, `_em`, `_envmask` | `envmask`; under `cs` and `cpm`, `complex_material` when the alpha varies | High (vanilla, or no/constant alpha); High for complex with varying alpha |
+| `_m`, `_em`, `_envmask` | `envmask`; `complex_material` when the alpha varies | High for both |
 | `_g` | `glow`; `pbr_emissive` in a PBR set | High |
 | `_p` | `height` (parallax) | High |
 | `_rmaos` | `rmaos` | High |
@@ -110,7 +110,7 @@ There are 29 sub-types in five categories.
 | `height` | Grayscale | BC4 | UNORM | remove | Parallax height (`_p`). |
 | `msn_specular` | Grayscale | BC4 | UNORM | remove | `_s` beside an `_msn`. |
 | `skin_sk` | Grayscale | BC4 | UNORM | remove | `cs` Advanced skin; red channel only. |
-| `complex_material` | MixedPacked | BC7 | UNORM | data, exact opaque | Complex `_m`. Not under `vanilla`. |
+| `complex_material` | MixedPacked | BC7 | UNORM | data, exact opaque | Complex `_m`. Under every target (Note AM). |
 | `rmaos` | MixedPacked | BC7 | UNORM | data | `cs` only. |
 | `skin_rfaos` | MixedPacked | BC7 | UNORM | data | `cs` only. Also accepted as `rfaos`. |
 | `flow` | MixedPacked | BC5 | UNORM | remove | `cs` only. Hair flow; at 32 px or less CS ignores it (`DIM-FLOW-SMALL`). |
