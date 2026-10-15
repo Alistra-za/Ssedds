@@ -1029,7 +1029,7 @@ impl Encoder {
 pub const PANEL_TITLE: &str = "Set preview (3D)";
 pub const NEEDS_CS: &str = "PGPatcher preview needs the CS target and a PBR set";
 /// PBR grass design §4.5 (owner D5): the object PBR path stands in for CS's `RunGrass.hlsl`.
-pub const GRASS_APPROX: &str = "PBR grass approximated: drawn with the object PBR shader (no wrapped diffuse, wind or grass LOD; micro-shadows still apply). PGPatcher 1.2.0 does not patch grass meshes.";
+pub const GRASS_APPROX: &str = "PBR grass approximated: drawn with the object PBR shader (no wrapped diffuse, wind or grass LOD; micro-shadows still apply).";
 pub const JSON_WINS: &str = "Assumes your sdc JSON wins over other mods' PGPatcher configs.";
 pub const NO_SCAN: &str = "Scan your mods in the Meshes view to preview on a real mesh";
 pub const NO_MATCH: &str = "No scanned mesh uses this diffuse";

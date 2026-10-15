@@ -104,10 +104,6 @@ static PBR_GRASS: ShaderSpec = ShaderSpec {
     ],
     optional: &[role("subsurface _s", &[Subtype::PbrSubsurface])],
 };
-/// PBR grass design §4.4: PGPatcher before 2.1.0 refuses TruePBR on meshes a GRAS record uses (research §3.1); the
-/// owner stays on 1.2.0 and sdc exports anyway (owner answers 2026-10-13).
-pub const PGPATCHER_GRASS: &str =
-    "PGPatcher 1.2.0 does not patch grass meshes; needs 2.1.0 or later";
 static ADVANCED_SKIN: ShaderSpec = ShaderSpec {
     required: &[
         role("skin_albedo", &[Subtype::SkinAlbedo]),
@@ -820,10 +816,10 @@ pub fn check_maps(pick: &ShaderPick, members: &[MemberMap]) -> Vec<Warning> {
 }
 
 /// SHADER-AUTO for an `auto:` pick (data `{"shader", "rule"}`); SHADER-UNAVAILABLE for a fallback (data
-/// `{"wanted", "shader"}`); nothing for `set`. A `pbr_grass` pick also gets PBR-GRASS-PGPATCHER.
+/// `{"wanted", "shader"}`); nothing for `set`.
 pub fn pick_notes(pick: &ShaderPick, target: Target) -> Vec<Warning> {
     let id = pick.shader.id();
-    let mut out = match (&pick.provenance, pick.wanted) {
+    match (&pick.provenance, pick.wanted) {
         (ShaderOrigin::Auto(r), _) => vec![Warning::new(
             Code::ShaderAuto,
             format!("shader {id} picked automatically ({})", r.id()),
@@ -838,11 +834,7 @@ pub fn pick_notes(pick: &ShaderPick, target: Target) -> Vec<Warning> {
         )
         .with_data(serde_json::json!({"wanted": w.id(), "shader": id}))],
         _ => vec![],
-    };
-    if pick.shader == Shader::PbrGrass {
-        out.push(Warning::new(Code::PbrGrassPgpatcher, PGPATCHER_GRASS));
     }
-    out
 }
 
 /// PBR grass design §4.4: CS's grass depth/shadow pass runs the complex-grass detector on a PBR grass albedo
@@ -1780,35 +1772,6 @@ mod tests {
             [Code::ShaderExtraMap]
         );
         assert_eq!(w[0].data["member"], "g_g");
-    }
-
-    /// PBR grass design §4.4: every pbr_grass pick, set or auto, notes the PGPatcher version; nothing else does.
-    #[test]
-    fn a_pbr_grass_pick_notes_the_pgpatcher_version() {
-        let p = |shader, provenance| ShaderPick {
-            shader,
-            provenance,
-            wanted: None,
-        };
-        let codes = |p: &ShaderPick| {
-            pick_notes(p, Target::Cs)
-                .into_iter()
-                .map(|w| w.code)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            codes(&p(Shader::PbrGrass, ShaderOrigin::Set)),
-            [Code::PbrGrassPgpatcher]
-        );
-        assert_eq!(
-            codes(&p(Shader::PbrGrass, ShaderOrigin::Auto(AutoRule::PbrGrass))),
-            [Code::ShaderAuto, Code::PbrGrassPgpatcher]
-        );
-        assert!(codes(&p(Shader::Pbr, ShaderOrigin::Set)).is_empty());
-        assert_eq!(
-            PGPATCHER_GRASS,
-            "PGPatcher 1.2.0 does not patch grass meshes; needs 2.1.0 or later"
-        );
     }
 
     /// PBR grass design §4.4: the albedo of a pbr_grass set whose corner reads as a unit vector (0.01 to spare).

@@ -127,30 +127,6 @@ fn gras_evidence_on_a_set_that_is_not_pbr_is_not_pbr_grass() {
     assert_ne!(picked(&p).0, Shader::PbrGrass);
 }
 
-/// The `SetResolved` event of the fixture set.
-fn set_warnings(ev: &[EngineEvent]) -> Vec<Code> {
-    ev.iter()
-        .find_map(|e| match &e.kind {
-            EventKind::SetResolved { warnings, .. }
-                if e.set.as_deref().is_some_and(|s| s.ends_with(SET)) =>
-            {
-                Some(warnings.iter().map(|w| w.code).collect())
-            }
-            _ => None,
-        })
-        .expect("the set event")
-}
-
-#[test]
-fn only_a_pbr_grass_set_gets_the_pgpatcher_note() {
-    let d = tempfile::tempdir().unwrap();
-    pbr_set(d.path(), BROWN);
-    let (_, ev) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
-    assert!(set_warnings(&ev).contains(&Code::PbrGrassPgpatcher));
-    let (_, ev) = plan(d.path(), Target::Cs, &[SET], &[], &[(SET, Shader::Pbr)]);
-    assert!(!set_warnings(&ev).contains(&Code::PbrGrassPgpatcher));
-}
-
 /// The warning codes of the albedo job.
 fn albedo_codes(p: &Plan) -> Vec<Code> {
     p.jobs
