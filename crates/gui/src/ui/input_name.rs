@@ -17,7 +17,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         .map(|e| format!("sdc.toml is read-only: {e}"));
     let err_id = egui::Id::new(("input-name-error", &v.id));
     ui.add_enabled_ui(why.is_none(), |ui| {
-        ui.menu_button("Input name…", |ui| {
+        path_picker::menu(ui, "Input name…", |ui| {
             ui.label(egui::RichText::new("Read this set's textures as").strong());
             ui.weak(format!("now: {current}"));
             let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());

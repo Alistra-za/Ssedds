@@ -387,7 +387,7 @@ fn match_pill(
             Mode::Exact(_) => "Pick an exact texture path the scan found in this slot",
             Mode::Contains => "Pick a texture path; any diffuse path containing it matches",
         };
-        ui.menu_button("▾", |ui| {
+        path_picker::menu(ui, "▾", |ui| {
             let list = match mode {
                 Mode::Exact(n) => known(ui, model, &format!("slot{n}"), || {
                     model.known_textures(Some(n - 1))
@@ -426,7 +426,7 @@ fn nif_pill(ui: &mut egui::Ui, model: &AppModel, owner: &Owner, value: &str, act
                 (!t.is_empty()).then(|| json!(t)),
             ));
         }
-        ui.menu_button("▾", |ui| {
+        path_picker::menu(ui, "▾", |ui| {
             let dirs: Vec<String> = model
                 .known_mesh_dirs()
                 .iter()

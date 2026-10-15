@@ -139,6 +139,8 @@ Select a set to edit it. Each texture slot is a card, in PGPatcher slot order: D
 
 **Drop files from Explorer on a card.** A file dropped on a slot card fills that slot, as one undo step, when it is a texture of the open folder and its sub-type belongs in that slot. It moves in the way a texture dragged from the Textures column does: a filled slot asks **Replace** or **Cancel**, a locked slot refuses, and Share or Duplicate are not offered, so nothing is copied. A file outside the open folder is not copied either: the line under the cards says "brick.png is outside the open folder; files are never copied". Drop several files and only the first is used ("only the first file was used"). A file dropped anywhere else opens its folder, as before.
 
+**Path pickers.** *Input name…* in the set's header row, and the ▾ beside a match path or a mesh path in the JSON editor, open a list of known paths with a filter box. Clicking or typing inside it (the box, the list, its scroll bar) keeps it open; it closes on a pick, on Esc, or on a click outside.
+
 The set's **Shader** dropdown lists the shaders the current mode offers. The picked one reads "(auto)" when Tessalith chose it, and "(fallback)" when the shader you asked for does not exist under the current mode and `default` stands in. Choosing **Auto** clears your choice. Warnings (a missing or unused map, an unavailable shader) show on the set's ⚠ badge. A scanned mod's meshes decide the auto pick unless a PBR or skin member, a complex `_m` or a `_p` does.
 
 ### PGPatcher settings

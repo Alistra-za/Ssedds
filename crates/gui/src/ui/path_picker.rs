@@ -70,3 +70,16 @@ pub fn cached(
     ui.data_mut(|d| d.insert_temp(id, (key, v.clone())));
     v
 }
+
+/// `ui.menu_button` for a menu that holds [`list`] (AG125): a click inside, in the filter box, the list or its scroll
+/// bar, keeps it open. A click outside, Esc or a pick (the caller's `ui.close()`) closes it.
+pub fn menu<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    use egui::containers::menu::{MenuButton, MenuConfig};
+    let config = MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (response, inner) = MenuButton::new(label).config(config).ui(ui, content);
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}
