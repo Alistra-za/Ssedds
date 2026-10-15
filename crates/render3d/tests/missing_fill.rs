@@ -118,6 +118,16 @@ fn a_dropped_swap_of_a_missing_path_falls_back_to_the_fill() {
         0,
         &[(0, r"textures\standin\missing_d.dds")],
     );
+    // A material edit evicts texture-less cache entries; the missing provenance must outlive that.
+    let mut m = r
+        .shapes()
+        .into_iter()
+        .find(|s| s.id == CYL1)
+        .unwrap()
+        .material;
+    m.params.uv_scale = [2.0, 2.0];
+    assert!(r.set_material(CYL1, m, &|_| None).is_ok());
+    assert_eq!(r.draw_default_at(CYL1, 0), Some((SrvKind::Tex2D, MAGENTA)));
     r.replace_texture(
         DIFFUSE,
         &dds_rgba8(1, 1, &[[255, 0, 0, 255]]),

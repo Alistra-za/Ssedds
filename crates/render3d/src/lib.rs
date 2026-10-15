@@ -306,6 +306,9 @@ pub struct Renderer {
     draw_order: Vec<ShapeId>,
     /// Textures resolved or swapped in since the last load, by canonical path.
     tex_cache: HashMap<String, TexEntry>,
+    /// Missing slot paths whose texture-less entry an edit evicted (so the resolver is asked again); a later
+    /// `replace_texture` that recreates the entry keeps `TexEntry::missing` from here. Cleared per load.
+    evicted_missing: HashSet<String>,
     /// The variant the resolver's bytes of the next loads count as ([`Renderer::set_load_variant`]).
     load_variant: Variant,
     bounds: Option<([f32; 3], f32)>,
@@ -426,6 +429,7 @@ impl Renderer {
             shapes: BTreeMap::new(),
             draw_order: vec![],
             tex_cache: HashMap::new(),
+            evicted_missing: HashSet::new(),
             load_variant: Variant::Source,
             bounds: None,
             sampler: s.ok_or("no sampler")?,
@@ -695,6 +699,7 @@ impl Renderer {
             return e.current().map(|t| (t.srv.clone(), t.kind));
         }
         let v = self.load_variant;
+        self.evicted_missing.remove(norm);
         let mut entry = TexEntry {
             active: v,
             ..TexEntry::default()
@@ -1126,6 +1131,7 @@ impl Renderer {
         self.shapes.clear();
         self.draw_order.clear();
         self.tex_cache.clear();
+        self.evicted_missing.clear();
         self.bounds = None;
         let mut rep = LoadReport {
             le_mesh: parsed.le_mesh,
@@ -1276,7 +1282,13 @@ impl Renderer {
         if kind == EditKind::Same && !rebuild {
             return Ok(kind);
         }
-        self.tex_cache.retain(|_, e| e.any());
+        let evicted = &mut self.evicted_missing;
+        self.tex_cache.retain(|p, e| {
+            if e.missing && !e.any() {
+                evicted.insert(p.clone());
+            }
+            e.any()
+        });
         let mut scratch = LoadReport::default();
         if rebuild {
             if let Some(s) = self.shapes.get_mut(&id) {
@@ -1379,7 +1391,14 @@ impl Renderer {
         } else {
             Some(textures::load_dds(&self.gpu, dds).map_err(|e| format!("{path}: {e}"))?)
         };
-        let mut entry = self.tex_cache.get(path).cloned().unwrap_or_default();
+        let mut entry = self
+            .tex_cache
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| TexEntry {
+                missing: self.evicted_missing.contains(path),
+                ..TexEntry::default()
+            });
         let was = entry.active;
         let dropped = fresh.is_none();
         *entry.slot_mut(v) = fresh;
