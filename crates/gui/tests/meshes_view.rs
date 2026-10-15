@@ -201,6 +201,7 @@ fn shape(textures: Vec<Option<&str>>) -> ShapeView {
         vertex_desc: None,
         num_vertices: Some(120),
         num_triangles: Some(80),
+        index3d: Some(0),
     }
 }
 

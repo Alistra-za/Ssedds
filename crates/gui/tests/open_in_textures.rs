@@ -28,6 +28,7 @@ fn shape() -> ShapeView {
         vertex_desc: None,
         num_vertices: None,
         num_triangles: None,
+        index3d: Some(0),
     }
 }
 
