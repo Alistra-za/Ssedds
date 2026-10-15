@@ -296,7 +296,7 @@ pub fn refuse_clashes(out: &mut [CmTarget], exporting: impl Fn(&str) -> bool) {
 }
 
 use super::history::sha256_of;
-use super::pbr_export::{hand_edited, write_atomic};
+use super::pbr_export::write_atomic;
 use super::Dialog;
 use std::path::PathBuf;
 
@@ -386,11 +386,8 @@ pub fn finish(
                 path.display(),
                 dds.file_name().unwrap_or_default().to_string_lossy()
             ))
-        } else if hand_edited(&path, text, last) {
-            Some(format!(
-                "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
-                path.display()
-            ))
+        } else if let Err(why) = may_replace(&path, last) {
+            Some(why)
         } else {
             match write_atomic(&path, text) {
                 Ok(()) => {
@@ -434,6 +431,25 @@ pub fn finish(
     out
 }
 
+/// Whether sdc may write `path`: only when it is absent or is exactly what sdc last wrote there (its recorded hash
+/// `last`). An existing file with no record (even with identical bytes), a changed one or one that cannot be read is
+/// kept; `Err` is the note.
+pub fn may_replace(path: &std::path::Path, last: Option<&str>) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!(
+            "{} kept: it could not be read ({e})",
+            path.display()
+        )),
+        Ok(b) if last == Some(hex::encode(Sha256::digest(&b)).as_str()) => Ok(()),
+        Ok(_) => Err(format!(
+            "{} kept as edited outside Tessalith (delete it to let Tessalith write it again)",
+            path.display()
+        )),
+    }
+}
+
 impl AppModel {
     /// The export ended. After a clean export, write the files of `p` (taken from `pending_cm` by the caller) and
     /// record their hashes (saved, like the CS PBR record). Otherwise only add a note.
@@ -447,7 +463,7 @@ impl AppModel {
                 .export
                 .summary
                 .as_ref()
-                .is_some_and(|s| s.cancelled.is_empty());
+                .is_some_and(|s| s.cancelled.is_empty() && s.failed == 0);
         if !ok {
             if !p.files.is_empty() {
                 self.export

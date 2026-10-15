@@ -689,3 +689,82 @@ fn a_read_only_document_records_no_hash() {
     );
     assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
 }
+
+/// Fix round 1 (1): a file sdc did not write is never adopted, even with the same bytes.
+#[test]
+fn an_identical_unrecorded_file_is_never_overwritten() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    let mine = prepare(&m).unwrap().files[0].1.clone();
+    let f = out(&m, "m/iron_m.json");
+    std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+    std::fs::write(&f, &mine).unwrap();
+    export_and_wait(&mut m);
+    assert!(
+        notes(&m).contains("kept as edited outside Tessalith"),
+        "{}",
+        notes(&m)
+    );
+    m.set_cm_value(&iron, "glossiness", Some(json!(50.0)));
+    export_and_wait(&mut m);
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), mine);
+    assert!(m.sets_doc.as_ref().unwrap().cm_json_shas().is_empty());
+}
+
+/// Fix round 1 (2): something at the path that cannot be read as a file is kept, never treated as absent.
+#[test]
+fn an_unreadable_file_is_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("m/x_m.json");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(may_replace(&dir, None)
+        .unwrap_err()
+        .contains("could not be read"));
+    assert!(may_replace(&dir, Some("00")).is_err());
+    assert_eq!(may_replace(&d.path().join("absent.json"), None), Ok(()));
+}
+
+/// Fix round 1 (3): an export with a failed job writes no JSON, even where an older `_m` .dds is on disk.
+#[test]
+fn a_failed_export_writes_nothing_next_to_a_stale_dds() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    export_and_wait(&mut m);
+    assert!(out(&m, "m/iron_m.dds").is_file(), "{}", notes(&m));
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    let p = prepare(&m).unwrap();
+    m.export.summary.as_mut().unwrap().failed = 1;
+    m.finish_cm_json(Some(p));
+    assert!(!out(&m, "m/iron_m.json").exists());
+    assert!(notes(&m).contains("Complex material JSON not written: the export did not finish"));
+}
+
+/// Fix round 1 (4): of two entries with one id, the first decides (as `exports` and `cm_block`).
+#[test]
+fn prepare_follows_the_first_entry_of_a_duplicated_id() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    let mut run = |a: &str, b: &str| {
+        let toml = format!(
+            "[[sets]]\nid = \"{iron}\"\n\n[sets.cm]\n{a}\n\n[[sets]]\nid = \"{iron}\"\n\n[sets.cm]\n{b}\n"
+        );
+        let (_t, s) = doc(&toml);
+        m.sets_doc = Some(s);
+        prepare(&m).unwrap().files
+    };
+    assert!(run("export = false", "export = true").is_empty());
+    let f = run(
+        "export = true\nglossiness = 10",
+        "export = true\nglossiness = 20",
+    );
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(
+        f[0].1.contains("10.0") && !f[0].1.contains("20.0"),
+        "{}",
+        f[0].1
+    );
+}
