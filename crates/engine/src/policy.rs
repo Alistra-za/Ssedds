@@ -1,7 +1,8 @@
 //! Resolve (spec §5.2): merge preset, config, rules, analysis and overrides into an immutable ResolvedJob.
 //!
 //! Precedence (spec §8, lowest first): built-in (`sdc-base`) → preset chain → user config → project config →
-//! rule matches (first match per source, sources in the same order) → analysis facts → the project config's
+//! rule matches (every matching rule of a source, in file order, field by field; sources in the same order;
+//! DECISIONS AP10) → analysis facts → the project config's
 //! `[files]` entries (DECISIONS N2) → `--set` (unscoped, then sub-type-scoped, then file-scoped, each in
 //! command-line order).
 use crate::analyse::Analysis;
@@ -213,16 +214,17 @@ fn rule_sources<'a>(ctx: &ResolveCtx<'a>, chain: &[&'a PresetFile]) -> Vec<(Stri
     v
 }
 
-/// The first rule of one source that matches. While layering sub-type `st`, a rule that names another sub-type
+/// Every rule of one source that matches, in file order: they layer field by field, so a later rule overrides only
+/// the fields it sets (owner ruling, DECISIONS AP10). While layering sub-type `st`, a rule that names another sub-type
 /// (`Rule::subtype`) does not match, so a `--set`/`[files]` sub-type drops it (carried fix 3, Note T10). `alpha` as
 /// in [`rule_matches`].
-fn first_match<'a>(
+fn matching<'a>(
     rules: &'a [Rule],
-    f: &FileFacts,
+    f: &'a FileFacts,
     st: Option<Subtype>,
     alpha: Option<AlphaContent>,
-) -> Option<(usize, &'a Rule)> {
-    rules.iter().enumerate().find(|(_, r)| {
+) -> impl Iterator<Item = (usize, &'a Rule)> {
+    rules.iter().enumerate().filter(move |(_, r)| {
         st.is_none_or(|s| r.subtype.is_none_or(|x| x == s))
             && rule_matches(&r.matcher, f, st, alpha)
     })
@@ -361,9 +363,10 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
             };
         }
     }
-    // rules: highest-precedence source with a matching rule that names a sub-type
+    // rules: highest-precedence source with a matching rule that names a sub-type. The sub-type is decided by the
+    // first matching rule of a source, as before; only the field overrides layer (AP10)
     for (src, rules) in rule_sources(ctx, &chain).into_iter().rev() {
-        if let Some((i, r)) = first_match(rules, f, None, Some(f.analysis.alpha)) {
+        if let Some((i, r)) = matching(rules, f, None, Some(f.analysis.alpha)).next() {
             if let Some(st) = r.subtype {
                 return SubtypeDecision {
                     subtype: st,
@@ -586,12 +589,12 @@ fn layered_profile_with(
             .into_iter()
             .any(|o| o.field == "alpha.policy" && override_applies(ctx, o, Some(st), f))
         && !rule_sources(ctx, &chain).into_iter().any(|(_, rules)| {
-            first_match(rules, f, Some(st), real_alpha)
-                .is_some_and(|(_, r)| r.overrides.pointer("/alpha/policy").is_some())
+            matching(rules, f, Some(st), real_alpha)
+                .any(|(_, r)| r.overrides.pointer("/alpha/policy").is_some())
         });
     let rule_alpha = real_alpha.map(|a| if mesh_remove { AlphaContent::None } else { a });
     for (src, rules) in rule_sources(ctx, &chain) {
-        if let Some((i, r)) = first_match(rules, f, Some(st), rule_alpha) {
+        for (i, r) in matching(rules, f, Some(st), rule_alpha) {
             apply(
                 &mut doc,
                 &mut prov,

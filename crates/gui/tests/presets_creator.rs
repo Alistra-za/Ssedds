@@ -133,23 +133,23 @@ fn reset_drops_the_override_so_the_base_shows_through() {
     pm.reset_all();
     assert_eq!(pm.toml_text(), before);
 }
-
 #[test]
-fn a_swizzle_remap_writes_the_alias_and_the_rule() {
+fn a_swizzle_remap_is_its_alias_branchs_channels() {
+    // Note AP6: a remap is `channels.swizzle` in the alias's branch rule.
     let d = tempfile::tempdir().unwrap();
     let mut pm = copy_of_quality(d.path());
-    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.add_alias("dmask", "m").unwrap();
+    pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     let t: toml::Table = toml::from_str(&pm.toml_text()).unwrap();
     assert_eq!(t["suffix_aliases"]["dmask"].as_str(), Some("m"));
     let rule = &t["rules"].as_array().unwrap()[0];
     assert_eq!(rule["match"]["glob"].as_str(), Some("*_dmask.*"));
+    assert_eq!(rule["match"]["subtypes"][0].as_str(), Some("envmask"));
     assert_eq!(
         rule["overrides"]["channels"]["swizzle"].as_str(),
         Some("bgr1")
     );
-    assert_eq!(pm.remaps(), [("dmask".into(), "m".into(), "bgr1".into())]);
     assert_eq!(pm.status(), &Ok(()));
-    assert!(pm.add_remap("dmask2", "m", "rgbx").is_err());
     // Removing the alias removes its rule.
     pm.remove_alias("dmask");
     assert!(!pm.toml_text().contains("dmask"));
@@ -242,7 +242,8 @@ fn a_saved_remap_reaches_the_plan_without_a_restart() {
     let pm = m.presets_model();
     pm.select("cs-quality");
     pm.duplicate();
-    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.add_alias("dmask", "m").unwrap();
+    pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     pm.save().unwrap();
     // What the window does after a save.
     m.replan();
@@ -292,7 +293,8 @@ fn a_saved_preset_is_offered_in_the_header_and_picking_it_plans_with_it() {
 fn duplicate_drops_the_remap_rules_of_the_aliases_it_drops() {
     let d = tempfile::tempdir().unwrap();
     let mut pm = copy_of_quality(d.path());
-    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.add_alias("dmask", "m").unwrap();
+    pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     pm.save().unwrap();
     pm.duplicate();
     let text = pm.toml_text();
@@ -426,4 +428,42 @@ fn a_startup_banner_survives_a_replan_until_dismissed() {
         m.banner.as_deref(),
         Some("preset ghost not found: using cs-quality")
     );
+}
+
+#[test]
+fn rows_are_grouped_pbr_cs_then_cpm_then_vanilla_each_sub_type_once() {
+    // Note AP9: the family comes from the engine's availability per target.
+    use sdc_gui::model::presets::{family_of, layout, FAMILIES};
+    let names: Vec<&str> = FAMILIES.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        names,
+        [
+            "PBR / Community Shaders",
+            "Complex Parallax Materials (cpm)",
+            "Vanilla"
+        ]
+    );
+    let l = layout();
+    let order: Vec<&str> = l.iter().map(|(f, _, _)| *f).collect();
+    let mut dedup = order.clone();
+    dedup.dedup();
+    assert_eq!(dedup, names, "families in order, each once");
+    let all: Vec<Subtype> = l.iter().flat_map(|(_, _, s)| s.clone()).collect();
+    assert_eq!(all.len(), Subtype::ALL.len());
+    for st in Subtype::ALL {
+        assert_eq!(all.iter().filter(|s| **s == st).count(), 1, "{st:?}");
+    }
+    assert!(
+        l.iter().all(|(_, _, s)| !s.is_empty()),
+        "no empty sub-group"
+    );
+    assert_eq!(family_of(Subtype::PbrEmissive), "PBR / Community Shaders");
+    assert_eq!(family_of(Subtype::Glow), "Vanilla");
+    assert_eq!(
+        family_of(Subtype::ComplexMaterial),
+        "Complex Parallax Materials (cpm)"
+    );
+    assert_eq!(family_of(Subtype::Diffuse), "Vanilla");
+    // By hand (AP9): a Community Shaders feature, though every target has it.
+    assert_eq!(family_of(Subtype::ComplexGrass), "PBR / Community Shaders");
 }

@@ -436,3 +436,54 @@ fn rnm_ranges_and_non_base_reset() {
         .iter()
         .any(|w| w.code == Code::CfgInvalid && w.message.contains("rnm.bent.ao_power")));
 }
+
+/// Owner ruling (Note AP10): every matching rule of a source layers in file order, field by field; a later rule
+/// overrides only the fields it sets, and each field's provenance names the rule that last set it.
+#[test]
+fn every_matching_rule_of_a_source_layers_in_file_order() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let project: ConfigFile = toml::from_str(
+        "[[rules]]\nmatch = { glob = \"**/ui/**\" }\noverrides = { resize = \"half\", mips = { levels = 1 } }\n\
+         [[rules]]\nmatch = { glob = \"**/nothere/**\" }\noverrides = { mips = { levels = 3 } }\n\
+         [[rules]]\nmatch = { glob = \"**/icon.png\" }\noverrides = { mips = { levels = 2 } }\n",
+    )
+    .unwrap();
+    let allow = BTreeSet::new();
+    let ctx = ResolveCtx {
+        target: Target::Vanilla,
+        registry: &reg,
+        preset: "vanilla-quality",
+        user_config: None,
+        project_config: Some(&project),
+        overrides: &[],
+        accept: AcceptSuggestions::None,
+        allow: &allow,
+        files: &NO_FILE_SCOPES,
+        shaders: &NO_SHADERS,
+        mesh_alpha: &NO_MESH_ALPHA,
+        nvtt: None,
+    };
+    let img = Rgba32F::new(4, 4, [0.5, 0.5, 0.5, 1.0]);
+    let a = analyse(&img, &RGB8);
+    let f = input("textures/ui/icon.png");
+    let set = TextureSet {
+        key: "i".into(),
+        members: vec![0],
+        suffixes: BTreeSet::new(),
+    };
+    let facts = FileFacts {
+        input: &f,
+        suffix: None,
+        alias: None,
+        set: &set,
+        analysis: &a,
+        info: &RGB8,
+    };
+    let (p, prov) = layered_profile(&ctx, &facts, Subtype::Diffuse).unwrap();
+    assert_eq!(
+        (p.resize, p.mips.levels),
+        (ResizeMode::Half, MipLevels::Count(2))
+    );
+    assert_eq!(prov["resize"], Provenance::Rule("project#0".into()));
+    assert_eq!(prov["mips.levels"], Provenance::Rule("project#2".into()));
+}

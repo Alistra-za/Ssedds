@@ -35,6 +35,50 @@ pub fn group_of(st: Subtype) -> &'static str {
     }
 }
 
+/// The top-level families (AP9), in order, with their hint.
+pub const FAMILIES: [(&str, &str); 3] = [
+    ("PBR / Community Shaders", "used under the cs target"),
+    (
+        "Complex Parallax Materials (cpm)",
+        "used under the cs and cpm targets",
+    ),
+    ("Vanilla", "used under every target"),
+];
+
+/// AP9: the most specific family a sub-type is available in, from `policy::availability`: cs only → PBR / CS,
+/// cs and cpm only → CPM, anything vanilla also has → Vanilla. complex_grass is placed in PBR / CS by hand.
+pub fn family_of(st: Subtype) -> &'static str {
+    use engine::policy::{availability, Availability};
+    // Owner ruling (AP9): available under every target, but a Community Shaders feature in practice.
+    if st == Subtype::ComplexGrass {
+        return FAMILIES[0].0;
+    }
+    let on = |t| availability(t, st) == Availability::Available;
+    let i = match (on(Target::Cpm), on(Target::Vanilla)) {
+        (false, false) => 0,
+        (true, false) => 1,
+        _ => 2,
+    };
+    FAMILIES[i].0
+}
+
+/// The body's layout: `(family, group, sub-types)` in family order, then `GROUPS` order, then `Subtype::ALL`
+/// order; empty groups left out.
+pub fn layout() -> Vec<(&'static str, &'static str, Vec<Subtype>)> {
+    FAMILIES
+        .iter()
+        .flat_map(|(f, _)| GROUPS.iter().map(move |g| (*f, *g)))
+        .map(|(f, g)| {
+            let sts = Subtype::ALL
+                .into_iter()
+                .filter(|st| family_of(*st) == f && group_of(*st) == g)
+                .collect();
+            (f, g, sts)
+        })
+        .filter(|(_, _, s): &(_, _, Vec<Subtype>)| !s.is_empty())
+        .collect()
+}
+
 /// Data sub-types get the Channel remap and Packing fills subheaders.
 pub fn is_data(st: Subtype) -> bool {
     group_of(st) == "Data"
@@ -101,7 +145,7 @@ pub fn check_id(id: &str) -> Result<(), String> {
     }
 }
 
-/// The glob of an alias's swizzle remap rule: a glob without '/' matches the file name alone.
+/// The glob of an alias's branch rule (AM10, AP3): a glob without '/' matches the file name alone.
 fn remap_glob(alias: &str) -> String {
     format!("*_{alias}.*")
 }
@@ -111,6 +155,66 @@ pub struct Row {
     pub subtype: Subtype,
     pub profile: Result<Profile, String>,
     pub base: Option<Profile>,
+    /// Note AP: one branch per suffix that names the sub-type, built-in suffixes first, then the draft's aliases.
+    pub branches: Vec<Branch>,
+}
+
+/// A suffix branch (Note AP): the sub-type's profile with the branch rule's overrides on top.
+pub struct Branch {
+    /// The canonical suffix or the alias, without '_'.
+    pub suffix: String,
+    pub alias: bool,
+    /// What a file with this suffix gets (AP11): the row's document, then every rule a plan would apply to it in
+    /// order (the chain's and the draft's, so a canonical suffix's branch under an alias's), this branch included.
+    pub profile: Result<Profile, String>,
+    /// The same without this branch's own rule: what its fields' hints show.
+    pub inherited: Result<Profile, String>,
+    /// A rule on alpha content may also apply; it is left out of `profile`.
+    pub by_alpha: bool,
+    /// The fields the branch sets (a format and its tag count once).
+    pub overrides: usize,
+}
+
+/// What is known of a file a branch addresses: its sub-type, its canonical suffix, and the alias it is named with.
+struct BranchFacts<'a> {
+    st: Subtype,
+    canon: &'a str,
+    alias: Option<&'a str>,
+}
+
+impl BranchFacts<'_> {
+    /// Whether `r` applies to such a file (`policy::rule_matches` on these facts): `None` when it turns on alpha
+    /// content. A rule on a path (other than the alias's glob) or a set's members cannot be known and is left out.
+    fn applies(&self, r: &engine::presets::Rule) -> Option<bool> {
+        let m = &r.matcher;
+        let known = r.subtype.is_none_or(|s| s == self.st)
+            && (m.subtypes.is_empty() || m.subtypes.contains(&self.st))
+            && m.suffix
+                .as_deref()
+                .is_none_or(|s| s.eq_ignore_ascii_case(self.canon))
+            && m.glob
+                .as_deref()
+                .is_none_or(|g| self.alias.is_some_and(|a| g == remap_glob(a)))
+            && m.set_has.is_none();
+        match (known, m.alpha) {
+            (true, Some(_)) => None,
+            (k, _) => Some(k),
+        }
+    }
+
+    /// The branch's own rule (AP3's shape for this sub-type and suffix).
+    fn is_own(&self, r: &engine::presets::Rule) -> bool {
+        let m = &r.matcher;
+        let shape = r.subtype.is_none()
+            && m.subtypes == [self.st]
+            && m.set_has.is_none()
+            && m.alpha.is_none();
+        shape
+            && match self.alias {
+                Some(a) => m.suffix.is_none() && m.glob.as_deref() == Some(remap_glob(a).as_str()),
+                None => m.glob.is_none() && m.suffix.as_deref() == Some(self.canon),
+            }
+    }
 }
 
 /// The preset being shown.
@@ -140,6 +244,8 @@ pub struct PresetsModel {
     pub target: Target,
     /// The last Save or Delete failure, until the next change.
     pub error: Option<String>,
+    /// `suffixes_of` for every sub-type under `.0` (thousands of `suggest` calls, so once per target).
+    suffixes: (Option<Target>, Vec<Vec<&'static str>>),
 }
 
 fn json_of(v: &toml::Value) -> Value {
@@ -196,6 +302,7 @@ impl PresetsModel {
             status: Ok(()),
             target: fallback,
             error: None,
+            suffixes: (None, vec![]),
         };
         m.rescan();
         m
@@ -272,19 +379,14 @@ impl PresetsModel {
         let mut t = d.table.clone();
         let id = self.unique_id(t.get("id").and_then(|v| v.as_str()).unwrap_or("preset"));
         t.insert("id".into(), id.into());
-        // The aliases go, and so do their remap rules (a rule for an alias the copy lacks would be an orphan).
-        let globs: Vec<String> = t
+        // The aliases go, and so do their branch and remap rules (a rule for an alias the copy lacks would be an
+        // orphan).
+        let aliases: Vec<String> = t
             .remove("suffix_aliases")
-            .and_then(|v| {
-                v.as_table()
-                    .map(|a| a.keys().map(|k| remap_glob(k)).collect())
-            })
+            .and_then(|v| v.as_table().map(|a| a.keys().cloned().collect()))
             .unwrap_or_default();
-        if let Some(rules) = t.get_mut("rules").and_then(toml::Value::as_array_mut) {
-            rules.retain(|r| remap_of(r).is_none_or(|(g, _)| !globs.contains(&g)));
-            if rules.is_empty() {
-                t.remove("rules");
-            }
+        for a in aliases {
+            drop_alias_rules(&mut t, &a);
         }
         self.draft = Some(Draft {
             saved: toml::Table::new(),
@@ -374,74 +476,192 @@ impl PresetsModel {
 
     /// The draft's own value of `field` (a dotted profile path) for `st`, when it sets one.
     pub fn field(&self, st: Subtype, field: &str) -> Option<Value> {
-        let d = self.draft.as_ref()?;
-        let id = st.id();
-        let mut path = vec!["subtypes", id.as_str()];
-        path.extend(field.split('.'));
-        get_at(&d.table, &path).map(json_of)
+        self.scoped_field(st, None, field)
+    }
+
+    /// The branch `suffix` of `st`'s own value of `field` (Note AP).
+    pub fn branch_field(&self, st: Subtype, suffix: &str, field: &str) -> Option<Value> {
+        self.scoped_field(st, Some(suffix), field)
+    }
+
+    fn scoped_field(&self, st: Subtype, branch: Option<&str>, field: &str) -> Option<Value> {
+        let path: Vec<&str> = field.split('.').collect();
+        get_at(self.scope(st, branch)?, &path).map(json_of)
+    }
+
+    /// The table edits of `st` land in: `[subtypes.<id>]`, or the branch rule's `overrides`.
+    fn scope(&self, st: Subtype, branch: Option<&str>) -> Option<&toml::Table> {
+        let t = &self.draft.as_ref()?.table;
+        match branch {
+            None => t.get("subtypes")?.get(st.id())?.as_table(),
+            Some(s) => {
+                let i = self.branch_index(st, s)?;
+                t.get("rules")?.get(i)?.get("overrides")?.as_table()
+            }
+        }
     }
 
     /// Set `field` for `st`. A format pick takes its tag (`value` is `[format, tag]`) and drops an own backend the
     /// new format cannot use.
     pub fn set_field(&mut self, st: Subtype, field: &str, value: Value) {
-        let id = st.id();
-        let field = field.to_string();
-        let format = match (field.as_str(), &value) {
-            ("format", Value::Array(p)) => serde_json::from_value::<Format>(p[0].clone()).ok(),
-            _ => None,
-        };
-        self.edit(move |t| {
-            let Some(sub) = table_at(t, &["subtypes", id.as_str()], true) else {
-                return;
-            };
-            let mut put = |path: &str, v: &Value| {
-                let parts: Vec<&str> = path.split('.').collect();
-                let (last, parents) = parts.split_last().expect("a field path");
-                if let (Some(tv), Some(parent)) =
-                    (toml::Value::try_from(v).ok(), table_at(sub, parents, true))
-                {
-                    parent.insert((*last).into(), tv);
-                }
-            };
-            if field == "format" {
-                if let Value::Array(pair) = &value {
-                    put("format", &pair[0]);
-                    put("color.tag", &pair[1]);
-                }
-                let own_backend = get_at(sub, &["encoder", "backend"])
-                    .and_then(|b| serde_json::from_value::<Backend>(json_of(b)).ok());
-                if let (Some(b), Some(f)) = (own_backend, format) {
-                    if !engine::policy::backend_fits(b, f) {
-                        remove_at(sub, &["encoder", "backend"]);
-                    }
-                }
-            } else {
-                put(&field, &value);
-            }
-        });
+        self.edit_scope(st, None, |sub| put_field(sub, field, &value));
+    }
+
+    /// Set `field` in `st`'s branch `suffix`, creating its rule (Note AP).
+    pub fn set_branch_field(&mut self, st: Subtype, suffix: &str, field: &str, value: Value) {
+        self.edit_scope(st, Some(suffix), |sub| put_field(sub, field, &value));
     }
 
     /// ↺: drop the draft's own `field` for `st` (a format drops its tag too), so the base shows through.
     pub fn clear_field(&mut self, st: Subtype, field: &str) {
+        self.edit_scope(st, None, |sub| drop_field(sub, field));
+    }
+
+    /// ↺ in a branch: an emptied branch's rule goes (Note AP).
+    pub fn clear_branch_field(&mut self, st: Subtype, suffix: &str, field: &str) {
+        self.edit_scope(st, Some(suffix), |sub| drop_field(sub, field));
+    }
+
+    /// Run `f` on `st`'s scope table (created as needed), then drop what it left empty. A preset's matching rules layer in
+    /// file order (AP10), so a new built-in suffix branch goes after the other rules and before the alias branches, and
+    /// a new alias branch goes last: it adds to its canonical suffix's branch (AP2).
+    fn edit_scope(&mut self, st: Subtype, branch: Option<&str>, f: impl FnOnce(&mut toml::Table)) {
         let id = st.id();
-        let fields: Vec<String> = if field == "format" {
-            vec!["format".into(), "color.tag".into()]
-        } else {
-            vec![field.to_string()]
+        let Some(sfx) = branch else {
+            return self.edit(|t| {
+                if let Some(sub) = table_at(t, &["subtypes", id.as_str()], true) {
+                    f(sub);
+                    if sub.is_empty() {
+                        remove_at(t, &["subtypes", id.as_str()]);
+                    }
+                }
+            });
         };
+        let alias = self.aliases().iter().any(|(a, _)| a == sfx);
+        let at = self.branch_index(st, sfx);
+        let rules = self.rules();
+        let insert = if alias {
+            rules.len()
+        } else {
+            // After the last hand-written rule, then before the first alias branch that follows it.
+            let start = rules
+                .iter()
+                .rposition(|r| self.branch_key(r).is_none())
+                .map_or(0, |i| i + 1);
+            rules[start..]
+                .iter()
+                .position(|r| self.branch_key(r).is_some_and(|(_, _, a)| a))
+                .map_or(rules.len(), |i| start + i)
+        };
+        let rule = branch_rule(&id, sfx, alias);
         self.edit(move |t| {
-            for f in &fields {
-                let mut path = vec!["subtypes", id.as_str()];
-                path.extend(f.split('.'));
-                remove_at(t, &path);
+            let rules = t
+                .entry("rules")
+                .or_insert_with(|| toml::Value::Array(vec![]));
+            let Some(a) = rules.as_array_mut() else {
+                return;
+            };
+            let i = at.unwrap_or_else(|| {
+                a.insert(insert, rule);
+                insert
+            });
+            if let Some(o) = a[i]
+                .get_mut("overrides")
+                .and_then(toml::Value::as_table_mut)
+            {
+                f(o);
+            }
+            if a[i]
+                .get("overrides")
+                .and_then(toml::Value::as_table)
+                .is_none_or(toml::Table::is_empty)
+            {
+                a.remove(i);
+            }
+            if a.is_empty() {
+                t.remove("rules");
             }
         });
     }
 
-    /// Reset preset (AM9): drop every sub-type override (`[subtypes]`); names, aliases, remaps and rules stay.
+    fn rules(&self) -> Vec<toml::Value> {
+        self.draft
+            .as_ref()
+            .and_then(|d| d.table.get("rules"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The suffixes that can name `st` under the draft's target (`suffixes_of`, cached).
+    pub fn suffixes(&self, st: Subtype) -> Vec<&'static str> {
+        let i = Subtype::ALL
+            .iter()
+            .position(|s| *s == st)
+            .expect("a sub-type");
+        self.suffixes.1.get(i).cloned().unwrap_or_default()
+    }
+
+    /// `(sub-type, suffix, alias)` when `rule` is a branch the editor owns and shows (AP3): exactly `match` and
+    /// `overrides`, `match` being one sub-type plus a suffix that names it or an alias glob (`*_<alias>.*`) of one of
+    /// its aliases.
+    fn branch_key(&self, rule: &toml::Value) -> Option<(Subtype, String, bool)> {
+        let r = rule.as_table()?;
+        let m = r.get("match")?.as_table()?;
+        r.get("overrides")?.as_table()?;
+        let sts = m.get("subtypes")?.as_array()?;
+        (r.len() == 2 && m.len() == 2 && sts.len() == 1).then_some(())?;
+        let st: Subtype =
+            serde_json::from_value(Value::String(sts[0].as_str()?.to_string())).ok()?;
+        if let Some(s) = m.get("suffix") {
+            let s = s.as_str()?;
+            return self
+                .suffixes(st)
+                .contains(&s)
+                .then(|| (st, s.to_string(), false));
+        }
+        let g = m.get("glob")?.as_str()?;
+        self.aliases_for(st)
+            .into_iter()
+            .find(|(a, _)| remap_glob(a) == g)
+            .map(|(a, _)| (st, a, true))
+    }
+
+    fn branch_index(&self, st: Subtype, suffix: &str) -> Option<usize> {
+        self.rules().iter().position(|r| {
+            self.branch_key(r)
+                .is_some_and(|(s, x, _)| s == st && x == suffix)
+        })
+    }
+
+    /// The draft's rules that are not branches, as TOML: kept as they are and shown read-only (AP4).
+    pub fn hand_rules(&self) -> Vec<String> {
+        self.rules()
+            .iter()
+            .filter(|r| self.branch_key(r).is_none())
+            .map(|r| {
+                r.as_table()
+                    .and_then(|t| toml::to_string(t).ok())
+                    .unwrap_or_else(|| r.to_string())
+            })
+            .collect()
+    }
+
+    /// Reset preset (AM9, AP5): drop every sub-type override (`[subtypes]`) and every branch rule; names, aliases and
+    /// other rules stay.
     pub fn reset_all(&mut self) {
+        let keep: Vec<toml::Value> = self
+            .rules()
+            .into_iter()
+            .filter(|r| self.branch_key(r).is_none())
+            .collect();
         self.edit(|t| {
             t.remove("subtypes");
+            if keep.is_empty() {
+                t.remove("rules");
+            } else {
+                t.insert("rules".into(), toml::Value::Array(keep));
+            }
         });
     }
 
@@ -458,7 +678,7 @@ impl PresetsModel {
 
     /// The draft's aliases `(alias, canonical)` whose canonical suffix can name `st`.
     pub fn aliases_for(&self, st: Subtype) -> Vec<(String, String)> {
-        let own = suffixes_of(st, self.target);
+        let own = self.suffixes(st);
         self.aliases()
             .into_iter()
             .filter(|(_, c)| own.contains(&c.as_str()))
@@ -516,64 +736,12 @@ impl PresetsModel {
         Ok(())
     }
 
-    /// Remove an alias and its remap rule.
+    /// Remove an alias and its branch rules (and an AM10 remap rule).
     pub fn remove_alias(&mut self, alias: &str) {
-        let glob = remap_glob(alias);
-        let a = alias.to_string();
         self.edit(|t| {
-            remove_at(t, &["suffix_aliases", a.as_str()]);
-            if let Some(rules) = t.get_mut("rules").and_then(toml::Value::as_array_mut) {
-                rules.retain(|r| remap_of(r).is_none_or(|(g, _)| g != glob));
-                if rules.is_empty() {
-                    t.remove("rules");
-                }
-            }
+            remove_at(t, &["suffix_aliases", alias]);
+            drop_alias_rules(t, alias);
         });
-    }
-
-    /// The draft's swizzle remaps `(alias, canonical, swizzle)`: an alias with its own glob rule (AM10).
-    pub fn remaps(&self) -> Vec<(String, String, String)> {
-        let rules = self
-            .draft
-            .as_ref()
-            .and_then(|d| d.table.get("rules"))
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        self.aliases()
-            .into_iter()
-            .filter_map(|(a, c)| {
-                let glob = remap_glob(&a);
-                let s = rules
-                    .iter()
-                    .filter_map(remap_of)
-                    .find(|(g, _)| *g == glob)?
-                    .1;
-                Some((a, c, s))
-            })
-            .collect()
-    }
-
-    /// A swizzle remap: the alias plus a rule `match = { glob = "*_<alias>.*" }` that sets `channels.swizzle`.
-    pub fn add_remap(&mut self, alias: &str, canonical: &str, swizzle: &str) -> Result<(), String> {
-        if swizzle.len() != 4 || !swizzle.chars().all(|c| SWIZZLE_SOURCES.contains(&c)) {
-            return Err(format!("'{swizzle}': four of r, g, b, a, 0, 1"));
-        }
-        self.add_alias(alias, canonical)?;
-        let rule: toml::Table = toml::from_str(&format!(
-            "match = {{ glob = \"{}\" }}\noverrides = {{ channels = {{ swizzle = \"{swizzle}\" }} }}",
-            remap_glob(alias)
-        ))
-        .expect("a remap rule");
-        self.edit(|t| {
-            let rules = t
-                .entry("rules")
-                .or_insert_with(|| toml::Value::Array(vec![]));
-            if let Some(a) = rules.as_array_mut() {
-                a.push(toml::Value::Table(rule));
-            }
-        });
-        Ok(())
     }
 
     /// Exactly what Save writes.
@@ -638,10 +806,21 @@ impl PresetsModel {
             })
             .unwrap_or(self.fallback);
         let target = self.target;
-        self.rows = Subtype::ALL
+        if self.suffixes.0 != Some(target) {
+            self.suffixes = (
+                Some(target),
+                Subtype::ALL.map(|st| suffixes_of(st, target)).to_vec(),
+            );
+        }
+        // Every rule a plan sees for this preset, in order: the chain's (base first), then the draft's (AP11).
+        let rules: Vec<&engine::presets::Rule> = match (&parsed, &chain) {
+            (Ok(p), Ok(c)) => c.iter().flat_map(|x| &x.rules).chain(&p.rules).collect(),
+            _ => vec![],
+        };
+        let rows = Subtype::ALL
             .into_iter()
             .map(|st| {
-                let profile = match (&parsed, &chain) {
+                let doc = match (&parsed, &chain) {
                     (Ok(p), Ok(c)) => {
                         let mut all = c.clone();
                         all.push(p);
@@ -649,23 +828,66 @@ impl PresetsModel {
                         for (_, patch) in PresetRegistry::layers_of(&all, st) {
                             merge_json(&mut doc, &patch);
                         }
-                        finish_profile(doc, target, st)
-                            .map(follow_backend)
-                            .map_err(|e| e.to_string())
+                        Ok(doc)
                     }
                     (Err(e), _) | (_, Err(e)) => Err(e.clone()),
                 };
+                let finish = |doc: Value| {
+                    finish_profile(doc, target, st)
+                        .map(follow_backend)
+                        .map_err(|e| e.to_string())
+                };
+                let branches = self
+                    .suffixes(st)
+                    .into_iter()
+                    .map(|s| (s.to_string(), s.to_string(), false))
+                    .chain(self.aliases_for(st).into_iter().map(|(a, c)| (a, c, true)))
+                    .map(|(suffix, canon, alias)| {
+                        let own = self.scope(st, Some(&suffix));
+                        let facts = BranchFacts {
+                            st,
+                            canon: &canon,
+                            alias: alias.then_some(suffix.as_str()),
+                        };
+                        let layered = |with_own: bool| {
+                            doc.clone().map(|mut d| {
+                                let mut by_alpha = false;
+                                for r in &rules {
+                                    match facts.applies(r) {
+                                        Some(true) if with_own || !facts.is_own(r) => {
+                                            merge_json(&mut d, &r.overrides)
+                                        }
+                                        None => by_alpha = true,
+                                        _ => {}
+                                    }
+                                }
+                                (d, by_alpha)
+                            })
+                        };
+                        let by_alpha = layered(true).is_ok_and(|(_, a)| a);
+                        Branch {
+                            overrides: own.map_or(0, count_fields),
+                            profile: layered(true).and_then(|(d, _)| finish(d)),
+                            inherited: layered(false).and_then(|(d, _)| finish(d)),
+                            by_alpha,
+                            suffix,
+                            alias,
+                        }
+                    })
+                    .collect();
                 let base = (!base.is_empty())
                     .then(|| self.registry.profile(&base, target, st).ok())
                     .flatten()
                     .map(follow_backend);
                 Row {
                     subtype: st,
-                    profile,
+                    profile: doc.and_then(finish),
                     base,
+                    branches,
                 }
             })
             .collect();
+        self.rows = rows;
         self.status = self.validate().map(|_| ());
     }
 
@@ -751,17 +973,82 @@ fn follow_backend(mut p: Profile) -> Profile {
     p
 }
 
-/// `(glob, swizzle)` of a remap rule: a glob-only match and a swizzle-only override.
-fn remap_of(rule: &toml::Value) -> Option<(String, String)> {
-    let r = rule.as_table()?;
-    let m = r.get("match")?.as_table()?;
-    let o = r.get("overrides")?.as_table()?;
-    let ch = o.get("channels")?.as_table()?;
-    (r.len() == 2 && m.len() == 1 && o.len() == 1 && ch.len() == 1).then_some(())?;
-    Some((
-        m.get("glob")?.as_str()?.to_string(),
-        ch.get("swizzle")?.as_str()?.to_string(),
-    ))
+/// Write `field` into a scope table. A format pick (`[format, tag]`) writes both and drops an own backend the new
+/// format cannot use.
+fn put_field(sub: &mut toml::Table, field: &str, value: &Value) {
+    let put = |sub: &mut toml::Table, path: &str, v: &Value| {
+        let parts: Vec<&str> = path.split('.').collect();
+        let (last, parents) = parts.split_last().expect("a field path");
+        if let (Some(tv), Some(parent)) =
+            (toml::Value::try_from(v).ok(), table_at(sub, parents, true))
+        {
+            parent.insert((*last).into(), tv);
+        }
+    };
+    let (Value::Array(pair), "format") = (value, field) else {
+        return put(sub, field, value);
+    };
+    put(sub, "format", &pair[0]);
+    put(sub, "color.tag", &pair[1]);
+    let own_backend = get_at(sub, &["encoder", "backend"])
+        .and_then(|b| serde_json::from_value::<Backend>(json_of(b)).ok());
+    let format = serde_json::from_value::<Format>(pair[0].clone()).ok();
+    if let (Some(b), Some(f)) = (own_backend, format) {
+        if !engine::policy::backend_fits(b, f) {
+            remove_at(sub, &["encoder", "backend"]);
+        }
+    }
+}
+
+/// Remove `field` from a scope table (a format takes its tag with it) and the tables it leaves empty.
+fn drop_field(sub: &mut toml::Table, field: &str) {
+    if field == "format" {
+        remove_at(sub, &["color", "tag"]);
+    }
+    remove_at(sub, &field.split('.').collect::<Vec<_>>());
+}
+
+/// A new, empty branch rule (AP3): a built-in suffix matches `match.suffix`; an alias matches its glob, since
+/// `match.suffix` sees the canonical suffix.
+fn branch_rule(st_id: &str, suffix: &str, alias: bool) -> toml::Value {
+    let mut m = toml::Table::new();
+    if alias {
+        m.insert("glob".into(), remap_glob(suffix).into());
+    } else {
+        m.insert("suffix".into(), suffix.into());
+    }
+    m.insert("subtypes".into(), toml::Value::Array(vec![st_id.into()]));
+    let mut r = toml::Table::new();
+    r.insert("match".into(), toml::Value::Table(m));
+    r.insert("overrides".into(), toml::Value::Table(toml::Table::new()));
+    toml::Value::Table(r)
+}
+
+/// Drop the rules matched only by `alias`'s glob (its branches, and an AM10 remap rule).
+fn drop_alias_rules(t: &mut toml::Table, alias: &str) {
+    let glob = remap_glob(alias);
+    let Some(rules) = t.get_mut("rules").and_then(toml::Value::as_array_mut) else {
+        return;
+    };
+    rules.retain(|r| {
+        let m = r.get("match").and_then(toml::Value::as_table);
+        !m.is_some_and(|m| {
+            m.get("glob").and_then(toml::Value::as_str) == Some(glob.as_str())
+                && m.keys().all(|k| k == "glob" || k == "subtypes")
+        })
+    });
+    if rules.is_empty() {
+        t.remove("rules");
+    }
+}
+
+/// The fields a branch sets: its leaf values, a format's tag not counted apart.
+fn count_fields(t: &toml::Table) -> usize {
+    fn leaves(t: &toml::Table) -> usize {
+        t.values().map(|v| v.as_table().map_or(1, leaves)).sum()
+    }
+    let tag_with_format = t.contains_key("format") && get_at(t, &["color", "tag"]).is_some();
+    leaves(t) - usize::from(tag_with_format)
 }
 
 /// The text Save writes: a user preset's own file edited in place (`toml_edit`, so its comments, key order and

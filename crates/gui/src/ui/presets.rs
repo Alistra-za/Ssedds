@@ -6,8 +6,7 @@ use crate::model::fields::{
     encoding_options, field_lock, filter_option_lock, format_label, is_cutout,
 };
 use crate::model::presets::{
-    group_of, is_data, suffixes_of, PresetsModel, Row, FILL_ROLES, GROUPS, ORM_EXAMPLE,
-    SWIZZLE_SOURCES,
+    is_data, layout, PresetsModel, Row, FAMILIES, FILL_ROLES, ORM_EXAMPLE, SWIZZLE_SOURCES,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -30,11 +29,11 @@ enum Act {
     Id(String),
     Base(String),
     Target(Option<Target>),
-    Set(Subtype, &'static str, Value),
-    Clear(Subtype, &'static str),
+    /// A field of a sub-type (`None`) or of one of its suffix branches (Note AP).
+    Set(Subtype, Option<String>, &'static str, Value),
+    Clear(Subtype, Option<String>, &'static str),
     AddAlias(Subtype, String, String),
     RemoveAlias(String),
-    AddRemap(Subtype, String, String, String),
     Save,
     Revert,
     Delete,
@@ -116,20 +115,31 @@ pub fn window(ctx: &egui::Context, model: &mut AppModel) {
                 pm.set_target(t);
                 None
             }
-            Act::Set(st, f, v) => {
-                pm.set_field(st, f, v);
+            Act::Set(st, scope, f, v) => {
+                match scope {
+                    None => pm.set_field(st, f, v),
+                    Some(s) => pm.set_branch_field(st, &s, f, v),
+                }
                 None
             }
-            Act::Clear(st, f) => {
-                pm.clear_field(st, f);
+            Act::Clear(st, scope, f) => {
+                match scope {
+                    None => pm.clear_field(st, f),
+                    Some(s) => pm.clear_branch_field(st, &s, f),
+                }
                 None
             }
-            Act::AddAlias(st, a, c) => pm.add_alias(&a, &c).err().map(|e| (st, e)),
+            Act::AddAlias(st, a, c) => match pm.add_alias(&a, &c) {
+                Ok(()) => {
+                    ctx.data_mut(|d| d.insert_temp(open_branch_id(st, &a), true));
+                    None
+                }
+                Err(e) => Some((st, e)),
+            },
             Act::RemoveAlias(a) => {
                 pm.remove_alias(&a);
                 None
             }
-            Act::AddRemap(st, a, c, s) => pm.add_remap(&a, &c, &s).err().map(|e| (st, e)),
             Act::Save => {
                 match pm.save() {
                     Ok(_) => saved = true,
@@ -348,78 +358,126 @@ fn target_text(t: Target) -> &'static str {
 
 fn body(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
     let ro = pm.draft.as_ref().is_some_and(|d| d.read_only);
-    for g in GROUPS {
-        ui.heading(g);
-        for row in pm.rows().iter().filter(|r| group_of(r.subtype) == g) {
-            let st = row.subtype;
-            let fmt = match &row.profile {
-                Ok(p) => format_label(p.format, p.color.tag),
-                Err(_) => "does not load".into(),
-            };
-            egui::CollapsingHeader::new(format!("{} — {fmt}", subtype_label(st)))
-                .id_salt(("preset-row", st))
-                .show(ui, |ui| match &row.profile {
-                    Ok(p) => {
-                        ui.add_enabled_ui(!ro, |ui| subtype_body(ui, pm, row, p, acts))
-                            .inner
+    // AP4: rules the creator does not own are kept as they are and shown read-only.
+    let hand = pm.hand_rules();
+    if !hand.is_empty() {
+        egui::CollapsingHeader::new(format!("Other rules ({}, read-only)", hand.len()))
+            .id_salt("preset-hand-rules")
+            .show(ui, |ui| {
+                ui.weak("Kept as written. Every matching rule applies in file order; the suffix branches come after these, so they win on the fields they set.");
+                for r in hand {
+                    ui.label(egui::RichText::new(r).monospace());
+                    ui.separator();
+                }
+            });
+    }
+    // AP9: PBR / CS, then CPM, then Vanilla; inside each, the Colour, Normal, Data and Special groups it has.
+    let layout = layout();
+    for (family, hint) in FAMILIES {
+        egui::CollapsingHeader::new(egui::RichText::new(family).heading())
+            .id_salt(("preset-family", family))
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.weak(format!("{family} — {hint}"));
+                for (_, g, sts) in layout.iter().filter(|(f, _, _)| *f == family) {
+                    ui.strong(*g);
+                    for row in pm.rows().iter().filter(|r| sts.contains(&r.subtype)) {
+                        row_header(ui, pm, row, ro, acts);
                     }
-                    Err(e) => {
-                        ui.colored_label(RED, e);
-                    }
-                });
-        }
+                }
+            });
     }
 }
 
-fn sub(ui: &mut egui::Ui, st: Subtype, name: &str, body: impl FnOnce(&mut egui::Ui)) {
+fn row_header(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, ro: bool, acts: &mut Vec<Act>) {
+    let st = row.subtype;
+    let fmt = match &row.profile {
+        Ok(p) => format_label(p.format, p.color.tag),
+        Err(_) => "does not load".into(),
+    };
+    egui::CollapsingHeader::new(format!("{} — {fmt}", subtype_label(st)))
+        .id_salt(("preset-row", st))
+        .show(ui, |ui| match &row.profile {
+            Ok(p) => {
+                ui.add_enabled_ui(!ro, |ui| subtype_body(ui, pm, row, p, acts))
+                    .inner
+            }
+            Err(e) => {
+                ui.colored_label(RED, e);
+            }
+        });
+}
+
+/// Where a field edit lands (Note AP): the sub-type's own table (`None`, the "no suffix" default) or a suffix branch.
+type Scope<'a> = Option<&'a str>;
+
+fn sub(ui: &mut egui::Ui, st: Subtype, scope: Scope, name: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::CollapsingHeader::new(name)
-        .id_salt(("preset-sub", st, name))
+        .id_salt(("preset-sub", st, scope, name))
         .default_open(true)
         .show(ui, body);
 }
 
 fn subtype_body(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, p: &Profile, acts: &mut Vec<Act>) {
+    sub(ui, row.subtype, None, "Suffixes", |ui| {
+        suffixes(ui, pm, row, acts)
+    });
+    tree(ui, pm, row, p, None, acts);
+}
+
+/// The settings tree of the sub-type (`scope` `None`) or of one of its suffix branches: the same subheaders, with
+/// the base (or, in a branch, the sub-type) as the hint.
+fn tree(
+    ui: &mut egui::Ui,
+    pm: &PresetsModel,
+    row: &Row,
+    p: &Profile,
+    scope: Scope,
+    acts: &mut Vec<Act>,
+) {
     let st = row.subtype;
-    let t = pm.target;
-    sub(ui, st, "Suffixes", |ui| suffixes(ui, pm, st, acts));
-    sub(ui, st, "Compression", |ui| {
-        grid(ui, st, "c", |ui| {
+    sub(ui, st, scope, "Compression", |ui| {
+        grid(ui, st, scope, "c", |ui| {
             for (f, l) in [
                 ("format", "Format"),
                 ("encoder.backend", "Encoder"),
                 ("encoder.effort", "Effort"),
             ] {
-                field_row(ui, pm, row, p, t, f, l, acts);
+                field_row(ui, pm, row, p, scope, f, l, acts);
             }
         });
     });
-    sub(ui, st, "Resize & mips", |ui| {
-        grid(ui, st, "m", |ui| {
+    sub(ui, st, scope, "Resize & mips", |ui| {
+        grid(ui, st, scope, "m", |ui| {
             for (f, l) in [
                 ("resize", "Resize"),
                 ("mips.levels", "Mip levels"),
                 ("mips.filter", "Mip filter"),
             ] {
-                field_row(ui, pm, row, p, t, f, l, acts);
+                field_row(ui, pm, row, p, scope, f, l, acts);
             }
             if is_cutout(p) {
-                field_row(ui, pm, row, p, t, "mips.coverage", "Coverage", acts);
+                field_row(ui, pm, row, p, scope, "mips.coverage", "Coverage", acts);
             }
         });
     });
     if uses_alpha(row) {
-        sub(ui, st, "Alpha", |ui| {
-            grid(ui, st, "a", |ui| {
-                field_row(ui, pm, row, p, t, "alpha.policy", "Policy", acts);
+        sub(ui, st, scope, "Alpha", |ui| {
+            grid(ui, st, scope, "a", |ui| {
+                field_row(ui, pm, row, p, scope, "alpha.policy", "Policy", acts);
                 if is_cutout(p) {
-                    threshold_row(ui, pm, row, p, acts);
+                    threshold_row(ui, pm, row, p, scope, acts);
                 }
             });
         });
     }
     if is_data(st) {
-        sub(ui, st, "Channel remap", |ui| remaps(ui, pm, st, acts));
-        sub(ui, st, "Packing fills", |ui| fills(ui, pm, row, p, acts));
+        sub(ui, st, scope, "Channel remap", |ui| {
+            swizzle_row(ui, pm, row, p, scope, acts)
+        });
+        sub(ui, st, scope, "Packing fills", |ui| {
+            fills(ui, pm, row, p, scope, acts)
+        });
     }
 }
 
@@ -431,10 +489,46 @@ fn uses_alpha(row: &Row) -> bool {
         .is_some_and(|b| b.format.has_alpha())
 }
 
-fn grid(ui: &mut egui::Ui, st: Subtype, salt: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::Grid::new(("preset-grid", st, salt))
+fn grid(
+    ui: &mut egui::Ui,
+    st: Subtype,
+    scope: Scope,
+    salt: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Grid::new(("preset-grid", st, scope, salt))
         .num_columns(4)
         .show(ui, body);
+}
+
+/// What a field's hint shows: the base's profile for the sub-type; for a branch, what its files get without it (AP11).
+fn hint_profile<'a>(row: &'a Row, scope: Scope) -> (Option<&'a Profile>, &'static str) {
+    match scope {
+        None => (row.base.as_ref(), "base"),
+        Some(s) => (
+            row.branches
+                .iter()
+                .find(|b| b.suffix == s)
+                .and_then(|b| b.inherited.as_ref().ok()),
+            "inherits",
+        ),
+    }
+}
+
+fn own_value(pm: &PresetsModel, st: Subtype, scope: Scope, field: &str) -> bool {
+    match scope {
+        None => pm.field(st, field),
+        Some(s) => pm.branch_field(st, s, field),
+    }
+    .is_some()
+}
+
+fn set(st: Subtype, scope: Scope, field: &'static str, v: Value) -> Act {
+    Act::Set(st, scope.map(str::to_string), field, v)
+}
+
+fn clear(st: Subtype, scope: Scope, field: &'static str) -> Act {
+    Act::Clear(st, scope.map(str::to_string), field)
 }
 
 /// A field's value in `p`, as the options name it (the format as `[format, tag]`).
@@ -485,19 +579,21 @@ fn label_of(opts: &Options, v: &Value) -> String {
     )
 }
 
-/// A field row: label, the value's combo, the base's value as a hint, ↺ when the preset sets it.
+/// A field row: label, the value's combo, the base's (or, in a branch, the sub-type's) value as a hint, ↺ when the
+/// scope sets it.
 #[allow(clippy::too_many_arguments)]
 fn field_row(
     ui: &mut egui::Ui,
     pm: &PresetsModel,
     row: &Row,
     p: &Profile,
-    t: Target,
+    scope: Scope,
     field: &'static str,
     label: &str,
     acts: &mut Vec<Act>,
 ) {
     let st = row.subtype;
+    let t = pm.target;
     ui.label(label);
     let opts = field_options(field, t, p);
     let cur = value_of(p, field);
@@ -505,7 +601,7 @@ fn field_row(
     let r = ui.add_enabled_ui(lock.is_none(), |ui| {
         combo(
             ui,
-            egui::Id::new(("preset-field", st, field)),
+            egui::Id::new(("preset-field", st, scope, field)),
             &cur,
             &opts,
             false,
@@ -515,23 +611,19 @@ fn field_row(
         r.response.on_disabled_hover_text(why);
     }
     if let Some(v) = r.inner.0 {
-        acts.push(Act::Set(st, field, v));
+        acts.push(set(st, scope, field, v));
     }
-    hint(
-        ui,
-        row.base
-            .as_ref()
-            .map(|b| label_of(&opts, &value_of(b, field))),
-    );
-    reset(ui, pm.field(st, field).is_some(), || {
-        acts.push(Act::Clear(st, field))
+    let (h, name) = hint_profile(row, scope);
+    hint(ui, name, h.map(|b| label_of(&opts, &value_of(b, field))));
+    reset(ui, own_value(pm, st, scope, field), || {
+        acts.push(clear(st, scope, field))
     });
     ui.end_row();
 }
 
-fn hint(ui: &mut egui::Ui, base: Option<String>) {
+fn hint(ui: &mut egui::Ui, name: &str, base: Option<String>) {
     match base {
-        Some(b) => ui.weak(format!("base: {b}")),
+        Some(b) => ui.weak(format!("{name}: {b}")),
         None => ui.weak(""),
     };
 }
@@ -555,6 +647,7 @@ fn threshold_row(
     pm: &PresetsModel,
     row: &Row,
     p: &Profile,
+    scope: Scope,
     acts: &mut Vec<Act>,
 ) {
     let st = row.subtype;
@@ -564,23 +657,31 @@ fn threshold_row(
         .add(egui::DragValue::new(&mut v).range(1..=254))
         .changed()
     {
-        acts.push(Act::Set(st, "alpha.threshold", json!(v)));
+        acts.push(set(st, scope, "alpha.threshold", json!(v)));
     }
-    hint(ui, row.base.as_ref().map(|b| b.alpha.threshold.to_string()));
-    reset(ui, pm.field(st, "alpha.threshold").is_some(), || {
-        acts.push(Act::Clear(st, "alpha.threshold"))
+    let (h, name) = hint_profile(row, scope);
+    hint(ui, name, h.map(|b| b.alpha.threshold.to_string()));
+    reset(ui, own_value(pm, st, scope, "alpha.threshold"), || {
+        acts.push(clear(st, scope, "alpha.threshold"))
     });
     ui.end_row();
 }
 
-fn fills(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, p: &Profile, acts: &mut Vec<Act>) {
+fn fills(
+    ui: &mut egui::Ui,
+    pm: &PresetsModel,
+    row: &Row,
+    p: &Profile,
+    scope: Scope,
+    acts: &mut Vec<Act>,
+) {
     let st = row.subtype;
     let get = |pr: &Profile, role: &str| {
         serde_json::to_value(&pr.packing.fill)
             .ok()
             .and_then(|v| v.get(role).and_then(Value::as_u64))
     };
-    grid(ui, st, "f", |ui| {
+    grid(ui, st, scope, "f", |ui| {
         for role in FILL_ROLES {
             let field: &'static str = match role {
                 "roughness" => "packing.fill.roughness",
@@ -598,19 +699,19 @@ fn fills(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, p: &Profile, acts: &mu
                     .on_hover_text("Not set: the neutral default is used");
             }
             if r.changed() {
-                acts.push(Act::Set(st, field, json!(v)));
+                acts.push(set(st, scope, field, json!(v)));
             }
+            let (h, name) = hint_profile(row, scope);
             hint(
                 ui,
+                name,
                 Some(
-                    row.base
-                        .as_ref()
-                        .and_then(|b| get(b, role))
+                    h.and_then(|b| get(b, role))
                         .map_or("neutral default".into(), |v| v.to_string()),
                 ),
             );
-            reset(ui, pm.field(st, field).is_some(), || {
-                acts.push(Act::Clear(st, field))
+            reset(ui, own_value(pm, st, scope, field), || {
+                acts.push(clear(st, scope, field))
             });
             ui.end_row();
         }
@@ -622,22 +723,71 @@ fn text_state(ui: &egui::Ui, id: egui::Id) -> String {
     ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default()
 }
 
-fn suffixes(ui: &mut egui::Ui, pm: &PresetsModel, st: Subtype, acts: &mut Vec<Act>) {
-    let own = suffixes_of(st, pm.target);
+/// The flag that opens a new alias's branch on the next frame (AP: Add alias opens its branch).
+fn open_branch_id(st: Subtype, alias: &str) -> egui::Id {
+    egui::Id::new(("preset-branch-open", st, alias))
+}
+
+/// Suffixes: one branch per suffix that names the sub-type (built in, then the aliases), the ORM example under
+/// rmaos, and the New alias row.
+fn suffixes(ui: &mut egui::Ui, pm: &PresetsModel, row: &Row, acts: &mut Vec<Act>) {
+    let st = row.subtype;
+    let own = pm.suffixes(st);
     if own.is_empty() {
         ui.weak("No canonical suffix names this sub-type, so it takes no alias.");
         return;
     }
-    let list: Vec<String> = own.iter().map(|s| format!("_{s}")).collect();
-    ui.label(format!("Built in: {}", list.join(", ")));
-    for (a, c) in pm.aliases_for(st) {
-        ui.horizontal(|ui| {
-            ui.label(format!("_{a} → _{c}"));
-            if ui.small_button("Remove").clicked() {
-                acts.push(Act::RemoveAlias(a.clone()));
-            }
-        });
-    }
+    ui.weak(
+        "No suffix: the sub-type's settings below. A suffix's branch overrides them for its files.",
+    );
+    let canon: std::collections::BTreeMap<String, String> =
+        pm.aliases_for(st).into_iter().collect();
+    ui.indent(("preset-branches", st), |ui| {
+        for b in &row.branches {
+            let fmt = match &b.profile {
+                Ok(p) => format_label(p.format, p.color.tag),
+                Err(_) => "does not load".into(),
+            };
+            let name = match canon.get(&b.suffix) {
+                Some(c) => format!("_{} → _{c}", b.suffix),
+                None => format!("_{}", b.suffix),
+            };
+            let count = match b.overrides {
+                0 => String::new(),
+                n => format!(" (overrides {n})"),
+            };
+            let alpha = if b.by_alpha {
+                " (+ rules by alpha)"
+            } else {
+                ""
+            };
+            let open = ui.data_mut(|d| d.remove_temp::<bool>(open_branch_id(st, &b.suffix)));
+            egui::CollapsingHeader::new(format!("{name} — {fmt}{count}{alpha}"))
+                .id_salt(("preset-branch", st, &b.suffix))
+                .open(open)
+                .show(ui, |ui| {
+                    if b.alias && ui.small_button("Remove alias").clicked() {
+                        acts.push(Act::RemoveAlias(b.suffix.clone()));
+                    }
+                    match &b.profile {
+                        Ok(p) => tree(ui, pm, row, p, Some(&b.suffix), acts),
+                        Err(e) => {
+                            ui.colored_label(RED, e);
+                        }
+                    }
+                });
+        }
+        if st == Subtype::Rmaos {
+            egui::CollapsingHeader::new("_orm → _rmaos — ORM → RMAOS (built in, read-only)")
+                .id_salt(("preset-branch", st, "orm"))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(ORM_EXAMPLE).italics())
+                        .on_hover_text(
+                        "Engine behaviour (Note AL), read-only: nothing is written to the preset",
+                    );
+                });
+        }
+    });
     let id = egui::Id::new(("preset-alias", st));
     let cid = egui::Id::new(("preset-alias-canon", st));
     let mut text = text_state(ui, id);
@@ -646,8 +796,9 @@ fn suffixes(ui: &mut egui::Ui, pm: &PresetsModel, st: Subtype, acts: &mut Vec<Ac
         .filter(|c| own.contains(&c.as_str()))
         .unwrap_or_else(|| own[0].to_string());
     ui.horizontal(|ui| {
-        ui.label("New alias _");
-        ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0));
+        let l = ui.label("New alias _");
+        ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0))
+            .labelled_by(l.id);
         canon_combo(ui, st, "alias", &own, &mut canon);
         let check = (!text.is_empty()).then(|| pm.check_alias(&text, &canon));
         if ui
@@ -687,78 +838,55 @@ fn canon_combo(ui: &mut egui::Ui, st: Subtype, salt: &str, own: &[&str], canon: 
         });
 }
 
-fn remaps(ui: &mut egui::Ui, pm: &PresetsModel, st: Subtype, acts: &mut Vec<Act>) {
-    if st == Subtype::Rmaos {
-        ui.label(egui::RichText::new(ORM_EXAMPLE).italics())
-            .on_hover_text(
-                "Engine behaviour (Note AL), read-only: nothing is written to the preset",
-            );
-    }
-    let own = suffixes_of(st, pm.target);
-    for (a, c, s) in pm.remaps() {
-        if !own.contains(&c.as_str()) {
-            continue;
-        }
+/// Channel remap (AM10, AP6): `channels.swizzle` of the scope, one source per output channel.
+fn swizzle_row(
+    ui: &mut egui::Ui,
+    pm: &PresetsModel,
+    row: &Row,
+    p: &Profile,
+    scope: Scope,
+    acts: &mut Vec<Act>,
+) {
+    let st = row.subtype;
+    let field = "channels.swizzle";
+    let cur = p.channels.swizzle.clone().unwrap_or_else(|| "rgba".into());
+    let mut swz: Vec<char> = cur.chars().collect();
+    grid(ui, st, scope, "s", |ui| {
+        ui.label("Channels");
         ui.horizontal(|ui| {
-            ui.label(format!("_{a} → _{c}, channels {s}"));
-            if ui.small_button("Remove").clicked() {
-                acts.push(Act::RemoveAlias(a.clone()));
+            for (i, out) in ["R", "G", "B", "A"].into_iter().enumerate() {
+                ui.label(format!("{out} ="));
+                egui::ComboBox::from_id_salt(("preset-swz", st, scope, i))
+                    .width(40.0)
+                    .selected_text(swz.get(i).map_or(String::new(), char::to_string))
+                    .show_ui(ui, |ui| {
+                        for c in SWIZZLE_SOURCES {
+                            if ui
+                                .selectable_label(swz.get(i) == Some(&c), c.to_string())
+                                .clicked()
+                            {
+                                if let Some(s) = swz.get_mut(i) {
+                                    *s = c;
+                                }
+                            }
+                        }
+                    });
             }
         });
-    }
-    if own.is_empty() {
-        return;
-    }
-    let id = egui::Id::new(("preset-remap", st));
-    let sid = egui::Id::new(("preset-remap-swz", st));
-    let cid = egui::Id::new(("preset-remap-canon", st));
-    let mut text = text_state(ui, id);
-    let mut swz: [char; 4] = ui
-        .data(|d| d.get_temp::<[char; 4]>(sid))
-        .unwrap_or(['r', 'g', 'b', 'a']);
-    let mut canon = ui
-        .data(|d| d.get_temp::<String>(cid))
-        .filter(|c| own.contains(&c.as_str()))
-        .unwrap_or_else(|| own[0].to_string());
-    ui.horizontal_wrapped(|ui| {
-        ui.label("New remap _");
-        ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0));
-        canon_combo(ui, st, "remap", &own, &mut canon);
-        for (i, out) in ["R", "G", "B", "A"].into_iter().enumerate() {
-            ui.label(format!("{out} ="));
-            egui::ComboBox::from_id_salt(("preset-swz", st, i))
-                .width(40.0)
-                .selected_text(swz[i].to_string())
-                .show_ui(ui, |ui| {
-                    for c in SWIZZLE_SOURCES {
-                        ui.selectable_value(&mut swz[i], c, c.to_string());
-                    }
-                });
+        let next: String = swz.iter().collect();
+        if next != cur {
+            acts.push(set(st, scope, field, json!(next)));
         }
-        let check = (!text.is_empty()).then(|| pm.check_alias(&text, &canon));
-        if ui
-            .add_enabled(
-                matches!(check, Some(Ok(()))),
-                egui::Button::new("Add remap"),
-            )
-            .clicked()
-        {
-            acts.push(Act::AddRemap(
-                st,
-                text.clone(),
-                canon.clone(),
-                swz.iter().collect(),
-            ));
-            text.clear();
-        }
-        if let Some(Err(e)) = check {
-            ui.colored_label(RED, e);
-        }
-    });
-    ui.data_mut(|d| {
-        d.insert_temp(id, text);
-        d.insert_temp(sid, swz);
-        d.insert_temp(cid, canon);
+        let (h, name) = hint_profile(row, scope);
+        hint(
+            ui,
+            name,
+            h.map(|b| b.channels.swizzle.clone().unwrap_or_else(|| "rgba".into())),
+        );
+        reset(ui, own_value(pm, st, scope, field), || {
+            acts.push(clear(st, scope, field))
+        });
+        ui.end_row();
     });
 }
 

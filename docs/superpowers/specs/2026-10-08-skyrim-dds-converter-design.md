@@ -167,7 +167,7 @@ cs|cpm|vanilla    Color|Normal|Mixed-Packed|Grayscale|HDR     (tables in §4)
 | `id`, `version` (semver), `base` | Identity and single inheritance; user presets store only differences |
 | `target` | Target the preset serves |
 | `subtypes.<id>` | Overrides of any §3.2 field |
-| `rules[]` | `{ match: { glob, suffix, set_has, content predicate }, subtype, overrides }`, first match wins |
+| `rules[]` | `{ match: { glob, suffix, set_has, content predicate }, subtype, overrides }`, first match wins (amended by DECISIONS T14: every matching rule of a source layers its overrides in file order; the first match still decides the sub-type) |
 | `suffix_aliases` | `alias = "canonical"` table: exact filename suffixes bound to a canonical suffix and to this preset (§3.7) |
 
 Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 wherever alpha is removed), "CPM – Quality", "Vanilla – Quality", "Vanilla – Compact", "Fast preview" (bc7e `fast`, smallest-mip validation only). **[Proposal]** The three Quality presets (`cs-quality`, `cpm-quality`, `vanilla-quality`, all based on the hidden `sdc-base`, an id user presets cannot replace) ship with the CLI MVP; the Compact presets and "Fast preview" land in M6. **Every field is inspectable** (GUI inspector, `sdc presets show`, both with provenance) and **overridable per field** at preset, rule, file or command-line level. Changing a built-in default bumps the preset version and the changelog, because CS behaviour shifts between releases [SC §4]. **[Decided]** (M4, DECISIONS R14) `sdc-base` is 1.1.0: new defaults `mips.normal_base`, `mips.bake_clamp` and the `coat_normal` self-bake; there is no separate changelog file yet, so the bump is recorded in DECISIONS Note R.

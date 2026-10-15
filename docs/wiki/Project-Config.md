@@ -25,7 +25,7 @@ mips.filter = "kaiser"
 [subtypes.normal]
 channels.green_convention = "directx"
 
-# Rules: first match per file wins
+# Rules: every rule that matches applies, in order; a later rule overrides only the fields it sets
 [[rules]]
 match = { glob = "**/interface/**" }
 overrides = { mips = { levels = "none" } }
@@ -77,7 +77,7 @@ Every texture's final settings (its profile) are built from layers. Later layers
 2. The selected preset and its base chain: all `[defaults]` tables from base to child, then all `[subtypes]` tables from base to child.
 3. The user config: `[defaults]`, then `[subtypes.<id>]`.
 4. The project config: `[defaults]`, then `[subtypes.<id>]`.
-5. Rules: from the preset chain, then the user config, then the project config. In each of those sources, only the first rule that matches the file applies.
+5. Rules: from the preset chain, then the user config, then the project config. In each of those sources, every rule that matches the file applies, in file order: a later rule overrides only the fields it sets, and the earlier rules' other fields stay. A field's provenance names the rule that last set it.
 6. Facts from analysing the image, such as a High-confidence alpha policy (no alpha channel means `remove`).
 7. The set shader's member settings, and alpha from scanned meshes (GUI only).
 8. Facts from the file's suffix.
