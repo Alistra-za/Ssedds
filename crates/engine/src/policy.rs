@@ -1100,7 +1100,6 @@ pub fn availability(t: Target, s: Subtype) -> Availability {
         (_, PbrNormal) => un(Some(Normal)),
         (_, PbrSubsurface | PbrFuzz | CoatNormal | Rmaos | SkinRfaos | Flow | HdrSky) => un(None),
         (_, SkinAlbedo | SkinSk | SkinWet) => un(None),
-        (Target::Vanilla, ComplexMaterial) => un(Some(Envmask)),
         _ => Availability::Available,
     }
 }
