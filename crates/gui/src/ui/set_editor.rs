@@ -540,7 +540,11 @@ fn pgp_lock_cross(
     .wrap()
     .halign(egui::Align::Center);
     let n = slot.slot_number();
-    ui.put(band, caption).on_hover_ui(|ui| {
+    // A child over the thumbnail: `ui.put` would move the card's cursor back up into it.
+    let mut over = ui.new_child(egui::UiBuilder::new().max_rect(band).layout(
+        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+    ));
+    over.add(caption).on_hover_ui(|ui| {
         ui.label(format!(
             "PGPatcher lock ({}): this slot keeps the mesh's own texture",
             lock_key(n).unwrap_or_default()

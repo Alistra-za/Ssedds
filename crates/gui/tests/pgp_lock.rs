@@ -269,10 +269,17 @@ fn a_locked_slot_card_shows_the_caption() {
     let mut h = harness(m);
     h.run();
     assert_eq!(h.query_all_by_label(CAPTION).count(), 0);
+    // The caption sits over the thumbnail: the card's content below it does not move.
+    let empties = |h: &Harness<'static, AppModel>| -> Vec<_> {
+        h.query_all_by_label("empty").map(|n| n.rect()).collect()
+    };
+    let before = empties(&h);
+    assert!(!before.is_empty());
     h.get_by_label("RMAOS").click_secondary();
     h.run();
     h.get_by_label(KEEP).click();
     h.run();
     assert_eq!(settings_of(h.state()).get("lock_rmaos"), Some(&json!(true)));
     assert_eq!(h.query_all_by_label(CAPTION).count(), 1);
+    assert_eq!(empties(&h), before);
 }

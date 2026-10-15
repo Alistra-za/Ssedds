@@ -346,7 +346,8 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
         egui::Grid::new(("pgp-matching", &c.set))
             .num_columns(3)
             .show(ui, |ui| {
-                for (i, m) in c.matches.iter().enumerate() {
+                let first = c.matches.iter().find(|m| !m.path.is_empty()).map(|m| m.n);
+                for m in &c.matches {
                     ui.label(&m.slot);
                     let id = egui::Id::new(("pgp-match", m.n, &c.set));
                     let mut text = ui
@@ -376,7 +377,7 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                         ui.label("");
                         ui.colored_label(AMBER, EMPTY_ROW);
                         ui.end_row();
-                    } else if i > 0 && c.renamed.is_some() {
+                    } else if Some(m.n) != first && c.renamed.is_some() {
                         ui.label("");
                         ui.colored_label(
                             AMBER,
