@@ -9,7 +9,7 @@ use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{active_matches, match_toggle, stored_match};
-use crate::pgp::schema::{spec, KeyKind, KeySpec, KEYS};
+use crate::pgp::schema::{grass_ignores, spec, KeyKind, KeySpec, KEYS};
 use crate::pgp::settings::{Settings, GLINT_DEFAULTS};
 use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
 use eframe::egui;
@@ -670,6 +670,10 @@ fn add_set_key_menu(
         for k in KEYS.iter().filter(|k| {
             !is_match_key(k.key) && k.kind != KeyKind::Slot && !c.own.contains_key(edit_key(k.key))
         }) {
+            // PBR grass: a key grass ignores would be stored but never shown, and come back on a switch to pbr.
+            if c.grass && grass_ignores(k.key) {
+                continue;
+            }
             // A sub-key of glint or fuzz is offered while the feature is on.
             if let Some((obj, _)) = k.key.split_once('.') {
                 if c.own.get(&format!("{obj}_on")).and_then(Value::as_bool) != Some(true) {
