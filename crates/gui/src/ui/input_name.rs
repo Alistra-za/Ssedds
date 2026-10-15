@@ -33,7 +33,9 @@ struct Live {
     sel: Option<usize>,
     /// Last frame's rows and where they were drawn, for a press on one.
     rows: Vec<(String, egui::Rect)>,
-    /// A row pressed with the mouse: the focus loss that press causes commits it, not the typed text.
+    /// The row a mouse press landed on, until its release.
+    pressed: Option<(String, egui::Rect)>,
+    /// A row pressed and released on: the focus loss that click causes commits it, not the typed text.
     clicked: Option<String>,
 }
 
@@ -41,6 +43,32 @@ struct Live {
 fn same(a: &str, b: &str) -> bool {
     let n = |s: &str| strip_dds(&s.trim().replace('\\', "/").to_lowercase()).to_string();
     n(a) == n(b)
+}
+
+/// Why `text` cannot be the set's input name (`None` when it can, or is the current name). `input_name_plan` is
+/// cached per (text, items_rev): the box asks every frame while it holds a changed name.
+fn plan_error(
+    ui: &egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    id: egui::Id,
+    text: &str,
+    current: &str,
+) -> Option<String> {
+    if same(text, current) {
+        return None;
+    }
+    let key = id.with("plan");
+    let rev = model.items_rev();
+    type Cached = (String, u64, Option<String>);
+    if let Some((t, r, e)) = ui.data(|d| d.get_temp::<Cached>(key)) {
+        if t == text && r == rev {
+            return e;
+        }
+    }
+    let e = model.input_name_plan(&v.id, text).err();
+    ui.data_mut(|d| d.insert_temp::<Cached>(key, (text.to_string(), rev, e.clone())));
+    e
 }
 
 /// The set's path as the row's heading, then its input name box (none without an own diffuse).
@@ -124,11 +152,21 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             }
         }
         if shown {
-            // Before the box sees the press (and loses focus to it): which row was pressed.
+            // Before the box sees the click (and loses focus to it): the row pressed, then released on the same row.
             let press = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
             if let Some(p) = press {
-                live.clicked = live.rows.iter().find(|(_, r)| r.contains(p)).map(|(s, _)| s.clone());
+                live.pressed = live.rows.iter().find(|(_, r)| r.contains(p)).cloned();
             }
+        }
+        if live.pressed.is_some() && ui.input(|i| i.pointer.any_released()) {
+            let at = ui.input(|i| i.pointer.interact_pos());
+            live.clicked = live
+                .pressed
+                .take()
+                .filter(|(_, r)| at.is_some_and(|p| r.contains(p)))
+                .map(|(s, _)| s);
+        }
+        if shown {
             let n = live.rows.len();
             if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
                 live.sel = Some(live.sel.map_or(0, |s| (s + 1).min(n - 1)));
@@ -172,9 +210,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                 state.store(ui.ctx(), edit_id);
             }
         }
-        let err = (!same(&text, &current))
-            .then(|| model.input_name_plan(&v.id, &text).err())
-            .flatten();
+        let err = plan_error(ui, model, v, id, &text, &current);
         let locked_w = width(&locked);
         // The box is at least 160 pt (its free part at least MIN_FREE) and grows with its text and ghost, up to the room left
         // in the row and 480 pt (AO5). `room` leaves the margins and the ▾.
@@ -214,16 +250,6 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                             b.set_description(e.as_str());
                         }
                     });
-                    if let Some(g) = &ghost {
-                        let at = out.galley_pos + egui::vec2(out.galley.rect.width(), 0.0);
-                        ui.painter().with_clip_rect(out.text_clip_rect).text(
-                            at,
-                            egui::Align2::LEFT_TOP,
-                            g,
-                            font.clone(),
-                            ui.visuals().weak_text_color(),
-                        );
-                    }
                     (out, ui.min_rect().left())
                 })
                 .inner
@@ -231,7 +257,36 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         let (out, left) = inner.inner;
         let r = &out.response.response;
         let box_rect = inner.response.rect;
+        // A pasted full path under the lock: drop its locked part rather than doubling it.
+        let mut stripped = false;
+        if r.changed() && !locked.is_empty() {
+            let n = locked.len();
+            let norm = |s: &str| s.replace('\\', "/");
+            if free
+                .get(..n)
+                .is_some_and(|h| norm(h).eq_ignore_ascii_case(&norm(&locked)))
+            {
+                free = free[n..].to_string();
+                stripped = true;
+                let mut state = egui::TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+                let end = CCursor::new(free.chars().count());
+                state.cursor.set_char_range(Some(CCursorRange::one(end)));
+                state.store(ui.ctx(), edit_id);
+            }
+        }
         text = format!("{locked}{free}");
+        // The ghost follows the text as edited this frame (review fix): drawn after the edit, not from last frame's.
+        ghost = r.has_focus().then(|| completion(&paths, &text)).flatten();
+        if let Some(g) = ghost.as_ref().filter(|_| !stripped) {
+            let at = out.galley_pos + egui::vec2(out.galley.rect.width(), 0.0);
+            ui.painter().with_clip_rect(out.text_clip_rect).text(
+                at,
+                egui::Align2::LEFT_TOP,
+                g,
+                font.clone(),
+                ui.visuals().weak_text_color(),
+            );
+        }
         if let Some(e) = &err {
             ui.painter().rect_stroke(
                 box_rect,
@@ -254,6 +309,19 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         if r.changed() {
             live.open = true;
             live.sel = None;
+            // The next frame's Tab and Esc hold must match the new text, not the one the box was shown with.
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    edit_id,
+                    egui::EventFilter {
+                        tab: ghost.is_some(),
+                        escape: !rows.is_empty(),
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                    },
+                )
+            });
+            ui.ctx().request_repaint();
         }
         if r.lost_focus() {
             ui.data_mut(|d| d.remove::<(String, u64)>(buf));
@@ -336,11 +404,14 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             ui.weak(format!("now: {current}"));
             // Only paths under the lock.
             let pre = text[..cut].replace('\\', "/");
-            let under: Vec<String> = paths
-                .iter()
-                .filter(|p| p.get(..cut).is_some_and(|h| h.eq_ignore_ascii_case(&pre)))
-                .cloned()
-                .collect();
+            let under_key = (Arc::as_ptr(&paths) as usize, egui::Id::new(&pre).value());
+            let under = path_picker::cached(ui, "input-name-under", under_key, || {
+                paths
+                    .iter()
+                    .filter(|p| p.get(..cut).is_some_and(|h| h.eq_ignore_ascii_case(&pre)))
+                    .cloned()
+                    .collect()
+            });
             if let Some(p) = path_picker::list(ui, ("input-name", &v.id), &under, false) {
                 match model.set_input_name(&v.id, &p) {
                     Ok(()) => {

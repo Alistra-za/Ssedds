@@ -125,6 +125,8 @@ fn the_meshes_header_never_overlaps() {
     }
 }
 
+/// The 3D view's height under this row (at least 72 % of the centre at 1024×768) is checked by
+/// `set_preview_layout::in_3d_the_viewport_takes_most_of_the_centre`.
 /// Note AO: the set header's input name box and its ▾ never overlap each other or run off the window, and the box keeps
 /// at least 160 pt (the locked folder label included).
 #[test]

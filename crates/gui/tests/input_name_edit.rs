@@ -339,3 +339,75 @@ fn esc_closes_the_live_list_then_reverts() {
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert_eq!(free(&h), "rock01");
 }
+
+fn push_key(h: &mut H, key: Key) {
+    h.input_mut().events.push(egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+}
+
+/// Review fix: the ghost and Tab's hold follow the text in the frame it changes, with no settling run.
+#[test]
+fn the_ghost_follows_a_keystroke_by_the_next_frame() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    // "rocks/biz" has no candidate: no ghost, so Tab would leave the box.
+    clear_and_type(&mut h, "rocks/biz");
+    push_key(&mut h, Key::Backspace);
+    h.step();
+    // "rocks/bi" completes to "rocks/big": the very next frame's Tab is held and takes it.
+    push_key(&mut h, Key::Tab);
+    h.step();
+    h.step();
+    assert_eq!(free(&h), "rocks/big");
+}
+
+/// Review fix: a pasted full path that starts with the locked part replaces the free part, not doubled after the lock.
+#[test]
+fn a_pasted_full_path_drops_the_locked_part() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    clear_and_type(&mut h, "");
+    h.input_mut()
+        .events
+        .push(egui::Event::Paste("Textures\\Landscape\\rock02".into()));
+    h.run();
+    assert_eq!(free(&h), "rock02");
+}
+
+/// Review fix: a row commits only when the press and the release are both on it.
+#[test]
+fn a_press_dragged_off_a_live_row_commits_nothing() {
+    let (_d, mut h) = harness();
+    let steps = h.state().0.history.undo.len();
+    focus(&mut h);
+    clear_and_type(&mut h, "rocks");
+    let p = h.get_by_label(SMALL).rect().center();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    let away = egui::pos2(1500.0, 300.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(away));
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: away,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    h.run();
+    assert_eq!(h.state().0.history.undo.len(), steps, "nothing committed");
+    // A drag is no click: the box keeps its text and focus. Enter then takes the typed text, not the pressed row.
+    assert_eq!(free(&h), "rocks");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    settle(&mut h);
+    assert!(h.state().0.input_name_of("landscape/rocks/small").is_none());
+}
