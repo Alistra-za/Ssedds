@@ -313,6 +313,9 @@ pub struct AppModel {
     undo_note: Option<String>,
     /// When the note was set, and whether a plan has shown it: it goes with the next plan after that, or after 5 s.
     undo_note_at: Option<(Instant, bool)>,
+    /// AM17: a banner `refresh_banner` does not build (the startup "Settings were not read"): kept on every rebuild
+    /// until dismissed.
+    pub kept_banner: Option<String>,
     pub banner: Option<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
@@ -464,6 +467,7 @@ impl AppModel {
             undo_note: None,
             undo_note_at: None,
             dropped_fills: Default::default(),
+            kept_banner: None,
             banner: None,
             encoding_note: None,
             dialog: None,
@@ -2176,9 +2180,21 @@ impl AppModel {
         });
     }
 
+    /// Show `text` as a banner that survives every rebuild until [`AppModel::dismiss_kept_banner`].
+    pub fn keep_banner(&mut self, text: String) {
+        self.kept_banner = Some(text);
+        self.refresh_banner();
+    }
+
+    pub fn dismiss_kept_banner(&mut self) {
+        self.kept_banner = None;
+        self.refresh_banner();
+    }
+
     /// Rebuild the banner from both files: `sdc.toml`'s read-only reason and `sdc-project.toml`'s (P8).
     pub fn refresh_banner(&mut self) {
         let mut lines = Vec::new();
+        lines.extend(self.kept_banner.clone());
         if let Some(id) = self.missing_preset() {
             lines.push(format!(
                 "preset {id} not found: using {}",

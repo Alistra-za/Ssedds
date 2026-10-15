@@ -428,6 +428,14 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
                 if model.project.is_some() && ui.button("Reload").clicked() {
                     model.reload_documents();
                 }
+                if model.kept_banner.is_some()
+                    && ui
+                        .button("Dismiss")
+                        .on_hover_text("Hide the startup warning")
+                        .clicked()
+                {
+                    model.dismiss_kept_banner();
+                }
             });
         }
     });

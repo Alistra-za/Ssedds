@@ -387,3 +387,43 @@ fn a_deleted_preset_named_in_sdc_toml_falls_back_with_a_banner() {
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     assert_eq!(m.banner, None);
 }
+
+#[test]
+fn a_startup_banner_survives_a_replan_until_dismissed() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Rgb([x as u8, 10, 200]))
+        .save(root.join("a/box.png"))
+        .unwrap();
+    let mut m = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..Default::default()
+        },
+        None,
+        std::sync::Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap()),
+    );
+    m.keep_banner("Settings were not read, defaults are used: bad".into());
+    m.open_folder(root);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.replan();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(
+        m.banner.as_deref(),
+        Some("Settings were not read, defaults are used: bad")
+    );
+    // It sits beside the banners refresh_banner builds.
+    m.set_preset(Some("ghost".into()));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let b = m.banner.clone().unwrap();
+    assert!(
+        b.starts_with("Settings were not read") && b.contains("preset ghost not found"),
+        "{b}"
+    );
+    m.dismiss_kept_banner();
+    assert_eq!(
+        m.banner.as_deref(),
+        Some("preset ghost not found: using cs-quality")
+    );
+}

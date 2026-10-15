@@ -39,7 +39,7 @@ fn build_model() -> AppModel {
     };
     model.refresh_nvtt();
     if let Some(e) = err {
-        model.banner = Some(format!("Settings were not read, defaults are used: {e}"));
+        model.keep_banner(format!("Settings were not read, defaults are used: {e}"));
     }
     model
 }
