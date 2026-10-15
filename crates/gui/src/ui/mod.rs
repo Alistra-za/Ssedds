@@ -113,7 +113,7 @@ pub fn draw_with_scan(
 /// The centre: the preview of an expanded texture, else the settings of the selected texture or set, else a hint.
 fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: bool) {
     if model.root.is_none() {
-        ui.centered_and_justified(|ui| ui.label("Open a folder of source textures to begin."));
+        ui.centered_and_justified(|ui| ui.label(model.empty_hint()));
         return;
     }
     if model.expanded.is_some() {

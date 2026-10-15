@@ -66,6 +66,28 @@ pub fn counts_toward_badge(w: &engine::codes::Warning) -> bool {
     )
 }
 
+/// Item 13: the plan bar's text, "Analysing 1,234 / 5,000 files…".
+pub fn plan_bar_text(done: usize, total: usize) -> String {
+    format!(
+        "Analysing {} / {} files…",
+        thousands(done),
+        thousands(total)
+    )
+}
+
+/// `n` with a comma between each group of three digits.
+fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selection {
     None,
@@ -336,6 +358,12 @@ pub struct AppModel {
     votes_pending: Option<(u64, bool)>,
     generation: u64,
     planning: Option<CancelToken>,
+    /// Item 13: (done, total) of the plan in flight, from `PlanProgress`; `None` once it lands.
+    pub plan_progress: Option<(usize, usize)>,
+    /// While a folder's first plan is in flight: the folder open before it (`None`: none). Cancel goes back to it.
+    opening: Option<Option<PathBuf>>,
+    /// The last open was cancelled with no folder to go back to (the empty state says so).
+    open_cancelled: bool,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
 }
@@ -437,6 +465,9 @@ impl AppModel {
             votes_pending: None,
             generation: 0,
             planning: None,
+            plan_progress: None,
+            opening: None,
+            open_cancelled: false,
             tx,
             rx,
         }
@@ -487,6 +518,7 @@ impl AppModel {
     }
 
     pub fn open_folder(&mut self, root: PathBuf) {
+        self.open_cancelled = false;
         // Whatever was pending for the previous folder no longer applies (spec §8).
         self.after_export = None;
         self.pending_json = None;
@@ -514,7 +546,11 @@ impl AppModel {
         self.refresh_banner();
         self.settings.push_recent(root.clone());
         self.save_settings();
-        self.root = Some(root);
+        let previous = self.root.replace(root);
+        // A second open while the first is still planning goes back to the folder before both.
+        if !(self.opening.is_some() && self.planning.is_some()) {
+            self.opening = Some(previous);
+        }
         self.items.clear();
         self.invalidate_views();
         self.sets.clear();
@@ -670,6 +706,7 @@ impl AppModel {
         self.drop_pending_votes();
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
+        self.plan_progress = None;
         self.status_line = "Planning…".into();
         self.inputs_rev += 1;
         self.last_inputs = Some(EngineInputs {
@@ -683,6 +720,49 @@ impl AppModel {
             gras_diffuses: req.gras_diffuses.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
+    }
+
+    /// Item 13: the header offers Cancel while a folder's first plan is in flight (not for a re-plan, AG93).
+    pub fn can_cancel_open(&self) -> bool {
+        self.opening.is_some() && self.planning.is_some()
+    }
+
+    /// Cancel the open in flight (AG92): its plan is cancelled and, by the generation bump, dropped when it reports.
+    /// The previous folder opens again (its analyses are still cached), else the window is empty with a note.
+    pub fn cancel_open(&mut self) {
+        if !self.can_cancel_open() {
+            return;
+        }
+        if let Some(c) = self.planning.take() {
+            c.cancel();
+        }
+        self.generation += 1;
+        self.plan_progress = None;
+        match self.opening.take().flatten() {
+            Some(previous) => {
+                self.open_folder(previous);
+                // Going back is not an open the user can cancel.
+                self.opening = None;
+            }
+            None => {
+                self.root = None;
+                self.project = None;
+                self.sets_doc = None;
+                self.last_inputs = None;
+                self.refresh_banner();
+                self.status_line.clear();
+                self.open_cancelled = true;
+            }
+        }
+    }
+
+    /// The centre's text with no folder open.
+    pub fn empty_hint(&self) -> &'static str {
+        if self.open_cancelled {
+            "Opening cancelled"
+        } else {
+            "Open a folder of source textures to begin."
+        }
     }
 
     /// A sender into the model's own channel (tests inject worker messages with it).
@@ -714,12 +794,19 @@ impl AppModel {
 
     fn handle(&mut self, msg: WorkerMsg) {
         match msg {
-            WorkerMsg::PlanProgress { generation, total } if generation == self.generation => {
-                self.status_line = format!("Analysing {total} files…");
+            WorkerMsg::PlanProgress {
+                generation,
+                done,
+                total,
+            } if generation == self.generation => {
+                self.plan_progress = Some((done, total));
+                self.status_line = plan_bar_text(done, total);
             }
             WorkerMsg::PlanProgress { .. } => {}
             WorkerMsg::Planned { generation, result } if generation == self.generation => {
                 self.planning = None;
+                self.plan_progress = None;
+                self.opening = None;
                 match result {
                     Ok(view) => self.apply_plan(view),
                     Err(f) => self.plan_failed(f),

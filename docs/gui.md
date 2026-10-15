@@ -6,6 +6,8 @@
 
 Choose **Open folder…** (pick one from **Recent**, or drag a folder onto the window; a dropped file opens the folder that holds it). The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written to your textures. If the folder holds an `sdc.toml`, it is loaded; if that file cannot be parsed, or the engine rejects it (an unknown field or `allow` code in a `[files]` entry, an unknown sub-type, a value out of range), the folder is planned without it, a banner shows the error, and the GUI stays read-only (editing and **Export** are off, and the file is never written) until you fix the file and press **Reload** in the banner.
 
+While the folder is analysed, the status bar shows a progress bar, "Analysing 1,234 / 5,000 files…". The count is the images decoded so far: files analysed in an earlier open are not decoded again, and DDS inputs and duplicates are never decoded, so the bar can finish short of the total or jump to the end. Thumbnails appear when the whole plan lands, not one by one. Settings, bulk edit and **Export** stay off until then. **Cancel** next to the bar stops the open: the folder you had open before comes back (with its selection and undo history reset), or, if there was none, the window is empty and reads "Opening cancelled". Cancel shows only while a folder opens, not while an edit is re-planned.
+
 The file and folder dialogs (Open folder, the export folder, MO2 instance, a folder to scan, nvcompress.exe, the shader folder, Save report) no longer freeze the window while they are open. Only one is open at a time: the other dialog buttons and Open folder in the palette are greyed out ("A file dialog is already open") until you answer or cancel. If you open another folder while one of the folder dialogs is still up, its answer is ignored.
 
 The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means.
@@ -145,6 +147,8 @@ The Meshes view's 3D panel and a set's 3D view work the same way.
 - **Copy image** (or **Ctrl+Shift+C**) copies the last frame to the clipboard, at the size it was rendered; the panel says "Copied 3D view (W×H)".
 
 ## The Meshes view: shapes
+
+**Scan progress.** While a scan runs, the scan row (in the Meshes view and in the Textures view) shows a bar with the phase and its count, for example `reading 120/4000 · ETA 0:42`. The ETA appears once the phase has finished 3 items or run for 2 seconds. The ETA is the average over the last 10 seconds, as in the export drawer, and starts over with each phase.
 
 Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Select a mesh first", until a mesh is selected). Switched on, it replaces the mods and meshes list with the shape cards of the selected mesh; switched off, or when the selection clears, the list is back. The right-hand pane always shows the 3D view.
 

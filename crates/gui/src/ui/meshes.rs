@@ -78,8 +78,15 @@ pub fn scan_controls(ui: &mut egui::Ui, m: &mut MeshesModel) {
         }
         if m.scanning() {
             ui.spinner();
-            if let Some((phase, done, total)) = m.progress {
-                ui.label(format!("{phase} {done}/{total}"));
+            if let (Some((_, done, total)), Some(text)) =
+                (m.progress, m.scan_line(std::time::Instant::now()))
+            {
+                let frac = if total == 0 {
+                    0.0
+                } else {
+                    done as f32 / total as f32
+                };
+                ui.add(egui::ProgressBar::new(frac).desired_width(260.0).text(text));
             }
             if ui.button("Cancel").clicked() {
                 m.cancel_scan();

@@ -8,8 +8,10 @@ use engine::events::{EngineEvent, EventKind, EventSink, Reporter, VecSink};
 use engine::policy::ResolvedJob;
 use engine::session::{Session, SourcePreview};
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Why a plan failed; `config` is true for an invalid preset or config file (`EngineError::Config`), which the
 /// model answers by ignoring `sdc.toml` (M3a spec §7.4).
@@ -28,9 +30,10 @@ pub struct MeshEvidence {
 }
 
 pub enum WorkerMsg {
-    /// Planning discovered `total` files (the status line reads "Analysing {total} files…").
+    /// Planning has decoded `done` of `total` discovered files (DECISIONS AG91; the header shows a bar).
     PlanProgress {
         generation: u64,
+        done: usize,
         total: usize,
     },
     Planned {
@@ -89,23 +92,54 @@ impl EventSink for ChannelSink {
     }
 }
 
-/// Collects a plan's events for `PlanView::build` and reports the file count once `batch_started` arrives.
+/// Collects a plan's events for `PlanView::build` and keeps the file count `batch_started` reports.
 struct PlanSink {
     events: Arc<VecSink>,
-    tx: Sender<WorkerMsg>,
-    generation: u64,
+    total: Arc<AtomicUsize>,
 }
 
 impl EventSink for PlanSink {
     fn emit(&self, ev: &EngineEvent) {
         if let EventKind::BatchStarted { inputs, .. } = &ev.kind {
-            let _ = self.tx.send(WorkerMsg::PlanProgress {
-                generation: self.generation,
-                total: *inputs,
-            });
+            self.total.store(*inputs, Ordering::Relaxed);
         }
         self.events.emit(ev);
     }
+}
+
+/// How often the plan ticker reports.
+const PLAN_TICK: Duration = Duration::from_millis(100);
+
+/// AG91: the planner emits no event while it loads and analyses, so a ticker reports the session cache's decode
+/// count (`AnalysisCache::loads`, public API) against the discovered total until `stop` is dropped. Cache hits are
+/// not decodes, and DDS or duplicate inputs are never decoded, so `done` can stay short of `total`; it is clamped
+/// (pass 2 counts every packed source).
+fn plan_ticker(
+    tx: Sender<WorkerMsg>,
+    session: Arc<Session>,
+    total: Arc<AtomicUsize>,
+    generation: u64,
+    stop: Receiver<()>,
+) -> std::thread::JoinHandle<()> {
+    let base = session.cache().loads();
+    std::thread::spawn(move || {
+        let mut last = None;
+        while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(PLAN_TICK) {
+            let total = total.load(Ordering::Relaxed);
+            if total == 0 {
+                continue;
+            }
+            let done = ((session.cache().loads() - base) as usize).min(total);
+            if last != Some(done) {
+                last = Some(done);
+                let _ = tx.send(WorkerMsg::PlanProgress {
+                    generation,
+                    done,
+                    total,
+                });
+            }
+        }
+    })
 }
 
 pub(crate) fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
@@ -175,11 +209,13 @@ pub fn spawn_plan(
 ) {
     spawn_guarded(tx, "plan", move |tx| {
         let events = Arc::new(VecSink::default());
+        let total = Arc::new(AtomicUsize::new(0));
         let sink = Arc::new(PlanSink {
             events: events.clone(),
-            tx: tx.clone(),
-            generation,
+            total: total.clone(),
         });
+        let (stop, stop_rx) = std::sync::mpsc::channel();
+        let ticker = plan_ticker(tx.clone(), session.clone(), total, generation, stop_rx);
         let rep = Reporter::new(sink, engine::events::new_batch_id());
         let result = plan_result(|| {
             session
@@ -190,6 +226,9 @@ pub fn spawn_plan(
                     message: e.to_string(),
                 })
         });
+        // The ticker's last report is queued before `Planned`, so none of this generation follows it.
+        drop(stop);
+        let _ = ticker.join();
         let _ = tx.send(WorkerMsg::Planned { generation, result });
     });
 }

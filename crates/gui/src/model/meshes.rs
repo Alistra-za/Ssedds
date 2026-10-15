@@ -458,6 +458,8 @@ pub struct MeshesModel {
     pub report: Option<Report>,
     /// (phase, done, total) of the running scan.
     pub progress: Option<(&'static str, usize, usize)>,
+    /// The running scan phase's rate (Task 5's `Pace`); a new phase starts a new one.
+    scan_pace: Option<crate::model::export::Pace>,
     pub status: String,
     /// The left column lists the selected NIF's shapes instead of the mods and meshes (owner, 2026-10-14).
     pub shapes_col: bool,
@@ -538,6 +540,7 @@ impl MeshesModel {
             dialog: None,
             report: None,
             progress: None,
+            scan_pace: None,
             status: String::new(),
             shapes_col: false,
             v3: Viewport3d::new(None),
@@ -644,6 +647,46 @@ impl MeshesModel {
         self.cancel.is_some()
     }
 
+    /// A scan phase reported `done` of `total` at `now`. Each newly done item is one finish for the phase's `Pace`;
+    /// a new phase (or a count that went back) starts a fresh one, so its ETA waits for the `Pace` minimums again.
+    pub fn scan_progressed(
+        &mut self,
+        phase: &'static str,
+        done: usize,
+        total: usize,
+        now: Instant,
+    ) {
+        let prev = match self.progress {
+            Some((p, d, _)) if p == phase && d <= done && self.scan_pace.is_some() => d,
+            _ => {
+                self.scan_pace = Some(crate::model::export::Pace::new(now));
+                0
+            }
+        };
+        if let Some(pace) = &mut self.scan_pace {
+            for _ in prev..done {
+                pace.finished(now);
+            }
+        }
+        self.progress = Some((phase, done, total));
+    }
+
+    /// The running phase's ETA, by Task 5's `Pace` rules (`None` until enough samples exist).
+    pub fn scan_eta(&self, now: Instant) -> Option<Duration> {
+        let (_, done, total) = self.progress?;
+        self.scan_pace.as_ref()?.eta(done, total, now)
+    }
+
+    /// The scan row's bar text: `phase done/total`, then ` · ETA m:ss` once there is one.
+    pub fn scan_line(&self, now: Instant) -> Option<String> {
+        let (phase, done, total) = self.progress?;
+        let mut s = format!("{phase} {done}/{total}");
+        if let Some(eta) = self.scan_eta(now) {
+            s += &format!(" · ETA {}", crate::model::export::fmt_duration(eta));
+        }
+        Some(s)
+    }
+
     /// Start the scan on a worker. Nothing is read from the store until it ends (`begin_scan` disables every origin).
     pub fn start(&mut self, req: ScanRequest) {
         if self.scanning() {
@@ -724,7 +767,7 @@ impl MeshesModel {
             changed = true;
             match msg {
                 WorkerMsg::ScanProgress { done, total, phase } => {
-                    self.progress = Some((phase, done, total))
+                    self.scan_progressed(phase, done, total, Instant::now())
                 }
                 WorkerMsg::Scanned(r) => self.finished(r),
                 WorkerMsg::Panicked { message, .. } => {

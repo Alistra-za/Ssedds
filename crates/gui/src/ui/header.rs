@@ -277,7 +277,27 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
     }
     egui::Panel::top("status").show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.label(&model.status_line);
+            // Item 13: a bar while a plan analyses, with Cancel while a folder opens.
+            match model.plan_progress {
+                Some((done, total)) => {
+                    let frac = if total == 0 {
+                        0.0
+                    } else {
+                        done as f32 / total as f32
+                    };
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_width(320.0)
+                            .text(&model.status_line),
+                    );
+                }
+                None => {
+                    ui.label(&model.status_line);
+                }
+            }
+            if model.can_cancel_open() && ui.button("Cancel").clicked() {
+                model.cancel_open();
+            }
             // Task 9 (Z11): the last "encoding follows type" cleanup; every texture on hover.
             if let Some((line, all)) = &model.encoding_note {
                 ui.weak(format!("· {line}")).on_hover_text(all);
