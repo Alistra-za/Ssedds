@@ -1,5 +1,5 @@
 //! F3a Task 8 (ledger R8): the slot context menu of a set-editor card or a pill member: the Slot commands, From
-//! another set, Lock / Unlock.
+//! another set, Pin / Unpin (sdc) and the PGPatcher lock (Note AN).
 mod support;
 use sdc_gui::model::bulk::{MenuAction, MenuEntry};
 use sdc_gui::model::sets::*;
@@ -97,7 +97,16 @@ fn a_filled_slot_offers_the_slot_commands_other_sets_and_lock() {
                     n: 1,
                     on: true
                 },
-                "Lock",
+                "Pin slot (sdc)",
+                None
+            ),
+            (
+                MenuAction::PgpLock {
+                    set: ROCK_SET.into(),
+                    n: 1,
+                    on: true
+                },
+                "Keep original texture (PGPatcher lock)",
                 None
             ),
         ]
@@ -178,10 +187,13 @@ fn a_locked_slot_menu_offers_only_unlock() {
     for e in &menu[..4] {
         assert_eq!(e.disabled.as_deref(), Some("slot locked"), "{}", e.label);
     }
-    let last = menu.last().unwrap();
+    let pin = menu
+        .iter()
+        .find(|e| matches!(e.action, MenuAction::SlotLock { .. }))
+        .unwrap();
     assert_eq!(
-        (last.action.clone(), last.label.as_str()),
-        (lock(false), "Unlock")
+        (pin.action.clone(), pin.label.as_str()),
+        (lock(false), "Unpin slot (sdc)")
     );
     // A refused command comes back as the reason.
     assert_eq!(

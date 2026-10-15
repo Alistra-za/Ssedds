@@ -40,12 +40,12 @@ fn a_card_right_click_locks_and_unlocks_the_slot() {
     let mut h = opened_on_the_set(d.path());
     h.get_by_label("RMAOS").click_secondary();
     h.run();
-    h.get_by_label("Lock").click();
+    h.get_by_label("Pin slot (sdc)").click();
     h.run();
     assert!(h.state().slot_locked(SET, 6));
     h.get_by_label("🔒 RMAOS").click_secondary();
     h.run();
-    h.get_by_label("Unlock").click();
+    h.get_by_label("Unpin slot (sdc)").click();
     h.run();
     assert!(!h.state().slot_locked(SET, 6));
 }
@@ -67,7 +67,7 @@ fn path_from_the_card_menu_opens_the_slot_commands_window_and_it_toggles_the_loc
         h.query_all_by_label("Apply").count() >= 1,
         "slot 6 is in Path mode"
     );
-    h.get_by_label("Lock slot 6").click();
+    h.get_by_label("Pin slot 6").click();
     h.run();
     assert!(h.state().slot_locked(SET, 6));
 }

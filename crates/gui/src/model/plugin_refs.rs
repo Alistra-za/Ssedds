@@ -88,6 +88,13 @@ pub fn set_key(v: &SetView) -> Option<TexKey> {
         entry
             .entry("match_diffuse")
             .or_insert_with(|| Value::String(d.clone()));
+        // AN1: a renamed entry is written with its `match_diffuse` only.
+        if let Some((md, _)) = crate::pgp::prefix::json_rename(&v.settings, d) {
+            entry.retain(|k, _| {
+                k == "match_diffuse" || !(k.starts_with("match") || k == "path_contains")
+            });
+            entry.insert("match_diffuse".into(), Value::String(md));
+        }
     }
     crate::model::set_preview::tex_key(&Value::Object(entry), &Value::Null).map(|(k, _)| k)
 }

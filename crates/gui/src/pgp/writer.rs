@@ -1,6 +1,6 @@
 //! The PGPatcher JSON document (M3b spec §5.2–5.3, §5.6): `{ "$schema", "default", "entries" }`, keys in schema
 //! order. serde_json's map sorts keys, so the document is an ordered tree (`Node`) printed by `to_text`.
-use super::prefix::{active_matches, json_rename, match_value};
+use super::prefix::{active_matches, json_rename, match_value, pgp_locked};
 use super::schema::{Group, KeyKind, NumRange, KEYS, SCHEMA_URL};
 use super::settings::{
     feature_on, number_default, rgb_default, subsurface_group_open, Feature, Settings,
@@ -147,7 +147,13 @@ fn fixed_default_block() -> Vec<(String, Node)> {
 /// The entry for one set: only the set's own settings, under the per-kind rules, in schema order.
 fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(String, Node)> {
     let mut out = vec![];
-    let matches = active_matches(own, derived);
+    // One match key per entry (DECISIONS AN1): a renamed entry matches by its `match_diffuse` only.
+    let renamed = json_rename(own, derived);
+    let matches = if renamed.is_some() {
+        vec![]
+    } else {
+        active_matches(own, derived)
+    };
     for k in KEYS.iter().filter(|k| !k.key.contains('.')) {
         if k.group == Group::Subsurface {
             // Standard and Foliage share the group (AG101); hair and multilayer rule both out (`blocked_by`).
@@ -188,11 +194,13 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                     .find(|(m, _)| *m == n)
                     .map(|(_, v)| Node::Scalar(json!(match_value(v)))),
                 // The typed file name becomes the renamed path, with the `match_diffuse` PGPatcher renames from
-                // (owner, 2026-10-14; DECISIONS V3, AA8). The match slots stay the entry's matches.
-                None if k.key == "rename" => json_rename(own, derived).map(|(diffuse, r)| {
+                // (owner, 2026-10-14; DECISIONS V3, AA8); it replaces the match slots (AN1).
+                None if k.key == "rename" => renamed.clone().map(|(diffuse, r)| {
                     out.push(("match_diffuse".to_string(), Node::Scalar(json!(diffuse))));
                     Node::Scalar(json!(r))
                 }),
+                // A renamed entry writes no `path_contains` (AN1).
+                None if k.key == "path_contains" && renamed.is_some() => None,
                 None => v
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
@@ -202,7 +210,12 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
             KeyKind::Rgba => v.and_then(|v| colour(v, true)),
             KeyKind::Slot => {
                 let n: u8 = k.key[4..].parse().expect("slotN");
-                slots.get(&n).map(|p| Node::Scalar(json!(p)))
+                // A PGPatcher lock keeps the mesh's texture: only an explicit slot command still overrides it (AN6).
+                let derived_only = !own.contains_key(k.key);
+                slots
+                    .get(&n)
+                    .filter(|_| !(derived_only && pgp_locked(own, n)))
+                    .map(|p| Node::Scalar(json!(p)))
             }
         };
         if let Some(n) = node {

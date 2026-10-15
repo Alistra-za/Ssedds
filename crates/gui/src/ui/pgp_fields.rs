@@ -6,8 +6,9 @@ use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, S
 use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::pgp::prefix::{
-    match_toggle, match_value, matches_nothing, stored_match, strip_lead, subsurface_pitfalls,
-    EMPTY_ROW, NO_MATCH,
+    json_rename, match_toggle, match_value, matches_nothing, stored_match, strip_lead,
+    subsurface_pitfalls, EMPTY_ROW, NOT_WRITTEN, NO_MATCH, PATH_CONTAINS_NOT_WRITTEN,
+    RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
 use crate::pgp::schema::{spec, Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
@@ -113,6 +114,8 @@ pub(crate) struct Ctx {
     matches: Vec<SlotMatch>,
     addable: Vec<SlotMatch>,
     no_match: bool,
+    /// A renamed set's `match_diffuse` (AN1): its one match.
+    renamed: Option<String>,
     /// The set's locked slots: a locked slot command shows no remove button (DECISIONS AF6).
     pub(crate) locks: std::collections::BTreeSet<u8>,
 }
@@ -137,6 +140,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
     Ctx {
         locks: v.as_ref().map(|v| v.locks.clone()).unwrap_or_default(),
         no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
+        renamed: json_rename(&own, derived.as_deref().unwrap_or("")).map(|(d, _)| d),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
         sub_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Subsurface)),
@@ -323,6 +327,10 @@ fn group(
                 ui.end_row();
             }
         });
+    // AN1: a renamed entry matches by its diffuse alone.
+    if g == Group::Match && c.renamed.is_some() && c.own.contains_key("path_contains") {
+        ui.colored_label(AMBER, PATH_CONTAINS_NOT_WRITTEN);
+    }
     ui.add_space(6.0);
 }
 
@@ -335,10 +343,15 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
             .small()
             .weak(),
     );
+    if let Some(d) = &c.renamed {
+        ui.label(egui::RichText::new(RENAMED_MATCH_NOTE).small())
+            .on_hover_text(format!("Written as match_diffuse = {d}"));
+    }
     let r = ui.add_enabled_ui(c.read_only.is_none(), |ui| {
         egui::Grid::new(("pgp-matching", &c.set))
             .num_columns(3)
             .show(ui, |ui| {
+                let first = c.matches.iter().find(|m| !m.path.is_empty()).map(|m| m.n);
                 for m in &c.matches {
                     ui.label(&m.slot);
                     let id = egui::Id::new(("pgp-match", m.n, &c.set));
@@ -369,18 +382,27 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                         ui.label("");
                         ui.colored_label(AMBER, EMPTY_ROW);
                         ui.end_row();
+                    } else if Some(m.n) != first && c.renamed.is_some() {
+                        ui.label("");
+                        ui.colored_label(AMBER, NOT_WRITTEN);
+                        ui.end_row();
                     }
                 }
             });
+        let refused = (c.renamed.is_some() && !c.matches.is_empty()).then_some(RENAMED_ONE_MATCH);
         if !c.addable.is_empty() {
-            ui.menu_button("+", |ui| {
-                for a in &c.addable {
-                    if ui.button(format!("{} · {}", a.n, a.slot)).clicked() {
-                        edits.push(match_toggle(a.n, true, &a.path));
-                        ui.close();
+            ui.add_enabled_ui(refused.is_none(), |ui| {
+                ui.menu_button("+", |ui| {
+                    for a in &c.addable {
+                        if ui.button(format!("{} · {}", a.n, a.slot)).clicked() {
+                            edits.push(match_toggle(a.n, true, &a.path));
+                            ui.close();
+                        }
                     }
-                }
-            });
+                });
+            })
+            .response
+            .on_disabled_hover_text(refused.unwrap_or_default());
         }
     });
     if let Some(why) = &c.read_only {
@@ -396,6 +418,10 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
 pub(crate) fn disabled_reason(k: &KeySpec, c: &Ctx) -> Option<String> {
     if let Some(why) = &c.read_only {
         return Some(why.clone());
+    }
+    // AN2: a renamed set takes no path_contains (one already there stays editable).
+    if k.key == "path_contains" && c.renamed.is_some() && !c.own.contains_key(k.key) {
+        return Some(RENAMED_ONE_MATCH.into());
     }
     let on = c.eff.get(edit_key(k.key)).and_then(Value::as_bool) == Some(true);
     if on {

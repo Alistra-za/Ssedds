@@ -51,6 +51,12 @@ pub enum WorkerMsg {
         generation: u64,
         result: crate::model::used_by::UsedBy,
     },
+    /// Note AN: a locked slot's original textures were read (a stale generation is dropped).
+    OriginalTextures {
+        generation: u64,
+        key: (String, u8),
+        result: Result<Vec<String>, String>,
+    },
     /// The scan's texture and mesh paths were read (`AppModel::refresh_known_paths`).
     KnownPaths(Result<crate::model::known_paths::KnownPaths, String>),
     Event(EngineEvent),

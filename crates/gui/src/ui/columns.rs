@@ -475,6 +475,7 @@ pub(super) fn member(
     item: &TextureItem,
     selected: bool,
     locked: bool,
+    pgp_locked: bool,
     thumbs: &mut ThumbCache,
 ) -> egui::Response {
     let (rect, response) =
@@ -513,11 +514,25 @@ pub(super) fn member(
                 ui.visuals().strong_text_color(),
             );
         }
+        // Note AN: PGPatcher keeps the mesh's own texture in this member's slot.
+        if pgp_locked {
+            ui.painter().text(
+                rect.left_top() + egui::vec2(1.0, 0.0),
+                egui::Align2::LEFT_TOP,
+                "✕",
+                egui::FontId::proportional(13.0),
+                RED,
+            );
+        }
     }
+    let mut hover = item.name.clone();
     if locked {
-        return response.on_hover_text(format!("{} (slot locked)", item.name));
+        hover.push_str(" (slot pinned)");
     }
-    response.on_hover_text(&item.name)
+    if pgp_locked {
+        hover.push_str(" (PGPatcher lock: the mesh's original texture is used)");
+    }
+    response.on_hover_text(hover)
 }
 
 /// The export folder as a prefix of set keys: `<export folder>/`.

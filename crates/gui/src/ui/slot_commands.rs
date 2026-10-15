@@ -1,4 +1,4 @@
-//! The Slot commands dialog (M3b spec §4.2): per slot 1–8, from this set / a path / clear, and the slot lock (F3a
+//! The Slot commands dialog (M3b spec §4.2): per slot 1–8, from this set / a path / clear, and the slot pin (F3a
 //! Task 8).
 use crate::model::bulk::MenuAction;
 use crate::model::sets::{slot_gives, SlotCommand, SLOT_LOCKED};
@@ -63,10 +63,10 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
                         egui::WidgetType::Checkbox,
                         editable,
                         on,
-                        format!("Lock slot {n}"),
+                        format!("Pin slot {n}"),
                     )
                 });
-                if r.on_hover_text("Locked: drops, slot commands and bulk edits leave this slot as it is")
+                if r.on_hover_text("Pinned: drops, slot commands and bulk edits leave this slot as it is")
                     .on_disabled_hover_text(&why)
                     .changed()
                 {

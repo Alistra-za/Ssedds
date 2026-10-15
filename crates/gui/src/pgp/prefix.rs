@@ -250,6 +250,76 @@ pub const NO_MATCH: &str = "this entry matches nothing";
 /// The warning under a + row with no path yet (`matchN = ""`, owner 2026-10-12). It is not written to the JSON.
 pub const EMPTY_ROW: &str = "this row matches nothing until a path is entered";
 
+/// What the matching UI says on a renamed set (DECISIONS AN1).
+pub const RENAMED_MATCH_NOTE: &str =
+    "renamed: matches by diffuse (PGPatcher rename needs match_diffuse)";
+/// Why a renamed set takes no extra match (DECISIONS AN2).
+pub const RENAMED_ONE_MATCH: &str =
+    "renamed: matches by diffuse (PGPatcher rename needs match_diffuse); a renamed set takes no extra match";
+
+/// The marker under a renamed set's extra match row and its `path_contains` (AN2).
+pub const NOT_WRITTEN: &str = "not written: a renamed set matches by its diffuse only";
+pub const PATH_CONTAINS_NOT_WRITTEN: &str =
+    "path_contains not written: a renamed set matches by its diffuse only";
+
+/// The match rows of a set: its active matches plus the empty + rows (`matchN = ""`, N ≥ 2).
+fn match_rows(s: &Settings, derived: &str) -> usize {
+    let empty = (2..=8u8)
+        .filter(|n| text(s, &format!("match{n}")).is_none() && s.contains_key(&format!("match{n}")))
+        .count();
+    active_matches(s, derived).len() + empty
+}
+
+/// DECISIONS AN2: the refusal of an edit of `key` to `v` that would give a renamed set a second match row or a
+/// `path_contains`. Editing or removing what it has, and any edit of a set without a rename, is fine.
+pub fn extra_match_refusal(
+    s: &Settings,
+    derived: &str,
+    key: &str,
+    v: Option<&Value>,
+) -> Option<&'static str> {
+    // A renamed entry matches by `match_diffuse` alone, so `path_contains` is never written next to it (AN1).
+    if key == "path_contains" {
+        let adds = v
+            .and_then(Value::as_str)
+            .is_some_and(|t| !t.trim().is_empty())
+            && text(s, key).is_none();
+        return (adds && text(s, "rename").is_some()).then_some(RENAMED_ONE_MATCH);
+    }
+    let is_match = key
+        .strip_prefix("match")
+        .is_some_and(|n| n.len() == 1 && (b'1'..=b'8').contains(&n.as_bytes()[0]));
+    if !is_match || text(s, "rename").is_none() {
+        return None;
+    }
+    let mut after = s.clone();
+    match v {
+        Some(v) => after.insert(key.to_string(), v.clone()),
+        None => after.remove(key),
+    };
+    let n = match_rows(&after, derived);
+    (n > 1 && n > match_rows(s, derived)).then_some(RENAMED_ONE_MATCH)
+}
+
+/// The PGPatcher lock key of slot `n` (DECISIONS AN5). Slot 5 has none: `lock_cubemap` clears the cubemap.
+pub fn lock_key(n: u8) -> Option<&'static str> {
+    Some(match n {
+        1 => "lock_diffuse",
+        2 => "lock_normal",
+        3 => "lock_emissive",
+        4 => "lock_parallax",
+        6 => "lock_rmaos",
+        7 => "lock_cnr",
+        8 => "lock_subsurface",
+        _ => return None,
+    })
+}
+
+/// Whether slot `n`'s PGPatcher lock is on in `s`.
+pub fn pgp_locked(s: &Settings, n: u8) -> bool {
+    lock_key(n).is_some_and(|k| s.get(k).and_then(Value::as_bool) == Some(true))
+}
+
 /// No active `matchN` and no `path_contains`: PGPatcher would never apply the entry (DECISIONS V4).
 pub fn matches_nothing(s: &Settings, derived: &str) -> bool {
     active_matches(s, derived).is_empty() && text(s, "path_contains").is_none()
@@ -333,13 +403,23 @@ pub fn pitfalls(s: &Settings, derived: &str) -> Vec<String> {
                 .into(),
         );
     }
-    // A rename lands right only for meshes whose matched texture is the entry's `match_diffuse` (DECISIONS AA8).
-    if renamed && (prefixes.len() > 1 || text(s, "path_contains").is_some()) {
-        out.push(
-            "with a rename, only meshes using the first matched texture get the renamed files; meshes hit through \
-             path_contains or a match slot pointing at another texture get a wrong path"
-                .into(),
-        );
+    // A renamed entry matches by `match_diffuse` only (DECISIONS AN1-AN2): extra match rows are kept, not written.
+    if renamed && match_rows(s, derived) > 1 {
+        out.push(format!(
+            "{RENAMED_MATCH_NOTE}; the extra match slots are not written; remove them"
+        ));
+    }
+    // PGPatcher cuts a `path_contains` hit by `match_diffuse`'s length, a mangled path: not written (AN1).
+    if renamed && text(s, "path_contains").is_some() {
+        out.push(format!(
+            "{RENAMED_MATCH_NOTE}; path_contains is not written; remove it"
+        ));
+    }
+    // DECISIONS AN6: PGPatcher applies slotN after the locks, so a slot command undoes the lock.
+    for n in (1..=8u8).filter(|n| pgp_locked(s, *n) && s.contains_key(&format!("slot{n}"))) {
+        out.push(format!(
+            "slot{n} overrides the lock (PGPatcher applies slotN last)"
+        ));
     }
     if matches_nothing(s, derived) {
         out.push(format!(

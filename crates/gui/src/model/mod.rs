@@ -256,6 +256,8 @@ pub struct AppModel {
     pub known: Arc<known_paths::KnownPaths>,
     /// Item 9: the selected texture's "Used by meshes" read (`used_by_for`).
     pub used_by: used_by::UsedByState,
+    /// Note AN: the hover lists of PGPatcher-locked slots.
+    pub original: used_by::OriginalState,
     /// G3: the TruePBR JSON editor window is open.
     pub json_editor_open: bool,
     /// Note AM: the preset creator window is open.
@@ -431,6 +433,7 @@ impl AppModel {
             gras_diffuses: Default::default(),
             known: Default::default(),
             used_by: Default::default(),
+            original: Default::default(),
             json_editor_open: false,
             presets_open: false,
             presets: None,
@@ -895,6 +898,11 @@ impl AppModel {
             WorkerMsg::Planned { .. } => {}
             WorkerMsg::MeshVotes { generation, result } => self.votes_landed(generation, result),
             WorkerMsg::UsedBy { generation, result } => self.used_by_landed(generation, result),
+            WorkerMsg::OriginalTextures {
+                generation,
+                key,
+                result,
+            } => self.original_landed(generation, key, result),
             WorkerMsg::KnownPaths(result) => self.known_paths_landed(result),
             WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
@@ -908,6 +916,7 @@ impl AppModel {
                     "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
+                    "original-textures" => self.original_panicked(&message),
                     "save-report" => self.report_saving = false,
                     _ => {}
                 }

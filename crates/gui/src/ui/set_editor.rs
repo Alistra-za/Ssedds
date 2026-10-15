@@ -14,16 +14,23 @@ use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    card_title, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell, SlotFill,
-    SlotKind,
+    card_title, is_json_set, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell,
+    SlotFill, SlotKind,
 };
 use crate::model::AppModel;
-use crate::pgp::prefix::{active_matches, match_toggle, slot_match_path};
+use crate::pgp::prefix::{
+    active_matches, extra_match_refusal, lock_key, match_toggle, pgp_locked, slot_match_path,
+};
 use eframe::egui;
 use engine::config::{ColorTag, Format, PackRecipe, RawMap, Target};
 use engine::events::RecipeReport;
 use engine::pack::RecipeKind;
 use serde_json::Value;
+
+/// Note AN: the caption across a PGPatcher-locked slot card.
+pub const PGP_LOCK_CAPTION: &str = "The original texture in this spot is used";
+/// Review M2: a lock key on a set that writes no JSON.
+pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
 const CARD: f32 = 150.0;
 const THUMB: f32 = 72.0;
@@ -47,6 +54,8 @@ enum Act {
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
+    /// Note AN: read a locked slot's original textures (set id, slot) on a worker.
+    AskOriginal(String, u8),
     /// F3a Task 8: a slot menu pick.
     Slot(MenuAction),
     /// Item 17: files from Explorer dropped on this set's slot card.
@@ -181,6 +190,7 @@ pub fn draw(
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
             Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
+            Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
             Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
         }
@@ -357,7 +367,7 @@ fn card(
                 };
                 let t = if locked {
                     ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
-                        .on_hover_text("Slot locked: right-click to unlock")
+                        .on_hover_text("Slot pinned (sdc): right-click to unpin")
                 } else {
                     ui.label(egui::RichText::new(title).strong())
                 };
@@ -403,6 +413,14 @@ fn card(
                         );
                     }
                 }
+                if pgp_locked(&v.settings, slot.slot_number()) {
+                    // Only a set that writes JSON gives PGPatcher the lock (review M2).
+                    if is_json_set(v, model.target) {
+                        pgp_lock_cross(ui, model, v, slot, rect, acts);
+                    } else {
+                        ui.weak(PGP_LOCK_UNWRITTEN);
+                    }
+                }
                 let Some(i) = item else {
                     ui.weak("empty");
                     return;
@@ -421,14 +439,24 @@ fn card(
                         .any(|(m, _)| *m == n);
                     let mut want = on;
                     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+                    let path = slot_match_path(derived, slot.suffix());
+                    // AN2: a renamed set takes no second match.
+                    let (k, val) = match_toggle(n, true, &path);
+                    let refused = (!on)
+                        .then(|| extra_match_refusal(&v.settings, derived, &k, val.as_ref()))
+                        .flatten();
                     if ui
-                        .add_enabled(editable, egui::Checkbox::new(&mut want, "Match on this"))
+                        .add_enabled(
+                            editable && refused.is_none(),
+                            egui::Checkbox::new(&mut want, "Match on this"),
+                        )
                         .on_hover_text(
                             "PGPatcher applies the entry to meshes with this exact texture in this slot",
                         )
+                        .on_disabled_hover_text(refused.unwrap_or_default())
                         .changed()
                     {
-                        let (k, val) = match_toggle(n, want, &slot_match_path(derived, slot.suffix()));
+                        let (k, val) = match_toggle(n, want, &path);
                         acts.push(Act::Json(v.id.clone(), k, val));
                     }
                 }
@@ -494,6 +522,62 @@ fn card(
     if drop_at.is_some_and(|p| scoped.response.rect.contains(p)) {
         acts.push(Act::FileDrop(v.id.clone(), slot));
     }
+}
+
+/// Note AN: a PGPatcher-locked slot: a big red ✕ over the thumbnail and a caption across it. With a scan, the
+/// caption's hover names the textures the matched meshes have in that slot.
+fn pgp_lock_cross(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    slot: SlotKind,
+    rect: egui::Rect,
+    acts: &mut Vec<Act>,
+) {
+    let stroke = egui::Stroke::new(6.0, RED);
+    let r = rect.shrink(6.0);
+    ui.painter()
+        .line_segment([r.left_top(), r.right_bottom()], stroke);
+    ui.painter()
+        .line_segment([r.right_top(), r.left_bottom()], stroke);
+    let band = egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 34.0));
+    ui.painter()
+        .rect_filled(band, 0.0, egui::Color32::from_black_alpha(190));
+    let caption = egui::Label::new(
+        egui::RichText::new(PGP_LOCK_CAPTION)
+            .small()
+            .color(egui::Color32::WHITE),
+    )
+    .wrap()
+    .halign(egui::Align::Center);
+    let n = slot.slot_number();
+    // A child over the thumbnail: `ui.put` would move the card's cursor back up into it.
+    let mut over = ui.new_child(egui::UiBuilder::new().max_rect(band).layout(
+        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+    ));
+    over.add(caption).on_hover_ui(|ui| {
+        ui.label(format!(
+            "PGPatcher lock ({}): this slot keeps the mesh's own texture",
+            lock_key(n).unwrap_or_default()
+        ));
+        match model.original_textures(&v.id, n) {
+            Some(Some(paths)) if !paths.is_empty() => {
+                ui.label("Used by meshes, in this slot:");
+                for p in paths.iter() {
+                    ui.monospace(p);
+                }
+            }
+            Some(Some(_)) => {
+                ui.weak("The scan has no mesh with this set's diffuse");
+            }
+            // The read runs on a worker (AN6); it lands on a later frame.
+            Some(None) => {
+                ui.weak("…");
+                acts.push(Act::AskOriginal(v.id.clone(), n));
+            }
+            None => {}
+        }
+    });
 }
 
 /// F3a Task 8: the slot menu of card `slot` (the model's list, drawn as the bulk menus are).

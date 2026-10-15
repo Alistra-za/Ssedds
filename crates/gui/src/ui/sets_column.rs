@@ -505,7 +505,10 @@ fn pill(
                             .find(|(_, f)| matches!(f, SlotFill::Own { item } if item == mk))
                             .map(|(k, _)| *k);
                         let locked = kind.is_some_and(|k| v.locks.contains(&k.slot_number()));
-                        let r = member(ui, item, sel, locked, thumbs);
+                        let pgp = kind.is_some_and(|k| {
+                            crate::pgp::prefix::pgp_locked(&v.settings, k.slot_number())
+                        });
+                        let r = member(ui, item, sel, locked, pgp, thumbs);
                         if let Some(k) = kind {
                             member_menu |= r.secondary_clicked();
                             let open = r.context_menu(|ui| {
