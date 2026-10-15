@@ -342,3 +342,17 @@ fn an_old_skin_entry_drops_at_the_next_export_under_the_keep_rules() {
     ));
     assert!(!std::fs::read_to_string(&p.path).unwrap().contains("leaf"));
 }
+
+/// Fix round 2 (re-review minors): a skin-only project writes no JSON, so an old file stays (keep rule AF1), and the
+/// set preview has no JSON entry for a skin set (it draws it as a vanilla set).
+#[test]
+fn a_skin_only_project_keeps_the_old_json_and_previews_without_an_entry() {
+    let d = tempfile::tempdir().unwrap();
+    let m = skin_opened(d.path());
+    assert!(
+        sdc_gui::model::pbr_export::prepare(&m).is_none(),
+        "nothing to write"
+    );
+    let fp = sdc_gui::model::set_preview::fingerprint(&m, &set_key(&m)).unwrap();
+    assert!(fp.entry.is_none());
+}

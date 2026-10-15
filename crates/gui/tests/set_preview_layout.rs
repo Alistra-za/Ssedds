@@ -120,10 +120,10 @@ fn in_2d_the_centre_is_the_set_editor_and_no_3d_view_exists() {
     assert!(outer(&h, "set-3d").is_none());
 }
 
-/// AG87 (owner: "Keep 3D up"): a member of the set shown in 3D keeps the view, its settings folded above it; a
-/// texture of no set, or of another set, shows its normal settings.
+/// AG87 (owner: "Keep 3D up", fix round 2): with 3D on, any set member shows its set's 3D view with its settings
+/// folded above it, another set's member too; 2D brings the normal texture view back.
 #[test]
-fn a_member_keeps_the_3d_view_and_another_texture_does_not() {
+fn a_member_keeps_the_3d_view_and_2d_shows_its_normal_view() {
     use sdc_gui::model::Selection;
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(d.path(), false, 1400.0, true);
@@ -139,22 +139,22 @@ fn a_member_keeps_the_3d_view_and_another_texture_does_not() {
     let other = m
         .items
         .iter()
-        .find(|i| i.set_key.as_deref() != Some(set.as_str()))
-        .unwrap()
-        .key
-        .clone();
+        .find(|i| i.set_key.is_some() && i.set_key.as_deref() != Some(set.as_str()))
+        .map(|i| (i.key.clone(), i.name.clone()));
     h.state_mut().0.selection = Selection::Item(key);
     h.run_steps(3);
     h.get_by_label(FRAME_LABEL);
     h.get_by_label(&format!("{name} settings"));
     h.get_by_label("3D");
-    h.state_mut().0.selection = Selection::Item(other);
+    if let Some((k, n)) = other {
+        h.state_mut().0.selection = Selection::Item(k);
+        h.run_steps(3);
+        h.get_by_label(FRAME_LABEL);
+        h.get_by_label(&format!("{n} settings"));
+    }
+    h.state_mut().0.settings.set_view_3d = false;
     h.run_steps(3);
-    assert!(
-        h.query_by_label(FRAME_LABEL).is_none(),
-        "a non-member shows its own view"
-    );
-    assert!(h.state().0.settings.set_view_3d, "the switch stays on 3D");
+    assert!(h.query_by_label(FRAME_LABEL).is_none(), "2D: no 3D view");
 }
 
 /// Fix round 1, item 4: the coat group (under Multilayer, Note AJ) is in the 3D layout's TruePBR settings too.
@@ -173,4 +173,25 @@ fn the_3d_layout_truepbr_settings_show_the_coat_group() {
     h.get_by_label("Coat settings");
     h.get_by_label("Coat colour");
     h.get_by_label(FRAME_LABEL);
+}
+
+/// Fix round 2 (owner): with 3D on, a member clicked straight from the Textures column opens its set's 3D view,
+/// even though the set itself was never selected.
+#[test]
+fn a_member_selected_first_opens_its_sets_3d_view() {
+    use sdc_gui::model::Selection;
+    let d = tempfile::tempdir().unwrap();
+    let mut name = String::new();
+    let h = harness_with(d.path(), false, 1400.0, true, |m| {
+        let set = sdc_gui::model::set_preview::followed_set(m).unwrap();
+        let i = m
+            .items
+            .iter()
+            .find(|i| i.set_key.as_deref() == Some(set.as_str()))
+            .unwrap();
+        name = i.name.clone();
+        m.selection = Selection::Item(i.key.clone());
+    });
+    h.get_by_label(FRAME_LABEL);
+    h.get_by_label(&format!("{name} settings"));
 }
