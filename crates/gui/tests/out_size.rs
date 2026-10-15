@@ -161,3 +161,39 @@ fn headers_are_read_on_a_worker_and_the_totals_follow() {
     assert!(m.sizes.reads >= 2);
     assert_eq!(header_reads_on_this_thread(), before);
 }
+
+fn panics(_: &std::path::Path) -> Option<(u32, u32)> {
+    panic!("header reader blew up")
+}
+
+#[test]
+fn a_panicked_header_job_is_retried_once_at_the_next_plan_then_left_unsized() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    m.session = Some(support::session());
+    m.sizes.reader = Some(panics);
+    m.invalidate_views();
+    let (_, missing) = m.folder_size();
+    assert!(missing > 0);
+    settle(&mut m);
+    let reads = m.sizes.reads;
+    assert!(reads > 0);
+    // Not asked again until the next plan.
+    m.folder_size();
+    assert!(!m.dims_pending());
+    assert_eq!(m.sizes.reads, reads);
+    // The next plan asks again, once.
+    m.invalidate_views();
+    m.folder_size();
+    settle(&mut m);
+    assert_eq!(m.sizes.reads, 2 * reads, "retried once");
+    assert!(m
+        .messages
+        .entries()
+        .any(|e| e.text.contains("could not be read")));
+    m.invalidate_views();
+    let (_, still) = m.folder_size();
+    assert!(!m.dims_pending());
+    assert_eq!(m.sizes.reads, 2 * reads, "not a third time");
+    assert_eq!(still, missing, "they stay unsized");
+}

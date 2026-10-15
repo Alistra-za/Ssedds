@@ -105,6 +105,9 @@ pub fn source_dims(path: &std::path::Path) -> Option<(u32, u32)> {
 /// A source file and the (size, mtime) stamp the plan read it at.
 pub type DimKey = (std::path::PathBuf, Option<(u64, u64)>);
 
+/// Reads one source size from its header (`source_dims`).
+pub type DimsReader = fn(&std::path::Path) -> Option<(u32, u32)>;
+
 /// Per-item sizes by plan revision (`AppModel::items_rev`): the source dimensions are read once per file and
 /// kept; the sizes are rebuilt when the revision moves.
 #[derive(Default)]
@@ -120,6 +123,11 @@ pub struct SizeCache {
     pending: Vec<DimKey>,
     asked: std::collections::HashSet<DimKey>,
     running: bool,
+    /// The files of the job in flight, and the ones whose job already panicked once (AG127).
+    inflight: Vec<DimKey>,
+    retried: std::collections::HashSet<DimKey>,
+    /// What reads a header; `None` is [`source_dims`] (tests put in one that panics).
+    pub reader: Option<DimsReader>,
     /// Rebuilds so far (tests).
     pub builds: u32,
 }
@@ -267,11 +275,13 @@ impl AppModel {
         let todo = std::mem::take(&mut c.pending);
         c.running = true;
         c.reads += todo.len() as u32;
+        c.inflight = todo.clone();
+        let read = c.reader.unwrap_or(source_dims);
         crate::worker::spawn_guarded(self.tx.clone(), "dims", move |tx| {
             let dims = todo
                 .into_iter()
                 .map(|k| {
-                    let d = source_dims(&k.0);
+                    let d = read(&k.0);
                     (k, d)
                 })
                 .collect();
@@ -282,6 +292,7 @@ impl AppModel {
     pub(super) fn dims_landed(&mut self, dims: Vec<(DimKey, Option<(u32, u32)>)>) {
         let c = &mut self.sizes;
         c.running = false;
+        c.inflight.clear();
         c.dims.extend(dims);
         // Estimates built without them are rebuilt.
         c.rev = None;
@@ -289,8 +300,28 @@ impl AppModel {
         self.kick_dims();
     }
 
+    /// AG127: the files of a panicked job are asked again once, at the next plan; a second panic leaves them
+    /// unsized for the session, with a note.
     pub(super) fn dims_panicked(&mut self) {
-        self.sizes.running = false;
+        let c = &mut self.sizes;
+        c.running = false;
+        let mut gave_up = 0;
+        for k in std::mem::take(&mut c.inflight) {
+            if c.retried.insert(k.clone()) {
+                c.asked.remove(&k);
+            } else {
+                c.dims.insert(k, None);
+                gave_up += 1;
+            }
+        }
+        if gave_up > 0 {
+            self.messages.log(
+                crate::model::messages::Severity::Warning,
+                format!(
+                    "The size of {gave_up} source file(s) could not be read; they stay unsized"
+                ),
+            );
+        }
     }
 
     /// A header job is in flight or waiting: the app keeps frames coming until it lands.
