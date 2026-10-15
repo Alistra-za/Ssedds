@@ -2226,6 +2226,16 @@ impl AppModel {
                 self.fallback_preset()
             ));
         }
+        // Note AR: a crash's recovery file newer than its document.
+        let docs = [
+            self.project.as_ref().map(ProjectDoc::path),
+            self.sets_doc.as_ref().map(crate::sets_doc::SetsDoc::path),
+        ];
+        lines.extend(
+            docs.into_iter()
+                .flatten()
+                .filter_map(crate::crash_log::recovery_note),
+        );
         if let Some(e) = self.project.as_ref().and_then(ProjectDoc::error) {
             lines.push(read_only_banner(e));
         }
@@ -2283,6 +2293,7 @@ impl AppModel {
             wrote = true;
         }
         if wrote {
+            self.refresh_banner(); // the save removed any recovery file
             self.messages.notify(messages::Severity::Info, "Saved");
         }
         Ok(())

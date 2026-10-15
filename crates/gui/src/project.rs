@@ -491,6 +491,7 @@ impl ProjectDoc {
             .and_then(|_| std::fs::rename(&tmp, &self.path))
             .map_err(|e| SaveError::Io(e.to_string()))?;
         self.disk = SourceStamp::of(&self.path);
+        crate::crash_log::discard_recovery(&self.path);
         self.dirty = false;
         Ok(())
     }

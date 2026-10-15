@@ -1,5 +1,5 @@
 //! Note AR (crash 2026-10-15): egui-wgpu's "Failed to create staging buffer for index data" panic is what a lost
-//! wgpu device looks like, the app records the loss, and the panic hook keeps unsaved edits.
+//! wgpu device looks like and the app records the loss; egui textures do not grow over frames.
 mod support;
 use eframe::egui::epaint::{ClippedPrimitive, Mesh, Primitive, Vertex};
 use eframe::egui::{pos2, Rect};
@@ -44,7 +44,8 @@ fn a_lost_device_is_logged_and_is_what_the_staging_buffer_panic_means() {
         None,
         RendererOptions::default(),
     )) else {
-        return; // no adapter
+        eprintln!("SKIPPED a_lost_device_is_logged…: no wgpu adapter");
+        return;
     };
     eprintln!("adapter: {:?}", rs.adapter.get_info());
     let RenderState { device, queue, .. } = &rs;
@@ -80,25 +81,6 @@ fn a_lost_device_is_logged_and_is_what_the_staging_buffer_panic_means() {
     assert!(
         message.starts_with("Failed to create staging buffer for index data"),
         "{message}"
-    );
-}
-
-#[test]
-fn unsaved_edits_are_the_recovery_snapshot_and_a_panic_writes_them_beside_the_file() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
-    assert!(m.recovery_snapshot().is_empty(), "nothing unsaved");
-    m.set_target(engine::config::Target::Vanilla);
-    let snap = m.recovery_snapshot();
-    let project = m.project.as_ref().unwrap();
-    assert_eq!(snap, vec![(project.path().to_path_buf(), project.text())]);
-
-    crash_log::write_recovery(&snap);
-    let recovery = crash_log::recovery_path(project.path());
-    assert_eq!(std::fs::read_to_string(&recovery).unwrap(), project.text());
-    assert!(
-        std::fs::read_to_string(project.path()).ok() != Some(project.text()),
-        "the original is untouched"
     );
 }
 

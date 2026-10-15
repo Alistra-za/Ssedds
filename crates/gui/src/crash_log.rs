@@ -42,15 +42,16 @@ fn now_stamp() -> String {
     stamp(secs)
 }
 
-/// `%LOCALAPPDATA%\sdc\logs\crash-<stamp>.log` for this run.
-fn log_path(stamp: &str) -> Option<PathBuf> {
-    let dir = Path::new(&std::env::var_os("LOCALAPPDATA")?)
-        .join("sdc")
-        .join("logs");
-    Some(dir.join(format!("crash-{stamp}.log")))
+/// `%LOCALAPPDATA%\sdc\logs`, where each run's `crash-<stamp>.log` goes.
+fn log_dir() -> Option<PathBuf> {
+    Some(
+        Path::new(&std::env::var_os("LOCALAPPDATA")?)
+            .join("sdc")
+            .join("logs"),
+    )
 }
 
-/// This run's crash log, set by [`install`].
+/// This run's crash log, set by [`install_in`].
 static RUN_LOG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// The unsaved documents as `(file, text)`, refreshed each frame; the panic hook writes them out (Note AR).
 static RECOVERY: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
@@ -108,12 +109,44 @@ pub fn write_recovery(files: &[(PathBuf, String)]) {
     }
 }
 
-/// Install the hook: append the panic to this run's crash log, write any unsaved documents to their recovery files,
-/// then run the previous hook. Failures to write are ignored (a panic hook cannot report them anywhere).
+/// A saved document's recovery file is stale: remove it.
+pub fn discard_recovery(file: &Path) {
+    let _ = std::fs::remove_file(recovery_path(file));
+}
+
+/// The banner line for a recovery file newer than its document (or one whose document is gone); older ones are
+/// ignored.
+pub fn recovery_note(file: &Path) -> Option<String> {
+    let rec = recovery_path(file);
+    let rec_time = std::fs::metadata(&rec).and_then(|m| m.modified()).ok()?;
+    let newer = std::fs::metadata(file)
+        .and_then(|m| m.modified())
+        .map_or(true, |t| rec_time > t);
+    let name = |p: &Path| {
+        p.file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+    };
+    newer.then(|| {
+        format!(
+            "Unsaved edits from a crash were kept in {}: rename it over {} to restore, or delete it.",
+            name(&rec),
+            name(file)
+        )
+    })
+}
+
+/// [`install_in`] the `%LOCALAPPDATA%\sdc\logs` folder.
 pub fn install() {
-    let started = now_stamp();
-    if let Some(path) = log_path(&started) {
-        let _ = RUN_LOG.set(path);
+    install_in(log_dir());
+}
+
+/// Install the hook: append the panic to this run's crash log in `dir`, write the unsaved documents to their
+/// recovery files when the panic is on the main thread (a worker's panic is caught and shown, the app lives on), then
+/// run the previous hook. Failures to write are ignored (a panic hook cannot report them anywhere).
+pub fn install_in(dir: Option<PathBuf>) {
+    let log = dir.map(|d| d.join(format!("crash-{}.log", now_stamp())));
+    if let Some(path) = &log {
+        let _ = RUN_LOG.set(path.clone());
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -134,12 +167,14 @@ pub fn install() {
             &std::backtrace::Backtrace::force_capture().to_string(),
             &now_stamp(),
         );
-        if let Some(path) = log_path(&started) {
-            append(&path, &line);
+        if let Some(path) = &log {
+            append(path, &line);
         }
         // try_lock: a panic while the snapshot is being replaced must not deadlock the hook.
-        if let Ok(files) = RECOVERY.try_lock() {
-            write_recovery(&files);
+        if thread.name() == Some("main") {
+            if let Ok(files) = RECOVERY.try_lock() {
+                write_recovery(&files);
+            }
         }
         previous(info);
     }));
