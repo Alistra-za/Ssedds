@@ -1,11 +1,11 @@
 //! The patch itself, `applyOnePatch` + `enableTruePBROnShape` [Src 1.2.0 TP:662-1142; 01 §2.1-§2.3], on a
 //! `MaterialState`, plus the per-file checks of 01 §1.4.
-use crate::check::check_types;
+use crate::check::{check_types, uint_in};
 use crate::json::{flag, get_bool, get_num, rgb, GLINT_KEYS};
 use crate::matching::pg_slots;
 use crate::slots::{apply_slots, first_missing};
 use crate::{Badge, MaterialState, SimResult};
-use nif::props::LightingTrailer;
+use nif::props::{Alpha, LightingTrailer};
 use serde_json::{Map, Value};
 
 // nifly SkyrimShaderPropertyFlags1/2 bit numbers (nifly include/Shaders.hpp:50-116).
@@ -143,6 +143,22 @@ impl Sim {
         }
         if let Some(z) = get_bool(e, "zbuffer_write") {
             self.f2(SLSF2_ZBUFFER_WRITE, z);
+        }
+        // PGPatcher 2.2 `setAlphaProperty` / `deleteAlphaProperty`. Delete wins; create makes nifly's default
+        // NiAlphaProperty (flags 4844, threshold 128); only values `unsignedFromJSON` accepts are written.
+        // Sharing/unsharing of the property has no effect on a per-shape preview.
+        if flag(e, "alphaprop_delete") {
+            self.m.alpha = None;
+        } else if self.m.alpha.is_some() || flag(e, "alphaprop_create") {
+            let old = self.m.alpha.unwrap_or(Alpha {
+                flags: 4844,
+                threshold: 128,
+            });
+            let int = |k: &str, max: u32| e.get(k).and_then(|v| uint_in(v, max));
+            self.m.alpha = Some(Alpha {
+                flags: int("alphaprop_flags", 65535).map_or(old.flags, |v| v as u16),
+                threshold: int("alphaprop_thresh", 255).map_or(old.threshold, |v| v as u8),
+            });
         }
         if let Some(v) = get_num(e, "specular_level") {
             self.m.params.glossiness = v;

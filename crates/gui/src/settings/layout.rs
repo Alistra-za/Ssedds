@@ -103,13 +103,17 @@ pub struct LookSettings {
     pub hdri: Option<bool>,
     #[serde(deserialize_with = "lenient")]
     pub grey: Option<f32>,
+    /// The solid background colour, sRGB 0..=1 per channel (GUI suggestions item 2). `grey` is read only when this is
+    /// missing (a gui.toml from before), and never written.
+    #[serde(deserialize_with = "lenient")]
+    pub bg: Option<[f32; 3]>,
     #[serde(deserialize_with = "lenient")]
     pub sun: Option<f32>,
     #[serde(deserialize_with = "lenient")]
     pub point: Option<f32>,
     #[serde(deserialize_with = "lenient")]
     pub radius: Option<f32>,
-    /// The sun's turn about the vertical, radians (Task 10, AG74).
+    /// The sun's turn about the vertical, radians (Task 10, AG74). The HDRI backdrop and its ambient turn with it (AN4).
     #[serde(deserialize_with = "lenient")]
     pub sun_yaw: Option<f32>,
 }
@@ -121,6 +125,12 @@ impl LookSettings {
             *v = v.filter(|f| f.is_finite()).map(|f| f.clamp(lo, hi));
         };
         fix(&mut self.grey, (0.0, 1.0));
+        self.bg = self
+            .bg
+            .filter(|c| c.iter().all(|f| f.is_finite()))
+            .map(|c| c.map(|f| f.clamp(0.0, 1.0)));
+        // A legacy `grey` becomes `bg` on load, so a look saved back unchanged (`look_now`) never writes `grey`.
+        self.bg = self.bg.or(self.grey.take().map(|g| [g; 3]));
         fix(&mut self.sun, (0.0, 4.0));
         fix(&mut self.point, (0.0, 4.0));
         fix(&mut self.radius, (0.1, 10.0));

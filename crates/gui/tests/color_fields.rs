@@ -176,7 +176,15 @@ fn background_grey_renders_a_hex_box() {
         .find(|n| n.value().as_deref() == Some("#000000"))
         .expect("grey hex box");
     type_hex(&mut h, "#000000", "#808080");
-    assert!((h.state().look.grey - 128.0 / 255.0).abs() < 1e-6);
+    assert!(
+        h.state()
+            .look
+            .bg
+            .iter()
+            .all(|c| (c - 128.0 / 255.0).abs() < 1e-6),
+        "{:?}",
+        h.state().look.bg
+    );
 }
 
 #[test]

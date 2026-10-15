@@ -7,6 +7,7 @@ use crate::props::{
 use crate::shape_head::{decode_head, ShapeHead, ShapeKind};
 use crate::text::lossy;
 use crate::NifError;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shader {
@@ -30,6 +31,8 @@ pub struct NifScan {
     pub le_mesh: bool,
     pub shapes: Vec<ShapeRow>,
     pub problems: Vec<String>,
+    /// Block → PGPatcher 3D index ([`crate::graph::index3d`]); a shape no node reaches is absent.
+    pub index3d: BTreeMap<u32, u32>,
 }
 
 fn valid(h: &Header, r: i32) -> Option<usize> {
@@ -74,6 +77,7 @@ pub fn scan(b: &[u8]) -> Result<NifScan, NifError> {
         le_mesh: h.bsver == 83,
         shapes: vec![],
         problems: vec![],
+        index3d: crate::graph::index3d(&h, b),
     };
     for i in 0..h.sizes.len() {
         let Some(kind) = ShapeKind::from_name(h.kind(i)) else {

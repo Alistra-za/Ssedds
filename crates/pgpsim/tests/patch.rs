@@ -411,3 +411,100 @@ fn wrong_json_type_is_a_skip() {
         "{r:?}"
     );
 }
+
+// ---- PGPatcher 2.2 alphaprop_* (GUI suggestions item 5) ----
+
+fn alpha_after(entry: Value, source: &nif::material::MaterialState) -> Option<nif::props::Alpha> {
+    patched(sim(&with(entry), &sdc_default(), source)).0.alpha
+}
+
+fn with_alpha(flags: u16, threshold: u8) -> nif::material::MaterialState {
+    let mut m = rock();
+    m.alpha = Some(nif::props::Alpha { flags, threshold });
+    m
+}
+
+#[test]
+fn alphaprop_values_in_range_apply_to_an_existing_property() {
+    let a = alpha_after(
+        json!({"alphaprop_flags": 4845, "alphaprop_thresh": 200}),
+        &with_alpha(237, 10),
+    );
+    assert_eq!(
+        a,
+        Some(nif::props::Alpha {
+            flags: 4845,
+            threshold: 200
+        })
+    );
+}
+
+#[test]
+fn bad_alphaprop_values_are_ignored_and_never_skip() {
+    for (flags, thresh) in [
+        (json!(70000), json!(300)),
+        (json!(-1), json!(-1)),
+        (json!(1.5), json!(2.5)),
+        (json!("8"), json!("8")),
+        (json!(true), json!(true)),
+    ] {
+        let r = sim(
+            &with(json!({"alphaprop_flags": flags, "alphaprop_thresh": thresh})),
+            &sdc_default(),
+            &with_alpha(237, 10),
+        );
+        assert!(
+            matches!(r, SimResult::Patched { .. }),
+            "{flags} / {thresh}: {r:?}"
+        );
+        assert_eq!(
+            patched(r).0.alpha,
+            Some(nif::props::Alpha {
+                flags: 237,
+                threshold: 10
+            }),
+            "{flags} / {thresh}"
+        );
+    }
+}
+
+#[test]
+fn delete_beats_create() {
+    let a = alpha_after(
+        json!({"alphaprop_delete": true, "alphaprop_create": true, "alphaprop_thresh": 5}),
+        &with_alpha(237, 10),
+    );
+    assert_eq!(a, None);
+}
+
+#[test]
+fn create_on_a_shape_without_alpha_uses_niflys_defaults_then_the_given_values() {
+    assert_eq!(
+        alpha_after(json!({"alphaprop_create": true}), &rock()),
+        Some(nif::props::Alpha {
+            flags: 4844,
+            threshold: 128
+        })
+    );
+    assert_eq!(
+        alpha_after(
+            json!({"alphaprop_create": true, "alphaprop_thresh": 64}),
+            &rock()
+        ),
+        Some(nif::props::Alpha {
+            flags: 4844,
+            threshold: 64
+        })
+    );
+}
+
+#[test]
+fn without_create_a_shape_without_alpha_stays_without() {
+    assert_eq!(
+        alpha_after(
+            json!({"alphaprop_flags": 4845, "alphaprop_thresh": 64}),
+            &rock()
+        ),
+        None
+    );
+}

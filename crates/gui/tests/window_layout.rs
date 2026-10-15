@@ -34,7 +34,8 @@ fn full() -> LayoutSettings {
         preview_layout: "split".into(),
         look: Some(LookSettings {
             hdri: Some(true),
-            grey: Some(0.25),
+            grey: None,
+            bg: Some([0.25; 3]),
             sun: Some(2.0),
             point: Some(1.5),
             radius: Some(3.0),
@@ -126,7 +127,12 @@ radius = 0.0
     );
     assert_eq!(l.window, None, "a window with a bad field is ignored");
     let look = l.look.expect("the look table is read");
-    assert_eq!(look.grey, Some(1.0), "clamped to its range");
+    assert_eq!(look.grey, None, "folded into bg on load");
+    assert_eq!(
+        look.bg,
+        Some([1.0; 3]),
+        "the legacy grey, clamped to its range"
+    );
     assert_eq!(look.sun, None, "text is ignored");
     assert_eq!(look.point, Some(1.0));
     assert_eq!(look.radius, Some(0.1), "clamped to its range");
@@ -159,7 +165,7 @@ fn channels_layouts_and_looks_convert_both_ways() {
     assert_eq!(Layout::from_name("diagonal"), None);
     let look = Look {
         hdri: true,
-        grey: 0.5,
+        bg: [0.5, 0.25, 0.0],
         sun: 2.0,
         point: 1.0,
         radius: 4.0,
@@ -331,7 +337,7 @@ fn a_new_app_starts_from_the_saved_layout() {
         app.meshes.v3.look,
         Look {
             hdri: true,
-            grey: 0.25,
+            bg: [0.25; 3],
             sun: 2.0,
             point: 1.5,
             radius: 3.0,
@@ -504,4 +510,65 @@ fn a_window_saved_at_egui_zoom_restores_at_the_same_size() {
     };
     let w = initial_window(&l, &[rect(0.0, 0.0, 4000.0, 3000.0)]);
     assert_eq!((w.size, w.pos), ([1400.0, 900.0], Some([100.0, 80.0])));
+}
+
+/// GUI suggestions item 2: `bg` replaced the grey slider. An old `grey` still loads (as that grey), and a broken
+/// `bg` falls back to it.
+#[test]
+fn an_old_grey_background_loads_as_that_grey_and_a_bad_bg_falls_back() {
+    let (s, err) = load_text("[layout.look]\ngrey = 0.25\n");
+    assert_eq!(err, None);
+    assert_eq!(Look::from_settings(s.layout.look.as_ref()).bg, [0.25; 3]);
+    let (s, _) = load_text("[layout.look]\ngrey = 0.5\nbg = [1.0, 0.5]\n");
+    assert_eq!(
+        Look::from_settings(s.layout.look.as_ref()).bg,
+        [0.5; 3],
+        "wrong arity: bg ignored"
+    );
+    let (s, _) = load_text("[layout.look]\nbg = \"red\"\n");
+    assert_eq!(
+        Look::from_settings(s.layout.look.as_ref()).bg,
+        Look::default().bg
+    );
+    let (s, _) = load_text("[layout.look]\nbg = [2.0, 0.5, -1.0]\n");
+    assert_eq!(
+        s.layout.look.unwrap().bg,
+        Some([1.0, 0.5, 0.0]),
+        "clamped per channel"
+    );
+    // What the app writes back has bg and no grey.
+    let text = toml::to_string(&LookSettings::of(&Look {
+        bg: [0.1, 0.2, 0.3],
+        ..Look::default()
+    }))
+    .unwrap();
+    assert!(text.contains("bg") && !text.contains("grey"), "{text}");
+}
+
+/// Task 4 review: an untouched legacy look is saved back as it was loaded (`look_now`), so the load must already have
+/// turned `grey` into `bg`; an unrelated layout change then writes `bg` (same colour) and no `grey`.
+#[test]
+fn a_legacy_grey_is_saved_back_as_bg_after_an_unrelated_change() {
+    use sdc_gui::app::SdcApp;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("gui.toml");
+    std::fs::write(&path, "[layout.look]\ngrey = 0.25\n").unwrap();
+    let (settings, err) = GuiSettings::load(&path);
+    assert_eq!(err, None);
+    let model = sdc_gui::model::AppModel::new(settings, Some(path.clone()), support::session());
+    let mut app = SdcApp::new(model);
+    let ctx = egui::Context::default();
+    let t0 = Instant::now();
+    app.sync_layout_at(&ctx, t0);
+    app.model.filter.failed = true;
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(3));
+    app.sync_layout_at(&ctx, t0 + Duration::from_secs(6));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("failed"),
+        "the unrelated change was written: {text}"
+    );
+    assert!(text.contains("bg") && !text.contains("grey"), "{text}");
+    let (back, _) = GuiSettings::load(&path);
+    assert_eq!(back.layout.look.unwrap().bg, Some([0.25; 3]));
 }

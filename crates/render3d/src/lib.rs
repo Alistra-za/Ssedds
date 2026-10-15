@@ -4,6 +4,7 @@ pub mod cache;
 pub mod cbuffer;
 pub mod compile;
 pub mod cs_settings;
+pub mod debug;
 pub mod device;
 pub mod draw;
 pub mod hdri;
@@ -20,6 +21,7 @@ pub mod source;
 pub mod textures;
 
 pub use builtin::{builtin_mesh, Builtin};
+pub use debug::{Availability, DebugOutput};
 pub use material::{classify, pbr_flags, Bound, EditKind};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
@@ -199,6 +201,9 @@ struct TexEntry {
     source: Option<textures::Texture>,
     encoded: Option<textures::Texture>,
     active: Variant,
+    /// A texture-set slot path the resolver did not return (a `LoadReport::missing_textures` line); never set for an
+    /// RFAOS guess. Kept through swaps, so a dropped swap falls back to the missing-texture fill.
+    missing: bool,
 }
 
 impl TexEntry {
@@ -303,6 +308,9 @@ pub struct Renderer {
     draw_order: Vec<ShapeId>,
     /// Textures resolved or swapped in since the last load, by canonical path.
     tex_cache: HashMap<String, TexEntry>,
+    /// Missing slot paths whose texture-less entry an edit evicted (so the resolver is asked again); a later
+    /// `replace_texture` that recreates the entry keeps `TexEntry::missing` from here. Cleared per load.
+    evicted_missing: HashSet<String>,
     /// The variant the resolver's bytes of the next loads count as ([`Renderer::set_load_variant`]).
     load_variant: Variant,
     bounds: Option<([f32; 3], f32)>,
@@ -322,6 +330,13 @@ pub struct Renderer {
     reference_writer: bool,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
     backdrop: Option<Backdrop>,
+    /// [`Renderer::set_missing_texture`]: the colour a missing colour-slot texture shows; `None` = neutral defaults.
+    missing_fill: Option<[u8; 4]>,
+    /// [`Renderer::override_slot`]: NIF slot → the DDS bytes (kept to re-upload on a new device) and the texture every
+    /// shape shows there. Not cleared by a load.
+    overrides: BTreeMap<usize, (Arc<[u8]>, textures::Texture)>,
+    /// [`Renderer::set_debug_output`]: the term the next permutations write instead of the lit colour.
+    debug: DebugOutput,
 }
 
 impl Renderer {
@@ -401,6 +416,9 @@ impl Renderer {
             uploads: 0,
             reference_writer: false,
             backdrop: None,
+            missing_fill: None,
+            overrides: BTreeMap::new(),
+            debug: DebugOutput::Lit,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -420,6 +438,7 @@ impl Renderer {
             shapes: BTreeMap::new(),
             draw_order: vec![],
             tex_cache: HashMap::new(),
+            evicted_missing: HashSet::new(),
             load_variant: Variant::Source,
             bounds: None,
             sampler: s.ok_or("no sampler")?,
@@ -604,6 +623,35 @@ impl Renderer {
         self.encode_srgb = on;
     }
 
+    /// `Some(rgba)`: a slot path the resolver did not return shows `rgba` (1×1, 2D or cube as the register reads it) in
+    /// colour registers only: t0, and t4 when it reflects as a cube (the env map). Data registers keep `default_for`.
+    /// `Bound` is not changed (material flags stay those of a missing file). Applies from the next load or rebind.
+    pub fn set_missing_texture(&mut self, fill: Option<[u8; 4]>) {
+        self.missing_fill = fill;
+    }
+
+    /// The debug view for every shape (GUI suggestions item 1). Err, with nothing changed, when `d` is not Lit and this
+    /// CS build has no usable anchor ([`Renderer::debug_supported`]). Otherwise stores `d` and re-permutes every shape
+    /// (`begin_all`): the old draw stays on screen while programs compile. Never short-circuits on an unchanged value.
+    pub fn set_debug_output(&mut self, d: DebugOutput) -> Result<(), String> {
+        if d != DebugOutput::Lit {
+            self.sources.get_debug(Path::new("Lighting.hlsl"))?;
+        }
+        self.debug = d;
+        self.begin_all();
+        Ok(())
+    }
+
+    pub fn debug_output(&self) -> DebugOutput {
+        self.debug
+    }
+
+    /// The loaded CS `Lighting.hlsl` has the single `return psout;` and the names the debug block reads. After
+    /// `set_shaders` to a build without them, `debug_output()` keeps the request but every shape compiles Lit.
+    pub fn debug_supported(&self) -> bool {
+        self.sources.get_debug(Path::new("Lighting.hlsl")).is_ok()
+    }
+
     /// Timing of the last successful [`Renderer::render`].
     pub fn last_timing(&self) -> FrameTiming {
         self.timing
@@ -674,6 +722,7 @@ impl Renderer {
         &mut self,
         norm: &str,
         linear: bool,
+        report_missing: bool,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> TexSlot {
@@ -681,12 +730,14 @@ impl Renderer {
             return e.current().map(|t| (t.srv.clone(), t.kind));
         }
         let v = self.load_variant;
+        self.evicted_missing.remove(norm);
         let mut entry = TexEntry {
             active: v,
             ..TexEntry::default()
         };
         match textures(norm) {
             None => {
+                entry.missing = report_missing;
                 if !rep.missing_textures.iter().any(|m| m == norm) {
                     rep.missing_textures.push(norm.to_string());
                 }
@@ -714,6 +765,7 @@ impl Renderer {
         let pbr = m.is_pbr();
         let msn = m.slsf1 & (1 << 12) != 0;
         let mut real: HashMap<u32, ID3D11ShaderResourceView> = HashMap::new();
+        let mut missing: HashSet<u32> = HashSet::new();
         for (slot, path) in m.slots.iter().enumerate() {
             if path.norm.is_empty() {
                 continue;
@@ -724,9 +776,8 @@ impl Renderer {
             let Some(kind) = draw::srv_kind_at(&program.ps.reflection, reg) else {
                 continue;
             };
-            match self
-                .tex_cache
-                .get(&path.norm)
+            let entry = self.tex_cache.get(&path.norm);
+            match entry
                 .and_then(TexEntry::current)
                 .map(|t| (t.srv.clone(), t.kind))
             {
@@ -737,7 +788,11 @@ impl Renderer {
                     "{name}: {} is not a {kind:?} texture (t{reg}); default bound",
                     path.norm
                 )),
-                None => {}
+                None => {
+                    if entry.is_some_and(|e| e.missing) {
+                        missing.insert(reg);
+                    }
+                }
             }
         }
         // CS_SKIN's t71: the first RFAOS candidate in `tex_cache` with a texture (resolve_textures asked for them,
@@ -753,13 +808,33 @@ impl Renderer {
                 real.insert(71, srv);
             }
         }
+        for (slot, (_, t)) in &self.overrides {
+            let Some(reg) = textures::register_for_slot(m.shader_type, pbr, msn, *slot) else {
+                continue;
+            };
+            if let Some(kind) =
+                draw::srv_kind_at(&program.ps.reflection, reg).filter(|k| *k != t.kind)
+            {
+                rep.warnings.push(format!(
+                    "{name}: the slot {slot} override is kind {:?} but t{reg} reads {kind:?}; not shown",
+                    t.kind
+                ));
+            }
+        }
         let mut srvs = vec![];
         for (_, reg, kind) in &program.ps.reflection.srvs {
+            if let Some(v) = self.override_at(m, *reg, *kind) {
+                srvs.push((*reg, v));
+                continue;
+            }
             if let Some(v) = real.get(reg) {
                 srvs.push((*reg, v.clone()));
                 continue;
             }
-            let rgba = textures::default_for(*reg, m.shader_type, pbr);
+            let rgba = match self.missing_fill {
+                Some(fill) if missing.contains(reg) && colour_register(*reg, *kind) => fill,
+                _ => textures::default_for(*reg, m.shader_type, pbr),
+            };
             let v = self
                 .default_srv(*kind, rgba)
                 .map_err(|e| format!("default texture: {e}"))?;
@@ -784,13 +859,16 @@ impl Renderer {
             if !path.norm.is_empty()
                 && textures::register_for_slot(m.shader_type, pbr, msn, slot).is_some()
             {
-                self.texture(&path.norm, false, textures, rep);
+                self.texture(&path.norm, false, true, textures, rep);
             }
         }
         // Derived guesses: a candidate the resolver lacks is not a missing texture (decode errors still count).
         let mut quiet = LoadReport::default();
         for c in rfaos_candidates(m) {
-            if self.texture(&c, true, textures, &mut quiet).is_some() {
+            if self
+                .texture(&c, true, false, textures, &mut quiet)
+                .is_some()
+            {
                 break;
             }
         }
@@ -861,8 +939,24 @@ impl Renderer {
             .filter(|d| !(old_ll && *d == "ENABLE_LL"))
             .collect();
         let vs = defines(&pm, Stage::Vertex, &f, false);
-        let ps = defines(&pm, Stage::Pixel, &f, false);
-        let src = self.sources.get(Path::new("Lighting.hlsl"))?;
+        let mut ps = defines(&pm, Stage::Pixel, &f, false);
+        let lighting = Path::new("Lighting.hlsl");
+        // A debug view: the injected source for both stages (one extra VS compile per permutation, shared by the
+        // five views) and SDC_DEBUG on the PS only. Without an anchor, Lit (no failure per shape).
+        let debug = match self.debug.define() {
+            Some(n) => self.sources.get_debug(lighting).ok().map(|s| (n, s)),
+            None => None,
+        };
+        let src = match debug {
+            Some((n, s)) => {
+                ps.0.push(("SDC_DEBUG".into(), n.to_string()));
+                if self.encode_srgb {
+                    ps.0.push(("SDC_DEBUG_PRELINEAR".into(), "1".into()));
+                }
+                s
+            }
+            None => self.sources.get(lighting)?,
+        };
         let key = ProgramKey::pair(
             &program_key(&src, "main", "vs_5_0", &vs.0),
             &program_key(&src, "main", "ps_5_0", &ps.0),
@@ -1065,6 +1159,19 @@ impl Renderer {
         n.load_variant = self.load_variant;
         n.reference_writer = self.reference_writer;
         n.compiled = std::mem::take(&mut self.compiled);
+        n.missing_fill = self.missing_fill;
+        n.debug = self.debug;
+        // Device objects do not move: upload each override again (it decoded before, so a failure is not expected).
+        for (slot, (bytes, _)) in std::mem::take(&mut self.overrides) {
+            match textures::load_dds(&n.gpu, &bytes) {
+                Ok(t) => {
+                    n.overrides.insert(slot, (bytes, t));
+                }
+                Err(e) => {
+                    eprintln!("render3d: slot {slot} override dropped on the new device: {e}")
+                }
+            }
+        }
         *self = n;
         Ok(())
     }
@@ -1100,6 +1207,7 @@ impl Renderer {
         self.shapes.clear();
         self.draw_order.clear();
         self.tex_cache.clear();
+        self.evicted_missing.clear();
         self.bounds = None;
         let mut rep = LoadReport {
             le_mesh: parsed.le_mesh,
@@ -1250,7 +1358,13 @@ impl Renderer {
         if kind == EditKind::Same && !rebuild {
             return Ok(kind);
         }
-        self.tex_cache.retain(|_, e| e.any());
+        let evicted = &mut self.evicted_missing;
+        self.tex_cache.retain(|p, e| {
+            if e.missing && !e.any() {
+                evicted.insert(p.clone());
+            }
+            e.any()
+        });
         let mut scratch = LoadReport::default();
         if rebuild {
             if let Some(s) = self.shapes.get_mut(&id) {
@@ -1342,6 +1456,9 @@ impl Renderer {
     ///
     /// Returns the `(shape, register)` pairs rebound. `Err`, with nothing stored or changed, for a DDS that does
     /// not decode or a texture of another kind than a register reads (a cube into a 2D slot).
+    ///
+    /// A register under a slot override (`override_slot`) keeps showing the override; the entry and `Bound` still
+    /// change, and the pair is not returned.
     pub fn replace_texture(
         &mut self,
         path: &str,
@@ -1353,7 +1470,14 @@ impl Renderer {
         } else {
             Some(textures::load_dds(&self.gpu, dds).map_err(|e| format!("{path}: {e}"))?)
         };
-        let mut entry = self.tex_cache.get(path).cloned().unwrap_or_default();
+        let mut entry = self
+            .tex_cache
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| TexEntry {
+                missing: self.evicted_missing.contains(path),
+                ..TexEntry::default()
+            });
         let was = entry.active;
         let dropped = fresh.is_none();
         *entry.slot_mut(v) = fresh;
@@ -1383,6 +1507,125 @@ impl Renderer {
         entry.active = v;
         self.rebind(path, entry)
             .is_ok_and(|touched| !touched.is_empty())
+    }
+
+    /// Shows `dds` in NIF texture slot `slot` of every shape (through each shape's slot→register rule), now and for
+    /// later loads, over both variants, even where the slot path is empty. `None` removes it and rebinds what a load
+    /// would bind (the active texture, the missing fill or the default). `Bound` and the material are never changed.
+    /// A register of another kind keeps its binding (a load lists it under `warnings`). Err, with nothing changed, for
+    /// a DDS that does not decode. Returns the `(shape, register)` pairs rebound.
+    pub fn override_slot(
+        &mut self,
+        slot: usize,
+        dds: Option<&[u8]>,
+    ) -> Result<Vec<(ShapeId, u32)>, String> {
+        match dds {
+            Some(b) => {
+                let t = textures::load_dds(&self.gpu, b)
+                    .map_err(|e| format!("slot {slot} override: {e}"))?;
+                self.overrides.insert(slot, (Arc::from(b), t));
+            }
+            None => {
+                if self.overrides.remove(&slot).is_none() {
+                    return Ok(vec![]);
+                }
+            }
+        }
+        let mut touched = vec![];
+        for (id, reg, kind) in self.slot_targets(slot) {
+            let Some(built) = self.shapes[&id].draw.as_ref().map(|d| d.built.clone()) else {
+                continue;
+            };
+            let srv = match self.overrides.get(&slot) {
+                Some((_, t)) if t.kind == kind => t.srv.clone(),
+                Some(_) => continue,
+                None => self.plain_srv(&built, slot, reg, kind)?,
+            };
+            if let Some(e) = self
+                .shapes
+                .get_mut(&id)
+                .and_then(|s| s.draw.as_mut())
+                .and_then(|d| d.srvs.iter_mut().find(|(r, _)| *r == reg))
+            {
+                e.1 = srv;
+                touched.push((id, reg));
+            }
+        }
+        Ok(touched)
+    }
+
+    /// The override texture a draw built for `m` shows at `reg`, if an override's slot maps there and its kind is the
+    /// register's.
+    fn override_at(
+        &self,
+        m: &MaterialState,
+        reg: u32,
+        kind: SrvKind,
+    ) -> Option<ID3D11ShaderResourceView> {
+        let msn = m.slsf1 & (1 << 12) != 0;
+        self.overrides
+            .iter()
+            .find(|(slot, (_, t))| {
+                t.kind == kind
+                    && textures::register_for_slot(m.shader_type, m.is_pbr(), msn, **slot)
+                        == Some(reg)
+            })
+            .map(|(_, (_, t))| t.srv.clone())
+    }
+
+    /// `(shape, register, kind)` for every visible draw whose built material maps NIF slot `slot` to a register it
+    /// binds, with or without a path: [`Renderer::texture_targets`] keyed by slot.
+    fn slot_targets(&self, slot: usize) -> Vec<(ShapeId, u32, SrvKind)> {
+        let mut out = vec![];
+        for (id, s) in &self.shapes {
+            let Some(d) = s.draw.as_ref().filter(|_| s.status != ShapeStatus::Hidden) else {
+                continue;
+            };
+            let m = &d.built;
+            let msn = m.slsf1 & (1 << 12) != 0;
+            let Some(reg) = textures::register_for_slot(m.shader_type, m.is_pbr(), msn, slot)
+            else {
+                continue;
+            };
+            let Some(view) = d.srvs.iter().find(|(r, _)| *r == reg).map(|(_, v)| v) else {
+                continue;
+            };
+            if let Some(kind) = textures::view_kind(view) {
+                out.push((*id, reg, kind));
+            }
+        }
+        out
+    }
+
+    /// What `bind_textures` binds at `reg` for slot `slot` of `m` without an override: the active texture of the
+    /// slot's path, else the missing fill (colour registers of a missing path, cached or evicted) or the register's
+    /// default.
+    fn plain_srv(
+        &mut self,
+        m: &MaterialState,
+        slot: usize,
+        reg: u32,
+        kind: SrvKind,
+    ) -> Result<ID3D11ShaderResourceView, String> {
+        let norm = m
+            .slots
+            .get(slot)
+            .map(|p| p.norm.as_str())
+            .filter(|n| !n.is_empty());
+        let entry = norm.and_then(|n| self.tex_cache.get(n));
+        if let Some(t) = entry.and_then(TexEntry::current).filter(|t| t.kind == kind) {
+            return Ok(t.srv.clone());
+        }
+        // An edit evicts a texture-less missing entry; its provenance lives on in `evicted_missing`.
+        let missing = match entry {
+            Some(e) => e.missing,
+            None => norm.is_some_and(|n| self.evicted_missing.contains(n)),
+        };
+        let rgba = match self.missing_fill {
+            Some(fill) if missing && colour_register(reg, kind) => fill,
+            _ => textures::default_for(reg, m.shader_type, m.is_pbr()),
+        };
+        self.default_srv(kind, rgba)
     }
 
     /// `(shape, register, kind)` for every register a visible shape with a draw reads `path` through (the same slot →
@@ -1424,10 +1667,15 @@ impl Renderer {
     fn rebind(&mut self, path: &str, entry: TexEntry) -> Result<Vec<(ShapeId, u32)>, String> {
         let mut plan = vec![];
         for (id, reg, kind) in self.texture_targets(path) {
-            let (shader_type, pbr, name) = {
+            let (shader_type, pbr, name, under) = {
                 let s = &self.shapes[&id];
                 let b = s.draw.as_ref().map_or(&s.material, |d| &d.built);
-                (b.shader_type, b.is_pbr(), s.name.clone())
+                (
+                    b.shader_type,
+                    b.is_pbr(),
+                    s.name.clone(),
+                    self.override_at(b, reg, kind).is_some(),
+                )
             };
             let real = match entry.current() {
                 Some(t) if t.kind != kind => {
@@ -1441,14 +1689,20 @@ impl Renderer {
             };
             let srv = match &real {
                 Some(v) => v.clone(),
-                None => self.default_srv(kind, textures::default_for(reg, shader_type, pbr))?,
+                None => {
+                    let rgba = match self.missing_fill {
+                        Some(fill) if entry.missing && colour_register(reg, kind) => fill,
+                        _ => textures::default_for(reg, shader_type, pbr),
+                    };
+                    self.default_srv(kind, rgba)?
+                }
             };
-            plan.push((id, reg, srv, real.is_some()));
+            plan.push((id, reg, srv, real.is_some(), under));
         }
         self.tex_cache.insert(path.to_string(), entry);
         let ll = self.linear_lighting();
         let mut touched = vec![];
-        for (id, reg, srv, real) in plan {
+        for (id, reg, srv, real, under) in plan {
             let Some(s) = self.shapes.get_mut(&id) else {
                 continue;
             };
@@ -1457,8 +1711,10 @@ impl Renderer {
             let Some(d) = s.draw.as_mut() else {
                 continue;
             };
-            if let Some(slot) = d.srvs.iter_mut().find(|(r, _)| *r == reg) {
-                slot.1 = srv;
+            if !under {
+                if let Some(slot) = d.srvs.iter_mut().find(|(r, _)| *r == reg) {
+                    slot.1 = srv;
+                }
             }
             let was = d.bound.regs.contains(&reg);
             if real {
@@ -1470,7 +1726,9 @@ impl Renderer {
                 let fv = values_for(&self.settings, self.features_on, &d.fields, &material);
                 d.rewrite_material(&material, ll, &fv);
             }
-            touched.push((id, reg));
+            if !under {
+                touched.push((id, reg));
+            }
         }
         Ok(touched)
     }
@@ -1529,6 +1787,28 @@ impl Renderer {
             .draw
             .as_ref()
             .map(|d| d.mesh.index.as_raw() as usize)
+    }
+
+    /// Test hook: the `(kind, rgba)` of the 1×1 default bound at `reg` of the shape's draw; `None` when a real
+    /// texture (or an override) is bound there, or there is no draw.
+    #[doc(hidden)]
+    pub fn draw_default_at(&self, id: ShapeId, reg: u32) -> Option<(SrvKind, [u8; 4])> {
+        use windows::core::Interface;
+        let d = self.shapes.get(&id)?.draw.as_ref()?;
+        let bound = d.srvs.iter().find(|(r, _)| *r == reg)?.1.as_raw();
+        self.defaults
+            .iter()
+            .find(|(_, v)| v.as_raw() == bound)
+            .map(|(k, _)| *k)
+    }
+
+    /// Test hook: the registers the shape's draw counts as real textures (`Bound`), sorted.
+    #[doc(hidden)]
+    pub fn draw_bound(&self, id: ShapeId) -> Option<Vec<u32>> {
+        let d = self.shapes.get(&id)?.draw.as_ref()?;
+        let mut v: Vec<u32> = d.bound.regs.iter().copied().collect();
+        v.sort_unstable();
+        Some(v)
     }
 
     fn compute_bounds(&self) -> Option<([f32; 3], f32)> {
@@ -1645,13 +1925,13 @@ impl Renderer {
         }
         let gpu = &self.gpu;
         let target = self.target.as_ref().ok_or("no target")?;
-        let grey = match scene.background {
+        let clear = match scene.background {
             // The target is read back as is when not sRGB-encoding: give it the display value then.
-            Background::Solid(g) if self.encode_srgb => g,
-            Background::Solid(g) => scene::linear_to_srgb(g),
-            Background::Hdri => 0.0,
+            Background::Solid(c) if self.encode_srgb => c,
+            Background::Solid(c) => c.map(scene::linear_to_srgb),
+            Background::Hdri => [0.0; 3],
         };
-        target.clear(gpu, [grey, grey, grey, 1.0]);
+        target.clear(gpu, [clear[0], clear[1], clear[2], 1.0]);
         // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
         unsafe {
             let ctx = &gpu.ctx;
@@ -1667,7 +1947,7 @@ impl Renderer {
             ctx.RSSetState(&self.raster);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             if let (Background::Hdri, Some(b)) = (scene.background, &self.backdrop) {
-                b.draw(gpu, &view, !self.encode_srgb);
+                b.draw(gpu, &view, !self.encode_srgb, scene.env_yaw);
             }
             for id in &self.draw_order {
                 let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {
@@ -1737,6 +2017,12 @@ impl Renderer {
 /// A define the CS settings manage (C8): `ENABLE_LL` or a [`cs_settings::PREVIEW_FEATURES`] define.
 fn settings_define(d: &str) -> bool {
     d == "ENABLE_LL" || cs_settings::PREVIEW_FEATURES.iter().any(|(_, x)| *x == d)
+}
+
+/// Owner D3: the missing-texture fill goes to colour registers only, the base colour t0 and the env cube at t4.
+/// PBR t4 (`m_p`) and FaceGen t4 (detail) reflect as 2D and stay neutral.
+fn colour_register(reg: u32, kind: SrvKind) -> bool {
+    reg == 0 || (reg == 4 && kind == SrvKind::Cube)
 }
 
 /// Not visual in the preview: tools, display, performance.

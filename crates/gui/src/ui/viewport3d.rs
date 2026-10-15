@@ -3,7 +3,7 @@
 use crate::model::meshes::LE_WARNING;
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::viewport3d::{
-    moved_text, off_line, DebugView, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
+    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
     FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
@@ -51,7 +51,8 @@ fn keys(ctx: &egui::Context, v: &mut Viewport3d) {
         v.orbit.reset();
     }
     if pressed("3d-debug") {
-        v.set_debug(v.debug().next());
+        let next = v.debug().next(&v.offered());
+        v.set_debug(next);
     }
 }
 
@@ -155,14 +156,14 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Debug view");
                 let mut d = v.debug();
-                for o in DebugView::ALL {
-                    ui.radio_value(&mut d, o, o.label());
+                for o in v.offered() {
+                    let r = ui.radio_value(&mut d, o, o.label());
+                    if let Some(n) = v.stand_in(o) {
+                        r.on_hover_text(format!("Some shapes show a stand-in: {n}"));
+                    }
                 }
                 v.set_debug(d);
-                ui.weak(format!("({})", super::actions::keys_text("3d-debug")))
-                    .on_hover_text(
-                        "Albedo, normals, roughness, metallic and AO need the renderer's support (not offered yet)",
-                    );
+                ui.weak(format!("({})", super::actions::keys_text("3d-debug")));
             });
             let l = &mut v.look;
             ui.horizontal_wrapped(|ui| {
@@ -170,24 +171,10 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
                 ui.radio_value(&mut l.hdri, false, "Solid");
                 ui.radio_value(&mut l.hdri, true, "Studio HDRI");
                 if !l.hdri {
-                    // AG9: the background is one sRGB grey; swatch + hex edit it, a non-grey pick keeps its Rec.709 luma.
-                    let g = super::color::unit_to_u8(l.grey);
+                    // GUI suggestions item 2: one sRGB colour; the swatch's square and the hex box replace the grey slider.
                     let id = egui::Id::new("viewport3d-bg");
-                    if let Some([r, gg, b]) = super::color::color_field(ui, id, [g; 3]) {
-                        let y =
-                            0.2126 * f32::from(r) + 0.7152 * f32::from(gg) + 0.0722 * f32::from(b);
-                        l.grey = y.round() / 255.0;
-                    }
-                    let mut pct = l.grey * 100.0;
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut pct, 0.0..=100.0)
-                                .suffix(" %")
-                                .text("Grey"),
-                        )
-                        .changed()
-                    {
-                        l.grey = pct / 100.0;
+                    if let Some(rgb) = super::color::color_field(ui, id, l.bg.map(super::color::unit_to_u8)) {
+                        l.bg = rgb.map(super::color::u8_to_unit);
                     }
                 }
             });
@@ -216,7 +203,7 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
             });
             ui.weak("Drag: orbit · middle or Shift+drag: pan · Shift+right drag: turn the sun · wheel: zoom · double-click or Home: recentre");
             if v.look.hdri {
-                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light. Shift+right drag turns the sun only.");
+                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light. Shift+right drag turns the sun and the HDRI.");
             }
         });
 }
