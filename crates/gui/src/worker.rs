@@ -25,6 +25,8 @@ pub struct MeshEvidence {
     pub votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     pub alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     pub gras: std::collections::BTreeSet<String>,
+    /// PBR grass design §4.2: `meshes::gras_all_diffuses`.
+    pub gras_all: std::collections::BTreeSet<String>,
 }
 
 pub enum WorkerMsg {

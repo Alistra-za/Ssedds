@@ -148,6 +148,7 @@ struct EngineInputs {
     mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     gras_diffuses: std::collections::BTreeSet<String>,
+    gras_all_diffuses: std::collections::BTreeSet<String>,
 }
 
 impl EngineInputs {
@@ -162,6 +163,7 @@ impl EngineInputs {
             mesh_votes: m.mesh_votes.clone(),
             mesh_alpha: m.mesh_alpha.clone(),
             gras_diffuses: m.gras_diffuses.clone(),
+            gras_all_diffuses: m.gras_all_diffuses.clone(),
         }
     }
 }
@@ -212,6 +214,9 @@ pub struct AppModel {
     /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
     /// evidence; sent as `BatchRequest::gras_diffuses`.
     pub gras_diffuses: std::collections::BTreeSet<String>,
+    /// PBR grass design §4.2: every GRAS diffuse of the scan, TruePBR shapes kept, read with the mesh evidence; sent
+    /// as `BatchRequest::gras_all_diffuses`.
+    pub gras_all_diffuses: std::collections::BTreeSet<String>,
     /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
     pub known: Arc<known_paths::KnownPaths>,
     /// G3: the TruePBR JSON editor window is open.
@@ -345,6 +350,7 @@ impl AppModel {
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
             gras_diffuses: Default::default(),
+            gras_all_diffuses: Default::default(),
             known: Default::default(),
             json_editor_open: false,
             accept: AcceptSuggestions::High,
@@ -541,6 +547,7 @@ impl AppModel {
         req.mesh_shaders = self.mesh_votes.clone();
         req.mesh_alpha = self.mesh_alpha.clone();
         req.gras_diffuses = self.gras_diffuses.clone();
+        req.gras_all_diffuses = self.gras_all_diffuses.clone();
         Some(req)
     }
 
@@ -573,6 +580,7 @@ impl AppModel {
                     votes: meshes::mesh_votes(&db, &keys)?,
                     alpha: meshes::mesh_alpha(&db, &keys)?,
                     gras: meshes::gras_diffuses(&db)?,
+                    gras_all: meshes::gras_all_diffuses(&db)?,
                 })
             };
             // A panic is an error of this generation (kept values, stderr), not a dialog for a stale read.
@@ -600,8 +608,10 @@ impl AppModel {
             Ok(e) => {
                 let changed = e.votes != self.mesh_votes
                     || e.alpha != self.mesh_alpha
-                    || e.gras != self.gras_diffuses;
+                    || e.gras != self.gras_diffuses
+                    || e.gras_all != self.gras_all_diffuses;
                 (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
+                self.gras_all_diffuses = e.gras_all;
                 changed
             }
             Err(e) => {
@@ -646,6 +656,7 @@ impl AppModel {
             mesh_votes: req.mesh_shaders.clone(),
             mesh_alpha: req.mesh_alpha.clone(),
             gras_diffuses: req.gras_diffuses.clone(),
+            gras_all_diffuses: req.gras_all_diffuses.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
