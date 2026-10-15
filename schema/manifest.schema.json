@@ -710,7 +710,8 @@
         "glossiness",
         "height",
         "opacity",
-        "fuzz"
+        "fuzz",
+        "orm"
       ],
       "type": "string"
     },

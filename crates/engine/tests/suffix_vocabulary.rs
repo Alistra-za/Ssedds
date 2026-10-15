@@ -154,6 +154,8 @@ fn vocabulary_splits_to_skyrim_roles() {
         ("iron_opacity", "opacity"),
         ("iron_fuzz", "fuzz"),
         ("iron_sheen", "fuzz"),
+        ("iron_orm", "orm"),
+        ("iron_ORM", "orm"),
     ] {
         assert_eq!(s(stem), ("iron".into(), Some(role.into()), None), "{stem}");
         assert!(
@@ -182,7 +184,7 @@ fn vocabulary_splits_to_skyrim_roles() {
     );
     assert_eq!(SUFFIXES.len(), 20);
     // longest first, so `_base_color` is one term
-    assert_eq!(VOCABULARY.len(), 33);
+    assert_eq!(VOCABULARY.len(), 34);
     assert!(VOCABULARY
         .windows(2)
         .all(|w| w[0].term.len() >= w[1].term.len()));
@@ -452,6 +454,7 @@ fn raw_maps_are_packing_inputs_not_errors() {
         ("iron_height.png", RawMap::Height),
         ("iron_metal.png", RawMap::Metallic),
         ("iron_opacity.png", RawMap::Opacity),
+        ("iron_orm.png", RawMap::Orm),
     ] {
         let j = resolve_img(name, &[], &[], &[], &grey(), &RGB8);
         assert_eq!(j.status, JobStatus::PackingInput { role }, "{name}");

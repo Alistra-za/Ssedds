@@ -226,8 +226,17 @@
       "description": "What a packed channel holds; serialised in `file_planned` (`job.pack.channels`) and the manifest.",
       "oneOf": [
         {
-          "description": "R (or luma) of a raw source; `invert` stores 1 − x.",
+          "description": "R (or luma) of a raw source; `invert` stores 1 − x. `channel` (0..=2) reads that channel of an `_orm`\ninstead (DECISIONS Note AL); absent otherwise, so no other job's JSON changes.",
           "properties": {
+            "channel": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "from": {
               "const": "source",
               "type": "string"
@@ -434,6 +443,7 @@
         "PACK-UNUSED-INPUT",
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
+        "PACK-ORM-OVERRIDDEN",
         "RNM-NO-BASE",
         "RNM-IGNORED-EYE",
         "RNM-MASK-ORPHAN",
@@ -1136,7 +1146,8 @@
         "glossiness",
         "height",
         "opacity",
-        "fuzz"
+        "fuzz",
+        "orm"
       ],
       "type": "string"
     },

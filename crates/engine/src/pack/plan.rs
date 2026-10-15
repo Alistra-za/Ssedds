@@ -354,7 +354,7 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
     if ctx.target != Target::Cs {
         return false;
     }
-    let roles: BTreeSet<RawMap> = RawMap::ALL
+    let roles: BTreeSet<RawMap> = RawMap::INPUTS
         .into_iter()
         .filter(|r| set.suffixes.contains(&r.id()))
         .collect();
@@ -665,6 +665,12 @@ pub fn plan_packing(
                     .iter()
                     .filter(|_| matches!(recipe.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
                     .cloned()
+                    .chain(
+                        recipe
+                            .notes
+                            .iter()
+                            .map(|n| (Code::PackOrmOverridden, n.clone())),
+                    )
                     .collect(),
             });
         }

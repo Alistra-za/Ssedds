@@ -72,7 +72,7 @@ const fn term(term: &'static str, role: VocabRole) -> Vocab {
 /// Spec §4.4 exporter vocabulary, longest term first so `_base_color` wins over `_color`. None of these is a
 /// §6.1 suffix, and none ends in `_<§6.1 suffix>`, so a stem has at most one reading.
 /// `_norm` is rnm.py's alias of `_n` (M6 Track F2).
-pub static VOCABULARY: [Vocab; 33] = {
+pub static VOCABULARY: [Vocab; 34] = {
     use GreenConvention::*;
     use RawMap::*;
     use VocabRole::*;
@@ -108,6 +108,7 @@ pub static VOCABULARY: [Vocab; 33] = {
         term("norm", Normal(None)),
         term("coat", CoatColour),
         term("nrm", Normal(None)),
+        term("orm", PackingInput(Orm)),
         term("col", Colour),
         term("ao", PackingInput(Ao)),
     ]

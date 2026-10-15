@@ -246,6 +246,7 @@ Every warning has a code and a severity:
 | `PACK-UNUSED-INPUT` | warning | A raw map is used by no recipe under the target. | Change the target, set a sub-type, or remove it. |
 | `PACK-RECIPE-CONFLICT` | warning | The `_rfaos` and `_rmaos` keys of one set disagree on `packing.recipe`; the `_rfaos` entry wins. | Keep the recipe on one key. |
 | `PACK-RECIPE-UNBUILDABLE` | warning | `packing.recipe = "rfaos"` on a set with only a metallic map; `_rmaos` was built. | Add roughness, glossiness or AO, or drop the setting. |
+| `PACK-ORM-OVERRIDDEN` | info | A separate map (such as `_roughness`) is used instead of the matching `_orm` channel. | Nothing, or remove the separate map to use the `_orm` channel. |
 
 ### RNM, skin, shaders and grass
 

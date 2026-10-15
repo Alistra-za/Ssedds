@@ -101,11 +101,13 @@ pub struct RawInput {
 /// What a channel needs, before fills and defaults are known.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChannelNeed {
-    /// R (or luma) of a source; `invert` stores 1 − x (glossiness ↔ roughness).
+    /// R (or luma) of a source; `invert` stores 1 − x (glossiness ↔ roughness). `channel` reads that channel
+    /// (0..=2) instead, for a multi-channel `_orm` (DECISIONS Note AL).
     Source {
         path: PathBuf,
         role: RawMap,
         invert: bool,
+        channel: Option<u8>,
     },
     /// No source: a fill value or the neutral default of the slot.
     Missing(Slot),
@@ -120,6 +122,8 @@ pub struct Recipe {
     pub kind: RecipeKind,
     /// R, G, B, A.
     pub channels: [ChannelNeed; 4],
+    /// A loose map that won a slot over an `_orm` channel, one line each (`PACK-ORM-OVERRIDDEN`, Note AL2).
+    pub notes: Vec<String>,
 }
 
 impl Recipe {
@@ -161,6 +165,7 @@ fn unused_reason(
 ) -> String {
     let has = |r: RawMap| have.contains_key(&r);
     match (target, role) {
+        (_, RawMap::Orm) => "a loose map is used for each channel it could supply".into(),
         (_, RawMap::Opacity) => "no recipe packs opacity yet (spec §14 #19)".into(),
         (Target::Cs, RawMap::Glossiness) if has(RawMap::Roughness) => {
             "roughness is used: the _rmaos/_rfaos R channel is roughness".into()
@@ -195,6 +200,25 @@ fn unused_reason(
             "vanilla packs only an env-mask _m, from a metallic or specular source".into()
         }
     }
+}
+
+/// `loose` wins over the `_orm` channel `orm` for `slot` (DECISIONS Note AL2); a note says so when both exist.
+fn prefer(
+    loose: Option<ChannelNeed>,
+    orm: Option<ChannelNeed>,
+    slot: &str,
+    notes: &mut Vec<String>,
+) -> Option<ChannelNeed> {
+    if let (Some(ChannelNeed::Source { path: l, .. }), Some(ChannelNeed::Source { path: o, .. })) =
+        (&loose, &orm)
+    {
+        notes.push(format!(
+            "{} is used for {slot}, not the {} channel",
+            file_name(l),
+            file_name(o)
+        ));
+    }
+    loose.or(orm)
 }
 
 /// The recipes of one set under `target` (spec §6.4 recipe table) and the raw maps none of them uses, with
@@ -237,6 +261,16 @@ pub fn recipes_for_with(
             path: r.path.clone(),
             role,
             invert,
+            channel: None,
+        })
+    };
+    // Note AL1: an `_orm` holds AO in R, roughness in G and metallic in B.
+    let orm = |channel: u8, invert: bool| {
+        by_role.get(&Orm).map(|r| ChannelNeed::Source {
+            path: r.path.clone(),
+            role: Orm,
+            invert,
+            channel: Some(channel),
         })
     };
     let has = |role: RawMap| by_role.contains_key(&role);
@@ -245,15 +279,21 @@ pub fn recipes_for_with(
         Target::Cs => {
             // `_rfaos` has no metallic channel, so a lone metallic map cannot start a forced `_rfaos`.
             let triggers: &[RawMap] = if pack_recipe == PackRecipe::Rfaos {
-                &[Roughness, Glossiness, Ao]
+                &[Roughness, Glossiness, Ao, Orm]
             } else {
-                &[Roughness, Glossiness, Ao, Metallic]
+                &[Roughness, Glossiness, Ao, Metallic, Orm]
             };
             if triggers.iter().copied().any(has) {
-                let rough = src(Roughness, false)
-                    .or_else(|| src(Glossiness, true))
-                    .unwrap_or(Missing(Slot::Roughness));
-                let ao = src(Ao, false).unwrap_or(Missing(Slot::Ao));
+                let mut notes = vec![];
+                let rough = prefer(
+                    src(Roughness, false).or_else(|| src(Glossiness, true)),
+                    orm(1, false),
+                    "roughness",
+                    &mut notes,
+                )
+                .unwrap_or(Missing(Slot::Roughness));
+                let ao = prefer(src(Ao, false), orm(0, false), "AO", &mut notes)
+                    .unwrap_or(Missing(Slot::Ao));
                 let spec = src(Specular, false).unwrap_or(Missing(Slot::Specular));
                 // DECISIONS Note R-fills-1: `auto` is `_rfaos` when a fuzz source exists; `rfaos` always is, with
                 // the G channel filled or defaulted when there is none; `rmaos` never is.
@@ -266,50 +306,65 @@ pub fn recipes_for_with(
                     Some(fuzz) => recipes.push(Recipe {
                         kind: RecipeKind::Rfaos,
                         channels: [rough, fuzz, ao, spec],
+                        notes,
                     }),
-                    None => recipes.push(Recipe {
-                        kind: RecipeKind::Rmaos,
-                        channels: [
-                            rough,
-                            src(Metallic, false).unwrap_or(Missing(Slot::Metallic)),
-                            ao,
-                            spec,
-                        ],
-                    }),
+                    None => {
+                        let metal =
+                            prefer(src(Metallic, false), orm(2, false), "metallic", &mut notes)
+                                .unwrap_or(Missing(Slot::Metallic));
+                        recipes.push(Recipe {
+                            kind: RecipeKind::Rmaos,
+                            channels: [rough, metal, ao, spec],
+                            notes,
+                        })
+                    }
                 }
             }
             if let Some(h) = src(Height, false) {
                 recipes.push(Recipe {
                     kind: RecipeKind::Parallax,
                     channels: [h, MirrorR, MirrorR, Opaque],
+                    notes: vec![],
                 });
             }
         }
         Target::Cpm => {
-            if [Roughness, Glossiness, Metallic, Height]
+            if [Roughness, Glossiness, Metallic, Height, Orm]
                 .into_iter()
                 .any(has)
             {
+                let mut notes = vec![];
+                let metal = prefer(src(Metallic, false), orm(2, false), "metallic", &mut notes);
+                let gloss = prefer(
+                    src(Glossiness, false).or_else(|| src(Roughness, true)),
+                    orm(1, true),
+                    "glossiness",
+                    &mut notes,
+                );
                 recipes.push(Recipe {
                     kind: RecipeKind::CpmM,
                     channels: [
-                        src(Metallic, false)
+                        metal
+                            .clone()
                             .or_else(|| src(Specular, false))
                             .unwrap_or(Missing(Slot::EnvMask)),
-                        src(Glossiness, false)
-                            .or_else(|| src(Roughness, true))
-                            .unwrap_or(Missing(Slot::Glossiness)),
-                        src(Metallic, false).unwrap_or(Missing(Slot::Metallic)),
+                        gloss.unwrap_or(Missing(Slot::Glossiness)),
+                        metal.unwrap_or(Missing(Slot::Metallic)),
                         src(Height, false).unwrap_or(Missing(Slot::Height)),
                     ],
+                    notes,
                 });
             }
         }
         Target::Vanilla => {
-            if let Some(env) = src(Metallic, false).or_else(|| src(Specular, false)) {
+            let mut notes = vec![];
+            if let Some(env) = prefer(src(Metallic, false), orm(2, false), "metallic", &mut notes)
+                .or_else(|| src(Specular, false))
+            {
                 recipes.push(Recipe {
                     kind: RecipeKind::VanillaM,
                     channels: [env, MirrorR, MirrorR, Opaque],
+                    notes,
                 });
             }
         }
@@ -353,11 +408,14 @@ pub fn predicted_suffixes(target: Target, roles: &BTreeSet<RawMap>) -> Vec<&'sta
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "from", rename_all = "snake_case")]
 pub enum ChannelSource {
-    /// R (or luma) of a raw source; `invert` stores 1 − x.
+    /// R (or luma) of a raw source; `invert` stores 1 − x. `channel` (0..=2) reads that channel of an `_orm`
+    /// instead (DECISIONS Note AL); absent otherwise, so no other job's JSON changes.
     Source {
         path: PathBuf,
         role: RawMap,
         invert: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<u8>,
     },
     /// A user fill (`packing.fill.<role>`); `code` is the 8-bit value written (255 − fill when inverted).
     Fill { role: RawMap, code: u8 },
@@ -373,13 +431,19 @@ impl ChannelSource {
     /// The channel's provenance (DECISIONS Note M12); `None` for a mirrored or opaque filler channel.
     pub fn provenance(&self, gray: GraySource) -> Option<Provenance> {
         match self {
-            ChannelSource::Source { path, invert, .. } => Some(Provenance::Source(format!(
+            ChannelSource::Source {
+                path,
+                invert,
+                channel,
+                ..
+            } => Some(Provenance::Source(format!(
                 "{}{}:{}",
                 if *invert { "1-" } else { "" },
                 file_name(path),
-                match gray {
-                    GraySource::R => "R",
-                    GraySource::Luma => "luma",
+                match (channel, gray) {
+                    (Some(c), _) => ["R", "G", "B"][usize::from(*c)],
+                    (None, GraySource::R) => "R",
+                    (None, GraySource::Luma) => "luma",
                 }
             ))),
             ChannelSource::Fill { code, .. } => Some(Provenance::Fill(code.to_string())),
@@ -435,10 +499,16 @@ fn default_for(slot: Slot, p: &PackingSpec) -> f32 {
 pub fn resolve_channels(r: &Recipe, p: &PackingSpec) -> ([ChannelSource; 4], Vec<(usize, Slot)>) {
     let mut defaulted = vec![];
     let channels = std::array::from_fn(|i| match &r.channels[i] {
-        ChannelNeed::Source { path, role, invert } => ChannelSource::Source {
+        ChannelNeed::Source {
+            path,
+            role,
+            invert,
+            channel,
+        } => ChannelSource::Source {
             path: path.clone(),
             role: *role,
             invert: *invert,
+            channel: *channel,
         },
         ChannelNeed::MirrorR => ChannelSource::MirrorR,
         ChannelNeed::Opaque => ChannelSource::Opaque,

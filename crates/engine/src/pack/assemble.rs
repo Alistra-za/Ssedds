@@ -1,5 +1,6 @@
 //! The packed float image of a recipe (spec §6.4 "Sources", "Dimensions", "Precision"). Each source contributes
-//! its R channel (luma with `channels.grayscale_source = luma`); its alpha is ignored. Values stay as decoded
+//! its R channel (luma with `channels.grayscale_source = luma`), an `_orm` the channel each slot names (Note AL);
+//! its alpha is ignored. Values stay as decoded
 //! floats, so 16-bit sources keep their precision until Quantise. Sources are decoded **one at a time**: the peak
 //! is the output plus one decoded source, inside the 3x per-file estimate of `api::estimated_bytes`, which reads
 //! the first source (every source has its size).
@@ -87,15 +88,22 @@ pub fn assemble(job: &PackJob, gray: GraySource) -> Result<Assembled, PackError>
     }
     let mut non_gray = vec![];
     for s in &job.sources {
-        let targets: Vec<(usize, bool)> = job
+        let targets: Vec<(usize, bool, Option<u8>)> = job
             .channels
             .iter()
             .enumerate()
             .filter_map(|(c, ch)| match ch {
-                ChannelSource::Source { path, invert, .. } if *path == s.path => Some((c, *invert)),
+                ChannelSource::Source {
+                    path,
+                    invert,
+                    channel,
+                    ..
+                } if *path == s.path => Some((c, *invert, *channel)),
                 _ => None,
             })
             .collect();
+        // An `_orm` is colour by design (Note AL): never `CHAN-NOT-GRAY`.
+        let multi = targets.iter().any(|t| t.2.is_some());
         let (src, si) = load_image(&s.path)?;
         // `check_sizes` read the headers; a file replaced since then is caught here.
         if (src.width, src.height) != (w, h) {
@@ -113,11 +121,12 @@ pub fn assemble(job: &PackJob, gray: GraySource) -> Result<Assembled, PackError>
                 GraySource::R => q[0],
                 GraySource::Luma => 0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2],
             };
-            for &(c, invert) in &targets {
+            for &(c, invert, channel) in &targets {
+                let v = channel.map_or(v, |k| q[usize::from(k)]);
                 o[c] = if invert { 1.0 - v } else { v };
             }
         }
-        if !all_grey {
+        if !all_grey && !multi {
             non_gray.push(s.path.clone());
         }
     }

@@ -46,7 +46,7 @@ pub fn is_pbr_set(c: &SuggestContext) -> bool {
             || ["rmaos", "rfaos", "cnr", "f"]
                 .iter()
                 .any(|s| c.set_suffixes.contains(*s))
-            || RawMap::ALL
+            || RawMap::INPUTS
                 .iter()
                 .any(|r| r.starts_rmaos() && c.set_suffixes.contains(&r.id())))
 }

@@ -73,6 +73,7 @@ Tessalith also understands the names that texturing tools commonly export:
 | `_roughness`, `_rough` | Raw roughness | packed |
 | `_metallic`, `_metalness`, `_metal` | Raw metallic | packed |
 | `_ao`, `_ambientocclusion`, `_occlusion` | Raw AO | packed |
+| `_orm` | Channel-packed AO (R), roughness (G), metallic (B) | packed |
 | `_specular`, `_spec` | Raw specular | packed |
 | `_glossiness`, `_gloss` | Raw glossiness | packed (inverted into roughness) |
 | `_height`, `_displacement`, `_disp` | Raw height | packed |
@@ -147,6 +148,8 @@ Encoders: bc7e for BC7, rgbcx for BC1/BC3/BC4/BC5, the ISPC Texture Compressor f
 ## Packing raw maps
 
 Raw single-channel maps (from the exporter names above) are not converted on their own. They are packed into the layout the target reads. One source per role is used; if a set has two roughness maps, the first by path wins and the other is reported as `PACK-UNUSED-INPUT`.
+
+An `_orm` file counts as three raw maps at once: AO from its R channel, roughness from G and metallic from B. Every recipe below that reads roughness, AO or metallic takes them from it. A separate map for the same slot (an `_roughness` next to the `_orm`) wins that slot; an info note, `PACK-ORM-OVERRIDDEN`, says so. Slots an `_orm` does not hold (specular, height, fuzz) come from their own maps, the fill, or the default, as usual. So an `_rmaos` built from an `_orm` alone has `packing.fill.specular` in alpha, or 1 when no fill is set.
 
 ### Community Shaders (`cs`)
 

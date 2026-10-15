@@ -117,6 +117,7 @@ codes! {
     PackUnusedInput = "PACK-UNUSED-INPUT" => Warning,
     PackRecipeConflict = "PACK-RECIPE-CONFLICT" => Warning,
     PackRecipeUnbuildable = "PACK-RECIPE-UNBUILDABLE" => Warning,
+    PackOrmOverridden = "PACK-ORM-OVERRIDDEN" => Info,
     RnmNoBase = "RNM-NO-BASE" => Warning,
     RnmIgnoredEye = "RNM-IGNORED-EYE" => Warning,
     RnmMaskOrphan = "RNM-MASK-ORPHAN" => Warning,
@@ -201,7 +202,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 91);
+        assert_eq!(Code::ALL.len(), 92);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);

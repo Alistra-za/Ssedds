@@ -489,6 +489,7 @@ fn pack_codes_are_in_the_catalogue() {
         ("PACK-UNUSED-INPUT", Severity::Warning),
         ("PACK-RECIPE-CONFLICT", Severity::Warning),
         ("PACK-RECIPE-UNBUILDABLE", Severity::Warning),
+        ("PACK-ORM-OVERRIDDEN", Severity::Info),
         ("SKIN-WET-FORM", Severity::Info),
     ] {
         let c = Code::parse(s).unwrap();

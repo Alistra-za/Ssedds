@@ -290,6 +290,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | Raw roughness | `_roughness`, `_rough` | Packing input `roughness` | None on its own | §6.4 |
 | Raw metallic | `_metallic`, `_metalness`, `_metal` | Packing input `metallic` | None on its own | §6.4 |
 | Raw AO | `_ao`, `_ambientocclusion`, `_occlusion` | Packing input `ao` | None on its own | §6.4 |
+| Channel-packed ORM | `_orm` | Packing input `orm`: AO in R, roughness in G, metallic in B; a loose map for the same slot wins (DECISIONS Note AL) | None on its own | §6.4 |
 | Raw specular | `_specular`, `_spec` | Packing input `specular` | None on its own | §6.4 |
 | Raw glossiness | `_glossiness`, `_gloss` | Packing input `glossiness` | None on its own | §6.4 |
 | Raw height | `_height`, `_displacement`, `_disp` | Packing input `height` | None on its own | §6.4 |
@@ -711,6 +712,7 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `PACK-UNUSED-INPUT` | warning | Raw map used by no recipe under the target | Change target, set a sub-type, or remove it |
 | `PACK-RECIPE-CONFLICT` | warning | The `packing.recipe` of the `<base>_rfaos` and `<base>_rmaos` `[files]` keys disagree; the `_rfaos` entry wins (Note R-fills-1) | Keep the recipe on one key |
 | `PACK-RECIPE-UNBUILDABLE` | warning | `packing.recipe = rfaos` on a set with no roughness, glossiness or AO source (only metallic), so `_rmaos` was built (Note R-fills-1) | Add a roughness, glossiness or AO map, or drop the setting |
+| `PACK-ORM-OVERRIDDEN` | info | A loose raw map (e.g. `_roughness`) is used for a slot the set's `_orm` also holds; the loose map wins (Note AL2) | None, or remove the loose map to use the `_orm` channel |
 | `RNM-NO-BASE` | warning | An RNM layer or mask whose target names no base normal in its set (`_n`/`_cnr`), so it is not used (M6 F2) | Add the base normal, or set `rnm.target` on the layer |
 | `RNM-IGNORED-EYE` | warning | An RNM layer in an Eye-shader set: eye normals are model-space, RNM is tangent-space only (M6 F2) | Remove the layer, or move it to a non-eye set |
 | `RNM-MASK-ORPHAN` | warning | An RNM mask without its layer file (M6 F2) | Add the layer, or remove the mask |

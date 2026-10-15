@@ -33,7 +33,11 @@ fn is_normal_suffix(s: &str) -> bool {
 /// Canonical file suffixes (not sub-type ids): `rmaos`, `rfaos` (the `skin_rfaos` output keeps the `_rfaos` suffix),
 /// or a raw map that would pack one (roughness, glossiness, metallic, AO).
 fn is_roughness_suffix(s: &str) -> bool {
-    s == "rmaos" || s == "rfaos" || RawMap::ALL.iter().any(|r| r.starts_rmaos() && r.id() == s)
+    s == "rmaos"
+        || s == "rfaos"
+        || RawMap::INPUTS
+            .iter()
+            .any(|r| r.starts_rmaos() && r.id() == s)
 }
 
 /// The base name and canonical suffix of a file name (aliases, vocabulary and §6.1 suffixes, as Group reads them).
