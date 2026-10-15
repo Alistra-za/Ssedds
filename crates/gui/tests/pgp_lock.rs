@@ -21,6 +21,7 @@ const SET: &str = "landscape/rock01";
 const KEEP: &str = "Keep original texture (PGPatcher lock)";
 const STOP: &str = "Stop keeping original texture (PGPatcher lock)";
 const CAPTION: &str = "The original texture in this spot is used";
+const HOVER: &str = "PGPatcher lock (lock_rmaos): the original texture in this spot is used";
 
 fn s(pairs: &[(&str, Value)]) -> Settings {
     pairs
@@ -255,7 +256,7 @@ fn harness(model: AppModel) -> Harness<'static, AppModel> {
 }
 
 #[test]
-fn a_locked_slot_card_shows_the_caption() {
+fn a_locked_slot_card_shows_the_cross_and_one_tooltip() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     let key = m
@@ -280,8 +281,17 @@ fn a_locked_slot_card_shows_the_caption() {
     h.get_by_label(KEEP).click();
     h.run();
     assert_eq!(settings_of(h.state()).get("lock_rmaos"), Some(&json!(true)));
-    assert_eq!(h.query_all_by_label(CAPTION).count(), 1);
+    // No caption over the thumbnail: the cross alone.
+    assert_eq!(h.query_all_by_label_contains(CAPTION).count(), 0);
     assert_eq!(empties(&h), before);
+    // One hover on the locked card: the lock, not also the thumbnail's path.
+    let title = h.get_by_label("RMAOS").rect();
+    let thumb = eframe::egui::pos2(title.left() + 36.0, title.bottom() + 40.0);
+    h.input_mut()
+        .events
+        .push(eframe::egui::Event::PointerMoved(thumb));
+    h.run_steps(90);
+    assert_eq!(h.query_all_by_label_contains(HOVER).count(), 1);
 }
 
 /// The scan database `used_by_meshes.rs` builds, with one texture set: `diffuse` in slot 0 and `normal` in slot 1.

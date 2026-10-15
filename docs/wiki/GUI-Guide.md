@@ -231,7 +231,7 @@ In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Em
 
 A pinned slot keeps its fill. It refuses drags in or out and the slot commands, and bulk edits skip it. The pin is saved in `sdc-project.toml` and never written to the JSON.
 
-*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a big red ✕ with "The original texture in this spot is used" (with a scan, its hover lists the meshes' textures in that slot), and the member thumbnail a small red ✕. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
+*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a big red ✕ over the thumbnail; its hover says "PGPatcher lock (lock_<slot>): the original texture in this spot is used" and, with a scan, lists the meshes' textures in that slot, and the member thumbnail a small red ✕. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
 
 A `_coat` map fills the Subsurface card, which then reads "Coat colour + strength". When RNM normal layers are active, the normal card has a blue outline; see [RNM layers](#rnm-normal-layers).
 
