@@ -15,8 +15,8 @@ use render3d::locate::{self, Change, Fingerprint};
 use render3d::perf_log::{self, FrameStats, GapWatch};
 use render3d::scene::{Background, Camera, PointLight, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
 use render3d::{
-    CompileDone, CompilePool, EditKind, FrameTiming, LoadReport, ParsedNif, Renderer, ShapeId,
-    ShapeInfo, ShapeStatus, Variant,
+    Availability, CompileDone, CompilePool, DebugOutput, EditKind, FrameTiming, LoadReport,
+    ParsedNif, Renderer, ShapeId, ShapeInfo, ShapeStatus, Variant,
 };
 use serde_json::json;
 use std::cell::RefCell;
@@ -454,32 +454,68 @@ impl Default for Look {
     }
 }
 
-/// The 3D panel's debug views: only those render3d's public API can draw (AG75). Albedo, Normals, Roughness,
-/// Metallic and AO need render3d support (`.superpowers/sdd/2026-10-14-gui-suggestions/nif-request-3d-debug-views.md`).
+/// The 3D panel's debug views (AG75, GUI suggestions items 1 and 4). Lit and UV checker are always offered; the others
+/// when render3d reports the CS anchor (`V3Reply::DebugSupport`) and a loaded shape has the term ([`Viewport3d::offered`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DebugView {
     #[default]
     Lit,
-    /// A generated checker in every shape's slot 0 (diffuse / base colour), shown through `Renderer::override_slot`.
+    /// A generated checker over every shape's slot 0 (diffuse / base colour): render3d's `override_slot(0, …)`.
     UvChecker,
+    Albedo,
+    Normals,
+    Roughness,
+    Metallic,
+    Ao,
 }
 
 impl DebugView {
-    pub const ALL: [DebugView; 2] = [DebugView::Lit, DebugView::UvChecker];
+    pub const ALL: [DebugView; 7] = [
+        DebugView::Lit,
+        DebugView::UvChecker,
+        DebugView::Albedo,
+        DebugView::Normals,
+        DebugView::Roughness,
+        DebugView::Metallic,
+        DebugView::Ao,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             DebugView::Lit => "Lit",
             DebugView::UvChecker => "UV checker",
+            DebugView::Albedo => "Albedo",
+            DebugView::Normals => "Normals",
+            DebugView::Roughness => "Roughness",
+            DebugView::Metallic => "Metallic",
+            DebugView::Ao => "AO",
         }
     }
 
-    /// The next view in [`DebugView::ALL`], wrapping (the V key).
-    pub fn next(self) -> DebugView {
-        let i = Self::ALL.iter().position(|d| *d == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
+    /// The render3d output of this view; the UV checker draws Lit (its checker is a slot override).
+    pub fn output(self) -> DebugOutput {
+        match self {
+            DebugView::Lit | DebugView::UvChecker => DebugOutput::Lit,
+            DebugView::Albedo => DebugOutput::Albedo,
+            DebugView::Normals => DebugOutput::NormalWorld,
+            DebugView::Roughness => DebugOutput::Roughness,
+            DebugView::Metallic => DebugOutput::Metallic,
+            DebugView::Ao => DebugOutput::Ao,
+        }
+    }
+
+    /// The next of `offered`, wrapping (the V key); a view not in it goes to the first.
+    pub fn next(self, offered: &[DebugView]) -> DebugView {
+        match offered.iter().position(|d| *d == self) {
+            Some(i) => offered[(i + 1) % offered.len()],
+            None => offered.first().copied().unwrap_or(DebugView::Lit),
+        }
     }
 }
+
+/// The status line when render3d cannot draw the selected debug view any more (`DebugSupport(false)`).
+pub const DEBUG_UNSUPPORTED: &str =
+    "These Community Shaders have no debug-view anchor in Lighting.hlsl: back to Lit";
 
 /// Side of the UV checker texture; 8×8 cells.
 pub const CHECKER_SIZE: u32 = 256;
@@ -645,6 +681,9 @@ pub enum V3Reply {
     OffInPreview(Vec<String>),
     /// `Renderer::settings_coverage().line()` whenever it changes (P1-D); `None` = nothing to report.
     Coverage(Option<String>),
+    /// `Renderer::debug_supported()`: after the thread starts, after `SetShaders`, and `false` when a `SetDebug` was
+    /// refused.
+    DebugSupport(bool),
 }
 
 /// `%LOCALAPPDATA%\sdc\shader-cache`.
@@ -725,6 +764,8 @@ pub struct Viewport3d {
     /// "Open in Textures" clicked on a missing path: the item key, taken by `SdcApp::route_3d`.
     pub show_in_textures: Option<String>,
     debug: DebugView,
+    /// The last `V3Reply::DebugSupport`: render3d can draw Albedo … AO with these shaders.
+    debug_support: bool,
     /// The variant the next load's resolver bytes count as, and the one the render thread was last told.
     load_variant: Variant,
     load_variant_sent: Variant,
@@ -804,6 +845,7 @@ impl Viewport3d {
             missing_items: vec![],
             show_in_textures: None,
             debug: DebugView::Lit,
+            debug_support: false,
             load_variant: Variant::Source,
             load_variant_sent: Variant::Source,
             edits_sent: 0,
@@ -1368,6 +1410,38 @@ impl Viewport3d {
         }
     }
 
+    pub fn debug_support(&self) -> bool {
+        self.debug_support
+    }
+
+    /// The views the selector and the V key offer: Lit and UV checker always; each other view when render3d supports
+    /// debug views and at least one loaded shape has that term (`Availability` not `None`).
+    pub fn offered(&self) -> Vec<DebugView> {
+        DebugView::ALL
+            .into_iter()
+            .filter(|d| match d.output() {
+                DebugOutput::Lit => true,
+                o => {
+                    self.debug_support
+                        && self
+                            .shapes
+                            .iter()
+                            .any(|s| o.availability(&s.material) != Availability::None)
+                }
+            })
+            .collect()
+    }
+
+    /// The stand-in a view uses for some loaded shape, for the hover text.
+    pub fn stand_in(&self, d: DebugView) -> Option<&'static str> {
+        self.shapes
+            .iter()
+            .find_map(|s| match d.output().availability(&s.material) {
+                Availability::StandIn(n) => Some(n),
+                _ => None,
+            })
+    }
+
     /// Copy image (Ctrl+Shift+C): the last frame's RGBA8 to `put` (the clipboard), and the status note.
     pub fn copy_image(&mut self, put: impl FnOnce(usize, usize, &[u8]) -> Result<(), String>) {
         let Some(f) = &self.frame else {
@@ -1620,6 +1694,10 @@ impl Viewport3d {
                         self.held_frame = false;
                     }
                     self.shapes = s;
+                    // A load that leaves the current view not offered falls back to Lit.
+                    if !self.offered().contains(&self.debug) {
+                        self.set_debug(DebugView::Lit);
+                    }
                 }
             }
             V3Reply::MaterialSet {
@@ -1691,6 +1769,13 @@ impl Viewport3d {
             V3Reply::Located { .. } | V3Reply::Chosen { .. } => {}
             V3Reply::OffInPreview(off) => self.off_in_preview = off,
             V3Reply::Coverage(c) => self.coverage = c,
+            V3Reply::DebugSupport(on) => {
+                self.debug_support = on;
+                if !on && self.debug.output() != DebugOutput::Lit {
+                    self.set_debug(DebugView::Lit);
+                    self.status = Some(DEBUG_UNSUPPORTED.into());
+                }
+            }
         }
     }
 }
@@ -2014,6 +2099,7 @@ fn render_loop(
         warp: r.gpu().warp,
     });
     send(V3Reply::OffInPreview(r.off_in_preview()));
+    send(V3Reply::DebugSupport(r.debug_supported()));
     let pool = CompilePool::new(render3d::pool::WORKERS, move |d| {
         let _ = self_tx.send(V3Cmd::Compiled(d));
     });
@@ -2062,6 +2148,7 @@ fn render_loop(
         // A settings or features change: cbuffers rewritten, programs maybe swapped or queued; no reload.
         let mut restyled = false;
         let mut debug_changed = false;
+        let mut reshaded = false;
         let mut pending: Vec<(u64, ShapeId, MaterialState)> = vec![];
         let mut tex_cmds: Vec<TexCmd> = vec![];
         for c in std::iter::once(first).chain(rx.try_iter()) {
@@ -2074,6 +2161,7 @@ fn render_loop(
                 V3Cmd::SetShaders(f) => {
                     r.set_shaders(f);
                     reload = true;
+                    reshaded = true;
                     None
                 }
                 V3Cmd::SetFeatures(on) => {
@@ -2130,6 +2218,13 @@ fn render_loop(
                         // render3d keeps the override across loads, swaps and edits: no reload either way.
                         let _ = r.override_slot(0, on.then(checker_dds).as_deref());
                         debug_changed = true;
+                    }
+                    if r.debug_output() != d.output() {
+                        match r.set_debug_output(d.output()) {
+                            Ok(()) => debug_changed = true,
+                            // Only a missing anchor refuses (R8): the model goes back to Lit.
+                            Err(_) => send(V3Reply::DebugSupport(false)),
+                        }
                     }
                     ack.0 += 1;
                     None
@@ -2244,6 +2339,9 @@ fn render_loop(
             }
         }
         pump(&mut r);
+        if reshaded {
+            send(V3Reply::DebugSupport(r.debug_supported()));
+        }
         // A settings apply or a new program can change it; sent only on change.
         let coverage = r.settings_coverage().line();
         if coverage != last_coverage {

@@ -3,7 +3,7 @@
 use crate::model::meshes::LE_WARNING;
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::viewport3d::{
-    moved_text, off_line, DebugView, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
+    moved_text, off_line, Look, V3State, Viewport3d, CHOOSE_FOLDER, CUBEMAPS_FOOTER,
     FEATURES_LABEL, FRAME_LABEL, KEEP_OLD, NOT_FOUND, USE_NEW,
 };
 use eframe::egui;
@@ -51,7 +51,8 @@ fn keys(ctx: &egui::Context, v: &mut Viewport3d) {
         v.orbit.reset();
     }
     if pressed("3d-debug") {
-        v.set_debug(v.debug().next());
+        let next = v.debug().next(&v.offered());
+        v.set_debug(next);
     }
 }
 
@@ -155,14 +156,14 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Debug view");
                 let mut d = v.debug();
-                for o in DebugView::ALL {
-                    ui.radio_value(&mut d, o, o.label());
+                for o in v.offered() {
+                    let r = ui.radio_value(&mut d, o, o.label());
+                    if let Some(n) = v.stand_in(o) {
+                        r.on_hover_text(format!("Some shapes show a stand-in: {n}"));
+                    }
                 }
                 v.set_debug(d);
-                ui.weak(format!("({})", super::actions::keys_text("3d-debug")))
-                    .on_hover_text(
-                        "Albedo, normals, roughness, metallic and AO need the renderer's support (not offered yet)",
-                    );
+                ui.weak(format!("({})", super::actions::keys_text("3d-debug")));
             });
             let l = &mut v.look;
             ui.horizontal_wrapped(|ui| {

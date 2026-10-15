@@ -1483,6 +1483,12 @@ fn the_uv_checker_toggles_without_a_reload() {
         v.report.is_none(),
         "no Loaded reply: nothing was loaded again"
     );
+    assert_eq!(
+        v.offered(),
+        [v3::DebugView::Lit, v3::DebugView::UvChecker],
+        "the stand-in has no debug anchor"
+    );
+    assert!(!v.debug_support());
 }
 
 #[test]
@@ -2597,8 +2603,8 @@ fn the_sun_turn_round_trips_through_gui_toml() {
 #[test]
 fn the_debug_selector_lists_only_views_the_renderer_can_make() {
     use v3::DebugView;
-    // Albedo, Normals, Roughness, Metallic and AO need render3d support (nif-request-3d-debug-views.md).
-    assert_eq!(DebugView::ALL, [DebugView::Lit, DebugView::UvChecker]);
+    // Without render3d's support (no thread yet) only Lit and UV checker are offered.
+    assert_eq!(DebugView::ALL.len(), 7);
     let mut h = harness(Viewport3d::with_state(V3State::Ready));
     h.run();
     h.get_by_label("View").click();
@@ -2711,4 +2717,117 @@ fn the_3d_keys_reset_cycle_and_are_listed() {
     h.key_press(Key::V);
     h.run();
     assert_eq!(h.state().debug(), v3::DebugView::Lit);
+}
+
+fn shape_info(id: u32, m: MaterialState) -> ShapeInfo {
+    ShapeInfo {
+        id: ShapeId(id),
+        name: format!("s{id}"),
+        material: m,
+        status: ShapeStatus::Drawing,
+    }
+}
+
+fn pbr() -> MaterialState {
+    let mut m = MaterialState::builtin_default();
+    m.slsf2 |= nif::material::SLSF2_TRUE_PBR;
+    m
+}
+
+#[test]
+fn offered_views_follow_support_and_the_loaded_materials() {
+    use v3::DebugView::*;
+    let (mut v, _cmds) = rendered();
+    v.handle(v3::V3Reply::Shapes(vec![shape_info(
+        0,
+        MaterialState::builtin_default(),
+    )]));
+    assert_eq!(v.offered(), [Lit, UvChecker], "no support reported yet");
+    v.handle(v3::V3Reply::DebugSupport(true));
+    assert_eq!(
+        v.offered(),
+        [Lit, UvChecker, Albedo, Normals, Roughness, Ao],
+        "non-PBR: no Metallic"
+    );
+    assert_eq!(v.stand_in(Roughness), Some("1 − specular mask"));
+    assert_eq!(v.stand_in(Albedo), None);
+    let mut face = MaterialState::builtin_default();
+    face.shader_type = 4;
+    v.handle(v3::V3Reply::Shapes(vec![shape_info(0, face.clone())]));
+    assert!(!v.offered().contains(&Ao), "FaceGen: vertex AO is constant");
+    v.handle(v3::V3Reply::Shapes(vec![
+        shape_info(0, face),
+        shape_info(1, pbr()),
+    ]));
+    assert_eq!(v.offered().len(), 7, "one PBR shape offers everything");
+    assert_eq!(Lit.next(&v.offered()), UvChecker);
+    assert_eq!(Ao.next(&v.offered()), Lit, "wraps over the offered views");
+    assert_eq!(
+        Metallic.next(&[Lit, UvChecker]),
+        Lit,
+        "a view not offered goes to the first"
+    );
+}
+
+#[test]
+fn a_load_that_drops_the_current_view_falls_back_to_lit() {
+    let (mut v, cmds) = rendered();
+    v.handle(v3::V3Reply::DebugSupport(true));
+    v.handle(v3::V3Reply::Shapes(vec![shape_info(0, pbr())]));
+    v.set_debug(v3::DebugView::Metallic);
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetDebug(v3::DebugView::Metallic))
+    ));
+    v.handle(v3::V3Reply::Reconfigured(1));
+    v.handle(v3::V3Reply::Shapes(vec![shape_info(
+        0,
+        MaterialState::builtin_default(),
+    )]));
+    assert_eq!(v.debug(), v3::DebugView::Lit);
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetDebug(v3::DebugView::Lit))
+    ));
+}
+
+#[test]
+fn losing_debug_support_falls_back_to_lit_with_a_status_line() {
+    let (mut v, cmds) = rendered();
+    v.handle(v3::V3Reply::DebugSupport(true));
+    v.handle(v3::V3Reply::Shapes(vec![shape_info(0, pbr())]));
+    v.set_debug(v3::DebugView::Albedo);
+    let _ = cmds.try_recv();
+    v.handle(v3::V3Reply::Reconfigured(1));
+    // A CS update without the anchor (SetShaders), or a refused SetDebug.
+    v.handle(v3::V3Reply::DebugSupport(false));
+    assert_eq!(v.debug(), v3::DebugView::Lit);
+    assert_eq!(v.status.as_deref(), Some(v3::DEBUG_UNSUPPORTED));
+    assert!(matches!(
+        cmds.try_recv(),
+        Ok(v3::V3Cmd::SetDebug(v3::DebugView::Lit))
+    ));
+    assert_eq!(v.offered(), [v3::DebugView::Lit, v3::DebugView::UvChecker]);
+}
+
+#[test]
+fn the_view_section_lists_the_offered_views_with_the_stand_in_hover() {
+    let (mut v, _cmds) = rendered();
+    v.handle(v3::V3Reply::DebugSupport(true));
+    v.handle(v3::V3Reply::Shapes(vec![shape_info(
+        0,
+        MaterialState::builtin_default(),
+    )]));
+    let mut h = harness(v);
+    // The harness size asks for a frame no thread answers: busy, so it repaints; step instead of run().
+    h.run_steps(4);
+    h.get_by_label("View").click();
+    h.run_steps(4);
+    for offered in ["Lit", "UV checker", "Albedo", "Normals", "Roughness", "AO"] {
+        h.get_by_label(offered);
+    }
+    assert!(h.query_by_label("Metallic").is_none());
+    h.get_by_label("Roughness").hover();
+    h.run_steps(4);
+    h.get_by_label_contains("1 − specular mask");
 }
