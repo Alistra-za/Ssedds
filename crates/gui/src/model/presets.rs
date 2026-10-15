@@ -46,9 +46,13 @@ pub const FAMILIES: [(&str, &str); 3] = [
 ];
 
 /// AP9: the most specific family a sub-type is available in, from `policy::availability`: cs only → PBR / CS,
-/// cs and cpm only → CPM, anything vanilla also has (or that no rule places cleanly) → Vanilla.
+/// cs and cpm only → CPM, anything vanilla also has → Vanilla. complex_grass is placed in PBR / CS by hand.
 pub fn family_of(st: Subtype) -> &'static str {
     use engine::policy::{availability, Availability};
+    // Owner ruling (AP9): available under every target, but a Community Shaders feature in practice.
+    if st == Subtype::ComplexGrass {
+        return FAMILIES[0].0;
+    }
     let on = |t| availability(t, st) == Availability::Available;
     let i = match (on(Target::Cpm), on(Target::Vanilla)) {
         (false, false) => 0,
@@ -470,9 +474,9 @@ impl PresetsModel {
         self.edit_scope(st, Some(suffix), |sub| drop_field(sub, field));
     }
 
-    /// Run `f` on `st`'s scope table (created as needed), then drop what it left empty. A new branch rule goes to the
-    /// front: an alias's before every built-in suffix's, since only a preset's first matching rule applies and an
-    /// alias's files also carry its canonical suffix (AP2).
+    /// Run `f` on `st`'s scope table (created as needed), then drop what it left empty. A preset's matching rules layer in
+    /// file order (AP10), so a new built-in suffix branch goes after the other rules and before the alias branches, and
+    /// a new alias branch goes last: it adds to its canonical suffix's branch (AP2).
     fn edit_scope(&mut self, st: Subtype, branch: Option<&str>, f: impl FnOnce(&mut toml::Table)) {
         let id = st.id();
         let Some(sfx) = branch else {
@@ -487,13 +491,14 @@ impl PresetsModel {
         };
         let alias = self.aliases().iter().any(|(a, _)| a == sfx);
         let at = self.branch_index(st, sfx);
+        let rules = self.rules();
         let insert = if alias {
-            0
+            rules.len()
         } else {
-            self.rules()
+            rules
                 .iter()
-                .take_while(|r| self.branch_key(r).is_some_and(|(_, _, a)| a))
-                .count()
+                .position(|r| self.branch_key(r).is_some_and(|(_, _, a)| a))
+                .unwrap_or(rules.len())
         };
         let rule = branch_rule(&id, sfx, alias);
         self.edit(move |t| {

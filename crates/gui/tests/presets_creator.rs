@@ -464,4 +464,6 @@ fn rows_are_grouped_pbr_cs_then_cpm_then_vanilla_each_sub_type_once() {
         "Complex Parallax Materials (cpm)"
     );
     assert_eq!(family_of(Subtype::Diffuse), "Vanilla");
+    // By hand (AP9): a Community Shaders feature, though every target has it.
+    assert_eq!(family_of(Subtype::ComplexGrass), "PBR / Community Shaders");
 }

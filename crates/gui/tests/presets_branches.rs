@@ -85,10 +85,10 @@ fn an_alias_branch_saves_a_glob_rule_before_the_suffix_rules_and_removing_the_al
     pm.set_branch_field(Subtype::Diffuse, "foo", "mips.levels", json!(4));
     assert_eq!(pm.status(), &Ok(()));
     let r = rules(&pm);
-    // First match wins inside a preset: the alias rule must come before the `_d` rule its files also match.
-    assert_eq!(r[0]["match"]["glob"].as_str(), Some("*_foo.*"));
-    assert_eq!(r[0]["match"]["subtypes"][0].as_str(), Some("diffuse"));
-    assert_eq!(r[1]["match"]["suffix"].as_str(), Some("d"));
+    // Rules layer in file order (AP10): the alias rule comes after the `_d` rule, so it adds to it.
+    assert_eq!(r[0]["match"]["suffix"].as_str(), Some("d"));
+    assert_eq!(r[1]["match"]["glob"].as_str(), Some("*_foo.*"));
+    assert_eq!(r[1]["match"]["subtypes"][0].as_str(), Some("diffuse"));
     pm.remove_alias("foo");
     let r = rules(&pm);
     assert_eq!(r.len(), 1);
@@ -108,8 +108,9 @@ fn a_hand_written_rule_survives_a_save_and_is_listed_read_only() {
     pm.save().unwrap();
     let r = rules(&pm);
     assert_eq!(r.len(), 2);
-    assert_eq!(r[0]["match"]["suffix"].as_str(), Some("n"));
-    assert_eq!(r[1]["match"]["glob"].as_str(), Some("**/armor/**"));
+    // A branch goes after the hand-written rules, so it layers on top of them.
+    assert_eq!(r[0]["match"]["glob"].as_str(), Some("**/armor/**"));
+    assert_eq!(r[1]["match"]["suffix"].as_str(), Some("n"));
     assert_eq!(pm.hand_rules().len(), 1);
     // A rule that names several sub-types is never taken for a branch.
     pm.select("cs-compact");
@@ -216,8 +217,32 @@ fn a_plan_uses_the_branch_for_its_suffix_and_files_beats_it() {
     let foo = profile(&m, "a/y_foo.png");
     assert_eq!(foo.subtype, Subtype::Diffuse);
     assert_eq!(foo.resize, ResizeMode::Half, "the _foo branch");
+    assert_eq!(foo.format, Format::Bc1, "layered on the _d branch (AP10)");
     // An explicit [files] value beats the branch.
     m.set_field("a/x_d.png", "format", json!("bc7"));
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     assert_eq!(profile(&m, "a/x_d.png").format, Format::Bc7);
+}
+
+#[test]
+fn a_branch_layers_on_a_duplicated_compacts_bc1_rule() {
+    // AP10: cs-compact's opaque-colour rule (format bc1, resize none) still applies to `_d` files; the `_d` branch
+    // after it changes only the field it sets.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = model_on(d.path(), &["x_d.png", "x.png"]);
+    let pm = m.presets_model();
+    pm.select("cs-compact");
+    pm.duplicate();
+    pm.set_id("compact-branchy");
+    pm.set_branch_field(Subtype::Diffuse, "d", "resize", json!("half"));
+    let t: toml::Table = toml::from_str(&pm.toml_text()).unwrap();
+    let r = t["rules"].as_array().unwrap();
+    assert_eq!(r.last().unwrap()["match"]["suffix"].as_str(), Some("d"));
+    pm.save().unwrap();
+    m.set_preset(Some("compact-branchy".into()));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let xd = profile(&m, "a/x_d.png");
+    assert_eq!((xd.format, xd.resize), (Format::Bc1, ResizeMode::Half));
+    let x = profile(&m, "a/x.png");
+    assert_eq!((x.format, x.resize), (Format::Bc1, ResizeMode::None));
 }

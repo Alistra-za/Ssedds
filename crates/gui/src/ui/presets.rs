@@ -364,7 +364,7 @@ fn body(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
         egui::CollapsingHeader::new(format!("Other rules ({}, read-only)", hand.len()))
             .id_salt("preset-hand-rules")
             .show(ui, |ui| {
-                ui.weak("Kept as written. Only a preset's first matching rule applies, and suffix branches come first.");
+                ui.weak("Kept as written. Every matching rule applies in file order; the suffix branches come after these, so they win on the fields they set.");
                 for r in hand {
                     ui.label(egui::RichText::new(r).monospace());
                     ui.separator();

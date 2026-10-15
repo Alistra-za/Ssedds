@@ -164,7 +164,7 @@ rmaosultrahigh = "rmaos"
 
 The `[defaults]`, `[subtypes]` and `[[rules]]` tables take the same fields as `sdc.toml`; see the [field reference](Project-Config.md#field-reference).
 
-Inheritance: all `[defaults]` tables are applied from the oldest base to the child, then all `[subtypes]` tables from the oldest base to the child. Rules from every preset in the chain are considered, base first.
+Inheritance: all `[defaults]` tables are applied from the oldest base to the child, then all `[subtypes]` tables from the oldest base to the child. Rules from every preset in the chain are considered, base first. Within a preset (or config), every rule that matches a file applies, in file order, each overriding only the fields it sets.
 
 ### Suffix aliases
 
