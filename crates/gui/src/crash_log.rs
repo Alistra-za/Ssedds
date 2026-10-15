@@ -50,10 +50,70 @@ fn log_path(stamp: &str) -> Option<PathBuf> {
     Some(dir.join(format!("crash-{stamp}.log")))
 }
 
-/// Install the hook: append the panic to this run's crash log, then run the previous hook. Failures to write are
-/// ignored (a panic hook cannot report them anywhere).
+/// This run's crash log, set by [`install`].
+static RUN_LOG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// The unsaved documents as `(file, text)`, refreshed each frame; the panic hook writes them out (Note AR).
+static RECOVERY: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn run_log_path() -> Option<PathBuf> {
+    RUN_LOG.get().cloned()
+}
+
+fn append(path: &Path, line: &str) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// Note AR: wgpu reports a lost device to no one (egui-wgpu then panics on the next frame with "Failed to create
+/// staging buffer"), so the reason goes to the crash log and the timing log.
+pub fn watch_device(device: &eframe::egui_wgpu::wgpu::Device, log: Option<PathBuf>) {
+    device.set_device_lost_callback(move |reason, message| {
+        let line = format!("{} wgpu device lost ({reason:?}): {message}\n", now_stamp());
+        if let Some(path) = &log {
+            append(path, &line);
+        }
+        render3d::perf_log::emit(
+            "device_lost",
+            serde_json::json!({ "reason": format!("{reason:?}"), "message": message }),
+        );
+    });
+}
+
+pub fn set_recovery(files: Vec<(PathBuf, String)>) {
+    if let Ok(mut r) = RECOVERY.lock() {
+        *r = files;
+    }
+}
+
+/// `sdc.toml` → `sdc.toml.recovery`, beside it.
+pub fn recovery_path(file: &Path) -> PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(".recovery");
+    PathBuf::from(name)
+}
+
+/// Writes each unsaved document to its recovery file; the original is left alone.
+pub fn write_recovery(files: &[(PathBuf, String)]) {
+    for (path, text) in files {
+        let _ = std::fs::write(recovery_path(path), text);
+    }
+}
+
+/// Install the hook: append the panic to this run's crash log, write any unsaved documents to their recovery files,
+/// then run the previous hook. Failures to write are ignored (a panic hook cannot report them anywhere).
 pub fn install() {
     let started = now_stamp();
+    if let Some(path) = log_path(&started) {
+        let _ = RUN_LOG.set(path);
+    }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let payload = info.payload();
@@ -74,16 +134,11 @@ pub fn install() {
             &now_stamp(),
         );
         if let Some(path) = log_path(&started) {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = f.write_all(line.as_bytes());
-            }
+            append(&path, &line);
+        }
+        // try_lock: a panic while the snapshot is being replaced must not deadlock the hook.
+        if let Ok(files) = RECOVERY.try_lock() {
+            write_recovery(&files);
         }
         previous(info);
     }));
