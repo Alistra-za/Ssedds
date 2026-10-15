@@ -199,6 +199,9 @@ struct TexEntry {
     source: Option<textures::Texture>,
     encoded: Option<textures::Texture>,
     active: Variant,
+    /// A texture-set slot path the resolver did not return (a `LoadReport::missing_textures` line); never set for an
+    /// RFAOS guess. Kept through swaps, so a dropped swap falls back to the missing-texture fill.
+    missing: bool,
 }
 
 impl TexEntry {
@@ -322,6 +325,8 @@ pub struct Renderer {
     reference_writer: bool,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
     backdrop: Option<Backdrop>,
+    /// [`Renderer::set_missing_texture`]: the colour a missing colour-slot texture shows; `None` = neutral defaults.
+    missing_fill: Option<[u8; 4]>,
 }
 
 impl Renderer {
@@ -401,6 +406,7 @@ impl Renderer {
             uploads: 0,
             reference_writer: false,
             backdrop: None,
+            missing_fill: None,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -604,6 +610,13 @@ impl Renderer {
         self.encode_srgb = on;
     }
 
+    /// `Some(rgba)`: a slot path the resolver did not return shows `rgba` (1×1, 2D or cube as the register reads it) in
+    /// colour registers only: t0, and t4 when it reflects as a cube (the env map). Data registers keep `default_for`.
+    /// `Bound` is not changed (material flags stay those of a missing file). Applies from the next load or rebind.
+    pub fn set_missing_texture(&mut self, fill: Option<[u8; 4]>) {
+        self.missing_fill = fill;
+    }
+
     /// Timing of the last successful [`Renderer::render`].
     pub fn last_timing(&self) -> FrameTiming {
         self.timing
@@ -674,6 +687,7 @@ impl Renderer {
         &mut self,
         norm: &str,
         linear: bool,
+        report_missing: bool,
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
         rep: &mut LoadReport,
     ) -> TexSlot {
@@ -687,6 +701,7 @@ impl Renderer {
         };
         match textures(norm) {
             None => {
+                entry.missing = report_missing;
                 if !rep.missing_textures.iter().any(|m| m == norm) {
                     rep.missing_textures.push(norm.to_string());
                 }
@@ -714,6 +729,7 @@ impl Renderer {
         let pbr = m.is_pbr();
         let msn = m.slsf1 & (1 << 12) != 0;
         let mut real: HashMap<u32, ID3D11ShaderResourceView> = HashMap::new();
+        let mut missing: HashSet<u32> = HashSet::new();
         for (slot, path) in m.slots.iter().enumerate() {
             if path.norm.is_empty() {
                 continue;
@@ -724,9 +740,8 @@ impl Renderer {
             let Some(kind) = draw::srv_kind_at(&program.ps.reflection, reg) else {
                 continue;
             };
-            match self
-                .tex_cache
-                .get(&path.norm)
+            let entry = self.tex_cache.get(&path.norm);
+            match entry
                 .and_then(TexEntry::current)
                 .map(|t| (t.srv.clone(), t.kind))
             {
@@ -737,7 +752,11 @@ impl Renderer {
                     "{name}: {} is not a {kind:?} texture (t{reg}); default bound",
                     path.norm
                 )),
-                None => {}
+                None => {
+                    if entry.is_some_and(|e| e.missing) {
+                        missing.insert(reg);
+                    }
+                }
             }
         }
         // CS_SKIN's t71: the first RFAOS candidate in `tex_cache` with a texture (resolve_textures asked for them,
@@ -759,7 +778,10 @@ impl Renderer {
                 srvs.push((*reg, v.clone()));
                 continue;
             }
-            let rgba = textures::default_for(*reg, m.shader_type, pbr);
+            let rgba = match self.missing_fill {
+                Some(fill) if missing.contains(reg) && colour_register(*reg, *kind) => fill,
+                _ => textures::default_for(*reg, m.shader_type, pbr),
+            };
             let v = self
                 .default_srv(*kind, rgba)
                 .map_err(|e| format!("default texture: {e}"))?;
@@ -784,13 +806,16 @@ impl Renderer {
             if !path.norm.is_empty()
                 && textures::register_for_slot(m.shader_type, pbr, msn, slot).is_some()
             {
-                self.texture(&path.norm, false, textures, rep);
+                self.texture(&path.norm, false, true, textures, rep);
             }
         }
         // Derived guesses: a candidate the resolver lacks is not a missing texture (decode errors still count).
         let mut quiet = LoadReport::default();
         for c in rfaos_candidates(m) {
-            if self.texture(&c, true, textures, &mut quiet).is_some() {
+            if self
+                .texture(&c, true, false, textures, &mut quiet)
+                .is_some()
+            {
                 break;
             }
         }
@@ -1065,6 +1090,7 @@ impl Renderer {
         n.load_variant = self.load_variant;
         n.reference_writer = self.reference_writer;
         n.compiled = std::mem::take(&mut self.compiled);
+        n.missing_fill = self.missing_fill;
         *self = n;
         Ok(())
     }
@@ -1441,7 +1467,13 @@ impl Renderer {
             };
             let srv = match &real {
                 Some(v) => v.clone(),
-                None => self.default_srv(kind, textures::default_for(reg, shader_type, pbr))?,
+                None => {
+                    let rgba = match self.missing_fill {
+                        Some(fill) if entry.missing && colour_register(reg, kind) => fill,
+                        _ => textures::default_for(reg, shader_type, pbr),
+                    };
+                    self.default_srv(kind, rgba)?
+                }
             };
             plan.push((id, reg, srv, real.is_some()));
         }
@@ -1529,6 +1561,28 @@ impl Renderer {
             .draw
             .as_ref()
             .map(|d| d.mesh.index.as_raw() as usize)
+    }
+
+    /// Test hook: the `(kind, rgba)` of the 1×1 default bound at `reg` of the shape's draw; `None` when a real
+    /// texture (or an override) is bound there, or there is no draw.
+    #[doc(hidden)]
+    pub fn draw_default_at(&self, id: ShapeId, reg: u32) -> Option<(SrvKind, [u8; 4])> {
+        use windows::core::Interface;
+        let d = self.shapes.get(&id)?.draw.as_ref()?;
+        let bound = d.srvs.iter().find(|(r, _)| *r == reg)?.1.as_raw();
+        self.defaults
+            .iter()
+            .find(|(_, v)| v.as_raw() == bound)
+            .map(|(k, _)| *k)
+    }
+
+    /// Test hook: the registers the shape's draw counts as real textures (`Bound`), sorted.
+    #[doc(hidden)]
+    pub fn draw_bound(&self, id: ShapeId) -> Option<Vec<u32>> {
+        let d = self.shapes.get(&id)?.draw.as_ref()?;
+        let mut v: Vec<u32> = d.bound.regs.iter().copied().collect();
+        v.sort_unstable();
+        Some(v)
     }
 
     fn compute_bounds(&self) -> Option<([f32; 3], f32)> {
@@ -1737,6 +1791,12 @@ impl Renderer {
 /// A define the CS settings manage (C8): `ENABLE_LL` or a [`cs_settings::PREVIEW_FEATURES`] define.
 fn settings_define(d: &str) -> bool {
     d == "ENABLE_LL" || cs_settings::PREVIEW_FEATURES.iter().any(|(_, x)| *x == d)
+}
+
+/// Owner D3: the missing-texture fill goes to colour registers only, the base colour t0 and the env cube at t4.
+/// PBR t4 (`m_p`) and FaceGen t4 (detail) reflect as 2D and stay neutral.
+fn colour_register(reg: u32, kind: SrvKind) -> bool {
+    reg == 0 || (reg == 4 && kind == SrvKind::Cube)
 }
 
 /// Not visual in the preview: tools, display, performance.
