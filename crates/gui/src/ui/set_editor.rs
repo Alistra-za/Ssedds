@@ -52,6 +52,8 @@ enum Act {
     Fill(String, RawMap, Option<u8>),
     /// A PGPatcher setting of a set: (set id, key, value; `None` removes it).
     Json(String, String, Option<Value>),
+    /// Note AN: read a locked slot's original textures (set id, slot) on a worker.
+    AskOriginal(String, u8),
     /// F3a Task 8: a slot menu pick.
     Slot(MenuAction),
     /// Item 17: files from Explorer dropped on this set's slot card.
@@ -186,6 +188,7 @@ pub fn draw(
             }
             Act::Fill(k, role, v) => model.set_pack_fill(&k, role, v),
             Act::Json(set, k, v) => model.set_json_value(&set, &k, v),
+            Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
             Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
         }
@@ -409,7 +412,7 @@ fn card(
                     }
                 }
                 if pgp_locked(&v.settings, slot.slot_number()) {
-                    pgp_lock_cross(ui, model, v, slot, rect);
+                    pgp_lock_cross(ui, model, v, slot, rect, acts);
                 }
                 let Some(i) = item else {
                     ui.weak("empty");
@@ -522,6 +525,7 @@ fn pgp_lock_cross(
     v: &SetView,
     slot: SlotKind,
     rect: egui::Rect,
+    acts: &mut Vec<Act>,
 ) {
     let stroke = egui::Stroke::new(6.0, RED);
     let r = rect.shrink(6.0);
@@ -549,24 +553,20 @@ fn pgp_lock_cross(
             "PGPatcher lock ({}): this slot keeps the mesh's own texture",
             lock_key(n).unwrap_or_default()
         ));
-        // shortcut: read once per set and slot while hovered, kept for the session (a rescan is not seen); key it by
-        // a scan generation if that matters.
-        let id = egui::Id::new(("pgp-lock-original", &v.id, n));
-        let cached = ui.data(|d| d.get_temp::<Option<Vec<String>>>(id));
-        let paths = cached.unwrap_or_else(|| {
-            let p = model.original_textures(v, n);
-            ui.data_mut(|d| d.insert_temp(id, p.clone()));
-            p
-        });
-        match paths {
-            Some(paths) if !paths.is_empty() => {
+        match model.original_textures(&v.id, n) {
+            Some(Some(paths)) if !paths.is_empty() => {
                 ui.label("Used by meshes, in this slot:");
                 for p in paths.iter() {
                     ui.monospace(p);
                 }
             }
-            Some(_) => {
+            Some(Some(_)) => {
                 ui.weak("The scan has no mesh with this set's diffuse");
+            }
+            // The read runs on a worker (AN6); it lands on a later frame.
+            Some(None) => {
+                ui.weak("…");
+                acts.push(Act::AskOriginal(v.id.clone(), n));
             }
             None => {}
         }

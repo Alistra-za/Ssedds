@@ -7,7 +7,8 @@ use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::pgp::prefix::{
     json_rename, match_toggle, match_value, matches_nothing, stored_match, strip_lead,
-    subsurface_pitfalls, EMPTY_ROW, NO_MATCH, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
+    subsurface_pitfalls, EMPTY_ROW, NOT_WRITTEN, NO_MATCH, PATH_CONTAINS_NOT_WRITTEN,
+    RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
 use crate::pgp::schema::{spec, Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
@@ -326,6 +327,10 @@ fn group(
                 ui.end_row();
             }
         });
+    // AN1: a renamed entry matches by its diffuse alone.
+    if g == Group::Match && c.renamed.is_some() && c.own.contains_key("path_contains") {
+        ui.colored_label(AMBER, PATH_CONTAINS_NOT_WRITTEN);
+    }
     ui.add_space(6.0);
 }
 
@@ -379,10 +384,7 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                         ui.end_row();
                     } else if Some(m.n) != first && c.renamed.is_some() {
                         ui.label("");
-                        ui.colored_label(
-                            AMBER,
-                            "not written: a renamed set matches by its diffuse only",
-                        );
+                        ui.colored_label(AMBER, NOT_WRITTEN);
                         ui.end_row();
                     }
                 }
@@ -416,6 +418,10 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
 pub(crate) fn disabled_reason(k: &KeySpec, c: &Ctx) -> Option<String> {
     if let Some(why) = &c.read_only {
         return Some(why.clone());
+    }
+    // AN2: a renamed set takes no path_contains (one already there stays editable).
+    if k.key == "path_contains" && c.renamed.is_some() && !c.own.contains_key(k.key) {
+        return Some(RENAMED_ONE_MATCH.into());
     }
     let on = c.eff.get(edit_key(k.key)).and_then(Value::as_bool) == Some(true);
     if on {

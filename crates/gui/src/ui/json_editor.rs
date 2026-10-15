@@ -9,7 +9,8 @@ use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
 use crate::pgp::prefix::{
-    active_matches, json_rename, match_toggle, stored_match, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
+    active_matches, json_rename, match_toggle, stored_match, NOT_WRITTEN,
+    PATH_CONTAINS_NOT_WRITTEN, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
 use crate::pgp::schema::{spec, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{number_default, rgb_default, Settings};
@@ -615,6 +616,14 @@ fn set_entry(
             ));
         }
         ui.horizontal_wrapped(|ui| {
+            // AN2: a renamed set's matches keep their mode (another would be refused), and only its first is written.
+            let renamed = json_rename(&c.own, &derived).is_some();
+            let blocked: Vec<Mode> = if renamed {
+                (1..=8u8).map(Mode::Exact).chain([Mode::Contains]).collect()
+            } else {
+                taken.clone()
+            };
+            let first = active_matches(&c.own, &derived).first().map(|(n, _)| *n);
             for (n, path) in active_matches(&c.own, &derived) {
                 match_pill(
                     ui,
@@ -623,9 +632,12 @@ fn set_entry(
                     Mode::Exact(n),
                     &path,
                     &derived,
-                    &taken,
+                    &blocked,
                     acts,
                 );
+                if renamed && Some(n) != first {
+                    ui.colored_label(AMBER, NOT_WRITTEN);
+                }
             }
             if contains.is_some() || waiting.iter().any(|k| k == "path_contains") {
                 let p = contains.clone().unwrap_or_default();
@@ -636,9 +648,12 @@ fn set_entry(
                     Mode::Contains,
                     &p,
                     &derived,
-                    &taken,
+                    &blocked,
                     acts,
                 );
+                if renamed {
+                    ui.colored_label(AMBER, PATH_CONTAINS_NOT_WRITTEN);
+                }
             }
             let nif = text_of(&c.own, "nif_filter").map(str::to_string);
             if nif.is_some() || waiting.iter().any(|k| k == "nif_filter") {
@@ -724,7 +739,13 @@ fn add_set_key_menu(
                     ui.close();
                 }
             }
-            if !taken.contains(&Mode::Contains) && ui.button("path contains").clicked() {
+            let pc = renamed.then_some(RENAMED_ONE_MATCH);
+            if !taken.contains(&Mode::Contains)
+                && ui
+                    .add_enabled(pc.is_none(), egui::Button::new("path contains"))
+                    .on_disabled_hover_text(pc.unwrap_or_default())
+                    .clicked()
+            {
                 add_pending(ui, owner, waiting, "path_contains");
                 ui.close();
             }

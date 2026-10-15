@@ -220,7 +220,9 @@ impl AppModel {
         let st = &self.used_by;
         // Until the wanted texture is read or being read, so a settle cannot be missed; but only while a draw still
         // asks for it, so a texture nobody shows any more (another folder, a set selected) stops the frames.
+        // Note AN: a locked slot's hover list being read counts too.
         st.pending.is_some()
+            || !self.original.pending.is_empty()
             || st.wanted.as_ref().is_some_and(|(k, _)| {
                 st.current.as_ref().is_none_or(|c| &c.item != k)
                     && st.asked_at.is_some_and(|t| t.elapsed() < ASK_TTL)
@@ -246,6 +248,7 @@ impl AppModel {
         self.used_by.stale = true;
         self.used_by.generation += 1;
         self.used_by.pending = None;
+        self.original_scan_changed();
     }
 }
 
@@ -274,19 +277,89 @@ pub fn slot_textures(db: &Path, tex: &str, n: u8) -> Result<Vec<String>, String>
     rows
 }
 
+/// Note AN: the hover list of PGPatcher-locked slots, one worker read per (diffuse scan path, slot). A finished scan
+/// clears it and drops reads in flight (their generation is old).
+#[derive(Debug, Default)]
+pub struct OriginalState {
+    pub done: std::collections::BTreeMap<(String, u8), Arc<Vec<String>>>,
+    pub pending: std::collections::BTreeSet<(String, u8)>,
+    pub generation: u64,
+}
+
 impl AppModel {
-    /// Note AN: [`slot_textures`] for set `v`'s diffuse; `None` without a scan database or a diffuse with a job.
-    pub fn original_textures(&self, v: &super::sets::SetView, n: u8) -> Option<Vec<String>> {
+    /// The scan database and the scan path of set `set`'s diffuse; `None` without either.
+    fn original_source(&self, set: &str) -> Option<(std::path::PathBuf, String)> {
         let db = self.scan_db.clone().filter(|d| self.stat_is_file(d))?;
+        let v = super::sets::set_views(self)
+            .into_iter()
+            .find(|v| engine::sets::same_id(&v.id, set))?;
         let diffuse = match v.slots.get(&super::sets::SlotKind::Diffuse)? {
             super::sets::SlotFill::Own { item } | super::sets::SlotFill::Borrowed { item, .. } => {
-                item
+                item.clone()
             }
             super::sets::SlotFill::Empty => return None,
         };
-        let j = self.item(diffuse)?.job.as_ref()?;
+        let j = self.item(&diffuse)?.job.as_ref()?;
         let stem = j.output.file_stem()?.to_string_lossy().into_owned();
-        let tex = format!("{}.dds", engine::shader::mesh_key(&j.game_path, &stem));
-        Some(slot_textures(&db, &tex, n).unwrap_or_else(|e| vec![format!("Scan database: {e}")]))
+        Some((
+            db,
+            format!("{}.dds", engine::shader::mesh_key(&j.game_path, &stem)),
+        ))
+    }
+
+    /// Note AN: [`slot_textures`] of set `set`'s diffuse in slot `n`: `None` without a scan database or a diffuse
+    /// with a job, `Some(None)` until [`AppModel::ask_original_textures`]'s read lands.
+    pub fn original_textures(&self, set: &str, n: u8) -> Option<Option<Arc<Vec<String>>>> {
+        let (_, tex) = self.original_source(set)?;
+        Some(self.original.done.get(&(tex, n)).cloned())
+    }
+
+    /// Start the read of [`AppModel::original_textures`] on a worker, unless it is done or running.
+    pub fn ask_original_textures(&mut self, set: &str, n: u8) {
+        let Some((db, tex)) = self.original_source(set) else {
+            return;
+        };
+        let key = (tex, n);
+        let st = &mut self.original;
+        if st.done.contains_key(&key) || !st.pending.insert(key.clone()) {
+            return;
+        }
+        let generation = st.generation;
+        spawn_guarded(self.tx.clone(), "original-textures", move |tx| {
+            let result = slot_textures(&db, &key.0, key.1);
+            let _ = tx.send(WorkerMsg::OriginalTextures {
+                generation,
+                key,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn original_landed(
+        &mut self,
+        generation: u64,
+        key: (String, u8),
+        result: Result<Vec<String>, String>,
+    ) {
+        let st = &mut self.original;
+        if generation != st.generation {
+            return;
+        }
+        st.pending.remove(&key);
+        let list = result.unwrap_or_else(|e| vec![format!("Scan database: {e}")]);
+        st.done.insert(key, Arc::new(list));
+    }
+
+    /// A read that panicked: nothing is waiting any more (the next hover asks again).
+    pub(super) fn original_panicked(&mut self) {
+        self.original.pending.clear();
+    }
+
+    /// A finished scan or another folder: every list is read again.
+    pub(super) fn original_scan_changed(&mut self) {
+        let st = &mut self.original;
+        st.done.clear();
+        st.pending.clear();
+        st.generation += 1;
     }
 }

@@ -199,6 +199,8 @@ fn object(own: &Settings, derived: &str, slots: &BTreeMap<u8, String>) -> Vec<(S
                     out.push(("match_diffuse".to_string(), Node::Scalar(json!(diffuse))));
                     Node::Scalar(json!(r))
                 }),
+                // A renamed entry writes no `path_contains` (AN1).
+                None if k.key == "path_contains" && renamed.is_some() => None,
                 None => v
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())

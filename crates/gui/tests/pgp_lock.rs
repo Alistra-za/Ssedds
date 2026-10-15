@@ -283,3 +283,115 @@ fn a_locked_slot_card_shows_the_caption() {
     assert_eq!(h.query_all_by_label(CAPTION).count(), 1);
     assert_eq!(empties(&h), before);
 }
+
+/// The scan database `used_by_meshes.rs` builds, with one texture set: `diffuse` in slot 0 and `normal` in slot 1.
+fn db_with_set(db: &std::path::Path, diffuse: &str, normal: &str) {
+    let s = modscan::store::Store::open(db).unwrap();
+    let c = s.conn();
+    c.execute(
+        "INSERT INTO path(id, p) VALUES (1, ?1), (2, ?2)",
+        [diffuse, normal],
+    )
+    .unwrap();
+    c.execute_batch(
+        "INSERT INTO texset(id, n, t0, t1) VALUES (1, 2, 1, 2);
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0), (2, 1, 1);",
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_original_textures_are_read_off_the_ui_thread_and_again_after_a_scan() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    assert_eq!(m.original_textures(SET, 2), None, "no scan");
+    // The diffuse's scan path, as the Used-by list asks for it.
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    db_with_set(&db, "x.dds", "y.dds");
+    m.scan_db = Some(db.clone());
+    let t = std::time::Instant::now();
+    let tex = loop {
+        m.poll();
+        if let Some(Some(u)) = m.used_by_for("landscape/rock01.png") {
+            break u.tex.clone();
+        }
+        assert!(t.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let db = dbdir.path().join("scan2.db");
+    db_with_set(&db, &tex, "textures/landscape/rock01_n.dds");
+    m.scan_db = Some(db);
+    assert_eq!(m.original_textures(SET, 2), Some(None), "not read yet");
+    m.ask_original_textures(SET, 2);
+    assert!(m.used_by_pending(), "frames keep coming while it reads");
+    let t = std::time::Instant::now();
+    let list = loop {
+        m.poll();
+        if let Some(Some(l)) = m.original_textures(SET, 2) {
+            break l;
+        }
+        assert!(
+            t.elapsed() < Duration::from_secs(30),
+            "the read never landed"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(*list, vec!["textures/landscape/rock01_n.dds".to_string()]);
+    // A finished scan reads again.
+    m.refresh_mesh_votes(false);
+    assert_eq!(m.original_textures(SET, 2), Some(None));
+}
+
+/// Coordinator ruling: `path_contains` on a renamed set is not written (PGPatcher would mangle its hits' paths) and
+/// cannot be added; one already there stays editable.
+#[test]
+fn a_renamed_set_writes_no_path_contains_and_refuses_a_new_one() {
+    let d = r"landscape\rock01";
+    let pairs = [
+        ("path_contains", json!("rock")),
+        ("rename", json!("boulder")),
+    ];
+    assert_eq!(
+        written(&pairs, &[]),
+        json!({ "match_diffuse": r"landscape\rock01", "rename": r"landscape\boulder" })
+    );
+    let w = pitfalls(&s(&pairs), d);
+    assert!(
+        w.iter().any(|m| m.contains("path_contains is not written")),
+        "{w:?}"
+    );
+    let renamed = s(&[("rename", json!("boulder"))]);
+    assert_eq!(
+        extra_match_refusal(&renamed, d, "path_contains", Some(&json!("rock"))),
+        Some(RENAMED_ONE_MATCH)
+    );
+    assert_eq!(
+        extra_match_refusal(&s(&pairs), d, "path_contains", Some(&json!("rocks"))),
+        None,
+        "editing the one already there"
+    );
+    assert_eq!(
+        extra_match_refusal(&s(&[]), d, "path_contains", Some(&json!("rock"))),
+        None
+    );
+    // Not renamed: written as before.
+    assert_eq!(written(&pairs[..1], &[])["path_contains"], json!("rock"));
+}
+
+#[test]
+fn the_lock_entry_is_off_on_a_set_that_writes_no_pgpatcher_entry() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let menu = m.slot_menu("landscape/leaf", SlotKind::Diffuse);
+    let e = menu
+        .iter()
+        .find(|e| matches!(e.action, MenuAction::PgpLock { .. }))
+        .expect("listed");
+    assert!(
+        e.disabled
+            .as_deref()
+            .is_some_and(|w| w.contains("no PGPatcher entry")),
+        "{e:?}"
+    );
+}

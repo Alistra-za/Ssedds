@@ -102,7 +102,7 @@ The GUI writes only `target`, the `[files.*]` tables, `[inputs.*]` aliases and `
 - Closing the window or opening another folder with unsaved edits asks first. During an export, the dialog offers **Cancel export and continue** or **Keep running**.
 - **Ctrl+Z** undoes and **Ctrl+Y** redoes, up to 200 steps.
 
-When a texture's sub-type changes (by a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set that the new type does not allow are reset to the new type's default. A note after the status line says which. Textures in locked slots are left alone and named in the note. One undo restores both.
+When a texture's sub-type changes (by a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set that the new type does not allow are reset to the new type's default. A note after the status line says which. Textures in pinned slots are left alone and named in the note. One undo restores both.
 
 **Resize** is in the Advanced drawer under *Advanced texture fields*: *None*, *Down to a power of two* (1000x600 becomes 512x512), or *Half size (larger side above 512)* (1024x512 becomes 512x256).
 
@@ -159,7 +159,7 @@ Apply is greyed out while any row is red: two names collide, a name Windows cann
 
 ### Input name picker
 
-On the set editor heading, **Input name…** lists known texture paths: every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths. A filter box narrows the list (all words must appear), and you can type a path. Picking one gives every member of the set an `[inputs]` alias with its own suffix and extension. The set's TruePBR settings, locks and borrows follow it. The menu refuses, with the reason, a path outside the project's folder, a name another file already has, a locked slot, or the same name.
+On the set editor heading, **Input name…** lists known texture paths: every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths. A filter box narrows the list (all words must appear), and you can type a path. Picking one gives every member of the set an `[inputs]` alias with its own suffix and extension. The set's TruePBR settings, pins and borrows follow it. The menu refuses, with the reason, a path outside the project's folder, a name another file already has, a pinned slot, or the same name.
 
 ## The 2D preview
 
@@ -206,7 +206,7 @@ If an export is blocked, the *Export is blocked* dialog lists what to fix; click
 - Dropping a file from Explorer on a slot card fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
 - Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON".
 
-Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot locks and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
+Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot pins and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
 
 ### The set editor
 
@@ -218,7 +218,7 @@ In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Em
 
 | Card control | What it does |
 |---|---|
-| **Slot commands…** | *From this set*, *Path*, *Clear*, and *Lock slot N*. Each is one undo step. |
+| **Slot commands…** | *From this set*, *Path*, *Clear*, and *Pin slot N* (the sdc pin). Each is one undo step. |
 | Right-click | The slot commands plus *From another set*, which links the slot to another set's map, *Pin slot (sdc)* / *Unpin slot (sdc)*, and *Keep original texture (PGPatcher lock)*. |
 | **Opaque** (Diffuse) | Strips alpha: the diffuse is fully opaque. |
 | **Match on this** (Diffuse, Normal) | PGPatcher applies the entry to meshes with this exact texture in this slot. |
@@ -261,7 +261,7 @@ Rules:
 - Numbers cannot go below 0; strengths, weights and opacities stay within 0 to 1. A typed value outside the range is clamped and the box says so. The glint log density has no limit.
 - PGPatcher's own `default` block is fixed and not editable.
 - **Matching**: the diffuse path is on by default. **+** adds a row for slot 3 to 8; **×** removes one. A row with no path matches nothing and is not written. A set that matches nothing is left out of the JSON, and Export asks first.
-- **Rename** takes a new file name only. Outputs keep the matched texture's folder under `textures\pbr\` and take the new name, and the matched diffuse is written as `match_diffuse`, the key PGPatcher renames from. A renamed entry is written as `match_diffuse` + `rename` only, with no `match1`-`match8` ("renamed: matches by diffuse (PGPatcher rename needs match_diffuse)"). A renamed set takes no extra match; extra rows from before the rename are not written, and Export asks about them.
+- **Rename** takes a new file name only. Outputs keep the matched texture's folder under `textures\pbr\` and take the new name, and the matched diffuse is written as `match_diffuse`, the key PGPatcher renames from. A renamed entry is written as `match_diffuse` + `rename` only, with no `match1`-`match8` ("renamed: matches by diffuse (PGPatcher rename needs match_diffuse)"). A renamed set takes no extra match; extra rows from before the rename, and any path contains, are not written, and Export asks about them.
 
 ### The JSON file
 
@@ -335,7 +335,7 @@ The drawer at the right edge holds settings that are not per-texture, plus a few
 | File | Contents |
 |---|---|
 | `<folder>\sdc.toml` | Target and per-file decisions. Shared with the CLI. |
-| `<folder>\sdc-project.toml` | Sets, shaders, locks, output names, TruePBR settings, JSON name, delete sections. GUI only. |
+| `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections. GUI only. |
 | `%APPDATA%\sdc\gui.toml` | Window and app settings: export folder, recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
 | `%APPDATA%\sdc\config.toml` | The user config, also read by the CLI. |
 | `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |

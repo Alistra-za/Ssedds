@@ -864,7 +864,8 @@ pub enum MenuAction {
 /// The slot menu's PGPatcher lock entry, off and on (Note AN).
 pub const PGP_LOCK: &str = "Keep original texture (PGPatcher lock)";
 pub const PGP_UNLOCK: &str = "Stop keeping original texture (PGPatcher lock)";
-const NO_PGP_ENTRY: &str = "this set has no PGPatcher entry";
+const NO_PGP_ENTRY: &str =
+    "this set writes no PGPatcher entry (a TruePBR set under Community Shaders does)";
 
 /// One entry of a right-click menu; `disabled` is the hover reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1226,7 +1227,7 @@ impl AppModel {
                 },
                 label: if on { PGP_UNLOCK } else { PGP_LOCK }.into(),
                 disabled: read_only.or_else(|| {
-                    (!super::sets::shows_json_panel(v, self.target)).then(|| NO_PGP_ENTRY.into())
+                    (!super::sets::is_json_set(v, self.target)).then(|| NO_PGP_ENTRY.into())
                 }),
             });
         }
