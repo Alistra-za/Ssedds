@@ -1,6 +1,7 @@
 //! PGPatcher settings controls (M3b spec §4.3–4.5): the main groups for a set, and the advanced keys for the
 //! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
 use super::columns::AMBER;
+use crate::model::auto_flags::{auto_flags, resolved};
 use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
 use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
@@ -81,24 +82,22 @@ fn group_title(g: Group) -> &'static str {
 const MAIN: [Group; 8] = [
     Group::Material,
     Group::Features,
+    Group::Multilayer,
     Group::Emissive,
     Group::Parallax,
     Group::Subsurface,
-    Group::Multilayer,
     Group::Glint,
     Group::Fuzz,
 ];
-const ADVANCED: [Group; 5] = [
-    Group::Match,
-    Group::Uv,
-    Group::Vertex,
-    Group::Locks,
-    Group::Multilayer,
-];
+const ADVANCED: [Group; 4] = [Group::Match, Group::Uv, Group::Vertex, Group::Locks];
 
 pub(crate) struct Ctx {
     /// The set's own settings (there are no inherited ones: the `default` block is fixed).
     pub(crate) own: Settings,
+    /// `own` with the keys the members switch on (DECISIONS AJ7); what the card shows and the writer writes.
+    pub(crate) eff: Settings,
+    /// The auto keys with why: a key here that `own` leaves unset shows "(auto)".
+    auto: Vec<(&'static str, &'static str)>,
     set: String,
     /// Why every control is disabled, when the sets document is read-only.
     pub(crate) read_only: Option<String>,
@@ -119,6 +118,14 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
     let own: Settings = v.as_ref().map(|v| v.settings.clone()).unwrap_or_default();
     let derived = v.as_ref().and_then(|v| v.derived_match.clone());
+    let auto = v
+        .as_ref()
+        .map(|v| auto_flags(v.pbr, &v.slots, &own))
+        .unwrap_or_default();
+    let eff = v
+        .as_ref()
+        .map(|v| resolved(v.pbr, &v.slots, &own))
+        .unwrap_or_else(|| own.clone());
     let (matches, addable) = v.as_ref().map(slot_matches).unwrap_or_default();
     Ctx {
         locks: v.as_ref().map(|v| v.locks.clone()).unwrap_or_default(),
@@ -126,6 +133,8 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
         own,
+        eff,
+        auto,
         matches,
         addable,
         set: set.to_string(),
@@ -154,7 +163,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         model.json_editor_open = true;
     }
     for g in MAIN {
-        if !group_open(g, &c.own) {
+        if !group_open(g, &c.eff) {
             continue;
         }
         let keys: Vec<&KeySpec> = KEYS
@@ -162,6 +171,9 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
             .filter(|k| k.group == g && !k.advanced && k.kind != KeyKind::Slot)
             .collect();
         group(ui, &c, "pgp", g, &keys, &mut edits);
+        if g == Group::Features {
+            coat_kept_note(ui, &c);
+        }
     }
     alpha_section(ui, &c, &mut edits);
     matching(ui, &c, &mut edits);
@@ -170,7 +182,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         .default_open(false)
         .show(ui, |ui| {
             for g in ADVANCED {
-                if !group_open(g, &c.own) {
+                if !group_open(g, &c.eff) {
                     continue;
                 }
                 let keys: Vec<&KeySpec> =
@@ -180,6 +192,33 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
         });
     for (k, v) in edits {
         model.set_json_value(set, &k, v);
+    }
+}
+
+/// Coat values stay in the set while Multilayer is off but are not written (DECISIONS AJ4); say so.
+fn coat_kept_note(ui: &mut egui::Ui, c: &Ctx) {
+    let n = KEYS
+        .iter()
+        .filter(|k| k.group == Group::Multilayer && c.own.contains_key(k.key))
+        .count();
+    if n > 0 && !group_open(Group::Multilayer, &c.eff) {
+        let s = if n == 1 { "" } else { "s" };
+        ui.label(
+            egui::RichText::new(format!(
+                "{n} coat value{s} kept, unused while Multilayer is off"
+            ))
+            .small()
+            .weak(),
+        );
+    }
+}
+
+/// Hover text for a label that needs more than its name.
+fn label_hover(key: &str) -> Option<&'static str> {
+    match key {
+        "coat_color" => Some("Flat coat tint; multiplied by the _s coat diffuse map when Coat diffuse is on"),
+        "inner_uv_scale" => Some("UV scale of the inner layer (multilayer parallax). Visible only where the diffuse alpha is below 1 and an inner-layer texture is set"),
+        _ => None,
     }
 }
 
@@ -277,29 +316,35 @@ pub(crate) fn disabled_reason(k: &KeySpec, c: &Ctx) -> Option<String> {
     if let Some(why) = &c.read_only {
         return Some(why.clone());
     }
-    let on = c.own.get(edit_key(k.key)).and_then(Value::as_bool) == Some(true);
+    let on = c.eff.get(edit_key(k.key)).and_then(Value::as_bool) == Some(true);
     if on {
         return None;
     }
-    if let Some(b) = feature_of(k.key).and_then(|f| blocked_by(&c.own, f)) {
-        return Some(format!("off: {} is on", feature_name(b)));
-    }
+    // The member reasons come first: a coat normal turns multilayer on, which would otherwise be the stated reason.
     match k.key {
-        "fuzz" if c.coat_filled => Some(FUZZ_BLOCKED_BY_COAT.into()),
-        "coat_normal" if c.fuzz_filled => Some(COAT_NORMAL_BLOCKED_BY_FUZZ.into()),
-        _ => None,
+        "fuzz" if c.coat_filled => return Some(FUZZ_BLOCKED_BY_COAT.into()),
+        "coat_normal" if c.fuzz_filled => return Some(COAT_NORMAL_BLOCKED_BY_FUZZ.into()),
+        _ => {}
     }
+    feature_of(k.key)
+        .and_then(|f| blocked_by(&c.eff, f))
+        .map(|b| format!("off: {} is on", feature_name(b)))
 }
 
 /// One row: label, control, and reset. A disabled control says why on hover.
 fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
     let key = edit_key(k.key);
-    let own = c.own.get(key);
+    let auto = c.auto.iter().find(|(a, _)| *a == key).map(|(_, why)| *why);
+    let auto_true = json!(true);
+    let own = c.own.get(key).or(auto.map(|_| &auto_true));
     if matches!(k.kind, KeyKind::OnlyTrue | KeyKind::Object) {
         // The checkbox carries the label, so the label is the clickable part.
         ui.label("");
     } else {
-        ui.label(k.label);
+        let r = ui.label(k.label);
+        if let Some(t) = label_hover(k.key) {
+            r.on_hover_text(t);
+        }
     }
     let reason = disabled_reason(k, c);
     let r = ui.add_enabled_ui(reason.is_none(), |ui| {
@@ -312,7 +357,10 @@ fn row(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, edits: &mut Vec<Edit>) {
     if let Some(why) = reason {
         r.response.on_disabled_hover_text(why);
     }
-    if own.is_some() && c.read_only.is_none() {
+    if let (None, Some(why)) = (c.own.get(key), auto) {
+        ui.label(egui::RichText::new("(auto)").small().weak())
+            .on_hover_text(why);
+    } else if own.is_some() && c.read_only.is_none() {
         if ui
             .small_button("reset")
             .on_hover_text("Remove this setting (the default applies)")
@@ -337,7 +385,9 @@ pub(crate) fn control(
         KeyKind::OnlyTrue | KeyKind::Object => {
             let mut on = value.and_then(|v| v.as_bool()).unwrap_or(false);
             if ui.checkbox(&mut on, k.label).changed() {
-                edits.push((key, on.then_some(json!(true))));
+                // Unticking an auto-on key stores an explicit off, which beats the auto value (AJ8).
+                let auto = c.auto.iter().any(|(a, _)| *a == key);
+                edits.push((key, (on || auto).then_some(json!(on))));
             }
         }
         KeyKind::Tri => {

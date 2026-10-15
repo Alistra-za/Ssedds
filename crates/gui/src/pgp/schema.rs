@@ -275,7 +275,7 @@ pub const KEYS: &[KeySpec] = &[
         false,
         "Multilayer (coat)",
     ),
-    k("coat_color", K::Rgb, G::Multilayer, true, "Coat colour"),
+    k("coat_color", K::Rgb, G::Multilayer, false, "Coat colour"),
     k(
         "coat_specular_level",
         MIN0,
@@ -317,7 +317,7 @@ pub const KEYS: &[KeySpec] = &[
         "inner_uv_scale",
         MIN0,
         G::Multilayer,
-        true,
+        false,
         "Inner UV scale",
     ),
     k("glint", K::Object, G::Features, false, "Glint"),

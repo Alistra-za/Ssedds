@@ -1,4 +1,5 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
+pub mod auto_flags;
 pub mod bulk;
 pub mod dds_patch;
 pub mod encoding_follow;

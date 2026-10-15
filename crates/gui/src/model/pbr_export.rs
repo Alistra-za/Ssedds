@@ -184,7 +184,7 @@ pub fn json_entries(m: &AppModel) -> Vec<(SetView, EntryInput)> {
         })
         .map(|v| {
             let e = EntryInput {
-                settings: v.settings.clone(),
+                settings: crate::model::auto_flags::resolved(v.pbr, &v.slots, &v.settings),
                 slots: slots_of(v, &views, &paths, m),
                 derived_match: v.derived_match.clone().unwrap_or_default(),
                 section: false,
