@@ -127,6 +127,14 @@ pub const BLOCK: &str = "#if defined(SDC_DEBUG)
 #endif
 ";
 
+/// `text` has `name` as a whole identifier: not followed by an identifier character, so a renamed `worldNormalWS`
+/// does not pass for `worldNormal` (the block would then fail to compile instead of the view being refused).
+fn declares(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(i, _)| {
+        !text[i + name.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 /// `text` with [`BLOCK`] inserted right before its single `return psout;`. Err when the text does not have exactly
 /// one, or lacks one of the declarations the block reads.
 pub fn inject(text: &str) -> Result<String, String> {
@@ -136,7 +144,7 @@ pub fn inject(text: &str) -> Result<String, String> {
             "Lighting.hlsl has {n} `{ANCHOR}`; the debug views need exactly one"
         ));
     }
-    if let Some(name) = NAMES.iter().find(|name| !text.contains(*name)) {
+    if let Some(name) = NAMES.iter().find(|name| !declares(text, name)) {
         return Err(format!(
             "Lighting.hlsl has no `{name}`; the debug views read it"
         ));
@@ -172,6 +180,22 @@ mod tests {
             "float vertexAO",
         ] {
             let e = inject(&MINI.replace(name, "x")).unwrap_err();
+            assert!(e.contains(name), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_suffix_renamed_declaration_is_an_error() {
+        for (name, renamed) in [
+            (
+                "MaterialProperties material =",
+                "MaterialProperties materialX =",
+            ),
+            ("float3 worldNormal", "float3 worldNormalWS"),
+            ("float glossiness", "float glossinessX"),
+            ("float vertexAO", "float vertexAO2"),
+        ] {
+            let e = inject(&MINI.replace(name, renamed)).unwrap_err();
             assert!(e.contains(name), "{e}");
         }
     }
