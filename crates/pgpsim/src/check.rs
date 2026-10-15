@@ -137,6 +137,21 @@ pub(crate) fn check_types(e: &Map<String, Value>) -> Result<(), String> {
     Ok(())
 }
 
+/// PGPatcher 2.2 `alphaprop_*` whole-number keys and their maxima. Never in `NUM_KEYS`: 2.2 ignores a bad value
+/// (`unsignedFromJSON`) where 1.2.0 threw, so they never make a `Skip`.
+const INT_KEYS: [(&str, u32); 2] = [("alphaprop_flags", 65535), ("alphaprop_thresh", 255)];
+
+/// PGPatcher 2.2 `unsignedFromJSON`: `Some` only for a JSON number that is a whole value in 0..=max (an integral
+/// float counts). Booleans, strings, fractions, negatives and out-of-range values are `None` (ignored, never thrown).
+pub(crate) fn uint_in(v: &Value, max: u32) -> Option<u32> {
+    if !v.is_number() {
+        return None;
+    }
+    v.as_f64()
+        .filter(|f| f.fract() == 0.0 && (0.0..=f64::from(max)).contains(f))
+        .map(|f| f as u32)
+}
+
 /// The 0–1 factors among the number keys (sdc M6 F1 spec §2). Mirrors `NumRange::Unit` in sdc-gui's `pgp/schema.rs`;
 /// the GUI test `pgpsim_warns_on_exactly_the_gui_ranges` keeps the two in step.
 const UNIT_KEYS: [&str; 3] = ["subsurface_opacity", "coat_strength", "fuzz.weight"];
@@ -162,7 +177,8 @@ pub fn range_warnings(entry: &Value) -> Vec<String> {
             );
         }
     }
-    nums.into_iter()
+    let mut out: Vec<String> = nums
+        .into_iter()
         .filter_map(|(k, x)| {
             let unit = UNIT_KEYS.contains(&k.as_str());
             let hi = if unit { 1.0 } else { f64::INFINITY };
@@ -171,12 +187,24 @@ pub fn range_warnings(entry: &Value) -> Vec<String> {
                 format!("{k} is {x}, outside {range}")
             })
         })
-        .collect()
+        .collect();
+    // A number PGPatcher 2.2 would ignore; strings and booleans are ignored too but are not sdc's range business.
+    for (k, max) in INT_KEYS {
+        if let Some(v) = e
+            .get(k)
+            .filter(|v| v.is_number() && uint_in(v, max).is_none())
+        {
+            out.push(format!(
+                "{k} is {v}, outside 0–{max} (PGPatcher ignores it)"
+            ));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::range_warnings;
+    use super::{range_warnings, uint_in};
     use serde_json::json;
 
     #[test]
@@ -203,5 +231,44 @@ mod tests {
         assert!(range_warnings(&json!(3)).is_empty());
         // Final review Minor 9: the removed env_map_* keys have no range.
         assert!(range_warnings(&json!({"env_map_scale": -1, "env_map_scale_mult": -2})).is_empty());
+    }
+
+    #[test]
+    fn uint_in_is_unsigned_from_json() {
+        assert_eq!(uint_in(&json!(0), 255), Some(0));
+        assert_eq!(uint_in(&json!(255), 255), Some(255));
+        assert_eq!(
+            uint_in(&json!(8.0), 255),
+            Some(8),
+            "an integral float counts"
+        );
+        for bad in [
+            json!(256),
+            json!(-1),
+            json!(1.5),
+            json!(-0.5),
+            json!("8"),
+            json!(true),
+            json!(null),
+        ] {
+            assert_eq!(uint_in(&bad, 255), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn alphaprop_numbers_outside_their_range_warn_and_other_types_do_not() {
+        let w = range_warnings(&json!({"alphaprop_thresh": 300}));
+        assert_eq!(
+            w,
+            ["alphaprop_thresh is 300, outside 0–255 (PGPatcher ignores it)"]
+        );
+        assert_eq!(range_warnings(&json!({"alphaprop_flags": -1})).len(), 1);
+        assert_eq!(range_warnings(&json!({"alphaprop_flags": 1.5})).len(), 1);
+        assert!(
+            range_warnings(&json!({"alphaprop_flags": 65535, "alphaprop_thresh": 0})).is_empty()
+        );
+        assert!(
+            range_warnings(&json!({"alphaprop_thresh": "8", "alphaprop_flags": true})).is_empty()
+        );
     }
 }

@@ -142,10 +142,6 @@ fn pgpsim_warns_on_exactly_the_gui_ranges() {
         let KeyKind::Number(range) = k.kind else {
             continue;
         };
-        // Task 4b: pgpsim (NIF-owned) does not know the alphaprop_* keys yet; they are whole numbers, checked in alpha_prop.rs.
-        if matches!(range, NumRange::Int(_)) {
-            continue;
-        }
         // Indexing a Null `Value` by a string makes it an object.
         let entry = |x: f64| {
             let mut v = Value::Null;
@@ -155,6 +151,19 @@ fn pgpsim_warns_on_exactly_the_gui_ranges() {
             }
             v
         };
+        // The alphaprop_* keys are whole numbers 0..=max (pgpsim INT_KEYS, PGPatcher 2.2 unsignedFromJSON).
+        if let NumRange::Int(max) = range {
+            let max = f64::from(max);
+            for (x, warnings) in [(-1.0, 1), (1.0, 0), (max + 1.0, 1)] {
+                assert_eq!(
+                    pgpsim::range_warnings(&entry(x)).len(),
+                    warnings,
+                    "{} = {x}",
+                    k.key
+                );
+            }
+            continue;
+        }
         assert_eq!(
             pgpsim::range_warnings(&entry(-0.5)).len(),
             usize::from(range != NumRange::Any),
