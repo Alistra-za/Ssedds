@@ -1569,6 +1569,16 @@ impl AppModel {
             .collect();
     }
 
+    /// What the PGPatcher JSON editor's text and issues are built from (DECISIONS AG109): the set-view key, the
+    /// mesh evidence the auto flags read, and the file name.
+    pub(crate) fn json_key(&self) -> (ViewKey, usize, String) {
+        (
+            self.view_key(),
+            self.mesh_tree_anim.len(),
+            crate::model::pbr_export::json_name(self),
+        )
+    }
+
     /// Everything `sets::views` and `pbr_export::export_blocks` read (DECISIONS Note Y7).
     pub(crate) fn view_key(&self) -> ViewKey {
         ViewKey {

@@ -21,15 +21,18 @@ pub enum Area {
     /// The 3D panel (Meshes view, set preview). `ui::viewport3d` handles its keys (the viewports are not in
     /// `AppModel`); they are only listed here.
     View3d,
+    /// The PGPatcher JSON editor window (`ui::json_editor` handles its keys; it is a window of its own).
+    JsonEditor,
 }
 
 impl Area {
-    pub const ALL: [Area; 6] = [
+    pub const ALL: [Area; 7] = [
         Area::Global,
         Area::Grid,
         Area::Preview,
         Area::Sets,
         Area::View3d,
+        Area::JsonEditor,
         Area::Dialogs,
     ];
 
@@ -41,6 +44,7 @@ impl Area {
             Area::Sets => "Sets",
             Area::Dialogs => "Dialogs",
             Area::View3d => "3D preview",
+            Area::JsonEditor => "JSON editor",
         }
     }
 
@@ -55,6 +59,8 @@ impl Area {
             && other != Global
             && self != View3d
             && other != View3d
+            && self != JsonEditor
+            && other != JsonEditor
             && !both(Grid, Sets)
     }
 }
@@ -199,7 +205,7 @@ pub fn actions() -> &'static [Action] {
     ACTIONS
 }
 
-use Area::{Dialogs, Global, Grid, Preview, Sets, View3d};
+use Area::{Dialogs, Global, Grid, JsonEditor, Preview, Sets, View3d};
 
 pub static ACTIONS: &[Action] = &[
     // Global
@@ -513,6 +519,19 @@ pub static ACTIONS: &[Action] = &[
         View3d,
         &[ctrl_shift(Key::C)],
     ),
+    // The JSON editor (its window handles them)
+    listed(
+        "json-next-error",
+        "Next error in the PGPatcher JSON editor",
+        JsonEditor,
+        &[key(Key::F8)],
+    ),
+    listed(
+        "json-prev-error",
+        "Previous error in the PGPatcher JSON editor",
+        JsonEditor,
+        &[shift(Key::F8)],
+    ),
     // Dialogs
     listed(
         "dialog-enter",
@@ -555,7 +574,7 @@ fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
         Area::Global => true,
         Area::Grid | Area::Sets => !meshes_view && model.expanded.is_none(),
         Area::Preview => !meshes_view && model.expanded.is_some(),
-        Area::Dialogs | Area::View3d => false,
+        Area::Dialogs | Area::View3d | Area::JsonEditor => false,
     }
 }
 

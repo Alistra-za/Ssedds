@@ -207,6 +207,8 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | 3D preview | Home | Recentre the 3D view (as a double-click) |
 | 3D preview | V | Next 3D debug view (Lit, UV checker) |
 | 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
+| JSON editor | F8 | Next error in the PGPatcher JSON editor |
+| JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
 | Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
 | Dialogs | Esc | Cancel the dialog |
 
@@ -277,6 +279,15 @@ The TruePBR card has a collapsible **NiAlphaProperty** section for the schema's 
 ### The JSON
 
 After a complete export, **Export** writes `<export>\PBRNIFPatcher\<name>.json`. Only sets that exported fully are written, and the file name must be a single plain file name. If the file already exists and is not the one sdc wrote last time, you are asked before it is overwritten; a byte-identical file is never prompted. With a read-only `sdc-project.toml` the JSON is still written, but the next export asks before overwriting.
+
+### The JSON editor
+
+**Open the TruePBR JSON editor** (the set's TruePBR box, or the command palette) shows the whole PGPatcher JSON in a window of its own: one entry per TruePBR set, then the delete sections. Advanced skin sets have no entry.
+
+- The header reads "N errors, M warnings". Errors are what blocks Export (a red line under the entry they belong to); warnings are what Export asks about (an amber line). A problem that belongs to no entry (the JSON name, a set that matches nothing) is listed in a **General** box at the top.
+- **Next error** and **Prev** (F8 and Shift+F8) jump to the next or previous entry with an error, unfold it and scroll to it. They wrap at the end. Each entry has a **Collapse** / **Expand** button.
+- The search box keeps the entries whose set name or any path in them (match, slot, path_contains, nif_filter) contains the text, ignoring case; "showing K of N" says how many are left. The counts and Next error ignore the search: if the next error is hidden by it, Next error clears the search.
+- The JSON text is built again only when something it is made from changes, not on every frame.
 
 ### Check by hand
 

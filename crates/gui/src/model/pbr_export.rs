@@ -13,7 +13,7 @@ use crate::pgp::settings::{blocked_by, feature_key, feature_on, Feature, Setting
 use crate::pgp::validate::validate;
 use crate::pgp::writer::{document, to_text, EntryInput};
 use engine::config::Target;
-use engine::sets::OutputKey;
+use engine::sets::{same_id, OutputKey};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -687,4 +687,60 @@ pub fn unfinished_note(p: &PendingJson, failed: bool) -> Option<String> {
     }
     let why = if failed { "failed" } else { "was cancelled" };
     Some(format!("PGPatcher JSON not written: the export {why}"))
+}
+
+/// What the PGPatcher JSON editor shows (DECISIONS AG106): the export blocks (errors) and the pitfalls the export
+/// asks about (warnings), each on its entry or in the general box. An Advanced skin set (AG90) or any set that is
+/// not a TruePBR set has no entry and no line here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JsonIssues {
+    /// `(set id, text)` for an entry in the editor.
+    pub errors: Vec<(String, String)>,
+    pub warnings: Vec<(String, String)>,
+    /// Belong to no entry: project-wide blocks, and a TruePBR set that has no entry.
+    pub general_errors: Vec<String>,
+    pub general_warnings: Vec<String>,
+}
+
+impl JsonIssues {
+    pub fn error_count(&self) -> usize {
+        self.errors.len() + self.general_errors.len()
+    }
+    pub fn warning_count(&self) -> usize {
+        self.warnings.len() + self.general_warnings.len()
+    }
+}
+
+/// Sorts the blocks and the pitfalls onto `entry_ids` (the sets that have an entry), by set id.
+pub fn json_issues(m: &AppModel, entry_ids: &[&str]) -> JsonIssues {
+    let views = set_views(m);
+    let mut out = JsonIssues::default();
+    let mut place = |i: ExportIssue, error: bool| {
+        let owned = entry_ids.iter().any(|e| same_id(e, &i.set_id));
+        if owned {
+            // "<set id>: <message>" shows as the message, under the entry that says whose it is.
+            let text = i.text.strip_prefix(&format!("{}: ", i.set_id));
+            let text = text.unwrap_or(&i.text).to_string();
+            let to = if error {
+                &mut out.errors
+            } else {
+                &mut out.warnings
+            };
+            to.push((i.set_id, text));
+        } else if i.set_id.is_empty() || views.iter().any(|v| v.pbr && same_id(&v.id, &i.set_id)) {
+            let to = if error {
+                &mut out.general_errors
+            } else {
+                &mut out.general_warnings
+            };
+            to.push(i.text);
+        }
+    };
+    for i in export_blocks(m) {
+        place(i, true);
+    }
+    for i in export_asks(m) {
+        place(i, false);
+    }
+    out
 }
