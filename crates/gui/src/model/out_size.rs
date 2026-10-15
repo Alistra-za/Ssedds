@@ -144,6 +144,22 @@ impl SizeCache {
         e
     }
 
+    /// Forget every size of the folder that was open. A job in flight still lands (its files are only kept).
+    pub fn clear_folder(&mut self) {
+        self.dims.clear();
+        self.asked.clear();
+        self.retried.clear();
+        self.pending.clear();
+        self.sizes.clear();
+        self.folder = None;
+        self.rev = None;
+    }
+
+    /// Size results kept (tests).
+    pub fn dims_len(&self) -> usize {
+        self.dims.len()
+    }
+
     fn sync(&mut self, rev: u64) {
         if self.rev != Some(rev) {
             self.rev = Some(rev);

@@ -566,6 +566,8 @@ impl AppModel {
         // Another folder's item keys can be the same strings: its list must not show here.
         self.used_by.current = None;
         self.used_by_scan_changed();
+        // The source sizes read for the previous folder (AG129: the cache would grow for the whole session).
+        self.sizes.clear_folder();
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
@@ -793,6 +795,9 @@ impl AppModel {
                 self.project = None;
                 self.sets_doc = None;
                 self.last_inputs = None;
+                // An export queued behind the cancelled plan has no folder to run on (AG129).
+                self.export_after_plan = false;
+                self.continue_after_plan = None;
                 self.refresh_banner();
                 self.status_line.clear();
                 self.open_cancelled = true;
@@ -968,6 +973,11 @@ impl AppModel {
             WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}
         }
+    }
+
+    /// An export waits for a plan to land (Export clicked while planning, or a Continue after a re-plan).
+    pub fn export_queued(&self) -> bool {
+        self.export_after_plan || self.continue_after_plan.is_some()
     }
 
     /// Export the folder; first the checks that need an answer (M3a spec §2.5). Sources that changed since the plan

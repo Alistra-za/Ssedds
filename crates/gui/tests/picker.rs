@@ -176,10 +176,9 @@ fn each_purpose_reaches_its_own_handler() {
 }
 
 #[test]
-fn a_stale_open_folder_result_is_dropped() {
+fn an_open_folder_pick_is_never_stale_but_an_export_folder_pick_is() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(&d.path().join("a"));
-    let a = m.root.clone();
     let c = mod_folder(&d.path().join("c"));
     // The picker opens while folder A is open ...
     let (f, tx) = fake();
@@ -193,12 +192,29 @@ fn a_stale_open_folder_result_is_dropped() {
     let b = mod_folder(&d.path().join("b"));
     m.open_folder(b.clone());
     assert!(m.wait_idle(Duration::from_secs(60)));
-    tx.send(Some(c)).unwrap();
+    tx.send(Some(c.clone())).unwrap();
     wait_closed(&m.picker);
     m.poll();
-    // ... so the answer is for a folder that is gone.
-    assert_eq!(m.root, Some(b));
-    assert_ne!(m.root, a);
+    // ... and the pick still opens: it is the user's latest choice (AG129).
+    assert_eq!(m.root, Some(c));
+    assert!(!m.status_line.contains("Picker result ignored"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+
+    // An export folder picked for a folder that is gone is still dropped.
+    let (f, tx) = fake();
+    m.picker.set_backend(f);
+    assert!(m.pick(
+        &egui::Context::default(),
+        PickerPurpose::ExportFolder,
+        PickerSpec::folder()
+    ));
+    m.open_folder(b.clone());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let before = m.settings.export_folder.clone();
+    tx.send(Some(d.path().join("elsewhere"))).unwrap();
+    wait_closed(&m.picker);
+    m.poll();
+    assert_eq!(m.settings.export_folder, before);
     assert!(m.status_line.contains("Picker result ignored"));
     assert!(m
         .messages
@@ -279,4 +295,30 @@ fn a_shader_folder_pick_reaches_the_viewport_that_asked() {
     assert!(!meshes.v3.locating());
     assert!(set.v3.poll());
     assert!(set.v3.locating());
+}
+
+#[test]
+fn the_export_folder_cannot_change_while_an_export_runs() {
+    use egui_kittest::kittest::Queryable;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(&d.path().join("a"));
+    m.export.running = Some(Default::default());
+    // A dialog opened before the export started lands during it: dropped.
+    let before = m.settings.export_folder.clone();
+    ask(
+        &m.picker,
+        PickerPurpose::ExportFolder,
+        m.root.clone(),
+        Some(d.path().join("elsewhere")),
+    );
+    m.poll();
+    assert_eq!(m.settings.export_folder, before);
+    assert!(m.status_line.contains("an export is running"));
+    // The header button is off, with the reason.
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    h.run();
+    let b = h.get_by_label_contains("Export folder:");
+    assert!(b.accesskit_node().is_disabled());
 }

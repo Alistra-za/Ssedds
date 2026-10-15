@@ -161,3 +161,25 @@ fn scan_eta_follows_the_pace_rules() {
         .unwrap()
         .starts_with("indexing 2/50 · ETA "));
 }
+
+#[test]
+fn cancel_with_no_previous_folder_drops_a_queued_export() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.open_folder(root);
+    m.export_clicked();
+    assert!(m.export_queued(), "Export waits for the plan");
+    m.cancel_open();
+    assert!(!m.export_queued(), "nothing left to export");
+}
+
+#[test]
+fn opening_another_folder_forgets_the_source_sizes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.folder_size();
+    assert!(m.sizes.dims_len() > 0);
+    m.open_folder(mod_folder(&d.path().join("other")));
+    assert_eq!(m.sizes.dims_len(), 0);
+}

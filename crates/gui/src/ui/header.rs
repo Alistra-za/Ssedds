@@ -9,6 +9,8 @@ const WARNING: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const JSON_FIELD_WIDTH: f32 = 120.0;
 /// The widest the Export folder button gets; a longer path is cut with "…".
 const EXPORT_FOLDER_MAX: f32 = 280.0;
+/// Why the export folder cannot change now.
+pub const EXPORT_RUNNING_HOVER: &str = "An export is running: change the folder after it ends";
 
 fn target_name(t: Target) -> &'static str {
     match t {
@@ -243,17 +245,22 @@ fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
     fit(ui, w);
     let height = ui.spacing().interact_size.y;
     let b = egui::Button::new(text).truncate();
-    let r = ui
-        .allocate_ui(egui::vec2(w, height), |ui| {
-            ui.add_enabled(!model.picker.busy(), b)
-        })
-        .inner;
-    let r = if model.picker.busy() {
-        r.on_disabled_hover_text(picker::BUSY_HOVER)
+    // AG129: the drawer's links point at the export folder, so it stays put while an export runs.
+    let off = if model.picker.busy() {
+        Some(picker::BUSY_HOVER)
+    } else if model.export.running.is_some() {
+        Some(EXPORT_RUNNING_HOVER)
     } else {
-        r.on_hover_text(format!(
+        None
+    };
+    let r = ui
+        .allocate_ui(egui::vec2(w, height), |ui| ui.add_enabled(off.is_none(), b))
+        .inner;
+    let r = match off {
+        Some(why) => r.on_disabled_hover_text(why),
+        None => r.on_hover_text(format!(
             "Choose where converted textures are written (now {shown})"
-        ))
+        )),
     };
     if r.clicked() {
         model.pick(ui.ctx(), PickerPurpose::ExportFolder, PickerSpec::folder());

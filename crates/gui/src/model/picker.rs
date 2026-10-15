@@ -220,11 +220,12 @@ pub fn button(ui: &mut egui::Ui, picker: &Picker, b: egui::Button<'_>) -> bool {
 
 impl PickerPurpose {
     /// The purposes whose result belongs to the opened folder: it is dropped if the folder changed meanwhile.
+    /// OpenFolder is not one: the folder picked is the user's latest choice whatever was open (AG129).
     /// The others (a scan source, nvcompress, the shader folder) mean the same whatever folder is open.
     fn folder_scoped(self) -> bool {
         matches!(
             self,
-            PickerPurpose::OpenFolder | PickerPurpose::ExportFolder | PickerPurpose::SaveReport
+            PickerPurpose::ExportFolder | PickerPurpose::SaveReport
         )
     }
 }
@@ -261,6 +262,13 @@ impl AppModel {
         match d.purpose {
             PickerPurpose::OpenFolder => {
                 self.request_open(path);
+            }
+            PickerPurpose::ExportFolder if self.export.running.is_some() => {
+                // A dialog opened before the export started (AG129).
+                let note = "Picker result ignored: an export is running";
+                self.status_line = note.into();
+                self.messages
+                    .notify(super::messages::Severity::Warning, note);
             }
             PickerPurpose::ExportFolder => {
                 self.settings.export_folder = Some(path);
