@@ -3,7 +3,7 @@
 //! `ui::viewport3d::show`. No logic beyond mapping input to model calls.
 use crate::model::set_preview::{
     badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
-    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, JSON_WINS, MODE_LABEL_ENCODED,
+    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, GRASS_APPROX, JSON_WINS, MODE_LABEL_ENCODED,
     MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, PANEL_TITLE, TILING, WAITS_FOR_EXPORT,
 };
 use crate::model::AppModel;
@@ -85,6 +85,9 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
         ui.label(JSON_WINS);
     } else {
         ui.colored_label(AMBER, NEEDS_CS);
+    }
+    if fp.grass {
+        ui.colored_label(AMBER, GRASS_APPROX);
     }
     ui.label(egui::RichText::new(cap_text(s.enc.cap)).small());
     if s.enc.paused {

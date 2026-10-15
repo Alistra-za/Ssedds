@@ -389,6 +389,7 @@ fn fp_of(entry: Option<EntryInput>, sig: &str) -> SetFingerprint {
         set_key: "k".into(),
         label: "x/rock".into(),
         landscape: false,
+        grass: false,
         entry,
         prefix: Some(r"textures\pbr\x\rock".into()),
         members: vec![MemberSlot {
