@@ -845,6 +845,25 @@ pub fn pick_notes(pick: &ShaderPick, target: Target) -> Vec<Warning> {
     out
 }
 
+/// PBR grass design §4.4: CS's grass depth/shadow pass runs the complex-grass detector on a PBR grass albedo
+/// (research §1.6), so an albedo whose bottom-left texel reads as a unit vector gets mismatched cutout shadows.
+/// `GRASS_GUARD_MARGIN` to spare: BC encoding moves the texel (DECISIONS X2).
+pub fn pbr_grass_albedo_note(pick: &ShaderPick, st: Subtype, corner_err: f32) -> Option<Warning> {
+    use crate::grass::{CS_GRASS_THRESHOLD, GRASS_GUARD_MARGIN};
+    (pick.shader == Shader::PbrGrass
+        && matches!(st, Subtype::PbrAlbedo | Subtype::Diffuse)
+        && corner_err < CS_GRASS_THRESHOLD + GRASS_GUARD_MARGIN)
+        .then(|| {
+            Warning::new(
+                Code::PbrGrassDetect,
+                format!(
+                    "bottom-left texel has |L-1| = {corner_err:.3}: Community Shaders' grass shadow pass would read \
+                     this albedo as complex grass, so shadows will not match; change that texel"
+                ),
+            )
+        })
+}
+
 /// The settings `shader` gives a member of sub-type `st` (M6 spec §6): field path → value. The `bc4` rows restate
 /// the built-in `envmask`/`height` format so a later built-in change cannot undo them.
 pub fn member_defaults(shader: Shader, st: Subtype) -> Vec<(&'static str, serde_json::Value)> {
@@ -1790,5 +1809,32 @@ mod tests {
             PGPATCHER_GRASS,
             "PGPatcher 1.2.0 does not patch grass meshes; needs 2.1.0 or later"
         );
+    }
+
+    /// PBR grass design §4.4: the albedo of a pbr_grass set whose corner reads as a unit vector (0.01 to spare).
+    #[test]
+    fn a_pbr_grass_albedo_that_reads_as_complex_grass_is_noted() {
+        let grass = ShaderPick {
+            shader: Shader::PbrGrass,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let pbr = ShaderPick {
+            shader: Shader::Pbr,
+            ..grass.clone()
+        };
+        let note = |p: &ShaderPick, st, e| pbr_grass_albedo_note(p, st, e).map(|w| w.code);
+        assert_eq!(
+            note(&grass, Subtype::PbrAlbedo, 0.0),
+            Some(Code::PbrGrassDetect)
+        );
+        assert_eq!(
+            note(&grass, Subtype::Diffuse, 0.039),
+            Some(Code::PbrGrassDetect)
+        );
+        assert_eq!(note(&grass, Subtype::PbrAlbedo, 0.05), None);
+        assert_eq!(note(&grass, Subtype::PbrAlbedo, f32::INFINITY), None);
+        assert_eq!(note(&grass, Subtype::PbrNormal, 0.0), None);
+        assert_eq!(note(&pbr, Subtype::PbrAlbedo, 0.0), None);
     }
 }

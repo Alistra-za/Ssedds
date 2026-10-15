@@ -65,6 +65,9 @@ pub struct Analysis {
     pub nonfinite: [u64; 4],
     /// Complex grass facts (design §4, §5), for an image whose height is twice its width; `None` otherwise.
     pub grass: Option<crate::grass::GrassFacts>,
+    /// `|L - 1|` of the bottom-left texel `(0, h - 1)`, the one CS's complex-grass detector reads, for every shape
+    /// (PBR grass design R1); infinite for an empty image.
+    pub corner_err: f32,
 }
 
 /// DECISIONS Note L: source alpha whose minimum is at least 251/255 (no texel below 251) is opaque within BC
@@ -170,6 +173,12 @@ pub fn analyse(img: &Rgba32F, info: &SourceInfo) -> Analysis {
         dds_dxgi: None,
         nonfinite,
         grass: crate::grass::facts(img),
+        corner_err: img
+            .px
+            .get(img.height.saturating_sub(1) as usize * img.width as usize)
+            .map_or(f32::INFINITY, |c| {
+                crate::grass::unit_err([c[0], c[1], c[2]])
+            }),
     }
 }
 

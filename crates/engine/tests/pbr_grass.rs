@@ -14,6 +14,8 @@ use std::sync::Arc;
 /// The set key (and GRAS key) of the fixture set.
 const SET: &str = "textures/plants/g";
 const BROWN: [u8; 3] = [120, 90, 60];
+/// Decodes to (0, 0, 1): CS's complex-grass detector would accept this texel.
+const UNIT_BLUE: [u8; 3] = [128, 128, 255];
 
 fn put(dir: &Path, rel: &str, px: [u8; 3]) {
     let p = dir.join("in").join(rel);
@@ -147,4 +149,34 @@ fn only_a_pbr_grass_set_gets_the_pgpatcher_note() {
     assert!(set_warnings(&ev).contains(&Code::PbrGrassPgpatcher));
     let (_, ev) = plan(d.path(), Target::Cs, &[SET], &[], &[(SET, Shader::Pbr)]);
     assert!(!set_warnings(&ev).contains(&Code::PbrGrassPgpatcher));
+}
+
+/// The warning codes of the albedo job.
+fn albedo_codes(p: &Plan) -> Vec<Code> {
+    p.jobs
+        .iter()
+        .find(|j| j.input.file_name().is_some_and(|n| n == "g.png"))
+        .expect("the albedo job")
+        .warnings
+        .iter()
+        .map(|w| w.code)
+        .collect()
+}
+
+#[test]
+fn an_albedo_that_reads_as_complex_grass_warns_only_on_pbr_grass() {
+    let d = tempfile::tempdir().unwrap();
+    pbr_set(d.path(), UNIT_BLUE);
+    let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
+    assert!(
+        albedo_codes(&p).contains(&Code::PbrGrassDetect),
+        "{:?}",
+        albedo_codes(&p)
+    );
+    let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[(SET, Shader::Pbr)]);
+    assert!(!albedo_codes(&p).contains(&Code::PbrGrassDetect));
+    let d = tempfile::tempdir().unwrap();
+    pbr_set(d.path(), BROWN);
+    let (p, _) = plan(d.path(), Target::Cs, &[SET], &[], &[]);
+    assert!(!albedo_codes(&p).contains(&Code::PbrGrassDetect));
 }

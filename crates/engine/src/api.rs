@@ -1153,13 +1153,18 @@ impl Engine {
         };
         // 6c. Re-resolve the members of a set whose shader changes member defaults.
         let mut jobs = vec![];
-        for (old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
+        for (mut old, (wi, a, info)) in pass1_jobs.into_iter().zip(pass1) {
+            // PBR grass design §4.4: the albedo's corner texel against CS's grass shadow-pass detector.
+            let grass_note = picks.get(&old.set_key).and_then(|p| {
+                crate::shader::pbr_grass_albedo_note(p, old.profile.subtype, a.corner_err)
+            });
             // An explicit set shader also re-resolves a GRAS diffuse: it suppresses the auto-detect (`suggest_grass`).
             let is_gras = gras.contains(&crate::grass::path_key(&work[wi].1.game_path));
             if !picks.get(&old.set_key).is_some_and(|p| {
                 p.shader.has_member_defaults()
                     || (is_gras && p.provenance == crate::shader::ShaderOrigin::Set)
             }) {
+                old.warnings.extend(grass_note);
                 jobs.push(old);
                 continue;
             }
@@ -1183,6 +1188,7 @@ impl Engine {
             match r {
                 Ok(mut job) => {
                     job.source = old.source;
+                    job.warnings.extend(grass_note);
                     job.provenance.insert("target".into(), target_src.clone());
                     jobs.push(job);
                 }
