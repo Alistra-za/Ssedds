@@ -228,6 +228,9 @@ pub static ACTIONS: &[Action] = &[
         &[key(Key::F1), key(Key::Questionmark)],
         |m, _| m.nav.sheet = true,
     ),
+    a("messages", "Messages", Global, &[ctrl(Key::M)], |m, _| {
+        m.messages.toggle();
+    }),
     when(
         a("open", "Open folder…", Global, &[], |m, ctx| {
             m.pick(ctx, PickerPurpose::OpenFolder, PickerSpec::folder());
@@ -614,6 +617,10 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
         });
         if pressed {
             model.status_line = "Ctrl+S: leave the text field first".into();
+            model.messages.log(
+                crate::model::messages::Severity::Info,
+                model.status_line.clone(),
+            );
         }
     }
     let meshes = super::header::meshes_view_active(ctx);

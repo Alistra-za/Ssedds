@@ -190,6 +190,9 @@ pub fn rnm_section(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
                     (!on).then_some(json!(false)),
                 ));
             }
+            if job.active_rnm().is_some() {
+                blended_preview(ui, model, key);
+            }
             for r in &rows {
                 row(ui, model, key, r, both, &job, &mut edits);
                 if r.id == LayerId::Bent {
@@ -232,4 +235,37 @@ fn drag_slider(
         return (v != current).then_some(v);
     }
     None
+}
+
+/// Item 21 (DECISIONS AG115): the set's blended normal as a 128 px thumbnail, `(n + 1) / 2` as colour. The job runs
+/// off the UI thread; the picture on show stays until the one for the new settings lands.
+fn blended_preview(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
+    model.rnm_preview_frame(key);
+    ui.label("Blended normal");
+    if let Some(t) = model.rnm_preview_image(key) {
+        let id = egui::Id::new(("rnm-preview-tex", key));
+        let ptr = Arc::as_ptr(&t) as usize;
+        let cached: Option<(usize, egui::TextureHandle)> = ui.data(|d| d.get_temp(id));
+        let tex = match cached {
+            Some((p, h)) if p == ptr => h,
+            _ => {
+                let img = egui::ColorImage::from_rgba_unmultiplied(
+                    [t.width as usize, t.height as usize],
+                    &t.rgba,
+                );
+                let h =
+                    ui.ctx()
+                        .load_texture(format!("rnm-preview-{key}"), img, Default::default());
+                ui.data_mut(|d| d.insert_temp(id, (ptr, h.clone())));
+                h
+            }
+        };
+        ui.add(
+            egui::Image::new(&tex).fit_to_exact_size(egui::vec2(t.width as f32, t.height as f32)),
+        );
+    } else if model.rnm_preview_failed(key) {
+        ui.weak("Preview unavailable: a layer could not be read.");
+    } else {
+        ui.weak("Blending…");
+    }
 }

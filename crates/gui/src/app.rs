@@ -244,6 +244,22 @@ impl SdcApp {
         }
     }
 
+    /// A scan ended: a finished one toasts "Scan finished: <summary>"; a paused or cancelled one repeats its note;
+    /// a failed one has its dialog.
+    fn scan_ended(&mut self) {
+        use crate::model::messages::Severity;
+        let m = &self.meshes;
+        if m.error.is_some() || m.status.is_empty() {
+            return;
+        }
+        let (sev, text) = if m.status.starts_with("Scan ") {
+            (Severity::Warning, m.status.clone())
+        } else {
+            (Severity::Info, format!("Scan finished: {}", m.status))
+        };
+        self.model.messages.notify(sev, text);
+    }
+
     /// The window regained focus: the place to look for source files that changed meanwhile.
     fn focus_regained(&mut self) {
         self.model.check_sources();
@@ -295,6 +311,7 @@ impl eframe::App for SdcApp {
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).
         if scanning && !self.meshes.scanning() {
+            self.scan_ended();
             self.model.refresh_mesh_votes(false);
             self.model.refresh_known_paths();
         }
@@ -321,6 +338,17 @@ impl eframe::App for SdcApp {
         }
         // A "Open in Textures" click of this frame.
         self.route_3d(&ctx);
+        for v3 in [&mut self.meshes.v3, &mut self.state.set3d.v3] {
+            for (ok, text) in v3.take_notices() {
+                let sev = if ok {
+                    crate::model::messages::Severity::Info
+                } else {
+                    crate::model::messages::Severity::Warning
+                };
+                self.model.messages.notify(sev, text);
+            }
+        }
+        crate::ui::messages::draw(&ctx, &mut self.model);
         // Explorer requests the drawer and the menus queued this frame (Task 5).
         for req in self.model.take_shell() {
             crate::model::shell::spawn(&req);
@@ -341,6 +369,7 @@ impl eframe::App for SdcApp {
         // Worker results arrive on a channel, not as input events: keep frames coming while one is pending.
         if self.model.busy()
             || self.model.heatmap_pending()
+            || self.model.rnm_preview_pending()
             || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()

@@ -12,7 +12,9 @@ pub mod inspector;
 pub mod items;
 pub mod known_paths;
 pub mod meshes;
+pub mod messages;
 pub mod nav;
+pub mod out_size;
 pub mod pack_fills;
 pub mod pbr_export;
 mod pbr_follow;
@@ -23,6 +25,7 @@ pub mod preview;
 pub mod readout;
 pub mod rename;
 pub mod rnm;
+pub mod rnm_preview;
 pub mod sections;
 pub mod set_preview;
 pub mod sets;
@@ -291,6 +294,12 @@ pub struct AppModel {
     pub(crate) texture_cache: std::cell::RefCell<texture_view::TextureViewCache>,
     pub search: String,
     pub status_line: String,
+    /// Item 20: the toasts and the Messages log (DECISIONS AG112-AG114); every status-line note also lands here.
+    pub messages: messages::Messages,
+    /// Item 22: per-item DDS sizes by plan revision.
+    pub sizes: out_size::SizeCache,
+    /// Item 21: the RNM blended thumbnail job.
+    pub rnm_preview: rnm_preview::RnmPreview,
     /// A note kept in front of the status line until the next Export click (an Export cancelled by an edit, AF4).
     pub status_note: Option<String>,
     /// "Undid: <label>" / "Redid: <label>" in front of the status line until the next edit (item 2).
@@ -433,6 +442,9 @@ impl AppModel {
             texture_cache: Default::default(),
             search: String::new(),
             status_line: String::new(),
+            messages: Default::default(),
+            sizes: Default::default(),
+            rnm_preview: Default::default(),
             status_note: None,
             undo_note: None,
             undo_note_at: None,
@@ -860,6 +872,7 @@ impl AppModel {
                     }
                     "preview" => self.preview_panicked(&message),
                     "heatmap" => self.heatmap_panicked(),
+                    "rnm-preview" => self.rnm_preview_panicked(),
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -917,7 +930,15 @@ impl AppModel {
                 }
                 let mut failure = None;
                 match result {
-                    Ok(summary) => self.export.summary = Some(summary),
+                    Ok(summary) => {
+                        let sev = if summary.failed > 0 {
+                            messages::Severity::Warning
+                        } else {
+                            messages::Severity::Info
+                        };
+                        self.messages.notify(sev, export_finished_text(&summary));
+                        self.export.summary = Some(summary);
+                    }
                     Err(e) => {
                         self.export.error = Some(e.clone());
                         failure = Some(e);
@@ -934,6 +955,7 @@ impl AppModel {
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
             WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
+            WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}
         }
     }
@@ -1113,6 +1135,8 @@ impl AppModel {
                     .into(),
             );
             self.status_line = self.status_note.clone().unwrap_or_default();
+            self.messages
+                .log(messages::Severity::Warning, self.status_line.clone());
         }
     }
 
@@ -1760,6 +1784,7 @@ impl AppModel {
             Some(c) => format!("{n} {c} {counts}"),
             None => format!("{n} {counts}"),
         };
+        self.messages.notify(messages::Severity::Info, n.clone());
         self.undo_note = Some(n);
         self.undo_note_at = Some((Instant::now(), false));
     }
@@ -2069,11 +2094,13 @@ impl AppModel {
     /// document is not written (audit 2026-10-14 finding 3: writing it would offer "Overwrite" over a hand edit
     /// the GUI never loaded).
     pub fn save(&mut self) -> Result<(), SaveError> {
+        let mut wrote = false;
         if let Some(p) = self.project.as_mut().filter(|p| p.is_dirty()) {
             if let Err(e) = p.save(false) {
                 self.save_failed(DocKind::SdcToml, &e);
                 return Err(e);
             }
+            wrote = true;
         }
         // A clean sdc-project.toml is not written (no empty file, no spurious conflict); a read-only one never has edits.
         if let Some(s) = self
@@ -2085,6 +2112,10 @@ impl AppModel {
                 self.save_failed(DocKind::Project, &e);
                 return Err(e);
             }
+            wrote = true;
+        }
+        if wrote {
+            self.messages.notify(messages::Severity::Info, "Saved");
         }
         Ok(())
     }
@@ -2210,4 +2241,12 @@ fn remove_created(cf: &history::CreatedFile) -> Result<(), String> {
             cf.path.display()
         )),
     }
+}
+
+/// The toast of a finished export: "Export finished: 12 written, 3 skipped, 0 failed".
+pub fn export_finished_text(s: &engine::api::BatchSummary) -> String {
+    format!(
+        "Export finished: {} written, {} skipped, {} failed",
+        s.converted, s.skipped, s.failed
+    )
 }

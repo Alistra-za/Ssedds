@@ -200,6 +200,11 @@ fn a_stale_open_folder_result_is_dropped() {
     assert_eq!(m.root, Some(b));
     assert_ne!(m.root, a);
     assert!(m.status_line.contains("Picker result ignored"));
+    assert!(m
+        .messages
+        .entries()
+        .any(|e| e.text.starts_with("Picker result ignored")));
+    assert_eq!(m.messages.toasts().len(), 1, "and it toasts");
 }
 
 #[test]

@@ -186,6 +186,8 @@ impl AppModel {
                 s
             }
         };
+        self.messages
+            .log(super::messages::Severity::Info, line.clone());
         self.encoding_note = Some((line, lines.join("\n")));
     }
 }

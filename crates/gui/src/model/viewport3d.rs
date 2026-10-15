@@ -733,6 +733,8 @@ pub struct Viewport3d {
     /// The last Copy image note ("Copied 3D view (W×H)"), shown in the panel's toolbar: the Meshes view has no
     /// status bar.
     pub status: Option<String>,
+    /// Copy results for the toast and the Messages log (item 20); `SdcApp` drains them.
+    notices: Vec<(bool, String)>,
     /// For each `report.missing_textures` entry, the Textures item with that game path in the open folder; filled
     /// by `SdcApp::route_3d`.
     pub missing_items: Vec<Option<String>>,
@@ -814,6 +816,7 @@ impl Viewport3d {
             last_edit: None,
             swap_errors: vec![],
             status: None,
+            notices: vec![],
             missing_items: vec![],
             show_in_textures: None,
             debug: DebugView::Lit,
@@ -1387,10 +1390,17 @@ impl Viewport3d {
             self.status = Some("Nothing to copy yet".into());
             return;
         };
-        self.status = Some(match put(f.width as usize, f.height as usize, &f.rgba) {
-            Ok(()) => format!("Copied 3D view ({}×{})", f.width, f.height),
-            Err(e) => format!("Copy failed: {e}"),
-        });
+        let (ok, text) = match put(f.width as usize, f.height as usize, &f.rgba) {
+            Ok(()) => (true, format!("Copied 3D view ({}×{})", f.width, f.height)),
+            Err(e) => (false, format!("Copy failed: {e}")),
+        };
+        self.notices.push((ok, text.clone()));
+        self.status = Some(text);
+    }
+
+    /// The copy results since the last call: (copied, text).
+    pub fn take_notices(&mut self) -> Vec<(bool, String)> {
+        std::mem::take(&mut self.notices)
     }
 
     /// The panel wants a `w × h` frame of the current content and orbit: loads and renders only what changed.

@@ -73,6 +73,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                     // A failed save raises its own dialog.
                     let _ = model.save();
                 }
+                super::messages::button(ui, model);
                 export_folder_button(ui, model);
                 json_name_field(ui, model);
             });
@@ -302,6 +303,13 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
                     .clicked()
             {
                 model.cancel_open();
+            }
+            if !model.items.is_empty() {
+                let sel = model.selected_items();
+                let text = model.vram_text(&sel);
+                ui.weak(format!("· {text}")).on_hover_text(
+                    "File sizes of the DDS files an export writes; a compressed size is also its video memory",
+                );
             }
             // Task 9 (Z11): the last "encoding follows type" cleanup; every texture on hover.
             if let Some((line, all)) = &model.encoding_note {

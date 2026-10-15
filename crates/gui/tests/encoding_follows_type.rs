@@ -88,6 +88,10 @@ fn switching_grass_to_pbr_resets_a_linear_albedo_and_says_so() {
         "{line}"
     );
     assert!(line.contains("BC7 · sRGB"), "{line}");
+    assert!(
+        m.messages.entries().any(|e| e.text == line),
+        "the status-line note is in the Messages log"
+    );
 }
 
 #[test]

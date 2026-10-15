@@ -534,5 +534,11 @@ fn ctrl_s_in_a_text_field_says_so_in_the_status_line() {
         h.state().0.status_line,
         "Ctrl+S: leave the text field first"
     );
+    assert!(h
+        .state()
+        .0
+        .messages
+        .entries()
+        .any(|e| e.text == "Ctrl+S: leave the text field first"));
     assert!(h.state().0.is_dirty(), "and nothing was saved");
 }

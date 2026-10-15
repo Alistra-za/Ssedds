@@ -978,6 +978,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             if kind == ItemKind::Packed && !compact {
                 channels(ui, job);
             }
+            if !compact {
+                size_line(ui, model, key);
+            }
             let shown: &[&str] = if compact { &COMPACT_GROUPS } else { &GROUPS };
             for g in shown {
                 group(ui, g, &cx, &mut actions);
@@ -1009,6 +1012,33 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 // The result line lands in `dds_patch.last`, shown under the panel.
                 let _ = model.patch_dds_header(key);
             }
+        }
+    }
+}
+
+/// Item 22 (DECISIONS AG118): the DDS this texture writes: format, size after any resize, mips, bytes. A compressed
+/// size is also its video memory.
+fn size_line(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
+    use crate::model::out_size::{format_name, human};
+    match model.size_of(key) {
+        Some(e) => {
+            ui.label(format!(
+                "Output: {} · {}×{} · {} mips · {} ≈ VRAM",
+                format_name(e.format),
+                e.width,
+                e.height,
+                e.mips,
+                human(e.chain_bytes)
+            ))
+            .on_hover_text(format!(
+                "{} bytes of mip data + {} bytes of header = {} bytes on disk",
+                e.chain_bytes,
+                e.header_bytes,
+                e.file_bytes()
+            ));
+        }
+        None => {
+            ui.weak("Output size unknown: the source size could not be read.");
         }
     }
 }

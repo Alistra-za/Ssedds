@@ -1718,6 +1718,10 @@ fn an_edit_during_a_scan_finished_read_drops_the_queued_export() {
         "{}",
         m.status_line
     );
+    assert!(m
+        .messages
+        .entries()
+        .any(|e| e.text.starts_with("Export cancelled: the project changed")));
 }
 
 /// Fix round 2 (DECISIONS AF4): a re-plan that is no edit (here an NVTT probe whose result changed) keeps an Export

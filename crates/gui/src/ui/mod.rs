@@ -10,6 +10,7 @@ pub mod header;
 pub mod input_name;
 pub mod json_editor;
 pub mod meshes;
+pub mod messages;
 pub mod path_picker;
 pub mod pgp_fields;
 pub mod plugin_refs;

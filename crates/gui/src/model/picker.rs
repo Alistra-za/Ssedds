@@ -252,8 +252,10 @@ impl AppModel {
     pub fn picked(&mut self, d: Picked) {
         let Some(path) = d.path else { return };
         if d.purpose.folder_scoped() && d.scope != self.root {
-            self.status_line =
-                "Picker result ignored: the folder changed while the dialog was open".into();
+            let note = "Picker result ignored: the folder changed while the dialog was open";
+            self.status_line = note.into();
+            self.messages
+                .notify(super::messages::Severity::Warning, note);
             return;
         }
         match d.purpose {

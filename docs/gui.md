@@ -55,6 +55,8 @@ The Alpha row then reads *from the meshes that use this texture*. A texture with
 
 Any field in the centre column can be changed. Changes go into `sdc.toml` as `[files."<path>"]` entries, keyed by the file's path relative to the folder holding `sdc.toml` (packed outputs without an extension, for example `landscape/rock01_rmaos`). The GUI writes only `target`, the `[files.*]` tables and `defaults.packing.fill.*`; comments, ordering, rules and every other table in your `sdc.toml` are left byte for byte as they were.
 
+**Output size.** A texture's settings start with a line such as *Output: BC7 · 2048×2048 · 12 mips · 5.3 MiB ≈ VRAM*: the format, the size after any resize, the number of mip levels and the bytes of the whole chain (hover for the exact bytes, the header and the file size). The status line under the header and the bulk panel add *≈ VRAM: selection … · folder …*, the total over the selected textures and over every texture that is, or will be once decided, written. A compressed size is also what the texture takes in video memory. A source whose size cannot be read cheaply (a PSD) has no estimate and is counted as "unsized".
+
 **Used by meshes.** When a mod scan exists, a texture's settings end with a collapsed **Used by meshes (N)** list: each mesh that uses it, with its mod and MO2 priority, the winner first (loose files before BSAs, then the highest priority). When the meshes decided the texture's alpha meaning, the meshes whose alpha property gave that answer are marked **decided alpha** (for blend, every blending mesh; for cutout, the meshes testing at the threshold used). The list is read in the background and shows 200 meshes, then "and N more". It is read again after a scan.
 
 **Mipmaps: Filter and Edge.** The *Filter* row in the Mipmaps group picks *Box* (the default), *Tent*, *Mitchell* or *Kaiser*. Options the texture cannot use are greyed out and their hover text says why: tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting (not cutout or blend), and an HDR texture (BC6H or RGBA16F) may use box or tent only. The *Edge* row under it (*Wrap*, the default, or *Clamp*) is locked while the filter is box, because only tent, Mitchell and Kaiser read past the edge. **Resize** (*None*, *Down to a power of two* or *Half size (larger side above 512)*) is the last of the *Advanced texture fields* in the Advanced drawer. *Down to a power of two* shrinks each side to the largest power of two that fits (1000×600 becomes 512×512); *Half size* halves both sides when the larger is above 512 (1024×512 becomes 512×256). A resized texture shows a `DIM-RESIZED` note. The BC4/BC5 search radius field in the same list offers *Default*, *Maximum* and *Fast (preview)*.
@@ -175,6 +177,7 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 |---|---|---|
 | Global | Ctrl+K | Command palette |
 | Global | F1 or ? | Keyboard shortcuts |
+| Global | Ctrl+M | Messages |
 | Global | Ctrl+S | Save |
 | Global | Ctrl+Z | Undo |
 | Global | Ctrl+Y or Ctrl+Shift+Z | Redo |
@@ -211,6 +214,12 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
 | Dialogs | Enter | Press the dialog's safe default (never Proceed anyway) |
 | Dialogs | Esc | Cancel the dialog |
+
+## Messages and toasts
+
+Routine results show as **toasts**: short notices at the bottom right that do not block anything. *Saved*, *Export finished: N written, M skipped, K failed*, *Scan finished: …*, *Copied 3D view*, *Picker result ignored* and the *Undid / Redid* note each appear as one. A toast fades after 4 seconds (8 seconds for a warning); at most 3 are on screen and the rest wait their turn. Holding the pointer over a toast keeps it. Anything that needs a decision (Proceed anyway, Replace or Cancel, an external change, an error that blocks) stays a dialog.
+
+The **Messages** button in the header (or **Ctrl+M**) opens the Messages panel: the last 500 entries, newest first, with the time, the severity and the text. The button shows the number of entries you have not seen yet. Every note that shows in the status line (the encoding-follows-type note, *Export cancelled*, *Picker result ignored*, *Ctrl+S: leave the text field first*) is also logged here, as are the toasts. **Clear** empties the list. The log lives in memory only; it is gone when you close the window.
 
 ## Export
 
@@ -299,6 +308,7 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 
 - Select the normal: its settings have an **RNM** section with a switch for the whole blend, one strength slider per layer, the layer order and, for `_bent`, the AO options. The normal (or `_cnr`) card gets a **blue outline** while RNM is active (layers present and enabled); a slot the shader cannot use keeps its amber outline instead.
 - When the set has both an `_n` and a `_cnr`, each layer has a **target** switch (*Normal*, *CNR* or *Both*). It is written as `rnm.target` on the layer file's `[files]` entry.
+- Under the RNM switch, **Blended normal** shows the result at 128 px (the normal with every enabled layer blended in, drawn as `(n + 1) / 2`). It is made in the background with the same blend the export uses, and refreshes when a strength slider is released or the layer order changes; the old picture stays until the new one is ready. It is a small-size look, not the final pixels.
 - The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail, with a *use AO* tick. The note under it says Tessalith inverts the AO for you: supply normal AO (white = open) and do not invert it yourself.
 - Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
 
