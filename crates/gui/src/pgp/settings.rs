@@ -5,12 +5,13 @@ use serde_json::Value;
 pub type Settings = std::collections::BTreeMap<String, Value>;
 
 /// Glint values a freshly enabled glint starts from (spec §4.3; TruePBR-Manager's widget values, which it then
-/// overwrote with zeros).
+/// overwrote with zeros). Three moved in Task 14b (DECISIONS AG123): a value outside the observed p1-p99 band is now the
+/// observed median.
 pub const GLINT_DEFAULTS: [(&str, f64); 4] = [
     ("glint.screen_space_scale", 1.5),
-    ("glint.log_microfacet_density", 40.0),
-    ("glint.microfacet_roughness", 0.015),
-    ("glint.density_randomization", 2.0),
+    ("glint.log_microfacet_density", 10.0),
+    ("glint.microfacet_roughness", 1.0),
+    ("glint.density_randomization", 5.0),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

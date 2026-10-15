@@ -9,7 +9,7 @@ use crate::pgp::prefix::{
     match_toggle, match_value, matches_nothing, stored_match, strip_lead, subsurface_pitfalls,
     EMPTY_ROW, NO_MATCH,
 };
-use crate::pgp::schema::{Group, KeyKind, KeySpec, NumRange, KEYS};
+use crate::pgp::schema::{spec, Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, sub_edits, sub_mode, subsurface_group_open, Feature,
     Settings, SubMode, FEATURE_KEYS, FOLIAGE_KEY, GLINT_DEFAULTS,
@@ -492,7 +492,11 @@ pub(crate) fn control(
             let invalid = value.as_ref().filter(|_| stored.is_none());
             let mut x = stored.map_or_else(|| alpha_default(k.key), i64::from);
             ui.horizontal(|ui| {
-                let r = ui.add(egui::DragValue::new(&mut x).range(0..=i64::from(max)));
+                let r = ui.add(
+                    egui::DragValue::new(&mut x)
+                        .range(0..=i64::from(max))
+                        .speed(k.drag.speed),
+                );
                 if r.changed() && stored.map(i64::from) != Some(x) {
                     edits.push((key, Some(json!(x))));
                 }
@@ -520,6 +524,7 @@ pub(crate) fn control(
             let (lo, hi) = range.bounds();
             // The parser is the only place a typed number is seen before DragValue clamps it.
             let typed_outside = std::cell::Cell::new(false);
+            let speed = k.drag.speed_at(x);
             let mut drag = egui::DragValue::new(&mut x)
                 .range(lo..=hi)
                 // A hand-edited value outside the range shows as it is: clamping it here would edit the project just
@@ -530,9 +535,9 @@ pub(crate) fn control(
                     typed_outside.set(!(lo..=hi).contains(&n));
                     Some(n)
                 })
-                .speed(0.01)
-                .max_decimals(4)
-                .custom_formatter(|n, _| format!("{:?}", (n * 1e4).round() / 1e4));
+                .speed(speed)
+                .max_decimals(k.drag.decimals)
+                .custom_formatter(|n, _| k.drag.format(n));
             if unset_unknown {
                 // No default to show: say so rather than a 0.0 that looks like one.
                 drag = drag.custom_formatter(|_, _| "not set".to_string());
@@ -724,7 +729,11 @@ fn alpha_section(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                     }
                     ui.add_enabled_ui(thresh_set, |ui| {
                         let mut x = thresh.unwrap_or(DEFAULT_THRESH);
-                        let r = ui.add(egui::DragValue::new(&mut x).range(0..=255));
+                        let r = ui.add(
+                            egui::DragValue::new(&mut x)
+                                .range(0..=255)
+                                .speed(spec("alphaprop_thresh").map_or(1.0, |k| k.drag.speed)),
+                        );
                         if r.changed() && thresh != Some(x) {
                             edits.push(("alphaprop_thresh".into(), Some(json!(x))));
                         }

@@ -376,8 +376,8 @@ fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     h.get_by_label("Glint").click();
     h.run();
     let v = spin_values(&h);
-    for (_, x) in GLINT_DEFAULTS {
-        let t = format!("{x:?}");
+    for (key, x) in GLINT_DEFAULTS {
+        let t = sdc_gui::pgp::schema::spec(key).unwrap().drag.format(x);
         assert!(v.contains(&t), "glint default {t} in {v:?}");
     }
 }

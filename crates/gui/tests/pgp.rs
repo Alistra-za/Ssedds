@@ -743,7 +743,7 @@ fn glint_is_filled_from_its_defaults_and_fuzz_writes_what_is_set() {
     ));
     assert_eq!(
         v["glint"],
-        json!({ "screen_space_scale": 1.5, "log_microfacet_density": 40.0, "microfacet_roughness": 0.02, "density_randomization": 2.0 })
+        json!({ "screen_space_scale": 1.5, "log_microfacet_density": 10.0, "microfacet_roughness": 0.02, "density_randomization": 5.0 })
     );
     let v = written(&entry(
         &[
