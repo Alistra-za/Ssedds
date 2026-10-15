@@ -124,3 +124,45 @@ fn the_meshes_header_never_overlaps() {
         }
     }
 }
+
+/// The 3D view's height under this row (at least 72 % of the centre at 1024×768) is checked by
+/// `set_preview_layout::in_3d_the_viewport_takes_most_of_the_centre`.
+/// Note AO: the set header's input name box and its ▾ never overlap each other or run off the window, and the box keeps
+/// at least 160 pt (the locked folder label included).
+#[test]
+fn the_set_header_input_name_box_never_overlaps() {
+    let d = tempfile::tempdir().unwrap();
+    for w in [1024.0, 800.0, 640.0] {
+        let mut m = pbr_opened(&d.path().join(format!("{w}")));
+        let key = sdc_gui::model::pbr_export::json_entries(&m)
+            .into_iter()
+            .find(|(v, _)| v.id == "landscape/rock01")
+            .unwrap()
+            .0
+            .key;
+        m.select_set(&key);
+        let h = harness(m, w, false);
+        let edit = h
+            .get(
+                by().role(Role::TextInput)
+                    .label(sdc_gui::ui::input_name::HINT),
+            )
+            .rect();
+        let locked = h.get_by_label("textures/landscape/").rect();
+        let drop = h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).rect();
+        let all = [locked, edit, drop];
+        for (i, a) in all.iter().enumerate() {
+            assert!(a.right() <= w + 0.5, "at {w}: {a:?} runs off the window");
+            for b in &all[i + 1..] {
+                assert!(
+                    !a.shrink(0.5).intersects(b.shrink(0.5)),
+                    "at {w}: {a:?} overlaps {b:?}"
+                );
+            }
+        }
+        assert!(
+            edit.right() - locked.left() >= 160.0 - 1.0,
+            "at {w} the box is {locked:?}..{edit:?}"
+        );
+    }
+}

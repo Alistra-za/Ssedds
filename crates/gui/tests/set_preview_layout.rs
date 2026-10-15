@@ -248,7 +248,7 @@ fn in_3d_the_viewport_takes_most_of_the_centre() {
         let img = h.get_by_label(FRAME_LABEL).rect();
         let centre = bottom - top;
         assert!(
-            img.height() >= 0.7 * centre,
+            img.height() >= 0.72 * centre,
             "{w}x{hh}: frame {} high in a centre of {centre}",
             img.height()
         );

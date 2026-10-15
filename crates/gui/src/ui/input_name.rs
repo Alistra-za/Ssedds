@@ -1,13 +1,80 @@
-//! GUI tweaks G1: the set editor's input name picker. Drawing only; the change is `AppModel::set_input_name`.
+//! GUI tweaks G1, Note AO: the set header's input name box. A text box with gray Tab completion, a path lock rail
+//! and a ▾ list of known paths. Drawing only; the change is `AppModel::set_input_name`.
 use super::columns::RED;
 use super::path_picker;
+use crate::model::input_name::{completion, live_rows, lock_cut, separator_stops, tab_part};
+use crate::model::known_paths::strip_dds;
 use crate::model::sets::SetView;
 use crate::model::AppModel;
-use eframe::egui;
+use eframe::egui::{self, text::CCursor, text::CCursorRange, Key, Modifiers};
 use std::sync::Arc;
 
+/// The box's placeholder (and how tests find it).
+pub const HINT: &str = "Input name";
+/// The button that opens the list of known paths.
+pub const DROPDOWN: &str = "▾";
+/// The list's heading.
+pub const HEADING: &str = "Read this set's textures as";
+/// The free (editable) part of the box is never narrower than this.
+const MIN_FREE: f32 = 56.0;
+/// The set's path is never shortened below this to keep the box on its row.
+const HEADING_MIN: f32 = 40.0;
+/// What the box needs besides its text: its margins, the ▾ and the spacing between them.
+const CHROME: f32 = 44.0;
+
+/// Rows in the live list under the box.
+const LIVE_ROWS: usize = 12;
+
+/// Note AO4: the live list's state, per set, in egui memory.
+#[derive(Clone, Default)]
+struct Live {
+    open: bool,
+    /// The highlighted row (Up/Down); `None` until an arrow is pressed, so Enter takes the typed text.
+    sel: Option<usize>,
+    /// Last frame's rows and where they were drawn, for a press on one.
+    rows: Vec<(String, egui::Rect)>,
+    /// The row a mouse press landed on, until its release.
+    pressed: Option<(String, egui::Rect)>,
+    /// A row pressed and released on: the focus loss that click causes commits it, not the typed text.
+    clicked: Option<String>,
+}
+
+/// The same input name: case, `\` and a `.dds` ending aside.
+fn same(a: &str, b: &str) -> bool {
+    let n = |s: &str| strip_dds(&s.trim().replace('\\', "/").to_lowercase()).to_string();
+    n(a) == n(b)
+}
+
+/// Why `text` cannot be the set's input name (`None` when it can, or is the current name). `input_name_plan` is
+/// cached per (text, items_rev): the box asks every frame while it holds a changed name.
+fn plan_error(
+    ui: &egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    id: egui::Id,
+    text: &str,
+    current: &str,
+) -> Option<String> {
+    if same(text, current) {
+        return None;
+    }
+    let key = id.with("plan");
+    let rev = model.items_rev();
+    type Cached = (String, u64, Option<String>);
+    if let Some((t, r, e)) = ui.data(|d| d.get_temp::<Cached>(key)) {
+        if t == text && r == rev {
+            return e;
+        }
+    }
+    let e = model.input_name_plan(&v.id, text).err();
+    ui.data_mut(|d| d.insert_temp::<Cached>(key, (text.to_string(), rev, e.clone())));
+    e
+}
+
+/// The set's path as the row's heading, then its input name box (none without an own diffuse).
 pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     let Some(current) = model.input_name_of(&v.id) else {
+        ui.heading(&v.label);
         return;
     };
     let why = model
@@ -15,14 +82,337 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         .as_ref()
         .and_then(|p| p.error())
         .map(|e| format!("sdc.toml is read-only: {e}"));
-    let err_id = egui::Id::new(("input-name-error", &v.id));
+    let id = egui::Id::new(("input-name", &v.id));
+    let err_id = id.with("error");
+    let edit_id = id.with("edit");
+    let buf = id.with("buf");
+    let lock_id = id.with("lock");
+    let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
+    let paths = path_picker::cached(ui, "input-name", key, || model.input_name_candidates());
+    // The edit buffer carries the frame it was last drawn in (as the colour hex box does).
+    let frame = ui.ctx().cumulative_frame_nr();
+    let mut text = ui
+        .data(|d| d.get_temp::<(String, u64)>(buf))
+        .filter(|(_, f)| f + 1 >= frame)
+        .map_or_else(|| current.clone(), |(t, _)| t);
+    let stops = separator_stops(&text).len();
+    // The lock defaults to the folder: the file name is free (AO).
+    let mut lock = ui
+        .data(|d| d.get_temp::<usize>(lock_id))
+        .unwrap_or(separator_stops(&current).len())
+        .min(stops);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let ctx = ui.ctx().clone();
+    let width = |s: &str| {
+        ctx.fonts_mut(|f| f.layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE))
+            .size()
+            .x
+    };
+    // The heading takes what the box leaves of the row, shortened with … (full on hover), but at least HEADING_MIN; with
+    // less room the box starts the next row (decided here: the enabled scope below is one block). AO5.
+    let locked_w = width(&text[..lock_cut(&text, lock)]);
+    let box_w = (160.0 - locked_w).max(MIN_FREE) + locked_w + CHROME;
+    let heading = egui::RichText::new(&v.label).heading();
+    let room = ui.available_size_before_wrap().x - box_w - ui.spacing().item_spacing.x;
+    let full = ctx
+        .fonts_mut(|f| {
+            f.layout_no_wrap(
+                v.label.clone(),
+                egui::TextStyle::Heading.resolve(ui.style()),
+                egui::Color32::WHITE,
+            )
+        })
+        .size();
+    if full.x <= room {
+        ui.label(heading);
+    } else if room >= HEADING_MIN {
+        // Shortened, it is set in the body size, so the row is no taller than the box (the 3D view keeps its height).
+        let body = ui.text_style_height(&egui::TextStyle::Body);
+        ui.add_sized(
+            [room, body],
+            egui::Label::new(egui::RichText::new(&v.label).strong()).truncate(),
+        );
+    } else {
+        ui.label(heading);
+        ui.end_row();
+    }
     ui.add_enabled_ui(why.is_none(), |ui| {
-        path_picker::menu(ui, "Input name…", |ui| {
-            ui.label(egui::RichText::new("Read this set's textures as").strong());
+        let focused = ui.memory(|m| m.has_focus(edit_id));
+        let live_id = id.with("live");
+        let mut live = ui
+            .data(|d| d.get_temp::<Live>(live_id))
+            .unwrap_or_default();
+        let shown = focused && live.open && !live.rows.is_empty();
+        if focused {
+            if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::ArrowLeft)) {
+                lock = lock.saturating_sub(1);
+            }
+            if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::ArrowRight)) {
+                lock = (lock + 1).min(stops);
+            }
+        }
+        if shown {
+            // Before the box sees the click (and loses focus to it): the row pressed, then released on the same row.
+            let press = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
+            if let Some(p) = press {
+                live.pressed = live.rows.iter().find(|(_, r)| r.contains(p)).cloned();
+            }
+        }
+        if live.pressed.is_some() && ui.input(|i| i.pointer.any_released()) {
+            let at = ui.input(|i| i.pointer.interact_pos());
+            live.clicked = live
+                .pressed
+                .take()
+                .filter(|(_, r)| at.is_some_and(|p| r.contains(p)))
+                .map(|(s, _)| s);
+        }
+        if shown {
+            let n = live.rows.len();
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
+                live.sel = Some(live.sel.map_or(0, |s| (s + 1).min(n - 1)));
+            }
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp)) {
+                live.sel = live.sel.and_then(|s| s.checked_sub(1));
+            }
+            // The first Esc closes the list; the box keeps its text and its focus.
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                live.open = false;
+                live.sel = None;
+            }
+        }
+        let cut = lock_cut(&text, lock);
+        let locked = text[..cut].to_string();
+        let mut free = text[cut..].to_string();
+        let mut ghost = focused.then(|| completion(&paths, &text)).flatten();
+        if ghost.is_some() {
+            let mut state = egui::TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+            let at_end = state
+                .cursor
+                .char_range()
+                .is_none_or(|r| r.primary.index.0 >= free.chars().count());
+            let took = if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+                tab_part(&paths, &text)
+            } else if at_end && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowRight)) {
+                ghost.clone()
+            } else {
+                // Tab is held in the box while a ghost shows; Shift+Tab still leaves it.
+                if ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab)) {
+                    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
+                }
+                None
+            };
+            if let Some(t) = took {
+                free.push_str(&t);
+                text = format!("{locked}{free}");
+                ghost = completion(&paths, &text);
+                let end = CCursor::new(free.chars().count());
+                state.cursor.set_char_range(Some(CCursorRange::one(end)));
+                state.store(ui.ctx(), edit_id);
+            }
+        }
+        let err = plan_error(ui, model, v, id, &text, &current);
+        let locked_w = width(&locked);
+        // The box is at least 160 pt (its free part at least MIN_FREE) and grows with its text and ghost, up to the room left
+        // in the row and 480 pt (AO5). `room` leaves the margins and the ▾.
+        let min_free = (160.0 - locked_w).max(MIN_FREE);
+        let room = |ui: &egui::Ui| ui.available_size_before_wrap().x - CHROME - locked_w;
+        let want = width(&free) + ghost.as_deref().map_or(0.0, width) + 24.0;
+        let free_w = want.min(room(ui)).clamp(min_free, 480.0);
+        let mut commit = None;
+        let inner = egui::Frame::new()
+            .stroke(ui.visuals().widgets.inactive.bg_stroke)
+            .fill(ui.visuals().extreme_bg_color)
+            .corner_radius(2.0)
+            .inner_margin(egui::Margin::symmetric(4, 0))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.horizontal(|ui| {
+                    if !locked.is_empty() {
+                        ui.add(egui::Label::new(egui::RichText::new(&locked).weak()).selectable(false))
+                            .on_hover_text("Locked: drag the rail under the box, or Ctrl+Left/Right, to move the lock");
+                    }
+                    let out = egui::TextEdit::singleline(&mut free)
+                        .id(edit_id)
+                        .hint_text(HINT)
+                        .frame(egui::Frame::NONE)
+                        // Tab stays in the box while a ghost shows; Esc while the live list shows (AO2, AO4).
+                        .event_filter(egui::EventFilter {
+                            tab: ghost.is_some(),
+                            escape: shown && live.open,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                        })
+                        .desired_width(free_w)
+                        .show(ui);
+                    ui.ctx().accesskit_node_builder(edit_id, |b| {
+                        b.set_label(HINT);
+                        if let Some(e) = &err {
+                            b.set_description(e.as_str());
+                        }
+                    });
+                    (out, ui.min_rect().left())
+                })
+                .inner
+            });
+        let (out, left) = inner.inner;
+        let r = &out.response.response;
+        let box_rect = inner.response.rect;
+        // A pasted full path under the lock: drop its locked part rather than doubling it.
+        let mut stripped = false;
+        if r.changed() && !locked.is_empty() {
+            let n = locked.len();
+            let norm = |s: &str| s.replace('\\', "/");
+            if free
+                .get(..n)
+                .is_some_and(|h| norm(h).eq_ignore_ascii_case(&norm(&locked)))
+            {
+                free = free[n..].to_string();
+                stripped = true;
+                let mut state = egui::TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+                let end = CCursor::new(free.chars().count());
+                state.cursor.set_char_range(Some(CCursorRange::one(end)));
+                state.store(ui.ctx(), edit_id);
+            }
+        }
+        text = format!("{locked}{free}");
+        // The ghost follows the text as edited this frame (review fix): drawn after the edit, not from last frame's.
+        ghost = r.has_focus().then(|| completion(&paths, &text)).flatten();
+        if let Some(g) = ghost.as_ref().filter(|_| !stripped) {
+            let at = out.galley_pos + egui::vec2(out.galley.rect.width(), 0.0);
+            ui.painter().with_clip_rect(out.text_clip_rect).text(
+                at,
+                egui::Align2::LEFT_TOP,
+                g,
+                font.clone(),
+                ui.visuals().weak_text_color(),
+            );
+        }
+        if let Some(e) = &err {
+            ui.painter().rect_stroke(
+                box_rect,
+                2.0,
+                egui::Stroke::new(1.5, RED),
+                egui::StrokeKind::Outside,
+            );
+            inner.response.clone().on_hover_text(e);
+            r.clone().on_hover_text(e);
+        }
+        if r.has_focus() || r.changed() {
+            ui.data_mut(|d| d.insert_temp(buf, (text.clone(), frame)));
+        }
+        // AO4: the live list follows the text while the box has focus.
+        let rows = if r.has_focus() || r.lost_focus() {
+            live_rows(&paths, &text, cut, LIVE_ROWS)
+        } else {
+            vec![]
+        };
+        if r.changed() {
+            live.open = true;
+            live.sel = None;
+            // The next frame's Tab and Esc hold must match the new text, not the one the box was shown with.
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    edit_id,
+                    egui::EventFilter {
+                        tab: ghost.is_some(),
+                        escape: !rows.is_empty(),
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                    },
+                )
+            });
+            ui.ctx().request_repaint();
+        }
+        if r.lost_focus() {
+            ui.data_mut(|d| d.remove::<(String, u64)>(buf));
+            // A pressed row, else the highlighted row on Enter, else the typed text (AO4). Esc reverts; an invalid or
+            // unchanged value reverts; a valid change commits (one commit path, AO1).
+            let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
+            let row = live.clicked.take().or_else(|| {
+                live.sel
+                    .filter(|_| live.open && ui.input(|i| i.key_pressed(Key::Enter)))
+                    .and_then(|s| rows.get(s).cloned())
+            });
+            if let Some(p) = row {
+                commit = (!same(&p, &current)).then_some(p);
+            } else if !cancelled && err.is_none() && !same(&text, &current) {
+                commit = Some(text.clone());
+            }
+            live = Live::default();
+        }
+        let list_rect = egui::Rect::from_min_size(
+            box_rect.left_bottom() + egui::vec2(0.0, 2.0),
+            egui::vec2(box_rect.width().max(320.0), 0.0),
+        );
+        live.rows.clear();
+        if r.has_focus() && live.open && !rows.is_empty() {
+            egui::Area::new(live_id.with("area"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(list_rect.min)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(list_rect.width());
+                        for (i, p) in rows.iter().enumerate() {
+                            // The top row is the best match, the ghost's (AO4).
+                            let text = egui::RichText::new(p);
+                            let text = if i == 0 { text.strong() } else { text };
+                            let rr = ui.add(egui::Button::selectable(live.sel == Some(i), text));
+                            live.rows.push((p.clone(), rr.rect));
+                        }
+                    });
+                });
+        }
+        ui.data_mut(|d| d.insert_temp(live_id, live.clone()));
+        // The lock rail along the box's lower edge: a stop at the start and at each separator.
+        let xs: Vec<f32> = std::iter::once(left)
+            .chain(separator_stops(&text).into_iter().map(|i| {
+                if i < cut {
+                    left + width(&text[..=i])
+                } else {
+                    out.galley_pos.x + width(&text[cut..=i])
+                }
+            }))
+            .map(|x| x.clamp(box_rect.left(), box_rect.right()))
+            .collect();
+        if xs.len() > 1 {
+            let rail = egui::Rect::from_min_max(
+                egui::pos2(box_rect.left(), box_rect.bottom() - 4.0),
+                box_rect.right_bottom(),
+            );
+            let rr = ui
+                .interact(rail, id.with("rail"), egui::Sense::click_and_drag())
+                .on_hover_text("Path lock: drag to a / to keep the path up to it (Ctrl+Left/Right in the box)");
+            if let Some(p) = rr.interact_pointer_pos().filter(|_| rr.clicked() || rr.dragged()) {
+                lock = (0..xs.len())
+                    .min_by(|a, b| (xs[*a] - p.x).abs().total_cmp(&(xs[*b] - p.x).abs()))
+                    .unwrap_or(lock);
+            }
+            let painter = ui.painter();
+            let weak = ui.visuals().weak_text_color();
+            for x in &xs {
+                painter.vline(*x, rail.y_range(), egui::Stroke::new(1.0, weak));
+            }
+            let hx = xs[lock.min(xs.len() - 1)];
+            painter.line_segment(
+                [egui::pos2(rail.left(), rail.bottom()), egui::pos2(hx, rail.bottom())],
+                egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+            );
+            painter.circle_filled(egui::pos2(hx, rail.center().y), 3.0, ui.visuals().selection.bg_fill);
+        }
+        let menu = path_picker::menu(ui, DROPDOWN, |ui| {
+            ui.label(egui::RichText::new(HEADING).strong());
             ui.weak(format!("now: {current}"));
-            let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
-            let paths = path_picker::cached(ui, "input-name", key, || model.known_textures(Some(0)));
-            if let Some(p) = path_picker::list(ui, ("input-name", &v.id), &paths, true) {
+            // Only paths under the lock.
+            let pre = text[..cut].replace('\\', "/");
+            let under_key = (Arc::as_ptr(&paths) as usize, egui::Id::new(&pre).value());
+            let under = path_picker::cached(ui, "input-name-under", under_key, || {
+                paths
+                    .iter()
+                    .filter(|p| p.get(..cut).is_some_and(|h| h.eq_ignore_ascii_case(&pre)))
+                    .cloned()
+                    .collect()
+            });
+            if let Some(p) = path_picker::list(ui, ("input-name", &v.id), &under, false) {
                 match model.set_input_name(&v.id, &p) {
                     Ok(()) => {
                         ui.data_mut(|d| d.remove::<String>(err_id));
@@ -36,13 +426,19 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             if let Some(e) = ui.data(|d| d.get_temp::<String>(err_id)) {
                 ui.colored_label(RED, e);
             }
-        })
-        .response
-        .on_hover_text(
+        });
+        menu.response.on_hover_text(
             "Pick the game path this set's textures are read as. Each texture keeps its own suffix; files on \
              disk are not renamed (an [inputs] alias in sdc.toml).",
         );
+        // The box was validated as typed; a refusal here (sdc.toml went read-only) shows in the list.
+        if let Some(p) = commit {
+            if let Err(e) = model.set_input_name(&v.id, &p) {
+                ui.data_mut(|d| d.insert_temp(err_id, e));
+            }
+        }
     })
     .response
     .on_disabled_hover_text(why.unwrap_or_default());
+    ui.data_mut(|d| d.insert_temp(lock_id, lock));
 }

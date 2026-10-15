@@ -160,9 +160,11 @@ The dialog changes only the base name (the part before `_n`, `_normal` and so on
 
 Apply is greyed out while any row is red: two names collide, a name Windows cannot use, a changed extension, or an output name ending in a map suffix. Amber rows are warnings: a file whose name now reads as another kind of map, or an output that scanned meshes still use under its old name.
 
-### Input name picker
+### Input name box
 
-On the set editor heading, **Input name…** lists known texture paths: every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths. A filter box narrows the list (all words must appear), and you can type a path. Picking one gives every member of the set an `[inputs]` alias with its own suffix and extension. The set's TruePBR settings, pins and borrows follow it. The menu refuses, with the reason, a path outside the project's folder, a name another file already has, a pinned slot, or the same name.
+On the set editor heading, the **input name** box shows the path the set's textures are read as, and you can type a new one. While you type, the best known texture path (every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths) shows in gray after the text: **Tab** takes it up to the next `/`, Tab again keeps going, and **Right arrow** at the end takes all of it. A list of up to 12 matching paths opens under the box as you type; **Up/Down** highlight a row, **Enter** uses the highlighted row (or what you typed when none is), and clicking a row uses it. The first **Esc** closes the list. **Enter**, or clicking away, gives every member of the set an `[inputs]` alias with its own suffix and extension, as one undo step; **Esc** puts the old name back. The set's TruePBR settings, pins and borrows follow it. A name that cannot be used (outside the project's folder, a name another file already has, a pinned slot) gets a red outline, with the reason on hover, and is never applied.
+
+The folder part of the name is locked: it is dimmed and you edit only the file name. The thin rail along the bottom of the box has a stop at each `/`; drag it (or press **Ctrl+Left / Ctrl+Right** in the box) to lock more or less of the path. The **▾** at the right lists the known paths under the locked part (never those under `textures\pbr\`, which are PGPatcher's outputs), with a filter box (all words must appear); click one to use it.
 
 ## The 2D preview
 
@@ -213,11 +215,11 @@ Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created
 
 ### The set editor
 
-Select a set to edit it. The heading has **Input name…** and a **2D | 3D** switch (remembered in `gui.toml`, default 2D) that swaps the centre pane in place; in 3D the settings fold in sections above the view.
+Select a set to edit it. The heading has the input name box and a **2D | 3D** switch (remembered in `gui.toml`, default 2D) that swaps the centre pane in place; in 3D the settings fold in sections above the view.
 
 A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR box: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
 
-In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat _cnr, Fuzz _f, Subsurface. The cubemap slot has no card; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
+In 2D, each PGPatcher slot is one card (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that card, with both files listed and a ✕ beside each to take one out of the set, and export warns about it. The cubemap slot has no card; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
 
 | Card control | What it does |
 |---|---|
@@ -229,7 +231,7 @@ In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Em
 
 A pinned slot keeps its fill. It refuses drags in or out and the slot commands, and bulk edits skip it. The pin is saved in `sdc-project.toml` and never written to the JSON.
 
-*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a big red ✕ with "The original texture in this spot is used" (with a scan, its hover lists the meshes' textures in that slot), and the member thumbnail a small red ✕. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
+*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a big red ✕ over the thumbnail; its hover says "PGPatcher lock (lock_<slot>): the original texture in this spot is used" and, with a scan, lists the meshes' textures in that slot, and the member thumbnail a small red ✕. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
 
 A `_coat` map fills the Subsurface card, which then reads "Coat colour + strength". When RNM normal layers are active, the normal card has a blue outline; see [RNM layers](#rnm-normal-layers).
 
@@ -291,7 +293,7 @@ Switch the set editor to **3D** to see the set on a mesh, rendered with Direct3D
 | Control | What it does |
 |---|---|
 | Encoded (exact export) / Source (faster, no compression) | Show the bytes Export would write, or the prepared source without compression. |
-| **Mesh:** | *Auto* (a scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. |
+| **Mesh:** | *Auto* (the first scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. The scanned meshes are listed loose before BSA, with ground models (`gnd`, `_go`) and `1stperson` meshes last. |
 | **Shader folder…** | Point at your Community Shaders mod folder or its `Shaders` folder when it is not found automatically ("Community Shaders not found", **Choose folder…**). |
 | Community Shaders features | On by default. Off compiles the shaders without CS feature defines. |
 | Background | Solid or Studio HDRI (Poly Haven, CC0). For Solid, a colour swatch with a hex field and a *Grey* slider (0 to 100 %) set the grey level; a non-grey colour is turned into its grey. |

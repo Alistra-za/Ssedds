@@ -14,8 +14,8 @@ use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    card_title, is_json_set, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell,
-    SlotFill, SlotKind,
+    card_title, is_json_set, set_views, shows_json_panel, slot_clash_text, slot_label, slot_of,
+    slot_row, SetView, SlotCell, SlotFill, SlotKind,
 };
 use crate::model::AppModel;
 use crate::pgp::prefix::{
@@ -28,7 +28,6 @@ use engine::pack::RecipeKind;
 use serde_json::Value;
 
 /// Note AN: the caption across a PGPatcher-locked slot card.
-pub const PGP_LOCK_CAPTION: &str = "The original texture in this spot is used";
 /// Review M2: a lock key on a set that writes no JSON.
 pub const PGP_LOCK_UNWRITTEN: &str = "lock stored, not written (no PGPatcher entry)";
 
@@ -60,6 +59,8 @@ enum Act {
     Slot(MenuAction),
     /// Item 17: files from Explorer dropped on this set's slot card.
     FileDrop(String, SlotKind),
+    /// Note AO7: take a member out of the set (set id, item), from a clashing slot card.
+    RemoveMember(String, String),
 }
 
 /// How the set editor shares the view with the 3D preview panel.
@@ -88,7 +89,7 @@ pub fn draw(
         if view.switch {
             super::set_preview::view_switch(ui, model);
         }
-        ui.heading(&v.label);
+        // The set's path and its input name box share the row where the width allows (AO5).
         super::input_name::picker(ui, model, &v);
         if view.three_d {
             super::set_preview::settings_toggle(ui, model);
@@ -193,6 +194,15 @@ pub fn draw(
             Act::AskOriginal(set, n) => model.ask_original_textures(&set, n),
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
             Act::FileDrop(set, slot) => file_drop(model, drops, &set, slot),
+            Act::RemoveMember(set, item) => {
+                if let Err(why) = model.remove_member(&set, &item) {
+                    drops.slot_note = Some(SlotNote {
+                        set,
+                        text: why,
+                        error: true,
+                    });
+                }
+            }
         }
     }
     select_or_expand(ui, model, select, expand);
@@ -363,7 +373,7 @@ fn card(
                     SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
                         card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
                     }
-                    SlotFill::Empty => slot.label(),
+                    SlotFill::Empty => slot_label(slot, ""),
                 };
                 let t = if locked {
                     ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
@@ -371,6 +381,11 @@ fn card(
                 } else {
                     ui.label(egui::RichText::new(title).strong())
                 };
+                // Note AO7: both kinds of a shared slot (slot 7: `_cnr` and `_f`) are a conflict, not a silent pick: the card
+                // names and shows both, and either can be taken out of the set here.
+                if slot_clash_text(cell).is_some() {
+                    clash_rows(ui, model, v, cell, thumbs, acts);
+                }
                 if cell.usable && !rnm_layers.is_empty() {
                     t.clone()
                         .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
@@ -391,6 +406,14 @@ fn card(
                 let (rect, resp) =
                     ui.allocate_exact_size(egui::vec2(THUMB, THUMB), egui::Sense::click());
                 slot_menu(&resp, model, v, slot, acts);
+                // A PGPatcher-locked card has one hover, the lock's, in place of the thumbnail's path.
+                let lock_cross =
+                    pgp_locked(&v.settings, slot.slot_number()) && is_json_set(v, model.target);
+                let resp = if lock_cross {
+                    pgp_lock_hover(resp, model, v, slot, acts)
+                } else {
+                    resp
+                };
                 if ui.is_rect_visible(rect) {
                     match item.and_then(|i| thumbs.get(ui.ctx(), i)) {
                         Some(t) => egui::Image::new(&t)
@@ -415,8 +438,8 @@ fn card(
                 }
                 if pgp_locked(&v.settings, slot.slot_number()) {
                     // Only a set that writes JSON gives PGPatcher the lock (review M2).
-                    if is_json_set(v, model.target) {
-                        pgp_lock_cross(ui, model, v, slot, rect, acts);
+                    if lock_cross {
+                        pgp_lock_cross(ui, rect);
                     } else {
                         ui.weak(PGP_LOCK_UNWRITTEN);
                     }
@@ -464,7 +487,11 @@ fn card(
                     ui.colored_label(AMBER, format!("borrowed from {from}"));
                     return;
                 }
-                let resp = resp.on_hover_text(&i.key);
+                let resp = if lock_cross {
+                    resp
+                } else {
+                    resp.on_hover_text(&i.key)
+                };
                 if resp.double_clicked() {
                     acts.push(Act::Expand(i.key.clone()));
                 } else if resp.clicked() {
@@ -524,45 +551,33 @@ fn card(
     }
 }
 
-/// Note AN: a PGPatcher-locked slot: a big red ✕ over the thumbnail and a caption across it. With a scan, the
-/// caption's hover names the textures the matched meshes have in that slot.
-fn pgp_lock_cross(
-    ui: &mut egui::Ui,
-    model: &AppModel,
-    v: &SetView,
-    slot: SlotKind,
-    rect: egui::Rect,
-    acts: &mut Vec<Act>,
-) {
+/// Note AN: a PGPatcher-locked slot: a big red ✕ over the thumbnail.
+fn pgp_lock_cross(ui: &egui::Ui, rect: egui::Rect) {
     let stroke = egui::Stroke::new(6.0, RED);
     let r = rect.shrink(6.0);
     ui.painter()
         .line_segment([r.left_top(), r.right_bottom()], stroke);
     ui.painter()
         .line_segment([r.right_top(), r.left_bottom()], stroke);
-    let band = egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 34.0));
-    ui.painter()
-        .rect_filled(band, 0.0, egui::Color32::from_black_alpha(190));
-    let caption = egui::Label::new(
-        egui::RichText::new(PGP_LOCK_CAPTION)
-            .small()
-            .color(egui::Color32::WHITE),
-    )
-    .wrap()
-    .halign(egui::Align::Center);
+}
+
+/// Note AN: the locked card's one hover: the lock, then (with a scan) the textures the matched meshes have in that slot,
+/// read on a worker ("…" until it lands).
+fn pgp_lock_hover(
+    resp: egui::Response,
+    model: &AppModel,
+    v: &SetView,
+    slot: SlotKind,
+    acts: &mut Vec<Act>,
+) -> egui::Response {
     let n = slot.slot_number();
-    // A child over the thumbnail: `ui.put` would move the card's cursor back up into it.
-    let mut over = ui.new_child(egui::UiBuilder::new().max_rect(band).layout(
-        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-    ));
-    over.add(caption).on_hover_ui(|ui| {
+    resp.on_hover_ui(|ui| {
         ui.label(format!(
-            "PGPatcher lock ({}): this slot keeps the mesh's own texture",
+            "PGPatcher lock ({}): the original texture in this spot is used",
             lock_key(n).unwrap_or_default()
         ));
         match model.original_textures(&v.id, n) {
             Some(Some(paths)) if !paths.is_empty() => {
-                ui.label("Used by meshes, in this slot:");
                 for p in paths.iter() {
                     ui.monospace(p);
                 }
@@ -577,7 +592,7 @@ fn pgp_lock_cross(
             }
             None => {}
         }
-    });
+    })
 }
 
 /// F3a Task 8: the slot menu of card `slot` (the model's list, drawn as the bulk menus are).
@@ -589,7 +604,7 @@ fn slot_menu(
     acts: &mut Vec<Act>,
 ) {
     resp.context_menu(|ui| {
-        let title = format!("Slot {}: {}", slot.slot_number(), slot.label());
+        let title = format!("Slot {}: {}", slot.slot_number(), slot_label(slot, ""));
         if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, slot)) {
             acts.push(Act::Slot(a));
         }
@@ -794,5 +809,62 @@ fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut
         })
         .response
         .on_disabled_hover_text(why.clone().unwrap_or_default());
+    }
+}
+
+/// Note AO7: a card whose PGPatcher slot holds two members: a red line naming both files, then a row per member with
+/// its thumbnail and file name (click selects, double-click expands) and ✕, which takes it out of the set.
+fn clash_rows(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    v: &SetView,
+    cell: &SlotCell,
+    thumbs: &mut ThumbCache,
+    acts: &mut Vec<Act>,
+) {
+    let item_of = |fill: Option<&SlotFill>| match fill {
+        Some(SlotFill::Own { item } | SlotFill::Borrowed { item, .. }) => model.item(item),
+        _ => None,
+    };
+    let both: Vec<&TextureItem> = [Some(&cell.fill), cell.clash.and_then(|k| v.slots.get(&k))]
+        .into_iter()
+        .filter_map(item_of)
+        .collect();
+    let names: Vec<&str> = both.iter().map(|i| i.name.as_str()).collect();
+    ui.colored_label(
+        RED,
+        format!(
+            "{} both use slot {}: remove one",
+            names.join(" and "),
+            cell.kind.slot_number()
+        ),
+    );
+    for i in both {
+        ui.horizontal(|ui| {
+            if let Some(t) = thumbs.get(ui.ctx(), i) {
+                ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+            }
+            let r = ui
+                .add(
+                    egui::Label::new(egui::RichText::new(&i.name).small())
+                        .truncate()
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(&i.key);
+            if r.double_clicked() {
+                acts.push(Act::Expand(i.key.clone()));
+            } else if r.clicked() {
+                acts.push(Act::Select(i.key.clone()));
+            }
+            let x = ui
+                .small_button("✕")
+                .on_hover_text("Take it out of this set");
+            let label = format!("Remove {}", i.name);
+            ui.ctx()
+                .accesskit_node_builder(x.id, |b| b.set_label(label));
+            if x.clicked() {
+                acts.push(Act::RemoveMember(v.id.clone(), i.key.clone()));
+            }
+        });
     }
 }

@@ -108,10 +108,9 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         "Normal _n",
         "RMAOS",
         "Height _p",
-        "Emissive _g",
+        "Emissive / Skin (slot 3)",
         "Subsurface _s",
-        "Coat _cnr",
-        "Fuzz _f",
+        "Coat normal / Fuzz (slot 7)",
     ] {
         // The Matching header repeats the Diffuse/Normal slot names as its row labels.
         assert!(h.query_all_by_label(label).next().is_some(), "{label}");
@@ -1286,4 +1285,48 @@ fn amber_outlines(h: &Harness<'static, AppModel>) -> usize {
         walk(&c.shape, &mut n);
     }
     n
+}
+
+/// Review fix: a card whose slot holds two members (`_cnr` and `_f`) shows both, names both in its conflict line,
+/// and removes either from the card.
+fn clash_harness(d: &std::path::Path) -> Harness<'static, AppModel> {
+    let r = d.join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    for n in ["rock01_cnr.png", "rock01_f.png"] {
+        image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([128u8, 128, 255]))
+            .save(r.join(n))
+            .unwrap();
+    }
+    let mut m = pbr_opened(d);
+    rock_selected(&mut m);
+    let mut h = harness(m);
+    h.run();
+    h
+}
+
+fn members(h: &Harness<'static, AppModel>) -> Vec<String> {
+    sdc_gui::model::sets::set_views(h.state())
+        .into_iter()
+        .find(|v| v.id == "landscape/rock01")
+        .unwrap()
+        .members
+}
+
+#[test]
+fn a_clashing_slot_card_shows_and_removes_either_member() {
+    for name in ["rock01_f.png", "rock01_cnr.png"] {
+        let d = tempfile::tempdir().unwrap();
+        let mut h = clash_harness(d.path());
+        h.get_by_label_contains("rock01_cnr.png and rock01_f.png both use slot 7");
+        h.get_by_label("Remove rock01_cnr.png");
+        h.get_by_label("Remove rock01_f.png");
+        let key = format!("landscape/{name}");
+        assert!(members(&h).contains(&key));
+        h.get_by_label(&format!("Remove {name}")).click();
+        h.run();
+        assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+        h.run();
+        assert!(!members(&h).contains(&key), "{name} left the set");
+        assert!(h.query_by_label_contains("both use slot 7").is_none());
+    }
 }

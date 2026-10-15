@@ -99,8 +99,25 @@ pub fn slot_label(slot: SlotKind, key: &str) -> &'static str {
         Some((_, v)) if slot == SlotKind::Subsurface && v.role == VocabRole::CoatColour => {
             "Coat colour + strength"
         }
+        _ if slot.slot_number() == 7 => SLOT7_CARD,
+        _ if key.is_empty() && slot.slot_number() == 3 => SLOT3_CARD,
         _ => slot.label(),
     }
+}
+
+/// Note AO: the one card of PGPatcher slot 7, which holds the coat normal `_cnr` or the fuzz `_f`.
+pub const SLOT7_CARD: &str = "Coat normal / Fuzz (slot 7)";
+/// Note AO: the empty card of PGPatcher slot 3, which holds the emissive `_g` or the Advanced skin `_sk`.
+pub const SLOT3_CARD: &str = "Emissive / Skin (slot 3)";
+
+/// Note AO: the kinds a card of `slot`'s PGPatcher slot takes (`Coat _cnr or Fuzz _f` for slot 7).
+pub fn slot_kinds_label(slot: SlotKind) -> String {
+    let kinds: Vec<&str> = SlotKind::ALL
+        .iter()
+        .filter(|k| k.slot_number() == slot.slot_number())
+        .map(|k| k.label())
+        .collect();
+    kinds.join(" or ")
 }
 
 /// The card title of `slot` holding `key` in a set drawn by `shader`: a grass file in the Diffuse card is "Complex grass".
@@ -313,9 +330,12 @@ pub struct SlotCell {
     pub fill: SlotFill,
     /// False for a filled slot the set's shader does not use: it stays, outlined, and says why.
     pub usable: bool,
+    /// Note AO: another filled kind in the same PGPatcher slot (`_f` beside `_cnr`, `_sk` beside `_g`): a conflict.
+    pub clash: Option<SlotKind>,
 }
 
-/// The set's slot cards in PGPatcher slot order 1–8 (slots 3 and 7 hold two kinds each, in `SlotKind` order). These
+/// The set's slot cards in PGPatcher slot order 1–8, one per slot (Note AO: slots 3 and 7 hold two kinds each; the
+/// card holds the filled one, else the first in `SlotKind` order, and a second filled one is its `clash`). These
 /// are every slot the picked shader can use, filled or empty, plus every filled slot it cannot use. With no pick yet,
 /// only the filled slots show (F1 spec §5).
 pub fn slot_row(pick: Option<&ShaderPick>, slots: &BTreeMap<SlotKind, SlotFill>) -> Vec<SlotCell> {
@@ -326,14 +346,31 @@ pub fn slot_row(pick: Option<&ShaderPick>, slots: &BTreeMap<SlotKind, SlotFill>)
         .filter(|k| filled(k) || usable.as_ref().is_some_and(|u| u.contains(k)))
         .collect();
     kinds.sort_by_key(|k| (k.slot_number(), *k));
-    kinds
-        .into_iter()
-        .map(|kind| SlotCell {
+    let mut cells: Vec<SlotCell> = vec![];
+    for kind in kinds {
+        let cell = SlotCell {
             kind,
             fill: slots.get(&kind).cloned().unwrap_or(SlotFill::Empty),
             usable: usable.as_ref().is_none_or(|u| u.contains(&kind)),
-        })
-        .collect()
+            clash: None,
+        };
+        match cells.last_mut() {
+            Some(c) if c.kind.slot_number() == kind.slot_number() => {
+                if filled(&c.kind) && filled(&kind) {
+                    c.clash = Some(kind);
+                } else if filled(&kind) {
+                    *c = cell;
+                }
+            }
+            _ => cells.push(cell),
+        }
+    }
+    cells
+}
+
+/// Note AO: why a card's slot is in conflict (both kinds of slot 3 or 7 filled), if it is.
+pub fn slot_clash_text(cell: &SlotCell) -> Option<String> {
+    slot_conflict(&[cell.kind], cell.clash?)
 }
 
 /// Why `incoming` cannot join a set holding `existing`, if it cannot (spec §4.1: `_cnr` and `_f` share slot 7;
@@ -1641,7 +1678,8 @@ impl AppModel {
         };
         let key = it.key.clone();
         match slot_of(it) {
-            Some(k) if k == slot => {}
+            // Note AO: a card is a PGPatcher slot; slot 7's takes `_cnr` or `_f`.
+            Some(k) if k.slot_number() == slot.slot_number() => {}
             Some(k) => {
                 return refused(format!(
                     "{name} goes in the {} slot, not {}",
