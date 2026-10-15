@@ -124,6 +124,7 @@
         "PACK-UNUSED-INPUT",
         "PACK-RECIPE-CONFLICT",
         "PACK-RECIPE-UNBUILDABLE",
+        "PACK-ORM-OVERRIDDEN",
         "RNM-NO-BASE",
         "RNM-IGNORED-EYE",
         "RNM-MASK-ORPHAN",

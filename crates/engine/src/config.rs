@@ -316,13 +316,22 @@ impl RnmSpec {
         self.bent.ao_power.unwrap_or(1.5)
     }
 }
-cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz });
+cfg_enum!(RawMap, "lowercase" { Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm });
 
 impl RawMap {
+    /// The single-channel roles, each with a `packing.fill.<role>`. `Orm` is not one (DECISIONS Note AL).
     pub const ALL: [RawMap; 8] = {
         use RawMap::*;
         [
             Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz,
+        ]
+    };
+
+    /// Every raw-map role a file name can carry: [`RawMap::ALL`] and the multi-channel `Orm` (Note AL).
+    pub const INPUTS: [RawMap; 9] = {
+        use RawMap::*;
+        [
+            Roughness, Metallic, Ao, Specular, Glossiness, Height, Opacity, Fuzz, Orm,
         ]
     };
 
@@ -335,7 +344,7 @@ impl RawMap {
     pub fn starts_rmaos(self) -> bool {
         matches!(
             self,
-            RawMap::Roughness | RawMap::Glossiness | RawMap::Metallic | RawMap::Ao
+            RawMap::Roughness | RawMap::Glossiness | RawMap::Metallic | RawMap::Ao | RawMap::Orm
         )
     }
 }
@@ -423,6 +432,7 @@ impl FillSpec {
             RawMap::Height => self.height,
             RawMap::Opacity => self.opacity,
             RawMap::Fuzz => self.fuzz,
+            RawMap::Orm => None,
         }
     }
 }

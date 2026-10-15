@@ -560,6 +560,11 @@ impl PresetRegistry {
                     "suffix alias '{alias}' is a canonical suffix (spec §6.1)"
                 )));
             }
+            if alias == "orm" {
+                return Err(bad(
+                    "suffix alias 'orm' is an exporter vocabulary term: orm is a built-in packing input since Note AL (AO, roughness, metallic); remove the alias".into(),
+                ));
+            }
             if crate::group::is_vocabulary(alias) {
                 return Err(bad(format!(
                     "suffix alias '{alias}' is an exporter vocabulary term (spec §4.4)"

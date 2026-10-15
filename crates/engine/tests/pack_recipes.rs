@@ -22,6 +22,7 @@ fn src(f: &str, role: RawMap, invert: bool) -> ChannelNeed {
         path: PathBuf::from(f),
         role,
         invert,
+        channel: None,
     }
 }
 
@@ -345,6 +346,7 @@ fn channel_provenance_strings() {
         path: PathBuf::from(format!("C:/in/{path}")),
         role: Roughness,
         invert,
+        channel: None,
     };
     assert_eq!(
         s("iron_rough.png", false).provenance(GraySource::R),
@@ -372,4 +374,102 @@ fn channel_provenance_strings() {
     );
     assert_eq!(ChannelSource::MirrorR.provenance(GraySource::R), None);
     assert_eq!(ChannelSource::Opaque.provenance(GraySource::R), None);
+}
+
+fn orm(f: &str, channel: u8, invert: bool) -> ChannelNeed {
+    Source {
+        path: PathBuf::from(f),
+        role: Orm,
+        invert,
+        channel: Some(channel),
+    }
+}
+
+/// DECISIONS Note AL1: an `_orm` supplies AO (R), roughness (G) and metallic (B) to every recipe that reads them.
+#[test]
+fn an_orm_feeds_ao_roughness_and_metallic() {
+    let set = raw(&[("iron_orm.png", Orm)]);
+    let (r, u) = recipes_for(Target::Cs, &set);
+    assert!(u.is_empty());
+    assert_eq!(
+        r[0].channels,
+        [
+            orm("iron_orm.png", 1, false),
+            orm("iron_orm.png", 2, false),
+            orm("iron_orm.png", 0, false),
+            Missing(Slot::Specular),
+        ]
+    );
+    assert!(r[0].notes.is_empty());
+    let (r, _) = recipes_for(Target::Cpm, &set);
+    assert_eq!(
+        r[0].channels,
+        [
+            orm("iron_orm.png", 2, false),
+            orm("iron_orm.png", 1, true),
+            orm("iron_orm.png", 2, false),
+            Missing(Slot::Height),
+        ]
+    );
+    let (r, _) = recipes_for(Target::Vanilla, &set);
+    assert_eq!(r[0].channels[0], orm("iron_orm.png", 2, false));
+    let (r, _) = recipes_for_with(Target::Cs, &set, PackRecipe::Rfaos);
+    assert_eq!(kinds(&r), [RecipeKind::Rfaos]);
+    assert_eq!(
+        predicted_suffixes(Target::Cs, &BTreeSet::from([Orm])),
+        ["rmaos"]
+    );
+}
+
+/// DECISIONS Note AL2: a loose map wins its slot over the ORM channel, with a note; a fully overridden ORM is unused.
+#[test]
+fn a_loose_map_wins_over_the_orm_channel() {
+    let (r, u) = recipes_for(
+        Target::Cs,
+        &raw(&[("iron_orm.png", Orm), ("iron_rough.png", Roughness)]),
+    );
+    assert!(u.is_empty());
+    assert_eq!(r[0].channels[0], src("iron_rough.png", Roughness, false));
+    assert_eq!(r[0].channels[1], orm("iron_orm.png", 2, false));
+    assert_eq!(r[0].notes.len(), 1);
+    assert!(
+        r[0].notes[0].contains("iron_rough.png"),
+        "{}",
+        r[0].notes[0]
+    );
+    let (r, u) = recipes_for(
+        Target::Vanilla,
+        &raw(&[("iron_orm.png", Orm), ("iron_metal.png", Metallic)]),
+    );
+    assert_eq!(r[0].channels[0], src("iron_metal.png", Metallic, false));
+    assert_eq!(unused_names(&u), ["iron_orm.png"]);
+    assert!(u[0].reason.contains("loose"), "{}", u[0].reason);
+    // the ORM's metallic beats a loose specular for the env mask, and the reason says so
+    for target in [Target::Cpm, Target::Vanilla] {
+        let (_, u) = recipes_for(
+            target,
+            &raw(&[("iron_orm.png", Orm), ("iron_spec.png", Specular)]),
+        );
+        assert_eq!(unused_names(&u), ["iron_spec.png"]);
+        assert!(
+            u[0].reason.contains("env mask comes from the metallic"),
+            "{}",
+            u[0].reason
+        );
+    }
+}
+
+/// DECISIONS Note AL5: `_rfaos` has no metallic channel, so the ORM's B is dropped with a note.
+#[test]
+fn rfaos_notes_the_dropped_orm_metallic() {
+    let (r, _) = recipes_for(
+        Target::Cs,
+        &raw(&[("iron_orm.png", Orm), ("iron_fuzz.png", Fuzz)]),
+    );
+    assert_eq!(kinds(&r), [RecipeKind::Rfaos]);
+    assert_eq!(r[0].notes.len(), 1, "{:?}", r[0].notes);
+    assert!(r[0].notes[0].contains("metallic"), "{}", r[0].notes[0]);
+    // an `_rmaos` from the same ORM drops nothing
+    let (r, _) = recipes_for(Target::Cs, &raw(&[("iron_orm.png", Orm)]));
+    assert!(r[0].notes.is_empty());
 }

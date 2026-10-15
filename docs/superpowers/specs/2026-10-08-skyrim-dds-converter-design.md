@@ -290,6 +290,7 @@ Built-ins (read-only): "CS – Quality" (default), "CS – Compact" (BC1 whereve
 | Raw roughness | `_roughness`, `_rough` | Packing input `roughness` | None on its own | §6.4 |
 | Raw metallic | `_metallic`, `_metalness`, `_metal` | Packing input `metallic` | None on its own | §6.4 |
 | Raw AO | `_ao`, `_ambientocclusion`, `_occlusion` | Packing input `ao` | None on its own | §6.4 |
+| Channel-packed ORM | `_orm` | Packing input `orm`: AO in R, roughness in G, metallic in B; a loose map for the same slot wins (DECISIONS Note AL) | None on its own | §6.4 |
 | Raw specular | `_specular`, `_spec` | Packing input `specular` | None on its own | §6.4 |
 | Raw glossiness | `_glossiness`, `_gloss` | Packing input `glossiness` | None on its own | §6.4 |
 | Raw height | `_height`, `_displacement`, `_disp` | Packing input `height` | None on its own | §6.4 |
@@ -711,10 +712,11 @@ Options: `--target`, `--preset <id|file>`, `--preset-file <file>` (repeatable; l
 | `PACK-UNUSED-INPUT` | warning | Raw map used by no recipe under the target | Change target, set a sub-type, or remove it |
 | `PACK-RECIPE-CONFLICT` | warning | The `packing.recipe` of the `<base>_rfaos` and `<base>_rmaos` `[files]` keys disagree; the `_rfaos` entry wins (Note R-fills-1) | Keep the recipe on one key |
 | `PACK-RECIPE-UNBUILDABLE` | warning | `packing.recipe = rfaos` on a set with no roughness, glossiness or AO source (only metallic), so `_rmaos` was built (Note R-fills-1) | Add a roughness, glossiness or AO map, or drop the setting |
+| `PACK-ORM-OVERRIDDEN` | info | An `_orm` channel is not used: a loose raw map (e.g. `_roughness`) wins a slot the `_orm` also holds (Note AL2), or `_rfaos` has no metallic channel for its B (Note AL5) | None, or remove the loose map to use the `_orm` channel |
 | `RNM-NO-BASE` | warning | An RNM layer or mask whose target names no base normal in its set (`_n`/`_cnr`), so it is not used (M6 F2) | Add the base normal, or set `rnm.target` on the layer |
 | `RNM-IGNORED-EYE` | warning | An RNM layer in an Eye-shader set: eye normals are model-space, RNM is tangent-space only (M6 F2) | Remove the layer, or move it to a non-eye set |
 | `RNM-MASK-ORPHAN` | warning | An RNM mask without its layer file (M6 F2) | Add the layer, or remove the mask |
-| `RNM-AO-MISSING` | info | A `bent` layer in `ao_blend` mode with no `_ao` and no `_rmaos`/`_rfaos` file: the bent weight is uniform (M6 F2) | Add an AO map, or set `rnm.bent.ao = false` |
+| `RNM-AO-MISSING` | info | A `bent` layer in `ao_blend` mode with no `_ao`, `_orm` (Note AL4) or `_rmaos`/`_rfaos` file: the bent weight is uniform (M6 F2) | Add an AO map, or set `rnm.bent.ao = false` |
 | `RNM-LAYER-SHADOWED` | warning | Two files fill one layer of one base's stack; the one named for that base (else the bare one) is used (M6 F2) | Rename or remove one, or change `rnm.target` |
 | `SKIN-WET-FORM` | info | Which form a `skin_wet` file was read as: grey content is a BC4 height map, otherwise a BC7 normal with a binary mask in alpha; a `format` override can change it (Note R-skin-1) | Set `format` to force a form |
 

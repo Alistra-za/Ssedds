@@ -205,7 +205,7 @@ pub fn plan_rnm(
             if wants_ao && ao.is_none() {
                 notes.push(Warning::new(
                     Code::RnmAoMissing,
-                    "the bent layer has no AO (no _ao and no _rmaos/_rfaos file), so its weight is uniform",
+                    "the bent layer has no AO (no _ao, _orm or _rmaos/_rfaos file), so its weight is uniform",
                 ));
             }
             job.warnings.extend(notes);
@@ -217,7 +217,7 @@ pub fn plan_rnm(
     }
 }
 
-/// Note W9: the set's raw AO map (R), else its `_rmaos`/`_rfaos` file (B).
+/// Note W9: the set's raw AO map (R), else its `_orm` (R, Note AL4), else its `_rmaos`/`_rfaos` file (B).
 fn ao_source(
     set: &TextureSet,
     files: &[InputFile],
@@ -231,12 +231,13 @@ fn ao_source(
             .into_owned()
     };
     let members = || set.members.iter().map(|&i| &files[i]);
-    let raw = members().find(|f| {
-        matches!(
-            vocab_of(&stem(f)).map(|v| v.role),
-            Some(VocabRole::PackingInput(crate::config::RawMap::Ao))
-        )
-    });
+    let role_is = |f: &InputFile, role| {
+        vocab_of(&stem(f)).map(|v| v.role) == Some(VocabRole::PackingInput(role))
+    };
+    // Note AL4: a loose `_ao`, else an `_orm` (AO in R).
+    let raw = members()
+        .find(|f| role_is(f, crate::config::RawMap::Ao))
+        .or_else(|| members().find(|f| role_is(f, crate::config::RawMap::Orm)));
     if let Some(f) = raw {
         return Some(RnmAo {
             file: file(&f.path),

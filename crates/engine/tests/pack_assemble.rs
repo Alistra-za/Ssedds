@@ -34,6 +34,7 @@ fn src(p: &Path, role: RawMap, invert: bool) -> ChannelSource {
         path: p.to_path_buf(),
         role,
         invert,
+        channel: None,
     }
 }
 

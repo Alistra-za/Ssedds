@@ -10,7 +10,7 @@ use engine::manifest::{sha256_file, Manifest};
 use engine::overrides::parse_set;
 use engine::policy::AcceptSuggestions;
 use engine::validate::ValidationSummary;
-use image::{ImageBuffer, Luma, Rgba};
+use image::{ImageBuffer, Luma, Rgb, Rgba};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -547,4 +547,95 @@ fn a_forced_rfaos_writes_the_fuzz_default_or_fill_in_g() {
         assert_channel(px, 0, 4, r);
         assert_channel(px, 2, 4, ao);
     }
+}
+
+/// Note AL: an RGB `_orm` (R = AO, G = roughness, B = metallic) at `in/textures/a/<name>`.
+fn put_orm(dir: &Path, name: &str) {
+    let p = dir.join("in/textures/a").join(name);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    ImageBuffer::from_fn(W, W, |x, y| Rgb([ao(x, y), r(x, y), m(x, y)]))
+        .save(p)
+        .unwrap();
+}
+
+/// A diffuse and a flat normal beside the packing inputs.
+fn put_colour_set(dir: &Path) {
+    let a = dir.join("in/textures/a");
+    std::fs::create_dir_all(&a).unwrap();
+    ImageBuffer::from_fn(W, W, |x, y| Rgb([x as u8, y as u8, 90]))
+        .save(a.join("iron.png"))
+        .unwrap();
+    ImageBuffer::from_fn(W, W, |_, _| Rgb([128u8, 128, 255]))
+        .save(a.join("iron_n.png"))
+        .unwrap();
+}
+
+/// Note AL1: `_orm` beside a diffuse/normal set under cs → `_rmaos` R = ORM G, G = ORM B, B = ORM R, A = the
+/// specular fill when set, else the default 255.
+#[test]
+fn an_orm_packs_rmaos_with_the_specular_fill_or_default() {
+    for (sets, alpha) in [(&["packing.fill.specular=77"][..], 77u8), (&[][..], 255)] {
+        let d = tempfile::tempdir().unwrap();
+        put_colour_set(d.path());
+        put_orm(d.path(), "iron_orm.png");
+        let o = convert(d.path(), Target::Cs, sets);
+        assert!(
+            !warnings(&o).contains(&Code::ChanNotGray),
+            "{:?}",
+            warnings(&o)
+        );
+        let job = planned(&o, "iron_orm.png");
+        assert_eq!(job["provenance"]["pack.r"], "source:iron_orm.png:G");
+        assert_eq!(job["provenance"]["pack.g"], "source:iron_orm.png:B");
+        assert_eq!(job["provenance"]["pack.b"], "source:iron_orm.png:R");
+        assert_eq!(job["pack"]["sources"][0]["role"], "orm");
+        let px = &levels(&dds(d.path(), "iron_rmaos.dds"))[0];
+        assert_channel(px, 0, 4, r);
+        assert_channel(px, 1, 4, m);
+        assert_channel(px, 2, 4, ao);
+        assert_channel(px, 3, 2, |_, _| alpha);
+        assert!(out_path(d.path(), "iron.dds").exists());
+        assert!(!out_path(d.path(), "iron_orm.dds").exists());
+    }
+}
+
+/// Note AL2: a loose `_roughness` beside an `_orm` wins the R channel, with an info note; the ORM still gives G and B.
+#[test]
+fn a_loose_roughness_overrides_the_orm_green() {
+    let d = tempfile::tempdir().unwrap();
+    put_orm(d.path(), "iron_orm.png");
+    put(d.path(), "iron_roughness.png", spec);
+    let o = convert(d.path(), Target::Cs, &[]);
+    let px = &levels(&dds(d.path(), "iron_rmaos.dds"))[0];
+    assert_channel(px, 0, 4, spec);
+    assert_channel(px, 1, 4, m);
+    assert_channel(px, 2, 4, ao);
+    let notes: Vec<Warning> = o
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Warning(w) if w.code == Code::PackOrmOverridden => Some(w.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), 1, "{:?}", warnings(&o));
+    assert_eq!(notes[0].severity, engine::codes::Severity::Info);
+    assert!(
+        notes[0].message.contains("iron_roughness.png"),
+        "{}",
+        notes[0].message
+    );
+}
+
+/// Note AL3: the cpm `_m` takes metallic (R env mask and B) from the ORM's B and glossiness from 1 − its G.
+#[test]
+fn cpm_m_takes_metallic_from_the_orm_blue() {
+    let d = tempfile::tempdir().unwrap();
+    put_orm(d.path(), "iron_orm.png");
+    let o = convert(d.path(), Target::Cpm, &[]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
+    assert_channel(px, 0, 4, m);
+    assert_channel(px, 1, 4, |x, y| 255 - r(x, y));
+    assert_channel(px, 2, 4, m);
 }
