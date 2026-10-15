@@ -50,13 +50,8 @@ fn rgba16f_packs_little_endian_halves() {
 /// Compiles the shader on a real adapter when one exists; skips (passes) without one.
 #[test]
 fn the_shader_compiles_on_any_available_adapter() {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        return;
-    };
-    let (device, _queue) =
-        block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let Some(rs) = render_state() else { return };
+    let device = &rs.device;
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("preview"),
@@ -80,16 +75,21 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 
 // ---- Drawing on a real device. Each of these returns early when there is no adapter. ----
 
-/// A headless render state built with the wgpu setup `main` hands to eframe.
-fn render_state() -> Option<RenderState> {
-    let instance = wgpu::Instance::default();
-    block_on(RenderState::create(
-        &wgpu_configuration(),
-        &instance,
-        None,
-        RendererOptions::default(),
-    ))
-    .ok()
+/// A headless render state built with the wgpu setup `main` hands to eframe, shared by every test: creating
+/// all-backend instances on several threads at once deadlocks inside Vulkan + GL init, so a process gets one.
+fn render_state() -> Option<&'static RenderState> {
+    static RS: std::sync::OnceLock<Option<RenderState>> = std::sync::OnceLock::new();
+    RS.get_or_init(|| {
+        let instance = wgpu::Instance::default();
+        block_on(RenderState::create(
+            &wgpu_configuration(),
+            &instance,
+            None,
+            RendererOptions::default(),
+        ))
+        .ok()
+    })
+    .as_ref()
 }
 
 const SIDE: u32 = 8;
@@ -227,12 +227,12 @@ const BC4_128: [u8; 8] = [128, 0, 0, 0, 0, 0, 0, 0];
 #[test]
 fn bc5_shows_a_reconstructed_blue_on_both_upload_paths() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
+    let mut r = PreviewRenderer::new(rs);
     let block: Vec<u8> = [BC4_128, BC4_128].concat();
     let grey = 128.0 / 255.0;
     // 4x4 is a whole block: BC when the device supports it.
     let out = encoded(Format::Bc5, 4, 4, &block, [grey, grey, 0.0, 1.0]);
-    let path = r.set_encoded(&rs, &out);
+    let path = r.set_encoded(rs, &out);
     if r.supports_bc() {
         assert_eq!(path, UploadPath::Bc);
     } else {
@@ -240,10 +240,10 @@ fn bc5_shows_a_reconstructed_blue_on_both_upload_paths() {
     }
     // x = y = 128/255 * 2 - 1 is about 0, so the rebuilt z is about 1, shown as 255.
     let want = [128, 128, 255, 255];
-    near(draw(&rs, &r, Slot::Encoded, params())[MIDDLE], want);
+    near(draw(rs, &r, Slot::Encoded, params())[MIDDLE], want);
     // 2x2 is not a multiple of 4: the CPU decode, drawn the same.
     let out = encoded(Format::Bc5, 2, 2, &block, [grey, grey, 0.0, 1.0]);
-    let path = r.set_encoded(&rs, &out);
+    let path = r.set_encoded(rs, &out);
     assert!(matches!(path, UploadPath::CpuDecoded(_)));
     if r.supports_bc() {
         assert_eq!(
@@ -251,23 +251,20 @@ fn bc5_shows_a_reconstructed_blue_on_both_upload_paths() {
             UploadPath::CpuDecoded("Mip size not a multiple of 4: showing a CPU decode")
         );
     }
-    near(draw(&rs, &r, Slot::Encoded, params())[MIDDLE], want);
+    near(draw(rs, &r, Slot::Encoded, params())[MIDDLE], want);
 }
 
 /// Controller ruling (M6 Task 11): an RG8 normal rebuilds Z the way BC5 does.
 #[test]
 fn rg8_shows_a_reconstructed_blue_like_bc5() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
+    let mut r = PreviewRenderer::new(rs);
     let grey = 128.0 / 255.0;
     // `encoded` repeats its block once per 4x4 block: 4 texels of (128, 128) each time. RG8 always takes the CPU decode.
     let out = encoded(Format::Rg8, 4, 4, &[128; 8], [grey, grey, 0.0, 1.0]);
-    assert!(matches!(
-        r.set_encoded(&rs, &out),
-        UploadPath::CpuDecoded(_)
-    ));
+    assert!(matches!(r.set_encoded(rs, &out), UploadPath::CpuDecoded(_)));
     near(
-        draw(&rs, &r, Slot::Encoded, params())[MIDDLE],
+        draw(rs, &r, Slot::Encoded, params())[MIDDLE],
         [128, 128, 255, 255],
     );
 }
@@ -275,12 +272,12 @@ fn rg8_shows_a_reconstructed_blue_like_bc5() {
 #[test]
 fn bc4_is_grey_and_channels_can_be_isolated() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
+    let mut r = PreviewRenderer::new(rs);
     let grey = 128.0 / 255.0;
     let out = encoded(Format::Bc4, 4, 4, &BC4_128, [grey, grey, grey, 1.0]);
-    r.set_encoded(&rs, &out);
+    r.set_encoded(rs, &out);
     near(
-        draw(&rs, &r, Slot::Encoded, params())[MIDDLE],
+        draw(rs, &r, Slot::Encoded, params())[MIDDLE],
         [128, 128, 128, 255],
     );
     // BC4 has no alpha: it reads as opaque, which the alpha view shows as white.
@@ -289,7 +286,7 @@ fn bc4_is_grey_and_channels_can_be_isolated() {
         ..params()
     };
     near(
-        draw(&rs, &r, Slot::Encoded, alpha)[MIDDLE],
+        draw(rs, &r, Slot::Encoded, alpha)[MIDDLE],
         [255, 255, 255, 255],
     );
 }
@@ -297,7 +294,7 @@ fn bc4_is_grey_and_channels_can_be_isolated() {
 #[test]
 fn the_source_chain_draws_and_a_linear_view_re_encodes_to_srgb() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
+    let mut r = PreviewRenderer::new(rs);
     let level = |w: u32, h: u32, v: f32| Rgba32F {
         width: w,
         height: h,
@@ -308,9 +305,9 @@ fn the_source_chain_draws_and_a_linear_view_re_encodes_to_srgb() {
         dims: vec![(2, 2), (1, 1)],
         levels: vec![level(2, 2, 0.5), level(1, 1, 0.25)],
     };
-    assert!(r.set_source(&rs, &src));
+    assert!(r.set_source(rs, &src));
     near(
-        draw(&rs, &r, Slot::Source, params())[MIDDLE],
+        draw(rs, &r, Slot::Source, params())[MIDDLE],
         [128, 128, 128, 255],
     );
     // 0.5 linear is 0.735 in sRGB.
@@ -319,7 +316,7 @@ fn the_source_chain_draws_and_a_linear_view_re_encodes_to_srgb() {
         ..params()
     };
     near(
-        draw(&rs, &r, Slot::Source, linear)[MIDDLE],
+        draw(rs, &r, Slot::Source, linear)[MIDDLE],
         [188, 188, 188, 255],
     );
     // Mip 1 holds 0.25.
@@ -327,28 +324,28 @@ fn the_source_chain_draws_and_a_linear_view_re_encodes_to_srgb() {
         mip: 1.0,
         ..params()
     };
-    near(draw(&rs, &r, Slot::Source, mip1)[MIDDLE], [64, 64, 64, 255]);
+    near(draw(rs, &r, Slot::Source, mip1)[MIDDLE], [64, 64, 64, 255]);
     // A cleared slot draws nothing.
     r.clear(Slot::Source);
-    near(draw(&rs, &r, Slot::Source, params())[MIDDLE], [0, 0, 0, 0]);
+    near(draw(rs, &r, Slot::Source, params())[MIDDLE], [0, 0, 0, 0]);
 }
 
 #[test]
 fn the_heatmap_is_shown_as_is_and_the_alpha_mask_blends_over_a_checkerboard() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
-    assert!(r.set_heatmap(&rs, 1, 1, &[255, 0, 0, 255]));
+    let mut r = PreviewRenderer::new(rs);
+    assert!(r.set_heatmap(rs, 1, 1, &[255, 0, 0, 255]));
     near(
-        draw(&rs, &r, Slot::Heatmap, params())[MIDDLE],
+        draw(rs, &r, Slot::Heatmap, params())[MIDDLE],
         [255, 0, 0, 255],
     );
     // A fully transparent texel shows only the checkerboard: grey 0.35 or 0.65.
-    assert!(r.set_heatmap(&rs, 1, 1, &[255, 0, 0, 0]));
+    assert!(r.set_heatmap(rs, 1, 1, &[255, 0, 0, 0]));
     let mask = Params {
         channel: 5,
         ..params()
     };
-    let px = draw(&rs, &r, Slot::Heatmap, mask)[MIDDLE];
+    let px = draw(rs, &r, Slot::Heatmap, mask)[MIDDLE];
     assert!(px[0] == px[1] && px[1] == px[2], "{px:?}");
     assert!(
         [89, 166].iter().any(|&v| (px[0] as i32 - v).abs() <= 3),
@@ -358,15 +355,12 @@ fn the_heatmap_is_shown_as_is_and_the_alpha_mask_blends_over_a_checkerboard() {
 
 #[test]
 fn the_wgpu_setup_asks_for_bc_and_the_adapters_limits() {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        return;
-    };
+    let Some(rs) = render_state() else { return };
+    let adapter = &rs.adapter;
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = wgpu_configuration().wgpu_setup else {
         panic!("a new device is requested");
     };
-    let d = (setup.device_descriptor)(&adapter);
+    let d = (setup.device_descriptor)(adapter);
     assert_eq!(
         d.required_features
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
@@ -380,7 +374,7 @@ fn the_wgpu_setup_asks_for_bc_and_the_adapters_limits() {
 #[test]
 fn a_bc_chain_down_to_one_texel_uploads_every_mip() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
+    let mut r = PreviewRenderer::new(rs);
     if !r.supports_bc() {
         return;
     }
@@ -392,13 +386,10 @@ fn a_bc_chain_down_to_one_texel_uploads_every_mip() {
         .map(|&(w, h)| BC4_128.repeat((w as usize).div_ceil(4) * (h as usize).div_ceil(4)))
         .collect();
     out.result.source.dims = dims;
-    assert_eq!(r.set_encoded(&rs, &out), UploadPath::Bc);
+    assert_eq!(r.set_encoded(rs, &out), UploadPath::Bc);
     for mip in [0.0, 1.0, 2.0, 3.0] {
         let p = Params { mip, ..params() };
-        near(
-            draw(&rs, &r, Slot::Encoded, p)[MIDDLE],
-            [128, 128, 128, 255],
-        );
+        near(draw(rs, &r, Slot::Encoded, p)[MIDDLE], [128, 128, 128, 255]);
     }
 }
 
@@ -407,7 +398,7 @@ fn a_bc_chain_down_to_one_texel_uploads_every_mip() {
 #[test]
 fn exposure_scales_hdr_values_before_the_tone_map() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
+    let mut r = PreviewRenderer::new(rs);
     let level = |w: u32, h: u32, v: f32| Rgba32F {
         width: w,
         height: h,
@@ -418,7 +409,7 @@ fn exposure_scales_hdr_values_before_the_tone_map() {
         dims: vec![(2, 2), (1, 1)],
         levels: vec![level(2, 2, 1.0), level(1, 1, 0.5)],
     };
-    assert!(r.set_source(&rs, &src));
+    assert!(r.set_source(rs, &src));
     let hdr = |mip: f32, exposure: f32| Params {
         mip,
         tonemap: 1,
@@ -426,25 +417,25 @@ fn exposure_scales_hdr_values_before_the_tone_map() {
         ..params()
     };
     // 1.0 tone-maps to 0.5 linear, 0.735 in sRGB: 188, as before exposure existed.
-    let one = draw(&rs, &r, Slot::Source, hdr(0.0, 1.0))[MIDDLE];
+    let one = draw(rs, &r, Slot::Source, hdr(0.0, 1.0))[MIDDLE];
     near(one, [188, 188, 188, 255]);
     // Mip 1 holds 0.5: one stop up it shows exactly as 1.0 does.
-    near(draw(&rs, &r, Slot::Source, hdr(1.0, 2.0))[MIDDLE], one);
+    near(draw(rs, &r, Slot::Source, hdr(1.0, 2.0))[MIDDLE], one);
     // And it is brighter than 0.5 at EV 0.
-    assert!(draw(&rs, &r, Slot::Source, hdr(1.0, 1.0))[MIDDLE][0] < one[0] - 10);
+    assert!(draw(rs, &r, Slot::Source, hdr(1.0, 1.0))[MIDDLE][0] < one[0] - 10);
 }
 
 /// Item 1: the lens draws only the circle inscribed in its rect.
 #[test]
 fn the_lens_is_a_circle() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
-    assert!(r.set_heatmap(&rs, 1, 1, &[255, 0, 0, 255]));
+    let mut r = PreviewRenderer::new(rs);
+    assert!(r.set_heatmap(rs, 1, 1, &[255, 0, 0, 255]));
     let lens = Params {
         lens: 1,
         ..params()
     };
-    let px = draw(&rs, &r, Slot::Heatmap, lens);
+    let px = draw(rs, &r, Slot::Heatmap, lens);
     near(px[MIDDLE], [255, 0, 0, 255]);
     near(px[0], [0, 0, 0, 0]);
 }
@@ -453,17 +444,17 @@ fn the_lens_is_a_circle() {
 #[test]
 fn tiling_draws_the_neighbouring_copies() {
     let Some(rs) = render_state() else { return };
-    let mut r = PreviewRenderer::new(&rs);
-    assert!(r.set_heatmap(&rs, 1, 1, &[0, 255, 0, 255]));
+    let mut r = PreviewRenderer::new(rs);
+    assert!(r.set_heatmap(rs, 1, 1, &[0, 255, 0, 255]));
     // The rect shows uv −1..2: the corner pixel is in the top left copy.
     let wide = Params {
         uv_offset: [-1.0, -1.0],
         uv_scale: [3.0, 3.0],
         ..params()
     };
-    near(draw(&rs, &r, Slot::Heatmap, wide)[0], [0, 0, 0, 0]);
+    near(draw(rs, &r, Slot::Heatmap, wide)[0], [0, 0, 0, 0]);
     let tiled = Params { tile: 1, ..wide };
-    let px = draw(&rs, &r, Slot::Heatmap, tiled);
+    let px = draw(rs, &r, Slot::Heatmap, tiled);
     near(px[0], [0, 255, 0, 255]);
     near(px[MIDDLE], [0, 255, 0, 255]);
 }
