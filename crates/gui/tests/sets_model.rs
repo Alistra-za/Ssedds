@@ -1408,7 +1408,6 @@ fn a_pbr_set_shows_its_pbr_slots_in_slot_order() {
             SlotKind::Height,
             SlotKind::Rmaos,
             SlotKind::Coat,
-            SlotKind::Fuzz,
             SlotKind::Subsurface,
         ]
     );
@@ -1456,17 +1455,20 @@ fn a_fallback_shader_keeps_filled_slots_it_cannot_use() {
             SlotCell {
                 kind: SlotKind::Diffuse,
                 fill: own("d"),
-                usable: true
+                usable: true,
+                clash: None
             },
             SlotCell {
                 kind: SlotKind::Normal,
                 fill: SlotFill::Empty,
-                usable: true
+                usable: true,
+                clash: None
             },
             SlotCell {
                 kind: SlotKind::Rmaos,
                 fill: own("r"),
-                usable: false
+                usable: false,
+                clash: None
             },
         ]
     );
@@ -1770,4 +1772,44 @@ fn an_undo_during_a_scan_finished_read_cancels_the_queued_export() {
         "{}",
         m.status_line
     );
+}
+
+/// Note AO (owner, 2026-10-15): one card per PGPatcher slot, at most 8. `_cnr` and `_f` share the slot 7 card, which
+/// holds whichever is there; both at once is the slot's conflict, shown on the card.
+#[test]
+fn one_card_per_pgpatcher_slot_and_the_slot_7_card_holds_cnr_or_f() {
+    use engine::shader::{Shader, ShaderOrigin, ShaderPick};
+    use std::collections::BTreeMap;
+    let own = |i: &str| SlotFill::Own { item: i.into() };
+    let pbr = ShaderPick {
+        shader: Shader::Pbr,
+        provenance: ShaderOrigin::Fallback,
+        wanted: None,
+    };
+    let fuzz: BTreeMap<SlotKind, SlotFill> = [(SlotKind::Fuzz, own("f"))].into_iter().collect();
+    let row = slot_row(Some(&pbr), &fuzz);
+    let seven: Vec<_> = row.iter().filter(|c| c.kind.slot_number() == 7).collect();
+    assert_eq!(seven.len(), 1);
+    assert_eq!(
+        (seven[0].kind, &seven[0].fill, seven[0].clash),
+        (SlotKind::Fuzz, &own("f"), None)
+    );
+    let both: BTreeMap<SlotKind, SlotFill> = SlotKind::ALL
+        .into_iter()
+        .map(|k| (k, own(&format!("{k:?}"))))
+        .collect();
+    for pick in [None, Some(&pbr)] {
+        let row = slot_row(pick, &both);
+        assert!(row.len() <= 8, "{} cards", row.len());
+        let seven = row.iter().find(|c| c.kind.slot_number() == 7).unwrap();
+        assert_eq!(
+            (seven.kind, seven.clash),
+            (SlotKind::Coat, Some(SlotKind::Fuzz))
+        );
+        let three = row.iter().find(|c| c.kind.slot_number() == 3).unwrap();
+        assert!(three.clash.is_some());
+        assert!(slot_clash_text(seven).unwrap().contains("slot 7"));
+    }
+    assert_eq!(slot_label(SlotKind::Fuzz, "x/rock01_f.png"), SLOT7_CARD);
+    assert_eq!(slot_label(SlotKind::Coat, ""), SLOT7_CARD);
 }

@@ -14,8 +14,8 @@ use crate::model::items::{ItemKind, TextureItem};
 use crate::model::pack_fills::{fill_rows, FillRow};
 use crate::model::rnm::{rnm_active, rnm_rows};
 use crate::model::sets::{
-    card_title, is_json_set, set_views, shows_json_panel, slot_of, slot_row, SetView, SlotCell,
-    SlotFill, SlotKind,
+    card_title, is_json_set, set_views, shows_json_panel, slot_clash_text, slot_label, slot_of,
+    slot_row, SetView, SlotCell, SlotFill, SlotKind,
 };
 use crate::model::AppModel;
 use crate::pgp::prefix::{
@@ -362,7 +362,7 @@ fn card(
                     SlotFill::Own { item } | SlotFill::Borrowed { item, .. } => {
                         card_title(slot, item, v.shader.as_ref().map(|p| p.shader))
                     }
-                    SlotFill::Empty => slot.label(),
+                    SlotFill::Empty => slot_label(slot, ""),
                 };
                 let t = if locked {
                     ui.label(egui::RichText::new(format!("🔒 {title}")).strong())
@@ -370,6 +370,10 @@ fn card(
                 } else {
                     ui.label(egui::RichText::new(title).strong())
                 };
+                // Note AO: both kinds of a shared slot (slot 7: `_cnr` and `_f`) are a conflict, not a silent pick.
+                if let Some(why) = slot_clash_text(cell) {
+                    ui.colored_label(RED, why);
+                }
                 if cell.usable && !rnm_layers.is_empty() {
                     t.clone()
                         .on_hover_text(format!("RNM: {}", rnm_layers.join(" → ")));
@@ -588,7 +592,7 @@ fn slot_menu(
     acts: &mut Vec<Act>,
 ) {
     resp.context_menu(|ui| {
-        let title = format!("Slot {}: {}", slot.slot_number(), slot.label());
+        let title = format!("Slot {}: {}", slot.slot_number(), slot_label(slot, ""));
         if let Some(a) = bulk_menu(ui, &title, &model.slot_menu(&v.id, slot)) {
             acts.push(Act::Slot(a));
         }

@@ -1152,7 +1152,9 @@ impl AppModel {
             .filter(|o| !same_id(&o.id, &id))
             .flat_map(|o| o.members.iter().map(move |k| (o, k)))
             .filter_map(|(o, k)| {
-                let it = self.item(k).filter(|i| slot_of(i) == Some(kind))?;
+                let it = self
+                    .item(k)
+                    .filter(|i| slot_of(i).map(SlotKind::slot_number) == Some(n))?;
                 Some(MenuEntry {
                     action: MenuAction::SlotLink {
                         set: id.clone(),

@@ -110,8 +110,7 @@ fn the_set_editor_shows_slot_cards_opaque_and_slot_commands() {
         "Height _p",
         "Emissive _g",
         "Subsurface _s",
-        "Coat _cnr",
-        "Fuzz _f",
+        "Coat normal / Fuzz (slot 7)",
     ] {
         // The Matching header repeats the Diffuse/Normal slot names as its row labels.
         assert!(h.query_all_by_label(label).next().is_some(), "{label}");
