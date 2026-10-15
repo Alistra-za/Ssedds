@@ -3,12 +3,12 @@
 use crate::model::items::PlanView;
 use crate::model::preview::{dds_preview, decode_levels, PreviewOut};
 use encoders_sys::Bc1Model;
-use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError};
-use engine::events::{EngineEvent, EventKind, EventSink, Reporter, VecSink};
+use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError, PlanProgress};
+use engine::events::{EngineEvent, EventSink, Reporter, VecSink};
 use engine::policy::ResolvedJob;
 use engine::session::{Session, SourcePreview};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,44 +92,26 @@ impl EventSink for ChannelSink {
     }
 }
 
-/// Collects a plan's events for `PlanView::build` and keeps the file count `batch_started` reports.
-struct PlanSink {
-    events: Arc<VecSink>,
-    total: Arc<AtomicUsize>,
-}
-
-impl EventSink for PlanSink {
-    fn emit(&self, ev: &EngineEvent) {
-        if let EventKind::BatchStarted { inputs, .. } = &ev.kind {
-            self.total.store(*inputs, Ordering::Relaxed);
-        }
-        self.events.emit(ev);
-    }
-}
-
 /// How often the plan ticker reports.
 const PLAN_TICK: Duration = Duration::from_millis(100);
 
-/// AG91: the planner emits no event while it loads and analyses, so a ticker reports the session cache's decode
-/// count (`AnalysisCache::loads`, public API) against the discovered total until `stop` is dropped. Cache hits are
-/// not decodes, and DDS or duplicate inputs are never decoded, so `done` can stay short of `total`; it is clamped
-/// (pass 2 counts every packed source).
+/// AG91: the planner counts each planned file (cache hits included) in the request's `PlanProgress`, and nothing
+/// else; this ticker reports those counters until `stop` is dropped. Each plan has its own counters, so a cancelled
+/// plan still draining never moves the next plan's bar.
 fn plan_ticker(
     tx: Sender<WorkerMsg>,
-    session: Arc<Session>,
-    total: Arc<AtomicUsize>,
+    progress: PlanProgress,
     generation: u64,
     stop: Receiver<()>,
 ) -> std::thread::JoinHandle<()> {
-    let base = session.cache().loads();
     std::thread::spawn(move || {
         let mut last = None;
         while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(PLAN_TICK) {
-            let total = total.load(Ordering::Relaxed);
+            let total = progress.total.load(Ordering::Relaxed);
             if total == 0 {
                 continue;
             }
-            let done = ((session.cache().loads() - base) as usize).min(total);
+            let done = progress.done.load(Ordering::Relaxed);
             if last != Some(done) {
                 last = Some(done);
                 let _ = tx.send(WorkerMsg::PlanProgress {
@@ -208,15 +190,13 @@ pub fn spawn_plan(
     root: PathBuf,
 ) {
     spawn_guarded(tx, "plan", move |tx| {
+        let mut req = req;
+        let progress = PlanProgress::default();
+        req.plan_progress = Some(progress.clone());
         let events = Arc::new(VecSink::default());
-        let total = Arc::new(AtomicUsize::new(0));
-        let sink = Arc::new(PlanSink {
-            events: events.clone(),
-            total: total.clone(),
-        });
         let (stop, stop_rx) = std::sync::mpsc::channel();
-        let ticker = plan_ticker(tx.clone(), session.clone(), total, generation, stop_rx);
-        let rep = Reporter::new(sink, engine::events::new_batch_id());
+        let ticker = plan_ticker(tx.clone(), progress, generation, stop_rx);
+        let rep = Reporter::new(events.clone(), engine::events::new_batch_id());
         let result = plan_result(|| {
             session
                 .plan(req, &rep, &cancel)

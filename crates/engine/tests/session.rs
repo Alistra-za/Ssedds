@@ -204,3 +204,59 @@ fn a_cancelled_plan_keeps_the_cached_entries() {
         .thumbnail_of(&a.path().join("in").join("iron.png"))
         .is_some());
 }
+
+/// DECISIONS AG91: the plan's per-file counters (no event, no output) count every planned file, cache hits
+/// included, against the files actually planned (a skipped DDS and a duplicate left out).
+#[test]
+fn plan_progress_counts_every_planned_file_and_belongs_to_one_request() {
+    let d = tempfile::tempdir().unwrap();
+    fixture(d.path());
+    let r = d.path().join("in");
+    std::fs::write(r.join("old.dds"), b"DDS ").unwrap();
+    // `iron.tga` and `iron.png` both write `iron.dds`: a duplicate pair, neither planned.
+    ImageBuffer::from_fn(8, 8, |_, _| Rgb([1u8, 2, 3]))
+        .save(r.join("iron.tga"))
+        .unwrap();
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    let with = |p: &PlanProgress| {
+        let mut q = req(d.path(), Target::Cs);
+        q.plan_progress = Some(p.clone());
+        q
+    };
+    let counts = |p: &PlanProgress| {
+        (
+            p.done.load(std::sync::atomic::Ordering::Relaxed),
+            p.total.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    };
+
+    // A plan cancelled before it starts counts nothing done.
+    let cancelled = PlanProgress::default();
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    s.plan(
+        with(&cancelled),
+        &Reporter::new(Arc::new(NullSink), "t"),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(
+        counts(&cancelled),
+        (0, 2),
+        "roughness and ao; the rest are skipped"
+    );
+
+    let cold = PlanProgress::default();
+    plan(&s, with(&cold));
+    assert_eq!(counts(&cold), (2, 2));
+    let loads = s.cache().loads();
+    let warm = PlanProgress::default();
+    plan(&s, with(&warm));
+    assert_eq!(s.cache().loads(), loads, "every file is a cache hit");
+    assert_eq!(counts(&warm), (2, 2), "a warm re-plan reaches its total");
+    assert_eq!(
+        counts(&cancelled),
+        (0, 2),
+        "later plans never count into it"
+    );
+}

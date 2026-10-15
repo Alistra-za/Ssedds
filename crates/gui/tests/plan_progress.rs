@@ -5,7 +5,7 @@ use sdc_gui::model::export::{ETA_MIN_FILES, ETA_MIN_TIME};
 use sdc_gui::model::meshes::MeshesModel;
 use sdc_gui::model::{plan_bar_text, AppModel};
 use sdc_gui::settings::GuiSettings;
-use sdc_gui::worker::WorkerMsg;
+use sdc_gui::worker::{PlanFailure, WorkerMsg};
 use std::time::{Duration, Instant};
 use support::{mod_folder, opened, session};
 
@@ -59,17 +59,39 @@ fn cancel_with_a_previous_folder_keeps_it() {
     assert!(items > 0);
     let od = tempfile::tempdir().unwrap();
     let other = mod_folder(od.path());
-    m.open_folder(other);
+    let recent = m.settings.recent.clone();
+    m.open_folder(other.clone());
+    assert_eq!(m.settings.recent[0], other);
     assert!(m.can_cancel_open());
+    assert_eq!(
+        m.cancel_open_hover(),
+        "Stops opening and re-opens the previous folder (selection and undo history are reset)"
+    );
+    let cancelled = m.generation();
     m.cancel_open();
     assert!(!m.can_cancel_open());
     assert_eq!(m.root.as_ref(), Some(&first));
-    assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(
-        m.root.as_ref(),
-        Some(&first),
-        "the cancelled plan never lands"
+        m.settings.recent, recent,
+        "the cancelled folder leaves Recent"
     );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.items.len(), items);
+    // A result of the cancelled generation (here a failure, which would raise a dialog) is dropped.
+    progress(&mut m, cancelled, 1, 2);
+    m.sender()
+        .send(WorkerMsg::Planned {
+            generation: cancelled,
+            result: Err(PlanFailure {
+                message: "stale".into(),
+                config: false,
+            }),
+        })
+        .unwrap();
+    m.poll();
+    assert_eq!(m.dialog, None);
+    assert!(!m.status_line.contains("stale"));
+    assert_eq!(m.root.as_ref(), Some(&first));
     assert_eq!(m.items.len(), items);
     assert_eq!(m.plan_progress, None);
 }
@@ -80,7 +102,9 @@ fn cancel_with_no_previous_folder_shows_the_empty_state_note() {
     let root = mod_folder(d.path());
     let mut m = AppModel::new(GuiSettings::default(), None, session());
     m.open_folder(root);
+    assert_eq!(m.cancel_open_hover(), "Stops opening; no folder stays open");
     m.cancel_open();
+    assert!(m.settings.recent.is_empty());
     assert_eq!(m.root, None);
     assert!(m.project.is_none());
     assert!(!m.busy());

@@ -360,8 +360,9 @@ pub struct AppModel {
     planning: Option<CancelToken>,
     /// Item 13: (done, total) of the plan in flight, from `PlanProgress`; `None` once it lands.
     pub plan_progress: Option<(usize, usize)>,
-    /// While a folder's first plan is in flight: the folder open before it (`None`: none). Cancel goes back to it.
-    opening: Option<Option<PathBuf>>,
+    /// While a folder's first plan is in flight: the folder open before it (`None`: none) and Recent as it was.
+    /// Cancel goes back to both.
+    opening: Option<(Option<PathBuf>, Vec<PathBuf>)>,
     /// The last open was cancelled with no folder to go back to (the empty state says so).
     open_cancelled: bool,
     tx: Sender<WorkerMsg>,
@@ -544,12 +545,13 @@ impl AppModel {
         self.drop_undo_note();
         self.history.clear();
         self.refresh_banner();
+        let recent = self.settings.recent.clone();
         self.settings.push_recent(root.clone());
         self.save_settings();
         let previous = self.root.replace(root);
         // A second open while the first is still planning goes back to the folder before both.
         if !(self.opening.is_some() && self.planning.is_some()) {
-            self.opening = Some(previous);
+            self.opening = Some((previous, recent));
         }
         self.items.clear();
         self.invalidate_views();
@@ -738,7 +740,13 @@ impl AppModel {
         }
         self.generation += 1;
         self.plan_progress = None;
-        match self.opening.take().flatten() {
+        let Some((previous, recent)) = self.opening.take() else {
+            return;
+        };
+        // AG93: Recent is as it was before the open, so a cancelled folder new to it is not listed.
+        self.settings.recent = recent;
+        self.save_settings();
+        match previous {
             Some(previous) => {
                 self.open_folder(previous);
                 // Going back is not an open the user can cancel.
@@ -753,6 +761,16 @@ impl AppModel {
                 self.status_line.clear();
                 self.open_cancelled = true;
             }
+        }
+    }
+
+    /// The hover of the header's Cancel while a folder opens.
+    pub fn cancel_open_hover(&self) -> &'static str {
+        match &self.opening {
+            Some((Some(_), _)) => {
+                "Stops opening and re-opens the previous folder (selection and undo history are reset)"
+            }
+            _ => "Stops opening; no folder stays open",
         }
     }
 

@@ -31,7 +31,7 @@ use serde_json::Value;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// What `run` does when a ready file's output already exists (spec §3.2 `output.on_existing`, §8). It is a batch
@@ -116,6 +116,17 @@ pub struct BatchRequest {
     /// Also write `<name>.dds.json` next to each output.
     pub sidecar: bool,
     pub dry_run: bool,
+    /// GUI (DECISIONS AG91): counters the planner updates while it loads and resolves; nothing is emitted or written.
+    pub plan_progress: Option<PlanProgress>,
+}
+
+/// How far a plan's per-file pass has got: `total` is the number of files it loads and resolves (duplicates and
+/// skipped DDS inputs left out), `done` the files finished so far, cache hits included. One per request, so a
+/// cancelled plan still draining never counts into the next one.
+#[derive(Debug, Clone, Default)]
+pub struct PlanProgress {
+    pub done: Arc<AtomicUsize>,
+    pub total: Arc<AtomicUsize>,
 }
 
 impl BatchRequest {
@@ -150,6 +161,7 @@ impl BatchRequest {
             nvtt: None,
             sidecar: false,
             dry_run: false,
+            plan_progress: None,
         }
     }
 }
@@ -1052,6 +1064,10 @@ impl Engine {
         // One slot per work item, so results keep the input order. A slot left empty is a file that was cancelled
         // before its Load started.
         let slots: Vec<Mutex<Option<_>>> = work.iter().map(|_| Mutex::new(None)).collect();
+        let progress = req.plan_progress.clone();
+        if let Some(p) = &progress {
+            p.total.store(work.len(), Ordering::Relaxed);
+        }
         pool.in_place_scope(|scope| {
             for (item, slot) in work.iter().zip(&slots) {
                 #[cfg(feature = "test-hooks")]
@@ -1063,6 +1079,7 @@ impl Engine {
                 budget.acquire(est);
                 let admitted = Admitted(&budget, est);
                 let resolve_one = &resolve_one;
+                let progress = &progress;
                 scope.spawn(move |_| {
                     if !cancel.is_cancelled() {
                         // Spec §5.9, §8 (final review I1): a panic fails this file alone, at the stage it had
@@ -1078,6 +1095,9 @@ impl Engine {
                                 format!("internal error: {}", panic_message(&*panic)),
                             )),
                         });
+                        if let Some(p) = progress {
+                            p.done.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 });
             }
