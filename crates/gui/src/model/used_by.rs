@@ -248,3 +248,45 @@ impl AppModel {
         self.used_by.pending = None;
     }
 }
+
+/// Note AN: the textures the scanned meshes that use `tex` as their diffuse have in slot `n` (1-based), at most
+/// eight, sorted. These are what a PGPatcher lock on that slot keeps.
+pub fn slot_textures(db: &Path, tex: &str, n: u8) -> Result<Vec<String>, String> {
+    if !(1..=9).contains(&n) {
+        return Ok(vec![]);
+    }
+    let store = Store::open_read_only(db).map_err(|e| e.to_string())?;
+    // shortcut: raw SQL on `Store::conn()` against modscan's schema, as `query` above; move it into
+    // `modscan::store` as a typed query when modscan is next edited.
+    let sql = format!(
+        "SELECT DISTINCT p2.p FROM path tp
+         JOIN tex_use tu ON tu.tex_path_id = tp.id AND tu.slot = 0
+         JOIN texset ts ON ts.id = tu.texset_id
+         JOIN path p2 ON p2.id = ts.t{}
+         WHERE tp.p = ?1 ORDER BY p2.p LIMIT 8",
+        n - 1
+    );
+    let mut st = store.conn().prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = st
+        .query_map([tex], |r| r.get::<_, String>(0))
+        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+        .map_err(|e| e.to_string());
+    rows
+}
+
+impl AppModel {
+    /// Note AN: [`slot_textures`] for set `v`'s diffuse; `None` without a scan database or a diffuse with a job.
+    pub fn original_textures(&self, v: &super::sets::SetView, n: u8) -> Option<Vec<String>> {
+        let db = self.scan_db.clone().filter(|d| self.stat_is_file(d))?;
+        let diffuse = match v.slots.get(&super::sets::SlotKind::Diffuse)? {
+            super::sets::SlotFill::Own { item } | super::sets::SlotFill::Borrowed { item, .. } => {
+                item
+            }
+            super::sets::SlotFill::Empty => return None,
+        };
+        let j = self.item(diffuse)?.job.as_ref()?;
+        let stem = j.output.file_stem()?.to_string_lossy().into_owned();
+        let tex = format!("{}.dds", engine::shader::mesh_key(&j.game_path, &stem));
+        Some(slot_textures(&db, &tex, n).unwrap_or_else(|e| vec![format!("Scan database: {e}")]))
+    }
+}

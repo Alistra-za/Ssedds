@@ -8,7 +8,9 @@ use crate::model::pbr_export::{json_entries, json_issues, json_name, JsonIssues}
 use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
-use crate::pgp::prefix::{active_matches, match_toggle, stored_match};
+use crate::pgp::prefix::{
+    active_matches, json_rename, match_toggle, stored_match, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
+};
 use crate::pgp::schema::{spec, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{number_default, rgb_default, Settings};
 use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
@@ -607,6 +609,11 @@ fn set_entry(
             taken.push(Mode::Contains);
         }
         let waiting = pending(ui, &owner);
+        if let Some((d, _)) = json_rename(&c.own, &derived) {
+            ui.weak(RENAMED_MATCH_NOTE).on_hover_text(format!(
+                "Written as match_diffuse = {d}; other match slots are not written"
+            ));
+        }
         ui.horizontal_wrapped(|ui| {
             for (n, path) in active_matches(&c.own, &derived) {
                 match_pill(
@@ -690,11 +697,19 @@ fn add_set_key_menu(
     ui.menu_button("+ key", |ui| {
         ui.menu_button("Match", |ui| {
             let (_, addable) = slot_matches(v);
+            // AN2: a renamed set takes no second match.
+            let renamed = json_rename(&c.own, &derived).is_some();
+            let refused = (renamed && taken.iter().any(|m| matches!(m, Mode::Exact(_))))
+                .then_some(RENAMED_ONE_MATCH);
             for n in 1..=8u8 {
                 if taken.contains(&Mode::Exact(n)) {
                     continue;
                 }
-                if ui.button(Mode::Exact(n).label()).clicked() {
+                if ui
+                    .add_enabled(refused.is_none(), egui::Button::new(Mode::Exact(n).label()))
+                    .on_disabled_hover_text(refused.unwrap_or_default())
+                    .clicked()
+                {
                     let path = if n == 1 {
                         derived.clone()
                     } else {

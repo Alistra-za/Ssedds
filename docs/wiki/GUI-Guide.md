@@ -219,12 +219,14 @@ In 2D, each texture slot is a card, in PGPatcher slot order: Diffuse, Normal, Em
 | Card control | What it does |
 |---|---|
 | **Slot commands…** | *From this set*, *Path*, *Clear*, and *Lock slot N*. Each is one undo step. |
-| Right-click | The slot commands plus *From another set*, which links the slot to another set's map, and *Lock* / *Unlock*. |
+| Right-click | The slot commands plus *From another set*, which links the slot to another set's map, *Pin slot (sdc)* / *Unpin slot (sdc)*, and *Keep original texture (PGPatcher lock)*. |
 | **Opaque** (Diffuse) | Strips alpha: the diffuse is fully opaque. |
 | **Match on this** (Diffuse, Normal) | PGPatcher applies the entry to meshes with this exact texture in this slot. |
 | RMAOS / RFAOS (skin) | On a packed output's card: the recipe and per-channel fills. **Reset** removes a fill. |
 
-A locked slot keeps its fill. It refuses drags in or out and the slot commands, and bulk edits skip it. The lock is saved in `sdc-project.toml` and never written to the JSON.
+A pinned slot keeps its fill. It refuses drags in or out and the slot commands, and bulk edits skip it. The pin is saved in `sdc-project.toml` and never written to the JSON.
+
+*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a big red ✕ with "The original texture in this spot is used" (with a scan, its hover lists the meshes' textures in that slot), and the member thumbnail a small red ✕. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
 
 A `_coat` map fills the Subsurface card, which then reads "Coat colour + strength". When RNM normal layers are active, the normal card has a blue outline; see [RNM layers](#rnm-normal-layers).
 
@@ -259,7 +261,7 @@ Rules:
 - Numbers cannot go below 0; strengths, weights and opacities stay within 0 to 1. A typed value outside the range is clamped and the box says so. The glint log density has no limit.
 - PGPatcher's own `default` block is fixed and not editable.
 - **Matching**: the diffuse path is on by default. **+** adds a row for slot 3 to 8; **×** removes one. A row with no path matches nothing and is not written. A set that matches nothing is left out of the JSON, and Export asks first.
-- **Rename** takes a new file name only. Outputs keep the matched texture's folder under `textures\pbr\` and take the new name, and the full path is written so PGPatcher uses it whichever match hits. A renamed entry keeps its match slots and adds a `match_diffuse`.
+- **Rename** takes a new file name only. Outputs keep the matched texture's folder under `textures\pbr\` and take the new name, and the matched diffuse is written as `match_diffuse`, the key PGPatcher renames from. A renamed entry is written as `match_diffuse` + `rename` only, with no `match1`-`match8` ("renamed: matches by diffuse (PGPatcher rename needs match_diffuse)"). A renamed set takes no extra match; extra rows from before the rename are not written, and Export asks about them.
 
 ### The JSON file
 

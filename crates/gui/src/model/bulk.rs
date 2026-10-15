@@ -846,6 +846,12 @@ pub enum MenuAction {
         n: u8,
         on: bool,
     },
+    /// Note AN: turn slot `n`'s PGPatcher `lock_<slot>` key of `set` on or off (one undo step).
+    PgpLock {
+        set: String,
+        n: u8,
+        on: bool,
+    },
     /// F3b D5: open the rename dialog on input aliases or on output names.
     RenameInputs,
     RenameOutputs,
@@ -854,6 +860,11 @@ pub enum MenuAction {
     /// Task 5: select the source file of texture `key` in Explorer.
     ShowInExplorer(String),
 }
+
+/// The slot menu's PGPatcher lock entry, off and on (Note AN).
+pub const PGP_LOCK: &str = "Keep original texture (PGPatcher lock)";
+pub const PGP_UNLOCK: &str = "Stop keeping original texture (PGPatcher lock)";
+const NO_PGP_ENTRY: &str = "this set has no PGPatcher entry";
 
 /// One entry of a right-click menu; `disabled` is the hover reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1195,9 +1206,30 @@ impl AppModel {
                 n,
                 on: !locked,
             },
-            label: if locked { "Unlock" } else { "Lock" }.into(),
-            disabled: read_only,
+            label: if locked {
+                "Unpin slot (sdc)"
+            } else {
+                "Pin slot (sdc)"
+            }
+            .into(),
+            disabled: read_only.clone(),
         });
+        // Note AN: PGPatcher's own lock keeps the mesh's texture in this slot (slot 5 has none: AN5).
+        if let Some(on) =
+            crate::pgp::prefix::lock_key(n).map(|_| crate::pgp::prefix::pgp_locked(&v.settings, n))
+        {
+            menu.push(MenuEntry {
+                action: MenuAction::PgpLock {
+                    set: id.clone(),
+                    n,
+                    on: !on,
+                },
+                label: if on { PGP_UNLOCK } else { PGP_LOCK }.into(),
+                disabled: read_only.or_else(|| {
+                    (!super::sets::shows_json_panel(v, self.target)).then(|| NO_PGP_ENTRY.into())
+                }),
+            });
+        }
         menu
     }
 
@@ -1220,6 +1252,7 @@ impl AppModel {
                 };
             }
             MenuAction::SlotLock { set, n, on } => return self.set_slot_lock(&set, n, on).err(),
+            MenuAction::PgpLock { set, n, on } => return self.set_pgp_lock(&set, n, on).err(),
             MenuAction::RenameInputs => self.open_rename(super::rename::RenameMode::Inputs),
             MenuAction::RenameOutputs => self.open_rename(super::rename::RenameMode::Outputs),
             MenuAction::ClearInputAlias => {

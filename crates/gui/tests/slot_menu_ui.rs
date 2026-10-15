@@ -40,12 +40,12 @@ fn a_card_right_click_locks_and_unlocks_the_slot() {
     let mut h = opened_on_the_set(d.path());
     h.get_by_label("RMAOS").click_secondary();
     h.run();
-    h.get_by_label("Lock").click();
+    h.get_by_label("Pin slot (sdc)").click();
     h.run();
     assert!(h.state().slot_locked(SET, 6));
     h.get_by_label("🔒 RMAOS").click_secondary();
     h.run();
-    h.get_by_label("Unlock").click();
+    h.get_by_label("Unpin slot (sdc)").click();
     h.run();
     assert!(!h.state().slot_locked(SET, 6));
 }

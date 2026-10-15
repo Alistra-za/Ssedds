@@ -292,7 +292,7 @@ pub const KEYS: &[KeySpec] = &[
     )
     .with(DragSpec::new(0.01, 2, true)),
     k("cubemap", K::Text, G::Uv, true, "Cubemap path"),
-    k("lock_cubemap", K::Tri, G::Locks, true, "Lock cubemap"),
+    k("lock_cubemap", K::Tri, G::Locks, true, "Clear cubemap"),
     k("lock_rmaos", K::Tri, G::Locks, true, "Lock RMAOS"),
     k("specular_level", MIN0, G::Material, false, "Specular level")
         .with(DragSpec::new(0.001, 5, true)),

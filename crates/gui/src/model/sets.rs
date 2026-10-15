@@ -4,8 +4,8 @@ use super::history::{sha256_of, CreatedFile};
 use super::items::{ItemKind, ItemStatus, TextureItem};
 use super::{AppModel, ViewCache};
 use crate::pgp::prefix::{
-    active_matches, check_file_name, check_rel_path, derive_match_diffuse, is_path_key, output_rel,
-    prefix_of, slot_match_path, slot_suffixes, strip_lead,
+    active_matches, check_file_name, check_rel_path, derive_match_diffuse, extra_match_refusal,
+    is_path_key, output_rel, prefix_of, slot_match_path, slot_suffixes, strip_lead,
 };
 use crate::pgp::settings::Settings;
 use crate::sets_doc::{SetEntry, SetsDoc};
@@ -1005,6 +1005,18 @@ impl AppModel {
         Ok(())
     }
 
+    /// Note AN: turn slot `n`'s PGPatcher lock key of set `set` on (`true`) or off (the key removed), as one step.
+    pub fn set_pgp_lock(&mut self, set: &str, n: u8, on: bool) -> Result<(), String> {
+        if !self.sets_editable() {
+            return Err(READ_ONLY.into());
+        }
+        let key = crate::pgp::prefix::lock_key(n)
+            .ok_or_else(|| format!("slot{n} has no PGPatcher lock that keeps its texture"))?;
+        let id = self.view_of(set).ok_or_else(|| format!("no set {set}"))?.id;
+        self.set_json_value(&id, key, on.then_some(Value::Bool(true)));
+        Ok(())
+    }
+
     /// Why `item` cannot leave its set: it fills a locked slot there (F3a Task 8).
     fn leaves_locked(&self, item: &str) -> Result<(), String> {
         let Some(v) = self.set_of_item(item) else {
@@ -1538,6 +1550,13 @@ impl AppModel {
             Some(Value::String(t)) if is_path_key(key) => Some(Value::from(strip_lead(&t))),
             v => v,
         };
+        // DECISIONS AN2: a renamed set takes no extra match; the controls show the reason.
+        if self.view_of(set).is_some_and(|view| {
+            let derived = view.derived_match.as_deref().unwrap_or("");
+            extra_match_refusal(&view.settings, derived, key, v.as_ref()).is_some()
+        }) {
+            return;
+        }
         let (s_id, k) = (set.to_string(), key.to_string());
         let merge = Some(format!("{set}:{key}"));
         self.edit_docs(&format!("Change {key}"), merge, replan, move |_, d| {
