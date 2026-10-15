@@ -3,8 +3,8 @@
 //! `ui::viewport3d::show`. No logic beyond mapping input to model calls.
 use crate::model::set_preview::{
     badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
-    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, JSON_WINS, MODE_LABEL_ENCODED,
-    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, WAITS_FOR_EXPORT,
+    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, GRASS_APPROX, JSON_WINS, MODE_LABEL_ENCODED,
+    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, TILING, WAITS_FOR_EXPORT,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -85,11 +85,29 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 mode_toggle(ui, s);
-                mesh_picker(ui, s);
+                if fp.landscape {
+                    ui.label("Mesh: Plane (a PBR texture set previews on the plane)");
+                    let mut t = s.tiling;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut t, 1.0..=3.0)
+                                .step_by(0.5)
+                                .text(TILING),
+                        )
+                        .changed()
+                    {
+                        s.set_tiling(t);
+                    }
+                } else {
+                    mesh_picker(ui, s);
+                }
                 crate::ui::viewport3d::toolbar(ui, &mut s.v3);
             });
             if !simulated {
                 ui.colored_label(AMBER, NEEDS_CS);
+            }
+            if fp.grass {
+                ui.colored_label(AMBER, GRASS_APPROX);
             }
             if s.enc.paused {
                 ui.colored_label(AMBER, WAITS_FOR_EXPORT);
@@ -391,7 +409,12 @@ pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
         .as_ref()
         .is_some_and(|v| crate::model::sets::shows_json_panel(v, m.target));
     let skin = set.as_ref().is_some_and(|v| v.skin);
-    if item.is_none() && !json && !skin {
+    // The CS PBR section (CS target) and the complex material card show here too, as they do in 2D.
+    let cs = set.is_some() && m.target == engine::config::Target::Cs;
+    let cm = set
+        .as_ref()
+        .is_some_and(|v| crate::model::cm_json::shows_card(m, v));
+    if item.is_none() && !json && !skin && !cs && !cm {
         m.settings.set_settings_open = false;
         m.save_settings();
         return;
@@ -420,7 +443,7 @@ pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
                 crate::ui::settings_panel::draw(ui, m, k, false);
             }
             if let Some(v) = &set {
-                if item.is_some() && (json || skin) {
+                if item.is_some() && (json || skin || cs || cm) {
                     ui.separator();
                     ui.strong(format!("Set {}", v.label));
                 }
@@ -430,6 +453,8 @@ pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
                 if skin {
                     crate::ui::skin_card::card(ui, m, v);
                 }
+                crate::ui::cs_pbr::section(ui, m, v);
+                crate::ui::cm_card::section(ui, m, v);
             }
         });
     if !open {

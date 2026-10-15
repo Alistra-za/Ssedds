@@ -489,7 +489,8 @@ fn vanilla_never_writes_bc6h() {
 }
 
 /// Spec §4.2: with `--allow CFG-UNAVAILABLE` the offered fallback is resolved and written, with its own checks; the
-/// acknowledged CFG-UNAVAILABLE stays as a warning. complex_material → envmask reports LOSS-ALPHA-DATA (§4.2 cell).
+/// acknowledged CFG-UNAVAILABLE stays as a warning. `complex_material` is available under vanilla since Note AT, so it
+/// is no longer one of the fallbacks.
 #[test]
 fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
     let d = tempfile::tempdir().unwrap();
@@ -500,16 +501,10 @@ fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
         rgba(64, |x, _| [128, 128, 255, (x * 4) as u8]),
     );
     put(d.path(), "textures/b/lamp_g.png", rgb(64));
-    put(
-        d.path(),
-        "textures/c/iron_m.png",
-        rgba(64, |x, _| [90, 90, 90, (x * 4) as u8]),
-    );
     let sets = [
         "file:**/iron.png.subtype=pbr_albedo",
         "file:**/iron_n.png.subtype=pbr_normal",
         "file:**/lamp_g.png.subtype=pbr_emissive",
-        "file:**/iron_m.png.subtype=complex_material",
     ];
     // Without --allow every one of them is blocked and nothing is written.
     let o = convert(d.path(), Target::Vanilla, &sets, &[]);
@@ -519,18 +514,18 @@ fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
             o.summary.skipped,
             o.summary.exit_code()
         ),
-        (0, 4, 1),
+        (0, 3, 1),
         "{:?}",
         warnings(&o)
     );
-    assert_eq!(warnings(&o), vec![Code::CfgUnavailable; 4]);
+    assert_eq!(warnings(&o), vec![Code::CfgUnavailable; 3]);
     assert!(!d.path().join("out/textures").exists());
 
     let allow = [Code::CfgUnavailable, Code::LossAlphaData];
     let o = convert(d.path(), Target::Vanilla, &sets, &allow);
     assert_eq!(
         (o.summary.converted, o.summary.exit_code()),
-        (4, 0),
+        (3, 0),
         "{:?}",
         warnings(&o)
     );
@@ -538,7 +533,6 @@ fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
         ("iron.png", "pbr_albedo", "diffuse"),
         ("iron_n.png", "pbr_normal", "normal"),
         ("lamp_g.png", "pbr_emissive", "glow"),
-        ("iron_m.png", "complex_material", "envmask"),
     ] {
         let w = warning_of(&o, src, Code::CfgUnavailable);
         assert_eq!(w.severity, Severity::Warning, "{src}: {}", w.message);
@@ -553,14 +547,9 @@ fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
             "{src}"
         );
     }
-    assert_eq!(
-        warning_of(&o, "iron_m.png", Code::LossAlphaData).severity,
-        Severity::Warning
-    );
     assert_profile(&o, "iron.png", "diffuse", "remove", false, "bc7");
     assert_profile(&o, "iron_n.png", "normal", "data", false, "bc7");
     assert_profile(&o, "lamp_g.png", "glow", "remove", false, "bc7");
-    assert_profile(&o, "iron_m.png", "envmask", "remove", true, "bc4");
     for rel in [
         "textures/pbr/iron.dds",
         "textures/a/iron_n.dds",
@@ -573,12 +562,6 @@ fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
             7,
         );
     }
-    assert_dds(
-        &dds(d.path(), "textures/c/iron_m.dds"),
-        DdsPixelFormat::Bc4,
-        HeaderKind::Dx10,
-        7,
-    );
     // The normal fallback keeps the specular alpha that pbr_normal would have removed.
     assert_alpha_kept(
         &dds(d.path(), "textures/a/iron_n.dds"),
@@ -659,8 +642,9 @@ fn cpm_complex_m_is_bc7_and_nothing_is_srgb() {
     assert!(!d.path().join("out/textures/rock/rock.dds").exists());
 }
 
-/// Spec §4.2/§4.3 item 3: under vanilla `_g` is `glow` (BC7 UNORM, even in a `pbr/` path) and `_m` is always
-/// `envmask`; a varying alpha on it is LOSS-ALPHA-DATA (blocking) until acknowledged, then BC4.
+/// Spec §4.2/§4.3 item 3: under vanilla `_g` is `glow` (BC7 UNORM, even in a `pbr/` path). Since Note AT (D16) a
+/// varying-alpha `_m` is `complex_material` under vanilla too: BC7 with its alpha, no LOSS-ALPHA-DATA. (The name
+/// predates AT.)
 #[test]
 fn vanilla_g_is_glow_and_m_with_alpha_is_envmask_with_loss() {
     let d = tempfile::tempdir().unwrap();
@@ -694,19 +678,20 @@ fn vanilla_g_is_glow_and_m_with_alpha_is_envmask_with_loss() {
             o.summary.skipped,
             o.summary.exit_code()
         ),
-        (0, 1, 1),
+        (1, 0, 0),
         "{:?}",
         warnings(&o)
     );
-    assert_profile(&o, "iron_m.png", "envmask", "remove", true, "bc4");
-    assert_eq!(warnings(&o), vec![Code::LossAlphaData]);
-    assert_eq!(skip_code(&o, "iron_m.png"), Some(Code::LossAlphaData));
-    assert!(!d.path().join("out/textures/a/iron_m.dds").exists());
-    let o = convert(d.path(), Target::Vanilla, &[], &[Code::LossAlphaData]);
-    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_profile(&o, "iron_m.png", "complex_material", "data", true, "bc7");
+    assert_eq!(
+        planned(&o, "iron_m.png")["profile"]["alpha"]["parallax"],
+        true
+    );
+    // Grey RGB (90, 90, 90): VAL-M-GRAYSCALE is not target-gated (Note AH). Nothing else is raised.
+    assert_eq!(warnings(&o), vec![Code::ValMGrayscale]);
     assert_dds(
         &dds(d.path(), "textures/a/iron_m.dds"),
-        DdsPixelFormat::Bc4,
+        DdsPixelFormat::Bc7 { srgb: false },
         HeaderKind::Dx10,
         7,
     );

@@ -124,6 +124,13 @@ pub fn blocked_by(s: &Settings, f: Feature) -> Option<Feature> {
     })
 }
 
+/// PBR grass design §4.3 (rulings R2, R3): the settings a `pbr_grass` set shows, checks and exports: the keys the
+/// grass shader ignores are dropped. Subsurface for an `_s` comes from the auto flags, which switch on no key this
+/// view drops (`SsHint::grass`, DECISIONS AS8).
+pub fn grass_view(s: &mut Settings) {
+    s.retain(|k, _| !super::schema::grass_ignores(k));
+}
+
 /// The TruePBR card's Subsurface selector (owner, 2026-10-14; DECISIONS AG101): `subsurface` is Standard,
 /// `subsurface_foliage` is Foliage, and both stored is a conflict that is shown, never rewritten.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

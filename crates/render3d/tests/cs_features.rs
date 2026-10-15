@@ -81,7 +81,7 @@ fn shoot(
         return Err(format!("load: {rep:?}"));
     }
     let mut scene = Scene::neutral();
-    scene.background = Background::Solid(0.5);
+    scene.background = Background::Solid([0.5; 3]);
     let px = r.render(&scene, N, N)?;
     let bg = [px[0], px[1], px[2]]; // a corner: the camera frames the bounds with a margin
     let (mut drawn, mut sum, mut black) = (0, 0u64, 0);

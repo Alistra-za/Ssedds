@@ -40,18 +40,23 @@ pub const FAMILIES: [(&str, &str); 3] = [
     ("PBR / Community Shaders", "used under the cs target"),
     (
         "Complex Parallax Materials (cpm)",
-        "used under the cs and cpm targets",
+        "complex parallax materials (used under every target since vanilla keeps a complex _m)",
     ),
     ("Vanilla", "used under every target"),
 ];
 
 /// AP9: the most specific family a sub-type is available in, from `policy::availability`: cs only → PBR / CS,
-/// cs and cpm only → CPM, anything vanilla also has → Vanilla. complex_grass is placed in PBR / CS by hand.
+/// cs and cpm only → CPM, anything vanilla also has → Vanilla. complex_grass is placed in PBR / CS and
+/// complex_material in CPM by hand.
 pub fn family_of(st: Subtype) -> &'static str {
     use engine::policy::{availability, Availability};
     // Owner ruling (AP9): available under every target, but a Community Shaders feature in practice.
     if st == Subtype::ComplexGrass {
         return FAMILIES[0].0;
+    }
+    // AP12: vanilla keeps a complex `_m` since AT1, which would empty CPM; the owner's AP9 family stays.
+    if st == Subtype::ComplexMaterial {
+        return FAMILIES[1].0;
     }
     let on = |t| availability(t, st) == Availability::Available;
     let i = match (on(Target::Cpm), on(Target::Vanilla)) {

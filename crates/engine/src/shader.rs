@@ -18,6 +18,8 @@ use crate::suggest::has_component;
 #[serde(rename_all = "snake_case")]
 pub enum Shader {
     Pbr,
+    // Community Shaders PBR grass (PBR grass design): `RunGrass.hlsl` reads albedo, `_n`, `_rmaos` and `_s` only.
+    PbrGrass,
     AdvancedSkin,
     Default,
     Envmap,
@@ -92,6 +94,15 @@ static PBR: ShaderSpec = ShaderSpec {
         role("fuzz _f", &[Subtype::PbrFuzz]),
         role("_p", &[Subtype::Height]),
     ],
+};
+/// PBR grass design §4.1: what CS's grass shader binds (t0, t2, t3, t4; research §1.3).
+static PBR_GRASS: ShaderSpec = ShaderSpec {
+    required: &[
+        role("albedo", &[Subtype::PbrAlbedo]),
+        role("_n", &[Subtype::PbrNormal]),
+        role("_rmaos", &[Subtype::Rmaos]),
+    ],
+    optional: &[role("subsurface _s", &[Subtype::PbrSubsurface])],
 };
 static ADVANCED_SKIN: ShaderSpec = ShaderSpec {
     required: &[
@@ -187,10 +198,10 @@ static LANDSCAPE: ShaderSpec = ShaderSpec {
     optional: &[],
 };
 
-/// `ALL[2..]` without `ComplexGrass` (vanilla has no complex grass, ruling R1); a const loop, so position-independent.
+/// `ALL[3..]` without `ComplexGrass` (vanilla has no complex grass, ruling R1); a const loop, so position-independent.
 static VANILLA: [Shader; 10] = {
     let mut out = [Shader::Default; 10];
-    let (mut i, mut j) = (2, 0);
+    let (mut i, mut j) = (3, 0);
     while i < Shader::ALL.len() {
         if !matches!(Shader::ALL[i], Shader::ComplexGrass) {
             out[j] = Shader::ALL[i];
@@ -202,8 +213,9 @@ static VANILLA: [Shader; 10] = {
 };
 
 impl Shader {
-    pub const ALL: [Shader; 13] = [
+    pub const ALL: [Shader; 14] = [
         Shader::Pbr,
+        Shader::PbrGrass,
         Shader::AdvancedSkin,
         Shader::Default,
         Shader::Envmap,
@@ -221,6 +233,7 @@ impl Shader {
     pub fn id(self) -> &'static str {
         match self {
             Shader::Pbr => "pbr",
+            Shader::PbrGrass => "pbr_grass",
             Shader::AdvancedSkin => "advanced_skin",
             Shader::Default => "default",
             Shader::Envmap => "envmap",
@@ -239,6 +252,7 @@ impl Shader {
     pub fn label(self) -> &'static str {
         match self {
             Shader::Pbr => "PBR",
+            Shader::PbrGrass => "PBR grass",
             Shader::AdvancedSkin => "Advanced Skin",
             Shader::Default => "Default",
             Shader::Envmap => "Environment Map",
@@ -254,12 +268,13 @@ impl Shader {
         }
     }
 
-    /// The shaders a target can use: CS has all 13 (`pbr` first); Vanilla and CPM lack `pbr` and `advanced_skin`.
+    /// The shaders a target can use: CS has all 14 (`pbr` first); Vanilla and CPM lack `pbr`, `pbr_grass` and
+    /// `advanced_skin`.
     pub fn available(t: Target) -> &'static [Shader] {
         match t {
             Target::Cs => &Shader::ALL,
-            // `ALL` starts with `pbr`, `advanced_skin`.
-            Target::Cpm => &Shader::ALL[2..],
+            // `ALL` starts with `pbr`, `pbr_grass`, `advanced_skin`.
+            Target::Cpm => &Shader::ALL[3..],
             // Ruling R1: the vanilla grass shader has no complex grass.
             Target::Vanilla => &VANILLA,
         }
@@ -279,6 +294,7 @@ impl Shader {
     pub fn spec(self) -> &'static ShaderSpec {
         match self {
             Shader::Pbr => &PBR,
+            Shader::PbrGrass => &PBR_GRASS,
             Shader::AdvancedSkin => &ADVANCED_SKIN,
             Shader::Default => &DEFAULT,
             Shader::Envmap => &ENVMAP,
@@ -395,6 +411,7 @@ pub fn mesh_alpha_policy(shapes: &[MeshAlpha]) -> Option<(AlphaPolicy, Option<u8
 pub enum AutoRule {
     AdvancedSkin,
     Pbr,
+    PbrGrass,
     Mesh,
     ComplexM,
     EnvM,
@@ -410,9 +427,10 @@ pub enum AutoRule {
 }
 
 impl AutoRule {
-    const ALL: [AutoRule; 14] = [
+    const ALL: [AutoRule; 15] = [
         AutoRule::AdvancedSkin,
         AutoRule::Pbr,
+        AutoRule::PbrGrass,
         AutoRule::ComplexGrass,
         AutoRule::Mesh,
         AutoRule::ComplexM,
@@ -431,6 +449,7 @@ impl AutoRule {
         match self {
             AutoRule::AdvancedSkin => "advanced_skin",
             AutoRule::Pbr => "pbr",
+            AutoRule::PbrGrass => "pbr_grass",
             AutoRule::Mesh => "mesh",
             AutoRule::ComplexM => "complex_m",
             AutoRule::EnvM => "env_m",
@@ -512,6 +531,9 @@ pub struct PickInput<'a> {
     /// `suggest::is_pbr_set` evaluated as under `cs`, whatever the target: rule 2 is target-independent, so a PBR set
     /// under vanilla auto-picks `pbr` and falls back with SHADER-UNAVAILABLE.
     pub pbr: bool,
+    /// PBR grass design §4.2: a member is the slot-0 diffuse of a GRAS record's model, TruePBR shapes included
+    /// (`BatchRequest::gras_all_diffuses`).
+    pub gras: bool,
     pub suffixes: &'a BTreeSet<String>,
     /// Pass-1 sub-types of the set's members (packing inputs excluded).
     pub subtypes: &'a [Subtype],
@@ -558,7 +580,11 @@ pub fn pick(i: &PickInput) -> ShaderPick {
             Rmaos,
         ])
     {
-        (Shader::Pbr, AutoRule::Pbr)
+        if i.gras {
+            (Shader::PbrGrass, AutoRule::PbrGrass)
+        } else {
+            (Shader::Pbr, AutoRule::Pbr)
+        }
     } else if has(&[ComplexGrass]) {
         (Shader::ComplexGrass, AutoRule::ComplexGrass)
     } else if has(&[ComplexMaterial]) {
@@ -656,7 +682,7 @@ impl<'a> JobIndex<'a> {
 }
 
 /// `pick` for one set at plan time (spec §4): pass-1 `jobs` give the member sub-types (packing inputs excluded),
-/// `mesh` the scanned votes keyed by `mesh_key`.
+/// `mesh` the scanned votes keyed by `mesh_key`, `gras` the GRAS slot-0 diffuses (`grass::path_key` keys).
 pub fn pick_for_set(
     ctx: &crate::policy::ResolveCtx,
     set: &crate::group::TextureSet,
@@ -664,6 +690,7 @@ pub fn pick_for_set(
     jobs: &JobIndex,
     explicit: Option<Shader>,
     mesh: &BTreeMap<String, Vec<Shader>>,
+    gras: &BTreeSet<String>,
 ) -> ShaderPick {
     let first = set.members.first().map(|&i| &files[i]);
     let first_path = first.map_or("", |f| f.game_path.as_str());
@@ -710,6 +737,10 @@ pub fn pick_for_set(
             is_float: false,
             advanced_skin: false,
         }),
+        gras: set
+            .members
+            .iter()
+            .any(|&m| gras.contains(&crate::grass::path_key(&files[m].game_path))),
         suffixes: &set.suffixes,
         subtypes: &subtypes,
         game_paths: &game_paths,
@@ -806,6 +837,25 @@ pub fn pick_notes(pick: &ShaderPick, target: Target) -> Vec<Warning> {
     }
 }
 
+/// PBR grass design §4.4: CS's grass depth/shadow pass runs the complex-grass detector on a PBR grass albedo
+/// (research §1.6), so an albedo whose bottom-left texel reads as a unit vector gets mismatched cutout shadows.
+/// `GRASS_GUARD_MARGIN` to spare: BC encoding moves the texel (DECISIONS X2).
+pub fn pbr_grass_albedo_note(pick: &ShaderPick, st: Subtype, corner_err: f32) -> Option<Warning> {
+    use crate::grass::{CS_GRASS_THRESHOLD, GRASS_GUARD_MARGIN};
+    (pick.shader == Shader::PbrGrass
+        && matches!(st, Subtype::PbrAlbedo | Subtype::Diffuse)
+        && corner_err < CS_GRASS_THRESHOLD + GRASS_GUARD_MARGIN)
+        .then(|| {
+            Warning::new(
+                Code::PbrGrassDetect,
+                format!(
+                    "bottom-left texel has |L-1| = {corner_err:.3}: Community Shaders' grass shadow pass would read \
+                     this albedo as complex grass, so shadows will not match; change that texel"
+                ),
+            )
+        })
+}
+
 /// The settings `shader` gives a member of sub-type `st` (M6 spec §6): field path → value. The `bc4` rows restate
 /// the built-in `envmask`/`height` format so a later built-in change cannot undo them.
 pub fn member_defaults(shader: Shader, st: Subtype) -> Vec<(&'static str, serde_json::Value)> {
@@ -865,12 +915,17 @@ mod tests {
 
     #[test]
     fn lists_and_defaults_follow_the_mode() {
-        assert_eq!(Shader::available(Target::Cs).len(), 13);
+        assert_eq!(Shader::available(Target::Cs).len(), 14);
         assert_eq!(Shader::available(Target::Cs)[0], Shader::Pbr);
+        assert_eq!(Shader::available(Target::Cs)[1], Shader::PbrGrass);
         for t in [Target::Vanilla, Target::Cpm] {
             let l = Shader::available(t);
             assert_eq!(l.len(), if t == Target::Cpm { 11 } else { 10 }, "{t:?}");
-            assert!(!l.contains(&Shader::Pbr) && !l.contains(&Shader::AdvancedSkin));
+            assert!(
+                !l.contains(&Shader::Pbr)
+                    && !l.contains(&Shader::PbrGrass)
+                    && !l.contains(&Shader::AdvancedSkin)
+            );
             assert_eq!(Shader::default_for(t), Shader::Default);
         }
         assert_eq!(Shader::default_for(Target::Cs), Shader::Pbr);
@@ -1004,6 +1059,7 @@ mod tests {
             explicit: None,
             advanced_skin: false,
             pbr: false,
+            gras: false,
             suffixes,
             subtypes,
             game_paths: paths,
@@ -1637,5 +1693,111 @@ mod tests {
         assert!(!Shader::available(Target::Vanilla).contains(&Shader::ComplexGrass));
         assert_eq!(Shader::ComplexGrass.id(), "complex_grass");
         assert_eq!(Shader::ComplexGrass.label(), "Complex grass");
+    }
+
+    /// PBR grass design §4.1-4.2: four maps; a PBR set with GRAS evidence picks it; an explicit choice wins; CS only.
+    #[test]
+    fn pbr_grass_needs_a_pbr_set_and_gras_evidence() {
+        use Subtype::*;
+        assert_eq!(
+            (Shader::PbrGrass.id(), Shader::PbrGrass.label()),
+            ("pbr_grass", "PBR grass")
+        );
+        let spec = Shader::PbrGrass.spec();
+        let labels = |roles: &[MapRole]| roles.iter().map(|r| r.label).collect::<Vec<_>>();
+        assert_eq!(labels(spec.required), ["albedo", "_n", "_rmaos"]);
+        assert_eq!(labels(spec.optional), ["subsurface _s"]);
+        let s = sx(&["n", "rmaos"]);
+        let st = [PbrAlbedo, PbrNormal, Rmaos];
+        let paths = ["textures/plants/g.png"];
+        let mut i = input(Target::Cs, &s, &st, &paths);
+        i.pbr = true;
+        assert_eq!(
+            auto(&pick(&i)),
+            (Shader::Pbr, ShaderOrigin::Auto(AutoRule::Pbr))
+        );
+        i.gras = true;
+        assert_eq!(
+            auto(&pick(&i)),
+            (Shader::PbrGrass, ShaderOrigin::Auto(AutoRule::PbrGrass))
+        );
+        assert_eq!(
+            "auto:pbr_grass".parse::<ShaderOrigin>().unwrap(),
+            ShaderOrigin::Auto(AutoRule::PbrGrass)
+        );
+        i.explicit = Some(Shader::Pbr);
+        assert_eq!(auto(&pick(&i)), (Shader::Pbr, ShaderOrigin::Set));
+        i.explicit = None;
+        i.target = Target::Vanilla;
+        assert_eq!(
+            pick(&i),
+            ShaderPick {
+                shader: Shader::Default,
+                provenance: ShaderOrigin::Fallback,
+                wanted: Some(Shader::PbrGrass)
+            }
+        );
+        // GRAS evidence alone does not make a set PBR grass.
+        let (s2, st2) = (sx(&["n"]), [Diffuse, Normal]);
+        let mut j = input(Target::Cs, &s2, &st2, &paths);
+        j.gras = true;
+        assert_ne!(pick(&j).shader, Shader::PbrGrass);
+    }
+
+    /// PBR grass design §4.1: `_g`, `_p`, `_cnr` and `_f` are maps the grass shader cannot read.
+    #[test]
+    fn pbr_grass_reports_the_maps_grass_cannot_read() {
+        let p = ShaderPick {
+            shader: Shader::PbrGrass,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let m = |name: &str, st| MemberMap {
+            name: name.into(),
+            suffix: None,
+            subtype: Some(st),
+        };
+        let w = check_maps(
+            &p,
+            &[
+                m("g", Subtype::PbrAlbedo),
+                m("g_n", Subtype::PbrNormal),
+                m("g_rmaos", Subtype::Rmaos),
+                m("g_s", Subtype::PbrSubsurface),
+                m("g_g", Subtype::PbrEmissive),
+            ],
+        );
+        assert_eq!(
+            w.iter().map(|w| w.code).collect::<Vec<_>>(),
+            [Code::ShaderExtraMap]
+        );
+        assert_eq!(w[0].data["member"], "g_g");
+    }
+
+    /// PBR grass design §4.4: the albedo of a pbr_grass set whose corner reads as a unit vector (0.01 to spare).
+    #[test]
+    fn a_pbr_grass_albedo_that_reads_as_complex_grass_is_noted() {
+        let grass = ShaderPick {
+            shader: Shader::PbrGrass,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        let pbr = ShaderPick {
+            shader: Shader::Pbr,
+            ..grass.clone()
+        };
+        let note = |p: &ShaderPick, st, e| pbr_grass_albedo_note(p, st, e).map(|w| w.code);
+        assert_eq!(
+            note(&grass, Subtype::PbrAlbedo, 0.0),
+            Some(Code::PbrGrassDetect)
+        );
+        assert_eq!(
+            note(&grass, Subtype::Diffuse, 0.039),
+            Some(Code::PbrGrassDetect)
+        );
+        assert_eq!(note(&grass, Subtype::PbrAlbedo, 0.05), None);
+        assert_eq!(note(&grass, Subtype::PbrAlbedo, f32::INFINITY), None);
+        assert_eq!(note(&grass, Subtype::PbrNormal, 0.0), None);
+        assert_eq!(note(&pbr, Subtype::PbrAlbedo, 0.0), None);
     }
 }

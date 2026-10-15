@@ -368,6 +368,14 @@ pub fn gras_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {
     Ok(paths.iter().map(|p| engine::grass::path_key(p)).collect())
 }
 
+/// PBR grass design §4.2 (ruling R5): every GRAS slot-0 diffuse of the scan, TruePBR shapes kept, as
+/// `engine::grass::path_key` keys (sent as `BatchRequest::gras_all_diffuses`).
+pub fn gras_all_diffuses(db: &Path) -> Result<BTreeSet<String>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    let paths = store.gras_all_diffuse_textures().map_err(db_err)?;
+    Ok(paths.iter().map(|p| engine::grass::path_key(p)).collect())
+}
+
 /// "Plugin file references" (esp spec §4.4): information only.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FileRefs {
@@ -1472,78 +1480,7 @@ fn detect_mo2() -> Option<(PathBuf, String)> {
     None
 }
 
-/// SkyrimShaderPropertyFlags1 bit names (nif.xml / NifSkope); the nif crate exposes only the bits it uses.
-pub const SLSF1_NAMES: [&str; 32] = [
-    "Specular",
-    "Skinned",
-    "Temp_Refraction",
-    "Vertex_Alpha",
-    "Greyscale_To_PaletteColor",
-    "Greyscale_To_PaletteAlpha",
-    "Use_Falloff",
-    "Environment_Mapping",
-    "Receive_Shadows",
-    "Cast_Shadows",
-    "Facegen_Detail_Map",
-    "Parallax",
-    "Model_Space_Normals",
-    "Non_Projective_Shadows",
-    "Landscape",
-    "Refraction",
-    "Fire_Refraction",
-    "Eye_Environment_Mapping",
-    "Hair_Soft_Lighting",
-    "Screendoor_Alpha_Fade",
-    "Localmap_Hide_Secret",
-    "FaceGen_RGB_Tint",
-    "Own_Emit",
-    "Projected_UV",
-    "Multiple_Textures",
-    "Remappable_Textures",
-    "Decal",
-    "Dynamic_Decal",
-    "Parallax_Occlusion",
-    "External_Emittance",
-    "Soft_Effect",
-    "ZBuffer_Test",
-];
-
-/// SkyrimShaderPropertyFlags2 bit names. Bit 23 is the TruePBR marker in sdc (`nif::material::SLSF2_TRUE_PBR`).
-pub const SLSF2_NAMES: [&str; 32] = [
-    "ZBuffer_Write",
-    "LOD_Landscape",
-    "LOD_Objects",
-    "No_Fade",
-    "Double_Sided",
-    "Vertex_Colors",
-    "Glow_Map",
-    "Assume_Shadowmask",
-    "Packed_Tangent",
-    "Multi_Index_Snow",
-    "Vertex_Lighting",
-    "Uniform_Scale",
-    "Fit_Slope",
-    "Billboard",
-    "No_LOD_Land_Blend",
-    "EnvMap_Light_Fade",
-    "Wireframe",
-    "Weapon_Blood",
-    "Hide_On_Local_Map",
-    "Premult_Alpha",
-    "Cloud_LOD",
-    "Anisotropic_Lighting",
-    "No_Transparency_Multisampling",
-    "Unused01 (TruePBR)",
-    "Multi_Layer_Parallax",
-    "Soft_Lighting",
-    "Rim_Lighting",
-    "Back_Lighting",
-    "Unused02",
-    "Tree_Anim",
-    "Effect_Lighting",
-    "HD_LOD_Objects",
-];
-
+pub use nif::material::{SLSF1_NAMES, SLSF2_NAMES};
 /// The set bits of a flags word, lowest first: `Name (bit)`. A bit past the table reads `bit N`.
 pub fn flag_bits(names: &[&str], v: u32) -> Vec<String> {
     (0..32)

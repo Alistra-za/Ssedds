@@ -42,7 +42,11 @@ pub fn auto_flags_for(
         return out;
     }
     let mut eff = explicit.clone();
-    let has = |k: SlotKind| !matches!(slots.get(&k), None | Some(SlotFill::Empty));
+    // PBR grass (DECISIONS AS8): only `_s` switches a key on; the others' keys are ones grass ignores (R4).
+    let has = |k: SlotKind| {
+        !matches!(slots.get(&k), None | Some(SlotFill::Empty))
+            && (!hint.grass || k == SlotKind::Subsurface)
+    };
     if has(SlotKind::Coat) {
         let why = "on because the set has a _cnr";
         add(
@@ -123,6 +127,8 @@ pub fn resolved_for(
 pub struct SsHint {
     pub tree_anim: Option<bool>,
     pub path: String,
+    /// The set is `pbr_grass`: no auto key grass ignores (DECISIONS AS8).
+    pub grass: bool,
 }
 
 /// Folders that hold trees and plants, matched on `\`-bounded path parts.
@@ -176,5 +182,6 @@ pub fn hint(m: &crate::model::AppModel, v: &super::sets::SetView) -> SsHint {
     SsHint {
         tree_anim: key.and_then(|k| m.mesh_tree_anim.get(&k).copied()),
         path: v.derived_match.clone().unwrap_or_else(|| v.id.clone()),
+        grass: super::sets::is_pbr_grass(v),
     }
 }

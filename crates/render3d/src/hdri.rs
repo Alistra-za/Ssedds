@@ -169,21 +169,23 @@ pub fn decode_rgbe(b: &[u8]) -> Result<Hdr, String> {
     })
 }
 
-/// Ambient colours for the six DALC axes (+X −X +Y −Y +Z −Z, world space) from an equirectangular image: for each
-/// axis the cosine-weighted mean radiance over the hemisphere around it. The image is box-downsampled to at most
-/// 64×32 first (solid-angle weighted, so the poles do not dominate).
-pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
+/// One cell of the ≤ 64×32 solid-angle box-downsample: world direction of its centre, solid-angle weight, mean
+/// radiance.
+pub type Cell = ([f32; 3], f64, [f64; 3]);
+
+const AXES: [[f32; 3]; 6] = [
+    [1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, -1.0],
+];
+
+/// The image box-downsampled to at most 64×32 cells, solid-angle weighted (so the poles do not dominate).
+pub fn cells(img: &Hdr) -> Vec<Cell> {
     let (ow, oh) = (img.width.min(64), img.height.min(32));
-    let axes: [[f32; 3]; 6] = [
-        [1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, -1.0],
-    ];
-    let mut sum = [[0.0f64; 3]; 6];
-    let mut wsum = [0.0f64; 6];
+    let mut out = Vec::with_capacity(ow * oh);
     for oy in 0..oh {
         let (y0, y1) = (oy * img.height / oh, (oy + 1) * img.height / oh);
         let v = (oy as f32 + 0.5) / oh as f32;
@@ -199,14 +201,31 @@ pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
                 }
             }
             let n = ((y1 - y0) * (x1 - x0)).max(1) as f64;
-            let d = uv_to_dir((ox as f32 + 0.5) / ow as f32, v);
-            for (a, axis) in axes.iter().enumerate() {
-                let cos = (d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]).max(0.0) as f64;
-                let w = cos * solid;
-                wsum[a] += w;
-                for k in 0..3 {
-                    sum[a][k] += w * c[k] / n;
-                }
+            out.push((
+                uv_to_dir((ox as f32 + 0.5) / ow as f32, v),
+                solid,
+                c.map(|s| s / n),
+            ));
+        }
+    }
+    out
+}
+
+/// Ambient colours for the six DALC axes (+X −X +Y −Y +Z −Z, world space) of the environment turned by `yaw` about
+/// +Z: for each axis the cosine-weighted mean radiance over the hemisphere around it. A turned environment seen from
+/// axis `a` is the original seen from `a` turned by −yaw.
+pub fn integrate(cells: &[Cell], yaw: f32) -> [[f32; 3]; 6] {
+    let (s, c) = (-yaw).sin_cos();
+    let axes = AXES.map(|a| [a[0] * c - a[1] * s, a[0] * s + a[1] * c, a[2]]);
+    let mut sum = [[0.0f64; 3]; 6];
+    let mut wsum = [0.0f64; 6];
+    for (d, solid, mean) in cells {
+        for (a, axis) in axes.iter().enumerate() {
+            let cos = (d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]).max(0.0) as f64;
+            let w = cos * solid;
+            wsum[a] += w;
+            for k in 0..3 {
+                sum[a][k] += w * mean[k];
             }
         }
     }
@@ -219,10 +238,26 @@ pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
     out
 }
 
+/// [`integrate`] of the unturned image (the ambient the preview always had).
+pub fn ambient6(img: &Hdr) -> [[f32; 3]; 6] {
+    integrate(&cells(img), 0.0)
+}
+
 /// The bundled studio HDRI with its ambient, decoded on first use.
 pub struct Studio {
     pub image: Hdr,
+    /// = `ambient6_at(0.0)`.
     pub ambient6: [[f32; 3]; 6],
+    cells: Vec<Cell>,
+}
+
+impl Studio {
+    /// The ambient of the environment turned by `yaw` (radians about +Z), [`AMBIENT_SCALE`] applied. About 12k
+    /// multiply-adds per call; `Scene::ambient` calls it at most twice a frame.
+    /// shortcut: no memo; add a `(yaw bits, result)` memo if a profile shows it.
+    pub fn ambient6_at(&self, yaw: f32) -> [[f32; 3]; 6] {
+        integrate(&self.cells, yaw).map(|c| c.map(|v| v * AMBIENT_SCALE))
+    }
 }
 
 /// Decodes the bundled HDRI once (about 0.1 s) and caches it for the process.
@@ -230,8 +265,13 @@ pub fn studio() -> &'static Studio {
     static STUDIO: OnceLock<Studio> = OnceLock::new();
     STUDIO.get_or_init(|| {
         let image = decode_rgbe(STUDIO_HDR).expect("the bundled HDRI decodes");
-        let ambient6 = ambient6(&image).map(|c| c.map(|v| v * AMBIENT_SCALE));
-        Studio { image, ambient6 }
+        let cells = cells(&image);
+        let ambient6 = integrate(&cells, 0.0).map(|c| c.map(|v| v * AMBIENT_SCALE));
+        Studio {
+            image,
+            ambient6,
+            cells,
+        }
     })
 }
 
@@ -378,5 +418,35 @@ mod tests {
         let diff = (a - b + PI).rem_euclid(TAU) - PI;
         assert!(diff.abs() < 0.35, "key azimuth {a} vs sun {b}");
         assert!(sum[2] > 0.0, "key light is above the horizon");
+    }
+
+    #[test]
+    fn yaw_zero_is_todays_ambient_and_a_half_turn_swaps_the_sides() {
+        let s = studio();
+        assert_eq!(s.ambient6_at(0.0), s.ambient6, "bit-equal at yaw 0");
+        assert_eq!(integrate(&cells(&s.image), 0.0), ambient6(&s.image));
+        let (a, b) = (s.ambient6_at(0.0), s.ambient6_at(PI));
+        // +X −X +Y −Y +Z −Z: the half turn swaps ±X and ±Y and keeps ±Z.
+        for (got, from) in [(0, 1), (1, 0), (2, 3), (3, 2), (4, 4), (5, 5)] {
+            for k in 0..3 {
+                assert!(
+                    (b[got][k] - a[from][k]).abs() < 1e-4,
+                    "axis {got}: {b:?} vs {a:?}"
+                );
+            }
+        }
+    }
+
+    /// The sign test: the environment turns by +yaw about Z, as `Look::rotate_sun` turns the sun, so what lit +X at
+    /// yaw 0 lights +Y at a quarter turn (and the backdrop shader samples `azimuth - yaw`, tests/background.rs).
+    #[test]
+    fn a_quarter_turn_moves_the_ambient_the_way_the_sun_turns() {
+        let s = studio();
+        let (a, b) = (s.ambient6_at(0.0), s.ambient6_at(PI / 2.0));
+        for (got, from) in [(2, 0), (1, 2), (3, 1), (0, 3), (4, 4)] {
+            for k in 0..3 {
+                assert!((b[got][k] - a[from][k]).abs() < 1e-4, "axis {got}");
+            }
+        }
     }
 }

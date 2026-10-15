@@ -4,7 +4,7 @@
 use super::columns::{AMBER, RED};
 use super::path_picker;
 use super::pgp_fields::{alpha_default, context, control, disabled_reason, edit_key, Ctx};
-use crate::model::pbr_export::{json_entries, json_issues, json_name, JsonIssues};
+use crate::model::pbr_export::{json_issues, json_name, written_json_entries, JsonIssues};
 use crate::model::sections::{delete_hits, not_written_reason, DeleteHit};
 use crate::model::sets::{slot_matches, SetView};
 use crate::model::AppModel;
@@ -12,7 +12,7 @@ use crate::pgp::prefix::{
     active_matches, json_rename, match_toggle, stored_match, NOT_WRITTEN,
     PATH_CONTAINS_NOT_WRITTEN, RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
-use crate::pgp::schema::{spec, KeyKind, KeySpec, NumRange, KEYS};
+use crate::pgp::schema::{grass_ignores, spec, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{number_default, rgb_default, Settings};
 use crate::pgp::writer::{document, to_text, EntryInput, FIXED_NUMBERS};
 use eframe::egui;
@@ -225,7 +225,7 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.data_mut(|d| d.insert_temp(nav_id, nav));
 }
 
-/// The file as it would be written now (every set as if exported), built once per revision (`built`).
+/// The file as it would be written now (every written set as if exported), built once per revision (`built`).
 fn json_text(ui: &mut egui::Ui, text: &Arc<String>) {
     egui::CollapsingHeader::new("JSON text")
         .id_salt("json-editor-text")
@@ -760,6 +760,10 @@ fn add_set_key_menu(
         for k in KEYS.iter().filter(|k| {
             !is_match_key(k.key) && k.kind != KeyKind::Slot && !c.own.contains_key(edit_key(k.key))
         }) {
+            // PBR grass: a key grass ignores would be stored but never shown, and come back on a switch to pbr.
+            if c.grass && grass_ignores(k.key) {
+                continue;
+            }
             // A sub-key of glint or fuzz is offered while the feature is on.
             if let Some((obj, _)) = k.key.split_once('.') {
                 if c.own.get(&format!("{obj}_on")).and_then(Value::as_bool) != Some(true) {
@@ -917,7 +921,8 @@ fn built(ui: &egui::Ui, model: &AppModel) -> Built {
         return b;
     }
     BUILDS.set(BUILDS.get() + 1);
-    let entries = json_entries(model);
+    // Only the entries the file gets: the statics rule's dropped sets are left out, as export does (design §5.1).
+    let entries = written_json_entries(model);
     let mut inputs: Vec<EntryInput> = entries.iter().map(|(_, e)| e.clone()).collect();
     inputs.extend(
         model

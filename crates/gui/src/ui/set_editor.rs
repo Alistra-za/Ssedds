@@ -148,7 +148,8 @@ pub fn draw(
     let why = model.banner.clone().unwrap_or_default();
     if view.three_d {
         // 3D (AG132): the set's 3D view takes the rest of this pane (`ui::centre`); the TruePBR settings and the skin
-        // card are in the TruePBR settings… window, so an edit still shows live in 3D.
+        // card are in the TruePBR settings… window, as are the CS PBR section and the complex material card, so an edit
+        // still shows live in 3D.
         return;
     }
     egui::ScrollArea::vertical()
@@ -169,12 +170,14 @@ pub fn draw(
                 .on_disabled_hover_text(&why);
                 under_grid(ui, model, &v);
                 super::plugin_refs::set_section(ui, model, &v);
+                super::cs_pbr::section(ui, model, &v);
                 if shows_json_panel(&v, model.target) {
                     super::pgp_fields::panel(&mut cols[1], model, &v.id);
                 }
                 if v.skin {
                     super::skin_card::card(&mut cols[1], model, &v);
                 }
+                super::cm_card::section(&mut cols[1], model, &v);
             });
         });
     let (mut select, mut expand) = (None, None);

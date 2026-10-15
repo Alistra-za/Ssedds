@@ -29,6 +29,7 @@ fn auto(
     let hint = SsHint {
         tree_anim: tree,
         path: path.into(),
+        ..Default::default()
     };
     auto_flags_for(true, &slots(kinds), own, &hint)
 }
@@ -167,6 +168,7 @@ fn an_explicit_choice_wins_over_auto() {
     let hint = SsHint {
         tree_anim: Some(true),
         path: String::new(),
+        ..Default::default()
     };
     let own = s(&[("subsurface", json!(true))]);
     let r = resolved_for(true, &slots(&sub), &own, &hint);
@@ -331,4 +333,28 @@ fn foliage_without_an_s_texture_blocks_the_export() {
     // Hair blocks the Subsurface feature, so no texture is asked for.
     let hair = s(&[("subsurface_foliage", json!(true)), ("hair", json!(true))]);
     assert!(missing_texture_texts("a/b", &hair, |_| false).is_empty());
+}
+
+/// DECISIONS AS8: on a `pbr_grass` set only the `_s` turns a key on (Standard or Foliage, by main's AG102 rule);
+/// `_g`/`_p`/`_cnr`/`_f` would switch on keys grass ignores, and a `_cnr` must not route the `_s` to coat_diffuse.
+#[test]
+fn a_pbr_grass_set_auto_flags_only_its_subsurface() {
+    use SlotKind::*;
+    let all = slots(&[Emissive, Height, Coat, Fuzz, Subsurface]);
+    let hint = |path: &str| SsHint {
+        path: path.into(),
+        grass: true,
+        ..Default::default()
+    };
+    let own = Settings::new();
+    let keys = |h: &SsHint| -> Vec<&str> {
+        auto_flags_for(true, &all, &own, h)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect()
+    };
+    assert_eq!(keys(&hint("landscape/grass01")), ["subsurface"]);
+    assert_eq!(keys(&hint("plants/fern01")), ["subsurface_foliage"]);
+    let r = resolved_for(true, &all, &own, &hint("landscape/grass01"));
+    assert_eq!(r, s(&[("subsurface", json!(true))]));
 }

@@ -142,10 +142,6 @@ fn pgpsim_warns_on_exactly_the_gui_ranges() {
         let KeyKind::Number(range) = k.kind else {
             continue;
         };
-        // Task 4b: pgpsim (NIF-owned) does not know the alphaprop_* keys yet; they are whole numbers, checked in alpha_prop.rs.
-        if matches!(range, NumRange::Int(_)) {
-            continue;
-        }
         // Indexing a Null `Value` by a string makes it an object.
         let entry = |x: f64| {
             let mut v = Value::Null;
@@ -155,6 +151,19 @@ fn pgpsim_warns_on_exactly_the_gui_ranges() {
             }
             v
         };
+        // The alphaprop_* keys are whole numbers 0..=max (pgpsim INT_KEYS, PGPatcher 2.2 unsignedFromJSON).
+        if let NumRange::Int(max) = range {
+            let max = f64::from(max);
+            for (x, warnings) in [(-1.0, 1), (1.0, 0), (max + 1.0, 1)] {
+                assert_eq!(
+                    pgpsim::range_warnings(&entry(x)).len(),
+                    warnings,
+                    "{} = {x}",
+                    k.key
+                );
+            }
+            continue;
+        }
         assert_eq!(
             pgpsim::range_warnings(&entry(-0.5)).len(),
             usize::from(range != NumRange::Any),
@@ -921,24 +930,55 @@ fn keywords_in(v: &Value, out: &mut std::collections::BTreeSet<String>, under_pr
 
 #[test]
 fn the_validator_covers_every_keyword_the_schema_uses() {
-    let schema: Value = serde_json::from_str(sdc_gui::pgp::schema::SCHEMA_JSON).unwrap();
-    let mut used = std::collections::BTreeSet::new();
-    keywords_in(&schema, &mut used, false);
-    let annotations = [
-        "$schema",
-        "$id",
-        "title",
-        "description",
-        "examples",
-        "default",
-        "definitions",
-        "properties",
-    ];
-    for k in used {
-        assert!(
-            KEYWORDS.contains(&k.as_str()) || annotations.contains(&k.as_str()),
-            "the vendored schema uses '{k}', which validate.rs does not implement (DECISIONS P12)"
-        );
+    for (name, text) in [
+        ("pbr.schema.json", sdc_gui::pgp::schema::SCHEMA_JSON),
+        ("complex_material.schema.json", CM_SCHEMA_JSON),
+    ] {
+        let schema: Value = serde_json::from_str(text).unwrap();
+        let mut used = std::collections::BTreeSet::new();
+        keywords_in(&schema, &mut used, false);
+        let annotations = [
+            "$schema",
+            "$id",
+            "title",
+            "description",
+            "examples",
+            "default",
+            "definitions",
+            "properties",
+        ];
+        for k in used {
+            assert!(
+                KEYWORDS.contains(&k.as_str()) || annotations.contains(&k.as_str()),
+                "{name} uses '{k}', which validate.rs does not implement (DECISIONS P12)"
+            );
+        }
+    }
+}
+
+/// Complex material design section 7: both schema examples pass; an unknown key, a short colour and a non-number fail.
+#[test]
+fn validate_cm_accepts_the_schema_examples_and_rejects_bad_documents() {
+    let schema: Value = serde_json::from_str(CM_SCHEMA_JSON).unwrap();
+    let examples = schema["examples"].as_array().unwrap();
+    assert_eq!(examples.len(), 2);
+    for ex in examples {
+        assert_eq!(validate_cm(ex), Ok(()), "{ex}");
+    }
+    for (bad, why) in [
+        (json!({"specular": 1.0}), "unknown key 'specular'"),
+        (
+            json!({"specular_color": [1.0, 1.0]}),
+            "needs at least 3 items",
+        ),
+        (
+            json!({"specular_color": [1.0, "1", 1.0]}),
+            "specular_color[1]: expected",
+        ),
+        (json!({"glossiness": "80"}), "glossiness: expected"),
+    ] {
+        let e = validate_cm(&bad).unwrap_err();
+        assert!(e.iter().any(|x| x.contains(why)), "{bad}: {e:?}");
     }
 }
 
@@ -1289,6 +1329,71 @@ fn an_empty_match_row_is_not_written() {
     let e = entry(&[("match3", json!(""))], r"landscape\rock01");
     assert_eq!(written(&e), json!({ "match1": r"landscape\rock01.dds" }));
     assert!(pitfalls(&e.settings, r"landscape\rock01").is_empty());
+}
+
+/// PBR grass design R4: the keys CS's grass shader never reads, in KEYS order, and the GUI switches of glint/fuzz.
+#[test]
+fn grass_hides_exactly_the_keys_rungrass_ignores() {
+    let hidden: Vec<&str> = KEYS
+        .iter()
+        .map(|k| k.key)
+        .filter(|k| grass_ignores(k))
+        .collect();
+    assert_eq!(
+        hidden,
+        [
+            "auto_uv",
+            "uv_scale",
+            "emissive",
+            "lock_emissive",
+            "emissive_scale",
+            "emissive_color",
+            "parallax",
+            "lock_parallax",
+            "displacement_scale",
+            "hair",
+            "multilayer",
+            "coat_color",
+            "coat_specular_level",
+            "coat_roughness",
+            "coat_strength",
+            "coat_diffuse",
+            "coat_normal",
+            "coat_parallax",
+            "lock_cnr",
+            "inner_uv_scale",
+            "glint",
+            "fuzz",
+            "glint.screen_space_scale",
+            "glint.log_microfacet_density",
+            "glint.microfacet_roughness",
+            "glint.density_randomization",
+            "fuzz.texture",
+            "fuzz.color",
+            "fuzz.weight",
+        ]
+    );
+    assert!(grass_ignores("glint_on") && grass_ignores("fuzz_on"));
+}
+
+/// PBR grass design R2, R3: hidden keys dropped. The view adds nothing: an `_s` turns subsurface on through the
+/// auto flags (DECISIONS AS8), and stored subsurface keys (either kind, even false) stay.
+#[test]
+fn the_grass_view_drops_hidden_keys_and_adds_none() {
+    let mut raw = s(&[
+        ("emissive", json!(true)),
+        ("uv_scale", json!(2.0)),
+        ("roughness_scale", json!(0.8)),
+    ]);
+    grass_view(&mut raw);
+    assert_eq!(raw, s(&[("roughness_scale", json!(0.8))]));
+    let kept = s(&[
+        ("subsurface", json!(false)),
+        ("subsurface_foliage", json!(true)),
+    ]);
+    let mut v = kept.clone();
+    grass_view(&mut v);
+    assert_eq!(v, kept);
 }
 
 /// Audit 2026-10-13b G-I1 (DECISIONS AF8): PGPatcher matches `match_diffuse` by its last path components, so a

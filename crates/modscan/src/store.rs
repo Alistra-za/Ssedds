@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// `PRAGMA user_version` of the current schema. Older databases are dropped and rebuilt (the store is a cache).
-pub const SCHEMA_VERSION: i64 = 6;
+/// 8: shape.index3d (PGPatcher 3D index, GUI suggestions item 6).
+pub const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA: &str = r#"
 CREATE TABLE path   (id INTEGER PRIMARY KEY, p TEXT NOT NULL UNIQUE);
@@ -24,7 +25,7 @@ CREATE TABLE shape (copy_id INTEGER NOT NULL, block INTEGER NOT NULL, name TEXT,
                      shader_kind INTEGER NOT NULL, shader_type INTEGER, slsf1 INTEGER, slsf2 INTEGER,
                      texset_id INTEGER, alpha_flags INTEGER, alpha_threshold INTEGER, params TEXT,
                      skinned INTEGER NOT NULL DEFAULT 0, vertex_desc INTEGER, num_vertices INTEGER,
-                     num_triangles INTEGER,
+                     num_triangles INTEGER, index3d INTEGER,
                      PRIMARY KEY(copy_id, block)) WITHOUT ROWID;
 -- Raw NIF slot strings and PathFlags bits (1 empty, 2 rebased, 4 prefixed, 8 non_dds) for every slot whose raw
 -- string is not just the canonical path in another case / with backslashes, or whose flags are not default.
@@ -55,8 +56,10 @@ CREATE INDEX shape_texset ON shape(texset_id);
 CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, path TEXT NOT NULL,
                      size INTEGER, mtime INTEGER NOT NULL, lo_index INTEGER, light INTEGER NOT NULL,
                      flags INTEGER NOT NULL, masters_json TEXT NOT NULL, error_text TEXT);
+-- rec.mato_flags: the MATO DATA flags of that copy (bit 0 single pass, offset 44), NULL when DATA is under 48 bytes.
 CREATE TABLE rec (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, sig TEXT NOT NULL, edid TEXT,
-                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER);
+                     owner_ok INTEGER NOT NULL DEFAULT 0, txst_flags INTEGER, decal INTEGER, hdpt_flags INTEGER,
+                     mato_flags INTEGER);
 CREATE TABLE rec_winner (formid INTEGER PRIMARY KEY, plugin_id INTEGER NOT NULL, n_overrides INTEGER NOT NULL);
 CREATE TABLE txst_slot (formid INTEGER, local INTEGER NOT NULL, plugin_id INTEGER NOT NULL, slot INTEGER NOT NULL,
                      path_id INTEGER NOT NULL);
@@ -94,7 +97,7 @@ CREATE INDEX tex_ref_plugin ON tex_ref(plugin_id, local);
 "#;
 
 const SHAPE_COLS: &str = "block, name, kind, shader_kind, shader_type, slsf1, slsf2, texset_id, alpha_flags, \
-                          alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles";
+                          alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles, index3d";
 
 const TEMP: &str = r#"
 CREATE TEMP TABLE IF NOT EXISTS pending_derived (pid INTEGER PRIMARY KEY, path_id INTEGER NOT NULL,
@@ -105,7 +108,7 @@ CREATE TEMP TABLE IF NOT EXISTS pending_shape (pid INTEGER NOT NULL, block INTEG
                      shader_kind INTEGER NOT NULL, shader_type INTEGER, slsf1 INTEGER, slsf2 INTEGER,
                      texset_id INTEGER, alpha_flags INTEGER, alpha_threshold INTEGER, params TEXT,
                      skinned INTEGER NOT NULL DEFAULT 0, vertex_desc INTEGER, num_vertices INTEGER,
-                     num_triangles INTEGER, PRIMARY KEY(pid, block));
+                     num_triangles INTEGER, index3d INTEGER, PRIMARY KEY(pid, block));
 CREATE TEMP TABLE IF NOT EXISTS pending_tex_raw (pid INTEGER NOT NULL, block INTEGER NOT NULL, slot INTEGER NOT NULL,
                      raw TEXT NOT NULL, flags INTEGER NOT NULL, PRIMARY KEY(pid, block, slot));
 DELETE FROM pending_tex_raw;
@@ -232,6 +235,9 @@ pub struct ShapeView {
     pub vertex_desc: Option<u64>,
     pub num_vertices: Option<u32>,
     pub num_triangles: Option<u32>,
+    /// PGPatcher's 3D index of the shape (`nif::graph::index3d`): the number plugins use for its alternate textures.
+    /// `None` when no node reaches it.
+    pub index3d: Option<u32>,
 }
 
 /// A texture slot's raw NIF string (Windows-1252 decoded) and the flags of its canonicalisation.
@@ -592,7 +598,7 @@ fn write_shapes(
     scan: &NifScan,
 ) -> Result<(), ScanError> {
     let sql = format!(
-        "INSERT OR REPLACE INTO {}({}, {SHAPE_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        "INSERT OR REPLACE INTO {}({}, {SHAPE_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         t.shape, t.key
     );
     let raw_sql = format!(
@@ -652,6 +658,7 @@ fn write_shapes(
             h.vertex_desc.map(|v| v as i64),
             h.num_vertices.map(i64::from),
             h.num_triangles.map(i64::from),
+            scan.index3d.get(&s.block).map(|&i| i64::from(i)),
         ])?;
         for (slot, p) in slots.iter().enumerate() {
             if keep_raw(p) {
@@ -1112,9 +1119,10 @@ impl Store {
              DELETE FROM tex_raw WHERE copy_id IN (SELECT c.id FROM nif_copy c JOIN pending_derived d
                ON c.path_id = d.path_id AND c.origin_id = d.origin_id);
              INSERT INTO shape(copy_id, block, name, kind, shader_kind, shader_type, slsf1, slsf2, texset_id,
-                 alpha_flags, alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles)
+                 alpha_flags, alpha_threshold, params, skinned, vertex_desc, num_vertices, num_triangles, index3d)
                SELECT c.id, s.block, s.name, s.kind, s.shader_kind, s.shader_type, s.slsf1, s.slsf2, s.texset_id,
-                 s.alpha_flags, s.alpha_threshold, s.params, s.skinned, s.vertex_desc, s.num_vertices, s.num_triangles
+                 s.alpha_flags, s.alpha_threshold, s.params, s.skinned, s.vertex_desc, s.num_vertices, s.num_triangles,
+                 s.index3d
                FROM pending_shape s JOIN pending_derived d ON d.pid = s.pid
                JOIN nif_copy c ON c.path_id = d.path_id AND c.origin_id = d.origin_id;
              INSERT INTO tex_raw(copy_id, block, slot, raw, flags)
@@ -1393,12 +1401,12 @@ impl Store {
         let mut st = self.conn.prepare(
             "SELECT s.block, s.name, s.kind, s.shader_kind, s.shader_type, s.slsf1, s.slsf2,
                     s.alpha_flags, s.alpha_threshold, s.params,
-                    s.skinned, s.vertex_desc, s.num_vertices, s.num_triangles,
+                    s.skinned, s.vertex_desc, s.num_vertices, s.num_triangles, s.index3d,
                     t.n, t.t0, t.t1, t.t2, t.t3, t.t4, t.t5, t.t6, t.t7, t.t8
              FROM shape s LEFT JOIN texset t ON t.id = s.texset_id
              WHERE s.copy_id = ?1 ORDER BY s.block",
         )?;
-        const T: usize = 14;
+        const T: usize = 15;
         let rows: Vec<(ShapeView, Vec<Option<i64>>)> = st
             .query_map([copy_id], |r| {
                 let n: Option<i64> = r.get(T)?;
@@ -1424,6 +1432,7 @@ impl Store {
                         vertex_desc: r.get::<_, Option<i64>>(11)?.map(|x| x as u64),
                         num_vertices: r.get::<_, Option<i64>>(12)?.map(|x| x as u32),
                         num_triangles: r.get::<_, Option<i64>>(13)?.map(|x| x as u32),
+                        index3d: r.get::<_, Option<i64>>(14)?.map(|x| x as u32),
                     },
                     ids,
                 ))

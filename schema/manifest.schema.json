@@ -770,6 +770,7 @@
       "description": "A Skyrim shader a texture set is made for (spec §3).",
       "enum": [
         "pbr",
+        "pbr_grass",
         "advanced_skin",
         "default",
         "envmap",

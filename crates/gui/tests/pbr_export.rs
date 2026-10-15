@@ -1065,6 +1065,46 @@ fn a_set_that_matches_nothing_asks_and_is_left_out_of_the_json() {
         .all(|(v, _)| v.id != "landscape/rock01"));
 }
 
+/// PBR grass design R3, R4: a pbr set switched to pbr_grass exports only grass keys and loses its emissive block;
+/// the project file keeps the rest, so switching back restores them.
+#[test]
+fn a_pbr_grass_set_drops_the_keys_grass_ignores() {
+    use engine::shader::Shader;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "emissive", Some(json!(true)));
+    m.set_json_value("landscape/rock01", "uv_scale", Some(json!(2.0)));
+    m.set_json_value("landscape/rock01", "roughness_scale", Some(json!(0.8)));
+    idle(&mut m);
+    assert!(export_blocks(&m)
+        .iter()
+        .any(|i| i.text.contains("emissive is on")));
+    m.set_shader("landscape/rock01", Some(Shader::PbrGrass));
+    idle(&mut m);
+    assert_eq!(export_blocks(&m), vec![]);
+    let rock = |m: &sdc_gui::model::AppModel| {
+        json_entries(m)
+            .into_iter()
+            .find(|(v, _)| v.id == "landscape/rock01")
+            .unwrap()
+            .1
+            .settings
+    };
+    let s = rock(&m);
+    assert!(
+        !s.contains_key("emissive") && !s.contains_key("uv_scale"),
+        "{s:?}"
+    );
+    assert_eq!(s.get("roughness_scale"), Some(&json!(0.8)));
+    assert!(
+        !s.contains_key("subsurface"),
+        "no _s, so no subsurface default"
+    );
+    m.set_shader("landscape/rock01", Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(rock(&m).get("uv_scale"), Some(&json!(2.0)));
+}
+
 /// Audit 2026-10-13b G-I1 (DECISIONS AF8): the same-name pitfall reaches the export's questions.
 #[test]
 fn a_renamed_set_whose_name_the_scan_knows_elsewhere_asks_before_export() {
@@ -1083,4 +1123,76 @@ fn a_renamed_set_whose_name_the_scan_knows_elsewhere_asks_before_export() {
         mesh_dirs: vec![],
     });
     assert!(asks(&m), "{:?}", export_asks(&m));
+}
+
+/// DECISIONS AS8 (merge of main's auto flags): a pbr_grass set with a `_g` member (SHADER-EXTRA-MAP) exports no
+/// emissive and its form does not show it; its `_s` turns subsurface on through main's auto rule, and the writer
+/// writes it. Switched back to pbr, the `_g` turns emissive on again.
+#[test]
+fn a_pbr_grass_set_with_a_g_member_exports_no_emissive() {
+    use egui_kittest::kittest::Queryable;
+    use engine::shader::Shader;
+    const SET: &str = "landscape/rock01";
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/landscape");
+    std::fs::create_dir_all(&r).unwrap();
+    for n in ["rock01_g.png", "rock01_s.png"] {
+        image::ImageBuffer::from_fn(64, 64, |x, y| image::Rgb([x as u8, y as u8, 9u8]))
+            .save(r.join(n))
+            .unwrap();
+    }
+    let mut m = ready(d.path());
+    let rock = |m: &sdc_gui::model::AppModel| {
+        json_entries(m)
+            .into_iter()
+            .find(|(v, _)| v.id == SET)
+            .unwrap()
+            .1
+    };
+    assert_eq!(
+        rock(&m).settings.get("emissive"),
+        Some(&json!(true)),
+        "pbr: the _g turns emissive on"
+    );
+    m.set_shader(SET, Some(Shader::PbrGrass));
+    idle(&mut m);
+    let e = rock(&m);
+    assert!(!e.settings.contains_key("emissive"), "{:?}", e.settings);
+    assert_eq!(
+        e.settings.get("subsurface"),
+        Some(&json!(true)),
+        "{:?}",
+        e.settings
+    );
+    let text = sdc_gui::pgp::writer::to_text(&sdc_gui::pgp::writer::document(&[e]));
+    // The fixed `default` block always lists `emissive: false`; the set's entry must not.
+    let entry = text.split("\"entries\"").nth(1).unwrap();
+    assert!(
+        !entry.contains("emissive") && entry.contains("\"subsurface\": true"),
+        "{text}"
+    );
+    assert_eq!(export_blocks(&m), vec![]);
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with(SET))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 1100.0))
+        .build_ui_state(
+            |ui, m: &mut sdc_gui::model::AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, SET),
+            m,
+        );
+    h.run();
+    assert!(
+        h.query_by_label("Emissive").is_none(),
+        "the form hides emissive"
+    );
+    let mut m = h.into_state();
+    m.set_shader(SET, Some(Shader::Pbr));
+    idle(&mut m);
+    assert_eq!(rock(&m).settings.get("emissive"), Some(&json!(true)));
 }

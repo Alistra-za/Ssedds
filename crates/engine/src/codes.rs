@@ -15,6 +15,7 @@
 //! and the five `GRASS-*` codes and VAL-GRASS-DETECT (complex grass design 2026-10-12 §3.6, §3.7, §4)
 //! and IN-ALIAS-INVALID / IN-ALIAS-STALE (an `[inputs]` alias that was refused or matched no file, M6 Track F3b)
 //! and ALPHA-PARALLAX-NO-ALPHA (`alpha.parallax` on for a complex `_m` whose source has no alpha, DECISIONS AH2).
+//! and PBR-GRASS-DETECT (a PBR grass albedo CS would read as complex grass) (PBR grass design 2026-10-14 §4.4).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -136,6 +137,7 @@ codes! {
     GrassDetectSource = "GRASS-DETECT-SOURCE" => Warning,
     GrassVanilla = "GRASS-VANILLA" => Warning,
     ValGrassDetect = "VAL-GRASS-DETECT" => Error,
+    PbrGrassDetect = "PBR-GRASS-DETECT" => Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -202,7 +204,7 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 92);
+        assert_eq!(Code::ALL.len(), 93);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
@@ -211,7 +213,8 @@ mod tests {
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)
         );
-        assert_eq!(Code::ALL.last(), Some(&Code::ValGrassDetect));
+        assert_eq!(Code::ALL.last(), Some(&Code::PbrGrassDetect));
+        assert_eq!(Code::PbrGrassDetect.severity(), Severity::Warning);
         assert_eq!(Code::CfgPresetSkipped.severity(), Severity::Warning);
         assert_eq!(
             Code::parse("CFG-GREEN-CONFLICT"),

@@ -1330,3 +1330,44 @@ fn a_clashing_slot_card_shows_and_removes_either_member() {
         assert!(h.query_by_label_contains("both use slot 7").is_none());
     }
 }
+
+/// PBR grass design §4.3: a pbr_grass panel has no emissive, parallax, hair, coat, glint or fuzz switch, keeps the
+/// grass keys, and the Subsurface selector's Off removes the stored key (no grass default since AS8).
+#[test]
+fn a_pbr_grass_panel_shows_only_the_grass_keys() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_shader("landscape/rock01", Some(engine::shader::Shader::PbrGrass));
+    m.set_json_value(
+        "landscape/rock01",
+        "subsurface",
+        Some(serde_json::json!(true)),
+    );
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let mut h = panel_harness(m);
+    h.run();
+    for gone in [
+        "Emissive",
+        "Parallax",
+        "Hair",
+        "Multilayer (coat)",
+        "Glint",
+        "Fuzz",
+    ] {
+        assert!(
+            h.query_by_label(gone).is_none(),
+            "{gone} is hidden on PBR grass"
+        );
+    }
+    h.get_by_label("Roughness scale");
+    h.get_by_label("Specular level");
+    // DECISIONS AS8: main's selector replaces the checkbox; without an `_s` nothing turns it back on, so Off removes it.
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Standard"))
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Off").click();
+    h.run();
+    assert!(!rock_settings(&h).contains_key("subsurface"));
+}

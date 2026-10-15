@@ -1,0 +1,832 @@
+[
+  {
+    "edids": [
+      "DLC2GlacierSlab01TXT"
+    ],
+    "kind": "txst",
+    "name": "DLC2GlacierSlab01TXT",
+    "values": {
+      "displacementScale": 0.2,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 18.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "DecalSnowTransition"
+    ],
+    "kind": "txst",
+    "name": "DecalSnowTransition",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.03999999910593033,
+      "coatStrength": 1.0,
+      "displacementScale": 0.10000000149011612,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.019999999552965164,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "DefaultPBRLand",
+      "LandscapeDirt02",
+      "LandscapeDirtPath01",
+      "LandscapeFallForestLeaves01",
+      "LandscapePineForest01",
+      "LandscapePineForest03",
+      "LandscapeVolcanicAsh05",
+      "LandscapeVolcanicAshTundra01"
+    ],
+    "kind": "txst",
+    "name": "DefaultPBRLand",
+    "values": {
+      "displacementScale": 0.6,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "Faultier_volcanictundradirtcliffs01",
+      "Faultier_volcanictundradirtcliffsroots01",
+      "LandscapeDirtCliffs01Mask",
+      "LandscapeVolcanicAsh01",
+      "LandscapeVolcanicAshTundra04"
+    ],
+    "kind": "txst",
+    "name": "Faultier_volcanictundradirtcliffs01",
+    "values": {
+      "displacementScale": 0.3,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeCaveDirt01",
+      "LandscapeDirt01",
+      "LandscapeReachDirt01",
+      "LandscapeReachGrass01",
+      "LandscapeTundra01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeCaveDirt01",
+    "values": {
+      "displacementScale": 0.5,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeCoastBeach01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeCoastBeach01",
+    "values": {
+      "displacementScale": 0.4,
+      "glintParameters": {
+        "densityRandomization": 4.525000095367432,
+        "enabled": true,
+        "logMicrofacetDensity": 15.017000198364258,
+        "microfacetRoughness": 0.5170000195503235,
+        "screenSpaceScale": 1.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeCoastBeach02"
+    ],
+    "kind": "txst",
+    "name": "LandscapeCoastBeach02",
+    "values": {
+      "displacementScale": 0.3,
+      "glintParameters": {
+        "densityRandomization": 4.525000095367432,
+        "enabled": true,
+        "logMicrofacetDensity": 15.017000198364258,
+        "microfacetRoughness": 0.5170000195503235,
+        "screenSpaceScale": 1.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeCoastBeachGrass01",
+      "LandscapeFallForestDirt01",
+      "LandscapeFallForestGrass01",
+      "LandscapeFallForestRocks01",
+      "LandscapeMineFloorDirt01",
+      "LandscapePineForest02",
+      "LandscapeReachMoss01",
+      "LandscapeVolcanicAsh03",
+      "LandscapeVolcanicAsh04",
+      "LandscapeVolcanicAshTundra02",
+      "LandscapeVolcanicTundraDirt01",
+      "LandscapeVolcanicTundraDirt02",
+      "LandscapeVolcanicTundraGravel01",
+      "LandscapeVolcanicTundraMineralPool01",
+      "LandscapeVolcanicTundraRocks01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeCoastBeachGrass01",
+    "values": {
+      "displacementScale": 0.4,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeCoastOceanFloor01",
+      "LandscapeFieldDirtGrass01",
+      "LandscapeFrozenMarshDirtSlopes01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeCoastOceanFloor01",
+    "values": {
+      "displacementScale": 0.7,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeDirtSnowPath01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeDirtSnowPath01",
+    "values": {
+      "displacementScale": 0.5,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02
+    }
+  },
+  {
+    "edids": [
+      "LandscapeFieldGrass01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeFieldGrass01",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.04,
+      "coatStrength": 1.0,
+      "displacementScale": 0.4,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 2.0,
+        "enabled": false,
+        "logMicrofacetDensity": 40.0,
+        "microfacetRoughness": 0.015,
+        "screenSpaceScale": 1.5
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04,
+      "subsurfaceColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subsurfaceOpacity": 0.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeFieldGrass02"
+    ],
+    "kind": "txst",
+    "name": "LandscapeFieldGrass02",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.04,
+      "coatStrength": 1.0,
+      "displacementScale": 0.5,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 2.0,
+        "enabled": false,
+        "logMicrofacetDensity": 40.0,
+        "microfacetRoughness": 0.015,
+        "screenSpaceScale": 1.5
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04,
+      "subsurfaceColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subsurfaceOpacity": 0.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeFrozenMarshGrass01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeFrozenMarshGrass01",
+    "values": {
+      "displacementScale": 0.5,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 18.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeFrozenMarshIce01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeFrozenMarshIce01",
+    "values": {
+      "displacementScale": 0.4,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 18.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02
+    }
+  },
+  {
+    "edids": [
+      "LandscapeFrozenMarshLichen01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeFrozenMarshLichen01",
+    "values": {
+      "displacementScale": 0.7,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 18.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeGlowingForestDirt01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeGlowingForestDirt01",
+    "values": {
+      "displacementScale": 0.8,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 18.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeGrassSnow01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeGrassSnow01",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.03999999910593033,
+      "coatStrength": 1.0,
+      "displacementScale": 0.6000000238418579,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 10.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 2.0
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.03999999910593033,
+      "subsurfaceColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subsurfaceOpacity": 0.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeMountainSlab",
+      "LandscapeMountainSlab01Mask",
+      "LandscapeMountainSlab02Mask"
+    ],
+    "kind": "txst",
+    "name": "LandscapeMountainSlab",
+    "values": {
+      "displacementScale": 0.2,
+      "glintParameters": {
+        "densityRandomization": 300.0,
+        "enabled": true,
+        "logMicrofacetDensity": 24.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeReachMossyRocks01",
+      "LandscapeTundraRocks01",
+      "LandscapeVolcanicAshRocks01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeReachMossyRocks01",
+    "values": {
+      "displacementScale": 1.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeRiverBottom01",
+      "LandscapeVolcanicAshTundra03"
+    ],
+    "kind": "txst",
+    "name": "LandscapeRiverBottom01",
+    "values": {
+      "displacementScale": 0.2,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeRiverMud01",
+      "LandscapeTundra02"
+    ],
+    "kind": "txst",
+    "name": "LandscapeRiverMud01",
+    "values": {
+      "displacementScale": 0.8,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeRiverbedEdge01",
+      "LandscapeRocks01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeRiverbedEdge01",
+    "values": {
+      "displacementScale": 1.0,
+      "glintParameters": {
+        "densityRandomization": 300.0,
+        "enabled": true,
+        "logMicrofacetDensity": 24.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeSnow01",
+      "LandscapeSnow01Landscape"
+    ],
+    "kind": "txst",
+    "name": "LandscapeSnow01",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.04,
+      "coatStrength": 1.0,
+      "displacementScale": 0.2,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeSnow02",
+      "LandscapeSnow02Landscape"
+    ],
+    "kind": "txst",
+    "name": "LandscapeSnow02",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.04,
+      "coatStrength": 1.0,
+      "displacementScale": 0.15,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeSnowCobble01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeSnowCobble01",
+    "values": {
+      "coatColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coatRoughness": 1.0,
+      "coatSpecularLevel": 0.04,
+      "coatStrength": 1.0,
+      "displacementScale": 1.0,
+      "fuzzColor": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fuzzWeight": 0.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "innerLayerDisplacementOffset": 0.0,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "LandscapeVolcanicTundraMinerals01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeVolcanicTundraMinerals01",
+    "values": {
+      "displacementScale": 0.2,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 16.0,
+        "microfacetRoughness": 0.3,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeWinterForestDirt01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeWinterForestDirt01",
+    "values": {
+      "displacementScale": 0.3,
+      "glintParameters": {
+        "densityRandomization": 200.0,
+        "enabled": true,
+        "logMicrofacetDensity": 18.0,
+        "microfacetRoughness": 0.7,
+        "screenSpaceScale": 2.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "LandscapeWinterForestLeaves01"
+    ],
+    "kind": "txst",
+    "name": "LandscapeWinterForestLeaves01",
+    "values": {
+      "displacementScale": 1.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02
+    }
+  },
+  {
+    "edids": [
+      "LandscapeWinterForestLeaves02"
+    ],
+    "kind": "txst",
+    "name": "LandscapeWinterForestLeaves02",
+    "values": {
+      "displacementScale": 1.0,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04
+    }
+  },
+  {
+    "edids": [
+      "SnowRock01"
+    ],
+    "kind": "txst",
+    "name": "SnowRock01",
+    "values": {
+      "displacementScale": 0.3,
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "roughnessScale": 1.0,
+      "specularLevel": 0.02
+    }
+  },
+  {
+    "edids": [
+      "TextureSetRoad01FallForest01",
+      "TextureSetRoad01Reach01",
+      "TextureSetRoad01Snow01"
+    ],
+    "kind": "txst",
+    "name": "TextureSetRoad01FallForest01",
+    "values": {
+      "displacementScale": 0.1,
+      "roughnessScale": 1.0,
+      "specularLevel": 0.04,
+      "subsurfaceColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "subsurfaceOpacity": 1.0
+    }
+  },
+  {
+    "edids": [
+      "AshMaterialSolstheim1P",
+      "AshMaterialSolstheimLight1P",
+      "AshMaterialSolstheimMtns1P",
+      "DLC2AshMaterialDusting1P"
+    ],
+    "kind": "mato",
+    "name": "AshMaterialSolstheim1P",
+    "values": {
+      "baseColorScale": [
+        0.6600000262260437,
+        0.6299999952316284,
+        0.6299999952316284
+      ],
+      "glintParameters": {
+        "densityRandomization": 2.0,
+        "enabled": false,
+        "logMicrofacetDensity": 40.0,
+        "microfacetRoughness": 0.014999999664723873,
+        "screenSpaceScale": 1.5
+      },
+      "roughness": 0.8999999761581421,
+      "specularLevel": 0.03999999910593033
+    }
+  },
+  {
+    "edids": [
+      "BDS_SnowMaterialFarmhouseWalkway",
+      "BDS_SnowMaterialFarmhouseWalkwayRoof",
+      "BDS_SnowMaterialWalkway",
+      "DLC1SnowMaterialGlacierINT1P",
+      "DLC1SnowMaterialIceWall",
+      "DLC2SnowMaterialLakeSurface",
+      "SnowMaterialFarm",
+      "SnowMaterialGlacier",
+      "SnowMaterialGlacierSlab",
+      "SnowMaterialMarkarthCliffs",
+      "SnowMaterialMountain1P",
+      "SnowMaterialMountainLight1P",
+      "SnowMaterialMountainTrim1P",
+      "SnowMaterialMountainTrimLight1P",
+      "SnowMaterialObject1P",
+      "SnowMaterialObjectCustom01_1P",
+      "SnowMaterialObjectCustom02_1P",
+      "SnowMaterialObjectCustom03_1P",
+      "SnowMaterialObjectLight1P",
+      "SnowMaterialObjectNoise1P",
+      "SnowMaterialRoadLight1P",
+      "SnowMaterialSouth1P",
+      "SnowMaterialStockade1P",
+      "SnowMaterialWindhelm1P",
+      "SnowMaterialWinterhold"
+    ],
+    "kind": "mato",
+    "name": "BDS_SnowMaterialFarmhouseWalkway",
+    "values": {
+      "baseColorScale": [
+        0.98,
+        0.98,
+        1.0
+      ],
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 13.0,
+        "microfacetRoughness": 1.0,
+        "screenSpaceScale": 1.0
+      },
+      "roughness": 0.7,
+      "specularLevel": 0.02
+    }
+  },
+  {
+    "edids": [
+      "VolcanicSulfurCrystals",
+      "VolcanicSulfurCrystalsLite"
+    ],
+    "kind": "mato",
+    "name": "VolcanicSulfurCrystals",
+    "values": {
+      "baseColorScale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "glintParameters": {
+        "densityRandomization": 5.0,
+        "enabled": true,
+        "logMicrofacetDensity": 23.239999771118164,
+        "microfacetRoughness": 0.11999999731779099,
+        "screenSpaceScale": 2.0
+      },
+      "roughness": 0.9010000228881836,
+      "specularLevel": 0.03999999910593033
+    }
+  }
+]

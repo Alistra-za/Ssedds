@@ -1,9 +1,11 @@
 // Store API: raw slot strings + flags, geometry columns, schema version, error propagation.
+use modscan::store::ChunkItem;
 use modscan::store::{CopyResult, Store, PARSE_PARTIAL};
 use nif::path::{canon_texture, PathFlags};
 use nif::props::{Effect, EffectParams, FieldOffsets, Lighting, LightingParams, LightingTrailer};
 use nif::scan::{NifScan, Shader, ShapeRow};
 use nif::shape_head::{ShapeHead, ShapeKind};
+use std::collections::BTreeMap;
 
 fn head(skinned: bool) -> ShapeHead {
     ShapeHead {
@@ -78,6 +80,7 @@ fn scan_of(shapes: Vec<ShapeRow>) -> NifScan {
         le_mesh: false,
         shapes,
         problems: vec![],
+        index3d: Default::default(),
     }
 }
 
@@ -223,7 +226,7 @@ fn schema_v3_rebuilds_old_databases_and_sets_pragmas() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(v, modscan::store::SCHEMA_VERSION);
-    assert_eq!(v, 6);
+    assert_eq!(v, 8);
     let n: i64 = c
         .query_row("SELECT count(*) FROM shape", [], |r| r.get(0))
         .unwrap();
@@ -581,7 +584,7 @@ fn open_read_only_never_creates_rebuilds_or_writes() {
     }
     assert!(matches!(
         Store::open_read_only(&old),
-        Err(modscan::ScanError::SchemaVersion { found: 2, want: 6 })
+        Err(modscan::ScanError::SchemaVersion { found: 2, want: 8 })
     ));
     let n: i64 = rusqlite::Connection::open(&old)
         .unwrap()
@@ -1043,4 +1046,84 @@ fn a_rebuild_blocked_by_an_open_handle_says_to_restart() {
             .contains("restart the app to rebuild the scan database"),
         "{e}"
     );
+}
+
+#[test]
+fn shapes_of_round_trips_the_3d_index() {
+    let (_d, mut s, o) = store();
+    let mut scan = scan_of(vec![
+        ShapeRow {
+            block: 3,
+            head: head(false),
+            shader: Shader::None,
+            alpha: None,
+        },
+        ShapeRow {
+            block: 7,
+            head: head(false),
+            shader: Shader::None,
+            alpha: None,
+        },
+    ]);
+    scan.index3d = BTreeMap::from([(7, 0)]);
+    let id = s
+        .upsert_copy("meshes/x.nif", o, 1, 1, CopyResult::Scanned(scan), None)
+        .unwrap();
+    let v: Vec<(u32, Option<u32>)> = s
+        .shapes_of(id)
+        .unwrap()
+        .iter()
+        .map(|x| (x.block, x.index3d))
+        .collect();
+    assert_eq!(
+        v,
+        [(3, None), (7, Some(0))],
+        "NULL when no node reaches the shape"
+    );
+}
+
+#[test]
+fn a_derived_copy_keeps_its_3d_index_through_commit_pending() {
+    let (_d, mut s, o) = store();
+    let mut scan = scan_of(vec![ShapeRow {
+        block: 2,
+        head: head(false),
+        shader: Shader::None,
+        alpha: None,
+    }]);
+    scan.index3d = BTreeMap::from([(2, 5)]);
+    let pid = s.path_ids(&["meshes/d.nif"]).unwrap()[0];
+    s.write_chunk(&[ChunkItem {
+        path_id: pid,
+        origin_id: o,
+        size: 1,
+        mtime: 1,
+        crc32: None,
+        derived: true,
+        result: CopyResult::Scanned(scan),
+    }])
+    .unwrap();
+    s.commit_pending().unwrap();
+    let id = s.existing_copies().unwrap()[&(pid, o)].id;
+    assert_eq!(s.shapes_of(id).unwrap()[0].index3d, Some(5));
+}
+
+#[test]
+fn a_schema_7_database_is_rebuilt_with_the_index3d_column() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("v7.db");
+    {
+        let c = rusqlite::Connection::open(&p).unwrap();
+        c.execute_batch(
+            "CREATE TABLE shape (copy_id INTEGER, block INTEGER, PRIMARY KEY(copy_id, block));
+             INSERT INTO shape VALUES (1, 1); PRAGMA user_version = 7;",
+        )
+        .unwrap();
+    }
+    let s = Store::open(&p).unwrap();
+    let n: i64 = s
+        .conn()
+        .query_row("SELECT count(index3d) FROM shape", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0, "rebuilt: the column exists and the old row is gone");
 }

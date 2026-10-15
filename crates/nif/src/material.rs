@@ -21,6 +21,79 @@ pub const SLSF2_ZBUFFER_WRITE: u32 = 1 << 0;
 /// (01 §2.2, §3.1).
 pub const SLSF2_TRUE_PBR: u32 = 1 << 23;
 
+/// SkyrimShaderPropertyFlags1 bit names (nif.xml / NifSkope), moved from the GUI (GUI suggestions item 7). Bit 8 is
+/// spelled `Receive_Shadows` (nif.xml: `Recieve_Shadows`, sic).
+pub const SLSF1_NAMES: [&str; 32] = [
+    "Specular",
+    "Skinned",
+    "Temp_Refraction",
+    "Vertex_Alpha",
+    "Greyscale_To_PaletteColor",
+    "Greyscale_To_PaletteAlpha",
+    "Use_Falloff",
+    "Environment_Mapping",
+    "Receive_Shadows",
+    "Cast_Shadows",
+    "Facegen_Detail_Map",
+    "Parallax",
+    "Model_Space_Normals",
+    "Non_Projective_Shadows",
+    "Landscape",
+    "Refraction",
+    "Fire_Refraction",
+    "Eye_Environment_Mapping",
+    "Hair_Soft_Lighting",
+    "Screendoor_Alpha_Fade",
+    "Localmap_Hide_Secret",
+    "FaceGen_RGB_Tint",
+    "Own_Emit",
+    "Projected_UV",
+    "Multiple_Textures",
+    "Remappable_Textures",
+    "Decal",
+    "Dynamic_Decal",
+    "Parallax_Occlusion",
+    "External_Emittance",
+    "Soft_Effect",
+    "ZBuffer_Test",
+];
+
+/// SkyrimShaderPropertyFlags2 bit names. Bit 23 is the TruePBR marker (`SLSF2_TRUE_PBR`), shown as `Unused01 (TruePBR)`.
+pub const SLSF2_NAMES: [&str; 32] = [
+    "ZBuffer_Write",
+    "LOD_Landscape",
+    "LOD_Objects",
+    "No_Fade",
+    "Double_Sided",
+    "Vertex_Colors",
+    "Glow_Map",
+    "Assume_Shadowmask",
+    "Packed_Tangent",
+    "Multi_Index_Snow",
+    "Vertex_Lighting",
+    "Uniform_Scale",
+    "Fit_Slope",
+    "Billboard",
+    "No_LOD_Land_Blend",
+    "EnvMap_Light_Fade",
+    "Wireframe",
+    "Weapon_Blood",
+    "Hide_On_Local_Map",
+    "Premult_Alpha",
+    "Cloud_LOD",
+    "Anisotropic_Lighting",
+    "No_Transparency_Multisampling",
+    "Unused01 (TruePBR)",
+    "Multi_Layer_Parallax",
+    "Soft_Lighting",
+    "Rim_Lighting",
+    "Back_Lighting",
+    "Unused02",
+    "Tree_Anim",
+    "Effect_Lighting",
+    "HD_LOD_Objects",
+];
+
 /// A shape's material after any PGPatcher simulation: what CS reads from the NIF at load.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialState {
@@ -124,5 +197,30 @@ impl MaterialState {
             self.slots.resize(SLOT_COUNT, empty_slot());
         }
         self.slots[i] = canon_texture(raw.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod slsf_names {
+    use super::*;
+
+    fn bit(mask: u32) -> usize {
+        mask.trailing_zeros() as usize
+    }
+
+    #[test]
+    fn the_documented_deviations_from_nif_xml_are_kept() {
+        // nif.xml spells bit 8 "Recieve_Shadows" (sic); sdc shows it corrected. SLSF2 bit 23 is the TruePBR marker.
+        assert_eq!(SLSF1_NAMES[8], "Receive_Shadows");
+        assert_eq!(SLSF2_NAMES[23], "Unused01 (TruePBR)");
+    }
+
+    #[test]
+    fn every_bit_constant_names_the_bit_the_table_names() {
+        assert_eq!(SLSF1_NAMES[bit(SLSF1_SPECULAR)], "Specular");
+        assert_eq!(SLSF1_NAMES[bit(SLSF1_RECEIVE_SHADOWS)], "Receive_Shadows");
+        assert_eq!(SLSF1_NAMES[bit(SLSF1_CAST_SHADOWS)], "Cast_Shadows");
+        assert_eq!(SLSF2_NAMES[bit(SLSF2_ZBUFFER_WRITE)], "ZBuffer_Write");
+        assert_eq!(SLSF2_NAMES[bit(SLSF2_TRUE_PBR)], "Unused01 (TruePBR)");
     }
 }

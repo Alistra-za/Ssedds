@@ -295,9 +295,7 @@ fn availability_table() {
     );
     assert_eq!(
         availability(Target::Vanilla, Subtype::ComplexMaterial),
-        Availability::Unavailable {
-            fallback: Some(Subtype::Envmask)
-        }
+        Availability::Available
     );
     assert_eq!(
         availability(Target::Cpm, Subtype::ComplexMaterial),
@@ -1091,7 +1089,7 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
         "{:?}",
         j.warnings
     );
-    // complex_material under vanilla falls back to envmask, and its varying alpha is reported as lost
+    // complex_material is available under vanilla (Note AT, D16): no fallback, and its varying alpha is kept
     let mut m = Rgba32F::new(64, 64, [0.2, 0.6, 0.1, 1.0]);
     m.px[0][3] = 0.5;
     let reg = PresetRegistry::builtin().unwrap();
@@ -1113,13 +1111,23 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
     };
     let j = resolve_in(&ctx, "a/x_m.png", Some("m"), &m);
     assert_eq!(
-        (j.profile.subtype, j.status.clone()),
         (
-            Subtype::Envmask,
-            JobStatus::Blocked {
-                codes: vec![Code::LossAlphaData]
-            }
+            j.profile.subtype,
+            j.profile.format,
+            j.profile.alpha.policy,
+            j.status.clone()
         ),
+        (
+            Subtype::ComplexMaterial,
+            Format::Bc7,
+            AlphaPolicy::Data,
+            JobStatus::Ready
+        ),
+        "{:?}",
+        j.warnings
+    );
+    assert!(
+        !codes(&j).contains(&Code::CfgUnavailable),
         "{:?}",
         j.warnings
     );

@@ -71,6 +71,7 @@ fn gras_db(dir: &std::path::Path, tex: &str) -> std::path::PathBuf {
         le_mesh: false,
         shapes: vec![lighting_shape(3, &[tex])],
         problems: vec![],
+        index3d: Default::default(),
     };
     let id = s
         .upsert_copy(mesh, o, 1, 1, CopyResult::Scanned(scan), None)
@@ -322,5 +323,56 @@ fn a_scan_vote_retype_cleans_up_in_its_own_step() {
         m.history.undo[n - 2],
         last,
         "the last user step is unchanged"
+    );
+}
+
+/// PBR grass design §4.2, R5: a TruePBR GRAS shape is evidence for pbr_grass, and none for complex grass.
+#[test]
+fn a_pbr_set_whose_albedo_a_truepbr_gras_shape_uses_picks_pbr_grass() {
+    use engine::shader::{AutoRule, Shader, ShaderOrigin};
+    let d = tempfile::tempdir().unwrap();
+    for (name, px) in [
+        ("g.png", [64u8, 128, 38]),
+        ("g_n.png", [128, 128, 255]),
+        ("g_rmaos.png", [128, 0, 255]),
+    ] {
+        let p = d.path().join("textures/plants").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb(px))
+            .save(p)
+            .unwrap();
+    }
+    let mut m = support::opened(d.path());
+    m.accept = engine::policy::AcceptSuggestions::High;
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = gras_db(dbdir.path(), r"textures\plants\g.dds");
+    modscan::store::Store::open(&db)
+        .unwrap()
+        .conn()
+        .execute("UPDATE shape SET slsf2 = 8388608", [])
+        .unwrap();
+    m.scan_db = Some(db);
+    m.replan();
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
+    assert!(
+        m.gras_diffuses.is_empty(),
+        "a TruePBR shape is no complex-grass evidence"
+    );
+    assert_eq!(
+        m.gras_all_diffuses,
+        ["textures/plants/g".to_string()].into_iter().collect()
+    );
+    assert_eq!(m.request().unwrap().gras_all_diffuses, m.gras_all_diffuses);
+    let v = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.id == "plants/g")
+        .expect("the plants/g set");
+    let p = v.shader.expect("a shader pick");
+    assert_eq!(
+        (p.shader, p.provenance),
+        (Shader::PbrGrass, ShaderOrigin::Auto(AutoRule::PbrGrass))
     );
 }

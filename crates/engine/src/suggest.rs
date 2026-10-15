@@ -106,9 +106,7 @@ pub fn suggest(c: &SuggestContext) -> Vec<Suggestion> {
             "_s, no PBR set, no _msn (PGPatcher subsurface tint?)",
         )],
         Some("m") | Some("em") | Some("envmask") => {
-            if c.target == Target::Vanilla {
-                vec![s(Envmask, High, "_m under vanilla")]
-            } else if c.alpha == AlphaContent::Varying {
+            if c.alpha == AlphaContent::Varying {
                 vec![
                     s(ComplexMaterial, High, "_m with non-white alpha"),
                     s(Envmask, Low, "_m"),
@@ -355,6 +353,17 @@ mod tests {
                 "textures/a/x_m.png",
                 &none,
                 AlphaContent::Varying
+            ))
+            .subtype,
+            Subtype::ComplexMaterial
+        );
+        assert_eq!(
+            top(&ctx(
+                Target::Vanilla,
+                Some("m"),
+                "textures/a/x_m.png",
+                &none,
+                AlphaContent::Constant255
             ))
             .subtype,
             Subtype::Envmask

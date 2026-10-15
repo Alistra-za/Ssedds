@@ -575,8 +575,8 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
             if m.shapes.is_empty() {
                 ui.label("No shapes.");
             }
-            for (i, s) in m.shapes.iter().enumerate() {
-                if let Some(p) = shape(ui, m, s, i, &mut open) {
+            for s in &m.shapes {
+                if let Some(p) = shape(ui, m, s, &mut open) {
                     clicked = Some(p);
                 }
                 ui.separator();
@@ -769,24 +769,29 @@ fn file_refs(ui: &mut egui::Ui, m: &mut MeshesModel) {
         });
 }
 
-/// One shape card; `index` counts shapes only, from 0. Returns the texture path that was clicked.
+/// One shape card, numbered by PGPatcher's 3D index. Returns the texture path that was clicked.
 fn shape(
     ui: &mut egui::Ui,
     m: &MeshesModel,
     s: &ShapeView,
-    index: usize,
     open: &mut Option<String>,
 ) -> Option<String> {
     let mut clicked = None;
+    let number = s
+        .index3d
+        .map_or_else(|| "#– (not in scene tree)".to_string(), |i| format!("#{i}"));
     ui.label(
         egui::RichText::new(format!(
-            "#{index} {} — {}",
+            "{number} {} — {}",
             s.name.as_deref().unwrap_or("(unnamed)"),
             s.kind
         ))
         .strong(),
     )
-    .on_hover_text(format!("NIF block {}", s.block));
+    .on_hover_text(format!(
+        "NIF block {}\nPGPatcher 3D index: the number plugins use for this shape's alternate textures",
+        s.block
+    ));
     let bold = |t: String| egui::RichText::new(t).strong();
     ui.label(match s.shader_kind {
         1 => bold(
@@ -806,7 +811,7 @@ fn shape(
     ] {
         if let Some(v) = v {
             egui::CollapsingHeader::new(format!("{label} 0x{v:08X}"))
-                .id_salt(("slsf", s.block, index, label))
+                .id_salt(("slsf", s.block, label))
                 .show(ui, |ui| {
                     for l in flag_bits(names, v) {
                         ui.label(l);
@@ -831,7 +836,7 @@ fn shape(
         ui.label(alpha_line(a, s.alpha_threshold.unwrap_or(0)))
             .on_hover_text(format!("flags 0x{a:04X} ({a})"));
     }
-    ui.indent(("slots", s.block, index), |ui| {
+    ui.indent(("slots", s.block), |ui| {
         for (i, t) in s.textures.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 let name = slot_name(s.shader_kind, i);

@@ -2,7 +2,9 @@
 //! Advanced drawer. Drawing only; edits go through `AppModel::set_json_value` after drawing.
 use super::columns::AMBER;
 use crate::model::auto_flags::{auto_flags_for, hint, resolved_for};
-use crate::model::sets::{set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch};
+use crate::model::sets::{
+    is_pbr_grass, set_views, slot_matches, SetView, SlotFill, SlotKind, SlotMatch,
+};
 use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::pgp::prefix::{
@@ -10,7 +12,7 @@ use crate::pgp::prefix::{
     subsurface_pitfalls, EMPTY_ROW, NOT_WRITTEN, NO_MATCH, PATH_CONTAINS_NOT_WRITTEN,
     RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
-use crate::pgp::schema::{spec, Group, KeyKind, KeySpec, NumRange, KEYS};
+use crate::pgp::schema::{grass_ignores, spec, Group, KeyKind, KeySpec, NumRange, KEYS};
 use crate::pgp::settings::{
     blocked_by, feature_key, feature_on, number_default, rgb_default, rgb_of, sub_edits, sub_mode,
     subsurface_group_open, Feature, Settings, SubMode, FEATURE_KEYS, FOLIAGE_KEY, RGB_MAX,
@@ -110,6 +112,8 @@ pub(crate) struct Ctx {
     sub_filled: bool,
     tree_anim: Option<bool>,
     fuzz_filled: bool,
+    /// PBR grass design §4.3: the set is `pbr_grass`, so the keys grass ignores are not drawn.
+    pub(crate) grass: bool,
     /// The Matching header (F1 spec §3.2): the active slot matches, the + menu, and whether nothing matches.
     matches: Vec<SlotMatch>,
     addable: Vec<SlotMatch>,
@@ -143,6 +147,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         renamed: json_rename(&own, derived.as_deref().unwrap_or("")).map(|(d, _)| d),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
+        grass: v.as_ref().is_some_and(is_pbr_grass),
         sub_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Subsurface)),
         tree_anim: ss.tree_anim,
         own,
@@ -184,6 +189,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
             .filter(|k| {
                 k.group == g && !k.advanced && k.kind != KeyKind::Slot && !is_sub_key(k.key)
             })
+            .filter(|k| !(c.grass && grass_ignores(k.key)))
             .collect();
         group(ui, &c, "pgp", g, &keys, &mut edits);
         if g == Group::Features {
@@ -201,8 +207,11 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
                 if !group_open(g, &c.eff) {
                     continue;
                 }
-                let keys: Vec<&KeySpec> =
-                    KEYS.iter().filter(|k| k.group == g && k.advanced).collect();
+                let keys: Vec<&KeySpec> = KEYS
+                    .iter()
+                    .filter(|k| k.group == g && k.advanced)
+                    .filter(|k| !(c.grass && grass_ignores(k.key)))
+                    .collect();
                 group(ui, &c, "pgp-adv", g, &keys, &mut edits);
             }
         });

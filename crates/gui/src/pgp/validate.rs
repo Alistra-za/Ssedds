@@ -1,9 +1,12 @@
-//! A draft-07 subset validator for the vendored PGPatcher schema (DECISIONS P12): exactly the keywords that schema
-//! uses. A test fails if the schema starts using another one. Validation is a safety net that should never fire:
-//! the writer builds documents from the same key table.
+//! A draft-07 subset validator for the vendored PGPatcher schemas (DECISIONS P12): exactly the keywords those schemas
+//! use, `pbr.schema.json` and `complex_material.schema.json`. A test fails if either starts using another one.
+//! Validation is a safety net that should never fire: the writers build documents from the same key tables.
 use super::schema::SCHEMA_JSON;
 use serde_json::Value;
 use std::sync::OnceLock;
+
+/// PGPatcher's complex material schema (upstream `0176567`, identical at 2.2.0), vendored byte for byte.
+pub const CM_SCHEMA_JSON: &str = include_str!("../../assets/complex_material.schema.json");
 
 pub const KEYWORDS: &[&str] = &[
     "type",
@@ -186,8 +189,14 @@ fn check(root: &Value, s: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {
     }
 }
 
-pub fn validate(doc: &Value) -> Result<(), Vec<String>> {
-    let root = schema();
+fn cm_schema() -> &'static Value {
+    static S: OnceLock<Value> = OnceLock::new();
+    S.get_or_init(|| {
+        serde_json::from_str(CM_SCHEMA_JSON).expect("the vendored complex material schema parses")
+    })
+}
+
+fn run(root: &Value, doc: &Value) -> Result<(), Vec<String>> {
     let mut errs = vec![];
     check(root, root, doc, "$", &mut errs);
     if errs.is_empty() {
@@ -195,4 +204,13 @@ pub fn validate(doc: &Value) -> Result<(), Vec<String>> {
     } else {
         Err(errs)
     }
+}
+
+pub fn validate(doc: &Value) -> Result<(), Vec<String>> {
+    run(schema(), doc)
+}
+
+/// A PGPatcher complex material JSON (`<texture>_m.json`) against its vendored schema.
+pub fn validate_cm(doc: &Value) -> Result<(), Vec<String>> {
+    run(cm_schema(), doc)
 }

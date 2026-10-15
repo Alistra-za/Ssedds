@@ -1,6 +1,9 @@
 //! The view-model (M3a spec §3): all GUI state and logic, no egui types, testable without a window.
 pub mod auto_flags;
 pub mod bulk;
+pub mod cm_json;
+pub mod cs_pbr;
+pub mod cs_pbr_export;
 pub mod dds_patch;
 pub mod encoding_follow;
 pub mod export;
@@ -183,6 +186,7 @@ struct EngineInputs {
     mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     gras_diffuses: std::collections::BTreeSet<String>,
+    gras_all_diffuses: std::collections::BTreeSet<String>,
 }
 
 impl EngineInputs {
@@ -197,6 +201,7 @@ impl EngineInputs {
             mesh_votes: m.mesh_votes.clone(),
             mesh_alpha: m.mesh_alpha.clone(),
             gras_diffuses: m.gras_diffuses.clone(),
+            gras_all_diffuses: m.gras_all_diffuses.clone(),
         }
     }
 }
@@ -221,6 +226,8 @@ pub(crate) struct ViewKey {
     root: Option<PathBuf>,
     export_root: PathBuf,
     target: Target,
+    /// The scan database the statics rule read (design §5.1): a new scan changes the export blocks.
+    scan: cs_pbr::Stamp,
 }
 
 pub struct AppModel {
@@ -252,6 +259,9 @@ pub struct AppModel {
     /// Complex grass design §5: the GRAS diffuses of the scan (`engine::grass::path_key` keys), read with the mesh
     /// evidence; sent as `BatchRequest::gras_diffuses`.
     pub gras_diffuses: std::collections::BTreeSet<String>,
+    /// PBR grass design §4.2: every GRAS diffuse of the scan, TruePBR shapes kept, read with the mesh evidence; sent
+    /// as `BatchRequest::gras_all_diffuses`.
+    pub gras_all_diffuses: std::collections::BTreeSet<String>,
     /// GUI tweaks G1/G5: the texture and mesh paths of the last scan, for the path pickers.
     pub known: Arc<known_paths::KnownPaths>,
     /// Item 9: the selected texture's "Used by meshes" read (`used_by_for`).
@@ -348,6 +358,8 @@ pub struct AppModel {
     nvtt_key: Option<Option<NvttKey>>,
     /// The set editor "Used by plugins" reads (esp spec 4.1).
     pub plugin_refs: plugin_refs::SetPluginRefs,
+    /// Design §5.1, §6: the CS PBR scan reads (statics, EDID checks, the material-object picker).
+    pub cs_pbr: cs_pbr::CsPbrScan,
     /// Keyboard navigation, the shortcut sheet and the command palette (items 5 and 19).
     pub nav: nav::Nav,
     /// Explorer requests the app has not started yet (Task 5, `model::shell`).
@@ -367,6 +379,10 @@ pub struct AppModel {
     pending_json: Option<pbr_export::PendingJson>,
     /// The JSON text waiting for the answer to `Dialog::OverwriteJson`.
     pending_text: Option<String>,
+    /// Design §5: the CS PBR files the running export writes afterwards.
+    pending_cs: Option<cs_pbr_export::PendingCs>,
+    /// Complex material design §6: the `<texture>.json` files the running export writes afterwards.
+    pending_cm: Option<cm_json::PendingCm>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
@@ -431,6 +447,7 @@ impl AppModel {
             mesh_tree_anim: Default::default(),
             evidence_rev: 0,
             gras_diffuses: Default::default(),
+            gras_all_diffuses: Default::default(),
             known: Default::default(),
             used_by: Default::default(),
             original: Default::default(),
@@ -487,6 +504,8 @@ impl AppModel {
             after_export: None,
             pending_json: None,
             pending_text: None,
+            pending_cs: None,
+            pending_cm: None,
             ignored_by_plan: false,
             close_ready: false,
             restart_needed: false,
@@ -495,6 +514,7 @@ impl AppModel {
             nvtt_pending: false,
             nvtt_key: None,
             plugin_refs: Default::default(),
+            cs_pbr: Default::default(),
             nav: Default::default(),
             shell: Vec::new(),
             stats: Default::default(),
@@ -568,6 +588,8 @@ impl AppModel {
         self.after_export = None;
         self.pending_json = None;
         self.pending_text = None;
+        self.pending_cs = None;
+        self.pending_cm = None;
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
         // were answered to get here). Audit 2026-10-14 finding 2: a `ProceedAnyway` left open would be closed by
         // the new folder's plan (`refresh_undecided_dialog`) and continue into an export of that folder.
@@ -665,6 +687,7 @@ impl AppModel {
         req.mesh_shaders = self.mesh_votes.clone();
         req.mesh_alpha = self.mesh_alpha.clone();
         req.gras_diffuses = self.gras_diffuses.clone();
+        req.gras_all_diffuses = self.gras_all_diffuses.clone();
         Some(req)
     }
 
@@ -702,6 +725,7 @@ impl AppModel {
                     alpha: meshes::mesh_alpha(&db, &keys)?,
                     tree_anim: meshes::mesh_tree_anim(&db, &keys).unwrap_or_default(),
                     gras: meshes::gras_diffuses(&db)?,
+                    gras_all: meshes::gras_all_diffuses(&db)?,
                 })
             };
             // A panic is an error of this generation (kept values, stderr), not a dialog for a stale read.
@@ -729,8 +753,10 @@ impl AppModel {
             Ok(e) => {
                 let changed = e.votes != self.mesh_votes
                     || e.alpha != self.mesh_alpha
-                    || e.gras != self.gras_diffuses;
+                    || e.gras != self.gras_diffuses
+                    || e.gras_all != self.gras_all_diffuses;
                 (self.mesh_votes, self.mesh_alpha, self.gras_diffuses) = (e.votes, e.alpha, e.gras);
+                self.gras_all_diffuses = e.gras_all;
                 self.set_tree_anim(e.tree_anim);
                 changed
             }
@@ -782,6 +808,7 @@ impl AppModel {
             mesh_votes: req.mesh_shaders.clone(),
             mesh_alpha: req.mesh_alpha.clone(),
             gras_diffuses: req.gras_diffuses.clone(),
+            gras_all_diffuses: req.gras_all_diffuses.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
@@ -991,6 +1018,10 @@ impl AppModel {
                     }
                 }
                 self.finish_json();
+                let cs = self.pending_cs.take();
+                self.finish_cs_pbr(cs);
+                let cm = self.pending_cm.take();
+                self.finish_cm_json(cm);
                 // A user who cancelled the export to leave does not need its error as a dialog.
                 if !self.run_after_export() {
                     if let Some(e) = failure {
@@ -1361,6 +1392,8 @@ impl AppModel {
         };
         req.on_existing = engine::api::OnExisting::IfChanged;
         self.pending_json = pbr_export::prepare(self);
+        self.pending_cs = cs_pbr_export::prepare(self);
+        self.pending_cm = cm_json::prepare(self);
         self.pending_text = None;
         self.export = export::ExportModel {
             open: true,
@@ -1683,6 +1716,7 @@ impl AppModel {
             root: self.root.clone(),
             export_root: self.export_root(),
             target: self.target,
+            scan: cs_pbr::stamp(self.scan_db.as_deref()),
         }
     }
 

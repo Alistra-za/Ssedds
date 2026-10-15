@@ -8,7 +8,7 @@ A target says which renderer the textures are for. A preset is a named bundle of
 |---|---|---|
 | Community Shaders | `cs` | Everything: TruePBR materials, Advanced skin, `_SRGB` tags on PBR colour maps, BC6H and RGBA16F for HDR data, every set shader. The default. |
 | Complex Parallax Materials | `cpm` | Bethesda shaders plus the complex-material `_m` (environment, gloss, metal, height in one map). No `_SRGB`, no BC6H, no PBR. |
-| Vanilla | `vanilla` | Bethesda shaders only. No `_SRGB`, no BC6H, no complex `_m`, no PBR, no complex grass set shader (a `complex_grass` sub-type you set is still written, with a `GRASS-VANILLA` warning). |
+| Vanilla | `vanilla` | Bethesda shaders only. No `_SRGB`, no BC6H, no PBR, no complex grass set shader (a `complex_grass` sub-type you set is still written, with a `GRASS-VANILLA` warning). |
 
 How the target is chosen, highest first:
 
@@ -27,7 +27,6 @@ Under `cs` every sub-type is available. Under `cpm` and `vanilla`, some are not:
 | `pbr_albedo` | no | no | `diffuse` |
 | `pbr_emissive` | no | no | `glow` |
 | `pbr_normal` | no | no | `normal` |
-| `complex_material` | yes | no | `envmask` (vanilla) |
 | `pbr_subsurface`, `pbr_fuzz`, `coat_normal`, `rmaos`, `skin_rfaos` | no | no | none |
 | `skin_albedo`, `skin_sk`, `skin_wet` | no | no | none |
 | `flow`, `hdr_sky` | no | no | none |
@@ -83,7 +82,7 @@ A shader the target does not have falls back to `default`, with `SHADER-UNAVAILA
 | `cs-quality` | 1.0.0 | `cs` | The default. Community Shaders including TruePBR; bc7e at `veryslow`; BC6H for HDR emissive. Adds nothing to the base defaults. |
 | `cs-compact` | 1.0.0 | `cs` | Smaller files. BC1 for opaque colour maps at full size; every other listed sub-type at half size when its larger side is above 512; BC4/BC5 search radius `fast`. |
 | `cpm-quality` | 1.0.0 | `cpm` | CPM / ENB complex material. No `_SRGB`, no BC6H. |
-| `vanilla-quality` | 1.0.0 | `vanilla` | Bethesda shaders. No `_SRGB`, no BC6H, no complex `_m`. |
+| `vanilla-quality` | 1.0.0 | `vanilla` | Bethesda shaders. No `_SRGB`, no BC6H. |
 | `vanilla-compact` | 1.0.0 | `vanilla` | The vanilla version of `cs-compact`. |
 | `fast-preview` | 1.0.0 | none (uses the batch target) | bc7e `fast`, BC4/BC5 search radius `fast`, PSNR validation on the smallest mip only. For checking a mod quickly, not for release. |
 
