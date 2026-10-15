@@ -12,7 +12,7 @@ The file and folder dialogs (Open folder, the export folder, MO2 instance, a fol
 
 The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means.
 
-**Dialog keys.** **Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings** and the undecided-textures list ignore a click outside, so a stray click cannot lose what you typed or chose. **Enter** takes the safe default: Save in the unsaved-changes dialogs, Close, OK, Keep running, Keep it, and Cancel in the Reset all and Delete set confirms. In the "changed on disk" dialog Enter closes it without touching the file or your edits; it never overwrites. **Proceed anyway** is never taken by Enter.
+**Dialog keys.** **Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings**, **Fill from names** and the undecided-textures list ignore a click outside, so a stray click cannot lose what you typed or chose. **Enter** takes the safe default: Save in the unsaved-changes dialogs, Close, OK, Keep running, Keep it, and Cancel in the Reset all and Delete set confirms, and Fill in Fill from names. In the "changed on disk" dialog Enter closes it without touching the file or your edits; it never overwrites. **Proceed anyway** is never taken by Enter.
 
 ## The three columns
 

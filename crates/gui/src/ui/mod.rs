@@ -209,22 +209,15 @@ fn drop_pos(ctx: &egui::Context) -> Option<egui::Pos2> {
 fn os_cursor(ctx: &egui::Context) -> Option<egui::Pos2> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    let (inner, native) = ctx.input(|i| {
-        let v = i.viewport();
-        (v.inner_rect, v.native_pixels_per_point)
-    });
-    let (inner, native) = (inner?, native?);
+    let inner = ctx.input(|i| i.viewport().inner_rect)?;
     let mut p = POINT { x: 0, y: 0 };
     // SAFETY: GetCursorPos writes one POINT through a valid pointer.
     if unsafe { GetCursorPos(&mut p) } == 0 {
         return None;
     }
-    // `inner_rect` is in native points (pixels / native ppp); widgets are in pixels / ppp (zoom included).
+    // egui-winit gives `inner_rect` in the same points as the widgets (pixels / (native scale × zoom)).
     let ppp = ctx.pixels_per_point();
-    Some(egui::pos2(
-        (p.x as f32 - inner.min.x * native) / ppp,
-        (p.y as f32 - inner.min.y * native) / ppp,
-    ))
+    Some(egui::pos2(p.x as f32 / ppp, p.y as f32 / ppp) - inner.min.to_vec2())
 }
 
 #[cfg(not(windows))]
