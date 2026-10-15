@@ -1718,13 +1718,13 @@ impl Renderer {
         }
         let gpu = &self.gpu;
         let target = self.target.as_ref().ok_or("no target")?;
-        let grey = match scene.background {
+        let clear = match scene.background {
             // The target is read back as is when not sRGB-encoding: give it the display value then.
-            Background::Solid(g) if self.encode_srgb => g,
-            Background::Solid(g) => scene::linear_to_srgb(g),
-            Background::Hdri => 0.0,
+            Background::Solid(c) if self.encode_srgb => c,
+            Background::Solid(c) => c.map(scene::linear_to_srgb),
+            Background::Hdri => [0.0; 3],
         };
-        target.clear(gpu, [grey, grey, grey, 1.0]);
+        target.clear(gpu, [clear[0], clear[1], clear[2], 1.0]);
         // SAFETY (whole block): every bound object belongs to `gpu.device`; slices outlive the calls.
         unsafe {
             let ctx = &gpu.ctx;
@@ -1740,7 +1740,7 @@ impl Renderer {
             ctx.RSSetState(&self.raster);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             if let (Background::Hdri, Some(b)) = (scene.background, &self.backdrop) {
-                b.draw(gpu, &view, !self.encode_srgb);
+                b.draw(gpu, &view, !self.encode_srgb, scene.env_yaw);
             }
             for id in &self.draw_order {
                 let Some(s) = self.shapes.get_mut(id).and_then(|st| st.draw.as_mut()) else {

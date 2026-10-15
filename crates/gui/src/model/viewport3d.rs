@@ -354,18 +354,18 @@ impl Orbit {
 /// install begins at the defaults (the look the preview always had).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
-    /// The studio HDRI behind the model (and as ambient light) instead of a flat grey.
+    /// The studio HDRI behind the model (and as ambient light) instead of a flat colour.
     pub hdri: bool,
-    /// The flat background grey in 0..=1, perceptual (sRGB): 0 = black.
-    pub grey: f32,
+    /// The flat background colour, sRGB 0..=1 per channel: `[0.0; 3]` = black (GUI suggestions item 2; was `grey`).
+    pub bg: [f32; 3],
     /// Multiplier on the directional light, 0..=4.
     pub sun: f32,
     /// Point light brightness, 0..=4; 0 is off.
     pub point: f32,
     /// Point light falloff radius in multiples of the model's bounding radius, [`Look::RADIUS_RANGE`].
     pub radius: f32,
-    /// The sun's turn about the vertical (world Z), radians in 0..2π (Shift+right drag). The HDRI does not turn:
-    /// render3d has no environment rotation (AG74).
+    /// The sun's turn about the vertical (world Z), radians in 0..2π (Shift+right drag). The studio HDRI turns with it
+    /// (owner D4: `Scene::env_yaw`).
     pub sun_yaw: f32,
 }
 
@@ -381,9 +381,10 @@ impl Look {
             background: if self.hdri {
                 Background::Hdri
             } else {
-                Background::grey(self.grey)
+                Background::rgb(self.bg)
             },
             sun_brightness: self.sun.clamp(Self::SUN_RANGE.0, Self::SUN_RANGE.1),
+            env_yaw: self.sun_yaw,
             ..Scene::neutral()
         };
         let [x, y, z] = s.dir_light.direction;
@@ -417,7 +418,7 @@ impl Look {
         let Some(s) = s else { return d };
         Look {
             hdri: s.hdri.unwrap_or(d.hdri),
-            grey: s.grey.unwrap_or(d.grey),
+            bg: s.bg.or(s.grey.map(|g| [g; 3])).unwrap_or(d.bg),
             sun: s.sun.unwrap_or(d.sun),
             point: s.point.unwrap_or(d.point),
             radius: s.radius.unwrap_or(d.radius),
@@ -430,7 +431,8 @@ impl crate::settings::LookSettings {
     pub fn of(l: &Look) -> Self {
         Self {
             hdri: Some(l.hdri),
-            grey: Some(l.grey),
+            grey: None,
+            bg: Some(l.bg),
             sun: Some(l.sun),
             point: Some(l.point),
             radius: Some(l.radius),
@@ -443,7 +445,7 @@ impl Default for Look {
     fn default() -> Look {
         Look {
             hdri: false,
-            grey: 0.0,
+            bg: [0.0; 3],
             sun: 1.0,
             point: 0.0,
             radius: 2.0,

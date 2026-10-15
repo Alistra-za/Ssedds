@@ -45,19 +45,24 @@ pub struct DirLight {
 /// What is drawn behind the model.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Background {
-    /// A flat grey: a **linear** value. With `Renderer::set_encode_srgb(true)` it is encoded with the rest of the
-    /// frame at readback; without it (gamma-space output) the renderer writes its sRGB encoding, so the same
-    /// value looks the same either way. A perceptual (sRGB) grey from a UI slider goes through [`Background::grey`].
-    Solid(f32),
-    /// The bundled studio HDRI ([`crate::hdri`]) by view direction. It also replaces `Scene::ambient6`: the
-    /// ambient light is taken from the same image ([`Scene::ambient`]).
+    /// A flat colour: **linear** RGB. With `Renderer::set_encode_srgb(true)` it is encoded with the rest of the frame
+    /// at readback; without it (gamma-space output) the renderer writes its sRGB encoding, so the same value looks the
+    /// same either way. A perceptual (sRGB) colour from the UI goes through [`Background::rgb`] / [`Background::grey`].
+    Solid([f32; 3]),
+    /// The bundled studio HDRI ([`crate::hdri`]) by view direction, turned by `Scene::env_yaw`. It also replaces
+    /// `Scene::ambient6`: the ambient light is taken from the same image ([`Scene::ambient`]).
     Hdri,
 }
 
 impl Background {
     /// A solid grey from an sRGB-perceptual value in 0..1 (0 = black, 1 = white).
     pub fn grey(srgb: f32) -> Background {
-        Background::Solid(srgb_to_linear(srgb.clamp(0.0, 1.0)))
+        Background::rgb([srgb; 3])
+    }
+
+    /// A solid colour from sRGB-perceptual channels in 0..1, each clamped then decoded to linear.
+    pub fn rgb(srgb: [f32; 3]) -> Background {
+        Background::Solid(srgb.map(|c| srgb_to_linear(c.clamp(0.0, 1.0))))
     }
 }
 
@@ -103,6 +108,9 @@ pub struct Scene {
     pub dir_light: DirLight,
     /// Ambient (DALC) colours seen from +X, −X, +Y, −Y, +Z, −Z, world space.
     pub ambient6: [[f32; 3]; 6],
+    /// Environment turn about world +Z, radians, in the sun's sense (a feature at azimuth φ shows at φ + yaw). Turns the
+    /// HDRI backdrop and the ambient taken from it; 0 = the image as bundled. No effect with a solid background.
+    pub env_yaw: f32,
 }
 
 fn norm(v: [f32; 3]) -> [f32; 3] {
@@ -137,7 +145,7 @@ impl Scene {
     pub fn ambient(&self) -> [[f32; 3]; 6] {
         match self.background {
             Background::Solid(_) => self.ambient6,
-            Background::Hdri => crate::hdri::studio().ambient6,
+            Background::Hdri => crate::hdri::studio().ambient6_at(self.env_yaw),
         }
     }
 
@@ -151,7 +159,7 @@ impl Scene {
     pub fn neutral() -> Scene {
         Scene {
             camera: Camera::Auto,
-            background: Background::Solid(0.0),
+            background: Background::Solid([0.0; 3]),
             sun_brightness: 1.0,
             point_light: PointLight::OFF,
             dir_light: DirLight {
@@ -166,6 +174,7 @@ impl Scene {
                 [0.30; 3], // +Z
                 [0.12; 3], // −Z
             ],
+            env_yaw: 0.0,
         }
     }
 }

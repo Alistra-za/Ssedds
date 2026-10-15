@@ -39,7 +39,7 @@ float4 ps(VsOut i) : SV_Target
     // The view-projection is camera-relative (no translation), so the far-plane point is the world direction.
     float4 h = mul(InvViewProj, float4(i.ndc, 1.0, 1.0));
     float3 d = normalize(h.xyz / h.w);
-    float u = frac((atan2(d.y, d.x) + YAW) / 6.2831853 + 0.5);
+    float u = frac((atan2(d.y, d.x) + YAW - Flags.y) / 6.2831853 + 0.5);
     float v = acos(clamp(d.z, -1.0, 1.0)) / 3.1415927;
     float3 c = Env.SampleLevel(Smp, float2(u, v), 0).rgb;
     // Flags.x: the readback does not sRGB-encode, so give it display values.
@@ -196,10 +196,10 @@ impl Backdrop {
         })
     }
 
-    /// Draws the background into the bound target (viewport and render target already set). Leaves the default
-    /// depth state and no input layout; the caller sets everything else per shape.
-    pub fn draw(&self, gpu: &Gpu, view: &View, encode: bool) {
-        let flags = [if encode { 1.0f32 } else { 0.0 }, 0.0, 0.0, 0.0];
+    /// Draws the background into the bound target (viewport and render target already set), the environment turned by
+    /// `yaw` radians about +Z (`Flags.y`). Leaves the default depth state and no input layout.
+    pub fn draw(&self, gpu: &Gpu, view: &View, encode: bool, yaw: f32) {
+        let flags = [if encode { 1.0f32 } else { 0.0 }, yaw, 0.0, 0.0];
         let inv: Vec<u8> = inverse4(&view.view_proj)
             .iter()
             .flatten()

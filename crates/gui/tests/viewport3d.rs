@@ -1011,7 +1011,7 @@ fn changing_the_look_sends_a_render_and_no_load() {
     assert!(cmds.try_recv().is_err());
     for change in [
         (|l: &mut v3::Look| l.hdri = true) as fn(&mut v3::Look),
-        |l| l.grey = 0.5,
+        |l| l.bg = [0.5, 0.25, 0.0],
         |l| l.sun = 2.0,
         |l| l.point = 1.5,
         |l| l.radius = 4.0,
@@ -1037,7 +1037,7 @@ fn the_default_look_is_the_unchanged_scene() {
     // With bounds the point light is placed but off.
     let s = l.scene(Camera::Auto, Some(([1.0, 2.0, 3.0], 2.0)));
     assert_eq!(s.point_light.brightness, 0.0);
-    assert_eq!(s.background, Background::Solid(0.0));
+    assert_eq!(s.background, Background::Solid([0.0; 3]));
     let on = v3::Look {
         hdri: true,
         sun: 9.0,
@@ -1053,6 +1053,10 @@ fn the_default_look_is_the_unchanged_scene() {
         (on.point_light.radius - 4.0).abs() < 1e-5,
         "2 x bounds radius 2"
     );
+    // The HDRI turns with the sun (owner D4): one yaw for both.
+    let turned = v3::Look { sun_yaw: 1.25, ..l }.scene(Camera::Auto, None);
+    assert_eq!(turned.env_yaw, 1.25);
+    assert_eq!(l.scene(Camera::Auto, None).env_yaw, 0.0);
 }
 
 #[test]

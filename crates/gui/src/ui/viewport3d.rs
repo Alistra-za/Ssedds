@@ -170,24 +170,10 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
                 ui.radio_value(&mut l.hdri, false, "Solid");
                 ui.radio_value(&mut l.hdri, true, "Studio HDRI");
                 if !l.hdri {
-                    // AG9: the background is one sRGB grey; swatch + hex edit it, a non-grey pick keeps its Rec.709 luma.
-                    let g = super::color::unit_to_u8(l.grey);
+                    // GUI suggestions item 2: one sRGB colour; the swatch's square and the hex box replace the grey slider.
                     let id = egui::Id::new("viewport3d-bg");
-                    if let Some([r, gg, b]) = super::color::color_field(ui, id, [g; 3]) {
-                        let y =
-                            0.2126 * f32::from(r) + 0.7152 * f32::from(gg) + 0.0722 * f32::from(b);
-                        l.grey = y.round() / 255.0;
-                    }
-                    let mut pct = l.grey * 100.0;
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut pct, 0.0..=100.0)
-                                .suffix(" %")
-                                .text("Grey"),
-                        )
-                        .changed()
-                    {
-                        l.grey = pct / 100.0;
+                    if let Some(rgb) = super::color::color_field(ui, id, l.bg.map(super::color::unit_to_u8)) {
+                        l.bg = rgb.map(super::color::u8_to_unit);
                     }
                 }
             });
@@ -216,7 +202,7 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
             });
             ui.weak("Drag: orbit · middle or Shift+drag: pan · Shift+right drag: turn the sun · wheel: zoom · double-click or Home: recentre");
             if v.look.hdri {
-                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light. Shift+right drag turns the sun only.");
+                ui.weak("Studio HDRI by Poly Haven (CC0): background and ambient light. Shift+right drag turns the sun and the HDRI.");
             }
         });
 }
