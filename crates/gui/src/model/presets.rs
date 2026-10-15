@@ -18,7 +18,7 @@ pub const SWIZZLE_SOURCES: [char; 6] = ['r', 'g', 'b', 'a', '0', '1'];
 /// The read-only ORM example (Note AL): engine behaviour, never written to a preset.
 pub const ORM_EXAMPLE: &str =
     "ORM → RMAOS (built in): an _orm file gives the _rmaos R = roughness from its G, \
-G = metallic from its B, B = AO from its R; specular (A) comes from packing.fill.specular, else 1.";
+G = metallic from its B, B = AO from its R; specular (A) comes from a loose _specular map when the set has one (it wins over the fill), else packing.fill.specular, else 1.";
 
 /// The row groups (AM5), each in `Subtype::ALL` order.
 pub const GROUPS: [&str; 4] = ["Colour", "Normal", "Data", "Special"];
@@ -121,13 +121,15 @@ pub struct Draft {
     orig: Option<String>,
     /// A built-in, shown read-only (Duplicate makes an editable copy).
     pub read_only: bool,
+    /// The text of the file a user preset was loaded from: Save edits it in place (comments and order kept).
+    source: Option<String>,
 }
 
 pub struct PresetsModel {
     dir: Option<PathBuf>,
     registry: PresetRegistry,
-    /// Files of the presets folder that did not load (CFG-PRESET-SKIPPED).
-    pub skipped: Vec<String>,
+    /// `(file, reason)` of the presets folder files that did not load (CFG-PRESET-SKIPPED).
+    pub skipped: Vec<(String, String)>,
     /// The target used when neither the preset nor its base names one.
     pub fallback: Target,
     pub draft: Option<Draft>,
@@ -208,7 +210,10 @@ impl PresetsModel {
             .map(|d| self.registry.add_dir(d))
             .unwrap_or_default()
             .into_iter()
-            .map(|w| w.message)
+            .map(|w| {
+                let s = |k: &str| w.data[k].as_str().unwrap_or_default().to_string();
+                (s("file"), s("reason"))
+            })
             .collect();
         self.refresh();
     }
@@ -239,6 +244,10 @@ impl PresetsModel {
             table: t,
             orig: (!builtin).then(|| id.to_string()),
             read_only: builtin,
+            source: (!builtin)
+                .then(|| self.registry.source(id))
+                .flatten()
+                .and_then(|p| std::fs::read_to_string(p).ok()),
         });
         self.refresh();
     }
@@ -263,12 +272,26 @@ impl PresetsModel {
         let mut t = d.table.clone();
         let id = self.unique_id(t.get("id").and_then(|v| v.as_str()).unwrap_or("preset"));
         t.insert("id".into(), id.into());
-        t.remove("suffix_aliases");
+        // The aliases go, and so do their remap rules (a rule for an alias the copy lacks would be an orphan).
+        let globs: Vec<String> = t
+            .remove("suffix_aliases")
+            .and_then(|v| {
+                v.as_table()
+                    .map(|a| a.keys().map(|k| remap_glob(k)).collect())
+            })
+            .unwrap_or_default();
+        if let Some(rules) = t.get_mut("rules").and_then(toml::Value::as_array_mut) {
+            rules.retain(|r| remap_of(r).is_none_or(|(g, _)| !globs.contains(&g)));
+            if rules.is_empty() {
+                t.remove("rules");
+            }
+        }
         self.draft = Some(Draft {
             saved: toml::Table::new(),
             table: t,
             orig: None,
             read_only: false,
+            source: None,
         });
         self.refresh();
     }
@@ -289,6 +312,7 @@ impl PresetsModel {
             table: t,
             orig: None,
             read_only: false,
+            source: None,
         });
         self.refresh();
     }
@@ -556,7 +580,7 @@ impl PresetsModel {
     pub fn toml_text(&self) -> String {
         self.draft
             .as_ref()
-            .map(|d| toml::to_string(&d.table).unwrap_or_default())
+            .map(|d| output(d).unwrap_or_else(|e| e))
             .unwrap_or_default()
     }
 
@@ -578,7 +602,7 @@ impl PresetsModel {
     fn validate(&self) -> Result<String, String> {
         let d = self.draft.as_ref().ok_or("no preset")?;
         check_id(&self.id())?;
-        let text = toml::to_string(&d.table).map_err(|e| e.to_string())?;
+        let text = output(d)?;
         let mut r = self.registry.clone();
         if let Some(o) = &d.orig {
             r.remove(o);
@@ -674,10 +698,21 @@ impl PresetsModel {
             }
         };
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        write_atomic(&path, &text)?;
         self.rescan();
         self.select(&id);
         Ok(path)
+    }
+
+    /// The file the shown user preset was loaded from (what Delete removes).
+    pub fn source_file(&self) -> Option<String> {
+        let orig = self.draft.as_ref()?.orig.as_deref()?;
+        self.registry.source(orig).map(str::to_string)
+    }
+
+    /// The presets folder, if there is one.
+    pub fn dir(&self) -> Option<&std::path::Path> {
+        self.dir.as_deref()
     }
 
     /// Delete the shown user preset's file, then rescan.
@@ -727,4 +762,78 @@ fn remap_of(rule: &toml::Value) -> Option<(String, String)> {
         m.get("glob")?.as_str()?.to_string(),
         ch.get("swizzle")?.as_str()?.to_string(),
     ))
+}
+
+/// The text Save writes: a user preset's own file edited in place (`toml_edit`, so its comments, key order and
+/// layout stay where the values did not change), else the table serialised (AM13).
+fn output(d: &Draft) -> Result<String, String> {
+    let Some(src) = &d.source else {
+        return toml::to_string(&d.table).map_err(|e| e.to_string());
+    };
+    let mut doc: toml_edit::DocumentMut = src.parse().map_err(|e| format!("{e}"))?;
+    let old: toml::Table = toml::from_str(src).map_err(|e| e.to_string())?;
+    sync(doc.as_table_mut(), false, &old, &d.table)?;
+    Ok(doc.to_string())
+}
+
+/// Make `doc` (whose values are `old`) hold `new`, touching only the keys that differ: a table on both sides is
+/// synced key by key, anything else that changed is replaced.
+/// `inline`: `doc` is an inline table, so what goes in must be a value.
+fn sync(
+    doc: &mut dyn toml_edit::TableLike,
+    inline: bool,
+    old: &toml::Table,
+    new: &toml::Table,
+) -> Result<(), String> {
+    let gone: Vec<String> = old
+        .keys()
+        .filter(|k| !new.contains_key(*k))
+        .cloned()
+        .collect();
+    for k in gone {
+        doc.remove(&k);
+    }
+    for (k, v) in new {
+        if old.get(k) == Some(v) {
+            continue;
+        }
+        if let (Some(toml::Value::Table(o)), toml::Value::Table(n)) = (old.get(k), v) {
+            let sub_inline = inline || doc.get(k).is_some_and(toml_edit::Item::is_value);
+            if let Some(t) = doc.get_mut(k).and_then(toml_edit::Item::as_table_like_mut) {
+                sync(t, sub_inline, o, n)?;
+                continue;
+            }
+        }
+        let item = item_of(k, v)?;
+        let item = if inline {
+            toml_edit::Item::Value(item.into_value().map_err(|_| format!("{k}: not a value"))?)
+        } else {
+            item
+        };
+        doc.insert(k, item);
+    }
+    Ok(())
+}
+
+/// `v` as a `toml_edit` item, laid out as `toml` writes it (a table as a `[section]`, rules as `[[rules]]`).
+fn item_of(k: &str, v: &toml::Value) -> Result<toml_edit::Item, String> {
+    let mut t = toml::Table::new();
+    t.insert(k.to_string(), v.clone());
+    let text = toml::to_string(&t).map_err(|e| e.to_string())?;
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
+    doc.as_table_mut()
+        .remove(k)
+        .ok_or_else(|| "a serialised value".to_string())
+}
+
+/// Write `text` to `path` through a temporary file in the same folder, renamed over it, so a failed write never
+/// leaves half a preset.
+fn write_atomic(path: &std::path::Path, text: &str) -> Result<(), String> {
+    let tmp = path.with_extension("toml.tmp");
+    let fail = |e: std::io::Error| format!("{}: {e}", path.display());
+    std::fs::write(&tmp, text).map_err(fail)?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        fail(e)
+    })
 }

@@ -287,3 +287,103 @@ fn a_saved_preset_is_offered_in_the_header_and_picking_it_plans_with_it() {
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     assert_eq!(m.project_preset(), None);
 }
+
+#[test]
+fn duplicate_drops_the_remap_rules_of_the_aliases_it_drops() {
+    let d = tempfile::tempdir().unwrap();
+    let mut pm = copy_of_quality(d.path());
+    pm.add_remap("dmask", "m", "bgr1").unwrap();
+    pm.save().unwrap();
+    pm.duplicate();
+    let text = pm.toml_text();
+    assert!(!text.contains("dmask"), "{text}");
+    assert!(!text.contains("rules"), "{text}");
+    assert_eq!(pm.status(), &Ok(()));
+}
+
+#[test]
+fn a_save_keeps_the_files_comments_and_order_and_writes_atomically() {
+    let d = tempfile::tempdir().unwrap();
+    let text = "# My preset, hand-written.\nschema_version = 1\nid = \"hand\"\nversion = \"1.0.0\"\nbase = \"cs-quality\" # the default\n\n# Normals at half size.\n[subtypes.normal]\nresize = \"half\" # small\n\n[subtypes.diffuse]\nresize = \"half\"\n";
+    let path = d.path().join("handmade.toml");
+    std::fs::write(&path, text).unwrap();
+    let mut pm = PresetsModel::new(Some(d.path().to_path_buf()), Target::Cs);
+    pm.select("hand");
+    assert!(!pm.dirty());
+    assert_eq!(
+        pm.toml_text(),
+        text,
+        "an unchanged preset previews as its file"
+    );
+    pm.set_field(Subtype::Normal, "mips.levels", json!(5));
+    pm.set_field(Subtype::Envmask, "resize", json!("half"));
+    pm.clear_field(Subtype::Diffuse, "resize");
+    assert_eq!(pm.save().unwrap(), path);
+    let out = std::fs::read_to_string(&path).unwrap();
+    for keep in [
+        "# My preset, hand-written.",
+        "base = \"cs-quality\" # the default",
+        "# Normals at half size.",
+        "resize = \"half\" # small",
+    ] {
+        assert!(out.contains(keep), "{keep} lost:\n{out}");
+    }
+    assert!(out.find("schema_version").unwrap() < out.find("id =").unwrap());
+    assert!(!out.contains("subtypes.diffuse"), "{out}");
+    let t: toml::Table = toml::from_str(&out).unwrap();
+    assert_eq!(t["subtypes"]["envmask"]["resize"].as_str(), Some("half"));
+    assert_eq!(
+        t["subtypes"]["normal"]["mips"]["levels"].as_integer(),
+        Some(5)
+    );
+    assert_eq!(
+        files(d.path()),
+        ["handmade.toml"],
+        "no temporary file is left"
+    );
+}
+
+#[test]
+fn a_deleted_preset_named_in_sdc_toml_falls_back_with_a_banner() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, _| image::Rgb([x as u8, 10, 200]))
+        .save(root.join("a/box.png"))
+        .unwrap();
+    let mut m = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..Default::default()
+        },
+        None,
+        std::sync::Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap()),
+    );
+    m.user_presets = Some(d.path().join("presets"));
+    m.open_folder(root);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    let pm = m.presets_model();
+    pm.select("cs-quality");
+    pm.duplicate();
+    pm.set_id("gone");
+    pm.save().unwrap();
+    m.set_preset(Some("gone".into()));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.batch_preset, "gone");
+    assert_eq!(m.banner, None);
+    m.presets_model().delete().unwrap();
+    m.replan();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    // The plan runs on the fallback instead of failing, and says so.
+    assert!(m.dialog.is_none(), "no error dialog");
+    assert_eq!(m.batch_preset, "cs-quality");
+    assert_eq!(
+        m.banner.as_deref(),
+        Some("preset gone not found: using cs-quality")
+    );
+    // sdc.toml keeps the name (the file may come back); picking another clears the banner.
+    assert_eq!(m.project_preset().as_deref(), Some("gone"));
+    m.set_preset(None);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert_eq!(m.banner, None);
+}

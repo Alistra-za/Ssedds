@@ -637,7 +637,12 @@ impl AppModel {
         req.project_config_inline = Some(if project.read_only() {
             ConfigFile::default()
         } else {
-            project.config().unwrap_or_default()
+            let mut c = project.config().unwrap_or_default();
+            // AM14: a preset that no longer exists is left out, so the plan runs on the fallback (the banner says so).
+            if self.missing_preset().is_some() {
+                c.preset = None;
+            }
+            c
         });
         req.user_config = self.user_config.clone();
         req.user_presets = self.user_presets.clone();
@@ -745,6 +750,7 @@ impl AppModel {
 
     /// Plan again on a worker; a newer plan supersedes (cancels) an older one.
     pub fn replan(&mut self) {
+        self.refresh_banner();
         let (Some(session), Some(req), Some(root)) =
             (self.session.clone(), self.request(), self.root.clone())
         else {
@@ -2013,6 +2019,29 @@ impl AppModel {
         self.project.as_ref()?.preset()
     }
 
+    /// AM14: `preset` in `sdc.toml` when it names neither a built-in nor a preset of the presets folder (deleted or
+    /// renamed since). Reads the folder only for a non-built-in id.
+    pub fn missing_preset(&self) -> Option<String> {
+        let id = self.project_preset()?;
+        let mut r = engine::presets::PresetRegistry::builtin().ok()?;
+        if r.get(&id).is_some() {
+            return None;
+        }
+        if let Some(d) = &self.user_presets {
+            r.add_dir(d);
+        }
+        r.get(&id).is_none().then_some(id)
+    }
+
+    /// The preset a plan uses without the project's: the user config's, else the target's default.
+    fn fallback_preset(&self) -> String {
+        self.user_config
+            .as_deref()
+            .and_then(|p| ConfigFile::load(p).ok())
+            .and_then(|c| c.preset)
+            .unwrap_or_else(|| engine::presets::default_preset_for(self.target).to_string())
+    }
+
     /// Pick the project's preset (`None`: the target's default), one undo step, re-planned.
     pub fn set_preset(&mut self, id: Option<String>) {
         self.edit("Preset", move |p| p.set_preset(id.as_deref()));
@@ -2150,6 +2179,12 @@ impl AppModel {
     /// Rebuild the banner from both files: `sdc.toml`'s read-only reason and `sdc-project.toml`'s (P8).
     pub fn refresh_banner(&mut self) {
         let mut lines = Vec::new();
+        if let Some(id) = self.missing_preset() {
+            lines.push(format!(
+                "preset {id} not found: using {}",
+                self.fallback_preset()
+            ));
+        }
         if let Some(e) = self.project.as_ref().and_then(ProjectDoc::error) {
             lines.push(read_only_banner(e));
         }

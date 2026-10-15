@@ -77,3 +77,71 @@ fn the_reset_arrow_drops_an_override() {
     );
     assert!(h.query_by_label("↺").is_none());
 }
+
+fn with_folder(dir: &std::path::Path) -> AppModel {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.user_presets = Some(dir.to_path_buf());
+    m.open_presets();
+    m
+}
+
+#[test]
+fn unsaved_edits_ask_before_new_and_esc_keeps_them() {
+    use engine::config::Subtype;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_folder(d.path());
+    m.presets_model().select("cs-quality");
+    m.presets_model().duplicate();
+    m.presets_model().set_id("edited");
+    m.presets_model()
+        .set_field(Subtype::Diffuse, "resize", serde_json::json!("half"));
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("New").click();
+    h.run();
+    h.get_by_label("Discard unsaved changes to edited?");
+    h.key_press(eframe::egui::Key::Escape);
+    h.run();
+    h.run();
+    assert!(h
+        .query_by_label("Discard unsaved changes to edited?")
+        .is_none());
+    assert_eq!(
+        h.state_mut().presets_model().id(),
+        "edited",
+        "Esc kept the edits"
+    );
+    h.get_by_label("New").click();
+    h.run();
+    h.get_by_label("Discard").click();
+    h.run();
+    assert_eq!(h.state_mut().presets_model().id(), "", "a new preset");
+}
+
+#[test]
+fn delete_names_the_file_and_broken_files_are_listed_with_open_folder() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("broken.toml"), "id = ").unwrap();
+    std::fs::write(
+        d.path().join("other-name.toml"),
+        "schema_version = 1\nid = \"mine\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n",
+    )
+    .unwrap();
+    let mut m = with_folder(d.path());
+    m.presets_model().select("mine");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("1 preset files did not load:");
+    h.get_by_label_contains("broken.toml: ");
+    h.get_by_label("Open folder").click();
+    h.run();
+    assert_eq!(
+        h.state_mut().take_shell(),
+        [sdc_gui::model::shell::ShellRequest::Open(
+            d.path().to_path_buf()
+        )]
+    );
+    h.get_by_label("Delete…").click();
+    h.run();
+    h.get_by_label_contains("other-name.toml?");
+}

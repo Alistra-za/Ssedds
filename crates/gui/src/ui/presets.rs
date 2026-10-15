@@ -19,7 +19,11 @@ pub fn window_id() -> egui::Id {
     egui::Id::new("presets-window")
 }
 
+#[derive(Clone)]
 enum Act {
+    /// A Select, New or Duplicate the user confirmed over unsaved edits (AM15).
+    Discard(Box<Act>),
+    OpenFolder,
     Select(String),
     Duplicate,
     New,
@@ -66,10 +70,28 @@ pub fn window(ctx: &egui::Context, model: &mut AppModel) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| body(ui, pm, &mut acts));
         });
+    discard_prompt(ctx, model, &mut acts);
     let mut saved = false;
     for a in acts {
         let pm = model.presets_model();
+        let a = match a {
+            Act::Discard(inner) => *inner,
+            a @ (Act::Select(_) | Act::New | Act::Duplicate) if pm.dirty() => {
+                ctx.data_mut(|d| d.insert_temp(discard_id(), a));
+                continue;
+            }
+            a => a,
+        };
         let err = match a {
+            Act::Discard(_) => None,
+            Act::OpenFolder => {
+                if let Some(dir) = pm.dir().map(std::path::Path::to_path_buf) {
+                    model
+                        .shell
+                        .push(crate::model::shell::ShellRequest::Open(dir));
+                }
+                None
+            }
             Act::Select(id) => {
                 pm.select(&id);
                 None
@@ -150,6 +172,25 @@ fn add_error_id(st: Subtype) -> egui::Id {
 }
 
 fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
+    // AM16: files of the presets folder that did not load, with why.
+    if !pm.skipped.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("{} preset files did not load:", pm.skipped.len()),
+            );
+            if pm.dir().is_some() && ui.button("Open folder").clicked() {
+                acts.push(Act::OpenFolder);
+            }
+        });
+        for (file, reason) in &pm.skipped {
+            let name = std::path::Path::new(file)
+                .file_name()
+                .map_or(file.clone(), |n| n.to_string_lossy().into_owned());
+            ui.label(egui::RichText::new(format!("{name}: {reason}")).small())
+                .on_hover_text(file);
+        }
+    }
     ui.horizontal_wrapped(|ui| {
         ui.label("Preset");
         let shown = pm
@@ -259,7 +300,8 @@ fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
             let id = ui.make_persistent_id("presets-delete-ask");
             let asking = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
             if asking {
-                ui.colored_label(RED, format!("Delete {}?", pm.id()));
+                let file = pm.source_file().unwrap_or_else(|| pm.id());
+                ui.colored_label(RED, format!("Delete {file}?"));
                 if ui.button("Delete the file").clicked() {
                     acts.push(Act::Delete);
                     ui.data_mut(|d| d.remove::<bool>(id));
@@ -718,4 +760,36 @@ fn remaps(ui: &mut egui::Ui, pm: &PresetsModel, st: Subtype, acts: &mut Vec<Act>
         d.insert_temp(sid, swz);
         d.insert_temp(cid, canon);
     });
+}
+
+fn discard_id() -> egui::Id {
+    egui::Id::new("presets-discard")
+}
+
+/// AM15: Select, New or Duplicate over unsaved edits asks first. Discard goes on; Cancel, Esc or a click outside
+/// keeps the edits.
+fn discard_prompt(ctx: &egui::Context, model: &mut AppModel, acts: &mut Vec<Act>) {
+    let Some(pending) = ctx.data(|d| d.get_temp::<Act>(discard_id())) else {
+        return;
+    };
+    let id = model.presets_model().id();
+    let name = if id.is_empty() {
+        "the new preset".to_string()
+    } else {
+        id
+    };
+    let (mut discard, mut cancel) = (false, false);
+    let keys = super::dialogs::modal_keys(ctx, "presets-discard", true, |ui| {
+        ui.label(format!("Discard unsaved changes to {name}?"));
+        ui.horizontal(|ui| {
+            discard = ui.button("Discard").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if discard {
+        acts.push(Act::Discard(Box::new(pending)));
+    }
+    if discard || cancel || keys.cancel {
+        ctx.data_mut(|d| d.remove::<Act>(discard_id()));
+    }
 }
