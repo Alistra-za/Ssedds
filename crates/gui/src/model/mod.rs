@@ -26,6 +26,7 @@ pub mod sections;
 pub mod set_preview;
 pub mod sets;
 pub mod shell;
+pub mod skin;
 pub mod texture_view;
 pub mod view;
 pub mod viewport3d;

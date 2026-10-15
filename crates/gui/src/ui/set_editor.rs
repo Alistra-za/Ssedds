@@ -162,6 +162,9 @@ pub fn draw(
                 if shows_json_panel(&v, model.target) {
                     super::pgp_fields::panel(&mut cols[1], model, &v.id);
                 }
+                if v.skin {
+                    super::skin_card::card(&mut cols[1], model, &v);
+                }
             });
         });
     let (mut select, mut expand) = (None, None);

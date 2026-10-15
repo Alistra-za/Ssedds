@@ -15,7 +15,7 @@ pub const FILE_NAME: &str = "sdc-project.toml";
 /// GUI tweaks G4: the array of extra PGPatcher entries (delete sections).
 const SECTIONS: &str = "pgp_sections";
 /// Keys of a `[[sets]]` table that are not JSON settings.
-const RESERVED: [&str; 9] = [
+const RESERVED: [&str; 10] = [
     "id",
     "created",
     "renamed_from",
@@ -25,6 +25,7 @@ const RESERVED: [&str; 9] = [
     "shader",
     "lock",
     "output_name",
+    "skin",
 ];
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -43,6 +44,8 @@ pub struct SetEntry {
     /// F3b D2: the base name every output of the set takes (`output_name = "steel"`): `steel_n.dds`, `steel.dds`…
     /// in each output's own folder. Never on a CS PBR set, which renames through the PGPatcher `rename` key.
     pub output_name: Option<String>,
+    /// Task 10b: the Advanced skin card's explicit values (`skin.<CS key>`). Not PGPatcher settings; unknown keys stay.
+    pub skin: Settings,
     pub settings: Settings,
 }
 
@@ -110,6 +113,10 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             }
         }
     }
+    let mut skin = Settings::new();
+    if let Some(sub) = t.get("skin").and_then(Item::as_table_like) {
+        flatten(sub, "", &mut skin);
+    }
     let borrow = t
         .get("borrow")
         .and_then(Item::as_table_like)
@@ -145,6 +152,7 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
             .and_then(Item::as_str)
             .map(str::to_string)
             .filter(|n| !n.is_empty()),
+        skin,
         settings,
     })
 }

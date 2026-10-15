@@ -20,6 +20,7 @@ pub mod set_editor;
 pub mod set_preview;
 pub mod sets_column;
 pub mod settings_panel;
+pub mod skin_card;
 pub mod slot_commands;
 pub mod thumbs;
 pub mod viewport3d;
