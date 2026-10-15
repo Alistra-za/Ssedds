@@ -28,6 +28,18 @@ fn no_ext(p: &str) -> &str {
 }
 
 impl AppModel {
+    /// Note AO: what the input name box offers (its ▾ rows and gray completion): the known diffuse paths, without
+    /// those under `textures\pbr\`, which are PGPatcher's outputs, not input names (AO8).
+    pub fn input_name_candidates(&self) -> Vec<String> {
+        let mut list = self.known_textures(Some(0));
+        list.retain(|p| {
+            !p.replace('\\', "/")
+                .get(..13)
+                .is_some_and(|h| h.eq_ignore_ascii_case("textures/pbr/"))
+        });
+        list
+    }
+
     /// The current input name of set `set_id`: its own diffuse's game path without extension.
     pub fn input_name_of(&self, set_id: &str) -> Option<String> {
         let v = set_views(self)

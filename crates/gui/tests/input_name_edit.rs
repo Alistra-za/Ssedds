@@ -223,3 +223,35 @@ fn enter_commits_one_step_esc_reverts_and_invalid_text_does_not_commit() {
         Some("textures/landscape/rock02")
     );
 }
+
+/// Note AO8: paths under `textures\pbr\` are PGPatcher's outputs, not input names: no row, no ghost.
+#[test]
+fn pbr_output_paths_are_never_offered() {
+    let (_d, mut h) = harness();
+    h.state_mut().0.set_known(KnownPaths {
+        textures: [
+            ("textures/pbr/landscape/rock02.dds".to_string(), 1u16),
+            ("textures/landscape/rock02.dds".to_string(), 1u16),
+        ]
+        .into(),
+        mesh_dirs: vec![],
+    });
+    let list = h.state().0.input_name_candidates();
+    assert!(list.iter().any(|p| p == "textures/landscape/rock02"));
+    assert!(
+        !list
+            .iter()
+            .any(|p| p.to_lowercase().starts_with("textures/pbr/")),
+        "{list:?}"
+    );
+    assert_eq!(completion(&list, "Textures\\PBR"), None);
+    // Unlocked to `textures/`, the list still has no pbr row.
+    h.run();
+    focus(&mut h);
+    key(&mut h, Key::ArrowLeft, ctrl());
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
+    h.run();
+    h.get_by_label("textures/landscape/rock02");
+    assert!(h.query_by_label("textures/pbr/landscape/rock02").is_none());
+}

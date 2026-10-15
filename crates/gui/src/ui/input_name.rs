@@ -39,7 +39,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     let buf = id.with("buf");
     let lock_id = id.with("lock");
     let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
-    let paths = path_picker::cached(ui, "input-name", key, || model.known_textures(Some(0)));
+    let paths = path_picker::cached(ui, "input-name", key, || model.input_name_candidates());
     // The edit buffer carries the frame it was last drawn in (as the colour hex box does).
     let frame = ui.ctx().cumulative_frame_nr();
     let mut text = ui
