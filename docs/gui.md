@@ -131,6 +131,19 @@ Double-click a tile (or a set member), or select it and press **Enter** or **Spa
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed" (N11 ended in M6).
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works"; deciding, editing and Export still work.
 
+## The Meshes view: shapes
+
+Next to the **Mods and meshes** title is a **Shapes** button (greyed out, "Select a mesh first", until a mesh is selected). Switched on, it replaces the mods and meshes list with the shape cards of the selected mesh; switched off, or when the selection clears, the list is back. The right-hand pane always shows the 3D view.
+
+A shape card shows, from the top:
+
+- **#N name — type.** N counts only the shapes of the NIF, from 0, in the order the NIF lists them; bones and other non-shapes are skipped. Hover for the NIF block index ("NIF block 12").
+- **The shader**, in bold: the lighting shader type, for example **Hair Tint (6)**, or "Effect shader".
+- **SLSF1 0x… and SLSF2 0x…** as collapsed headers. Open one to list its set flags by name, one per line, for example "Specular (0)". A bit with no known name reads "bit N".
+- The geometry line (skinned, vertices, triangles).
+- **Alpha**, in words: "Alpha: blend Src Alpha → Inv Src Alpha · test Greater, threshold 5". Blending or testing is left out when it is off, and "Alpha: none" shows when both are. Hover for the raw flags, for example "flags 0x12ED (4845)".
+- The texture-set slots, indented under the shape.
+
 ## Keyboard
 
 Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. Press **Ctrl+K** for the command palette: type part of an action's, a texture's or a set's name (the letters in order are enough; names that start with what you typed come first, then names that contain it). Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, Esc closes. The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
