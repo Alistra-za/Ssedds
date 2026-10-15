@@ -1149,7 +1149,7 @@ Spec `docs/superpowers/specs/2026-10-14-pbr-grass-design.md` (owner-approved 202
 Spec `F:\ai\dds\nifparseref\plan\complex-material\2026-10-14-complex-material-design.md` (owner-approved 2026-10-14, including edits to `sets_doc.rs`, `pgp/validate.rs`, engine `policy.rs`/`suggest.rs`, the `vanilla-quality` description, `schema/` and two golden tests).
 
 - **AM1 Vanilla keeps a complex `_m` (D16).** The `(Vanilla, complex_material) → envmask` fallback and the "_m under vanilla" suggestion are gone.
-  - Vanilla uses the CS rule: a Note L varying alpha gives `complex_material` (High, BC7 UNORM with alpha, BC3 option, Note AH unchanged), and anything else gives `envmask` (BC4, no alpha).
+  - Vanilla uses the CS rule: a Note L alpha (minimum below 251) gives `complex_material` (High, BC7 UNORM with alpha, BC3 option, Note AH unchanged), and anything else gives `envmask` (BC4, no alpha).
   - Side effects: a Vanilla set with a complex `_m` auto-picks the Complex Material shader. A varying-alpha `_m` that used to be skipped (`LOSS-ALPHA-DATA`) or written as BC4 is now BC7, twice the size, and its `profile_sha256` changes once, so `if-changed` re-encodes it. The engine version stays 0.7.0.
   - The vanilla shader ignores the alpha without ENB. The owner accepted this.
   - Two golden tests changed (both owner-approved). `vanilla_fallbacks_are_written_with_allow_cfg_unavailable` drops `iron_m`: three fallbacks. `vanilla_g_is_glow_and_m_with_alpha_is_envmask_with_loss` now expects BC7 `complex_material` plus `VAL-M-GRAYSCALE` (its RGB is grey); the test name predates AM. It also dropped its `skip_code(None)` assert, because that helper panics when there is no skip event.
