@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 pub const LOG_CAP: usize = 500;
 /// Toasts on screen at once; the rest wait in a queue.
 pub const MAX_SHOWN: usize = 3;
+/// Toasts waiting for a place; the oldest are dropped past this (the log keeps them).
+pub const MAX_QUEUED: usize = 5;
 /// How long a toast stays, and a warning or error.
 pub const FADE: Duration = Duration::from_secs(4);
 pub const FADE_WARN: Duration = Duration::from_secs(8);
@@ -103,6 +105,13 @@ impl Messages {
         let text = text.into();
         self.log(severity, text.clone());
         self.next_id += 1;
+        // A newer notice of the same kind ("Undid", "Saved", "Export finished") replaces the one still waiting.
+        let kind = |t: &str| t.split(':').next().unwrap_or_default().to_string();
+        let k = kind(&text);
+        self.queue.retain(|q| kind(&q.text) != k);
+        while self.queue.len() >= MAX_QUEUED {
+            self.queue.pop_front();
+        }
         self.queue.push_back(Toast {
             id: self.next_id,
             severity,

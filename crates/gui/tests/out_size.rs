@@ -126,3 +126,38 @@ fn the_settings_panel_and_the_status_line_show_the_estimate() {
         .next()
         .is_some());
 }
+
+fn settle(m: &mut sdc_gui::model::AppModel) {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while m.dims_pending() {
+        assert!(std::time::Instant::now() < end, "the header job landed");
+        m.poll();
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn headers_are_read_on_a_worker_and_the_totals_follow() {
+    use sdc_gui::model::out_size::header_reads_on_this_thread;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    // A session that analysed nothing and no size asked for yet: every header goes to the worker.
+    m.session = Some(support::session());
+    m.invalidate_views();
+    let before = header_reads_on_this_thread();
+    let (_, missing) = m.folder_size();
+    assert!(missing > 0, "unsized until the worker lands");
+    assert!(m.dims_pending());
+    assert_eq!(
+        header_reads_on_this_thread(),
+        before,
+        "no header read on the UI thread"
+    );
+    settle(&mut m);
+    let (total, missing) = m.folder_size();
+    assert_eq!(missing, 0);
+    let one = m.size_of("landscape/rock01.png").unwrap();
+    assert!(total >= one.file_bytes());
+    assert!(m.sizes.reads >= 2);
+    assert_eq!(header_reads_on_this_thread(), before);
+}

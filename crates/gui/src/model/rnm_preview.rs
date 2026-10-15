@@ -27,6 +27,8 @@ pub struct RnmPreview {
     item: Option<String>,
     /// On show: (item key, the key it was made for, the picture; `None` = the blend failed).
     shown: Option<(String, String, Option<Arc<RnmThumb>>)>,
+    /// The key of the item last asked about, by plan revision.
+    key_cache: Option<(u64, String, Option<String>)>,
     /// Jobs started so far (tests).
     pub started: u32,
 }
@@ -91,7 +93,18 @@ impl AppModel {
     /// differs from the one on show and nothing is in flight. Returns at once; the picture lands through `poll`.
     pub fn rnm_preview_frame(&mut self, item_key: &str) {
         let job = self.item(item_key).and_then(|i| i.job.clone());
-        let want = job.as_ref().and_then(|j| key_of(item_key, j));
+        // The key serialises the job; it only changes with a plan, so it is rebuilt per plan revision.
+        let rev = self.items_rev();
+        let cached = self
+            .rnm_preview
+            .key_cache
+            .take()
+            .filter(|(r, it, _)| *r == rev && it == item_key);
+        let want = match cached {
+            Some((_, _, k)) => k,
+            None => job.as_ref().and_then(|j| key_of(item_key, j)),
+        };
+        self.rnm_preview.key_cache = Some((rev, item_key.to_string(), want.clone()));
         self.rnm_preview.item = Some(item_key.to_string());
         let (Some(job), Some(want)) = (job, want) else {
             return;

@@ -59,6 +59,15 @@ pub fn format_name(f: Format) -> String {
         .unwrap_or_else(|| format!("{f:?}"))
 }
 
+thread_local! {
+    static HEADER_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Header reads `source_dims` made on this thread (tests: the UI thread must make none).
+pub fn header_reads_on_this_thread() -> u32 {
+    HEADER_READS.with(|c| c.get())
+}
+
 /// "5.3 MiB", "148 B".
 pub fn human(bytes: u64) -> String {
     const U: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
@@ -79,6 +88,7 @@ pub fn human(bytes: u64) -> String {
 /// unreadable file: that texture then shows no estimate.
 /// shortcut: PSD sources have no size here; read the PSD header when they matter.
 pub fn source_dims(path: &std::path::Path) -> Option<(u32, u32)> {
+    HEADER_READS.with(|c| c.set(c.get() + 1));
     if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
@@ -93,7 +103,7 @@ pub fn source_dims(path: &std::path::Path) -> Option<(u32, u32)> {
 }
 
 /// A source file and the (size, mtime) stamp the plan read it at.
-type DimKey = (std::path::PathBuf, Option<(u64, u64)>);
+pub type DimKey = (std::path::PathBuf, Option<(u64, u64)>);
 
 /// Per-item sizes by plan revision (`AppModel::items_rev`): the source dimensions are read once per file and
 /// kept; the sizes are rebuilt when the revision moves.
@@ -104,8 +114,12 @@ pub struct SizeCache {
     dims: HashMap<DimKey, Option<(u32, u32)>>,
     folder: Option<(u64, (u64, usize))>,
     sizes: HashMap<String, Option<SizeEst>>,
-    /// Source-header reads so far (tests).
+    /// Files sent to the header worker so far (tests).
     pub reads: u32,
+    /// Files whose size the worker still has to read, and the ones it has been asked for (answered or in flight).
+    pending: Vec<DimKey>,
+    asked: std::collections::HashSet<DimKey>,
+    running: bool,
     /// Rebuilds so far (tests).
     pub builds: u32,
 }
@@ -136,12 +150,25 @@ impl SizeCache {
         let job = item.job.as_ref()?;
         let src = &job.input;
         let stamp = job.source.map(|s| (s.size, s.mtime_ns));
-        let reads = &mut self.reads;
-        let dims = *self.dims.entry((src.clone(), stamp)).or_insert_with(|| {
-            *reads += 1;
-            source_dims(src)
-        });
-        Some(estimate(dims?, &job.profile))
+        let k = (src.clone(), stamp);
+        if !self.dims.contains_key(&k) {
+            // The planner already decoded this file: its analysis has the size, no file is read.
+            let known = job
+                .source
+                .and_then(|st| m.session.as_ref().and_then(|s| s.cache().dims(src, st)));
+            match known {
+                Some(d) => {
+                    self.dims.insert(k.clone(), Some(d));
+                }
+                None => {
+                    if self.asked.insert(k.clone()) {
+                        self.pending.push(k);
+                    }
+                    return None;
+                }
+            }
+        }
+        Some(estimate(self.dims[&k]?, &job.profile))
     }
 
     /// Sum over `keys` (items without an estimate count as 0) and how many had none.
@@ -167,6 +194,7 @@ impl AppModel {
         let mut c = std::mem::take(&mut self.sizes);
         let e = c.item(self, key);
         self.sizes = c;
+        self.kick_dims();
         e
     }
 
@@ -175,6 +203,7 @@ impl AppModel {
         let mut c = std::mem::take(&mut self.sizes);
         let t = c.total(self, keys.iter().map(String::as_str));
         self.sizes = c;
+        self.kick_dims();
         t
     }
 
@@ -224,5 +253,48 @@ impl AppModel {
         }
         let (s, sm) = self.size_total(selection);
         format!("≈ VRAM: selection {} · {folder}", with_missing(s, sm))
+    }
+}
+
+impl AppModel {
+    /// Sends the files whose size the plan did not give to a worker, one job at a time (the heatmap pattern); the
+    /// totals say "(+N unsized)" until it lands.
+    fn kick_dims(&mut self) {
+        let c = &mut self.sizes;
+        if c.running || c.pending.is_empty() {
+            return;
+        }
+        let todo = std::mem::take(&mut c.pending);
+        c.running = true;
+        c.reads += todo.len() as u32;
+        crate::worker::spawn_guarded(self.tx.clone(), "dims", move |tx| {
+            let dims = todo
+                .into_iter()
+                .map(|k| {
+                    let d = source_dims(&k.0);
+                    (k, d)
+                })
+                .collect();
+            let _ = tx.send(crate::worker::WorkerMsg::Dims(dims));
+        });
+    }
+
+    pub(super) fn dims_landed(&mut self, dims: Vec<(DimKey, Option<(u32, u32)>)>) {
+        let c = &mut self.sizes;
+        c.running = false;
+        c.dims.extend(dims);
+        // Estimates built without them are rebuilt.
+        c.rev = None;
+        c.folder = None;
+        self.kick_dims();
+    }
+
+    pub(super) fn dims_panicked(&mut self) {
+        self.sizes.running = false;
+    }
+
+    /// A header job is in flight or waiting: the app keeps frames coming until it lands.
+    pub fn dims_pending(&self) -> bool {
+        self.sizes.running || !self.sizes.pending.is_empty()
     }
 }

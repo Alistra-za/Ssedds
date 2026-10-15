@@ -69,6 +69,8 @@ pub enum WorkerMsg {
         id: u64,
         image: Option<Arc<crate::model::rnm_preview::RnmThumb>>,
     },
+    /// Source sizes read from file headers (`AppModel::kick_dims`).
+    Dims(Vec<(crate::model::out_size::DimKey, Option<(u32, u32)>)>),
     Encoded {
         token: u64,
         result: Result<Arc<PreviewOut>, String>,

@@ -370,6 +370,7 @@ impl eframe::App for SdcApp {
         if self.model.busy()
             || self.model.heatmap_pending()
             || self.model.rnm_preview_pending()
+            || self.model.dims_pending()
             || self.model.picker.busy()
             || self.meshes.scanning()
             || self.meshes.v3.busy()

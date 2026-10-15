@@ -617,10 +617,19 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
         });
         if pressed {
             model.status_line = "Ctrl+S: leave the text field first".into();
-            model.messages.log(
-                crate::model::messages::Severity::Info,
-                model.status_line.clone(),
-            );
+            // Once per press: a held key repeats, and the log should not fill with the same line.
+            let fresh = ctx.input(|i| {
+                i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { repeat: false, pressed: true, key, .. }
+                        if save.iter().any(|s| s.key == *key))
+                })
+            });
+            if fresh {
+                model.messages.log(
+                    crate::model::messages::Severity::Info,
+                    model.status_line.clone(),
+                );
+            }
         }
     }
     let meshes = super::header::meshes_view_active(ctx);

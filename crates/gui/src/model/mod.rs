@@ -876,6 +876,7 @@ impl AppModel {
                     "preview" => self.preview_panicked(&message),
                     "heatmap" => self.heatmap_panicked(),
                     "rnm-preview" => self.rnm_preview_panicked(),
+                    "dims" => self.dims_panicked(),
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
@@ -958,6 +959,7 @@ impl AppModel {
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
             WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
+            WorkerMsg::Dims(dims) => self.dims_landed(dims),
             WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}
         }
@@ -1598,14 +1600,18 @@ impl AppModel {
 
     /// Replace the Tree_Anim scan evidence; the JSON editor's cache sees it (DECISIONS AG109).
     pub fn set_tree_anim(&mut self, t: std::collections::BTreeMap<String, bool>) {
-        self.mesh_tree_anim = t;
-        self.evidence_rev += 1;
+        if self.mesh_tree_anim != t {
+            self.mesh_tree_anim = t;
+            self.evidence_rev += 1;
+        }
     }
 
     /// Replace the scan's known paths; the JSON editor's cache sees it (DECISIONS AG109).
     pub fn set_known(&mut self, k: known_paths::KnownPaths) {
-        self.known = Arc::new(k);
-        self.evidence_rev += 1;
+        if *self.known != k {
+            self.known = Arc::new(k);
+            self.evidence_rev += 1;
+        }
     }
 
     /// What the PGPatcher JSON editor's text and issues are built from (DECISIONS AG109): the set-view key, the

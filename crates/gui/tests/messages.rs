@@ -266,3 +266,19 @@ fn saved_undo_and_export_results_raise_toasts() {
         "Export finished: 7 written, 2 skipped, 1 failed"
     );
 }
+
+#[test]
+fn twenty_quick_undos_leave_one_queued_undo_toast_and_the_queue_is_capped() {
+    let mut m = store();
+    for i in 0..20 {
+        m.notify(Severity::Info, format!("Undid: step {i}."));
+    }
+    assert_eq!(m.toasts().len(), MAX_SHOWN);
+    assert_eq!(m.queued(), 1, "the newest replaced the waiting one");
+    assert_eq!(m.len(), 20, "the log keeps every one");
+    let mut m = store();
+    for i in 0..30 {
+        m.notify(Severity::Info, format!("kind{i}: x"));
+    }
+    assert_eq!(m.queued(), sdc_gui::model::messages::MAX_QUEUED);
+}
