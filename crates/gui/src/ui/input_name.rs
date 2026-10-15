@@ -119,7 +119,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             .stroke(ui.visuals().widgets.inactive.bg_stroke)
             .fill(ui.visuals().extreme_bg_color)
             .corner_radius(2.0)
-            .inner_margin(egui::Margin::symmetric(4, 2))
+            .inner_margin(egui::Margin::symmetric(4, 0))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.horizontal(|ui| {

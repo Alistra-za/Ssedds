@@ -293,7 +293,7 @@ Switch the set editor to **3D** to see the set on a mesh, rendered with Direct3D
 | Control | What it does |
 |---|---|
 | Encoded (exact export) / Source (faster, no compression) | Show the bytes Export would write, or the prepared source without compression. |
-| **Mesh:** | *Auto* (a scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. |
+| **Mesh:** | *Auto* (the first scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. The scanned meshes are listed loose before BSA, with ground models (`gnd`, `_go`) and `1stperson` meshes last. |
 | **Shader folder…** | Point at your Community Shaders mod folder or its `Shaders` folder when it is not found automatically ("Community Shaders not found", **Choose folder…**). |
 | Community Shaders features | On by default. Off compiles the shaders without CS feature defines. |
 | Background | Solid or Studio HDRI (Poly Haven, CC0). For Solid, a colour swatch with a hex field and a *Grey* slider (0 to 100 %) set the grey level; a non-grey colour is turned into its grey. |

@@ -1306,6 +1306,23 @@ pub fn group_rows(
     out
 }
 
+/// Note AO9: a ground model (`gnd` in the file name, or a stem ending `_go`) or a first-person mesh (`1stperson…`).
+pub fn is_ground_or_first_person(nif_path: &str) -> bool {
+    let name = nif_path
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let stem = name.strip_suffix(".nif").unwrap_or(&name);
+    stem.contains("gnd") || stem.ends_with("_go") || stem.starts_with("1stperson")
+}
+
+/// Note AO9 (owner): loose meshes before BSA ones, ground and first-person meshes last: loose, BSA, loose ground,
+/// BSA ground. A stable sort, so each tier keeps the query's order. Auto takes the first usable one.
+pub fn order_candidates(list: &mut [Candidate], bsa: impl Fn(&Candidate) -> bool) {
+    list.sort_by_cached_key(|c| (is_ground_or_first_person(&c.nif_path), bsa(c)));
+}
+
 /// A stored shape's slots as PGPatcher reads them: the raw string when the store kept it, else the canonical path
 /// with backslashes (the same string up to case, which PGPatcher folds).
 fn view_slots(v: &ShapeView) -> Vec<TexPath> {
@@ -1346,10 +1363,18 @@ fn query(
             .find(|s| s.block == block)
             .is_some_and(|s| pgpsim::shape_matches(prepared, nif, &view_slots(s)))
     };
-    let out = group_rows(&rows, filter, &check);
+    let mut out = group_rows(&rows, filter, &check);
     if let Some(e) = failed.into_inner() {
         return Err(format!("reading the shapes of a mesh: {e}"));
     }
+    // A copy that is gone from the scan counts as loose; loading it reports that.
+    order_candidates(&mut out, |c| {
+        store
+            .copy_location(c.load_copy_id)
+            .ok()
+            .flatten()
+            .is_some_and(|(_, kind, _, _)| kind == modscan::store::KIND_BSA)
+    });
     Ok(out)
 }
 

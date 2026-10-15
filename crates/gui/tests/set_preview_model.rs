@@ -1888,3 +1888,48 @@ fn the_set_preview_tags_its_viewport_for_the_gap_watch() {
         "set_preview"
     );
 }
+
+/// Note AO9 (owner, 2026-10-15): the Mesh list puts loose meshes before BSA ones, and ground models (`gnd` in the
+/// name, a stem ending `_go`) and `1stperson` meshes last; within a tier the query's order stays. Auto takes the first.
+#[test]
+fn mesh_candidates_prefer_loose_then_leave_ground_and_first_person_last() {
+    let c = |id: i64, nif: &str| Candidate {
+        load_copy_id: id,
+        copy_id: id,
+        nif_path: nif.into(),
+        origin: "m".into(),
+        le_mesh: false,
+        derived: false,
+        shapes: vec![(0, None)],
+    };
+    let mut list = vec![
+        c(1, r"meshes\armor\bootsgnd.nif"),
+        c(2, r"meshes\armor\1stpersonboots.nif"),
+        c(3, r"meshes\armor\boots_1.nif"),
+        c(4, r"meshes\armor\ct77vampirethighboots_go.nif"),
+        c(5, r"meshes\armor\dragonboots.nif"),
+        c(6, r"meshes\armor\boots_0.nif"),
+        c(7, r"meshes\armor\gone_1.nif"),
+    ];
+    // 3 and 7 come from a BSA.
+    order_candidates(&mut list, |c| {
+        c.load_copy_id == 3 || c.load_copy_id == 7 || c.load_copy_id == 2
+    });
+    let ids: Vec<i64> = list.iter().map(|c| c.load_copy_id).collect();
+    // loose normal (5 "dragon" is no ground model, 6), bsa normal (3, 7 "gone" is not `_go`), loose ground/1st (1, 4),
+    // bsa ground/1st (2).
+    assert_eq!(ids, vec![5, 6, 3, 7, 1, 4, 2]);
+    // Auto draws the first usable one: a loose, non-ground mesh.
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(dir.path());
+    let key = rock(&m).0.key;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    s.candidates = Candidates::Ready(list);
+    assert_eq!(s.choice(), MeshChoice::Auto);
+    assert!(matches!(s.pick(), Pick::Nif(c) if c.load_copy_id == 5));
+    assert!(is_ground_or_first_person(r"meshes\a\Boots_GO.NIF"));
+    assert!(!is_ground_or_first_person(r"meshes\a\dragon.nif"));
+    assert!(!is_ground_or_first_person(r"meshes\a\gone.nif"));
+}
