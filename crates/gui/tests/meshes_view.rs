@@ -1573,25 +1573,38 @@ fn shapes_toggle_swaps_the_column_and_is_off_with_no_selection() {
 }
 
 #[test]
-fn shape_cards_number_from_zero_and_show_the_block_in_the_hover() {
+fn shape_cards_show_the_pgpatcher_3d_index_and_the_block_in_the_hover() {
     let a = ShapeView {
         block: 12,
         name: Some("First".into()),
+        index3d: Some(1),
         ..shape(vec![None])
     };
     let b = ShapeView {
         block: 20,
         name: Some("Second".into()),
+        index3d: Some(0),
         ..shape(vec![None])
     };
-    let mut h = harness(shapes_model(vec![a, b]));
+    let c = ShapeView {
+        block: 30,
+        name: Some("Orphan".into()),
+        index3d: None,
+        ..shape(vec![None])
+    };
+    let mut h = harness(shapes_model(vec![a, b, c]));
     h.run();
-    h.get_by_label_contains("#0 First");
-    h.get_by_label_contains("#1 Second");
-    assert!(h.query_by_label_contains("#12").is_none());
-    h.get_by_label_contains("#0 First").hover();
+    h.get_by_label_contains("#1 First");
+    h.get_by_label_contains("#0 Second");
+    h.get_by_label_contains("#– (not in scene tree) Orphan");
+    assert!(
+        h.query_by_label_contains("#12").is_none(),
+        "the block is not the number"
+    );
+    h.get_by_label_contains("#1 First").hover();
     h.run();
-    h.get_by_label("NIF block 12");
+    h.get_by_label_contains("NIF block 12");
+    h.get_by_label_contains("PGPatcher 3D index");
 }
 
 #[test]
