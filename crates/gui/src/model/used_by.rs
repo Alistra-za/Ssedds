@@ -7,6 +7,7 @@ use engine::shader::{mesh_alpha_policy, MeshAlpha};
 use modscan::store::{Store, KIND_BSA};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The list shows this many meshes, then "and N more".
 pub const USED_BY_CAP: usize = 200;
@@ -45,7 +46,12 @@ pub struct UsedByState {
     pub generation: u64,
     /// The item key of the read in flight.
     pub pending: Option<String>,
+    /// The texture asked for last and since when: its read starts once it has stayed [`USED_BY_SETTLE`] (AG128).
+    pub wanted: Option<(String, Instant)>,
 }
+
+/// How long a selection must stay before its read starts, so holding Up or Down starts one read, not one per step.
+pub const USED_BY_SETTLE: Duration = Duration::from_millis(150);
 
 /// Every NIF copy of enabled origins whose shapes use `tex`, winner first (loose before BSA, then MO2 priority, the
 /// order `modscan::resolve` picks winners by). `alpha`: the texture's alpha meaning came from the meshes
@@ -154,7 +160,7 @@ impl AppModel {
     /// The "Used by meshes" list of texture `key`: `None` hides it (no scan database, or the texture has no job);
     /// `Some(None)` while the first read runs. The first ask for a texture, or after a finished scan, starts the read.
     pub fn used_by_for(&mut self, key: &str) -> Option<Option<Arc<UsedBy>>> {
-        let db = self.scan_db.clone().filter(|d| d.is_file())?;
+        let db = self.scan_db.clone().filter(|d| self.stat_is_file(d))?;
         let j = self.item(key)?.job.as_ref()?;
         let stem = j.output.file_stem()?.to_string_lossy().into_owned();
         let tex = format!("{}.dds", engine::shader::mesh_key(&j.game_path, &stem));
@@ -166,7 +172,21 @@ impl AppModel {
         let have = st.current.clone().filter(|c| c.item == key);
         let fresh = have.is_some() && !st.stale;
         if !fresh && st.pending.as_deref() != Some(key) {
-            self.used_by.generation += 1;
+            let now = Instant::now();
+            let st = &mut self.used_by;
+            if st.wanted.as_ref().map(|w| w.0.as_str()) != Some(key) {
+                // A new texture: a read still in flight is for an older one and is dropped when it lands.
+                st.wanted = Some((key.to_string(), now));
+                st.generation += 1;
+                st.pending = None;
+            }
+            if st
+                .wanted
+                .as_ref()
+                .is_some_and(|w| now.duration_since(w.1) < USED_BY_SETTLE)
+            {
+                return Some(have);
+            }
             self.used_by.pending = Some(key.to_string());
             let (generation, item) = (self.used_by.generation, key.to_string());
             spawn_guarded(self.tx.clone(), "used-by", move |tx| {
@@ -188,6 +208,30 @@ impl AppModel {
         self.used_by.pending = None;
         self.used_by.stale = false;
         self.used_by.current = Some(Arc::new(result));
+    }
+
+    /// A read is waiting for the selection to settle or is in flight: the app keeps frames coming.
+    pub fn used_by_pending(&self) -> bool {
+        let st = &self.used_by;
+        st.pending.is_some()
+            || st
+                .wanted
+                .as_ref()
+                .is_some_and(|(k, _)| st.current.as_ref().is_none_or(|c| &c.item != k || st.stale))
+    }
+
+    /// AG128: a read that panicked shows its error in the list instead of staying "reading" for good.
+    pub(super) fn used_by_panicked(&mut self, message: &str) {
+        let st = &mut self.used_by;
+        let Some(item) = st.pending.take() else {
+            return;
+        };
+        st.stale = false;
+        st.current = Some(Arc::new(UsedBy {
+            item,
+            error: Some(format!("Reading the scan database failed: {message}")),
+            ..UsedBy::default()
+        }));
     }
 
     /// A finished scan: the list is read again on the next ask (the old one stays on screen until then).

@@ -209,3 +209,70 @@ fn a_stale_read_is_dropped() {
     );
     assert!(m.used_by.pending.is_some(), "a new read is under way");
 }
+
+#[test]
+fn a_panicked_read_shows_its_error_instead_of_reading_for_good() {
+    use sdc_gui::worker::WorkerMsg;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let key = "landscape/rock01.png";
+    // The read in flight, as `used_by_for` leaves it (no real thread, so nothing races the panic).
+    m.used_by.pending = Some(key.to_string());
+    m.sender()
+        .send(WorkerMsg::Panicked {
+            what: "used-by",
+            message: "boom".into(),
+        })
+        .unwrap();
+    m.poll();
+    assert!(m.used_by.pending.is_none(), "no longer reading");
+    let u = m.used_by.current.clone().expect("the error is shown");
+    assert_eq!(u.item, key);
+    assert!(
+        u.error.as_deref().is_some_and(|e| e.contains("boom")),
+        "{u:?}"
+    );
+}
+
+#[test]
+fn stepping_through_textures_starts_one_read_after_the_selection_settles() {
+    use sdc_gui::model::used_by::USED_BY_SETTLE;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    db_with(&db, "textures/none.dds", &[]);
+    m.scan_db = Some(db);
+    // Held Up/Down: a new texture every frame, no read starts.
+    for key in [
+        "landscape/leaf.png",
+        "landscape/rock01.png",
+        "landscape/leaf.png",
+    ] {
+        assert_eq!(m.used_by_for(key), Some(None));
+        assert!(m.used_by.pending.is_none(), "{key}: no read yet");
+        assert!(m.used_by_pending(), "frames keep coming");
+    }
+    std::thread::sleep(USED_BY_SETTLE);
+    m.used_by_for("landscape/leaf.png");
+    assert_eq!(m.used_by.pending.as_deref(), Some("landscape/leaf.png"));
+    let u = wait_used_by(&mut m, "landscape/leaf.png");
+    assert_eq!(u.item, "landscape/leaf.png");
+    assert!(!m.used_by_pending());
+}
+
+#[test]
+fn the_scan_database_and_show_in_explorer_are_not_statted_every_frame() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = dbdir.path().join("scan.db");
+    db_with(&db, "textures/none.dds", &[]);
+    m.scan_db = Some(db);
+    let before = m.stats.borrow().stats;
+    for _ in 0..5 {
+        m.used_by_for("landscape/leaf.png");
+        assert_eq!(m.reveal_problem("landscape/rock01.png"), None);
+    }
+    assert_eq!(m.stats.borrow().stats, before + 2, "one stat per file");
+}

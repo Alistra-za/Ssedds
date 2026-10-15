@@ -92,11 +92,20 @@ impl AppModel {
         Ok(())
     }
 
+    /// `p.is_file()` through [`AppModel::stats`]: drawing code asks every frame (AG128).
+    pub fn stat_is_file(&self, p: &Path) -> bool {
+        self.stats
+            .borrow_mut()
+            .is_file(p, std::time::Instant::now())
+    }
+
     /// Why "Show in Explorer" is off for the source of texture `key`.
     pub fn reveal_problem(&self, key: &str) -> Option<String> {
         match self.item(key) {
             None => Some("no such texture".into()),
-            Some(i) if !i.input.is_file() => Some(format!("{} is not on disk", i.input.display())),
+            Some(i) if !self.stat_is_file(&i.input) => {
+                Some(format!("{} is not on disk", i.input.display()))
+            }
             Some(_) => None,
         }
     }

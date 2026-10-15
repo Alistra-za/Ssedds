@@ -476,6 +476,8 @@ fn the_tile_menu_has_show_in_explorer_for_a_single_texture() {
     assert_eq!(m.take_shell(), vec![ShellRequest::Reveal(want.clone())]);
     // The file is gone: the entry is off, with the reason, and the command is refused.
     std::fs::remove_file(&want).unwrap();
+    // The menu's answer is cached for a second (AG128); the clock did not move here.
+    m.stats.borrow_mut().clear();
     let off = m
         .item_menu()
         .into_iter()

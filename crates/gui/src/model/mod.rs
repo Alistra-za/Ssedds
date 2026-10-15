@@ -342,6 +342,9 @@ pub struct AppModel {
     pub nav: nav::Nav,
     /// Explorer requests the app has not started yet (Task 5, `model::shell`).
     pub shell: Vec<shell::ShellRequest>,
+    /// File-exists answers asked while drawing (the scan DB, Show in Explorer), re-checked at most once a second
+    /// (AG128).
+    pub stats: std::cell::RefCell<shell::StatCache>,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// The undecided-texture dialog ended while a plan was in flight: the export continues when it lands.
@@ -478,6 +481,7 @@ impl AppModel {
             plugin_refs: Default::default(),
             nav: Default::default(),
             shell: Vec::new(),
+            stats: Default::default(),
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -877,6 +881,7 @@ impl AppModel {
                     "heatmap" => self.heatmap_panicked(),
                     "rnm-preview" => self.rnm_preview_panicked(),
                     "dims" => self.dims_panicked(),
+                    "used-by" => self.used_by_panicked(&message),
                     _ => {}
                 }
                 self.dialog = Some(Dialog::Error(format!(
