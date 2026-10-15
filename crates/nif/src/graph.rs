@@ -225,9 +225,9 @@ fn refs(c: &mut Cursor, n: usize) -> Result<Vec<i32>, NifError> {
 /// The refs of `block` that nifly's `GetChildIndices` lists and that can lead to an NiAVObject, in nifly's order
 /// (NiObjectNET/NiAVObject refs first in nifly, but extra data, controllers and collision never reach one):
 /// node `children` + `effects` (+ BSTreeNode `bones1`/`bones2`, + BSMasterParticleSystem `particleSysRefs`); a
-/// particle system's data and modifiers; a mesh-update modifier's meshes; a field modifier's field object;
-/// NiCamera's scene. A block that fails to read part-way keeps the refs read before the fault.
-/// shortcut: NiMeshPSysData's `nodeRef` is not followed (NiPSysData is variable-length); add it if a Skyrim NIF needs it.
+/// particle system's data and modifiers; a mesh-update modifier's meshes (+ BSPSysHavokUpdateModifier's
+/// `modifierRef`); a field modifier's field object; NiMeshPSysData's `nodeRef`; NiCamera's scene. A block that fails
+/// to read part-way keeps the refs read before the fault.
 fn av_refs(h: &Header, b: &[u8], block: usize) -> Vec<i32> {
     let mut out = vec![];
     let _ = av_refs_into(h, b, block, &mut out);
@@ -284,6 +284,17 @@ fn av_refs_into(h: &Header, b: &[u8], block: usize, out: &mut Vec<i32>) -> Resul
         } else {
             let n = c.u32()? as usize;
             out.extend(refs(&mut c, n)?);
+            if kind == b"BSPSysHavokUpdateModifier" {
+                out.push(c.i32()?); // modifierRef, after the nodes
+            }
+        }
+    } else if kind == b"NiMeshPSysData" {
+        // "Particle Meshes" is the block's last field (nif.xml, nifly NiMeshPSysData::Sync), after the
+        // variable-length NiPSysData part, so it is read from the block's end.
+        let size = h.sizes[block] as usize;
+        if size >= 4 {
+            c.skip(size - 4)?;
+            out.push(c.i32()?);
         }
     } else if kind == b"NiCamera" {
         read_av_head(h, &mut c)?;

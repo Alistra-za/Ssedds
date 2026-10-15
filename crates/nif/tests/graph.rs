@@ -243,8 +243,8 @@ fn av() -> W {
         .i32(-1)
 }
 
-/// An NiParticleSystem body at `bsver` (nifly NiParticleSystem::Sync) with these modifiers and no data.
-fn particles(bsver: u32, modifiers: &[i32]) -> Vec<u8> {
+/// An NiParticleSystem body at `bsver` (nifly NiParticleSystem::Sync) with this data ref and these modifiers.
+fn particles(bsver: u32, data: i32, modifiers: &[i32]) -> Vec<u8> {
     let mut w = av();
     w = if bsver >= 100 {
         // bounds, skin, shader, alpha, vertex flags, far/near, psys data
@@ -257,10 +257,10 @@ fn particles(bsver: u32, modifiers: &[i32]) -> Vec<u8> {
             .u16(0)
             .u16(0)
             .u16(0)
-            .i32(-1)
+            .i32(data)
     } else {
         // data, skin, 1 material (name + extra data), active material, needs update, shader, alpha, far/near
-        w.i32(-1)
+        w.i32(data)
             .i32(-1)
             .u32(1)
             .i32(-1)
@@ -300,7 +300,7 @@ fn a_shape_listed_by_a_particle_mesh_update_modifier_is_numbered_inside_the_part
     for bsver in [100, 83] {
         let mut f = Nif::new(bsver);
         f.block("BSFadeNode", node([0.0; 3], &[1, 3])); // 0
-        f.block("NiParticleSystem", particles(bsver, &[2])); // 1
+        f.block("NiParticleSystem", particles(bsver, -1, &[2])); // 1
         f.block("NiPSysMeshUpdateModifier", mesh_update(&[4])); // 2
         f.block("BSTriShape", vec![]); // 3: B, the root's second child
         f.block("NiTriShape", vec![]); // 4: A, only the modifier lists it
@@ -322,7 +322,7 @@ fn a_field_modifier_object_and_a_master_particle_system_are_followed() {
         .i32(1)
         .0;
     f.block("BSMasterParticleSystem", master); // 0: no children, one particle system
-    f.block("NiParticleSystem", particles(100, &[2])); // 1
+    f.block("NiParticleSystem", particles(100, -1, &[2])); // 1
     let field = W::default()
         .i32(-1)
         .u32(0)
@@ -356,4 +356,41 @@ fn bstreenode_bones_are_followed_after_children_and_effects() {
     f.block("NiNode", node([0.0; 3], &[5])); // 4: a bones2 node
     f.block("BSTriShape", vec![]); // 5
     assert_eq!(idx(&f), [(1, 0), (3, 1), (5, 2)]);
+}
+
+#[test]
+fn a_havok_update_modifier_follows_its_modifier_ref_after_its_nodes() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[1, 3])); // 0
+    f.block("NiParticleSystem", particles(100, -1, &[2])); // 1
+    let mut havok = mesh_update(&[]);
+    havok.extend(4i32.to_le_bytes()); // modifierRef
+    f.block("BSPSysHavokUpdateModifier", havok); // 2
+    f.block("BSTriShape", vec![]); // 3: B
+    f.block("NiPSysMeshUpdateModifier", mesh_update(&[5])); // 4: reached only through modifierRef
+    f.block("BSTriShape", vec![]); // 5: A
+    assert_eq!(idx(&f), [(1, 0), (3, 2), (5, 1)]);
+}
+
+#[test]
+fn mesh_psys_data_meshes_come_before_modifier_meshes() {
+    let mut f = Nif::new(100);
+    f.block("BSFadeNode", node([0.0; 3], &[1, 7])); // 0
+    f.block("NiMeshParticleSystem", particles(100, 2, &[5])); // 1
+                                                              // NiPSysData part (opaque here), pool size, fill pools, 1 generation, Particle Meshes = 3
+    let data = W::default()
+        .raw(&[0xAB; 37])
+        .u32(0)
+        .u8(0)
+        .u32(1)
+        .u32(0)
+        .i32(3)
+        .0;
+    f.block("NiMeshPSysData", data); // 2
+    f.block("NiNode", node([0.0; 3], &[4])); // 3
+    f.block("BSTriShape", vec![]); // 4: under the data's node
+    f.block("NiPSysMeshUpdateModifier", mesh_update(&[6])); // 5
+    f.block("BSTriShape", vec![]); // 6: under the modifier
+    f.block("BSTriShape", vec![]); // 7: the root's second child
+    assert_eq!(idx(&f), [(1, 0), (4, 1), (6, 2), (7, 3)]);
 }
