@@ -736,7 +736,7 @@ pub struct Viewport3d {
     /// For each `report.missing_textures` entry, the Textures item with that game path in the open folder; filled
     /// by `SdcApp::route_3d`.
     pub missing_items: Vec<Option<String>>,
-    /// "Show in Textures" clicked on a missing path: the item key, taken by `SdcApp::route_3d`.
+    /// "Open in Textures" clicked on a missing path: the item key, taken by `SdcApp::route_3d`.
     pub show_in_textures: Option<String>,
     debug: DebugView,
     /// The variant the next load's resolver bytes count as, and the one the render thread was last told.

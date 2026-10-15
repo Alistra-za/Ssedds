@@ -212,3 +212,54 @@ fn the_scan_reads_tree_anim_from_slsf2_bit_29() {
     assert_eq!(r.get("textures/a/rock"), Some(&false));
     assert_eq!(r.get("textures/a/none"), None);
 }
+
+#[test]
+fn a_selector_change_is_one_undo_step() {
+    use egui_kittest::kittest::Queryable;
+    const SET: &str = "landscape/rock01";
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with(SET))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+    m.set_json_value(SET, "subsurface_foliage", Some(json!(true)));
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 1100.0))
+        .build_ui_state(
+            |ui, m: &mut sdc_gui::model::AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, SET),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Foliage"))
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Standard").click();
+    h.run();
+    let has = |h: &egui_kittest::Harness<'_, sdc_gui::model::AppModel>, k: &str| {
+        h.state()
+            .sets_doc
+            .as_ref()
+            .unwrap()
+            .entries()
+            .into_iter()
+            .find(|e| e.id == SET)
+            .unwrap()
+            .settings
+            .iter()
+            .any(|(n, _)| n == k)
+    };
+    assert!(has(&h, "subsurface") && !has(&h, "subsurface_foliage"));
+    h.state_mut().undo();
+    assert!(
+        !has(&h, "subsurface") && has(&h, "subsurface_foliage"),
+        "one undo restores Foliage"
+    );
+}

@@ -2643,7 +2643,7 @@ fn missing_textures_are_listed_in_magenta_with_show_in_textures() {
     h.get_by_label("Missing texture: textures/a.dds");
     h.get_by_label("Missing texture: textures/b.dds");
     // Only the path in the open folder has the button.
-    h.get_by_label("Show in Textures").click();
+    h.get_by_label("Open in Textures").click();
     h.run();
     assert_eq!(
         h.state().show_in_textures.as_deref(),

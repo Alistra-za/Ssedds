@@ -117,7 +117,7 @@ impl SdcApp {
     }
 
     /// Both 3D panels' links to the Textures view: which missing texture paths are items of the open folder, and a
-    /// "Show in Textures" click (selects the item and switches to the Textures view).
+    /// "Open in Textures" click (selects the item and switches to the Textures view).
     pub fn route_3d(&mut self, ctx: &egui::Context) {
         let model = &mut self.model;
         for v in [&mut self.meshes.v3, &mut self.state.set3d.v3] {
@@ -319,7 +319,7 @@ impl eframe::App for SdcApp {
         } else {
             crate::ui::draw_with_scan(ui, &mut self.model, &mut self.state, Some(&mut self.meshes));
         }
-        // A "Show in Textures" click of this frame.
+        // A "Open in Textures" click of this frame.
         self.route_3d(&ctx);
         // Explorer requests the drawer and the menus queued this frame (Task 5).
         for req in self.model.take_shell() {

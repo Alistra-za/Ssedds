@@ -1499,6 +1499,30 @@ impl AppModel {
         });
     }
 
+    /// Several keys of one set as one undo step and one plan (the Subsurface selector writes two). One key keeps
+    /// `set_json_value`'s merge with the edit before it.
+    pub fn set_json_values(&mut self, set: &str, edits: Vec<(String, Option<Value>)>) {
+        if let [(k, v)] = edits.as_slice() {
+            return self.set_json_value(set, k, v.clone());
+        }
+        if edits.is_empty() || !self.sets_editable() {
+            return;
+        }
+        let label = format!(
+            "Change {}",
+            edits
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        self.batch_edit(&label, |m| {
+            for (k, v) in edits {
+                m.set_json_value(set, &k, v);
+            }
+        });
+    }
+
     /// A JSON value of set `set`. Material values do not plan; match fields do (P7).
     pub fn set_json_value(&mut self, set: &str, key: &str, v: Option<Value>) {
         if !self.sets_editable() {

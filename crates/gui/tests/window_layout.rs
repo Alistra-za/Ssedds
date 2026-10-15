@@ -1,7 +1,7 @@
 //! Task 3 (item 3, AG3, AG17-AG20): the window and layout are remembered in gui.toml.
 mod support;
 use eframe::egui::{self, pos2, vec2, Rect};
-use sdc_gui::layout::{fit_window, initial_window, SaveDebounce, DEFAULT_SIZE};
+use sdc_gui::layout::{fit_window, initial_window, native_points, SaveDebounce, DEFAULT_SIZE};
 use sdc_gui::model::view::{Channel, Layout};
 use sdc_gui::model::viewport3d::Look;
 use sdc_gui::settings::*;
@@ -481,4 +481,27 @@ fn the_3d_panels_requests_reach_the_app() {
     );
     assert_eq!(app.model.selection, sdc_gui::model::Selection::Item(key));
     assert!(app.meshes.v3.show_in_textures.is_none());
+}
+
+#[test]
+fn a_window_saved_at_egui_zoom_restores_at_the_same_size() {
+    // Zoom 1.25: egui reports the rects in zoomed points, a 1400 x 900 window as 1120 x 720.
+    let (inner, outer) = (
+        rect(88.0, 72.0, 1120.0, 720.0),
+        rect(80.0, 64.0, 1136.0, 760.0),
+    );
+    let (i, o) = (native_points(inner, 1.25), native_points(outer, 1.25));
+    let l = LayoutSettings {
+        window: Some(WindowSettings {
+            x: o.min.x,
+            y: o.min.y,
+            w: i.width(),
+            h: i.height(),
+            ppp: 1.0,
+            maximized: false,
+        }),
+        ..LayoutSettings::default()
+    };
+    let w = initial_window(&l, &[rect(0.0, 0.0, 4000.0, 3000.0)]);
+    assert_eq!((w.size, w.pos), ([1400.0, 900.0], Some([100.0, 80.0])));
 }

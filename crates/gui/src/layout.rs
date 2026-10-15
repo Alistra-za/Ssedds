@@ -292,9 +292,16 @@ fn look_now(look: &Look, prev: &Option<LookSettings>) -> Option<LookSettings> {
     Some(LookSettings::of(look))
 }
 
+/// A viewport rectangle in zoomed points (points of native x egui zoom) as points of the native scale, which is what
+/// `WindowSettings` and `ViewportBuilder` use.
+pub fn native_points(r: Rect, zoom: f32) -> Rect {
+    Rect::from_min_max(r.min * zoom, r.max * zoom)
+}
+
 /// The window from the viewport info (points). Maximised keeps the last normal rectangle, so leaving the maximised
 /// state at the next start gives that rectangle back; minimised and fullscreen change nothing.
 fn window_now(ctx: &egui::Context, prev: Option<WindowSettings>) -> Option<WindowSettings> {
+    let zoom = ctx.zoom_factor();
     let (inner, outer, maximized, minimized, fullscreen, ppp) = ctx.input(|i| {
         let v = i.viewport();
         (
@@ -318,6 +325,7 @@ fn window_now(ctx: &egui::Context, prev: Option<WindowSettings>) -> Option<Windo
     let (Some(inner), Some(outer)) = (inner, outer) else {
         return prev;
     };
+    let (inner, outer) = (native_points(inner, zoom), native_points(outer, zoom));
     let now = WindowSettings {
         x: outer.min.x,
         y: outer.min.y,

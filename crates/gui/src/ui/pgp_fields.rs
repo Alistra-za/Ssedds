@@ -202,9 +202,7 @@ pub fn panel(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
                 group(ui, &c, "pgp-adv", g, &keys, &mut edits);
             }
         });
-    for (k, v) in edits {
-        model.set_json_value(set, &k, v);
-    }
+    model.set_json_values(set, edits);
 }
 
 /// Subsurface keys the selector owns instead of the generic rows.

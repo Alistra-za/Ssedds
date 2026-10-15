@@ -333,7 +333,7 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
                     ui.colored_label(MAGENTA, format!("Missing texture: {t}"));
                     if let Some(Some(k)) = v.missing_items.get(i) {
                         if ui
-                            .small_button("Show in Textures")
+                            .small_button("Open in Textures")
                             .on_hover_text(format!("Select {k} in the Textures view"))
                             .clicked()
                         {
