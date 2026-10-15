@@ -5,6 +5,10 @@ use eframe::egui;
 use engine::config::Target;
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
+/// The JSON name field's width; it is never squeezed (AG126).
+const JSON_FIELD_WIDTH: f32 = 120.0;
+/// The widest the Export folder button gets; a longer path is cut with "…".
+const EXPORT_FOLDER_MAX: f32 = 280.0;
 
 fn target_name(t: Target) -> &'static str {
     match t {
@@ -47,39 +51,58 @@ fn set_title(ctx: &egui::Context, title: String) {
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     set_title(ui.ctx(), window_title(model));
     egui::Panel::top("header").show(ui, |ui| {
-        ui.horizontal(|ui| {
+        // AG126: one wrapped row, so a narrow window moves controls to a second line instead of drawing them on top
+        // of each other. A group that is one nested layout (a combo, a disabled scope) is moved whole by `fit`.
+        ui.horizontal_wrapped(|ui| {
             if picker::button(ui, &model.picker, egui::Button::new("Open folder…")) {
                 model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
             }
             recent_menu(ui, model);
             undo_redo(ui, model);
-            mode_combo(ui, model);
             view_toggle(ui);
+            mode_combo(ui, model);
             column_checkboxes(ui, model);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let can_export = can_export(model);
-                let mut export = egui::Button::new(egui::RichText::new("Export").strong())
-                    .min_size(egui::vec2(120.0, 30.0));
-                if can_export {
-                    export = export.fill(ui.visuals().selection.bg_fill);
-                }
-                if ui.add_enabled(can_export, export).clicked() {
-                    model.export_clicked();
-                }
-                if ui
-                    .add_enabled(model.is_dirty(), egui::Button::new("Save"))
-                    .clicked()
-                {
-                    // A failed save raises its own dialog.
-                    let _ = model.save();
-                }
-                super::messages::button(ui, model);
-                export_folder_button(ui, model);
-                json_name_field(ui, model);
-            });
+            json_name_field(ui, model);
+            export_folder_button(ui, model);
+            super::messages::button(ui, model);
+            if ui
+                .add_enabled(model.is_dirty(), egui::Button::new("Save"))
+                .clicked()
+            {
+                // A failed save raises its own dialog.
+                let _ = model.save();
+            }
+            let can_export = can_export(model);
+            let mut export = egui::Button::new(egui::RichText::new("Export").strong())
+                .min_size(egui::vec2(120.0, 30.0));
+            if can_export {
+                export = export.fill(ui.visuals().selection.bg_fill);
+            }
+            if ui.add_enabled(can_export, export).clicked() {
+                model.export_clicked();
+            }
         });
     });
     status(ui, model);
+}
+
+/// Starts a new line of a wrapped row unless `width` fits in what is left of this one. A nested layout (a combo, a
+/// scope) is placed where the cursor is; only single widgets wrap by themselves.
+fn fit(ui: &mut egui::Ui, width: f32) {
+    if ui.max_rect().right() - ui.cursor().min.x < width {
+        ui.end_row();
+    }
+}
+
+/// The width a button with `text` takes.
+fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    galley.size().x + 2.0 * ui.spacing().button_padding.x
 }
 
 /// Which of the Textures and Sets columns are shown at all. Each column's own arrow collapses it to a strip.
@@ -104,6 +127,7 @@ fn column_checkboxes(ui: &mut egui::Ui, model: &mut AppModel) {
 
 fn recent_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut open = None;
+    fit(ui, button_width(ui, "Recent"));
     ui.add_enabled_ui(!model.settings.recent.is_empty(), |ui| {
         ui.menu_button("Recent", |ui| {
             for p in &model.settings.recent {
@@ -156,6 +180,11 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
+    let gap = ui.spacing().item_spacing.x;
+    fit(
+        ui,
+        button_width(ui, "Mode") + gap + ui.spacing().combo_width,
+    );
     ui.label("Mode");
     let mut picked = model.target;
     ui.add_enabled_ui(model.project.is_some(), |ui| {
@@ -208,12 +237,23 @@ fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
     } else {
         "not set".to_string()
     };
-    let b = egui::Button::new(format!("Export folder: {shown}"));
-    let r = ui.add_enabled(!model.picker.busy(), b);
+    let text = format!("Export folder: {shown}");
+    // A long path is cut to EXPORT_FOLDER_MAX (the hover and the accessible name keep all of it).
+    let w = button_width(ui, &text).min(EXPORT_FOLDER_MAX);
+    fit(ui, w);
+    let height = ui.spacing().interact_size.y;
+    let b = egui::Button::new(text).truncate();
+    let r = ui
+        .allocate_ui(egui::vec2(w, height), |ui| {
+            ui.add_enabled(!model.picker.busy(), b)
+        })
+        .inner;
     let r = if model.picker.busy() {
         r.on_disabled_hover_text(picker::BUSY_HOVER)
     } else {
-        r.on_hover_text("Choose where converted textures are written")
+        r.on_hover_text(format!(
+            "Choose where converted textures are written (now {shown})"
+        ))
     };
     if r.clicked() {
         model.pick(ui.ctx(), PickerPurpose::ExportFolder, PickerSpec::folder());
@@ -225,7 +265,6 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
     if model.target != Target::Cs || model.root.is_none() || model.sets_doc.is_none() {
         return;
     }
-    // Right-to-left layout: the field is added first so the label ends up on its left.
     let id = egui::Id::new("json-name");
     let mut t = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| {
         model
@@ -245,7 +284,22 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
         "The PGPatcher JSON is written to {}\\PBRNIFPatcher\\<name>.json",
         model.export_root().display()
     );
-    // Right-to-left: added first, so it ends up right of the name field.
+    // The label, the field and Editor… stay on one line, the field never narrower than JSON_FIELD_WIDTH.
+    let gap = ui.spacing().item_spacing.x;
+    fit(
+        ui,
+        button_width(ui, "JSON:") + JSON_FIELD_WIDTH + button_width(ui, "Editor…") + 2.0 * gap,
+    );
+    ui.label("JSON:");
+    let r = ui
+        .add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut t)
+                .hint_text(crate::model::pbr_export::json_name(model))
+                .desired_width(JSON_FIELD_WIDTH),
+        )
+        .on_hover_text(hover)
+        .on_disabled_hover_text(why);
     if ui
         .button("Editor…")
         .on_hover_text("Edit the whole TruePBR JSON: every set's entry and the delete sections")
@@ -253,16 +307,6 @@ fn json_name_field(ui: &mut egui::Ui, model: &mut AppModel) {
     {
         model.json_editor_open = true;
     }
-    let r = ui
-        .add_enabled(
-            editable,
-            egui::TextEdit::singleline(&mut t)
-                .hint_text(crate::model::pbr_export::json_name(model))
-                .desired_width(120.0),
-        )
-        .on_hover_text(hover)
-        .on_disabled_hover_text(why);
-    ui.label("JSON:");
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(id, t.clone()));
     }

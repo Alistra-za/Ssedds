@@ -10,6 +10,8 @@ While a folder opens, the status bar shows a progress bar, "Analysing 1,234 / 5,
 
 The file and folder dialogs (Open folder, the export folder, MO2 instance, a folder to scan, nvcompress.exe, the shader folder, Save report) no longer freeze the window while they are open. Only one is open at a time: the other dialog buttons and Open folder in the palette are greyed out ("A file dialog is already open") until you answer or cancel. If you open another folder while one of the folder dialogs is still up, its answer is ignored.
 
+**The header** holds, in order: Open folder…, Recent, Undo, Redo, the Textures | Meshes view switch, Mode, the column checkboxes, the JSON name with **Editor…**, the export folder, Messages, Save and **Export**. In a narrow window it wraps onto a second line instead of drawing controls over each other; the JSON name box keeps its width, and a long export folder is cut with "…" (hover it for the whole path).
+
 The **Mode** menu picks the target (`cs`, `vanilla` or `cpm`). It is saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means.
 
 **Dialog keys.** **Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings**, **Fill from names** and the undecided-textures list ignore a click outside, so a stray click cannot lose what you typed or chose. **Enter** takes the safe default: Save in the unsaved-changes dialogs, Close, OK, Keep running, Keep it, and Cancel in the Reset all and Delete set confirms, and Fill in Fill from names. In the "changed on disk" dialog Enter closes it without touching the file or your edits; it never overwrites. **Proceed anyway** is never taken by Enter.
