@@ -1127,3 +1127,32 @@ fn a_schema_7_database_is_rebuilt_with_the_index3d_column() {
         .unwrap();
     assert_eq!(n, 0, "rebuilt: the column exists and the old row is gone");
 }
+
+/// Audit 2026-10-15 item 17: texsets (and their tex_use rows) that no live or pending shape uses are dropped at the
+/// end of a run; the interner cache must not hand a dropped id to a later shape.
+#[test]
+fn delete_unseen_drops_texsets_no_shape_uses() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    s.begin_scan().unwrap();
+    s.conn()
+        .execute_batch(
+            "INSERT INTO texset(id, n, t0) VALUES (1, 1, 10), (2, 1, 20), (3, 1, 30);
+             INSERT INTO tex_use VALUES (10, 1, 0), (20, 2, 0), (30, 3, 0);
+             INSERT INTO shape(copy_id, block, kind, shader_kind, texset_id) VALUES (1, 0, 'x', 1, 1);
+             INSERT INTO pending_shape(pid, block, kind, shader_kind, texset_id) VALUES (1, 0, 'x', 1, 3);",
+        )
+        .unwrap();
+    s.delete_unseen(&Default::default()).unwrap();
+    let ids = |q: &str| -> Vec<i64> {
+        let mut st = s.conn().prepare(q).unwrap();
+        let v = st.query_map([], |r| r.get(0)).unwrap();
+        v.map(|x| x.unwrap()).collect()
+    };
+    assert_eq!(ids("SELECT id FROM texset ORDER BY id"), [1, 3]);
+    assert_eq!(
+        ids("SELECT texset_id FROM tex_use ORDER BY texset_id"),
+        [1, 3]
+    );
+    s.end_scan().unwrap();
+}

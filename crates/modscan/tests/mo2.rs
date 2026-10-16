@@ -85,3 +85,21 @@ fn relative_base_directory_is_joined_to_the_instance_root() {
     assert!(missing.is_empty());
     assert!(o.iter().any(|x| x.name == "A"));
 }
+
+/// Audit 2026-10-15 item 19: a modlist name is one folder under mods; anything that climbs out is missing.
+const MODLIST: &str = "+../mods/A\n+A/..\n+A\\..\\B\n+C:\\Windows\n+/etc\n+A\n+Mod [v1.2] & Co.\n";
+
+#[test]
+fn modlist_names_that_escape_the_mods_folder_are_missing() {
+    let d = instance_fixture(MODLIST);
+    std::fs::create_dir_all(d.path().join("mods").join("Mod [v1.2] & Co.")).unwrap();
+    let inst = Instance::load(d.path(), None).unwrap();
+    let (o, missing) = loose_origins(&inst).unwrap();
+    let mods: Vec<_> = o
+        .iter()
+        .filter(|x| x.kind == OriginKind::Mod)
+        .map(|x| x.name.as_str())
+        .collect();
+    assert_eq!(mods, ["Mod [v1.2] & Co.", "A"]);
+    assert_eq!(missing.len(), 5, "{missing:?}");
+}

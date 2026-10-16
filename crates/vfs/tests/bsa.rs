@@ -209,3 +209,52 @@ fn hostile_folder_count_is_corrupt_before_any_record_read() {
     std::fs::write(&p, &out).unwrap(); // ends before the folder name block: any record read would be Io
     assert!(matches!(Bsa::open(&p), Err(vfs::VfsError::Corrupt(_))));
 }
+
+/// Audit 2026-10-15 item 18: the archive is opened once; a read no longer goes back to the path.
+#[test]
+fn read_uses_the_handle_opened_once_and_is_thread_safe() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("t.bsa");
+    std::fs::write(
+        &p,
+        build(
+            &[
+                ("meshes", "x.nif", b"XXXXXXXX", true),
+                ("meshes", "y.nif", b"yy", false),
+            ],
+            false,
+        ),
+    )
+    .unwrap();
+    let bsa = Bsa::open(&p).unwrap();
+    std::fs::rename(&p, dir.path().join("moved.bsa")).unwrap();
+    std::thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                for _ in 0..50 {
+                    assert_eq!(bsa.read(&bsa.entries[0]).unwrap(), b"XXXXXXXX");
+                    assert_eq!(bsa.read(&bsa.entries[1]).unwrap(), b"yy");
+                }
+            });
+        }
+    });
+}
+
+/// Item 21 must not change names: an empty folder and padding spaces match the old per-entry join.
+#[test]
+fn names_match_the_old_join_for_empty_and_padded_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases: [(&str, &str); 4] = [
+        ("", "a.nif"),
+        (" meshes ", " B.nif "),
+        ("Meshes", "c.nif "),
+        ("  ", "d.nif"),
+    ];
+    for (folder, file) in cases {
+        let p = dir.path().join("t.bsa");
+        std::fs::write(&p, build(&[(folder, file, b"x", false)], false)).unwrap();
+        let bsa = Bsa::open(&p).unwrap();
+        let old = nif::path::canon_mesh(&format!("{folder}\\{file}"));
+        assert_eq!(bsa.entries[0].norm, old, "{folder:?} / {file:?}");
+    }
+}

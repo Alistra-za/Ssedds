@@ -218,6 +218,8 @@ fn a_failed_in_place_patch_leaves_the_original_byte_identical() {
 fn a_failed_write_leaves_the_original_byte_identical_and_is_not_reported_patched() {
     let d = tempfile::tempdir().unwrap();
     let p = broken(d.path());
+    // Audit 2026-10-15 item 10: a later file in the batch is still patched.
+    let second = broken(&d.path().join("b"));
     let before = std::fs::read(&p).unwrap();
     let mut perm = std::fs::metadata(&p).unwrap().permissions();
     perm.set_readonly(true);
@@ -225,6 +227,7 @@ fn a_failed_write_leaves_the_original_byte_identical_and_is_not_reported_patched
     let o = sdc()
         .args(["patch-header", "--in-place"])
         .arg(&p)
+        .arg(&second)
         .output()
         .unwrap();
     #[allow(clippy::permissions_set_readonly_false)]
@@ -232,14 +235,16 @@ fn a_failed_write_leaves_the_original_byte_identical_and_is_not_reported_patched
     std::fs::set_permissions(&p, perm).unwrap();
     assert_eq!(
         code(&o),
-        3,
+        1,
         "write onto a read-only file fails: {}",
         text(&o.stderr)
     );
-    assert!(
-        !text(&o.stdout).contains("DDS-HEADER-PATCHED"),
-        "{}",
-        text(&o.stdout)
+    let out = text(&o.stdout);
+    assert!(out.contains("write failed"), "{out}");
+    assert_eq!(
+        out.matches("DDS-HEADER-PATCHED").count(),
+        1,
+        "only the second file: {out}"
     );
     assert_eq!(
         std::fs::read(&p).unwrap(),

@@ -4,7 +4,7 @@
 use crate::VfsError;
 use nif::path::canon_mesh;
 use nif::text::lossy;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 const INCLUDE_DIR_NAMES: u32 = 0x1;
@@ -23,9 +23,32 @@ pub struct BsaEntry {
 
 pub struct Bsa {
     pub path: PathBuf,
+    // Opened once (audit 2026-10-15 item 18); positional reads need no lock and no shared cursor.
+    file: std::fs::File,
+    len: u64,
     pub version: u32,
     pub flags: u32,
     pub entries: Vec<BsaEntry>,
+}
+
+/// Positional read: independent of the handle cursor, so `&Bsa` is shareable across threads.
+#[cfg(windows)]
+fn read_exact_at(f: &std::fs::File, mut buf: &mut [u8], mut off: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match f.seek_read(buf, off)? {
+            0 => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            n => {
+                buf = &mut buf[n..];
+                off += n as u64;
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn read_exact_at(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, off)
 }
 
 fn rd<const N: usize>(f: &mut impl Read) -> Result<[u8; N], VfsError> {
@@ -77,17 +100,21 @@ impl Bsa {
             return Err(VfsError::Corrupt("file count mismatch".into()));
         }
         let mut recs = Vec::with_capacity(nfiles.min(65536));
+        let mut folders: Vec<String> = Vec::with_capacity(nfolders.min(65536));
         for &count in &counts {
             let l = rd::<1>(&mut f)?[0] as usize;
             let mut name = vec![0u8; l];
             f.read_exact(&mut name)?;
-            let folder = lossy(name.strip_suffix(&[0]).unwrap_or(&name));
+            // Raw name kept once per folder; entries hold an index (audit item 21). Names are joined and canonicalised
+            // together so trimming matches the old per-entry join exactly.
+            folders.push(lossy(name.strip_suffix(&[0]).unwrap_or(&name)));
+            let folder = (folders.len() - 1) as u32;
             for _ in 0..count {
                 let r = rd::<16>(&mut f)?;
                 let size = u32::from_le_bytes(r[8..12].try_into().unwrap());
                 let offset = u32::from_le_bytes(r[12..16].try_into().unwrap());
                 let compressed = (flags & COMPRESSED_DEFAULT != 0) ^ (size & 0x4000_0000 != 0);
-                recs.push((folder.clone(), size & 0x3FFF_FFFF, offset, compressed));
+                recs.push((folder, size & 0x3FFF_FFFF, offset, compressed));
             }
         }
         let pos = f.stream_position()?;
@@ -107,18 +134,22 @@ impl Bsa {
         let entries = recs
             .into_iter()
             .enumerate()
-            .map(|(i, (folder, size, offset, compressed))| {
-                let file = lossy(names[i]);
-                BsaEntry {
-                    norm: canon_mesh(&format!("{folder}\\{file}")),
-                    offset,
-                    size,
-                    compressed,
-                }
+            .map(|(i, (folder, size, offset, compressed))| BsaEntry {
+                norm: canon_mesh(&format!(
+                    "{}\\{}",
+                    folders[folder as usize],
+                    lossy(names[i])
+                )),
+                offset,
+                size,
+                compressed,
             })
             .collect();
+        let file = f.into_inner();
         Ok(Bsa {
             path: path.to_path_buf(),
+            file,
+            len: file_total,
             version,
             flags,
             entries,
@@ -126,17 +157,14 @@ impl Bsa {
     }
 
     pub fn read(&self, e: &BsaEntry) -> Result<Vec<u8>, VfsError> {
-        let mut f = std::fs::File::open(&self.path)?;
-        let total = f.metadata()?.len();
-        if e.offset as u64 + e.size as u64 > total {
+        if e.offset as u64 + e.size as u64 > self.len {
             return Err(VfsError::Corrupt(format!(
                 "{}: data past end of file",
                 e.norm
             )));
         }
-        f.seek(SeekFrom::Start(e.offset as u64))?;
         let mut data = vec![0u8; e.size as usize];
-        f.read_exact(&mut data)?;
+        read_exact_at(&self.file, &mut data, e.offset as u64)?;
         let mut p = 0usize;
         if self.flags & EMBED_NAMES != 0 {
             p += 1 + *data
