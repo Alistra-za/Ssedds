@@ -1429,3 +1429,9 @@ Owner go: a layered normal was admitted at its base size and complex grass at on
 - **BB4 Complex grass.** `job_bytes` adds one float chain (texels × 16 × 1.34) for `Subtype::ComplexGrass`: in `grass::build` both half Works, both half chains (one full chain together) and the stacked chain are live at once, one chain more than the generic model. That is about 1.33× the generic admission (tested inside 1.3–1.5×).
 - **BB5 Scheduling.** `Budget::acquire` is unchanged: the bigger jobs simply run with fewer neighbours, and a job over the whole budget is admitted alone when nothing else is in flight, as any oversized file was, so it cannot deadlock (tested).
 - **BB6 Bytes.** Admission only; goldens and output bytes unchanged.
+
+## Note BC — Audit REPORT 2026-10-16 fixes, engine and CLI (owner, 2026-10-16)
+
+Fixes from the owner-commissioned audit (`F:i\dds\REPORT.md`, made at main b5ad038; each re-checked on 395012a). One commit per finding.
+
+- **BC1 Closed stdout pipe (#1).** Every stdout print in `crates/cli/src/verbs.rs` (and `say`) goes through `out!`/`out_raw!`, which ignore write errors, so `sdc validate --json | head -n1` exits with the report's code, not 3. Tested with stdout closed before sdc writes.

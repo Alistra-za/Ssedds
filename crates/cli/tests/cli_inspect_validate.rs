@@ -1115,3 +1115,27 @@ fn validate_given_a_folder_is_a_usage_error() {
         text(&o.stderr)
     );
 }
+
+/// Audit REPORT #1 (Note BC): a reader that closes the pipe early (`| head -n1`) is not a crash. stdout is closed
+/// before sdc writes a line, so every print fails; the exit is the report's own (0 or 4), never 3.
+#[test]
+fn a_closed_stdout_pipe_is_not_an_internal_error() {
+    let d = tempfile::tempdir().unwrap();
+    let dds = converted_normal(d.path());
+    let mut child = sdc()
+        .args(["validate", "--json"])
+        .arg(&dds)
+        .arg(&dds)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let o = child.wait_with_output().unwrap();
+    assert!(
+        matches!(code(&o), 0 | 4),
+        "exit {}: {}",
+        code(&o),
+        text(&o.stderr)
+    );
+}
