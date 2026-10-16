@@ -1432,6 +1432,7 @@ Owner go: a layered normal was admitted at its base size and complex grass at on
 
 ## Note BC — Audit REPORT 2026-10-16 fixes, engine and CLI (owner, 2026-10-16)
 
-Fixes from the owner-commissioned audit (`F:i\dds\REPORT.md`, made at main b5ad038; each re-checked on 395012a). One commit per finding.
+Fixes from the owner-commissioned audit (`F:/ai/dds/REPORT.md`, made at main b5ad038; each re-checked on 395012a). One commit per finding.
 
 - **BC1 Closed stdout pipe (#1).** Every stdout print in `crates/cli/src/verbs.rs` (and `say`) goes through `out!`/`out_raw!`, which ignore write errors, so `sdc validate --json | head -n1` exits with the report's code, not 3. Tested with stdout closed before sdc writes.
+- **BC2 In-place output root (#3).** `discover` skips the output root only when it is strictly inside the input folder (case-insensitive both ways). An output root equal to the input folder (`-o` = the input, writing beside the sources) or above it skips nothing, where it used to find zero inputs and exit 0. The S6 guard is unchanged and now reachable in place: a re-encoded DDS that would overwrite itself fails and its bytes stay (tested). A later in-place run sees its own `.dds` outputs as DDS inputs, which are skipped (`IN-DDS-SKIPPED`) unless re-encode is opted in.

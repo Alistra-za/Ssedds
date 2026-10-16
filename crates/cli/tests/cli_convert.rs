@@ -1303,3 +1303,25 @@ fn cpm_is_rejected_as_target_config_and_preset() {
     assert_eq!(code(&o), 2, "{}", text(&o.stderr));
     assert!(text(&o.stderr).contains("cpm"), "{}", text(&o.stderr));
 }
+
+/// Audit REPORT #3 (Note BC): `-o` equal to the input folder converts beside the sources, and the S6 guard still
+/// refuses to write a re-encoded DDS over itself.
+#[test]
+fn an_output_root_equal_to_the_input_converts_in_place_and_never_overwrites_a_source_dds() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    let args = ["--target", "vanilla", "--set", "subtype=diffuse"];
+    let o = fx.convert_to("in", &args);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let dds = fx.p("in/textures/a/wall.dds");
+    let before = std::fs::read(&dds).expect("converted in place");
+    std::fs::remove_file(fx.p("in/textures/a/wall.png")).unwrap();
+    let o = fx.convert_to("in", &[&args[..], &["--set", "reencode=true"]].concat());
+    assert_ne!(code(&o), 0, "{}", text(&o.stderr));
+    assert!(
+        text(&o.stdout).contains("would overwrite the source DDS"),
+        "{}",
+        text(&o.stdout)
+    );
+    assert_eq!(std::fs::read(&dds).unwrap(), before);
+}

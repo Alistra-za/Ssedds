@@ -292,3 +292,17 @@ fn an_unreadable_root_is_still_an_error() {
     }
     assert!(root.is_err(), "an unreadable input folder must fail");
 }
+
+/// Audit REPORT #3 (Note BC): an output root equal to the input folder (in place), or one that contains it, skips
+/// nothing; only an output root strictly inside the input is skipped.
+#[test]
+fn an_output_root_at_or_above_the_input_skips_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("in");
+    touch(&src.join("a.png"));
+    touch(&src.join("sub/b.png"));
+    let files = discover(std::slice::from_ref(&src), &src, true).unwrap();
+    assert_eq!(rels(&files), ["a.png", "sub/b.png"]);
+    let files = discover(&[src.join("sub")], &src, true).unwrap();
+    assert_eq!(rels(&files), ["b.png"]);
+}
