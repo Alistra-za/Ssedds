@@ -52,17 +52,6 @@ pub struct LightingParams {
     pub trailer: LightingTrailer,
 }
 
-/// Absolute file offsets of editable fields, for a later in-place patcher (plan 01 Q8).
-#[derive(Debug, Clone, PartialEq)]
-pub struct FieldOffsets {
-    pub block_offset: usize,
-    pub slsf1: usize,
-    pub uv_offset: usize,
-    pub emissive_color: usize,
-    pub glossiness: usize,
-    pub trailer: usize,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lighting {
     pub name: Option<String>,
@@ -71,7 +60,6 @@ pub struct Lighting {
     pub slsf2: u32,
     pub texture_set: i32,
     pub params: LightingParams,
-    pub field_offsets: FieldOffsets,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,26 +140,21 @@ pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, N
     let (mut c, start, end) = block_cursor(h, b, block);
     let shader_type = c.u32()?; // before the name at BSVER 83..139 (plan 01 Q2)
     let name = object_net(h, &mut c)?;
-    let slsf1_off = c.pos();
     let slsf1 = c.u32()?;
     let slsf2 = c.u32()?;
-    let uv_off = c.pos();
     let uv_offset = c.f32s::<2>()?;
     let uv_scale = c.f32s::<2>()?;
     let texture_set = c.i32()?;
-    let em_off = c.pos();
     let emissive_color = c.f32s::<3>()?;
     let emissive_multiple = c.f32()?;
     let texture_clamp_mode = c.u32()?;
     let alpha = c.f32()?;
     let refraction_strength = c.f32()?;
-    let gloss_off = c.pos();
     let glossiness = c.f32()?;
     let specular_color = c.f32s::<3>()?;
     let specular_strength = c.f32()?;
     let lighting_effect_1 = c.f32()?;
     let lighting_effect_2 = c.f32()?;
-    let trailer_off = c.pos();
     let trailer = match shader_type {
         1 => LightingTrailer::EnvMap { scale: c.f32()? },
         5 => LightingTrailer::SkinTint(c.f32s::<3>()?),
@@ -215,14 +198,6 @@ pub fn decode_lighting(h: &Header, b: &[u8], block: usize) -> Result<Lighting, N
             lighting_effect_1,
             lighting_effect_2,
             trailer,
-        },
-        field_offsets: FieldOffsets {
-            block_offset: start,
-            slsf1: slsf1_off,
-            uv_offset: uv_off,
-            emissive_color: em_off,
-            glossiness: gloss_off,
-            trailer: trailer_off,
         },
     })
 }

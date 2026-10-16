@@ -2,7 +2,7 @@
 use modscan::store::ChunkItem;
 use modscan::store::{CopyResult, Store, PARSE_PARTIAL};
 use nif::path::{canon_texture, PathFlags};
-use nif::props::{Effect, EffectParams, FieldOffsets, Lighting, LightingParams, LightingTrailer};
+use nif::props::{Effect, EffectParams, Lighting, LightingParams, LightingTrailer};
 use nif::scan::{NifScan, Shader, ShapeRow};
 use nif::shape_head::{ShapeHead, ShapeKind};
 use std::collections::BTreeMap;
@@ -41,14 +41,6 @@ fn lighting() -> Lighting {
             lighting_effect_1: 0.3,
             lighting_effect_2: 2.0,
             trailer: LightingTrailer::None,
-        },
-        field_offsets: FieldOffsets {
-            block_offset: 0,
-            slsf1: 0,
-            uv_offset: 0,
-            emissive_color: 0,
-            glossiness: 0,
-            trailer: 0,
         },
     }
 }

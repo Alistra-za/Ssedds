@@ -102,7 +102,7 @@ fn gras_db(dir: &std::path::Path, tex: &str) -> std::path::PathBuf {
 
 /// `set_preview_model.rs`'s lighting shape (block `block`, slots `slots`), copied: test binaries cannot share it.
 fn lighting_shape(block: u32, slots: &[&str]) -> nif::scan::ShapeRow {
-    use nif::props::{FieldOffsets, Lighting, LightingParams, LightingTrailer};
+    use nif::props::{Lighting, LightingParams, LightingTrailer};
     use nif::shape_head::{ShapeHead, ShapeKind};
     nif::scan::ShapeRow {
         block,
@@ -137,14 +137,6 @@ fn lighting_shape(block: u32, slots: &[&str]) -> nif::scan::ShapeRow {
                     lighting_effect_1: 0.3,
                     lighting_effect_2: 2.0,
                     trailer: LightingTrailer::None,
-                },
-                field_offsets: FieldOffsets {
-                    block_offset: 0,
-                    slsf1: 0,
-                    uv_offset: 0,
-                    emissive_color: 0,
-                    glossiness: 0,
-                    trailer: 0,
                 },
             },
             slots

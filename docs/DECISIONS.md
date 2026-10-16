@@ -1495,3 +1495,7 @@ Branch `refactor/gui-doc-state-and-caches`: REPORT #15, #9, #11 and gui-model GM
 - **BI4 Scan stamp per frame (#9).** `AppModel::poll()` stats the scan database once per frame into `scan_stamp`; `view_key` reads it, with the database path in the key. An external CLI scan is seen on the next frame; code that rewrites the database in place without a frame (tests) calls `poll()`.
 - **BI5 Delete hits (#11).** `delete_hits` returns `Arc<Vec<DeleteHit>>` cached in `ViewCache` under `view_key()`, like `export_blocks`.
 - **BI6 Small items.** GM-6: `open_folder` resets `dds_patch`. GM-5: the mesh-evidence and known-paths read errors are Messages warnings ("Scan database: …"), each distinct text once (`scan_db_error`, cleared by a successful read and by `open_folder`). GM-4: `export_ended(Result)` serves `ExportDone` and the export `Panicked` arm (`Err("internal error: …")`): the pace clock stops, pending JSON/CS/CM are finished or noted, and an error is always logged before the dialog decision; the panic arm still shows its own error dialog. LC-7: `ProjectDoc::read_as_all` (no readers) is gone. GM-10: a model unit test replaces every mesh-evidence read with alternating GRAS sets and checks three plans, then the "sets changed while planning" refusal.
+
+## Note BK — nif FieldOffsets removed (owner, 2026-10-16)
+
+`nif::props::FieldOffsets` and `Lighting::field_offsets` are gone (audit LC-7): they were kept for an in-place patcher that does not exist and had no production readers. `decode_lighting` is otherwise unchanged.
