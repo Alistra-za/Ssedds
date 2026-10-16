@@ -350,7 +350,21 @@ pub fn same_file(src: &Path, out: &Path) -> bool {
 ///
 /// Failures surface as `io::Error`: for example the rename fails with access denied when the target is read-only
 /// or open elsewhere without delete sharing, and when it is a directory.
+///
+/// The temp is flushed to disk (`sync_all`) before the rename: this is for documents a user edits (configs, project
+/// files, presets, exported JSON, patched DDS). Encode outputs use [`write_atomic_nosync`].
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic_with(path, bytes, true)
+}
+
+/// [`write_atomic`] without the flush, for what an encode writes (DDS outputs and sidecars; Note BC, audit #19): a
+/// flush per file costs minutes on a hard disk over a large batch, and after a power loss a torn output no longer
+/// matches its manifest record, so `if-changed` re-encodes it.
+pub fn write_atomic_nosync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic_with(path, bytes, false)
+}
+
+fn write_atomic_with(path: &Path, bytes: &[u8], sync: bool) -> std::io::Result<()> {
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -375,7 +389,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     };
     let mut guard = TempGuard(Some(&tmp_path));
     file.write_all(bytes)?;
-    file.sync_all()?;
+    if sync {
+        file.sync_all()?;
+    }
     drop(file);
     // On Windows std::fs::rename replaces an existing target (MoveFileExW with MOVEFILE_REPLACE_EXISTING).
     std::fs::rename(&tmp_path, path)?;

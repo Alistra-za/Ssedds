@@ -10,7 +10,7 @@ use crate::api::{BatchRequest, CancelToken};
 use crate::bake::NormalVariance;
 use crate::config::{Backend, Format, Profile, Subtype};
 use crate::coverage::{coverage_fraction, preserve_coverage};
-use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
+use crate::dds::{dds_bytes, resolve_header, write_atomic_nosync, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
 use crate::events::{EventKind, Reporter, Stage};
 use crate::image::Rgba32F;
@@ -537,7 +537,7 @@ pub fn process_file(
     };
     stop()?;
 
-    write_atomic(&job.output, &bytes).map_err(|e| fail(Stage::Write)(e.to_string()))?;
+    write_atomic_nosync(&job.output, &bytes).map_err(|e| fail(Stage::Write)(e.to_string()))?;
     tracker.written.set(true);
     drop(bytes);
     // Note Y1: taken after the rename, so `if-changed` notices a replaced output. Any failure from here on removes
@@ -546,7 +546,7 @@ pub fn process_file(
     if req.sidecar {
         let text =
             serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
-        write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
+        write_atomic_nosync(&job.output.with_extension("dds.json"), text.as_bytes())
             .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
     }
     manifest
