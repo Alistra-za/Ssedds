@@ -350,6 +350,8 @@ fn a_save_error_leaves_an_open_question_and_goes_to_the_notes() {
     let mut m = with_blocks(d.path());
     export_and_wait(&mut m);
     m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.03)));
+    // Saved by the user, so the hash record saves (an unsaved edit waits for Save, Note BD2) and meets the change.
+    m.sets_doc.as_mut().unwrap().save(true).unwrap();
     let toml = m.sets_doc.as_ref().unwrap().path().to_path_buf();
     let text = std::fs::read_to_string(&toml).unwrap();
     std::fs::write(&toml, format!("{text}\n# edited elsewhere\n")).unwrap();
@@ -369,6 +371,9 @@ fn a_save_error_leaves_an_open_question_and_goes_to_the_notes() {
     // With no question open the file changed on disk is the save question (audit 2026-10-15 item 16).
     m.dialog = None;
     m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.01)));
+    m.sets_doc.as_mut().unwrap().save(true).unwrap();
+    let text = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(&toml, format!("{text}\n# edited elsewhere again\n")).unwrap();
     let p = prepare(&m);
     m.finish_cs_pbr(p);
     assert_eq!(

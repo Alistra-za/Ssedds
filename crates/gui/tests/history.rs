@@ -300,3 +300,34 @@ fn an_edit_after_undo_never_merges_into_the_step_below() {
     h.push(cmd("name", snap("", "a"), snap("", "ab"), Some("k")));
     assert_eq!(h.undo.len(), 2);
 }
+
+/// Audit REPORT 2026-10-16 #2 (Note BD2): a set edit made while an export runs is not written by the hash record;
+/// it stays unsaved (the doc dirty) until the user saves or discards it.
+#[test]
+fn an_edit_during_an_export_is_not_saved_by_the_hash_record() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
+    m.export_clicked();
+    if matches!(m.dialog, Some(sdc_gui::model::Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.37)));
+    assert!(m.wait_idle(std::time::Duration::from_secs(120)));
+    let doc = m.sets_doc.as_ref().unwrap();
+    assert!(
+        doc.last_json_sha256().is_some(),
+        "the hash is recorded in memory"
+    );
+    assert!(doc.is_dirty(), "the edit is still unsaved");
+    let disk = std::fs::read_to_string(doc.path()).unwrap();
+    assert!(!disk.contains("0.37"), "{disk}");
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.contains("written with the next Save")),
+        "{:?}",
+        m.export.notes
+    );
+}

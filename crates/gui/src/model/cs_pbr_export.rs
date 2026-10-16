@@ -296,9 +296,8 @@ impl AppModel {
             );
             return;
         }
+        let was_dirty = d.is_dirty();
         d.set_cs_pbr_shas(&shas);
-        if let Err(e) = d.save(false) {
-            self.hash_record_failed(&e);
-        }
+        self.save_hash_record(was_dirty);
     }
 }
