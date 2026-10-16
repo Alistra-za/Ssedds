@@ -1082,9 +1082,9 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
     Ok(0)
 }
 
-/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable or refused, else 0; usage errors are 2
-/// (including `--out-dir` resolving to an input itself, DECISIONS S6). A write failure is exit 3 and stops the
-/// batch; files written before it stay written.
+/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable, refused or fails to write, else 0; usage
+/// errors are 2 (including `--out-dir` resolving to an input itself, DECISIONS S6). A failed write does not stop
+/// the batch: the other files are still patched (audit 2026-10-15 item 10).
 pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
     if let Some(p) = a.dds.iter().find(|p| p.is_dir()) {
         return Err(EngineError::Usage(format!(
