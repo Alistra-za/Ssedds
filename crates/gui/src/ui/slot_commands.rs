@@ -16,6 +16,8 @@ pub struct SlotCmdState {
     pub error: [Option<String>; 8],
     /// Per slot: a choice made in the combo that is not written yet (Path waits for Apply).
     pub mode: [Option<usize>; 8],
+    /// Per slot: the box was prefilled from the stored path once, so emptying it does not refill it.
+    pub filled: [bool; 8],
 }
 
 const NAMES: [&str; 8] = [
@@ -84,7 +86,8 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
                     Some(Value::String(s)) if s.is_empty() => 2,
                     Some(_) => 1,
                 };
-                if st.text[i].is_empty() {
+                if !st.filled[i] {
+                    st.filled[i] = true;
                     if let Some(Value::String(s)) = settings.get(&format!("slot{n}")) {
                         st.text[i] = s.clone();
                     }
