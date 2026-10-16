@@ -175,9 +175,9 @@ An `_orm` file counts as three raw maps at once: AO from its R channel, roughnes
 
 `_p` is built from a raw height map.
 
-### CPM (`cpm`)
+### Vanilla, complex material set
 
-`_m` is built when the set has a roughness, glossiness, metallic or height map:
+Under `vanilla`, a set whose shader is complex material (picked in the GUI, `--set set:<id>.shader=complex_material`, or chosen automatically because the set already has a complex-material `_m` file) builds the complex `_m` when it has a roughness, glossiness, metallic, height or `_orm` map. If the set already has an `_m` file, that file still wins unless `packing.prefer = "raw"`.
 
 | Channel | Source | Default when missing |
 |---|---|---|
@@ -186,9 +186,11 @@ An `_orm` file counts as three raw maps at once: AO from its R channel, roughnes
 | B | metallic | 0 |
 | A | height | 0 |
 
-### Vanilla (`vanilla`)
+### Vanilla, any other set
 
-`_m` is a BC4 environment mask, built from metallic (else specular) only when one of them exists.
+`_m` is a BC4 environment mask, built from metallic (else specular) only when one of them exists. Other raw maps are not used (`PACK-UNUSED-INPUT`).
+
+The recipe id of the complex `_m` in events and manifests is `cpm_m`, a name kept from the removed `cpm` target.
 
 ### Fills and defaults
 
@@ -288,7 +290,7 @@ A complex-grass texture is one image twice as tall as it is wide, with power-of-
 
 - Set the set's shader to `complex_grass`, set `subtype = "complex_grass"` on the file's `[files]` entry, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half gets a High-confidence `complex_grass` suggestion, which the GUI accepts. The GUI's sub-type picker does not offer `complex_grass`.
 - The CLI never tags it automatically. If you convert the same folder with `sdc convert`, add `subtype = "complex_grass"` to the file's `[files]` entry, or it is converted as a diffuse.
-- Codes: `GRASS-SHAPE` (error: not 1:2 or not power of two), `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE` (the source corner already fails the CS test), `GRASS-VANILLA`, and `VAL-GRASS-DETECT` (error: the encoded corner still fails after a slowest re-encode).
+- Codes: `GRASS-SHAPE` (error: not 1:2 or not power of two), `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE` (the source corner already fails the CS test), and `VAL-GRASS-DETECT` (error: the encoded corner still fails after a slowest re-encode).
 
 ## Alpha policies
 

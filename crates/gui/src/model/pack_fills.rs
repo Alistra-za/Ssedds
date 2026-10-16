@@ -15,8 +15,8 @@ use engine::pack::{recipes_for_with, ChannelSource, RawInput, RecipeKind};
 use serde_json::json;
 
 /// The role each channel of a packed output holds, R to A, where a fill can stand in for a missing source.
-/// `ChannelSource::Default` carries no role, so this table names it. Vanilla `_m` and the parallax map have
-/// nothing to fill; the cpm `_m` has no fuzz or AO channel and its R (the env mask) takes the metallic fill.
+/// `ChannelSource::Default` carries no role, so this table names it. The env-mask `_m` and the parallax map have
+/// nothing to fill; the complex `_m` has no fuzz or AO channel and its R (the env mask) takes the metallic fill.
 pub fn channel_roles(kind: RecipeKind) -> [Option<RawMap>; 4] {
     use RawMap::*;
     match kind {
@@ -117,7 +117,7 @@ impl AppModel {
                 _ => None,
             })
             .collect();
-        let built = recipes_for_with(Target::Cs, &raw, PackRecipe::Rfaos)
+        let built = recipes_for_with(Target::Cs, &raw, PackRecipe::Rfaos, false)
             .0
             .iter()
             .any(|r| r.kind == RecipeKind::Rfaos);

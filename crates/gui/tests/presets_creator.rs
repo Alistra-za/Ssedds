@@ -431,18 +431,12 @@ fn a_startup_banner_survives_a_replan_until_dismissed() {
 }
 
 #[test]
-fn rows_are_grouped_pbr_cs_then_cpm_then_vanilla_each_sub_type_once() {
-    // Note AP9: the family comes from the engine's availability per target.
+fn rows_are_grouped_pbr_cs_then_vanilla_each_sub_type_once() {
+    // Note AP9: the family comes from the engine's availability per target; the CPM family folded into Vanilla
+    // (Note AZ).
     use sdc_gui::model::presets::{family_of, layout, FAMILIES};
     let names: Vec<&str> = FAMILIES.iter().map(|(n, _)| *n).collect();
-    assert_eq!(
-        names,
-        [
-            "PBR / Community Shaders",
-            "Complex Parallax Materials (cpm)",
-            "Vanilla"
-        ]
-    );
+    assert_eq!(names, ["PBR / Community Shaders", "Vanilla"]);
     let l = layout();
     let order: Vec<&str> = l.iter().map(|(f, _, _)| *f).collect();
     let mut dedup = order.clone();
@@ -459,10 +453,7 @@ fn rows_are_grouped_pbr_cs_then_cpm_then_vanilla_each_sub_type_once() {
     );
     assert_eq!(family_of(Subtype::PbrEmissive), "PBR / Community Shaders");
     assert_eq!(family_of(Subtype::Glow), "Vanilla");
-    assert_eq!(
-        family_of(Subtype::ComplexMaterial),
-        "Complex Parallax Materials (cpm)"
-    );
+    assert_eq!(family_of(Subtype::ComplexMaterial), "Vanilla");
     assert_eq!(family_of(Subtype::Diffuse), "Vanilla");
     // By hand (AP9): a Community Shaders feature, though every target has it.
     assert_eq!(family_of(Subtype::ComplexGrass), "PBR / Community Shaders");

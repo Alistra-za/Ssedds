@@ -135,7 +135,6 @@ codes! {
     GrassTopOpaque = "GRASS-TOP-OPAQUE" => Warning,
     GrassNormals = "GRASS-NORMALS" => Warning,
     GrassDetectSource = "GRASS-DETECT-SOURCE" => Warning,
-    GrassVanilla = "GRASS-VANILLA" => Warning,
     ValGrassDetect = "VAL-GRASS-DETECT" => Error,
     PbrGrassDetect = "PBR-GRASS-DETECT" => Warning,
 }
@@ -204,11 +203,10 @@ mod tests {
         assert_eq!(Code::parse("VAL-PGPATCHER-50"), Some(Code::ValPgpatcher50));
         let names: BTreeSet<_> = Code::ALL.iter().map(|c| c.as_str()).collect();
         assert_eq!(names.len(), Code::ALL.len());
-        assert_eq!(Code::ALL.len(), 93);
+        assert_eq!(Code::ALL.len(), 92);
         assert_eq!(Code::EncNvttFailed.severity(), Severity::Error);
         assert_eq!(Code::GrassShape.severity(), Severity::Error);
         assert_eq!(Code::ValGrassDetect.severity(), Severity::Error);
-        assert_eq!(Code::GrassVanilla.severity(), Severity::Warning);
         assert_eq!(
             Code::parse("GRASS-DETECT-SOURCE"),
             Some(Code::GrassDetectSource)

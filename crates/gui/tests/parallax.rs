@@ -87,7 +87,7 @@ fn settle(h: &mut Harness<'static, AppModel>) {
 }
 
 #[test]
-fn the_cpm_card_checkbox_turns_parallax_off_in_one_undo_step() {
+fn the_complex_m_card_checkbox_turns_parallax_off_in_one_undo_step() {
     let d = tempfile::tempdir().unwrap();
     let m = fixture(d.path());
     assert_eq!(

@@ -266,11 +266,15 @@ fn put_gray(dir: &Path, name: &str, f: impl Fn(u32, u32) -> u8) {
 }
 
 #[test]
-fn a_packed_cpm_m_without_height_is_still_0() {
+fn a_packed_complex_m_without_height_is_still_0() {
     let d = tempfile::tempdir().unwrap();
     put_gray(d.path(), "iron_roughness.png", |x, _| (x * 4) as u8);
     put_gray(d.path(), "iron_metallic.png", |_, _| 40);
-    let o = convert(d.path(), Target::Cpm, &[]);
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["set:iron.shader=complex_material"],
+    );
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     // The M1 height default is a constant 0: nothing to enable, so parallax reads off (DECISIONS AH2).
     let j = planned(&o, "iron_metallic.png");
@@ -313,12 +317,16 @@ fn an_explicit_remove_raises_no_parallax_warning() {
 }
 
 #[test]
-fn a_packed_cpm_m_with_height_defaults_to_parallax_on() {
+fn a_packed_complex_m_with_height_defaults_to_parallax_on() {
     let d = tempfile::tempdir().unwrap();
     put_gray(d.path(), "iron_roughness.png", |x, _| (x * 4) as u8);
     put_gray(d.path(), "iron_metallic.png", |_, _| 40);
     put_gray(d.path(), "iron_height.png", height);
-    let o = convert(d.path(), Target::Cpm, &[]);
+    let o = convert(
+        d.path(),
+        Target::Vanilla,
+        &["set:iron.shader=complex_material"],
+    );
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     let j = planned(&o, "iron_metallic.png");
     assert_eq!(j["profile"]["alpha"]["parallax"], true);

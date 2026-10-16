@@ -198,20 +198,6 @@ static LANDSCAPE: ShaderSpec = ShaderSpec {
     optional: &[],
 };
 
-/// `ALL[3..]` without `ComplexGrass` (vanilla has no complex grass, ruling R1); a const loop, so position-independent.
-static VANILLA: [Shader; 10] = {
-    let mut out = [Shader::Default; 10];
-    let (mut i, mut j) = (3, 0);
-    while i < Shader::ALL.len() {
-        if !matches!(Shader::ALL[i], Shader::ComplexGrass) {
-            out[j] = Shader::ALL[i];
-            j += 1;
-        }
-        i += 1;
-    }
-    out
-};
-
 impl Shader {
     pub const ALL: [Shader; 14] = [
         Shader::Pbr,
@@ -268,15 +254,13 @@ impl Shader {
         }
     }
 
-    /// The shaders a target can use: CS has all 14 (`pbr` first); Vanilla and CPM lack `pbr`, `pbr_grass` and
-    /// `advanced_skin`.
+    /// The shaders a target can use: CS has all 14 (`pbr` first); Vanilla lacks `pbr`, `pbr_grass` and
+    /// `advanced_skin` but has complex grass and complex material (Note AZ).
     pub fn available(t: Target) -> &'static [Shader] {
         match t {
             Target::Cs => &Shader::ALL,
             // `ALL` starts with `pbr`, `pbr_grass`, `advanced_skin`.
-            Target::Cpm => &Shader::ALL[3..],
-            // Ruling R1: the vanilla grass shader has no complex grass.
-            Target::Vanilla => &VANILLA,
+            Target::Vanilla => &Shader::ALL[3..],
         }
     }
 
@@ -287,7 +271,7 @@ impl Shader {
     pub fn default_for(t: Target) -> Shader {
         match t {
             Target::Cs => Shader::Pbr,
-            Target::Vanilla | Target::Cpm => Shader::Default,
+            Target::Vanilla => Shader::Default,
         }
     }
 
@@ -918,16 +902,15 @@ mod tests {
         assert_eq!(Shader::available(Target::Cs).len(), 14);
         assert_eq!(Shader::available(Target::Cs)[0], Shader::Pbr);
         assert_eq!(Shader::available(Target::Cs)[1], Shader::PbrGrass);
-        for t in [Target::Vanilla, Target::Cpm] {
-            let l = Shader::available(t);
-            assert_eq!(l.len(), if t == Target::Cpm { 11 } else { 10 }, "{t:?}");
-            assert!(
-                !l.contains(&Shader::Pbr)
-                    && !l.contains(&Shader::PbrGrass)
-                    && !l.contains(&Shader::AdvancedSkin)
-            );
-            assert_eq!(Shader::default_for(t), Shader::Default);
-        }
+        let l = Shader::available(Target::Vanilla);
+        assert_eq!(l.len(), 11);
+        assert!(
+            !l.contains(&Shader::Pbr)
+                && !l.contains(&Shader::PbrGrass)
+                && !l.contains(&Shader::AdvancedSkin)
+        );
+        assert!(l.contains(&Shader::ComplexGrass) && l.contains(&Shader::ComplexMaterial));
+        assert_eq!(Shader::default_for(Target::Vanilla), Shader::Default);
         assert_eq!(Shader::default_for(Target::Cs), Shader::Pbr);
         assert!(!Shader::Pbr.is_available(Target::Vanilla));
         assert!(Shader::ComplexMaterial.is_available(Target::Vanilla));
@@ -1289,9 +1272,6 @@ mod tests {
                 wanted: Some(Shader::Pbr)
             }
         );
-        // cpm uses the vanilla list.
-        i.target = Target::Cpm;
-        assert_eq!(pick(&i).shader, Shader::Default);
     }
 
     #[test]
@@ -1666,15 +1646,15 @@ mod tests {
     }
 
     /// 2026-10-13: a set with a complex_grass member picks `complex_grass` (ENB and CS), before the mesh majority
-    /// and the landscape path; vanilla has no such shader.
+    /// and the landscape path; vanilla has it too since Note AZ (ruling R1 reversed).
     #[test]
-    fn complex_grass_is_picked_by_its_member_and_is_never_vanilla() {
+    fn complex_grass_is_picked_by_its_member() {
         use Subtype::*;
         let s = sx(&[]);
         let st = [ComplexGrass];
         let paths = ["textures/landscape/grass/g.dds"];
         let mesh = [Shader::Landscape, Shader::Landscape];
-        for t in [Target::Cs, Target::Cpm] {
+        for t in [Target::Cs, Target::Vanilla] {
             let mut i = input(t, &s, &st, &paths);
             i.mesh = &mesh;
             let p = pick(&i);
@@ -1687,10 +1667,7 @@ mod tests {
                 "{t:?}"
             );
         }
-        let p = pick(&input(Target::Vanilla, &s, &st, &paths));
-        assert_eq!(p.shader, Shader::Default);
-        assert_eq!(p.wanted, Some(Shader::ComplexGrass));
-        assert!(!Shader::available(Target::Vanilla).contains(&Shader::ComplexGrass));
+        assert!(Shader::available(Target::Vanilla).contains(&Shader::ComplexGrass));
         assert_eq!(Shader::ComplexGrass.id(), "complex_grass");
         assert_eq!(Shader::ComplexGrass.label(), "Complex grass");
     }

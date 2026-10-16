@@ -1396,7 +1396,7 @@ fn encoding_warnings(
     if srgb && target != Target::Cs {
         add(
             TagSrgbVanilla,
-            "_SRGB is not usable under vanilla or CPM shaders [D#4]".into(),
+            "_SRGB is not usable under vanilla shaders [D#4]".into(),
         );
     } else if srgb && !st.is_pbr_color() {
         add(
@@ -1514,7 +1514,7 @@ pub fn check_profile(
         );
     }
     // M2.5 (spec §6.4): the neutral roughness (0..=1) of the sub-types whose recipe reads it: `_rmaos`/`_rfaos` and
-    // `cpm` `_m`. The check also fires for a pre-packed file of that sub-type, which never reads the value; that is
+    // complex `_m`. The check also fires for a pre-packed file of that sub-type, which never reads the value; that is
     // harmless (the value is a profile-wide setting, so a bad one is worth flagging wherever it shows up).
     if (st.is_roughness_member() || st == Subtype::ComplexMaterial)
         && !(0.0..=1.0).contains(&p.packing.roughness_default)
@@ -1844,14 +1844,6 @@ pub fn check_profile(
                     .into(),
             );
         }
-        if p.target == Target::Vanilla {
-            add(
-                GrassVanilla,
-                "the vanilla grass shader has no complex grass: written as complex_grass unchanged; only Community \
-                 Shaders or ENB read it"
-                    .into(),
-            );
-        }
         match &a.grass {
             Some(g) if a.is_pot => {
                 if g.top_opaque {
@@ -2046,7 +2038,7 @@ pub fn resolve_file(ctx: &ResolveCtx, f: &FileFacts) -> ResolvedJob {
 
 /// [`resolve_file`] for a file the plugin scanner names as the diffuse of a GRAS model (`gras_diffuse`, complex grass
 /// design §5, ruling R11): when nothing explicit chose its sub-type and its analysis passes the detection tests, its
-/// top suggestion becomes a high-confidence `complex_grass`. Never under vanilla (ruling R1).
+/// top suggestion becomes a high-confidence `complex_grass`, on either target (Note AZ reverses ruling R1).
 pub fn resolve_file_with(ctx: &ResolveCtx, f: &FileFacts, gras_diffuse: bool) -> ResolvedJob {
     let mut d = decide_subtype(ctx, f);
     // Spec §4.4: a raw map is a packing input unless a rule or --set names its sub-type.
@@ -2088,7 +2080,6 @@ fn suggest_grass(ctx: &ResolveCtx, f: &FileFacts, d: &mut SubtypeDecision) {
         .get(&f.set.key)
         .is_some_and(|p| p.provenance == crate::shader::ShaderOrigin::Set)
         || !matches!(d.provenance, Provenance::Suggestion)
-        || ctx.target == Target::Vanilla
         || !crate::grass::looks_like_grass(f.analysis)
     {
         return;

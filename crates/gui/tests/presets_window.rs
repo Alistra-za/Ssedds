@@ -219,18 +219,15 @@ fn the_families_show_in_order_with_their_hints() {
     m.presets_model().select("cs-quality");
     let h = harness(m);
     let y = |label: &str| h.get_by_label(label).rect().top();
-    let (pbr, cpm, van) = (
-        y("PBR / Community Shaders"),
-        y("Complex Parallax Materials (cpm)"),
-        y("Vanilla"),
-    );
-    assert!(pbr < cpm && cpm < van, "{pbr} {cpm} {van}");
+    let (pbr, van) = (y("PBR / Community Shaders"), y("Vanilla"));
+    assert!(pbr < van, "{pbr} {van}");
     h.get_by_label("PBR / Community Shaders — used under the cs target");
-    // pbr_emissive under PBR / CS, glow under Vanilla.
+    // pbr_emissive under PBR / CS; glow and complex material under Vanilla (Note AZ).
     let emissive = h.get_by_label_contains("emissive —").rect().top();
     let glow = h.get_by_label_contains("glow —").rect().top();
-    assert!(pbr < emissive && emissive < cpm, "{emissive}");
-    assert!(van < glow, "{glow}");
+    let complex = h.get_by_label_contains("complex material —").rect().top();
+    assert!(pbr < emissive && emissive < van, "{emissive}");
+    assert!(van < glow && van < complex, "{glow} {complex}");
 }
 
 /// The PBR / CS family comes first and is long: fold it so the Vanilla rows are on screen.

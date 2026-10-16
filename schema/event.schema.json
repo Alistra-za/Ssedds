@@ -460,7 +460,6 @@
         "GRASS-TOP-OPAQUE",
         "GRASS-NORMALS",
         "GRASS-DETECT-SOURCE",
-        "GRASS-VANILLA",
         "VAL-GRASS-DETECT",
         "PBR-GRASS-DETECT"
       ],
@@ -1166,7 +1165,7 @@
         },
         {
           "const": "cpm_m",
-          "description": "`cpm` complex `<base>_m.dds`: env mask, glossiness, metallic, height.",
+          "description": "Complex `<base>_m.dds` of a vanilla complex-material set: env mask, glossiness, metallic, height (Note AZ3).",
           "type": "string"
         },
         {
@@ -1718,7 +1717,6 @@
     "Target": {
       "enum": [
         "cs",
-        "cpm",
         "vanilla"
       ],
       "type": "string"

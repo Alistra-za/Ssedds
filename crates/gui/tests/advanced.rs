@@ -62,7 +62,7 @@ fn unmatched_entries_are_listed_and_removable() {
         "alpha.threshold",
         serde_json::json!(90),
     );
-    m.set_target(engine::config::Target::Cpm);
+    m.set_target(engine::config::Target::Vanilla);
     assert!(m.wait_idle(Duration::from_secs(60)));
     assert_eq!(m.unmatched_keys, vec!["landscape/rock01_rmaos".to_string()]);
     m.remove_unmatched("landscape/rock01_rmaos");
@@ -284,7 +284,7 @@ fn remove_drops_an_unmatched_entry() {
         "alpha.threshold",
         serde_json::json!(90),
     );
-    model.set_target(engine::config::Target::Cpm);
+    model.set_target(engine::config::Target::Vanilla);
     assert!(model.wait_idle(Duration::from_secs(60)));
     model.settings.advanced_open = true;
     let mut h = harness(model);

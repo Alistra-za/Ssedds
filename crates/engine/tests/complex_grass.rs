@@ -14,12 +14,11 @@ use tempfile::TempDir;
 
 const TAG: &str = "file:**/g.png.subtype=complex_grass";
 const CUTOUT: &str = "file:**/g.png.alpha.policy=cutout";
-const GRASS_CODES: [Code; 6] = [
+const GRASS_CODES: [Code; 5] = [
     Code::GrassShape,
     Code::GrassTopOpaque,
     Code::GrassNormals,
     Code::GrassDetectSource,
-    Code::GrassVanilla,
     Code::ValGrassDetect,
 ];
 
@@ -180,15 +179,15 @@ fn a_failing_source_corner_warns() {
     assert!(w.message.contains("renormalised"), "{}", w.message);
 }
 
-/// R1 (Review Focus 4): under vanilla the tag stays, with a warning, and the file is not blocked.
+/// Note AZ (reverses R1): under vanilla the tag stays, with no warning, and the file is not blocked.
 #[test]
-fn vanilla_tag_warns_and_stays_complex_grass() {
+fn vanilla_tag_stays_complex_grass() {
     let d = tempfile::tempdir().unwrap();
     put(&d, "g.png", &grass(32));
     let p = plan(&d, Target::Vanilla, &[TAG, CUTOUT]);
     let j = job(&p, "g.png");
     assert_eq!(j.profile.subtype, Subtype::ComplexGrass);
-    assert_eq!(grass_codes(j), [Code::GrassVanilla]);
+    assert!(grass_codes(j).is_empty(), "{:?}", j.warnings);
     assert!(!codes(j).contains(&Code::CfgUnavailable));
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
     assert_eq!(
@@ -196,9 +195,7 @@ fn vanilla_tag_warns_and_stays_complex_grass() {
         Availability::Available
     );
     assert!(!offered(Target::Vanilla, Subtype::ComplexGrass));
-    assert!(
-        !offered(Target::Cs, Subtype::ComplexGrass) && !offered(Target::Cpm, Subtype::ComplexGrass)
-    );
+    assert!(!offered(Target::Cs, Subtype::ComplexGrass));
     assert!(offered(Target::Vanilla, Subtype::Diffuse));
 }
 
@@ -477,18 +474,18 @@ fn a_user_tag_wins_both_ways() {
     assert_eq!(job(&p, "g.png").profile.subtype, Subtype::ComplexGrass);
 }
 
-/// R1 (Review Focus 4).
+/// Note AZ (reverses R1): a GRAS diffuse is auto-tagged under vanilla too.
 #[test]
-fn vanilla_is_never_auto_tagged() {
+fn vanilla_is_auto_tagged() {
     let d = tempfile::tempdir().unwrap();
     put(&d, "g.png", &grass(32));
     let p = plan_gras(&d, Target::Vanilla, true, &[]);
     let j = job(&p, "g.png");
-    assert!(j
-        .suggestions
-        .iter()
-        .all(|s| s.subtype != Subtype::ComplexGrass));
-    assert_ne!(j.profile.subtype, Subtype::ComplexGrass);
+    assert_eq!(
+        (j.suggestions[0].subtype, j.suggestions[0].confidence),
+        (Subtype::ComplexGrass, engine::suggest::Confidence::High)
+    );
+    assert_eq!(j.profile.subtype, Subtype::ComplexGrass);
 }
 
 /// Plan `rel` (under `in/`) with an explicit set shader for its set, and the GRAS flag on or off.

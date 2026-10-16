@@ -386,7 +386,7 @@ pub struct AppModel {
     continue_after_plan: Option<Continue>,
     /// The user chose to cancel the running export and then close or open: done when the export has ended.
     after_export: Option<AfterExport>,
-    /// What the running export writes afterwards (the JSON and the vanilla/CPM copies).
+    /// What the running export writes afterwards (the JSON and the vanilla copies).
     pending_json: Option<pbr_export::PendingJson>,
     /// The JSON text waiting for the answer to `Dialog::OverwriteJson`.
     pending_text: Option<String>,

@@ -288,17 +288,13 @@ fn rgbcx_level_above_max_is_cfg_invalid() {
 #[test]
 fn availability_table() {
     assert_eq!(
-        availability(Target::Cpm, Subtype::PbrNormal),
+        availability(Target::Vanilla, Subtype::PbrNormal),
         Availability::Unavailable {
             fallback: Some(Subtype::Normal)
         }
     );
     assert_eq!(
         availability(Target::Vanilla, Subtype::ComplexMaterial),
-        Availability::Available
-    );
-    assert_eq!(
-        availability(Target::Cpm, Subtype::ComplexMaterial),
         Availability::Available
     );
     assert_eq!(
@@ -459,11 +455,11 @@ fn packed_maps_reject_bc6h() {
     }
 }
 
-/// Carry 2: `_SRGB` and BC6H only under cs; PBR sub-types inherited by cpm/vanilla are caught.
+/// Carry 2: `_SRGB` and BC6H only under cs; PBR sub-types inherited by vanilla are caught.
 #[test]
 fn srgb_and_bc6h_are_gated_by_target() {
     let j = run(
-        Target::Cpm,
+        Target::Vanilla,
         "textures/a/x.png",
         None,
         &[],
@@ -477,10 +473,10 @@ fn srgb_and_bc6h_are_gated_by_target() {
             codes: vec![Code::TagSrgbVanilla]
         }
     );
-    // pbr_emissive under cpm: the unavailable sub-type is the only report; its inherited BC6H is a cascade
+    // pbr_emissive under vanilla: the unavailable sub-type is the only report; its inherited BC6H is a cascade
     // (fix batch 39 item 2), so the file is blocked by one CFG-UNAVAILABLE, not failed.
     let j = run(
-        Target::Cpm,
+        Target::Vanilla,
         "textures/a/x_g.png",
         Some("g"),
         &["g"],
@@ -549,11 +545,10 @@ fn unavailable_subtype_reports_cfg_unavailable_only() {
     }
     for (target, st) in [
         (Target::Vanilla, "pbr_albedo"),
-        (Target::Cpm, "pbr_albedo"),
         (Target::Vanilla, "pbr_emissive"),
         (Target::Vanilla, "pbr_fuzz"),
         (Target::Vanilla, "rmaos"),
-        (Target::Cpm, "flow"),
+        (Target::Vanilla, "flow"),
         (Target::Vanilla, "hdr_sky"),
     ] {
         let set = format!("subtype={st}");
@@ -1073,9 +1068,9 @@ fn allow_cfg_unavailable_accepts_fallbacks_only() {
     let w = warning(&j, Code::CfgUnavailable);
     assert_eq!(w.severity, engine::codes::Severity::Warning);
     assert!(w.message.contains("fallback diffuse"), "{}", w.message);
-    // pbr_emissive under cpm resolves as glow (BC7, not the inherited BC6H)
+    // pbr_emissive under vanilla resolves as glow (BC7, not the inherited BC6H)
     let j = run(
-        Target::Cpm,
+        Target::Vanilla,
         "textures/a/x_g.png",
         Some("g"),
         &["g"],
@@ -1254,7 +1249,7 @@ fn builtin_presets_never_confirm_mesh_alpha() {
     img.px[0][3] = 0.5;
     let allow = BTreeSet::new();
     assert!(reg.is_builtin(BASE_ID));
-    for target in [Target::Cs, Target::Cpm, Target::Vanilla] {
+    for target in [Target::Cs, Target::Vanilla] {
         let preset = default_preset_for(target);
         assert!(reg.is_builtin(preset));
         for st in ["diffuse", "pbr_albedo", "ui_sky"] {

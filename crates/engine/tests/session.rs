@@ -48,13 +48,17 @@ fn replanning_reuses_analyses_and_a_target_change_reloads_only_pack_sources() {
     assert_eq!(s.cache().loads(), 5);
     plan(&s, req(d.path(), Target::Cs));
     assert_eq!(s.cache().loads(), 5, "an identical re-plan loads nothing");
-    plan(&s, req(d.path(), Target::Cpm));
-    // The cpm `_m` packs roughness (as glossiness) and has no AO channel, so the new recipe has one source: only it
+    // A vanilla complex-material set (the old cpm target, Note AZ).
+    let mut r = req(d.path(), Target::Vanilla);
+    r.overrides
+        .push(parse_set("set:iron.shader=complex_material").unwrap());
+    plan(&s, r);
+    // The complex `_m` packs roughness (as glossiness) and has no AO channel, so the new recipe has one source: only it
     // loads, and the three files' pass-1 analyses are reused.
     assert_eq!(
         s.cache().loads(),
         6,
-        "cpm packs a _m from roughness alone: only that source loads"
+        "the complex _m packs from roughness alone: only that source loads"
     );
 }
 

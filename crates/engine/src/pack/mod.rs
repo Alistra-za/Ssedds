@@ -23,7 +23,7 @@ pub enum RecipeKind {
     Rfaos,
     /// `cs` `<base>_p.dds`: height (BC4).
     Parallax,
-    /// `cpm` complex `<base>_m.dds`: env mask, glossiness, metallic, height.
+    /// Complex `<base>_m.dds` of a vanilla complex-material set: env mask, glossiness, metallic, height (Note AZ3).
     CpmM,
     /// `vanilla` env-mask `<base>_m.dds` (BC4).
     VanillaM,
@@ -156,9 +156,11 @@ fn file_name(p: &Path) -> String {
         .into_owned()
 }
 
-/// Why a raw map of `role` takes part in no recipe of `target` (DECISIONS Note M2).
+/// Why a raw map of `role` takes part in no recipe of `target` (DECISIONS Note M2); `complex` is a vanilla set
+/// that packs the complex `_m` (Note AZ).
 fn unused_reason(
     target: Target,
+    complex: bool,
     recipe: PackRecipe,
     role: RawMap,
     have: &BTreeMap<RawMap, &RawInput>,
@@ -185,21 +187,18 @@ fn unused_reason(
             "nothing to pack: _rmaos/_rfaos need a roughness, glossiness, AO or metallic source"
                 .into()
         }
-        (Target::Cpm, RawMap::Roughness) if has(RawMap::Glossiness) => {
-            "glossiness is used: the cpm _m G channel is glossiness".into()
-        }
-        (Target::Cpm, RawMap::Specular) if has(RawMap::Metallic) => {
-            "the env mask comes from the metallic source".into()
-        }
-        (Target::Cpm, RawMap::Ao | RawMap::Fuzz) => {
-            format!("the cpm _m has no {} channel", role.id())
-        }
-        (Target::Cpm, _) => {
-            "nothing to pack: the cpm _m needs a roughness, glossiness, metallic or height source"
-                .into()
+        (Target::Vanilla, RawMap::Roughness) if complex && has(RawMap::Glossiness) => {
+            "glossiness is used: the complex _m G channel is glossiness".into()
         }
         (Target::Vanilla, RawMap::Specular) if has(RawMap::Metallic) => {
             "the env mask comes from the metallic source".into()
+        }
+        (Target::Vanilla, RawMap::Ao | RawMap::Fuzz) if complex => {
+            format!("the complex _m has no {} channel", role.id())
+        }
+        (Target::Vanilla, _) if complex => {
+            "nothing to pack: the complex _m needs a roughness, glossiness, metallic or height source"
+                .into()
         }
         (Target::Vanilla, _) => {
             "vanilla packs only an env-mask _m, from a metallic or specular source".into()
@@ -227,16 +226,19 @@ fn prefer(
 }
 
 /// The recipes of one set under `target` (spec §6.4 recipe table) and the raw maps none of them uses, with
-/// `packing.recipe = auto`.
+/// `packing.recipe = auto`, for a set whose shader is not complex material.
 pub fn recipes_for(target: Target, raw: &[RawInput]) -> (Vec<Recipe>, Vec<Unused>) {
-    recipes_for_with(target, raw, PackRecipe::Auto)
+    recipes_for_with(target, raw, PackRecipe::Auto, false)
 }
 
-/// [`recipes_for`] with the set's `packing.recipe`: it only matters on cs (DECISIONS Note R-fills-1).
+/// [`recipes_for`] with the set's `packing.recipe` (it only matters on cs, DECISIONS Note R-fills-1) and whether
+/// the set's shader is complex material: under vanilla such a set packs the complex `_m` instead of the env-mask
+/// `_m` (Note AZ); cs ignores it.
 pub fn recipes_for_with(
     target: Target,
     raw: &[RawInput],
     pack_recipe: PackRecipe,
+    complex: bool,
 ) -> (Vec<Recipe>, Vec<Unused>) {
     use ChannelNeed::{MirrorR, Missing, Opaque};
     use RawMap::*;
@@ -342,7 +344,7 @@ pub fn recipes_for_with(
                 });
             }
         }
-        Target::Cpm => {
+        Target::Vanilla if complex => {
             if [Roughness, Glossiness, Metallic, Height, Orm]
                 .into_iter()
                 .any(has)
@@ -393,7 +395,7 @@ pub fn recipes_for_with(
             unused.push(Unused {
                 path: r.path.clone(),
                 role: r.role,
-                reason: unused_reason(target, pack_recipe, r.role, &by_role),
+                reason: unused_reason(target, complex, pack_recipe, r.role, &by_role),
             });
         }
     }
@@ -403,7 +405,11 @@ pub fn recipes_for_with(
 
 /// The suffixes a set's recipes would add (spec §6.4 "Set membership", DECISIONS Note M7), from the raw roles
 /// present, before anything is resolved.
-pub fn predicted_suffixes(target: Target, roles: &BTreeSet<RawMap>) -> Vec<&'static str> {
+pub fn predicted_suffixes(
+    target: Target,
+    complex: bool,
+    roles: &BTreeSet<RawMap>,
+) -> Vec<&'static str> {
     let raw: Vec<RawInput> = roles
         .iter()
         .map(|r| RawInput {
@@ -411,7 +417,7 @@ pub fn predicted_suffixes(target: Target, roles: &BTreeSet<RawMap>) -> Vec<&'sta
             role: *r,
         })
         .collect();
-    recipes_for(target, &raw)
+    recipes_for_with(target, &raw, PackRecipe::Auto, complex)
         .0
         .iter()
         .map(|r| r.kind.suffix())

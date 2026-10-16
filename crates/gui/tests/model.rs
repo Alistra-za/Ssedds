@@ -144,10 +144,13 @@ fn filters_search_and_selection_survive_a_replan() {
 fn the_mode_changes_target_and_recipes() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
-    m.set_target(Target::Cpm);
+    m.set_target(Target::Vanilla);
     assert!(m.wait_idle(Duration::from_secs(60)));
-    assert_eq!(m.target, Target::Cpm);
+    assert_eq!(m.target, Target::Vanilla);
     assert!(m.item("landscape/rock01_rmaos").is_none());
+    // Roughness and AO make no env-mask `_m`; a complex-material set packs the complex `_m` (Note AZ).
+    assert!(m.item("landscape/rock01_m").is_none());
+    complex_material(&mut m, "landscape/rock01");
     assert!(m.item("landscape/rock01_m").is_some());
 }
 

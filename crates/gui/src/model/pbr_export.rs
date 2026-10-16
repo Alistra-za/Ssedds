@@ -482,13 +482,13 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
         .collect()
 }
 
-/// What an export about to start writes once it has ended: the PGPatcher JSON and the vanilla/CPM copies.
+/// What an export about to start writes once it has ended: the PGPatcher JSON and the vanilla copies.
 #[derive(Debug, Clone)]
 pub struct PendingJson {
     pub path: PathBuf,
     /// Set id, the job keys its entry depends on, and the entry.
     pub entries: Vec<(String, Vec<String>, EntryInput)>,
-    /// Borrowed-slot copies for vanilla/CPM: (owner output, borrower path, owner job key), paths absolute (P4).
+    /// Borrowed-slot copies for vanilla: (owner output, borrower path, owner job key), paths absolute (P4).
     pub copies: Vec<(PathBuf, PathBuf, String)>,
 }
 
@@ -696,7 +696,7 @@ pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) ->
     }
 }
 
-/// The note for an export that did not end cleanly: nothing is written then. A vanilla/CPM export has no JSON, so
+/// The note for an export that did not end cleanly: nothing is written then. A vanilla export has no JSON, so
 /// it gets no note.
 pub fn unfinished_note(p: &PendingJson, failed: bool) -> Option<String> {
     if p.entries.is_empty() {

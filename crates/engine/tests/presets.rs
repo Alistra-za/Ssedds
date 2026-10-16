@@ -86,7 +86,6 @@ fn every_builtin_subtype_profile_deserialises() {
     let r = PresetRegistry::builtin().unwrap();
     for (id, target) in [
         ("cs-quality", Target::Cs),
-        ("cpm-quality", Target::Cpm),
         ("vanilla-quality", Target::Vanilla),
     ] {
         for st in Subtype::ALL {
@@ -104,7 +103,7 @@ fn every_builtin_subtype_profile_deserialises() {
 #[test]
 fn preset_targets_and_default_preset_agree() {
     let r = PresetRegistry::builtin().unwrap();
-    for t in [Target::Cs, Target::Cpm, Target::Vanilla] {
+    for t in [Target::Cs, Target::Vanilla] {
         assert_eq!(r.get(default_preset_for(t)).unwrap().target, Some(t));
     }
     assert_eq!(default_preset_for(Target::Cs), DEFAULT_PRESET);
@@ -113,7 +112,6 @@ fn preset_targets_and_default_preset_agree() {
     assert_eq!(
         ids,
         [
-            "cpm-quality",
             "cs-compact",
             "cs-quality",
             "fast-preview",
@@ -200,7 +198,7 @@ fn compact_and_fast_preview_resolve_as_designed() {
         assert_eq!(rule.overrides, json!({"format": "bc1", "resize": "none"}));
     }
     assert_eq!(r.get("vanilla-compact").unwrap().rules, compact.rules);
-    for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+    for t in [Target::Cs, Target::Vanilla] {
         let p = r.profile("fast-preview", t, Subtype::Diffuse).unwrap();
         assert_eq!(p.encoder.effort, Effort::Fast);
         assert_eq!(p.validation.mips, ValidationMips::Smallest);
@@ -893,4 +891,40 @@ fn vanilla_compact_halves_a_complex_m() {
         (p.format, p.resize, p.alpha.policy),
         (Format::Bc7, ResizeMode::Half, AlphaPolicy::Data)
     );
+}
+
+/// Note AZ: the cpm target and its preset are gone, with no alias: `target = "cpm"` and `base = "cpm-quality"` are
+/// errors.
+#[test]
+fn cpm_target_and_preset_are_rejected() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    assert!(r.get("cpm-quality").is_none());
+    let e = r
+        .add_toml("schema_version = 1\nid = \"a\"\nversion = \"1\"\nbase = \"sdc-base\"\ntarget = \"cpm\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cpm"), "{e}");
+    let added = r
+        .add_toml("schema_version = 1\nid = \"b\"\nversion = \"1\"\nbase = \"cpm-quality\"\n")
+        .and_then(|id| r.chain(&id).map(|_| ()));
+    assert!(added.unwrap_err().to_string().contains("cpm-quality"));
+    assert!(toml::from_str::<engine::presets::ConfigFile>("target = \"cpm\"\n").is_err());
+}
+
+/// Note AZ1 (review M3): a user preset with `target = "cpm"` in the presets folder is skipped with CFG-PRESET-SKIPPED
+/// (Note T6, unchanged), and the warning names the unknown target.
+#[test]
+fn a_user_preset_with_the_cpm_target_is_skipped_naming_it() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("old.toml"),
+        "schema_version = 1\nid = \"old\"\nversion = \"1\"\nbase = \"sdc-base\"\ntarget = \"cpm\"\n",
+    )
+    .unwrap();
+    let mut r = PresetRegistry::builtin().unwrap();
+    let w = r.add_dir(d.path());
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].code, engine::codes::Code::CfgPresetSkipped);
+    assert!(w[0].message.contains("`cpm`"), "{}", w[0].message);
+    assert!(r.get("old").is_none());
 }

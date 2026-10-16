@@ -285,19 +285,13 @@ fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
             let own = pm.own_target();
             let name = |t: Option<Target>| match t {
                 Some(Target::Cs) => "cs".to_string(),
-                Some(Target::Cpm) => "cpm".to_string(),
                 Some(Target::Vanilla) => "vanilla".to_string(),
                 None => "from the base".to_string(),
             };
             egui::ComboBox::from_id_salt("presets-target")
                 .selected_text(name(own))
                 .show_ui(ui, |ui| {
-                    for t in [
-                        None,
-                        Some(Target::Cs),
-                        Some(Target::Vanilla),
-                        Some(Target::Cpm),
-                    ] {
+                    for t in [None, Some(Target::Cs), Some(Target::Vanilla)] {
                         if ui.selectable_label(t == own, name(t)).clicked() && t != own {
                             acts.push(Act::Target(t));
                         }
@@ -393,7 +387,6 @@ fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
 fn target_text(t: Target) -> &'static str {
     match t {
         Target::Cs => "cs",
-        Target::Cpm => "cpm",
         Target::Vanilla => "vanilla",
     }
 }
@@ -413,7 +406,7 @@ fn body(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
                 }
             });
     }
-    // AP9: PBR / CS, then CPM, then Vanilla; inside each, the Colour, Normal, Data and Special groups it has.
+    // AP9, Note AZ: PBR / CS, then Vanilla; inside each, the Colour, Normal, Data and Special groups it has.
     let layout = layout();
     for (family, hint) in FAMILIES {
         egui::CollapsingHeader::new(egui::RichText::new(family).heading())

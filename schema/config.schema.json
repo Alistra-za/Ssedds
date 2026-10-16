@@ -1251,7 +1251,6 @@
     "Target": {
       "enum": [
         "cs",
-        "cpm",
         "vanilla"
       ],
       "type": "string"
