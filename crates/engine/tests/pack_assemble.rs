@@ -83,7 +83,7 @@ fn inverted_mirrored_opaque_and_shared_sources() {
     let d = tempfile::tempdir().unwrap();
     let gloss = gray8(d.path(), "iron_gloss.png", 4, |x, _| x as u8 * 60);
     let metal = gray8(d.path(), "iron_metal.png", 4, |_, y| y as u8 * 60);
-    // cpm: metallic feeds R (env mask) and B; glossiness is G.
+    // complex _m: metallic feeds R (env mask) and B; glossiness is G.
     let j = job(
         RecipeKind::CpmM,
         [

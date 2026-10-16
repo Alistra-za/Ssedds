@@ -368,16 +368,12 @@ fn alias_preset_without_base_layers_on_the_target_quality_preset() {
         ["sdc-base", "cs-quality", "nobase"]
     );
     assert_eq!(
-        ids("nobase", Target::Cpm),
-        ["sdc-base", "cpm-quality", "nobase"]
-    );
-    assert_eq!(
         ids("nobase", Target::Vanilla),
         ["sdc-base", "vanilla-quality", "nobase"]
     );
     // an alias preset with a base keeps its declared chain
     assert_eq!(
-        ids("ultra", Target::Cpm),
+        ids("ultra", Target::Vanilla),
         ["sdc-base", "cs-quality", "ultra"]
     );
     let j = resolve(&reg, "iron_rmaoslow.png", &[], AcceptSuggestions::High);
@@ -480,9 +476,9 @@ fn accepted_fallback_keeps_the_alias_preset() {
     let overrides = vec![];
     let allow = BTreeSet::from([engine::codes::Code::CfgUnavailable]);
     let ctx = ResolveCtx {
-        target: Target::Cpm,
+        target: Target::Vanilla,
         registry: &reg,
-        preset: "cpm-quality",
+        preset: "vanilla-quality",
         user_config: None,
         project_config: None,
         overrides: &overrides,
@@ -502,7 +498,7 @@ fn accepted_fallback_keeps_the_alias_preset() {
         kind: InputKind::Image,
         real_rel: None,
     };
-    // The alias preset's rule names pbr_normal, unavailable under CPM; its fallback is normal, and the
+    // The alias preset's rule names pbr_normal, unavailable under vanilla; its fallback is normal, and the
     // fallback is resolved with the alias preset's chain too.
     let set = TextureSet {
         key: "textures/armor/iron".into(),

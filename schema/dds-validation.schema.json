@@ -141,7 +141,6 @@
         "GRASS-TOP-OPAQUE",
         "GRASS-NORMALS",
         "GRASS-DETECT-SOURCE",
-        "GRASS-VANILLA",
         "VAL-GRASS-DETECT",
         "PBR-GRASS-DETECT"
       ],

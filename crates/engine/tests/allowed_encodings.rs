@@ -22,7 +22,7 @@ fn pairs(v: &[(Format, ColorTag)]) -> String {
 fn every_built_in_default_is_allowed() {
     let reg = PresetRegistry::builtin().unwrap();
     let mut bad = vec![];
-    for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+    for t in [Target::Cs, Target::Vanilla] {
         println!("== {t:?}");
         for st in Subtype::ALL {
             let allowed = allowed_encodings(st, t);
@@ -82,7 +82,7 @@ fn owner_rules_hold() {
         let a = allowed_encodings(st, Target::Cs);
         assert!(a.iter().all(|(_, t)| *t == ColorTag::Srgb), "{st:?}: {a:?}");
     }
-    for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+    for t in [Target::Cs, Target::Vanilla] {
         for st in Subtype::ALL {
             let a = allowed_encodings(st, t);
             if matches!(

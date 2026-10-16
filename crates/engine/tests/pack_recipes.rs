@@ -26,6 +26,11 @@ fn src(f: &str, role: RawMap, invert: bool) -> ChannelNeed {
     }
 }
 
+/// The recipes of a vanilla set whose shader is complex material (the old cpm target, Note AZ).
+fn complex(raw: &[RawInput]) -> (Vec<Recipe>, Vec<Unused>) {
+    recipes_for_with(Target::Vanilla, raw, PackRecipe::Auto, true)
+}
+
 fn kinds(r: &[Recipe]) -> Vec<RecipeKind> {
     r.iter().map(|r| r.kind).collect()
 }
@@ -140,15 +145,12 @@ fn sets_without_a_trigger_pack_nothing() {
 }
 
 #[test]
-fn cpm_packs_a_complex_m() {
-    let (r, u) = recipes_for(
-        Target::Cpm,
-        &raw(&[
-            ("iron_rough.png", Roughness),
-            ("iron_ao.png", Ao),
-            ("iron_fuzz.png", Fuzz),
-        ]),
-    );
+fn vanilla_complex_material_packs_a_complex_m() {
+    let (r, u) = complex(&raw(&[
+        ("iron_rough.png", Roughness),
+        ("iron_ao.png", Ao),
+        ("iron_fuzz.png", Fuzz),
+    ]));
     assert_eq!(kinds(&r), [RecipeKind::CpmM]);
     assert_eq!(
         r[0].channels,
@@ -161,18 +163,18 @@ fn cpm_packs_a_complex_m() {
     );
     assert_eq!(unused_names(&u), ["iron_ao.png", "iron_fuzz.png"]);
     // Note M1: env mask from metallic (also B), else specular.
-    let (r, u) = recipes_for(
-        Target::Cpm,
-        &raw(&[("iron_metal.png", Metallic), ("iron_spec.png", Specular)]),
-    );
+    let (r, u) = complex(&raw(&[
+        ("iron_metal.png", Metallic),
+        ("iron_spec.png", Specular),
+    ]));
     assert_eq!(r[0].channels[0], src("iron_metal.png", Metallic, false));
     assert_eq!(r[0].channels[2], src("iron_metal.png", Metallic, false));
     assert_eq!(r[0].sources().len(), 1);
     assert_eq!(unused_names(&u), ["iron_spec.png"]);
-    let (r, _) = recipes_for(
-        Target::Cpm,
-        &raw(&[("iron_spec.png", Specular), ("iron_height.png", Height)]),
-    );
+    let (r, _) = complex(&raw(&[
+        ("iron_spec.png", Specular),
+        ("iron_height.png", Height),
+    ]));
     assert_eq!(r[0].channels[0], src("iron_spec.png", Specular, false));
 }
 
@@ -215,12 +217,18 @@ fn a_second_source_of_one_role_is_unused() {
 fn predicted_suffixes_follow_the_recipes() {
     let set = |r: &[RawMap]| r.iter().copied().collect::<BTreeSet<_>>();
     assert_eq!(
-        predicted_suffixes(Target::Cs, &set(&[Ao, Height])),
+        predicted_suffixes(Target::Cs, false, &set(&[Ao, Height])),
         ["rmaos", "p"]
     );
-    assert_eq!(predicted_suffixes(Target::Cs, &set(&[Fuzz, Ao])), ["rfaos"]);
-    assert_eq!(predicted_suffixes(Target::Cpm, &set(&[Height])), ["m"]);
-    assert!(predicted_suffixes(Target::Vanilla, &set(&[Height])).is_empty());
+    assert_eq!(
+        predicted_suffixes(Target::Cs, false, &set(&[Fuzz, Ao])),
+        ["rfaos"]
+    );
+    assert_eq!(
+        predicted_suffixes(Target::Vanilla, true, &set(&[Height])),
+        ["m"]
+    );
+    assert!(predicted_suffixes(Target::Vanilla, false, &set(&[Height])).is_empty());
 }
 
 fn packing() -> PackingSpec {
@@ -273,8 +281,8 @@ fn missing_channels_take_neutral_defaults_or_fills() {
             code: 204
         }
     );
-    // cpm with a roughness source: G is that source inverted, so only env mask and height take defaults (Note M1).
-    let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_rough.png", Roughness)]));
+    // The complex _m with a roughness source: G is that source inverted, so only env mask and height take defaults (Note M1).
+    let (r, _) = complex(&raw(&[("iron_rough.png", Roughness)]));
     let (ch, _) = resolve_channels(&r[0], &packing());
     assert_eq!(ch[0], ChannelSource::Default { value: 0.0 });
     assert_eq!(ch[3], ChannelSource::Default { value: 0.0 });
@@ -293,7 +301,7 @@ fn missing_channels_take_neutral_defaults_or_fills() {
 /// Spec §6.4 defaults table: glossiness defaults to 1 - roughness_default; provenance shows the exact decimal.
 #[test]
 fn glossiness_default_is_one_minus_roughness_default() {
-    let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_height.png", Height)]));
+    let (r, _) = complex(&raw(&[("iron_height.png", Height)]));
     let mut p = packing();
     p.roughness_default = 0.6;
     let (ch, defaulted) = resolve_channels(&r[0], &p);
@@ -308,7 +316,7 @@ fn glossiness_default_is_one_minus_roughness_default() {
 /// DECISIONS Note M5: a roughness fill feeds a glossiness channel inverted (255 - v).
 #[test]
 fn roughness_fill_feeds_a_glossiness_channel_inverted() {
-    let (r, _) = recipes_for(Target::Cpm, &raw(&[("iron_height.png", Height)]));
+    let (r, _) = complex(&raw(&[("iron_height.png", Height)]));
     let mut p = packing();
     p.fill.roughness = Some(51);
     let (ch, defaulted) = resolve_channels(&r[0], &p);
@@ -401,7 +409,7 @@ fn an_orm_feeds_ao_roughness_and_metallic() {
         ]
     );
     assert!(r[0].notes.is_empty());
-    let (r, _) = recipes_for(Target::Cpm, &set);
+    let (r, _) = complex(&set);
     assert_eq!(
         r[0].channels,
         [
@@ -413,10 +421,10 @@ fn an_orm_feeds_ao_roughness_and_metallic() {
     );
     let (r, _) = recipes_for(Target::Vanilla, &set);
     assert_eq!(r[0].channels[0], orm("iron_orm.png", 2, false));
-    let (r, _) = recipes_for_with(Target::Cs, &set, PackRecipe::Rfaos);
+    let (r, _) = recipes_for_with(Target::Cs, &set, PackRecipe::Rfaos, false);
     assert_eq!(kinds(&r), [RecipeKind::Rfaos]);
     assert_eq!(
-        predicted_suffixes(Target::Cs, &BTreeSet::from([Orm])),
+        predicted_suffixes(Target::Cs, false, &BTreeSet::from([Orm])),
         ["rmaos"]
     );
 }
@@ -445,10 +453,12 @@ fn a_loose_map_wins_over_the_orm_channel() {
     assert_eq!(unused_names(&u), ["iron_orm.png"]);
     assert!(u[0].reason.contains("loose"), "{}", u[0].reason);
     // the ORM's metallic beats a loose specular for the env mask, and the reason says so
-    for target in [Target::Cpm, Target::Vanilla] {
-        let (_, u) = recipes_for(
-            target,
+    for cm in [true, false] {
+        let (_, u) = recipes_for_with(
+            Target::Vanilla,
             &raw(&[("iron_orm.png", Orm), ("iron_spec.png", Specular)]),
+            PackRecipe::Auto,
+            cm,
         );
         assert_eq!(unused_names(&u), ["iron_spec.png"]);
         assert!(
@@ -472,4 +482,25 @@ fn rfaos_notes_the_dropped_orm_metallic() {
     // an `_rmaos` from the same ORM drops nothing
     let (r, _) = recipes_for(Target::Cs, &raw(&[("iron_orm.png", Orm)]));
     assert!(r[0].notes.is_empty());
+}
+
+/// Note AZ (ruling 3): under vanilla a gloss/height set packs the complex `_m` only when its shader is complex
+/// material; otherwise nothing packs (the env-mask `_m` needs metallic or specular) and the maps are unused.
+#[test]
+fn vanilla_packs_the_complex_m_only_for_a_complex_material_set() {
+    let set = raw(&[("iron_gloss.png", Glossiness), ("iron_height.png", Height)]);
+    let (r, u) = recipes_for(Target::Vanilla, &set);
+    assert!(r.is_empty());
+    assert_eq!(unused_names(&u), ["iron_gloss.png", "iron_height.png"]);
+    let (r, u) = complex(&set);
+    assert_eq!(kinds(&r), [RecipeKind::CpmM]);
+    assert!(u.is_empty());
+    let roles = BTreeSet::from([Glossiness, Height]);
+    assert!(predicted_suffixes(Target::Vanilla, false, &roles).is_empty());
+    assert_eq!(predicted_suffixes(Target::Vanilla, true, &roles), ["m"]);
+    // cs ignores the flag.
+    assert_eq!(
+        kinds(&recipes_for_with(Target::Cs, &set, PackRecipe::Auto, true).0),
+        [RecipeKind::Rmaos, RecipeKind::Parallax]
+    );
 }

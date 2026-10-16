@@ -86,7 +86,6 @@ fn every_builtin_subtype_profile_deserialises() {
     let r = PresetRegistry::builtin().unwrap();
     for (id, target) in [
         ("cs-quality", Target::Cs),
-        ("cpm-quality", Target::Cpm),
         ("vanilla-quality", Target::Vanilla),
     ] {
         for st in Subtype::ALL {
@@ -104,7 +103,7 @@ fn every_builtin_subtype_profile_deserialises() {
 #[test]
 fn preset_targets_and_default_preset_agree() {
     let r = PresetRegistry::builtin().unwrap();
-    for t in [Target::Cs, Target::Cpm, Target::Vanilla] {
+    for t in [Target::Cs, Target::Vanilla] {
         assert_eq!(r.get(default_preset_for(t)).unwrap().target, Some(t));
     }
     assert_eq!(default_preset_for(Target::Cs), DEFAULT_PRESET);
@@ -113,7 +112,6 @@ fn preset_targets_and_default_preset_agree() {
     assert_eq!(
         ids,
         [
-            "cpm-quality",
             "cs-compact",
             "cs-quality",
             "fast-preview",
@@ -200,7 +198,7 @@ fn compact_and_fast_preview_resolve_as_designed() {
         assert_eq!(rule.overrides, json!({"format": "bc1", "resize": "none"}));
     }
     assert_eq!(r.get("vanilla-compact").unwrap().rules, compact.rules);
-    for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+    for t in [Target::Cs, Target::Vanilla] {
         let p = r.profile("fast-preview", t, Subtype::Diffuse).unwrap();
         assert_eq!(p.encoder.effort, Effort::Fast);
         assert_eq!(p.validation.mips, ValidationMips::Smallest);

@@ -38,6 +38,9 @@ fn convert_with(dir: &Path, target: Target, sets: &[&str], on_existing: OnExisti
     }
 }
 
+/// The set shader that makes a vanilla set pack the complex `_m` (the old cpm target, Note AZ).
+const CM: &str = "set:iron.shader=complex_material";
+
 fn convert(dir: &Path, target: Target, sets: &[&str]) -> Out {
     convert_with(dir, target, sets, OnExisting::Overwrite)
 }
@@ -317,14 +320,14 @@ fn gloss_only_cs_set_inverts_into_roughness() {
     );
 }
 
-/// Exit: cpm → complex `_m` whose smallest-mip alpha stays below CS's complex gate (Spike S8).
+/// Exit: a vanilla complex-material set → complex `_m` whose smallest-mip alpha stays below CS's complex gate (Spike S8).
 #[test]
-fn cpm_packs_a_complex_m_below_the_gate() {
+fn complex_material_packs_a_complex_m_below_the_gate() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "iron_roughness.png", r);
     put(d.path(), "iron_metallic.png", |_, _| 40);
     put(d.path(), "iron_height.png", |_, y| (y * 2) as u8);
-    let o = convert(d.path(), Target::Cpm, &[]);
+    let o = convert(d.path(), Target::Vanilla, &[CM]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     let f = dds(d.path(), "iron_m.dds");
     assert_dds(&f, DdsPixelFormat::Bc7 { srgb: false }, HeaderKind::Dx10, 7);
@@ -341,13 +344,13 @@ fn cpm_packs_a_complex_m_below_the_gate() {
     );
 }
 
-/// Spike S8: a packed cpm `_m` whose RGB is grey at the smallest mip is not complex in CS; VAL-M-GRAYSCALE says so.
+/// Spike S8: a packed complex `_m` whose RGB is grey at the smallest mip is not complex in CS; VAL-M-GRAYSCALE says so.
 #[test]
-fn a_grey_packed_cpm_m_is_flagged() {
+fn a_grey_packed_complex_m_is_flagged() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "iron_metallic.png", |_, _| 128);
     put(d.path(), "iron_glossiness.png", |_, _| 128);
-    let o = convert(d.path(), Target::Cpm, &[]);
+    let o = convert(d.path(), Target::Vanilla, &[CM]);
     assert_eq!(o.summary.converted, 1);
     assert!(
         warnings(&o).contains(&Code::ValMGrayscale),
@@ -448,14 +451,14 @@ fn if_changed_follows_a_source_renamed_to_another_role() {
     assert_eq!((s.converted, s.up_to_date), (0, 1));
 }
 
-/// Task 3b (owner 2026-10-10, amends Note M1): a packed cpm `_m` with no height source gets alpha 0, so CS keeps
+/// Task 3b (owner 2026-10-10, amends Note M1): a packed complex `_m` with no height source gets alpha 0, so CS keeps
 /// complex material on with parallax off; PACK-DEFAULTED still names the height channel.
 #[test]
-fn a_cpm_m_without_a_height_source_gets_alpha_zero() {
+fn a_complex_m_without_a_height_source_gets_alpha_zero() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "iron_roughness.png", r);
     put(d.path(), "iron_metallic.png", |_, _| 40);
-    let o = convert(d.path(), Target::Cpm, &[]);
+    let o = convert(d.path(), Target::Vanilla, &[CM]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     assert!(defaulted(&o, "iron_metallic.png").contains(&"A".to_string()));
     let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
@@ -471,8 +474,9 @@ fn an_explicit_height_fill_still_applies() {
     // DECISIONS AH2: a fill is a constant alpha, so it is written only with parallax turned on.
     let o = convert(
         d.path(),
-        Target::Cpm,
+        Target::Vanilla,
         &[
+            CM,
             "packing.fill.height=128",
             "subtype:complex_material.alpha.parallax=true",
         ],
@@ -489,7 +493,7 @@ fn a_height_fill_without_parallax_writes_alpha_0() {
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "iron_roughness.png", r);
     put(d.path(), "iron_metallic.png", |_, _| 40);
-    let o = convert(d.path(), Target::Cpm, &["packing.fill.height=128"]);
+    let o = convert(d.path(), Target::Vanilla, &[CM, "packing.fill.height=128"]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     let job = planned(&o, "iron_metallic.png");
     assert_eq!(job["profile"]["alpha"]["parallax"], false);
@@ -511,8 +515,9 @@ fn a_255_fill_with_parallax_on_and_exact_opaque_off_is_flagged() {
     put(d.path(), "iron_metallic.png", |_, _| 40);
     let o = convert(
         d.path(),
-        Target::Cpm,
+        Target::Vanilla,
         &[
+            CM,
             "packing.fill.height=255",
             "subtype:complex_material.alpha.parallax=true",
             "subtype:complex_material.alpha.exact_opaque=false",
@@ -627,15 +632,57 @@ fn a_loose_roughness_overrides_the_orm_green() {
     );
 }
 
-/// Note AL3: the cpm `_m` takes metallic (R env mask and B) from the ORM's B and glossiness from 1 − its G.
+/// Note AL3: the complex `_m` takes metallic (R env mask and B) from the ORM's B and glossiness from 1 − its G.
 #[test]
-fn cpm_m_takes_metallic_from_the_orm_blue() {
+fn complex_m_takes_metallic_from_the_orm_blue() {
     let d = tempfile::tempdir().unwrap();
     put_orm(d.path(), "iron_orm.png");
-    let o = convert(d.path(), Target::Cpm, &[]);
+    let o = convert(d.path(), Target::Vanilla, &[CM]);
     assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
     let px = &levels(&dds(d.path(), "iron_m.dds"))[0];
     assert_channel(px, 0, 4, m);
     assert_channel(px, 1, 4, |x, y| 255 - r(x, y));
     assert_channel(px, 2, 4, m);
+}
+
+/// Note AZ (ruling 3): a vanilla set with only glossiness and height packs the complex `_m` when its shader is set to
+/// complex material, by `--set` or by the GUI map (the prediction reads both); with no set shader nothing packs.
+#[test]
+fn a_vanilla_gloss_height_set_packs_the_complex_m_only_with_the_complex_material_shader() {
+    let fixture = || {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "iron_glossiness.png", |x, _| (x * 4) as u8);
+        put(d.path(), "iron_height.png", |_, y| (y * 2) as u8);
+        d
+    };
+    let d = fixture();
+    let o = convert(d.path(), Target::Vanilla, &[]);
+    assert_eq!(o.summary.converted, 0, "{:?}", warnings(&o));
+    assert!(!out_path(d.path(), "iron_m.dds").exists());
+    let d = fixture();
+    let o = convert(d.path(), Target::Vanilla, &[CM]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(planned(&o, "iron_glossiness.png")["pack"]["kind"], "cpm_m");
+    let cli = std::fs::read(out_path(d.path(), "iron_m.dds")).unwrap();
+    let d = fixture();
+    let mut req = BatchRequest::new(
+        vec![d.path().join("in")],
+        d.path().join("out"),
+        Target::Vanilla,
+    );
+    req.recursive = true;
+    req.accept = AcceptSuggestions::High;
+    req.set_shaders.insert(
+        "textures/a/iron".into(),
+        engine::shader::Shader::ComplexMaterial,
+    );
+    let rep = Reporter::new(Arc::new(VecSink::default()), "packing");
+    let e = Engine::new().unwrap();
+    let plan = e.plan(req, &rep, &CancelToken::default()).unwrap();
+    let summary = e.run(plan, &rep, &CancelToken::default()).unwrap();
+    assert_eq!(summary.converted, 1);
+    assert_eq!(
+        std::fs::read(out_path(d.path(), "iron_m.dds")).unwrap(),
+        cli
+    );
 }

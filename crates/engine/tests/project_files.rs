@@ -131,7 +131,8 @@ fn a_packed_output_is_keyed_without_extension() {
 
 #[test]
 fn an_unmatched_files_key_is_reported_once_and_kept() {
-    let d = fixture("target = \"cpm\"\n[files.\"landscape/rock01_rmaos\"]\nalpha.threshold = 90\n");
+    let d =
+        fixture("target = \"vanilla\"\n[files.\"landscape/rock01_rmaos\"]\nalpha.threshold = 90\n");
     let mut r = req(&d);
     r.target = None;
     let (p, ev) = plan_events(r);

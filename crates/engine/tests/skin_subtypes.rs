@@ -272,7 +272,7 @@ fn skin_sub_types_are_unavailable_off_cs() {
         Subtype::SkinWet,
     ] {
         assert_eq!(availability(Target::Cs, st), Availability::Available);
-        for t in [Target::Cpm, Target::Vanilla] {
+        for t in [Target::Vanilla] {
             assert_eq!(
                 availability(t, st),
                 Availability::Unavailable { fallback: None }
@@ -421,12 +421,12 @@ fn a_wet_member_joins_only_a_cs_advanced_skin_set() {
     let p = plan(&d, Target::Cs, &[]);
     assert_eq!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
     assert_eq!(top(&p, "x_wet.png"), (Subtype::SkinWet, Confidence::High));
-    // Not on cpm, even with an `_rfaos` beside it.
+    // Not on vanilla, even with an `_rfaos` beside it.
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "x.png", colour(64));
     put(d.path(), "x_rfaos.png", colour(64));
     put(d.path(), "x_wet.png", colour(64));
-    let p = plan(&d, Target::Cpm, &[]);
+    let p = plan(&d, Target::Vanilla, &[]);
     assert_ne!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
     assert_eq!(top(&p, "x_wet.png").0, Subtype::Diffuse);
 }

@@ -390,11 +390,11 @@ fn cs_pbr_albedo_is_srgb_and_vanilla_refuses_it() {
     assert!(!d.path().join("out/textures/pbr/iron.dds").exists());
 }
 
-/// Spec §4.2: every `—` cell under cpm and vanilla is CFG-UNAVAILABLE (blocking): nothing is written and the batch
+/// Spec §4.2: every `—` cell under vanilla is CFG-UNAVAILABLE (blocking): nothing is written and the batch
 /// exits 1. The unavailable profile raises nothing else (fix batch 39 item 2).
 #[test]
-fn cpm_and_vanilla_block_unavailable_subtypes() {
-    for target in [Target::Cpm, Target::Vanilla] {
+fn vanilla_blocks_unavailable_subtypes() {
+    for target in [Target::Vanilla] {
         let d = tempfile::tempdir().unwrap();
         put(d.path(), "textures/pbr/iron.png", rgb(64));
         put(
@@ -570,9 +570,10 @@ fn vanilla_fallbacks_are_written_with_allow_cfg_unavailable() {
     );
 }
 
-/// Spec §4.2/§3.4: cpm writes complex `_m` as BC7 and never writes `_SRGB`, not even when asked.
+/// Spec §4.2/§3.4: a vanilla complex-material set writes complex `_m` as BC7 and nothing is `_SRGB`, not even when
+/// asked (was the cpm target, Note AZ).
 #[test]
-fn cpm_complex_m_is_bc7_and_nothing_is_srgb() {
+fn vanilla_complex_m_is_bc7_and_nothing_is_srgb() {
     let d = tempfile::tempdir().unwrap();
     put(
         d.path(),
@@ -589,8 +590,11 @@ fn cpm_complex_m_is_bc7_and_nothing_is_srgb() {
     );
     let o = convert(
         d.path(),
-        Target::Cpm,
-        &["file:**/rock.png.subtype=diffuse"],
+        Target::Vanilla,
+        &[
+            "file:**/rock.png.subtype=diffuse",
+            "set:iron.shader=complex_material",
+        ],
         &[],
     );
     assert_eq!(
@@ -617,12 +621,12 @@ fn cpm_complex_m_is_bc7_and_nothing_is_srgb() {
         );
     }
     assert!(!warnings(&o).iter().any(|c| c.as_str().starts_with("TAG-")));
-    // An explicit `_SRGB` tag under cpm fails the file (TAG-SRGB-VANILLA is an error, not allowable).
+    // An explicit `_SRGB` tag under vanilla fails the file (TAG-SRGB-VANILLA is an error, not allowable).
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "textures/rock/rock.png", rgb(64));
     let o = convert(
         d.path(),
-        Target::Cpm,
+        Target::Vanilla,
         &[
             "file:**/rock.png.subtype=diffuse",
             "file:**/rock.png.color.tag=srgb",
@@ -716,7 +720,7 @@ fn vanilla_normal_keeps_specular_alpha() {
 
 #[test]
 fn landscape_diffuse_alpha_is_data() {
-    // CS/CPM store height in the alpha, vanilla a snow mask (spec §4.2): data either way.
+    // CS and parallax landscape mods (CPM) store height in the alpha, vanilla a snow mask (spec §4.2): data either way.
     for target in [Target::Cs, Target::Vanilla] {
         let d = tempfile::tempdir().unwrap();
         put(

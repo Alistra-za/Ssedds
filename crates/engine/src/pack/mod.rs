@@ -23,8 +23,7 @@ pub enum RecipeKind {
     Rfaos,
     /// `cs` `<base>_p.dds`: height (BC4).
     Parallax,
-    /// `vanilla` complex `<base>_m.dds` of a complex-material set: env mask, glossiness, metallic, height. The id
-    /// stays `cpm_m` (Note AZ3).
+    /// Complex `<base>_m.dds` of a vanilla complex-material set: env mask, glossiness, metallic, height (Note AZ3).
     CpmM,
     /// `vanilla` env-mask `<base>_m.dds` (BC4).
     VanillaM,

@@ -36,7 +36,7 @@ fn rmaos(dir: &Path) {
 #[test]
 fn every_builtin_profile_renormalises_mip_0_and_clamps_at_a_quarter() {
     let r = PresetRegistry::builtin().unwrap();
-    for t in [Target::Cs, Target::Cpm, Target::Vanilla] {
+    for t in [Target::Cs, Target::Vanilla] {
         for st in Subtype::ALL {
             let p = r.base_profile(t, st);
             assert_eq!(

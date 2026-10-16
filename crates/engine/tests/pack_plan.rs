@@ -437,6 +437,40 @@ fn set_has_rules_see_the_packed_suffix() {
     );
 }
 
+/// Note AZ (ruling 3): under vanilla an explicit complex-material set shader predicts the complex `_m` from glossiness
+/// and height alone, so a `set_has = "m"` rule sees it; without the set shader nothing packs and the rule misses.
+#[test]
+fn set_has_sees_the_complex_m_of_an_explicit_complex_material_set() {
+    for (sets, levels) in [
+        (
+            &["set:iron.shader=complex_material"][..],
+            MipLevels::Count(3),
+        ),
+        (&[][..], MipLevels::Keyword(MipKeyword::Full)),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "iron_glossiness.png", 16, |_, _| 200);
+        put(d.path(), "iron_height.png", 16, |_, _| 100);
+        ImageBuffer::from_fn(16, 16, |_, _| Rgb([128u8, 128, 255]))
+            .save(d.path().join("in/textures/a/iron_n.png"))
+            .unwrap();
+        let cfg = d.path().join("sdc.toml");
+        std::fs::write(
+            &cfg,
+            "[[rules]]\nmatch = { suffix = \"n\", set_has = \"m\" }\noverrides = { mips = { levels = 3 } }\n",
+        )
+        .unwrap();
+        let mut req = request(d.path(), Target::Vanilla, sets);
+        req.project_config = Some(cfg);
+        let (p, _) = plan_of(req);
+        assert_eq!(
+            job(&p, "iron_n.png").profile.mips.levels,
+            levels,
+            "{sets:?}"
+        );
+    }
+}
+
 /// Review Focus 4, DECISIONS Note M8, final review I5.
 #[test]
 fn file_planned_paths_stay_unique() {
