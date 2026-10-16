@@ -64,7 +64,7 @@ Raw maps (`_roughness`, `_metallic`, `_ao` and so on) are packed differently per
 | `vanilla`, set shader complex material | `_m` | R environment, G gloss, B metallic, A height; built from any roughness, glossiness, metallic, height or `_orm` source |
 | `vanilla`, any other set | `_m` (BC4) | environment mask, built only when a metallic or specular source exists |
 
-Under vanilla, pick **Complex Material** as the set's shader (GUI) or pass `--set set:<id>.shader=complex_material` (CLI) to get the complex `_m` from raw maps. A set that already has a complex-material `_m` file picks the shader by itself.
+Under vanilla, pick **Complex Material** as the set's shader (GUI) or pass `--set set:<id>.shader=complex_material` (CLI) to get the complex `_m` from raw maps. A set that already has a complex-material `_m` file picks the shader by itself, and that file is kept unless `packing.prefer = "raw"`.
 
 See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
 
