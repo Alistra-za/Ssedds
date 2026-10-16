@@ -414,3 +414,16 @@ fn an_explicit_subtype_beats_an_accepted_suggestion() {
     );
     assert_eq!(auto_subtype_reason(&job), None);
 }
+
+#[test]
+fn a_set_view_carries_its_recipes() {
+    let d = tempfile::tempdir().unwrap();
+    let m = opened(d.path());
+    let set = m.sets.iter().find(|s| s.key.ends_with("rock01")).unwrap();
+    let v = sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.key == set.key)
+        .unwrap();
+    assert!(!v.recipes.is_empty());
+    assert_eq!(v.recipes.len(), set.recipes.len());
+}
