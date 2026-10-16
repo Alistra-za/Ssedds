@@ -1286,12 +1286,8 @@ impl Store {
         Ok(())
     }
 
-    /// Writes the derived-layer columns for every copy, plus newly computed CRCs, in one transaction.
-    pub fn set_derived(
-        &mut self,
-        rows: &[DeriveRow],
-        crcs: &HashMap<i64, u32>,
-    ) -> Result<(), ScanError> {
+    /// Writes the derived-layer columns for every copy, in one transaction.
+    pub fn set_derived(&mut self, rows: &[DeriveRow]) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;
         {
             let mut u = tx.prepare(
@@ -1304,10 +1300,6 @@ impl Store {
                     r.source_copy_id,
                     r.derive_check
                 ])?;
-            }
-            let mut c = tx.prepare("UPDATE nif_copy SET crc32 = ?2 WHERE id = ?1")?;
-            for (id, crc) in crcs {
-                c.execute(params![id, *crc as i64])?;
             }
         }
         tx.commit()?;

@@ -382,15 +382,12 @@ fn query_store() -> (tempfile::TempDir, Store, HashMap<&'static str, i64>) {
             false,
         ),
     );
-    s.set_derived(
-        &[DeriveRow {
-            copy_id: ids["d"],
-            is_derived: true,
-            source_copy_id: Some(ids["d_src"]),
-            derive_check: Some(0),
-        }],
-        &HashMap::new(),
-    )
+    s.set_derived(&[DeriveRow {
+        copy_id: ids["d"],
+        is_derived: true,
+        source_copy_id: Some(ids["d_src"]),
+        derive_check: Some(0),
+    }])
     .unwrap();
     let names = ["a", "b", "c", "d", "e", "f", "g"];
     let paths: Vec<String> = names.iter().map(|n| format!("meshes/x/{n}.nif")).collect();

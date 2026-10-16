@@ -404,7 +404,11 @@ fn scan_body(
     let mut work = vec![];
     for (i, c) in copies.iter().enumerate() {
         match existing.get(&(path_ids[i], origin_id(c.origin))) {
-            Some(m) if m.size == Some(c.size) && m.mtime == Some(c.mtime) => {
+            Some(m)
+                if m.size == Some(c.size)
+                    && m.mtime == Some(c.mtime)
+                    && !(candidate[i] && m.crc32.is_none()) =>
+            {
                 report.reused += 1;
                 if let Some(crc) = m.crc32 {
                     crc_known.insert(i, crc);
@@ -641,19 +645,9 @@ fn scan_body(
     for &i in &nd {
         by_path.entry(copies[i].path.as_str()).or_default().push(i);
     }
-    let mut new_crcs: HashMap<i64, u32> = HashMap::new();
-    let mut crc_of = |i: usize| -> Option<u32> {
-        if let Some(c) = crc_known.get(&i) {
-            return Some(*c);
-        }
-        let Loc::Loose(p) = &locs[i] else {
-            return None; // BSA source: unverified (05 §5.1)
-        };
-        let c = crc32fast::hash(&std::fs::read(p).ok()?);
-        crc_known.insert(i, c);
-        new_crcs.insert(ids[i], c);
-        Some(c)
-    };
+    // Every candidate has a CRC here: reuse skips candidates without one, so the parallel pass hashed them (loose and BSA).
+    // A candidate whose read failed has none: it is unverified and re-read next scan, which is acceptable.
+    let crc_of = |i: usize| -> Option<u32> { crc_known.get(&i).copied() };
     let mut rows = Vec::with_capacity(copies.len());
     for (i, c) in copies.iter().enumerate() {
         if !derived[i] {
@@ -701,7 +695,7 @@ fn scan_body(
             derive_check: Some(check_code(check)),
         });
     }
-    store.set_derived(&rows, &new_crcs)?;
+    store.set_derived(&rows)?;
 
     // 7. Drop copies not seen in this walk.
     let tdl = Instant::now();
