@@ -293,14 +293,14 @@ fn a_skin_set_has_no_json_entry_no_truepbr_card_and_an_export_placeholder() {
 
     // A PBR set is unchanged.
     let d2 = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(d2.path());
+    let mut m = pbr_opened_plain(d2.path());
     assert_eq!(sdc_gui::model::pbr_export::json_entries(&m).len(), 1);
     let k = set_key(&m);
     m.select_set(&k);
     let mut h = harness(m);
     h.run();
     h.get_by_label("Specular level");
-    h.get_by_label(sdc_gui::model::sets::BADGE_PBR_LANDSCAPE_PGP); // Note BM
+    h.get_by_label("PBR → JSON");
 }
 
 #[test]

@@ -26,7 +26,7 @@ fn the_sets_column_shows_badges_and_the_new_set_area() {
     );
     h.get_by_label("landscape/rock01");
     // Note BM: the fixture is a PBR set under textures/landscape: PBR Landscape, no block yet.
-    h.get_by_label(sdc_gui::model::sets::BADGE_PBR_LANDSCAPE_PGP);
+    h.get_by_label(sdc_gui::model::sets::BADGE_PBR_LANDSCAPE_PGP_ONLY);
     h.get_by_label_contains("Drop here to start a new set");
 }
 
@@ -300,7 +300,7 @@ fn rock_settings(
 #[test]
 fn feature_toggles_grey_their_exclusions_and_reveal_their_groups() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(d.path());
+    let mut m = pbr_opened_plain(d.path());
     rock_selected(&mut m);
     let mut h = harness(m);
     h.run();
@@ -332,7 +332,7 @@ fn spin_values(h: &Harness<'static, AppModel>) -> Vec<String> {
 fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     use sdc_gui::pgp::settings::GLINT_DEFAULTS;
     let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(d.path());
+    let mut m = pbr_opened_plain(d.path());
     rock_selected(&mut m);
     let mut h = harness(m);
     h.run();
@@ -361,7 +361,7 @@ fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
     assert!(!rock_settings(&h).contains_key("roughness_scale"));
     assert!(h.query_by_label("reset").is_none());
     // The dependent groups show their defaults too: displacement scale, and the four glint values.
-    let mut m = pbr_opened(tempfile::tempdir().unwrap().path());
+    let mut m = pbr_opened_plain(tempfile::tempdir().unwrap().path());
     rock_selected(&mut m);
     m.set_json_value(
         "landscape/rock01",
@@ -646,7 +646,7 @@ fn the_json_name_is_editable_and_undoable() {
 #[test]
 fn glint_and_fuzz_switch_the_gui_keys_and_exclude_each_other() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(d.path());
+    let mut m = pbr_opened_plain(d.path());
     rock_selected(&mut m);
     let mut h = harness(m);
     h.run();
@@ -713,7 +713,7 @@ fn a_filled_coat_slot_greys_fuzz_with_its_reason() {
     image::ImageBuffer::from_fn(64, 64, |_, _| image::Rgb([128u8, 128, 255]))
         .save(r.join("rock01_cnr.png"))
         .unwrap();
-    let mut m = pbr_opened(d.path());
+    let mut m = pbr_opened_plain(d.path());
     rock_selected(&mut m);
     let v = set_views(&m)
         .into_iter()

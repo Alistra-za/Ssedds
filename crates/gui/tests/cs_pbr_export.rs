@@ -136,7 +136,7 @@ fn names(dir: &std::path::Path) -> Vec<String> {
 }
 
 fn with_blocks(d: &std::path::Path) -> AppModel {
-    let mut m = pbr_opened(d);
+    let mut m = pbr_opened_plain(d);
     m.add_cs_block(ROCK, Kind::Txst);
     m.set_cs_edids(
         ROCK,
