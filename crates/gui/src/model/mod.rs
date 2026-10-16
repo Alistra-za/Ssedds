@@ -1498,7 +1498,26 @@ impl AppModel {
                 .push("the JSON's hash was not recorded: sdc-project.toml is read-only".into());
             return;
         }
+        let was_dirty = d.is_dirty();
         d.set_last_json_sha256(sha);
+        self.save_hash_record(was_dirty);
+    }
+
+    /// Saves `sdc-project.toml` after a hash was recorded, unless it already held unsaved edits (set edits and
+    /// Undo stay live while an export runs; Note BD2): those are the user's to save or discard, so the record waits
+    /// for the next Save. A stale on-disk record only makes the next export ask before overwriting.
+    fn save_hash_record(&mut self, was_dirty: bool) {
+        if was_dirty {
+            const NOTE: &str = "hash recorded; written with the next Save";
+            // Up to three hash records per export (PGPatcher, CS PBR, complex material): one note.
+            if !self.export.notes.iter().any(|n| n == NOTE) {
+                self.export.notes.push(NOTE.into());
+            }
+            return;
+        }
+        let Some(d) = self.sets_doc.as_mut() else {
+            return;
+        };
         if let Err(e) = d.save(false) {
             self.hash_record_failed(&e);
         }

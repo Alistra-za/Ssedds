@@ -1423,3 +1423,8 @@ Supersedes, where they name `cpm`: M1 (the packed `cpm` `_m` is now the vanilla 
 
 - **BF1 Rule.** Keys compared against scan/NIF paths fold ASCII only, matching `nif::path` (`slashes_lower`): `shader::mesh_key` / `colour_mesh_key` use `to_ascii_lowercase`. The old Unicode fold made a texture under a non-ASCII folder (`textures/Ärger/`) miss its scan row.
 - **BF2 Unchanged.** Set ids (`sets.rs` `fold`/`fold_id`) and `[files]` keys stay Unicode-folded.
+
+## Note BD — Audit REPORT 2026-10-16: render3d upload test, export save
+
+- **BD1 Upload test (#13).** `render3d/tests/upload.rs` loads BC1 DDS files with full mip chains through `load_dds` (8×8 and non-square 16×8 2D, and an 8×8 cube; every block a distinct colour, so a short or swapped row pitch shows), copies every subresource back from WARP and compares it byte for byte with the file. The report suggested rendering at two sizes to sample mips 0 and 3; reading back every subresource checks the same per-face/per-mip pointer and pitch arithmetic exactly, without depending on the rasteriser's mip selection.
+- **BD2 Export save (#2).** After an export, the JSON hash record (`last_json_sha256`, CS PBR and complex material hashes) saves `sdc-project.toml` only when it had no unsaved edits before the hash was set. Set edits and Undo stay enabled while an export runs; if the doc was dirty, the hash is kept in memory and the note "hash recorded; written with the next Save" is shown (once per export), so Save/Discard still decide about the user's edits. A stale on-disk hash only makes the next export ask before overwriting its own JSON.
