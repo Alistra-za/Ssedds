@@ -124,6 +124,7 @@ fn no_shortcut_fires_from_a_text_field_except_ctrl_k() {
         );
     h.run();
     h.run();
+    let (mut tried, mut palette) = (0, 0);
     for a in actions() {
         for s in a.keys {
             h.state_mut().1 = None;
@@ -138,8 +139,15 @@ fn no_shortcut_fires_from_a_text_field_except_ctrl_k() {
             h.run();
             let want = (a.id == actions::PALETTE).then_some(actions::PALETTE);
             assert_eq!(h.state().1, want, "{} from a text field", s.text());
+            tried += 1;
+            palette += usize::from(h.state().1 == Some(actions::PALETTE));
         }
     }
+    assert!(
+        tried >= 20,
+        "letter, Ctrl and Shift shortcuts were tried: {tried}"
+    );
+    assert_eq!(palette, 1, "only Ctrl+K fired");
     assert_eq!(h.state().2, "hello", "Ctrl+K never reached the field");
     assert_eq!(
         h.state().0.selection,
