@@ -3,7 +3,7 @@
 //! The CLI never sets either.
 use crate::discover::InputFile;
 use crate::group::{member_split, TextureSet};
-use crate::overrides::{path_key_matches, project_rel};
+use crate::overrides::KeyIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -83,12 +83,8 @@ pub fn apply_set_edits(
     aliases: &BTreeMap<String, String>,
     edits: &[SetEdit],
 ) -> Vec<StaleEdit> {
-    let file_of = |k: &str| -> Option<usize> {
-        let root = root?;
-        files
-            .iter()
-            .position(|f| project_rel(root, f).is_some_and(|r| path_key_matches(k, &r)))
-    };
+    let index = root.map(|root| KeyIndex::new(root, files));
+    let file_of = |k: &str| -> Option<usize> { index.as_ref()?.hits(k).first().copied() };
     let pos = |sets: &Vec<TextureSet>, id: &str| {
         let key = set_key(output_root, id);
         sets.iter().position(|s| s.key == key)
@@ -214,12 +210,11 @@ pub fn apply_output_paths(
     paths: &BTreeMap<OutputKey, PathBuf>,
 ) {
     let Some(root) = root else { return };
+    let index = KeyIndex::new(root, files);
     for (k, rel) in paths.iter().filter(|(_, rel)| stays_under(rel)) {
         let OutputKey::File(key) = k else { continue };
-        for f in files.iter_mut() {
-            if project_rel(root, f).is_some_and(|r| path_key_matches(key, &r)) {
-                f.output = output_root.join(rel);
-            }
+        for &i in index.hits(key) {
+            files[i].output = output_root.join(rel);
         }
     }
 }

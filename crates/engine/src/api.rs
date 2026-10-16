@@ -17,7 +17,7 @@ use crate::manifest::{
     bc1_model_id, output_key, profile_sha256, sha256_file, EncoderVersions, Manifest,
     ManifestEntry, PresetRef, ENGINE_VERSION,
 };
-use crate::overrides::{path_key_matches, project_rel, to_patch, FileScopes, Scope, SetOverride};
+use crate::overrides::{project_rel, to_patch, FileScopes, KeyForms, Scope, SetOverride};
 use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
@@ -866,11 +866,13 @@ impl Engine {
                 .or_default()
                 .extend(codes.iter().copied());
         }
-        let file_scopes = FileScopes {
+        let mut file_scopes = FileScopes {
             root: scope_root.clone(),
             overrides: file_overrides,
             allow: file_allow,
+            ..FileScopes::default()
         };
+        file_scopes.index(&files);
         let nvtt = crate::nvtt::NvttCell::new(req.nvtt.clone());
         let ctx = ResolveCtx {
             target,
@@ -1435,13 +1437,21 @@ impl Engine {
             rels.extend(failed.iter().filter_map(|f| rel_of_path(&f.path)));
             rels.extend(cancelled.iter().filter_map(|p| rel_of_path(p)));
         }
+        // Every form a key can match, so each key is one lookup (DECISIONS AV3).
+        let matched: std::collections::HashSet<String> = rels
+            .iter()
+            .flat_map(|r| {
+                let KeyForms { full, stem } = KeyForms::of(r);
+                std::iter::once(full).chain(stem)
+            })
+            .collect();
         let mut keys: BTreeSet<&String> = file_scopes.allow.keys().collect();
         keys.extend(file_scopes.overrides.iter().filter_map(|o| match &o.scope {
             Scope::Path(k) => Some(k),
             _ => None,
         }));
         for key in keys {
-            if !rels.iter().any(|r| path_key_matches(key, r)) {
+            if !matched.contains(&key.to_lowercase()) {
                 rep.emit(
                     None,
                     None,

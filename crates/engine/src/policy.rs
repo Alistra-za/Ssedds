@@ -12,7 +12,7 @@ use crate::dds::{resolve_header, ResolvedHeader};
 use crate::discover::InputFile;
 use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};
 use crate::image::SourceInfo;
-use crate::overrides::{path_key_matches, to_patch, FileScopes, Scope, SetOverride};
+use crate::overrides::{to_patch, FileScopes, Scope, SetOverride};
 use crate::pack::plan::set_is_advanced_skin;
 pub use crate::presets::Provenance;
 use crate::presets::*;
@@ -238,11 +238,11 @@ pub fn allowed(ctx: &ResolveCtx, f: &FileFacts, code: Code) -> bool {
     if ctx.files.allow.is_empty() {
         return false;
     }
-    ctx.files.rel_of(f.input).is_some_and(|rel| {
+    ctx.files.forms_of(f.input).is_some_and(|forms| {
         ctx.files
             .allow
             .iter()
-            .any(|(k, codes)| codes.contains(&code) && path_key_matches(k, &rel))
+            .any(|(k, codes)| codes.contains(&code) && forms.matches(k))
     })
 }
 
@@ -251,10 +251,7 @@ fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &
         Scope::All => true,
         Scope::Subtype(s) => Some(*s) == st,
         Scope::File(g) => glob_match(g, f),
-        Scope::Path(k) => ctx
-            .files
-            .rel_of(f.input)
-            .is_some_and(|rel| path_key_matches(k, &rel)),
+        Scope::Path(k) => ctx.files.forms_of(f.input).is_some_and(|m| m.matches(k)),
         Scope::Set(_) => false,
     }
 }
@@ -292,10 +289,7 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
         .find(|o| match &o.scope {
             Scope::All => true,
             Scope::File(g) => glob_match_input(g, input),
-            Scope::Path(k) => ctx
-                .files
-                .rel_of(input)
-                .is_some_and(|rel| path_key_matches(k, &rel)),
+            Scope::Path(k) => ctx.files.forms_of(input).is_some_and(|m| m.matches(k)),
             Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .is_some_and(|o| o.value == Value::Bool(true))
@@ -310,10 +304,7 @@ pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTa
         .find(|o| match &o.scope {
             Scope::All => true,
             Scope::File(g) => glob_match_input(g, input),
-            Scope::Path(k) => ctx
-                .files
-                .rel_of(input)
-                .is_some_and(|rel| path_key_matches(k, &rel)),
+            Scope::Path(k) => ctx.files.forms_of(input).is_some_and(|m| m.matches(k)),
             Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .and_then(|o| crate::overrides::rnm_target_value(&o.value))
