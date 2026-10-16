@@ -14,4 +14,3 @@ nif = { path = "../nif" }
 
 [dev-dependencies]
 tempfile.workspace = true
-lz4_flex.workspace = true

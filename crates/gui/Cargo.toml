@@ -49,6 +49,5 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Grap
 [dev-dependencies]
 egui_kittest = "=0.36.2"
 tempfile.workspace = true
-image.workspace = true
 walkdir.workspace = true
 crc32fast.workspace = true
