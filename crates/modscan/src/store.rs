@@ -40,6 +40,7 @@ CREATE TABLE tex_use (tex_path_id INTEGER, texset_id INTEGER, slot INTEGER,
 CREATE TABLE nif_winner     (path_id INTEGER PRIMARY KEY, copy_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
 CREATE TABLE nif_winner_src (path_id INTEGER PRIMARY KEY, copy_id INTEGER NOT NULL);
 CREATE TABLE pgp_diff (path_id INTEGER PRIMARY KEY, crc_orig INTEGER NOT NULL, crc_patched INTEGER NOT NULL);
+-- Unused since audit 2026-10-16 (Note BE): no longer written, nothing reads it. Drop at the next schema bump.
 CREATE TABLE tex_copy   (path_id INTEGER NOT NULL, origin_id INTEGER NOT NULL, size INTEGER, mtime INTEGER,
                      PRIMARY KEY(path_id, origin_id)) WITHOUT ROWID;
 CREATE TABLE tex_winner (path_id INTEGER PRIMARY KEY, origin_id INTEGER NOT NULL, n_copies INTEGER NOT NULL);
@@ -1200,20 +1201,11 @@ impl Store {
         Ok(())
     }
 
-    /// Replaces `tex_copy` and `tex_winner`: copies as (path_id, origin_id, size, mtime), winners
-    /// path_id -> (origin_id, n_copies).
-    pub fn set_textures(
-        &mut self,
-        copies: &[(i64, i64, u64, i64)],
-        winners: &HashMap<i64, (i64, u32)>,
-    ) -> Result<(), ScanError> {
+    /// Replaces `tex_winner`: path_id -> (origin_id, n_copies).
+    pub fn set_textures(&mut self, winners: &HashMap<i64, (i64, u32)>) -> Result<(), ScanError> {
         let tx = self.conn.transaction()?;
-        tx.execute_batch("DELETE FROM tex_copy; DELETE FROM tex_winner;")?;
+        tx.execute_batch("DELETE FROM tex_winner;")?;
         {
-            let mut c = tx.prepare("INSERT OR REPLACE INTO tex_copy VALUES (?1,?2,?3,?4)")?;
-            for (p, o, s, m) in copies {
-                c.execute(params![p, o, *s as i64, m])?;
-            }
             let mut w = tx.prepare("INSERT INTO tex_winner VALUES (?1,?2,?3)")?;
             for (p, (o, n)) in winners {
                 w.execute(params![p, o, n])?;

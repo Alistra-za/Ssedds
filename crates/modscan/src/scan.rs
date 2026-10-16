@@ -616,16 +616,11 @@ fn scan_body(
         .zip(&tex_pids)
         .map(|(c, &p)| (c.path.as_str(), p))
         .collect();
-    let tex_rows: Vec<(i64, i64, u64, i64)> = tex
-        .iter()
-        .zip(&tex_pids)
-        .map(|(c, &p)| (p, origin_id(c.origin), c.size, c.mtime))
-        .collect();
     let tex_win_rows: HashMap<i64, (i64, u32)> = tex_win
         .iter()
         .map(|(p, &(i, n))| (tex_pid_of[p.as_str()], (origin_id(tex[i].origin), n)))
         .collect();
-    store.set_textures(&tex_rows, &tex_win_rows)?;
+    store.set_textures(&tex_win_rows)?;
     let textures_ms = lap(&mut t);
 
     // pgp_diff: higher-priority origins overwrite lower ones on the same key.
