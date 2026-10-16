@@ -2168,7 +2168,7 @@ fn check_up_front(
     let presets = chain
         .iter()
         .chain(alias_chains.iter().flat_map(|(_, c)| c.iter()));
-    let rule_globs = presets
+    let all_rules = presets
         .flat_map(|p| {
             p.rules
                 .iter()
@@ -2181,10 +2181,17 @@ fn check_up_front(
                 .enumerate()
                 .map(|(i, r)| ("config".to_string(), i, r))
         }));
-    for (src, i, r) in rule_globs {
+    // A rule glob that does not compile (audit #7), and `overrides.subtype` (audit EC-4), which does nothing.
+    for (src, i, r) in all_rules {
         if let Some(g) = &r.matcher.glob {
             crate::policy::compile_glob(g)
                 .map_err(|e| EngineError::Config(format!("rule {src}#{i}: {e}")))?;
+        }
+        if r.overrides.get("subtype").is_some() {
+            return Err(EngineError::Config(format!(
+                "rule {src}#{i}: {}",
+                crate::presets::SUBTYPE_IN_OVERRIDES
+            )));
         }
     }
     let doc_of = |chain: &[&PresetFile], st: Subtype| {

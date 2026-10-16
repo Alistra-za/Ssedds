@@ -340,3 +340,15 @@ fn a_glob_that_does_not_compile_stops_the_plan() {
         other => panic!("expected a usage error, got {:?}", other.map(|_| ())),
     }
 }
+
+/// Audit EC-4 (Note BC): a config rule that sets the sub-type in `overrides` stops the plan.
+#[test]
+fn a_config_rule_override_of_the_subtype_stops_the_plan() {
+    let d = fixture(
+        "[[rules]]\nmatch = { suffix = \"n\" }\noverrides = { subtype = \"pbr_normal\" }\n",
+    );
+    match plan_events(req(&d)).0 {
+        Err(EngineError::Config(m)) => assert!(m.contains("not in overrides"), "{m}"),
+        other => panic!("expected a config error, got {:?}", other.map(|_| ())),
+    }
+}

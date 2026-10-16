@@ -426,6 +426,10 @@ fn without_nulls(v: &Value) -> Option<Value> {
     }
 }
 
+/// Audit EC-4 (Note BC): a rule's `overrides.subtype` is overwritten by the decided sub-type, so it would do nothing.
+pub(crate) const SUBTYPE_IN_OVERRIDES: &str =
+    "set the sub-type with `subtype =` on the rule, not in overrides";
+
 /// Dotted paths of every non-null leaf of `v`.
 pub fn leaf_paths(v: &Value, prefix: &str, out: &mut Vec<String>) {
     match v {
@@ -672,6 +676,11 @@ impl PresetRegistry {
             if let Some(g) = &r.matcher.glob {
                 crate::policy::compile_glob(g)
                     .map_err(|e| PresetError::Invalid(format!("preset '{id}' rule #{i}: {e}")))?;
+            }
+            if r.overrides.get("subtype").is_some() {
+                return Err(PresetError::Invalid(format!(
+                    "preset '{id}' rule #{i}: {SUBTYPE_IN_OVERRIDES}"
+                )));
             }
             let mut paths = vec![];
             leaf_paths(&r.overrides, "", &mut paths);

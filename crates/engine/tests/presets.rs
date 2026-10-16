@@ -938,3 +938,13 @@ fn a_rule_glob_that_does_not_compile_fails_check_preset() {
     let e = r.check_preset("badglob").unwrap_err().to_string();
     assert!(e.contains("glob"), "{e}");
 }
+
+/// Audit EC-4 (Note BC): `overrides.subtype` on a rule would be overwritten by the decided sub-type, so it is refused.
+#[test]
+fn a_rule_override_of_the_subtype_fails_check_preset() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml("schema_version = 1\nid = \"stover\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { suffix = \"n\" }\noverrides = { subtype = \"pbr_normal\" }\n")
+        .unwrap();
+    let e = r.check_preset("stover").unwrap_err().to_string();
+    assert!(e.contains("not in overrides"), "{e}");
+}
