@@ -105,8 +105,9 @@ impl Bsa {
             let l = rd::<1>(&mut f)?[0] as usize;
             let mut name = vec![0u8; l];
             f.read_exact(&mut name)?;
-            // Normalised once per folder (audit item 21); `canon_mesh` maps char by char, so folder + "/" + file is the same.
-            folders.push(canon_mesh(&lossy(name.strip_suffix(&[0]).unwrap_or(&name))));
+            // Raw name kept once per folder; entries hold an index (audit item 21). Names are joined and canonicalised
+            // together so trimming matches the old per-entry join exactly.
+            folders.push(lossy(name.strip_suffix(&[0]).unwrap_or(&name)));
             let folder = (folders.len() - 1) as u32;
             for _ in 0..count {
                 let r = rd::<16>(&mut f)?;
@@ -134,11 +135,11 @@ impl Bsa {
             .into_iter()
             .enumerate()
             .map(|(i, (folder, size, offset, compressed))| BsaEntry {
-                norm: format!(
-                    "{}/{}",
+                norm: canon_mesh(&format!(
+                    "{}\\{}",
                     folders[folder as usize],
-                    canon_mesh(&lossy(names[i]))
-                ),
+                    lossy(names[i])
+                )),
                 offset,
                 size,
                 compressed,

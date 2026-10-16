@@ -239,3 +239,22 @@ fn read_uses_the_handle_opened_once_and_is_thread_safe() {
         }
     });
 }
+
+/// Item 21 must not change names: an empty folder and padding spaces match the old per-entry join.
+#[test]
+fn names_match_the_old_join_for_empty_and_padded_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases: [(&str, &str); 4] = [
+        ("", "a.nif"),
+        (" meshes ", " B.nif "),
+        ("Meshes", "c.nif "),
+        ("  ", "d.nif"),
+    ];
+    for (folder, file) in cases {
+        let p = dir.path().join("t.bsa");
+        std::fs::write(&p, build(&[(folder, file, b"x", false)], false)).unwrap();
+        let bsa = Bsa::open(&p).unwrap();
+        let old = nif::path::canon_mesh(&format!("{folder}\\{file}"));
+        assert_eq!(bsa.entries[0].norm, old, "{folder:?} / {file:?}");
+    }
+}
