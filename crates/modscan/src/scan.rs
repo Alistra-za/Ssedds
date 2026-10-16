@@ -354,8 +354,18 @@ fn scan_body(
     report.phase_ms.push(("origins", lap(&mut t)));
 
     // 3. Walk.
-    let (mut copies, mut locs, opened, tex) = walk(&loose, &bsas, &mut report, progress);
+    let mut failed_bsas = HashSet::new();
+    let (mut copies, mut locs, opened, tex) =
+        walk(&loose, &bsas, &mut report, &mut failed_bsas, progress);
     report.phase_ms.push(("walk", lap(&mut t)));
+    // A BSA that failed to open (locked, being redeployed) is not enabled, so delete_unseen keeps its cached rows.
+    let enable_bsa_ids: Vec<i64> = bsa_ids
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(i, _)| !failed_bsas.contains(i))
+        .map(|(_, id)| id)
+        .collect();
     let (mut parse_ms, mut write_ms) = (0u64, 0u64);
     let mut derived: Vec<bool> = copies
         .iter()
@@ -542,7 +552,7 @@ fn scan_body(
         report.tainted = true;
         store.discard_pending()?;
         // A tainted run still returns a (flagged) result: its origins are listed, as before.
-        enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
+        enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
             p.state = DerivedState::RunningAtScan;
             store.set_derived_state(p.origin_id, DerivedState::RunningAtScan)?;
@@ -696,7 +706,7 @@ fn scan_body(
     let tdl = Instant::now();
     let seen: HashSet<i64> = ids.iter().copied().collect();
     // Commit point: only a run that got here makes its origins readable (the plugin pass below needs them enabled).
-    enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
+    enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
     store.delete_unseen(&seen)?;
     report
         .sub_ms
@@ -738,6 +748,7 @@ fn walk(
     loose: &[LooseOrigin],
     bsas: &[ActiveBsa],
     report: &mut Report,
+    failed_bsas: &mut HashSet<usize>,
     progress: &dyn Fn(Progress),
 ) -> (Vec<Copy>, Vec<Loc>, Vec<Bsa>, Vec<Copy>) {
     let total = loose.len() + bsas.len();
@@ -787,6 +798,7 @@ fn walk(
                 report
                     .problems
                     .push((b.path.display().to_string(), e.to_string()));
+                failed_bsas.insert(i);
                 continue;
             }
         };
