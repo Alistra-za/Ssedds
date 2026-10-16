@@ -351,8 +351,9 @@ fn tail(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join(" | ")
 }
 
-/// How long one `w`×`h` level may run before nvcompress counts as hung and is killed (audit #18, Note BC): 2 minutes
-/// plus 1 s per 50 000 texels (an 8192² level: about 24 minutes), far above a working encode.
+/// How long one `w`×`h` level may run before nvcompress counts as hung and is killed (audit #18, Note BC9): 2 minutes
+/// plus 1 s per 4 000 texels. Spike S7's slow end for BC7 Production is 0.036 Mpix/s (1 s per ~36 000 texels, on
+/// ~13 cores), so this is about 9x that, room for a smaller CPU or a busy pool: ~70 min at 4096², ~4.7 h at 8192².
 fn level_timeout(w: u32, h: u32) -> Duration {
     #[cfg(feature = "test-hooks")]
     if let Some(ms) = std::env::var("SDC_NVTT_LEVEL_TIMEOUT_MS")
@@ -361,7 +362,7 @@ fn level_timeout(w: u32, h: u32) -> Duration {
     {
         return Duration::from_millis(ms);
     }
-    Duration::from_secs(120 + u64::from(w) * u64::from(h) / 50_000)
+    Duration::from_secs(120 + u64::from(w) * u64::from(h) / 4_000)
 }
 
 /// One level through nvcompress (DECISIONS Note NV4-NV8). `input` is the quantised level (`w` x `h` texels) and
@@ -478,4 +479,19 @@ pub fn encode_level_nvtt(
         );
     }
     Ok(payload)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Review C1 (Note BC9): the limit stays at least 3x Spike S7's slow end (0.036 Mpix/s) at every size.
+    #[test]
+    fn the_level_limit_is_at_least_three_times_s7s_slow_end() {
+        for w in [256u32, 2048, 4096, 8192, 16384] {
+            let slow = f64::from(w) * f64::from(w) / 36_000.0;
+            assert!(
+                super::level_timeout(w, w).as_secs_f64() >= 3.0 * slow,
+                "{w}"
+            );
+        }
+    }
 }
