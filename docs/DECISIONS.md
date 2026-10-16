@@ -1327,3 +1327,4 @@ Spec `docs/superpowers/specs/2026-10-15-gui-suggestions-nif-design.md` (owner-ap
 ### GUI UI
 
 - **AV-UI3 3D frame texture per panel (audit item 3).** The cached frame texture is keyed by `("viewport3d-frame", panel)` (`ui::viewport3d::frame_cache_id`), so the Meshes panel and the set preview, which both count frame ids from 1, no longer show each other's picture.
+- **AV-UI2 GPU thumbnail eviction (audit item 2, GUI part).** `ThumbCache` stamps each texture with the egui pass it was last drawn in and, when an upload takes it past `THUMB_CAP` (1000), frees the ones drawn longest ago. A texture drawn in the current or previous pass is never freed, so the tiles on screen stay (the cap can be exceeded by a very tall window). An evicted tile uploads again from the engine's shared thumbnail when it scrolls back.
