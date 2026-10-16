@@ -1190,6 +1190,11 @@ impl Engine {
         }
         // 6b. One pick per set, from the pass-1 sub-types; later resolves see it through `ctx.shaders`.
         let index = crate::shader::JobIndex::new(&pass1_jobs);
+        let txst: BTreeSet<String> = req
+            .cs_txst_sets
+            .iter()
+            .map(|t| crate::sets::fold_id(t))
+            .collect();
         let picks: BTreeMap<String, ShaderPick> = sets
             .iter()
             .map(|s| {
@@ -1201,12 +1206,10 @@ impl Engine {
                     explicit.get(&s.key).copied(),
                     &req.mesh_shaders,
                     &req.gras_all_diffuses,
-                    !req.cs_txst_sets.is_empty() && {
-                        let id = crate::sets::set_id(&req.output_root, &s.key);
-                        req.cs_txst_sets
-                            .iter()
-                            .any(|t| crate::sets::same_id(&id, t))
-                    },
+                    txst.contains(&crate::sets::fold_id(&crate::sets::set_id(
+                        &req.output_root,
+                        &s.key,
+                    ))),
                 );
                 (s.key.clone(), pick)
             })
