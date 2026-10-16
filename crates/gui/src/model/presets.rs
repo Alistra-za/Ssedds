@@ -232,6 +232,8 @@ pub struct Draft {
     pub read_only: bool,
     /// The text of the file a user preset was loaded from: Save edits it in place (comments and order kept).
     source: Option<String>,
+    /// The stamp of that file when it was picked (audit item 4): Save refuses when it changed.
+    stamp: Option<engine::policy::SourceStamp>,
 }
 
 pub struct PresetsModel {
@@ -249,6 +251,9 @@ pub struct PresetsModel {
     pub target: Target,
     /// The last Save or Delete failure, until the next change.
     pub error: Option<String>,
+    /// The last Save was refused because the preset file changed on disk (audit item 4): the window asks
+    /// Overwrite / Reload / Cancel. Cleared by the next change.
+    pub changed_on_disk: bool,
     /// `suffixes_of` for every sub-type under `.0` (thousands of `suggest` calls, so once per target).
     suffixes: (Option<Target>, Vec<Vec<&'static str>>),
 }
@@ -307,6 +312,7 @@ impl PresetsModel {
             status: Ok(()),
             target: fallback,
             error: None,
+            changed_on_disk: false,
             suffixes: (None, vec![]),
         };
         m.rescan();
@@ -351,15 +357,14 @@ impl PresetsModel {
             return;
         };
         let builtin = self.registry.is_builtin(id);
+        let file = (!builtin).then(|| self.registry.source(id)).flatten();
         self.draft = Some(Draft {
             saved: t.clone(),
             table: t,
             orig: (!builtin).then(|| id.to_string()),
             read_only: builtin,
-            source: (!builtin)
-                .then(|| self.registry.source(id))
-                .flatten()
-                .and_then(|p| std::fs::read_to_string(p).ok()),
+            stamp: file.and_then(|p| engine::policy::SourceStamp::of(p.as_ref())),
+            source: file.and_then(|p| std::fs::read_to_string(p).ok()),
         });
         self.refresh();
     }
@@ -399,6 +404,7 @@ impl PresetsModel {
             orig: None,
             read_only: false,
             source: None,
+            stamp: None,
         });
         self.refresh();
     }
@@ -420,6 +426,7 @@ impl PresetsModel {
             orig: None,
             read_only: false,
             source: None,
+            stamp: None,
         });
         self.refresh();
     }
@@ -787,6 +794,7 @@ impl PresetsModel {
 
     fn refresh(&mut self) {
         self.error = None;
+        self.changed_on_disk = false;
         let Some(d) = &self.draft else {
             self.rows.clear();
             self.status = Ok(());
@@ -903,7 +911,27 @@ impl PresetsModel {
 
     /// Save (AM8): validate, write the preset's own file (a new preset: `<folder>/<id>.toml`, never over an existing
     /// file), then rescan the folder and show the saved preset.
+    /// A user preset's file that changed on disk since it was picked is not written: `changed_on_disk` is set and
+    /// the window asks (audit item 4).
     pub fn save(&mut self) -> Result<PathBuf, String> {
+        self.save_with(false)
+    }
+
+    /// The answer Overwrite: save over a preset file that changed on disk.
+    pub fn save_overwrite(&mut self) -> Result<PathBuf, String> {
+        self.save_with(true)
+    }
+
+    /// The answer Reload: drop the draft and pick the preset again from its file.
+    pub fn reload_from_disk(&mut self) {
+        let orig = self.draft.as_ref().and_then(|d| d.orig.clone());
+        self.rescan();
+        if let Some(id) = orig {
+            self.select(&id);
+        }
+    }
+
+    fn save_with(&mut self, force: bool) -> Result<PathBuf, String> {
         let dir = self
             .dir
             .clone()
@@ -912,7 +940,18 @@ impl PresetsModel {
         let id = self.id();
         let orig = self.draft.as_ref().and_then(|d| d.orig.clone());
         let path = match orig.as_deref().and_then(|o| self.registry.source(o)) {
-            Some(src) => PathBuf::from(src),
+            Some(src) => {
+                let path = PathBuf::from(src);
+                let stamp = self.draft.as_ref().and_then(|d| d.stamp);
+                if !force && engine::policy::SourceStamp::of(&path) != stamp {
+                    self.changed_on_disk = true;
+                    return Err(format!(
+                        "{} changed on disk since it was loaded",
+                        path.display()
+                    ));
+                }
+                path
+            }
             None => {
                 let p = dir.join(format!("{id}.toml"));
                 if p.exists() {
@@ -925,7 +964,8 @@ impl PresetsModel {
             }
         };
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        write_atomic(&path, &text)?;
+        engine::dds::write_atomic(&path, text.as_bytes())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         self.rescan();
         self.select(&id);
         Ok(path)
@@ -1116,16 +1156,4 @@ fn item_of(k: &str, v: &toml::Value) -> Result<toml_edit::Item, String> {
     doc.as_table_mut()
         .remove(k)
         .ok_or_else(|| "a serialised value".to_string())
-}
-
-/// Write `text` to `path` through a temporary file in the same folder, renamed over it, so a failed write never
-/// leaves half a preset.
-fn write_atomic(path: &std::path::Path, text: &str) -> Result<(), String> {
-    let tmp = path.with_extension("toml.tmp");
-    let fail = |e: std::io::Error| format!("{}: {e}", path.display());
-    std::fs::write(&tmp, text).map_err(fail)?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        fail(e)
-    })
 }

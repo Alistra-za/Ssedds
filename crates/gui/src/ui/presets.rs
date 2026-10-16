@@ -35,6 +35,10 @@ enum Act {
     AddAlias(Subtype, String, String),
     RemoveAlias(String),
     Save,
+    /// The answers to a Save refused because the file changed on disk (audit item 4).
+    Overwrite,
+    Reload,
+    KeepEditing,
     Revert,
     Delete,
     ResetAll,
@@ -145,6 +149,22 @@ pub fn window(ctx: &egui::Context, model: &mut AppModel) {
                     Ok(_) => saved = true,
                     Err(e) => pm.error = Some(e),
                 }
+                None
+            }
+            Act::Overwrite => {
+                match pm.save_overwrite() {
+                    Ok(_) => saved = true,
+                    Err(e) => pm.error = Some(e),
+                }
+                None
+            }
+            Act::Reload => {
+                pm.reload_from_disk();
+                None
+            }
+            Act::KeepEditing => {
+                pm.changed_on_disk = false;
+                pm.error = None;
                 None
             }
             Act::Revert => {
@@ -334,6 +354,28 @@ fn top_bar(ui: &mut egui::Ui, pm: &PresetsModel, acts: &mut Vec<Act>) {
     });
     if let Some(e) = &pm.error {
         ui.colored_label(RED, e);
+    }
+    // Audit item 4: the file was edited by hand since it was picked.
+    if pm.changed_on_disk {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Overwrite")
+                .on_hover_text("Write your version over the file")
+                .clicked()
+            {
+                acts.push(Act::Overwrite);
+            }
+            if ui
+                .button("Reload")
+                .on_hover_text("Drop your changes and load the file")
+                .clicked()
+            {
+                acts.push(Act::Reload);
+            }
+            if ui.button("Cancel").clicked() {
+                acts.push(Act::KeepEditing);
+            }
+        });
     }
     egui::CollapsingHeader::new("TOML preview")
         .id_salt("presets-toml")
