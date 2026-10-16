@@ -40,7 +40,7 @@ Click "More info", then "Run anyway".
 Help
 ----
   Documentation, known issues and bug reports:
-    https://github.com/Alistra-za/Ssedds
+    https://github.com/Alistra-za/Tessalith
     Wiki pages: Known-Issues, Troubleshooting, GUI-Guide, CLI-Reference
   If the GUI crashes, attach the newest file in
     %LOCALAPPDATA%\sdc\logs\
