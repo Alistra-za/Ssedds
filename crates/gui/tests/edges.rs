@@ -539,3 +539,23 @@ fn a_scan_database_error_is_logged_once() {
         .collect();
     assert_eq!(texts.len(), 2, "{texts:?}");
 }
+
+/// Review M3: a successful read clears the guard, so the same error coming back is logged again.
+#[test]
+fn a_scan_database_error_after_a_good_read_is_logged_again() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    let tx = m.sender();
+    tx.send(WorkerMsg::KnownPaths(Err("locked".into())))
+        .unwrap();
+    tx.send(WorkerMsg::KnownPaths(Ok(Default::default())))
+        .unwrap();
+    tx.send(WorkerMsg::KnownPaths(Err("locked".into())))
+        .unwrap();
+    m.poll();
+    let n = m
+        .messages
+        .entries()
+        .filter(|e| e.text.starts_with("Scan database"))
+        .count();
+    assert_eq!(n, 2);
+}

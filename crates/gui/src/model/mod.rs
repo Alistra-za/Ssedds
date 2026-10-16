@@ -641,6 +641,7 @@ impl AppModel {
         self.dropped_fills.clear();
         // Audit GM-6: the previous folder's header-patch result, tag choices and open confirmation.
         self.dds_patch = Default::default();
+        self.scan_db_error = None;
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
@@ -805,6 +806,7 @@ impl AppModel {
         };
         let changed = match result {
             Ok(e) => {
+                self.scan_db_error = None;
                 let changed = e.votes != self.mesh_votes
                     || e.alpha != self.mesh_alpha
                     || e.gras != self.gras_diffuses

@@ -98,7 +98,10 @@ impl AppModel {
 
     pub(super) fn known_paths_landed(&mut self, result: Result<KnownPaths, String>) {
         match result {
-            Ok(k) => self.set_known(k),
+            Ok(k) => {
+                self.scan_db_error = None;
+                self.set_known(k);
+            }
             Err(e) => self.scan_db_warning(format!(
                 "Scan database: reading its texture paths failed: {e}"
             )),

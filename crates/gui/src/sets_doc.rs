@@ -969,10 +969,12 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
                     return false;
                 };
                 let hit = remove(sub, &parts[1..]);
-                if sub.is_empty() {
+                // Pruning an emptied (or already empty) sub-table is a change too: the caller touches.
+                let pruned = sub.is_empty();
+                if pruned {
                     t.remove(parts[0]);
                 }
-                hit
+                hit || pruned
             }
             remove(t, &parts)
         }
@@ -1088,6 +1090,43 @@ mod tests {
         for (what, step) in &steps {
             s.entries();
             step(&mut s);
+            assert_eq!(*s.entries(), s.parse_entries(), "{what}");
+        }
+    }
+
+    /// Review M1: removing the last key of a block, or a key under an empty sub-table that gets pruned, is a change:
+    /// rev moves, the document is dirty and the cached entries match.
+    #[test]
+    fn pruning_a_block_sub_table_bumps_the_revision() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = SetsDoc::open(d.path());
+        s.restore(
+            "[[sets]]\nid = \"a/x\"\n[sets.cm]\nglossiness = 0.5\n[sets.cm.extra]\n\
+             [sets.cs_txst]\nedids = []\n[sets.cs_txst.glintParameters]\n",
+        );
+        type Step<'a> = (&'a str, Box<dyn Fn(&mut SetsDoc) + 'a>);
+        let steps: Vec<Step> = vec![
+            (
+                "cm: empty sub-table pruned",
+                Box::new(|s| s.set_cm_value("a/x", "extra.k", None)),
+            ),
+            (
+                "cm: last key",
+                Box::new(|s| s.set_cm_value("a/x", "glossiness", None)),
+            ),
+            (
+                "cs: empty sub-table pruned",
+                Box::new(|s| s.set_cs_value("a/x", Kind::Txst, "glintParameters.enabled", None)),
+            ),
+        ];
+        for (what, step) in &steps {
+            s.entries();
+            let rev = s.rev();
+            let text = s.text();
+            step(&mut s);
+            assert_ne!(s.text(), text, "{what}: the document changed");
+            assert_ne!(s.rev(), rev, "{what}");
+            assert!(s.is_dirty(), "{what}");
             assert_eq!(*s.entries(), s.parse_entries(), "{what}");
         }
     }
