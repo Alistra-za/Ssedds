@@ -94,7 +94,13 @@ pub fn loose_origins(inst: &Instance) -> Result<(Vec<LooseOrigin>, Vec<String>),
             continue;
         }
         let root = inst.mods.join(name);
-        if root.is_dir() {
+        // Audit 2026-10-15 item 19: exactly one plain folder name, never a path out of the mods folder.
+        let mut parts = std::path::Path::new(name).components();
+        let plain = matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        );
+        if plain && root.is_dir() {
             enabled.push((name.to_string(), root));
         } else {
             missing.push(name.to_string());
