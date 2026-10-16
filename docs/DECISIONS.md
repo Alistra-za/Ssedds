@@ -1418,3 +1418,8 @@ Supersedes, where they name `cpm`: M1 (the packed `cpm` `_m` is now the vanilla 
 - **BA2 Any HDPT.** Rule 3 matches any HDPT copy in the active plugins, not only winners: a mesh an overridden head part used to name is still a head mesh.
 - **BA3 No schema bump.** The esp reader has captured HDPT MODL into `model_ref` since the first payload commit (78fb141, before schema 8), so existing stores already hold the rows; `SCHEMA_VERSION` stays 8 and no rescan is forced. No scan or no plugins = rule 3 false.
 - **BA4 Plumbing.** `modscan::Store::is_head_part_mesh(norm)` answers rules 2–3 once per mesh load (Meshes view `mesh_spec`, set preview `load_nif` off the UI thread); the GUI passes it as `MeshSpec::head_part` / `ParsedNif::head_part`; `render3d` keeps it per loaded NIF (`is_head` = rule 1 or the flag). No per-frame query.
+
+## Note BF — Game-path keys fold ASCII (owner, 2026-10-16)
+
+- **BF1 Rule.** Keys compared against scan/NIF paths fold ASCII only, matching `nif::path` (`slashes_lower`): `shader::mesh_key` / `colour_mesh_key` use `to_ascii_lowercase`. The old Unicode fold made a texture under a non-ASCII folder (`textures/Ärger/`) miss its scan row.
+- **BF2 Unchanged.** Set ids (`sets.rs` `fold`/`fold_id`) and `[files]` keys stay Unicode-folded.

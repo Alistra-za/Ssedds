@@ -328,13 +328,13 @@ impl Shader {
 }
 
 /// The scan-database key of a set (S-shader-10): the folder of `game_path` + `/` + `stem`, lower case; no folder
-/// gives just `stem`. The database is asked for `<key>.dds`.
+/// gives just `stem`. ASCII-folded like `nif::path` (Note BF): the scan side never folds non-ASCII. The database is asked for `<key>.dds`.
 pub fn mesh_key(game_path: &str, stem: &str) -> String {
     match game_path.rsplit_once('/') {
         Some((dir, _)) => format!("{dir}/{stem}"),
         None => stem.to_owned(),
     }
-    .to_lowercase()
+    .to_ascii_lowercase()
 }
 
 /// The `mesh_key` of a set's colour member (final review I1), or `None` for any other member. A colour member has
@@ -884,6 +884,15 @@ pub fn member_subtype(shader: Shader, suggested: Subtype) -> Option<(Subtype, &'
 mod tests {
     use super::*;
     use crate::config::{Subtype, Target};
+
+    #[test]
+    fn mesh_key_folds_ascii_only_like_the_scan_side() {
+        // nif::path::canon_texture leaves "Ä" alone, so the key must too (Note BF).
+        assert_eq!(
+            mesh_key("textures/Ärger/A.png", "Wall_D"),
+            "textures/Ärger/wall_d"
+        );
+    }
 
     #[test]
     fn ids_round_trip_and_are_snake_case() {
