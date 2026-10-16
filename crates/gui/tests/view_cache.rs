@@ -56,3 +56,15 @@ fn every_sets_doc_edit_changes_its_revision() {
         "a new document never reuses a revision"
     );
 }
+
+#[test]
+fn reload_changes_the_revision_of_both_documents() {
+    let d = tempfile::tempdir().unwrap();
+    let mut p = sdc_gui::project::ProjectDoc::open(d.path());
+    let mut s = sdc_gui::sets_doc::SetsDoc::open(d.path());
+    let (pr, sr) = (p.rev(), s.rev());
+    p.reload();
+    s.reload();
+    assert_ne!(p.rev(), pr, "sdc.toml");
+    assert_ne!(s.rev(), sr, "sdc-project.toml");
+}
