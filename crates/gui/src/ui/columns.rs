@@ -381,7 +381,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                     egui::Layout::left_to_right(egui::Align::Min),
                     |ui| {
                         for &idx in row {
-                            tile(ui, model, thumbs, idx, &chosen, size);
+                            tile(ui, model, thumbs, idx, chosen, size);
                         }
                     },
                 );
