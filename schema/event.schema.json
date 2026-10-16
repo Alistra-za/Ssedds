@@ -939,11 +939,6 @@
           "const": "alpha_meaning",
           "description": "The alpha meaning (policy) depends on the mesh and nobody chose it.",
           "type": "string"
-        },
-        {
-          "const": "green_convention",
-          "description": "A plain `_normal`/`_nrm` source with no stated green convention.",
-          "type": "string"
         }
       ]
     },
@@ -1584,7 +1579,7 @@
         },
         {
           "const": "unresolved",
-          "description": "A sub-type, alpha meaning or green convention still needs a decision.",
+          "description": "A sub-type or alpha meaning still needs a decision.",
           "type": "string"
         },
         {

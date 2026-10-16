@@ -14,16 +14,16 @@ skip  C:/src/rock.png: SUG-LOW-CONFIDENCE sub-type 'diffuse' is a High-confidenc
 
 A diffuse (or albedo, UI or skin colour) whose alpha varies cannot be decided from the image alone: the mesh decides whether it is a cutout, a blend or unused. Set `alpha.policy` on the file, answer the question in the GUI, or scan your mods so the GUI can read the meshes ([Mod scanning](Mod-Scanning.md)). Alpha whose minimum is 251 or more is treated as opaque and does not ask.
 
-### A normal map is blocked with IN-GREEN-UNSTATED
+### A normal map reports IN-GREEN-UNSTATED
 
-The file is named `_normal`, `_nrm` or `_norm`, which does not say whether its green channel is DirectX (Skyrim's convention) or OpenGL. Set it:
+The file is named `_normal`, `_nrm` or `_norm`, which does not say whether its green channel is DirectX (Skyrim's convention) or OpenGL. It is converted as DirectX and this note says so. If it is really OpenGL, set it:
 
 ```toml
 [files."textures/armor/iron/iron_normal.png"]
 channels.green_convention = "opengl"   # or "directx"
 ```
 
-Or rename the file `_normalgl`, `_normaldx` or `_n` (`_n` means DirectX). This block cannot be lifted with `--allow`.
+Or rename the file `_normalgl`, `_normaldx` or `_n` (`_n` means DirectX). Nothing is blocked, so there is nothing to allow.
 
 ### A normal map came out as a diffuse
 
@@ -124,7 +124,7 @@ Every warning has a code and a severity:
 | `IN-DUPLICATE` | blocking | Two inputs would write one output. | Exclude or rename one. |
 | `IN-DDS-SKIPPED` | info | A DDS input is not re-encoded by default. | Use the source, or set `reencode = true`. |
 | `IN-PACKING-INPUT` | warning | A raw map is not packed because its recipe is off (`packing.enabled = false`). | Enable packing, or give the file a sub-type. |
-| `IN-GREEN-UNSTATED` | blocking | A plain `_normal`/`_nrm`/`_norm` does not state its green convention. Cannot be allowed. | Set `channels.green_convention`. |
+| `IN-GREEN-UNSTATED` | info | A plain `_normal`/`_nrm`/`_norm` does not state its green convention; it was converted as DirectX. | Set `channels.green_convention = "opengl"` if it is an OpenGL map. |
 | `IN-DECODE` | error | The source cannot be read. | Fix or re-save the file. |
 | `IN-NONFINITE` | warning | NaN or infinite samples were replaced. | Fix the source. |
 | `IN-UNREADABLE` | warning | A file or folder under an input folder could not be read (access denied, broken junction, cloud placeholder) and was skipped. | Fix permissions, or ignore. |

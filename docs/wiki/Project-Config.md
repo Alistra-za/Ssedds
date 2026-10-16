@@ -214,7 +214,7 @@ Every field below can be set in `[defaults]`, `[subtypes.<id>]`, a rule's `overr
 |---|---|---|---|
 | `channels.swizzle` | four characters from `r g b a 0 1` | none | Reorder channels before encoding, for example `"bgra"` or `"rrr1"`. Anything else is `CFG-INVALID`. |
 | `channels.flip_green` | `true`, `false` | `false` | Invert the green channel of a normal map. |
-| `channels.green_convention` | `directx`, `opengl` | unset | Which way the source normal map's green points. `opengl` turns on `flip_green`. A plain `_normal` file stays unresolved (`IN-GREEN-UNSTATED`) until this is set. An explicit `flip_green` that contradicts the convention gives `CFG-GREEN-CONFLICT`, and the explicit `flip_green` wins. |
+| `channels.green_convention` | `directx`, `opengl` | unset | Which way the source normal map's green points. `opengl` turns on `flip_green`. A plain `_normal` file with this unset is converted as DirectX and notes `IN-GREEN-UNSTATED` (info). An explicit `flip_green` that contradicts the convention gives `CFG-GREEN-CONFLICT`, and the explicit `flip_green` wins. |
 | `channels.reconstruct_z` | `true`, `false` | `false` | Rebuild the normal's blue channel from red and green. |
 | `channels.grayscale_source` | `r`, `luma` | `r` | How a grayscale value is read from a colour source: the red channel, or luminance. |
 

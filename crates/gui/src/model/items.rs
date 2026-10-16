@@ -36,7 +36,6 @@ pub enum ItemStatus {
 pub enum Decision {
     Subtype { suggested: Option<Subtype> },
     AlphaMeaning,
-    GreenConvention,
     Acknowledge(Code),
 }
 
@@ -124,14 +123,11 @@ pub fn decisions_of(job: &ResolvedJob) -> Vec<Decision> {
                     suggested: job.suggestions.first().map(|s| s.subtype),
                 },
                 Need::AlphaMeaning => Decision::AlphaMeaning,
-                Need::GreenConvention => Decision::GreenConvention,
             });
         }
     }
     for w in &job.warnings {
-        if w.severity == Severity::Blocking
-            && !matches!(w.code, Code::SugLowConfidence | Code::InGreenUnstated)
-        {
+        if w.severity == Severity::Blocking && w.code != Code::SugLowConfidence {
             out.push(Decision::Acknowledge(w.code));
         }
     }
