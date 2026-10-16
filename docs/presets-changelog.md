@@ -3,6 +3,10 @@
 One entry per built-in preset version. A version changes when anything the preset resolves to changes; the workspace
 version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
 
+## 2026-10-15 — sdc 0.8.0 (public alpha)
+
+- Version bump only; no preset or output change. Every output re-encodes once under `if-changed` (engine version 0.8.0).
+
 ## 2026-10-12 — sdc 0.7.0 (M6 Track F2)
 
 - RNM normal layers: `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2`, `_bent` and their masks (plus rnm.py's aliases and
