@@ -214,10 +214,8 @@ pub const KEYS: &[KeySpec] = &[
     k("nif_filter", K::Text, G::Match, true, "Mesh path contains"),
     k("rename", K::Text, G::Match, true, "Rename"),
     k("smooth_angle", MIN0, G::Uv, true, "Smooth angle").with(DragSpec::new(0.5, 1, false)),
-    // shortcut: no field data, retune when seen
-    k("auto_uv", MIN0, G::Uv, true, "Auto UV").with(DragSpec::new(0.01, 3, false)),
-    // shortcut: no field data, retune when seen
-    k("uv_scale", MIN0, G::Uv, true, "UV scale").with(DragSpec::new(0.01, 3, true)),
+    k("auto_uv", MIN0, G::Uv, true, "Auto UV").with(DragSpec::new(0.002, 3, false)),
+    k("uv_scale", MIN0, G::Uv, true, "UV scale").with(DragSpec::new(0.002, 3, false)),
     k("vertex_colors", K::Tri, G::Vertex, true, "Vertex colours"),
     k(
         "vertex_color_lum_mult",
@@ -236,7 +234,6 @@ pub const KEYS: &[KeySpec] = &[
     )
     .with(DragSpec::new(0.005, 2, false)),
     k("zbuffer_write", K::Tri, G::Vertex, true, "Z-buffer write"),
-    // shortcut: no field data, retune when seen
     k(
         "alphaprop_flags",
         K::Number(NumRange::Int(65535)),
@@ -245,7 +242,6 @@ pub const KEYS: &[KeySpec] = &[
         "Alpha flags",
     )
     .with(DragSpec::new(16.0, 0, false)),
-    // shortcut: no field data, retune when seen
     k(
         "alphaprop_thresh",
         K::Number(NumRange::Int(255)),
@@ -377,7 +373,6 @@ pub const KEYS: &[KeySpec] = &[
         "Coat parallax",
     ),
     k("lock_cnr", K::Tri, G::Locks, true, "Lock coat normal"),
-    // shortcut: no field data, retune when seen
     k(
         "inner_uv_scale",
         MIN0,
@@ -385,7 +380,7 @@ pub const KEYS: &[KeySpec] = &[
         false,
         "Inner UV scale",
     )
-    .with(DragSpec::new(0.01, 3, true)),
+    .with(DragSpec::new(0.002, 3, false)),
     k("glint", K::Object, G::Features, false, "Glint"),
     k("fuzz", K::Object, G::Features, false, "Fuzz"),
     k("slot1", K::Slot, G::Slots, false, "Slot 1"),
