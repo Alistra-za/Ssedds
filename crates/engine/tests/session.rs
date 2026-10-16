@@ -120,7 +120,7 @@ fn thumbnails_of_float_and_16_bit_sources_are_visible() {
         is_float: true,
     };
     let t = make_thumbnail(&img, &info);
-    assert_eq!((t.width, t.height), (256, 128));
+    assert_eq!((t.width, t.height), (128, 64));
     let px = &t.rgba[..4];
     assert!(px[0] > 150 && px[0] < 255, "{px:?}");
     assert!(px[2] > 0, "{px:?}");

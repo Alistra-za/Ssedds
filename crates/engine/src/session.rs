@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Largest side of a thumbnail.
-pub const THUMB_MAX: u32 = 256;
+/// Largest side of a thumbnail (DECISIONS AV2: 128, a 64 KiB RGBA8 tile per file; grid tiles are 64-192 pt).
+pub const THUMB_MAX: u32 = 128;
 
 /// A display-ready RGBA8 thumbnail (straight alpha).
 #[derive(Debug, Clone, PartialEq)]
