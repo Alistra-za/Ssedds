@@ -67,7 +67,7 @@ What to check:
 | `status ready` | The file will be converted. `unresolved`, `blocked` or `error` means it will not, and the reasons follow on the same line. `packing_input` (a raw map waiting to be packed) and `normal_layer` (an RNM layer) are not converted on their own either; they feed another output. |
 | Lines starting with `warning` or `blocking` | Diagnostic codes. See [Troubleshooting](Troubleshooting.md). |
 
-If a file shows `status unresolved`, the reason says what is missing: usually a sub-type that is only a Medium or Low confidence guess, the meaning of a varying alpha channel, or the green-channel direction of a normal map named plain `_normal`. Fix it with one of the methods in Step 2.
+If a file shows `status unresolved`, the reason says what is missing: usually a sub-type that is only a Medium or Low confidence guess or the meaning of a varying alpha channel. Fix it with one of the methods in Step 2.
 
 ### Step 2. Record decisions in sdc.toml
 

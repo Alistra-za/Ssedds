@@ -80,7 +80,7 @@ Tessalith also understands the names that texturing tools commonly export:
 | `_opacity` | Raw opacity | not packed by any recipe |
 | `_fuzz`, `_sheen` | Raw fuzz | packed |
 
-A normal map named only `_normal`, `_nrm` or `_norm` is blocked with `IN-GREEN-UNSTATED` until you say which way its green channel points. Skyrim uses DirectX. Set `channels.green_convention = "opengl"` or `"directx"` on the file (the GUI asks with *DirectX* and *OpenGL* buttons). This cannot be bypassed with `--allow` or `--accept-suggestions`.
+A normal map named only `_normal`, `_nrm` or `_norm` does not say which way its green channel points. Tessalith assumes DirectX, which is what Skyrim uses, converts it without a flip and notes `IN-GREEN-UNSTATED` as information. If the map is OpenGL, set `channels.green_convention = "opengl"` on the file (the GUI offers a *Treat as OpenGL* button on that note) or name it `_normalgl`.
 
 You can add your own suffixes through a preset's `suffix_aliases`. See [Presets and targets](Presets-and-Targets.md#suffix-aliases).
 

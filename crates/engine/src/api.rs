@@ -505,12 +505,12 @@ fn resolve_target(
     (Target::Cs, Provenance::Builtin)
 }
 
-/// The skip code of an unresolved job: its `SUG-LOW-CONFIDENCE` or `IN-GREEN-UNSTATED` warning.
+/// The skip code of an unresolved job: its `SUG-LOW-CONFIDENCE` warning.
 fn unresolved_code(job: &ResolvedJob) -> Code {
     job.warnings
         .iter()
         .map(|w| w.code)
-        .find(|c| matches!(c, Code::SugLowConfidence | Code::InGreenUnstated))
+        .find(|c| *c == Code::SugLowConfidence)
         .unwrap_or(Code::SugLowConfidence)
 }
 

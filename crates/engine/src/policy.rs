@@ -1139,8 +1139,6 @@ pub enum Need {
     Subtype,
     /// The alpha meaning (policy) depends on the mesh and nobody chose it.
     AlphaMeaning,
-    /// A plain `_normal`/`_nrm` source with no stated green convention.
-    GreenConvention,
 }
 
 /// What happens to a file (spec §5.2, §10). Serialises as `{"state": "ready"}`,
@@ -2203,23 +2201,22 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
             hint.unwrap_or_default()
         ));
     }
-    // Spec §4.4 (DECISIONS Note H): a plain `_normal`/`_nrm` has no default green convention. It is not a suggestion,
-    // so neither --accept-suggestions high nor --allow settles it (IN-GREEN-UNSTATED is never allowable).
-    let mut green_reason = None;
+    // DECISIONS Note AW: a plain `_normal`/`_nrm` with no stated green convention is assumed DirectX (no flip). The
+    // profile keeps `green_convention` unset, so output bytes and recorded settings are unchanged; only this Info
+    // warning says an assumption was made.
+    let mut green_note = None;
     if let Some(Vocab {
         term,
         role: VocabRole::Normal(None),
     }) = vocab_for(f)
     {
-        if available && takes_green(profile.subtype) && profile.channels.green_convention.is_none()
+        if available
+            && takes_green(profile.subtype)
+            && profile.channels.green_convention.is_none()
+            && !profile.channels.flip_green
         {
-            green_reason = Some(format!(
-                "green convention of _{term} is unstated: pass --set 'file:{}.channels.green_convention=opengl|directx' (or set channels.green_convention in a preset, config or rule)",
-                f.input
-                    .rel
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
+            green_note = Some(format!(
+                "green convention of _{term} is unstated; assumed DirectX (set channels.green_convention=opengl if this is an OpenGL map)"
             ));
         }
     }
@@ -2244,18 +2241,14 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
                 .with_data(json!({ "suggestions": d.suggestions })),
         );
     }
-    if let Some(r) = &green_reason {
-        warnings.push(Warning::new(Code::InGreenUnstated, r.clone()));
-        // Reported next to the other reasons.
-        needs.push(Need::GreenConvention);
-        reasons.push(r.clone());
+    if let Some(r) = green_note {
+        warnings.push(Warning::new(Code::InGreenUnstated, r));
     }
     // `--allow` turns a blocking code into a warning. CFG-UNAVAILABLE is acknowledged only by accepting a
     // fallback (above), and warnings that `check_profile` raised to error stay errors.
     for w in &mut warnings {
         if w.severity == Severity::Blocking
             && w.code != Code::CfgUnavailable
-            && w.code != Code::InGreenUnstated
             && allowed(ctx, f, w.code)
         {
             w.severity = Severity::Warning;
@@ -2267,9 +2260,7 @@ pub fn resolve_decided(ctx: &ResolveCtx, f: &FileFacts, d: SubtypeDecision) -> R
     // triggers LOSS-ALPHA-DATA against the default `remove`), then blocking codes.
     let status = if !errors.is_empty() {
         JobStatus::Error { codes: errors }
-    } else if (!reasons.is_empty() && !allowed(ctx, f, Code::SugLowConfidence))
-        || green_reason.is_some()
-    {
+    } else if !reasons.is_empty() && !allowed(ctx, f, Code::SugLowConfidence) {
         JobStatus::Unresolved { reasons, needs }
     } else if !blocking.is_empty() {
         JobStatus::Blocked { codes: blocking }

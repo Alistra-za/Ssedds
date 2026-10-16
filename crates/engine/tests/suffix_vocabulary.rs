@@ -324,26 +324,30 @@ fn colour_terms_and_d_are_high_confidence_but_alpha_meaning_is_never_assumed() {
 }
 
 #[test]
-fn plain_normal_stays_unresolved_until_the_green_convention_is_stated() {
-    let green_reason = |j: &ResolvedJob| matches!(&j.status, JobStatus::Unresolved { reasons, .. } if reasons.iter().any(|r| r.contains("green convention")));
+fn plain_normal_is_directx_unless_opengl_is_stated() {
     for name in ["iron_normal.png", "iron_nrm.png"] {
         let j = resolve_img(name, &[], &[], &[], &flat_normal(), &RGB8);
         assert_eq!(
             (j.profile.subtype, j.suggestions[0].confidence),
             (Subtype::Normal, Confidence::High)
         );
-        assert_eq!(j.profile.channels.green_convention, None);
-        assert!(green_reason(&j), "{name}: {:?}", j.status);
-        // not a suggestion: --allow SUG-LOW-CONFIDENCE does not settle it
-        let j = resolve_img(
-            name,
-            &[],
-            &[],
-            &[Code::SugLowConfidence],
-            &flat_normal(),
-            &RGB8,
+        // Note AW1: the profile stays unset (bytes and settings unchanged); only the Info line records the assumption.
+        assert_eq!(j.status, JobStatus::Ready, "{name}: {:?}", j.warnings);
+        assert_eq!(
+            (
+                j.profile.channels.green_convention,
+                j.profile.channels.flip_green
+            ),
+            (None, false)
         );
-        assert!(green_reason(&j), "{name}: {:?}", j.status);
+        let w = j
+            .warnings
+            .iter()
+            .find(|w| w.code == Code::InGreenUnstated)
+            .unwrap_or_else(|| panic!("{:?}", j.warnings));
+        assert_eq!(w.severity, Severity::Info);
+        assert!(w.message.contains("assumed DirectX"), "{}", w.message);
+        assert!(!j.provenance.contains_key("channels.green_convention"));
     }
     let j = resolve_img(
         "iron_normal.png",
@@ -362,6 +366,7 @@ fn plain_normal_stays_unresolved_until_the_green_convention_is_stated() {
         (Some(GreenConvention::Directx), false)
     );
     assert_eq!(j.provenance["channels.green_convention"], Provenance::User);
+    assert!(!j.warnings.iter().any(|w| w.code == Code::InGreenUnstated));
     let j = resolve_img(
         "iron_normal.png",
         &[],
@@ -373,6 +378,7 @@ fn plain_normal_stays_unresolved_until_the_green_convention_is_stated() {
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
     assert!(j.profile.channels.flip_green);
     assert_eq!(j.provenance["channels.flip_green"], Provenance::User);
+    assert!(!j.warnings.iter().any(|w| w.code == Code::InGreenUnstated));
     // Skyrim's own _n is DirectX by definition
     let j = resolve_img("iron_n.png", &[], &[], &[], &flat_normal(), &RGB8);
     assert_eq!(j.status, JobStatus::Ready, "{:?}", j.warnings);
@@ -532,35 +538,24 @@ fn aliases_may_not_shadow_the_vocabulary() {
     );
 }
 
-/// 27a review: the unstated green convention is its own blocking code, never allowable, with a file-scoped hint.
+/// Note AW: the unstated green convention is an Info line (never blocking, never needs --allow); stating it clears it.
 #[test]
-fn unstated_green_convention_is_in_green_unstated_and_not_allowable() {
-    for allow in [
-        vec![],
-        vec![Code::InGreenUnstated],
-        vec![Code::SugLowConfidence],
-    ] {
+fn unstated_green_convention_is_an_info_line_and_stating_it_clears_it() {
+    for allow in [vec![], vec![Code::InGreenUnstated]] {
         let j = resolve_img("iron_normal.png", &[], &[], &allow, &flat_normal(), &RGB8);
-        let reasons = match &j.status {
-            JobStatus::Unresolved { reasons, .. } => reasons,
-            s => panic!("{allow:?}: {s:?}"),
-        };
+        assert_eq!(j.status, JobStatus::Ready, "{allow:?}: {:?}", j.warnings);
         let w = j
             .warnings
             .iter()
             .find(|w| w.code == Code::InGreenUnstated)
             .unwrap_or_else(|| panic!("{:?}", j.warnings));
-        assert_eq!(w.severity, Severity::Blocking, "{allow:?}");
+        assert_eq!(w.severity, Severity::Info, "{allow:?}");
         assert!(
-            !j.warnings.iter().any(|w| w.code == Code::SugLowConfidence),
-            "{:?}",
-            j.warnings
+            w.message.contains("channels.green_convention=opengl"),
+            "{}",
+            w.message
         );
-        let hint = "--set 'file:iron_normal.png.channels.green_convention=opengl|directx'";
-        assert!(w.message.contains(hint), "{}", w.message);
-        assert!(reasons.iter().any(|r| r.contains(hint)), "{reasons:?}");
     }
-    // stating it clears the code
     let j = resolve_img(
         "iron_normal.png",
         &[],

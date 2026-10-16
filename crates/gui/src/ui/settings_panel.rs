@@ -663,24 +663,6 @@ fn decision_box(
                             }
                         });
                     }
-                    Decision::GreenConvention => {
-                        match message_of(warnings, Code::InGreenUnstated) {
-                            Some(m) => ui.label(m),
-                            None => {
-                                ui.label("Which way does this normal map's green channel point?")
-                            }
-                        };
-                        ui.horizontal(|ui| {
-                            if ui.button("OpenGL").clicked() {
-                                actions
-                                    .push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
-                            }
-                            if ui.button("DirectX").clicked() {
-                                actions
-                                    .push(Action::Decide(Answer::Green(GreenConvention::Directx)));
-                            }
-                        });
-                    }
                     Decision::Acknowledge(code) => {
                         ui.label(egui::RichText::new(code.as_str()).strong());
                         if let Some(m) = message_of(warnings, *code) {
@@ -970,6 +952,15 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     ui.colored_label(RED, error_text(c));
                 }
                 _ => {}
+            }
+            if let Some(m) = message_of(&warnings, Code::InGreenUnstated) {
+                // Note AW: an Info line, not a question; the OpenGL answer stays one click away.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("IN-GREEN-UNSTATED: {m}")).small());
+                    if ui.small_button("Treat as OpenGL (flip green)").clicked() {
+                        actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
+                    }
+                });
             }
             if !decisions.is_empty() {
                 decision_box(ui, &cx, &decisions, &warnings, &mut actions);

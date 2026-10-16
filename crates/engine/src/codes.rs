@@ -102,7 +102,7 @@ codes! {
     InDuplicate = "IN-DUPLICATE" => Blocking,
     InDdsSkipped = "IN-DDS-SKIPPED" => Info,
     InPackingInput = "IN-PACKING-INPUT" => Warning,
-    InGreenUnstated = "IN-GREEN-UNSTATED" => Blocking,
+    InGreenUnstated = "IN-GREEN-UNSTATED" => Info,
     InDecode = "IN-DECODE" => Error,
     InNonfinite = "IN-NONFINITE" => Warning,
     InUnreadable = "IN-UNREADABLE" => Warning,
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(Code::DimResized.severity(), Severity::Info);
         assert_eq!(Code::CfgFilterIgnored.severity(), Severity::Info);
         assert_eq!(Code::InPackingInput.severity(), Severity::Warning);
-        assert_eq!(Code::InGreenUnstated.severity(), Severity::Blocking);
+        assert_eq!(Code::InGreenUnstated.severity(), Severity::Info);
         assert_eq!(
             Code::parse("IN-GREEN-UNSTATED"),
             Some(Code::InGreenUnstated)

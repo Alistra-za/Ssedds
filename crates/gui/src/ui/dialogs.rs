@@ -3,7 +3,7 @@ use super::settings_panel::alpha_options;
 use crate::model::items::Decision;
 use crate::model::{AfterExport, Answer, AppModel, Dialog, DocKind};
 use eframe::egui;
-use engine::config::{AlphaPolicy, GreenConvention};
+use engine::config::AlphaPolicy;
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     super::actions::draw(ctx, model);
@@ -158,19 +158,6 @@ fn proceed_anyway(ctx: &egui::Context, model: &mut AppModel, keys: &[String]) {
                                     if ui.button(label).clicked() {
                                         answer = Some((key.clone(), Answer::Alpha(policy)));
                                     }
-                                }
-                            }
-                            Decision::GreenConvention => {
-                                ui.label("Green channel:");
-                                if ui.button("OpenGL").clicked() {
-                                    answer =
-                                        Some((key.clone(), Answer::Green(GreenConvention::Opengl)));
-                                }
-                                if ui.button("DirectX").clicked() {
-                                    answer = Some((
-                                        key.clone(),
-                                        Answer::Green(GreenConvention::Directx),
-                                    ));
                                 }
                             }
                             Decision::Acknowledge(code) => {

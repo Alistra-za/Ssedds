@@ -79,13 +79,14 @@ fn unresolved_jobs_name_what_they_need() {
     fixture(d.path());
     let ev = events(d.path(), &[]);
     assert!(needs(&planned(&ev, "leaf.png")).contains(&Need::Subtype));
-    assert!(needs(&planned(&ev, "foo_normal.png")).contains(&Need::GreenConvention));
+    // Note AW: a plain `_normal` is assumed DirectX; it waits only for its (suggested) sub-type, never for a green convention.
+    assert_eq!(needs(&planned(&ev, "foo_normal.png")), vec![Need::Subtype]);
     let ev = events(d.path(), &["file:leaf.png.subtype=diffuse"]);
     assert_eq!(needs(&planned(&ev, "leaf.png")), vec![Need::AlphaMeaning]);
 }
 
 #[test]
-fn allowing_low_confidence_suggestions_leaves_only_the_green_convention_as_a_need() {
+fn a_plain_normal_needs_nothing_even_when_low_confidence_suggestions_are_allowed() {
     let d = tempfile::tempdir().unwrap();
     fixture(d.path());
     let mut req = BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
@@ -98,6 +99,6 @@ fn allowing_low_confidence_suggestions_leaves_only_the_green_convention_as_a_nee
         .unwrap();
     let ev = sink.take();
     let j = planned(&ev, "foo_normal.png");
-    assert!(matches!(j.status, JobStatus::Unresolved { .. }));
-    assert_eq!(needs(&j), vec![Need::GreenConvention]);
+    assert_eq!(j.status, JobStatus::Ready);
+    assert!(needs(&j).is_empty());
 }

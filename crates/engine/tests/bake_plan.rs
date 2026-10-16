@@ -417,10 +417,12 @@ fn a_shared_roughness_never_bakes_even_with_a_borrowed_n() {
 #[test]
 fn an_undecided_n_does_not_bake_and_says_so() {
     let d = tempfile::tempdir().unwrap();
-    // `_normal` states no green convention, so the `_n` is unresolved (DECISIONS Note H).
+    // Without --accept-suggestions the `_normal` sub-type is an unconfirmed suggestion, so the `_n` is unresolved.
     normal(d.path(), "textures/pbr/iron_normal.png", 64, 64);
     rough(d.path(), "textures/pbr/iron_rmaos.png", 64, 64);
-    let (p, _) = plan(req(d.path(), &[]));
+    let mut r = req(d.path(), &[]);
+    r.accept = AcceptSuggestions::None;
+    let (p, _) = plan(r);
     let m = job(&p, "iron_rmaos.png");
     assert!(m.bake.is_none());
     let w = m

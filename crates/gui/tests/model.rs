@@ -38,7 +38,18 @@ fn opening_a_folder_lists_items_sets_and_decisions() {
         .iter()
         .any(|d| matches!(d, Decision::Subtype { .. })));
     let n = m.item("landscape/rock01_normal.png").unwrap();
-    assert!(n.decisions.contains(&Decision::GreenConvention));
+    // Note AW: only the sub-type is asked; the unstated green convention is an Info line.
+    assert!(n
+        .decisions
+        .iter()
+        .all(|d| matches!(d, Decision::Subtype { .. })));
+    assert!(n
+        .job
+        .as_ref()
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.code == Code::InGreenUnstated));
     assert!(n.thumb.is_some());
     assert!(m.undecided() >= 3);
     let set = m.sets.iter().find(|s| s.key.ends_with("rock01")).unwrap();
