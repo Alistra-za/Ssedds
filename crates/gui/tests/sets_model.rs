@@ -464,8 +464,8 @@ fn slot_paths_are_checked() {
             .unwrap()
             .entries()
             .iter()
+            .find(|&e| e.id == set)
             .cloned()
-            .find(|e| e.id == set)
             .unwrap()
             .settings
     };

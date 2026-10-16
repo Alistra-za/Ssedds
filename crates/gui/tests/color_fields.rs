@@ -69,8 +69,8 @@ fn colour(h: &Harness<'static, AppModel>) -> Option<Value> {
         .unwrap()
         .entries()
         .iter()
-        .cloned()
-        .find(|e| e.id == "landscape/rock01")?
+        .find(|&e| e.id == "landscape/rock01")
+        .cloned()?
         .settings
         .into_iter()
         .find(|(k, _)| k == "emissive_color")

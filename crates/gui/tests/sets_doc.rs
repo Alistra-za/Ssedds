@@ -62,8 +62,8 @@ fn edits_preserve_comments_and_round_trip() {
     let a = again
         .entries()
         .iter()
+        .find(|&e| e.id == "a/one")
         .cloned()
-        .find(|e| e.id == "a/one")
         .unwrap();
     assert_eq!(a.settings["displacement_scale"], json!(0.4));
     assert_eq!(a.settings["glint.screen_space_scale"], json!(1.5));
@@ -97,8 +97,8 @@ fn create_rename_delete_and_order() {
     let b = s
         .entries()
         .iter()
+        .find(|&e| e.id == "landscape/boulder")
         .cloned()
-        .find(|e| e.id == "landscape/boulder")
         .unwrap();
     assert_eq!(b.renamed_from.as_deref(), Some("landscape/rock01"));
     assert!(!b.created);
@@ -313,8 +313,8 @@ fn shader_is_reserved_not_a_json_setting() {
     let e = s
         .entries()
         .iter()
+        .find(|&e| e.id == "landscape/leaf")
         .cloned()
-        .find(|e| e.id == "landscape/leaf")
         .unwrap();
     assert_eq!(e.shader, Some(Shader::Hair));
     assert!(!e.settings.contains_key("shader"), "{:?}", e.settings);
@@ -355,7 +355,7 @@ fn an_unknown_shader_id_reads_as_none_and_survives_a_save() {
         "[[sets]]\nid = \"landscape/leaf\"\nshader = \"toon\"\n",
     ));
     assert!(!s.read_only());
-    let e = s.entries().iter().cloned().next().unwrap();
+    let e = s.entries().iter().next().cloned().unwrap();
     assert_eq!(e.shader, None);
     assert!(!e.settings.contains_key("shader"), "{:?}", e.settings);
     s.set_value("landscape/leaf", "hair", Some(json!(true)));

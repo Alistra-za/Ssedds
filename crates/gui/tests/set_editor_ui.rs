@@ -204,8 +204,8 @@ fn a_bad_slot_path_is_refused_with_the_reason() {
         .unwrap()
         .entries()
         .iter()
+        .find(|&e| e.id == "landscape/rock01")
         .cloned()
-        .find(|e| e.id == "landscape/rock01")
         .unwrap();
     assert_eq!(e.settings["slot3"], serde_json::json!(r"effects\white.dds"));
     assert_eq!(e.settings["slot5"], serde_json::json!(""));
@@ -238,8 +238,8 @@ fn a_typed_leading_backslash_is_dropped_from_set_paths() {
         .unwrap()
         .entries()
         .iter()
+        .find(|&e| e.id == "landscape/rock01")
         .cloned()
-        .find(|e| e.id == "landscape/rock01")
         .unwrap();
     assert_eq!(e.settings["slot3"], json!(r"effects\white.dds"));
     assert_eq!(e.settings["match2"], json!(r"landscape\rock01_n"));
@@ -290,8 +290,8 @@ fn rock_settings(
         .unwrap()
         .entries()
         .iter()
+        .find(|&e| e.id == "landscape/rock01")
         .cloned()
-        .find(|e| e.id == "landscape/rock01")
         .map(|e| e.settings.into_iter().collect())
         .unwrap_or_default() // no entry yet = nothing written
 }

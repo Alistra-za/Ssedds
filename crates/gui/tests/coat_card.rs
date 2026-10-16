@@ -43,8 +43,8 @@ fn stored(h: &Harness<'static, AppModel>, key: &str) -> Option<Value> {
         .unwrap()
         .entries()
         .iter()
-        .cloned()
-        .find(|e| e.id == SET)?
+        .find(|&e| e.id == SET)
+        .cloned()?
         .settings
         .into_iter()
         .find(|(k, _)| k == key)

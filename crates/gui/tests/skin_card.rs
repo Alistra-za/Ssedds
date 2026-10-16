@@ -136,7 +136,7 @@ fn the_skin_table_round_trips_and_unknown_keys_survive() {
     let root = m.root.clone().unwrap();
     m.sets_doc.as_mut().unwrap().save(true).unwrap();
     let s = SetsDoc::open(&root);
-    let e = s.entries().iter().cloned().find(|e| e.id == SKIN).unwrap();
+    let e = s.entries().iter().find(|&e| e.id == SKIN).cloned().unwrap();
     assert_eq!(e.skin["F0"], json!(0.04));
     assert_eq!(e.skin["sssWidth"], json!(0.3));
     assert_eq!(e.skin["Future"], json!("x"));
