@@ -164,7 +164,8 @@ pub fn draw(
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
     }
-    let blocked: Vec<String> = export_blocks(model).into_iter().map(|i| i.set_id).collect();
+    let blocked: std::collections::HashSet<String> =
+        export_blocks(model).into_iter().map(|i| i.set_id).collect();
     let mut acts = vec![];
     let (mut released, mut hovered) = (None, None);
     let ctx = ui.ctx().clone();
@@ -527,18 +528,15 @@ fn pill(
                         }
                     }
                 });
-                for set in model.sets.iter().filter(|s| s.key == v.key) {
-                    for recipe in &set.recipes {
-                        let (word, color) = status_text(recipe.status);
-                        let t =
-                            egui::RichText::new(format!("{}: {word}", recipe.subtype.id())).small();
-                        let r = ui.label(match color {
-                            Some(c) => t.color(c),
-                            None => t.weak(),
-                        });
-                        if let Some(reason) = &recipe.reason {
-                            r.on_hover_text(reason);
-                        }
+                for recipe in &v.recipes {
+                    let (word, color) = status_text(recipe.status);
+                    let t = egui::RichText::new(format!("{}: {word}", recipe.subtype.id())).small();
+                    let r = ui.label(match color {
+                        Some(c) => t.color(c),
+                        None => t.weak(),
+                    });
+                    if let Some(reason) = &recipe.reason {
+                        r.on_hover_text(reason);
                     }
                 }
             },
