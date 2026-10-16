@@ -16,8 +16,8 @@ Where a crate offers a choice of licences, `about.toml` records the choice: MIT 
 - The ISPC objects of the above were compiled with Intel ISPC 1.31.0 (BSD-3-Clause compiler; the objects carry the source files' licences).
 - **Studio HDRI** `crates/render3d/assets/hdri/studio_small_09_2k.hdr` (Poly Haven `studio_small_09`, https://polyhaven.com/a/studio_small_09), embedded in the GUI as the 3D preview background and ambient light. The repository's own record (`crates/render3d/assets/hdri/README.md`) states CC0 1.0 Universal. That README is the only record; the repository holds no licence file from the download itself.
 - **PGPatcher JSON schemas** `crates/gui/assets/pbr.schema.json` and `crates/gui/assets/complex_material.schema.json` (https://github.com/hakasapl/PGPatcher, (c) hakasapl and contributors, GPL-3.0), vendored unmodified and embedded in the GUI to validate exported JSON. `pbr.schema.json` was fetched from `main` on 2026-10-09; `complex_material.schema.json` is upstream commit 0176567.
-- **PBR landscape template values** in `crates/gui/assets/cs_pbr_templates.json`: values by Faultier (see `docs/CREDITS.md`). The repository records no licence for them.
-- The GUI icon and shader (`tessalith.ico`, `tessalith-256.png`, `preview.wgsl`) are Tessalith's own.
+- **PBR landscape template values** in `crates/gui/assets/cs_pbr_templates.json`: values by Faultier (see `docs/CREDITS.md`). Used with Faultier's permission; no licence attached.
+- The icons (`tessalith.ico`, `tessalith-256.png`, `sdc.ico`), the emblem (`docs/assets/tessalith-emblem.png`) and the shader `preview.wgsl` are Tessalith's own; the icon and emblem art was made by the project author.
 
 Tessalith uses the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at run time and ships no fonts (egui's bundled default fonts are disabled).
 
