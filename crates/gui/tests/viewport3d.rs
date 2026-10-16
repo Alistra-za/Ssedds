@@ -297,6 +297,7 @@ fn femalebody_1600x900_frame_times() {
         nif: v3::FileSource::Loose(winner.root.join(BODY)),
         textures,
         le_mesh: false,
+        head_part: false,
     }));
     let wait = |v: &mut Viewport3d| {
         let t = std::time::Instant::now();
@@ -409,6 +410,7 @@ fn spec(key: i64, le_mesh: bool) -> v3::MeshSpec {
         nif: v3::FileSource::Loose(PathBuf::from(format!("C:/nope/{key}.nif"))),
         textures: Default::default(),
         le_mesh,
+        head_part: false,
     }
 }
 

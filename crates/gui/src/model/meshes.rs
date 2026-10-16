@@ -1443,6 +1443,7 @@ fn mesh_spec(
         nif: FileSource::from_store(kind, &root, &path),
         textures,
         le_mesh,
+        head_part: store.is_head_part_mesh(&path).unwrap_or(false), // shading only: a failed lookup is body
     }))
 }
 

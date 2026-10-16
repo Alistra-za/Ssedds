@@ -172,6 +172,8 @@ pub struct MeshSpec {
     pub textures: HashMap<String, FileSource>,
     /// BSVER 83: the panel shows the LE text and nothing is loaded or rendered (00 §6.5).
     pub le_mesh: bool,
+    /// A head part (Note BA: facegendata or an HDPT model): every shape is CS "head" ([`ParsedNif::head_part`]).
+    pub head_part: bool,
 }
 
 /// What the panel draws: a NIF read through a [`MeshSpec`] (the Meshes view), a parsed NIF whose shape materials
@@ -1958,7 +1960,11 @@ fn load(r: &mut Renderer, c: &Content, edits: &BTreeMap<ShapeId, MaterialState>)
     let textures = resolver(c.textures(), &bsas, &errors);
     let mut rep = match c {
         Content::Mesh(spec) => match read_source(&spec.nif, &bsas) {
-            Ok(nif) => r.load(&nif, &textures),
+            Ok(nif) => {
+                let mut p = render3d::parse(&nif);
+                p.head_part = spec.head_part;
+                r.load_parsed_sync(&p, &textures)
+            }
             Err(e) => {
                 return LoadReport {
                     errors: vec![format!("NIF: {e}")],
