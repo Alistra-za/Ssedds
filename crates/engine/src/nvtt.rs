@@ -264,6 +264,7 @@ impl TempDir {
     pub fn new() -> std::io::Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         // Audit EP-7 (Note BC): a folder a crashed run left under a recycled pid is skipped, never reused.
+        std::fs::create_dir_all(std::env::temp_dir())?;
         loop {
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let dir = std::env::temp_dir().join(format!("sdc-nvtt-{}-{n}", std::process::id()));
