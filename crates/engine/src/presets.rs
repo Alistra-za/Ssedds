@@ -666,57 +666,16 @@ impl PresetRegistry {
         self.alias_owner.retain(|_, o| o != id);
     }
 
-    /// Spec §3/§4 (`presets validate`, the user folder): the chain resolves, every rule override names a known field,
-    /// and every sub-type's profile, alone and with each of `id`'s own rules applied, deserialises, for each target
-    /// the chain allows (its nearest `target`, else both).
+    /// Spec §3/§4 (`presets validate`, the user folder): the chain resolves and passes [`check_chain`] for each target
+    /// it allows (its nearest `target`, else both).
     pub fn check_preset(&self, id: &str) -> Result<(), PresetError> {
         let chain = self.chain(id)?;
-        let own = *chain.last().expect("a chain holds its own preset");
-        for (i, r) in own.rules.iter().enumerate() {
-            if let Some(g) = &r.matcher.glob {
-                crate::policy::compile_glob(g)
-                    .map_err(|e| PresetError::Invalid(format!("preset '{id}' rule #{i}: {e}")))?;
-            }
-            if r.overrides.get("subtype").is_some() {
-                return Err(PresetError::Invalid(format!(
-                    "preset '{id}' rule #{i}: {SUBTYPE_IN_OVERRIDES}"
-                )));
-            }
-            let mut paths = vec![];
-            leaf_paths(&r.overrides, "", &mut paths);
-            if let Some(f) = paths
-                .iter()
-                .find(|f| !crate::overrides::FIELD_PATHS.contains(&f.as_str()))
-            {
-                return Err(PresetError::Invalid(format!(
-                    "preset '{id}' rule #{i}: unknown field '{f}'"
-                )));
-            }
-        }
         let targets = match chain.iter().rev().find_map(|p| p.target) {
             Some(t) => vec![t],
             None => vec![Target::Cs, Target::Vanilla],
         };
         for t in targets {
-            for st in Subtype::ALL {
-                let mut doc = Value::Object(Map::new());
-                for (_, patch) in Self::layers_of(&chain, st) {
-                    merge_json(&mut doc, &patch);
-                }
-                finish_profile(doc.clone(), t, st).map_err(|e| {
-                    PresetError::Invalid(format!("preset '{id}', {} under {t:?}: {e}", st.id()))
-                })?;
-                for (i, r) in own.rules.iter().enumerate() {
-                    let mut d = doc.clone();
-                    merge_json(&mut d, &r.overrides);
-                    finish_profile(d, t, st).map_err(|e| {
-                        PresetError::Invalid(format!(
-                            "preset '{id}' rule #{i}, {} under {t:?}: {e}",
-                            st.id()
-                        ))
-                    })?;
-                }
-            }
+            check_chain(&chain, &[], t)?;
         }
         Ok(())
     }
@@ -931,6 +890,77 @@ impl PresetRegistry {
         }
         finish_profile(doc, target, subtype)
     }
+}
+
+/// One sub-type's profile document before identity fields: the chain's layers, then each config's defaults and its
+/// `[subtypes]` table for `st`.
+pub fn chain_doc(chain: &[&PresetFile], configs: &[&ConfigFile], st: Subtype) -> Value {
+    let mut doc = Value::Object(Map::new());
+    for (_, patch) in PresetRegistry::layers_of(chain, st) {
+        merge_json(&mut doc, &patch);
+    }
+    for c in configs {
+        merge_json(&mut doc, &c.defaults);
+        if let Some(s) = c.subtypes.get(&st) {
+            merge_json(&mut doc, s);
+        }
+    }
+    doc
+}
+
+/// Spec §3/§4/§8, audit EC-6 (Note BJ): the checks `presets validate` and the batch share. Every rule of `chain` and
+/// of `configs` compiles its glob (audit #7), leaves `subtype` out of its overrides (EC-4) and names only known
+/// fields; every sub-type's profile ([`chain_doc`]) deserialises under `target`, alone and with each rule applied.
+pub fn check_chain(
+    chain: &[&PresetFile],
+    configs: &[&ConfigFile],
+    target: Target,
+) -> Result<(), PresetError> {
+    let invalid = PresetError::Invalid;
+    let rules: Vec<(String, &Rule)> = chain
+        .iter()
+        .flat_map(|p| {
+            p.rules
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (format!("preset '{}' rule #{i}", p.id), r))
+        })
+        .chain(configs.iter().flat_map(|c| {
+            c.rules
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (format!("config rule #{i}"), r))
+        }))
+        .collect();
+    for (at, r) in &rules {
+        if let Some(g) = &r.matcher.glob {
+            crate::policy::compile_glob(g).map_err(|e| invalid(format!("{at}: {e}")))?;
+        }
+        if r.overrides.get("subtype").is_some() {
+            return Err(invalid(format!("{at}: {SUBTYPE_IN_OVERRIDES}")));
+        }
+        let mut paths = vec![];
+        leaf_paths(&r.overrides, "", &mut paths);
+        if let Some(f) = paths
+            .iter()
+            .find(|f| !crate::overrides::FIELD_PATHS.contains(&f.as_str()))
+        {
+            return Err(invalid(format!("{at}: unknown field '{f}'")));
+        }
+    }
+    let id = chain.last().map_or("", |p| p.id.as_str());
+    for st in Subtype::ALL {
+        let doc = chain_doc(chain, configs, st);
+        finish_profile(doc.clone(), target, st)
+            .map_err(|e| invalid(format!("preset '{id}', {} under {target:?}: {e}", st.id())))?;
+        for (at, r) in &rules {
+            let mut d = doc.clone();
+            merge_json(&mut d, &r.overrides);
+            finish_profile(d, target, st)
+                .map_err(|e| invalid(format!("{at}, {} under {target:?}: {e}", st.id())))?;
+        }
+    }
+    Ok(())
 }
 
 /// Insert identity fields and deserialise; errors name the offending field.

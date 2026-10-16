@@ -2201,80 +2201,15 @@ fn check_up_front(
                 .map_err(|e| usage(format!("--set file:{g}.{}: {e}", o.field)))?;
         }
     }
-    let presets = chain
-        .iter()
-        .chain(alias_chains.iter().flat_map(|(_, c)| c.iter()));
-    let all_rules = presets
-        .flat_map(|p| {
-            p.rules
-                .iter()
-                .enumerate()
-                .map(|(i, r)| (p.id.clone(), i, r))
-        })
-        .chain(configs.iter().flat_map(|c| {
-            c.rules
-                .iter()
-                .enumerate()
-                .map(|(i, r)| ("config".to_string(), i, r))
-        }));
-    // A rule glob that does not compile (audit #7), and `overrides.subtype` (audit EC-4), which does nothing.
-    for (src, i, r) in all_rules {
-        if let Some(g) = &r.matcher.glob {
-            crate::policy::compile_glob(g)
-                .map_err(|e| EngineError::Config(format!("rule {src}#{i}: {e}")))?;
-        }
-        if r.overrides.get("subtype").is_some() {
-            return Err(EngineError::Config(format!(
-                "rule {src}#{i}: {}",
-                crate::presets::SUBTYPE_IN_OVERRIDES
-            )));
-        }
+    // Audit EC-6 (Note BJ): the rule and profile checks are `presets validate`'s, for the batch chain with the
+    // configs and for every suffix alias preset's chain.
+    check_chain(chain, configs, target).map_err(config_err)?;
+    for (pid, c) in &alias_chains {
+        check_chain(c, configs, target)
+            .map_err(|e| EngineError::Config(format!("suffix alias preset '{pid}': {e}")))?;
     }
-    let doc_of = |chain: &[&PresetFile], st: Subtype| {
-        let mut doc = Value::Object(Default::default());
-        for (_, patch) in PresetRegistry::layers_of(chain, st) {
-            merge_json(&mut doc, &patch);
-        }
-        for c in configs {
-            merge_json(&mut doc, &c.defaults);
-            if let Some(s) = c.subtypes.get(&st) {
-                merge_json(&mut doc, s);
-            }
-        }
-        doc
-    };
-    let rules_of = |chain: &[&PresetFile]| -> Vec<(String, usize, Value)> {
-        let presets = chain.iter().flat_map(|p| {
-            p.rules
-                .iter()
-                .enumerate()
-                .map(|(i, r)| (p.id.clone(), i, r.overrides.clone()))
-        });
-        let cfgs = configs.iter().flat_map(|c| {
-            c.rules
-                .iter()
-                .enumerate()
-                .map(|(i, r)| ("config".to_string(), i, r.overrides.clone()))
-        });
-        presets.chain(cfgs).collect()
-    };
-    let batch_rules = rules_of(chain);
     for st in Subtype::ALL {
-        let doc = doc_of(chain, st);
-        finish_profile(doc.clone(), target, st).map_err(|e| {
-            EngineError::Config(format!(
-                "preset '{}' with the configs, sub-type {}: {e}",
-                chain.last().map_or("", |p| p.id.as_str()),
-                st.id()
-            ))
-        })?;
-        for (src, i, patch) in &batch_rules {
-            let mut d = doc.clone();
-            merge_json(&mut d, patch);
-            finish_profile(d, target, st).map_err(|e| {
-                EngineError::Config(format!("rule {src}#{i}, sub-type {}: {e}", st.id()))
-            })?;
-        }
+        let doc = chain_doc(chain, configs, st);
         for o in req.overrides.iter().filter(|o| {
             o.field != "subtype"
                 && !crate::overrides::is_selector(&o.field)
@@ -2295,25 +2230,6 @@ fn check_up_front(
             finish_profile(d, target, st).map_err(|e| {
                 EngineError::Config(format!("[files.\"{key}\"] {}={}: {e}", o.field, o.value))
             })?;
-        }
-        for (pid, c) in &alias_chains {
-            let doc = doc_of(c, st);
-            finish_profile(doc.clone(), target, st).map_err(|e| {
-                EngineError::Config(format!(
-                    "preset '{pid}' (suffix alias preset), sub-type {}: {e}",
-                    st.id()
-                ))
-            })?;
-            for (src, i, patch) in rules_of(c) {
-                let mut d = doc.clone();
-                merge_json(&mut d, &patch);
-                finish_profile(d, target, st).map_err(|e| {
-                    EngineError::Config(format!(
-                        "rule {src}#{i} (suffix alias preset '{pid}'), sub-type {}: {e}",
-                        st.id()
-                    ))
-                })?;
-            }
         }
     }
     // Spec §8: an unsupported setting for the whole batch exits 2 before work starts.
