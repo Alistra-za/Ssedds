@@ -1370,3 +1370,7 @@ Rulings are numbered by audit item (`.superpowers/sdd/audit3/audit.md`), not AV1
 - **AV-S3 one BSA handle (item 18).** `Bsa::open` keeps the file open and `read` uses positional reads (`seek_read` on Windows, `read_exact_at` on Unix), so `&Bsa` is shared across threads without a lock and a read no longer reopens the path.
 - **AV-S4 modlist names (item 19).** A `modlist.txt` name must be exactly one plain folder component. `..`, several components, drive prefixes and absolute names are listed as missing and never joined to the mods folder.
 - **AV-S5 BSA folder names (item 21).** `Bsa::open` keeps each folder name once and stores a `u32` folder index per record; the entry name is still `canon_mesh(folder + "\\" + file)` per entry, so empty-folder and padding-space names stay byte-identical to before (test).
+
+## Note AX — Version 0.8.0 for the public alpha (owner, 2026-10-15)
+
+- **AX1 Version.** The workspace version moves 0.7.0 → 0.8.0 for the first public alpha (GitHub release of `tessalith.exe` and `sdc.exe`). `ENGINE_VERSION` follows `CARGO_PKG_VERSION` and is part of `is_up_to_date`, so every `--on-existing if-changed` run re-encodes each recorded output once after upgrading. No preset or pixel output changes; goldens are unchanged. `docs/presets-changelog.md` gets a 0.8.0 entry for the same reason.
