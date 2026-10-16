@@ -177,4 +177,4 @@ To get an equivalent command line, press **Copy CLI command** in the bottom draw
 
 - [GUI guide](GUI-Guide.md) for bulk editing, renaming, the 3D preview and the TruePBR JSON editor.
 - [Mod scanning](Mod-Scanning.md) to let the GUI learn alpha modes and shaders from the meshes that use your textures.
-- [Presets and targets](Presets-and-Targets.md) to switch to Vanilla or CPM output, or to smaller BC1 files.
+- [Presets and targets](Presets-and-Targets.md) to switch to Vanilla output (with complex material `_m` maps if you want them), or to smaller BC1 files.

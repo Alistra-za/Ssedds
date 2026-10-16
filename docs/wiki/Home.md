@@ -7,13 +7,12 @@ Tessalith converts source images (PNG, TGA, TIFF, EXR, PSD and others) into DDS 
 
 Each project folder can hold an `sdc.toml` file that records how its textures are converted. The GUI writes it and both programs read it, so you can set a project up in the GUI and then run it from a script.
 
-Tessalith builds for three targets:
+Tessalith builds for two targets:
 
 | Target | Value | Use it when |
 |---|---|---|
 | Community Shaders | `cs` (default) | You play with Community Shaders, including TruePBR materials. |
-| Complex Parallax Materials | `cpm` | Your textures use the complex material `_m` layout. |
-| Vanilla | `vanilla` | You want textures that load in an unmodified game. |
+| Vanilla | `vanilla` | You want textures that load without Community Shaders. A set given the complex material shader packs the complex `_m` (environment, gloss, metal, height). |
 
 This wiki covers version 0.7.0. Tessalith is licensed GPL-3.0-or-later.
 

@@ -7,8 +7,9 @@ A target says which renderer the textures are for. A preset is a named bundle of
 | Target | Id | What it allows |
 |---|---|---|
 | Community Shaders | `cs` | Everything: TruePBR materials, Advanced skin, `_SRGB` tags on PBR colour maps, BC6H and RGBA16F for HDR data, every set shader. The default. |
-| Complex Parallax Materials | `cpm` | Bethesda shaders plus the complex-material `_m` (environment, gloss, metal, height in one map). No `_SRGB`, no BC6H, no PBR. |
-| Vanilla | `vanilla` | Bethesda shaders only. No `_SRGB`, no BC6H, no PBR, no complex grass set shader (a `complex_grass` sub-type you set is still written, with a `GRASS-VANILLA` warning). |
+| Vanilla | `vanilla` | Bethesda shaders, plus the complex-material `_m` (environment, gloss, metal, height in one map) for a set whose shader is complex material, and complex grass. No `_SRGB`, no BC6H, no PBR. |
+
+Before the first release there was a third target, `cpm`. It is gone: a vanilla set with the complex material shader packs the same `_m`. `cpm` anywhere (`--target`, `sdc.toml`, `sdc-project.toml`, a preset's `target`, `base = "cpm-quality"`) is an error.
 
 How the target is chosen, highest first:
 
@@ -20,20 +21,20 @@ How the target is chosen, highest first:
 
 ### Sub-types per target
 
-Under `cs` every sub-type is available. Under `cpm` and `vanilla`, some are not:
+Under `cs` every sub-type is available. Under `vanilla`, some are not:
 
-| Sub-type | `cpm` | `vanilla` | Fallback with `--allow CFG-UNAVAILABLE` |
-|---|---|---|---|
-| `pbr_albedo` | no | no | `diffuse` |
-| `pbr_emissive` | no | no | `glow` |
-| `pbr_normal` | no | no | `normal` |
-| `pbr_subsurface`, `pbr_fuzz`, `coat_normal`, `rmaos`, `skin_rfaos` | no | no | none |
-| `skin_albedo`, `skin_sk`, `skin_wet` | no | no | none |
-| `flow`, `hdr_sky` | no | no | none |
+| Sub-type | `vanilla` | Fallback with `--allow CFG-UNAVAILABLE` |
+|---|---|---|
+| `pbr_albedo` | no | `diffuse` |
+| `pbr_emissive` | no | `glow` |
+| `pbr_normal` | no | `normal` |
+| `pbr_subsurface`, `pbr_fuzz`, `coat_normal`, `rmaos`, `skin_rfaos` | no | none |
+| `skin_albedo`, `skin_sk`, `skin_wet` | no | none |
+| `flow`, `hdr_sky` | no | none |
 
 A file whose sub-type is unavailable is blocked with `CFG-UNAVAILABLE`. When a fallback exists, `--allow CFG-UNAVAILABLE` (or the GUI's acknowledge button) converts it as the fallback. When none exists, change the sub-type or the target.
 
-`complex_grass` is accepted under every target, but under `vanilla` it raises `GRASS-VANILLA` because the vanilla grass shader cannot use it.
+`complex_grass` is accepted under both targets, and a GRAS diffuse is tagged automatically under both. Only Community Shaders or ENB read it in game.
 
 ### sRGB tagging
 
@@ -43,7 +44,7 @@ The DDS format's `_SRGB` flag tells the game to decode colours from sRGB. Gettin
 |---|---|
 | Under `cs`, PBR colour maps (`pbr_albedo`, `pbr_emissive` as BC7, `pbr_subsurface`, `pbr_fuzz`) are tagged `_SRGB`. | `TAG-UNORM-PBR` (blocking) |
 | Under `cs`, every other sub-type is UNORM. This includes ordinary `diffuse` and `skin_albedo`. | `TAG-SRGB-NONPBR` (blocking) |
-| Under `vanilla` and `cpm`, nothing is tagged `_SRGB`. | `TAG-SRGB-VANILLA` (error) |
+| Under `vanilla`, nothing is tagged `_SRGB`. | `TAG-SRGB-VANILLA` (error) |
 | Anything under a `lod` folder is UNORM; LOD shaders reject `_SRGB`. | `TAG-SRGB-LOD` (blocking) |
 | BC6H and RGBA16F have no tag (`n/a`). | |
 
@@ -60,18 +61,19 @@ Raw maps (`_roughness`, `_metallic`, `_ao` and so on) are packed differently per
 | `cs` | `_rmaos` | R roughness (or 1 minus glossiness), G metallic, B AO, A specular |
 | `cs` | `_rfaos` (Advanced skin, when a fuzz source exists) | R roughness, G fuzz, B AO, A specular |
 | `cs` | `_p` | height |
-| `cpm` | `_m` | R environment, G gloss, B metallic, A height |
-| `vanilla` | `_m` (BC4) | environment mask, built only when a metallic or specular source exists |
+| `vanilla`, set shader complex material | `_m` | R environment, G gloss, B metallic, A height; built from any roughness, glossiness, metallic, height or `_orm` source |
+| `vanilla`, any other set | `_m` (BC4) | environment mask, built only when a metallic or specular source exists |
+
+Under vanilla, pick **Complex Material** as the set's shader (GUI) or pass `--set set:<id>.shader=complex_material` (CLI) to get the complex `_m` from raw maps. A set that already has a complex-material `_m` file picks the shader by itself.
 
 See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
 
 ### Set shaders per target
 
-| Shader | `cs` | `cpm` | `vanilla` |
-|---|---|---|---|
-| `pbr`, `advanced_skin` | yes | no | no |
-| `default`, `envmap`, `complex_material`, `glow`, `parallax`, `skin`, `hair`, `eye`, `multilayer`, `landscape` | yes | yes | yes |
-| `complex_grass` | yes | yes | no |
+| Shader | `cs` | `vanilla` |
+|---|---|---|
+| `pbr`, `pbr_grass`, `advanced_skin` | yes | no |
+| `default`, `envmap`, `complex_material`, `glow`, `parallax`, `skin`, `hair`, `eye`, `multilayer`, `landscape`, `complex_grass` | yes | yes |
 
 A shader the target does not have falls back to `default`, with `SHADER-UNAVAILABLE`. See [Texture types](Texture-Types.md#set-shaders).
 
@@ -81,7 +83,6 @@ A shader the target does not have falls back to `default`, with `SHADER-UNAVAILA
 |---|---|---|---|
 | `cs-quality` | 1.0.0 | `cs` | The default. Community Shaders including TruePBR; bc7e at `veryslow`; BC6H for HDR emissive. Adds nothing to the base defaults. |
 | `cs-compact` | 1.0.0 | `cs` | Smaller files. BC1 for opaque colour maps at full size; every other listed sub-type at half size when its larger side is above 512; BC4/BC5 search radius `fast`. |
-| `cpm-quality` | 1.0.0 | `cpm` | CPM / ENB complex material. No `_SRGB`, no BC6H. |
 | `vanilla-quality` | 1.0.0 | `vanilla` | Bethesda shaders. No `_SRGB`, no BC6H. |
 | `vanilla-compact` | 1.0.0 | `vanilla` | The vanilla version of `cs-compact`. |
 | `fast-preview` | 1.0.0 | none (uses the batch target) | bc7e `fast`, BC4/BC5 search radius `fast`, PSNR validation on the smallest mip only. For checking a mod quickly, not for release. |
@@ -93,7 +94,7 @@ How the preset is chosen, highest first:
 1. `--preset` on the command line.
 2. `preset` in the project `sdc.toml`.
 3. `preset` in the user config.
-4. The default for the target: `cs-quality`, `cpm-quality` or `vanilla-quality`.
+4. The default for the target: `cs-quality` or `vanilla-quality`.
 
 In the GUI, the header's **Preset** menu picks the preset (it writes `preset = "<id>"` to `sdc.toml`; it lists the presets of the current Mode), and **Presets…** opens the preset creator, which makes and edits user presets without writing TOML by hand (see the GUI guide). The Advanced drawer's Preset inspector shows the batch preset and lists the user presets that loaded.
 

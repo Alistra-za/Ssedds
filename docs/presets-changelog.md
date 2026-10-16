@@ -6,6 +6,8 @@ version changes with it so `--on-existing if-changed` re-encodes (spec §3.6).
 ## 2026-10-15 — sdc 0.8.0 (public alpha)
 
 - Version bump only; no preset or output change. Every output re-encodes once under `if-changed` (engine version 0.8.0).
+- **cpm-quality removed** with the `cpm` target (DECISIONS Note AZ). `base = "cpm-quality"` and `target = "cpm"` are
+  errors. A vanilla set with the complex material shader writes the same complex `_m` the cpm target did.
 
 ## 2026-10-12 — sdc 0.7.0 (M6 Track F2)
 

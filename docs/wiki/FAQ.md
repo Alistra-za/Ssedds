@@ -14,7 +14,7 @@ Not yet. Build from source; see [Installation](Installation.md).
 
 ### Which target should I pick?
 
-`cs` if you play with Community Shaders, which is the default. `vanilla` for textures that must work without Community Shaders. `cpm` if your textures use the complex material `_m` layout outside Community Shaders. See [Presets and targets](Presets-and-Targets.md).
+`cs` if you play with Community Shaders, which is the default. `vanilla` for textures that must work without Community Shaders; for the complex material `_m` layout outside Community Shaders, use `vanilla` and set the set's shader to complex material. See [Presets and targets](Presets-and-Targets.md).
 
 ### Why are my files "unresolved" on the command line but fine in the GUI?
 

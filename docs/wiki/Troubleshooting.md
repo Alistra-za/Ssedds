@@ -55,7 +55,7 @@ Raw maps are packed only under the target that reads them. Under `vanilla`, only
 |---|---|
 | `TAG-UNORM-PBR` | A PBR colour map under `cs` must be `_SRGB`. Remove the `color.tag = "unorm"` override. |
 | `TAG-SRGB-NONPBR` | Under `cs`, only PBR colour maps take `_SRGB`. Remove the `color.tag = "srgb"` override, or set the sub-type to the PBR one. |
-| `TAG-SRGB-VANILLA` | `vanilla` and `cpm` have no `_SRGB`. |
+| `TAG-SRGB-VANILLA` | `vanilla` has no `_SRGB`. |
 | `TAG-SRGB-LOD` | Files under a `lod` folder must be UNORM. |
 
 ### The GUI is read-only
@@ -162,7 +162,7 @@ Every warning has a code and a severity:
 | `FMT-BC1-ALPHA` | blocking | BC1 with an alpha policy other than `remove`; BC1 output is opaque only. | Use BC7 or BC3, or `remove`. |
 | `FMT-PERCEPTUAL-DATA` | error | Perceptual encoding on a data map. | Turn `encoder.perceptual` off. |
 | `FMT-HDR-SOURCE` | info | Why a `pbr_emissive` is BC6H (float source above 1.0) or BC7 sRGB. | Set `format` on the file to choose. |
-| `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla` or `cpm`. | UNORM. |
+| `TAG-SRGB-VANILLA` | error | `_SRGB` under `vanilla`. | UNORM. |
 | `TAG-SRGB-NONPBR` | blocking | `_SRGB` on a non-PBR sub-type under `cs`; renders darker. | UNORM. |
 | `TAG-UNORM-PBR` | blocking | UNORM on PBR colour; looks washed out with linear lighting off. | `_SRGB`. |
 | `TAG-SRGB-LOD` | blocking | `_SRGB` under a `lod` folder; LOD shaders reject it. | UNORM. |
@@ -266,7 +266,6 @@ Every warning has a code and a severity:
 | `GRASS-TOP-OPAQUE` | warning | The top half is fully opaque: no cutout. | Check the alpha. |
 | `GRASS-NORMALS` | warning | Under 99% of the bottom half is unit-length normals. | Check the bottom half is a normal map. |
 | `GRASS-DETECT-SOURCE` | warning | The source's bottom-left texel already fails Community Shaders' detection test. | Fix the corner texel. |
-| `GRASS-VANILLA` | warning | `complex_grass` under `vanilla`, whose grass shader cannot use it. | Use `cs`, or retag. |
 
 ## In-game checklist
 
@@ -276,7 +275,7 @@ Tessalith's validation checks the files, not the game. After installing converte
 2. **Brightness of PBR colour maps.** Under Community Shaders, compare PBR albedo, emissive (`_g`) and fuzz (`_f`) with linear lighting on and off. They are written `_SRGB` (or BC6H for HDR emissive), which was the tested result; a washed-out look points to a UNORM override (`TAG-UNORM-PBR`).
 3. **Ordinary diffuse brightness.** A non-PBR diffuse that looks too dark under Community Shaders points to an `_SRGB` override (`TAG-SRGB-NONPBR`).
 4. **Small textures.** Textures from 16 to 128 px with full mip chains loaded without crashes in testing. If a small texture crashes the game, report it.
-5. **Complex `_m` maps (CS, CPM).** Community Shaders turns complex material off when the smallest mip's alpha is 251/255 or more. Check parallax and complex shading at a distance. `VAL-M-COMPLEX-MARGIN` warns from 247/255.
+5. **Complex `_m` maps (CS, or vanilla with the complex material shader).** Community Shaders turns complex material off when the smallest mip's alpha is 251/255 or more. Check parallax and complex shading at a distance. `VAL-M-COMPLEX-MARGIN` warns from 247/255.
 6. **Plain `_m` maps and PGPatcher.** A plain `_m` stored with alpha whose decoded alpha is 50% or more non-white is treated as complex by PGPatcher. Tessalith keeps `_m` alpha exactly opaque by default (`exact_opaque`) and warns with `VAL-PGPATCHER-50`.
 7. **Cutouts at a distance.** Foliage and fences with `cutout` keep their coverage in smaller mips. If they thin out or thicken, check the `alpha.threshold` against the mesh and look for `VAL-COVERAGE`.
 8. **TruePBR sets.** Run PGPatcher after installing the JSON, then check that the PBR material shows on the intended meshes and not on others (watch for delete sections that hit your own sets).

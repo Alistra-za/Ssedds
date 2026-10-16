@@ -23,7 +23,7 @@ Human-readable output from `convert` goes to stderr. The result verbs (`inspect`
 |---|---|---|
 | `<inputs>...` | required | Image files or folders. Several are allowed. |
 | `--recursive` | off | Walk folders recursively. Without it, only the files directly inside each folder are read. Files you name explicitly are always included. |
-| `--target cs\|cpm\|vanilla` | see below | The target game setup. |
+| `--target cs\|vanilla` | see below | The target game setup. |
 | `--preset <id or file.toml>` | see below | Select a preset by id, or load a preset file and select the id it declares. |
 | `--preset-file <file>` | none | Load a preset file without selecting it, for example one that declares suffix aliases. Repeatable. Loading an id that is already loaded is an error. |
 | `--config <file>` | `sdc.toml` in the first input folder | The project config file. |
@@ -35,7 +35,7 @@ Human-readable output from `convert` goes to stderr. The result verbs (`inspect`
 
 How the target is chosen, highest first: `--target`, then `target` in the project `sdc.toml`, then `target` in the user config, then the selected preset's own target, then `cs`.
 
-How the preset is chosen, highest first: `--preset`, then `preset` in the project `sdc.toml`, then `preset` in the user config, then the default for the target: `cs-quality`, `cpm-quality` or `vanilla-quality`.
+How the preset is chosen, highest first: `--preset`, then `preset` in the project `sdc.toml`, then `preset` in the user config, then the default for the target: `cs-quality` or `vanilla-quality`.
 
 The user config is `%APPDATA%\sdc\config.toml`. User presets in `%APPDATA%\sdc\presets\*.toml` are always loaded. See [Presets and targets](Presets-and-Targets.md).
 
@@ -236,7 +236,7 @@ Runs the post-encode checks on DDS files that already exist, including files mad
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--target cs\|cpm\|vanilla` | `cs` | Whose rules apply. |
+| `--target cs\|vanilla` | `cs` | Whose rules apply. |
 | `--subtype <id>` | inferred from the file's suffix, its game path and, for formats with alpha, its mip-0 alpha | What the files are meant to be. A sub-type the target does not have is an error. |
 | `--alpha-policy remove\|cutout\|blend\|cutout_blend\|data` | inferred | The alpha meaning to check against. Inferred as `remove` when every mip-0 alpha value is at least 254. Otherwise the sub-type's default, except that a sub-type whose default is `remove` is inferred as `data`. |
 | `--exact-opaque` | off | Hold BC7 files under `remove` to Tessalith's own guarantee that opaque alpha decodes as exactly 255. Off by default because other encoders do not promise it. |
@@ -315,7 +315,7 @@ Fixes DDS header faults that need no change to the pixel data: mip count, flags,
 |---|---|
 | `--out-dir <dir>` | Write each patched file into this folder under its own name. The input is never changed. |
 | `--in-place` | Rewrite each input in place, atomically. |
-| `--target cs\|cpm\|vanilla` | Whose rules give the tag and mip expectation of `--subtype` (default `cs`). |
+| `--target cs\|vanilla` | Whose rules give the tag and mip expectation of `--subtype` (default `cs`). |
 | `--subtype <id>` | What the files are meant to be. Sets the tag, and requires a full mip chain when that sub-type's profile has one. |
 | `--tag srgb\|unorm` | Tag to write. Overrides the tag from `--subtype`. Without either, the file's tag is kept. |
 | `--format <format>` | The block format the files must be; a file in another format is refused. |
