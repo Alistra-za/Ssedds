@@ -79,6 +79,9 @@ pub fn apply_set_edits(
     aliases: &BTreeMap<String, String>,
     edits: &[SetEdit],
 ) -> Vec<StaleEdit> {
+    if edits.is_empty() {
+        return vec![];
+    }
     let index = root.map(|root| KeyIndex::new(root, files));
     let file_of = |k: &str| -> Option<usize> { index.as_ref()?.hits(k).first().copied() };
     let pos = |sets: &Vec<TextureSet>, id: &str| {
@@ -205,7 +208,9 @@ pub fn apply_output_paths(
     output_root: &Path,
     paths: &BTreeMap<OutputKey, PathBuf>,
 ) {
-    let Some(root) = root else { return };
+    let Some(root) = root.filter(|_| !paths.is_empty()) else {
+        return;
+    };
     let index = KeyIndex::new(root, files);
     for (k, rel) in paths.iter().filter(|(_, rel)| stays_under(rel)) {
         let OutputKey::File(key) = k else { continue };
