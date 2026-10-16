@@ -1603,7 +1603,28 @@ impl Engine {
             );
             s.skipped += 1;
         };
+        // Note BC2 (review M3): an in-place re-run finds its own earlier outputs as DDS inputs. One whose manifest
+        // record still matches the file on disk is counted into one line instead of a skip per file. The manifest is
+        // read leniently here; `run` reads it again below and fails there if it is unreadable.
+        let recorded = if plan
+            .skipped
+            .iter()
+            .any(|s| s.code == Some(Code::InDdsSkipped))
+        {
+            Manifest::at(&req.output_root).load().unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        let mut earlier = 0usize;
         for s in &plan.skipped {
+            if s.code == Some(Code::InDdsSkipped)
+                && recorded.get(&key(&s.path)).is_some_and(|e| {
+                    e.output_stamp.is_some() && e.output_stamp == SourceStamp::of(&s.path)
+                })
+            {
+                earlier += 1;
+                continue;
+            }
             skip(
                 &s.output,
                 s.set.as_deref(),
@@ -1618,6 +1639,21 @@ impl Engine {
             if matches!(s.code, Some(Code::InDdsSkipped | Code::PackConflict)) {
                 summary.skipped_intentional += 1;
             }
+        }
+        if earlier > 0 {
+            rep.emit(
+                None,
+                None,
+                EventKind::Warning(
+                    Warning::new(
+                        Code::InDdsSkipped,
+                        format!(
+                            "{earlier} earlier outputs in the input folder were not re-read (DDS inputs are not re-encoded by default)"
+                        ),
+                    )
+                    .with_data(serde_json::json!({ "count": earlier })),
+                ),
+            );
         }
         for f in &plan.failed {
             rep.emit_job(

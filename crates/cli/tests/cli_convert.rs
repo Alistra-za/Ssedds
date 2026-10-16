@@ -1325,3 +1325,35 @@ fn an_output_root_equal_to_the_input_converts_in_place_and_never_overwrites_a_so
     );
     assert_eq!(std::fs::read(&dds).unwrap(), before);
 }
+
+/// Review M3 (Note BC2): an in-place re-run finds its own earlier outputs as DDS inputs. Those whose manifest record
+/// still matches the file on disk are folded into one counted IN-DDS-SKIPPED warning, not one skip per file.
+#[test]
+fn earlier_outputs_in_place_are_one_counted_line() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    fx.rgb("door.png");
+    let args = ["--target", "vanilla", "--set", "subtype=diffuse"];
+    let o = fx.convert_to("in", &args);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let o = fx.convert_to("in", &args);
+    assert_eq!(code(&o), 0, "{}", text(&o.stderr));
+    let dds_skips: Vec<_> = skips(&o)
+        .into_iter()
+        .filter(|(_, c)| c.as_deref() == Some("IN-DDS-SKIPPED"))
+        .collect();
+    assert!(dds_skips.is_empty(), "{dds_skips:?}");
+    let folded: Vec<Value> = events(&o)
+        .into_iter()
+        .filter(|e| e["kind"] == "warning" && e["code"] == "IN-DDS-SKIPPED")
+        .collect();
+    assert_eq!(folded.len(), 1, "{folded:?}");
+    assert!(
+        folded[0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("2 earlier outputs"),
+        "{}",
+        folded[0]
+    );
+}
