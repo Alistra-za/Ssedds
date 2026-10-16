@@ -225,7 +225,7 @@ pub fn clashes<'a>(rels: impl Iterator<Item = &'a str>) -> BTreeSet<String> {
 }
 
 /// Every card set's members with their JSON path: the job's output with `.json` (so `_em`, `_envmask`, renames
-/// and packed cpm `_m` follow). The output is not `item.job_key`, which is case-folded. Members of exporting sets
+/// and packed complex `_m` follow). The output is not `item.job_key`, which is case-folded. Members of exporting sets
 /// that share a path are refused.
 pub fn targets(m: &AppModel) -> Vec<CmTarget> {
     let root = m.export_root();

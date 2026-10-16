@@ -760,7 +760,7 @@ fn fill_controls(ui: &mut egui::Ui, model: &AppModel, key: &str, acts: &mut Vec<
     }
 }
 
-/// Outputs that fill no slot card get their controls here, under the cards: the complex `_m` (packed cpm or loose)
+/// Outputs that fill no slot card get their controls here, under the cards: the complex `_m` (packed or loose)
 /// its "Enable parallax" box (DECISIONS AH2), a packed output its fill rows.
 fn unslotted_packed(ui: &mut egui::Ui, model: &AppModel, v: &SetView, acts: &mut Vec<Act>) {
     let why = super::settings_panel::toml_read_only_reason(model);

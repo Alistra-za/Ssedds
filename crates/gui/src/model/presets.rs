@@ -35,35 +35,22 @@ pub fn group_of(st: Subtype) -> &'static str {
     }
 }
 
-/// The top-level families (AP9), in order, with their hint.
-pub const FAMILIES: [(&str, &str); 3] = [
+/// The top-level families (AP9, Note AZ), in order, with their hint.
+pub const FAMILIES: [(&str, &str); 2] = [
     ("PBR / Community Shaders", "used under the cs target"),
-    (
-        "Complex Parallax Materials (cpm)",
-        "complex parallax materials (used under every target since vanilla keeps a complex _m)",
-    ),
     ("Vanilla", "used under every target"),
 ];
 
 /// AP9: the most specific family a sub-type is available in, from `policy::availability`: cs only → PBR / CS,
-/// cs and cpm only → CPM, anything vanilla also has → Vanilla. complex_grass is placed in PBR / CS and
-/// complex_material in CPM by hand.
+/// anything vanilla also has → Vanilla (the CPM family folded into Vanilla, Note AZ). complex_grass is placed in
+/// PBR / CS by hand.
 pub fn family_of(st: Subtype) -> &'static str {
     use engine::policy::{availability, Availability};
     // Owner ruling (AP9): available under every target, but a Community Shaders feature in practice.
     if st == Subtype::ComplexGrass {
         return FAMILIES[0].0;
     }
-    // AP12: vanilla keeps a complex `_m` since AT1, which would empty CPM; the owner's AP9 family stays.
-    if st == Subtype::ComplexMaterial {
-        return FAMILIES[1].0;
-    }
-    let on = |t| availability(t, st) == Availability::Available;
-    let i = match (on(Target::Cpm), on(Target::Vanilla)) {
-        (false, false) => 0,
-        (true, false) => 1,
-        _ => 2,
-    };
+    let i = usize::from(availability(Target::Vanilla, st) == Availability::Available);
     FAMILIES[i].0
 }
 
@@ -1020,7 +1007,7 @@ impl PresetsModel {
     }
 }
 
-/// `cs`, `vanilla`, `cpm`.
+/// `cs`, `vanilla`.
 fn json_target(t: Target) -> String {
     serde_json::to_value(t)
         .ok()

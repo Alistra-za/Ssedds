@@ -16,15 +16,15 @@ fn target_name(t: Target) -> &'static str {
     match t {
         Target::Cs => "cs",
         Target::Vanilla => "vanilla",
-        Target::Cpm => "cpm",
     }
 }
 
 fn target_help(t: Target) -> &'static str {
     match t {
         Target::Cs => "Community Shaders: TruePBR sets and its packed maps",
-        Target::Vanilla => "The base game's shaders and texture layout",
-        Target::Cpm => "Complex Parallax Materials: packed maps with a height channel",
+        Target::Vanilla => {
+            "The base game's shaders and texture layout, plus complex material and complex grass"
+        }
     }
 }
 
@@ -210,14 +210,14 @@ fn mode_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         egui::ComboBox::from_id_salt("mode")
             .selected_text(target_name(model.target))
             .show_ui(ui, |ui| {
-                for t in [Target::Cs, Target::Vanilla, Target::Cpm] {
+                for t in [Target::Cs, Target::Vanilla] {
                     ui.selectable_value(&mut picked, t, target_name(t))
                         .on_hover_text(target_help(t));
                 }
             })
             .response
             .on_hover_text(
-                "The target the textures are converted for: cs, vanilla or cpm. Saved in sdc.toml as target.",
+                "The target the textures are converted for: cs or vanilla. Saved in sdc.toml as target.",
             );
     });
     if picked != model.target {

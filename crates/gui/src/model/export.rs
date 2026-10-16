@@ -68,7 +68,7 @@ pub struct ExportModel {
     pub events: Vec<EngineEvent>,
     pub summary: Option<BatchSummary>,
     pub error: Option<String>,
-    /// What the export did besides converting: the JSON, the vanilla/CPM copies, and what was left out.
+    /// What the export did besides converting: the JSON, the vanilla copies, and what was left out.
     pub notes: Vec<String>,
     /// Job key to the file the engine plans to write (or wrote): an absolute path with forward slashes.
     pub outputs: HashMap<String, String>,
