@@ -2,7 +2,7 @@
 //! session's BC1 model, and an `AnalysisCache` so re-planning after an edit or a target change reloads only what
 //! changed.
 use crate::analyse::{code8, Analysis};
-use crate::api::{BatchRequest, BatchSummary, CancelToken, Engine, EngineError, Plan};
+use crate::api::{lock, BatchRequest, BatchSummary, CancelToken, Engine, EngineError, Plan};
 use crate::codes::Warning;
 use crate::config::{Category, Format};
 use crate::dds::{dds_bytes, read_dds, resolve_header, DdsDesc};
@@ -105,10 +105,6 @@ pub struct AnalysisCache {
     files: Mutex<HashMap<PathBuf, FileEntry>>,
     packs: Mutex<HashMap<String, PackEntry>>,
     loads: AtomicU64,
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The key of a packed image: everything that shapes it, including each source's stamp. `None` when the job cannot
@@ -262,6 +258,8 @@ impl Session {
 
     /// The float chain the encoder works on (M3a spec §6.2), in its working domain (linear light for sRGB colour,
     /// −1..1 for vectors), from the first mip within `max_size`. Nothing is encoded or written.
+    /// Test/golden use; the GUI uses [`Self::preview_source_stored`] (DECISIONS AV5).
+    #[doc(hidden)]
     pub fn preview_source(
         &self,
         job: &ResolvedJob,

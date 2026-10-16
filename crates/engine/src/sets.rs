@@ -2,7 +2,7 @@
 //! first (set keys are fixed from then on), output paths second, then outputs are compared for duplicates again.
 //! The CLI never sets either.
 use crate::discover::InputFile;
-use crate::group::{member_split, TextureSet};
+use crate::group::{fold, member_split, TextureSet};
 use crate::overrides::KeyIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,10 +28,6 @@ pub enum SetEdit {
 pub struct StaleEdit {
     pub edit: SetEdit,
     pub reason: String,
-}
-
-fn fold(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").to_lowercase()
 }
 
 /// The id of a set: its key without the output root in front (`landscape/rock01`). A key not under the root is

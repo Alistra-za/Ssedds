@@ -329,7 +329,8 @@ fn preset_err(e: PresetError) -> EngineError {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+/// Lock `m`, taking the data of a poisoned lock as it is (engine and session share this).
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
