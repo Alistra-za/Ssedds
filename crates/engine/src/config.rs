@@ -600,6 +600,10 @@ pub struct ColorSpec {
     pub tag: ColorTag,
 }
 
+/// The allowed `alpha.threshold` values (owner O2): a NIF threshold is clamped into it, a preset value outside it is
+/// CFG-INVALID.
+pub const ALPHA_THRESHOLD: std::ops::RangeInclusive<u8> = 1..=254;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AlphaSpec {

@@ -13,6 +13,7 @@ use encoders_sys::RGBCX_MAX_LEVEL;
 use engine::codes::{Code, Warning};
 use engine::config::{
     AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Profile, Subtype, Target,
+    ALPHA_THRESHOLD,
 };
 use engine::policy::{offered, Provenance, ResolvedJob};
 use serde_json::{json, Value};
@@ -354,7 +355,7 @@ fn threshold(
         model_busy,
         id,
         u32::from(current),
-        1..=254,
+        u32::from(*ALPHA_THRESHOLD.start())..=u32::from(*ALPHA_THRESHOLD.end()),
         "Alpha threshold",
         mixed,
     );
@@ -372,7 +373,10 @@ pub(super) fn editor(
 ) -> (Option<Value>, egui::Response) {
     match f.field {
         "alpha.threshold" => {
-            let cur = f.value.as_u64().unwrap_or(128).clamp(1, 254) as u8;
+            let cur = f.value.as_u64().unwrap_or(128).clamp(
+                u64::from(*ALPHA_THRESHOLD.start()),
+                u64::from(*ALPHA_THRESHOLD.end()),
+            ) as u8;
             threshold(ui, busy, key, cur, mixed)
         }
         "alpha.parallax" => {

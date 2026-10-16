@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::codes::{Code, Warning};
-use crate::config::{AlphaPolicy, Subtype, Target};
+use crate::config::{AlphaPolicy, Subtype, Target, ALPHA_THRESHOLD};
 use crate::suggest::has_component;
 
 /// A Skyrim shader a texture set is made for (spec §3).
@@ -380,7 +380,10 @@ pub fn mesh_alpha_policy(shapes: &[MeshAlpha]) -> Option<(AlphaPolicy, Option<u8
     let threshold = shapes
         .iter()
         .filter(|s| s.test)
-        .map(|s| s.threshold.clamp(1, 254))
+        .map(|s| {
+            s.threshold
+                .clamp(*ALPHA_THRESHOLD.start(), *ALPHA_THRESHOLD.end())
+        })
         .max();
     Some(match (blend, threshold) {
         (false, None) => (AlphaPolicy::Remove, None),

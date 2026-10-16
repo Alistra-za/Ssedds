@@ -496,6 +496,7 @@ impl AppModel {
     }
 }
 
+use engine::analyse::CS_COMPLEX_GATE_CODE;
 use engine::codes::Code;
 use engine::config::AlphaPolicy;
 
@@ -546,7 +547,7 @@ pub fn card_warnings(m: &AppModel, v: &SetView, ts: &[CmTarget]) -> Vec<String> 
             ));
         } else {
             match smallest_alpha(m, &t.key) {
-                Some(a @ 251..=254) => out.push(format!(
+                Some(a @ CS_COMPLEX_GATE_CODE..=254) => out.push(format!(
                     "{n}: smallest-mip alpha {a}. PGPatcher treats it as complex material and applies {n}.json, but \
                      Community Shaders renders it as a plain env mask (alpha ≥ 251)."
                 )),

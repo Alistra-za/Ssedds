@@ -494,7 +494,7 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
 
 /// Mip-0 decoded alpha below this is "varying" for sub-type inference. DECISIONS Note L: alpha whose minimum
 /// is 251 or more is opaque (BC encode noise, Community Shaders' 251 opacity gate), so BC7's 254 is not varying.
-const VARYING_ALPHA_BELOW: u8 = 251;
+const VARYING_ALPHA_BELOW: u8 = engine::analyse::CS_COMPLEX_GATE_CODE;
 
 /// Mip-0 decoded alpha at or above this is flat opaque: the file carries no alpha worth keeping, so it is
 /// held to the `remove` guarantee (spec §5.8: decoded alpha >= 254 for BC7, 255 otherwise). It is the

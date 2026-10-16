@@ -74,8 +74,12 @@ pub struct Analysis {
 /// tolerance (BC7 re-exports leave 251..=254). The comparison is on the stored float, so an 8-bit source (exact
 /// k/255) compares on its codes and a 16-bit or float source against 251/255 itself; [`NEAR_OPAQUE_EPS`] absorbs
 /// only the float rounding of the division.
-pub const NEAR_OPAQUE_ALPHA: f32 = 251.0 / 255.0;
+pub const NEAR_OPAQUE_ALPHA: f32 = CS_COMPLEX_GATE_CODE as f32 / 255.0;
 const NEAR_OPAQUE_EPS: f32 = 1e-6;
+
+/// Community Shaders' complex-material alpha gate, as an 8-bit code (spike S8, DECISIONS Note L): an `_m` whose
+/// smallest-mip alpha is at or above it is a plain env mask, and source alpha whose minimum reaches it is opaque.
+pub const CS_COMPLEX_GATE_CODE: u8 = 251;
 
 /// Round a stored value to the nearest 8-bit code, clamping to `[0, 1]` first.
 /// NaN maps to 0.
