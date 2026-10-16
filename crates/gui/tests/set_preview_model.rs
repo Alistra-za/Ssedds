@@ -819,11 +819,8 @@ fn exists_accepts_sdc_outputs_and_any_vfs_winner_including_bsa_only_textures() {
             })
             .unwrap();
         let pid = s.path_ids(&["textures/clutter/vanilla_m.dds"]).unwrap()[0];
-        s.set_textures(
-            &[(pid, bsa, 1, 1)],
-            &[(pid, (bsa, 1))].into_iter().collect(),
-        )
-        .unwrap();
+        s.set_textures(&[(pid, (bsa, 1))].into_iter().collect())
+            .unwrap();
     }
     let mut s = SetPreview::new(None, None, Some(db), DEFAULT_CAP);
     run(&mut s, &m);
@@ -1133,11 +1130,8 @@ fn bsa_db(dir: &Path) -> PathBuf {
         })
         .unwrap();
     let pid = s.path_ids(&["textures/clutter/vanilla_m.dds"]).unwrap()[0];
-    s.set_textures(
-        &[(pid, bsa, 1, 1)],
-        &[(pid, (bsa, 1))].into_iter().collect(),
-    )
-    .unwrap();
+    s.set_textures(&[(pid, (bsa, 1))].into_iter().collect())
+        .unwrap();
     db
 }
 
