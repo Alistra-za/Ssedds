@@ -208,7 +208,7 @@ If an export is blocked, the *Export is blocked* dialog lists what to fix; click
 - **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up** and **Move down**. **Delete set** asks first, naming the set and its member count. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Fill from names…** (set menu) lists files in the set's folder named like its diffuse plus a known suffix, and moves the ticked ones in as one undo step.
 - Dropping a file from Explorer on a slot card fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
-- Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON"; a PBR Landscape set shows "PBR Landscape → CS JSON", or "PBR Landscape → CS + PGPatcher JSON" when it also writes a PGPatcher entry.
+- Badges show what needs attention: a missing file, a borrowed slot, a blocking problem. A PBR set under `cs` shows "PBR → JSON"; a PBR Landscape set says which JSON it writes ("PBR Landscape → CS + PGPatcher JSON", "→ CS JSON", "→ PGPatcher JSON (no CS records yet)" or "PBR Landscape (no JSON yet)").
 
 Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot pins and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on.
 
