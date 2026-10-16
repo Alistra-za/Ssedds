@@ -274,6 +274,10 @@ pub(crate) fn decode_peak(path: &std::path::Path) -> u64 {
         crate::load::lift_limits(&mut r);
         let d = r.into_decoder().ok()?;
         let (w, h) = d.dimensions();
+        // A hostile header must not overflow the product; the load refuses a file this large anyway (review M1).
+        if w.max(h) > crate::load::MAX_DIM {
+            return None;
+        }
         Some(BakeJob::peak_bytes(
             w,
             h,
