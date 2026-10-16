@@ -260,3 +260,19 @@ fn plan_progress_counts_every_planned_file_and_belongs_to_one_request() {
         "later plans never count into it"
     );
 }
+
+/// Audit 2026-10-15 item 14 (DECISIONS AV4): a warm re-plan admits nothing for a source the cache already holds,
+/// so it never reads that source's header just to size it.
+#[test]
+fn a_warm_replan_admits_no_bytes_for_cached_sources() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("in")).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([x as u8, y as u8, 9]))
+        .save(d.path().join("in/iron.png"))
+        .unwrap();
+    let s = Session::new(Bc1Model::Ideal).unwrap();
+    assert!(plan(&s, req(d.path(), Target::Cs)).peak_admitted_bytes > 0);
+    let warm = plan(&s, req(d.path(), Target::Cs));
+    assert_eq!(s.cache().loads(), 1);
+    assert_eq!(warm.peak_admitted_bytes, 0);
+}

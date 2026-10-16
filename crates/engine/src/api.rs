@@ -1081,7 +1081,11 @@ impl Engine {
                 if cancel.is_cancelled() {
                     continue;
                 }
-                let est = estimated_bytes(&item.1.path);
+                // DECISIONS AV4: a cache hit loads nothing, so it is admitted at 0 without reading its header.
+                // shortcut: a file changed between this check and its Load loads unadmitted; the next plan admits it.
+                let path = &item.1.path;
+                let cached = SourceStamp::of(path).is_some_and(|s| cache.dims(path, s).is_some());
+                let est = if cached { 0 } else { estimated_bytes(path) };
                 budget.acquire(est);
                 let admitted = Admitted(&budget, est);
                 let resolve_one = &resolve_one;
