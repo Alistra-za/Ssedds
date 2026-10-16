@@ -485,16 +485,6 @@ impl ProjectDoc {
         Some(())
     }
 
-    /// F3b: every `[inputs]` alias as (key as written, alias).
-    pub fn read_as_all(&self) -> Vec<(String, String)> {
-        let Some(t) = self.f.doc.get("inputs").and_then(Item::as_table_like) else {
-            return vec![];
-        };
-        t.iter()
-            .filter_map(|(k, v)| Some((k.to_string(), v.get("as")?.as_str()?.to_string())))
-            .collect()
-    }
-
     /// The spelling of file `key`'s entry in `[inputs]`: `key` in any case, or without its extension.
     fn read_as_key(&self, key: &str) -> Option<String> {
         let t = self.f.doc.get("inputs")?.as_table_like()?;

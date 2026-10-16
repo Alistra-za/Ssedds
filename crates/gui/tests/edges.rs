@@ -492,3 +492,50 @@ fn opening_a_folder_clears_a_pending_action() {
     finish_export(&mut m);
     assert!(!m.take_close_ready());
 }
+
+/// Audit GM-4: a worker panic ends the export like a failed one: the clock stops and the error is in Messages.
+#[test]
+fn a_worker_panic_in_the_export_stops_the_clock_and_logs_the_error() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.export.running = Some(CancelToken::default());
+    let t0 = std::time::Instant::now();
+    m.export.pace = Some(sdc_gui::model::export::Pace::new(t0));
+    m.sender()
+        .send(WorkerMsg::Panicked {
+            what: "export",
+            message: "boom".into(),
+        })
+        .unwrap();
+    m.poll();
+    assert!(m.export.running.is_none());
+    let pace = m.export.pace.as_ref().unwrap();
+    let later = std::time::Instant::now() + Duration::from_secs(60);
+    assert!(
+        pace.elapsed(later) < Duration::from_secs(60),
+        "the clock stopped"
+    );
+    assert!(m
+        .messages
+        .entries()
+        .any(|e| e.text.contains("Export failed: internal error: boom")));
+    assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
+}
+
+/// Audit GM-5: a scan-database read error is a Messages warning (no console), once per distinct error.
+#[test]
+fn a_scan_database_error_is_logged_once() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    for e in ["locked", "locked", "old schema"] {
+        m.sender()
+            .send(WorkerMsg::KnownPaths(Err(e.into())))
+            .unwrap();
+    }
+    m.poll();
+    let texts: Vec<String> = m
+        .messages
+        .entries()
+        .filter(|e| e.text.starts_with("Scan database"))
+        .map(|e| e.text.clone())
+        .collect();
+    assert_eq!(texts.len(), 2, "{texts:?}");
+}
