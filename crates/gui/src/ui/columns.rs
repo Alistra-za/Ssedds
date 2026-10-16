@@ -35,11 +35,6 @@ pub const TEXTURES_MIN: f32 =
 pub const SETS_MIN: f32 =
     2.0 * MEMBER + ITEM_SPACING + PILL_CHROME + SCROLL_ALLOWANCE + PANEL_CHROME;
 
-/// A collapsed column: a thin strip with the column name drawn vertically.
-pub fn strip(ui: &mut egui::Ui, name: &str) {
-    strip_sensing(ui, name, egui::Sense::hover());
-}
-
 /// The arrow beside a column heading that collapses the column to its strip (the strip's own arrow expands it).
 pub fn collapse_arrow(ui: &mut egui::Ui, model: &mut AppModel, column: crate::ui::Column) {
     let name = match column {

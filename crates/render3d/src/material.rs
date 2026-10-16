@@ -90,7 +90,7 @@ pub fn pbr_flags(m: &MaterialState, bound: &Bound) -> u32 {
     f
 }
 
-/// The permutation-relevant subset of a material (the owned replacement of `Material::from_shape`).
+/// The permutation-relevant subset of a material.
 pub fn perm_material(m: &MaterialState) -> Material {
     Material {
         shader_type: m.shader_type,

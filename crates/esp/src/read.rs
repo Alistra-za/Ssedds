@@ -325,7 +325,8 @@ fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
             "bad zlib stream: declared size {want} is over the {MAX_INFLATED} cap"
         ));
     }
-    let mut out = Vec::with_capacity(want);
+    // Capacity follows the compressed size, not the header: a lying header cannot make a big allocation up front.
+    let mut out = Vec::with_capacity(want.min(raw.len().saturating_mul(8)));
     // take(want + 1): a stream that inflates past its declared size stops there and is an error, not an OOM.
     flate2::read::ZlibDecoder::new(&raw[4..])
         .take(want as u64 + 1)

@@ -10,7 +10,7 @@ use crate::decode::{decode_level, Decoded};
 use crate::events::{NullSink, Reporter, Stage};
 use crate::image::{Rgba32F, SourceInfo};
 use crate::manifest::sha256_json;
-use crate::ops::Domain;
+use crate::ops::{linear_to_srgb, Domain};
 use crate::pack::PackJob;
 use crate::pipeline::{encode_levels, prepare, FileError, FileTracker, Keep};
 use crate::policy::{ResolvedJob, SourceStamp};
@@ -31,14 +31,6 @@ pub struct Thumbnail {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
-}
-
-fn linear_to_srgb(v: f32) -> f32 {
-    if v <= 0.003_130_8 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    }
 }
 
 /// Box-downscale `img` so its larger side is at most `THUMB_MAX`. A float source holds linear radiance, so its
