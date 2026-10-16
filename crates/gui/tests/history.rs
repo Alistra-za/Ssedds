@@ -330,4 +330,11 @@ fn an_edit_during_an_export_is_not_saved_by_the_hash_record() {
         "{:?}",
         m.export.notes
     );
+    // The next Save writes the edit and the recorded hash.
+    let sha = m.sets_doc.as_ref().unwrap().last_json_sha256().unwrap();
+    m.save().unwrap();
+    let doc = m.sets_doc.as_ref().unwrap();
+    assert!(!doc.is_dirty());
+    let disk = std::fs::read_to_string(doc.path()).unwrap();
+    assert!(disk.contains("0.37") && disk.contains(&sha), "{disk}");
 }

@@ -1508,9 +1508,11 @@ impl AppModel {
     /// for the next Save. A stale on-disk record only makes the next export ask before overwriting.
     fn save_hash_record(&mut self, was_dirty: bool) {
         if was_dirty {
-            self.export
-                .notes
-                .push("hash recorded; written with the next Save".into());
+            const NOTE: &str = "hash recorded; written with the next Save";
+            // Up to three hash records per export (PGPatcher, CS PBR, complex material): one note.
+            if !self.export.notes.iter().any(|n| n == NOTE) {
+                self.export.notes.push(NOTE.into());
+            }
             return;
         }
         let Some(d) = self.sets_doc.as_mut() else {
