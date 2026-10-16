@@ -1,7 +1,5 @@
 //! NIF material → CS Lighting.hlsl permutation defines (plan 04 §1.2, corrected by real captures:
 //! tools/rdc-out/p04/answers.md Q4, controller ruling RB7).
-use nif::props::{Alpha, Lighting};
-use nif::shape_head::ShapeHead;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material {
@@ -14,26 +12,6 @@ pub struct Material {
     pub has_vertex_colors: bool,
     /// NIF specular strength; SPECULAR is dropped when it is 0 (answers.md Q4.2, Arch_Mouth).
     pub specular_strength: f32,
-}
-
-/// BSVertexDesc: the VertexAttribute flags sit at bits 44..56, `Vertex_Colors` is attribute bit 5
-/// (nif.xml `VertexAttribute` / `BSVertexDesc`).
-pub fn desc_has_vertex_colors(vertex_desc: u64) -> bool {
-    (vertex_desc >> 44) & (1 << 5) != 0
-}
-
-impl Material {
-    pub fn from_shape(head: &ShapeHead, lighting: &Lighting, alpha: Option<Alpha>) -> Material {
-        Material {
-            shader_type: lighting.shader_type,
-            slsf1: lighting.slsf1,
-            slsf2: lighting.slsf2,
-            skinned: head.skinned,
-            alpha_test: alpha.is_some(),
-            has_vertex_colors: head.vertex_desc.is_some_and(desc_has_vertex_colors),
-            specular_strength: lighting.params.specular_strength,
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -144,17 +122,5 @@ pub fn runtime_bits(m: &Material) -> u32 {
         2 << 24
     } else {
         0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vertex_colour_bit_from_desc() {
-        // VF_Vertex | VF_UVs | VF_Normals | VF_Tangents | VF_Vertex_Colors = 0x3B at bit 44.
-        assert!(desc_has_vertex_colors(0x3Bu64 << 44 | 0x408));
-        assert!(!desc_has_vertex_colors(0x1Bu64 << 44 | 0x408));
     }
 }

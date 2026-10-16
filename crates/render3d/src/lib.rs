@@ -331,7 +331,7 @@ pub struct Renderer {
     /// Test hook: draw with P0's by-name writer (every field, every cbuffer, every frame).
     reference_writer: bool,
     /// The HDRI background pass, made on the first `Background::Hdri` frame.
-    backdrop: Option<Backdrop>,
+    backdrop: Option<Result<Backdrop, String>>,
     /// [`Renderer::set_missing_texture`]: the colour a missing colour-slot texture shows; `None` = neutral defaults.
     missing_fill: Option<[u8; 4]>,
     /// [`Renderer::override_slot`]: NIF slot → the DDS bytes (kept to re-upload on a new device) and the texture every
@@ -628,6 +628,7 @@ impl Renderer {
 
     /// sRGB-encode the frame on readback (off by default). Turn it on for display when the features include
     /// `ENABLE_LL`: Linear Lighting draws in linear working space; without it the output is already gamma-space.
+    #[doc(hidden)]
     pub fn set_encode_srgb(&mut self, on: bool) {
         self.encode_srgb = on;
     }
@@ -1952,7 +1953,12 @@ impl Renderer {
         };
         let mut uploads = 0;
         if scene.background == Background::Hdri && self.backdrop.is_none() {
-            self.backdrop = Some(Backdrop::new(&self.gpu)?);
+            // A failure is kept, so it is neither recompiled nor reported on every frame: the model draws on black.
+            let made = Backdrop::new(&self.gpu);
+            if let Err(e) = &made {
+                perf_log::emit("backdrop_failed", serde_json::json!({ "error": e }));
+            }
+            self.backdrop = Some(made);
         }
         let gpu = &self.gpu;
         let target = self.target.as_ref().ok_or("no target")?;
@@ -1977,7 +1983,7 @@ impl Renderer {
             }]));
             ctx.RSSetState(&self.raster);
             ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            if let (Background::Hdri, Some(b)) = (scene.background, &self.backdrop) {
+            if let (Background::Hdri, Some(Ok(b))) = (scene.background, &self.backdrop) {
                 b.draw(gpu, &view, !self.encode_srgb, scene.env_yaw);
             }
             for id in &self.draw_order {
