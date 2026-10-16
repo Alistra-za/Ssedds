@@ -83,12 +83,7 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
     let skipped = count(&|s| matches!(s, RowState::Skipped(..)));
     let failed = count(&|s| matches!(s, RowState::Failed(_)));
     let validation_failed = count(&|s| matches!(s, RowState::Done { passed: false }));
-    let finished = model
-        .export
-        .rows
-        .iter()
-        .filter(|r| !matches!(r.state, RowState::Queued | RowState::Running))
-        .count();
+    let (finished, _) = model.export.progress();
     let running = model.export.running.is_some();
     let (mut cancel, mut close, mut save, mut copy, mut open) = (false, false, false, false, false);
     ui.horizontal_wrapped(|ui| {

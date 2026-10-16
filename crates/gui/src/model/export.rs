@@ -96,6 +96,25 @@ fn same_path(a: &str, b: &str) -> bool {
 }
 
 impl ExportModel {
+    /// (finished, total) jobs: a row counts once it is neither queued nor running.
+    pub fn progress(&self) -> (usize, usize) {
+        let done = self
+            .rows
+            .iter()
+            .filter(|r| !matches!(r.state, RowState::Queued | RowState::Running))
+            .count();
+        (done, self.rows.len())
+    }
+
+    /// The file of the last running row, for the Export button's progress hover.
+    pub fn current_file(&self) -> Option<&str> {
+        self.rows
+            .iter()
+            .rev()
+            .find(|r| r.state == RowState::Running)
+            .map(|r| r.path.as_str())
+    }
+
     /// Drop the queued rows of `path` (a raw map packed into a recipe, a used RNM layer).
     fn drop_queued(&mut self, path: &str) {
         let before = self.rows.len();

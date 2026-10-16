@@ -111,6 +111,56 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
     });
 }
 
+/// The JSON name field's width; it is never squeezed (AG126).
+const NAME_FIELD_WIDTH: f32 = 160.0;
+/// The JSON name field's label (and how tests find the row).
+pub const NAME_LABEL: &str = "JSON name:";
+
+/// Note BH7: the PGPatcher JSON name, the editor's top field (it was in the header). The default shows as hint text;
+/// empty restores it. One undo step per committed edit (`AppModel::set_json_name`), on focus loss.
+fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
+    let id = egui::Id::new("json-name");
+    let mut t = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| {
+        model
+            .sets_doc
+            .as_ref()
+            .and_then(|d| d.json_name())
+            .unwrap_or_default()
+    });
+    let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());
+    let why = model
+        .sets_doc
+        .as_ref()
+        .and_then(|d| d.error())
+        .unwrap_or("sdc-project.toml is read-only")
+        .to_string();
+    let path = format!(
+        "{}\\PBRNIFPatcher\\{}.json",
+        model.export_root().display(),
+        json_name(model)
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.label(NAME_LABEL);
+        let r = ui
+            .add_enabled(
+                editable,
+                egui::TextEdit::singleline(&mut t)
+                    .hint_text(json_name(model))
+                    .desired_width(NAME_FIELD_WIDTH),
+            )
+            .on_hover_text(format!("The PGPatcher JSON is written to {path}"))
+            .on_disabled_hover_text(why);
+        ui.weak(&path);
+        if r.changed() {
+            ui.data_mut(|d| d.insert_temp(id, t.clone()));
+        }
+        if r.lost_focus() {
+            ui.data_mut(|d| d.remove::<String>(id));
+            model.set_json_name(&t);
+        }
+    });
+}
+
 fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut acts: Vec<Act> = vec![];
     let read_only = model.sets_doc.as_ref().and_then(|d| {
@@ -122,13 +172,6 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     });
     ui.horizontal_wrapped(|ui| {
         ui.heading(WINDOW_TITLE);
-        if model.root.is_some() {
-            ui.weak(format!(
-                "{}\\PBRNIFPatcher\\{}.json",
-                model.export_root().display(),
-                json_name(model)
-            ));
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Close").clicked() {
                 model.json_editor_open = false;
@@ -141,6 +184,9 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
             }
         });
     });
+    if model.root.is_some() {
+        name_field(ui, model);
+    }
     if let Some(why) = &read_only {
         ui.colored_label(AMBER, why);
     }

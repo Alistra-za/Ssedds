@@ -2,7 +2,7 @@
 //! walks them with Next error / Prev (F8 / Shift+F8), filters by search, and builds its JSON text once per revision.
 mod support;
 use eframe::egui::{self, accesskit::Role, Key, Modifiers};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use egui_kittest::Harness;
 use engine::config::Subtype;
 use sdc_gui::model::{Answer, AppModel};
@@ -57,12 +57,12 @@ fn collapse_all(h: &mut Harness<'static, AppModel>) {
     assert_eq!(open_entries(h), 0);
 }
 
-/// The search box is the first text box of the window.
+/// The search box: the second text box of the window (Note BH7 put the JSON name field first).
 fn search(h: &mut Harness<'static, AppModel>, text: &str) {
-    h.query_all_by_role(Role::TextInput).next().unwrap().click();
+    h.query_all_by_role(Role::TextInput).nth(1).unwrap().click();
     h.run();
     h.query_all_by_role(Role::TextInput)
-        .next()
+        .nth(1)
         .unwrap()
         .type_text(text);
     h.run();
@@ -89,7 +89,12 @@ fn an_error_shows_under_its_entry_and_an_unowned_one_in_general() {
         .set_json_name(Some("a/b"));
     h.run();
     h.get_by_label("General");
-    h.get_by_label_contains("JSON name");
+    // The General box names the JSON name problem (the field's own "JSON name:" label aside).
+    assert!(h.query_all_by_label_contains("JSON name").any(|n| n
+        .accesskit_node()
+        .label()
+        .as_deref()
+        != Some(json_editor::NAME_LABEL)));
 }
 
 #[test]
