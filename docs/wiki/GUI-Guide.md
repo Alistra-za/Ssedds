@@ -76,7 +76,7 @@ A texture that still needs an answer has an amber border. The centre column then
 |---|---|
 | What kind of texture is this? | A sub-type dropdown and **Confirm**. |
 | What does the alpha channel mean? | *Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*. |
-| Which way does this normal map's green channel point? | *DirectX* or *OpenGL*. |
+| An info line "IN-GREEN-UNSTATED" on a plain `_normal` | The map is converted as DirectX. Press *Treat as OpenGL (flip green)* if it is an OpenGL map; an OpenGL file then shows *Green: OpenGL (flipped)* with a *Treat as DirectX* button that undoes it. |
 | A blocking warning | **Acknowledge for this texture**. For `DIM-NPOT` there is also **Resize to a power of two**, which writes `resize = "pot-down"`. |
 
 Every answer is written to `sdc.toml`, as a field value or as an `allow` code on the file's `[files]` entry. A choice you make always wins over a suggestion.

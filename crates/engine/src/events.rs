@@ -61,7 +61,7 @@ pub enum SkipKind {
     UpToDate,
     /// `--on-existing skip` kept an existing output.
     OnExistingSkip,
-    /// A sub-type, alpha meaning or green convention still needs a decision.
+    /// A sub-type or alpha meaning still needs a decision.
     Unresolved,
     /// A blocking code was not acknowledged.
     Blocked,

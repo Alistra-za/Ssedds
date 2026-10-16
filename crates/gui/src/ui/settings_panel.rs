@@ -14,7 +14,7 @@ use engine::codes::{Code, Warning};
 use engine::config::{
     AlphaPolicy, Backend, ColorTag, Format, GreenConvention, MipFilter, Profile, Subtype, Target,
 };
-use engine::policy::{offered, ResolvedJob};
+use engine::policy::{offered, Provenance, ResolvedJob};
 use serde_json::{json, Value};
 
 /// What a control asks of the model; applied once the drawing is over.
@@ -959,6 +959,22 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     ui.label(egui::RichText::new(format!("IN-GREEN-UNSTATED: {m}")).small());
                     if ui.small_button("Treat as OpenGL (flip green)").clicked() {
                         actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
+                    }
+                });
+            } else if job.profile.channels.green_convention == Some(GreenConvention::Opengl) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Green: OpenGL (flipped)");
+                    if matches!(
+                        job.provenance.get("channels.green_convention"),
+                        Some(Provenance::ProjectFile | Provenance::User)
+                    ) {
+                        let b = ui.add_enabled(
+                            toml_read_only.is_none(),
+                            egui::Button::new("Treat as DirectX").small(),
+                        );
+                        if b.clicked() {
+                            actions.push(Action::Clear("channels.green_convention"));
+                        }
                     }
                 });
             }

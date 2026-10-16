@@ -1183,7 +1183,7 @@ impl AppModel {
     }
 
     /// Whether the texture asks for its sub-type, and the engine's suggestion for it (the one the confirm-subtype
-    /// box preselects). `None`: the sub-type is not what it waits for (an alpha or green-channel question).
+    /// box preselects). `None`: the sub-type is not what it waits for (an alpha question).
     pub fn subtype_question(&self, key: &str) -> Option<Option<Subtype>> {
         self.item(key)?.decisions.iter().find_map(|d| match d {
             Decision::Subtype { suggested } => Some(*suggested),
@@ -1198,7 +1198,7 @@ impl AppModel {
         self.refresh_if_settled();
     }
 
-    /// A row's inline answer that is not a sub-type (alpha meaning, green convention, an acknowledgement). The row
+    /// A row's inline answer that is not a sub-type (alpha meaning, an acknowledgement). The row
     /// leaves the list when the plan that follows shows the texture decided.
     pub fn answer_undecided_row(&mut self, key: &str, answer: Answer) {
         self.decide(key, answer);
@@ -1206,7 +1206,7 @@ impl AppModel {
     }
 
     /// "Accept all suggestions": decide every listed texture that has a suggestion as that suggestion, as one undo
-    /// step. A texture without a suggestion stays listed and undecided; alpha, green and acknowledgements are
+    /// step. A texture without a suggestion stays listed and undecided; alpha and acknowledgements are
     /// never answered here.
     pub fn accept_all_suggestions(&mut self) {
         let Some(Dialog::ProceedAnyway(keys)) = self.dialog.clone() else {

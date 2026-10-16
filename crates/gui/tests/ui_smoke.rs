@@ -214,6 +214,44 @@ fn the_opengl_button_on_the_unstated_green_line_writes_an_explicit_value() {
     h.get_by_label_contains("Needs a decision");
 }
 
+fn green_of(h: &Harness<'static, AppModel>) -> Option<engine::config::GreenConvention> {
+    let item = h.state().item("landscape/rock01_normal.png").unwrap();
+    item.job.as_ref().unwrap().profile.channels.green_convention
+}
+
+#[test]
+fn undo_takes_the_opengl_button_back() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.select_item("landscape/rock01_normal.png");
+    let mut h = harness(model);
+    h.run();
+    press(&mut h, "Treat as OpenGL (flip green)");
+    settle(&mut h);
+    assert!(green_of(&h).is_some());
+    h.state_mut().undo();
+    settle(&mut h);
+    assert_eq!(green_of(&h), None);
+    h.get_by_label("Treat as OpenGL (flip green)");
+}
+
+#[test]
+fn the_treat_as_directx_button_clears_an_opengl_setting() {
+    let d = tempfile::tempdir().unwrap();
+    let mut model = opened(d.path());
+    model.select_item("landscape/rock01_normal.png");
+    let mut h = harness(model);
+    h.run();
+    press(&mut h, "Treat as OpenGL (flip green)");
+    settle(&mut h);
+    h.get_by_label_contains("Green: OpenGL (flipped)");
+    press(&mut h, "Treat as DirectX");
+    settle(&mut h);
+    assert_eq!(green_of(&h), None);
+    assert!(h.query_by_label_contains("Green: OpenGL").is_none());
+    h.get_by_label("Treat as OpenGL (flip green)");
+}
+
 #[test]
 fn an_alpha_button_writes_the_policy_and_the_reset_button_takes_it_back() {
     let d = tempfile::tempdir().unwrap();
