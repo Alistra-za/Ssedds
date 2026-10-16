@@ -125,12 +125,12 @@ fn query(db: &Path, tex: &str) -> Result<Vec<ShapeRow>, String> {
 fn users(rows: Vec<ShapeRow>, alpha: bool) -> (Vec<MeshUser>, usize) {
     let shapes: Vec<MeshAlpha> = rows.iter().filter_map(|r| r.4).collect();
     let policy = alpha.then(|| mesh_alpha_policy(&shapes)).flatten();
+    let range = engine::config::ALPHA_THRESHOLD;
+    let thr = |a: &MeshAlpha| Some(a.threshold.clamp(*range.start(), *range.end()));
     let decides = |a: &MeshAlpha| match policy {
         Some((AlphaPolicy::Blend, _)) => a.blend,
-        Some((AlphaPolicy::Cutout, t)) => a.test && Some(a.threshold.clamp(1, 254)) == t,
-        Some((AlphaPolicy::CutoutBlend, t)) => {
-            a.blend || (a.test && Some(a.threshold.clamp(1, 254)) == t)
-        }
+        Some((AlphaPolicy::Cutout, t)) => a.test && thr(a) == t,
+        Some((AlphaPolicy::CutoutBlend, t)) => a.blend || (a.test && thr(a) == t),
         _ => false,
     };
     let mut by: std::collections::BTreeMap<(String, String), MeshUser> = Default::default();
