@@ -634,3 +634,22 @@ fn packed_source_skips_drop_rows_and_later_events_find_the_rest() {
         ]
     );
 }
+
+/// Review minor 4: another folder or a new export makes the drawer forget its cached file checks.
+#[test]
+fn the_drawer_forgets_its_file_checks_on_a_new_epoch() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = drawer_harness(model_with(d.path(), ExportModel::default()));
+    h.run();
+    let now = Instant::now();
+    let p = d.path().join("x");
+    h.state_mut().1.stats.is_file(&p, now);
+    let before = h.state().1.stats.stats;
+    h.state_mut().1.stats.is_file(&p, now);
+    assert_eq!(h.state().1.stats.stats, before, "cached");
+    h.state_mut().0.drawer_epoch += 1;
+    h.run();
+    let mid = h.state().1.stats.stats;
+    h.state_mut().1.stats.is_file(&p, now);
+    assert_eq!(h.state().1.stats.stats, mid + 1, "asked again");
+}

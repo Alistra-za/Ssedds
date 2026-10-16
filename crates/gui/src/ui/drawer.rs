@@ -29,10 +29,17 @@ pub struct DrawerState {
     pub expanded: std::collections::BTreeSet<engine::codes::Code>,
     /// Cached "is the export folder / this file on disk" answers (AG39).
     pub stats: StatCache,
+    /// The `model.drawer_epoch` `stats` belongs to.
+    pub epoch: u64,
 }
 
 /// Draw the drawer while `model.export.open`. Call before the central panel.
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut DrawerState) {
+    // Another folder or a new export: the cached file checks are another run's.
+    if state.epoch != model.drawer_epoch {
+        state.stats.clear();
+        state.epoch = model.drawer_epoch;
+    }
     if !model.export.open {
         return;
     }

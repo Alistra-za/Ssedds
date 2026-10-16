@@ -504,3 +504,40 @@ fn reload_after_a_disk_change_drops_the_draft() {
     assert!(!pm.changed_on_disk);
     assert!(pm.toml_text().contains("# a hand edit"));
 }
+
+/// Review minor 3: Reload of a preset whose file was deleted keeps the edits, says so, and Overwrite writes it back.
+#[test]
+fn reload_of_a_deleted_preset_file_keeps_the_edits() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("handmade.toml");
+    let text = "schema_version = 1\nid = \"hand\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n";
+    std::fs::write(&path, text).unwrap();
+    let mut pm = PresetsModel::new(Some(d.path().to_path_buf()), Target::Cs);
+    pm.select("hand");
+    pm.set_field(Subtype::Normal, "resize", json!("half"));
+    std::fs::remove_file(&path).unwrap();
+    assert!(pm.save().is_err());
+    pm.reload_from_disk();
+    assert!(pm.dirty(), "the edits are kept");
+    assert!(pm.changed_on_disk);
+    let e = pm.error.clone().unwrap();
+    assert!(e.ends_with("was deleted: kept your edits"), "{e}");
+    pm.save_overwrite().unwrap();
+    assert!(std::fs::read_to_string(&path).unwrap().contains("half"));
+}
+
+#[test]
+fn reload_of_a_preset_file_that_no_longer_loads_keeps_the_edits() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("hand.toml");
+    let text = "schema_version = 1\nid = \"hand\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n";
+    std::fs::write(&path, text).unwrap();
+    let mut pm = PresetsModel::new(Some(d.path().to_path_buf()), Target::Cs);
+    pm.select("hand");
+    pm.set_field(Subtype::Normal, "resize", json!("half"));
+    std::fs::write(&path, "id = [broken").unwrap();
+    pm.reload_from_disk();
+    assert!(pm.dirty());
+    let e = pm.error.clone().unwrap();
+    assert!(e.ends_with("no longer loads: kept your edits"), "{e}");
+}

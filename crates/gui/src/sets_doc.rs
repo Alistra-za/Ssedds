@@ -287,7 +287,7 @@ impl SetsDoc {
             return Err(SaveError::ChangedOnDisk);
         }
         engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
-            .map_err(|e| SaveError::Io(e.to_string()))?;
+            .map_err(|e| crate::project::write_error(&self.path, e))?;
         self.disk = SourceStamp::of(&self.path);
         crate::crash_log::discard_recovery(&self.path);
         self.dirty = false;

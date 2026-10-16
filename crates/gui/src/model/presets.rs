@@ -234,6 +234,8 @@ pub struct Draft {
     source: Option<String>,
     /// The stamp of that file when it was picked (audit item 4): Save refuses when it changed.
     stamp: Option<engine::policy::SourceStamp>,
+    /// That file: Save writes it, even after a rescan no longer finds the preset there.
+    file: Option<PathBuf>,
 }
 
 pub struct PresetsModel {
@@ -365,6 +367,7 @@ impl PresetsModel {
             read_only: builtin,
             stamp: file.and_then(|p| engine::policy::SourceStamp::of(p.as_ref())),
             source: file.and_then(|p| std::fs::read_to_string(p).ok()),
+            file: file.map(PathBuf::from),
         });
         self.refresh();
     }
@@ -405,6 +408,7 @@ impl PresetsModel {
             read_only: false,
             source: None,
             stamp: None,
+            file: None,
         });
         self.refresh();
     }
@@ -427,6 +431,7 @@ impl PresetsModel {
             read_only: false,
             source: None,
             stamp: None,
+            file: None,
         });
         self.refresh();
     }
@@ -923,12 +928,26 @@ impl PresetsModel {
     }
 
     /// The answer Reload: drop the draft and pick the preset again from its file.
+    /// A file that was deleted or no longer loads keeps the draft (and the question), with a note.
     pub fn reload_from_disk(&mut self) {
-        let orig = self.draft.as_ref().and_then(|d| d.orig.clone());
+        let Some(d) = &self.draft else { return };
+        let (orig, file) = (d.orig.clone(), d.file.clone());
         self.rescan();
-        if let Some(id) = orig {
+        let Some(id) = orig else { return };
+        if self.registry.table(&id).is_some() {
             self.select(&id);
+            return;
         }
+        let name = file
+            .as_deref()
+            .map_or(id.clone(), |f| f.display().to_string());
+        let why = if file.as_deref().is_some_and(std::path::Path::exists) {
+            "no longer loads"
+        } else {
+            "was deleted"
+        };
+        self.error = Some(format!("{name} {why}: kept your edits"));
+        self.changed_on_disk = true;
     }
 
     fn save_with(&mut self, force: bool) -> Result<PathBuf, String> {
@@ -939,9 +958,9 @@ impl PresetsModel {
         let text = self.validate()?;
         let id = self.id();
         let orig = self.draft.as_ref().and_then(|d| d.orig.clone());
-        let path = match orig.as_deref().and_then(|o| self.registry.source(o)) {
-            Some(src) => {
-                let path = PathBuf::from(src);
+        let file = self.draft.as_ref().and_then(|d| d.file.clone());
+        let path = match orig.as_ref().and(file) {
+            Some(path) => {
                 let stamp = self.draft.as_ref().and_then(|d| d.stamp);
                 if !force && engine::policy::SourceStamp::of(&path) != stamp {
                     self.changed_on_disk = true;

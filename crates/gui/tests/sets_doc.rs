@@ -232,6 +232,9 @@ fn a_bad_sdc_project_toml_keeps_sdc_toml_working() {
     assert!(m.banner.is_none(), "{:?}", m.banner);
 }
 
+/// Windows refuses to replace a file with the read-only flag: the save fails, says how to fix it, leaves the file
+/// as it was and leaves no temporary file.
+#[cfg(windows)]
 #[test]
 fn a_non_conflict_save_error_names_the_file() {
     use sdc_gui::model::Dialog;
@@ -248,6 +251,7 @@ fn a_non_conflict_save_error_names_the_file() {
     let mut perm = std::fs::metadata(&file).unwrap().permissions();
     perm.set_readonly(true);
     std::fs::set_permissions(&file, perm.clone()).unwrap();
+    let original = std::fs::read(&file).unwrap();
     m.sets_doc
         .as_mut()
         .unwrap()
@@ -257,10 +261,24 @@ fn a_non_conflict_save_error_names_the_file() {
     perm.set_readonly(false);
     std::fs::set_permissions(&file, perm).unwrap();
     assert!(saved.is_err());
-    match &m.dialog {
-        Some(Dialog::Error(t)) => assert!(t.starts_with("sdc-project.toml: "), "{t}"),
-        other => panic!("{other:?}"),
-    }
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::Error(
+            "sdc-project.toml is read-only: clear the read-only flag to save".into()
+        ))
+    );
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        original,
+        "the file is unchanged"
+    );
+    let tmp: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".sdc-") && n.ends_with(".tmp"))
+        .collect();
+    assert!(tmp.is_empty(), "{tmp:?}");
 }
 
 #[test]

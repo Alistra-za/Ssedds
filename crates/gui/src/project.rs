@@ -15,6 +15,8 @@ pub enum SaveError {
     ReadOnly,
     /// The file changed on disk since it was loaded or saved; save again with `force` to overwrite.
     ChangedOnDisk,
+    /// The file has the read-only flag, so it cannot be replaced.
+    ReadOnlyFlag,
     Io(String),
 }
 
@@ -25,6 +27,9 @@ impl std::fmt::Display for SaveError {
                 f.write_str("the file is read-only until its error is fixed and it is reloaded")
             }
             SaveError::ChangedOnDisk => f.write_str("the file changed on disk since it was loaded"),
+            SaveError::ReadOnlyFlag => {
+                f.write_str("the file is read-only: clear the read-only flag to save")
+            }
             SaveError::Io(e) => write!(f, "could not save: {e}"),
         }
     }
@@ -500,7 +505,7 @@ impl ProjectDoc {
             return Err(SaveError::ChangedOnDisk);
         }
         engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
-            .map_err(|e| SaveError::Io(e.to_string()))?;
+            .map_err(|e| crate::project::write_error(&self.path, e))?;
         self.disk = SourceStamp::of(&self.path);
         crate::crash_log::discard_recovery(&self.path);
         self.dirty = false;
@@ -513,4 +518,14 @@ fn without_ext(key: &str) -> Option<&str> {
     let dir_len = key.rfind('/').map_or(0, |i| i + 1);
     let dot = key[dir_len..].rfind('.').filter(|&d| d > 0)?;
     Some(&key[..dir_len + dot])
+}
+
+/// A failed write of a project file: a file with the read-only flag says so (Windows refuses to replace it).
+pub(crate) fn write_error(path: &Path, e: std::io::Error) -> SaveError {
+    let flagged = std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly());
+    if e.kind() == std::io::ErrorKind::PermissionDenied && flagged {
+        SaveError::ReadOnlyFlag
+    } else {
+        SaveError::Io(e.to_string())
+    }
 }

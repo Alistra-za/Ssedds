@@ -31,3 +31,27 @@ fn opening_a_folder_clears_the_stat_cache() {
     m.stats.borrow_mut().is_file(&p, now);
     assert_eq!(m.stats.borrow().stats, before + 1, "asked again");
 }
+
+/// Item 11: undo, redo and a sdc-project.toml edit each rebuild the snapshot.
+#[test]
+fn undo_redo_and_a_sets_edit_rebuild_the_recovery_snapshot() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.recovery_changed();
+    assert!(m.recovery_changed().is_none());
+    m.undo();
+    assert!(m.recovery_changed().is_some(), "undo");
+    assert!(m.recovery_changed().is_none());
+    m.redo();
+    assert!(m.recovery_changed().is_some(), "redo");
+    assert!(m.recovery_changed().is_none());
+    m.sets_doc
+        .as_mut()
+        .unwrap()
+        .set_value("a", "hair", Some(serde_json::json!(true)));
+    let snap = m.recovery_changed().expect("a sets edit");
+    assert!(
+        snap.iter().any(|(p, _)| p.ends_with("sdc-project.toml")),
+        "{snap:?}"
+    );
+}

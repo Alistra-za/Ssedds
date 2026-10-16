@@ -244,6 +244,8 @@ pub struct AppModel {
     settings_error: Option<String>,
     /// What the last recovery snapshot was taken at (audit item 11).
     recovery_key: Option<RecoveryKey>,
+    /// Bumped by `open_folder` and a new export: the drawer then forgets its cached file checks.
+    pub drawer_epoch: u64,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
     /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
@@ -452,6 +454,7 @@ impl AppModel {
             settings_base: None,
             settings_error: None,
             recovery_key: None,
+            drawer_epoch: 0,
             user_config: None,
             user_presets: None,
             loaded_user_presets: vec![],
@@ -625,6 +628,7 @@ impl AppModel {
         self.sizes.clear_folder();
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
+        self.drawer_epoch += 1;
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
@@ -663,7 +667,18 @@ impl AppModel {
             return;
         };
         match self.settings.save_merged(&p, &mut self.settings_base) {
-            Ok(()) => self.settings_error = None,
+            Ok(kept) => {
+                self.settings_error = None;
+                if let Some(kept) = kept {
+                    self.messages.notify(
+                        messages::Severity::Warning,
+                        format!(
+                            "gui.toml: it could not be read, so it was kept as {} and a new one was written",
+                            kept.display()
+                        ),
+                    );
+                }
+            }
             Err(e) => {
                 let text = format!("gui.toml: could not save: {e}");
                 if self.settings_error.as_ref() != Some(&text) {
@@ -1428,6 +1443,7 @@ impl AppModel {
             pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
         };
+        self.drawer_epoch += 1;
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
         spawn_export(self.tx.clone(), session, req, cancel);
@@ -2301,6 +2317,10 @@ impl AppModel {
     fn save_failed(&mut self, kind: DocKind, e: &SaveError) {
         self.dialog = Some(match e {
             SaveError::ChangedOnDisk => Dialog::ExternalChange(kind),
+            SaveError::ReadOnlyFlag => Dialog::Error(format!(
+                "{} is read-only: clear the read-only flag to save",
+                kind.file()
+            )),
             e => Dialog::Error(format!("{}: {e}", kind.file())),
         });
     }
