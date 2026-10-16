@@ -411,3 +411,67 @@ fn a_press_dragged_off_a_live_row_commits_nothing() {
     settle(&mut h);
     assert!(h.state().0.input_name_of("landscape/rocks/small").is_none());
 }
+
+/// Note BH1: the set's name shows once, as the input name box; no heading repeats it beside the box.
+#[test]
+fn the_set_header_shows_the_name_only_in_the_box() {
+    let (_d, h) = harness();
+    let edit = h
+        .get(
+            by().role(Role::TextInput)
+                .label(sdc_gui::ui::input_name::HINT),
+        )
+        .rect();
+    // Only the Sets column's row is labelled with the set's path; nothing on the box's row is.
+    assert!(h.query_all_by_label(ROCK_SET).count() >= 1);
+    let on_row = h
+        .query_all_by_label(ROCK_SET)
+        .filter(|n| (n.rect().center().y - edit.center().y).abs() < 12.0)
+        .count();
+    assert_eq!(on_row, 0);
+}
+
+/// Note BH2: the lock handle is an accessible slider; dragging it moves the lock to the nearest separator.
+#[test]
+fn the_lock_icon_drags_to_a_separator() {
+    let (_d, mut h) = harness();
+    assert_eq!(free(&h), "rock01");
+    let handle = h.get_by_label(sdc_gui::ui::input_name::LOCK_LABEL);
+    assert_eq!(handle.accesskit_node().role(), Role::Slider);
+    let from = handle.rect().center();
+    // The first stop: the box's left edge.
+    let to = egui::pos2(
+        h.get(
+            by().role(Role::TextInput)
+                .label(sdc_gui::ui::input_name::HINT),
+        )
+        .rect()
+        .left()
+            - 200.0,
+        from.y,
+    );
+    h.input_mut().events.push(egui::Event::PointerMoved(from));
+    h.run();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    for i in 1..=4 {
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(from.lerp(to, i as f32 / 4.0)));
+        h.run();
+    }
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    h.run();
+    assert_eq!(free(&h), "textures/landscape/rock01");
+}

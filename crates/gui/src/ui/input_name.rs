@@ -17,10 +17,36 @@ pub const DROPDOWN: &str = "▾";
 pub const HEADING: &str = "Read this set's textures as";
 /// The free (editable) part of the box is never narrower than this.
 const MIN_FREE: f32 = 56.0;
-/// The set's path is never shortened below this to keep the box on its row.
-const HEADING_MIN: f32 = 40.0;
 /// What the box needs besides its text: its margins, the ▾ and the spacing between them.
 const CHROME: f32 = 44.0;
+
+/// The path lock handle's accessible name (Note BH2).
+pub const LOCK_LABEL: &str = "Path lock";
+/// The lock icon's hit box.
+const LOCK_W: f32 = 12.0;
+const LOCK_H: f32 = 14.0;
+const LOCK_BLUE: egui::Color32 = egui::Color32::from_rgb(70, 140, 235);
+const LOCK_HOVER: egui::Color32 = egui::Color32::from_rgb(110, 170, 255);
+const LOCK_ACTIVE: egui::Color32 = egui::Color32::from_rgb(40, 105, 200);
+
+/// A padlock centred on `c`: a filled body under a shackle.
+fn paint_lock(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
+    let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.0), egui::vec2(9.0, 7.0));
+    let (l, r, top) = (body.left() + 2.0, body.right() - 2.0, body.top() - 4.0);
+    let stroke = egui::Stroke::new(1.6, color);
+    painter.line_segment(
+        [egui::pos2(l, body.top()), egui::pos2(l, top + 1.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(r, body.top()), egui::pos2(r, top + 1.0)],
+        stroke,
+    );
+    painter.line_segment([egui::pos2(l, top + 1.0), egui::pos2(l + 1.0, top)], stroke);
+    painter.line_segment([egui::pos2(l + 1.0, top), egui::pos2(r - 1.0, top)], stroke);
+    painter.line_segment([egui::pos2(r - 1.0, top), egui::pos2(r, top + 1.0)], stroke);
+    painter.rect_filled(body, 1.5, color);
+}
 
 /// Rows in the live list under the box.
 const LIVE_ROWS: usize = 12;
@@ -71,7 +97,7 @@ fn plan_error(
     e
 }
 
-/// The set's path as the row's heading, then its input name box (none without an own diffuse).
+/// The set's input name box, which also names the set (Note BH1); a set without an own diffuse shows its path.
 pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     let Some(current) = model.input_name_of(&v.id) else {
         ui.heading(&v.label);
@@ -108,32 +134,11 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             .size()
             .x
     };
-    // The heading takes what the box leaves of the row, shortened with … (full on hover), but at least HEADING_MIN; with
-    // less room the box starts the next row (decided here: the enabled scope below is one block). AO5.
+    // Note BH1: the box alone names the set (no heading beside it). With too little room left in the row it starts
+    // the next one (decided here: the enabled scope below is one block). AO5.
     let locked_w = width(&text[..lock_cut(&text, lock)]);
     let box_w = (160.0 - locked_w).max(MIN_FREE) + locked_w + CHROME;
-    let heading = egui::RichText::new(&v.label).heading();
-    let room = ui.available_size_before_wrap().x - box_w - ui.spacing().item_spacing.x;
-    let full = ctx
-        .fonts_mut(|f| {
-            f.layout_no_wrap(
-                v.label.clone(),
-                egui::TextStyle::Heading.resolve(ui.style()),
-                egui::Color32::WHITE,
-            )
-        })
-        .size();
-    if full.x <= room {
-        ui.label(heading);
-    } else if room >= HEADING_MIN {
-        // Shortened, it is set in the body size, so the row is no taller than the box (the 3D view keeps its height).
-        let body = ui.text_style_height(&egui::TextStyle::Body);
-        ui.add_sized(
-            [room, body],
-            egui::Label::new(egui::RichText::new(&v.label).strong()).truncate(),
-        );
-    } else {
-        ui.label(heading);
+    if ui.available_size_before_wrap().x < box_w {
         ui.end_row();
     }
     ui.add_enabled_ui(why.is_none(), |ui| {
@@ -382,22 +387,43 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             let rr = ui
                 .interact(rail, id.with("rail"), egui::Sense::click_and_drag())
                 .on_hover_text("Path lock: drag to a / to keep the path up to it (Ctrl+Left/Right in the box)");
-            if let Some(p) = rr.interact_pointer_pos().filter(|_| rr.clicked() || rr.dragged()) {
-                lock = (0..xs.len())
+            // Note BH2: the handle is a blue lock icon on the rail, dragged like the rail.
+            let hx = xs[lock.min(xs.len() - 1)];
+            let handle_rect =
+                egui::Rect::from_center_size(egui::pos2(hx, rail.center().y), egui::vec2(LOCK_W, LOCK_H));
+            let hr = ui
+                .interact(handle_rect, id.with("lock-handle"), egui::Sense::click_and_drag())
+                .on_hover_text("Path lock: drag to a / to keep the path up to it (Ctrl+Left/Right in the box)");
+            hr.widget_info(|| egui::WidgetInfo::slider(true, lock as f64, LOCK_LABEL));
+            let cur = lock;
+            let snap = |p: egui::Pos2| {
+                (0..xs.len())
                     .min_by(|a, b| (xs[*a] - p.x).abs().total_cmp(&(xs[*b] - p.x).abs()))
-                    .unwrap_or(lock);
+                    .unwrap_or(cur)
+            };
+            for r in [&rr, &hr] {
+                if let Some(p) = r.interact_pointer_pos().filter(|_| r.clicked() || r.dragged()) {
+                    lock = snap(p);
+                }
             }
             let painter = ui.painter();
             let weak = ui.visuals().weak_text_color();
             for x in &xs {
                 painter.vline(*x, rail.y_range(), egui::Stroke::new(1.0, weak));
             }
+            let blue = if hr.dragged() || hr.is_pointer_button_down_on() {
+                LOCK_ACTIVE
+            } else if hr.hovered() || rr.hovered() {
+                LOCK_HOVER
+            } else {
+                LOCK_BLUE
+            };
             let hx = xs[lock.min(xs.len() - 1)];
             painter.line_segment(
                 [egui::pos2(rail.left(), rail.bottom()), egui::pos2(hx, rail.bottom())],
-                egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                egui::Stroke::new(2.0, blue),
             );
-            painter.circle_filled(egui::pos2(hx, rail.center().y), 3.0, ui.visuals().selection.bg_fill);
+            paint_lock(painter, egui::pos2(hx, rail.center().y), blue);
         }
         let menu = path_picker::menu(ui, DROPDOWN, |ui| {
             ui.label(egui::RichText::new(HEADING).strong());

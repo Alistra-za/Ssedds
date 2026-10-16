@@ -1423,3 +1423,19 @@ Supersedes, where they name `cpm`: M1 (the packed `cpm` `_m` is now the vanilla 
 
 - **BF1 Rule.** Keys compared against scan/NIF paths fold ASCII only, matching `nif::path` (`slashes_lower`): `shader::mesh_key` / `colour_mesh_key` use `to_ascii_lowercase`. The old Unicode fold made a texture under a non-ASCII folder (`textures/Ärger/`) miss its scan row.
 - **BF2 Unchanged.** Set ids (`sets.rs` `fold`/`fold_id`) and `[files]` keys stay Unicode-folded.
+
+## Note BH — Toolbar layout (owner, 2026-10-16)
+
+Owner requests on the top bar and the set header; the calls not spelled out by the owner are marked *(call)*.
+
+- **BH1 One set name.** The set header shows the input name box only; the set's path heading beside it is gone (a set without an own diffuse, which has no box, still shows its path). With too little room left in the row the box starts the next line *(call: replaces AO5's shortened heading)*.
+- **BH2 Lock icon.** The path lock rail's round handle is a blue padlock (painted, not a font glyph, so it never depends on a font). It is its own widget: accessible slider "Path lock" (value = the lock stop), lighter on hover, darker while pressed or dragged; dragging it or the rail snaps to the nearest `/` stop as before, and Ctrl+Left/Right still move it.
+- **BH3 Export.** Right-anchored, 240 pt wide (twice the old 120 pt minimum) and as tall as the left rows: two rows normally; when a narrow window wraps the rows onto more lines it grows with them *(call)*.
+- **BH4 Messages / Save.** Stacked directly left of Export, Messages on top *(call: keeps the old left-to-right order)*, each as wide as the wider of the two texts (so "Messages (n)" widens both) and together Export's height. Save keeps no hover text (it had none).
+- **BH5 Column checkboxes.** First on the bottom row, at the far left.
+- **BH6 MO2… + Mode.** One framed unit (MO2…, then the Mode label and combo) that wraps whole. The Meshes view's own header keeps MO2… beside the view tabs (it has no Mode).
+- **BH7 PG JSON Editor.** One button replaces "JSON: [name] Editor…", shown under the same condition as before (cs mode, a folder open, `sdc-project.toml` loaded) *(call: hidden, not disabled, otherwise)*. The name box is the editor window's top field, "JSON name:", with the full output path beside it; same hint (the default name), same commit on focus loss through `set_json_name`, so the same single undo step and the same read-only reason on hover.
+- **BH8 View tabs.** "Textures view" / "Meshes view" are tabs: 16 pt of space either side, rounded on top only, 6 pt taller than a row, equal width, the selected one filled with the selection colour and bold. They sit on the bottom row next to the content below *(call: they do not paint past the header panel's edge, which clips them; the tab shape and position carry the "attached" look)*. Labels and behaviour unchanged, so the same tabs serve the Meshes view's header.
+- **BH9 Export progress.** While an export runs Export's lower half is a progress bar, done/total from the rows the drawer already counts (`ExportModel::progress`, now shared with the drawer); hover names the running file and says Cancel is in the export drawer *(call: no second Cancel; the drawer opens when an export starts and keeps its Cancel)*. No engine change.
+- **BH10 Narrow windows.** The export folder button is cut to what is left of the bottom row (at least 120 pt) before it wraps, so at 1024 pt the header stays three lines and the 3D view keeps its 72 % of the centre *(call)*.
+- **BH11 Screenshot test.** `egui_kittest` gets its `wgpu` feature (dev-dependency only; every crate it needs was already in `Cargo.lock`) for the ignored `header_layout::render_the_toolbar`, which writes the header render to `SDC_TOOLBAR_PNG`. The repo has no snapshot tests, so none were regenerated.

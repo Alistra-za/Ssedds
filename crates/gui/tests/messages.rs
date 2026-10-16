@@ -192,7 +192,7 @@ fn the_header_button_shows_the_unread_count_and_opens_the_panel() {
     let mut h = Harness::builder()
         .with_size(egui::vec2(900.0, 200.0))
         .build_ui_state(
-            |ui, m: &mut AppModel| sdc_gui::ui::messages::button(ui, m),
+            |ui, m: &mut AppModel| sdc_gui::ui::messages::button(ui, m, egui::vec2(120.0, 20.0)),
             m,
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
