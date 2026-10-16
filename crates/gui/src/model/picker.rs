@@ -233,14 +233,6 @@ impl PickerPurpose {
 use super::AppModel;
 
 impl AppModel {
-    /// The purposes this model handles in `poll`.
-    pub const PICKS: [PickerPurpose; 4] = [
-        PickerPurpose::OpenFolder,
-        PickerPurpose::ExportFolder,
-        PickerPurpose::NvttPath,
-        PickerPurpose::SaveReport,
-    ];
-
     /// Open a picker for `purpose`, tagged with the opened folder when the purpose is folder-scoped. False when a
     /// dialog is already open.
     pub fn pick(&self, ctx: &egui::Context, purpose: PickerPurpose, spec: PickerSpec) -> bool {
