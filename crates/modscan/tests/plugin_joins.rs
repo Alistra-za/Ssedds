@@ -351,11 +351,6 @@ fn provide(s: &Store, path: &str, enabled: bool) {
         .query_row("SELECT id FROM path WHERE p = ?1", [path], |r| r.get(0))
         .unwrap();
     c.execute(
-        "INSERT INTO tex_copy(path_id, origin_id) VALUES (?1, ?2)",
-        [p, o],
-    )
-    .unwrap();
-    c.execute(
         "INSERT INTO tex_winner(path_id, origin_id, n_copies) VALUES (?1, ?2, 1)",
         [p, o],
     )

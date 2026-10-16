@@ -214,7 +214,6 @@ fn dump(s: &Store, root: &std::path::Path) -> String {
         ("nif_winner", format!("SELECT p.p, cp.p, co.root, w.n_copies FROM nif_winner w JOIN path p ON p.id = w.path_id {}", copy("w.copy_id"))),
         ("nif_winner_src", format!("SELECT p.p, cp.p, co.root FROM nif_winner_src w JOIN path p ON p.id = w.path_id {}", copy("w.copy_id"))),
         ("pgp_diff", "SELECT p.p, d.crc_orig, d.crc_patched FROM pgp_diff d JOIN path p ON p.id = d.path_id".into()),
-        ("tex_copy", "SELECT p.p, o.root, t.size, t.mtime IS NOT NULL FROM tex_copy t JOIN path p ON p.id = t.path_id JOIN origin o ON o.id = t.origin_id".into()),
         ("tex_winner", "SELECT p.p, o.root, w.n_copies FROM tex_winner w JOIN path p ON p.id = w.path_id JOIN origin o ON o.id = w.origin_id".into()),
         ("plugin", "SELECT name, path, size, lo_index, light, flags, masters_json, error_text FROM plugin".into()),
         ("rec", "SELECT pl.name, r.local, r.formid, r.sig, r.edid, r.owner_ok, r.txst_flags, r.decal FROM rec r JOIN plugin pl ON pl.id = r.plugin_id".into()),

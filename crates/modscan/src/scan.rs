@@ -354,8 +354,18 @@ fn scan_body(
     report.phase_ms.push(("origins", lap(&mut t)));
 
     // 3. Walk.
-    let (mut copies, mut locs, opened, tex) = walk(&loose, &bsas, &mut report, progress);
+    let mut failed_bsas = HashSet::new();
+    let (mut copies, mut locs, opened, tex) =
+        walk(&loose, &bsas, &mut report, &mut failed_bsas, progress);
     report.phase_ms.push(("walk", lap(&mut t)));
+    // A BSA that failed to open (locked, being redeployed) is not enabled, so delete_unseen keeps its cached rows.
+    let enable_bsa_ids: Vec<i64> = bsa_ids
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(i, _)| !failed_bsas.contains(i))
+        .map(|(_, id)| id)
+        .collect();
     let (mut parse_ms, mut write_ms) = (0u64, 0u64);
     let mut derived: Vec<bool> = copies
         .iter()
@@ -404,7 +414,11 @@ fn scan_body(
     let mut work = vec![];
     for (i, c) in copies.iter().enumerate() {
         match existing.get(&(path_ids[i], origin_id(c.origin))) {
-            Some(m) if m.size == Some(c.size) && m.mtime == Some(c.mtime) => {
+            Some(m)
+                if m.size == Some(c.size)
+                    && m.mtime == Some(c.mtime)
+                    && !(candidate[i] && m.crc32.is_none()) =>
+            {
                 report.reused += 1;
                 if let Some(crc) = m.crc32 {
                     crc_known.insert(i, crc);
@@ -538,7 +552,7 @@ fn scan_body(
         report.tainted = true;
         store.discard_pending()?;
         // A tainted run still returns a (flagged) result: its origins are listed, as before.
-        enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
+        enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
         for p in &mut report.pgp {
             p.state = DerivedState::RunningAtScan;
             store.set_derived_state(p.origin_id, DerivedState::RunningAtScan)?;
@@ -578,10 +592,10 @@ fn scan_body(
                 .ok_or_else(|| ScanError::Io(std::io::Error::other("copy row missing after scan")))
         })
         .collect::<Result<_, _>>()?;
-    let game = winners(&copies, &loose, &bsas, &|_| false);
+    let game = winners(&copies, &loose, &bsas);
     let nd: Vec<usize> = (0..copies.len()).filter(|&i| !derived[i]).collect();
     let nd_copies: Vec<Copy> = nd.iter().map(|&i| copies[i].clone()).collect();
-    let source: HashMap<String, usize> = winners(&nd_copies, &loose, &bsas, &|_| false)
+    let source: HashMap<String, usize> = winners(&nd_copies, &loose, &bsas)
         .into_iter()
         .map(|(p, (j, _))| (p, nd[j]))
         .collect();
@@ -606,22 +620,17 @@ fn scan_body(
 
     // Texture winners (game view only; stat-only data from the walk).
     let tex_pids = store.path_ids(&tex.iter().map(|c| c.path.as_str()).collect::<Vec<_>>())?;
-    let tex_win = winners(&tex, &loose, &bsas, &|_| false);
+    let tex_win = winners(&tex, &loose, &bsas);
     let tex_pid_of: HashMap<&str, i64> = tex
         .iter()
         .zip(&tex_pids)
         .map(|(c, &p)| (c.path.as_str(), p))
         .collect();
-    let tex_rows: Vec<(i64, i64, u64, i64)> = tex
-        .iter()
-        .zip(&tex_pids)
-        .map(|(c, &p)| (p, origin_id(c.origin), c.size, c.mtime))
-        .collect();
     let tex_win_rows: HashMap<i64, (i64, u32)> = tex_win
         .iter()
         .map(|(p, &(i, n))| (tex_pid_of[p.as_str()], (origin_id(tex[i].origin), n)))
         .collect();
-    store.set_textures(&tex_rows, &tex_win_rows)?;
+    store.set_textures(&tex_win_rows)?;
     let textures_ms = lap(&mut t);
 
     // pgp_diff: higher-priority origins overwrite lower ones on the same key.
@@ -641,19 +650,9 @@ fn scan_body(
     for &i in &nd {
         by_path.entry(copies[i].path.as_str()).or_default().push(i);
     }
-    let mut new_crcs: HashMap<i64, u32> = HashMap::new();
-    let mut crc_of = |i: usize| -> Option<u32> {
-        if let Some(c) = crc_known.get(&i) {
-            return Some(*c);
-        }
-        let Loc::Loose(p) = &locs[i] else {
-            return None; // BSA source: unverified (05 §5.1)
-        };
-        let c = crc32fast::hash(&std::fs::read(p).ok()?);
-        crc_known.insert(i, c);
-        new_crcs.insert(ids[i], c);
-        Some(c)
-    };
+    // Every candidate has a CRC here: reuse skips candidates without one, so the parallel pass hashed them (loose and BSA).
+    // A candidate whose read failed has none: it is unverified and re-read next scan, which is acceptable.
+    let crc_of = |i: usize| -> Option<u32> { crc_known.get(&i).copied() };
     let mut rows = Vec::with_capacity(copies.len());
     for (i, c) in copies.iter().enumerate() {
         if !derived[i] {
@@ -701,13 +700,13 @@ fn scan_body(
             derive_check: Some(check_code(check)),
         });
     }
-    store.set_derived(&rows, &new_crcs)?;
+    store.set_derived(&rows)?;
 
     // 7. Drop copies not seen in this walk.
     let tdl = Instant::now();
     let seen: HashSet<i64> = ids.iter().copied().collect();
     // Commit point: only a run that got here makes its origins readable (the plugin pass below needs them enabled).
-    enable_run(store, &loose_ids, &bsa_ids, &sep_ids)?;
+    enable_run(store, &loose_ids, &enable_bsa_ids, &sep_ids)?;
     store.delete_unseen(&seen)?;
     report
         .sub_ms
@@ -749,6 +748,7 @@ fn walk(
     loose: &[LooseOrigin],
     bsas: &[ActiveBsa],
     report: &mut Report,
+    failed_bsas: &mut HashSet<usize>,
     progress: &dyn Fn(Progress),
 ) -> (Vec<Copy>, Vec<Loc>, Vec<Bsa>, Vec<Copy>) {
     let total = loose.len() + bsas.len();
@@ -798,6 +798,7 @@ fn walk(
                 report
                     .problems
                     .push((b.path.display().to_string(), e.to_string()));
+                failed_bsas.insert(i);
                 continue;
             }
         };

@@ -382,15 +382,12 @@ fn query_store() -> (tempfile::TempDir, Store, HashMap<&'static str, i64>) {
             false,
         ),
     );
-    s.set_derived(
-        &[DeriveRow {
-            copy_id: ids["d"],
-            is_derived: true,
-            source_copy_id: Some(ids["d_src"]),
-            derive_check: Some(0),
-        }],
-        &HashMap::new(),
-    )
+    s.set_derived(&[DeriveRow {
+        copy_id: ids["d"],
+        is_derived: true,
+        source_copy_id: Some(ids["d_src"]),
+        derive_check: Some(0),
+    }])
     .unwrap();
     let names = ["a", "b", "c", "d", "e", "f", "g"];
     let paths: Vec<String> = names.iter().map(|n| format!("meshes/x/{n}.nif")).collect();
@@ -1155,4 +1152,16 @@ fn delete_unseen_drops_texsets_no_shape_uses() {
         [1, 3]
     );
     s.end_scan().unwrap();
+}
+
+#[test]
+fn winning_nifs_folds_ascii_only_like_the_stored_keys() {
+    let (_d, mut s, a) = store();
+    let id = put(&mut s, "meshes/Ärger/X.nif", a, 0, lit(&[]), false);
+    let pid = s.path_ids(&["meshes/Ärger/X.nif"]).unwrap()[0];
+    s.set_winners(&[(pid, (id, 1))].into_iter().collect(), &HashMap::new())
+        .unwrap();
+    assert_eq!(s.winning_nifs("Ärger", 10).unwrap().len(), 1);
+    assert_eq!(s.winning_nifs("ärGER/x", 10).unwrap().len(), 0);
+    assert_eq!(s.winning_nifs("ÄrGER/x", 10).unwrap().len(), 1);
 }

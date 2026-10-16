@@ -51,21 +51,22 @@ fn loose_beats_bsa_and_priority_orders_loose() {
         c("meshes/z.nif", OriginRef::Loose(2)),
         c("meshes/z.nif", OriginRef::Loose(3)),
     ];
-    let w = winners(&copies, &loose, &bsas, &|_| false);
+    let w = winners(&copies, &loose, &bsas);
     assert_eq!(w["meshes/x.nif"], (1, 2));
     assert_eq!(w["meshes/y.nif"], (3, 2));
     assert_eq!(w["meshes/z.nif"], (6, 3));
 }
 
 #[test]
-fn exclude_gives_source_view() {
+fn non_derived_copies_give_source_view() {
     let loose = vec![lo("A", 0), lo("PGP", 5), lo("C", 9)];
     let copies = vec![
         c("meshes/x.nif", OriginRef::Loose(0)),
         c("meshes/x.nif", OriginRef::Loose(1)),
     ];
-    let game = winners(&copies, &loose, &[], &|_| false);
-    let source = winners(&copies, &loose, &[], &|o| o == OriginRef::Loose(1));
+    let game = winners(&copies, &loose, &[]);
+    let nd_copies: Vec<Copy> = copies[..1].to_vec();
+    let source = winners(&nd_copies, &loose, &[]);
     assert_eq!(game["meshes/x.nif"].0, 1);
     assert_eq!(source["meshes/x.nif"].0, 0);
 }

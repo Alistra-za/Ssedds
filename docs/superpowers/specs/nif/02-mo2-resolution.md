@@ -203,6 +203,7 @@ CREATE TABLE texset (id INTEGER PRIMARY KEY, t0 INTEGER, t1 INTEGER, t2 INTEGER,
                      UNIQUE(t0,t1,t2,t3,t4,t5,t6,t7,t8));
 CREATE TABLE tex_use (tex_path_id INTEGER, texset_id INTEGER, slot INTEGER,
                       PRIMARY KEY(tex_path_id, texset_id, slot)) WITHOUT ROWID; -- reverse index
+-- tex_copy: unused since audit 2026-10-16 (no longer written, nothing reads it; drop at the next schema bump).
 CREATE TABLE tex_copy (path_id INTEGER, origin_id INTEGER, size INTEGER, mtime INTEGER,
                        PRIMARY KEY(path_id, origin_id)) WITHOUT ROWID;
 CREATE TABLE tex_winner (path_id INTEGER PRIMARY KEY, origin_id INTEGER, n_copies INTEGER);

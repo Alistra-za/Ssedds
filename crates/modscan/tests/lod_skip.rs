@@ -79,10 +79,10 @@ fn lod_meshes_textures_and_plugin_paths_are_skipped() {
     assert_eq!(rep.nifs, 2);
     assert_eq!(s.copy_ids().unwrap().len(), 2);
     assert!(s.plugin_missing_files().unwrap().is_empty());
-    // LOD textures stay in tex_copy: a normal NIF may reference one.
+    // LOD textures stay in tex_winner: a normal NIF may reference one.
     let n: i64 = s
         .conn()
-        .query_row("SELECT count(*) FROM tex_copy", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM tex_winner", [], |r| r.get(0))
         .unwrap();
     assert_eq!(n, 2);
     assert_eq!(s.unused_textures().unwrap(), ["textures/t/lonely.dds"]);

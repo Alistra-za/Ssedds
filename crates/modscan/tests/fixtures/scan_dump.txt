@@ -87,9 +87,6 @@ shape|meshes/x.nif|<root>/mods/B|3|cylinder_1|BSTriShape|1|0|2185233155|32785|9:
 shape|meshes/x.nif|<root>/mods/B|9|cylinder_2|BSTriShape|1|0|2185233155|32785|9:textures/gray.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
 shape|meshes/x.nif|<root>/mods/PGP|3|cylinder_1|BSTriShape|1|0|2185233155|32785|9:textures/white.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
 shape|meshes/x.nif|<root>/mods/PGP|9|cylinder_2|BSTriShape|1|0|2185233155|32785|9:textures/gray.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
-tex_copy|textures/a/a_d.dds|<root>/mods/A|4|1
-tex_copy|textures/a/a_d.dds|<root>/mods/B|4|1
-tex_copy|textures/bsa/b_d.dds|<root>/mods/A/Foo.bsa|4|1
 tex_raw|meshes/multi.nif|<root>/mods/A|3|0|x.dds|4
 tex_raw|meshes/multi.nif|<root>/mods/A|3|1|y.jpeg|12
 tex_raw|meshes/multi.nif|<root>/mods/A|3|7|Z/q.dds|4
@@ -212,9 +209,6 @@ shape|meshes/x.nif|<root>/mods/B|3|cylinder_1|BSTriShape|1|0|2185233155|32785|9:
 shape|meshes/x.nif|<root>/mods/B|9|cylinder_2|BSTriShape|1|0|2185233155|32785|9:textures/gray.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
 shape|meshes/x.nif|<root>/mods/PGP|3|cylinder_1|BSTriShape|1|0|2185233155|32785|9:textures/white.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
 shape|meshes/x.nif|<root>/mods/PGP|9|cylinder_2|BSTriShape|1|0|2185233155|32785|9:textures/gray.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
-tex_copy|textures/a/a_d.dds|<root>/mods/A|4|1
-tex_copy|textures/a/a_d.dds|<root>/mods/B|4|1
-tex_copy|textures/bsa/b_d.dds|<root>/mods/A/Foo.bsa|4|1
 tex_raw|meshes/multi.nif|<root>/mods/A|3|0|x.dds|4
 tex_raw|meshes/multi.nif|<root>/mods/A|3|1|y.jpeg|12
 tex_raw|meshes/multi.nif|<root>/mods/A|3|7|Z/q.dds|4
@@ -333,8 +327,6 @@ shape|meshes/x.nif|<root>/mods/B|3|cylinder_1|BSTriShape|1|0|2185233155|32785|9:
 shape|meshes/x.nif|<root>/mods/B|9|cylinder_2|BSTriShape|1|0|2185233155|32785|9:textures/gray.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
 shape|meshes/x.nif|<root>/mods/PGP|3|cylinder_1|BSTriShape|1|0|2185233155|32785|9:textures/white.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
 shape|meshes/x.nif|<root>/mods/PGP|9|cylinder_2|BSTriShape|1|0|2185233155|32785|9:textures/gray.dds,-,-,-,-,-,-,-,-|NULL|NULL|{"uv_offset":[0.0,0.0],"uv_scale":[1.0,1.0],"emissive_color":[0.0,0.0,0.0],"emissive_multiple":1.0,"texture_clamp_mode":3,"alpha":1.0,"refraction_strength":0.0,"glossiness":20.0,"specular_color":[1.0,1.0,1.0],"specular_strength":1.0,"lighting_effect_1":0.3,"lighting_effect_2":2.0,"trailer":"None"}|1|1600890815710218|0|0
-tex_copy|textures/a/a_d.dds|<root>/mods/A|4|1
-tex_copy|textures/bsa/b_d.dds|<root>/mods/A/Foo.bsa|4|1
 tex_raw|meshes/multi.nif|<root>/mods/A|3|0|x.dds|4
 tex_raw|meshes/multi.nif|<root>/mods/A|3|1|y.jpeg|12
 tex_raw|meshes/multi.nif|<root>/mods/A|3|7|Z/q.dds|4
