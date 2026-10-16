@@ -176,6 +176,8 @@ fn bad_files_entries_are_config_errors_and_user_config_files_are_rejected() {
     };
     assert!(config_err("[files.\"x.png\"]\ncolour = \"srgb\"\n").contains("x.png"));
     assert!(config_err("[files.\"x.png\"]\nallow = [\"NOT-A-CODE\"]\n").contains("NOT-A-CODE"));
+    // Audit REPORT #8 (Note BC): a non-finite number is refused, not ignored.
+    assert!(config_err("[files.\"x.png\"]\nalpha.threshold = nan\n").contains("finite"));
     let d = fixture("");
     let user = d.path().join("user.toml");
     std::fs::write(&user, "[files.\"a.png\"]\nalpha.threshold = 90\n").unwrap();
@@ -314,4 +316,39 @@ fn files_entries_beat_rules_and_drop_rules_for_another_subtype() {
     let j = job(&p, "landscape/rock01.dds");
     assert_eq!(j.profile.alpha.threshold, 100);
     assert_eq!(prov(j, "alpha.threshold"), "project_file");
+}
+
+/// Audit REPORT #7 (Note BC): a config rule glob or a file-scoped override built without `parse_set` (the GUI) that
+/// does not compile stops the plan before any work.
+#[test]
+fn a_glob_that_does_not_compile_stops_the_plan() {
+    let d =
+        fixture("[[rules]]\nmatch = { glob = \"**/[x\" }\noverrides = { mips = { levels = 2 } }\n");
+    match plan_events(req(&d)).0 {
+        Err(EngineError::Config(m)) => assert!(m.contains("glob"), "{m}"),
+        other => panic!("expected a config error, got {:?}", other.map(|_| ())),
+    }
+    let d = fixture("");
+    let mut r = req(&d);
+    r.overrides.push(engine::overrides::SetOverride {
+        scope: engine::overrides::Scope::File("**/[x".into()),
+        field: "format".into(),
+        value: serde_json::json!("bc1"),
+    });
+    match plan_events(r).0 {
+        Err(EngineError::Usage(m)) => assert!(m.contains("glob"), "{m}"),
+        other => panic!("expected a usage error, got {:?}", other.map(|_| ())),
+    }
+}
+
+/// Audit EC-4 (Note BC): a config rule that sets the sub-type in `overrides` stops the plan.
+#[test]
+fn a_config_rule_override_of_the_subtype_stops_the_plan() {
+    let d = fixture(
+        "[[rules]]\nmatch = { suffix = \"n\" }\noverrides = { subtype = \"pbr_normal\" }\n",
+    );
+    match plan_events(req(&d)).0 {
+        Err(EngineError::Config(m)) => assert!(m.contains("not in overrides"), "{m}"),
+        other => panic!("expected a config error, got {:?}", other.map(|_| ())),
+    }
 }

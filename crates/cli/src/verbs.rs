@@ -32,6 +32,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// `println!` to stdout that ignores write errors: a reader that closes the pipe early (`| head -n1`) is not a
+/// crash (audit REPORT #1, Note BC). The engine's JSON sink ignores them the same way.
+macro_rules! out {
+    ($($t:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout().lock(), $($t)*);
+    }};
+}
+
+/// [`out!`] without the newline (`print!`).
+macro_rules! out_raw {
+    ($($t:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stdout().lock(), $($t)*);
+    }};
+}
+
 /// Formats whose decoded RGBA carries a meaningful alpha channel.
 fn carries_alpha(f: DdsPixelFormat) -> bool {
     use DdsPixelFormat::*;
@@ -129,9 +146,9 @@ fn pct(n: u64, of: u64) -> String {
 }
 
 fn print_dds_info(v: &Value) {
-    println!("{}", v["path"].as_str().unwrap_or(""));
+    out!("{}", v["path"].as_str().unwrap_or(""));
     if let Some(e) = v["error"].as_str() {
-        println!("  cannot be read: {e}");
+        out!("  cannot be read: {e}");
         return;
     }
     let srgb = match v["srgb"].as_bool() {
@@ -139,7 +156,7 @@ fn print_dds_info(v: &Value) {
         Some(false) => " unorm",
         None => "",
     };
-    println!(
+    out!(
         "  format {}{srgb}  {}x{}  {} mips  {} header  cubemap {}",
         v["format"].as_str().unwrap_or(""),
         v["width"],
@@ -149,7 +166,7 @@ fn print_dds_info(v: &Value) {
         v["cubemap"]
     );
     for issue in v["header_issues"].as_array().into_iter().flatten() {
-        println!("  header issue: {}", issue.as_str().unwrap_or(""));
+        out!("  header issue: {}", issue.as_str().unwrap_or(""));
     }
     for (i, m) in v["mips"].as_array().into_iter().flatten().enumerate() {
         let alpha = match serde_json::from_value::<AlphaStats>(m["alpha"].clone()) {
@@ -165,7 +182,7 @@ fn print_dds_info(v: &Value) {
                 .map(|e| format!("  decode failed: {e}"))
                 .unwrap_or_default(),
         };
-        println!("  mip {i} {}x{}{alpha}", m["width"], m["height"]);
+        out!("  mip {i} {}x{}{alpha}", m["width"], m["height"]);
     }
 }
 
@@ -198,7 +215,7 @@ fn print_rnm(job: &ResolvedJob) {
         let mask = inputs.iter().find(|(_, k)| *k == format!("{role}.mask"));
         let ao = inputs.iter().find(|(_, k)| k.starts_with("bent.ao"));
         let ao = ao.filter(|_| *role == "bent");
-        println!(
+        out!(
             "  rnm {role} {} strength {}{}{}",
             name(f),
             spec.layer(l.id).strength,
@@ -211,17 +228,17 @@ fn print_rnm(job: &ResolvedJob) {
 }
 
 fn print_planned(job: &ResolvedJob) {
-    println!("{}", job.input.display());
+    out!("{}", job.input.display());
     match job.suggestions.first() {
-        Some(g) => println!(
+        Some(g) => out!(
             "  suggested {} ({} confidence: {})",
             g.subtype.id(),
             tag!(&g.confidence),
             g.reason
         ),
-        None => println!("  no suggestion"),
+        None => out!("  no suggestion"),
     }
-    println!(
+    out!(
         "  sub-type {}  format {}  tag {}  alpha {}  output {}",
         job.profile.subtype.id(),
         tag!(&job.profile.format),
@@ -240,10 +257,10 @@ fn print_planned(job: &ResolvedJob) {
         .ok()
         .and_then(|v| v["state"].as_str().map(str::to_owned))
         .unwrap_or_else(|| "-".into());
-    println!("  status {state} {}", detail.join("; "));
+    out!("  status {state} {}", detail.join("; "));
     print_rnm(job);
     for w in &job.warnings {
-        println!("  {} {} {}", tag!(&w.severity), w.code.as_str(), w.message);
+        out!("  {} {} {}", tag!(&w.severity), w.code.as_str(), w.message);
     }
 }
 
@@ -257,14 +274,14 @@ fn print_event(ev: &EngineEvent) {
             kind: SkipKind::PackedSource,
             ..
         } => {}
-        EventKind::FileSkipped { code, reason, .. } => println!(
+        EventKind::FileSkipped { code, reason, .. } => out!(
             "{path}\n  skipped {}{reason}",
             code.map(|c| format!("{} ", c.as_str())).unwrap_or_default()
         ),
-        EventKind::FileFailed { error, .. } => println!("{path}\n  cannot be read: {error}"),
+        EventKind::FileFailed { error, .. } => out!("{path}\n  cannot be read: {error}"),
         // A batch-level warning (CFG-PRESET-SKIPPED).
         EventKind::Warning(w) => {
-            println!("{} {} {}", tag!(&w.severity), w.code.as_str(), w.message)
+            out!("{} {} {}", tag!(&w.severity), w.code.as_str(), w.message)
         }
         EventKind::SetResolved {
             recipes,
@@ -276,9 +293,9 @@ fn print_event(ev: &EngineEvent) {
                 .as_ref()
                 .map(|p| format!("  shader {} ({})", p.shader.id(), p.provenance))
                 .unwrap_or_default();
-            println!("set {}{shown}", ev.set.as_deref().unwrap_or(""));
+            out!("set {}{shown}", ev.set.as_deref().unwrap_or(""));
             for w in warnings {
-                println!("  {} {} {}", tag!(&w.severity), w.code.as_str(), w.message);
+                out!("  {} {} {}", tag!(&w.severity), w.code.as_str(), w.message);
             }
             for r in recipes {
                 let status = serde_json::to_value(r.status)
@@ -290,14 +307,14 @@ fn print_event(ev: &EngineEvent) {
                     .as_deref()
                     .map(|x| format!(": {x}"))
                     .unwrap_or_default();
-                println!("  pack {} ({}) {status}{reason}", r.output, r.subtype.id());
+                out!("  pack {} ({}) {status}{reason}", r.output, r.subtype.id());
                 let channels: Vec<String> = ["R", "G", "B", "A"]
                     .iter()
                     .zip(&r.channels)
                     .filter(|(_, p)| !p.is_empty())
                     .map(|(c, p)| format!("{c} {p}"))
                     .collect();
-                println!("    {}", channels.join("  "));
+                out!("    {}", channels.join("  "));
             }
         }
         _ => {}
@@ -398,7 +415,7 @@ pub fn inspect(a: InspectArgs) -> Result<i32, EngineError> {
         unreadable += u32::from(matches!(info, DdsInfo::Unreadable(_)));
         let v = serde_json::to_value(&info).unwrap_or(Value::Null);
         if json {
-            println!("{v}");
+            out!("{v}");
         } else {
             print_dds_info(&v);
         }
@@ -591,7 +608,7 @@ fn say(json: bool, line: String) {
     if json {
         eprintln!("{line}");
     } else {
-        println!("{line}");
+        out!("{line}");
     }
 }
 
@@ -654,7 +671,7 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
                         passed: false,
                         error: e,
                     });
-                    println!("{}", json_line(&rec));
+                    out!("{}", json_line(&rec));
                 }
                 unreadable += 1;
                 continue;
@@ -740,7 +757,7 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
                 summary: report.summary,
                 warnings: report.warnings,
             });
-            println!("{}", json_line(&rec));
+            out!("{}", json_line(&rec));
         }
         failed += u32::from(!passed);
         not_judged += u32::from(passed && !judged);
@@ -789,7 +806,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
         PresetsCmd::List { json } => {
             for p in reg.selectable() {
                 if json {
-                    println!(
+                    out!(
                         "{}",
                         json!({
                             "id": p.id, "version": p.version, "target": p.target,
@@ -805,7 +822,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                     let aliases = alias_list(&p.suffix_aliases)
                         .map(|a| format!("  aliases: {a}"))
                         .unwrap_or_default();
-                    println!(
+                    out!(
                         "{:<18} {:<8} {:<8} {}{aliases}{from}",
                         p.id,
                         p.version,
@@ -838,7 +855,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                 None => Subtype::ALL.to_vec(),
             };
             if let Some(a) = alias_list(&preset.suffix_aliases) {
-                println!("suffix aliases: {a}");
+                out!("suffix aliases: {a}");
             }
             for st in subtypes {
                 let profile = reg.profile(&id, target, st).map_err(usage)?;
@@ -851,7 +868,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                     }
                 }
                 let shown = json!({ "subtype": st, "profile": profile, "provenance": prov });
-                println!(
+                out!(
                     "{}",
                     serde_json::to_string_pretty(&shown).unwrap_or_default()
                 );
@@ -903,12 +920,12 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                 }
             }
             if json {
-                println!("{}", Value::Array(rows));
+                out!("{}", Value::Array(rows));
             } else if rows.is_empty() {
-                println!("no differences");
+                out!("no differences");
             } else {
                 for r in &rows {
-                    println!(
+                    out!(
                         "{}.{}: {} \u{2192} {}",
                         r["subtype"].as_str().unwrap_or_default(),
                         r["field"].as_str().unwrap_or_default(),
@@ -918,7 +935,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                 }
             }
             if !json {
-                println!("(rules are not compared)");
+                out!("(rules are not compared)");
             }
             Ok(0)
         }
@@ -934,9 +951,9 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                 )));
             }
             match out {
-                Some(p) => std::fs::write(&p, &text)
+                Some(p) => engine::dds::write_atomic(&p, text.as_bytes())
                     .map_err(|e| EngineError::Fatal(format!("{}: {e}", p.display())))?,
-                None => print!("{text}"),
+                None => out_raw!("{text}"),
             }
             Ok(0)
         }
@@ -945,10 +962,10 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
             for f in &files {
                 let problems = reg.validate_file(f);
                 if problems.is_empty() {
-                    println!("ok {}", f.display());
+                    out!("ok {}", f.display());
                 }
                 for p in &problems {
-                    println!("{}: {p}", f.display());
+                    out!("{}: {p}", f.display());
                 }
                 bad |= !problems.is_empty();
             }
@@ -959,7 +976,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                 (SchemaKind::All, Some(dir)) => {
                     engine::schemas::write_all(&dir)
                         .map_err(|e| EngineError::Fatal(format!("{}: {e}", dir.display())))?;
-                    println!(
+                    out!(
                         "wrote {} schemas to {}",
                         SchemaKind::FILES.len(),
                         dir.display()
@@ -977,9 +994,9 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                             )
                         })
                         .map_err(|e| EngineError::Fatal(format!("{}: {e}", dir.display())))?;
-                    println!("wrote {} to {}", kind.file_name(), dir.display());
+                    out!("wrote {} to {}", kind.file_name(), dir.display());
                 }
-                (kind, None) => print!("{}", engine::schemas::schema_json(kind)),
+                (kind, None) => out_raw!("{}", engine::schemas::schema_json(kind)),
             }
             Ok(0)
         }
@@ -1026,7 +1043,7 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
         Err(why) => (None, Some(why.clone())),
     };
     if a.json {
-        println!(
+        out!(
             "{}",
             json!({
                 "kind": "encoders",
@@ -1041,33 +1058,33 @@ pub fn encoders(a: EncodersArgs) -> Result<i32, EngineError> {
         );
         return Ok(0);
     }
-    println!(
+    out!(
         "bc7e (bc7enc_rdo {}) patch {}",
         v.bc7enc_rdo,
         v.bc7e_patch.as_deref().unwrap_or("none")
     );
-    println!(
+    out!(
         "rgbcx (bc7enc_rdo {}) patch {}",
         v.bc7enc_rdo,
         v.rgbcx_patch.as_deref().unwrap_or("none")
     );
-    println!("ISPC Texture Compressor {} (BC6H)", v.ispctc);
-    println!("ISPC {} objects; dispatched ISA on this CPU: {isa}", v.ispc);
-    println!("BC1 decoder model: {model}");
+    out!("ISPC Texture Compressor {} (BC6H)", v.ispctc);
+    out!("ISPC {} objects; dispatched ISA on this CPU: {isa}", v.ispc);
+    out!("BC1 decoder model: {model}");
     match (&tool, nvtt_path) {
-        (Some(t), Some(p)) if t.tested() => println!("NVTT: {} at {p} (tested)", t.version),
-        (Some(t), Some(p)) => println!(
+        (Some(t), Some(p)) if t.tested() => out!("NVTT: {} at {p} (tested)", t.version),
+        (Some(t), Some(p)) => out!(
             "NVTT: {} at {p} (untested: acknowledge with --allow ENC-NVTT-VERSION)",
             t.version
         ),
-        _ => println!("NVTT: not found ({})", why.unwrap_or_default()),
+        _ => out!("NVTT: not found ({})", why.unwrap_or_default()),
     }
     Ok(0)
 }
 
-/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable or refused, else 0; usage errors are 2
-/// (including `--out-dir` resolving to an input itself, DECISIONS S6). A write failure is exit 3 and stops the
-/// batch; files written before it stay written.
+/// `sdc patch-header` (DECISIONS S7). Exit 1 when a file is unreadable, refused or fails to write, else 0; usage
+/// errors are 2 (including `--out-dir` resolving to an input itself, DECISIONS S6). A failed write does not stop
+/// the batch: the other files are still patched (audit 2026-10-15 item 10).
 pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
     if let Some(p) = a.dds.iter().find(|p| p.is_dir()) {
         return Err(EngineError::Usage(format!(
@@ -1129,13 +1146,13 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(e) => {
-                println!("{shown}: unreadable: {e}");
+                out!("{shown}: unreadable: {e}");
                 exit = 1;
                 continue;
             }
         };
         match plan_patch(&bytes, &req) {
-            Ok(None) => println!("{shown}: header already valid; nothing to patch"),
+            Ok(None) => out!("{shown}: header already valid; nothing to patch"),
             Ok(Some(p)) => {
                 if !a.dry_run {
                     let out = match &a.out_dir {
@@ -1144,18 +1161,18 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
                     };
                     // Audit 2026-10-15 item 10: one failed write does not stop the batch.
                     if let Err(e) = engine::dds::write_atomic(&out, &p.bytes) {
-                        println!("{shown}: write failed: {e}");
+                        out!("{shown}: write failed: {e}");
                         exit = 1;
                         continue;
                     }
                 }
                 // After the write, so a failed write never reads as patched.
                 let w = p.warning();
-                println!("{shown}: {}: {}", w.code.as_str(), w.message);
+                out!("{shown}: {}: {}", w.code.as_str(), w.message);
             }
             Err(u) => {
                 let w = u.warning();
-                println!("{shown}: {}: {}", w.code.as_str(), w.message);
+                out!("{shown}: {}: {}", w.code.as_str(), w.message);
                 exit = 1;
             }
         }

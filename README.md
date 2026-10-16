@@ -6,7 +6,7 @@
 
 ---
 
-Tessalith converts a folder of source images for Skyrim SE/AE. It works out what each file is from its name, groups files into material sets, packs loose maps into Skyrim's layouts, builds the mips and picks the format and colour tag each shader needs. The GUI (`tessalith.exe`) and the CLI (`sdc`) share one engine and one per-project `sdc.toml`, so both write the same bytes. Targets: `cs` (Community Shaders with TruePBR; default) and `vanilla` (which also packs the complex-material `_m` for a set given the complex material shader). It is for making new textures, not for fixing an installed game folder. Windows x64. Version 0.7.0. GPL-3.0-or-later.
+Tessalith converts a folder of source images for Skyrim SE/AE. It works out what each file is from its name, groups files into material sets, packs loose maps into Skyrim's layouts, builds the mips and picks the format and colour tag each shader needs. The GUI (`tessalith.exe`) and the CLI (`sdc`) share one engine and one per-project `sdc.toml`, so both write the same bytes. Targets: `cs` (Community Shaders with TruePBR; default) and `vanilla` (which also packs the complex-material `_m` for a set given the complex material shader). It is for making new textures, not for fixing an installed game folder. Windows x64. Version 0.8.0 (see the [CHANGELOG](CHANGELOG.md)). GPL-3.0-or-later.
 
 ## Feature comparison
 
@@ -92,6 +92,24 @@ sdc validate out\textures\armor\iron\iron_n.dds --target cs
 ```
 
 Exit codes: 0 done, 1 some files failed or were skipped, 2 usage or config error, 3 fatal, 4 validation failed.
+
+**Unsigned exe.** The release exes are not code-signed, so Windows SmartScreen may warn on first run. Click **More info**, then **Run anyway**. This is an alpha: back up your mod folders first.
+
+## Where your data lives
+
+| What | Where |
+|---|---|
+| GUI settings | `%APPDATA%\sdc\gui.toml` |
+| CLI/GUI user config | `%APPDATA%\sdc\config.toml` |
+| User presets | `%APPDATA%\sdc\presets\` |
+| Mod scan database | `%LOCALAPPDATA%\sdc\scan.db` |
+| GUI crash logs | `%LOCALAPPDATA%\sdc\logs\crash-<date>-<time>.log` (the CLI writes none) |
+| Per-folder settings | `sdc.toml` and `sdc-project.toml` in the folder you convert |
+| Unsaved edits after a crash | `sdc.toml.recovery`, `sdc-project.toml.recovery`, beside the original |
+
+## Known issues and changes
+
+See [Known issues](docs/wiki/Known-Issues.md) and the [CHANGELOG](CHANGELOG.md).
 
 ## Documentation
 

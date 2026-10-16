@@ -234,6 +234,8 @@ pub struct SetView {
     pub set_warnings: Vec<Warning>,
     /// F3a Task 8: the locked slot numbers (`SetEntry::lock`).
     pub locks: BTreeSet<u8>,
+    /// The engine's recipe reports for this set (`SetItem::recipes`), read by the Sets column pill.
+    pub recipes: Vec<engine::events::RecipeReport>,
 }
 
 impl SetView {
@@ -257,6 +259,7 @@ impl SetView {
             shader_choice: None,
             set_warnings: vec![],
             locks: BTreeSet::new(),
+            recipes: vec![],
         }
     }
 }
@@ -471,6 +474,7 @@ fn build_views(m: &AppModel) -> Vec<SetView> {
             let mut v = SetView::new(s.key.clone(), set_id(&root, &s.key), s.members.clone());
             v.shader = s.shader.clone();
             v.set_warnings = s.warnings.clone();
+            v.recipes = s.recipes.clone();
             for mk in &s.members {
                 if let Some(slot) = m.item(mk).and_then(slot_of) {
                     v.slots

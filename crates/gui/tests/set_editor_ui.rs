@@ -807,14 +807,14 @@ fn a_filled_fuzz_slot_greys_the_coat_normal_switch() {
 
 /// F1 spec §4: the drawer no longer shows PGPatcher keys; they are in the TruePBR box.
 #[test]
-fn the_header_has_the_json_name_and_the_drawer_has_no_pgpatcher_keys() {
+fn the_header_has_the_json_editor_and_the_drawer_has_no_pgpatcher_keys() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     rock_selected(&mut m);
     m.settings.advanced_open = true;
     let mut h = harness(m);
     h.run();
-    h.get_by_label("JSON:");
+    h.get_by_label(sdc_gui::ui::header::JSON_EDITOR);
     assert!(h.query_by_label_contains("PGPatcher (advanced)").is_none());
     h.get_by_label("Advanced TruePBR settings");
 }

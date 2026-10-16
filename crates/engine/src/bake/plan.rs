@@ -91,32 +91,67 @@ fn member_file<'a>(
 fn sibling_outside(
     beside: &Path,
     want: fn(&str) -> bool,
-    batch: &BTreeSet<PathBuf>,
+    outside: &Outside,
     aliases: &BTreeMap<String, String>,
 ) -> Option<(PathBuf, bool)> {
     let (base, _) = base_and_suffix(beside, aliases)?;
-    let dir = beside.parent()?;
-    let mut hits: Vec<(PathBuf, bool)> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && !batch.contains(p))
-        .filter_map(|p| {
-            let ext = p.extension()?.to_string_lossy().to_ascii_lowercase();
-            let dds = ext == "dds";
-            if !dds && !IMAGE_EXTS.contains(&ext.as_str()) {
-                return None;
-            }
-            let (b, s) = base_and_suffix(&p, aliases)?;
-            (b.eq_ignore_ascii_case(&base) && s.as_deref().is_some_and(want)).then_some((p, dds))
+    let listed = outside.files_in(beside.parent()?);
+    let mut hits: Vec<&(PathBuf, bool)> = listed
+        .iter()
+        .filter(|(p, _)| {
+            base_and_suffix(p, aliases).is_some_and(|(b, s)| {
+                b.eq_ignore_ascii_case(&base) && s.as_deref().is_some_and(want)
+            })
         })
         .collect();
     hits.sort();
-    hits.into_iter().next()
+    hits.first().map(|&h| h.clone())
+}
+
+/// One folder's files outside the batch: `(path, is_dds)`.
+type Listing = std::rc::Rc<Vec<(PathBuf, bool)>>;
+
+/// The batch's paths and, per folder, the image and DDS files in it that the batch does not hold, each folder read
+/// once per plan (audit #6, Note BC): a flat folder of thousands of half-finished PBR sets used to be listed, and
+/// every entry stat'd, once per set.
+struct Outside {
+    batch: BTreeSet<PathBuf>,
+    dirs: std::cell::RefCell<BTreeMap<PathBuf, Listing>>,
+}
+
+impl Outside {
+    fn files_in(&self, dir: &Path) -> Listing {
+        let mut dirs = self.dirs.borrow_mut();
+        dirs.entry(dir.to_path_buf())
+            .or_insert_with(|| {
+                let Ok(rd) = std::fs::read_dir(dir) else {
+                    return Default::default();
+                };
+                std::rc::Rc::new(
+                    rd.filter_map(Result::ok)
+                        .filter_map(|e| {
+                            let p = e.path();
+                            if self.batch.contains(&p) {
+                                return None;
+                            }
+                            let ext = p.extension()?.to_string_lossy().to_ascii_lowercase();
+                            let dds = ext == "dds";
+                            if !dds && !IMAGE_EXTS.contains(&ext.as_str()) {
+                                return None;
+                            }
+                            // The entry's type is free; only a link is followed with a stat.
+                            let t = e.file_type().ok()?;
+                            (t.is_file() || (t.is_symlink() && p.is_file())).then_some((p, dds))
+                        })
+                        .collect(),
+                )
+            })
+            .clone()
+    }
 }
 
 /// Why a roughness member has no `_n` to bake from (spec §6.3, DECISIONS R8).
-fn missing_normal(cx: &BakeCtx, set: &TextureSet, batch: &BTreeSet<PathBuf>, j: &mut ResolvedJob) {
+fn missing_normal(cx: &BakeCtx, set: &TextureSet, outside: &Outside, j: &mut ResolvedJob) {
     if let Some(f) = member_file(cx, set, InputKind::Image, is_normal_suffix) {
         let msg = format!(
             "the set's _n ({}) has no pbr_normal job (it failed, was cancelled, is a duplicate or was given another sub-type): the roughness is written without the variance bake",
@@ -133,7 +168,7 @@ fn missing_normal(cx: &BakeCtx, set: &TextureSet, batch: &BTreeSet<PathBuf>, j: 
         note(j, Code::SetCompanionDds, msg, Some(&f.path));
         return;
     }
-    match sibling_outside(&j.input, is_normal_suffix, batch, cx.aliases) {
+    match sibling_outside(&j.input, is_normal_suffix, outside, cx.aliases) {
         Some((p, true)) => {
             let msg = format!(
                 "the set's _n is only a DDS ({}) and is not in this batch: the roughness is written without the variance bake",
@@ -178,12 +213,7 @@ fn missing_borrowed_normal(cx: &BakeCtx, owner: &TextureSet, j: &mut ResolvedJob
 }
 
 /// Why a `pbr_normal` has no roughness member to bake into (spec §6.3, DECISIONS R8).
-fn missing_roughness(
-    cx: &BakeCtx,
-    set: &TextureSet,
-    batch: &BTreeSet<PathBuf>,
-    j: &mut ResolvedJob,
-) {
+fn missing_roughness(cx: &BakeCtx, set: &TextureSet, outside: &Outside, j: &mut ResolvedJob) {
     if let Some(f) = member_file(cx, set, InputKind::Dds, is_roughness_suffix) {
         let msg = format!(
             "the set's roughness member is only a DDS ({}): DDS members do not bake, so the normal is renormalised only",
@@ -192,7 +222,7 @@ fn missing_roughness(
         note(j, Code::SetCompanionDds, msg, Some(&f.path));
         return;
     }
-    match sibling_outside(&j.input, is_roughness_suffix, batch, cx.aliases) {
+    match sibling_outside(&j.input, is_roughness_suffix, outside, cx.aliases) {
         Some((p, true)) => {
             let msg = format!(
                 "the set's roughness member is only a DDS ({}) and is not in this batch: the normal is renormalised only",
@@ -333,7 +363,10 @@ fn roughness_members(jobs: &[ResolvedJob], key: &str) -> Vec<usize> {
 /// the `_n`'s `mips.normal = renormalize_bake` with provenance `set`, and appends the `SET-*` codes to the jobs they
 /// concern. Returns the keys of the sets that bake (`set_resolved.bake`).
 pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
-    let batch: BTreeSet<PathBuf> = cx.files.iter().map(|f| f.path.clone()).collect();
+    let outside = Outside {
+        batch: cx.files.iter().map(|f| f.path.clone()).collect(),
+        dirs: Default::default(),
+    };
     let mut baking = BTreeSet::new();
     // DECISIONS Note R M4-final-1: the `_n` jobs that a borrower set with a roughness member of its own uses. Such an
     // `_n` reports no missing roughness in its own set, whether the borrower bakes or is shared (R7).
@@ -390,13 +423,13 @@ pub fn plan_bakes(cx: &BakeCtx, jobs: &mut [ResolvedJob]) -> BTreeSet<String> {
                 }
                 None => {
                     for &m in &members {
-                        missing_normal(cx, set, &batch, &mut jobs[m]);
+                        missing_normal(cx, set, &outside, &mut jobs[m]);
                     }
                 }
             },
             (Some(n), true) => {
                 if owner.is_none() && !lent.contains(&n) {
-                    missing_roughness(cx, set, &batch, &mut jobs[n]);
+                    missing_roughness(cx, set, &outside, &mut jobs[n]);
                 }
             }
             (Some(n), false) => {

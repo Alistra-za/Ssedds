@@ -104,16 +104,18 @@ pub fn panel(ctx: &egui::Context, model: &mut AppModel) {
     }
 }
 
-/// The header button: "Messages", or "Messages (3)" with the unread count.
-pub fn button(ui: &mut egui::Ui, model: &mut AppModel) {
-    let n = model.messages.unread();
-    let text = if n > 0 {
-        format!("Messages ({n})")
-    } else {
-        "Messages".to_string()
-    };
+/// The Messages button's text: "Messages", plus the unread count.
+pub fn button_text(model: &AppModel) -> String {
+    match model.messages.unread() {
+        0 => "Messages".to_string(),
+        n => format!("Messages ({n})"),
+    }
+}
+
+/// The header's Messages button, `size` big (Note BH: as wide as Save, stacked on it).
+pub fn button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     if ui
-        .button(text)
+        .add_sized(size, egui::Button::new(button_text(model)))
         .on_hover_text(format!(
             "Notes and results of this session ({})",
             super::actions::keys_text("messages")

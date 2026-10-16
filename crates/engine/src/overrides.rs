@@ -292,11 +292,25 @@ fn parse_value(raw: &str) -> Value {
     }
 }
 
+/// Whether `v` holds a null: TOML's `inf`, `-inf` and `nan` convert to JSON null, which the merge ignores, so a
+/// setting typed that way would silently do nothing (audit #8, Note BC).
+pub(crate) fn non_finite(v: &Value) -> bool {
+    match v {
+        Value::Null => true,
+        Value::Array(a) => a.iter().any(non_finite),
+        Value::Object(o) => o.values().any(non_finite),
+        _ => false,
+    }
+}
+
 pub fn parse_set(s: &str) -> Result<SetOverride, String> {
     let (key, raw) = s
         .split_once('=')
         .ok_or_else(|| format!("--set '{s}': expected <field>=<value>"))?;
     let value = parse_value(raw.trim());
+    if non_finite(&value) {
+        return Err(format!("--set '{s}': not a finite number"));
+    }
     let known = |f: &str| FIELD_PATHS.contains(&f);
     let (scope, field) = if let Some(rest) = key.strip_prefix("subtype:") {
         let (id, field) = rest
@@ -353,6 +367,7 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
             .max_by_key(|f| f.len())
             .ok_or_else(|| format!("--set '{s}': expected file:<glob>.<field>"))?;
         let glob = &rest[..rest.len() - field.len() - 1];
+        crate::policy::compile_glob(glob).map_err(|e| format!("--set '{s}': {e}"))?;
         (Scope::File(glob.to_string()), *field)
     } else if known(key) {
         (Scope::All, key)

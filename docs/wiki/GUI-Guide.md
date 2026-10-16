@@ -10,19 +10,18 @@ The window has two views, picked in the header: the Textures view (converter and
 |---|---|
 | **Open folder…** | Pick a source folder. You can also drag a folder onto the window; a dropped file opens the folder that holds it. |
 | **Recent** | The last ten folders. |
-| **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. |
+| **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Framed together with **MO2…**. |
 | **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. |
 | **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. |
 | **Presets…** | The preset creator (see [Presets](#presets)). |
-| **Textures view** / **Meshes view** | Switch views. |
-| **Textures column**, **Sets column** | Show or hide each column. |
-| **Export** | Convert the folder. |
+| **Textures view** / **Meshes view** | Switch views. Tabs on the bottom row; the selected one is filled. |
+| **Textures column**, **Sets column** | Show or hide each column. At the far left of the bottom row. |
+| **Export** | Convert the folder. The big button at the right edge, as tall as both rows. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the export drawer). |
 | **Messages** (Ctrl+M) | The last 500 notices, newest first; the button counts the ones you have not seen. |
 | **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
-| **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. |
+| **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Under **Messages**, left of Export. |
 | **Export folder: …** | Where converted textures go. By default `sdc-out` inside the opened folder. |
-| **JSON:** | The name of the TruePBR JSON file. By default the folder name. |
-| **Editor…** | Open the TruePBR JSON editor window. |
+| **PG JSON Editor** | Open the TruePBR JSON editor window (cs mode, with a folder open). The JSON's file name is its top field. |
 
 The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). The **MO2…** header button opens the scan source popup: the MO2 instance with **Choose…**, its profiles, **Scan a folder…** and **Scan** / **Cancel**; the button's hover text names the instance and profile. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
 
@@ -270,11 +269,11 @@ Rules:
 
 ### The JSON file
 
-After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.json`, with `<name>` from the **JSON:** field. Only sets that exported fully are written. If the file exists and is not the one Tessalith wrote last time, you are asked before it is overwritten; a byte-identical file is never prompted. The JSON is written in `cs` mode only.
+After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.json`, with `<name>` from the editor's **JSON name:** field (by default the folder name). Only sets that exported fully are written. If the file exists and is not the one Tessalith wrote last time, you are asked before it is overwritten; a byte-identical file is never prompted. The JSON is written in `cs` mode only.
 
 ### The TruePBR JSON editor
 
-Open it with **Editor…** in the header or from a set's TruePBR box. It is a window of its own, titled "TruePBR JSON — Tessalith".
+Open it with **PG JSON Editor** in the header or from a set's TruePBR box. It is a window of its own, titled "TruePBR JSON — Tessalith". Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
 
 - Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set in the main window), then its keys as small pills with the same controls as the TruePBR box.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.

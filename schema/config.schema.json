@@ -282,12 +282,16 @@
         "packing": {
           "$ref": "#/$defs/PartialPackingSpec"
         },
+        "reencode": {
+          "description": "Re-encode this DDS input (DECISIONS S6).",
+          "type": "boolean"
+        },
         "resize": {
           "$ref": "#/$defs/ResizeMode",
           "description": "Preprocess step 6 (spec §5.4); `pot-down` = largest power of two ≤ each axis, `half` = both axes halved when the larger is above 512 (M6 Track D)."
         },
         "rnm": {
-          "$ref": "#/$defs/PartialRnmSpec",
+          "$ref": "#/$defs/FileRnmSpec",
           "description": "RNM normal layers (M6 Track F2); read only by base normals (`Subtype::rnm_base`)."
         },
         "subtype": {
@@ -295,6 +299,44 @@
         },
         "validation": {
           "$ref": "#/$defs/PartialValidationSpec"
+        }
+      },
+      "type": "object"
+    },
+    "FileRnmSpec": {
+      "additionalProperties": false,
+      "description": "RNM normal layers (M6 Track F2 spec §4). A field of every profile, read only by base normals (`Subtype::rnm_base`);\nnot serialised at its default, so profile hashes written before F2 hold (DECISIONS Note W6).",
+      "properties": {
+        "bent": {
+          "$ref": "#/$defs/PartialBentSpec"
+        },
+        "bump": {
+          "$ref": "#/$defs/PartialLayerSpec"
+        },
+        "bump2": {
+          "$ref": "#/$defs/PartialLayerSpec"
+        },
+        "detail": {
+          "$ref": "#/$defs/PartialLayerSpec"
+        },
+        "detail2": {
+          "$ref": "#/$defs/PartialLayerSpec"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "description": "Blend order; see [`RnmSpec::effective_order`].",
+          "items": {
+            "$ref": "#/$defs/LayerId"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/RnmTarget"
         }
       },
       "type": "object"
@@ -1127,6 +1169,15 @@
         }
       },
       "type": "object"
+    },
+    "RnmTarget": {
+      "description": "Which base normal a layer file feeds (F2 spec §2.3): `n` (`_n`), `cnr` (`_cnr`) or both.",
+      "enum": [
+        "n",
+        "cnr",
+        "both"
+      ],
+      "type": "string"
     },
     "Rule": {
       "additionalProperties": false,

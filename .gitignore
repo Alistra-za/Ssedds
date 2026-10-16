@@ -5,3 +5,7 @@ target/
 _sdc/
 *.tmp
 /sdc-out/
+*.recovery
+/dist/Tessalith-*/
+/dist/*.zip
+/dist/SHA256SUMS.txt
