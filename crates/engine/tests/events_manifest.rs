@@ -624,3 +624,74 @@ fn manifest_records_pass_the_migration_hook() {
     assert_eq!(e["b.dds"].raw["x"], 1);
     assert!(!e.contains_key("c.dds"));
 }
+
+/// A manifest of at least `min_bytes` alternating two keys (`a.dds` with source "1", `b.dds` with "2").
+fn stale_manifest(m: &Manifest, min_bytes: u64) {
+    let (profile, preset) = cs_quality();
+    let mut pair = vec![];
+    for (out, sha) in [("a.dds", "1"), ("b.dds", "2")] {
+        pair.extend(
+            serde_json::to_vec(&record(out, sha, profile.clone(), preset.clone())).unwrap(),
+        );
+        pair.push(b'\n');
+    }
+    let n = min_bytes as usize / pair.len() + 1;
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    std::fs::write(m.path(), pair.repeat(n)).unwrap();
+}
+
+/// Audit EC-5 (Note BJ): a manifest over 32 MB with more than 3 lines per entry is rewritten on load to one line per
+/// entry, and loads the same records afterwards.
+#[test]
+fn a_big_stale_manifest_is_compacted_on_load() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    stale_manifest(&m, COMPACT_MIN_BYTES);
+    let first = m.load().unwrap();
+    assert_eq!(first.len(), 2);
+    let text = std::fs::read_to_string(m.path()).unwrap();
+    assert_eq!(text.lines().count(), 2, "compacted to one line per entry");
+    assert_eq!(m.load().unwrap(), first);
+}
+
+/// A small manifest, however stale, is left as it is.
+#[test]
+fn a_small_stale_manifest_is_not_rewritten() {
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    stale_manifest(&m, 1 << 20);
+    let before = std::fs::read(m.path()).unwrap();
+    assert_eq!(m.load().unwrap().len(), 2);
+    assert_eq!(std::fs::read(m.path()).unwrap(), before);
+}
+
+/// Compaction holds the append lock: a record appended while a big manifest is being loaded is never lost.
+#[test]
+fn an_append_during_compaction_is_kept() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let d = tempfile::tempdir().unwrap();
+    let m = Manifest::at(d.path());
+    stale_manifest(&m, COMPACT_MIN_BYTES);
+    let done = AtomicBool::new(false);
+    let mut appended = 0;
+    let (profile, preset) = cs_quality();
+    std::thread::scope(|s| {
+        let writer = s.spawn(|| {
+            let w = Manifest::at(d.path());
+            // Appends until the load has returned, so some land between its read and its rewrite.
+            let mut n = 0;
+            while n < 20 || !done.load(Ordering::Relaxed) {
+                let r = record(&format!("c{n}.dds"), "3", profile.clone(), preset.clone());
+                w.append(&r).unwrap();
+                n += 1;
+            }
+            n
+        });
+        m.load().unwrap();
+        done.store(true, Ordering::Relaxed);
+        appended = writer.join().unwrap();
+    });
+    let all = m.load().unwrap();
+    assert_eq!(all.len(), 2 + appended);
+    assert_eq!(all["b.dds"].source_sha256, "2");
+}

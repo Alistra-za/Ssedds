@@ -1513,10 +1513,13 @@ pub fn check_profile(
     let mut add = |c: Code, m: String| w.push(Warning::new(c, m));
     // An HDR format (BC6H, RGBA16F) outside cs cannot be acknowledged: an error, added after the other checks.
     let hdr_outside_cs = hdr_outside_cs(p.format, p.target);
-    if !(1..=254).contains(&p.alpha.threshold) {
+    if !ALPHA_THRESHOLD.contains(&p.alpha.threshold) {
         add(
             CfgInvalid,
-            format!("alpha.threshold {} outside 1..=254", p.alpha.threshold),
+            format!(
+                "alpha.threshold {} outside {ALPHA_THRESHOLD:?}",
+                p.alpha.threshold
+            ),
         );
     }
     // M2.5 (spec §6.4): the neutral roughness (0..=1) of the sub-types whose recipe reads it: `_rmaos`/`_rfaos` and

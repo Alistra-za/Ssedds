@@ -318,6 +318,30 @@ fn files_entries_beat_rules_and_drop_rules_for_another_subtype() {
     assert_eq!(prov(j, "alpha.threshold"), "project_file");
 }
 
+/// Audit EC-6 (Note BJ): `presets validate` and the batch share one check, so a preset rule that overrides an
+/// identity field (`target`, which `finish_profile` would silently overwrite) is refused by both.
+#[test]
+fn check_preset_and_the_batch_refuse_the_same_bad_preset() {
+    let d = fixture("");
+    let file = d.path().join("idrule.toml");
+    std::fs::write(
+        &file,
+        "schema_version = 1\nid = \"idrule\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { suffix = \"n\" }\noverrides = { target = \"vanilla\" }\n",
+    )
+    .unwrap();
+    let mut r = engine::presets::PresetRegistry::builtin().unwrap();
+    r.add_file(&file).unwrap();
+    let e = r.check_preset("idrule").unwrap_err().to_string();
+    assert!(e.contains("unknown field 'target'"), "{e}");
+    let mut q = req(&d);
+    q.preset_files = vec![file];
+    q.preset = Some("idrule".into());
+    match plan_events(q).0 {
+        Err(EngineError::Config(m)) => assert!(m.contains("unknown field 'target'"), "{m}"),
+        other => panic!("expected a config error, got {:?}", other.map(|_| ())),
+    }
+}
+
 /// Audit REPORT #7 (Note BC): a config rule glob or a file-scoped override built without `parse_set` (the GUI) that
 /// does not compile stops the plan before any work.
 #[test]

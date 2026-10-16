@@ -689,7 +689,7 @@ fn threshold_row(
     ui.label("Threshold");
     let mut v = p.alpha.threshold;
     if ui
-        .add(egui::DragValue::new(&mut v).range(1..=254))
+        .add(egui::DragValue::new(&mut v).range(engine::config::ALPHA_THRESHOLD))
         .changed()
     {
         acts.push(set(st, scope, "alpha.threshold", json!(v)));

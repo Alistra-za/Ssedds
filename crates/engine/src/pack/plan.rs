@@ -419,6 +419,12 @@ pub fn plan_packing(
     };
     let mut consumed: BTreeSet<PathBuf> = BTreeSet::new();
     let mut heads = vec![];
+    // Audit EP-5 (Note BJ): the waiting raw inputs, collected once; `jobs` does not change until the planning loop.
+    let waiting: BTreeSet<PathBuf> = jobs
+        .iter()
+        .filter(|j| matches!(j.status, JobStatus::PackingInput { .. }))
+        .map(|j| j.input.clone())
+        .collect();
     for set in sets {
         // Raw members still waiting for a recipe: a planned packing input, or one that failed to load or was
         // cancelled before its Load. A raw map whose sub-type a rule or `--set` named is an ordinary file
@@ -428,10 +434,8 @@ pub fn plan_packing(
         for &i in &set.members {
             let f = &files[i];
             let Some(role) = raw_role(f) else { continue };
-            let waiting = jobs
-                .iter()
-                .any(|j| j.input == f.path && matches!(j.status, JobStatus::PackingInput { .. }));
-            if waiting || failed.contains(&f.path) || cancelled.contains(&f.path) {
+            if waiting.contains(&f.path) || failed.contains(&f.path) || cancelled.contains(&f.path)
+            {
                 raw.push(RawInput {
                     path: f.path.clone(),
                     role,

@@ -3,7 +3,7 @@
 //! `RunGrass.hlsl` reads both halves from one view and treats a texture as complex when the decoded bottom-left texel
 //! of mip 0 is a unit vector (`|length(rgb * 2 - 1) - 1| < ComplexGrassThreshold`); ENB is assumed to do the same
 //! (owner ruling 2026-10-12).
-use crate::analyse::code8;
+use crate::analyse::{code8, CS_COMPLEX_GATE_CODE};
 use crate::config::*;
 use crate::coverage::preserve_coverage;
 use crate::image::Rgba32F;
@@ -75,7 +75,7 @@ pub fn facts(img: &Rgba32F) -> Option<GrassFacts> {
     };
     let c = img.px[(h - 1) * w];
     Some(GrassFacts {
-        top_opaque: top.iter().all(|p| code8(p[3]) >= 251),
+        top_opaque: top.iter().all(|p| code8(p[3]) >= CS_COMPLEX_GATE_CODE),
         bottom_unit_share: share(bottom, &|p| unit_err([p[0], p[1], p[2]]) < GRASS_UNIT_TOL),
         corner_err: unit_err([c[0], c[1], c[2]]),
     })

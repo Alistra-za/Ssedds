@@ -3,6 +3,7 @@
 //! `alpha` holds the decoded-alpha statistics used by spike S5 and by Validate.
 pub mod alpha;
 
+use crate::analyse::CS_COMPLEX_GATE_CODE;
 use crate::codes::{Code, Severity, Warning};
 use crate::config::*;
 use crate::coverage::coverage_fraction;
@@ -25,7 +26,7 @@ const COVERAGE_MIN_TEXELS: u32 = 256;
 const COVERAGE_EPS: f64 = 1e-9;
 
 /// CS's complex-material gate, in 8-bit codes: smallest-mip alpha below 251/255 (spike S8).
-const CS_COMPLEX_GATE: f64 = 251.0;
+const CS_COMPLEX_GATE: f64 = CS_COMPLEX_GATE_CODE as f64;
 
 /// Community Shaders' complex-material decision, as read from its Lighting pixel shader in a RenderDoc
 /// capture (spike S8, DECISIONS): it samples the `_m` at LOD 15 (the smallest mip) and
@@ -411,7 +412,11 @@ pub fn validate(inp: &ValidationInput) -> ValidationReport {
             }
             if let Some((_, _, px)) = ldr.first() {
                 let n = px.len().max(1) as f64;
-                let clip = px.iter().filter(|q| q[3] <= 4 || q[3] >= 251).count() as f64 / n;
+                let clip = px
+                    .iter()
+                    .filter(|q| q[3] <= 4 || q[3] >= CS_COMPLEX_GATE_CODE)
+                    .count() as f64
+                    / n;
                 // All texels <= 4 is a deliberate "no parallax" _m (the packed default), not a clipped height.
                 let has_height = px.iter().any(|q| q[3] > 4);
                 if alpha_present && has_height && clip > 0.25 {
