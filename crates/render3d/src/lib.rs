@@ -662,6 +662,11 @@ impl Renderer {
         self.sources.get_debug(Path::new("Lighting.hlsl")).is_ok()
     }
 
+    /// Why the Studio HDRI backdrop could not be made (kept, so it is tried once per renderer), if it could not.
+    pub fn backdrop_error(&self) -> Option<&str> {
+        self.backdrop.as_ref()?.as_ref().err().map(String::as_str)
+    }
+
     /// Timing of the last successful [`Renderer::render`].
     pub fn last_timing(&self) -> FrameTiming {
         self.timing

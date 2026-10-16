@@ -649,6 +649,8 @@ pub enum V3Reply {
         id: u64,
         message: String,
     },
+    /// A one-line problem the viewport shows above the frame (the Studio backdrop could not be made).
+    Notice(String),
     /// `n` features/settings commands are answered, after all the replies they caused (no wake-up otherwise).
     Reconfigured(u64),
     /// The shapes of the loaded `Parsed`/`Builtin` content: after each load and after each batch of edits.
@@ -1670,6 +1672,7 @@ impl Viewport3d {
                     self.timing = Some(timing);
                 }
             }
+            V3Reply::Notice(text) => self.notice = Some(text),
             V3Reply::RenderError { id, message } => {
                 self.render_done = self.render_done.max(id);
                 if self.loaded.is_some() && self.pending_load.is_none() {
@@ -2144,6 +2147,7 @@ fn render_loop(
     let mut view: Option<(Camera, u32, u32, Look)> = None;
     let mut refresh_id: u64 = 1 << 62;
     let mut stats = FrameStats::default();
+    let mut backdrop_told = false;
     let mut last_coverage: Option<String> = None;
     while let Ok(first) = rx.recv() {
         // Dropped at the end of the batch, after every other reply: answers each features/settings command.
@@ -2384,8 +2388,15 @@ fn render_loop(
                 if let Err(e) = rebuild(&mut r, &last, &edits, &tex) {
                     return send(V3Reply::Failed(e));
                 }
+                backdrop_told = false;
                 pump(&mut r);
                 result = r.render(&scene, w, h);
+            }
+        }
+        if !backdrop_told {
+            if let Some(e) = r.backdrop_error() {
+                backdrop_told = true;
+                send(V3Reply::Notice(format!("Studio backdrop unavailable: {e}")));
             }
         }
         match result {
