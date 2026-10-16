@@ -1339,6 +1339,20 @@ impl Store {
              DELETE FROM nif_copy WHERE id IN (SELECT id FROM gone_copy);
              DELETE FROM seen_copy; DELETE FROM gone_copy;",
         )?;
+        // Audit 2026-10-15 item 17: texsets no shape (live or staged) uses, with their tex_use rows. The interner
+        // may hold dropped ids, so it forgets all of them. Orphan `path` rows stay (shortcut: bounded by distinct
+        // paths ever seen; drop them if the store size ever matters).
+        tx.execute_batch(
+            "DELETE FROM tex_use WHERE texset_id NOT IN
+               (SELECT texset_id FROM shape WHERE texset_id IS NOT NULL
+                UNION SELECT texset_id FROM pending_shape WHERE texset_id IS NOT NULL);
+             DELETE FROM texset WHERE id NOT IN
+               (SELECT texset_id FROM shape WHERE texset_id IS NOT NULL
+                UNION SELECT texset_id FROM pending_shape WHERE texset_id IS NOT NULL);",
+        )?;
+        if let Some(i) = &mut self.intern {
+            i.texsets.clear();
+        }
         tx.commit()?;
         Ok(n)
     }
