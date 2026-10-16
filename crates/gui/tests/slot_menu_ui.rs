@@ -102,6 +102,12 @@ fn emptying_the_path_box_leaves_it_empty() {
             .any(|n| n.value().is_some_and(|v| v.contains("white.dds")))
     };
     assert!(has_path(&h), "the box starts with the stored path");
+    let empties = |h: &Harness<'static, AppModel>| {
+        h.query_all_by_role(eframe::egui::accesskit::Role::TextInput)
+            .filter(|n| n.value().as_deref() == Some(""))
+            .count()
+    };
+    let before = empties(&h);
     let boxed = h
         .query_all_by_role(eframe::egui::accesskit::Role::TextInput)
         .find(|n| n.value().is_some_and(|v| v.contains("white.dds")))
@@ -113,4 +119,9 @@ fn emptying_the_path_box_leaves_it_empty() {
     h.run();
     h.run();
     assert!(!has_path(&h), "an emptied box is not refilled");
+    assert_eq!(
+        empties(&h),
+        before + 1,
+        "the box is exactly empty, not left with part of the path"
+    );
 }
