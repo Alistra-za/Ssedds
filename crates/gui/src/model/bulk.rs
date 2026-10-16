@@ -23,6 +23,8 @@ pub struct MultiSelection {
     pub keys: Vec<String>,
     /// The keys are set keys (else item keys).
     pub sets: bool,
+    /// Bumped by every change to the selection, so a cache can key on it instead of comparing the keys.
+    pub selection_rev: u64,
 }
 
 /// What the bulk panel keeps between frames: a new selection resets it, a plan does not.
@@ -191,7 +193,11 @@ impl AppModel {
             Some(k) => Selection::Item(k),
             None => Selection::None,
         };
-        self.multi = MultiSelection { keys, sets };
+        self.multi = MultiSelection {
+            keys,
+            sets,
+            selection_rev: self.multi.selection_rev + 1,
+        };
         if self.multi.keys.len() < 2 {
             self.multi.keys.clear();
         }
@@ -249,6 +255,7 @@ impl AppModel {
     /// active key hands over to the last remaining one. The chip and the report are kept.
     pub(super) fn prune_selection(&mut self) {
         if !self.multi_in_effect() {
+            self.multi.selection_rev += 1;
             self.multi.keys.clear();
             return;
         }

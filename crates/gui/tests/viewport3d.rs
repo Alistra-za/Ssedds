@@ -2837,3 +2837,41 @@ fn the_view_section_lists_the_offered_views_with_the_stand_in_hover() {
     h.run_steps(4);
     h.get_by_label_contains("1 − specular mask");
 }
+
+/// Audit 3 item 3: two panels both count frame ids from 1; each keeps its own texture.
+#[test]
+fn two_panels_with_the_same_frame_id_keep_their_own_textures() {
+    let frame = |c: u8| {
+        Some(std::sync::Arc::new(v3::Frame {
+            width: 2,
+            height: 2,
+            rgba: vec![c; 16],
+            id: 1,
+        }))
+    };
+    let mut a = Viewport3d::with_state(V3State::Ready);
+    a.panel = "meshes";
+    a.frame = frame(10);
+    let mut b = Viewport3d::with_state(V3State::Ready);
+    b.panel = "set_preview";
+    b.frame = frame(200);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(400.0, 700.0))
+        .build_ui_state(
+            |ui, (a, b): &mut (Viewport3d, Viewport3d)| {
+                sdc_gui::ui::viewport3d::image(ui, a);
+                sdc_gui::ui::viewport3d::image(ui, b);
+            },
+            (a, b),
+        );
+    h.run();
+    let get = |p| {
+        h.ctx.data(|d| {
+            d.get_temp::<(u64, eframe::egui::TextureHandle)>(
+                sdc_gui::ui::viewport3d::frame_cache_id(p),
+            )
+        })
+    };
+    let (ta, tb) = (get("meshes").unwrap().1, get("set_preview").unwrap().1);
+    assert_ne!(ta.id(), tb.id());
+}

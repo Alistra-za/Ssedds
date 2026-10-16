@@ -7,6 +7,7 @@ use crate::model::AppModel;
 use eframe::egui;
 use engine::events::RecipeStatus;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 pub(super) const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 pub(super) const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
@@ -222,19 +223,62 @@ fn tile(
     }
 }
 
+/// What the Textures column derives from the selection, the filters and the items; rebuilt only when those change.
+pub struct ColumnStats {
+    pub not_in_set: usize,
+    pub summary: Option<String>,
+    pub chosen: HashSet<String>,
+}
+
+#[derive(Clone, PartialEq)]
+struct StatsKey {
+    items: u64,
+    filter: crate::model::Filter,
+    search: String,
+    sort: SortKey,
+    selection: crate::model::Selection,
+    selection_rev: u64,
+}
+
+/// `changed on disk` and `need a decision` stay uncounted here: they are one cheap pass and move without the items revision.
+pub fn column_stats(ctx: &egui::Context, model: &AppModel) -> Arc<ColumnStats> {
+    let key = StatsKey {
+        items: model.items_rev(),
+        filter: model.filter.clone(),
+        search: model.search.clone(),
+        sort: model.prefs.sort,
+        selection: model.selection.clone(),
+        selection_rev: model.multi.selection_rev,
+    };
+    let id = egui::Id::new("column-stats");
+    if let Some((k, s)) = ctx.data(|d| d.get_temp::<(StatsKey, Arc<ColumnStats>)>(id)) {
+        if k == key {
+            return s;
+        }
+    }
+    let s = Arc::new(ColumnStats {
+        not_in_set: model.not_in_set_count(),
+        summary: model.selection_summary(false),
+        chosen: model.selected_items().into_iter().collect(),
+    });
+    ctx.data_mut(|d| d.insert_temp(id, (key, s.clone())));
+    s
+}
+
 pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache) {
     // Wrapped: the counts move under the heading in a narrow column instead of holding it wider.
     ui.horizontal_wrapped(|ui| {
         collapse_arrow(ui, model, crate::ui::Column::Textures);
         ui.heading("Textures");
-        if let Some(s) = model.selection_summary(false) {
+        let stats = column_stats(ui.ctx(), model);
+        if let Some(s) = &stats.summary {
             ui.label(egui::RichText::new(s).strong());
         }
         let n = model.undecided();
         if n > 0 {
             ui.colored_label(AMBER, format!("{n} need a decision"));
         }
-        let not_in = model.not_in_set_count();
+        let not_in = column_stats(ui.ctx(), model).not_in_set;
         if not_in > 0
             && ui
                 .link(egui::RichText::new(format!("{not_in} not in a set")).color(AMBER))
@@ -287,7 +331,8 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         return;
     }
     // One set per frame keeps the per-tile test O(1) however many are selected.
-    let chosen: HashSet<String> = model.selected_items().into_iter().collect();
+    let stats = column_stats(ui.ctx(), model);
+    let chosen = &stats.chosen;
     // A tile never runs wider than the column, so a narrow column still shows one.
     let chrome = 2.0 * (TILE_MARGIN + TILE_STROKE);
     let size = model
@@ -328,7 +373,7 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                     egui::Layout::left_to_right(egui::Align::Min),
                     |ui| {
                         for &idx in row {
-                            tile(ui, model, thumbs, idx, &chosen, size);
+                            tile(ui, model, thumbs, idx, chosen, size);
                         }
                     },
                 );

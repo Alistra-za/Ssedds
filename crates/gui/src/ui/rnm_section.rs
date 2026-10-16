@@ -237,29 +237,38 @@ fn drag_slider(
     None
 }
 
+/// The blended preview's texture: one slot, holding the `Arc` it was made from (so its pointer cannot be reused by
+/// another picture) and replaced when the key or the picture changes, which frees the last one (audit 3 item 12).
+pub fn preview_texture(
+    ctx: &egui::Context,
+    key: &str,
+    t: &Arc<crate::model::rnm_preview::RnmThumb>,
+) -> egui::TextureHandle {
+    let id = egui::Id::new("rnm-preview-tex");
+    type Slot = (
+        String,
+        Arc<crate::model::rnm_preview::RnmThumb>,
+        egui::TextureHandle,
+    );
+    if let Some((k, old, h)) = ctx.data(|d| d.get_temp::<Slot>(id)) {
+        if k == key && Arc::ptr_eq(&old, t) {
+            return h;
+        }
+    }
+    let img =
+        egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], &t.rgba);
+    let h = ctx.load_texture(format!("rnm-preview-{key}"), img, Default::default());
+    ctx.data_mut(|d| d.insert_temp(id, (key.to_string(), t.clone(), h.clone())));
+    h
+}
+
 /// Item 21 (DECISIONS AG115): the set's blended normal as a 128 px thumbnail, `(n + 1) / 2` as colour. The job runs
 /// off the UI thread; the picture on show stays until the one for the new settings lands.
 fn blended_preview(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
     model.rnm_preview_frame(key);
     ui.label("Blended normal");
     if let Some(t) = model.rnm_preview_image(key) {
-        let id = egui::Id::new(("rnm-preview-tex", key));
-        let ptr = Arc::as_ptr(&t) as usize;
-        let cached: Option<(usize, egui::TextureHandle)> = ui.data(|d| d.get_temp(id));
-        let tex = match cached {
-            Some((p, h)) if p == ptr => h,
-            _ => {
-                let img = egui::ColorImage::from_rgba_unmultiplied(
-                    [t.width as usize, t.height as usize],
-                    &t.rgba,
-                );
-                let h =
-                    ui.ctx()
-                        .load_texture(format!("rnm-preview-{key}"), img, Default::default());
-                ui.data_mut(|d| d.insert_temp(id, (ptr, h.clone())));
-                h
-            }
-        };
+        let tex = preview_texture(ui.ctx(), key, &t);
         ui.add(
             egui::Image::new(&tex).fit_to_exact_size(egui::vec2(t.width as f32, t.height as f32)),
         );
