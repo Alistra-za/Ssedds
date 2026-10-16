@@ -69,6 +69,21 @@ pub fn load_image_meta(path: &Path) -> Result<(Rgba32F, SourceInfo, SourceMeta),
     decode(reader, path)
 }
 
+/// What the png crate may allocate besides the image (DECISIONS AV1): its line buffer and ancillary chunks, the
+/// iCCP profile inflated among them. The decoded pixels do not count against it.
+const PNG_METADATA_BUDGET: u64 = 64 << 20;
+
+/// The explicit MAX_DIM header check bounds the image, so the crate's default 512 MiB allocation cap (which
+/// rejects valid 16384 px images) is lifted. A PNG keeps a bound: `max_alloc` is also what its iCCP inflates
+/// under (png 0.18 `decompress_to_vec_bounded`), parsed before any size is known (audit 2026-10-15 item 1).
+pub(crate) fn lift_limits<R: std::io::BufRead + std::io::Seek>(reader: &mut image::ImageReader<R>) {
+    let mut limits = image::Limits::no_limits();
+    if reader.format() == Some(image::ImageFormat::Png) {
+        limits.max_alloc = Some(PNG_METADATA_BUDGET);
+    }
+    reader.limits(limits);
+}
+
 /// Decode with the `image` decoder `reader` picked, MAX_DIM-checked from its header first.
 fn decode<R: std::io::BufRead + std::io::Seek>(
     mut reader: image::ImageReader<R>,
@@ -78,9 +93,7 @@ fn decode<R: std::io::BufRead + std::io::Seek>(
         path: path.to_path_buf(),
         msg: e.to_string(),
     };
-    // The explicit MAX_DIM header check below bounds the size, so the crate's default
-    // 512 MiB allocation cap (which rejects valid 16384 px images) is lifted.
-    reader.no_limits();
+    lift_limits(&mut reader);
     let mut decoder = reader.into_decoder().map_err(err)?;
     // Checked on the decoder chosen by content (the one that allocates), not one chosen by extension.
     let (w, h) = decoder.dimensions();
@@ -140,7 +153,7 @@ pub fn image_size(path: &Path) -> Result<(u32, u32), LoadError> {
         let mut reader = image::ImageReader::open(path)
             .and_then(image::ImageReader::with_guessed_format)
             .map_err(|e| bad(e.to_string()))?;
-        reader.no_limits();
+        lift_limits(&mut reader);
         reader.into_dimensions().map_err(|e| bad(e.to_string()))?
     };
     if w.max(h) > MAX_DIM {

@@ -24,21 +24,58 @@ pub enum Scope {
 /// Whether a `[files]` key names the file at project-relative path `rel` (DECISIONS N2): case-insensitively,
 /// `rel == key`, or `rel` without the last extension of its file name `== key` (a packed output's key).
 pub fn path_key_matches(key: &str, rel: &str) -> bool {
-    let (k, r) = (key.to_lowercase(), rel.to_lowercase());
-    if r == k {
-        return true;
-    }
-    let (dir, name) = r.rsplit_once('/').unwrap_or(("", r.as_str()));
-    match name.rsplit_once('.') {
-        Some((stem, _)) if !stem.is_empty() => {
-            let without = if dir.is_empty() {
+    KeyForms::of(rel).matches(key)
+}
+
+/// What a `[files]` key is compared with for one project-relative path (`path_key_matches`): the path lower-cased,
+/// and lower-cased without the last extension of its file name when that leaves a non-empty stem. Worked out once
+/// per file, so matching many keys costs no path work (DECISIONS AV3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyForms {
+    pub(crate) full: String,
+    pub(crate) stem: Option<String>,
+}
+
+impl KeyForms {
+    pub fn of(rel: &str) -> KeyForms {
+        let full = rel.to_lowercase();
+        let (dir, name) = full.rsplit_once('/').unwrap_or(("", full.as_str()));
+        let stem = match name.rsplit_once('.') {
+            Some((stem, _)) if !stem.is_empty() => Some(if dir.is_empty() {
                 stem.to_string()
             } else {
                 format!("{dir}/{stem}")
-            };
-            without == k
+            }),
+            _ => None,
+        };
+        KeyForms { full, stem }
+    }
+    /// Whether `key` names this path, case-insensitively.
+    pub fn matches(&self, key: &str) -> bool {
+        let k = key.to_lowercase();
+        self.full == k || self.stem.as_deref() == Some(k.as_str())
+    }
+}
+
+/// The files `[files]`-style keys name, by match form: for many keys over many files (DECISIONS AV3).
+pub(crate) struct KeyIndex(std::collections::HashMap<String, Vec<usize>>);
+
+impl KeyIndex {
+    pub(crate) fn new(root: &Path, files: &[InputFile]) -> KeyIndex {
+        let mut m: std::collections::HashMap<String, Vec<usize>> = Default::default();
+        for (i, f) in files.iter().enumerate() {
+            if let Some(r) = project_rel(root, f) {
+                let KeyForms { full, stem } = KeyForms::of(&r);
+                for form in std::iter::once(full).chain(stem) {
+                    m.entry(form).or_default().push(i);
+                }
+            }
         }
-        _ => false,
+        KeyIndex(m)
+    }
+    /// The indices of the files `key` names, in file order (a file matches a key by one form only).
+    pub(crate) fn hits(&self, key: &str) -> &[usize] {
+        self.0.get(&key.to_lowercase()).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -100,6 +137,8 @@ pub struct FileScopes {
     pub overrides: Vec<SetOverride>,
     /// Key → codes acknowledged for that file only.
     pub allow: BTreeMap<String, BTreeSet<Code>>,
+    /// The planned files' match forms by path (`index`), with the file name they were worked out for.
+    pub(crate) forms: BTreeMap<PathBuf, (Option<std::ffi::OsString>, Option<KeyForms>)>,
 }
 
 impl FileScopes {
@@ -107,12 +146,43 @@ impl FileScopes {
         root: None,
         overrides: Vec::new(),
         allow: BTreeMap::new(),
+        forms: BTreeMap::new(),
     };
 
-    /// The project-relative path of `input` when the layer is active.
-    pub fn rel_of(&self, input: &InputFile) -> Option<String> {
-        project_rel(self.root.as_deref()?, input)
+    /// Work out each of `files`' match forms once (audit 2026-10-15 item 5), so `forms_of` costs a lookup, not two
+    /// absolute-path resolutions per key. Nothing to do when the layer is off or empty.
+    pub fn index(&mut self, files: &[InputFile]) {
+        let Some(root) = self.root.as_deref() else {
+            return;
+        };
+        if self.overrides.is_empty() && self.allow.is_empty() {
+            return;
+        }
+        self.forms = files
+            .iter()
+            .map(|f| {
+                let forms = project_rel(root, f).map(|r| KeyForms::of(&r));
+                (f.path.clone(), (key_name(f).map(Into::into), forms))
+            })
+            .collect();
     }
+
+    /// The match forms of `input`'s project-relative path when the layer is active: from `index` when it saw this
+    /// path under this name, else worked out now (a packed output's virtual name, a file planned later).
+    pub fn forms_of(&self, input: &InputFile) -> Option<std::borrow::Cow<'_, KeyForms>> {
+        let root = self.root.as_deref()?;
+        match self.forms.get(&input.path) {
+            Some((name, forms)) if name.as_deref() == key_name(input) => {
+                forms.as_ref().map(std::borrow::Cow::Borrowed)
+            }
+            _ => project_rel(root, input).map(|r| std::borrow::Cow::Owned(KeyForms::of(&r))),
+        }
+    }
+}
+
+/// The file name `project_rel` takes for `input`.
+fn key_name(input: &InputFile) -> Option<&std::ffi::OsStr> {
+    input.real_rel.as_deref().unwrap_or(&input.rel).file_name()
 }
 
 /// For `ResolveCtx` literals that have no `[files]` layer (tests, `inspect` on a single file).

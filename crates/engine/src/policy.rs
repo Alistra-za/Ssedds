@@ -12,7 +12,7 @@ use crate::dds::{resolve_header, ResolvedHeader};
 use crate::discover::InputFile;
 use crate::group::{vocab_of, TextureSet, Vocab, VocabRole};
 use crate::image::SourceInfo;
-use crate::overrides::{path_key_matches, to_patch, FileScopes, Scope, SetOverride};
+use crate::overrides::{to_patch, FileScopes, Scope, SetOverride};
 use crate::pack::plan::set_is_advanced_skin;
 pub use crate::presets::Provenance;
 use crate::presets::*;
@@ -238,23 +238,41 @@ pub fn allowed(ctx: &ResolveCtx, f: &FileFacts, code: Code) -> bool {
     if ctx.files.allow.is_empty() {
         return false;
     }
-    ctx.files.rel_of(f.input).is_some_and(|rel| {
+    ctx.files.forms_of(f.input).is_some_and(|forms| {
         ctx.files
             .allow
             .iter()
-            .any(|(k, codes)| codes.contains(&code) && path_key_matches(k, &rel))
+            .any(|(k, codes)| codes.contains(&code) && forms.matches(k))
     })
 }
 
-fn override_applies(ctx: &ResolveCtx, o: &SetOverride, st: Option<Subtype>, f: &FileFacts) -> bool {
+/// A file's `[files]` match forms, fetched at most once per pass over the overrides (DECISIONS AV3).
+type LazyForms<'a> = std::cell::OnceCell<Option<std::borrow::Cow<'a, crate::overrides::KeyForms>>>;
+
+fn path_matches<'a>(
+    ctx: &ResolveCtx<'a>,
+    forms: &LazyForms<'a>,
+    input: &InputFile,
+    key: &str,
+) -> bool {
+    forms
+        .get_or_init(|| ctx.files.forms_of(input))
+        .as_ref()
+        .is_some_and(|m| m.matches(key))
+}
+
+fn override_applies<'a>(
+    ctx: &ResolveCtx<'a>,
+    o: &SetOverride,
+    st: Option<Subtype>,
+    f: &FileFacts,
+    forms: &LazyForms<'a>,
+) -> bool {
     match &o.scope {
         Scope::All => true,
         Scope::Subtype(s) => Some(*s) == st,
         Scope::File(g) => glob_match(g, f),
-        Scope::Path(k) => ctx
-            .files
-            .rel_of(f.input)
-            .is_some_and(|rel| path_key_matches(k, &rel)),
+        Scope::Path(k) => path_matches(ctx, forms, f.input, k),
         Scope::Set(_) => false,
     }
 }
@@ -285,6 +303,7 @@ fn ranked_overrides<'a>(ctx: &ResolveCtx<'a>) -> Vec<&'a SetOverride> {
 /// DECISIONS S6: whether a DDS input is re-encoded. The highest-precedence `reencode` override that reaches the
 /// file decides: `[files]`, then unscoped, file-glob and path `--set` (a sub-type scope is refused at parse time).
 pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
+    let forms = LazyForms::new();
     ranked_overrides(ctx)
         .into_iter()
         .rev()
@@ -292,10 +311,7 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
         .find(|o| match &o.scope {
             Scope::All => true,
             Scope::File(g) => glob_match_input(g, input),
-            Scope::Path(k) => ctx
-                .files
-                .rel_of(input)
-                .is_some_and(|rel| path_key_matches(k, &rel)),
+            Scope::Path(k) => path_matches(ctx, &forms, input, k),
             Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .is_some_and(|o| o.value == Value::Bool(true))
@@ -303,6 +319,7 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
 /// M6 Track F2 (DECISIONS Note W3): the `rnm.target` a layer file asked for, by the highest-precedence override that
 /// reaches it (`[files]`, then unscoped, file-glob and path `--set`); `None` = the default from its name.
 pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTarget> {
+    let forms = LazyForms::new();
     ranked_overrides(ctx)
         .into_iter()
         .rev()
@@ -310,10 +327,7 @@ pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTa
         .find(|o| match &o.scope {
             Scope::All => true,
             Scope::File(g) => glob_match_input(g, input),
-            Scope::Path(k) => ctx
-                .files
-                .rel_of(input)
-                .is_some_and(|rel| path_key_matches(k, &rel)),
+            Scope::Path(k) => path_matches(ctx, &forms, input, k),
             Scope::Subtype(_) | Scope::Set(_) => false,
         })
         .and_then(|o| crate::overrides::rnm_target_value(&o.value))
@@ -349,10 +363,11 @@ pub fn decide_subtype(ctx: &ResolveCtx, f: &FileFacts) -> SubtypeDecision {
         apply_vocabulary(&mut suggestions, v);
     }
     // --set subtype (unscoped or file-scoped): the highest-precedence one wins
+    let forms = LazyForms::new();
     let set_subtype = ranked_overrides(ctx)
         .into_iter()
         .rev()
-        .find(|o| o.field == "subtype" && override_applies(ctx, o, None, f));
+        .find(|o| o.field == "subtype" && override_applies(ctx, o, None, f, &forms));
     if let Some(o) = set_subtype {
         if let Ok(st) = serde_json::from_value::<Subtype>(o.value.clone()) {
             return SubtypeDecision {
@@ -542,6 +557,7 @@ fn layered_profile_with(
 ) -> Result<Layered, PresetError> {
     // The alias preset's chain for an aliased file (spec §3.7), else the batch preset's.
     let chain = preset_chain(ctx, f)?;
+    let forms = LazyForms::new();
     let mut doc = Value::Object(Map::new());
     let mut prov = BTreeMap::new();
     let mut sources = FormatSources::default();
@@ -587,7 +603,7 @@ fn layered_profile_with(
         && !alpha_policy_explicit(ctx, &prov)
         && !ranked_overrides(ctx)
             .into_iter()
-            .any(|o| o.field == "alpha.policy" && override_applies(ctx, o, Some(st), f))
+            .any(|o| o.field == "alpha.policy" && override_applies(ctx, o, Some(st), f, &forms))
         && !rule_sources(ctx, &chain).into_iter().any(|(_, rules)| {
             matching(rules, f, Some(st), real_alpha)
                 .any(|(_, r)| r.overrides.pointer("/alpha/policy").is_some())
@@ -707,7 +723,7 @@ fn layered_profile_with(
         .into_iter()
         .filter(|o| o.field != "subtype" && !crate::overrides::is_selector(&o.field))
     {
-        if override_applies(ctx, o, Some(st), f) {
+        if override_applies(ctx, o, Some(st), f, &forms) {
             let reach = match o.scope {
                 Scope::All => GENERIC,
                 Scope::Subtype(_) => SUBTYPE_SET,

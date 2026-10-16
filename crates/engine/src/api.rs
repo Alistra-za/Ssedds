@@ -17,7 +17,7 @@ use crate::manifest::{
     bc1_model_id, output_key, profile_sha256, sha256_file, EncoderVersions, Manifest,
     ManifestEntry, PresetRef, ENGINE_VERSION,
 };
-use crate::overrides::{path_key_matches, project_rel, to_patch, FileScopes, Scope, SetOverride};
+use crate::overrides::{project_rel, to_patch, FileScopes, KeyForms, Scope, SetOverride};
 use crate::pack;
 use crate::pipeline::{process_file, FileError, FileTracker};
 use crate::policy::*;
@@ -329,7 +329,8 @@ fn preset_err(e: PresetError) -> EngineError {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+/// Lock `m`, taking the data of a poisoned lock as it is (engine and session share this).
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -866,11 +867,13 @@ impl Engine {
                 .or_default()
                 .extend(codes.iter().copied());
         }
-        let file_scopes = FileScopes {
+        let mut file_scopes = FileScopes {
             root: scope_root.clone(),
             overrides: file_overrides,
             allow: file_allow,
+            ..FileScopes::default()
         };
+        file_scopes.index(&files);
         let nvtt = crate::nvtt::NvttCell::new(req.nvtt.clone());
         let ctx = ResolveCtx {
             target,
@@ -1079,7 +1082,11 @@ impl Engine {
                 if cancel.is_cancelled() {
                     continue;
                 }
-                let est = estimated_bytes(&item.1.path);
+                // DECISIONS AV4: a cache hit loads nothing, so it is admitted at 0 without reading its header.
+                // shortcut: a file changed between this check and its Load loads unadmitted; the next plan admits it.
+                let path = &item.1.path;
+                let cached = SourceStamp::of(path).is_some_and(|s| cache.dims(path, s).is_some());
+                let est = if cached { 0 } else { estimated_bytes(path) };
                 budget.acquire(est);
                 let admitted = Admitted(&budget, est);
                 let resolve_one = &resolve_one;
@@ -1435,13 +1442,21 @@ impl Engine {
             rels.extend(failed.iter().filter_map(|f| rel_of_path(&f.path)));
             rels.extend(cancelled.iter().filter_map(|p| rel_of_path(p)));
         }
+        // Every form a key can match, so each key is one lookup (DECISIONS AV3).
+        let matched: std::collections::HashSet<String> = rels
+            .iter()
+            .flat_map(|r| {
+                let KeyForms { full, stem } = KeyForms::of(r);
+                std::iter::once(full).chain(stem)
+            })
+            .collect();
         let mut keys: BTreeSet<&String> = file_scopes.allow.keys().collect();
         keys.extend(file_scopes.overrides.iter().filter_map(|o| match &o.scope {
             Scope::Path(k) => Some(k),
             _ => None,
         }));
         for key in keys {
-            if !rels.iter().any(|r| path_key_matches(key, r)) {
+            if !matched.contains(&key.to_lowercase()) {
                 rep.emit(
                     None,
                     None,

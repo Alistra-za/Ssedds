@@ -242,12 +242,12 @@ impl BakeJob {
     pub fn estimated_bytes(&self) -> u64 {
         use ::image::ImageDecoder;
         let header = || {
-            let d = ::image::ImageReader::open(&self.normal)
+            let mut r = ::image::ImageReader::open(&self.normal)
                 .ok()?
                 .with_guessed_format()
-                .ok()?
-                .into_decoder()
                 .ok()?;
+            crate::load::lift_limits(&mut r);
+            let d = r.into_decoder().ok()?;
             let (w, h) = d.dimensions();
             Some(Self::peak_bytes(
                 w,

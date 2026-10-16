@@ -220,6 +220,41 @@ fn an_embedded_icc_profile_is_reported_and_ignored() {
     assert_eq!(meta.dds_dxgi, None);
 }
 
+/// Audit 2026-10-15 item 1 (DECISIONS AV1): a PNG's iCCP inflates under a bound, so a small file cannot make the
+/// decoder allocate gigabytes before any size check. 96 MiB of zeros compresses to ~100 KB. The png crate drops a
+/// profile over the bound and decodes on, so the image loads with no profile reported.
+#[test]
+fn an_iccp_bomb_is_dropped_not_inflated() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("bomb.png");
+    let mut f = std::fs::File::create(&p).unwrap();
+    let mut enc = image::codecs::png::PngEncoder::new(&mut f);
+    let mut icc = icc_blob();
+    icc.resize(96 << 20, 0);
+    enc.set_icc_profile(icc).unwrap();
+    enc.write_image(&[1, 2, 3], 1, 1, ExtendedColorType::Rgb8)
+        .unwrap();
+    drop(f);
+    assert!(std::fs::metadata(&p).unwrap().len() < 1 << 20);
+    assert_eq!(image_size(&p).unwrap(), (1, 1));
+    let (img, _, meta) = load_image_meta(&p).unwrap();
+    assert_eq!((img.width, img.height), (1, 1));
+    assert!(!meta.icc_profile, "the profile was inflated past the bound");
+}
+
+/// The iCCP bound is not a cap on the image: a PNG whose decoded pixels outgrow it still loads.
+#[test]
+fn a_png_larger_than_the_metadata_bound_loads() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("big16.png");
+    // 3000 x 3000 RGBA16 = 72 MiB of decoded pixels.
+    ImageBuffer::from_fn(3000, 3000, |x, _| Rgba([x as u16, 7, 9, 65535]))
+        .save(&p)
+        .unwrap();
+    let (img, info) = load_image(&p).unwrap();
+    assert_eq!((img.width, img.height, info.bit_depth), (3000, 3000, 16));
+}
+
 #[test]
 fn a_garbage_exr_is_a_decode_error_not_a_panic() {
     let d = tempfile::tempdir().unwrap();

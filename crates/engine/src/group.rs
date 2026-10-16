@@ -189,7 +189,8 @@ pub struct TextureSet {
     pub suffixes: BTreeSet<String>,
 }
 
-fn fold(p: &std::path::Path) -> String {
+/// A path compared case-insensitively: '/'-separated and lower-cased.
+pub(crate) fn fold(p: &std::path::Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_lowercase()
 }
 

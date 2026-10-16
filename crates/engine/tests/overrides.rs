@@ -164,3 +164,61 @@ fn resize_and_edge_are_settable_fields() {
         "mips.edge"
     );
 }
+
+/// Audit 2026-10-15 item 5 (DECISIONS AV3): `FileScopes::index` works out each planned file's match forms once;
+/// `forms_of` matches exactly what `path_key_matches(key, project_rel(..))` does, for an indexed file, an aliased
+/// one, a packed output's virtual name over an indexed path, and a file that was never indexed.
+#[test]
+fn indexed_forms_match_like_project_rel() {
+    let root = Path::new("C:/mod/textures");
+    let real = InputFile {
+        path: PathBuf::from("C:/mod/textures/Landscape/Rock01_Roughness.png"),
+        rel: PathBuf::from("Landscape/Rock01_Roughness.png"),
+        game_path: "textures/landscape/rock01_roughness.png".into(),
+        output: PathBuf::from("C:/out/landscape/rock01_roughness.dds"),
+        kind: InputKind::Image,
+        real_rel: None,
+    };
+    let aliased = InputFile {
+        path: PathBuf::from("C:/mod/textures/a/old.png"),
+        rel: PathBuf::from("a/new.png"),
+        real_rel: Some(PathBuf::from("a/old.png")),
+        ..real.clone()
+    };
+    let virt = InputFile {
+        rel: PathBuf::from("Landscape/rock01_rmaos.png"),
+        ..real.clone()
+    };
+    let unindexed = InputFile {
+        path: PathBuf::from("C:/mod/textures/b/c.tga"),
+        rel: PathBuf::from("b/c.tga"),
+        ..real.clone()
+    };
+    let mut fs = FileScopes::default();
+    fs.root = Some(root.to_path_buf());
+    fs.allow = [("x".to_string(), Default::default())].into();
+    fs.index(&[real.clone(), aliased.clone()]);
+    let keys = [
+        "landscape/rock01_roughness.png",
+        "LANDSCAPE/ROCK01_ROUGHNESS",
+        "landscape/rock01_rmaos",
+        "a/old.png",
+        "a/new.png",
+        "a/old",
+        "b/c",
+        "b/c.tga",
+        "rock01_roughness.png",
+    ];
+    for f in [&real, &aliased, &virt, &unindexed] {
+        for k in keys {
+            let want = project_rel(root, f).is_some_and(|r| path_key_matches(k, &r));
+            assert_eq!(
+                fs.forms_of(f).is_some_and(|m| m.matches(k)),
+                want,
+                "{k} vs {}",
+                f.rel.display()
+            );
+        }
+    }
+    assert!(FileScopes::NONE.forms_of(&real).is_none());
+}
