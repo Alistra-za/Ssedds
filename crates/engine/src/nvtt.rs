@@ -263,10 +263,16 @@ pub struct TempDir(PathBuf);
 impl TempDir {
     pub fn new() -> std::io::Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("sdc-nvtt-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        Ok(TempDir(dir))
+        // Audit EP-7 (Note BC): a folder a crashed run left under a recycled pid is skipped, never reused.
+        loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("sdc-nvtt-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(TempDir(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -392,6 +398,8 @@ pub fn encode_level_nvtt(
             Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
         }
     };
+    // A stale output must not pass for this run's when nvcompress exits 0 without writing (audit EP-7).
+    let _ = std::fs::remove_file(&out);
     // stdout and stderr go to one file: an unread pipe could fill and stall the process.
     let logf =
         std::fs::File::create(&log).map_err(|e| failed(format!("{}: {e}", log.display())))?;
