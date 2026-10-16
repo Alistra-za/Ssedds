@@ -1374,3 +1374,8 @@ Rulings are numbered by audit item (`.superpowers/sdd/audit3/audit.md`), not AV1
 ## Note AX — Version 0.8.0 for the public alpha (owner, 2026-10-15)
 
 - **AX1 Version.** The workspace version moves 0.7.0 → 0.8.0 for the first public alpha (GitHub release of `tessalith.exe` and `sdc.exe`). `ENGINE_VERSION` follows `CARGO_PKG_VERSION` and is part of `is_up_to_date`, so every `--on-existing if-changed` run re-encodes each recorded output once after upgrading. No preset or pixel output changes; goldens are unchanged. `docs/presets-changelog.md` gets a 0.8.0 entry for the same reason.
+
+## Note AY — Exe icon and version resource (owner, 2026-10-15)
+
+- **AY1 Exe resources.** `tessalith.exe` and `sdc.exe` carry the Tessalith icon (`crates/gui/assets/tessalith.ico`) and a VERSIONINFO block (ProductName Tessalith, version from `CARGO_PKG_VERSION`, GPL-3.0-or-later). Each crate's `build.rs` compiles a generated `.rc` with the Windows SDK `rc.exe` (env `RC`, else the newest `Windows Kits\10\bin\<ver>\x64`); no new crate. A missing or failing `rc.exe` only warns and the exe builds without resources.
+- **AY2 Window icon.** The GUI sets the window/taskbar icon from the embedded `tessalith-256.png`; a decode failure is logged and skipped.
