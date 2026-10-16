@@ -347,6 +347,19 @@ fn tail(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join(" | ")
 }
 
+/// How long one `w`×`h` level may run before nvcompress counts as hung and is killed (audit #18, Note BC): 2 minutes
+/// plus 1 s per 50 000 texels (an 8192² level: about 24 minutes), far above a working encode.
+fn level_timeout(w: u32, h: u32) -> Duration {
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("SDC_NVTT_LEVEL_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    Duration::from_secs(120 + u64::from(w) * u64::from(h) / 50_000)
+}
+
 /// One level through nvcompress (DECISIONS Note NV4-NV8). `input` is the quantised level (`w` x `h` texels) and
 /// `level` names its files in `tmp`; the result is the raw block payload, post-fixed for BC7. `cancel` is polled
 /// while waiting for the slot and while the process runs; on cancel the process is killed.
@@ -395,6 +408,8 @@ pub fn encode_level_nvtt(
     let mut child = cmd
         .spawn()
         .map_err(|e| failed(format!("could not start {}: {e}", tool.path.display())))?;
+    let limit = level_timeout(w, h);
+    let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st,
@@ -409,6 +424,14 @@ pub fn encode_level_nvtt(
             let _ = child.kill();
             let _ = child.wait();
             return Err(NvttError::Cancelled);
+        }
+        if started.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(failed(format!(
+                "nvcompress did not finish a {w}x{h} level within {} s and was stopped",
+                limit.as_secs_f32()
+            )));
         }
         std::thread::sleep(wait);
         wait = (wait * 2).min(Duration::from_millis(50));

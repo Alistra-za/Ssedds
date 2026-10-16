@@ -196,3 +196,24 @@ fn a_parallax_off_complex_m_decodes_alpha_0_through_nvtt() {
     // Parallax on keeps the encoder's alpha untouched (the fake's 255 shows the fix did not run).
     assert!(decoded_alpha(true, 1).iter().all(|&a| a == 255));
 }
+
+/// Audit REPORT #18 (Note BC): a hung nvcompress is killed after the level's time limit and the level fails (the
+/// file is ENC-NVTT-FAILED), instead of holding the NVTT slot forever. The limit is shortened with the test hook.
+#[test]
+fn a_hung_nvcompress_is_killed_and_fails_the_level() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let p = profile(Subtype::Diffuse, Format::Bc7, AlphaPolicy::Remove);
+    std::env::set_var("SDC_FAKE_NVTT_FAIL", "sleep");
+    std::env::set_var("SDC_NVTT_LEVEL_TIMEOUT_MS", "300");
+    let t = Instant::now();
+    let r = encode_level_nvtt(&fake(), &ldr(8, 8), 8, 8, &p, &tmp, 0, &never);
+    std::env::remove_var("SDC_FAKE_NVTT_FAIL");
+    std::env::remove_var("SDC_NVTT_LEVEL_TIMEOUT_MS");
+    match r {
+        Err(NvttError::Failed(m)) => assert!(m.contains("did not finish"), "{m}"),
+        r => panic!("{r:?}"),
+    }
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+    assert!(!tmp.path().join("l0.out.dds").exists());
+}
