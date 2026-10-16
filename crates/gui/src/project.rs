@@ -15,6 +15,8 @@ pub enum SaveError {
     ReadOnly,
     /// The file changed on disk since it was loaded or saved; save again with `force` to overwrite.
     ChangedOnDisk,
+    /// The file has the read-only flag, so it cannot be replaced.
+    ReadOnlyFlag,
     Io(String),
 }
 
@@ -25,6 +27,9 @@ impl std::fmt::Display for SaveError {
                 f.write_str("the file is read-only until its error is fixed and it is reloaded")
             }
             SaveError::ChangedOnDisk => f.write_str("the file changed on disk since it was loaded"),
+            SaveError::ReadOnlyFlag => {
+                f.write_str("the file is read-only: clear the read-only flag to save")
+            }
             SaveError::Io(e) => write!(f, "could not save: {e}"),
         }
     }
@@ -35,6 +40,8 @@ pub struct ProjectDoc {
     doc: DocumentMut,
     disk: Option<SourceStamp>,
     dirty: bool,
+    /// Changes with every edit, from the counter `SetsDoc` uses (audit item 11).
+    rev: u64,
     error: Option<String>,
 }
 
@@ -123,6 +130,7 @@ impl ProjectDoc {
             doc: DocumentMut::new(),
             disk: None,
             dirty: false,
+            rev: crate::sets_doc::next_rev(),
             error: None,
         };
         d.reload();
@@ -168,6 +176,14 @@ impl ProjectDoc {
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+    /// An unsaved edit.
+    fn touch(&mut self) {
+        self.dirty = true;
+        self.rev = crate::sets_doc::next_rev();
+    }
     pub fn read_only(&self) -> bool {
         self.error.is_some()
     }
@@ -188,7 +204,7 @@ impl ProjectDoc {
         }
         if let Ok(doc) = text.parse::<DocumentMut>() {
             self.doc = doc;
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -207,7 +223,7 @@ impl ProjectDoc {
         let s = serde_json::to_value(t).ok();
         if let Some(Json::String(s)) = s {
             set_value(self.doc.as_table_mut(), "target", Value::from(s));
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -227,7 +243,7 @@ impl ProjectDoc {
                 self.doc.as_table_mut().remove("preset");
             }
         }
-        self.dirty = true;
+        self.touch();
     }
 
     /// The `[files]` table (or inline table), if there is one.
@@ -289,7 +305,7 @@ impl ProjectDoc {
             Some(())
         })();
         if written.is_some() {
-            self.dirty = true;
+            self.touch();
         } else if self.entry(key).is_some_and(|t| t.is_empty()) {
             // A field path ran into a non-table: do not leave the entry we just created behind.
             self.drop_entry(key);
@@ -318,7 +334,7 @@ impl ProjectDoc {
             .entry_mut(key)
             .is_some_and(|entry| remove(entry, &parts))
         {
-            self.dirty = true;
+            self.touch();
         }
         if self.entry(key).is_some_and(|t| t.is_empty()) {
             self.remove_file_entry(key);
@@ -362,7 +378,9 @@ impl ProjectDoc {
             Some(v) => self.write_fill(&id, v).is_some(),
             None => self.remove_fill(&id).is_some(),
         };
-        self.dirty |= changed;
+        if changed {
+            self.touch();
+        }
     }
 
     /// `defaults.packing.fill.<id> = v`, creating missing tables (dotted keys inside an existing `[defaults]`);
@@ -456,7 +474,7 @@ impl ProjectDoc {
                 }
             }
         }
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn file_keys(&self) -> Vec<String> {
@@ -470,7 +488,7 @@ impl ProjectDoc {
             return;
         }
         if self.drop_entry(key) {
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -486,10 +504,8 @@ impl ProjectDoc {
         if !force && self.changed_on_disk() {
             return Err(SaveError::ChangedOnDisk);
         }
-        let tmp = self.path.with_extension("toml.sdc-tmp");
-        std::fs::write(&tmp, self.doc.to_string())
-            .and_then(|_| std::fs::rename(&tmp, &self.path))
-            .map_err(|e| SaveError::Io(e.to_string()))?;
+        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
+            .map_err(|e| crate::project::write_error(&self.path, e))?;
         self.disk = SourceStamp::of(&self.path);
         crate::crash_log::discard_recovery(&self.path);
         self.dirty = false;
@@ -502,4 +518,14 @@ fn without_ext(key: &str) -> Option<&str> {
     let dir_len = key.rfind('/').map_or(0, |i| i + 1);
     let dot = key[dir_len..].rfind('.').filter(|&d| d > 0)?;
     Some(&key[..dir_len + dot])
+}
+
+/// A failed write of a project file: a file with the read-only flag says so (Windows refuses to replace it).
+pub(crate) fn write_error(path: &Path, e: std::io::Error) -> SaveError {
+    let flagged = std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly());
+    if e.kind() == std::io::ErrorKind::PermissionDenied && flagged {
+        SaveError::ReadOnlyFlag
+    } else {
+        SaveError::Io(e.to_string())
+    }
 }

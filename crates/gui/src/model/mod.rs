@@ -105,6 +105,9 @@ pub enum Selection {
 
 pub use texture_view::Filter;
 
+/// (sdc.toml rev, dirty), (sdc-project.toml rev, dirty, read-only).
+type RecoveryKey = (Option<(u64, bool)>, Option<(u64, bool, bool)>);
+
 /// Which of the two project files a dialog or save error is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {
@@ -235,6 +238,14 @@ pub struct AppModel {
     pub picker: picker::Picker,
     pub settings: GuiSettings,
     pub settings_path: Option<PathBuf>,
+    /// gui.toml as last loaded or written, and its stamp then (audit item 15); `None`: no merge on the next save.
+    settings_base: Option<(GuiSettings, Option<SourceStamp>)>,
+    /// The last gui.toml write error shown (audit item 9: each distinct error is toasted once).
+    settings_error: Option<String>,
+    /// What the last recovery snapshot was taken at (audit item 11).
+    recovery_key: Option<RecoveryKey>,
+    /// Bumped by `open_folder` and a new export: the drawer then forgets its cached file checks.
+    pub drawer_epoch: u64,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
     /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
@@ -424,6 +435,9 @@ impl AppModel {
         session: Arc<Session>,
     ) -> AppModel {
         let mut m = AppModel::placeholder(settings);
+        m.settings_base = settings_path
+            .as_deref()
+            .map(|p| (m.settings.clone(), SourceStamp::of(p)));
         m.settings_path = settings_path;
         m.session = Some(session);
         m
@@ -437,6 +451,10 @@ impl AppModel {
             picker: picker::Picker::default(),
             settings,
             settings_path: None,
+            settings_base: None,
+            settings_error: None,
+            recovery_key: None,
+            drawer_epoch: 0,
             user_config: None,
             user_presets: None,
             loaded_user_presets: vec![],
@@ -608,6 +626,9 @@ impl AppModel {
         self.used_by_scan_changed();
         // The source sizes read for the previous folder (AG129: the cache would grow for the whole session).
         self.sizes.clear_folder();
+        // Audit item 22: the previous folder's file checks would stay for the session.
+        self.stats.borrow_mut().clear();
+        self.drawer_epoch += 1;
         self.dropped_fills.clear();
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
@@ -641,9 +662,31 @@ impl AppModel {
         self.replan();
     }
 
-    pub fn save_settings(&self) {
-        if let Some(p) = &self.settings_path {
-            let _ = self.settings.save(p);
+    pub fn save_settings(&mut self) {
+        let Some(p) = self.settings_path.clone() else {
+            return;
+        };
+        match self.settings.save_merged(&p, &mut self.settings_base) {
+            Ok(kept) => {
+                self.settings_error = None;
+                if let Some(kept) = kept {
+                    self.messages.notify(
+                        messages::Severity::Warning,
+                        format!(
+                            "gui.toml: it could not be read, so it was kept as {} and a new one was written",
+                            kept.display()
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                let text = format!("gui.toml: could not save: {e}");
+                if self.settings_error.as_ref() != Some(&text) {
+                    self.messages
+                        .notify(messages::Severity::Warning, text.clone());
+                    self.settings_error = Some(text);
+                }
+            }
         }
     }
 
@@ -1400,6 +1443,7 @@ impl AppModel {
             pace: Some(export::Pace::new(Instant::now())),
             ..Default::default()
         };
+        self.drawer_epoch += 1;
         let cancel = CancelToken::default();
         self.export.running = Some(cancel.clone());
         spawn_export(self.tx.clone(), session, req, cancel);
@@ -1456,7 +1500,19 @@ impl AppModel {
         }
         d.set_last_json_sha256(sha);
         if let Err(e) = d.save(false) {
-            self.dialog = Some(Dialog::Error(format!("sdc-project.toml: {e}")));
+            self.hash_record_failed(&e);
+        }
+    }
+
+    /// A JSON hash record that did not save (audit item 16): the save question (Overwrite / Reload for a file
+    /// changed on disk), unless a dialog is open; an open question must stay, so the error goes to the notes then.
+    fn hash_record_failed(&mut self, e: &SaveError) {
+        if self.dialog.is_some() {
+            self.export
+                .notes
+                .push(format!("{}: {e}", DocKind::Project.file()));
+        } else {
+            self.save_failed(DocKind::Project, e);
         }
     }
 
@@ -1914,13 +1970,23 @@ impl AppModel {
             return;
         };
         if let Some(cf) = &c.created_file {
-            if let Err(e) = std::fs::copy(&cf.source, &cf.path) {
-                self.history.refuse_redo();
-                self.dialog = Some(Dialog::Error(format!(
-                    "could not copy {} again: {e}",
-                    cf.source.display()
-                )));
-                return;
+            match copy_again(cf) {
+                Ok(sha256) => {
+                    // Undo deletes the copy only when it is still this one (audit item 8).
+                    if let Some(f) = self
+                        .history
+                        .undo
+                        .last_mut()
+                        .and_then(|s| s.created_file.as_mut())
+                    {
+                        f.sha256 = sha256;
+                    }
+                }
+                Err(why) => {
+                    self.history.refuse_redo();
+                    self.dialog = Some(Dialog::Error(why));
+                    return;
+                }
             }
         }
         self.apply_snapshot(&c.after);
@@ -2231,10 +2297,30 @@ impl AppModel {
         out
     }
 
+    /// [`Self::recovery_snapshot`] when a document changed since the last call, else `None` (audit item 11: the
+    /// app refreshes the panic hook's copy only then).
+    pub fn recovery_changed(&mut self) -> Option<Vec<(std::path::PathBuf, String)>> {
+        let key = (
+            self.project.as_ref().map(|p| (p.rev(), p.is_dirty())),
+            self.sets_doc
+                .as_ref()
+                .map(|s| (s.rev(), s.is_dirty(), s.read_only())),
+        );
+        if self.recovery_key == Some(key) {
+            return None;
+        }
+        self.recovery_key = Some(key);
+        Some(self.recovery_snapshot())
+    }
+
     /// Raise the dialog for a failed save of `kind`; the error text names the file.
     fn save_failed(&mut self, kind: DocKind, e: &SaveError) {
         self.dialog = Some(match e {
             SaveError::ChangedOnDisk => Dialog::ExternalChange(kind),
+            SaveError::ReadOnlyFlag => Dialog::Error(format!(
+                "{} is read-only: clear the read-only flag to save",
+                kind.file()
+            )),
             e => Dialog::Error(format!("{}: {e}", kind.file())),
         });
     }
@@ -2444,6 +2530,38 @@ impl AppModel {
 }
 
 /// Delete a file a command created, if it still has the SHA-256 it was created with.
+/// Redo of a Duplicate: copy the source to the copy's path again, never over a file already there; the new
+/// copy's hash.
+fn copy_again(cf: &history::CreatedFile) -> Result<String, String> {
+    let fail = |e: std::io::Error| format!("could not copy {} again: {e}", cf.source.display());
+    let mut out = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&cf.path)
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "{} already exists, so redo does not copy over it. Move or delete it, then redo.",
+                cf.path.display()
+            ))
+        }
+        Err(e) => return Err(fail(e)),
+        Ok(f) => f,
+    };
+    // From here the file at `cf.path` is the one just created, so a failure removes it.
+    let copied =
+        std::fs::File::open(&cf.source).and_then(|mut src| std::io::copy(&mut src, &mut out));
+    drop(out);
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&cf.path);
+        return Err(fail(e));
+    }
+    history::sha256_of(&cf.path).ok_or_else(|| {
+        let _ = std::fs::remove_file(&cf.path);
+        format!("could not read the copy {}", cf.path.display())
+    })
+}
+
 fn remove_created(cf: &history::CreatedFile) -> Result<(), String> {
     match history::sha256_of(&cf.path) {
         None => Ok(()), // already gone

@@ -66,7 +66,7 @@ pub struct SetEntry {
 
 /// Source of `SetsDoc::rev`: one counter for every document, so a replaced document never reuses a revision (DECISIONS Note Y7).
 static NEXT_REV: AtomicU64 = AtomicU64::new(1);
-fn next_rev() -> u64 {
+pub(crate) fn next_rev() -> u64 {
     NEXT_REV.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -286,10 +286,8 @@ impl SetsDoc {
         if !force && self.changed_on_disk() {
             return Err(SaveError::ChangedOnDisk);
         }
-        let tmp = self.path.with_extension("toml.sdc-tmp");
-        std::fs::write(&tmp, self.doc.to_string())
-            .and_then(|_| std::fs::rename(&tmp, &self.path))
-            .map_err(|e| SaveError::Io(e.to_string()))?;
+        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
+            .map_err(|e| crate::project::write_error(&self.path, e))?;
         self.disk = SourceStamp::of(&self.path);
         crate::crash_log::discard_recovery(&self.path);
         self.dirty = false;

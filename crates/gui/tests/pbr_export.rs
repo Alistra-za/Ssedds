@@ -1196,3 +1196,25 @@ fn a_pbr_grass_set_with_a_g_member_exports_no_emissive() {
     idle(&mut m);
     assert_eq!(rock(&m).settings.get("emissive"), Some(&json!(true)));
 }
+
+/// Audit 2026-10-15 item 16: sdc-project.toml changed on disk during an export: recording the JSON's hash asks
+/// Overwrite / Reload instead of a dead-end error.
+#[test]
+fn a_project_file_changed_during_the_export_asks_about_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ready(d.path());
+    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.05)));
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    let pf = m.sets_doc.as_ref().unwrap().path().to_path_buf();
+    let mut text = std::fs::read_to_string(&pf).unwrap();
+    text.push_str("\n# a hand edit\n");
+    std::fs::write(&pf, text).unwrap();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::ExternalChange(sdc_gui::model::DocKind::Project))
+    );
+}

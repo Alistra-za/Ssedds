@@ -78,14 +78,37 @@ pub struct ExportModel {
     pub revision: u64,
     /// `job_key` to its index in `rows` (the drawer's per-event lookup; rebuilt when rows are removed).
     pub(crate) index: HashMap<String, usize>,
+    /// Rows were removed since `index` was built: rebuild it at the next lookup (audit item 6).
+    pub(crate) index_stale: bool,
 }
 
 fn slash(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+/// `a == b` with `\` and `/` equal, without allocating.
+fn same_path(a: &str, b: &str) -> bool {
+    let sep = |c: u8| c == b'/' || c == b'\\';
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .all(|(x, y)| x == y || (sep(x) && sep(y)))
+}
+
 impl ExportModel {
+    /// Drop the queued rows of `path` (a raw map packed into a recipe, a used RNM layer).
+    fn drop_queued(&mut self, path: &str) {
+        let before = self.rows.len();
+        self.rows
+            .retain(|r| !(r.state == RowState::Queued && same_path(&r.path, path)));
+        self.index_stale |= self.rows.len() != before;
+    }
+
     fn row(&mut self, ev: &EngineEvent) -> Option<&mut Row> {
+        if self.index_stale {
+            self.reindex();
+            self.index_stale = false;
+        }
         let key = ev.job.clone()?;
         let i = match self.index.get(&key) {
             Some(&i) => i,
@@ -145,10 +168,7 @@ impl ExportModel {
             } => {
                 // A raw map consumed by a recipe has no job of its own: drop the row its discovery made.
                 if let Some(p) = ev.path.as_deref() {
-                    let p = slash(p);
-                    self.rows
-                        .retain(|r| !(r.state == RowState::Queued && slash(&r.path) == p));
-                    self.reindex();
+                    self.drop_queued(p);
                 }
             }
             EventKind::FileDiscovered { output } => {
@@ -169,10 +189,7 @@ impl ExportModel {
             } => {
                 // A used layer shows only in the RNM section; one an RNM-* code explains stays visible.
                 if let Some(p) = ev.path.as_deref() {
-                    let p = slash(p);
-                    self.rows
-                        .retain(|r| !(r.state == RowState::Queued && slash(&r.path) == p));
-                    self.reindex();
+                    self.drop_queued(p);
                 }
             }
             EventKind::FileSkipped { kind, reason, .. } => {

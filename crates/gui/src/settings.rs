@@ -169,24 +169,93 @@ impl GuiSettings {
     }
     /// Write the file atomically (a temporary file, then rename). A file that exists but cannot be parsed (the user's
     /// hand edit that `load` reported) is kept as `gui.toml.bad` first, so the first save does not destroy it.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+    /// Returns the `.bad` path when a broken file was kept.
+    pub fn save(&self, path: &Path) -> std::io::Result<Option<PathBuf>> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let unreadable = std::fs::read_to_string(path)
             .is_ok_and(|text| toml::from_str::<GuiSettings>(&text).is_err());
+        let kept = path.with_extension("toml.bad");
         if unreadable {
-            let kept = path.with_extension("toml.bad");
             let _ = std::fs::remove_file(&kept);
-            std::fs::rename(path, kept)?;
+            std::fs::rename(path, &kept)?;
         }
         let text = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path))
+        engine::dds::write_atomic(path, text.as_bytes())?;
+        Ok(unreadable.then_some(kept))
+    }
+
+    /// [`Self::save`] that keeps hand edits made while the app runs (audit 2026-10-15 item 15). `base` is what was
+    /// last loaded or written and the file's stamp then; when the file changed since, it is read again and every
+    /// field the app has not changed since `base` takes the file's value. A file that is gone or does not parse is
+    /// not merged. `base` is updated after a write.
+    pub fn save_merged(
+        &mut self,
+        path: &Path,
+        base: &mut Option<(GuiSettings, Option<engine::policy::SourceStamp>)>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        let now = engine::policy::SourceStamp::of(path);
+        if let Some((b, _)) = base.as_ref().filter(|(_, s)| now.is_some() && *s != now) {
+            if let (disk, None) = GuiSettings::load(path) {
+                if let Some(merged) = merge(b, self, &disk) {
+                    *self = merged;
+                }
+            }
+        }
+        let kept = self.save(path)?;
+        *base = Some((self.clone(), engine::policy::SourceStamp::of(path)));
+        Ok(kept)
     }
     pub fn push_recent(&mut self, p: PathBuf) {
         self.recent.retain(|r| r != &p);
         self.recent.insert(0, p);
         self.recent.truncate(10);
     }
+}
+
+/// Field by field (tables recursed): `mine` where it differs from `base`, else `disk`. `None` when a side does not
+/// serialise or the result does not deserialise.
+fn merge(base: &GuiSettings, mine: &GuiSettings, disk: &GuiSettings) -> Option<GuiSettings> {
+    fn table(t: &toml::Table, base: &toml::Table, disk: &toml::Table) -> toml::Table {
+        let mut out = disk.clone();
+        let keys: std::collections::BTreeSet<&String> = t.keys().chain(base.keys()).collect();
+        for k in keys {
+            match (t.get(k), base.get(k), disk.get(k)) {
+                (a, b, _) if a == b => {}
+                // Recent folders merge per folder: the file's removals and additions, the app's additions and order.
+                (Some(toml::Value::Array(a)), Some(toml::Value::Array(b)), d) if k == "recent" => {
+                    let none = vec![];
+                    let d = d.and_then(toml::Value::as_array).unwrap_or(&none);
+                    let mut list: Vec<toml::Value> = a
+                        .iter()
+                        .filter(|x| d.contains(x) || !b.contains(x))
+                        .cloned()
+                        .collect();
+                    for x in d {
+                        if !b.contains(x) && !list.contains(x) {
+                            list.push(x.clone());
+                        }
+                    }
+                    out.insert(k.clone(), toml::Value::Array(list));
+                }
+                (
+                    Some(toml::Value::Table(a)),
+                    Some(toml::Value::Table(b)),
+                    Some(toml::Value::Table(d)),
+                ) => {
+                    out.insert(k.clone(), toml::Value::Table(table(a, b, d)));
+                }
+                (Some(a), _, _) => {
+                    out.insert(k.clone(), a.clone());
+                }
+                (None, _, _) => {
+                    out.remove(k);
+                }
+            }
+        }
+        out
+    }
+    let v = |s: &GuiSettings| toml::Table::try_from(s).ok();
+    table(&v(mine)?, &v(base)?, &v(disk)?).try_into().ok()
 }

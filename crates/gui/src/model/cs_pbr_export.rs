@@ -51,8 +51,8 @@ pub fn to_text(kind: Kind, values: &Map<String, Json>) -> String {
 
 use super::cs_pbr::{valid_value, CsBlock, StaticsStatus};
 use super::history::sha256_of;
-use super::pbr_export::{file_name_problem, hand_edited, json_entries, write_atomic};
-use super::{AppModel, Dialog};
+use super::pbr_export::{file_name_problem, hand_edited, json_entries};
+use super::AppModel;
 use crate::sets_doc::SetEntry;
 use engine::config::Target;
 use std::collections::{BTreeMap, BTreeSet};
@@ -220,7 +220,7 @@ pub fn finish(
             }
             continue;
         }
-        match write_atomic(&path, text) {
+        match engine::dds::write_atomic(&path, text.as_bytes()) {
             Ok(()) => {
                 written += 1;
                 if let Some(s) = sha256_of(&path) {
@@ -298,12 +298,7 @@ impl AppModel {
         }
         d.set_cs_pbr_shas(&shas);
         if let Err(e) = d.save(false) {
-            let e = format!("sdc-project.toml: {e}");
-            // An open question (the PGPatcher JSON overwrite) must stay: replacing it would drop that JSON unasked.
-            match self.dialog {
-                Some(_) => self.export.notes.push(e),
-                None => self.dialog = Some(Dialog::Error(e)),
-            }
+            self.hash_record_failed(&e);
         }
     }
 }

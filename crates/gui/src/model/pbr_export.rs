@@ -599,17 +599,6 @@ fn exported(rows: &[Row], key: &str) -> Result<(), String> {
     }
 }
 
-pub(crate) fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    let tmp = path.with_extension("json.sdc-tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
-}
-
 /// The file was edited outside sdc since sdc last wrote it (DECISIONS Note P21): it exists, its hash is not the
 /// recorded one, and its bytes are not `text` (identical bytes need no question, even with no record).
 pub(crate) fn hand_edited(path: &std::path::Path, text: &str, last_sha: Option<&str>) -> bool {
@@ -677,7 +666,7 @@ pub fn finish(
     if hand_edited(&p.path, &text, last_sha) {
         return Finish::Overwrite(text);
     }
-    match write_atomic(&p.path, &text) {
+    match engine::dds::write_atomic(&p.path, text.as_bytes()) {
         Ok(()) => {
             notes.push(format!(
                 "PGPatcher JSON written: {} ({} entries)",
@@ -695,7 +684,7 @@ pub fn finish(
 
 /// Write `text` over an existing (hand-edited) JSON: the answer "Overwrite" to `Dialog::OverwriteJson`.
 pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) -> Option<String> {
-    match write_atomic(path, text) {
+    match engine::dds::write_atomic(path, text.as_bytes()) {
         Ok(()) => {
             notes.push(format!("PGPatcher JSON written: {}", path.display()));
             sha256_of(path)

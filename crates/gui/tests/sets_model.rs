@@ -1836,3 +1836,42 @@ fn slot_3_and_7_cards_name_both_kinds() {
         assert!(why.contains(both), "{why}");
     }
 }
+
+/// Audit 2026-10-15 item 8: redo of a Duplicate never writes over a file at the copy's path, and records the new
+/// copy's hash so undo deletes it again even when the source changed in between.
+#[test]
+fn redo_of_a_duplicate_refuses_an_occupied_path_and_records_the_new_hash() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let odd = key_of(&m, "odd.png");
+    let id = m.drop_new_set(&odd).unwrap();
+    idle(&mut m);
+    let rough = key_of(&m, "rock01_roughness.png");
+    m.drop_on_set(&rough, &id);
+    assert_eq!(
+        m.drop_choice(&rough, &id, DropChoice::Duplicate),
+        DropOutcome::Joined
+    );
+    let root = m.root.clone().unwrap();
+    let base = id.rsplit('/').next().unwrap().to_string();
+    let copy = root.join(format!("landscape/{base}_roughness.png"));
+    let src = root.join("landscape/rock01_roughness.png");
+    m.undo();
+    std::fs::write(&copy, b"someone else").unwrap();
+    m.redo();
+    assert!(matches!(m.dialog, Some(sdc_gui::model::Dialog::Error(_))));
+    assert!(m.history.can_redo(), "the step stays to redo");
+    assert_eq!(std::fs::read(&copy).unwrap(), b"someone else");
+    m.dialog = None;
+    std::fs::remove_file(&copy).unwrap();
+    let mut bytes = std::fs::read(&src).unwrap();
+    bytes.extend_from_slice(b"trailing");
+    std::fs::write(&src, bytes).unwrap();
+    m.redo();
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(copy.exists());
+    m.undo();
+    assert!(m.dialog.is_none(), "{:?}", m.dialog);
+    assert!(!copy.exists(), "the copy made by redo is deleted by undo");
+}

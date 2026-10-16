@@ -589,3 +589,67 @@ fn skips_stay_out_of_the_rate_but_count_as_done() {
     assert_eq!(p.rate(at(t0, 4000)), 0.0);
     assert!(p.eta(40, 100, at(t0, 4000)).is_none(), "no ETA from skips");
 }
+
+/// Audit 2026-10-15 item 6: pack-source skips drop the raw maps' rows (paths compared with `\` and `/` equal) and
+/// later events still reach the right rows; the paths keep the engine's spelling.
+#[test]
+fn packed_source_skips_drop_rows_and_later_events_find_the_rest() {
+    let mut x = ExportModel::default();
+    for (i, n) in ["a", "b", "c", "d"].iter().enumerate() {
+        x.on_event(ev(
+            i as u64,
+            &format!("t/{n}.dds"),
+            &format!(r"C:\m\t\{n}.png"),
+            EventKind::FileDiscovered {
+                output: format!("o/t/{n}.dds"),
+            },
+        ));
+    }
+    for (i, n) in ["a", "c"].iter().enumerate() {
+        let mut e = ev(
+            10 + i as u64,
+            "t/x_rmaos.dds",
+            &format!("C:/m/t/{n}.png"),
+            EventKind::FileSkipped {
+                kind: SkipKind::PackedSource,
+                code: None,
+                reason: "packed".into(),
+            },
+        );
+        e.job = None;
+        x.on_event(e);
+    }
+    x.on_event(ev(20, "t/d.dds", r"C:\m\t\d.png", failed("boom")));
+    x.on_event(ev(21, "t/b.dds", r"C:\m\t\b.png", EventKind::FileStarted));
+    let rows: Vec<(&str, &str, String)> = x
+        .rows
+        .iter()
+        .map(|r| (r.job_key.as_str(), r.path.as_str(), r.state.label()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("t/b.dds", r"C:\m\t\b.png", "running".to_string()),
+            ("t/d.dds", r"C:\m\t\d.png", "failed: boom".to_string()),
+        ]
+    );
+}
+
+/// Review minor 4: another folder or a new export makes the drawer forget its cached file checks.
+#[test]
+fn the_drawer_forgets_its_file_checks_on_a_new_epoch() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = drawer_harness(model_with(d.path(), ExportModel::default()));
+    h.run();
+    let now = Instant::now();
+    let p = d.path().join("x");
+    h.state_mut().1.stats.is_file(&p, now);
+    let before = h.state().1.stats.stats;
+    h.state_mut().1.stats.is_file(&p, now);
+    assert_eq!(h.state().1.stats.stats, before, "cached");
+    h.state_mut().0.drawer_epoch += 1;
+    h.run();
+    let mid = h.state().1.stats.stats;
+    h.state_mut().1.stats.is_file(&p, now);
+    assert_eq!(h.state().1.stats.stats, mid + 1, "asked again");
+}
