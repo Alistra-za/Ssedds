@@ -1385,7 +1385,7 @@ fn load_nif(path: &Path, c: &Candidate) -> Result<LoadedNif, String> {
         .ok_or_else(|| format!("{}: no longer in the scan", c.nif_path))?;
     let bytes = read_file(&FileSource::from_store(kind, &root, &p))?;
     let mut parsed = render3d::parse(&bytes);
-    parsed.head_part = store.is_head_part_mesh(&p).map_err(|e| e.to_string())?;
+    parsed.head_part = store.is_head_part_mesh(&p).unwrap_or(false); // shading only: a failed lookup is body
     let mut vfs = HashMap::new();
     for t in parsed.shapes.iter().flat_map(|s| s.material.slots.iter()) {
         if t.norm.is_empty() || vfs.contains_key(&t.norm) {
