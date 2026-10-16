@@ -264,7 +264,7 @@ impl BakeJob {
 
 /// `load::load_image`'s peak on `path`, from its header: [`BakeJob::peak_bytes`] of its size and decoded texel width.
 /// 0 when the header cannot be read.
-pub fn decode_peak(path: &std::path::Path) -> u64 {
+pub(crate) fn decode_peak(path: &std::path::Path) -> u64 {
     use ::image::ImageDecoder;
     let header = || {
         let mut r = ::image::ImageReader::open(path)

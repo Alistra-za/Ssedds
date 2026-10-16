@@ -2428,7 +2428,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (j, base) = layered_normal(d.path());
         let n = job_bytes(&j);
-        let b = Budget::new(2 * base, 8);
+        // One layered job fits, two do not; two base-only jobs would.
+        let b = Budget::new(n + base, 8);
         b.acquire(n);
         let admitted = std::sync::atomic::AtomicBool::new(false);
         std::thread::scope(|s| {
