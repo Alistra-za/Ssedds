@@ -242,10 +242,6 @@ fn atomic_write_replaces_and_leaves_no_temp() {
     write_atomic(&p, b"two").unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), b"two");
     assert_eq!(std::fs::read_dir(p.parent().unwrap()).unwrap().count(), 1);
-    // Note BC (audit #19): the encode outputs' writer is the same temp-and-rename without the flush.
-    engine::dds::write_atomic_nosync(&p, b"three").unwrap();
-    assert_eq!(std::fs::read(&p).unwrap(), b"three");
-    assert_eq!(std::fs::read_dir(p.parent().unwrap()).unwrap().count(), 1);
 }
 
 #[test]

@@ -584,7 +584,7 @@ fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
     let side = output.with_extension("dds.json");
     side.exists()
         || serde_json::to_string_pretty(&e.raw)
-            .is_ok_and(|t| crate::dds::write_atomic_nosync(&side, t.as_bytes()).is_ok())
+            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
 }
 
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
