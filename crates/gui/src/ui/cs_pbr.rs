@@ -1,19 +1,23 @@
-//! The set editor's Community Shaders PBR section (design §4, §6): per kind a block with its template picker,
-//! fields, EDID list, warnings and (texture sets) the statics line. Drawing only: every change is a model call made
-//! after drawing.
+//! The set editor's Community Shaders PBR records (design §4, §6): the PBR Landscape card and the generic
+//! "Advanced: CS PBR records" panel (Note BM). Per kind a block with its template picker, fields, EDID list, warnings
+//! and (texture sets) the statics line or the PGPatcher box. Drawing only: every change is a model call made after
+//! drawing.
 use super::columns::{AMBER, RED};
 use crate::model::cs_pbr::{
-    check_edid, check_text, fields, single_pass_text, statics_text, templates, CsBlock, EdidCheck,
-    Field, FieldKind, Kind, Statics, StaticsStatus, GLINT_FIELDS, NOT_CHECKED, NO_TXST_USES,
+    check_edid, check_text, fields, pgp_box_text, single_pass_text, statics_text, templates,
+    CsBlock, EdidCheck, Field, FieldKind, Kind, Statics, StaticsStatus, GLINT_FIELDS, NOT_CHECKED,
+    NO_TXST_USES, PGP_BOX,
 };
 use crate::model::cs_pbr_export::{refusals, MATO_SPECULAR};
 use crate::model::plugin_refs::set_key;
-use crate::model::sets::SetView;
+use crate::model::sets::{is_pbr_landscape, SetView};
 use crate::model::AppModel;
 use eframe::egui;
 use serde_json::{json, Value as Json};
 
-pub const SECTION: &str = "Community Shaders PBR records";
+pub const SECTION: &str = "Advanced: CS PBR records";
+/// Note BM: the PBR Landscape card's title.
+pub const CARD: &str = "PBR Landscape";
 
 enum Act {
     Add(Kind),
@@ -25,27 +29,42 @@ enum Act {
     Refresh,
 }
 
+/// The generic records panel, collapsed, for any CS set but a PBR Landscape set, whose card edits the same blocks
+/// (Note BM: hidden there, so the blocks are never edited in two places).
 pub fn section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
-    if model.target != engine::config::Target::Cs {
-        return;
+    if model.target == engine::config::Target::Cs && !is_pbr_landscape(v) {
+        draw(ui, model, v, false);
     }
+}
+
+/// Note BM: the PBR Landscape card: the texture set (always shown; the first edit creates the block), the
+/// PGPatcher box in place of the statics choice, and the material object.
+pub fn card(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
+    if model.target == engine::config::Target::Cs && is_pbr_landscape(v) {
+        draw(ui, model, v, true);
+    }
+}
+
+fn draw(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, card: bool) {
     let mut acts = vec![];
     let m: &AppModel = model;
-    egui::CollapsingHeader::new(SECTION)
-        .id_salt(("cs-pbr", v.id.as_str()))
+    egui::CollapsingHeader::new(if card { CARD } else { SECTION })
+        .id_salt(("cs-pbr", card, v.id.as_str()))
+        .default_open(card)
         .show(ui, |ui| {
             if ui.small_button("Refresh scan").clicked() {
                 acts.push(Act::Refresh);
             }
             for kind in [Kind::Txst, Kind::Mato] {
                 ui.separator();
+                let always = card && kind == Kind::Txst;
                 match m.cs_block(&v.id, kind) {
-                    None => {
+                    None if !always => {
                         if ui.button(format!("Add {}", kind.label())).clicked() {
                             acts.push(Act::Add(kind));
                         }
                     }
-                    Some(b) => block(ui, m, v, kind, &b, &mut acts),
+                    b => block(ui, m, v, kind, &b.unwrap_or_default(), card, &mut acts),
                 }
             }
         });
@@ -64,14 +83,18 @@ pub fn section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     }
 }
 
+/// `card`: drawn in the PBR Landscape card, where the texture set has no Remove and the PGPatcher box replaces the
+/// statics choice.
 fn block(
     ui: &mut egui::Ui,
     m: &AppModel,
     v: &SetView,
     kind: Kind,
     b: &CsBlock,
+    card: bool,
     acts: &mut Vec<Act>,
 ) {
+    let removable = !(card && kind == Kind::Txst);
     ui.horizontal(|ui| {
         ui.strong(kind.label());
         egui::ComboBox::from_id_salt(("cs-template", kind.key(), v.id.as_str()))
@@ -87,7 +110,7 @@ fn block(
                     }
                 }
             });
-        if ui.small_button("Remove").clicked() {
+        if removable && ui.small_button("Remove").clicked() {
             acts.push(Act::Remove(kind));
         }
     });
@@ -102,7 +125,11 @@ fn block(
     }
     edids(ui, m, v, kind, b, acts);
     if kind == Kind::Txst {
-        statics(ui, m, v, b, acts);
+        if card {
+            pgp_box(ui, m, v, b, acts);
+        } else {
+            statics(ui, m, v, b, acts);
+        }
     }
 }
 
@@ -294,6 +321,42 @@ fn edids(
     }
 }
 
+/// Note BM: ticked = the entry is written (always, or auto with non-LOD meshes; also with no block yet, as for any
+/// PBR set). A click stores always/never; "Back to auto" clears it.
+fn pgp_box(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut Vec<Act>) {
+    let st = m.statics_status(v);
+    let mut on = matches!(
+        st,
+        None | Some(StaticsStatus::Always | StaticsStatus::Used(_))
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui.checkbox(&mut on, PGP_BOX).changed() {
+            acts.push(Act::Statics(if on {
+                Statics::Always
+            } else {
+                Statics::Never
+            }));
+        }
+        if b.statics != Statics::Auto && ui.small_button("Back to auto").clicked() {
+            acts.push(Act::Statics(Statics::Auto));
+        }
+    });
+    ui.weak(pgp_box_text(st.as_ref()));
+    meshes(ui, v, st.as_ref());
+}
+
+fn meshes(ui: &mut egui::Ui, v: &SetView, st: Option<&StaticsStatus>) {
+    if let Some(StaticsStatus::Used(paths)) = st {
+        egui::CollapsingHeader::new("Meshes")
+            .id_salt(("cs-statics", v.id.as_str()))
+            .show(ui, |ui| {
+                for p in paths {
+                    ui.monospace(p);
+                }
+            });
+    }
+}
+
 fn statics(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut Vec<Act>) {
     ui.horizontal(|ui| {
         ui.label("PGPatcher entry for statics:");
@@ -307,16 +370,9 @@ fn statics(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut
             }
         }
     });
-    if let Some(st) = m.statics_status(v) {
-        ui.label(statics_text(&st));
-        if let StaticsStatus::Used(paths) = &st {
-            egui::CollapsingHeader::new("Meshes")
-                .id_salt(("cs-statics", v.id.as_str()))
-                .show(ui, |ui| {
-                    for p in paths {
-                        ui.monospace(p);
-                    }
-                });
-        }
+    let st = m.statics_status(v);
+    if let Some(s) = &st {
+        ui.label(statics_text(s));
     }
+    meshes(ui, v, st.as_ref());
 }

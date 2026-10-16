@@ -453,6 +453,7 @@ pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
                 if skin {
                     crate::ui::skin_card::card(ui, m, v);
                 }
+                crate::ui::cs_pbr::card(ui, m, v);
                 crate::ui::cs_pbr::section(ui, m, v);
                 crate::ui::cm_card::section(ui, m, v);
             }

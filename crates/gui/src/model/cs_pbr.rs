@@ -351,7 +351,8 @@ impl AppModel {
         }
     }
 
-    /// One undoable, JSON-only edit of the sets document (design §3; nothing is planned, DECISIONS P7).
+    /// One undoable, JSON-only edit of the sets document (design §3; nothing is planned, DECISIONS P7, except when a
+    /// texture-set block comes or goes: Note BM4).
     fn cs_edit(
         &mut self,
         set: &str,
@@ -363,7 +364,12 @@ impl AppModel {
             return;
         }
         let s = set.to_string();
+        let txst = super::sets::cs_txst_sets(self);
         self.edit_docs(label, merge, false, move |_, d| f(d, &s));
+        // Note BM: a texture-set block that comes or goes is shader-pick input, so that edit plans again.
+        if super::sets::cs_txst_sets(self) != txst {
+            self.replan_after_edit();
+        }
     }
 
     pub fn add_cs_block(&mut self, set: &str, kind: Kind) {
@@ -586,6 +592,19 @@ pub fn statics_text(s: &StaticsStatus) -> String {
         }
         StaticsStatus::Always => "statics = always: PGPatcher entry written".into(),
         StaticsStatus::Never => "statics = never: no PGPatcher entry".into(),
+    }
+}
+
+/// Note BM: the PBR Landscape card's "Also write into the PGPatcher JSON" box (it replaces the statics choice).
+pub const PGP_BOX: &str = "Also write into the PGPatcher JSON";
+
+/// The line under the PGPatcher box: the auto reason, or that the user set it. `None` = no texture-set block yet.
+pub fn pgp_box_text(s: Option<&StaticsStatus>) -> String {
+    match s {
+        None => "No texture set yet: the PGPatcher entry is written as for any PBR set".into(),
+        Some(StaticsStatus::Always) => "Ticked by you: PGPatcher entry written".into(),
+        Some(StaticsStatus::Never) => "Unticked by you: no PGPatcher entry".into(),
+        Some(s) => statics_text(s),
     }
 }
 
