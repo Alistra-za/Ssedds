@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Installs the channel, target and components pinned in rust-toolchain.toml.
+      - name: Install toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace -- -D warnings
+      # No ISPC compiler is needed: the encoder objects are vendored (crates/encoders-sys/vendor).
+      # Tests that need owner data are #[ignore]d or skip without SDC_BENCH_ROOT and similar variables.
+      # The render3d and gui GPU tests use the WARP software adapter or skip when no adapter is found,
+      # so no GPU is required.
+      - run: cargo test --workspace
