@@ -41,7 +41,6 @@ pub enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 pub enum TargetArg {
     Cs,
-    Cpm,
     Vanilla,
 }
 
@@ -49,7 +48,6 @@ impl From<TargetArg> for Target {
     fn from(t: TargetArg) -> Target {
         match t {
             TargetArg::Cs => Target::Cs,
-            TargetArg::Cpm => Target::Cpm,
             TargetArg::Vanilla => Target::Vanilla,
         }
     }

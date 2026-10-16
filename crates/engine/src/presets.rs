@@ -22,15 +22,13 @@ pub const SOURCE_INLINE: &str = "inline";
 pub fn default_preset_for(t: Target) -> &'static str {
     match t {
         Target::Cs => "cs-quality",
-        Target::Cpm => "cpm-quality",
         Target::Vanilla => "vanilla-quality",
     }
 }
 
-const BUILTIN: [&str; 7] = [
+const BUILTIN: [&str; 6] = [
     include_str!("../../../presets/sdc-base.toml"),
     include_str!("../../../presets/cs-quality.toml"),
-    include_str!("../../../presets/cpm-quality.toml"),
     include_str!("../../../presets/vanilla-quality.toml"),
     include_str!("../../../presets/cs-compact.toml"),
     include_str!("../../../presets/vanilla-compact.toml"),
@@ -678,7 +676,7 @@ impl PresetRegistry {
         }
         let targets = match chain.iter().rev().find_map(|p| p.target) {
             Some(t) => vec![t],
-            None => vec![Target::Cs, Target::Cpm, Target::Vanilla],
+            None => vec![Target::Cs, Target::Vanilla],
         };
         for t in targets {
             for st in Subtype::ALL {

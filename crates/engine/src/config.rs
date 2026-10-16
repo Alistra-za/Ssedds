@@ -11,7 +11,7 @@ macro_rules! cfg_enum {
     };
 }
 
-cfg_enum!(Target, "lowercase" { Cs, Cpm, Vanilla });
+cfg_enum!(Target, "lowercase" { Cs, Vanilla });
 cfg_enum!(Category, "snake_case" { Color, Normal, MixedPacked, Grayscale, Hdr });
 /// A texture sub-type. `skin_rfaos` was `rfaos` before the Advanced skin sub-types were prefixed (DECISIONS Note
 /// R-skin-1): the old id still loads, and the new one is written back.

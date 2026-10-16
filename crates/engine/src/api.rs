@@ -850,7 +850,8 @@ impl Engine {
         // 3. `apply_set_edits`. Set keys are fixed from here on: output overrides never change a key.
         // 4. `apply_output_paths` (Task 3).
         // 5. `duplicate_outputs_with` on the final paths, so two sets writing one file are caught after paths change.
-        // 6. Predicted packing suffixes, the skip/work loop, then pass 1 (Load, Analyse, Resolve with no shaders).
+        // 6. Predicted packing suffixes (they read the explicit shaders of 6a, Note AZ), the skip/work loop, then pass
+        //    1 (Load, Analyse, Resolve with no shaders).
         // 6a. Explicit shader choices (`explicit_shaders`): `BatchRequest::set_shaders`, then `--set set:<id>.shader`.
         // 6b. One `ShaderPick` per set (`shader::pick_for_set`) from the pass-1 sub-types; `ctx.shaders` holds them.
         // 6c. Members of a set whose shader has member defaults are resolved again with the picks; then packing.
@@ -943,13 +944,17 @@ impl Engine {
         });
 
         // Spec §6.4 "Set membership", DECISIONS Note M7: a recipe's output joins its set before anything resolves.
+        // Note AZ: a set explicitly given complex material predicts the complex `_m` (the auto pick comes later and
+        // needs a member already typed complex_material, so it never adds a suffix of its own).
+        let (explicit, stale_shaders) = explicit_shaders(&req, &sets);
         for set in &mut sets {
             let roles: BTreeSet<RawMap> = set
                 .members
                 .iter()
                 .filter_map(|&i| pack::plan::raw_role(&files[i]))
                 .collect();
-            for s in pack::predicted_suffixes(target, &roles) {
+            let complex = explicit.get(&set.key) == Some(&Shader::ComplexMaterial);
+            for s in pack::predicted_suffixes(target, complex, &roles) {
                 set.suffixes.insert(s.to_string());
             }
         }
@@ -1156,7 +1161,19 @@ impl Engine {
             }
         }
         // 6a. Explicit shader choices: the GUI map, then `--set set:<id>.shader` (the command line wins).
-        let explicit = explicit_shaders(&req, &sets, rep);
+        for id in &stale_shaders {
+            rep.emit(
+                None,
+                None,
+                EventKind::Warning(
+                    Warning::new(
+                        Code::SetEditStale,
+                        format!("shader choice skipped: no set '{id}'"),
+                    )
+                    .with_data(serde_json::json!({ "set": id })),
+                ),
+            );
+        }
         // 6b. One pick per set, from the pass-1 sub-types; later resolves see it through `ctx.shaders`.
         let index = crate::shader::JobIndex::new(&pass1_jobs);
         let picks: BTreeMap<String, ShaderPick> = sets
@@ -1957,12 +1974,12 @@ fn run_one(
 /// Planning step 6a (DECISIONS Note S-shader-1/-2): set key → explicit shader, from `req.set_shaders` then the
 /// `set:` overrides in command-line order (later wins). An id names a set by `sets::set_id`; a command-line id
 /// without `/` also names every set whose key ends in `/<id>`. GUI ids are canonical and match exactly (final
-/// review I2). Each id that names no set is one SET-EDIT-STALE.
+/// review I2). Also returns each id that names no set, once, for one SET-EDIT-STALE each at step 6a. Computed
+/// before the packing prediction (step 6), which reads it (Note AZ).
 fn explicit_shaders(
     req: &BatchRequest,
     sets: &[TextureSet],
-    rep: &Reporter,
-) -> BTreeMap<String, Shader> {
+) -> (BTreeMap<String, Shader>, Vec<String>) {
     let gui = req.set_shaders.iter().map(|(k, s)| (k, *s, false));
     let cli = req.overrides.iter().filter_map(|o| match &o.scope {
         Scope::Set(id) => Some((
@@ -1973,7 +1990,7 @@ fn explicit_shaders(
         _ => None,
     });
     let mut out = BTreeMap::new();
-    let mut stale = BTreeSet::new();
+    let mut stale = vec![];
     for (id, shader, tail_match) in gui.chain(cli) {
         let tail = format!("/{}", crate::sets::fold_id(id));
         let mut hit = false;
@@ -1985,21 +2002,11 @@ fn explicit_shaders(
                 hit = true;
             }
         }
-        if !hit && stale.insert(id.clone()) {
-            rep.emit(
-                None,
-                None,
-                EventKind::Warning(
-                    Warning::new(
-                        Code::SetEditStale,
-                        format!("shader choice skipped: no set '{id}'"),
-                    )
-                    .with_data(serde_json::json!({ "set": id })),
-                ),
-            );
+        if !hit && !stale.contains(id) {
+            stale.push(id.clone());
         }
     }
-    out
+    (out, stale)
 }
 
 /// The members the shader map check sees (spec §5): each non-raw member with its ordinary job (or as a skipped DDS
@@ -2607,15 +2614,15 @@ mod tests {
     fn target_origin_follows_precedence() {
         let reg = PresetRegistry::builtin().unwrap();
         let chain = reg.chain("vanilla-quality").unwrap();
-        let mut req = BatchRequest::new(vec![], "out".into(), Target::Cpm);
+        let mut req = BatchRequest::new(vec![], "out".into(), Target::Cs);
         let cfg = |t| ConfigFile {
             target: Some(t),
             ..Default::default()
         };
-        let (proj, user) = (cfg(Target::Vanilla), cfg(Target::Cpm));
+        let (proj, user) = (cfg(Target::Vanilla), cfg(Target::Cs));
         assert_eq!(
             resolve_target(&req, Some(&proj), Some(&user), &chain),
-            (Target::Cpm, Provenance::User)
+            (Target::Cs, Provenance::User)
         );
         req.target = None;
         assert_eq!(
@@ -2624,7 +2631,7 @@ mod tests {
         );
         assert_eq!(
             resolve_target(&req, None, Some(&user), &chain),
-            (Target::Cpm, Provenance::UserConfig)
+            (Target::Cs, Provenance::UserConfig)
         );
         assert_eq!(
             resolve_target(&req, None, None, &chain),

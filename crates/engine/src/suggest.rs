@@ -486,13 +486,6 @@ mod tests {
             &rfaos,
             AlphaContent::None
         )));
-        assert!(!is_pbr_set(&ctx(
-            Target::Cpm,
-            None,
-            "textures/a/x.png",
-            &rfaos,
-            AlphaContent::None
-        )));
     }
 
     #[test]
@@ -694,7 +687,7 @@ mod tests {
             );
             assert!(
                 !is_pbr_set(&ctx(
-                    Target::Cpm,
+                    Target::Vanilla,
                     None,
                     "textures/a/x.png",
                     &set,

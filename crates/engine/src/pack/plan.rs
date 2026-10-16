@@ -293,7 +293,7 @@ fn chosen_recipe(
     if ctx.target != Target::Cs {
         return (PackRecipe::Auto, None);
     }
-    let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto);
+    let (auto, _) = recipes_for_with(ctx.target, raw, PackRecipe::Auto, false);
     let Some(base) = auto
         .iter()
         .find(|r| matches!(r.kind, RecipeKind::Rfaos | RecipeKind::Rmaos))
@@ -326,7 +326,7 @@ fn chosen_recipe(
         on_rmaos
     };
     if pick == PackRecipe::Rfaos
-        && !recipes_for_with(ctx.target, raw, pick)
+        && !recipes_for_with(ctx.target, raw, pick, false)
             .0
             .iter()
             .any(|r| r.kind == RecipeKind::Rfaos)
@@ -359,7 +359,7 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
         .filter(|r| set.suffixes.contains(&r.id()))
         .collect();
     if set.suffixes.contains("rfaos")
-        && !super::predicted_suffixes(ctx.target, &roles).contains(&"rfaos")
+        && !super::predicted_suffixes(ctx.target, false, &roles).contains(&"rfaos")
     {
         return true;
     }
@@ -389,7 +389,7 @@ pub fn set_is_advanced_skin(ctx: &ResolveCtx, set: &TextureSet, this: &InputFile
     let mut this = this.clone();
     this.rel = this.rel.with_file_name(format!("{base}_ao.{ext}"));
     let (choice, _) = chosen_recipe(ctx, set, &|_| this.clone(), &raw, &pa, &pinfo);
-    recipes_for_with(ctx.target, &raw, choice)
+    recipes_for_with(ctx.target, &raw, choice, false)
         .0
         .iter()
         .any(|r| r.kind == RecipeKind::Rfaos)
@@ -444,7 +444,12 @@ pub fn plan_packing(
         }
         let (choice, recipe_note) =
             chosen_recipe(ctx, set, &|p| members[p].clone(), &raw, &pa, &pinfo);
-        let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice);
+        // Note AZ: a vanilla set whose shader pick is complex material packs the complex `_m`.
+        let complex = ctx
+            .shaders
+            .get(&set.key)
+            .is_some_and(|p| p.shader == crate::shader::Shader::ComplexMaterial);
+        let (recipes, unused) = recipes_for_with(ctx.target, &raw, choice, complex);
         heads.push((set, members, recipe_note, recipes, unused));
     }
     // Every recipe's output (explicit or default) before any is planned: an explicit packed path is compared with
