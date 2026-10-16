@@ -1142,8 +1142,12 @@ pub fn patch_header(a: PatchHeaderArgs) -> Result<i32, EngineError> {
                         Some(dir) => dir.join(path.file_name().unwrap_or_default()),
                         None => path.clone(),
                     };
-                    engine::dds::write_atomic(&out, &p.bytes)
-                        .map_err(|e| EngineError::Fatal(format!("{}: {e}", out.display())))?;
+                    // Audit 2026-10-15 item 10: one failed write does not stop the batch.
+                    if let Err(e) = engine::dds::write_atomic(&out, &p.bytes) {
+                        println!("{shown}: write failed: {e}");
+                        exit = 1;
+                        continue;
+                    }
                 }
                 // After the write, so a failed write never reads as patched.
                 let w = p.warning();
