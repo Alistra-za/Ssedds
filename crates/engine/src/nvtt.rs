@@ -1,7 +1,7 @@
 //! NVIDIA Texture Tools 3 (`nvcompress`) as an optional BC7/BC6H encoder (spec §7.5, DECISIONS Note NV). Never bundled
 //! or linked: the user installs it and the engine runs it as a separate process.
 use crate::config::{AlphaPolicy, Format, Profile};
-use crate::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+use crate::dds::{dds_bytes, DdsDesc, ResolvedHeader, DDPF_FOURCC};
 use crate::encode::{bc7_post_fix, pack_uncompressed};
 use crate::quantize::EncoderInput;
 use std::ffi::OsStr;
@@ -292,8 +292,6 @@ static NVTT_SLOT: Mutex<()> = Mutex::new(());
 
 /// `D3DFMT_A16B16G16R16F`: the legacy FourCC for RGBA16F that nvcompress reads (Spike S7b).
 const FOURCC_RGBA16F: u32 = 113;
-/// `DDPF_FOURCC`.
-const DDPF_FOURCC: u32 = 0x4;
 
 /// NV5 (Spike S7b): nvcompress reads uncompressed DDS only with a legacy header. BC7 levels go as B8G8R8A8 with
 /// BGRA masks, BC6H levels as RGBA16F with FourCC 113 (the engine's writer has no legacy RGBA16F form, so the DX10
