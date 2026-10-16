@@ -658,7 +658,7 @@ impl PresetRegistry {
 
     /// Spec §3/§4 (`presets validate`, the user folder): the chain resolves, every rule override names a known field,
     /// and every sub-type's profile, alone and with each of `id`'s own rules applied, deserialises, for each target
-    /// the chain allows (its nearest `target`, else all three).
+    /// the chain allows (its nearest `target`, else both).
     pub fn check_preset(&self, id: &str) -> Result<(), PresetError> {
         let chain = self.chain(id)?;
         let own = *chain.last().expect("a chain holds its own preset");

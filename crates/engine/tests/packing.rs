@@ -686,3 +686,42 @@ fn a_vanilla_gloss_height_set_packs_the_complex_m_only_with_the_complex_material
         cli
     );
 }
+
+/// Note AZ2: an auto pick counts too. Under vanilla an `_m` with a varying alpha is typed complex_material, so a set
+/// whose raw maps start no `_rmaos` (here only a height map; roughness, glossiness, metallic, AO or an `_orm` would make
+/// it a PBR set, which falls back to `default`) auto-picks complex_material, and `plan_packing` reads that pick: the
+/// height plans the complex `_m`. By default the existing `_m` wins with PACK-CONFLICT; with `packing.prefer = raw`
+/// the packed complex `_m` replaces it.
+#[test]
+fn an_auto_picked_complex_material_set_packs_the_complex_m() {
+    let fixture = || {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("in/textures/a/iron_m.png");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        ImageBuffer::from_fn(W, W, |x, y| {
+            Rgba([80u8, 160, 40, (100 + (x + y) % 64) as u8])
+        })
+        .save(&p)
+        .unwrap();
+        put(d.path(), "iron_height.png", |_, y| (y * 2) as u8);
+        d
+    };
+    let d = fixture();
+    let o = convert(d.path(), Target::Vanilla, &[]);
+    assert_eq!(
+        planned(&o, "iron_m.png")["profile"]["subtype"],
+        "complex_material"
+    );
+    assert!(
+        warnings_of(&o, "iron_m.png")
+            .iter()
+            .any(|w| w.code == Code::PackConflict),
+        "{:?}",
+        warnings(&o)
+    );
+    let d = fixture();
+    let o = convert(d.path(), Target::Vanilla, &["packing.prefer=raw"]);
+    assert_eq!(o.summary.converted, 1, "{:?}", warnings(&o));
+    assert_eq!(planned(&o, "iron_height.png")["pack"]["kind"], "cpm_m");
+    assert_eq!(skip_code(&o, "iron_m.png"), Some(Code::PackConflict));
+}

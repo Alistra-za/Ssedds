@@ -910,3 +910,21 @@ fn cpm_target_and_preset_are_rejected() {
     assert!(added.unwrap_err().to_string().contains("cpm-quality"));
     assert!(toml::from_str::<engine::presets::ConfigFile>("target = \"cpm\"\n").is_err());
 }
+
+/// Note AZ1 (review M3): a user preset with `target = "cpm"` in the presets folder is skipped with CFG-PRESET-SKIPPED
+/// (Note T6, unchanged), and the warning names the unknown target.
+#[test]
+fn a_user_preset_with_the_cpm_target_is_skipped_naming_it() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("old.toml"),
+        "schema_version = 1\nid = \"old\"\nversion = \"1\"\nbase = \"sdc-base\"\ntarget = \"cpm\"\n",
+    )
+    .unwrap();
+    let mut r = PresetRegistry::builtin().unwrap();
+    let w = r.add_dir(d.path());
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].code, engine::codes::Code::CfgPresetSkipped);
+    assert!(w[0].message.contains("`cpm`"), "{}", w[0].message);
+    assert!(r.get("old").is_none());
+}
