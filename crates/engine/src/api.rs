@@ -429,7 +429,9 @@ fn input_bytes(w: u32, h: u32) -> u64 {
 
 /// [`estimated_bytes`] of the job's input, plus what its variance bake holds (DECISIONS R4; the M4 carry "the
 /// summed-area table counts against `--mem-budget`", a length pyramid since R5), plus (S-mips-11) 8 B/texel for a
-/// non-box filter's intermediate and 32 B/texel for a resize, both on the input's size.
+/// non-box filter's intermediate and 32 B/texel for a resize, both on the input's size, plus (Note BB) the active
+/// RNM layers' [`crate::rnm::RnmJob::admission_bytes`] at the resized size and, for complex grass, one more float
+/// chain (both half chains and the stacked chain are live together in `grass::build`).
 fn job_bytes(job: &ResolvedJob) -> u64 {
     let p = &job.profile;
     let extra = input_dims(&job.input).map_or(0, |(w, h)| {
@@ -444,7 +446,15 @@ fn job_bytes(job: &ResolvedJob) -> u64 {
         } else {
             0
         };
-        texels * (filter + resize)
+        let grass = if p.subtype == Subtype::ComplexGrass {
+            texels * 16 * 134 / 100
+        } else {
+            0
+        };
+        let layers = job.active_rnm().map_or(0, |r| {
+            r.admission_bytes(&p.rnm, crate::resize::target_dims((w, h), p.resize))
+        });
+        texels * (filter + resize) + grass + layers
     });
     estimated_bytes(&job.input)
         + extra
@@ -2353,6 +2363,114 @@ mod tests {
         let lying = d.path().join("a.bmp");
         std::fs::rename(&png, &lying).unwrap();
         assert_eq!(estimated_bytes(&lying), input_bytes(64, 32));
+    }
+
+    /// A Cs job of `subtype` reading a `w`×`h` RGB PNG at `dir/name`.
+    fn png_job(dir: &Path, name: &str, (w, h): (u32, u32), subtype: Subtype) -> ResolvedJob {
+        let input = dir.join(name);
+        image::RgbImage::new(w, h).save(&input).unwrap();
+        ResolvedJob {
+            input,
+            output: dir.join("out.dds"),
+            game_path: "a".into(),
+            set_key: "x/a".into(),
+            profile: PresetRegistry::builtin()
+                .unwrap()
+                .base_profile(Target::Cs, subtype),
+            provenance: Default::default(),
+            suggestions: vec![],
+            warnings: vec![],
+            status: JobStatus::Ready,
+            suffix_alias: None,
+            source: None,
+            pack: None,
+            bake: None,
+            rnm: None,
+            shader: None,
+        }
+    }
+
+    /// Note BB: a 64 `_n` with a 256 detail layer (the 8K-on-2K ratio, 4x) and the base-only bytes of that job.
+    fn layered_normal(dir: &Path) -> (ResolvedJob, u64) {
+        let mut j = png_job(dir, "a_n.png", (64, 64), Subtype::Normal);
+        let base = job_bytes(&j);
+        let layer = dir.join("detail.png");
+        image::RgbImage::new(256, 256).save(&layer).unwrap();
+        j.rnm = Some(crate::rnm::RnmJob {
+            layers: vec![crate::rnm::RnmLayer {
+                id: LayerId::Detail,
+                file: crate::rnm::RnmFile {
+                    path: layer,
+                    stamp: None,
+                },
+                mask: None,
+            }],
+            ao: None,
+        });
+        (j, base)
+    }
+
+    /// Note BB: a layered normal is admitted for its largest layer's decode (8-bit RGB: 3 + 16 + 16 per layer texel)
+    /// plus that layer resampled to the base (16 per base texel), on top of the base.
+    #[test]
+    fn a_layer_bigger_than_its_normal_is_admitted_for_its_decode_and_resample() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut j, base) = layered_normal(d.path());
+        assert_eq!(job_bytes(&j), base + 256 * 256 * 35 + 64 * 64 * 16);
+        // Off, the layers are not loaded, so they are not admitted.
+        j.profile.rnm.enabled = false;
+        assert_eq!(job_bytes(&j), base);
+    }
+
+    /// Note BB: under a budget that holds two base-only jobs, two layered ones run one at a time.
+    #[test]
+    fn two_layered_normals_are_not_admitted_together_under_a_small_budget() {
+        let d = tempfile::tempdir().unwrap();
+        let (j, base) = layered_normal(d.path());
+        let n = job_bytes(&j);
+        let b = Budget::new(2 * base, 8);
+        b.acquire(n);
+        let admitted = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                b.acquire(n);
+                admitted.store(true, Ordering::SeqCst);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(
+                !admitted.load(Ordering::SeqCst),
+                "second layered job admitted beside the first"
+            );
+            b.release(n);
+        });
+        assert!(admitted.load(Ordering::SeqCst));
+        assert_eq!(*lock(&b.used), (n, 1));
+    }
+
+    /// Note BB: a layered job bigger than the whole budget is admitted alone, as any oversized file is.
+    #[test]
+    fn a_layered_normal_over_the_whole_budget_still_runs_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let (j, base) = layered_normal(d.path());
+        let n = job_bytes(&j);
+        assert!(n > 2 * base, "{n} <= {}", 2 * base);
+        let b = Budget::new(2 * base, 8);
+        b.acquire(n);
+        assert_eq!(*lock(&b.used), (n, 1));
+    }
+
+    /// Note BB: complex grass holds both half chains and the stacked chain at once, one float chain (16 B/texel ×
+    /// 1.34) more than the generic model; about 1.33x the generic admission.
+    #[test]
+    fn complex_grass_is_admitted_for_its_chain_peak() {
+        let d = tempfile::tempdir().unwrap();
+        let mut j = png_job(d.path(), "g.png", (32, 64), Subtype::ComplexGrass);
+        let grass = job_bytes(&j);
+        j.profile.subtype = Subtype::Diffuse;
+        let generic = job_bytes(&j);
+        assert_eq!(grass, generic + 32 * 64 * 16 * 134 / 100);
+        let ratio = grass as f64 / input_bytes(32, 64) as f64;
+        assert!((1.3..=1.5).contains(&ratio), "{ratio}");
     }
 
     /// S-mips-11: a non-box filter adds its 8 B/texel intermediate, a resize its 32 B/texel; a DDS is sized from

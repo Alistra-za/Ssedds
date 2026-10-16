@@ -260,9 +260,8 @@ fn prepare_then<T>(
     } else {
         (preprocess_with(img, p, transfer), None)
     };
-    // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched.
-    // shortcut: memory admission counts only the base (`estimated_bytes`), not the layers loaded here (one at a time,
-    // plus its resample); count the largest layer when an 8K-layer-on-2K-base batch runs out of memory.
+    // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched. Admission
+    // counts the largest layer and its resample (`api::job_bytes`, Note BB).
     if let Some(r) = job.active_rnm() {
         crate::rnm::blend::apply(&mut work.img, r, p).map_err(fail(Stage::Load))?;
     }
