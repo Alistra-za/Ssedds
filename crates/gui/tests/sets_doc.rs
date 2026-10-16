@@ -238,13 +238,25 @@ fn a_non_conflict_save_error_names_the_file() {
     let d = tempfile::tempdir().unwrap();
     let mut m = support::opened(d.path());
     let root = m.root.clone().unwrap();
-    // A directory where the temp file goes makes the write fail.
-    std::fs::create_dir(root.join("sdc-project.toml.sdc-tmp")).unwrap();
     m.sets_doc
         .as_mut()
         .unwrap()
         .set_value("a", "hair", Some(json!(true)));
-    assert!(m.save().is_err());
+    m.save().unwrap();
+    // A read-only file cannot be replaced (Windows), so the write fails.
+    let file = root.join("sdc-project.toml");
+    let mut perm = std::fs::metadata(&file).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(&file, perm.clone()).unwrap();
+    m.sets_doc
+        .as_mut()
+        .unwrap()
+        .set_value("a", "hair", Some(json!(false)));
+    let saved = m.save();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perm.set_readonly(false);
+    std::fs::set_permissions(&file, perm).unwrap();
+    assert!(saved.is_err());
     match &m.dialog {
         Some(Dialog::Error(t)) => assert!(t.starts_with("sdc-project.toml: "), "{t}"),
         other => panic!("{other:?}"),

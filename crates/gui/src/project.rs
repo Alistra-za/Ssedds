@@ -35,6 +35,8 @@ pub struct ProjectDoc {
     doc: DocumentMut,
     disk: Option<SourceStamp>,
     dirty: bool,
+    /// Changes with every edit, from the counter `SetsDoc` uses (audit item 11).
+    rev: u64,
     error: Option<String>,
 }
 
@@ -123,6 +125,7 @@ impl ProjectDoc {
             doc: DocumentMut::new(),
             disk: None,
             dirty: false,
+            rev: crate::sets_doc::next_rev(),
             error: None,
         };
         d.reload();
@@ -168,6 +171,14 @@ impl ProjectDoc {
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+    /// An unsaved edit.
+    fn touch(&mut self) {
+        self.dirty = true;
+        self.rev = crate::sets_doc::next_rev();
+    }
     pub fn read_only(&self) -> bool {
         self.error.is_some()
     }
@@ -188,7 +199,7 @@ impl ProjectDoc {
         }
         if let Ok(doc) = text.parse::<DocumentMut>() {
             self.doc = doc;
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -207,7 +218,7 @@ impl ProjectDoc {
         let s = serde_json::to_value(t).ok();
         if let Some(Json::String(s)) = s {
             set_value(self.doc.as_table_mut(), "target", Value::from(s));
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -227,7 +238,7 @@ impl ProjectDoc {
                 self.doc.as_table_mut().remove("preset");
             }
         }
-        self.dirty = true;
+        self.touch();
     }
 
     /// The `[files]` table (or inline table), if there is one.
@@ -289,7 +300,7 @@ impl ProjectDoc {
             Some(())
         })();
         if written.is_some() {
-            self.dirty = true;
+            self.touch();
         } else if self.entry(key).is_some_and(|t| t.is_empty()) {
             // A field path ran into a non-table: do not leave the entry we just created behind.
             self.drop_entry(key);
@@ -318,7 +329,7 @@ impl ProjectDoc {
             .entry_mut(key)
             .is_some_and(|entry| remove(entry, &parts))
         {
-            self.dirty = true;
+            self.touch();
         }
         if self.entry(key).is_some_and(|t| t.is_empty()) {
             self.remove_file_entry(key);
@@ -362,7 +373,9 @@ impl ProjectDoc {
             Some(v) => self.write_fill(&id, v).is_some(),
             None => self.remove_fill(&id).is_some(),
         };
-        self.dirty |= changed;
+        if changed {
+            self.touch();
+        }
     }
 
     /// `defaults.packing.fill.<id> = v`, creating missing tables (dotted keys inside an existing `[defaults]`);
@@ -456,7 +469,7 @@ impl ProjectDoc {
                 }
             }
         }
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn file_keys(&self) -> Vec<String> {
@@ -470,7 +483,7 @@ impl ProjectDoc {
             return;
         }
         if self.drop_entry(key) {
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -486,9 +499,7 @@ impl ProjectDoc {
         if !force && self.changed_on_disk() {
             return Err(SaveError::ChangedOnDisk);
         }
-        let tmp = self.path.with_extension("toml.sdc-tmp");
-        std::fs::write(&tmp, self.doc.to_string())
-            .and_then(|_| std::fs::rename(&tmp, &self.path))
+        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
             .map_err(|e| SaveError::Io(e.to_string()))?;
         self.disk = SourceStamp::of(&self.path);
         crate::crash_log::discard_recovery(&self.path);

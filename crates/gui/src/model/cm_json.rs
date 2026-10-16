@@ -296,8 +296,7 @@ pub fn refuse_clashes(out: &mut [CmTarget], exporting: impl Fn(&str) -> bool) {
 }
 
 use super::history::sha256_of;
-use super::pbr_export::write_atomic;
-use super::Dialog;
+
 use std::path::PathBuf;
 
 /// What an export about to start writes once it has ended (computed when it starts, like the CS PBR files).
@@ -389,7 +388,7 @@ pub fn finish(
         } else if let Err(why) = may_replace(&path, last) {
             Some(why)
         } else {
-            match write_atomic(&path, text) {
+            match engine::dds::write_atomic(&path, text.as_bytes()) {
                 Ok(()) => {
                     written += 1;
                     if let Some(s) = sha256_of(&path) {
@@ -492,12 +491,7 @@ impl AppModel {
         }
         d.set_cm_json_shas(&shas);
         if let Err(e) = d.save(false) {
-            let e = format!("sdc-project.toml: {e}");
-            // An open question (the PGPatcher JSON overwrite) must stay.
-            match self.dialog {
-                Some(_) => self.export.notes.push(e),
-                None => self.dialog = Some(Dialog::Error(e)),
-            }
+            self.hash_record_failed(&e);
         }
     }
 }

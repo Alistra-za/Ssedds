@@ -386,8 +386,9 @@ impl eframe::App for SdcApp {
         }
         self.sync_layout_at(&ctx, std::time::Instant::now());
         // Last, so the panel paint that follows (where a lost device panics) has this frame's edits (Note AR).
-        // shortcut: re-serialises the unsaved documents every frame while dirty; key it on a revision if that shows up.
-        crate::crash_log::set_recovery(self.model.recovery_snapshot());
+        if let Some(files) = self.model.recovery_changed() {
+            crate::crash_log::set_recovery(files);
+        }
     }
 
     /// AG124: the panel fill, so a strip no panel paints never shows as a black bar (eframe's default is near black).

@@ -366,12 +366,15 @@ fn a_save_error_leaves_an_open_question_and_goes_to_the_notes() {
         "{:?}",
         m.export.notes
     );
-    // With no question open the error is still a dialog.
+    // With no question open the file changed on disk is the save question (audit 2026-10-15 item 16).
     m.dialog = None;
     m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.01)));
     let p = prepare(&m);
     m.finish_cs_pbr(p);
-    assert!(matches!(m.dialog, Some(Dialog::Error(_))), "{:?}", m.dialog);
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::ExternalChange(sdc_gui::model::DocKind::Project))
+    );
 }
 
 /// Final review M4: an unreadable scan database (an old schema before a rescan) is said once in the report.
