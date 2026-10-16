@@ -235,6 +235,10 @@ pub struct AppModel {
     pub picker: picker::Picker,
     pub settings: GuiSettings,
     pub settings_path: Option<PathBuf>,
+    /// gui.toml as last loaded or written, and its stamp then (audit item 15); `None`: no merge on the next save.
+    settings_base: Option<(GuiSettings, Option<SourceStamp>)>,
+    /// The last gui.toml write error shown (audit item 9: each distinct error is toasted once).
+    settings_error: Option<String>,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
     /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
@@ -424,6 +428,9 @@ impl AppModel {
         session: Arc<Session>,
     ) -> AppModel {
         let mut m = AppModel::placeholder(settings);
+        m.settings_base = settings_path
+            .as_deref()
+            .map(|p| (m.settings.clone(), SourceStamp::of(p)));
         m.settings_path = settings_path;
         m.session = Some(session);
         m
@@ -437,6 +444,8 @@ impl AppModel {
             picker: picker::Picker::default(),
             settings,
             settings_path: None,
+            settings_base: None,
+            settings_error: None,
             user_config: None,
             user_presets: None,
             loaded_user_presets: vec![],
@@ -641,9 +650,20 @@ impl AppModel {
         self.replan();
     }
 
-    pub fn save_settings(&self) {
-        if let Some(p) = &self.settings_path {
-            let _ = self.settings.save(p);
+    pub fn save_settings(&mut self) {
+        let Some(p) = self.settings_path.clone() else {
+            return;
+        };
+        match self.settings.save_merged(&p, &mut self.settings_base) {
+            Ok(()) => self.settings_error = None,
+            Err(e) => {
+                let text = format!("gui.toml: could not save: {e}");
+                if self.settings_error.as_ref() != Some(&text) {
+                    self.messages
+                        .notify(messages::Severity::Warning, text.clone());
+                    self.settings_error = Some(text);
+                }
+            }
         }
     }
 
