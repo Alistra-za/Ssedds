@@ -630,7 +630,7 @@ impl AppModel {
         self.sets.clear();
         self.unmatched_keys.clear();
         self.selection = Selection::None;
-        self.multi = Default::default();
+        self.reset_multi();
         self.bulk = Default::default();
         self.expanded = None;
         self.preview_close();
@@ -1734,17 +1734,25 @@ impl AppModel {
             .count()
     }
 
+    /// End the multi-selection; the revision keeps counting up.
+    fn reset_multi(&mut self) {
+        self.multi = bulk::MultiSelection {
+            selection_rev: self.multi.selection_rev + 1,
+            ..Default::default()
+        };
+    }
+
     /// Select one texture; any multi-selection ends (F3a D1).
     pub fn select_item(&mut self, key: &str) {
         self.selection = Selection::Item(key.to_string());
-        self.multi = Default::default();
+        self.reset_multi();
         self.bulk = Default::default();
     }
 
     /// Select one set; any multi-selection ends (F3a D1).
     pub fn select_set(&mut self, key: &str) {
         self.selection = Selection::Set(key.to_string());
-        self.multi = Default::default();
+        self.reset_multi();
         self.bulk = Default::default();
     }
 

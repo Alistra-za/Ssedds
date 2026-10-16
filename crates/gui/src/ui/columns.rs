@@ -237,26 +237,18 @@ struct StatsKey {
     search: String,
     sort: SortKey,
     selection: crate::model::Selection,
-    sets: bool,
-    n: usize,
-    ends: (Option<String>, Option<String>),
+    selection_rev: u64,
 }
 
-/// shortcut: the multi-selection is compared by its length and its first and last key, not key by key; every change
-/// to it changes one of the three (a click adds or drops one key, a range moves an end), so upgrade to a revision
-/// counter on the model if one ever swaps keys in the middle.
 /// `changed on disk` and `need a decision` stay uncounted here: they are one cheap pass and move without the items revision.
 pub fn column_stats(ctx: &egui::Context, model: &AppModel) -> Arc<ColumnStats> {
-    let keys = &model.multi.keys;
     let key = StatsKey {
         items: model.items_rev(),
         filter: model.filter.clone(),
         search: model.search.clone(),
         sort: model.prefs.sort,
         selection: model.selection.clone(),
-        sets: model.multi.sets,
-        n: keys.len(),
-        ends: (keys.first().cloned(), keys.last().cloned()),
+        selection_rev: model.multi.selection_rev,
     };
     let id = egui::Id::new("column-stats");
     if let Some((k, s)) = ctx.data(|d| d.get_temp::<(StatsKey, Arc<ColumnStats>)>(id)) {
