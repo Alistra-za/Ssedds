@@ -892,3 +892,21 @@ fn vanilla_compact_halves_a_complex_m() {
         (Format::Bc7, ResizeMode::Half, AlphaPolicy::Data)
     );
 }
+
+/// Note AZ: the cpm target and its preset are gone, with no alias: `target = "cpm"` and `base = "cpm-quality"` are
+/// errors.
+#[test]
+fn cpm_target_and_preset_are_rejected() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    assert!(r.get("cpm-quality").is_none());
+    let e = r
+        .add_toml("schema_version = 1\nid = \"a\"\nversion = \"1\"\nbase = \"sdc-base\"\ntarget = \"cpm\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cpm"), "{e}");
+    let added = r
+        .add_toml("schema_version = 1\nid = \"b\"\nversion = \"1\"\nbase = \"cpm-quality\"\n")
+        .and_then(|id| r.chain(&id).map(|_| ()));
+    assert!(added.unwrap_err().to_string().contains("cpm-quality"));
+    assert!(toml::from_str::<engine::presets::ConfigFile>("target = \"cpm\"\n").is_err());
+}

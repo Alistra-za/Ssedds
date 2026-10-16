@@ -519,39 +519,39 @@ fn target_and_preset_come_from_flag_then_project_then_user_then_preset() {
     assert_eq!(prov(&job, "target"), "builtin"); // nothing states a target: the documented fall-back
 
     // A selected preset states its own target.
-    let (b, job) = run(&["--preset", "cpm-quality"]);
-    assert_eq!(
-        (b["target"].as_str(), b["preset"].as_str()),
-        (Some("cpm"), Some("cpm-quality"))
-    );
-    assert_eq!(prov(&job, "target"), "preset:cpm-quality");
-
-    fx.user_config("target = \"cpm\"\npreset = \"cpm-quality\"\n");
-    let (b, job) = run(&[]);
-    assert_eq!(
-        (b["target"].as_str(), b["preset"].as_str()),
-        (Some("cpm"), Some("cpm-quality"))
-    );
-    assert_eq!(prov(&job, "target"), "user_config");
-
-    fx.project_config("target = \"vanilla\"\npreset = \"vanilla-quality\"\n");
-    let (b, job) = run(&[]);
+    let (b, job) = run(&["--preset", "vanilla-quality"]);
     assert_eq!(
         (b["target"].as_str(), b["preset"].as_str()),
         (Some("vanilla"), Some("vanilla-quality"))
     );
+    assert_eq!(prov(&job, "target"), "preset:vanilla-quality");
+
+    fx.user_config("target = \"vanilla\"\npreset = \"vanilla-compact\"\n");
+    let (b, job) = run(&[]);
+    assert_eq!(
+        (b["target"].as_str(), b["preset"].as_str()),
+        (Some("vanilla"), Some("vanilla-compact"))
+    );
+    assert_eq!(prov(&job, "target"), "user_config");
+
+    fx.project_config("target = \"cs\"\npreset = \"cs-compact\"\n");
+    let (b, job) = run(&[]);
+    assert_eq!(
+        (b["target"].as_str(), b["preset"].as_str()),
+        (Some("cs"), Some("cs-compact"))
+    );
     assert_eq!(prov(&job, "target"), "project_config");
 
     // `--preset` beats both configs' presets; a configured target still outranks the preset's own.
-    let (b, job) = run(&["--preset", "cpm-quality"]);
-    assert_eq!(b["preset"], "cpm-quality");
-    assert_eq!(b["target"], "vanilla");
+    let (b, job) = run(&["--preset", "vanilla-quality"]);
+    assert_eq!(b["preset"], "vanilla-quality");
+    assert_eq!(b["target"], "cs");
     assert_eq!(prov(&job, "target"), "project_config");
 
-    let (b, job) = run(&["--target", "cs", "--preset", "cpm-quality"]);
+    let (b, job) = run(&["--target", "vanilla", "--preset", "cs-quality"]);
     assert_eq!(
         (b["target"].as_str(), b["preset"].as_str()),
-        (Some("cs"), Some("cpm-quality"))
+        (Some("vanilla"), Some("cs-quality"))
     );
     assert_eq!(prov(&job, "target"), "user");
 }
@@ -560,13 +560,13 @@ fn target_and_preset_come_from_flag_then_project_then_user_then_preset() {
 fn explicit_config_flag_replaces_the_default_sdc_toml() {
     let fx = Fx::new();
     fx.rgb("wall.png");
-    fx.project_config("target = \"cpm\"\n");
-    let other = fx.write("other.toml", "target = \"vanilla\"\n");
+    fx.project_config("target = \"vanilla\"\n");
+    let other = fx.write("other.toml", "target = \"cs\"\n");
     let other = other.to_string_lossy().to_string();
     let o = fx.convert(&["--dry-run", "--set", "subtype=diffuse"]);
-    assert_eq!(batch_started(&o)["target"], "cpm");
-    let o = fx.convert(&["--dry-run", "--set", "subtype=diffuse", "--config", &other]);
     assert_eq!(batch_started(&o)["target"], "vanilla");
+    let o = fx.convert(&["--dry-run", "--set", "subtype=diffuse", "--config", &other]);
+    assert_eq!(batch_started(&o)["target"], "cs");
 }
 
 #[test]
@@ -1285,4 +1285,21 @@ fn cs_compact_writes_bc1_colour_and_half_size_normals() {
     assert_eq!((n.width, n.height), (512, 512));
     let p = read_dds(&std::fs::read(fx.dds("textures/a/wall_rmaos.dds")).unwrap()).unwrap();
     assert_eq!((p.width, p.height), (512, 512));
+}
+
+/// Note AZ: `cpm` is a hard error everywhere (unreleased, no alias): the flag, a config's target and the preset.
+#[test]
+fn cpm_is_rejected_as_target_config_and_preset() {
+    let fx = Fx::new();
+    fx.rgb("wall.png");
+    let args = ["--dry-run", "--set", "subtype=diffuse"];
+    for extra in [&["--target", "cpm"][..], &["--preset", "cpm-quality"]] {
+        let o = fx.convert(&[&args[..], extra].concat());
+        assert_eq!(code(&o), 2, "{extra:?}: {}", text(&o.stderr));
+        assert!(text(&o.stderr).contains("cpm"), "{}", text(&o.stderr));
+    }
+    fx.project_config("target = \"cpm\"\n");
+    let o = fx.convert(&args);
+    assert_eq!(code(&o), 2, "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("cpm"), "{}", text(&o.stderr));
 }

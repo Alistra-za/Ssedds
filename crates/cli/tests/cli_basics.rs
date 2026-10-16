@@ -164,7 +164,7 @@ fn project_config_target_is_used_when_no_target_flag_is_given() {
     let d = tempfile::tempdir().unwrap();
     normal_fixture(d.path());
     let cfg = d.path().join("proj.toml");
-    std::fs::write(&cfg, "target = \"cpm\"\n").unwrap();
+    std::fs::write(&cfg, "target = \"vanilla\"\n").unwrap();
     let o = sdc()
         .args(["convert", "--json", "--dry-run", "--recursive", "--config"])
         .arg(&cfg)
@@ -174,7 +174,7 @@ fn project_config_target_is_used_when_no_target_flag_is_given() {
         .output()
         .unwrap();
     let ev = events(&o.stdout);
-    assert_eq!(ev[0]["target"], "cpm", "{}", text(&o.stderr));
+    assert_eq!(ev[0]["target"], "vanilla", "{}", text(&o.stderr));
 }
 
 #[test]
