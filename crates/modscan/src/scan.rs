@@ -582,10 +582,10 @@ fn scan_body(
                 .ok_or_else(|| ScanError::Io(std::io::Error::other("copy row missing after scan")))
         })
         .collect::<Result<_, _>>()?;
-    let game = winners(&copies, &loose, &bsas, &|_| false);
+    let game = winners(&copies, &loose, &bsas);
     let nd: Vec<usize> = (0..copies.len()).filter(|&i| !derived[i]).collect();
     let nd_copies: Vec<Copy> = nd.iter().map(|&i| copies[i].clone()).collect();
-    let source: HashMap<String, usize> = winners(&nd_copies, &loose, &bsas, &|_| false)
+    let source: HashMap<String, usize> = winners(&nd_copies, &loose, &bsas)
         .into_iter()
         .map(|(p, (j, _))| (p, nd[j]))
         .collect();
@@ -610,7 +610,7 @@ fn scan_body(
 
     // Texture winners (game view only; stat-only data from the walk).
     let tex_pids = store.path_ids(&tex.iter().map(|c| c.path.as_str()).collect::<Vec<_>>())?;
-    let tex_win = winners(&tex, &loose, &bsas, &|_| false);
+    let tex_win = winners(&tex, &loose, &bsas);
     let tex_pid_of: HashMap<&str, i64> = tex
         .iter()
         .zip(&tex_pids)

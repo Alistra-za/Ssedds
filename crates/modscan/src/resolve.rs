@@ -28,13 +28,9 @@ pub fn winners(
     copies: &[Copy],
     loose: &[LooseOrigin],
     bsas: &[ActiveBsa],
-    exclude: &dyn Fn(OriginRef) -> bool,
 ) -> HashMap<String, (usize, u32)> {
     let mut best: HashMap<String, (usize, u32)> = HashMap::new();
     for (i, c) in copies.iter().enumerate() {
-        if exclude(c.origin) {
-            continue;
-        }
         let e = best.entry(c.path.clone()).or_insert((i, 0));
         e.1 += 1;
         if key(c.origin, loose, bsas) > key(copies[e.0].origin, loose, bsas) {
