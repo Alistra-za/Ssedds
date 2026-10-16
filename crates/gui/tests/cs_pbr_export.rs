@@ -105,6 +105,11 @@ use support::*;
 const ROCK: &str = "landscape/rock01";
 
 fn export_and_wait(m: &mut AppModel) {
+    // Note BM: adding a texture-set block re-plans (it is shader pick input); export from the settled plan.
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
     m.export_clicked();
     if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
         m.proceed_anyway();

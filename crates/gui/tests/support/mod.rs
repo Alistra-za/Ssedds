@@ -80,6 +80,18 @@ pub fn pbr_opened(dir: &Path) -> AppModel {
     m
 }
 
+/// `pbr_opened` with rock01 picked as plain `pbr`: the fixture lives under `textures/landscape/`, so it is auto PBR
+/// Landscape (Note BM); tests of plain-PBR cards, slots and the sphere/mesh preview use this.
+pub fn pbr_opened_plain(dir: &Path) -> AppModel {
+    let mut m = pbr_opened(dir);
+    m.set_shader("landscape/rock01", Some(engine::shader::Shader::Pbr));
+    assert!(
+        m.wait_idle(Duration::from_secs(60)),
+        "planning did not finish"
+    );
+    m
+}
+
 /// A model built as the app builds it (no test overrides), opened on `root` with exports under `export`.
 pub fn opened_as_the_app(root: PathBuf, export: PathBuf) -> AppModel {
     let settings = GuiSettings {

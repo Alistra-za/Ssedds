@@ -984,7 +984,8 @@ fn a_target_switch_replans_when_only_the_shared_roughness_changed() {
 #[test]
 fn shader_dropdown_lists_match_the_mode() {
     use engine::{config::Target, shader::Shader};
-    assert_eq!(shader_options(Target::Cs).len(), 14);
+    assert_eq!(shader_options(Target::Cs).len(), 15);
+    assert!(!shader_options(Target::Vanilla).contains(&Shader::PbrLandscape));
     assert!(!shader_options(Target::Vanilla).contains(&Shader::PbrGrass));
     assert!(!shader_options(Target::Vanilla).contains(&Shader::Pbr));
     // Note AZ (reverses ruling R1): vanilla lists complex grass and complex material.
@@ -1393,7 +1394,7 @@ fn the_matching_rows_and_the_plus_menu_follow_the_filled_slots() {
 fn a_pbr_set_shows_its_pbr_slots_in_slot_order() {
     use engine::shader::Shader;
     let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(d.path());
+    let mut m = pbr_opened_plain(d.path());
     idle(&mut m);
     let v = view(&set_views(&m), "landscape/rock01").clone();
     assert_eq!(v.shader.as_ref().map(|p| p.shader), Some(Shader::Pbr));

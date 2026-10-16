@@ -659,7 +659,7 @@ fn shown_ids(s: &SetPreview) -> Vec<u64> {
 #[test]
 fn without_a_scan_db_the_set_shows_patched_on_the_sphere_and_json_edits_encode_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(dir.path());
+    let mut m = pbr_opened_plain(dir.path());
     let key = rock(&m).0.key;
     m.select_set(&key);
     let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
@@ -834,7 +834,7 @@ fn exists_accepts_sdc_outputs_and_any_vfs_winner_including_bsa_only_textures() {
 #[test]
 fn a_scanned_mesh_is_listed_and_an_unreadable_one_falls_back_to_the_sphere() {
     let dir = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(dir.path());
+    let mut m = pbr_opened_plain(dir.path());
     let key = rock(&m).0.key;
     m.select_set(&key);
     let db = scan_db(dir.path(), &[r"textures\landscape\rock01.dds"]);
@@ -1254,7 +1254,7 @@ fn a_vanished_set_clears_the_scene_and_settles() {
 #[test]
 fn only_le_meshes_say_why_the_sphere_is_shown() {
     let dir = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(dir.path());
+    let mut m = pbr_opened_plain(dir.path());
     let key = rock(&m).0.key;
     m.select_set(&key);
     let db = scan_db_with(dir.path(), &[r"textures\landscape\rock01.dds"], true);
@@ -1910,7 +1910,7 @@ fn mesh_candidates_prefer_loose_then_leave_ground_and_first_person_last() {
     assert_eq!(ids, vec![5, 6, 3, 7, 1, 4, 2]);
     // Auto draws the first usable one: a loose, non-ground mesh.
     let dir = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(dir.path());
+    let mut m = pbr_opened_plain(dir.path());
     let key = rock(&m).0.key;
     m.select_set(&key);
     let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);

@@ -171,7 +171,7 @@ fn used_by_plugins_reads_the_scan_db_and_refresh_rereads_it() {
     use sdc_gui::model::sets::set_views;
     let d = tempfile::tempdir().unwrap();
     let db = seeded_db(d.path());
-    let mut model = pbr_opened(d.path());
+    let mut model = pbr_opened_plain(d.path());
     let v = set_views(&model)
         .into_iter()
         .find(
@@ -392,7 +392,7 @@ fn used_by_plugins_reads_inert_from_the_scan_db() {
              INSERT INTO rec_inert(formid, reason) VALUES (74565, 1), (3567, 2);",
         )
         .unwrap();
-    let mut model = pbr_opened(d.path());
+    let mut model = pbr_opened_plain(d.path());
     let v = set_views(&model)
         .into_iter()
         .find(

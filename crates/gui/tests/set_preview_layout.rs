@@ -203,7 +203,7 @@ fn a_member_selected_first_opens_its_sets_3d_view() {
 // ---- AG132: the compact 3D layout ----
 
 fn harness_at(d: &std::path::Path, size: egui::Vec2, prep: impl FnOnce(&mut AppModel)) -> H {
-    let mut m = pbr_opened(d);
+    let mut m = pbr_opened_plain(d);
     let key = json_entries(&m)
         .into_iter()
         .find(|(v, _)| v.id == "landscape/rock01")
