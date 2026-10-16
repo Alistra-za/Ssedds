@@ -72,7 +72,7 @@ See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
 
 | Shader | `cs` | `vanilla` |
 |---|---|---|
-| `pbr`, `pbr_grass`, `advanced_skin` | yes | no |
+| `pbr`, `pbr_grass`, `pbr_landscape`, `advanced_skin` | yes | no |
 | `default`, `envmap`, `complex_material`, `glow`, `parallax`, `skin`, `hair`, `eye`, `multilayer`, `landscape`, `complex_grass` | yes | yes |
 
 A shader the target does not have falls back to `default`, with `SHADER-UNAVAILABLE`. See [Texture types](Texture-Types.md#set-shaders).
