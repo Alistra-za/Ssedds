@@ -230,3 +230,14 @@ fn a_bad_file_glob_is_refused() {
     assert!(e.contains("glob"), "{e}");
     parse_set("file:**/armor/[ab]*.png.format=bc1").unwrap();
 }
+
+/// Audit REPORT #8 (Note BC): TOML's `inf`, `-inf` and `nan` become JSON null, which the merge ignores; they are
+/// refused instead of silently doing nothing.
+#[test]
+fn a_non_finite_value_is_refused() {
+    for v in ["inf", "-inf", "nan", "[1.0, nan]"] {
+        let e = parse_set(&format!("validation.min_mip_psnr_db={v}")).unwrap_err();
+        assert!(e.contains("finite"), "{v}: {e}");
+    }
+    parse_set("validation.min_mip_psnr_db=-1e9").unwrap();
+}

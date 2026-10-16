@@ -176,6 +176,8 @@ fn bad_files_entries_are_config_errors_and_user_config_files_are_rejected() {
     };
     assert!(config_err("[files.\"x.png\"]\ncolour = \"srgb\"\n").contains("x.png"));
     assert!(config_err("[files.\"x.png\"]\nallow = [\"NOT-A-CODE\"]\n").contains("NOT-A-CODE"));
+    // Audit REPORT #8 (Note BC): a non-finite number is refused, not ignored.
+    assert!(config_err("[files.\"x.png\"]\nalpha.threshold = nan\n").contains("finite"));
     let d = fixture("");
     let user = d.path().join("user.toml");
     std::fs::write(&user, "[files.\"a.png\"]\nalpha.threshold = 90\n").unwrap();

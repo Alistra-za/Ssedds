@@ -219,6 +219,12 @@ impl ConfigFile {
                 }
                 allow.insert(key.clone(), codes);
             }
+            // `leaf_paths` skips nulls, which only a non-finite number makes (audit #8, Note BC).
+            if crate::overrides::non_finite(&entry) {
+                return Err(bad(
+                    "not a finite number (inf, -inf and nan are refused)".into()
+                ));
+            }
             let mut paths = vec![];
             leaf_paths(&entry, "", &mut paths);
             for field in paths {
