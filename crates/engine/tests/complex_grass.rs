@@ -555,3 +555,28 @@ fn an_auto_shader_with_a_gras_diffuse_is_grass() {
         Some(engine::shader::Shader::ComplexGrass)
     );
 }
+
+/// Audit REPORT #4 (Note BC): the bottom half's alpha is specular data, so a specular alternating 100/160 around
+/// the cutout threshold (50 % passing at mip 0, drifting at lower mips) raises no VAL-COVERAGE; the top half is
+/// preserved in `grass::build`.
+#[test]
+fn a_varying_specular_raises_no_val_coverage() {
+    let d = tempfile::tempdir().unwrap();
+    let mut img = grass(64);
+    for y in 64..128 {
+        for x in 0..64 {
+            img.at_mut(x, y)[3] = if (x + y) % 2 == 0 { 100.0 } else { 160.0 } / 255.0;
+        }
+    }
+    put(&d, "g.png", &img);
+    let (events, s) = run(&d, Target::Cs, &[TAG, CUTOUT]);
+    assert_eq!(s.converted, 1);
+    let codes: Vec<Code> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Warning(w) => Some(w.code),
+            _ => None,
+        })
+        .collect();
+    assert!(!codes.contains(&Code::ValCoverage), "{codes:?}");
+}
