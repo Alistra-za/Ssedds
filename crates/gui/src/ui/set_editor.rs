@@ -123,7 +123,7 @@ pub fn draw(
     }
     // G6: a delete section that matches this set's textures deletes the shapes the set is for.
     for h in crate::model::sections::delete_hits(model)
-        .into_iter()
+        .iter()
         .filter(|h| engine::sets::same_id(&h.set_id, &v.id))
     {
         ui.horizontal_wrapped(|ui| {

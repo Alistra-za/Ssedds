@@ -98,8 +98,22 @@ impl AppModel {
 
     pub(super) fn known_paths_landed(&mut self, result: Result<KnownPaths, String>) {
         match result {
-            Ok(k) => self.set_known(k),
-            Err(e) => eprintln!("tessalith: reading the scan's texture paths failed: {e}"),
+            Ok(k) => {
+                self.scan_db_error = None;
+                self.set_known(k);
+            }
+            Err(e) => self.scan_db_warning(format!(
+                "Scan database: reading its texture paths failed: {e}"
+            )),
+        }
+    }
+
+    /// A scan-database read failed: a warning in Messages (the GUI has no console), once per distinct error.
+    pub(super) fn scan_db_warning(&mut self, text: String) {
+        if self.scan_db_error.as_ref() != Some(&text) {
+            self.messages
+                .log(super::messages::Severity::Warning, text.clone());
+            self.scan_db_error = Some(text);
         }
     }
 

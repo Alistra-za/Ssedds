@@ -192,6 +192,11 @@ fn a_delete_section_that_matches_a_sets_texture_is_a_hit_and_goes_in_the_export(
     assert!(delete_hits(&m).is_empty());
     m.set_section_value(0, "path_contains", Some(json!("rock0")));
     assert!(delete_hits(&m).iter().any(|h| h.set_id == ROCK_SET));
+    let hits = delete_hits(&m);
+    assert!(
+        std::sync::Arc::ptr_eq(&hits, &delete_hits(&m)),
+        "no change, no rematch (REPORT #11)"
+    );
     let p = sdc_gui::model::pbr_export::prepare(&m).expect("a JSON to write");
     let (id, deps, e) = p.entries.last().unwrap();
     assert_eq!(id, "delete section 1");

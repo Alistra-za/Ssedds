@@ -460,7 +460,11 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
 /// Every set, in display order, with its slots, ownership and prefix.
 fn build_views(m: &AppModel) -> Vec<SetView> {
     let root = m.export_root();
-    let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
+    let entries = m
+        .sets_doc
+        .as_ref()
+        .map(|d| d.entries().to_vec())
+        .unwrap_or_default();
     let order = m.sets_doc.as_ref().map(|d| d.order()).unwrap_or_default();
 
     let mut views: Vec<SetView> = m
@@ -627,7 +631,7 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
     for e in entries.iter().filter(|e| e.created) {
         edits.push(SetEdit::Create { set: e.id.clone() });
     }
-    for e in &entries {
+    for e in entries.iter() {
         if let Some(from) = &e.renamed_from {
             edits.push(SetEdit::Rename {
                 from: from.clone(),
@@ -635,7 +639,7 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
             });
         }
     }
-    for e in &entries {
+    for e in entries.iter() {
         for f in &e.add {
             edits.push(SetEdit::Move {
                 file: f.clone(),
@@ -643,7 +647,7 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
             });
         }
     }
-    for e in &entries {
+    for e in entries.iter() {
         for f in &e.remove {
             edits.push(SetEdit::Remove { file: f.clone() });
         }
@@ -701,7 +705,7 @@ pub fn engine_inputs(m: &AppModel) -> (Vec<SetEdit>, BTreeMap<OutputKey, PathBuf
 pub fn output_name_paths(m: &AppModel, views: &[SetView]) -> Vec<(OutputKey, PathBuf)> {
     let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
     let mut out = vec![];
-    for e in &entries {
+    for e in entries.iter() {
         let Some(name) = e.output_name.as_deref() else {
             continue;
         };
@@ -815,8 +819,8 @@ pub fn borrowed_normal(m: &AppModel) -> BTreeMap<String, String> {
 pub fn set_shaders(m: &AppModel) -> BTreeMap<String, Shader> {
     let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
     entries
-        .into_iter()
-        .filter_map(|e| Some((e.id, e.shader?)))
+        .iter()
+        .filter_map(|e| Some((e.id.clone(), e.shader?)))
         .collect()
 }
 
@@ -1095,8 +1099,8 @@ impl AppModel {
         if let Some(d) = &self.sets_doc {
             ids.extend(
                 d.entries()
-                    .into_iter()
-                    .filter_map(|e| e.renamed_from.map(|f| fold_id(&f))),
+                    .iter()
+                    .filter_map(|e| e.renamed_from.as_deref().map(fold_id)),
             );
         }
         ids

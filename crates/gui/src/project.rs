@@ -35,14 +35,98 @@ impl std::fmt::Display for SaveError {
     }
 }
 
-pub struct ProjectDoc {
-    path: PathBuf,
-    doc: DocumentMut,
+/// The state both project files share (REPORT #15): the document, its disk stamp, unsaved-edit flag, load error and
+/// revision. `ProjectDoc` and `SetsDoc` wrap it; every edit ends with `touch()`, so `rev` names the edited document.
+pub(crate) struct TomlFile {
+    pub(crate) path: PathBuf,
+    pub(crate) doc: DocumentMut,
     disk: Option<SourceStamp>,
-    dirty: bool,
-    /// Changes with every edit, from the counter `SetsDoc` uses (audit item 11).
-    rev: u64,
-    error: Option<String>,
+    pub(crate) dirty: bool,
+    pub(crate) error: Option<String>,
+    /// Changes with every edit, restore and reload, from one counter for every document (DECISIONS Note Y7).
+    pub(crate) rev: u64,
+}
+
+impl TomlFile {
+    pub(crate) fn open(path: PathBuf) -> TomlFile {
+        let mut f = TomlFile {
+            path,
+            doc: DocumentMut::new(),
+            disk: None,
+            dirty: false,
+            error: None,
+            rev: 0,
+        };
+        f.reload();
+        f
+    }
+
+    /// Re-read the file, dropping unsaved edits.
+    pub(crate) fn reload(&mut self) {
+        self.dirty = false;
+        self.error = None;
+        self.doc = DocumentMut::new();
+        self.disk = SourceStamp::of(&self.path);
+        match std::fs::read_to_string(&self.path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
+            Ok(text) => match text.parse::<DocumentMut>() {
+                Ok(doc) => self.doc = doc,
+                Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
+            },
+        }
+        self.rev = crate::sets_doc::next_rev();
+    }
+
+    /// An unsaved edit, made just before.
+    pub(crate) fn touch(&mut self) {
+        self.dirty = true;
+        self.rev = crate::sets_doc::next_rev();
+    }
+
+    pub(crate) fn read_only(&self) -> bool {
+        self.error.is_some()
+    }
+
+    pub(crate) fn text(&self) -> String {
+        self.doc.to_string()
+    }
+
+    /// Replace the document with `text` (an undo or redo): an unsaved change. A read-only document is left alone:
+    /// its edits never happened.
+    pub(crate) fn restore(&mut self, text: &str) {
+        if self.read_only() {
+            return;
+        }
+        if let Ok(doc) = text.parse::<DocumentMut>() {
+            self.doc = doc;
+            self.touch();
+        }
+    }
+
+    pub(crate) fn changed_on_disk(&self) -> bool {
+        SourceStamp::of(&self.path) != self.disk
+    }
+
+    /// Write the document (atomically: a temporary file, then rename).
+    pub(crate) fn save(&mut self, force: bool) -> Result<(), SaveError> {
+        if self.read_only() {
+            return Err(SaveError::ReadOnly);
+        }
+        if !force && self.changed_on_disk() {
+            return Err(SaveError::ChangedOnDisk);
+        }
+        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
+            .map_err(|e| write_error(&self.path, e))?;
+        self.disk = SourceStamp::of(&self.path);
+        crate::crash_log::discard_recovery(&self.path);
+        self.dirty = false;
+        Ok(())
+    }
+}
+
+pub struct ProjectDoc {
+    f: TomlFile,
 }
 
 pub(crate) fn json_to_toml(v: &Json) -> Option<Value> {
@@ -124,93 +208,74 @@ pub(crate) fn find_key(t: &dyn TableLike, key: &str) -> Option<String> {
 
 impl ProjectDoc {
     pub fn open(root: &Path) -> ProjectDoc {
-        let path = root.join("sdc.toml");
         let mut d = ProjectDoc {
-            path,
-            doc: DocumentMut::new(),
-            disk: None,
-            dirty: false,
-            rev: crate::sets_doc::next_rev(),
-            error: None,
+            f: TomlFile::open(root.join("sdc.toml")),
         };
-        d.reload();
+        d.check();
         d
     }
 
     /// Re-read the file, dropping unsaved edits.
     pub fn reload(&mut self) {
-        self.dirty = false;
-        self.error = None;
-        self.doc = DocumentMut::new();
-        self.disk = SourceStamp::of(&self.path);
-        match std::fs::read_to_string(&self.path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
-            Ok(text) => match text.parse::<DocumentMut>() {
-                Ok(doc) => {
-                    self.doc = doc;
-                    // The engine's own up-front checks on `[files]` (unknown field or code) are parse errors too.
-                    let checked = self
-                        .config()
-                        .and_then(|c| c.file_entries().map(|_| ()).map_err(|e| e.to_string()));
-                    if let Err(e) = checked {
-                        self.set_error(&e);
-                    }
-                }
-                Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
-            },
+        self.f.reload();
+        self.check();
+    }
+
+    /// The engine's own up-front checks on `[files]` (unknown field or code) are parse errors too.
+    fn check(&mut self) {
+        if self.f.read_only() {
+            return;
+        }
+        let checked = self
+            .config()
+            .and_then(|c| c.file_entries().map(|_| ()).map_err(|e| e.to_string()));
+        if let Err(e) = checked {
+            self.set_error(&e);
         }
     }
 
     /// Mark the file unusable (M3a spec §7.4): read-only with `message`, its contents and unsaved edits dropped. Used
     /// when the engine rejects a config that parsed; `reload` clears it.
     pub fn set_error(&mut self, message: &str) {
-        self.error = Some(format!("{}: {message}", self.path.display()));
-        self.doc = DocumentMut::new();
-        self.dirty = false;
+        self.f.error = Some(format!("{}: {message}", self.f.path.display()));
+        self.f.doc = DocumentMut::new();
+        self.f.dirty = false;
+        self.f.rev = crate::sets_doc::next_rev();
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.f.path
     }
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.f.dirty
     }
     pub fn rev(&self) -> u64 {
-        self.rev
+        self.f.rev
     }
-    /// An unsaved edit.
     fn touch(&mut self) {
-        self.dirty = true;
-        self.rev = crate::sets_doc::next_rev();
+        self.f.touch();
     }
     pub fn read_only(&self) -> bool {
-        self.error.is_some()
+        self.f.read_only()
     }
     pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
+        self.f.error.as_deref()
     }
 
     /// The document as text (undo snapshots, DECISIONS P9).
     pub fn text(&self) -> String {
-        self.doc.to_string()
+        self.f.text()
     }
 
     /// Replace the document with `text` (an undo or redo). It is an unsaved change. A read-only document is left
     /// alone: its edits never happened.
     pub fn restore(&mut self, text: &str) {
-        if self.read_only() {
-            return;
-        }
-        if let Ok(doc) = text.parse::<DocumentMut>() {
-            self.doc = doc;
-            self.touch();
-        }
+        self.f.restore(text);
     }
 
     /// The document as the engine parses it (migration hook included, spec §5).
     pub fn config(&self) -> Result<ConfigFile, String> {
-        ConfigFile::parse(&self.doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
+        ConfigFile::parse(&self.f.doc.to_string(), "sdc.toml").map_err(|e| e.to_string())
     }
 
     pub fn target(&self) -> Option<Target> {
@@ -222,14 +287,14 @@ impl ProjectDoc {
         }
         let s = serde_json::to_value(t).ok();
         if let Some(Json::String(s)) = s {
-            set_value(self.doc.as_table_mut(), "target", Value::from(s));
+            set_value(self.f.doc.as_table_mut(), "target", Value::from(s));
             self.touch();
         }
     }
 
     /// `preset`, read from the document (no parse: the header asks every frame).
     pub fn preset(&self) -> Option<String> {
-        self.doc.get("preset")?.as_str().map(str::to_string)
+        self.f.doc.get("preset")?.as_str().map(str::to_string)
     }
 
     /// `preset = "<id>"`, or removed with `None` (the target's default preset then applies).
@@ -238,9 +303,9 @@ impl ProjectDoc {
             return;
         }
         match id {
-            Some(id) => set_value(self.doc.as_table_mut(), "preset", Value::from(id)),
+            Some(id) => set_value(self.f.doc.as_table_mut(), "preset", Value::from(id)),
             None => {
-                self.doc.as_table_mut().remove("preset");
+                self.f.doc.as_table_mut().remove("preset");
             }
         }
         self.touch();
@@ -248,7 +313,7 @@ impl ProjectDoc {
 
     /// The `[files]` table (or inline table), if there is one.
     fn files(&self) -> Option<&dyn TableLike> {
-        self.doc.get("files")?.as_table_like()
+        self.f.doc.get("files")?.as_table_like()
     }
 
     /// The entry for `key`, matched the way the engine matches (case-insensitively), as a table or inline table.
@@ -261,7 +326,7 @@ impl ProjectDoc {
     /// or the entry is not a table.
     fn entry_mut(&mut self, key: &str) -> Option<&mut dyn TableLike> {
         // `[files]` is created implicit (no bare `[files]` header).
-        let files = sub_table(self.doc.as_table_mut(), "files", || {
+        let files = sub_table(self.f.doc.as_table_mut(), "files", || {
             let mut t = Table::new();
             t.set_implicit(true);
             Item::Table(t)
@@ -272,7 +337,12 @@ impl ProjectDoc {
 
     /// Remove the entry for `key` (any spelling of it); true when one existed.
     fn drop_entry(&mut self, key: &str) -> bool {
-        let Some(files) = self.doc.get_mut("files").and_then(Item::as_table_like_mut) else {
+        let Some(files) = self
+            .f
+            .doc
+            .get_mut("files")
+            .and_then(Item::as_table_like_mut)
+        else {
             return false;
         };
         let Some(name) = find_key(files, key) else {
@@ -361,6 +431,7 @@ impl ProjectDoc {
 
     pub fn fill(&self, role: RawMap) -> Option<u8> {
         let v = self
+            .f
             .doc
             .get("defaults")?
             .get("packing")?
@@ -386,7 +457,7 @@ impl ProjectDoc {
     /// `defaults.packing.fill.<id> = v`, creating missing tables (dotted keys inside an existing `[defaults]`);
     /// works through inline tables. `None` when a table on the path is not a table.
     fn write_fill(&mut self, id: &str, v: u8) -> Option<()> {
-        let defaults = sub_table(self.doc.as_table_mut(), "defaults", || {
+        let defaults = sub_table(self.f.doc.as_table_mut(), "defaults", || {
             Item::Table(Table::new())
         })?;
         let packing = sub_table(defaults, "packing", dotted_table)?;
@@ -398,7 +469,7 @@ impl ProjectDoc {
     /// Remove `defaults.packing.fill.<id>`, and the tables that leaves empty (no bare `[defaults]` header is left
     /// behind). `None` when there was nothing to remove.
     fn remove_fill(&mut self, id: &str) -> Option<()> {
-        let defaults = self.doc.get_mut("defaults")?.as_table_like_mut()?;
+        let defaults = self.f.doc.get_mut("defaults")?.as_table_like_mut()?;
         let packing = defaults.get_mut("packing")?.as_table_like_mut()?;
         let fill = packing.get_mut("fill")?.as_table_like_mut()?;
         fill.remove(id)?;
@@ -409,31 +480,22 @@ impl ProjectDoc {
             defaults.remove("packing");
         }
         if defaults.is_empty() {
-            self.doc.remove("defaults");
+            self.f.doc.remove("defaults");
         }
         Some(())
     }
 
-    /// F3b: every `[inputs]` alias as (key as written, alias).
-    pub fn read_as_all(&self) -> Vec<(String, String)> {
-        let Some(t) = self.doc.get("inputs").and_then(Item::as_table_like) else {
-            return vec![];
-        };
-        t.iter()
-            .filter_map(|(k, v)| Some((k.to_string(), v.get("as")?.as_str()?.to_string())))
-            .collect()
-    }
-
     /// The spelling of file `key`'s entry in `[inputs]`: `key` in any case, or without its extension.
     fn read_as_key(&self, key: &str) -> Option<String> {
-        let t = self.doc.get("inputs")?.as_table_like()?;
+        let t = self.f.doc.get("inputs")?.as_table_like()?;
         find_key(t, key).or_else(|| find_key(t, without_ext(key)?))
     }
 
     /// F3b: the path file `key` is read as (its `[inputs]` alias), if it has one.
     pub fn read_as(&self, key: &str) -> Option<String> {
         let name = self.read_as_key(key)?;
-        self.doc
+        self.f
+            .doc
             .get("inputs")?
             .get(&name)?
             .get("as")?
@@ -449,7 +511,7 @@ impl ProjectDoc {
         let existing = self.read_as_key(key);
         match alias {
             Some(a) => {
-                let Some(inputs) = sub_table(self.doc.as_table_mut(), "inputs", || {
+                let Some(inputs) = sub_table(self.f.doc.as_table_mut(), "inputs", || {
                     let mut t = Table::new();
                     t.set_implicit(true);
                     Item::Table(t)
@@ -464,13 +526,17 @@ impl ProjectDoc {
             }
             None => {
                 let Some(name) = existing else { return };
-                let Some(inputs) = self.doc.get_mut("inputs").and_then(Item::as_table_like_mut)
+                let Some(inputs) = self
+                    .f
+                    .doc
+                    .get_mut("inputs")
+                    .and_then(Item::as_table_like_mut)
                 else {
                     return;
                 };
                 inputs.remove(&name);
                 if inputs.is_empty() {
-                    self.doc.as_table_mut().remove("inputs");
+                    self.f.doc.as_table_mut().remove("inputs");
                 }
             }
         }
@@ -493,23 +559,12 @@ impl ProjectDoc {
     }
 
     pub fn changed_on_disk(&self) -> bool {
-        SourceStamp::of(&self.path) != self.disk
+        self.f.changed_on_disk()
     }
 
     /// Write the document (atomically: a temporary file, then rename).
     pub fn save(&mut self, force: bool) -> Result<(), SaveError> {
-        if self.read_only() {
-            return Err(SaveError::ReadOnly);
-        }
-        if !force && self.changed_on_disk() {
-            return Err(SaveError::ChangedOnDisk);
-        }
-        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
-            .map_err(|e| crate::project::write_error(&self.path, e))?;
-        self.disk = SourceStamp::of(&self.path);
-        crate::crash_log::discard_recovery(&self.path);
-        self.dirty = false;
-        Ok(())
+        self.f.save(force)
     }
 }
 

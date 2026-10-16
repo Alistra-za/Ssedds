@@ -4,14 +4,17 @@
 use crate::model::cm_json::{block_of as cm_block_of, CmBlock};
 use crate::model::cs_pbr::{self, block_of, field, fields, CsBlock, Kind, Template};
 use crate::pgp::settings::Settings;
-use crate::project::{dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError};
-use engine::policy::SourceStamp;
+use crate::project::{
+    dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError, TomlFile,
+};
 use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
+use std::sync::Arc;
+use toml_edit::{Array, ArrayOfTables, Item, Table, TableLike, Value};
 
 pub const FILE_NAME: &str = "sdc-project.toml";
 /// GUI tweaks G4: the array of extra PGPatcher entries (delete sections).
@@ -71,12 +74,8 @@ pub(crate) fn next_rev() -> u64 {
 }
 
 pub struct SetsDoc {
-    path: PathBuf,
-    doc: DocumentMut,
-    disk: Option<SourceStamp>,
-    dirty: bool,
-    error: Option<String>,
-    rev: u64,
+    f: TomlFile,
+    entries_cache: RefCell<Option<(u64, Arc<Vec<SetEntry>>)>>,
 }
 
 /// Flatten a table into `prefix.key` paths; values only (nested tables recurse).
@@ -186,80 +185,54 @@ fn entry_of(t: &Table) -> Option<SetEntry> {
 
 impl SetsDoc {
     pub fn open(root: &Path) -> SetsDoc {
-        let mut d = SetsDoc {
-            path: root.join(FILE_NAME),
-            doc: DocumentMut::new(),
-            disk: None,
-            dirty: false,
-            error: None,
-            rev: next_rev(),
-        };
-        d.reload();
-        d
+        SetsDoc {
+            f: TomlFile::open(root.join(FILE_NAME)),
+            entries_cache: RefCell::default(),
+        }
     }
 
     pub fn reload(&mut self) {
-        self.rev = next_rev();
-        self.dirty = false;
-        self.error = None;
-        self.doc = DocumentMut::new();
-        self.disk = SourceStamp::of(&self.path);
-        match std::fs::read_to_string(&self.path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
-            Ok(text) => match text.parse::<DocumentMut>() {
-                Ok(doc) => self.doc = doc,
-                Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
-            },
-        }
+        self.f.reload();
     }
 
     /// Changes on every edit, restore and reload (the set-view cache key).
     pub fn rev(&self) -> u64 {
-        self.rev
+        self.f.rev
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.f.path
     }
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.f.dirty
     }
     pub fn read_only(&self) -> bool {
-        self.error.is_some()
+        self.f.read_only()
     }
     pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
+        self.f.error.as_deref()
     }
     pub fn changed_on_disk(&self) -> bool {
-        SourceStamp::of(&self.path) != self.disk
+        self.f.changed_on_disk()
     }
 
     pub fn text(&self) -> String {
-        self.doc.to_string()
+        self.f.text()
     }
 
     /// Replace the document with `text` (undo/redo): an unsaved change. Ignored while read-only.
     pub fn restore(&mut self, text: &str) {
-        self.rev = next_rev();
-        if self.read_only() {
-            return;
-        }
-        if let Ok(doc) = text.parse::<DocumentMut>() {
-            self.doc = doc;
-            self.dirty = true;
-        }
+        self.f.restore(text);
     }
 
     /// Undo/redo: `restore` that keeps the live `last_json_sha256`, `cs_pbr_sha256` and `cm_json_sha256`. The hash records the JSON on disk, which undo
     /// does not change, so it is outside the undoable state. When only the hash differs, nothing changes (and the
     /// document is not marked dirty).
     pub fn restore_keeping_json_sha(&mut self, text: &str) {
-        self.rev = next_rev();
         if self.read_only() || self.text() == text {
             return;
         }
-        let (doc, dirty, sha) = (self.doc.clone(), self.dirty, self.last_json_sha256());
+        let (doc, dirty, sha) = (self.f.doc.clone(), self.f.dirty, self.last_json_sha256());
         let cs = self.cs_pbr_shas();
         let cm = self.cm_json_shas();
         let old = self.text();
@@ -274,28 +247,18 @@ impl SetsDoc {
             self.set_cm_json_shas(&cm);
         }
         if self.text() == old {
-            self.doc = doc;
-            self.dirty = dirty;
+            self.f.doc = doc;
+            self.f.dirty = dirty;
         }
     }
 
     pub fn save(&mut self, force: bool) -> Result<(), SaveError> {
-        if self.read_only() {
-            return Err(SaveError::ReadOnly);
-        }
-        if !force && self.changed_on_disk() {
-            return Err(SaveError::ChangedOnDisk);
-        }
-        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
-            .map_err(|e| crate::project::write_error(&self.path, e))?;
-        self.disk = SourceStamp::of(&self.path);
-        crate::crash_log::discard_recovery(&self.path);
-        self.dirty = false;
-        Ok(())
+        self.f.save(force)
     }
 
     fn project_str(&self, key: &str) -> Option<String> {
-        self.doc
+        self.f
+            .doc
             .get("project")?
             .get(key)?
             .as_str()
@@ -303,12 +266,11 @@ impl SetsDoc {
     }
 
     fn set_project(&mut self, key: &str, v: Option<Value>) {
-        self.rev = next_rev();
-        let absent = self.doc.get("project").and_then(|p| p.get(key)).is_none();
+        let absent = self.f.doc.get("project").and_then(|p| p.get(key)).is_none();
         if self.read_only() || (v.is_none() && absent) {
             return;
         }
-        let Some(p) = sub_table(self.doc.as_table_mut(), "project", || {
+        let Some(p) = sub_table(self.f.doc.as_table_mut(), "project", || {
             Item::Table(Table::new())
         }) else {
             return;
@@ -319,26 +281,25 @@ impl SetsDoc {
                 p.remove(key);
             }
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     pub fn json_name(&self) -> Option<String> {
         self.project_str("json_name")
     }
     pub fn set_json_name(&mut self, name: Option<&str>) {
-        self.rev = next_rev();
         self.set_project("json_name", name.map(Value::from));
     }
     pub fn last_json_sha256(&self) -> Option<String> {
         self.project_str("last_json_sha256")
     }
     pub fn set_last_json_sha256(&mut self, sha: &str) {
-        self.rev = next_rev();
         self.set_project("last_json_sha256", Some(Value::from(sha)));
     }
 
     fn shas(&self, key: &str) -> BTreeMap<String, String> {
-        self.doc
+        self.f
+            .doc
             .get("project")
             .and_then(|p| p.get(key))
             .and_then(Item::as_table_like)
@@ -351,7 +312,6 @@ impl SetsDoc {
     }
 
     fn set_shas(&mut self, key: &str, shas: &BTreeMap<String, String>) {
-        self.rev = next_rev();
         let mut t = toml_edit::InlineTable::new();
         for (k, v) in shas {
             t.insert(k, Value::from(v.as_str()));
@@ -376,10 +336,9 @@ impl SetsDoc {
     }
 
     pub fn order(&self) -> Vec<String> {
-        strings(self.doc.get("project").and_then(|p| p.get("order")))
+        strings(self.f.doc.get("project").and_then(|p| p.get("order")))
     }
     pub fn set_order(&mut self, ids: &[String]) {
-        self.rev = next_rev();
         let mut arr = Array::new();
         for id in ids {
             arr.push(id.as_str());
@@ -390,10 +349,9 @@ impl SetsDoc {
     /// Files whose sub-type was switched to its PBR counterpart because their set's diffuse became `pbr_albedo`
     /// (so a revert finds them). GUI bookkeeping in `[project]`: `sdc.toml` rejects unknown keys.
     pub fn auto_pbr(&self) -> Vec<String> {
-        strings(self.doc.get("project").and_then(|p| p.get("auto_pbr")))
+        strings(self.f.doc.get("project").and_then(|p| p.get("auto_pbr")))
     }
     pub fn set_auto_pbr(&mut self, keys: &[String]) {
-        self.rev = next_rev();
         let mut arr = Array::new();
         for k in keys {
             arr.push(k.as_str());
@@ -401,8 +359,23 @@ impl SetsDoc {
         self.set_project("auto_pbr", (!keys.is_empty()).then_some(Value::Array(arr)));
     }
 
-    pub fn entries(&self) -> Vec<SetEntry> {
-        self.doc
+    /// The `[[sets]]` entries, parsed once per revision (REPORT #9).
+    pub fn entries(&self) -> Arc<Vec<SetEntry>> {
+        let rev = self.f.rev;
+        if let Some((r, e)) = &*self.entries_cache.borrow() {
+            if *r == rev {
+                return e.clone();
+            }
+        }
+        let e = Arc::new(self.parse_entries());
+        *self.entries_cache.borrow_mut() = Some((rev, e.clone()));
+        e
+    }
+
+    /// The entries as the document holds them now. Mutators use this: mid-edit the revision is not bumped yet.
+    fn parse_entries(&self) -> Vec<SetEntry> {
+        self.f
+            .doc
             .get("sets")
             .and_then(Item::as_array_of_tables)
             .map(|a| a.iter().filter_map(entry_of).collect())
@@ -412,7 +385,8 @@ impl SetsDoc {
     /// GUI tweaks G4: the `[[pgp_sections]]` tables, in file order: extra PGPatcher entries that belong to no set
     /// (delete entries). Each is its JSON keys, flattened like a set's settings.
     pub fn sections(&self) -> Vec<Settings> {
-        self.doc
+        self.f
+            .doc
             .get(SECTIONS)
             .and_then(Item::as_array_of_tables)
             .map(|a| {
@@ -429,32 +403,37 @@ impl SetsDoc {
 
     /// Append a section with `keys` (values JSON can hold; others are left out).
     pub fn add_section(&mut self, keys: &Settings) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
-        if !self.doc.get(SECTIONS).is_some_and(Item::is_array_of_tables) {
-            self.doc
+        if !self
+            .f
+            .doc
+            .get(SECTIONS)
+            .is_some_and(Item::is_array_of_tables)
+        {
+            self.f
+                .doc
                 .insert(SECTIONS, Item::ArrayOfTables(ArrayOfTables::new()));
         }
         let mut t = Table::new();
         for (k, v) in keys {
             write_path(&mut t, k, Some(v.clone()));
         }
-        self.doc[SECTIONS]
+        self.f.doc[SECTIONS]
             .as_array_of_tables_mut()
             .expect("just made")
             .push(t);
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// Remove section `i` (the array goes when it is empty).
     pub fn remove_section(&mut self, i: usize) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let Some(a) = self
+            .f
             .doc
             .get_mut(SECTIONS)
             .and_then(Item::as_array_of_tables_mut)
@@ -464,19 +443,19 @@ impl SetsDoc {
         if i < a.len() {
             a.remove(i);
             if a.is_empty() {
-                self.doc.remove(SECTIONS);
+                self.f.doc.remove(SECTIONS);
             }
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
     /// Set (or with `None` remove) key `key` of section `i`.
     pub fn set_section_value(&mut self, i: usize, key: &str, v: Option<Json>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let Some(t) = self
+            .f
             .doc
             .get_mut(SECTIONS)
             .and_then(Item::as_array_of_tables_mut)
@@ -485,16 +464,17 @@ impl SetsDoc {
             return;
         };
         if write_path(t, key, v) {
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
     fn tables_mut(&mut self) -> &mut ArrayOfTables {
-        if !self.doc.get("sets").is_some_and(Item::is_array_of_tables) {
-            self.doc
+        if !self.f.doc.get("sets").is_some_and(Item::is_array_of_tables) {
+            self.f
+                .doc
                 .insert("sets", Item::ArrayOfTables(ArrayOfTables::new()));
         }
-        self.doc["sets"]
+        self.f.doc["sets"]
             .as_array_of_tables_mut()
             .expect("just made")
     }
@@ -514,32 +494,34 @@ impl SetsDoc {
                 let mut t = Table::new();
                 t.insert("id", toml_edit::value(id));
                 tables.push(t);
-                tables.len() - 1
+                // A new entry even when the caller writes nothing into it (no dirty): the entries changed.
+                let i = tables.len() - 1;
+                self.f.rev = next_rev();
+                i
             }
         };
-        tables.get_mut(i).expect("index in range")
+        self.tables_mut().get_mut(i).expect("index in range")
     }
 
     pub fn create_set(&mut self, id: &str) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         self.table_mut(id).insert("created", toml_edit::value(true));
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// Drop set `id`'s entry and remove it from the order list (DECISIONS P2: its files return to automatic grouping).
     pub fn delete_set(&mut self, id: &str) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let lower = fold_id(id);
-        if !self.entries().iter().any(|e| fold_id(&e.id) == lower) {
+        if !self.parse_entries().iter().any(|e| fold_id(&e.id) == lower) {
             return;
         }
         if let Some(tables) = self
+            .f
             .doc
             .get_mut("sets")
             .and_then(Item::as_array_of_tables_mut)
@@ -558,22 +540,21 @@ impl SetsDoc {
         if !self.order().is_empty() {
             self.set_order(&order);
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// Rename set `from` to `to`. A created set just changes its id; an automatic set records `renamed_from`. Other
     /// entries that borrow from `from`, and the order list, follow.
     pub fn rename_set(&mut self, from: &str, to: &str) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let created = self
-            .entries()
+            .parse_entries()
             .iter()
             .any(|e| same_id(&e.id, from) && e.created);
         let already = self
-            .entries()
+            .parse_entries()
             .iter()
             .find(|e| same_id(&e.id, from))
             .and_then(|e| e.renamed_from.clone());
@@ -596,14 +577,14 @@ impl SetsDoc {
         if !order.is_empty() {
             self.set_order(&order);
         }
-        for e in self.entries() {
+        for e in self.parse_entries() {
             for (slot, src) in &e.borrow {
                 if same_id(src, from) {
                     self.set_borrow(&e.id, *slot, Some(to));
                 }
             }
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// GUI tweaks G1: the automatic set `from` is now named `to` by the engine (its members were given new input
@@ -611,11 +592,10 @@ impl SetsDoc {
     /// `renamed_from = to`; an entry under the automatic id itself takes the new id, with the order list and other
     /// entries' borrows. Created sets are never touched.
     pub fn retarget_auto(&mut self, from: &str, to: &str) {
-        self.rev = next_rev();
         if self.read_only() || same_id(from, to) {
             return;
         }
-        let entries = self.entries();
+        let entries = self.parse_entries();
         if let Some(e) = entries
             .iter()
             .find(|e| !e.created && e.renamed_from.as_deref().is_some_and(|r| same_id(r, from)))
@@ -627,14 +607,14 @@ impl SetsDoc {
             } else {
                 t.insert("renamed_from", toml_edit::value(to));
             }
-            self.dirty = true;
+            self.f.touch();
         } else if entries
             .iter()
             .any(|e| !e.created && e.renamed_from.is_none() && same_id(&e.id, from))
         {
             self.rename_set(from, to);
             self.table_mut(to).remove("renamed_from");
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
@@ -657,13 +637,12 @@ impl SetsDoc {
             }
             t.insert(key, toml_edit::value(arr));
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// `file` moves into set `id` (a `Move` edit); it is taken out of every other entry's `add` and `remove`.
     pub fn add_member(&mut self, id: &str, file: &str) {
-        self.rev = next_rev();
-        for e in self.entries() {
+        for e in self.parse_entries() {
             if !same_id(&e.id, id) {
                 if e.add.iter().any(|f| same_id(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
@@ -676,7 +655,7 @@ impl SetsDoc {
         // A file this set removed belongs to it by its name: lifting the remove brings it back (an `add` beside the
         // `remove` would leave it out, AG100).
         let removed_here = self
-            .entries()
+            .parse_entries()
             .iter()
             .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
         if removed_here {
@@ -688,9 +667,8 @@ impl SetsDoc {
 
     /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.
     pub fn remove_member(&mut self, id: &str, file: &str) {
-        self.rev = next_rev();
         let moved_in = self
-            .entries()
+            .parse_entries()
             .iter()
             .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| same_id(f, file)));
         if moved_in {
@@ -701,7 +679,6 @@ impl SetsDoc {
     }
 
     pub fn set_borrow(&mut self, id: &str, slot: u8, from: Option<&str>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -724,24 +701,23 @@ impl SetsDoc {
         {
             t.remove("borrow");
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// F3a Task 8: lock (or unlock) slot `slot` of set `id`.
     pub fn set_lock(&mut self, id: &str, slot: u8, on: bool) {
-        self.rev = next_rev();
         self.list_edit(id, "lock", &format!("slot{slot}"), on);
     }
 
     /// Set (or with `None` remove) set `id`'s explicit shader (M6 spec §7).
     pub fn set_shader(&mut self, id: &str, shader: Option<engine::shader::Shader>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         // Clearing a set with no table changes nothing (no table, no dirty, no undo step).
         let lower = fold_id(id);
         let has_table = self
+            .f
             .doc
             .get("sets")
             .and_then(Item::as_array_of_tables)
@@ -764,17 +740,17 @@ impl SetsDoc {
                 t.remove("shader");
             }
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// F3b D2: set (or with `None` remove) the base name of set `id`'s outputs.
     pub fn set_output_name(&mut self, id: &str, name: Option<&str>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let lower = fold_id(id);
         let has_table = self
+            .f
             .doc
             .get("sets")
             .and_then(Item::as_array_of_tables)
@@ -797,13 +773,12 @@ impl SetsDoc {
                 t.remove("output_name");
             }
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     /// Set (or with `None` remove) JSON setting `key` (a dotted schema path) of set `id`. On a set with a texture-set
     /// block a mapped key lands in the block (design §5.1: one source, so the two files cannot drift).
     pub fn set_value(&mut self, id: &str, key: &str, v: Option<Json>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -817,19 +792,18 @@ impl SetsDoc {
                         None => write_path(b, cs, None),
                     };
                 }
-                self.dirty = true;
+                self.f.touch();
                 return;
             }
         }
         if write_path(t, key, v) {
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
     /// Design §3: set (or with `None` remove) key `key` (dotted, `glintParameters.enabled`) of set `id`'s `kind`
     /// block, creating the block (`[sets.cs_txst]`) when missing.
     pub fn set_cs_value(&mut self, id: &str, kind: Kind, key: &str, v: Option<Json>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -844,21 +818,20 @@ impl SetsDoc {
             None => write_path(b, key, None),
         };
         if hit {
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
     /// Complex material design §3: set (or with `None` remove) key `key` of set `id`'s `[sets.cm]`, creating the block
     /// when missing. Keys are written as given; `cm_json::block_of` decides what is used.
     pub fn set_cm_value(&mut self, id: &str, key: &str, v: Option<Json>) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         // Removing from a set with no block changes nothing (no table, no dirty, no undo step).
         if v.is_none()
             && !self
-                .entries()
+                .parse_entries()
                 .iter()
                 .any(|e| same_id(&e.id, id) && e.cm.is_some())
         {
@@ -869,7 +842,7 @@ impl SetsDoc {
             return;
         };
         if write_path(b, key, v) {
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
@@ -882,12 +855,11 @@ impl SetsDoc {
     /// Design §3: start set `id`'s `kind` block (`edids = []`); nothing when it exists. A texture-set block takes
     /// over the set's own values of the keys it maps (moved, so adding the block never drops them, design §5.1).
     pub fn add_cs_block(&mut self, id: &str, kind: Kind) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         let own = self
-            .entries()
+            .parse_entries()
             .into_iter()
             .find(|e| same_id(&e.id, id))
             .map(|e| e.settings)
@@ -910,17 +882,20 @@ impl SetsDoc {
                 write_path(t, pgp, None);
             }
         }
-        self.dirty = true;
+        self.f.touch();
     }
 
     pub fn remove_cs_block(&mut self, id: &str, kind: Kind) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
         // Mirrors `add_cs_block`: the PGPatcher values the block took over move back to the set (design §5.1).
         let back = (kind == Kind::Txst)
-            .then(|| self.entries().into_iter().find(|e| same_id(&e.id, id)))
+            .then(|| {
+                self.parse_entries()
+                    .into_iter()
+                    .find(|e| same_id(&e.id, id))
+            })
             .flatten()
             .and_then(|e| e.cs_txst)
             .map(|b| cs_pbr::cs_to_pgp(&b.values))
@@ -930,14 +905,13 @@ impl SetsDoc {
             for (k, v) in back {
                 write_path(t, &k, Some(v));
             }
-            self.dirty = true;
+            self.f.touch();
         }
     }
 
     /// Design §4: the template's values replace the block's known fields (unknown keys stay) and it is recorded as
     /// `template`; a block with no EDIDs takes the template's (plan ruling R8).
     pub fn apply_cs_template(&mut self, id: &str, t: &Template) {
-        self.rev = next_rev();
         if self.read_only() {
             return;
         }
@@ -962,7 +936,7 @@ impl SetsDoc {
             }
             set_value(b, "edids", Value::Array(arr));
         }
-        self.dirty = true;
+        self.f.touch();
     }
 }
 
@@ -995,10 +969,12 @@ fn write_path(t: &mut dyn TableLike, path: &str, v: Option<Json>) -> bool {
                     return false;
                 };
                 let hit = remove(sub, &parts[1..]);
-                if sub.is_empty() {
+                // Pruning an emptied (or already empty) sub-table is a change too: the caller touches.
+                let pruned = sub.is_empty();
+                if pruned {
                     t.remove(parts[0]);
                 }
-                hit
+                hit || pruned
             }
             remove(t, &parts)
         }
@@ -1012,5 +988,146 @@ fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
             write_json(t, &format!("{path}.{k}"), x) | hit
         }),
         _ => write_path(t, path, Some(v.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// REPORT #9: after every mutator the cached `entries()` is what the document holds.
+    #[test]
+    fn the_entries_cache_follows_every_mutator() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = SetsDoc::open(d.path());
+        let template = Template {
+            name: "t".into(),
+            kind: Kind::Txst,
+            edids: vec!["E".into()],
+            values: serde_json::Map::new(),
+        };
+        type Step<'a> = (&'a str, Box<dyn Fn(&mut SetsDoc) + 'a>);
+        let steps: Vec<Step> = vec![
+            ("create_set", Box::new(|s| s.create_set("a/x"))),
+            ("add_member", Box::new(|s| s.add_member("a/x", "a/f.png"))),
+            (
+                "remove_member",
+                Box::new(|s| s.remove_member("a/x", "a/g.png")),
+            ),
+            (
+                "set_borrow",
+                Box::new(|s| s.set_borrow("a/x", 2, Some("b/y"))),
+            ),
+            ("set_lock", Box::new(|s| s.set_lock("a/x", 2, true))),
+            (
+                "set_shader",
+                Box::new(|s| s.set_shader("a/x", Some(engine::shader::Shader::Pbr))),
+            ),
+            (
+                "set_output_name",
+                Box::new(|s| s.set_output_name("a/x", Some("steel"))),
+            ),
+            (
+                "set_value",
+                Box::new(|s| s.set_value("a/x", "hair", Some(json!(true)))),
+            ),
+            (
+                "set_value on a new set",
+                Box::new(|s| s.set_value("c/z", "hair", None)),
+            ),
+            (
+                "add_cs_block",
+                Box::new(|s| s.add_cs_block("a/x", Kind::Txst)),
+            ),
+            (
+                "set_cs_value",
+                Box::new(|s| s.set_cs_value("a/x", Kind::Mato, "edids", Some(json!(["M"])))),
+            ),
+            (
+                "apply_cs_template",
+                Box::new(|s| s.apply_cs_template("a/x", &template)),
+            ),
+            (
+                "remove_cs_block",
+                Box::new(|s| s.remove_cs_block("a/x", Kind::Txst)),
+            ),
+            (
+                "remove_cs_block on a new set",
+                Box::new(|s| s.remove_cs_block("d/w", Kind::Txst)),
+            ),
+            (
+                "set_cm_value",
+                Box::new(|s| s.set_cm_value("a/x", "glossiness", Some(json!(0.5)))),
+            ),
+            ("set_cm_export", Box::new(|s| s.set_cm_export("a/x", false))),
+            (
+                "set_order",
+                Box::new(|s| s.set_order(&["a/x".into(), "b/y".into()])),
+            ),
+            ("rename_set", Box::new(|s| s.rename_set("a/x", "a/renamed"))),
+            (
+                "rename_set (no order)",
+                Box::new(|s| {
+                    s.set_order(&[]);
+                    s.rename_set("a/renamed", "a/again")
+                }),
+            ),
+            ("retarget_auto", Box::new(|s| s.retarget_auto("a/x", "a/y"))),
+            ("delete_set", Box::new(|s| s.delete_set("c/z"))),
+            ("add_section", Box::new(|s| s.add_section(&Settings::new()))),
+            ("set_json_name", Box::new(|s| s.set_json_name(Some("n")))),
+            (
+                "restore_keeping_json_sha",
+                Box::new(|s| s.restore_keeping_json_sha("[[sets]]\nid = \"r/one\"\n")),
+            ),
+            (
+                "restore",
+                Box::new(|s| s.restore("[[sets]]\nid = \"r/two\"\n")),
+            ),
+            ("reload", Box::new(|s| s.reload())),
+        ];
+        for (what, step) in &steps {
+            s.entries();
+            step(&mut s);
+            assert_eq!(*s.entries(), s.parse_entries(), "{what}");
+        }
+    }
+
+    /// Review M1: removing the last key of a block, or a key under an empty sub-table that gets pruned, is a change:
+    /// rev moves, the document is dirty and the cached entries match.
+    #[test]
+    fn pruning_a_block_sub_table_bumps_the_revision() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = SetsDoc::open(d.path());
+        s.restore(
+            "[[sets]]\nid = \"a/x\"\n[sets.cm]\nglossiness = 0.5\n[sets.cm.extra]\n\
+             [sets.cs_txst]\nedids = []\n[sets.cs_txst.glintParameters]\n",
+        );
+        type Step<'a> = (&'a str, Box<dyn Fn(&mut SetsDoc) + 'a>);
+        let steps: Vec<Step> = vec![
+            (
+                "cm: empty sub-table pruned",
+                Box::new(|s| s.set_cm_value("a/x", "extra.k", None)),
+            ),
+            (
+                "cm: last key",
+                Box::new(|s| s.set_cm_value("a/x", "glossiness", None)),
+            ),
+            (
+                "cs: empty sub-table pruned",
+                Box::new(|s| s.set_cs_value("a/x", Kind::Txst, "glintParameters.enabled", None)),
+            ),
+        ];
+        for (what, step) in &steps {
+            s.entries();
+            let rev = s.rev();
+            let text = s.text();
+            step(&mut s);
+            assert_ne!(s.text(), text, "{what}: the document changed");
+            assert_ne!(s.rev(), rev, "{what}");
+            assert!(s.is_dirty(), "{what}");
+            assert_eq!(*s.entries(), s.parse_entries(), "{what}");
+        }
     }
 }

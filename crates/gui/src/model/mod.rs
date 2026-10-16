@@ -213,12 +213,13 @@ fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
-/// The cached set views and export blocks, valid for `key` only.
+/// The cached set views, export blocks and delete-section hits, valid for `key` only.
 #[derive(Default)]
 pub(crate) struct ViewCache {
     pub key: Option<ViewKey>,
     pub views: Option<Arc<Vec<sets::SetView>>>,
     pub blocks: Option<Arc<Vec<pbr_export::ExportIssue>>>,
+    pub hits: Option<Arc<Vec<sections::DeleteHit>>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -230,6 +231,8 @@ pub(crate) struct ViewKey {
     export_root: PathBuf,
     target: Target,
     /// The scan database the statics rule read (design §5.1): a new scan changes the export blocks.
+    scan_db: Option<PathBuf>,
+    /// Its stamp as of the last `poll` (an external CLI scan shows on the next frame).
     scan: cs_pbr::Stamp,
 }
 
@@ -257,6 +260,10 @@ pub struct AppModel {
     /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
     /// developer's scan cannot leak in.
     pub scan_db: Option<PathBuf>,
+    /// `scan_db`'s stamp, taken once per frame in `poll` (REPORT #9: `view_key` does not stat it per call).
+    scan_stamp: cs_pbr::Stamp,
+    /// The last scan-database read error logged (audit GM-5: each distinct error once).
+    scan_db_error: Option<String>,
     /// S-shader-10: `shader::mesh_key` → what the scanned meshes report; sent as `BatchRequest::mesh_shaders`.
     pub mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
@@ -460,6 +467,8 @@ impl AppModel {
             loaded_user_presets: vec![],
             skipped_user_presets: vec![],
             scan_db: None,
+            scan_stamp: None,
+            scan_db_error: None,
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
             mesh_tree_anim: Default::default(),
@@ -630,6 +639,9 @@ impl AppModel {
         self.stats.borrow_mut().clear();
         self.drawer_epoch += 1;
         self.dropped_fills.clear();
+        // Audit GM-6: the previous folder's header-patch result, tag choices and open confirmation.
+        self.dds_patch = Default::default();
+        self.scan_db_error = None;
         let same_folder = self.root.as_ref() == Some(&root);
         self.ignored_by_plan = false;
         let project = ProjectDoc::open(&root);
@@ -738,7 +750,7 @@ impl AppModel {
     /// `shader::colour_mesh_key`, the engine's rule) and the GRAS diffuses (complex grass design §5 condition 1) from
     /// the scan database on one worker thread, tagged with a generation; `votes_landed` applies the newest result.
     /// No database means no evidence (applied at once): the suffix rules decide and the alpha is asked. A read
-    /// error keeps the previous values (stderr). `after_plan`: the result continues `apply_plan`'s tail.
+    /// error keeps the previous values (a Messages warning). `after_plan`: the result continues `apply_plan`'s tail.
     pub fn refresh_mesh_votes(&mut self, after_plan: bool) {
         let keys: std::collections::BTreeSet<String> = self
             .items
@@ -771,7 +783,7 @@ impl AppModel {
                     gras_all: meshes::gras_all_diffuses(&db)?,
                 })
             };
-            // A panic is an error of this generation (kept values, stderr), not a dialog for a stale read.
+            // A panic is an error of this generation (kept values, a warning), not a dialog for a stale read.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read))
                 .unwrap_or_else(|p| Err(format!("panic: {}", crate::worker::panic_text(&*p))));
             let _ = tx.send(WorkerMsg::MeshVotes { generation, result });
@@ -794,6 +806,7 @@ impl AppModel {
         };
         let changed = match result {
             Ok(e) => {
+                self.scan_db_error = None;
                 let changed = e.votes != self.mesh_votes
                     || e.alpha != self.mesh_alpha
                     || e.gras != self.gras_diffuses
@@ -804,9 +817,9 @@ impl AppModel {
                 changed
             }
             Err(e) => {
-                eprintln!(
-                    "tessalith: scan database read failed, keeping the previous mesh evidence: {e}"
-                );
+                self.scan_db_warning(format!(
+                    "Scan database: {e}; keeping the previous mesh evidence"
+                ));
                 false
             }
         };
@@ -934,6 +947,7 @@ impl AppModel {
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        self.scan_stamp = cs_pbr::stamp(self.scan_db.as_deref());
         for d in self.picker.take() {
             changed = true;
             self.picked(d);
@@ -977,10 +991,7 @@ impl AppModel {
             WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    "export" => {
-                        self.export.running = None;
-                        self.run_after_export();
-                    }
+                    "export" => self.export_ended(Err(format!("internal error: {message}"))),
                     "preview" => self.preview_panicked(&message),
                     "heatmap" => self.heatmap_panicked(),
                     "rnm-preview" => self.rnm_preview_panicked(),
@@ -1039,45 +1050,51 @@ impl AppModel {
         match msg {
             WorkerMsg::ReportSaved { path, result } => self.report_saved(&path, result),
             WorkerMsg::Event(e) => self.export.on_event(e),
-            WorkerMsg::ExportDone(result) => {
-                self.export.running = None;
-                if let Some(p) = self.export.pace.as_mut() {
-                    p.stop(Instant::now());
-                }
-                let mut failure = None;
-                match result {
-                    Ok(summary) => {
-                        let sev = if summary.failed > 0 {
-                            messages::Severity::Warning
-                        } else {
-                            messages::Severity::Info
-                        };
-                        self.messages.notify(sev, export_finished_text(&summary));
-                        self.export.summary = Some(summary);
-                    }
-                    Err(e) => {
-                        self.export.error = Some(e.clone());
-                        failure = Some(e);
-                    }
-                }
-                self.finish_json();
-                let cs = self.pending_cs.take();
-                self.finish_cs_pbr(cs);
-                let cm = self.pending_cm.take();
-                self.finish_cm_json(cm);
-                // A user who cancelled the export to leave does not need its error as a dialog.
-                if !self.run_after_export() {
-                    if let Some(e) = failure {
-                        self.dialog = Some(Dialog::Error(e));
-                    }
-                }
-            }
+            WorkerMsg::ExportDone(result) => self.export_ended(result),
             WorkerMsg::Source { token, result } => self.on_source(token, result),
             WorkerMsg::Encoded { token, result } => self.on_encoded(token, result),
             WorkerMsg::Heatmap { id, image } => self.heatmap_landed(id, image),
             WorkerMsg::Dims(dims) => self.dims_landed(dims),
             WorkerMsg::RnmPreview { id, image } => self.rnm_preview_landed(id, image),
             _ => {}
+        }
+    }
+
+    /// The export ended: its result, or a worker panic as an error (audit GM-4: one path for both). The pace clock
+    /// stops, the JSON/CS/CM files are written or noted, and an error is always logged.
+    fn export_ended(&mut self, result: Result<engine::api::BatchSummary, String>) {
+        self.export.running = None;
+        if let Some(p) = self.export.pace.as_mut() {
+            p.stop(Instant::now());
+        }
+        let mut failure = None;
+        match result {
+            Ok(summary) => {
+                let sev = if summary.failed > 0 {
+                    messages::Severity::Warning
+                } else {
+                    messages::Severity::Info
+                };
+                self.messages.notify(sev, export_finished_text(&summary));
+                self.export.summary = Some(summary);
+            }
+            Err(e) => {
+                self.messages
+                    .log(messages::Severity::Error, format!("Export failed: {e}"));
+                self.export.error = Some(e.clone());
+                failure = Some(e);
+            }
+        }
+        self.finish_json();
+        let cs = self.pending_cs.take();
+        self.finish_cs_pbr(cs);
+        let cm = self.pending_cm.take();
+        self.finish_cm_json(cm);
+        // A user who cancelled the export to leave does not need its error as a dialog.
+        if !self.run_after_export() {
+            if let Some(e) = failure {
+                self.dialog = Some(Dialog::Error(e));
+            }
         }
     }
 
@@ -1791,7 +1808,8 @@ impl AppModel {
             root: self.root.clone(),
             export_root: self.export_root(),
             target: self.target,
-            scan: cs_pbr::stamp(self.scan_db.as_deref()),
+            scan_db: self.scan_db.clone(),
+            scan: self.scan_stamp,
         }
     }
 
@@ -2607,4 +2625,66 @@ pub fn export_finished_text(s: &engine::api::BatchSummary) -> String {
         "Export finished: {} written, {} skipped, {} failed",
         s.converted, s.skipped, s.failed
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Audit GM-10: mesh evidence that differs on every read never settles; `auto_replans` stops the re-plans
+    /// after two rounds, and Export then refuses with "the sets changed while planning".
+    #[test]
+    fn alternating_mesh_votes_stop_replanning_after_two_rounds() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("textures/landscape");
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbImage::from_pixel(16, 16, image::Rgb([90, 90, 90]))
+            .save(root.join("rock01.png"))
+            .unwrap();
+        // Any file: each plan's evidence read then comes as a worker message, which this test replaces.
+        let db = d.path().join("scan.db");
+        std::fs::write(&db, "not a database").unwrap();
+        let settings = GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..GuiSettings::default()
+        };
+        let session =
+            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
+        let mut m = AppModel::new(settings, None, session);
+        m.scan_db = Some(db);
+        let start = m.generation;
+        m.open_folder(root);
+        let (mut flip, mut reads) = (false, 0);
+        let end = Instant::now() + Duration::from_secs(120);
+        while m.busy() {
+            assert!(Instant::now() < end, "the plan never settled");
+            let Ok(msg) = m.rx.recv_timeout(Duration::from_millis(50)) else {
+                continue;
+            };
+            let msg = match msg {
+                WorkerMsg::MeshVotes { generation, .. } => {
+                    flip = !flip;
+                    reads += 1;
+                    let gras = [if flip { "a" } else { "b" }.to_string()].into();
+                    WorkerMsg::MeshVotes {
+                        generation,
+                        result: Ok(MeshEvidence {
+                            gras,
+                            ..Default::default()
+                        }),
+                    }
+                }
+                other => other,
+            };
+            m.handle(msg);
+        }
+        assert_eq!(reads, 3, "one read per plan");
+        assert_eq!(m.generation - start, 3, "the first plan and two re-plans");
+        m.export_clicked();
+        assert!(
+            matches!(&m.dialog, Some(Dialog::Error(e)) if e.contains("sets changed while planning")),
+            "{:?}",
+            m.dialog
+        );
+    }
 }

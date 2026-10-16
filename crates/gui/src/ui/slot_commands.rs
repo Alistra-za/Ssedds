@@ -37,7 +37,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
     let entry = model
         .sets_doc
         .as_ref()
-        .and_then(|d| d.entries().into_iter().find(|e| same_id(&e.id, &set)))
+        .and_then(|d| d.entries().iter().find(|e| same_id(&e.id, &set)).cloned())
         .unwrap_or_default();
     let (settings, locks) = (entry.settings, entry.lock);
     let editable = model.sets_doc.as_ref().is_some_and(|d| !d.read_only());

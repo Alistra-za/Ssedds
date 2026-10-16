@@ -112,9 +112,10 @@ impl AppModel {
         self.sets_doc
             .as_ref()?
             .entries()
-            .into_iter()
+            .iter()
             .find(|e| same_id(&e.id, set))?
             .cm
+            .clone()
     }
 
     /// One undoable edit of `[sets.cm]`. Nothing is planned: the block never changes a job.

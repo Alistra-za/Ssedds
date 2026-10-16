@@ -79,10 +79,10 @@ impl AppModel {
             .as_ref()
             .and_then(|d| {
                 d.entries()
-                    .into_iter()
+                    .iter()
                     .find(|e| engine::sets::same_id(&e.id, set))
+                    .map(|e| e.skin.clone())
             })
-            .map(|e| e.skin)
             .unwrap_or_default()
     }
 
