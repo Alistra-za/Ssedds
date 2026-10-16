@@ -107,7 +107,7 @@ pub fn draw(
     status(ui, model);
 }
 
-/// Open folder…, Recent, Undo, Redo, MO2… with Mode, Preset, Presets… and PG JSON Editor.
+/// Open folder…, Recent, Undo, Redo, MO2… with Mode, Preset, Presets…, then the export folder at the right (BH12).
 fn top_row(
     ui: &mut egui::Ui,
     model: &mut AppModel,
@@ -129,14 +129,38 @@ fn top_row(
     {
         model.open_presets();
     }
+    export_folder_button(ui, model);
+}
+
+/// The column eye toggles at the far left, the view tabs centred in the space left (BH14), then PG JSON Editor at the
+/// right (BH12).
+fn bottom_row(ui: &mut egui::Ui, model: &mut AppModel) {
+    column_toggles(ui, model);
+    let right = if shows_json_editor(model) {
+        button_width(ui, JSON_EDITOR) + ui.spacing().item_spacing.x
+    } else {
+        0.0
+    };
+    let tabs = view_tabs_width(ui);
+    let free = room(ui) - right;
+    if free > tabs {
+        ui.add_space((free - tabs) / 2.0);
+    }
+    view_toggle(ui);
     json_editor_button(ui, model);
 }
 
-/// The column checkboxes at the far left, the view tabs, then the export folder.
-fn bottom_row(ui: &mut egui::Ui, model: &mut AppModel) {
-    column_checkboxes(ui, model);
-    view_toggle(ui);
-    export_folder_button(ui, model);
+/// What is left of this line of a wrapped row.
+fn room(ui: &egui::Ui) -> f32 {
+    ui.max_rect().right() - ui.cursor().min.x
+}
+
+/// Moves the cursor so a `w`-wide widget ends at the row's right edge, against the Messages/Save stack (BH12).
+fn push_right(ui: &mut egui::Ui, w: f32) {
+    let s = room(ui) - w - 0.5;
+    if s > 0.0 {
+        ui.add_space(s);
+    }
 }
 
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
@@ -184,12 +208,19 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     });
 }
 
+/// PG JSON Editor is offered: cs mode, a folder open and its `sdc-project.toml` loaded.
+fn shows_json_editor(model: &AppModel) -> bool {
+    model.target == Target::Cs && model.root.is_some() && model.sets_doc.is_some()
+}
+
 /// The PGPatcher JSON editor (CS only, with a folder open); the JSON name is its top field (Note BH7).
 fn json_editor_button(ui: &mut egui::Ui, model: &mut AppModel) {
-    if model.target != Target::Cs || model.root.is_none() || model.sets_doc.is_none() {
+    if !shows_json_editor(model) {
         return;
     }
-    fit(ui, button_width(ui, JSON_EDITOR));
+    let w = button_width(ui, JSON_EDITOR);
+    fit(ui, w);
+    push_right(ui, w);
     if ui
         .button(JSON_EDITOR)
         .on_hover_text(
@@ -220,23 +251,105 @@ fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     galley.size().x + 2.0 * ui.spacing().button_padding.x
 }
 
-/// Which of the Textures and Sets columns are shown at all. Each column's own arrow collapses it to a strip.
-fn column_checkboxes(ui: &mut egui::Ui, model: &mut AppModel) {
+/// Which of the Textures and Sets columns are shown at all (BH15: eye toggles). Each column's own arrow collapses it
+/// to a strip.
+fn column_toggles(ui: &mut egui::Ui, model: &mut AppModel) {
     let st = &mut model.settings;
     let mut textures = !st.textures_hidden;
     let mut sets = !st.sets_hidden;
-    let mut changed = ui
-        .checkbox(&mut textures, "Textures column")
-        .on_hover_text("Show the Textures column")
-        .changed();
-    changed |= ui
-        .checkbox(&mut sets, "Sets column")
-        .on_hover_text("Show the Sets column")
-        .changed();
+    let mut changed = eye_toggle(ui, &mut textures, "Textures").changed();
+    changed |= eye_toggle(ui, &mut sets, "Sets").changed();
     if changed {
         st.textures_hidden = !textures;
         st.sets_hidden = !sets;
         model.save_settings();
+    }
+}
+
+/// An eye and `text`: open while the `text` column shows, struck through while it is hidden. To accessibility it is a
+/// check box named "<text> column" (what tests and screen readers find); the hover says what a click does.
+fn eye_toggle(ui: &mut egui::Ui, on: &mut bool, text: &str) -> egui::Response {
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    let pad = ui.spacing().button_padding.x;
+    let size = egui::vec2(
+        pad + EYE_W + 4.0 + galley.size().x + pad,
+        ui.spacing().interact_size.y,
+    );
+    let (rect, mut r) = ui.allocate_exact_size(size, egui::Sense::click());
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    let label = format!("{text} column");
+    let enabled = ui.is_enabled();
+    let shown = *on;
+    r.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, shown, &label)
+    });
+    if ui.is_rect_visible(rect) {
+        let v = ui.style().interact(&r);
+        if r.hovered() || r.has_focus() {
+            ui.painter().rect(
+                rect,
+                v.corner_radius,
+                v.weak_bg_fill,
+                v.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        let color = if shown {
+            v.text_color()
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        let eye = egui::pos2(rect.left() + pad + EYE_W / 2.0, rect.center().y);
+        paint_eye(ui.painter(), eye, color, shown);
+        let at = egui::pos2(
+            rect.left() + pad + EYE_W + 4.0,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(at, galley, color);
+    }
+    let verb = if shown { "Hide" } else { "Show" };
+    r.on_hover_text(format!("{verb} the {text} column"))
+}
+
+/// The eye's width.
+const EYE_W: f32 = 14.0;
+
+/// An eye centred on `c`: a lens outline and a pupil when `open`, a lens struck through when not.
+fn paint_eye(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32, open: bool) {
+    let (rx, ry) = (EYE_W / 2.0, 4.5);
+    let n = 12;
+    let edge = |u: f32, sign: f32| {
+        egui::pos2(
+            c.x - rx + 2.0 * rx * u,
+            c.y + sign * ry * (std::f32::consts::PI * u).sin(),
+        )
+    };
+    let lens: Vec<egui::Pos2> = (0..=n)
+        .map(|i| edge(i as f32 / n as f32, -1.0))
+        .chain((1..n).map(|i| edge(1.0 - i as f32 / n as f32, 1.0)))
+        .collect();
+    painter.add(egui::Shape::closed_line(
+        lens,
+        egui::Stroke::new(1.3, color),
+    ));
+    if open {
+        painter.circle_filled(c, 2.3, color);
+    } else {
+        painter.line_segment(
+            [
+                c + egui::vec2(-rx + 1.0, ry + 1.0),
+                c + egui::vec2(rx - 1.0, -ry - 1.0),
+            ],
+            egui::Stroke::new(1.6, color),
+        );
     }
 }
 
@@ -404,11 +517,7 @@ pub fn view_toggle(ui: &mut egui::Ui) {
                 .min_size(egui::vec2(w, h)),
         )
     };
-    let gap = ui.spacing().item_spacing.x;
-    fit(
-        ui,
-        2.0 * (button_width(ui, "Textures view") + 12.0) + 32.0 + gap,
-    );
+    fit(ui, view_tabs_width(ui));
     ui.add_space(16.0);
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
@@ -421,6 +530,11 @@ pub fn view_toggle(ui: &mut egui::Ui) {
     });
     ui.add_space(16.0);
     set_meshes_view(ui.ctx(), meshes);
+}
+
+/// The width `view_toggle` takes: two tabs, their 16 pt margins and the spacing after them.
+fn view_tabs_width(ui: &egui::Ui) -> f32 {
+    2.0 * (button_width(ui, "Textures view") + 12.0) + 2.0 + 32.0 + ui.spacing().item_spacing.x
 }
 
 /// Switch the view (also the saved one coming back at start, AG17).
@@ -443,14 +557,17 @@ fn export_folder_button(ui: &mut egui::Ui, model: &mut AppModel) {
     };
     let text = format!("Export folder: {shown}");
     // A long path is cut to EXPORT_FOLDER_MAX, or to what is left of the row but at least EXPORT_FOLDER_MIN (the
-    // hover and the accessible name keep all of it), so a narrow window keeps the bottom row one line.
-    let left = ui.max_rect().right() - ui.cursor().min.x;
+    // hover and the accessible name keep all of it), so a narrow window keeps its row one line.
     let w = button_width(ui, &text)
         .min(EXPORT_FOLDER_MAX)
-        .min(left.max(EXPORT_FOLDER_MIN));
+        .min(room(ui).max(EXPORT_FOLDER_MIN));
     fit(ui, w);
+    push_right(ui, w);
     let height = ui.spacing().interact_size.y;
-    let b = egui::Button::new(text).truncate();
+    // Exactly `w` wide, so its right edge is the row's (BH12).
+    let b = egui::Button::new(text)
+        .truncate()
+        .min_size(egui::vec2(w, height));
     // AG129: the drawer's links point at the export folder, so it stays put while an export runs.
     let off = if model.picker.busy() {
         Some(picker::BUSY_HOVER)

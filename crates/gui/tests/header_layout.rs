@@ -156,6 +156,66 @@ fn export_spans_two_rows_at_the_right_with_messages_over_save() {
     }
 }
 
+/// Note BH12/BH14: the export folder ends the top row and PG JSON Editor the bottom row, both against the
+/// Messages/Save stack; the view tabs sit centred between the eye toggles and PG JSON Editor.
+#[test]
+fn export_folder_and_json_editor_sit_against_the_stack_and_the_tabs_are_centred() {
+    let d = tempfile::tempdir().unwrap();
+    let h = harness(pbr_opened(d.path()), 1440.0, false);
+    let msgs = h.get_by_label("Messages").rect();
+    let open = h.get_by_label("Open folder…").rect();
+    let folder = h.get_by_label_contains("Export folder").rect();
+    let json = h.get_by_label(sdc_gui::ui::header::JSON_EDITOR).rect();
+    let sets = h.get_by_label("Sets column").rect();
+    let tabs = h
+        .get_by_label("Textures view")
+        .rect()
+        .union(h.get_by_label("Meshes view").rect());
+    let gap = msgs.left() - folder.right();
+    assert!((0.0..12.0).contains(&gap), "{folder:?} vs {msgs:?}");
+    assert!(
+        (msgs.left() - json.right() - gap).abs() < 1.0,
+        "{json:?} vs {msgs:?}"
+    );
+    // Rows: the folder on the top row, the editor button on the bottom row.
+    assert!(
+        (folder.center().y - open.center().y).abs() < 4.0,
+        "{folder:?}"
+    );
+    assert!(json.top() > open.bottom(), "{json:?}");
+    // Centred: the space before the tabs and after them differ by less than a few points.
+    let (before, after) = (tabs.left() - sets.right(), json.left() - tabs.right());
+    assert!(
+        (before - after).abs() < 12.0,
+        "before {before}, after {after}"
+    );
+}
+
+/// Note BH15: the columns' eye toggles keep their accessible names and say whether the column shows.
+#[test]
+fn the_column_toggles_are_eyes_named_for_their_columns() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(pbr_opened(d.path()), 1440.0, false);
+    let toggled = |h: &H| h.get_by_label("Textures column").accesskit_node().toggled();
+    assert_eq!(
+        h.get_by_label("Textures column").accesskit_node().role(),
+        Role::CheckBox
+    );
+    assert_eq!(toggled(&h), Some(egui::accesskit::Toggled::True));
+    h.get_by_label("Textures column").click();
+    h.run_steps(2);
+    assert!(h.state().0.settings.textures_hidden);
+    assert_eq!(toggled(&h), Some(egui::accesskit::Toggled::False));
+    // The visible text is the bare column name.
+    assert!(button_text_is_short(&h));
+}
+
+/// The toggles show "Textures" and "Sets" (shorter than the old "… column" labels).
+fn button_text_is_short(h: &H) -> bool {
+    let w = h.get_by_label("Textures column").rect().width();
+    w < 100.0
+}
+
 /// Note BH9: a running export shows its progress under the Export button, in the header.
 #[test]
 fn a_running_export_shows_progress_in_the_header() {

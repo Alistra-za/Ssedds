@@ -439,6 +439,14 @@ fn the_lock_icon_drags_to_a_separator() {
     let handle = h.get_by_label(sdc_gui::ui::input_name::LOCK_LABEL);
     assert_eq!(handle.accesskit_node().role(), Role::Slider);
     let from = handle.rect().center();
+    // BH13: the padlock sits on the box's lower edge, on the track under the text, not over it.
+    let edit = h
+        .get(
+            by().role(Role::TextInput)
+                .label(sdc_gui::ui::input_name::HINT),
+        )
+        .rect();
+    assert!(from.y >= edit.bottom() - 0.5, "{from:?} vs {edit:?}");
     // The first stop: the box's left edge.
     let to = egui::pos2(
         h.get(
