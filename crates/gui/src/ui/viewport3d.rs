@@ -299,6 +299,11 @@ fn look_controls(ui: &mut egui::Ui, v: &mut Viewport3d) {
         });
 }
 
+/// Where a panel keeps its frame texture.
+pub fn frame_cache_id(panel: &str) -> egui::Id {
+    egui::Id::new(("viewport3d-frame", panel))
+}
+
 /// The frame, sized to the space left; asks the model for a frame of that size (physical pixels).
 pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let avail = ui.available_size();
@@ -334,7 +339,7 @@ pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let Some(frame) = v.frame.clone() else {
         return;
     };
-    let id = egui::Id::new("viewport3d-frame");
+    let id = frame_cache_id(v.panel);
     let cached: Option<(u64, egui::TextureHandle)> = ui.ctx().data(|d| d.get_temp(id));
     let tex = match cached {
         Some((fid, t)) if fid == frame.id => t,

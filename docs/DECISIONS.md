@@ -1321,3 +1321,9 @@ Spec `docs/superpowers/specs/2026-10-15-gui-suggestions-nif-design.md` (owner-ap
 - **AU6 3D index.** Supersedes AI2's block-order numbering (merge into main, 2026-10-15). `nif::graph::index3d` (PGPatcher `shapesWith3DIdx`: pre-order, first visit wins) follows nifly's `GetTree` refs, not only block children: node children, `BSTreeNode` bones, particle systems and their data and modifiers, the Havok `modifierRef`, and `NiMeshPSysData.nodeRef`. Particle systems, `NiMeshParticleSystem` included, take an index. Owner-data check: 45 of 46 logged NIFs reproduce the logged indices (the miss is a facegen copy no longer on disk); 1 of 109,320 loose NIFs differs from a block-children-only walk. `shape.index3d`, modscan schema 8 (one full rescan). The Meshes card reads `#index3d`, or `#– (not in scene tree)`.
 - **AU7 Debug views (amends AG75).** Albedo, Normals, Roughness, Metallic, AO by one block injected before CS's single `return psout;` (no vendored shader). The anchors are whole-identifier checks: each declaration the block reads is matched on the complete name (boundary on the name, not after `=`), so a longer identifier cannot satisfy it; spacing between type and variable is literal, so a reformatted CS fails closed. Non-PBR Roughness is `1 − glossiness` (G9; CS also has a real Roughness field, noted for the owner) and AO is vertex AO (stand-ins, named in the hover); non-PBR Metallic and FaceGen/Hair/Eye AO are not offered. Without the anchor the views are not offered (`V3Reply::DebugSupport`).
 - **AU8 One branch.** All seven items landed on `nif/m-guisug`, not one branch each (R1).
+
+## Note AV — Audit 2026-10-15 fixes
+
+### GUI UI
+
+- **AV-UI3 3D frame texture per panel (audit item 3).** The cached frame texture is keyed by `("viewport3d-frame", panel)` (`ui::viewport3d::frame_cache_id`), so the Meshes panel and the set preview, which both count frame ids from 1, no longer show each other's picture.
