@@ -1392,3 +1392,10 @@ Reverses Note H's "Plain `_normal`: no default green convention" (spec §4.4 "sd
 
 - **AY1 Exe resources.** `tessalith.exe` and `sdc.exe` carry the Tessalith icon (`crates/gui/assets/tessalith.ico`) and a VERSIONINFO block (ProductName Tessalith, version from `CARGO_PKG_VERSION`, GPL-3.0-or-later). Each crate's `build.rs` compiles a generated `.rc` with the Windows SDK `rc.exe` (env `RC`, else the newest `Windows Kits\10\bin\<ver>\x64`); no new crate. A missing or failing `rc.exe` only warns and the exe builds without resources.
 - **AY2 Window icon.** The GUI sets the window/taskbar icon from the embedded `tessalith-256.png`; a decode failure is logged and skipped.
+
+## Note BA — Head parts are head in the 3D preview (owner, 2026-10-15)
+
+- **BA1 Rule.** Community Shaders treats every geometry under a `BSFaceGenNiNode` as head (skin `bodyTiling` = 1). That node exists only in game, so the preview counts a shape as head when ANY of: (1) its shader type is FaceGen (4), as before; (2) its NIF path is under `meshes/actors/character/facegendata/`; (3) its NIF is the model (MODL) of an HDPT record in the scanned plugins. Rules 2 and 3 are per NIF: every shape of such a NIF is head (type-5 mouths, teeth, etc.; RenderDoc capture 11178 ev 4269). The type-5 "counts as body" shortcut is gone.
+- **BA2 Any HDPT.** Rule 3 matches any HDPT copy in the active plugins, not only winners: a mesh an overridden head part used to name is still a head mesh.
+- **BA3 No schema bump.** The esp reader has captured HDPT MODL into `model_ref` since the first payload commit (78fb141, before schema 8), so existing stores already hold the rows; `SCHEMA_VERSION` stays 8 and no rescan is forced. No scan or no plugins = rule 3 false.
+- **BA4 Plumbing.** `modscan::Store::is_head_part_mesh(norm)` answers rules 2–3 once per mesh load (Meshes view `mesh_spec`, set preview `load_nif` off the UI thread); the GUI passes it as `MeshSpec::head_part` / `ParsedNif::head_part`; `render3d` keeps it per loaded NIF (`is_head` = rule 1 or the flag). No per-frame query.

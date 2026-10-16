@@ -33,6 +33,9 @@ pub struct ParsedNif {
     pub skipped: Vec<(ShapeId, String)>,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
+    /// The NIF is a head part (Note BA: a facegendata NIF or an HDPT model): every shape is CS "head". `parse`
+    /// cannot know it (it needs the NIF path and the plugins); the caller sets it before loading.
+    pub head_part: bool,
 }
 
 /// Scans the NIF and decodes the geometry of every BSLightingShaderProperty shape, in block order.
