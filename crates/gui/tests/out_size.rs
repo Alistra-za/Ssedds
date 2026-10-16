@@ -197,3 +197,26 @@ fn a_panicked_header_job_is_retried_once_at_the_next_plan_then_left_unsized() {
     assert_eq!(m.sizes.reads, 2 * reads, "not a third time");
     assert_eq!(still, missing, "they stay unsized");
 }
+
+#[test]
+fn a_psd_source_has_a_size() {
+    // Minimal raw 8-bit RGB PSD, 3x2: header, three empty sections, compression 0, planar pixels.
+    let (w, h) = (3u32, 2u32);
+    let mut b = b"8BPS".to_vec();
+    b.extend(1u16.to_be_bytes());
+    b.extend([0u8; 6]);
+    b.extend(3u16.to_be_bytes());
+    b.extend(h.to_be_bytes());
+    b.extend(w.to_be_bytes());
+    b.extend(8u16.to_be_bytes());
+    b.extend(3u16.to_be_bytes());
+    for _ in 0..3 {
+        b.extend(0u32.to_be_bytes());
+    }
+    b.extend(0u16.to_be_bytes());
+    b.extend(vec![128u8; (w * h * 3) as usize]);
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.psd");
+    std::fs::write(&p, b).unwrap();
+    assert_eq!(sdc_gui::model::out_size::source_dims(&p), Some((w, h)));
+}
