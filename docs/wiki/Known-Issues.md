@@ -72,7 +72,7 @@ The program is not code-signed yet. On first run, click **More info**, then **Ru
 
 Open an issue on the Tessalith GitHub page. Please include:
 
-- The Tessalith version (0.8.0 for this release).
+- The Tessalith version (the exe's file properties, or `sdc --version`).
 - Your GPU and driver.
 - Your Community Shaders and PGPatcher versions.
 - The crash log from `%LOCALAPPDATA%\sdc\logs`, if the app crashed.
