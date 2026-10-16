@@ -951,7 +951,7 @@ pub fn presets(args: PresetsArgs) -> Result<i32, EngineError> {
                 )));
             }
             match out {
-                Some(p) => std::fs::write(&p, &text)
+                Some(p) => engine::dds::write_atomic(&p, text.as_bytes())
                     .map_err(|e| EngineError::Fatal(format!("{}: {e}", p.display())))?,
                 None => out_raw!("{text}"),
             }
