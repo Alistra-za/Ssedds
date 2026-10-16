@@ -60,6 +60,10 @@ fn main() -> eframe::Result {
     if let Some(p) = win.pos {
         viewport = viewport.with_position(p);
     }
+    match eframe::icon_data::from_png_bytes(include_bytes!("../assets/tessalith-256.png")) {
+        Ok(icon) => viewport = viewport.with_icon(icon),
+        Err(e) => eprintln!("window icon skipped: {e}"),
+    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         // BC texture compression and the adapter's own limits, for the preview textures.
