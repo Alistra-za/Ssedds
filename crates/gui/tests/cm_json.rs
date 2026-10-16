@@ -394,9 +394,10 @@ fn targets_follow_the_resolved_output_name() {
     assert!(r.contains(&ok("steel_m", "m/steel_m.json")), "{r:?}");
 }
 
-/// Design §6 step 2: a packed cpm `_m` gets its JSON next to the packed output.
+/// Design §6 step 2: a packed complex `_m` (vanilla, complex-material set, Note AZ) gets its JSON next to the packed
+/// output.
 #[test]
-fn a_packed_cpm_m_gets_its_json_next_to_the_packed_output() {
+fn a_packed_complex_m_gets_its_json_next_to_the_packed_output() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("src/p");
     std::fs::create_dir_all(&p).unwrap();
@@ -405,7 +406,10 @@ fn a_packed_cpm_m_gets_its_json_next_to_the_packed_output() {
             .save(p.join(n))
             .unwrap();
     }
-    let m = open(d.path(), Target::Cpm);
+    let mut m = open(d.path(), Target::Vanilla);
+    let steel = set_id(&m, "p/steel");
+    m.set_shader(&steel, Some(Shader::ComplexMaterial));
+    idle(&mut m);
     let r = rels(&m);
     assert!(r.contains(&ok("steel_m", "p/steel_m.json")), "{r:?}");
 }

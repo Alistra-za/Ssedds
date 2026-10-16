@@ -75,8 +75,8 @@ fn mode_change_cancels_and_drops_a_preview_of_a_vanished_job() {
         .unwrap();
     m.expand("landscape/rock01_rmaos");
     m.encode_now();
-    // Switch target while the encode may still be running: cpm packs rock01_m instead.
-    m.set_target(Target::Cpm);
+    // Switch target while the encode may still be running: vanilla builds no _rmaos.
+    m.set_target(Target::Vanilla);
     settle(&mut m);
     assert!(m.item("landscape/rock01_rmaos").is_none());
     assert_eq!(m.expanded, None);

@@ -28,7 +28,7 @@ fn doc_with(text: &str) -> (tempfile::TempDir, ProjectDoc) {
 #[test]
 fn edits_keep_every_hand_written_byte() {
     let (d, mut doc) = doc_with(HAND_WRITTEN);
-    doc.set_target(Target::Cpm);
+    doc.set_target(Target::Vanilla);
     doc.set_file_value("landscape/rock01_n.png", "format", &json!("bc7"));
     doc.set_file_value("landscape/rock01_d.png", "alpha.policy", &json!("blend"));
     doc.set_allow(
@@ -46,13 +46,13 @@ fn edits_keep_every_hand_written_byte() {
     {
         assert!(text.contains(line), "lost line: {line}");
     }
-    assert!(text.contains("target = \"cpm\"  # my target"), "{text}");
+    assert!(text.contains("target = \"vanilla\"  # my target"), "{text}");
     assert!(
         text.contains("format = \"bc7\"  # BC7 looks worse here"),
         "{text}"
     );
     let cfg = ProjectDoc::open(d.path()).config().unwrap();
-    assert_eq!(cfg.target, Some(Target::Cpm));
+    assert_eq!(cfg.target, Some(Target::Vanilla));
     assert_eq!(cfg.files["landscape/rock01_n.png"]["format"], "bc7");
     assert_eq!(
         cfg.files["landscape/rock01_n.png"]["allow"],

@@ -178,7 +178,7 @@ fn uncompressed_formats_are_offered_and_rgba16f_only_under_cs() {
         );
     }
     assert!(formats(Target::Cs, Subtype::HdrSky).contains(&Format::Rgba16f));
-    assert!(!formats(Target::Cpm, Subtype::Diffuse).contains(&Format::Rgba16f));
+    assert!(!formats(Target::Vanilla, Subtype::Diffuse).contains(&Format::Rgba16f));
 }
 
 #[test]

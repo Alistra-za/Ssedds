@@ -94,3 +94,17 @@ pub fn opened_as_the_app(root: PathBuf, export: PathBuf) -> AppModel {
     );
     m
 }
+
+/// Note AZ: give the set whose key ends with `key_end` the complex-material shader (under vanilla it then packs the
+/// complex `_m`, the old cpm target) and wait for the re-plan.
+pub fn complex_material(m: &mut AppModel, key_end: &str) {
+    let views = sdc_gui::model::sets::views(m);
+    let id = views
+        .iter()
+        .find(|v| v.key.ends_with(key_end))
+        .unwrap_or_else(|| panic!("no set {key_end}"))
+        .id
+        .clone();
+    m.set_shader(&id, Some(engine::shader::Shader::ComplexMaterial));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+}

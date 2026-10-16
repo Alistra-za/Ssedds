@@ -511,20 +511,19 @@ fn a_moved_fill_never_overwrites_the_destination_silently() {
 }
 
 #[test]
-fn cpm_m_has_glossiness_metallic_and_height_rows_and_vanilla_m_none() {
+fn complex_m_has_glossiness_metallic_and_height_rows_and_vanilla_m_none() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path());
     grey(&d.path().join("m"), "rock03_metallic.png", 5);
     m.open_folder(d.path().to_path_buf());
     idle(&mut m);
-    m.set_target(engine::config::Target::Cpm);
+    m.set_target(engine::config::Target::Vanilla);
     idle(&mut m);
+    support::complex_material(&mut m, "m/rock01");
     assert_eq!(
         roles(&m, "m/rock01_m"),
         vec![RawMap::Glossiness, RawMap::Metallic, RawMap::Height]
     );
-    m.set_target(engine::config::Target::Vanilla);
-    idle(&mut m);
     assert!(m.item("m/rock03_m").is_some(), "vanilla builds the _m");
     assert!(roles(&m, "m/rock03_m").is_empty());
 }
