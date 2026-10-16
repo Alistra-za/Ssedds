@@ -1,0 +1,75 @@
+name: Bug report
+description: Something broke or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Please do not attach game assets or other people's textures; a small made-up example is fine.
+  - type: input
+    id: version
+    attributes:
+      label: Tessalith version
+      description: The release you downloaded, for example 0.8.0-alpha.1.
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: GUI or CLI
+      options: [GUI (tessalith.exe), CLI (sdc.exe), Both]
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 23H2
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver version
+      placeholder: NVIDIA RTX 4070, 560.94
+  - type: input
+    id: cs
+    attributes:
+      label: Community Shaders version
+      description: Leave blank if not used.
+  - type: input
+    id: pgpatcher
+    attributes:
+      label: PGPatcher version
+      description: Leave blank if not used.
+  - type: dropdown
+    id: nvtt
+    attributes:
+      label: Is NVTT installed and used?
+      options: ["No", "Installed, not used", "Installed and used (BC7/BC6H)"]
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open folder ...
+        2. Set Mode to ...
+        3. Export
+    validations:
+      required: true
+  - type: textarea
+    id: crash
+    attributes:
+      label: Crash log
+      description: For a GUI crash, paste the newest file from `%LOCALAPPDATA%\sdc\logs\` (crash-*.log).
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: sdc.toml
+      description: Paste or drag in the `sdc.toml` from the folder you converted (and `sdc-project.toml` if sets are involved).
+      render: toml
