@@ -236,32 +236,18 @@ impl BakeJob {
         Ok(LengthPyramid::build(&work.img))
     }
 
-    /// Peak bytes the bake holds, for `--mem-budget` admission (DECISIONS R4, Task 7 review I2), from the `_n`'s
-    /// header: [`BakeJob::peak_bytes`] of its size and decoded texel width. 0 when the header cannot be read (the
-    /// load then fails with its own error).
+    /// Peak bytes the bake holds, for `--mem-budget` admission (DECISIONS R4, Task 7 review I2): the `_n`'s
+    /// [`decode_peak`], plus (Note BB) its RNM layers' [`crate::rnm::RnmJob::admission_bytes`] at the `_n`'s
+    /// preprocessed size, which `load_lengths` blends into. 0 when the header cannot be read (the load then fails
+    /// with its own error).
     pub fn estimated_bytes(&self) -> u64 {
-        use ::image::ImageDecoder;
-        let header = || {
-            let mut r = ::image::ImageReader::open(&self.normal)
-                .ok()?
-                .with_guessed_format()
-                .ok()?;
-            crate::load::lift_limits(&mut r);
-            let d = r.into_decoder().ok()?;
-            let (w, h) = d.dimensions();
-            Some(Self::peak_bytes(
-                w,
-                h,
-                u64::from(d.color_type().bytes_per_pixel()),
-            ))
+        let layers = || {
+            let r = self.rnm.as_ref()?;
+            let dims = crate::load::image_size(&self.normal).ok()?;
+            let np = &self.normal_profile;
+            Some(r.admission_bytes(&np.rnm, crate::resize::target_dims(dims, np.resize)))
         };
-        // A PSD decodes straight to float RGBA (`psd::load`), with no decoded buffer of its own.
-        header()
-            .or_else(|| {
-                let (w, h) = crate::load::image_size(&self.normal).ok()?;
-                Some(Self::peak_bytes(w, h, 0))
-            })
-            .unwrap_or(0)
+        decode_peak(&self.normal) + layers().unwrap_or(0)
     }
 
     /// Peak bytes of baking a `w`×`h` `_n` whose decoded texels are `decoded` bytes wide. The peak is inside
@@ -269,13 +255,42 @@ impl BakeJob {
     /// 16-bit RGBA), its `to_rgba32f` copy (16) and the collected `Vec` (16). Everything after is smaller:
     /// `preprocess` and the renormalise work in place on the 16-byte base, and the pyramid build adds one
     /// quarter-size accumulation level (4), the next one (1) and the lengths (1.33), about 22.4 per texel.
-    /// shortcut: the `_n`'s RNM layers (loaded one at a time with a resample) are not counted; count the largest when an
-    /// 8K-layer-on-2K-`_n` batch runs out of memory.
     /// A DDS input (M6) instead holds its file data (every mip) and the decoded RGBA32F mip 0 at once: ~32 per texel
     /// for a float DDS; not modelled here.
     pub fn peak_bytes(w: u32, h: u32, decoded: u64) -> u64 {
         u64::from(w) * u64::from(h) * (decoded + 16 + 16)
     }
+}
+
+/// `load::load_image`'s peak on `path`, from its header: [`BakeJob::peak_bytes`] of its size and decoded texel width.
+/// 0 when the header cannot be read.
+pub(crate) fn decode_peak(path: &std::path::Path) -> u64 {
+    use ::image::ImageDecoder;
+    let header = || {
+        let mut r = ::image::ImageReader::open(path)
+            .ok()?
+            .with_guessed_format()
+            .ok()?;
+        crate::load::lift_limits(&mut r);
+        let d = r.into_decoder().ok()?;
+        let (w, h) = d.dimensions();
+        // A hostile header must not overflow the product; the load refuses a file this large anyway (review M1).
+        if w.max(h) > crate::load::MAX_DIM {
+            return None;
+        }
+        Some(BakeJob::peak_bytes(
+            w,
+            h,
+            u64::from(d.color_type().bytes_per_pixel()),
+        ))
+    };
+    // A PSD decodes straight to float RGBA (`psd::load`), with no decoded buffer of its own.
+    header()
+        .or_else(|| {
+            let (w, h) = crate::load::image_size(path).ok()?;
+            Some(BakeJob::peak_bytes(w, h, 0))
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -527,6 +542,42 @@ mod tests {
             .unwrap();
         assert_eq!(job(rgba16).estimated_bytes(), 4 * 4 * (8 + 16 + 16));
         assert_eq!(job(d.path().join("missing_n.png")).estimated_bytes(), 0);
+    }
+
+    /// Note BB: the bake blends the `_n`'s layers too, so it adds the largest layer's decode and its resample to
+    /// the `_n` size.
+    #[test]
+    fn a_bake_with_rnm_layers_is_admitted_for_its_largest_layer() {
+        let d = tempfile::tempdir().unwrap();
+        let n = d.path().join("a_n.png");
+        ::image::RgbImage::new(64, 32).save(&n).unwrap();
+        let layer = |name: &str, w: u32| {
+            let p = d.path().join(name);
+            ::image::RgbImage::new(w, w / 2).save(&p).unwrap();
+            crate::rnm::RnmLayer {
+                id: crate::config::LayerId::Detail,
+                file: crate::rnm::RnmFile {
+                    path: p,
+                    stamp: None,
+                },
+                mask: None,
+            }
+        };
+        let mut job = BakeJob {
+            normal: n,
+            normal_profile: profile(Subtype::PbrNormal),
+            shift: 0,
+            stamp: None,
+            rnm: None,
+        };
+        let base = job.estimated_bytes();
+        let mut small = layer("small.png", 32);
+        small.id = crate::config::LayerId::Bump;
+        job.rnm = Some(crate::rnm::RnmJob {
+            layers: vec![small, layer("big.png", 256)],
+            ao: None,
+        });
+        assert_eq!(job.estimated_bytes(), base + 256 * 128 * 35 + 64 * 32 * 16);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! NVIDIA Texture Tools 3 (`nvcompress`) as an optional BC7/BC6H encoder (spec §7.5, DECISIONS Note NV). Never bundled
 //! or linked: the user installs it and the engine runs it as a separate process.
 use crate::config::{AlphaPolicy, Format, Profile};
-use crate::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+use crate::dds::{dds_bytes, DdsDesc, ResolvedHeader, DDPF_FOURCC};
 use crate::encode::{bc7_post_fix, pack_uncompressed};
 use crate::quantize::EncoderInput;
 use std::ffi::OsStr;
@@ -263,10 +263,17 @@ pub struct TempDir(PathBuf);
 impl TempDir {
     pub fn new() -> std::io::Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("sdc-nvtt-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        Ok(TempDir(dir))
+        // Audit EP-7 (Note BC): a folder a crashed run left under a recycled pid is skipped, never reused.
+        std::fs::create_dir_all(std::env::temp_dir())?;
+        loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("sdc-nvtt-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(TempDir(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -286,8 +293,6 @@ static NVTT_SLOT: Mutex<()> = Mutex::new(());
 
 /// `D3DFMT_A16B16G16R16F`: the legacy FourCC for RGBA16F that nvcompress reads (Spike S7b).
 const FOURCC_RGBA16F: u32 = 113;
-/// `DDPF_FOURCC`.
-const DDPF_FOURCC: u32 = 0x4;
 
 /// NV5 (Spike S7b): nvcompress reads uncompressed DDS only with a legacy header. BC7 levels go as B8G8R8A8 with
 /// BGRA masks, BC6H levels as RGBA16F with FourCC 113 (the engine's writer has no legacy RGBA16F form, so the DX10
@@ -347,6 +352,20 @@ fn tail(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join(" | ")
 }
 
+/// How long one `w`×`h` level may run before nvcompress counts as hung and is killed (audit #18, Note BC9): 2 minutes
+/// plus 1 s per 4 000 texels. Spike S7's slow end for BC7 Production is 0.036 Mpix/s (1 s per ~36 000 texels, on
+/// ~13 cores), so this is about 9x that, room for a smaller CPU or a busy pool: ~70 min at 4096², ~4.7 h at 8192².
+fn level_timeout(w: u32, h: u32) -> Duration {
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("SDC_NVTT_LEVEL_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    Duration::from_secs(120 + u64::from(w) * u64::from(h) / 4_000)
+}
+
 /// One level through nvcompress (DECISIONS Note NV4-NV8). `input` is the quantised level (`w` x `h` texels) and
 /// `level` names its files in `tmp`; the result is the raw block payload, post-fixed for BC7. `cancel` is polled
 /// while waiting for the slot and while the process runs; on cancel the process is killed.
@@ -379,6 +398,8 @@ pub fn encode_level_nvtt(
             Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
         }
     };
+    // A stale output must not pass for this run's when nvcompress exits 0 without writing (audit EP-7).
+    let _ = std::fs::remove_file(&out);
     // stdout and stderr go to one file: an unread pipe could fill and stall the process.
     let logf =
         std::fs::File::create(&log).map_err(|e| failed(format!("{}: {e}", log.display())))?;
@@ -395,6 +416,8 @@ pub fn encode_level_nvtt(
     let mut child = cmd
         .spawn()
         .map_err(|e| failed(format!("could not start {}: {e}", tool.path.display())))?;
+    let limit = level_timeout(w, h);
+    let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st,
@@ -409,6 +432,14 @@ pub fn encode_level_nvtt(
             let _ = child.kill();
             let _ = child.wait();
             return Err(NvttError::Cancelled);
+        }
+        if started.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(failed(format!(
+                "nvcompress did not finish a {w}x{h} level within {} s and was stopped",
+                limit.as_secs_f32()
+            )));
         }
         std::thread::sleep(wait);
         wait = (wait * 2).min(Duration::from_millis(50));
@@ -449,4 +480,19 @@ pub fn encode_level_nvtt(
         );
     }
     Ok(payload)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Review C1 (Note BC9): the limit stays at least 3x Spike S7's slow end (0.036 Mpix/s) at every size.
+    #[test]
+    fn the_level_limit_is_at_least_three_times_s7s_slow_end() {
+        for w in [256u32, 2048, 4096, 8192, 16384] {
+            let slow = f64::from(w) * f64::from(w) / 36_000.0;
+            assert!(
+                super::level_timeout(w, w).as_secs_f64() >= 3.0 * slow,
+                "{w}"
+            );
+        }
+    }
 }

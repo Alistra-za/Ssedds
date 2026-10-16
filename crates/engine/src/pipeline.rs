@@ -260,9 +260,8 @@ fn prepare_then<T>(
     } else {
         (preprocess_with(img, p, transfer), None)
     };
-    // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched.
-    // shortcut: memory admission counts only the base (`estimated_bytes`), not the layers loaded here (one at a time,
-    // plus its resample); count the largest layer when an 8K-layer-on-2K-base batch runs out of memory.
+    // M6 Track F2 (DECISIONS Note W1): RNM layers blend into the preprocessed base; alpha is never touched. Admission
+    // counts the largest layer and its resample (`api::job_bytes`, Note BB).
     if let Some(r) = job.active_rnm() {
         crate::rnm::blend::apply(&mut work.img, r, p).map_err(fail(Stage::Load))?;
     }
@@ -279,9 +278,14 @@ fn prepare_then<T>(
     work.img = Rgba32F::new(0, 0, [0.0; 4]);
     let alpha_present = work.alpha_present;
     // Spec §5.5 (Task 30): coverage runs after the mips and before quantise; for `cutout_blend` it rewrites the
-    // only alpha channel. Complex grass preserved its top half already; its bottom half's alpha is specular data.
-    let base_coverage = base_coverage(&chain[0], p, alpha_present);
-    if base_coverage.is_some() && !grass {
+    // only alpha channel. Complex grass preserved its top half already; its bottom half's alpha is specular data,
+    // so coverage measured on the stacked image is not checked either (Note BC, audit #4).
+    let base_coverage = if grass {
+        None
+    } else {
+        base_coverage(&chain[0], p, alpha_present)
+    };
+    if base_coverage.is_some() {
         preserve_coverage(&mut chain, p.alpha.threshold, p.alpha.compare);
     }
     let dims: Vec<(u32, u32)> = chain.iter().map(|l| (l.width, l.height)).collect();

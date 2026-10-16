@@ -162,16 +162,22 @@ fn glob_match_input(glob: &str, input: &InputFile) -> bool {
     let game = input.game_path.to_lowercase();
     GLOBS.with_borrow_mut(|c| {
         if !c.contains_key(glob) {
-            let m = globset::GlobBuilder::new(&glob.to_lowercase())
-                .literal_separator(true)
-                .build()
-                .ok()
-                .map(|g| g.compile_matcher());
-            c.insert(glob.to_owned(), m);
+            c.insert(glob.to_owned(), compile_glob(glob).ok());
         }
         let Some(m) = &c[glob] else { return false };
         m.is_match(&game) || m.is_match(&rel) || (!glob.contains('/') && m.is_match(name))
     })
+}
+
+/// The matcher [`glob_match_input`] uses for `glob`, or why it does not compile. Patterns are checked with it where
+/// they enter (`parse_set`, `check_preset`, `check_up_front`; audit #7, Note BC), so a typo is an error, never a
+/// glob that matches nothing.
+pub(crate) fn compile_glob(glob: &str) -> Result<globset::GlobMatcher, String> {
+    globset::GlobBuilder::new(&glob.to_lowercase())
+        .literal_separator(true)
+        .build()
+        .map(|g| g.compile_matcher())
+        .map_err(|e| format!("bad glob '{glob}': {e}"))
 }
 
 fn glob_match(glob: &str, f: &FileFacts) -> bool {

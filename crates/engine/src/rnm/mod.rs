@@ -184,4 +184,21 @@ impl RnmJob {
         }
         v
     }
+
+    /// Note BB: what blending into a `base`-sized normal adds to its `--mem-budget` admission. `blend::apply` loads
+    /// one file at a time and resamples it to the base, so: the largest file's decode peak
+    /// ([`crate::bake::decode_peak`], header only) plus one base-sized float image (16 B/texel). 0 when no file's
+    /// header reads (the load then fails with its own error).
+    pub fn admission_bytes(&self, spec: &RnmSpec, base: (u32, u32)) -> u64 {
+        let largest = self
+            .inputs(spec)
+            .iter()
+            .map(|(f, _)| crate::bake::decode_peak(&f.path))
+            .max()
+            .unwrap_or(0);
+        if largest == 0 {
+            return 0;
+        }
+        largest + u64::from(base.0) * u64::from(base.1) * 16
+    }
 }

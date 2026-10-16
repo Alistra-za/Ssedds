@@ -88,7 +88,8 @@ fn make(path: PathBuf, rel: PathBuf, output_root: &Path) -> InputFile {
 }
 
 /// Finds inputs. Folders are walked one level deep unless `recursive`; `_sdc` folders and
-/// anything under `output_root` are skipped, and unknown extensions inside folders are ignored.
+/// anything under an `output_root` strictly inside the folder are skipped (an output root equal to the folder, in
+/// place, or above it skips nothing: Note BC), and unknown extensions inside folders are ignored.
 /// Explicit file inputs are always included. The result is sorted by `rel`.
 pub fn discover(
     inputs: &[PathBuf],
@@ -109,6 +110,9 @@ pub fn discover_reporting(
     let mut skipped = vec![];
     for input in inputs {
         if input.is_dir() {
+            // Note BC (audit #3): only an output root strictly inside this folder is skipped; in place skips nothing.
+            let in_abs = std::path::absolute(input)?;
+            let skip_out = is_under(&out_abs, &in_abs) && !is_under(&in_abs, &out_abs);
             let max_depth = if recursive { usize::MAX } else { 1 };
             let walker = walkdir::WalkDir::new(input)
                 .min_depth(1)
@@ -118,7 +122,8 @@ pub fn discover_reporting(
                     return true;
                 }
                 e.file_name() != SDC_DIR
-                    && !std::path::absolute(e.path()).is_ok_and(|a| is_under(&a, &out_abs))
+                    && !(skip_out
+                        && std::path::absolute(e.path()).is_ok_and(|a| is_under(&a, &out_abs)))
             };
             for e in walker.into_iter().filter_entry(keep) {
                 let e = match e {
@@ -134,7 +139,9 @@ pub fn discover_reporting(
                     }
                 };
                 let p = e.path();
-                if !e.file_type().is_file() || is_under(&std::path::absolute(p)?, &out_abs) {
+                if !e.file_type().is_file()
+                    || (skip_out && is_under(&std::path::absolute(p)?, &out_abs))
+                {
                     continue;
                 }
                 let ext = ext_lower(p);

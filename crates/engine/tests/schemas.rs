@@ -85,3 +85,28 @@ fn config_schema_version_minimum_is_one() {
     let sv = &v["properties"]["schema_version"];
     assert_eq!(sv["minimum"], 1, "{sv}");
 }
+
+/// Audit REPORT #17 (Note BC): every settable field (`FIELD_PATHS`, which `[files]` entries accept) is in the
+/// config schema's `[files]` entry, including `reencode` and `rnm.target`; `subtype` is not a `[files]` field.
+#[test]
+fn the_files_entry_schema_accepts_every_field_path() {
+    let v: serde_json::Value = serde_json::from_str(&schema_json(SchemaKind::Config)).unwrap();
+    let defs = &v["$defs"];
+    let resolve = |s: &serde_json::Value| -> serde_json::Value {
+        match s["$ref"].as_str() {
+            Some(r) => defs[r.trim_start_matches("#/$defs/")].clone(),
+            None => s.clone(),
+        }
+    };
+    for path in engine::overrides::FIELD_PATHS {
+        if *path == "subtype" {
+            continue;
+        }
+        let mut node = defs["FileEntry"].clone();
+        for part in path.split('.') {
+            let next = resolve(&node)["properties"][part].clone();
+            assert!(!next.is_null(), "[files] schema lacks {path}");
+            node = next;
+        }
+    }
+}

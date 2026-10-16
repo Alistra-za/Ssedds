@@ -231,6 +231,27 @@ pub fn files_table_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Sche
                 "items": { "type": "string" }
             }),
         );
+        // Audit #17 (Note BC): the per-file selectors the loader accepts (`overrides::is_selector`).
+        props.insert(
+            crate::overrides::REENCODE_FIELD.into(),
+            serde_json::json!({
+                "description": "Re-encode this DDS input (DECISIONS S6).",
+                "type": "boolean"
+            }),
+        );
+        let target = gen.subschema_for::<crate::config::RnmTarget>();
+        let mut rnm = gen
+            .definitions()
+            .get("PartialRnmSpec")
+            .cloned()
+            .unwrap_or_default();
+        if let Some(Value::Object(rp)) = rnm.get_mut("properties") {
+            rp.insert("target".into(), target.to_value());
+        }
+        gen.definitions_mut().insert("FileRnmSpec".into(), rnm);
+        if let Some(Value::Object(r)) = props.get_mut("rnm") {
+            r.insert("$ref".into(), format!("{prefix}FileRnmSpec").into());
+        }
     }
     gen.definitions_mut().insert("FileEntry".into(), entry);
     schemars::json_schema!({
