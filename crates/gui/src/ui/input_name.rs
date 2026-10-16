@@ -25,14 +25,16 @@ pub const LOCK_LABEL: &str = "Path lock";
 /// The lock icon's hit box.
 const LOCK_W: f32 = 12.0;
 const LOCK_H: f32 = 14.0;
+/// BH13: the box's bottom padding, the track the rail and padlock sit on (below the text).
+const LOCK_TRACK: f32 = 4.0;
 const LOCK_BLUE: egui::Color32 = egui::Color32::from_rgb(70, 140, 235);
 const LOCK_HOVER: egui::Color32 = egui::Color32::from_rgb(110, 170, 255);
 const LOCK_ACTIVE: egui::Color32 = egui::Color32::from_rgb(40, 105, 200);
 
 /// A padlock centred on `c`: a filled body under a shackle.
 fn paint_lock(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
-    let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.0), egui::vec2(9.0, 7.0));
-    let (l, r, top) = (body.left() + 2.0, body.right() - 2.0, body.top() - 4.0);
+    let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 1.5), egui::vec2(9.0, 6.0));
+    let (l, r, top) = (body.left() + 2.0, body.right() - 2.0, body.top() - 3.0);
     let stroke = egui::Stroke::new(1.6, color);
     painter.line_segment(
         [egui::pos2(l, body.top()), egui::pos2(l, top + 1.0)],
@@ -228,10 +230,12 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             .stroke(ui.visuals().widgets.inactive.bg_stroke)
             .fill(ui.visuals().extreme_bg_color)
             .corner_radius(2.0)
+            // BH13: the text sits at the top; the text edit's bottom margin is the track for the rail and padlock
+            // (the box is as tall as before).
             .inner_margin(egui::Margin::symmetric(4, 0))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.horizontal(|ui| {
+                ui.horizontal_top(|ui| {
                     if !locked.is_empty() {
                         ui.add(egui::Label::new(egui::RichText::new(&locked).weak()).selectable(false))
                             .on_hover_text("Locked: drag the rail under the box, or Ctrl+Left/Right, to move the lock");
@@ -240,6 +244,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                         .id(edit_id)
                         .hint_text(HINT)
                         .frame(egui::Frame::NONE)
+                        .margin(egui::Margin { left: 4, right: 4, top: 0, bottom: LOCK_TRACK as i8 })
                         // Tab stays in the box while a ghost shows; Esc while the live list shows (AO2, AO4).
                         .event_filter(egui::EventFilter {
                             tab: ghost.is_some(),
@@ -381,16 +386,18 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
             .collect();
         if xs.len() > 1 {
             let rail = egui::Rect::from_min_max(
-                egui::pos2(box_rect.left(), box_rect.bottom() - 4.0),
+                egui::pos2(box_rect.left(), box_rect.bottom() - LOCK_TRACK),
                 box_rect.right_bottom(),
             );
             let rr = ui
                 .interact(rail, id.with("rail"), egui::Sense::click_and_drag())
                 .on_hover_text("Path lock: drag to a / to keep the path up to it (Ctrl+Left/Right in the box)");
-            // Note BH2: the handle is a blue lock icon on the rail, dragged like the rail.
+            // Note BH2: the handle is a blue lock icon on the rail, dragged like the rail; BH13: centred on the box's
+            // lower edge, so it sits on the track below the text.
+            let lock_y = box_rect.bottom() + 0.5;
             let hx = xs[lock.min(xs.len() - 1)];
             let handle_rect =
-                egui::Rect::from_center_size(egui::pos2(hx, rail.center().y), egui::vec2(LOCK_W, LOCK_H));
+                egui::Rect::from_center_size(egui::pos2(hx, lock_y), egui::vec2(LOCK_W, LOCK_H));
             let hr = ui
                 .interact(handle_rect, id.with("lock-handle"), egui::Sense::click_and_drag())
                 .on_hover_text("Path lock: drag to a / to keep the path up to it (Ctrl+Left/Right in the box)");
@@ -423,7 +430,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                 [egui::pos2(rail.left(), rail.bottom()), egui::pos2(hx, rail.bottom())],
                 egui::Stroke::new(2.0, blue),
             );
-            paint_lock(painter, egui::pos2(hx, rail.center().y), blue);
+            paint_lock(painter, egui::pos2(hx, lock_y), blue);
         }
         let menu = path_picker::menu(ui, DROPDOWN, |ui| {
             ui.label(egui::RichText::new(HEADING).strong());
