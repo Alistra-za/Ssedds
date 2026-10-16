@@ -106,6 +106,9 @@ pub struct BatchRequest {
     /// GUI (PBR grass design §4.2): as `gras_diffuses` with TruePBR shapes kept (`Store::gras_all_diffuse_textures`).
     /// A PBR set with a member listed here auto-picks `pbr_grass`. Empty for the CLI, which never auto-picks it.
     pub gras_all_diffuses: BTreeSet<String>,
+    /// GUI (Note BM): ids of the sets with a `[sets.cs_txst]` block. A PBR set listed here auto-picks `pbr_landscape`
+    /// under CS. Empty for the CLI.
+    pub cs_txst_sets: BTreeSet<String>,
     pub recursive: bool,
     pub on_existing: OnExisting,
     /// Worker threads; 0 = one per logical core.
@@ -157,6 +160,7 @@ impl BatchRequest {
             mesh_alpha: BTreeMap::new(),
             gras_diffuses: BTreeSet::new(),
             gras_all_diffuses: BTreeSet::new(),
+            cs_txst_sets: BTreeSet::new(),
             recursive: false,
             on_existing: OnExisting::IfChanged,
             jobs: 0,
@@ -1197,6 +1201,12 @@ impl Engine {
                     explicit.get(&s.key).copied(),
                     &req.mesh_shaders,
                     &req.gras_all_diffuses,
+                    !req.cs_txst_sets.is_empty() && {
+                        let id = crate::sets::set_id(&req.output_root, &s.key);
+                        req.cs_txst_sets
+                            .iter()
+                            .any(|t| crate::sets::same_id(&id, t))
+                    },
                 );
                 (s.key.clone(), pick)
             })

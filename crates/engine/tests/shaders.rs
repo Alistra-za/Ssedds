@@ -622,3 +622,58 @@ fn under_accept_high_an_auto_shader_decides_its_member_subtype() {
         n.status
     );
 }
+
+/// Note BM: a CS PBR set on a landscape path, or one the GUI says has a texture-set block, auto-picks
+/// `pbr_landscape`; its jobs are exactly those of the same set picked as `pbr` (byte-identical output); vanilla keeps
+/// its `pbr` fallback.
+#[test]
+fn pbr_landscape_is_auto_picked_and_resolves_exactly_like_pbr() {
+    let jobs = |p: &Plan| {
+        p.jobs
+            .iter()
+            .map(|j| serde_json::to_string(&(&j.output, &j.profile)).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let pick = |p: &Plan| {
+        let s = p.shaders.values().next().unwrap();
+        (s.shader, s.provenance.to_string(), s.wanted)
+    };
+    for (base, id, txst) in [
+        ("textures/landscape/rock", "textures/landscape/rock", false),
+        ("textures/a/rock", "textures/a/rock", true),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        put_rgb(d.path(), &format!("{base}.png"), [110, 90, 70]);
+        put_rgb(d.path(), &format!("{base}_n.png"), [128, 128, 255]);
+        put_rgb(d.path(), &format!("{base}_rmaos.png"), [128, 0, 255]);
+        let run = |gui: &[(&str, Shader)]| {
+            let mut req =
+                BatchRequest::new(vec![d.path().join("in")], d.path().join("out"), Target::Cs);
+            req.recursive = true;
+            req.accept = AcceptSuggestions::High;
+            req.set_shaders = gui.iter().map(|(k, s)| (k.to_string(), *s)).collect();
+            if txst {
+                req.cs_txst_sets = [id.to_string()].into();
+            }
+            let rep = Reporter::new(Arc::new(VecSink::default()), "shaders");
+            Engine::new()
+                .unwrap()
+                .plan(req, &rep, &CancelToken::default())
+                .unwrap()
+        };
+        let auto = run(&[]);
+        assert_eq!(
+            pick(&auto),
+            (Shader::PbrLandscape, "auto:pbr_landscape".into(), None),
+            "{base}"
+        );
+        let pbr = run(&[(id, Shader::Pbr)]);
+        assert_eq!(pick(&pbr).0, Shader::Pbr);
+        assert_eq!(jobs(&auto), jobs(&pbr), "{base}: same jobs as pbr");
+    }
+    let d = tempfile::tempdir().unwrap();
+    put_rgb(d.path(), "textures/landscape/rock.png", [110, 90, 70]);
+    put_rgb(d.path(), "textures/landscape/rock_rmaos.png", [128, 0, 255]);
+    let (p, _) = plan(d.path(), Target::Vanilla, &[], &[]);
+    assert_eq!(p.shaders.values().next().unwrap().wanted, Some(Shader::Pbr));
+}

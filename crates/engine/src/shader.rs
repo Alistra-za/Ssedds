@@ -20,6 +20,8 @@ pub enum Shader {
     Pbr,
     // Community Shaders PBR grass (PBR grass design): `RunGrass.hlsl` reads albedo, `_n`, `_rmaos` and `_s` only.
     PbrGrass,
+    // Community Shaders PBR landscape (Note BM): a PBR texture set drawn by the landscape shader; CS only.
+    PbrLandscape,
     AdvancedSkin,
     Default,
     Envmap,
@@ -103,6 +105,32 @@ static PBR_GRASS: ShaderSpec = ShaderSpec {
         role("_rmaos", &[Subtype::Rmaos]),
     ],
     optional: &[role("subsurface _s", &[Subtype::PbrSubsurface])],
+};
+/// Note BM: CS's PBR landscape texture set (albedo, `_n`, `_rmaos`, displacement). Packing and formats are `pbr`'s:
+/// no member defaults and no re-typing, so its outputs are byte-identical to the same set picked as `pbr`.
+static PBR_LANDSCAPE: ShaderSpec = ShaderSpec {
+    required: &[
+        role(
+            "albedo",
+            &[
+                Subtype::PbrAlbedo,
+                Subtype::LandscapeDiffuse,
+                Subtype::Diffuse,
+            ],
+        ),
+        role(
+            "_n",
+            &[
+                Subtype::PbrNormal,
+                Subtype::Normal,
+                Subtype::LandscapeNormal,
+            ],
+        ),
+    ],
+    optional: &[
+        role("_rmaos", &[Subtype::Rmaos]),
+        role("_p", &[Subtype::Height]),
+    ],
 };
 static ADVANCED_SKIN: ShaderSpec = ShaderSpec {
     required: &[
@@ -199,9 +227,10 @@ static LANDSCAPE: ShaderSpec = ShaderSpec {
 };
 
 impl Shader {
-    pub const ALL: [Shader; 14] = [
+    pub const ALL: [Shader; 15] = [
         Shader::Pbr,
         Shader::PbrGrass,
+        Shader::PbrLandscape,
         Shader::AdvancedSkin,
         Shader::Default,
         Shader::Envmap,
@@ -220,6 +249,7 @@ impl Shader {
         match self {
             Shader::Pbr => "pbr",
             Shader::PbrGrass => "pbr_grass",
+            Shader::PbrLandscape => "pbr_landscape",
             Shader::AdvancedSkin => "advanced_skin",
             Shader::Default => "default",
             Shader::Envmap => "envmap",
@@ -239,6 +269,7 @@ impl Shader {
         match self {
             Shader::Pbr => "PBR",
             Shader::PbrGrass => "PBR grass",
+            Shader::PbrLandscape => "PBR Landscape",
             Shader::AdvancedSkin => "Advanced Skin",
             Shader::Default => "Default",
             Shader::Envmap => "Environment Map",
@@ -254,13 +285,13 @@ impl Shader {
         }
     }
 
-    /// The shaders a target can use: CS has all 14 (`pbr` first); Vanilla lacks `pbr`, `pbr_grass` and
-    /// `advanced_skin` but has complex grass and complex material (Note AZ).
+    /// The shaders a target can use: CS has all 15 (`pbr` first); Vanilla lacks `pbr`, `pbr_grass`, `pbr_landscape`
+    /// and `advanced_skin` but has complex grass and complex material (Note AZ, BM).
     pub fn available(t: Target) -> &'static [Shader] {
         match t {
             Target::Cs => &Shader::ALL,
-            // `ALL` starts with `pbr`, `pbr_grass`, `advanced_skin`.
-            Target::Vanilla => &Shader::ALL[3..],
+            // `ALL` starts with `pbr`, `pbr_grass`, `pbr_landscape`, `advanced_skin`.
+            Target::Vanilla => &Shader::ALL[4..],
         }
     }
 
@@ -279,6 +310,7 @@ impl Shader {
         match self {
             Shader::Pbr => &PBR,
             Shader::PbrGrass => &PBR_GRASS,
+            Shader::PbrLandscape => &PBR_LANDSCAPE,
             Shader::AdvancedSkin => &ADVANCED_SKIN,
             Shader::Default => &DEFAULT,
             Shader::Envmap => &ENVMAP,
@@ -399,6 +431,7 @@ pub enum AutoRule {
     AdvancedSkin,
     Pbr,
     PbrGrass,
+    PbrLandscape,
     Mesh,
     ComplexM,
     EnvM,
@@ -414,10 +447,11 @@ pub enum AutoRule {
 }
 
 impl AutoRule {
-    const ALL: [AutoRule; 15] = [
+    const ALL: [AutoRule; 16] = [
         AutoRule::AdvancedSkin,
         AutoRule::Pbr,
         AutoRule::PbrGrass,
+        AutoRule::PbrLandscape,
         AutoRule::ComplexGrass,
         AutoRule::Mesh,
         AutoRule::ComplexM,
@@ -437,6 +471,7 @@ impl AutoRule {
             AutoRule::AdvancedSkin => "advanced_skin",
             AutoRule::Pbr => "pbr",
             AutoRule::PbrGrass => "pbr_grass",
+            AutoRule::PbrLandscape => "pbr_landscape",
             AutoRule::Mesh => "mesh",
             AutoRule::ComplexM => "complex_m",
             AutoRule::EnvM => "env_m",
@@ -521,6 +556,8 @@ pub struct PickInput<'a> {
     /// PBR grass design §4.2: a member is the slot-0 diffuse of a GRAS record's model, TruePBR shapes included
     /// (`BatchRequest::gras_all_diffuses`).
     pub gras: bool,
+    /// Note BM: the GUI set has a `[sets.cs_txst]` block (`BatchRequest::cs_txst_sets`); always false for the CLI.
+    pub cs_txst: bool,
     pub suffixes: &'a BTreeSet<String>,
     /// Pass-1 sub-types of the set's members (packing inputs excluded).
     pub subtypes: &'a [Subtype],
@@ -543,7 +580,7 @@ fn mesh_majority(i: &PickInput) -> Option<Shader> {
 
 /// Spec §4.1-4.3: explicit choice, else the first matching auto rule; a shader the target lacks falls back to
 /// `default_for(target)`. Order (owner answer 2026-10-11, "map wins, assume the user runs PGPatcher"): advanced
-/// skin, PBR, then the PGPatcher-patchable maps (complex `_m`, `_p`), which beat the mesh, then the mesh majority
+/// skin, PBR (PBR grass, then CS PBR landscape, then plain PBR; Note BM), then the PGPatcher-patchable maps (complex `_m`, `_p`), which beat the mesh, then the mesh majority
 /// (S-shader-10), then envmap `_m`, `_g`, `_i`, `_sk`, hair/eyes/landscape paths and the default.
 pub fn pick(i: &PickInput) -> ShaderPick {
     use Subtype::*;
@@ -553,6 +590,12 @@ pub fn pick(i: &PickInput) -> ShaderPick {
         i.game_paths
             .iter()
             .any(|p| has_component(&p.to_ascii_lowercase(), c))
+    };
+    let landscape_path = || {
+        i.game_paths
+            .iter()
+            .any(|p| p.to_ascii_lowercase().starts_with("textures/landscape/"))
+            || path("landscape")
     };
     let (shader, rule) = if i.advanced_skin || has(&[SkinAlbedo, SkinRfaos, SkinSk, SkinWet]) {
         (Shader::AdvancedSkin, AutoRule::AdvancedSkin)
@@ -569,6 +612,9 @@ pub fn pick(i: &PickInput) -> ShaderPick {
     {
         if i.gras {
             (Shader::PbrGrass, AutoRule::PbrGrass)
+        } else if i.target == Target::Cs && (i.cs_txst || landscape_path()) {
+            // Note BM: CS only, so a vanilla PBR landscape set still falls back with `wanted: pbr` as before.
+            (Shader::PbrLandscape, AutoRule::PbrLandscape)
         } else {
             (Shader::Pbr, AutoRule::Pbr)
         }
@@ -592,12 +638,7 @@ pub fn pick(i: &PickInput) -> ShaderPick {
         (Shader::Hair, AutoRule::HairPath)
     } else if path("eyes") {
         (Shader::Eye, AutoRule::EyesPath)
-    } else if has(&[LandscapeDiffuse])
-        || i.game_paths
-            .iter()
-            .any(|p| p.to_ascii_lowercase().starts_with("textures/landscape/"))
-        || path("landscape")
-    {
+    } else if has(&[LandscapeDiffuse]) || landscape_path() {
         (Shader::Landscape, AutoRule::Landscape)
     } else {
         (Shader::Default, AutoRule::Otherwise)
@@ -669,7 +710,8 @@ impl<'a> JobIndex<'a> {
 }
 
 /// `pick` for one set at plan time (spec §4): pass-1 `jobs` give the member sub-types (packing inputs excluded),
-/// `mesh` the scanned votes keyed by `mesh_key`, `gras` the GRAS slot-0 diffuses (`grass::path_key` keys).
+/// `mesh` the scanned votes keyed by `mesh_key`, `gras` the GRAS slot-0 diffuses (`grass::path_key` keys), `cs_txst` whether the set has a texture-set block.
+#[allow(clippy::too_many_arguments)]
 pub fn pick_for_set(
     ctx: &crate::policy::ResolveCtx,
     set: &crate::group::TextureSet,
@@ -678,6 +720,7 @@ pub fn pick_for_set(
     explicit: Option<Shader>,
     mesh: &BTreeMap<String, Vec<Shader>>,
     gras: &BTreeSet<String>,
+    cs_txst: bool,
 ) -> ShaderPick {
     let first = set.members.first().map(|&i| &files[i]);
     let first_path = first.map_or("", |f| f.game_path.as_str());
@@ -728,6 +771,7 @@ pub fn pick_for_set(
             .members
             .iter()
             .any(|&m| gras.contains(&crate::grass::path_key(&files[m].game_path))),
+        cs_txst,
         suffixes: &set.suffixes,
         subtypes: &subtypes,
         game_paths: &game_paths,
@@ -911,14 +955,16 @@ mod tests {
 
     #[test]
     fn lists_and_defaults_follow_the_mode() {
-        assert_eq!(Shader::available(Target::Cs).len(), 14);
+        assert_eq!(Shader::available(Target::Cs).len(), 15);
         assert_eq!(Shader::available(Target::Cs)[0], Shader::Pbr);
         assert_eq!(Shader::available(Target::Cs)[1], Shader::PbrGrass);
+        assert_eq!(Shader::available(Target::Cs)[2], Shader::PbrLandscape);
         let l = Shader::available(Target::Vanilla);
         assert_eq!(l.len(), 11);
         assert!(
             !l.contains(&Shader::Pbr)
                 && !l.contains(&Shader::PbrGrass)
+                && !l.contains(&Shader::PbrLandscape)
                 && !l.contains(&Shader::AdvancedSkin)
         );
         assert!(l.contains(&Shader::ComplexGrass) && l.contains(&Shader::ComplexMaterial));
@@ -1055,6 +1101,7 @@ mod tests {
             advanced_skin: false,
             pbr: false,
             gras: false,
+            cs_txst: false,
             suffixes,
             subtypes,
             game_paths: paths,
@@ -1682,6 +1729,78 @@ mod tests {
         assert!(Shader::available(Target::Vanilla).contains(&Shader::ComplexGrass));
         assert_eq!(Shader::ComplexGrass.id(), "complex_grass");
         assert_eq!(Shader::ComplexGrass.label(), "Complex grass");
+    }
+
+    /// Note BM: a CS PBR set on a landscape path or with a texture-set block picks `pbr_landscape`, ahead of the mesh
+    /// vote; GRAS evidence and an explicit choice win; vanilla and non-PBR landscape sets are unchanged.
+    #[test]
+    fn pbr_landscape_is_picked_for_cs_pbr_landscape_sets() {
+        use Subtype::*;
+        assert_eq!(
+            (Shader::PbrLandscape.id(), Shader::PbrLandscape.label()),
+            ("pbr_landscape", "PBR Landscape")
+        );
+        let spec = Shader::PbrLandscape.spec();
+        let labels = |roles: &[MapRole]| roles.iter().map(|r| r.label).collect::<Vec<_>>();
+        assert_eq!(labels(spec.required), ["albedo", "_n"]);
+        assert_eq!(labels(spec.optional), ["_rmaos", "_p"]);
+        assert!(!Shader::PbrLandscape.has_member_defaults());
+        for st in [PbrAlbedo, Diffuse, LandscapeDiffuse, Rmaos, Height] {
+            assert!(member_defaults(Shader::PbrLandscape, st).is_empty());
+            assert_eq!(member_subtype(Shader::PbrLandscape, st), None);
+        }
+        let s = sx(&["n", "rmaos"]);
+        let st = [PbrAlbedo, PbrNormal, Rmaos];
+        let want = (
+            Shader::PbrLandscape,
+            ShaderOrigin::Auto(AutoRule::PbrLandscape),
+        );
+        for p in [
+            "textures/landscape/dirt.png",
+            "textures/mod/landscape/d.png",
+        ] {
+            let paths = [p];
+            let mut i = input(Target::Cs, &s, &st, &paths);
+            i.mesh = &[Shader::Landscape];
+            assert_eq!(auto(&pick(&i)), want, "{p}");
+            i.gras = true;
+            assert_eq!(pick(&i).shader, Shader::PbrGrass);
+            i.gras = false;
+            i.explicit = Some(Shader::Pbr);
+            assert_eq!(auto(&pick(&i)), (Shader::Pbr, ShaderOrigin::Set));
+            i.explicit = None;
+            i.target = Target::Vanilla;
+            assert_eq!(pick(&i).wanted, Some(Shader::Pbr), "vanilla unchanged");
+        }
+        let paths = ["textures/rocks/r.png"];
+        let mut i = input(Target::Cs, &s, &st, &paths);
+        assert_eq!(pick(&i).shader, Shader::Pbr);
+        i.cs_txst = true;
+        assert_eq!(auto(&pick(&i)), want);
+        // A texture-set block alone does not make a non-PBR set PBR landscape.
+        let plain = [Diffuse, Normal];
+        let mut j = input(Target::Cs, &s, &plain, &paths);
+        j.cs_txst = true;
+        assert_eq!(pick(&j).shader, Shader::Default);
+        let lpaths = ["textures/landscape/dirt.png"];
+        let k = input(Target::Cs, &s, &plain, &lpaths);
+        assert_eq!(pick(&k).shader, Shader::Landscape);
+        assert_eq!(
+            "auto:pbr_landscape".parse::<ShaderOrigin>().unwrap(),
+            ShaderOrigin::Auto(AutoRule::PbrLandscape)
+        );
+        // `_rmaos` is optional and a landscape diffuse fills the albedo: no map warnings.
+        let mm = |name: &str, st| MemberMap {
+            name: name.into(),
+            suffix: None,
+            subtype: Some(st),
+        };
+        let p = ShaderPick {
+            shader: Shader::PbrLandscape,
+            provenance: ShaderOrigin::Set,
+            wanted: None,
+        };
+        assert!(check_maps(&p, &[mm("d", LandscapeDiffuse), mm("n", Normal)]).is_empty());
     }
 
     /// PBR grass design §4.1-4.2: four maps; a PBR set with GRAS evidence picks it; an explicit choice wins; CS only.
