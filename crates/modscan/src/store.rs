@@ -1374,7 +1374,7 @@ impl Store {
         Ok(v)
     }
 
-    /// The game-winning copy of each mesh path that contains `path_contains` (the part after a leading `meshes/`; case-insensitive, `\` read as `/`,
+    /// The game-winning copy of each mesh path that contains `path_contains` (the part after a leading `meshes/`; ASCII case-insensitive like the stored keys, `\` read as `/`,
     /// no wildcards), by path, with its origin's name. Returns up to `limit + 1` rows: one extra means "truncated".
     pub fn winning_nifs(
         &self,
@@ -1383,7 +1383,7 @@ impl Store {
     ) -> Result<Vec<(NifRow, String)>, ScanError> {
         let pattern = format!(
             "%{}%",
-            like_escape(&path_contains.replace('\\', "/").to_lowercase())
+            like_escape(&path_contains.replace('\\', "/").to_ascii_lowercase())
         );
         let mut st = self.conn.prepare(&format!(
             "{NIF_ROWS} WHERE w.copy_id = c.id AND CASE WHEN p.p LIKE 'meshes/%' THEN substr(p.p, 8) ELSE p.p END LIKE ?1 ESCAPE '\\' ORDER BY p.p LIMIT ?2"

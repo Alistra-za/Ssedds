@@ -1153,3 +1153,15 @@ fn delete_unseen_drops_texsets_no_shape_uses() {
     );
     s.end_scan().unwrap();
 }
+
+#[test]
+fn winning_nifs_folds_ascii_only_like_the_stored_keys() {
+    let (_d, mut s, a) = store();
+    let id = put(&mut s, "meshes/Ärger/X.nif", a, 0, lit(&[]), false);
+    let pid = s.path_ids(&["meshes/Ärger/X.nif"]).unwrap()[0];
+    s.set_winners(&[(pid, (id, 1))].into_iter().collect(), &HashMap::new())
+        .unwrap();
+    assert_eq!(s.winning_nifs("Ärger", 10).unwrap().len(), 1);
+    assert_eq!(s.winning_nifs("ärGER/x", 10).unwrap().len(), 0);
+    assert_eq!(s.winning_nifs("ÄrGER/x", 10).unwrap().len(), 1);
+}
