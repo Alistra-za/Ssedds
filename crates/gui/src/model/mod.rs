@@ -952,6 +952,7 @@ impl AppModel {
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         self.scan_stamp = cs_pbr::stamp(self.scan_db.as_deref());
+        self.cs_pbr.new_frame();
         for d in self.picker.take() {
             changed = true;
             self.picked(d);

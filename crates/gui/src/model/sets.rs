@@ -279,17 +279,21 @@ pub fn is_pbr_grass(v: &SetView) -> bool {
 
 pub const BADGE_PBR_LANDSCAPE: &str = "PBR Landscape → CS JSON";
 pub const BADGE_PBR_LANDSCAPE_PGP: &str = "PBR Landscape → CS + PGPatcher JSON";
+pub const BADGE_PBR_LANDSCAPE_PGP_ONLY: &str = "PBR Landscape → PGPatcher JSON (no CS records yet)";
+pub const BADGE_PBR_LANDSCAPE_NONE: &str = "PBR Landscape (no JSON yet)";
 
-/// The Sets column badge. A PBR Landscape set's follows its shader and its PGPatcher box (Note BM).
+/// The Sets column badge. A PBR Landscape set's says what it writes (Note BM, review I2): CS records when a block
+/// has an EDID, the PGPatcher entry when the set is a PGPatcher JSON set its statics rule keeps.
 pub fn badge_text(m: &AppModel, v: &SetView) -> &'static str {
     if v.skin {
         // AG90: an Advanced skin set gets no PGPatcher JSON.
         "Advanced skin (no JSON)"
     } else if is_pbr_landscape(v) {
-        if m.pgp_entry_wanted(v) {
-            BADGE_PBR_LANDSCAPE_PGP
-        } else {
-            BADGE_PBR_LANDSCAPE
+        match (m.cs_records_written(v), m.pgp_written(v)) {
+            (true, true) => BADGE_PBR_LANDSCAPE_PGP,
+            (true, false) => BADGE_PBR_LANDSCAPE,
+            (false, true) => BADGE_PBR_LANDSCAPE_PGP_ONLY,
+            (false, false) => BADGE_PBR_LANDSCAPE_NONE,
         }
     } else if !is_json_set(v, m.target) {
         "vanilla set (no JSON)"
