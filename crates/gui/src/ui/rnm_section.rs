@@ -37,7 +37,9 @@ fn thumb(ui: &mut egui::Ui, model: &AppModel, path: &Path, invert: Option<usize>
     };
     let cache = shared_thumbs(ui.ctx());
     let tex = {
-        let mut c = cache.lock().unwrap();
+        let mut c = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         c.sweep(model.items_rev());
         c.get_raw(ui.ctx(), &path.to_string_lossy(), &t, invert)
     };
