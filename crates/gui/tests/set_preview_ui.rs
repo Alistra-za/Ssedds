@@ -51,7 +51,7 @@ fn settle(h: &mut H) {
 }
 
 fn rock_selected(d: &std::path::Path) -> AppModel {
-    let mut m = pbr_opened(d);
+    let mut m = pbr_opened_plain(d);
     let key = json_entries(&m)
         .into_iter()
         .find(|(v, _)| v.id == "landscape/rock01")

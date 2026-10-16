@@ -242,7 +242,7 @@ fn model_edits_are_undoable_steps_and_cs_keys_never_reach_the_pgpatcher_json() {
     use sdc_gui::model::pbr_export::json_entries;
     use sdc_gui::pgp::writer::{document, to_text};
     let d = tempfile::tempdir().unwrap();
-    let mut m = support::pbr_opened(d.path());
+    let mut m = support::pbr_opened_plain(d.path());
     let id = "landscape/rock01";
     m.add_cs_block(id, Kind::Txst);
     m.apply_cs_template(id, Kind::Txst, "LandscapeMountainSlab")
@@ -336,7 +336,7 @@ fn rock(m: &AppModel) -> SetView {
 
 /// The fixture's rock set with a texture-set block (LandscapeMountainSlab values) and `facts` as the scan's answer.
 fn landscape(d: &std::path::Path, statics: &[&str]) -> AppModel {
-    let mut m = support::pbr_opened(d);
+    let mut m = support::pbr_opened_plain(d);
     m.add_cs_block(ROCK, Kind::Txst);
     m.apply_cs_template(ROCK, Kind::Txst, "LandscapeMountainSlab")
         .unwrap();
@@ -353,6 +353,11 @@ fn landscape(d: &std::path::Path, statics: &[&str]) -> AppModel {
 }
 
 fn export_and_wait(m: &mut AppModel) {
+    // Note BM: adding a texture-set block re-plans (it is shader pick input); export from the settled plan.
+    assert!(
+        m.wait_idle(std::time::Duration::from_secs(60)),
+        "planning did not finish"
+    );
     m.export_clicked();
     if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
         m.proceed_anyway();
@@ -456,7 +461,7 @@ fn a_disabled_glint_writes_no_glint() {
 #[test]
 fn an_unusable_scan_db_writes_no_statics_entry_unless_always() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = support::pbr_opened(d.path());
+    let mut m = support::pbr_opened_plain(d.path());
     m.add_cs_block(ROCK, Kind::Txst);
     let bad = d.path().join("scan.db");
     std::fs::write(&bad, "not a database").unwrap();
@@ -481,12 +486,14 @@ fn an_unusable_scan_db_writes_no_statics_entry_unless_always() {
 #[test]
 fn scan_reads_are_cached_until_the_database_file_changes() {
     let d = tempfile::tempdir().unwrap();
-    let m = support::pbr_opened(d.path());
+    let mut m = support::pbr_opened_plain(d.path());
     let db = d.path().join("scan.db");
     std::fs::write(&db, "not a database").unwrap();
+    m.scan_db = Some(db.clone());
+    m.poll(); // the frame stamp (Note BI4) is what the cache follows (Note BM)
     let key = set_key(&rock(&m)).unwrap();
-    assert!(m.cs_pbr.facts(Some(&db), &key).is_err());
-    assert!(m.cs_pbr.records(Some(&db)).is_err());
+    assert!(m.scan_facts(&key).is_err());
+    assert!(m.scan_records().is_err());
     let sentinel = SetFacts {
         txst_edids: vec!["Cached".into()],
         statics: vec![],
@@ -496,15 +503,13 @@ fn scan_reads_are_cached_until_the_database_file_changes() {
         .borrow_mut()
         .insert(key.clone(), Ok(sentinel.clone()));
     assert_eq!(
-        m.cs_pbr.facts(Some(&db), &key),
+        m.scan_facts(&key),
         Ok(sentinel.clone()),
         "unchanged file: not re-opened"
     );
     std::fs::write(&db, "not a database!").unwrap();
-    assert!(
-        m.cs_pbr.facts(Some(&db), &key).is_err(),
-        "a new length re-reads"
-    );
+    m.poll();
+    assert!(m.scan_facts(&key).is_err(), "a new length re-reads");
     m.cs_pbr
         .facts
         .borrow_mut()
@@ -512,10 +517,8 @@ fn scan_reads_are_cached_until_the_database_file_changes() {
     let f = std::fs::File::options().write(true).open(&db).unwrap();
     f.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
     drop(f);
-    assert!(
-        m.cs_pbr.facts(Some(&db), &key).is_err(),
-        "a new mtime re-reads"
-    );
+    m.poll();
+    assert!(m.scan_facts(&key).is_err(), "a new mtime re-reads");
 }
 
 /// Ruling P5: a set whose entry the statics rule drops writes no JSON, so it cannot block the export.
@@ -523,7 +526,7 @@ fn scan_reads_are_cached_until_the_database_file_changes() {
 fn a_dropped_entry_does_not_block_the_export() {
     use sdc_gui::model::pbr_export::export_blocks;
     let d = tempfile::tempdir().unwrap();
-    let mut m = support::pbr_opened(d.path());
+    let mut m = support::pbr_opened_plain(d.path());
     m.sets_doc.as_mut().unwrap().set_json_name(Some("CON"));
     let name_block = |m: &AppModel| {
         export_blocks(m)
@@ -548,7 +551,7 @@ fn slot_block(m: &AppModel) -> bool {
 #[test]
 fn a_dropped_set_with_a_bad_slot_path_does_not_block() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = support::pbr_opened(d.path());
+    let mut m = support::pbr_opened_plain(d.path());
     m.set_json_value(ROCK, "slot3", Some(json!(r"..\g.dds")));
     m.add_cs_block(ROCK, Kind::Txst);
     m.set_cs_statics(ROCK, Statics::Never);
@@ -565,7 +568,7 @@ fn a_dropped_set_with_a_bad_slot_path_does_not_block() {
 #[test]
 fn export_blocks_follow_a_rescan_both_ways() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = support::pbr_opened(d.path());
+    let mut m = support::pbr_opened_plain(d.path());
     m.set_json_value(ROCK, "slot3", Some(json!(r"..\g.dds")));
     m.add_cs_block(ROCK, Kind::Txst);
     let db = d.path().join("scan.db");
@@ -579,7 +582,7 @@ fn export_blocks_follow_a_rescan_both_ways() {
         })
     };
     // Scan 1: a mesh uses the set, so its bad slot blocks.
-    let _ = m.cs_pbr.facts(Some(&db), &key);
+    let _ = m.scan_facts(&key);
     m.cs_pbr.facts.borrow_mut().insert(key.clone(), used());
     assert!(slot_block(&m));
     // Scan 2 (a new file length): no usable answer, the entry is dropped and the cached block goes.
@@ -589,7 +592,7 @@ fn export_blocks_follow_a_rescan_both_ways() {
     // Scan 3: used again, the block comes back.
     std::fs::write(&db, "scan 3!!").unwrap();
     m.poll();
-    let _ = m.cs_pbr.facts(Some(&db), &key);
+    let _ = m.scan_facts(&key);
     m.cs_pbr.facts.borrow_mut().insert(key, used());
     assert!(slot_block(&m));
 }

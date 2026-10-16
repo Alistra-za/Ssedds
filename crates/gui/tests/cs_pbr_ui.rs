@@ -26,7 +26,7 @@ fn has(h: &Harness<'static, AppModel>, s: &str) -> bool {
 #[test]
 fn the_json_editor_leaves_out_a_set_the_statics_rule_drops() {
     let d = tempfile::tempdir().unwrap();
-    let mut model = pbr_opened(d.path());
+    let mut model = pbr_opened_plain(d.path());
     model.add_cs_block("landscape/rock01", Kind::Txst); // no scan: the entry is dropped
     model.json_editor_open = true;
     let mut h = tall(model);
@@ -44,6 +44,8 @@ fn the_section_shows_the_block_template_refusals_and_checks() {
     let d = tempfile::tempdir().unwrap();
     let mut model = pbr_opened(d.path());
     let id = "landscape/rock01";
+    // The fixture is a PBR landscape set (Note BM); as plain PBR it keeps the Advanced records panel.
+    model.set_shader(id, Some(engine::shader::Shader::Pbr));
     model.add_cs_block(id, Kind::Txst);
     model
         .apply_cs_template(id, Kind::Txst, "LandscapeMountainSlab")
@@ -54,6 +56,7 @@ fn the_section_shows_the_block_template_refusals_and_checks() {
         .find(|v| v.id == id)
         .unwrap()
         .key;
+    assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     model.select_set(&key);
     let mut h = tall(model);
     h.run();

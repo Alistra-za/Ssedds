@@ -24,7 +24,7 @@ fn harness_with(
     three_d: bool,
     prep: impl FnOnce(&mut AppModel),
 ) -> H {
-    let mut m = pbr_opened(d);
+    let mut m = pbr_opened_plain(d);
     let key = json_entries(&m)
         .into_iter()
         .find(|(v, _)| v.id == "landscape/rock01")
@@ -203,7 +203,11 @@ fn a_member_selected_first_opens_its_sets_3d_view() {
 // ---- AG132: the compact 3D layout ----
 
 fn harness_at(d: &std::path::Path, size: egui::Vec2, prep: impl FnOnce(&mut AppModel)) -> H {
-    let mut m = pbr_opened(d);
+    harness_on(pbr_opened_plain(d), size, prep)
+}
+
+/// `harness_at` on a model of the caller's (Note BM: `pbr_opened` is a PBR Landscape set, previewed on the plane).
+fn harness_on(mut m: AppModel, size: egui::Vec2, prep: impl FnOnce(&mut AppModel)) -> H {
     let key = json_entries(&m)
         .into_iter()
         .find(|(v, _)| v.id == "landscape/rock01")
@@ -236,9 +240,19 @@ fn settle(h: &mut H) {
 
 #[test]
 fn in_3d_the_viewport_takes_most_of_the_centre() {
-    for (w, hh) in [(1400.0, 900.0), (1024.0, 768.0)] {
+    // Note BM (review M4): the PBR Landscape fixture (plane + Tiling) keeps the rule too.
+    for (w, hh, landscape) in [
+        (1400.0, 900.0, false),
+        (1024.0, 768.0, false),
+        (1024.0, 768.0, true),
+    ] {
         let d = tempfile::tempdir().unwrap();
-        let h = harness_at(d.path(), egui::vec2(w, hh), |_| {});
+        let m = if landscape {
+            pbr_opened(d.path())
+        } else {
+            pbr_opened_plain(d.path())
+        };
+        let h = harness_on(m, egui::vec2(w, hh), |_| {});
         let top = ["header", "status"]
             .iter()
             .filter_map(|i| outer(&h, i))
@@ -249,7 +263,7 @@ fn in_3d_the_viewport_takes_most_of_the_centre() {
         let centre = bottom - top;
         assert!(
             img.height() >= 0.72 * centre,
-            "{w}x{hh}: frame {} high in a centre of {centre}",
+            "{w}x{hh} (landscape {landscape}): frame {} high in a centre of {centre}",
             img.height()
         );
         // The compact layout: no heading, no second path line.

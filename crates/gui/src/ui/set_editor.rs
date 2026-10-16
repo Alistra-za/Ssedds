@@ -171,8 +171,9 @@ pub fn draw(
                 under_grid(ui, model, &v);
                 super::plugin_refs::set_section(ui, model, &v);
                 super::cs_pbr::section(ui, model, &v);
+                super::cs_pbr::card(&mut cols[1], model, &v);
                 if shows_json_panel(&v, model.target) {
-                    super::pgp_fields::panel(&mut cols[1], model, &v.id);
+                    super::cs_pbr::pgp_panel(&mut cols[1], model, &v);
                 }
                 if v.skin {
                     super::skin_card::card(&mut cols[1], model, &v);

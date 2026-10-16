@@ -771,6 +771,7 @@
       "enum": [
         "pbr",
         "pbr_grass",
+        "pbr_landscape",
         "advanced_skin",
         "default",
         "envmap",

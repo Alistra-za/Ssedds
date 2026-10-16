@@ -237,6 +237,7 @@ Each set is made for one Skyrim shader. The shader decides which maps the set sh
 | Shader | Required maps | Optional maps |
 |---|---|---|
 | `pbr` | albedo, `_n`, `_rmaos` | `_g` emissive, `_s` subsurface/coat, `_cnr`, `_f`, `_p` |
+| `pbr_landscape` (cs only) | albedo (or landscape diffuse), `_n` | `_rmaos`, `_p` |
 | `advanced_skin` | skin albedo, `_n`/`_msn`, `_rfaos` | `_sk`, `_wet` |
 | `default` | diffuse, `_n` | `_b`/`_bl` |
 | `envmap` | diffuse, `_n` | `_m`, `_e` |
@@ -257,7 +258,7 @@ A missing required map gives `SHADER-MISSING-MAP`; a member the shader does not 
 You can pick a set's shader in the GUI's set editor, or with `--set set:<id>.shader=<shader>`. Otherwise the first rule that fits decides (`SHADER-AUTO` says which):
 
 1. Advanced skin members or an `_rfaos`: `advanced_skin`.
-2. A PBR set or PBR members: `pbr`.
+2. A PBR set or PBR members: `pbr_grass` when a grass record uses the albedo (GUI, after a scan with plugins); under `cs`, `pbr_landscape` when the set is under `textures/landscape/`, has a `landscape` folder in its path, or has a Community Shaders texture-set block (GUI); otherwise `pbr`.
 3. A complex-grass member: `complex_grass`.
 4. A complex `_m`: `complex_material`.
 5. A `_p`: `parallax`.
@@ -277,6 +278,7 @@ A shader the target lacks falls back to `default` (`SHADER-UNAVAILABLE`).
 | `hair` | Diffuse: `alpha.policy = "cutout_blend"` (cutout + blend) and `mips.coverage = "on"`. |
 | `eye` | `_n` becomes `msn` (model-space). `_m` is BC4. |
 | `landscape` | Colour becomes `landscape_diffuse` (alpha is the snow mask). |
+| `pbr_landscape` | Nothing: members convert exactly as under `pbr`. |
 | `multilayer` | Diffuse alpha is `data`. |
 | `envmap` | `_m` is BC4. |
 | `parallax` | `_p` is BC4. |

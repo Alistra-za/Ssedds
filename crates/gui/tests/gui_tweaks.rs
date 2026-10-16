@@ -254,7 +254,7 @@ fn the_header_checkboxes_hide_columns_and_the_arrows_collapse_and_expand_them() 
 #[test]
 fn the_2d_3d_switch_swaps_the_slot_cards_for_the_preview_and_keeps_the_truepbr_settings() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened(d.path());
+    let mut m = pbr_opened_plain(d.path());
     let key = rock_key(&m);
     m.select_set(&key);
     let mut h = harness(m, true);

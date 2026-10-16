@@ -96,6 +96,82 @@ pub const GLINT_FIELDS: [Field; 4] = [
     f("densityRandomization", Num, 0.0, 5.0, 2.0),
 ];
 
+/// Note BM (owner): the plain name a field row shows; the exact JSON key is its hover text.
+pub fn field_label(name: &str) -> &str {
+    match name {
+        "roughnessScale" => "Roughness scale",
+        "displacementScale" => "Displacement scale",
+        "specularLevel" => "Specular level",
+        "subsurfaceColor" => "Subsurface colour",
+        "subsurfaceOpacity" => "Subsurface opacity",
+        "coatColor" => "Coat colour",
+        "coatStrength" => "Coat strength",
+        "coatRoughness" => "Coat roughness",
+        "coatSpecularLevel" => "Coat specular level",
+        "innerLayerDisplacementOffset" => "Inner layer displacement offset",
+        "fuzzColor" => "Fuzz colour",
+        "fuzzWeight" => "Fuzz weight",
+        "glintParameters" => "Glint parameters",
+        "baseColorScale" => "Base colour scale",
+        "roughness" => "Roughness",
+        "screenSpaceScale" => "Screen-space scale",
+        "logMicrofacetDensity" => "Log microfacet density",
+        "microfacetRoughness" => "Microfacet roughness",
+        "densityRandomization" => "Density randomization",
+        _ => name,
+    }
+}
+
+/// Note BM (owner): texture-set fields CS's landscape shader never reads. `Lighting.hlsl` (CS AIO 2026-10-03) reads
+/// per landscape layer only `PBRParams` (roughness scale, displacement scale, specular level) and the glint
+/// parameters (`LIGHTING_LANDSCAPE_BLEND_ONE_LAYER_PBR`); the subsurface, coat (two-layer) and fuzz branches sit
+/// under `#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)`, and the inner-layer offset belongs to the coat's
+/// interlayer parallax. The card shows these only when the set's PGPatcher entry is written (meshes sharing the
+/// texture read them) or when they hold a value.
+pub const LANDSCAPE_UNREAD: [&str; 9] = [
+    "subsurfaceColor",
+    "subsurfaceOpacity",
+    "coatColor",
+    "coatStrength",
+    "coatRoughness",
+    "coatSpecularLevel",
+    "innerLayerDisplacementOffset",
+    "fuzzColor",
+    "fuzzWeight",
+];
+
+/// Note BM16 (owner): fields the texture set and the material object share with one meaning, edited once in the
+/// card's Shared section. Only the glint parameters: CS reads both blocks' glint as the same struct
+/// (`Lighting.hlsl` lerps the surface's `glintParameters` to the material object's `SparkleParams`). The texture
+/// set's `roughnessScale` / `specularLevel` multiply the `_rmaos` channels (`rawRMAOS *= float4(PBRParams1.x, 1, 1,
+/// PBRParams1.z)`), while the material object's `roughness` / `specularLevel` replace them
+/// (`rawRMAOS.xyw = lerp(…, float3(ParallaxOccData.x, 0, ParallaxOccData.y), …)`), so they stay separate rows.
+pub const SHARED_FIELDS: [&str; 1] = ["glintParameters"];
+/// The block key listing a block's unsynced shared fields; not a CS field, so never exported.
+pub const UNSYNCED: &str = "unsynced";
+
+/// Note BM16: what a field's value means, for the rows whose name alone is ambiguous (hover text).
+pub fn field_note(kind: Kind, name: &str) -> Option<&'static str> {
+    Some(match (kind, name) {
+        (Kind::Txst, "roughnessScale") => "Multiplies the _rmaos roughness channel.",
+        (Kind::Txst, "specularLevel") => "Multiplies the _rmaos specular channel.",
+        (Kind::Mato, "roughness") => {
+            "Absolute roughness where the material object projects (replaces the surface's; not a scale)."
+        }
+        (Kind::Mato, "specularLevel") => {
+            "Absolute specular level where the material object projects (replaces the surface's; not a scale)."
+        }
+        _ => return None,
+    })
+}
+
+/// Whether a material object follows the texture set's value of shared field `field`: not listed as unsynced and
+/// holding the same value (differing blocks, as in an older project, show as unsynced and are never overwritten).
+pub fn mato_synced(txst: Option<&CsBlock>, mato: &CsBlock, field: &str) -> bool {
+    !mato.unsynced.iter().any(|f| f == field)
+        && txst.and_then(|b| b.values.get(field)) == mato.values.get(field)
+}
+
 pub fn fields(kind: Kind) -> &'static [Field] {
     match kind {
         Kind::Txst => &TXST_FIELDS,
@@ -201,6 +277,8 @@ pub struct CsBlock {
     /// The last applied template (informational).
     pub template: Option<String>,
     pub statics: Statics,
+    /// Note BM16: the shared fields this block keeps its own value for (`unsynced = [...]`; never exported).
+    pub unsynced: Vec<String>,
     /// Known fields with a usable value, as read (`glintParameters` an object).
     pub values: Map<String, Json>,
     /// Known fields whose value has the wrong type: kept in the file, warned about, not exported (design §8).
@@ -236,6 +314,16 @@ pub(crate) fn block_of(t: &dyn TableLike, kind: Kind) -> CsBlock {
             }
             "template" => b.template = item.as_str().map(str::to_string),
             "statics" => b.statics = Statics::parse(item.as_str()),
+            UNSYNCED => {
+                b.unsynced = item
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
             _ => {
                 if let Some(f) = field(kind, k) {
                     match item_json(item).filter(|v| valid_value(f.kind, v)) {
@@ -351,7 +439,8 @@ impl AppModel {
         }
     }
 
-    /// One undoable, JSON-only edit of the sets document (design §3; nothing is planned, DECISIONS P7).
+    /// One undoable, JSON-only edit of the sets document (design §3; nothing is planned, DECISIONS P7, except when a
+    /// texture-set block comes or goes: Note BM4).
     fn cs_edit(
         &mut self,
         set: &str,
@@ -363,7 +452,12 @@ impl AppModel {
             return;
         }
         let s = set.to_string();
+        let txst = super::sets::cs_txst_sets(self);
         self.edit_docs(label, merge, false, move |_, d| f(d, &s));
+        // Note BM: a texture-set block that comes or goes is shader-pick input, so that edit plans again.
+        if super::sets::cs_txst_sets(self) != txst {
+            self.replan_after_edit();
+        }
     }
 
     pub fn add_cs_block(&mut self, set: &str, kind: Kind) {
@@ -406,6 +500,62 @@ impl AppModel {
 
     pub fn set_cs_statics(&mut self, set: &str, statics: Statics) {
         self.set_cs_value(set, Kind::Txst, "statics", statics.as_str().map(Json::from));
+    }
+
+    /// Note BM16: a Shared-section edit (`key` dotted under a shared field): the texture set, and the material object
+    /// when it follows, in one undo step. The PGPatcher keys follow the texture set (AD2).
+    pub fn set_shared_value(&mut self, set: &str, key: &str, v: Option<Json>) {
+        let field = key.split('.').next().unwrap_or(key);
+        let txst = self.cs_block(set, Kind::Txst);
+        let mato = self
+            .cs_block(set, Kind::Mato)
+            .is_some_and(|b| mato_synced(txst.as_ref(), &b, field));
+        let merge = Some(format!("{set}:shared:{key}"));
+        let k = key.to_string();
+        self.cs_edit(set, &format!("Change {key}"), merge, move |d, s| {
+            d.set_cs_value(s, Kind::Txst, &k, v.clone());
+            if mato {
+                d.set_cs_value(s, Kind::Mato, &k, v);
+            }
+        });
+    }
+
+    /// Note BM16: "Sync" copies the texture set's value of `field` into the material object and drops it from
+    /// `unsynced`; "Unsync" lists it, keeping the value. One undo step each.
+    pub fn set_mato_synced(&mut self, set: &str, field: &str, synced: bool) {
+        let Some(mato) = self.cs_block(set, Kind::Mato) else {
+            return;
+        };
+        let shared = self
+            .cs_block(set, Kind::Txst)
+            .and_then(|b| b.values.get(field).cloned());
+        let mut list: Vec<String> = mato.unsynced.into_iter().filter(|f| f != field).collect();
+        if !synced {
+            list.push(field.to_string());
+        }
+        let list = (!list.is_empty()).then(|| json!(list));
+        let f = field.to_string();
+        let label = if synced { "Sync" } else { "Unsync" };
+        self.cs_edit(set, &format!("{label} {field}"), None, move |d, s| {
+            if synced {
+                d.set_cs_value(s, Kind::Mato, &f, shared);
+            }
+            d.set_cs_value(s, Kind::Mato, UNSYNCED, list);
+        });
+    }
+
+    /// Note BM16: the card's "Add PBR material object": the new block starts with the texture set's shared values,
+    /// so it follows them (one undo step).
+    pub fn add_mato_synced(&mut self, set: &str) {
+        let txst = self.cs_block(set, Kind::Txst).unwrap_or_default();
+        self.cs_edit(set, "Add PBR material object", None, move |d, s| {
+            d.add_cs_block(s, Kind::Mato);
+            for f in SHARED_FIELDS {
+                if let Some(v) = txst.values.get(f) {
+                    d.set_cs_value(s, Kind::Mato, f, Some(v.clone()));
+                }
+            }
+        });
     }
 }
 
@@ -455,16 +605,29 @@ pub(crate) fn stamp(db: Option<&Path>) -> Stamp {
     Some((md.modified().ok(), md.len()))
 }
 
-/// The scan reads of the CS PBR section and the statics rule, for the session. shortcut: read on the UI thread on
-/// demand (section open, export start) like "Used by plugins"; move to a worker if a modlist makes them slow.
-/// Errors are cached like answers (an old-schema database is not re-opened every frame); everything is forgotten
-/// when the database file's mtime or length changes (a new scan) and on "Refresh scan".
-#[derive(Debug, Default)]
+/// The scan reads of the CS PBR section, the statics rule and the badges, for the session. shortcut: read on the UI
+/// thread on demand (card open, a badge, export start) like "Used by plugins"; move to a worker if a modlist makes
+/// them slow. Errors are cached like answers (an old-schema database is not re-opened every frame); everything is
+/// forgotten when the per-frame database stamp (`AppModel::poll`, Note BI4) changes (a new scan, or a running scan's
+/// checkpoint) and on "Refresh scan". Reads in one frame share one open database (Note BM, review M2).
+#[derive(Default)]
 pub struct CsPbrScan {
     pub facts: RefCell<HashMap<TexKey, Result<SetFacts, String>>>,
     pub records: RefCell<Option<Result<Arc<ScanRecords>, String>>>,
-    /// The database file the cached reads came from.
+    /// The database stamp the cached reads came from.
     stamp: RefCell<Stamp>,
+    /// This frame's open database (dropped by `new_frame`, so the file is never held across frames).
+    store: RefCell<Option<std::rc::Rc<Store>>>,
+}
+
+impl std::fmt::Debug for CsPbrScan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CsPbrScan")
+            .field("facts", &self.facts)
+            .field("records", &self.records)
+            .field("stamp", &self.stamp)
+            .finish_non_exhaustive()
+    }
 }
 
 fn open(db: Option<&Path>) -> Result<Store, String> {
@@ -485,8 +648,7 @@ pub fn non_lod_nifs(rows: &[MatchRow]) -> Vec<String> {
         .collect()
 }
 
-fn read_facts(db: Option<&Path>, key: &TexKey) -> Result<SetFacts, String> {
-    let s = open(db)?;
+fn read_facts(s: &Store, key: &TexKey) -> Result<SetFacts, String> {
     let mut txst_edids: Vec<String> = s
         .txsts_matching(key, LIMIT)
         .map_err(|e| e.to_string())?
@@ -519,8 +681,7 @@ pub fn statics_of(
     Ok(statics)
 }
 
-fn read_records(db: Option<&Path>) -> Result<Arc<ScanRecords>, String> {
-    let s = open(db)?;
+fn read_records(s: &Store) -> Result<Arc<ScanRecords>, String> {
     let w = |sig: &str| s.winning_records(sig).map_err(|e| e.to_string());
     Ok(Arc::new(ScanRecords {
         txst: w("TXST")?,
@@ -529,31 +690,51 @@ fn read_records(db: Option<&Path>) -> Result<Arc<ScanRecords>, String> {
 }
 
 impl CsPbrScan {
-    /// Forget the cached reads when `db` is not the file they came from (one stat per call).
-    fn sync(&self, db: Option<&Path>) {
-        let now = stamp(db);
+    /// Forget the cached reads when `now` (the frame's database stamp) is not the one they came from.
+    fn sync(&self, now: Stamp) {
         if *self.stamp.borrow() != now {
             self.refresh();
             *self.stamp.borrow_mut() = now;
         }
     }
 
-    pub fn facts(&self, db: Option<&Path>, key: &TexKey) -> Result<SetFacts, String> {
-        self.sync(db);
+    /// Called once per frame (`AppModel::poll`): the next read opens the database afresh.
+    pub fn new_frame(&self) {
+        *self.store.borrow_mut() = None;
+    }
+
+    fn with_store<T>(
+        &self,
+        db: Option<&Path>,
+        f: impl FnOnce(&Store) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let s = match self.store.borrow().clone() {
+            Some(s) => s,
+            None => {
+                let s = std::rc::Rc::new(open(db)?);
+                *self.store.borrow_mut() = Some(s.clone());
+                s
+            }
+        };
+        f(&s)
+    }
+
+    pub fn facts(&self, db: Option<&Path>, now: Stamp, key: &TexKey) -> Result<SetFacts, String> {
+        self.sync(now);
         if let Some(r) = self.facts.borrow().get(key) {
             return r.clone();
         }
-        let r = read_facts(db, key);
+        let r = self.with_store(db, |s| read_facts(s, key));
         self.facts.borrow_mut().insert(key.clone(), r.clone());
         r
     }
 
-    pub fn records(&self, db: Option<&Path>) -> Result<Arc<ScanRecords>, String> {
-        self.sync(db);
+    pub fn records(&self, db: Option<&Path>, now: Stamp) -> Result<Arc<ScanRecords>, String> {
+        self.sync(now);
         if let Some(r) = &*self.records.borrow() {
             return r.clone();
         }
-        let r = read_records(db);
+        let r = self.with_store(db, read_records);
         *self.records.borrow_mut() = Some(r.clone());
         r
     }
@@ -561,6 +742,20 @@ impl CsPbrScan {
     pub fn refresh(&self) {
         self.facts.borrow_mut().clear();
         *self.records.borrow_mut() = None;
+        *self.store.borrow_mut() = None;
+    }
+}
+
+impl AppModel {
+    /// The scan facts of a set's texture key, through the session cache and this frame's stamp.
+    pub fn scan_facts(&self, key: &TexKey) -> Result<SetFacts, String> {
+        self.cs_pbr
+            .facts(self.scan_db.as_deref(), self.scan_stamp, key)
+    }
+
+    pub fn scan_records(&self) -> Result<Arc<ScanRecords>, String> {
+        self.cs_pbr
+            .records(self.scan_db.as_deref(), self.scan_stamp)
     }
 }
 
@@ -589,6 +784,28 @@ pub fn statics_text(s: &StaticsStatus) -> String {
     }
 }
 
+/// Note BM: the PBR Landscape card's "Also write into the PGPatcher JSON" box (it replaces the statics choice).
+pub const PGP_BOX: &str = "Also write into the PGPatcher JSON";
+
+/// The line under the PGPatcher box (PBR Landscape sets only): the auto reason, or that the user set it. `None` = no
+/// texture-set block yet.
+pub fn pgp_box_text(s: Option<&StaticsStatus>) -> String {
+    match s {
+        None => "No texture set yet: the PGPatcher entry is written as for any PBR set".into(),
+        Some(StaticsStatus::Always) => "Ticked by you: PGPatcher entry written".into(),
+        Some(StaticsStatus::Never) => "Unticked by you: no PGPatcher entry".into(),
+        // Note BM6 (owner): with no usable scan a PBR Landscape set keeps its entry.
+        Some(StaticsStatus::NoScan(e)) => format!(
+            "{e} The PGPatcher entry is written until a scan finds no mesh using this diffuse (LOD meshes do not count)."
+        ),
+        Some(s) => statics_text(s),
+    }
+}
+
+/// Note BM (review I2): why the box is off and disabled for a PBR Landscape set that cannot have a PGPatcher entry.
+pub const PGP_BOX_UNAVAILABLE: &str = "Not available: the set's colour map is not a PBR albedo (pbr_albedo), so it \
+                                       has no PGPatcher entry. Set its type to pbr_albedo to write one.";
+
 impl AppModel {
     /// `None` without a texture-set block (the set's entry is written as before).
     pub fn statics_status(&self, v: &SetView) -> Option<StaticsStatus> {
@@ -598,7 +815,7 @@ impl AppModel {
             Statics::Always => StaticsStatus::Always,
             Statics::Auto => match set_key(v) {
                 None => StaticsStatus::Unused,
-                Some(k) => match self.cs_pbr.facts(self.scan_db.as_deref(), &k) {
+                Some(k) => match self.scan_facts(&k) {
                     Err(e) => StaticsStatus::NoScan(e),
                     Ok(f) if f.statics.is_empty() => StaticsStatus::Unused,
                     Ok(f) => StaticsStatus::Used(f.statics),
@@ -607,11 +824,26 @@ impl AppModel {
         })
     }
 
+    /// The statics rule keeps the set's PGPatcher entry. Note BM6 (owner): a PBR Landscape set on auto with no usable
+    /// scan keeps it too, so the card's first edit (which creates the block) never turns the entry off.
     pub fn pgp_entry_wanted(&self, v: &SetView) -> bool {
-        matches!(
-            self.statics_status(v),
-            None | Some(StaticsStatus::Always | StaticsStatus::Used(_))
-        )
+        match self.statics_status(v) {
+            None | Some(StaticsStatus::Always | StaticsStatus::Used(_)) => true,
+            Some(StaticsStatus::NoScan(_)) => super::sets::is_pbr_landscape(v),
+            Some(StaticsStatus::Never | StaticsStatus::Unused) => false,
+        }
+    }
+
+    /// Note BM (review I2): the set's PGPatcher entry is written: a PGPatcher JSON set the statics rule keeps.
+    pub fn pgp_written(&self, v: &SetView) -> bool {
+        super::sets::is_json_set(v, self.target) && self.pgp_entry_wanted(v)
+    }
+
+    /// Note BM (review I2): the set writes CS records: a texture-set or material-object block with an EDID.
+    pub fn cs_records_written(&self, v: &SetView) -> bool {
+        [Kind::Txst, Kind::Mato]
+            .into_iter()
+            .any(|k| self.cs_block(&v.id, k).is_some_and(|b| !b.edids.is_empty()))
     }
 }
 

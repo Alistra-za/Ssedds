@@ -277,6 +277,38 @@ pub fn is_pbr_grass(v: &SetView) -> bool {
         .is_some_and(|p| p.shader == Shader::PbrGrass)
 }
 
+pub const BADGE_PBR_LANDSCAPE: &str = "PBR Landscape → CS JSON";
+pub const BADGE_PBR_LANDSCAPE_PGP: &str = "PBR Landscape → CS + PGPatcher JSON";
+pub const BADGE_PBR_LANDSCAPE_PGP_ONLY: &str = "PBR Landscape → PGPatcher JSON (no CS records yet)";
+pub const BADGE_PBR_LANDSCAPE_NONE: &str = "PBR Landscape (no JSON yet)";
+
+/// The Sets column badge. A PBR Landscape set's says what it writes (Note BM, review I2): CS records when a block
+/// has an EDID, the PGPatcher entry when the set is a PGPatcher JSON set its statics rule keeps.
+pub fn badge_text(m: &AppModel, v: &SetView) -> &'static str {
+    if v.skin {
+        // AG90: an Advanced skin set gets no PGPatcher JSON.
+        "Advanced skin (no JSON)"
+    } else if is_pbr_landscape(v) {
+        match (m.cs_records_written(v), m.pgp_written(v)) {
+            (true, true) => BADGE_PBR_LANDSCAPE_PGP,
+            (true, false) => BADGE_PBR_LANDSCAPE,
+            (false, true) => BADGE_PBR_LANDSCAPE_PGP_ONLY,
+            (false, false) => BADGE_PBR_LANDSCAPE_NONE,
+        }
+    } else if !is_json_set(v, m.target) {
+        "vanilla set (no JSON)"
+    } else {
+        "PBR → JSON"
+    }
+}
+
+/// The set's pick is `pbr_landscape` (Note BM): it gets the PBR Landscape card and badge.
+pub fn is_pbr_landscape(v: &SetView) -> bool {
+    v.shader
+        .as_ref()
+        .is_some_and(|p| p.shader == Shader::PbrLandscape)
+}
+
 /// Whether the set editor draws the TruePBR panel and the JSON path errors: a JSON set, or any set but a skin set
 /// that already has JSON settings (so existing edits are never hidden). `pbr_export::export_blocks` checks `v.pbr`.
 pub fn shows_json_panel(v: &SetView, target: Target) -> bool {
@@ -821,6 +853,16 @@ pub fn set_shaders(m: &AppModel) -> BTreeMap<String, Shader> {
     entries
         .iter()
         .filter_map(|e| Some((e.id.clone(), e.shader?)))
+        .collect()
+}
+
+/// Note BM: the ids of the sets with a `[sets.cs_txst]` block (sent as `BatchRequest::cs_txst_sets`).
+pub fn cs_txst_sets(m: &AppModel) -> BTreeSet<String> {
+    let entries = m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default();
+    entries
+        .iter()
+        .filter(|e| e.cs_txst.is_some())
+        .map(|e| e.id.clone())
         .collect()
 }
 

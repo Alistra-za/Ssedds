@@ -1,59 +1,96 @@
-//! The set editor's Community Shaders PBR section (design §4, §6): per kind a block with its template picker,
-//! fields, EDID list, warnings and (texture sets) the statics line. Drawing only: every change is a model call made
-//! after drawing.
+//! The set editor's Community Shaders PBR records (design §4, §6): the PBR Landscape card and the generic
+//! "Advanced: CS PBR records" panel (Note BM). Per kind a block with its template picker, fields, EDID list, warnings
+//! and (texture sets) the statics line or the PGPatcher box. Drawing only: every change is a model call made after
+//! drawing.
 use super::columns::{AMBER, RED};
 use crate::model::cs_pbr::{
-    check_edid, check_text, fields, single_pass_text, statics_text, templates, CsBlock, EdidCheck,
-    Field, FieldKind, Kind, Statics, StaticsStatus, GLINT_FIELDS, NOT_CHECKED, NO_TXST_USES,
+    check_edid, check_text, field_label, fields, pgp_box_text, single_pass_text, statics_text,
+    templates, CsBlock, EdidCheck, Field, FieldKind, Kind, Statics, StaticsStatus, GLINT_FIELDS,
+    LANDSCAPE_UNREAD, NOT_CHECKED, NO_TXST_USES, PGP_BOX, PGP_BOX_UNAVAILABLE,
 };
+use crate::model::cs_pbr::{field_note, mato_synced, SHARED_FIELDS};
 use crate::model::cs_pbr_export::{refusals, MATO_SPECULAR};
 use crate::model::plugin_refs::set_key;
-use crate::model::sets::SetView;
+use crate::model::sets::{is_json_set, is_pbr_landscape, SetView};
 use crate::model::AppModel;
 use eframe::egui;
 use serde_json::{json, Value as Json};
 
-pub const SECTION: &str = "Community Shaders PBR records";
+pub const SECTION: &str = "Advanced: CS PBR records";
+/// Note BM: the PBR Landscape card's title.
+pub const CARD: &str = "PBR Landscape";
+/// Note BM: after the count of texture-set rows the card hides.
+pub const HIDDEN_ROWS: &str = "fields Community Shaders' landscape shader does not read are hidden; they show while \"Also write into the PGPatcher JSON\" is on (meshes sharing the texture read them).";
 
 enum Act {
     Add(Kind),
+    /// Note BM16: the card's add, which starts the material object on the shared values.
+    AddMato,
     Remove(Kind),
     Value(Kind, String, Option<Json>),
+    /// Note BM16: a Shared-section edit.
+    Shared(String, Option<Json>),
+    /// Note BM16: Sync (true) / Unsync (false) the material object's shared field.
+    Sync(&'static str, bool),
     Edids(Kind, Vec<String>),
     Template(Kind, String),
     Statics(Statics),
     Refresh,
 }
 
+/// The generic records panel, collapsed, for any CS set but a PBR Landscape set, whose card edits the same blocks
+/// (Note BM: hidden there, so the blocks are never edited in two places).
 pub fn section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
-    if model.target != engine::config::Target::Cs {
-        return;
+    if model.target == engine::config::Target::Cs && !is_pbr_landscape(v) {
+        draw(ui, model, v, false);
     }
+}
+
+/// Note BM: the PBR Landscape card: the shared fields, the texture set (always shown; the first edit creates the
+/// block) with the PGPatcher box in place of the statics choice, and the material object.
+pub fn card(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
+    if model.target == engine::config::Target::Cs && is_pbr_landscape(v) {
+        draw(ui, model, v, true);
+    }
+}
+
+/// Note BM16: the card's Shared section heading.
+pub const SHARED: &str = "Shared (texture set, material object and PGPatcher JSON)";
+
+fn draw(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, card: bool) {
     let mut acts = vec![];
     let m: &AppModel = model;
-    egui::CollapsingHeader::new(SECTION)
-        .id_salt(("cs-pbr", v.id.as_str()))
+    egui::CollapsingHeader::new(if card { CARD } else { SECTION })
+        .id_salt(("cs-pbr", card, v.id.as_str()))
+        .default_open(card)
         .show(ui, |ui| {
             if ui.small_button("Refresh scan").clicked() {
                 acts.push(Act::Refresh);
             }
+            if card {
+                shared(ui, m, v, &mut acts);
+            }
             for kind in [Kind::Txst, Kind::Mato] {
                 ui.separator();
+                let always = card && kind == Kind::Txst;
                 match m.cs_block(&v.id, kind) {
-                    None => {
+                    None if !always => {
                         if ui.button(format!("Add {}", kind.label())).clicked() {
-                            acts.push(Act::Add(kind));
+                            acts.push(if card { Act::AddMato } else { Act::Add(kind) });
                         }
                     }
-                    Some(b) => block(ui, m, v, kind, &b, &mut acts),
+                    b => block(ui, m, v, kind, &b.unwrap_or_default(), card, &mut acts),
                 }
             }
         });
     for a in acts {
         match a {
             Act::Add(k) => model.add_cs_block(&v.id, k),
+            Act::AddMato => model.add_mato_synced(&v.id),
             Act::Remove(k) => model.remove_cs_block(&v.id, k),
             Act::Value(k, key, x) => model.set_cs_value(&v.id, k, &key, x),
+            Act::Shared(key, x) => model.set_shared_value(&v.id, &key, x),
+            Act::Sync(f, on) => model.set_mato_synced(&v.id, f, on),
             Act::Edids(k, l) => model.set_cs_edids(&v.id, k, &l),
             Act::Template(k, name) => {
                 let _ = model.apply_cs_template(&v.id, k, &name);
@@ -64,14 +101,67 @@ pub fn section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
     }
 }
 
+/// Note BM16: the shared fields, shown with the texture set's value and written to every block that follows it.
+fn shared(ui: &mut egui::Ui, m: &AppModel, v: &SetView, acts: &mut Vec<Act>) {
+    ui.separator();
+    ui.strong(SHARED);
+    let b = m.cs_block(&v.id, Kind::Txst).unwrap_or_default();
+    let mut own = vec![];
+    for f in fields(Kind::Txst)
+        .iter()
+        .filter(|f| SHARED_FIELDS.contains(&f.name))
+    {
+        field_row(ui, Kind::Txst, f, b.values.get(f.name), &mut own);
+    }
+    acts.extend(own.into_iter().map(|a| match a {
+        Act::Value(_, k, x) => Act::Shared(k, x),
+        a => a,
+    }));
+}
+
+/// Note BM16: a material object's shared field: "shared (above)" with Unsync, or its own row with Sync.
+fn mato_shared(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut Vec<Act>) {
+    let txst = m.cs_block(&v.id, Kind::Txst);
+    for f in fields(Kind::Mato)
+        .iter()
+        .filter(|f| SHARED_FIELDS.contains(&f.name))
+    {
+        if mato_synced(txst.as_ref(), b, f.name) {
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(format!("{}: shared (above)", field_label(f.name)));
+                if ui
+                    .small_button("Unsync")
+                    .on_hover_text("Give the material object its own value")
+                    .clicked()
+                {
+                    acts.push(Act::Sync(f.name, false));
+                }
+            });
+        } else {
+            field_row(ui, Kind::Mato, f, b.values.get(f.name), acts);
+            if ui
+                .small_button(format!("Sync {}", field_label(f.name)))
+                .on_hover_text("Use the shared value again")
+                .clicked()
+            {
+                acts.push(Act::Sync(f.name, true));
+            }
+        }
+    }
+}
+
+/// `card`: drawn in the PBR Landscape card, where the texture set has no Remove and the PGPatcher box replaces the
+/// statics choice.
 fn block(
     ui: &mut egui::Ui,
     m: &AppModel,
     v: &SetView,
     kind: Kind,
     b: &CsBlock,
+    card: bool,
     acts: &mut Vec<Act>,
 ) {
+    let removable = !(card && kind == Kind::Txst);
     ui.horizontal(|ui| {
         ui.strong(kind.label());
         egui::ComboBox::from_id_salt(("cs-template", kind.key(), v.id.as_str()))
@@ -87,12 +177,34 @@ fn block(
                     }
                 }
             });
-        if ui.small_button("Remove").clicked() {
+        if removable && ui.small_button("Remove").clicked() {
             acts.push(Act::Remove(kind));
         }
     });
+    // Note BM: in the card the box comes first, since it decides which texture-set rows apply.
+    let landscape = card && kind == Kind::Txst;
+    if landscape {
+        pgp_box(ui, m, v, b, acts);
+    }
+    let pgp = landscape && m.pgp_written(v);
+    let mut hidden = 0;
     for f in fields(kind) {
+        // Note BM16: in the card the shared fields are edited in the Shared section (and below for an unsynced block).
+        if card && SHARED_FIELDS.contains(&f.name) {
+            continue;
+        }
+        if landscape && !pgp && LANDSCAPE_UNREAD.contains(&f.name) && !b.values.contains_key(f.name)
+        {
+            hidden += 1;
+            continue;
+        }
         field_row(ui, kind, f, b.values.get(f.name), acts);
+    }
+    if card && kind == Kind::Mato {
+        mato_shared(ui, m, v, b, acts);
+    }
+    if hidden > 0 {
+        ui.weak(format!("{hidden} {HIDDEN_ROWS}"));
     }
     for k in &b.bad {
         ui.colored_label(
@@ -101,7 +213,7 @@ fn block(
         );
     }
     edids(ui, m, v, kind, b, acts);
-    if kind == Kind::Txst {
+    if kind == Kind::Txst && !card {
         statics(ui, m, v, b, acts);
     }
 }
@@ -137,7 +249,14 @@ fn drag(ui: &mut egui::Ui, x: &mut f64, f: &Field) -> bool {
 fn field_row(ui: &mut egui::Ui, kind: Kind, f: &Field, cur: Option<&Json>, acts: &mut Vec<Act>) {
     ui.horizontal_wrapped(|ui| {
         let mut on = cur.is_some();
-        if ui.checkbox(&mut on, f.name).changed() {
+        if ui
+            .checkbox(&mut on, field_label(f.name))
+            .on_hover_text(match field_note(kind, f.name) {
+                Some(n) => format!("JSON key: {}. {n}", f.name),
+                None => format!("JSON key: {}", f.name),
+            })
+            .changed()
+        {
             acts.push(Act::Value(kind, f.name.into(), on.then(|| default_of(f))));
         }
         let Some(cur) = cur else {
@@ -175,7 +294,8 @@ fn field_row(ui: &mut egui::Ui, kind: Kind, f: &Field, cur: Option<&Json>, acts:
                 }
                 for g in &GLINT_FIELDS {
                     let mut x = cur.get(g.name).and_then(Json::as_f64).unwrap_or(g.default);
-                    ui.label(g.name);
+                    ui.label(field_label(g.name))
+                        .on_hover_text(format!("JSON key: {}.{}", f.name, g.name));
                     if drag(ui, &mut x, g) {
                         acts.push(Act::Value(
                             kind,
@@ -198,7 +318,7 @@ fn edids(
     acts: &mut Vec<Act>,
 ) {
     let refused = refusals(&m.sets_doc.as_ref().map(|d| d.entries()).unwrap_or_default());
-    let recs = m.cs_pbr.records(m.scan_db.as_deref());
+    let recs = m.scan_records();
     let scanned = recs.as_ref().ok().filter(|r| !r.of(kind).is_empty());
     ui.label("EDIDs (the file names, exact case):");
     for (i, e) in b.edids.iter().enumerate() {
@@ -246,7 +366,7 @@ fn edids(
         }
     });
     let suggestions: Vec<(String, String)> = match kind {
-        Kind::Txst => match set_key(v).map(|k| m.cs_pbr.facts(m.scan_db.as_deref(), &k)) {
+        Kind::Txst => match set_key(v).map(|k| m.scan_facts(&k)) {
             Some(Ok(f)) => {
                 if f.txst_edids.is_empty() {
                     ui.colored_label(AMBER, NO_TXST_USES);
@@ -294,6 +414,48 @@ fn edids(
     }
 }
 
+/// Note BM6: ticked = the set's PGPatcher entry is written (`pgp_written`). A click stores always/never; "Back to
+/// auto" clears it. A set that is not a PGPatcher JSON set (its colour map is not `pbr_albedo`) gets the box off and
+/// disabled, with the reason (review I2).
+fn pgp_box(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut Vec<Act>) {
+    let json = is_json_set(v, m.target);
+    let st = m.statics_status(v);
+    let mut on = m.pgp_written(v);
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(json, egui::Checkbox::new(&mut on, PGP_BOX))
+            .changed()
+        {
+            acts.push(Act::Statics(if on {
+                Statics::Always
+            } else {
+                Statics::Never
+            }));
+        }
+        if json && b.statics != Statics::Auto && ui.small_button("Back to auto").clicked() {
+            acts.push(Act::Statics(Statics::Auto));
+        }
+    });
+    if !json {
+        ui.colored_label(AMBER, PGP_BOX_UNAVAILABLE);
+        return;
+    }
+    ui.weak(pgp_box_text(st.as_ref()));
+    meshes(ui, v, st.as_ref());
+}
+
+fn meshes(ui: &mut egui::Ui, v: &SetView, st: Option<&StaticsStatus>) {
+    if let Some(StaticsStatus::Used(paths)) = st {
+        egui::CollapsingHeader::new("Meshes")
+            .id_salt(("cs-statics", v.id.as_str()))
+            .show(ui, |ui| {
+                for p in paths {
+                    ui.monospace(p);
+                }
+            });
+    }
+}
+
 fn statics(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut Vec<Act>) {
     ui.horizontal(|ui| {
         ui.label("PGPatcher entry for statics:");
@@ -307,16 +469,35 @@ fn statics(ui: &mut egui::Ui, m: &AppModel, v: &SetView, b: &CsBlock, acts: &mut
             }
         }
     });
-    if let Some(st) = m.statics_status(v) {
-        ui.label(statics_text(&st));
-        if let StaticsStatus::Used(paths) = &st {
-            egui::CollapsingHeader::new("Meshes")
-                .id_salt(("cs-statics", v.id.as_str()))
-                .show(ui, |ui| {
-                    for p in paths {
-                        ui.monospace(p);
-                    }
-                });
-        }
+    let st = m.statics_status(v);
+    if let Some(s) = &st {
+        ui.label(statics_text(s));
     }
+    meshes(ui, v, st.as_ref());
+}
+
+/// Note BM (review 7): the TruePBR panel's header on a PBR Landscape set.
+pub const PGP_PANEL: &str = "PGPatcher JSON settings";
+pub const PGP_PANEL_OFF: &str =
+    "PGPatcher JSON settings (not written: tick 'Also write into the PGPatcher JSON' above)";
+pub const PGP_PANEL_NOTE: &str =
+    "Roughness, specular, displacement, subsurface, coat and glint are the texture set's values above.";
+
+/// The set's TruePBR (PGPatcher) panel. On a PBR Landscape set it sits under "PGPatcher JSON settings": open with a
+/// note while the entry is written, collapsed and marked "not written" while it is not (never hidden: matching,
+/// slots and the unmapped keys stay editable).
+pub fn pgp_panel(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
+    if model.target != engine::config::Target::Cs || !is_pbr_landscape(v) {
+        return super::pgp_fields::panel(ui, model, &v.id);
+    }
+    let on = model.pgp_written(v);
+    egui::CollapsingHeader::new(if on { PGP_PANEL } else { PGP_PANEL_OFF })
+        .id_salt(("pgp-panel", on, v.id.as_str()))
+        .default_open(on)
+        .show(ui, |ui| {
+            if on {
+                ui.weak(PGP_PANEL_NOTE);
+            }
+            super::pgp_fields::panel(ui, model, &v.id);
+        });
 }

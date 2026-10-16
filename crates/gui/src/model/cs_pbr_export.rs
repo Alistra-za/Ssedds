@@ -172,6 +172,8 @@ pub fn prepare(m: &AppModel) -> Option<PendingCs> {
     // Final review M4: say once why texture-set sets got no PGPatcher entry while the scan cannot be read.
     let no_scan: Vec<String> = json_entries(m)
         .into_iter()
+        // Note BM6: a PBR Landscape set keeps its entry without a scan, so it is not left out.
+        .filter(|(v, _)| !crate::model::sets::is_pbr_landscape(v))
         .filter_map(|(v, _)| match m.statics_status(&v) {
             Some(StaticsStatus::NoScan(e)) => Some(e),
             _ => None,

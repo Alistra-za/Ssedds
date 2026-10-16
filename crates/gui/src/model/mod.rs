@@ -190,6 +190,7 @@ struct EngineInputs {
     mesh_alpha: std::collections::BTreeMap<String, Vec<engine::shader::MeshAlpha>>,
     gras_diffuses: std::collections::BTreeSet<String>,
     gras_all_diffuses: std::collections::BTreeSet<String>,
+    cs_txst_sets: std::collections::BTreeSet<String>,
 }
 
 impl EngineInputs {
@@ -205,6 +206,7 @@ impl EngineInputs {
             mesh_alpha: m.mesh_alpha.clone(),
             gras_diffuses: m.gras_diffuses.clone(),
             gras_all_diffuses: m.gras_all_diffuses.clone(),
+            cs_txst_sets: sets::cs_txst_sets(m),
         }
     }
 }
@@ -743,6 +745,7 @@ impl AppModel {
         req.mesh_alpha = self.mesh_alpha.clone();
         req.gras_diffuses = self.gras_diffuses.clone();
         req.gras_all_diffuses = self.gras_all_diffuses.clone();
+        req.cs_txst_sets = sets::cs_txst_sets(self);
         Some(req)
     }
 
@@ -865,6 +868,7 @@ impl AppModel {
             mesh_alpha: req.mesh_alpha.clone(),
             gras_diffuses: req.gras_diffuses.clone(),
             gras_all_diffuses: req.gras_all_diffuses.clone(),
+            cs_txst_sets: req.cs_txst_sets.clone(),
         });
         spawn_plan(self.tx.clone(), session, req, cancel, self.generation, root);
     }
@@ -948,6 +952,7 @@ impl AppModel {
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         self.scan_stamp = cs_pbr::stamp(self.scan_db.as_deref());
+        self.cs_pbr.new_frame();
         for d in self.picker.take() {
             changed = true;
             self.picked(d);

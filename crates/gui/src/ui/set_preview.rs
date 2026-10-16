@@ -86,7 +86,10 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
             ui.horizontal_wrapped(|ui| {
                 mode_toggle(ui, s);
                 if fp.landscape {
-                    ui.label("Mesh: Plane (a PBR texture set previews on the plane)");
+                    // Note BM (review M4): short, so the toolbar stays one line at 1024 pt (BH13).
+                    ui.label("Mesh: Plane").on_hover_text(
+                        "A PBR texture set or PBR Landscape set previews on the plane",
+                    );
                     let mut t = s.tiling;
                     if ui
                         .add(
@@ -448,11 +451,12 @@ pub fn settings_window(ctx: &egui::Context, m: &mut AppModel, three_d: bool) {
                     ui.strong(format!("Set {}", v.label));
                 }
                 if json {
-                    crate::ui::pgp_fields::panel(ui, m, &v.id);
+                    crate::ui::cs_pbr::pgp_panel(ui, m, v);
                 }
                 if skin {
                     crate::ui::skin_card::card(ui, m, v);
                 }
+                crate::ui::cs_pbr::card(ui, m, v);
                 crate::ui::cs_pbr::section(ui, m, v);
                 crate::ui::cm_card::section(ui, m, v);
             }
