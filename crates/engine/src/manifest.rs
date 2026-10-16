@@ -310,6 +310,9 @@ pub fn output_key(output_root: &Path, output: &Path) -> String {
     }
 }
 
+/// Audit EC-5 (Note BJ): `load` rewrites a manifest bigger than this whose line count is over 3x its entry count.
+pub const COMPACT_MIN_BYTES: u64 = 32 << 20;
+
 /// Serialises appends from every `Manifest` in the process, so two values on one root cannot interleave either.
 static APPEND_LOCK: Mutex<()> = Mutex::new(());
 
@@ -358,12 +361,22 @@ impl Manifest {
     /// are skipped; records of a newer schema are kept (see [`ManifestEntry::is_newer_schema`]).
     pub fn load(&self) -> io::Result<BTreeMap<String, ManifestEntry>> {
         let mut map = BTreeMap::new();
+        let big = match std::fs::metadata(&self.path) {
+            Ok(m) => m.len() > COMPACT_MIN_BYTES,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(map),
+            Err(e) => return Err(e),
+        };
+        // A big manifest may be rewritten below: hold the append lock from the read to the rewrite, so no append in
+        // this process lands in between and is lost.
+        let _g = big.then(|| APPEND_LOCK.lock().unwrap_or_else(|e| e.into_inner()));
         let f = match std::fs::File::open(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(map),
             Err(e) => return Err(e),
         };
+        let mut lines = 0usize;
         for line in io::BufReader::new(f).split(b'\n') {
+            lines += 1;
             let Ok(raw) = serde_json::from_slice::<serde_json::Value>(&line?) else {
                 continue;
             };
@@ -376,6 +389,15 @@ impl Manifest {
             if let Some(e) = ManifestEntry::from_value(raw) {
                 map.insert(e.output.clone(), e);
             }
+        }
+        if big && lines > 3 * map.len() {
+            let mut bytes = vec![];
+            for e in map.values() {
+                serde_json::to_writer(&mut bytes, &e.raw).map_err(io::Error::other)?;
+                bytes.push(b'\n');
+            }
+            // A failed rewrite leaves the old file whole; the next load tries again.
+            let _ = crate::dds::write_atomic(&self.path, &bytes);
         }
         Ok(map)
     }
