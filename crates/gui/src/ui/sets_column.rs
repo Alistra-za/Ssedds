@@ -7,8 +7,7 @@ use super::thumbs::ThumbCache;
 use crate::model::bulk::MenuAction;
 use crate::model::pbr_export::export_blocks;
 use crate::model::sets::{
-    fill_proposals, is_json_set, shader_options, DropChoice, DropOutcome, FillProposal, SetView,
-    SlotFill,
+    fill_proposals, shader_options, DropChoice, DropOutcome, FillProposal, SetView, SlotFill,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -445,14 +444,7 @@ fn pill(
                     ui.label(egui::RichText::new(&v.label).strong());
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if v.skin {
-                        // AG90: an Advanced skin set gets no PGPatcher JSON.
-                        badge(ui, "Advanced skin (no JSON)", None);
-                    } else if !is_json_set(v, model.target) {
-                        badge(ui, "vanilla set (no JSON)", None);
-                    } else {
-                        badge(ui, "PBR → JSON", None);
-                    }
+                    badge(ui, crate::model::sets::badge_text(model, v), None);
                     let rows: Vec<(&str, &Warning)> = v
                         .members
                         .iter()

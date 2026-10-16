@@ -1074,7 +1074,8 @@ pub fn target_of(s: &MeshesSettings) -> Option<ScanTarget> {
 pub struct SetFingerprint {
     pub set_key: String,
     pub label: String,
-    /// Design §7 (plan ruling R1): the set has a texture-set block, so it is shown on the plane only.
+    /// Design §7 (plan ruling R1): the set has a texture-set block or is PBR Landscape (Note BM), so it is shown on
+    /// the plane only.
     pub landscape: bool,
     /// PBR grass design §4.5: the set's pick is `pbr_grass` (the "approximated" badge).
     pub grass: bool,
@@ -1096,7 +1097,8 @@ pub fn fingerprint(m: &AppModel, set_key: &str) -> Option<SetFingerprint> {
         label: v.label.clone(),
         landscape: m
             .cs_block(&v.id, crate::model::cs_pbr::Kind::Txst)
-            .is_some(),
+            .is_some()
+            || crate::model::sets::is_pbr_landscape(&v),
         grass: crate::model::sets::is_pbr_grass(&v),
         entry,
         prefix: v.prefix.clone(),
