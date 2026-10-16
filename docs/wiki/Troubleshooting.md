@@ -1,5 +1,7 @@
 # Troubleshooting
 
+Not listed here? See [Known issues](Known-Issues.md) for open problems in this alpha.
+
 ## Common problems
 
 ### Every file is "unresolved" on the command line

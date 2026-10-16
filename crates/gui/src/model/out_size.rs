@@ -76,22 +76,11 @@ pub fn human(bytes: u64) -> String {
     }
 }
 
-/// The source size of an image, from its header only. `None` for a format the reader does not know (PSD) or an
-/// unreadable file: that texture then shows no estimate.
-/// shortcut: PSD sources have no size here; read the PSD header when they matter.
+/// The source size of an image, from its header only, by the engine's reader (DDS, PSD, KRA/ORA and every
+/// `image` format). `None` for an unreadable file or one over MAX_DIM: that texture then shows no estimate.
 pub fn source_dims(path: &std::path::Path) -> Option<(u32, u32)> {
     HEADER_READS.with(|c| c.set(c.get() + 1));
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("dds"))
-    {
-        use std::io::Read;
-        let mut b = [0u8; 20];
-        std::fs::File::open(path).ok()?.read_exact(&mut b).ok()?;
-        let at = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
-        return Some((at(16), at(12)));
-    }
-    image::image_dimensions(path).ok()
+    engine::load::image_size(path).ok()
 }
 
 /// A source file and the (size, mtime) stamp the plan read it at.

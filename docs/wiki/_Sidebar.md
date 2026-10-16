@@ -22,4 +22,5 @@ Concepts
 Help
 
 - [Troubleshooting](Troubleshooting.md)
+- [Known issues](Known-Issues.md)
 - [FAQ](FAQ.md)

@@ -250,19 +250,19 @@ fn program_fields(p: &Program) -> BTreeSet<String> {
 fn values_for(
     s: &CsSettings,
     features_on: bool,
+    head_part: bool,
     fields: &BTreeSet<String>,
     m: &MaterialState,
 ) -> Vec<(String, Vec<f64>)> {
-    cs_settings::feature_data(s, fields, features_on, is_head(m))
+    cs_settings::feature_data(s, fields, features_on, is_head(m, head_part))
 }
 
 /// CS's head (bodyTiling = 1): a geometry under a `BSFaceGenNiNode` (advanced-skin Renderer.cpp:133-134). That
-/// node exists only at runtime, so the preview uses the FaceGen shader type, the old shader's own head split
-/// (1.8 Lighting.hlsl:2047).
-/// shortcut: type-5 head parts (mouth: capture 11178 ev 4269, tiling 10/1) count as body; upgrade with a
-/// "loaded from a facegendata NIF / root named BSFaceGenNiNodeSkinned" flag at parse time if a user reports it.
-fn is_head(m: &MaterialState) -> bool {
-    m.shader_type == 4
+/// node exists only at runtime, so (Note BA) a shape is head when its shader type is FaceGen (4; the old shader's
+/// own head split, 1.8 Lighting.hlsl:2047) or its NIF is a head part (`head_part`: a facegendata NIF or an HDPT
+/// model; the mouth of capture 11178 ev 4269 is type 5 with head tiling).
+fn is_head(m: &MaterialState, head_part: bool) -> bool {
+    head_part || m.shader_type == 4
 }
 
 /// [`textures::rfaos_candidates`] of a material (slot 1 normal, slot 7 specular).
@@ -301,6 +301,8 @@ pub struct Renderer {
     jobs: Vec<CompileJob>,
     /// Hosts that drive a pool turn this on; the default settles every load and edit before returning.
     async_compile: bool,
+    /// The loaded NIF is a head part (Note BA; [`ParsedNif::head_part`]), set by every load.
+    head_part: bool,
     defaults: HashMap<(SrvKind, [u8; 4]), ID3D11ShaderResourceView>,
     /// Every Lighting shape of the loaded model, keyed by NIF block index (built-ins: `ShapeId(0)`).
     shapes: BTreeMap<ShapeId, ShapeState>,
@@ -434,6 +436,7 @@ impl Renderer {
             inflight: HashSet::new(),
             jobs: vec![],
             async_compile: false,
+            head_part: false,
             defaults: HashMap::new(),
             shapes: BTreeMap::new(),
             draw_order: vec![],
@@ -571,7 +574,13 @@ impl Renderer {
                 continue;
             }
             if let Some(d) = s.draw.as_mut() {
-                let fv = values_for(&self.settings, self.features_on, &d.fields, &s.material);
+                let fv = values_for(
+                    &self.settings,
+                    self.features_on,
+                    self.head_part,
+                    &d.fields,
+                    &s.material,
+                );
                 d.rewrite_material(&s.material, ll, &fv);
             }
         }
@@ -902,7 +911,7 @@ impl Renderer {
         };
         let ll = self.linear_lighting();
         let fields = program_fields(program);
-        let fv = values_for(&self.settings, self.features_on, &fields, m);
+        let fv = values_for(&self.settings, self.features_on, self.head_part, &fields, m);
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
             write_material(&mut cb.writer, m, &bound, ll);
             scene::write_static(&mut cb.writer, &fv);
@@ -1183,7 +1192,16 @@ impl Renderer {
         nif_bytes: &[u8],
         textures: &dyn Fn(&str) -> Option<Vec<u8>>,
     ) -> LoadReport {
-        self.load_inner(&parse(nif_bytes), textures, true)
+        self.load_parsed_sync(&parse(nif_bytes), textures)
+    }
+
+    /// `load_parsed` in sync mode whatever the renderer's mode (`load` for an already parsed NIF).
+    pub fn load_parsed_sync(
+        &mut self,
+        parsed: &ParsedNif,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) -> LoadReport {
+        self.load_inner(parsed, textures, true)
     }
 
     /// Replaces the loaded model with `parsed`: geometry and textures now, one program per distinct
@@ -1209,6 +1227,7 @@ impl Renderer {
         self.tex_cache.clear();
         self.evicted_missing.clear();
         self.bounds = None;
+        self.head_part = parsed.head_part;
         let mut rep = LoadReport {
             le_mesh: parsed.le_mesh,
             errors: parsed.errors.clone(),
@@ -1436,7 +1455,13 @@ impl Renderer {
             .get_mut(&id)
             .and_then(|s| s.draw.as_mut())
             .ok_or("no draw")?;
-        let fv = values_for(&self.settings, self.features_on, &d.fields, m);
+        let fv = values_for(
+            &self.settings,
+            self.features_on,
+            self.head_part,
+            &d.fields,
+            m,
+        );
         d.rewrite_material(m, ll, &fv);
         Ok(())
     }
@@ -1723,7 +1748,13 @@ impl Renderer {
                 d.bound.regs.remove(&reg);
             }
             if was != real && applied {
-                let fv = values_for(&self.settings, self.features_on, &d.fields, &material);
+                let fv = values_for(
+                    &self.settings,
+                    self.features_on,
+                    self.head_part,
+                    &d.fields,
+                    &material,
+                );
                 d.rewrite_material(&material, ll, &fv);
             }
             if !under {
@@ -1956,7 +1987,13 @@ impl Renderer {
                 uploads += if self.reference_writer {
                     {
                         // Test hook only (P0's reference writer): recomputed every frame.
-                        let fv = values_for(&self.settings, self.features_on, &s.fields, &s.built);
+                        let fv = values_for(
+                            &self.settings,
+                            self.features_on,
+                            self.head_part,
+                            &s.fields,
+                            &s.built,
+                        );
                         s.update_by_name(gpu, scene, &view, &fv)
                     }
                 } else {
@@ -2083,5 +2120,22 @@ fn wait_idle(gpu: &Gpu, q: &ID3D11Query) -> Result<(), String> {
             }
             std::thread::sleep(std::time::Duration::from_micros(200));
         }
+    }
+}
+
+#[cfg(test)]
+mod head_tests {
+    use super::*;
+
+    /// Note BA: a type-5 head part (the capture-11178 mouth) is head only when its NIF is flagged a head part;
+    /// FaceGen (4) is head either way.
+    #[test]
+    fn head_parts_and_facegen_are_head() {
+        let mut m = MaterialState::builtin_default();
+        m.shader_type = 5;
+        assert!(is_head(&m, true));
+        assert!(!is_head(&m, false));
+        m.shader_type = 4;
+        assert!(is_head(&m, false));
     }
 }

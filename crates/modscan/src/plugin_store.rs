@@ -675,6 +675,20 @@ impl Store {
         Ok(out)
     }
 
+    /// The mesh `norm` (canonical) is a head part (Note BA): under `meshes/actors/character/facegendata/`, or the
+    /// MODL of any HDPT copy in the scanned plugins (not only winners: an overridden head part's mesh is still a head).
+    pub fn is_head_part_mesh(&self, norm: &str) -> Result<bool, ScanError> {
+        if nif::path::is_facegen(norm) {
+            return Ok(true);
+        }
+        let mut st = self.conn.prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM path p JOIN model_ref m ON m.path_id = p.id
+             JOIN rec r ON r.plugin_id = m.plugin_id AND r.local = m.local
+             WHERE p.p = ?1 AND r.sig = 'HDPT')",
+        )?;
+        Ok(st.query_row([norm], |r| r.get(0))?)
+    }
+
     /// Missing files (spec §4.4, ruling R8) that at least one live record names, by path (filtering ruling R12).
     pub fn plugin_missing_files(&self) -> Result<Vec<MissingRef>, ScanError> {
         Ok(self.plugin_missing_with_inert()?.0)
