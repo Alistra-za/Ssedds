@@ -10,8 +10,8 @@ fn drag(key: &str) -> sdc_gui::pgp::schema::DragSpec {
 /// (pgp-numeric-stats.csv): 0.02776 and 0.3576 are real values, so a drag never rounds them away.
 const TABLE: [(&str, f64, usize, bool); 21] = [
     ("smooth_angle", 0.5, 1, false),
-    ("auto_uv", 0.002, 3, true),
-    ("uv_scale", 0.002, 3, true),
+    ("auto_uv", 0.002, 3, false),
+    ("uv_scale", 0.002, 3, false),
     ("vertex_color_lum_mult", 0.005, 3, false),
     ("vertex_color_sat_mult", 0.005, 2, false),
     ("alphaprop_flags", 16.0, 0, false),
@@ -24,7 +24,7 @@ const TABLE: [(&str, f64, usize, bool); 21] = [
     ("coat_specular_level", 0.001, 4, true),
     ("coat_roughness", 0.005, 2, false),
     ("coat_strength", 0.005, 2, false),
-    ("inner_uv_scale", 0.002, 3, true),
+    ("inner_uv_scale", 0.002, 3, false),
     ("glint.screen_space_scale", 0.02, 2, false),
     ("glint.log_microfacet_density", 0.1, 3, false),
     ("glint.microfacet_roughness", 0.005, 3, true),

@@ -214,8 +214,8 @@ pub const KEYS: &[KeySpec] = &[
     k("nif_filter", K::Text, G::Match, true, "Mesh path contains"),
     k("rename", K::Text, G::Match, true, "Rename"),
     k("smooth_angle", MIN0, G::Uv, true, "Smooth angle").with(DragSpec::new(0.5, 1, false)),
-    k("auto_uv", MIN0, G::Uv, true, "Auto UV").with(DragSpec::new(0.002, 3, true)),
-    k("uv_scale", MIN0, G::Uv, true, "UV scale").with(DragSpec::new(0.002, 3, true)),
+    k("auto_uv", MIN0, G::Uv, true, "Auto UV").with(DragSpec::new(0.002, 3, false)),
+    k("uv_scale", MIN0, G::Uv, true, "UV scale").with(DragSpec::new(0.002, 3, false)),
     k("vertex_colors", K::Tri, G::Vertex, true, "Vertex colours"),
     k(
         "vertex_color_lum_mult",
@@ -380,7 +380,7 @@ pub const KEYS: &[KeySpec] = &[
         false,
         "Inner UV scale",
     )
-    .with(DragSpec::new(0.002, 3, true)),
+    .with(DragSpec::new(0.002, 3, false)),
     k("glint", K::Object, G::Features, false, "Glint"),
     k("fuzz", K::Object, G::Features, false, "Fuzz"),
     k("slot1", K::Slot, G::Slots, false, "Slot 1"),
