@@ -584,9 +584,11 @@ fn export_blocks_follow_a_rescan_both_ways() {
     assert!(slot_block(&m));
     // Scan 2 (a new file length): no usable answer, the entry is dropped and the cached block goes.
     std::fs::write(&db, "scan 2!").unwrap();
+    m.poll(); // the next frame stats the database (REPORT #9)
     assert!(!slot_block(&m));
     // Scan 3: used again, the block comes back.
     std::fs::write(&db, "scan 3!!").unwrap();
+    m.poll();
     let _ = m.cs_pbr.facts(Some(&db), &key);
     m.cs_pbr.facts.borrow_mut().insert(key, used());
     assert!(slot_block(&m));

@@ -137,7 +137,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingCs> {
         ..Default::default()
     };
     let mut done = BTreeSet::new();
-    for e in &entries {
+    for e in entries.iter() {
         for (kind, b) in blocks(e) {
             let mut values = b.values.clone();
             values.retain(|k, v| writable(kind, k, v));

@@ -179,7 +179,8 @@ fn stored(m: &AppModel, key: &str) -> Option<Value> {
         .as_ref()
         .unwrap()
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| e.id == SET)?
         .settings
         .into_iter()

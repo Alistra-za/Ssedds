@@ -37,7 +37,8 @@ fn entry(m: &AppModel, id: &str) -> sdc_gui::sets_doc::SetEntry {
         .as_ref()
         .unwrap()
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| engine::sets::same_id(&e.id, id))
         .unwrap_or_else(|| panic!("no entry {id}"))
 }
@@ -138,7 +139,8 @@ fn entry_or_none(m: &AppModel, id: &str) -> Option<String> {
         .as_ref()
         .unwrap()
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| engine::sets::same_id(&e.id, id))
         .and_then(|e| e.output_name)
 }

@@ -61,7 +61,8 @@ fn edits_preserve_comments_and_round_trip() {
     let again = SetsDoc::open(d.path());
     let a = again
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| e.id == "a/one")
         .unwrap();
     assert_eq!(a.settings["displacement_scale"], json!(0.4));
@@ -95,7 +96,8 @@ fn create_rename_delete_and_order() {
     s.rename_set("landscape/rock01", "landscape/boulder");
     let b = s
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| e.id == "landscape/boulder")
         .unwrap();
     assert_eq!(b.renamed_from.as_deref(), Some("landscape/rock01"));
@@ -310,7 +312,8 @@ fn shader_is_reserved_not_a_json_setting() {
     s.set_shader("landscape/leaf", Some(Shader::Hair));
     let e = s
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| e.id == "landscape/leaf")
         .unwrap();
     assert_eq!(e.shader, Some(Shader::Hair));
@@ -352,7 +355,7 @@ fn an_unknown_shader_id_reads_as_none_and_survives_a_save() {
         "[[sets]]\nid = \"landscape/leaf\"\nshader = \"toon\"\n",
     ));
     assert!(!s.read_only());
-    let e = s.entries().into_iter().next().unwrap();
+    let e = s.entries().iter().cloned().next().unwrap();
     assert_eq!(e.shader, None);
     assert!(!e.settings.contains_key("shader"), "{:?}", e.settings);
     s.set_value("landscape/leaf", "hair", Some(json!(true)));

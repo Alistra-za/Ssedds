@@ -68,7 +68,8 @@ fn colour(h: &Harness<'static, AppModel>) -> Option<Value> {
         .as_ref()
         .unwrap()
         .entries()
-        .into_iter()
+        .iter()
+        .cloned()
         .find(|e| e.id == "landscape/rock01")?
         .settings
         .into_iter()

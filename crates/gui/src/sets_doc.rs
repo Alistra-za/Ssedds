@@ -9,9 +9,11 @@ use crate::project::{
 };
 use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use toml_edit::{Array, ArrayOfTables, Item, Table, TableLike, Value};
 
 pub const FILE_NAME: &str = "sdc-project.toml";
@@ -73,6 +75,7 @@ pub(crate) fn next_rev() -> u64 {
 
 pub struct SetsDoc {
     f: TomlFile,
+    entries_cache: RefCell<Option<(u64, Arc<Vec<SetEntry>>)>>,
 }
 
 /// Flatten a table into `prefix.key` paths; values only (nested tables recurse).
@@ -184,6 +187,7 @@ impl SetsDoc {
     pub fn open(root: &Path) -> SetsDoc {
         SetsDoc {
             f: TomlFile::open(root.join(FILE_NAME)),
+            entries_cache: RefCell::default(),
         }
     }
 
@@ -355,7 +359,21 @@ impl SetsDoc {
         self.set_project("auto_pbr", (!keys.is_empty()).then_some(Value::Array(arr)));
     }
 
-    pub fn entries(&self) -> Vec<SetEntry> {
+    /// The `[[sets]]` entries, parsed once per revision (REPORT #9).
+    pub fn entries(&self) -> Arc<Vec<SetEntry>> {
+        let rev = self.f.rev;
+        if let Some((r, e)) = &*self.entries_cache.borrow() {
+            if *r == rev {
+                return e.clone();
+            }
+        }
+        let e = Arc::new(self.parse_entries());
+        *self.entries_cache.borrow_mut() = Some((rev, e.clone()));
+        e
+    }
+
+    /// The entries as the document holds them now. Mutators use this: mid-edit the revision is not bumped yet.
+    fn parse_entries(&self) -> Vec<SetEntry> {
         self.f
             .doc
             .get("sets")
@@ -499,7 +517,7 @@ impl SetsDoc {
             return;
         }
         let lower = fold_id(id);
-        if !self.entries().iter().any(|e| fold_id(&e.id) == lower) {
+        if !self.parse_entries().iter().any(|e| fold_id(&e.id) == lower) {
             return;
         }
         if let Some(tables) = self
@@ -532,11 +550,11 @@ impl SetsDoc {
             return;
         }
         let created = self
-            .entries()
+            .parse_entries()
             .iter()
             .any(|e| same_id(&e.id, from) && e.created);
         let already = self
-            .entries()
+            .parse_entries()
             .iter()
             .find(|e| same_id(&e.id, from))
             .and_then(|e| e.renamed_from.clone());
@@ -559,7 +577,7 @@ impl SetsDoc {
         if !order.is_empty() {
             self.set_order(&order);
         }
-        for e in self.entries() {
+        for e in self.parse_entries() {
             for (slot, src) in &e.borrow {
                 if same_id(src, from) {
                     self.set_borrow(&e.id, *slot, Some(to));
@@ -577,7 +595,7 @@ impl SetsDoc {
         if self.read_only() || same_id(from, to) {
             return;
         }
-        let entries = self.entries();
+        let entries = self.parse_entries();
         if let Some(e) = entries
             .iter()
             .find(|e| !e.created && e.renamed_from.as_deref().is_some_and(|r| same_id(r, from)))
@@ -624,7 +642,7 @@ impl SetsDoc {
 
     /// `file` moves into set `id` (a `Move` edit); it is taken out of every other entry's `add` and `remove`.
     pub fn add_member(&mut self, id: &str, file: &str) {
-        for e in self.entries() {
+        for e in self.parse_entries() {
             if !same_id(&e.id, id) {
                 if e.add.iter().any(|f| same_id(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
@@ -637,7 +655,7 @@ impl SetsDoc {
         // A file this set removed belongs to it by its name: lifting the remove brings it back (an `add` beside the
         // `remove` would leave it out, AG100).
         let removed_here = self
-            .entries()
+            .parse_entries()
             .iter()
             .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
         if removed_here {
@@ -650,7 +668,7 @@ impl SetsDoc {
     /// `file` leaves set `id`: it is dropped from `id`'s `add` when it was moved in, else recorded in `remove`.
     pub fn remove_member(&mut self, id: &str, file: &str) {
         let moved_in = self
-            .entries()
+            .parse_entries()
             .iter()
             .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| same_id(f, file)));
         if moved_in {
@@ -813,7 +831,7 @@ impl SetsDoc {
         // Removing from a set with no block changes nothing (no table, no dirty, no undo step).
         if v.is_none()
             && !self
-                .entries()
+                .parse_entries()
                 .iter()
                 .any(|e| same_id(&e.id, id) && e.cm.is_some())
         {
@@ -841,7 +859,7 @@ impl SetsDoc {
             return;
         }
         let own = self
-            .entries()
+            .parse_entries()
             .into_iter()
             .find(|e| same_id(&e.id, id))
             .map(|e| e.settings)
@@ -873,7 +891,11 @@ impl SetsDoc {
         }
         // Mirrors `add_cs_block`: the PGPatcher values the block took over move back to the set (design §5.1).
         let back = (kind == Kind::Txst)
-            .then(|| self.entries().into_iter().find(|e| same_id(&e.id, id)))
+            .then(|| {
+                self.parse_entries()
+                    .into_iter()
+                    .find(|e| same_id(&e.id, id))
+            })
             .flatten()
             .and_then(|e| e.cs_txst)
             .map(|b| cs_pbr::cs_to_pgp(&b.values))
@@ -964,5 +986,109 @@ fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
             write_json(t, &format!("{path}.{k}"), x) | hit
         }),
         _ => write_path(t, path, Some(v.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// REPORT #9: after every mutator the cached `entries()` is what the document holds.
+    #[test]
+    fn the_entries_cache_follows_every_mutator() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = SetsDoc::open(d.path());
+        let template = Template {
+            name: "t".into(),
+            kind: Kind::Txst,
+            edids: vec!["E".into()],
+            values: serde_json::Map::new(),
+        };
+        type Step<'a> = (&'a str, Box<dyn Fn(&mut SetsDoc) + 'a>);
+        let steps: Vec<Step> = vec![
+            ("create_set", Box::new(|s| s.create_set("a/x"))),
+            ("add_member", Box::new(|s| s.add_member("a/x", "a/f.png"))),
+            (
+                "remove_member",
+                Box::new(|s| s.remove_member("a/x", "a/g.png")),
+            ),
+            (
+                "set_borrow",
+                Box::new(|s| s.set_borrow("a/x", 2, Some("b/y"))),
+            ),
+            ("set_lock", Box::new(|s| s.set_lock("a/x", 2, true))),
+            (
+                "set_shader",
+                Box::new(|s| s.set_shader("a/x", Some(engine::shader::Shader::Pbr))),
+            ),
+            (
+                "set_output_name",
+                Box::new(|s| s.set_output_name("a/x", Some("steel"))),
+            ),
+            (
+                "set_value",
+                Box::new(|s| s.set_value("a/x", "hair", Some(json!(true)))),
+            ),
+            (
+                "set_value on a new set",
+                Box::new(|s| s.set_value("c/z", "hair", None)),
+            ),
+            (
+                "add_cs_block",
+                Box::new(|s| s.add_cs_block("a/x", Kind::Txst)),
+            ),
+            (
+                "set_cs_value",
+                Box::new(|s| s.set_cs_value("a/x", Kind::Mato, "edids", Some(json!(["M"])))),
+            ),
+            (
+                "apply_cs_template",
+                Box::new(|s| s.apply_cs_template("a/x", &template)),
+            ),
+            (
+                "remove_cs_block",
+                Box::new(|s| s.remove_cs_block("a/x", Kind::Txst)),
+            ),
+            (
+                "remove_cs_block on a new set",
+                Box::new(|s| s.remove_cs_block("d/w", Kind::Txst)),
+            ),
+            (
+                "set_cm_value",
+                Box::new(|s| s.set_cm_value("a/x", "glossiness", Some(json!(0.5)))),
+            ),
+            ("set_cm_export", Box::new(|s| s.set_cm_export("a/x", false))),
+            (
+                "set_order",
+                Box::new(|s| s.set_order(&["a/x".into(), "b/y".into()])),
+            ),
+            ("rename_set", Box::new(|s| s.rename_set("a/x", "a/renamed"))),
+            (
+                "rename_set (no order)",
+                Box::new(|s| {
+                    s.set_order(&[]);
+                    s.rename_set("a/renamed", "a/again")
+                }),
+            ),
+            ("retarget_auto", Box::new(|s| s.retarget_auto("a/x", "a/y"))),
+            ("delete_set", Box::new(|s| s.delete_set("c/z"))),
+            ("add_section", Box::new(|s| s.add_section(&Settings::new()))),
+            ("set_json_name", Box::new(|s| s.set_json_name(Some("n")))),
+            (
+                "restore_keeping_json_sha",
+                Box::new(|s| s.restore_keeping_json_sha("[[sets]]\nid = \"r/one\"\n")),
+            ),
+            (
+                "restore",
+                Box::new(|s| s.restore("[[sets]]\nid = \"r/two\"\n")),
+            ),
+            ("reload", Box::new(|s| s.reload())),
+        ];
+        for (what, step) in &steps {
+            s.entries();
+            step(&mut s);
+            assert_eq!(*s.entries(), s.parse_entries(), "{what}");
+        }
     }
 }

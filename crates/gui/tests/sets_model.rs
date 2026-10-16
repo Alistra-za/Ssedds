@@ -463,7 +463,8 @@ fn slot_paths_are_checked() {
             .as_ref()
             .unwrap()
             .entries()
-            .into_iter()
+            .iter()
+            .cloned()
             .find(|e| e.id == set)
             .unwrap()
             .settings

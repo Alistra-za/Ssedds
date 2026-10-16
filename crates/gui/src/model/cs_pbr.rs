@@ -343,15 +343,11 @@ pub fn overlay(settings: &mut Settings, b: &CsBlock) {
 impl AppModel {
     /// Set `set`'s block of `kind`, as the document holds it.
     pub fn cs_block(&self, set: &str, kind: Kind) -> Option<CsBlock> {
-        let e = self
-            .sets_doc
-            .as_ref()?
-            .entries()
-            .into_iter()
-            .find(|e| same_id(&e.id, set))?;
+        let entries = self.sets_doc.as_ref()?.entries();
+        let e = entries.iter().find(|e| same_id(&e.id, set))?;
         match kind {
-            Kind::Txst => e.cs_txst,
-            Kind::Mato => e.cs_mato,
+            Kind::Txst => e.cs_txst.clone(),
+            Kind::Mato => e.cs_mato.clone(),
         }
     }
 

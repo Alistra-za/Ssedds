@@ -230,6 +230,8 @@ pub(crate) struct ViewKey {
     export_root: PathBuf,
     target: Target,
     /// The scan database the statics rule read (design §5.1): a new scan changes the export blocks.
+    scan_db: Option<PathBuf>,
+    /// Its stamp as of the last `poll` (an external CLI scan shows on the next frame).
     scan: cs_pbr::Stamp,
 }
 
@@ -257,6 +259,8 @@ pub struct AppModel {
     /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
     /// developer's scan cannot leak in.
     pub scan_db: Option<PathBuf>,
+    /// `scan_db`'s stamp, taken once per frame in `poll` (REPORT #9: `view_key` does not stat it per call).
+    scan_stamp: cs_pbr::Stamp,
     /// S-shader-10: `shader::mesh_key` → what the scanned meshes report; sent as `BatchRequest::mesh_shaders`.
     pub mesh_votes: std::collections::BTreeMap<String, Vec<engine::shader::Shader>>,
     /// M6 Track E (DECISIONS Note U5): `shader::colour_mesh_key` → the alpha property of each scanned shape that uses
@@ -460,6 +464,7 @@ impl AppModel {
             loaded_user_presets: vec![],
             skipped_user_presets: vec![],
             scan_db: None,
+            scan_stamp: None,
             mesh_votes: Default::default(),
             mesh_alpha: Default::default(),
             mesh_tree_anim: Default::default(),
@@ -934,6 +939,7 @@ impl AppModel {
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        self.scan_stamp = cs_pbr::stamp(self.scan_db.as_deref());
         for d in self.picker.take() {
             changed = true;
             self.picked(d);
@@ -1791,7 +1797,8 @@ impl AppModel {
             root: self.root.clone(),
             export_root: self.export_root(),
             target: self.target,
-            scan: cs_pbr::stamp(self.scan_db.as_deref()),
+            scan_db: self.scan_db.clone(),
+            scan: self.scan_stamp,
         }
     }
 
