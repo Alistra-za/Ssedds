@@ -8,46 +8,39 @@
 
 Tessalith converts a folder of source images for Skyrim SE/AE. It works out what each file is from its name, groups files into material sets, packs loose maps into Skyrim's layouts, builds the mips and picks the format and colour tag each shader needs. The GUI (`tessalith.exe`) and the CLI (`sdc`) share one engine and one per-project `sdc.toml`, so both write the same bytes. Targets: `cs` (Community Shaders with TruePBR; default) and `vanilla` (which also packs the complex-material `_m` for a set given the complex material shader). It is for making new textures, not for fixing an installed game folder. Windows x64. Version 0.8.0 (see the [CHANGELOG](CHANGELOG.md)). GPL-3.0-or-later.
 
-## Feature comparison
+## Features
 
 What each tool does for a Skyrim texture without extra scripting.
 
 | Capability | Tessalith | texconv (DirectXTex) | NVIDIA Texture Tools Exporter | Compressonator | Cathedral Assets Optimizer |
 |---|---|---|---|---|---|
-| BC1, BC3, BC4, BC5, BC6H, BC7 output | ✅ | ✅ | ✅ | ✅ | ⚠️ [1] |
-| Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster | ✅ | ⚠️ [2] | ⚠️ [2] | ⚠️ [2] | ⚠️ [1] |
-| `_SRGB` / UNORM tag chosen per map type and target | ✅ | ⚠️ [3] | ⚠️ [3] | ⚠️ [3] | ⚠️ [1] |
-| Cutout alpha: coverage-preserving mips, on by default | ✅ | ⚠️ [4] | ⚠️ [4] | ⚠️ [5] | ⚠️ [5] |
-| Exact-opaque alpha (255, not 254) on `_m` maps | ✅ | ⚠️ [6] | ✅ [6] | ⚠️ [5] | ⚠️ [5] |
-| Normal mips renormalised | ✅ | ⚠️ [5] | ⚠️ [12] | ⚠️ [5] | ⚠️ [5] |
-| Normal-mip variance baked into TruePBR roughness | ✅ | ❌ | ❌ | ❌ | ❌ |
-| RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Loose maps packed into `_rmaos` / `_rfaos` / complex `_m` | ✅ | ⚠️ [7] | ❌ | ❌ | ❌ |
-| TruePBR: PGPatcher JSON written per set | ✅ [8] | ❌ | ❌ | ❌ | ❌ |
-| CS complex-material `_m` gate checked | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Complex grass (1:2 image, halves mipped apart) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Mod scan: meshes decide alpha meaning and set shader | ✅ [8] | ❌ | ❌ | ❌ | ❌ |
-| Decode-and-check after every encode, with Skyrim rules | ✅ | ❌ | ❌ | ⚠️ [9] | ❌ |
-| Validate DDS files made by other tools | ✅ | ⚠️ [10] | ❌ | ⚠️ [9] | ⚠️ [1] |
-| GUI with encoded-mip preview, pixel readout, pin and compare | ✅ | ❌ | ✅ | ✅ | ❌ |
-| NiAlphaProperty (alpha blend/test) edited per TruePBR set | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Batch / command line | ✅ | ✅ | ✅ | ✅ | ✅ |
-| NVTT as the BC7 / BC6H encoder | ⚠️ [11] | ❌ | ✅ | ❌ | ❌ |
-
-1. CAO converts through DirectXTex with fixed rules for making existing mod files load. Not compared in detail.
-2. Common formats; PSD, Krita and OpenRaster support varies. Not checked one by one.
-3. You set the tag per file or per run.
-4. An option you turn on (texconv `-keepcoverage`; NVTT has an alpha-coverage option in its library, exporter UI not checked), not set from the texture's role.
-5. No documented option found. Not tested.
-6. Local benchmark, RGB-only BC7: texconv decoded 254 on 2.4% of pixels, NVTT (`nvcompress`) on 0% ([Research](docs/wiki/Research.md#alpha)).
-7. `texassemble` merges channels but knows no Skyrim layout.
-8. GUI only.
-9. Compares an encode with its source (PSNR, SSIM); no Skyrim rules.
-10. `texdiag` reports header and pixel data; no Skyrim rules.
-11. Optional, never bundled: runs your installed `nvcompress.exe` (3.2.5 tested) at Production, BC7 and BC6H only.
-12. An option for normal maps (normalise mipmaps); not set from the texture's role.
-
-PGPatcher (ParallaxGen) is left out: it patches meshes and reads the JSON Tessalith writes, so it complements rather than competes.
+BC1, BC3, BC4, BC5, BC6H, BC7 output
+Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster 
+SRGB / UNORM (Linear) tag chosen per map type and target shader
+Cutout alpha: coverage-preserving mips, on by default 
+Optional Exact-opaque alpha 255 for where it's needed (Forces mode 6's pbit to 1, off by default)
+Normal mips renormalised 
+Normal-mip variance baked into TruePBR roughness 
+RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent` with optional masks '_bumpmask' '_detailnormmask' '_bentmask') 
+Multiple layers accepted and duplicate types 'bump2' just works
+Loose maps automatically picked up and packed into `_rmaos` / `_rfaos` / complex `_m` 
+Suffix based channel remapping; ORM > RMAOS is instant 
+Complex-material `_m` gate checked 
+Complex grass (1:2 image, halves mipped apart) 
+Mod scan: meshes decide alpha meaning and set shader 
+Decode-and-check after every encode, with Skyrim rules 
+Validate DDS files made by other tools 
+GUI with encoded-mip preview, pixel readout, pin and compare
+TruePBR: PGPatcher JSON written per set, Validated, with every option exposed including recent
+NiAlphaProperty (alpha blend/test) set in a familiar format, Easy context menu options for slots and lock commands,
+Interactive color picker with hex and rgb 255 inputs, outputs are converted to decimal
+PBR Landscape, PBRTextureSets and PBRMaterialObjects Jsons built from actual the EDID's in your loadorder no need to cross reference
+Pg Patcher _m sidecard .json
+Batch / command line
+Fast Scanning - 100 000 nifs scanned in 14 seconds, 1500 plugins scanned in less than 3
+Does not need to be launched from mo2, can be. 
+It will fill in your mo2 location for the first time if it is. It does not rely on it's launched file system, it skips the middleman 
+Optional NVTT backend for BC7 BC6H encoding
 
 ## What it does differently
 
@@ -56,6 +49,51 @@ PGPatcher (ParallaxGen) is left out: it patches meshes and reads the JSON Tessal
 - **Reads your load order.** A GUI scan of MO2 meshes and plugins gives each diffuse its alpha meaning.
 - **Checks its own output.** Every file is decoded and checked; a manifest lets re-runs redo only what changed.
 
+## Uses the best encoder available 
+
+BC7E for BC7, rgbcx for bc1 - 5, Intel ISPC for BC6h
+
+GPU and CPU mixed BC7
+| Encoder | Speed (s/Mpix) | Δ RGB (real) | Δ (real alpha) |
+|---|--:|--:|--:|
+| NVTT Normal (GPU) / texconv GPU | 0.03–0.09 | −1.4 / −1.8 | −0.75 / −2.8 |
+| ISPC basic | 0.11 | −0.75 | −0.69 |
+| bc7e u4 | 0.12 | −0.39 | −0.36 |
+| bc7e u5 | 0.22 | +0.01 | −0.03 |
+| bc7e u6 | 0.28 | 0 | 0 |
+| ISPC slow | 0.30 | −0.59 | −0.67 |
+| NVTT Production/Highest | ~14 | −0.32 | −0.37 |
+| texconv CPU (-bc x) | ~16–20 | −1.6 | −2.4 |
+| Compressonator q1.0 | ~33 | −0.16 | −1.50 |
+
+BC7E vs only cpu encoders at maximum settings (besides ISPC)
+| Measure | bc7e -u5 | NVTT 3 Production | Compressonator q1.0 | Intel ISPC slow | texconv -bc x |
+|---|--:|--:|--:|--:|--:|
+| Real colour textures | +0.03 | −0.27 | −0.16† | −0.44 | −1.47 |
+| Smooth gradients (synthetic) | 0.00 | +3.86 | +3.21 | +0.73 | −6.89 |
+| Real decals, smooth alpha | −0.02 | −0.06 | −1.50† | −0.58 | −2.04 |
+| Packed data maps (RGB PSNR, dB) | 41.22 | 41.58 | —† | 41.20 | 40.38 |
+| Normal maps (mean angle error) | 1.77° | 1.71° | —† | 1.79° | 2.19° |
+| Opaque input decoded with alpha 254 | 28%*  | 0% | 1.1% | 15% | 2.4% |
+| Time per megapixel | 0.22 s | ~14 s | ~33 s | 0.30 s | ~20 s |
+
+* Optional patch for when that's not acceptable (mode 6 pbit override, exact opaque)
+† Compressonator q1.0 was not re-measured on the wider set; its values come from the original 4–7 images. On those images it was 0.15 dB behind NVTT on packed data and 0.27° behind on normals. 
+The alpha-254 and timing rows are also from the original run.
+
+| Format and measure | rgbcx | NVTT 3 | Compressonator | Intel ISPC | texconv(CPU) |
+|---|--:|--:|--:|--:|--:|
+| BC1 colour (RGB PSNR, dB) | 39.85 | 39.74 | 39.05 | 38.11 | 37.41 |
+| BC3 colour + alpha (premultiplied PSNR, dB) | 49.20 | 49.29 | 48.75 | 48.02 | 48.07 |
+| BC4 masks (PSNR, dB) | 45.59 | 45.05 | 45.19 | 43.70 | 43.94 |
+| BC5 normals (mean angle error) | .41° | .47° | .45° | .55° | .56° |
+| BC6H HDR (multi-exposure PSNR, dB) | — | 48.00 | —† | 50.38 | 49.62 |
+| BC6H brightest highlight kept (worst image) | — | 94% | 29%† | 22% | 29% |
+
+rgbcx beats NVTT on BC1 on 96 of 100 images, and BC3 is a tie. 
+Texconv GPU path is both slower than ISPC on BC6H and looses -1.8 db
+
+† Original 4 HDRIs only; its mPSNR there was 1.2 dB below ISPC. 
 ## RNM vs alternatives
 
 Ways to put a detail normal on a base normal:
@@ -73,6 +111,7 @@ What Tessalith does (`crates/engine/src/rnm/`):
 - **Order and strength:** `bent` 0.35, `bump` 0.4, `bump2` 0.4, `detail` 0.6, `detail2` 0.3, in that order; `rnm.order` moves listed layers to the front. Strength scales the layer's slope (0 flat, 1 as authored); a mask's R channel scales it per texel.
 - **Where:** into the set's `_n` or `_cnr`, after decode and green flip, before mips. Layers are resampled to the base size. Alpha is untouched, so `_cnr` coat roughness passes through. The TruePBR roughness bake reads the blended normal.
 
+Defaults assume _Bent is a high to low mesh only bake from the same normal source (It contains all detail the normal has, used to reduce the ao strengh) use RMM mixing for when that is not the case
 ## Quick start
 
 Build with Rust stable and the MSVC Build Tools ([Installation](docs/wiki/Installation.md)). This writes `sdc.exe` and `tessalith.exe` to `target\x86_64-pc-windows-msvc\release\`:
