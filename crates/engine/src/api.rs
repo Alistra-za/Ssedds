@@ -2158,6 +2158,35 @@ fn check_up_front(
         let c = registry.alias_chain(pid, target).map_err(config_err)?;
         alias_chains.push((pid, c));
     }
+    // Audit #7 (Note BC): a glob that does not compile would match nothing, silently.
+    for o in &req.overrides {
+        if let Scope::File(g) = &o.scope {
+            crate::policy::compile_glob(g)
+                .map_err(|e| usage(format!("--set file:{g}.{}: {e}", o.field)))?;
+        }
+    }
+    let presets = chain
+        .iter()
+        .chain(alias_chains.iter().flat_map(|(_, c)| c.iter()));
+    let rule_globs = presets
+        .flat_map(|p| {
+            p.rules
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (p.id.clone(), i, r))
+        })
+        .chain(configs.iter().flat_map(|c| {
+            c.rules
+                .iter()
+                .enumerate()
+                .map(|(i, r)| ("config".to_string(), i, r))
+        }));
+    for (src, i, r) in rule_globs {
+        if let Some(g) = &r.matcher.glob {
+            crate::policy::compile_glob(g)
+                .map_err(|e| EngineError::Config(format!("rule {src}#{i}: {e}")))?;
+        }
+    }
     let doc_of = |chain: &[&PresetFile], st: Subtype| {
         let mut doc = Value::Object(Default::default());
         for (_, patch) in PresetRegistry::layers_of(chain, st) {

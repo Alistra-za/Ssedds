@@ -315,3 +315,26 @@ fn files_entries_beat_rules_and_drop_rules_for_another_subtype() {
     assert_eq!(j.profile.alpha.threshold, 100);
     assert_eq!(prov(j, "alpha.threshold"), "project_file");
 }
+
+/// Audit REPORT #7 (Note BC): a config rule glob or a file-scoped override built without `parse_set` (the GUI) that
+/// does not compile stops the plan before any work.
+#[test]
+fn a_glob_that_does_not_compile_stops_the_plan() {
+    let d =
+        fixture("[[rules]]\nmatch = { glob = \"**/[x\" }\noverrides = { mips = { levels = 2 } }\n");
+    match plan_events(req(&d)).0 {
+        Err(EngineError::Config(m)) => assert!(m.contains("glob"), "{m}"),
+        other => panic!("expected a config error, got {:?}", other.map(|_| ())),
+    }
+    let d = fixture("");
+    let mut r = req(&d);
+    r.overrides.push(engine::overrides::SetOverride {
+        scope: engine::overrides::Scope::File("**/[x".into()),
+        field: "format".into(),
+        value: serde_json::json!("bc1"),
+    });
+    match plan_events(r).0 {
+        Err(EngineError::Usage(m)) => assert!(m.contains("glob"), "{m}"),
+        other => panic!("expected a usage error, got {:?}", other.map(|_| ())),
+    }
+}

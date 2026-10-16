@@ -663,6 +663,10 @@ impl PresetRegistry {
         let chain = self.chain(id)?;
         let own = *chain.last().expect("a chain holds its own preset");
         for (i, r) in own.rules.iter().enumerate() {
+            if let Some(g) = &r.matcher.glob {
+                crate::policy::compile_glob(g)
+                    .map_err(|e| PresetError::Invalid(format!("preset '{id}' rule #{i}: {e}")))?;
+            }
             let mut paths = vec![];
             leaf_paths(&r.overrides, "", &mut paths);
             if let Some(f) = paths

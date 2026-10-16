@@ -353,6 +353,7 @@ pub fn parse_set(s: &str) -> Result<SetOverride, String> {
             .max_by_key(|f| f.len())
             .ok_or_else(|| format!("--set '{s}': expected file:<glob>.<field>"))?;
         let glob = &rest[..rest.len() - field.len() - 1];
+        crate::policy::compile_glob(glob).map_err(|e| format!("--set '{s}': {e}"))?;
         (Scope::File(glob.to_string()), *field)
     } else if known(key) {
         (Scope::All, key)

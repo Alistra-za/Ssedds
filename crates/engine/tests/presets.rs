@@ -928,3 +928,13 @@ fn a_user_preset_with_the_cpm_target_is_skipped_naming_it() {
     assert!(w[0].message.contains("`cpm`"), "{}", w[0].message);
     assert!(r.get("old").is_none());
 }
+
+/// Audit REPORT #7 (Note BC): a preset rule whose glob does not compile fails `check_preset`.
+#[test]
+fn a_rule_glob_that_does_not_compile_fails_check_preset() {
+    let mut r = PresetRegistry::builtin().unwrap();
+    r.add_toml("schema_version = 1\nid = \"badglob\"\nversion = \"1\"\nbase = \"cs-quality\"\n[[rules]]\nmatch = { glob = \"**/{a,b\" }\noverrides = { mips = { levels = 2 } }\n")
+        .unwrap();
+    let e = r.check_preset("badglob").unwrap_err().to_string();
+    assert!(e.contains("glob"), "{e}");
+}
