@@ -394,44 +394,43 @@ fn cs_pbr_albedo_is_srgb_and_vanilla_refuses_it() {
 /// exits 1. The unavailable profile raises nothing else (fix batch 39 item 2).
 #[test]
 fn vanilla_blocks_unavailable_subtypes() {
-    for target in [Target::Vanilla] {
-        let d = tempfile::tempdir().unwrap();
-        put(d.path(), "textures/pbr/iron.png", rgb(64));
-        put(
-            d.path(),
-            "textures/arm/steel_rmaos.png",
-            rgba(64, |x, _| [(x * 4) as u8, 0, 200, 255]),
-        );
-        put(d.path(), "textures/hair/h_flow.png", rgb(64));
-        put(d.path(), "textures/cloth/silk_f.png", rgb(64));
-        let o = convert(
-            d.path(),
-            target,
-            &["file:**/iron.png.subtype=pbr_albedo"],
-            &[],
-        );
+    let target = Target::Vanilla;
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "textures/pbr/iron.png", rgb(64));
+    put(
+        d.path(),
+        "textures/arm/steel_rmaos.png",
+        rgba(64, |x, _| [(x * 4) as u8, 0, 200, 255]),
+    );
+    put(d.path(), "textures/hair/h_flow.png", rgb(64));
+    put(d.path(), "textures/cloth/silk_f.png", rgb(64));
+    let o = convert(
+        d.path(),
+        target,
+        &["file:**/iron.png.subtype=pbr_albedo"],
+        &[],
+    );
+    assert_eq!(
+        (o.summary.converted, o.summary.skipped, o.summary.failed),
+        (0, 4, 0),
+        "{target:?}: {:?}",
+        warnings(&o)
+    );
+    assert_eq!(o.summary.exit_code(), 1, "{target:?}");
+    assert_eq!(warnings(&o), vec![Code::CfgUnavailable; 4], "{target:?}");
+    for (src, out, subtype) in [
+        ("iron.png", "textures/pbr/iron.dds", "pbr_albedo"),
+        ("steel_rmaos.png", "textures/arm/steel_rmaos.dds", "rmaos"),
+        ("h_flow.png", "textures/hair/h_flow.dds", "flow"),
+        ("silk_f.png", "textures/cloth/silk_f.dds", "pbr_fuzz"),
+    ] {
+        assert_eq!(planned(&o, src)["profile"]["subtype"], subtype);
         assert_eq!(
-            (o.summary.converted, o.summary.skipped, o.summary.failed),
-            (0, 4, 0),
-            "{target:?}: {:?}",
-            warnings(&o)
+            skip_code(&o, src),
+            Some(Code::CfgUnavailable),
+            "{target:?} {src}"
         );
-        assert_eq!(o.summary.exit_code(), 1, "{target:?}");
-        assert_eq!(warnings(&o), vec![Code::CfgUnavailable; 4], "{target:?}");
-        for (src, out, subtype) in [
-            ("iron.png", "textures/pbr/iron.dds", "pbr_albedo"),
-            ("steel_rmaos.png", "textures/arm/steel_rmaos.dds", "rmaos"),
-            ("h_flow.png", "textures/hair/h_flow.dds", "flow"),
-            ("silk_f.png", "textures/cloth/silk_f.dds", "pbr_fuzz"),
-        ] {
-            assert_eq!(planned(&o, src)["profile"]["subtype"], subtype);
-            assert_eq!(
-                skip_code(&o, src),
-                Some(Code::CfgUnavailable),
-                "{target:?} {src}"
-            );
-            assert!(!d.path().join("out").join(out).exists(), "{target:?} {out}");
-        }
+        assert!(!d.path().join("out").join(out).exists(), "{target:?} {out}");
     }
 }
 

@@ -479,16 +479,15 @@ fn vanilla_neither_bakes_nor_reports_bake_companions() {
 /// no `SET-MISSING-COMPANION` for its missing `_n`.
 #[test]
 fn an_unavailable_flow_reports_no_missing_companion() {
-    for target in [Target::Vanilla] {
-        let d = tempfile::tempdir().unwrap();
-        normal(d.path(), "textures/hair/h_flow.png", 64, 64);
-        let mut r = req(d.path(), &[]);
-        r.target = Some(target);
-        let (p, _) = plan(r);
-        let j = job(&p, "h_flow.png");
-        assert_eq!(j.profile.subtype, Subtype::Flow, "{target:?}");
-        assert_eq!(codes(j), vec![Code::CfgUnavailable], "{target:?}");
-    }
+    let target = Target::Vanilla;
+    let d = tempfile::tempdir().unwrap();
+    normal(d.path(), "textures/hair/h_flow.png", 64, 64);
+    let mut r = req(d.path(), &[]);
+    r.target = Some(target);
+    let (p, _) = plan(r);
+    let j = job(&p, "h_flow.png");
+    assert_eq!(j.profile.subtype, Subtype::Flow, "{target:?}");
+    assert_eq!(codes(j), vec![Code::CfgUnavailable], "{target:?}");
 }
 
 /// Controller ruling: only roughness members (`rmaos`, `skin_rfaos`) get a `BakeJob`; the set's other members never.

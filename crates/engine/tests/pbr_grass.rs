@@ -102,20 +102,19 @@ fn the_cli_can_choose_pbr_grass() {
 
 #[test]
 fn vanilla_falls_back_from_pbr_grass() {
-    for t in [Target::Vanilla] {
-        let d = tempfile::tempdir().unwrap();
-        pbr_set(d.path(), BROWN);
-        let (p, _) = plan(d.path(), t, &[SET], &[], &[(SET, Shader::PbrGrass)]);
-        assert_eq!(
-            picked(&p),
-            (
-                Shader::Default,
-                ShaderOrigin::Fallback,
-                Some(Shader::PbrGrass)
-            ),
-            "{t:?}"
-        );
-    }
+    let t = Target::Vanilla;
+    let d = tempfile::tempdir().unwrap();
+    pbr_set(d.path(), BROWN);
+    let (p, _) = plan(d.path(), t, &[SET], &[], &[(SET, Shader::PbrGrass)]);
+    assert_eq!(
+        picked(&p),
+        (
+            Shader::Default,
+            ShaderOrigin::Fallback,
+            Some(Shader::PbrGrass)
+        ),
+        "{t:?}"
+    );
 }
 
 #[test]

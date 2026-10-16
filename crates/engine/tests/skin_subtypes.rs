@@ -272,12 +272,11 @@ fn skin_sub_types_are_unavailable_off_cs() {
         Subtype::SkinWet,
     ] {
         assert_eq!(availability(Target::Cs, st), Availability::Available);
-        for t in [Target::Vanilla] {
-            assert_eq!(
-                availability(t, st),
-                Availability::Unavailable { fallback: None }
-            );
-        }
+        let t = Target::Vanilla;
+        assert_eq!(
+            availability(t, st),
+            Availability::Unavailable { fallback: None }
+        );
     }
     let d = tempfile::tempdir().unwrap();
     put(d.path(), "x_sk.png", grey(64));
