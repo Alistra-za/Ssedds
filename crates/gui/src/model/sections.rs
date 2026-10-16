@@ -7,6 +7,7 @@ use super::sets::{views, SetView};
 use super::AppModel;
 use crate::pgp::settings::Settings;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 /// The keys a section can hold, in the order the JSON writes them.
 pub const SECTION_KEYS: [&str; 11] = [
@@ -104,8 +105,31 @@ fn slot_paths(m: &AppModel, v: &SetView) -> Vec<(u8, String)> {
 
 /// G6: every set that a written delete section would delete shapes of: a section's exact match is the set's texture
 /// in that slot, or its `path_contains` is in the set's diffuse path. A `nif_filter` narrows it to some meshes,
-/// which the hit says.
-pub fn delete_hits(m: &AppModel) -> Vec<DeleteHit> {
+/// which the hit says. Cached with the set views (REPORT #11).
+pub fn delete_hits(m: &AppModel) -> Arc<Vec<DeleteHit>> {
+    let key = m.view_key();
+    {
+        let c = m.views.borrow();
+        if c.key.as_ref() == Some(&key) {
+            if let Some(h) = &c.hits {
+                return h.clone();
+            }
+        }
+    }
+    // No borrow is held here: `build_hits` reads the cached views.
+    let h = Arc::new(build_hits(m));
+    let mut c = m.views.borrow_mut();
+    if c.key.as_ref() != Some(&key) {
+        *c = super::ViewCache {
+            key: Some(key),
+            ..Default::default()
+        };
+    }
+    c.hits = Some(h.clone());
+    h
+}
+
+fn build_hits(m: &AppModel) -> Vec<DeleteHit> {
     let sections = m.sections();
     if sections.is_empty() {
         return vec![];

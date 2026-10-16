@@ -213,12 +213,13 @@ fn read_only_banner(error: &str) -> String {
     format!("{error} — sdc.toml is ignored and the GUI is read-only until it is fixed and reloaded")
 }
 
-/// The cached set views and export blocks, valid for `key` only.
+/// The cached set views, export blocks and delete-section hits, valid for `key` only.
 #[derive(Default)]
 pub(crate) struct ViewCache {
     pub key: Option<ViewKey>,
     pub views: Option<Arc<Vec<sets::SetView>>>,
     pub blocks: Option<Arc<Vec<pbr_export::ExportIssue>>>,
+    pub hits: Option<Arc<Vec<sections::DeleteHit>>>,
 }
 
 #[derive(Clone, PartialEq)]
