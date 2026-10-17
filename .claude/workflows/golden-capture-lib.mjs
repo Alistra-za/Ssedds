@@ -2,10 +2,11 @@
 // Deterministic half of the golden-capture workflow (golden-capture.js). Workflow scripts have no filesystem, so
 // every file read/write/hash the workflow needs is a command here; its agents only run these and relay the JSON.
 // Commands (all print one JSON object on stdout; exit 1 with {"ok":false,"reason":...} on refusal):
-//   preflight --plan P --mo2 M --run-dir D [--journal J] [--profile X] [--cell C] [--keep-root K] [--cs-mod NAME] [--dry-run]
+//   preflight --plan P --mo2 M --run-root R [--journal J] [--profile X] [--cell C] [--keep-root K] [--cs-mod NAME] [--dry-run]
 //       W1/W7/W8/W10: validate the plan, resolve the profile, record the CS version, check disk, plan the settings
 //       edits; without --dry-run also back up SettingsUser.json, record it in the recovery journal J and apply the
-//       edits atomically. Writes D/resolved.json and D/plan.txt (every edit, placement, command and capture).
+//       edits atomically, all under the journal lock. Creates a fresh run dir R\<UTC time>-<run id> (never reused) and
+//       writes resolved.json and plan.txt there; a refused real run writes nothing.
 //   steps --run-dir D --group L --origin x,y,z      W3/W4: the exact DevBench requests for one group.
 //   restore --mo2 M [--journal J] [--run-id ID]     W1: atomic byte-copy of the journal's backup, verify sha256;
 //       with --run-id only when the pending entry is that run's (automatic cleanup); without it: restore_only.
@@ -13,7 +14,7 @@
 //       W6: copy a Captures .rdc to keep_dir and verify sha256. Never deletes anything.
 //   copy --run-dir D --file F                       copy (never delete) e.g. the CS log into keep_dir.
 //   map-draws --run-dir D --group G --draws F [--label X]   W9: draw -> placed ref, writes D/drawmap_<X>.json.
-// Env (tests only): GOLDEN_GAME_PROCESS = process name checked for "game running" (default SkyrimSE.exe);
+// Env (tests only): GOLDEN_TEST_DELAY_BEFORE_LOCK_MS = sleep before taking the lock; GOLDEN_GAME_PROCESS = process name checked for "game running" (default SkyrimSE.exe);
 //   GOLDEN_FAIL_RENAME = basename substring whose atomic replace fails (simulated interruption).
 import fs from 'node:fs'
 import path from 'node:path'
@@ -195,8 +196,20 @@ const vadd = (a, b) => a.map((x, i) => x + (b[i] || 0))
 
 export function resolveGroups(plan, groups, s6) {
   const light = { ...LIGHT_DEFAULTS, ...(plan.x_light || {}) }
+  const formTags = Object.fromEntries(Object.entries(plan.x_form_tags || {}).map(([k, v]) => [k.toUpperCase(), v]))
   const out = groups.map(g => {
+    // W9 expected shapes per form: x_form_tags; else tags paired with the non-anchor forms by index when the counts
+    // match (the draft plan's layout); else every tag of the group (then shared names stay ambiguous).
+    const tags = g.tags || []
+    const subjects = (g.forms || []).filter(f => f.toUpperCase() !== light.anchor.toUpperCase())
+    const shapesFor = form => {
+      const F = form.toUpperCase()
+      if (formTags[F]) return formTags[F]
+      if (F === light.anchor.toUpperCase()) return []
+      return tags.length === subjects.length ? [tags[subjects.findIndex(x => x.toUpperCase() === F)]] : tags
+    }
     const forms = (g.forms || []).map((form, i) => ({
+      shapes: shapesFor(form),
       form: form.toUpperCase(),
       rel: g.x_pos ? g.x_pos[i] : [((i - ((g.forms.length - 1) / 2)) * (g.spacing || 120)), 400, 0], // legacy row
       angle: g.x_angle ? g.x_angle[i] : [0, 0, 180],
@@ -209,7 +222,7 @@ export function resolveGroups(plan, groups, s6) {
       // Only when the s6 mesh the plan names is on disk with the planned sha256 (never written here).
       const f = s6.find(x => x.copy_of && x.ok)
       optional = { form: opt.form, used: !!f, why: f ? `s6 file ${f.path} present` : 's6 file missing or sha256 differs' }
-      if (f) forms.push({ form: opt.form.toUpperCase(), rel: opt.pos, angle: opt.angle || [0, 0, 180], keyframed: false, light_anchor: false })
+      if (f) forms.push({ shapes: formTags[opt.form.toUpperCase()] || opt.tags || [], form: opt.form.toUpperCase(), rel: opt.pos, angle: opt.angle || [0, 0, 180], keyframed: false, light_anchor: false })
     }
     return {
       label: g.label, forms, tags: [...(g.tags || []), ...(optional && optional.used ? opt.tags || [] : [])],
@@ -341,7 +354,19 @@ export function extractScripts(names) {
 }
 
 // ---------- commands ----------
+const sleepMs = ms => new Promise(r => setTimeout(r, ms))
+// Exclusive per-invocation run directory <run-root>\<UTC time>-<run id>; a plain mkdir throws if it exists, so a
+// run dir is never reused or overwritten by another invocation.
+function newRunDir(root, runId) {
+  fs.mkdirSync(root, { recursive: true })
+  const dir = path.join(root, `${new Date().toISOString().replace(/[:.]/g, '-')}-${runId.slice(0, 8)}`)
+  fs.mkdirSync(dir)
+  return dir
+}
+
 async function preflight(o) {
+  if (o['run-dir']) return { ok: false, reason: 'preflight takes --run-root and creates a fresh run dir itself; --run-dir is not accepted' }
+  if (!o['run-root']) return { ok: false, reason: 'preflight needs --run-root' }
   const plan = readJson(o.plan)
   const { profile, overlay, groups: rawGroups } = resolveProfile(plan, o.profile)
   const errs = validatePlan(plan, rawGroups)
@@ -349,8 +374,21 @@ async function preflight(o) {
   try { scripts = extractScripts(plan.x_extract) } catch (e) { errs.push(e.message) }
   if (errs.length) return { ok: false, reason: `plan: ${errs.join('; ')}` }
   const journal = o.journal || DEFAULT_JOURNAL
+  const delay = +(process.env.GOLDEN_TEST_DELAY_BEFORE_LOCK_MS || 0) // test hook: widen the window before the lock
+  if (delay) await sleepMs(delay)
+  if (o['dry-run']) return preflightBody(o, { plan, profile, overlay, rawGroups, scripts, journal, dry: true })
+  // N4: everything that reads the live settings, checks the journal, writes the backup or applies runs under the lock.
+  return withJournalLock(journal, `preflight ${profile}`, () => preflightBody(o, { plan, profile, overlay, rawGroups, scripts, journal, dry: false }))
+}
+
+async function preflightBody(o, { plan, profile, overlay, rawGroups, scripts, journal, dry }) {
+  const runId = crypto.randomUUID()
   const settingsPath = settingsPathOf(o.mo2)
   const capturesDir = path.join(path.dirname(settingsPath), 'Captures')
+  const key = canonPath(settingsPath)
+  const pe = journalLoad(journal).entries[key]
+  const pendingMsg = pe && pe.state === 'applied' ? `recovery journal ${journal}: profile ${pe.profile} (run ${pe.run_id}) applied settings and never restored them; run with restore_only first` : ''
+  if (pendingMsg && !dry) return { ok: false, reason: pendingMsg } // N5: before any artifact is written
   const mo = mo2Facts(o.mo2, o['cs-mod'])
   const origBuf = fs.readFileSync(settingsPath)
   const settingsText = origBuf.toString('utf8')
@@ -379,42 +417,35 @@ async function preflight(o) {
   // The edited text must parse to exactly the original merged with the overlay: no other key may change.
   if (canon(JSON.parse(result)) !== canon(deepMerge(JSON.parse(settingsText.replace(/^\uFEFF/, '')), overlay))) return { ok: false, reason: 'settings edit self-check failed (result != original + overlay)' }
   const running = gameRunning()
-  const key = canonPath(settingsPath)
-  const pendingEntry = journalLoad(journal).entries[key]
-  fs.mkdirSync(o['run-dir'], { recursive: true })
   const cell = o.cell || plan.cell || ''
-  const appliedCopy = path.join(o['run-dir'], 'SettingsUser.applied.json')
+  const stop = []
+  if (!cell) stop.push('no cell: set plan.cell or --cell')
+  if (pendingMsg) stop.push(pendingMsg)
+  if (freeF < needF) stop.push(`fixture drive has ${freeF.toFixed(1)} GB free, needs ${needF.toFixed(1)} (captures + 20 GB)`)
+  if (freeG < needG) stop.push(`captures drive has ${freeG.toFixed(1)} GB free, needs ${needG.toFixed(1)}`)
+  if (missingMods.length) stop.push(`not enabled in MO2 profile ${mo.profile}: ${missingMods.join(', ')}`)
+  if (running !== false) stop.push(running ? 'the game is running' : 'cannot tell whether the game is running')
+  if (stop.length && !dry) return { ok: false, reason: stop.join('; ') } // N5: refused runs write nothing
+  const runDir = newRunDir(o['run-root'], runId)
+  const appliedCopy = path.join(runDir, 'SettingsUser.applied.json')
   const resolved = {
-    profile, cell, cell_fallback: plan.x_cell_fallback || [], cs_version: { settings: csSettingsVersion, meta: mo.csMeta, key: csKey, mod: mo.csMod, meta_path: mo.metaPath },
+    run_id: runId, profile, cell, cell_fallback: plan.x_cell_fallback || [], cs_version: { settings: csSettingsVersion, meta: mo.csMeta, key: csKey, mod: mo.csMod, meta_path: mo.metaPath },
     mo2_profile: mo.profile, settings_path: settingsPath, settings_applied_copy: appliedCopy, captures_dir: capturesDir, journal, overlay,
     edits, keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts,
     shape_offsets: plan.x_shape_offsets || {}, match_tol: plan.x_match_tol || 60,
     s6, groups, planned_captures: planned, port, setup_console: SETUP_CONSOLE,
   }
-  writeJson(path.join(o['run-dir'], 'resolved.json'), resolved)
-  writeAtomic(path.join(o['run-dir'], 'plan.txt'), planText(resolved, o['dry-run']))
+  writeJson(path.join(runDir, 'resolved.json'), resolved)
+  writeAtomic(path.join(runDir, 'plan.txt'), planText(resolved, dry))
   const summary = {
-    run_dir: o['run-dir'], profile, cell, cs_key: csKey, settings_version: csSettingsVersion, meta_version: mo.csMeta, cs_meta_path: mo.metaPath, planned_captures: planned,
+    run_dir: runDir, profile, cell, cs_key: csKey, settings_version: csSettingsVersion, meta_version: mo.csMeta, cs_meta_path: mo.metaPath, planned_captures: planned,
     free_gb_fixtures: +freeF.toFixed(1), need_gb_fixtures: +needF.toFixed(1), free_gb_captures: +freeG.toFixed(1), need_gb_captures: +needG.toFixed(1),
     keep_dir: keepDir, extract_out: extractOut, extract_scripts: scripts, settings_applied_copy: appliedCopy, journal,
     group_tags: Object.fromEntries(groups.map(g => [g.label, g.tags.join(',') || '*'])),
     port, edits: edits.length, game_running: running, backup: null, applied: false,
     s6: s6.map(f => `${f.path}: ${f.ok ? 'ok' : f.exists ? 'sha256 differs' : 'missing'}`),
   }
-  const stop = []
-  if (!cell) stop.push('no cell: set plan.cell or --cell')
-  if (pendingEntry && pendingEntry.state === 'applied') stop.push(`recovery journal ${journal}: profile ${pendingEntry.profile} (run dir ${pendingEntry.run_dir}) applied settings and never restored them; run with restore_only first`)
-  if (freeF < needF) stop.push(`fixture drive has ${freeF.toFixed(1)} GB free, needs ${needF.toFixed(1)} (captures + 20 GB)`)
-  if (freeG < needG) stop.push(`captures drive has ${freeG.toFixed(1)} GB free, needs ${needG.toFixed(1)}`)
-  if (missingMods.length) stop.push(`not enabled in MO2 profile ${mo.profile}: ${missingMods.join(', ')}`)
-  if (running !== false) stop.push(running ? 'the game is running' : 'cannot tell whether the game is running')
-  if (o['dry-run']) return { ok: true, dry_run: true, would_stop: stop, ...summary }
-  // The lock comes first: the pending check and the apply happen under it.
-  return withJournalLock(journal, `preflight ${profile} ${o['run-dir']}`, async () => {
-  const pe = journalLoad(journal).entries[key] // re-read under the lock
-  if (pe && pe.state === 'applied') return { ok: false, reason: `recovery journal ${journal}: profile ${pe.profile} (run ${pe.run_id}) applied settings and never restored them; run with restore_only first`, ...summary }
-  const other = stop.filter(x => !x.startsWith('recovery journal'))
-  if (other.length) return { ok: false, reason: other.join('; '), ...summary }
+  if (dry) return { ok: true, dry_run: true, would_stop: stop, ...summary }
   // Backup next to the journal (outside run dirs), then journal "applied" BEFORE the live file changes.
   const backupSha = sha256Buf(origBuf)
   const backupDir = path.join(path.dirname(journal), 'settings-backups')
@@ -422,30 +453,29 @@ async function preflight(o) {
   const backup = path.join(backupDir, `SettingsUser.${profile}.${backupSha.slice(0, 12)}.json`)
   writeAtomic(backup, origBuf)
   if (await sha256(backup) !== backupSha) return { ok: false, reason: 'backup copy does not match the live file', ...summary }
+  if (await sha256(settingsPath) !== backupSha) return { ok: false, reason: 'live settings changed since they were read (under the lock?); nothing edited', ...summary }
   // The run id is how this run's automatic cleanup recognises its own entry (restore --run-id).
-  const runId = crypto.randomUUID()
   summary.run_id = runId
-  const entry = { state: 'applied', run_id: runId, settings_path: settingsPath, backup, backup_sha256: backupSha, profile, run_dir: o['run-dir'] }
+  const entry = { state: 'applied', run_id: runId, settings_path: settingsPath, backup, backup_sha256: backupSha, profile, run_dir: runDir }
   journalSet(journal, key, entry)
   try {
-  const unchanged = async why => {
-    if (await sha256(settingsPath) === backupSha) { journalSet(journal, key, { ...entry, state: 'restored', note: why }); return true }
-    return false
-  }
-  if (gameRunning() !== false) { await unchanged('game started during preflight'); return { ok: false, reason: 'the game started during preflight; nothing edited', ...summary, backup } }
-  try { writeAtomic(settingsPath, result) } catch (e) {
-    const clean = await unchanged(`apply failed: ${e.message}`)
-    return { ok: false, reason: `writing settings failed (${e.message}); ${clean ? 'live file unchanged' : 'live file changed: run restore_only'}`, ...summary, backup }
-  }
-  writeAtomic(appliedCopy, result)
-  const reread = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-  if (canon(deepMerge(reread, overlay)) !== canon(reread)) return { ok: false, reason: 'live file lacks overlay values after writing; run restore_only', ...summary, backup }
-  return { ok: true, ...summary, backup, backup_sha256: backupSha, applied: true }
+    const unchanged = async why => {
+      if (await sha256(settingsPath) === backupSha) { journalSet(journal, key, { ...entry, state: 'restored', note: why }); return true }
+      return false
+    }
+    if (gameRunning() !== false) { await unchanged('game started during preflight'); return { ok: false, reason: 'the game started during preflight; nothing edited', ...summary, backup } }
+    try { writeAtomic(settingsPath, result) } catch (e) {
+      const clean = await unchanged(`apply failed: ${e.message}`)
+      return { ok: false, reason: `writing settings failed (${e.message}); ${clean ? 'live file unchanged' : 'live file changed: run restore_only'}`, ...summary, backup }
+    }
+    writeAtomic(appliedCopy, result)
+    const reread = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    if (canon(deepMerge(reread, overlay)) !== canon(reread)) return { ok: false, reason: 'live file lacks overlay values after writing; run restore_only', ...summary, backup }
+    return { ok: true, ...summary, backup, backup_sha256: backupSha, applied: true }
   } catch (e) {
     // Any failure after the journal entry exists still names the run id, so the workflow restores it.
     return { ok: false, reason: `after applying settings: ${e.message}; journal entry ${runId} pending`, ...summary, backup, applied: true }
   }
-  })
 }
 
 function planText(r, dry) {
@@ -544,31 +574,45 @@ async function copy(o) {
   return { ...c, source_deleted: false }
 }
 
-// W9: map draws to placed refs. Expected position = ref position, plus the shape's model offset rotated by the
-// ref's Z angle when the plan gives one (x_shape_offsets {form: {shapePrefix: [x,y,z]}}): then 3D distance;
-// otherwise XY distance (model offsets are mostly height). Without an offset a draw is "matched" only when it is
-// within tol/2 of its nearest ref and the next ref is at least 2x and tol away; anything else within 4*tol is
-// "ambiguous", beyond that "unmatched". Nothing is dropped: every draw keeps its nearest candidates.
+// W9: map draws to placed refs by identity, not by guessing from distance.
+// - A ref "expects" the shapes in its `shapes` list (resolveGroups: x_form_tags, else the group's tags paired with
+//   its forms by index, else every tag of the group).
+// - A draw is matched "by name" when exactly one placed ref expects its shape and no other draw has that shape name.
+// - When names collide (several refs expect it, or several draws carry it), a match is confirmed only with
+//   x_shape_offsets for every candidate form: expected position = ref position + offset rotated by the ref's Z angle,
+//   3D distance within tol and clearly nearer than the next candidate.
+// - Everything else is "ambiguous" (collision without offsets) or "unmatched" (no ref expects the shape), always with
+//   the candidates and their distances (XY when no offset) for the report.
 const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] } // shortcut: sign convention only checked for 0/180 degrees
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
+  const offsetOf = (form, shape) => Object.entries(offsets[form] || {}).find(([p]) => shape.startsWith(p))
+  const nameCount = {}
+  for (const d of draws) nameCount[d.shape] = (nameCount[d.shape] || 0) + 1
+  const near = (list, d) => list.map(r => {
+    const off = offsetOf(r.form, d.shape)
+    const exp = off ? vadd(r.pos, rotZ(off[1], (r.angle || [0, 0, 0])[2])) : r.pos
+    const dist = off ? Math.hypot(d.world[0] - exp[0], d.world[1] - exp[1], d.world[2] - exp[2]) : Math.hypot(d.world[0] - exp[0], d.world[1] - exp[1])
+    return { form: r.form, ref: r.ref, dist: +dist.toFixed(1), mode: off ? '3d+offset' : 'xy' }
+  }).sort((x, y) => x.dist - y.dist)
   return draws.map(d => {
-    const c = refs.map(r => {
-      const off = Object.entries(offsets[r.form] || {}).find(([p]) => d.shape.startsWith(p))
-      const exp = off ? vadd(r.pos, rotZ(off[1], (r.angle || [0, 0, 0])[2])) : r.pos
-      const dist = off ? Math.hypot(d.world[0] - exp[0], d.world[1] - exp[1], d.world[2] - exp[2]) : Math.hypot(d.world[0] - exp[0], d.world[1] - exp[1])
-      return { form: r.form, ref: r.ref, dist: +dist.toFixed(1), mode: off ? '3d+offset' : 'xy' }
-    }).sort((x, y) => x.dist - y.dist)
-    const [a, b] = c
-    let status
-    if (!a || a.dist > 4 * tol) status = 'unmatched'
-    else if (a.mode === '3d+offset') status = a.dist <= tol && !(b && b.dist < Math.max(a.dist * 1.5, a.dist + 10)) ? 'matched' : 'ambiguous'
-    else status = a.dist <= tol / 2 && !(b && b.dist < Math.max(2 * a.dist, tol)) ? 'matched' : 'ambiguous'
-    return { ...d, status, form: status === 'matched' ? a.form : null, ref: status === 'matched' ? a.ref : null, candidates: c.slice(0, 3) }
+    const cands = refs.filter(r => (r.shapes || []).some(p => d.shape.startsWith(p)))
+    const res = (status, by, hit, candidates) => ({ ...d, status, by, form: hit ? hit.form : null, ref: hit ? hit.ref : null, candidates })
+    if (!cands.length) return res('unmatched', null, null, near(refs, d).slice(0, 3))
+    if (cands.length === 1 && nameCount[d.shape] === 1) return res('matched', 'name', cands[0], near(cands, d))
+    const c = near(cands, d)
+    if (cands.every(r => offsetOf(r.form, d.shape))) {
+      const [a, b] = c
+      if (a.dist <= tol && !(b && b.dist < Math.max(a.dist * 1.5, a.dist + 10))) return res('matched', 'offset', a, c)
+    }
+    return res('ambiguous', null, null, c)
   })
 }
 function mapDrawsCmd(o) {
   const r = readJson(path.join(o['run-dir'], 'resolved.json'))
-  const refs = readJson(path.join(o['run-dir'], `refs_${o.group}.json`))
+  const g = r.groups.find(x => x.label === o.group)
+  if (!g) throw new Error(`no group ${o.group}`)
+  const shapesOf = form => (g.forms.find(f => f.form === String(form).replace(/^0x/i, '').toUpperCase()) || {}).shapes || []
+  const refs = readJson(path.join(o['run-dir'], `refs_${o.group}.json`)).map(x => ({ ...x, shapes: x.shapes || shapesOf(x.form) }))
   const out = mapDraws(readJson(o.draws), refs, { tol: r.match_tol, offsets: r.shape_offsets })
   const file = path.join(o['run-dir'], `drawmap_${o.label || o.group}.json`)
   writeJson(file, out)

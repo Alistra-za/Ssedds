@@ -86,19 +86,30 @@ const lib = (cmd, env = {}) => {
   assert.throws(() => extractScripts(['A', 'C']), /dispatch/)
   assert.deepEqual(extractScripts(['A']).map(s => s.stage), ['A'])
   ok('x_extract: stages map to scripts in run order; D and missing dispatch rejected')
-  const refs = [{ form: 'F1', ref: '0xFF1', pos: [-120, 400, 0], angle: [0, 0, 180] }, { form: 'F2', ref: '0xFF2', pos: [0, 400, 0], angle: [0, 0, 180] }, { form: 'F3', ref: '0xFF3', pos: [120, 400, 0], angle: [0, 0, 180] }]
+  // W9: identity by shape name; collisions need offsets.
+  const refs = [
+    { form: 'F1', ref: '0xFF1', pos: [-120, 400, 0], angle: [0, 0, 180], shapes: ['EyesMale', 'MaleHeadIMF'] },
+    { form: 'F2', ref: '0xFF2', pos: [0, 400, 0], angle: [0, 0, 180], shapes: ['EyesMale', 'Off'] },
+    { form: 'F3', ref: '0xFF3', pos: [120, 400, 0], angle: [0, 0, 180], shapes: ['coffin'] },
+  ]
   const m = mapDraws([
-    { event: 1, shape: 'EyesMale', world: [-118, 395, 120] }, // head height: XY match
-    { event: 2, shape: 'EyesMale', world: [60, 400, 120] }, // halfway between F2 and F3
-    { event: 3, shape: 'coffin', world: [900, 900, 0] }, // cell furniture
-    { event: 4, shape: 'Off', world: [-35, 315, 0] }, // model offset 85 units: only matches with the offset
-  ], refs, { tol: 60, offsets: { F2: { Off: [35, 85, 0] } } })
-  assert.deepEqual(m.map(x => [x.status, x.form]), [['matched', 'F1'], ['ambiguous', null], ['unmatched', null], ['matched', 'F2']])
-  assert.ok(m[1].candidates.length && m[2].candidates.length, 'ambiguous/unmatched keep their candidates')
-  ok('mapDraws (W9): XY match, ambiguous and unmatched reported with candidates, model offset rotated by the ref angle')
-  const cx = mapDraws([{ event: 9, shape: 'S', world: [85, 0, 0] }], [{ form: 'R0', ref: 'a', pos: [0, 0, 0] }, { form: 'R120', ref: 'b', pos: [120, 0, 0] }], { tol: 60 })
-  assert.equal(cx[0].status, 'ambiguous'); assert.deepEqual(cx[0].candidates.map(c => c.form), ['R120', 'R0'])
-  ok('mapDraws: refs at X=0 and X=120, shape at X=85, no offsets -> ambiguous with both candidates')
+    { event: 1, shape: 'MaleHeadIMF', world: [100, 395, 120] }, // unique name: matched by name even though nearer F3
+    { event: 2, shape: 'EyesMale', world: [-118, 395, 120] }, // two refs expect it: no offsets -> ambiguous
+    { event: 3, shape: 'coffin', world: [120, 400, 0] }, // F3's coffin ...
+    { event: 4, shape: 'coffin', world: [900, 900, 0] }, // ... and cell furniture with the same name: both ambiguous
+    { event: 5, shape: 'Rug', world: [0, 0, 0] }, // nobody expects it
+  ], refs, { tol: 60 })
+  assert.deepEqual(m.map(x => [x.status, x.by, x.form]), [['matched', 'name', 'F1'], ['ambiguous', null, null], ['ambiguous', null, null], ['ambiguous', null, null], ['unmatched', null, null]])
+  assert.ok(m.slice(1).every(x => x.candidates.length), 'ambiguous/unmatched keep their candidates')
+  const mo = mapDraws([{ event: 6, shape: 'EyesMale', world: [-35, 315, 120] }], refs, { tol: 60, offsets: { F1: { EyesMale: [0, 0, 120] }, F2: { EyesMale: [35, 85, 120] } } })
+  assert.deepEqual([mo[0].status, mo[0].by, mo[0].form], ['matched', 'offset', 'F2'])
+  ok('mapDraws (W9): unique name matched by name; shared names and duplicate draws ambiguous; unexpected shape unmatched; collision resolved only with offsets')
+  const two = [{ form: 'R0', ref: 'a', pos: [0, 0, 0], shapes: ['S'] }, { form: 'R120', ref: 'b', pos: [120, 0, 0], shapes: ['S'] }]
+  for (const x of [85, 100]) {
+    const cx = mapDraws([{ event: 9, shape: 'S', world: [x, 0, 0] }], two, { tol: 60 })
+    assert.equal(cx[0].status, 'ambiguous', `X=${x}`); assert.deepEqual(cx[0].candidates.map(c => c.form).sort(), ['R0', 'R120'])
+  }
+  ok('mapDraws: refs at X=0 and X=120 both expecting the shape, draw at X=85 or X=100, no offsets -> ambiguous with both candidates')
 }
 
 // ---------- 2. profiles and plan checks (W1, W8) ----------
@@ -138,7 +149,8 @@ const lib = (cmd, env = {}) => {
 const RUN = path.join(T, 'run')
 const FIX = path.join(T, 'fixtures')
 const JOURNAL = path.join(T, 'journal', '.golden-recovery.json')
-const preArgs = (run = RUN, profile = 'A') => `--plan "${PLAN}" --mo2 "${MO2}" --run-dir "${run}" --journal "${JOURNAL}" --keep-root "${FIX}" --profile ${profile}`
+let RUN_A = null // run dir created by the apply test
+const preArgs = (run = RUN, profile = 'A') => `--plan "${PLAN}" --mo2 "${MO2}" --run-root "${run}" --journal "${JOURNAL}" --keep-root "${FIX}" --profile ${profile}`
 const restoreCmd = `restore --mo2 "${MO2}" --journal "${JOURNAL}"`
 const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JOURNAL, 'utf8')).entries).some(e => e.state === 'applied') } catch { return false } }
 {
@@ -146,7 +158,10 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   assert.equal(r.ok, true, r.reason); assert.equal(r.dry_run, true)
   assert.equal(r.cs_key, 'cs-1.9.0-d2026.10.11.0')
   assert.equal(sha(LIVE), ORIG_SHA); assert.ok(!fs.existsSync(JOURNAL), 'dry run writes no journal')
-  assert.ok(fs.readFileSync(path.join(RUN, 'plan.txt'), 'utf8').includes('communityshaders.capture'))
+  assert.ok(r.run_dir.startsWith(RUN) && fs.readFileSync(path.join(r.run_dir, 'plan.txt'), 'utf8').includes('communityshaders.capture'))
+  const r2 = lib(`preflight ${preArgs()} --dry-run`)
+  assert.notEqual(r2.run_dir, r.run_dir, 'every invocation gets a fresh run dir, dry runs too')
+  assert.throws(() => execSync(`node "${LIB}" preflight --plan "${PLAN}" --mo2 "${MO2}" --run-dir "${r.run_dir}" --dry-run`, { stdio: 'pipe' }))
   ok(`preflight --dry-run: ${r.edits} edits planned, ${r.planned_captures} captures, settings untouched, plan.txt written`)
 }
 
@@ -171,6 +186,7 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
 {
   const r = lib(`preflight ${preArgs()}`)
   assert.equal(r.ok, true, r.reason); assert.equal(r.applied, true)
+  RUN_A = r.run_dir
   assert.equal(sha(r.backup), ORIG_SHA, 'backup is the original'); assert.ok(!r.backup.startsWith(RUN), 'backup outside the run dir')
   assert.ok(pending())
   const live = fs.readFileSync(LIVE)
@@ -184,10 +200,13 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   const touched = new Set(edits.map(e => e.line))
   before.forEach((l, i) => { if (!touched.has(i + 1)) assert.ok(after.includes(l), `line ${i + 1} kept`) })
   assert.equal(after.length - before.length, edits.filter(e => e.before === null).length, 'one new line per inserted key')
-  assert.equal(fs.readFileSync(path.join(RUN, 'SettingsUser.applied.json'), 'utf8'), live.toString('utf8'), 'applied copy for P04_SETTINGS')
+  assert.equal(fs.readFileSync(path.join(RUN_A, 'SettingsUser.applied.json'), 'utf8'), live.toString('utf8'), 'applied copy for P04_SETTINGS')
 
   // Review #1: another profile in another run dir must refuse while A is pending (and not back up A's edits).
-  const other = lib(`preflight ${preArgs(path.join(T, 'run-B'), 'B')}`)
+  const snapshot = d => Object.fromEntries(fs.readdirSync(d).map(n => [n, sha(path.join(d, n))]))
+  const before5 = snapshot(RUN_A), dirs5 = fs.readdirSync(RUN)
+  const other = lib(`preflight ${preArgs(RUN, 'B')}`)
+  assert.deepEqual(snapshot(RUN_A), before5, 'refused run leaves the active run dir byte-identical'); assert.deepEqual(fs.readdirSync(RUN), dirs5, 'refused run creates no dir')
   assert.equal(other.ok, false); assert.match(other.reason, /never restored/)
   assert.equal(sha(r.backup), ORIG_SHA)
 
@@ -213,7 +232,26 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   assert.ok(Buffer.compare(fs.readFileSync(LIVE), Buffer.from(ORIG_TEXT, 'utf8')) === 0)
   assert.ok(!pending()); assert.ok(fs.existsSync(r.backup), 'backup kept')
   assert.equal(lib(restoreCmd).nothing_to_restore, true)
-  ok(`apply ${edits.length} edits (only overlay keys, no BOM); other profile/run dir refused while pending; other run id not restored; journal lock held -> restore and preflight refused, lock never broken; restore refused while running; interrupted restore stays pending; restore byte-identical (sha256 ${ORIG_SHA.slice(0, 12)})`)
+  ok(`apply ${edits.length} edits (only overlay keys, no BOM); other profile refused while pending (active run dir byte-identical, no new dir); other run id not restored; journal lock held -> restore and preflight refused, lock never broken; restore refused while running; interrupted restore stays pending; restore byte-identical (sha256 ${ORIG_SHA.slice(0, 12)})`)
+}
+
+// ---------- 7b. N4: B's view of the settings is taken under the lock ----------
+{
+  const a = lib(`preflight ${preArgs(path.join(T, 'run-n4a'))}`); assert.equal(a.ok, true, a.reason)
+  assert.notEqual(sha(LIVE), ORIG_SHA)
+  const { spawn } = await import('node:child_process')
+  const b = new Promise(res => {
+    const p = spawn(process.execPath, [LIB, 'preflight', '--plan', PLAN, '--mo2', MO2, '--run-root', path.join(T, 'run-n4b'), '--journal', JOURNAL, '--keep-root', FIX, '--profile', 'B'], { env: { ...process.env, GOLDEN_TEST_DELAY_BEFORE_LOCK_MS: '2500' } })
+    let out = ''; p.stdout.on('data', x => { out += x }); p.on('close', () => res(JSON.parse(out)))
+  })
+  await new Promise(r => setTimeout(r, 300)) // B is started and waiting before its lock
+  assert.equal(lib(`${restoreCmd} --run-id ${a.run_id}`).restored, true) // A restores meanwhile
+  const bres = await b
+  assert.equal(bres.ok, true, bres.reason)
+  assert.equal(sha(bres.backup), ORIG_SHA, "B's backup is the owner's original, not A's applied settings")
+  assert.equal(lib(`${restoreCmd} --run-id ${bres.run_id}`).restored, true)
+  assert.equal(sha(LIVE), ORIG_SHA)
+  ok('N4: B delayed before the lock while A restores -> B reads settings under the lock; backup is the original; restore byte-identical')
 }
 
 // ---------- 8. keep: Captures .rdc only, distinct destination, delete after verify (W6) ----------
@@ -222,32 +260,32 @@ const pending = () => { try { return Object.values(JSON.parse(fs.readFileSync(JO
   const rdc = path.join(capDir, 'Skyrim_AE_test_frame1.rdc')
   fs.writeFileSync(rdc, crypto.randomBytes(1 << 20))
   const s = sha(rdc)
-  const r = lib(`keep --run-dir "${RUN}" --file "${rdc}" --group A1 --label A1_cap0 --frame 1`)
+  const r = lib(`keep --run-dir "${RUN_A}" --file "${rdc}" --group A1 --label A1_cap0 --frame 1`)
   assert.equal(r.ok, true, r.reason); assert.equal(r.sha256, s); assert.equal(sha(r.dst), s)
   assert.ok(r.dst.startsWith(path.join(FIX, 'A')))
   assert.ok(fs.existsSync(rdc) && sha(rdc) === s, 'keep never deletes the Captures copy'); assert.equal(r.source_deleted, false)
-  const again = lib(`keep --run-dir "${RUN}" --file "${rdc}"`); assert.equal(again.ok, true); assert.ok(fs.existsSync(rdc), 'second keep: same copy, source still there')
+  const again = lib(`keep --run-dir "${RUN_A}" --file "${rdc}"`); assert.equal(again.ok, true); assert.ok(fs.existsSync(rdc), 'second keep: same copy, source still there')
   assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(r.dst), 'captures.json'), 'utf8'))[0].label, 'A1_cap0')
   // Review #3: a file outside Captures (even an .rdc), a non-.rdc, and the kept copy itself are refused, untouched.
   const s6 = path.join(MO2, 'mods', 's6', 'test.rdc'); fs.mkdirSync(path.dirname(s6), { recursive: true }); fs.writeFileSync(s6, 'x')
   const nif = path.join(capDir, 'test.nif'); fs.writeFileSync(nif, 'x')
-  for (const f of [s6, nif, r.dst]) { const k = lib(`keep --run-dir "${RUN}" --file "${f}"`); assert.equal(k.ok, false, f); assert.ok(fs.existsSync(f), `${f} kept`) }
+  for (const f of [s6, nif, r.dst]) { const k = lib(`keep --run-dir "${RUN_A}" --file "${f}"`); assert.equal(k.ok, false, f); assert.ok(fs.existsSync(f), `${f} kept`) }
   // Same-path destination: point keep_dir at the Captures folder.
-  const resolvedPath = path.join(RUN, 'resolved.json')
+  const resolvedPath = path.join(RUN_A, 'resolved.json')
   const res = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'))
   const rdc2 = path.join(capDir, 'Skyrim_AE_test_frame2.rdc'); fs.writeFileSync(rdc2, 'y')
   fs.writeFileSync(resolvedPath, JSON.stringify({ ...res, keep_dir: capDir }))
-  const same = lib(`keep --run-dir "${RUN}" --file "${rdc2}"`)
+  const same = lib(`keep --run-dir "${RUN_A}" --file "${rdc2}"`)
   assert.equal(same.ok, false); assert.match(same.reason, /inside the Captures folder/); assert.ok(fs.existsSync(rdc2))
   // Destination aliasing: keep_dir is a junction that resolves into Captures.
   const alias = path.join(T, 'alias-keep'); fs.symlinkSync(capDir, alias, 'junction')
   fs.writeFileSync(resolvedPath, JSON.stringify({ ...res, keep_dir: alias }))
-  const al = lib(`keep --run-dir "${RUN}" --file "${rdc2}"`)
+  const al = lib(`keep --run-dir "${RUN_A}" --file "${rdc2}"`)
   assert.equal(al.ok, false); assert.match(al.reason, /Captures/); assert.ok(fs.existsSync(rdc2))
   assert.equal(fs.readdirSync(capDir).filter(n => n.endsWith('.rdc')).length, 2, 'Captures unchanged')
   fs.writeFileSync(resolvedPath, JSON.stringify(res))
   const logf = path.join(T, 'CommunityShaders.log'); fs.writeFileSync(logf, 'x')
-  const cp = lib(`copy --run-dir "${RUN}" --file "${logf}"`)
+  const cp = lib(`copy --run-dir "${RUN_A}" --file "${logf}"`)
   assert.equal(cp.ok, true); assert.equal(cp.source_deleted, false); assert.ok(fs.existsSync(logf)); assert.ok(fs.existsSync(cp.dst))
   ok('keep: sha256-verified copy, never deletes; refuses outside-Captures, non-.rdc, already-kept, same-folder and junction-aliased destinations; copy never deletes')
 }
@@ -285,19 +323,19 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
 }
 {
   const base = { plan: PLAN, mo2: MO2, tools: 'F:\\ai\\dds\\tools', lib: LIB, keep_root: FIX, journal: JOURNAL, profile: 'A' }
-  const d = await runWorkflow({ ...base, dry_run: true, run_dir: path.join(T, 'wf-dry') }, {})
+  const d = await runWorkflow({ ...base, dry_run: true, run_root: path.join(T, 'wf-dry') }, {})
   assert.equal(d.res.dry_run, true); assert.deepEqual(d.calls, ['preflight (dry run)']); assert.equal(sha(LIVE), ORIG_SHA)
   ok(`workflow dry_run: only Preflight ran; returned ${path.basename(d.res.plan_txt)}`)
-  await assert.rejects(runWorkflow({ ...base, run_dir: path.join(T, 'wf-noperm') }, {}).then(x => { if (x.err) throw x.err }), /owner_ok/)
+  await assert.rejects(runWorkflow({ ...base, run_root: path.join(T, 'wf-noperm') }, {}).then(x => { if (x.err) throw x.err }), /owner_ok/)
 
-  const c = await runWorkflow({ ...base, owner_ok: true, run_dir: path.join(T, 'wf-crash') }, { sessionThrows: true })
+  const c = await runWorkflow({ ...base, owner_ok: true, run_root: path.join(T, 'wf-crash') }, { sessionThrows: true })
   assert.ok(c.err, 'session error propagates after the finally')
   assert.deepEqual(c.calls, ['preflight', 'session A', 'restore settings'])
   assert.equal(sha(LIVE), ORIG_SHA, 'settings byte-identical after a crashed session'); assert.ok(!pending())
   ok('workflow: owner_ok required; session throws -> Restore still runs (finally), settings byte-identical')
 
   // The preflight agent dies after the lib applied the settings: output lost, so no automatic restore.
-  const p = await runWorkflow({ ...base, owner_ok: true, run_dir: path.join(T, 'wf-prefail') }, { preflightThrowsAfterApply: true })
+  const p = await runWorkflow({ ...base, owner_ok: true, run_root: path.join(T, 'wf-prefail') }, { preflightThrowsAfterApply: true })
   assert.ok(p.err); assert.deepEqual(p.calls, ['preflight']); assert.ok(pending()); assert.ok(p.logs.some(l => /restore_only/.test(l)))
   const pr = await runWorkflow({ mo2: MO2, journal: JOURNAL, lib: LIB, restore_only: true }, {})
   assert.equal(pr.res.settings_restored, true); assert.equal(sha(LIVE), ORIG_SHA); assert.ok(!pending())
@@ -305,7 +343,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
 
   // N1: a structured failure after applying ({ok:false} with the run id) is restored by its own run.
   process.env.GOLDEN_FAIL_RENAME = 'SettingsUser.applied'
-  const n1 = await runWorkflow({ ...base, owner_ok: true, run_dir: path.join(T, 'wf-n1') }, {})
+  const n1 = await runWorkflow({ ...base, owner_ok: true, run_root: path.join(T, 'wf-n1') }, {})
   delete process.env.GOLDEN_FAIL_RENAME
   assert.equal(n1.res.stopped, 'preflight'); assert.match(n1.res.reason, /after applying settings/)
   assert.deepEqual(n1.calls, ['preflight', 'restore settings']); assert.equal(n1.res.settings_restored, true)
@@ -315,7 +353,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   // N2: run A pending; run B's preflight is refused and its output lost -> B must not restore A.
   const aRun = lib(`preflight ${preArgs(path.join(T, 'run-A2'))}`); assert.equal(aRun.ok, true)
   const appliedSha = sha(LIVE)
-  const n2 = await runWorkflow({ ...base, owner_ok: true, profile: 'B', run_dir: path.join(T, 'wf-n2') }, { preflightThrowsAfterApply: true })
+  const n2 = await runWorkflow({ ...base, owner_ok: true, profile: 'B', run_root: path.join(T, 'wf-n2') }, { preflightThrowsAfterApply: true })
   assert.deepEqual(n2.calls, ['preflight']); assert.ok(pending(), "A's entry still pending"); assert.equal(sha(LIVE), appliedSha, "A's settings untouched")
   assert.equal(lib(`${restoreCmd} --run-id ${aRun.run_id}`).restored, true); assert.equal(sha(LIVE), ORIG_SHA)
   ok("workflow N2: another run's refused/lost preflight never restores run A's settings")
@@ -328,7 +366,7 @@ async function runWorkflow(args, { sessionThrows, preflightThrowsAfterApply }) {
   // A preflight refused by another run's pending entry must not restore it (that run may still be going).
   lib(`preflight ${preArgs(path.join(T, 'run-p'))}`) // leaves a pending entry
   assert.ok(pending())
-  const q = await runWorkflow({ ...base, owner_ok: true, profile: 'B', run_dir: path.join(T, 'wf-pending') }, {})
+  const q = await runWorkflow({ ...base, owner_ok: true, profile: 'B', run_root: path.join(T, 'wf-pending') }, {})
   assert.equal(q.res.stopped, 'preflight'); assert.match(q.res.reason, /never restored/); assert.equal(q.res.settings_restored, null)
   assert.deepEqual(q.calls, ['preflight']); assert.ok(pending(), 'earlier entry left pending'); assert.ok(q.logs.some(l => /restore_only/.test(l)))
   ok("workflow: preflight refused by another run's pending journal -> no restore of that run, restore_only advised")

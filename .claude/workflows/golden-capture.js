@@ -1,7 +1,7 @@
 export const meta = {
   name: 'golden-capture',
   description: 'Phase D golden captures: apply a CS settings profile, launch Skyrim via MO2 + DevBench, place subjects and camera relative to the coc marker, take RenderDoc captures, quit, restore settings byte-exact, keep the .rdc files as fixtures and run the golden extractors',
-  whenToUse: 'NIF team Phase D golden RenderDoc captures (one profile per run: A, B, A_DC). Args: {plan: "<phase-d plan .json>", profile: "A"|"B"|"A_DC" (default plan x_profile), mo2: "G:\\\\Acherus", tools: "F:\\\\ai\\\\dds\\\\tools", owner_ok: true, dry_run: false, restore_only: false, cell: "<override plan cell>", journal: "<recovery journal, default F:\\\\ai\\\\dds\\\\tools\\\\rdc-fixtures\\\\.golden-recovery.json>", run_dir: "<default .superpowers/sdd/captures/golden-<profile>>", out: "<results .md>"}. dry_run runs only Preflight and returns the full plan without touching settings or launching the game; restore_only only restores pending settings from the journal.',
+  whenToUse: 'NIF team Phase D golden RenderDoc captures (one profile per run: A, B, A_DC). Args: {plan: "<phase-d plan .json>", profile: "A"|"B"|"A_DC" (default plan x_profile), mo2: "G:\\\\Acherus", tools: "F:\\\\ai\\\\dds\\\\tools", owner_ok: true, dry_run: false, restore_only: false, cell: "<override plan cell>", journal: "<recovery journal, default F:\\\\ai\\\\dds\\\\tools\\\\rdc-fixtures\\\\.golden-recovery.json>", run_root: "<default .superpowers/sdd/captures/golden; each run gets a fresh <UTC time>-<run id> dir below it>", out: "<results .md, default in the run dir>"}. dry_run runs only Preflight and returns the full plan without touching settings or launching the game; restore_only only restores pending settings from the journal.',
   phases: [
     { title: 'Preflight', detail: 'plan checks, CS version, disk, journal, game not running; back up SettingsUser.json and apply the profile atomically (dry_run: plan only)' },
     { title: 'Session', detail: 'launch via MO2, wait DevBench + a positive shader-compile signal, coc, per group: place, frame, draw check, capture; qqq' },
@@ -20,7 +20,7 @@ export const meta = {
 //     1. {plan, profile: "A",    mo2, tools, owner_ok: true}   golden: P0 probe + A1-A6 (plan top level)
 //     2. {plan, profile: "B",    mo2, tools, owner_ok: true}   as shipped: groups of x_profiles_other_runs.B
 //     3. {plan, profile: "A_DC", mo2, tools, owner_ok: true}   A without DynamicCubemaps at boot
-//   Always do a dry run first: add dry_run: true. It runs Preflight read-only and returns <run_dir>/plan.txt:
+//   Always do a dry run first: add dry_run: true. It runs Preflight read-only and returns <its fresh run dir>/plan.txt:
 //   every settings edit (line, old -> new), every DevBench request per group (origin shown as 0,0,0), every capture.
 //   If run 1's P0 probe shows no directional light, pass cell: "<x_cell_fallback[0]>" to every run.
 //   If a run ends with settings_restored: false, run {mo2, restore_only: true} once the game has exited.
@@ -41,13 +41,17 @@ export const meta = {
 //   x_keep_rdc         where kept .rdc go (per profile below it); default F:\ai\dds\tools\rdc-fixtures\<cs-version>
 //   x_extract          stages to run: A, B, dispatch, C, shader_id, defines, fixture (default all; others rejected)
 //   x_fixture_out      must equal the extractors' fixed output root rdc-out\golden\<cs-version> (checked)
-//   x_shape_offsets    optional {form: {shapePrefix: [x,y,z]}} model offsets for W9; x_match_tol (default 60 units)
+//   x_shape_offsets    optional {form: {shapePrefix: [x,y,z]}} model offsets for W9; x_match_tol (default 60 units).
+//                      W9 matches a draw by shape name when exactly one placed ref expects it; collided names
+//                      need offsets for those forms or stay "ambiguous".
+//   x_form_tags        optional {form: [shape prefixes]}; default: group tags paired with its forms by index when
+//                      the counts match (light anchor excluded), else every tag for every form
 //   A group with empty forms and tags is a probe (W8); a question without "outcomes" is a fixture goal (W8).
 //
 // RESTORE GUARANTEES
 //   - Preflight takes an exclusive journal lock (<journal>.lock, created with 'wx'; a leftover lock is never broken
 //     automatically), backs SettingsUser.json up next to the recovery journal (outside run dirs) and marks the
-//     journal "applied" with a fresh run id before the first edit. Every run, whatever its profile or run_dir,
+//     journal "applied" with a fresh run id before the first edit. Every run, whatever its profile or run dir,
 //     refuses to start while the journal has a pending entry for the same SettingsUser.json. Settings, backup and
 //     journal are written atomically (temp file, flush, rename).
 //   - Restore runs in a finally block after Preflight, Session and Keep, whatever happened (agent failure, thrown
@@ -69,8 +73,10 @@ const DRY = a.dry_run === true
 if (DRY && RESTORE_ONLY) throw new Error('golden-capture: dry_run and restore_only cannot be combined (restore_only writes the settings file)')
 if (!DRY && !RESTORE_ONLY && a.owner_ok !== true) throw new Error('golden-capture needs args.owner_ok: true (owner permission to edit CS settings for this run and enable RenderDoc capture)')
 const PROFILE_ARG = a.profile || ''
-const RUN_DIR = a.run_dir || `.superpowers/sdd/captures/golden-${PROFILE_ARG || 'default'}`
-const OUT = a.out || `${RUN_DIR}/results.md`
+if (a.run_dir) throw new Error('golden-capture: run_dir is not accepted; each run creates a fresh dir under run_root')
+const RUN_ROOT = a.run_root || '.superpowers/sdd/captures/golden'
+let RUN_DIR = null // the fresh dir preflight creates (never reused); set from its output
+let OUT = a.out || null
 const LIB = a.lib || '.claude/workflows/golden-capture-lib.mjs'
 const JOURNAL = a.journal || 'F:\\ai\\dds\\tools\\rdc-fixtures\\.golden-recovery.json'
 const MO2 = a.mo2
@@ -117,7 +123,7 @@ try {
     properties: { exit_code: { type: 'integer' }, stdout_json: { type: 'string', description: 'the command stdout, verbatim' } },
     required: ['exit_code', 'stdout_json'],
   }
-  const preCmd = node(`preflight --run-dir "${RUN_DIR}" --journal "${JOURNAL}" --plan "${a.plan}" --mo2 "${MO2}"${PROFILE_ARG ? ` --profile ${PROFILE_ARG}` : ''}${a.cell ? ` --cell "${a.cell}"` : ''}${a.keep_root ? ` --keep-root "${a.keep_root}"` : ''}${a.cs_mod ? ` --cs-mod "${a.cs_mod}"` : ''}${DRY ? ' --dry-run' : ''}`)
+  const preCmd = node(`preflight --run-root "${RUN_ROOT}" --journal "${JOURNAL}" --plan "${a.plan}" --mo2 "${MO2}"${PROFILE_ARG ? ` --profile ${PROFILE_ARG}` : ''}${a.cell ? ` --cell "${a.cell}"` : ''}${a.keep_root ? ` --keep-root "${a.keep_root}"` : ''}${a.cs_mod ? ` --cs-mod "${a.cs_mod}"` : ''}${DRY ? ' --dry-run' : ''}`)
   const preRun = await agent(
     `Preflight for a golden capture run. ${RULES}
 Run exactly this one command from the repository root (PowerShell or bash), once:
@@ -126,6 +132,7 @@ It prints one JSON object. Return exit_code and stdout_json = the stdout verbati
     { label: DRY ? 'preflight (dry run)' : 'preflight', phase: 'Preflight', schema: PRE_SCHEMA })
   try { pre = preRun && JSON.parse(preRun.stdout_json) } catch (e) { pre = null }
   if (pre && pre.extract_scripts && !pre.extract_scripts.some(s => s.stage === 'fixture')) log(`Note: x_extract (${pre.extract_scripts.map(s => s.stage).join(', ')}) has no "fixture" stage, so golden_fixture.py will not write state.json/manifest.json/completeness.json`)
+  if (pre && pre.run_dir) { RUN_DIR = pre.run_dir; OUT = OUT || `${RUN_DIR}/results.md` }
   if (!pre) stopped = { stopped: 'preflight', reason: 'preflight agent returned nothing parseable' }
   else if (DRY) {
     log(`Dry run: profile ${pre.profile}, cell ${pre.cell}, CS ${pre.cs_key}, ${pre.edits} settings edits, ${pre.planned_captures} captures; keep ${pre.keep_dir}; F: ${pre.free_gb_fixtures}/${pre.need_gb_fixtures} GB, captures drive ${pre.free_gb_captures}/${pre.need_gb_captures} GB`)
@@ -282,7 +289,7 @@ Kept captures: ${JSON.stringify(kept.map(k => ({ label: k.capture.label, ...k.ke
 Per-capture results: ${JSON.stringify(analysed.map(x => ({ label: x.capture.label, group: x.capture.group, frame: x.capture.frame, ...(x.result || { error: 'analysis returned nothing' }) })))}
 Sections:
 1. Summary: per subject (tag, form, group) fixture complete yes/no; per capture the kept path and sha256.
-2. Draw mapping: per capture the ${RUN_DIR}/drawmap_<label>.json counts, and every ambiguous or unmatched draw with its nearest candidates (the fixture writer does not record this mapping; this report and those files do).
+2. Draw mapping: per capture the ${RUN_DIR}/drawmap_<label>.json counts, and every ambiguous or unmatched draw with its candidates (the fixture writer does not record this mapping; this report and those files do). A draw is matched by its shape name only when one placed ref expects that name and no other draw carries it; collided names (e.g. the A3 LoadScreen actor statics sharing EyesMale, MaleHeadIMF, HandMale_Big1stperson, or a tag shared with cell furniture) are confirmed only with x_shape_offsets for those forms and otherwise stay ambiguous: say which plan entries need x_shape_offsets (or x_form_tags).
 3. Questions from the plan: fixture goals (no "outcomes") list missing tags/files per subject; questions with outcomes (P0 cell probe, point light) get the outcome per the plan. For P0: if DirLightColor is 0, say the next runs must pass args.cell = the plan's x_cell_fallback[0] (P0 is not analysed in-session). Time gaps use SharedData Timer, not the wall clock (the game stalls while an .rdc is written).
 4. Retests: subjects missing, shadow-only, ambiguous or incomplete, with what to change (camera, position, NPC instead of static, x_shape_offsets).
 5. Restore status: ${JSON.stringify(restore)}. Captures folder files the owner can delete now that they are kept (source -> kept copy, sha256): ${JSON.stringify(kept.filter(k => k.keep.ok).map(k => [k.capture.file, k.keep.dst, k.keep.sha256]))}; captures not kept: ${JSON.stringify(kept.filter(k => !k.keep.ok).map(k => k.capture.file))}; other .rdc left in Captures: ${JSON.stringify(keepRes ? keepRes.other_rdc : [])}.
