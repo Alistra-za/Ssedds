@@ -1020,7 +1020,14 @@ impl AppModel {
             WorkerMsg::Nvtt { generation, probe } => self.nvtt_landed(generation, probe),
             WorkerMsg::Panicked { what, message } => {
                 match what {
-                    "export" => self.export_ended(Err(format!("internal error: {message}"))),
+                    // Audit 08f-9: one error dialog. `export_ended` shows it unless the user was leaving; then the
+                    // panic arm shows its own (Note BI6).
+                    "export" => {
+                        self.export_ended(Err(format!("internal error: {message}")));
+                        if matches!(self.dialog, Some(Dialog::Error(_))) {
+                            return;
+                        }
+                    }
                     "dims" => self.dims_panicked(),
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
@@ -2979,5 +2986,18 @@ mod tests {
                 m.export.notes
             );
         }
+    }
+
+    /// Audit 08f-9: an export-thread panic sets the error dialog once (`export_ended`'s), not twice.
+    #[test]
+    fn an_export_panic_is_handled_once() {
+        let mut m = bare_model();
+        m.export.running = Some(CancelToken::default());
+        m.handle(WorkerMsg::Panicked {
+            what: "export",
+            message: "boom".into(),
+        });
+        assert_eq!(m.dialog, Some(Dialog::Error("internal error: boom".into())));
+        assert_eq!(m.export.error.as_deref(), Some("internal error: boom"));
     }
 }
