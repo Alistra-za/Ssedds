@@ -528,3 +528,17 @@ fn accepted_fallback_keeps_the_alias_preset() {
     );
     assert_eq!(j.suffix_alias.unwrap().preset, "nhq");
 }
+
+/// Audit 08e-11: an RNM layer term (`bump`, `bentmask`, …) is a file-name term like the exporter vocabulary, so it
+/// is refused as an alias.
+#[test]
+fn an_rnm_layer_term_is_not_an_alias() {
+    let mut r = registry();
+    for bad in ["bump = \"n\"", "bentmask = \"n\"", "detail2 = \"n\""] {
+        let e = r.add_toml(&preset_with("bad", bad));
+        assert!(
+            matches!(&e, Err(PresetError::Alias(m)) if m.contains("RNM layer")),
+            "{bad}: {e:?}"
+        );
+    }
+}

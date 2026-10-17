@@ -549,7 +549,7 @@ impl PresetRegistry {
         Ok(id)
     }
 
-    /// Spec §3.7: an alias is `[a-z0-9]+`, is neither a §6.1 suffix nor an exporter vocabulary term (§4.4),
+    /// Spec §3.7: an alias is `[a-z0-9]+`, is neither a §6.1 suffix, an exporter vocabulary term (§4.4) nor an RNM layer term,
     /// maps to a §6.1 suffix and is unique across loaded presets.
     fn check_aliases(&self, p: &PresetFile) -> Result<(), PresetError> {
         let bad = |m: String| PresetError::Alias(format!("CFG-INVALID: preset '{}': {m}", p.id));
@@ -576,6 +576,12 @@ impl PresetRegistry {
             if crate::group::is_vocabulary(alias) {
                 return Err(bad(format!(
                     "suffix alias '{alias}' is an exporter vocabulary term (spec §4.4)"
+                )));
+            }
+            // Audit 08e-11: layer terms are file-name terms too (`rnm::split_layer`).
+            if crate::rnm::LAYER_VOCABULARY.iter().any(|v| v.term == alias) {
+                return Err(bad(format!(
+                    "suffix alias '{alias}' is an RNM layer term (DECISIONS Note W)"
                 )));
             }
             if !SUFFIXES.contains(&canonical.as_str()) {
