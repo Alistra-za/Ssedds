@@ -326,3 +326,59 @@ fn the_markdown_report_lists_the_export_notes() {
         "{md}"
     );
 }
+
+/// Audit 08f-1: an export queued behind a plan does not start while the Open-unsaved question is up; the user's
+/// answer would otherwise open the other folder in the middle of the export and drop its JSON.
+#[test]
+fn a_queued_export_waits_out_an_open_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_json_value(
+        "landscape/rock01",
+        "specular_level",
+        Some(serde_json::json!(0.05)),
+    );
+    m.replan();
+    m.export_clicked();
+    assert!(m.export_queued());
+    let other = d.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    assert!(!m.request_open(other.clone()));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(
+        m.export.running.is_none() && m.export.rows.is_empty(),
+        "the export started"
+    );
+    assert_eq!(m.dialog, Some(Dialog::OpenUnsaved(other)));
+    assert!(m.status_line.contains("Export"), "{}", m.status_line);
+}
+
+/// Audit 08f-1: answering Open-unsaved while an export runs asks to stop the export first, as Open does.
+#[test]
+fn answering_open_unsaved_during_an_export_waits_for_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_json_value(
+        "landscape/rock01",
+        "specular_level",
+        Some(serde_json::json!(0.05)),
+    );
+    m.export_clicked();
+    if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+        m.proceed_anyway();
+    }
+    assert!(m.export.running.is_some(), "{:?}", m.dialog);
+    let root = m.root.clone();
+    let other = d.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    m.resolve_open_unsaved(other.clone(), false);
+    assert_eq!(m.root, root, "not opened during the export");
+    assert_eq!(
+        m.dialog,
+        Some(Dialog::ExportRunning(AfterExport::Open(other)))
+    );
+    m.cancel_export();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+}

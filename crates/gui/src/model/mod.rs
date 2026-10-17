@@ -856,7 +856,11 @@ impl AppModel {
             self.replan();
         } else if std::mem::take(&mut self.export_after_plan) {
             // DECISIONS AF4: an Export clicked during this scan-finished read starts now, never on a later plan.
-            self.export_clicked();
+            if self.dialog.is_some() {
+                self.queued_export_dropped();
+            } else {
+                self.export_clicked();
+            }
         }
     }
 
@@ -1825,13 +1829,23 @@ impl AppModel {
             std::mem::take(&mut self.export_after_plan),
             self.continue_after_plan.take(),
         );
-        if clicked {
+        if clicked && self.dialog.is_some() {
+            self.queued_export_dropped();
+        } else if clicked {
             self.export_checks();
         } else if let Some(how) = continued {
             self.run_continue(how);
         } else {
             self.refresh_undecided_dialog();
         }
+    }
+
+    /// Audit 08f-1: an export queued behind a plan never starts over an open question (its answer could open
+    /// another folder mid-export); the user clicks Export again after answering.
+    fn queued_export_dropped(&mut self) {
+        let note = "Export not started: answer the open dialog, then click Export again";
+        self.status_line = note.into();
+        self.messages.notify(messages::Severity::Warning, note);
     }
 
     pub fn wait_idle(&mut self, timeout: Duration) -> bool {
@@ -2668,6 +2682,12 @@ impl AppModel {
     /// The answer to `Dialog::OpenUnsaved`: save (opening only if that succeeded) or drop the edits, then open.
     pub fn resolve_open_unsaved(&mut self, root: PathBuf, save: bool) {
         self.dialog = None;
+        // Audit 08f-1: an export started while the question was up; opening now would drop its JSON. Ask to stop
+        // it first, as Open does; the question comes back once it has ended.
+        if self.export.running.is_some() {
+            self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
+            return;
+        }
         if save {
             if self.save().is_err() {
                 return;
