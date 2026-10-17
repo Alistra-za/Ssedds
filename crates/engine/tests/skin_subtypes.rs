@@ -429,3 +429,28 @@ fn a_wet_member_joins_only_a_cs_advanced_skin_set() {
     assert_ne!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
     assert_eq!(top(&p, "x_wet.png").0, Subtype::Diffuse);
 }
+
+/// Trace-debug 2026-10-16 #3: renaming an Advanced skin set keeps its joined `_wet` member as the skin wet map.
+#[test]
+fn rename_keeps_joined_skin_wet() {
+    let d = tempfile::tempdir().unwrap();
+    set_files(&d, true);
+    let mut r = req(&d, Target::Cs, &[]);
+    r.set_edits = vec![engine::sets::SetEdit::Rename {
+        from: "x".into(),
+        to: "x2".into(),
+    }];
+    let rep = Reporter::new(Arc::new(VecSink::default()), "t");
+    let p = Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap();
+    assert!(
+        set_of(&p, "x.png").ends_with("/x2"),
+        "{}",
+        set_of(&p, "x.png")
+    );
+    assert_eq!(set_of(&p, "x_wet.png"), set_of(&p, "x.png"));
+    assert_eq!(top(&p, "x_wet.png"), (Subtype::SkinWet, Confidence::High));
+    assert_eq!(top(&p, "x.png").0, Subtype::SkinAlbedo);
+}

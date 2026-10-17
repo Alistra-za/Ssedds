@@ -241,10 +241,15 @@ fn key_base(key: &str) -> &str {
 /// The skin `_wet` member split of `stem` when it belongs to the set `set_key` as one (it was moved there by
 /// [`join_skin_wet`]): `x_wet` in set `x`. `None` for every other file.
 fn wet_split(stem: &str, set_key: &str) -> Option<SuffixSplit> {
+    wet_tail_split(stem).filter(|s| s.base.eq_ignore_ascii_case(key_base(set_key)))
+}
+
+/// `x_wet` -> base `x`, suffix `wet`, whatever set it is in.
+fn wet_tail_split(stem: &str) -> Option<SuffixSplit> {
     let tail = format!("_{SKIN_WET}");
     let lower = stem.to_ascii_lowercase();
-    let base = lower.strip_suffix(&tail).filter(|b| !b.is_empty())?;
-    (base == key_base(set_key)).then(|| SuffixSplit {
+    lower.strip_suffix(&tail).filter(|b| !b.is_empty())?;
+    Some(SuffixSplit {
         // The tail is ASCII, so the cut falls on a char boundary.
         base: stem[..stem.len() - tail.len()].to_string(),
         suffix: Some(SKIN_WET.to_string()),
@@ -260,11 +265,16 @@ pub fn member_split(
     set: &TextureSet,
     aliases: &BTreeMap<String, String>,
 ) -> SuffixSplit {
-    set.suffixes
-        .contains(SKIN_WET)
-        .then(|| wet_split(stem, &set.key))
-        .flatten()
-        .unwrap_or_else(|| split_suffix_with(stem, aliases))
+    // The key is not checked: a Rename (`x` -> `x2`) keeps the joined `x_wet` (trace-debug 2026-10-16 #3).
+    // shortcut: any other suffix-less `*_wet` moved into a set that lists `wet` also reads as its wet map; track
+    // joined members by index if that ever matters.
+    let s = split_suffix_with(stem, aliases);
+    if s.suffix.is_none() && set.suffixes.contains(SKIN_WET) {
+        if let Some(w) = wet_tail_split(stem) {
+            return w;
+        }
+    }
+    s
 }
 
 /// Final review I3 (DECISIONS Note R): `_wet` splits off as a suffix only on cs and only when the base is an
