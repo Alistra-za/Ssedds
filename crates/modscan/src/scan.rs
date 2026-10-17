@@ -767,7 +767,14 @@ fn walk(
             done: i,
             total,
         });
-        for f in vfs::loose::walk(&o.root, &["meshes"], &["nif"]) {
+        let (files, errs) = vfs::loose::walk(&o.root, &["meshes"], &["nif"]);
+        for e in errs {
+            // the mesh and texture walks of one root report the same root failure
+            if !report.problems.contains(&e) {
+                report.problems.push(e);
+            }
+        }
+        for f in files {
             let origin = OriginRef::Loose(i);
             if is_lod_path(&f.norm) || !seen.insert((f.norm.clone(), origin)) {
                 continue;
@@ -781,7 +788,14 @@ fn walk(
             locs.push(Loc::Loose(f.abs));
         }
         // Textures: directory-entry stat only, never the bytes. Distinct paths per origin by construction.
-        for f in vfs::loose::walk(&o.root, &["textures"], &["dds"]) {
+        let (files, errs) = vfs::loose::walk(&o.root, &["textures"], &["dds"]);
+        for e in errs {
+            // the mesh and texture walks of one root report the same root failure
+            if !report.problems.contains(&e) {
+                report.problems.push(e);
+            }
+        }
+        for f in files {
             tex.push(Copy {
                 path: f.norm,
                 origin: OriginRef::Loose(i),
