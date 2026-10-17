@@ -333,7 +333,7 @@ fn the_json_editor_add_menu_hides_grass_ignored_keys_on_a_pbr_grass_set() {
 /// Trace-debug #12: three delete sections; type into section `typed`'s match1, then click section `removed`'s Remove.
 /// Returns the match1 values left. The focus loss must edit the typed section, never a shifted neighbour.
 fn remove_while_typing(typed: usize, removed: usize) -> Vec<String> {
-    use egui_kittest::kittest::{by, NodeT as _};
+    use egui_kittest::kittest::by;
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     for p in ["aaa_one", "bbb_two", "ccc_three"] {
@@ -357,7 +357,12 @@ fn remove_while_typing(typed: usize, removed: usize) -> Vec<String> {
         .0
         .sections()
         .iter()
-        .map(|s| s.get("match1").and_then(|v| v.as_str()).unwrap_or("").to_string())
+        .map(|s| {
+            s.get("match1")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        })
         .collect()
 }
 
