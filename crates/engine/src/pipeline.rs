@@ -548,6 +548,14 @@ pub fn process_file(
             serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
         write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
             .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
+    } else {
+        // Trace-debug #27 (Note BQ): an earlier run's sidecar describes the bytes just replaced.
+        match std::fs::remove_file(job.output.with_extension("dds.json")) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(fail(Stage::Write)(format!("stale sidecar: {e}")));
+            }
+            _ => {}
+        }
     }
     manifest
         .append(&record)

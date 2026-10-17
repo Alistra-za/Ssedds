@@ -1105,3 +1105,24 @@ fn a_dry_run_in_place_does_not_rewrite_a_big_stale_manifest() {
         "the dry run rewrote the manifest"
     );
 }
+
+/// Trace-debug #27 (Note BQ): an output re-encoded without `--sidecar` loses its old sidecar, which described the
+/// previous source; a later `--sidecar` run then writes a fresh one.
+#[test]
+fn stale_sidecar_is_not_kept_after_a_run_without_sidecar() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let side = d.path().join("out/armor/iron.dds.json");
+    let mut with = request(d.path());
+    with.sidecar = true;
+    run(with.clone());
+    let first = std::fs::read_to_string(&side).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([y as u8 * 4, x as u8 * 4, 9]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let (s, _) = run(request(d.path()));
+    assert_eq!(s.converted, 1);
+    assert!(!side.exists(), "the stale sidecar was kept");
+    run(with);
+    assert_ne!(std::fs::read_to_string(&side).unwrap(), first);
+}
