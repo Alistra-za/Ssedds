@@ -27,7 +27,8 @@ pub struct InputFile {
     pub path: PathBuf,
     /// Path relative to the folder it was found in (just the file name for an explicit file).
     pub rel: PathBuf,
-    /// Lower-case, '/'-separated path from the last `textures` component, else `rel`.
+    /// Lower-case, '/'-separated path from the first `textures` component at or below the input root, else the last
+    /// one above it, else `rel`.
     pub game_path: String,
     /// `<output_root>/<rel>` with a `.dds` extension.
     pub output: PathBuf,
@@ -49,7 +50,14 @@ pub fn game_path(abs: &Path, rel: &Path) -> String {
         .components()
         .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect();
-    match comps.iter().rposition(|c| c == "textures") {
+    // Trace-debug #24 (Note BQ): the first `textures` at or below the input root (its last component), as
+    // `nif::path::canon_texture` keeps a nested one; else the last anywhere.
+    let root = comps.len().saturating_sub(rel.components().count() + 1);
+    let first = comps[root..]
+        .iter()
+        .position(|c| c == "textures")
+        .map(|i| root + i);
+    match first.or_else(|| comps.iter().rposition(|c| c == "textures")) {
         Some(i) => comps[i..].join("/"),
         None => rel
             .to_string_lossy()

@@ -321,3 +321,19 @@ fn overlapping_inputs_yield_one_entry_per_file() {
     let files = discover(&[tex.clone(), tex.join("sub")], &out, true).unwrap();
     assert_eq!(rels(&files), ["rock.png", "sub/moss.png"]);
 }
+
+/// Trace-debug #24 (Note BQ): a `textures` folder nested under the mod's own `textures` stays in the game path, as
+/// `nif::path::canon_texture` keeps it; the cut is at the first `textures` at or below the input root.
+#[test]
+fn game_path_keeps_a_nested_textures_folder() {
+    let abs = Path::new("C:/mods/Data/textures/armor/textures/foo_d.dds");
+    assert_eq!(
+        game_path(abs, Path::new("textures/armor/textures/foo_d.dds")),
+        "textures/armor/textures/foo_d.dds"
+    );
+    // The input root is itself a `textures` folder.
+    assert_eq!(
+        game_path(abs, Path::new("armor/textures/foo_d.dds")),
+        "textures/armor/textures/foo_d.dds"
+    );
+}
