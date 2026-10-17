@@ -10,33 +10,33 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 
 ## Features
 
-BC1, BC3, BC4, BC5, BC6H, BC7 output
-Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster 
-SRGB / UNORM (Linear) tag chosen per map type and target shader
-Cutout alpha: coverage-preserving mips, on by default 
-Optional Exact-opaque alpha 255 for where it's needed (Forces mode 6's pbit to 1, off by default)
-Normal mips renormalised 
-Normal-mip variance baked into TruePBR roughness 
-RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent` with optional masks '_bumpmask' '_detailnormmask' '_bentmask') 
-Multiple layers accepted and duplicate types 'bump2' just works
-Loose maps automatically picked up and packed into `_rmaos` / `_rfaos` / complex `_m` 
-Suffix based channel remapping; ORM > RMAOS is instant 
-Complex-material `_m` gate checked 
-Complex grass (1:2 image, halves mipped apart) 
-Mod scan: meshes decide alpha meaning and set shader 
-Decode-and-check after every encode, with Skyrim rules 
-Validate DDS files made by other tools 
-GUI with encoded-mip preview, pixel readout, pin and compare
-TruePBR: PGPatcher JSON written per set, Validated, with every option exposed including recent
-NiAlphaProperty (alpha blend/test) set in a familiar format, Easy context menu options for slots and lock commands,
-Interactive color picker with hex and rgb 255 inputs, outputs are converted to decimal
-PBR Landscape, PBRTextureSets and PBRMaterialObjects Jsons built from actual the EDID's in your loadorder no need to cross reference
-Pg Patcher _m sidecard .json
-Batch / command line
-Fast Scanning - 100 000 nifs scanned in 14 seconds, 1500 plugins scanned in less than 3
-Does not need to be launched from mo2, can be. 
-It will fill in your mo2 location for the first time if it is. It does not rely on it's launched file system, it skips the middleman 
-Optional NVTT backend for BC7 BC6H encoding
+- BC1, BC3, BC4, BC5, BC6H, BC7 output
+- Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster
+- SRGB / UNORM (Linear) tag chosen per map type and target shader
+- Cutout alpha: coverage-preserving mips, on by default
+- Optional Exact-opaque alpha 255 for where it's needed (Forces mode 6's pbit to 1, off by default)
+- Normal mips renormalised
+- Normal-mip variance baked into TruePBR roughness
+- RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent` with optional masks '_bumpmask' '_detailnormmask' '_bentmask')
+- Multiple layers accepted and duplicate types 'bump2' just works
+- Loose maps automatically picked up and packed into `_rmaos` / `_rfaos` / complex `_m`
+- Suffix based channel remapping; ORM > RMAOS is instant
+- Complex-material `_m` gate checked
+- Complex grass (1:2 image, halves mipped apart)
+- Mod scan: meshes decide alpha meaning and set shader
+- Decode-and-check after every encode, with Skyrim rules
+- Validate DDS files made by other tools
+- GUI with encoded-mip preview, pixel readout, pin and compare
+- TruePBR: PGPatcher JSON written per set, Validated, with every option exposed including recent
+- NiAlphaProperty (alpha blend/test) set in a familiar format, Easy context menu options for slots and lock commands,
+- Interactive color picker with hex and rgb 255 inputs, outputs are converted to decimal
+- PBR Landscape, PBRTextureSets and PBRMaterialObjects Jsons built from actual the EDID's in your loadorder no need to cross reference
+- Pg Patcher _m sidecard .json
+- Batch / command line
+- Fast Scanning - 100 000 nifs scanned in 14 seconds, 1500 plugins scanned in less than 3
+- Does not need to be launched from mo2, can be.
+- It will fill in your mo2 location for the first time if it is. It does not rely on it's launched file system, it skips the middleman
+- Optional NVTT backend for BC7 BC6H encoding
 
 ## What it does differently
 
