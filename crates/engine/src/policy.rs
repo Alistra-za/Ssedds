@@ -777,6 +777,25 @@ fn layered_profile_with(
             prov.insert("channels.flip_green".into(), src);
         }
     }
+    // Trace-debug 2026-10-16 #5: a BC5 or RG8 source decodes with B = 0 (Z = -1), which the clamp in Preprocess would
+    // turn into a sideways vector. Rebuild Z from X and Y, as for any two-channel normal, unless the user set it.
+    let two_channel = f
+        .analysis
+        .dds_dxgi
+        .and_then(crate::dds::from_dxgi)
+        .is_some_and(|d| {
+            matches!(
+                d,
+                crate::dds::DdsPixelFormat::Bc5 | crate::dds::DdsPixelFormat::Rg8
+            )
+        });
+    if takes_green(st) && two_channel && !field_explicit(ctx, &prov, "channels.reconstruct_z") {
+        profile.channels.reconstruct_z = true;
+        prov.insert(
+            "channels.reconstruct_z".into(),
+            Provenance::AnalysisFact("two-channel-dds".into()),
+        );
+    }
     // DECISIONS Note W6: only a base normal reads `rnm`, so another sub-type keeps the default (and its hash).
     if st.rnm_base().is_none() && !profile.rnm.is_default() {
         profile.rnm = crate::config::RnmSpec::default();
