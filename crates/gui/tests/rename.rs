@@ -336,3 +336,46 @@ fn renaming_300_outputs_is_one_step_and_one_plan() {
     assert_eq!(m.history.undo.len(), steps + 1, "one undo step");
     assert_eq!(m.generation(), generation + 1, "one plan");
 }
+
+fn pbr_settings_of(m: &AppModel, id: &str) -> Option<serde_json::Value> {
+    sdc_gui::model::pbr_export::json_entries(m)
+        .into_iter()
+        .find(|(v, _)| v.id == id)
+        .map(|(v, _)| serde_json::json!(v.settings))
+}
+
+/// Trace-debug 2026-10-16 #2: an Inputs rename moves the set's sdc-project.toml entry to the new automatic id, as the
+/// input name box does (AB1), in the same undo step.
+#[test]
+fn rename_inputs_moves_set_entry_with_automatic_id() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let set = set_id_of(&m, ROCK);
+    assert_eq!(set, "landscape/rock01");
+    m.set_json_value(&set, "specular_level", Some(serde_json::json!(0.5)));
+    idle(&mut m);
+    m.click_set(&set_key_of(&m, ROCK), false, false);
+    m.open_rename(RenameMode::Inputs);
+    dialog(&mut m).recipe.prefix = "steel_".into();
+    let steps = m.history.undo.len();
+    assert!(m.apply_rename());
+    assert_eq!(m.history.undo.len(), steps + 1, "one undo step");
+    idle(&mut m);
+    assert_eq!(set_id_of(&m, ROCK), "landscape/steel_rock01");
+    let s = pbr_settings_of(&m, "landscape/steel_rock01").expect("the set under its new id");
+    assert_eq!(s["specular_level"], serde_json::json!(0.5));
+    assert!(
+        sdc_gui::model::sets::views(&m)
+            .iter()
+            .all(|v| v.id != "landscape/rock01"),
+        "no set is left behind under the old id"
+    );
+    m.undo();
+    idle(&mut m);
+    assert_eq!(set_id_of(&m, ROCK), "landscape/rock01");
+    let s = pbr_settings_of(&m, "landscape/rock01").expect("the set under its old id");
+    assert_eq!(s["specular_level"], serde_json::json!(0.5));
+    assert!(sdc_gui::model::sets::views(&m)
+        .iter()
+        .all(|v| v.id != "landscape/steel_rock01"));
+}

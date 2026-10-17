@@ -572,8 +572,27 @@ impl AppModel {
                 format!("Rename outputs of {n} set{}", if n == 1 { "" } else { "s" })
             }
         };
+        // AB1: each set whose own diffuse is renamed takes its sdc-project.toml entry to its new automatic id.
+        let retargets: Vec<(String, String)> = match d.mode {
+            RenameMode::Inputs => super::sets::set_views(self)
+                .iter()
+                .filter_map(|v| {
+                    let Some(super::sets::SlotFill::Own { item }) =
+                        v.slots.get(&super::sets::SlotKind::Diffuse)
+                    else {
+                        return None;
+                    };
+                    let r = rows.iter().find(|r| &r.key == item)?;
+                    self.auto_retarget(&v.key, item, &r.new)
+                })
+                .collect(),
+            RenameMode::Outputs => vec![],
+        };
         self.dialog = None;
         self.batch_edit(&label, |m| {
+            for (from, to) in &retargets {
+                m.edit_docs(&label, None, true, |_, d| d.retarget_auto(from, to));
+            }
             for r in &rows {
                 match d.mode {
                     RenameMode::Inputs => {
