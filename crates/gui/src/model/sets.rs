@@ -491,7 +491,7 @@ pub fn set_views(m: &AppModel) -> Vec<SetView> {
 
 /// Every set, in display order, with its slots, ownership and prefix.
 fn build_views(m: &AppModel) -> Vec<SetView> {
-    let root = m.export_root();
+    let root = m.sets_root();
     let entries = m
         .sets_doc
         .as_ref()

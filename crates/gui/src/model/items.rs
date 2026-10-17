@@ -89,6 +89,8 @@ pub struct PlanView {
     pub rnm_notes: BTreeMap<String, Vec<Warning>>,
     /// Layer, mask and AO path to its `[files]` key.
     pub rnm_keys: BTreeMap<PathBuf, String>,
+    /// The export folder the plan ran with: set keys are under it (audit 08c-3).
+    pub output_root: PathBuf,
 }
 
 /// The `[files]` key of a path under `root` (DECISIONS N2).
@@ -351,6 +353,7 @@ impl PlanView {
             unmatched,
             rnm_notes,
             rnm_keys,
+            output_root: out_root.clone(),
         }
     }
 }

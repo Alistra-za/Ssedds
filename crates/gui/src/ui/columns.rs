@@ -580,7 +580,7 @@ pub fn export_prefix(model: &AppModel) -> String {
     format!(
         "{}/",
         model
-            .export_root()
+            .sets_root()
             .to_string_lossy()
             .replace('\\', "/")
             .trim_end_matches('/')

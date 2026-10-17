@@ -309,6 +309,9 @@ pub struct AppModel {
     pub target: Target,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
+    /// The export folder `sets` were planned with (audit 08c-3): set ids strip it, also while a re-plan for a new
+    /// export folder runs. `None` before the first plan.
+    sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
     /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
@@ -505,6 +508,7 @@ impl AppModel {
             item_index: Default::default(),
             views: Default::default(),
             sets: vec![],
+            sets_root: None,
             unmatched_keys: vec![],
             rnm_notes: Default::default(),
             rnm_keys: Default::default(),
@@ -673,6 +677,7 @@ impl AppModel {
         self.items.clear();
         self.invalidate_views();
         self.sets.clear();
+        self.sets_root = None;
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -712,6 +717,11 @@ impl AppModel {
                 }
             }
         }
+    }
+
+    /// The export folder the current sets were planned with (their keys are under it), else `export_root`.
+    pub fn sets_root(&self) -> PathBuf {
+        self.sets_root.clone().unwrap_or_else(|| self.export_root())
     }
 
     /// `<export folder>` from the settings, else `<root>/sdc-out`.
@@ -1747,6 +1757,7 @@ impl AppModel {
         self.items = view.items;
         self.invalidate_views();
         self.sets = view.sets;
+        self.sets_root = Some(view.output_root);
         self.unmatched_keys = view.unmatched;
         self.rnm_notes = view.rnm_notes;
         self.rnm_keys = view.rnm_keys;

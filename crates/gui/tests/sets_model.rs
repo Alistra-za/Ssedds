@@ -1908,3 +1908,23 @@ fn move_down_on_last_set_changes_nothing() {
     assert!(!dirty, "sdc-project.toml is untouched");
     assert!(m.reorder_set(&last, 0), "a real move still moves");
 }
+
+/// Audit 08c-3: while the re-plan after an export folder change runs, set ids still strip the folder the current
+/// sets were planned with, so an edit made then lands on the right set.
+#[test]
+fn set_ids_stay_right_while_a_new_export_folder_replans() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let before: Vec<String> = set_views(&m).iter().map(|v| v.id.clone()).collect();
+    assert!(
+        before.iter().any(|id| id == "landscape/rock01"),
+        "{before:?}"
+    );
+    m.set_export_folder(d.path().join("elsewhere"));
+    let during: Vec<String> = set_views(&m).iter().map(|v| v.id.clone()).collect();
+    assert_eq!(during, before);
+    idle(&mut m);
+    let after: Vec<String> = set_views(&m).iter().map(|v| v.id.clone()).collect();
+    assert_eq!(after, before);
+}

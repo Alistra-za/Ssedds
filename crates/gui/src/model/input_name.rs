@@ -174,7 +174,7 @@ impl AppModel {
             .map_or_else(|| diffuse.to_string(), |a| a.replace('\\', "/"));
         let old_out = lower(no_ext(&input_output(&cur)));
         let new_out = lower(no_ext(&input_output(new)));
-        let old_auto = fold_id(&engine::sets::set_id(&self.export_root(), set_key));
+        let old_auto = fold_id(&engine::sets::set_id(&self.sets_root(), set_key));
         let head = old_auto.strip_suffix(&old_out)?;
         let new_auto = format!("{head}{new_out}");
         (new_auto != old_auto).then_some((old_auto, new_auto))
