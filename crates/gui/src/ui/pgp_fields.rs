@@ -375,7 +375,8 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                     // is no edit (F1 Review Focus 4).
                     if r.lost_focus() {
                         ui.data_mut(|d| d.remove::<String>(id));
-                        if match_value(strip_lead(&text)) != match_value(&m.path) {
+                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if !esc && match_value(strip_lead(&text)) != match_value(&m.path) {
                             edits.push((format!("match{}", m.n), stored_match(m.n, &text)));
                         }
                     }
@@ -619,7 +620,10 @@ pub(crate) fn control(
             if r.lost_focus() {
                 ui.data_mut(|d| d.remove::<String>(id));
                 let t = text.trim();
-                edits.push((key, (!t.is_empty()).then(|| json!(t))));
+                // Esc cancels (AG10/AG11, trace-debug #57).
+                if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    edits.push((key, (!t.is_empty()).then(|| json!(t))));
+                }
             }
         }
         KeyKind::Rgb | KeyKind::Rgba => {

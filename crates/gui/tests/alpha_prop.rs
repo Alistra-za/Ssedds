@@ -486,3 +486,45 @@ fn no_sorter_is_last_says_it_has_no_effect_and_round_trips() {
     h.run();
     assert_eq!(stored(h.state(), "alphaprop_flags"), Some(json!(0x32ED)));
 }
+
+/// Trace-debug #57: Esc leaves a TruePBR text box (rename, a match) and a JSON editor box (a match, the JSON name)
+/// without writing what was typed (AG10/AG11).
+#[test]
+fn esc_cancels_truepbr_rename_and_match_edits() {
+    let esc = eframe::egui::Key::Escape;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = rock(d.path());
+    m.set_json_value(SET, "rename", Some(json!("old_name")));
+    let mut h = panel(m);
+    h.run();
+    // Rename and Matching are under the advanced header.
+    h.get_by_label("Advanced TruePBR settings").click();
+    h.run();
+    type_raw(&mut h, "old_name", "new_name", esc);
+    assert_eq!(stored(h.state(), "rename"), Some(json!("old_name")));
+    assert!(raw_box_shows(&h, "old_name"), "the box reverts");
+    type_raw(&mut h, DERIVED, r"landscape\other", esc);
+    assert_eq!(stored(h.state(), "match1"), None);
+    let mut m = h.into_state();
+    m.add_section("aaa_one");
+    m.set_json_name("mine");
+    m.json_editor_open = true;
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1000.0, 900.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| sdc_gui::ui::json_editor::draw(ui.ctx(), m),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    type_raw(&mut h, "aaa_one", "bbb_two", esc);
+    assert_eq!(
+        h.state().sections()[0].get("match1"),
+        Some(&json!("aaa_one"))
+    );
+    type_raw(&mut h, "mine", "yours", esc);
+    assert_eq!(
+        h.state().sets_doc.as_ref().unwrap().json_name().as_deref(),
+        Some("mine")
+    );
+}

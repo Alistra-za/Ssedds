@@ -158,7 +158,10 @@ fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
         }
         if r.lost_focus() {
             ui.data_mut(|d| d.remove::<String>(id));
-            model.set_json_name(&t);
+            // Esc cancels (AG10/AG11, trace-debug #57): egui drops the focus on it.
+            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                model.set_json_name(&t);
+            }
         }
     });
 }
@@ -349,7 +352,8 @@ fn text_box(ui: &mut egui::Ui, id: egui::Id, current: &str, width: f32) -> Optio
     }
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(id));
-        if t.trim() != current.trim() {
+        // Esc cancels (AG10/AG11, trace-debug #57).
+        if t.trim() != current.trim() && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return Some(t.trim().to_string());
         }
     }
