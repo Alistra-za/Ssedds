@@ -1636,9 +1636,13 @@ impl AppModel {
             return false;
         }
         // #44: the export finished before the cancel was seen and asked about the PGPatcher JSON; leaving answers
-        // "keep" (with its note) rather than dropping the question.
+        // "keep" (with its note) rather than dropping the question. Opening another folder clears the export notes, so
+        // the note is also a message.
         if self.after_export.is_some() && matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
             self.resolve_overwrite_json(false);
+            if let Some(n) = self.export.notes.last().cloned() {
+                self.messages.notify(messages::Severity::Warning, n);
+            }
         }
         let action = self.after_export.take();
         match action {
@@ -2860,6 +2864,10 @@ mod tests {
             "{:?}",
             m.export.notes
         );
+        assert!(m
+            .messages
+            .entries()
+            .any(|e| e.text.contains("kept as edited")));
     }
 
     /// Trace-debug 2026-10-16 #48: a plan failure or a worker panic while the overwrite question is open goes to
