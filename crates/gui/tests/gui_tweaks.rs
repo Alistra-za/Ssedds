@@ -397,3 +397,30 @@ fn remove_section_with_focused_match_does_not_edit_next_section() {
 fn remove_earlier_section_while_typing_in_a_later_one_edits_the_typed_section() {
     assert_eq!(remove_while_typing(2, 0), ["bbb_two", "ccc_threeX"]);
 }
+
+/// Trace-debug 2026-10-16 #33: with sdc-project.toml read-only the set entry cannot follow the new name, so neither
+/// the input name box nor an Inputs rename writes the aliases.
+#[test]
+fn an_input_name_is_refused_while_sdc_project_toml_is_read_only() {
+    use sdc_gui::model::rename::RenameMode;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let key = rock_key(&m);
+    let bad = d.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::write(bad.join("sdc-project.toml"), "this is = = not toml\n").unwrap();
+    m.sets_doc = Some(SetsDoc::open(&bad));
+    assert!(m.sets_doc.as_ref().unwrap().read_only());
+    let before = m.project.as_ref().unwrap().text();
+    let e = m
+        .set_input_name(ROCK_SET, "textures/landscape/rock02")
+        .unwrap_err();
+    assert!(e.contains("sdc-project.toml"), "{e}");
+    m.click_set(&key, false, false);
+    m.open_rename(RenameMode::Inputs);
+    if let Some(sdc_gui::model::Dialog::Rename(r)) = m.dialog.as_mut() {
+        r.recipe.prefix = "steel_".into();
+    }
+    assert!(!m.apply_rename());
+    assert_eq!(m.project.as_ref().unwrap().text(), before);
+}

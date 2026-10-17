@@ -606,3 +606,20 @@ fn bake_sizes_members_by_content_beside_a_dds_member() {
     assert!(m.bake.is_some(), "{:?}", m.warnings);
     assert!(bake_flag(&ev, "textures/pbr/iron"));
 }
+
+/// Trace-debug #32 (Note BQ): the eye shader re-types an eye's `_n` to `msn`, and eyes have no `_s`, so an eye
+/// set's msn is not SET-MISSING-COMPANION.
+#[test]
+fn an_eye_shader_msn_is_not_set_missing_companion() {
+    let d = tempfile::tempdir().unwrap();
+    gray(d.path(), "textures/eyes/eye.png", 90);
+    normal(d.path(), "textures/eyes/eye_n.png", 64, 64);
+    for t in [Target::Cs, Target::Vanilla] {
+        let mut r = req(d.path(), &[]);
+        r.target = Some(t);
+        let (p, _) = plan(r);
+        let n = job(&p, "eye_n.png");
+        assert_eq!(n.profile.subtype, Subtype::Msn, "{t:?}");
+        assert_eq!(set_codes(n), vec![], "{t:?}");
+    }
+}

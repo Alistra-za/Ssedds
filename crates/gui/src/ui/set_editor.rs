@@ -37,8 +37,6 @@ const THUMB: f32 = 72.0;
 const CARD_CHROME: f32 = 24.0;
 /// Seconds a single click waits for its second click (a little over egui's double-click delay).
 const DOUBLE_CLICK_WAIT: f64 = 0.35;
-/// Seconds past the wait after which a pending click is stale (the view was not drawn when it came due).
-const STALE_AFTER: f64 = 1.0;
 
 enum Act {
     Select(String),
@@ -209,7 +207,7 @@ pub fn draw(
             }
         }
     }
-    select_or_expand(ui, model, select, expand);
+    select_or_expand(ui, model, &v.id, select, expand);
 }
 
 /// Item 17: a file from Explorer dropped on slot `slot` of `set`. The drop is taken (its folder is not opened); a
@@ -550,7 +548,8 @@ fn card(
     });
     slot_menu(&scoped.response, model, v, slot, acts);
     // Item 17: a file from Explorer dropped on this card.
-    if drop_at.is_some_and(|p| scoped.response.rect.contains(p)) {
+    // The clipped rect: a card scrolled out of view takes no drop (trace-debug #51).
+    if drop_at.is_some_and(|p| scoped.response.interact_rect.contains(p)) {
         acts.push(Act::FileDrop(v.id.clone(), slot));
     }
 }
@@ -617,34 +616,38 @@ fn slot_menu(
 
 /// A click selects a texture, which replaces this view by its settings, so the second click of a double click
 /// would land on something else. The selection therefore waits out the double-click delay; a double click
-/// meanwhile expands the texture instead.
+/// meanwhile expands the texture instead. The pending click is set `set`'s and lives only while its view is drawn
+/// every pass: another set's view never sees it, and a pass without this view drops it (trace-debug #53).
 fn select_or_expand(
     ui: &egui::Ui,
     model: &mut AppModel,
+    set: &str,
     clicked: Option<String>,
     expand: Option<String>,
 ) {
-    let id = egui::Id::new("set-editor-pending-select");
-    let now = ui.input(|i| i.time);
+    type Pending = (String, f64, u64);
+    let id = egui::Id::new(("set-editor-pending-select", set));
+    let (now, pass) = (ui.input(|i| i.time), ui.ctx().cumulative_pass_nr());
     if let Some(k) = expand {
-        ui.data_mut(|d| d.remove::<(String, f64)>(id));
+        ui.data_mut(|d| d.remove::<Pending>(id));
         model.expand(&k);
         return;
     }
     if let Some(k) = clicked {
-        ui.data_mut(|d| d.insert_temp(id, (k, now)));
+        ui.data_mut(|d| d.insert_temp(id, (k, now, pass)));
     }
-    let Some((k, at)) = ui.data(|d| d.get_temp::<(String, f64)>(id)) else {
+    let Some((k, at, seen)) = ui.data(|d| d.get_temp::<Pending>(id)) else {
         return;
     };
     let left = DOUBLE_CLICK_WAIT - (now - at);
-    if left <= 0.0 {
-        ui.data_mut(|d| d.remove::<(String, f64)>(id));
-        // A click left pending while this view was not drawn (another selection took over) is stale: drop it.
-        if -left < STALE_AFTER {
+    // A click left pending while this view was not drawn (another selection took over) is stale: drop it.
+    if left <= 0.0 || seen + 1 < pass {
+        ui.data_mut(|d| d.remove::<Pending>(id));
+        if seen + 1 >= pass {
             model.select_item(&k);
         }
     } else {
+        ui.data_mut(|d| d.insert_temp(id, (k, at, pass)));
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_secs_f64(left));
     }

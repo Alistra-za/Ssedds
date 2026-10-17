@@ -34,6 +34,10 @@
         "exact_opaque": {
           "type": "boolean"
         },
+        "exr_straight": {
+          "description": "An OpenEXR source with alpha is straight alpha, read as stored: no un-premultiply on load (trace-debug #30,\nNote BQ15). Off: RGB / A, as OpenEXR stores premultiplied colour. Read only for an `.exr` source with alpha.",
+          "type": "boolean"
+        },
         "parallax": {
           "description": "`complex_material` only (DECISIONS AH2): `false` writes alpha 0 at every mip (complex material on, parallax\noff); `true` keeps the source alpha as height. Resolve sets it from the source alpha; `None` elsewhere.",
           "type": [
@@ -543,6 +547,10 @@
           "$ref": "#/$defs/AlphaCompare"
         },
         "exact_opaque": {
+          "type": "boolean"
+        },
+        "exr_straight": {
+          "description": "An OpenEXR source with alpha is straight alpha, read as stored: no un-premultiply on load (trace-debug #30,\nNote BQ15). Off: RGB / A, as OpenEXR stores premultiplied colour. Read only for an `.exr` source with alpha.",
           "type": "boolean"
         },
         "parallax": {

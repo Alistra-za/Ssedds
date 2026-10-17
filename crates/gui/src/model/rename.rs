@@ -345,11 +345,20 @@ fn input_collisions(m: &AppModel, rows: &mut [RenameRow]) {
             }
         }
     }
+    // #19: outputs of every file this batch leaves alone (an `output_name` can point one anywhere).
+    let writes: BTreeMap<String, String> = m
+        .items
+        .iter()
+        .filter(|i| !i.job_key.is_empty() && !changing.contains(&i.key))
+        .map(|i| (lower(&i.job_key.replace('\\', "/")), i.key.clone()))
+        .collect();
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for r in rows.iter_mut().filter(|r| r.writes()) {
         let l = lower(&r.new);
         if let Some(other) = taken.get(&l).filter(|o| **o != r.key) {
             r.problem = Some(format!("{other} already has this name"));
+        } else if let Some(other) = writes.get(&lower(&r.output)) {
+            r.problem = Some(format!("{other} already writes {}", r.output));
         } else if let Some(other) = seen.get(&l) {
             r.problem = Some(format!("{other} is renamed to this name too"));
         } else {
@@ -560,7 +569,10 @@ impl AppModel {
             return false;
         };
         // Review I1: the aliases cannot be written, so nothing (not even the set entries) may move.
-        if d.mode == RenameMode::Inputs && self.project.as_ref().is_some_and(|p| p.read_only()) {
+        if d.mode == RenameMode::Inputs
+            && (self.project.as_ref().is_some_and(|p| p.read_only())
+                || self.sets_doc.as_ref().is_some_and(|s| s.read_only()))
+        {
             return false;
         }
         let plan = plan_rename(self, &d);
@@ -602,7 +614,7 @@ impl AppModel {
                 match d.mode {
                     RenameMode::Inputs => {
                         // Back to its own name: the alias goes.
-                        let alias = (lower(&r.new) != lower(&r.key)).then_some(r.new.as_str());
+                        let alias = (r.new != r.key).then_some(r.new.as_str());
                         m.edit_docs(&label, None, true, |p, _| p.set_read_as(&r.key, alias));
                     }
                     RenameMode::Outputs => {

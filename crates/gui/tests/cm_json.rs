@@ -517,8 +517,8 @@ fn nothing_is_written_without_a_ticked_export() {
 }
 
 /// Design §6/§9: the file sits next to the `_m`, holds only the set keys, and is recorded. A `--sidecar` record
-/// (`<name>.dds.json`) is another file and stays. The GUI exports with `sidecar = false`, and the engine reads or
-/// removes `<name>.dds.json` only under `--sidecar` (`api.rs:1798`, `:1934`), so the stub is never read.
+/// (`<name>.dds.json`) is another file and stays. The GUI exports with `sidecar = false`; the engine then removes
+/// a `<name>.dds.json` only when it reads as sdc's record for that output (Note BQ10), so this stub stays.
 #[test]
 fn export_writes_the_json_next_to_the_m_and_records_its_hash() {
     let d = tempfile::tempdir().unwrap();

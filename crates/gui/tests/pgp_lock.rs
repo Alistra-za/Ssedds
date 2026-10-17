@@ -333,7 +333,11 @@ fn db_with_set(db: &std::path::Path, diffuse: &str, normal: &str) {
     .unwrap();
     c.execute_batch(
         "INSERT INTO texset(id, n, t0, t1) VALUES (1, 2, 1, 2);
-         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0), (2, 1, 1);",
+         INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES (1, 1, 0), (2, 1, 1);
+         INSERT INTO path(id, p) VALUES (3, 'meshes/a.nif');
+         INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES (1, 1, 'A', 'a', 1, 1);
+         INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES (1, 3, 1, 0, 0);
+         INSERT INTO shape(copy_id, block, kind, shader_kind, texset_id) VALUES (1, 0, 'BSTriShape', 1, 1);",
     )
     .unwrap();
 }
@@ -503,4 +507,47 @@ fn settings_of_set(m: &AppModel, id: &str) -> Settings {
         .find(|v| v.id == id)
         .unwrap()
         .settings
+}
+
+/// Trace-debug #42: four texture sets with diffuse `d.dds`; only the first is used by a lighting shape in a
+/// non-derived copy of an enabled mod. The others: a disabled mod, an effect shape, a PGPatcher output copy.
+fn db_with_filtered_users(db: &std::path::Path) {
+    let s = modscan::store::Store::open(db).unwrap();
+    s.conn()
+        .execute_batch(
+            "INSERT INTO path(id, p) VALUES (1, 'textures/d.dds'), (2, 'textures/ok_n.dds'),
+               (3, 'textures/off_n.dds'), (4, 'textures/grey.dds'), (5, 'textures/pgp_n.dds'),
+               (11, 'meshes/a.nif'), (12, 'meshes/b.nif'), (13, 'meshes/c.nif'), (14, 'meshes/d.nif');
+             INSERT INTO origin(id, kind, name, root, priority, enabled) VALUES
+               (1, 1, 'On', 'on', 1, 1), (2, 1, 'Off', 'off', 2, 0);
+             INSERT INTO nif_copy(id, path_id, origin_id, parse_status, is_derived) VALUES
+               (1, 11, 1, 0, 0), (2, 12, 2, 0, 0), (3, 13, 1, 0, 0), (4, 14, 1, 0, 1);
+             INSERT INTO texset(id, n, t0, t1) VALUES (1, 2, 1, 2), (2, 2, 1, 3), (3, 2, 1, 4), (4, 2, 1, 5);
+             INSERT INTO tex_use(tex_path_id, texset_id, slot) VALUES
+               (1, 1, 0), (2, 1, 1), (1, 2, 0), (3, 2, 1), (1, 3, 0), (4, 3, 1), (1, 4, 0), (5, 4, 1);
+             INSERT INTO shape(copy_id, block, kind, shader_kind, texset_id) VALUES
+               (1, 0, 'BSTriShape', 1, 1), (2, 0, 'BSTriShape', 1, 2), (3, 0, 'BSTriShape', 2, 3),
+               (4, 0, 'BSTriShape', 1, 4);",
+        )
+        .unwrap();
+}
+
+#[test]
+fn slot_textures_skip_disabled_effect_and_derived_shapes() {
+    let d = tempfile::tempdir().unwrap();
+    let db = d.path().join("scan.db");
+    db_with_filtered_users(&db);
+    assert_eq!(
+        sdc_gui::model::used_by::slot_textures(&db, "textures/d.dds", 2).unwrap(),
+        ["textures/ok_n.dds"]
+    );
+    let known = sdc_gui::model::known_paths::read(&db).unwrap();
+    assert_eq!(
+        known
+            .textures
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["textures/d.dds", "textures/ok_n.dds"]
+    );
 }

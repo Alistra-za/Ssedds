@@ -1,5 +1,14 @@
 //! `sdc` command line (spec §8). Human output goes to stderr; with `--json`, stdout carries only JSON Lines.
 //! Exit codes, highest precedence first: 3 fatal > 2 usage/config > 1 partial > 4 validation failed > 0.
+/// `eprintln!` that ignores write errors: a closed stderr is not a crash, and a panic while reporting one would end
+/// the process with 101 outside `catch_unwind` (trace-debug #18, Note BQ).
+macro_rules! err {
+    ($($t:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr().lock(), $($t)*);
+    }};
+}
+
 mod args;
 mod cancel;
 mod human;
@@ -43,7 +52,7 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
     // reported: without the handler Ctrl-C ends the process at once, as for any console program.
     let cancel = CancelToken::default();
     if let Err(e) = cancel::install(cancel.clone()) {
-        eprintln!(
+        err!(
             "warning: could not install the Ctrl-C handler ({e}); Ctrl-C will end sdc immediately"
         );
     }
@@ -77,11 +86,11 @@ fn main() -> ExitCode {
     match std::panic::catch_unwind(|| run(cli)) {
         Ok(Ok(code)) => ExitCode::from(code as u8),
         Ok(Err(e)) => {
-            eprintln!("sdc: {e}");
+            err!("sdc: {e}");
             ExitCode::from(e.exit_code() as u8)
         }
         Err(_) => {
-            eprintln!("sdc: internal error");
+            err!("sdc: internal error");
             ExitCode::from(3)
         }
     }

@@ -8,7 +8,7 @@ use crate::model::sets::{
 use crate::model::AppModel;
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
 use crate::pgp::prefix::{
-    json_rename, match_toggle, match_value, matches_nothing, stored_match, strip_lead,
+    json_rename, match_toggle, match_value, matches_nothing, stored_set_match, strip_lead,
     subsurface_pitfalls, EMPTY_ROW, NOT_WRITTEN, NO_MATCH, PATH_CONTAINS_NOT_WRITTEN,
     RENAMED_MATCH_NOTE, RENAMED_ONE_MATCH,
 };
@@ -120,6 +120,8 @@ pub(crate) struct Ctx {
     no_match: bool,
     /// A renamed set's `match_diffuse` (AN1): its one match.
     renamed: Option<String>,
+    /// The derived diffuse path (`match1` when the set has no key).
+    derived: String,
     /// The set's locked slots: a locked slot command shows no remove button (DECISIONS AF6).
     pub(crate) locks: std::collections::BTreeSet<u8>,
 }
@@ -145,6 +147,7 @@ pub(crate) fn context(model: &AppModel, set: &str) -> Ctx {
         locks: v.as_ref().map(|v| v.locks.clone()).unwrap_or_default(),
         no_match: matches_nothing(&own, derived.as_deref().unwrap_or("")),
         renamed: json_rename(&own, derived.as_deref().unwrap_or("")).map(|(d, _)| d),
+        derived: derived.clone().unwrap_or_default(),
         coat_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Coat)),
         fuzz_filled: v.as_ref().is_some_and(|v| filled(v, SlotKind::Fuzz)),
         grass: v.as_ref().is_some_and(is_pbr_grass),
@@ -375,8 +378,12 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                     // is no edit (F1 Review Focus 4).
                     if r.lost_focus() {
                         ui.data_mut(|d| d.remove::<String>(id));
-                        if match_value(strip_lead(&text)) != match_value(&m.path) {
-                            edits.push((format!("match{}", m.n), stored_match(m.n, &text)));
+                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if !esc && match_value(strip_lead(&text)) != match_value(&m.path) {
+                            edits.push((
+                                format!("match{}", m.n),
+                                stored_set_match(m.n, &text, &c.derived),
+                            ));
                         }
                     }
                     if ui
@@ -619,7 +626,10 @@ pub(crate) fn control(
             if r.lost_focus() {
                 ui.data_mut(|d| d.remove::<String>(id));
                 let t = text.trim();
-                edits.push((key, (!t.is_empty()).then(|| json!(t))));
+                // Esc cancels (AG10/AG11, trace-debug #57).
+                if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    edits.push((key, (!t.is_empty()).then(|| json!(t))));
+                }
             }
         }
         KeyKind::Rgb | KeyKind::Rgba => {

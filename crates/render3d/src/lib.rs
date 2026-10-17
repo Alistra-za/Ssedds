@@ -1142,10 +1142,20 @@ impl Renderer {
     }
 
     /// Runs every queued job on this thread and applies it: the synchronous mode (tests, the Meshes view's
-    /// `load`).
+    /// `load`). A key the host's pool already took (in flight) is compiled here too, so no shape stays `Pending`.
     pub fn settle(&mut self) {
         loop {
-            let jobs = self.take_jobs();
+            let mut jobs = self.take_jobs();
+            if jobs.is_empty() {
+                let mut seen = HashSet::new();
+                jobs = self
+                    .shapes
+                    .values()
+                    .filter_map(|s| s.wanted.as_ref())
+                    .filter(|w| seen.insert(w.key.clone()))
+                    .map(|w| w.job(&self.cache_dir))
+                    .collect();
+            }
             if jobs.is_empty() {
                 break;
             }
@@ -1346,8 +1356,8 @@ impl Renderer {
     ///
     /// A shape that is not `Drawing` (pending, failed, hidden) is always rebuilt. On any build error the
     /// previous draw stays on screen and the status is `Failed { showing_previous: true }`; the result is still
-    /// `Ok(kind)`. A hidden material stops drawing the shape and keeps its draw for later. Paths the resolver
-    /// did not return before are asked for again. `Err` only for an id that is not loaded.
+    /// `Ok(kind)`. A hidden material stops drawing the shape and keeps its draw for later. Slot paths the
+    /// resolver did not return before are asked for again (bytes that did not decode are not). `Err` only for an id that is not loaded.
     pub fn set_material(
         &mut self,
         id: ShapeId,
@@ -1384,11 +1394,13 @@ impl Renderer {
             return Ok(kind);
         }
         let evicted = &mut self.evicted_missing;
+        // Only missing entries are asked again; a decode error stays (begin_all never asks, so it would turn missing).
         self.tex_cache.retain(|p, e| {
-            if e.missing && !e.any() {
+            let evict = e.missing && !e.any();
+            if evict {
                 evicted.insert(p.clone());
             }
-            e.any()
+            !evict
         });
         let mut scratch = LoadReport::default();
         if rebuild {

@@ -1344,10 +1344,11 @@ impl Store {
     /// Origins of the latest run: loose ones and separators by priority (highest first), then BSAs by game rank.
     /// A separator is listed after the mods it owns: MO2 shows a separator above its mods in ascending priority,
     /// so in this highest-first order it owns the loose mods listed just above it, up to the previous separator.
+    /// Adjacent separators share a priority and keep modlist.txt order (stored in `parent_origin` for kind 3).
     pub fn mods(&self) -> Result<Vec<ModRow>, ScanError> {
         let mut st = self.conn.prepare(
             "SELECT id, name, kind, priority, derived_by IS NOT NULL FROM origin WHERE enabled = 1
-             ORDER BY kind = 4, priority DESC, kind = 3 DESC, id",
+             ORDER BY kind = 4, priority DESC, kind = 3 DESC, CASE WHEN kind = 3 THEN parent_origin END, id",
         )?;
         let v = st
             .query_map([], |r| {

@@ -123,6 +123,8 @@ pub struct PendingCs {
     pub files: Vec<(String, String)>,
     /// Refused files and left-out keys, for the export report.
     pub notes: Vec<String>,
+    /// #49: paths of refused files (already noted): not orphans, and their record stays.
+    pub refused: Vec<String>,
 }
 
 /// Design §5: one file per EDID per block (CS only). `Some` on CS even without blocks: the orphan report needs it.
@@ -155,6 +157,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingCs> {
             for edid in &b.edids {
                 match refused.get(&(e.id.clone(), kind, edid.clone())) {
                     Some(why) => {
+                        p.refused.push(rel_path(kind, edid));
                         let n = format!("{} {edid} not written: {why}", kind.label());
                         if !p.notes.contains(&n) {
                             p.notes.push(n);
@@ -245,6 +248,10 @@ pub fn finish(
     }
     for (rel, sha) in shas {
         if p.files.iter().any(|(r, _)| r.eq_ignore_ascii_case(rel)) {
+            continue;
+        }
+        if p.refused.iter().any(|r| r.eq_ignore_ascii_case(rel)) {
+            out.insert(rel.clone(), sha.clone());
             continue;
         }
         let path = p.root.join(rel);

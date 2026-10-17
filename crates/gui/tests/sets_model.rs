@@ -1874,3 +1874,37 @@ fn redo_of_a_duplicate_refuses_an_occupied_path_and_records_the_new_hash() {
     assert!(m.dialog.is_none(), "{:?}", m.dialog);
     assert!(!copy.exists(), "the copy made by redo is deleted by undo");
 }
+
+/// Trace-debug 2026-10-16 #39: Duplicate into set skips a name another file is read as (its `[inputs]` alias), as
+/// the rename code does; the engine would refuse that alias next to a real file of the same name.
+#[test]
+fn duplicate_skips_a_name_another_file_reads_as() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    let root = m.root.clone().unwrap();
+    let leaf = key_of(&m, "leaf.png");
+    let rough = key_of(&m, "rock01_roughness.png");
+    m.edit_docs("alias", None, true, |p, _| {
+        p.set_read_as(&leaf, Some("landscape/odd_roughness.png"))
+    });
+    idle(&mut m);
+    let _ = m.drop_replace(&rough, "landscape/odd", DropChoice::Duplicate);
+    assert!(!root.join("landscape/odd_roughness.png").exists());
+    assert!(root.join("landscape/odd-2_roughness.png").exists());
+}
+
+/// Trace-debug #55: Move down on the last set (no `[project].order` yet) is no edit at all.
+#[test]
+fn move_down_on_last_set_changes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let views = set_views(&m);
+    let last = views.last().unwrap().id.clone();
+    let sets_dirty = |m: &sdc_gui::model::AppModel| m.sets_doc.as_ref().unwrap().is_dirty();
+    let (undo, dirty) = (m.history.undo.len(), sets_dirty(&m));
+    assert!(!m.reorder_set(&last, views.len()));
+    assert_eq!((m.history.undo.len(), sets_dirty(&m)), (undo, dirty));
+    assert!(!dirty, "sdc-project.toml is untouched");
+    assert!(m.reorder_set(&last, 0), "a real move still moves");
+}

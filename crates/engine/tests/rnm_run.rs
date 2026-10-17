@@ -179,3 +179,40 @@ fn target_edit_re_encodes_the_cnr() {
     ));
     assert_eq!(s.converted, 1);
 }
+
+/// Trace-debug #25 (Note BQ): RNM layer and mask files are never converted on their own, so the shader map check
+/// does not call them extra maps that are "still converted".
+#[test]
+fn rnm_layers_get_no_extra_map_warning() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["iron.png", "iron_n.png", "iron_detailnormmask.png"] {
+        png(d.path(), n);
+    }
+    detail(d.path(), "iron_detailnorm.png", 32, 32);
+    let mut req = BatchRequest::new(
+        vec![d.path().join("in")],
+        d.path().join("out"),
+        engine::config::Target::Cs,
+    );
+    req.accept = engine::policy::AcceptSuggestions::High;
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), "rnm-extra");
+    Engine::new()
+        .unwrap()
+        .plan(req, &rep, &CancelToken::default())
+        .unwrap();
+    let events: Vec<String> = sink
+        .take()
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap())
+        .collect();
+    assert!(
+        events.iter().any(|e| e.contains("set_resolved")),
+        "no set_resolved event"
+    );
+    let extra: Vec<&String> = events
+        .iter()
+        .filter(|e| e.contains("SHADER-EXTRA-MAP") && e.contains("detailnorm"))
+        .collect();
+    assert!(extra.is_empty(), "{extra:?}");
+}

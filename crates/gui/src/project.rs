@@ -159,6 +159,18 @@ pub(crate) fn toml_to_json(v: &Item) -> Option<Json> {
     serde_json::to_value(&t["v"]).ok()
 }
 
+/// A TOML item as JSON; a `[table]` (or dotted keys) becomes an object, as an inline table does.
+pub(crate) fn item_json(item: &Item) -> Option<Json> {
+    match item {
+        Item::Table(t) => Some(Json::Object(
+            t.iter()
+                .filter_map(|(k, i)| Some((k.to_string(), item_json(i)?)))
+                .collect(),
+        )),
+        _ => toml_to_json(item),
+    }
+}
+
 /// A new table whose keys print as dotted keys (`alpha.policy = ...`) inside their parent.
 pub(crate) fn dotted_table() -> Item {
     let mut t = Table::new();

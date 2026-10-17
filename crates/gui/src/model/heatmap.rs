@@ -7,7 +7,7 @@
 use crate::model::preview::PreviewOut;
 use crate::model::view::{heatmap_of, heatmap_vs_pin, Channel};
 use crate::model::AppModel;
-use crate::worker::{spawn_guarded, WorkerMsg};
+use crate::worker::{or_send, spawn_guarded, WorkerMsg};
 use std::sync::Arc;
 
 /// A heatmap ready to upload: `width * height * 4` RGBA bytes.
@@ -102,12 +102,17 @@ impl AppModel {
         let id = h.next_id;
         h.running = Some((id, want.clone()));
         spawn_guarded(self.tx.clone(), "heatmap", move |tx| {
-            let made = match &pin_out {
-                Some(pin) => {
-                    heatmap_vs_pin(&want.out, pin, want.mip, want.channel, want.full_scale)
-                }
-                None => heatmap_of(&want.out, want.mip, want.channel, want.full_scale),
-            };
+            // A panic is this job's "no heatmap" (trace-debug #26), so its key is not retried every frame.
+            let made = or_send(
+                tx,
+                || match &pin_out {
+                    Some(pin) => {
+                        heatmap_vs_pin(&want.out, pin, want.mip, want.channel, want.full_scale)
+                    }
+                    None => heatmap_of(&want.out, want.mip, want.channel, want.full_scale),
+                },
+                |_| WorkerMsg::Heatmap { id, image: None },
+            );
             let image = made.map(|(width, height, rgba)| {
                 Arc::new(HeatImage {
                     width,
@@ -127,14 +132,6 @@ impl AppModel {
         };
         if want.as_ref().is_some_and(|w| key.same_view(w)) {
             h.shown = Some((key, image));
-        }
-    }
-
-    /// A panicked heatmap job (the error dialog says so): its key shows no heatmap, so it is not retried every frame.
-    pub(super) fn heatmap_panicked(&mut self) {
-        let h = &mut self.preview.heat;
-        if let Some((_, key)) = h.running.take() {
-            h.shown = Some((key, None));
         }
     }
 
@@ -163,5 +160,43 @@ impl AppModel {
                 .as_ref()
                 .is_none_or(|(k, _)| *k != w)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::tests::{bare_model, panicked};
+    use crate::model::{preview, Dialog};
+
+    /// Trace-debug #26: job A's panic lands after job B started; B keeps running and its result is shown.
+    #[test]
+    fn a_stale_heatmap_panic_does_not_blank_the_current_job() {
+        let mut m = bare_model();
+        let out = Arc::new(preview::PreviewOut {
+            result: engine::session::PreviewResult {
+                source: engine::session::SourcePreview {
+                    first_level: 0,
+                    dims: vec![(1, 1)],
+                    levels: vec![],
+                },
+                format: engine::config::Format::Rgba8,
+                srgb: false,
+                levels: vec![],
+                validation: Default::default(),
+                warnings: vec![],
+                normal_len: vec![],
+            },
+            decoded: vec![],
+        });
+        m.preview.encoded = preview::EncodedState::Done(out);
+        m.view.heatmap = true;
+        let key = m.heat_wanted().unwrap();
+        m.preview.heat.running = Some((2, key));
+        // Job 1 panicked: its own tagged result, then the dialog.
+        m.handle(WorkerMsg::Heatmap { id: 1, image: None });
+        m.handle(panicked("heatmap"));
+        assert!(m.heatmap_pending(), "job 2 is still in flight");
+        assert!(matches!(m.dialog, Some(Dialog::Error(_))));
     }
 }

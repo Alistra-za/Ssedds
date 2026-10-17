@@ -1422,9 +1422,26 @@ impl AppModel {
             .ok_or("the source has no folder")?
             .to_path_buf();
         let name = |b: &str| dir.join(format!("{b}{tail}.{ext}"));
+        // #39: a name another file is read as (its alias) is taken too, as in the rename dialog.
+        let aliases: BTreeSet<String> = self
+            .project
+            .as_ref()
+            .map(|p| {
+                self.items
+                    .iter()
+                    .filter_map(|i| p.read_as(&i.key))
+                    .map(|a| a.replace('\\', "/").to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let aliased = |p: &Path| {
+            p.strip_prefix(&root).is_ok_and(|r| {
+                aliases.contains(&r.to_string_lossy().replace('\\', "/").to_lowercase())
+            })
+        };
         let mut dst = name(&set_base);
         let mut n = 2;
-        while dst.exists() {
+        while dst.exists() || aliased(&dst) {
             dst = name(&format!("{set_base}-{n}"));
             n += 1;
         }
@@ -1463,17 +1480,23 @@ impl AppModel {
     }
 
     /// Move set `id` to display position `to` (the order decides ownership, so output paths: plan again, P7).
-    pub fn reorder_set(&mut self, id: &str, to: usize) {
+    /// Move set `id` to position `to`; false when nothing moved (trace-debug #55: no step, no dirty document).
+    pub fn reorder_set(&mut self, id: &str, to: usize) -> bool {
         if !self.sets_editable() {
-            return;
+            return false;
         }
         let mut ids: Vec<String> = set_views(self).into_iter().map(|v| v.id).collect();
         let Some(from) = ids.iter().position(|i| same_id(i, id)) else {
-            return;
+            return false;
         };
         let moved = ids.remove(from);
-        ids.insert(to.min(ids.len()), moved);
+        let to = to.min(ids.len());
+        if to == from {
+            return false;
+        }
+        ids.insert(to, moved);
         self.edit_docs("Reorder sets", None, true, move |_, s| s.set_order(&ids));
+        true
     }
 
     /// Rename set `id` to `new_id`; refused (returns the reason) when the name is unusable or taken.
@@ -1540,7 +1563,8 @@ impl AppModel {
             return Err(format!("{item} is not in {}", v.id));
         }
         let moved_in = self.sets_doc.as_ref().is_some_and(|d| {
-            entry_of(&d.entries(), &v.id).is_some_and(|e| e.add.iter().any(|f| same_id(f, item)))
+            entry_of(&d.entries(), &v.id)
+                .is_some_and(|e| e.add.iter().any(|f| crate::sets_doc::names_file(f, item)))
         });
         if v.members.len() == 1 && !moved_in {
             return Err(format!("{item} is the only texture in {}", v.id));

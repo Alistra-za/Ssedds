@@ -184,3 +184,31 @@ fn installed_cs_fills_a_missing_env_cube_with_a_cube() {
         Some((SrvKind::Cube, MAGENTA))
     );
 }
+
+/// Trace-debug #29: bytes that do not decode keep the white default through a cbuffer edit and then a re-permute
+/// (`begin_all` never asks the resolver, so an evicted decode-error entry came back as missing, the fill).
+#[test]
+fn undecodable_slot_stays_default_after_edit_then_define_change() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = cylinder(cache.path(), FLAT, Some(MAGENTA), 0, &[]);
+    let bad = |p: &str| (p == "textures/standin/bad_d.dds").then(|| b"not a dds".to_vec());
+    let mut m = r
+        .shapes()
+        .into_iter()
+        .find(|s| s.id == CYL1)
+        .unwrap()
+        .material;
+    m.set_slot_raw(0, r"textures\standin\bad_d.dds");
+    assert!(r.set_material(CYL1, m.clone(), &bad).is_ok());
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    assert_eq!(r.draw_default_at(CYL1, 0), Some((SrvKind::Tex2D, WHITE)));
+    m.params.uv_scale = [2.0, 2.0];
+    assert!(r.set_material(CYL1, m, &bad).is_ok());
+    assert_eq!(r.draw_default_at(CYL1, 0), Some((SrvKind::Tex2D, WHITE)));
+    r.set_debug_output(render3d::DebugOutput::Lit).unwrap();
+    assert_eq!(
+        r.draw_default_at(CYL1, 0),
+        Some((SrvKind::Tex2D, WHITE)),
+        "a decode error is not a missing texture"
+    );
+}

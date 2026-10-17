@@ -375,3 +375,56 @@ fn moving_a_file_back_lifts_its_own_remove() {
     let e = &s.entries()[0];
     assert!(e.remove.is_empty() && e.add.is_empty(), "{e:?}");
 }
+
+/// Trace-debug 2026-10-16 #37: an `add` key without the extension names the file as the engine reads it
+/// (`path_key_matches`), so removing that file drops the key instead of refusing or writing a `remove`.
+#[test]
+fn removing_a_file_moved_in_by_extensionless_key_drops_the_add() {
+    let (_d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nadd = [\"a/wall\"]\n",
+    ));
+    s.remove_member("a/new", "a/wall.png");
+    let e = &s.entries()[0];
+    assert!(e.add.is_empty() && e.remove.is_empty(), "{e:?}");
+
+    let d = tempfile::tempdir().unwrap();
+    let root = support::mod_folder(d.path());
+    std::fs::write(
+        root.join("sdc-project.toml"),
+        "[[sets]]\nid = \"landscape/new\"\ncreated = true\nadd = [\"landscape/odd\"]\n",
+    )
+    .unwrap();
+    let mut m = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..Default::default()
+        },
+        None,
+        support::session(),
+    );
+    m.open_folder(root);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m.remove_member("landscape/new", "landscape/odd.png")
+        .unwrap();
+    let e = m.sets_doc.as_ref().unwrap().entries();
+    let e = e.iter().find(|e| e.id == "landscape/new").unwrap();
+    assert!(e.add.is_empty() && e.remove.is_empty(), "{e:?}");
+}
+
+/// Review M4 (#37, Note BR4): an extension-less `add` key that also names a sibling (`foo` for `foo.png` and
+/// `foo.tga`) is not dropped when one of them is removed; the removed file gets its own `remove`, so the sibling
+/// stays in the set.
+#[test]
+fn removing_one_of_two_same_stem_files_keeps_the_shared_add_key() {
+    let (d, mut s) = doc(Some(
+        "[[sets]]\nid = \"a/new\"\ncreated = true\nadd = [\"a/foo\"]\n",
+    ));
+    std::fs::create_dir_all(d.path().join("a")).unwrap();
+    for f in ["a/foo.png", "a/foo.tga"] {
+        std::fs::write(d.path().join(f), b"x").unwrap();
+    }
+    s.remove_member("a/new", "a/foo.tga");
+    let e = &s.entries()[0];
+    assert_eq!(e.add, ["a/foo"], "{e:?}");
+    assert_eq!(e.remove, ["a/foo.tga"], "{e:?}");
+}

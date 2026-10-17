@@ -18,6 +18,8 @@ pub enum MigrateError {
         found: u32,
         current: u32,
     },
+    #[error("[subtypes.rfaos] and [subtypes.skin_rfaos] name the same sub-type (rfaos is the old id); keep one")]
+    DuplicateSubtypeAlias,
 }
 
 type TomlStep = fn(toml::Value) -> toml::Value;
@@ -79,15 +81,27 @@ fn toml_version(
     }
 }
 
+/// Trace-debug #20 (Note BQ): serde folds the `rfaos` alias into `skin_rfaos`, so a `[subtypes]` table holding both
+/// would lose one silently; refuse it instead of merging.
+fn check_aliases(v: &toml::Value) -> Result<(), MigrateError> {
+    let st = v.get("subtypes").and_then(toml::Value::as_table);
+    if st.is_some_and(|t| t.contains_key("rfaos") && t.contains_key("skin_rfaos")) {
+        return Err(MigrateError::DuplicateSubtypeAlias);
+    }
+    Ok(())
+}
+
 /// A preset file's table; `schema_version` is required.
 pub fn migrate_preset(v: toml::Value) -> Result<toml::Value, MigrateError> {
     let from = toml_version(&v, "schema_version", None)?;
+    check_aliases(&v)?;
     run(v, from, PRESET_SCHEMA, "schema_version", PRESET_STEPS)
 }
 
 /// A config file's table; an absent `schema_version` is 1.
 pub fn migrate_config(v: toml::Value) -> Result<toml::Value, MigrateError> {
     let from = toml_version(&v, "schema_version", Some(1))?;
+    check_aliases(&v)?;
     run(v, from, CONFIG_SCHEMA, "schema_version", CONFIG_STEPS)
 }
 

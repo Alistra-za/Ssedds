@@ -10,7 +10,7 @@ fn fonts_dir() -> PathBuf {
 }
 
 /// The font definitions built from `dir`: Segoe UI (proportional) and Consolas (monospace) with
-/// Segoe UI Symbol and Segoe UI Emoji as fallbacks. A missing optional font is skipped; a missing
+/// Segoe UI Symbol, Segoe UI Emoji and the CJK system fonts as fallbacks. A missing optional font is skipped; a missing
 /// `segoeui.ttf` is an error naming its path.
 fn definitions_from(dir: &Path) -> Result<egui::FontDefinitions, String> {
     let primary = dir.join("segoeui.ttf");
@@ -26,6 +26,10 @@ fn definitions_from(dir: &Path) -> Result<egui::FontDefinitions, String> {
     for (name, file, proportional_fallback, monospace_use) in [
         ("seguisym", "seguisym.ttf", true, true),
         ("seguiemj", "seguiemj.ttf", true, false),
+        // #50: CJK fallbacks (Chinese, Japanese, Korean); each adds 13-20 MB of font data.
+        ("msyh", "msyh.ttc", true, true),
+        ("yugothm", "YuGothM.ttc", true, true),
+        ("malgun", "malgun.ttf", true, true),
         ("consola", "consola.ttf", false, true),
     ] {
         let Ok(bytes) = std::fs::read(dir.join(file)) else {
@@ -73,6 +77,28 @@ mod tests {
         assert!(!defs.families[&egui::FontFamily::Proportional].is_empty());
         assert_eq!(defs.families[&egui::FontFamily::Proportional][0], "segoeui");
         assert!(!defs.families[&egui::FontFamily::Monospace].is_empty());
+    }
+
+    /// Trace-debug 2026-10-16 #50: CJK names get a proportional fallback (Chinese, Japanese, Korean system fonts).
+    #[test]
+    fn cjk_names_have_a_proportional_fallback() {
+        let dir = fonts_dir();
+        let defs = definitions_from(&dir).unwrap();
+        let family = &defs.families[&egui::FontFamily::Proportional];
+        for (name, file) in [
+            ("msyh", "msyh.ttc"),
+            ("yugothm", "YuGothM.ttc"),
+            ("malgun", "malgun.ttf"),
+        ] {
+            if dir.join(file).exists() {
+                assert!(family.iter().any(|f| f == name), "{name}: {family:?}");
+            }
+        }
+        if dir.join("msyh.ttc").exists() {
+            let mut fonts = egui::epaint::text::Fonts::new(Default::default(), defs);
+            let id = egui::FontId::proportional(14.0);
+            assert!(fonts.has_glyphs(&id, "中文 日本語 한국어"));
+        }
     }
 
     #[test]

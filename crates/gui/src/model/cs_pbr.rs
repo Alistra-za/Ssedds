@@ -238,10 +238,11 @@ pub fn floats(v: &Json) -> Json {
 
 use super::AppModel;
 use crate::pgp::settings::Settings;
+use crate::project::item_json;
 use crate::sets_doc::SetsDoc;
 use engine::sets::same_id;
 use serde_json::json;
-use toml_edit::{Item, TableLike};
+use toml_edit::TableLike;
 
 /// Texture sets: when the set's PGPatcher entry is written (design §5.1). `statics = "auto" | "always" | "never"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -283,18 +284,6 @@ pub struct CsBlock {
     pub values: Map<String, Json>,
     /// Known fields whose value has the wrong type: kept in the file, warned about, not exported (design §8).
     pub bad: Vec<String>,
-}
-
-/// A TOML item as JSON; a `[table]` (or dotted keys) becomes an object.
-fn item_json(item: &Item) -> Option<Json> {
-    match item {
-        Item::Table(t) => Some(Json::Object(
-            t.iter()
-                .filter_map(|(k, i)| Some((k.to_string(), item_json(i)?)))
-                .collect(),
-        )),
-        _ => crate::project::toml_to_json(item),
-    }
 }
 
 /// Reads a block table. Unknown keys are left alone: they stay in the file and are never exported.

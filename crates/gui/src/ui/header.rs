@@ -96,8 +96,11 @@ pub fn draw(
                         .add_enabled(model.is_dirty(), egui::Button::new("Save").min_size(size))
                         .clicked()
                     {
-                        // A failed save raises its own dialog.
-                        let _ = model.save();
+                        // AG23, trace-debug #54: as Ctrl+S, wait for a focused field to commit.
+                        if !field_focused(ui, model, "Save") {
+                            // A failed save raises its own dialog.
+                            let _ = model.save();
+                        }
                     }
                 },
             );
@@ -163,6 +166,21 @@ fn push_right(ui: &mut egui::Ui, w: f32) {
     }
 }
 
+/// True when a text field has the keyboard focus: `what` (Save, Export) then does nothing and says why, so the
+/// field commits its typed value on the focus loss first (AG23, trace-debug #54).
+fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
+    if !ui.ctx().egui_wants_keyboard_input() {
+        return false;
+    }
+    model.status_line = format!("{what}: leave the text field first");
+    // The commit's plan replaces the status line at once; the log keeps it.
+    model.messages.log(
+        crate::model::messages::Severity::Info,
+        model.status_line.clone(),
+    );
+    true
+}
+
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
 fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
     let can_export = can_export(model);
@@ -179,7 +197,8 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         export = export.fill(ui.visuals().selection.bg_fill);
     }
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
-        if ui.add_enabled(can_export, export).clicked() {
+        // Export saves first: like Save, wait for a focused field to commit (Note BS14).
+        if ui.add_enabled(can_export, export).clicked() && !field_focused(ui, model, "Export") {
             model.export_clicked();
         }
         if running {
