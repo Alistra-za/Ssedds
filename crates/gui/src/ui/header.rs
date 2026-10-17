@@ -638,7 +638,7 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(WARNING, format!("⚠ {b}"));
                 if model.project.is_some() && ui.button("Reload").clicked() {
-                    model.reload_documents();
+                    model.request_reload();
                 }
                 if model.kept_banner.is_some()
                     && ui

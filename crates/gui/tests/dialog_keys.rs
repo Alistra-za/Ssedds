@@ -271,6 +271,7 @@ fn esc_closes_the_dialogs_that_use_the_shared_modal() {
     for dialog in [
         Dialog::Error("boom".into()),
         Dialog::CloseUnsaved,
+        Dialog::ReloadUnsaved,
         Dialog::ConfirmResetAll(vec![]),
         Dialog::ExportBlocked(vec![]),
         Dialog::ExportWarnings(vec![]),

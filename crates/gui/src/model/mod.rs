@@ -136,6 +136,8 @@ pub enum Dialog {
     CloseUnsaved,
     /// Opening this folder would drop unsaved edits to the current `sdc.toml`.
     OpenUnsaved(PathBuf),
+    /// The banner's Reload would drop unsaved edits and undo (trace-debug #10).
+    ReloadUnsaved,
     /// An export is running; closing or opening would have to cancel it first (M3a spec §2.6).
     ExportRunning(AfterExport),
     /// The PGPatcher JSON was edited outside sdc since the last export; the new text waits for the answer.
@@ -2422,6 +2424,15 @@ impl AppModel {
     }
 
     /// Reload both documents from disk (the banner's Reload), then plan once.
+    /// The banner's Reload: at once when nothing is unsaved, else ask first (`Dialog::ReloadUnsaved`).
+    pub fn request_reload(&mut self) {
+        if self.is_dirty() {
+            self.dialog = Some(Dialog::ReloadUnsaved);
+        } else {
+            self.reload_documents();
+        }
+    }
+
     pub fn reload_documents(&mut self) {
         self.dialog = None;
         self.reset_type_follow();
