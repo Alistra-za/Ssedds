@@ -429,3 +429,31 @@ fn rename_inputs_onto_an_existing_entry_says_the_entry_was_kept() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Trace-debug 2026-10-16 #19: an input renamed onto the path another set writes (through its `output_name`) blocks,
+/// or both textures are skipped as IN-DUPLICATE.
+#[test]
+fn an_input_rename_onto_another_sets_output_blocks_apply() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let leaf = set_id_of(&m, LEAF);
+    m.set_output_name(&leaf, Some("steel")).unwrap();
+    idle(&mut m);
+    assert!(output_of(&m, LEAF).ends_with("export/landscape/steel.dds"));
+    m.click_item(ROCK, false, false);
+    m.open_rename(RenameMode::Inputs);
+    dialog(&mut m)
+        .typed
+        .insert(ROCK.into(), "landscape/steel.png".into());
+    let p = plan(&m);
+    let r = row(&p, ROCK);
+    assert!(
+        r.problem
+            .as_deref()
+            .unwrap_or("")
+            .contains("already writes"),
+        "{:?}",
+        r.problem
+    );
+    assert!(!p.can_apply());
+}
