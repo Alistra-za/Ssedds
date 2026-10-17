@@ -38,12 +38,12 @@ pub(crate) fn has_component(path: &str, name: &str) -> bool {
     path.split('/').any(|c| c == name)
 }
 
-/// Spec §4.3 rule 1: under cs, a set is PBR if its path has a `pbr` component, it has _rmaos/_rfaos/_cnr/_f, or it
+/// Spec §4.3 rule 1: under cs, a set is PBR if its path has a `pbr` component, it has _rmaos/_rfaos/_cnr/_crn/_f, or it
 /// has a raw packing input that starts the _rmaos/_rfaos recipe (§4.4, §6.4).
 pub fn is_pbr_set(c: &SuggestContext) -> bool {
     c.target == Target::Cs
         && (has_component(c.game_path, "pbr")
-            || ["rmaos", "rfaos", "cnr", "f"]
+            || ["rmaos", "rfaos", "cnr", "crn", "f"]
                 .iter()
                 .any(|s| c.set_suffixes.contains(*s))
             || RawMap::INPUTS
@@ -872,5 +872,23 @@ mod tests {
             AlphaPolicy::Remove
         );
         assert!(suggest_alpha(Subtype::Normal, AlphaContent::Constant255, 1.0).is_none());
+    }
+
+    /// Audit 08b-4: `_crn` is the same coat normal as `_cnr`, so it makes a set PBR too.
+    #[test]
+    fn crn_makes_a_set_pbr_like_cnr() {
+        for s in ["cnr", "crn"] {
+            let set = set_of(&[s, "n"]);
+            assert!(
+                is_pbr_set(&ctx(
+                    Target::Cs,
+                    None,
+                    "textures/a/x.png",
+                    &set,
+                    AlphaContent::None
+                )),
+                "{s}"
+            );
+        }
     }
 }
