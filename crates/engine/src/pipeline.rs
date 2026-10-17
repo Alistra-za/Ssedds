@@ -562,8 +562,15 @@ pub fn process_file(
             });
         if ours {
             match std::fs::remove_file(&side) {
+                // Owner, 2026-10-16 (Note BQ10): a warning; the new DDS stays.
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(fail(Stage::Write)(format!("stale sidecar: {e}")));
+                    report.warnings.push(crate::codes::Warning::new(
+                        crate::codes::Code::OutSidecarKept,
+                        format!(
+                            "{}: the old sidecar describes the previous output and could not be removed: {e}",
+                            side.display()
+                        ),
+                    ));
                 }
                 _ => {}
             }

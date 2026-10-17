@@ -441,6 +441,7 @@
         "IN-ALIAS-INVALID",
         "IN-ALIAS-STALE",
         "OUT-UNKNOWN-EXISTING",
+        "OUT-SIDECAR-KEPT",
         "PACK-DEFAULTED",
         "PACK-SIZE-MISMATCH",
         "PACK-CONFLICT",

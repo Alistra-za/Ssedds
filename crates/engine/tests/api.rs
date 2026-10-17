@@ -1134,3 +1134,34 @@ fn stale_sidecar_is_not_kept_after_a_run_without_sidecar() {
     assert_eq!(s.converted, 1);
     assert_eq!(std::fs::read_to_string(&side).unwrap(), "{\"mine\": true}");
 }
+
+/// Review M2 (owner, 2026-10-16; Note BQ10): a stale sidecar sdc wrote but cannot remove (held open without
+/// delete sharing here) is a warning, OUT-SIDECAR-KEPT; the new DDS is kept and the file counts as converted.
+#[cfg(windows)]
+#[test]
+fn an_unremovable_stale_sidecar_is_a_warning_not_a_failure() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let side = d.path().join("out/armor/iron.dds.json");
+    let mut with = request(d.path());
+    with.sidecar = true;
+    run(with);
+    // FILE_SHARE_READ only: sdc can read the record, but not delete it while this handle is open.
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&side)
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([y as u8 * 4, x as u8 * 4, 9]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let (s, ev) = run(request(d.path()));
+    drop(hold);
+    assert_eq!((s.converted, s.failed), (1, 0));
+    assert!(d.path().join("out/armor/iron.dds").exists());
+    assert!(side.exists());
+    assert!(ev
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutSidecarKept)));
+}
