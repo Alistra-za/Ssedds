@@ -1486,8 +1486,19 @@ fn category_of(st: Subtype, format: Format, grayscale: bool) -> Category {
 
 /// Every (format, tag) pair a format picker may offer for `st` under `target` (owner, 2026-10-13): the pairs
 /// `check_profile` raises nothing blocking or worse for from the format and tag alone. Empty for a sub-type
-/// unavailable under `target` (CFG-UNAVAILABLE: nothing is written).
+/// unavailable under `target` (CFG-UNAVAILABLE: nothing is written). A grey `skin_wet` is judged as the greyscale
+/// map it is only by [`allowed_encodings_for`].
 pub fn allowed_encodings(st: Subtype, target: Target) -> Vec<(Format, ColorTag)> {
+    allowed_encodings_for(st, target, false)
+}
+
+/// [`allowed_encodings`] for a file whose analysis is (`grayscale`) or is not greyscale, as `check_profile` judges
+/// a grey `skin_wet` (trace-debug #31, Note BQ).
+pub fn allowed_encodings_for(
+    st: Subtype,
+    target: Target,
+    grayscale: bool,
+) -> Vec<(Format, ColorTag)> {
     if availability(target, st) != Availability::Available {
         return vec![];
     }
@@ -1509,7 +1520,7 @@ pub fn allowed_encodings(st: Subtype, target: Target) -> Vec<(Format, ColorTag)>
         .flat_map(|f| tags.map(|t| (f, t)))
         .filter(|&(f, t)| {
             !hdr_outside_cs(f, target)
-                && encoding_warnings(st, category_of(st, f, false), target, f, t)
+                && encoding_warnings(st, category_of(st, f, grayscale), target, f, t)
                     .iter()
                     .all(|w| w.severity < Severity::Blocking)
         })

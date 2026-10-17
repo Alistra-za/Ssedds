@@ -27,7 +27,8 @@ pub struct InputFile {
     pub path: PathBuf,
     /// Path relative to the folder it was found in (just the file name for an explicit file).
     pub rel: PathBuf,
-    /// Lower-case, '/'-separated path from the last `textures` component, else `rel`.
+    /// Lower-case, '/'-separated path from the first `textures` component at or below the input root, else the last
+    /// one above it, else `rel`.
     pub game_path: String,
     /// `<output_root>/<rel>` with a `.dds` extension.
     pub output: PathBuf,
@@ -49,7 +50,14 @@ pub fn game_path(abs: &Path, rel: &Path) -> String {
         .components()
         .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect();
-    match comps.iter().rposition(|c| c == "textures") {
+    // Trace-debug #24 (Note BQ): the first `textures` at or below the input root (its last component), as
+    // `nif::path::canon_texture` keeps a nested one; else the last anywhere.
+    let root = comps.len().saturating_sub(rel.components().count() + 1);
+    let first = comps[root..]
+        .iter()
+        .position(|c| c == "textures")
+        .map(|i| root + i);
+    match first.or_else(|| comps.iter().rposition(|c| c == "textures")) {
         Some(i) => comps[i..].join("/"),
         None => rel
             .to_string_lossy()
@@ -108,6 +116,15 @@ pub fn discover_reporting(
     let out_abs = std::path::absolute(output_root)?;
     let mut files = vec![];
     let mut skipped = vec![];
+    // Trace-debug #13 (Note BQ): a file reached through two inputs is kept once, through the first.
+    let mut seen = std::collections::HashSet::new();
+    let mut first_sight = |p: &Path| {
+        seen.insert(
+            std::fs::canonicalize(p)
+                .or_else(|_| std::path::absolute(p))
+                .unwrap_or_else(|_| p.to_path_buf()),
+        )
+    };
     for input in inputs {
         if input.is_dir() {
             // Note BC (audit #3): only an output root strictly inside this folder is skipped; in place skips nothing.
@@ -145,7 +162,7 @@ pub fn discover_reporting(
                     continue;
                 }
                 let ext = ext_lower(p);
-                if ext == "dds" || IMAGE_EXTS.contains(&ext.as_str()) {
+                if (ext == "dds" || IMAGE_EXTS.contains(&ext.as_str())) && first_sight(p) {
                     let rel = p
                         .strip_prefix(input)
                         .map_err(std::io::Error::other)?
@@ -157,6 +174,9 @@ pub fn discover_reporting(
             let name = input
                 .file_name()
                 .ok_or_else(|| std::io::Error::other("input has no file name"))?;
+            if !first_sight(input) {
+                continue;
+            }
             files.push(make(input.clone(), PathBuf::from(name), output_root));
         }
     }

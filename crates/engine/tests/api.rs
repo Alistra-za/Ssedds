@@ -1082,3 +1082,55 @@ fn a_real_convert_with_pot_down_writes_a_power_of_two_dds() {
     let f = engine::dds::read_dds(&std::fs::read(d.path().join("out/odd.dds")).unwrap()).unwrap();
     assert_eq!((f.width, f.height, f.mip_count), (32, 32, 6));
 }
+
+/// Trace-debug #22 (Note BQ): a dry run reads the manifest without compacting it, so a big stale manifest is left
+/// as it is (a converting process on the same root may be appending to it).
+#[test]
+fn a_dry_run_in_place_does_not_rewrite_a_big_stale_manifest() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    // A DDS input makes the run read the manifest for its IN-DDS-SKIPPED summary.
+    std::fs::write(d.path().join("textures/armor/old.dds"), b"DDS ").unwrap();
+    let m = Manifest::at(&d.path().join("out"));
+    std::fs::create_dir_all(m.path().parent().unwrap()).unwrap();
+    let line = b"{\"schema\":1,\"output\":\"a.dds\"}\n";
+    let n = engine::manifest::COMPACT_MIN_BYTES as usize / line.len() + 1;
+    std::fs::write(m.path(), line.repeat(n)).unwrap();
+    let mut req = request(d.path());
+    req.dry_run = true;
+    run(req);
+    assert_eq!(
+        std::fs::metadata(m.path()).unwrap().len(),
+        (line.len() * n) as u64,
+        "the dry run rewrote the manifest"
+    );
+}
+
+/// Trace-debug #27 (Note BQ): an output re-encoded without `--sidecar` loses its old sidecar, which described the
+/// previous source; a later `--sidecar` run then writes a fresh one.
+#[test]
+fn stale_sidecar_is_not_kept_after_a_run_without_sidecar() {
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let side = d.path().join("out/armor/iron.dds.json");
+    let mut with = request(d.path());
+    with.sidecar = true;
+    run(with.clone());
+    let first = std::fs::read_to_string(&side).unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([y as u8 * 4, x as u8 * 4, 9]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let (s, _) = run(request(d.path()));
+    assert_eq!(s.converted, 1);
+    assert!(!side.exists(), "the stale sidecar was kept");
+    run(with);
+    assert_ne!(std::fs::read_to_string(&side).unwrap(), first);
+    // A `.dds.json` sdc did not write stays.
+    std::fs::write(&side, "{\"mine\": true}").unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([x as u8, y as u8, 99]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let (s, _) = run(request(d.path()));
+    assert_eq!(s.converted, 1);
+    assert_eq!(std::fs::read_to_string(&side).unwrap(), "{\"mine\": true}");
+}

@@ -548,6 +548,25 @@ pub fn process_file(
             serde_json::to_string_pretty(&record).map_err(|e| fail(Stage::Write)(e.to_string()))?;
         write_atomic(&job.output.with_extension("dds.json"), text.as_bytes())
             .map_err(|e| fail(Stage::Write)(format!("sidecar: {e}")))?;
+    } else {
+        // Trace-debug #27 (Note BQ): an earlier run's sidecar describes the bytes just replaced. Only a file that
+        // reads as sdc's record for this output is removed: never a file sdc did not write.
+        let side = job.output.with_extension("dds.json");
+        let ours = std::fs::read(&side)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .is_some_and(|v| {
+                v["output"].as_str() == Some(record.output.as_str())
+                    && v.get("profile_sha256").is_some()
+            });
+        if ours {
+            match std::fs::remove_file(&side) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(fail(Stage::Write)(format!("stale sidecar: {e}")));
+                }
+                _ => {}
+            }
+        }
     }
     manifest
         .append(&record)

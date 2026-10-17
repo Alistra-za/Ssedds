@@ -66,7 +66,7 @@ fn bc7_levels_have_the_right_size_and_flags() {
         assert!(a.iter().any(|x| x == f), "{f} not in {a:?}");
     }
     // The feed is the level as a legacy-header B8G8R8A8 DDS (Spike S7b).
-    let feed = std::fs::read(&a[a.len() - 2]).unwrap();
+    let feed = std::fs::read(tmp.path().join(&a[a.len() - 2])).unwrap();
     assert_ne!(&feed[84..88], b"DX10");
     assert_eq!(u32::from_le_bytes(feed[88..92].try_into().unwrap()), 32);
     assert_eq!(&feed[128..132], &[200, 40, 0, 255]); // B, G, R, A of texel 0
@@ -95,7 +95,7 @@ fn bc6h_level_is_fed_as_legacy_rgba16f() {
         "{a:?}"
     );
     assert!(!a.iter().any(|x| x == "-bc7" || x == "-noalpha"), "{a:?}");
-    let feed = std::fs::read(&a[a.len() - 2]).unwrap();
+    let feed = std::fs::read(tmp.path().join(&a[a.len() - 2])).unwrap();
     assert_eq!(u32::from_le_bytes(feed[84..88].try_into().unwrap()), 113);
     assert_eq!(feed.len(), 128 + 6 * 5 * 8);
 }

@@ -6,6 +6,7 @@
 //!   the probe). Then the banner `NVIDIA Texture Tools <SDC_FAKE_NVTT_VERSION or 3.2.5>` and a usage list; exit 0.
 //! - `<flags> <in.dds> <out.dds>`: every BC7 block is mode 6, alpha 255, colour from the block's first input texel;
 //!   every BC6H block is zeros. The argument list is written to `<out>.args`, one per line.
+//! - Like the real tool, a character outside Latin-1 (its ANSI code page here) in an argument reads as `?`.
 //! - `SDC_FAKE_NVTT_FAIL=exit|short|sleep`: exit 3 with a stderr line; write a payload one block short; sleep 30 s
 //!   before writing.
 use engine::config::Format;
@@ -36,7 +37,16 @@ fn bc7_mode6(c: [u8; 3]) -> [u8; 16] {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // The real tool reads its arguments in the ANSI code page: a character outside it arrives as `?` (trace-debug
+    // #17). Latin-1 stands in for the code page.
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .map(|a| {
+            a.chars()
+                .map(|c| if c > '\u{ff}' { '?' } else { c })
+                .collect()
+        })
+        .collect();
     if args.is_empty() {
         let exe = std::env::current_exe().unwrap_or_default();
         if exe
