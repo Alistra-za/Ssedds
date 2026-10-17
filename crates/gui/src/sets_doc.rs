@@ -24,6 +24,9 @@ const CS_SHA: &str = "cs_pbr_sha256";
 /// Complex material design §3: `[project] cm_json_sha256`, path under the export root → hash of the
 /// `<texture>.json` sdc last wrote there.
 const CM_SHA: &str = "cm_json_sha256";
+/// #43: `[project] pgp_json_sha256`, path under the export root → hash of the PGPatcher JSON sdc last wrote there (one
+/// per name it has had). `last_json_sha256` stays the current name's hash, for older builds.
+const PGP_SHA: &str = "pgp_json_sha256";
 /// Keys of a `[[sets]]` table that are not JSON settings.
 const RESERVED: [&str; 13] = [
     "id",
@@ -235,10 +238,15 @@ impl SetsDoc {
         let (doc, dirty, sha) = (self.f.doc.clone(), self.f.dirty, self.last_json_sha256());
         let cs = self.cs_pbr_shas();
         let cm = self.cm_json_shas();
+        let pgp = self.pgp_json_shas();
         let old = self.text();
         self.restore(text);
         if self.last_json_sha256() != sha {
             self.set_project("last_json_sha256", sha.map(Value::from));
+        }
+        // In the order an export writes them, so a restore that only puts them back leaves the text as it was.
+        if self.pgp_json_shas() != pgp {
+            self.set_pgp_json_shas(&pgp);
         }
         if self.cs_pbr_shas() != cs {
             self.set_cs_pbr_shas(&cs);
@@ -325,6 +333,14 @@ impl SetsDoc {
 
     pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
         self.set_shas(CS_SHA, shas)
+    }
+
+    pub fn pgp_json_shas(&self) -> BTreeMap<String, String> {
+        self.shas(PGP_SHA)
+    }
+
+    pub fn set_pgp_json_shas(&mut self, shas: &BTreeMap<String, String>) {
+        self.set_shas(PGP_SHA, shas)
     }
 
     pub fn cm_json_shas(&self) -> BTreeMap<String, String> {

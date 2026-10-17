@@ -1504,14 +1504,38 @@ impl AppModel {
             }
             return;
         }
-        let last = self.sets_doc.as_ref().and_then(|d| d.last_json_sha256());
+        let rel = self.json_rel(&p.path);
+        let shas = self
+            .sets_doc
+            .as_ref()
+            .map(|d| d.pgp_json_shas())
+            .unwrap_or_default();
+        // #43: the record of this name; a project from before per-name records has only the legacy one.
+        let last = if shas.is_empty() {
+            self.sets_doc.as_ref().and_then(|d| d.last_json_sha256())
+        } else {
+            shas.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(&rel))
+                .map(|(_, s)| s.clone())
+        };
+        let root = self.export_root();
+        for k in shas.keys().filter(|k| !k.eq_ignore_ascii_case(&rel)) {
+            let old = root.join(k);
+            if old.is_file() {
+                self.export.notes.push(format!(
+                    "{}: the PGPatcher JSON is now {}; the old file was left in place and PGPatcher still reads it",
+                    old.display(),
+                    p.path.display()
+                ));
+            }
+        }
         match pbr_export::finish(
             &p,
             &self.export.rows,
             last.as_deref(),
             &mut self.export.notes,
         ) {
-            pbr_export::Finish::Written(sha) => self.record_json_sha(&sha),
+            pbr_export::Finish::Written(sha) => self.record_json_sha(&rel, &sha),
             pbr_export::Finish::Overwrite(text) => {
                 self.pending_text = Some(text);
                 self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
@@ -1521,10 +1545,17 @@ impl AppModel {
         }
     }
 
+    /// The PGPatcher JSON's path under the export root, `/`-separated (the key of its hash record).
+    fn json_rel(&self, path: &std::path::Path) -> String {
+        let rel = path.strip_prefix(self.export_root()).unwrap_or(path);
+        rel.to_string_lossy().replace('\\', "/")
+    }
+
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
     /// the project file is read-only (a bad `sdc-project.toml`, ruling P8) the JSON is still written but no hash is
     /// recorded: the next export then asks before overwriting it.
-    fn record_json_sha(&mut self, sha: &str) {
+    fn record_json_sha(&mut self, rel: &str, sha: &str) {
+        let root = self.export_root();
         let Some(d) = self.sets_doc.as_mut() else {
             return;
         };
@@ -1535,7 +1566,12 @@ impl AppModel {
             return;
         }
         let was_dirty = d.is_dirty();
+        // #43: one record per name; a name whose file is gone is dropped.
+        let mut shas = d.pgp_json_shas();
+        shas.retain(|k, _| !k.eq_ignore_ascii_case(rel) && root.join(k).is_file());
+        shas.insert(rel.to_string(), sha.to_string());
         d.set_last_json_sha256(sha);
+        d.set_pgp_json_shas(&shas);
         self.save_hash_record(was_dirty);
     }
 
@@ -1579,7 +1615,8 @@ impl AppModel {
         };
         if overwrite {
             if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
-                self.record_json_sha(&sha);
+                let rel = self.json_rel(&p.path);
+                self.record_json_sha(&rel, &sha);
             }
         } else {
             self.export.notes.push(format!(
