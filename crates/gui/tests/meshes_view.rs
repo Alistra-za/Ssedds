@@ -1675,3 +1675,38 @@ fn a_running_pgpatcher_pauses_the_scan() {
     assert_eq!(m.status, "Scan paused: PGPatcher is running.");
     assert_eq!(m.banner, Some(Banner::PgpRunning));
 }
+
+/// Trace-debug #40: a mod that turned PGPatcher-derived since the last scan is closed by the reload.
+#[test]
+fn reload_closes_a_mod_that_became_derived() {
+    let (d, mut m) = scanned();
+    let b = m.mods.iter().find(|r| r.name == "B").unwrap().id;
+    m.select_mod(b);
+    let copy = m.nifs[0].copy_id;
+    m.select_nif(copy);
+    put(d.path(), "mods/B/PGPatcher.esp", Some(b"e"));
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    wait(&mut m);
+    assert_eq!(m.error, None);
+    assert!(m.mods.iter().any(|r| r.id == b && r.derived));
+    assert_eq!(m.selected_mod, None);
+    assert!(m.nifs.is_empty());
+    assert_eq!(m.selected_nif, None);
+}
+
+/// Trace-debug #41: only a scan that returned a result counts as completed (the app re-reads the Textures view's
+/// mesh evidence then); a paused, cancelled or failed one leaves the store unreadable or unchanged.
+#[test]
+fn cancelled_or_failed_scan_does_not_mark_a_completed_scan() {
+    let (_d, mut m) = scanned();
+    assert!(m.scan_completed);
+    m.procs = || vec!["pgpatcher.exe".to_string()];
+    m.request_scan(false);
+    let req = m.take_request().unwrap();
+    m.start(req);
+    wait(&mut m);
+    assert_eq!(m.banner, Some(Banner::PgpRunning));
+    assert!(!m.scan_completed);
+}

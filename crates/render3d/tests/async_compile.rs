@@ -423,3 +423,22 @@ fn a_sync_texture_edit_after_set_shaders_compiles_inline() {
     assert_eq!(r.set_material(CYL1, m, &resolve), Ok(EditKind::Textures));
     assert_eq!(status(&r, CYL1), ShapeStatus::Drawing);
 }
+
+/// Trace-debug #21: a sync load whose program the pool already holds (in flight, not applied) still settles.
+#[test]
+fn sync_load_compiles_key_already_taken_by_pool() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = renderer(cache.path(), FLAT);
+    r.set_async_compile(true);
+    let nif = parse(&fixture("TestNifFile_Furniture_Col_SE.nif"));
+    r.load_parsed(&nif, &none);
+    let taken = r.take_jobs();
+    assert!(!taken.is_empty());
+    let rep = r.load_parsed_sync(&nif, &none);
+    assert_eq!((rep.shapes, rep.pending), (2, 0), "{rep:?}");
+    assert_eq!(status(&r, CYL1), ShapeStatus::Drawing);
+    // The pool's late results only warm the memo.
+    for j in taken {
+        assert!(!r.apply_compiled(run_job(j)));
+    }
+}

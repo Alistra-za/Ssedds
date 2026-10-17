@@ -845,3 +845,64 @@ fn second_scan_on_the_same_store_is_busy_and_the_lock_is_released() {
     assert!(matches!(r, Err(modscan::ScanError::PgpRunning)));
     assert!(attempt(false, &|_| {}).is_ok());
 }
+
+/// Trace-debug #36: a tainted run (PGPatcher started mid-scan) must not read the previous run's winners.
+#[test]
+fn tainted_run_does_not_keep_previous_winners() {
+    let d = instance_fixture("+A\n");
+    put(d.path(), "mods/A/meshes/x.nif", None);
+    let (_, r) = go(&d, vec![]);
+    assert!(!r.tainted);
+    std::fs::write(d.path().join("profiles/Default/modlist.txt"), "+B\n-A\n").unwrap();
+    put(d.path(), "mods/B/meshes/x.nif", None);
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let inst = Instance::load(d.path(), None).unwrap();
+    let mut store = Store::open(&d.path().join("scan.db")).unwrap();
+    let r = run(
+        &Source::Mo2(inst),
+        &mut store,
+        &AtomicBool::new(false),
+        &|_| {},
+        &|| {
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                vec![]
+            } else {
+                vec!["pgtools.exe".into()]
+            }
+        },
+    )
+    .unwrap();
+    assert!(r.tainted);
+    let b = store
+        .mods()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.name == "B")
+        .unwrap();
+    let nifs = store.nifs_of(b.id).unwrap();
+    assert_eq!(nifs.len(), 1);
+    assert_eq!(nifs[0].overridden_by, None, "{:?}", nifs[0]);
+}
+
+/// Trace-debug #38: adjacent separators share a priority; they follow modlist order, not row id, after a swap.
+#[test]
+fn tied_separators_follow_modlist_order_after_a_reorder() {
+    let d = instance_fixture("+B\n-X_separator\n-Y_separator\n+A\n");
+    let order = |d: &tempfile::TempDir| -> Vec<String> {
+        let (store, _) = go(d, vec![]);
+        store
+            .mods()
+            .unwrap()
+            .into_iter()
+            .map(|m| m.name)
+            .filter(|n| n.ends_with("_separator"))
+            .collect()
+    };
+    assert_eq!(order(&d), ["X_separator", "Y_separator"]);
+    std::fs::write(
+        d.path().join("profiles/Default/modlist.txt"),
+        "+B\n-Y_separator\n-X_separator\n+A\n",
+    )
+    .unwrap();
+    assert_eq!(order(&d), ["Y_separator", "X_separator"]);
+}
