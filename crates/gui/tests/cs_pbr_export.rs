@@ -98,6 +98,7 @@ fn material_specular_is_always_written_and_absent_fields_are_omitted() {
     );
 }
 
+use sdc_gui::model::history::record_key;
 use sdc_gui::model::{AppModel, Dialog};
 use std::time::Duration;
 use support::*;
@@ -172,7 +173,8 @@ fn export_writes_one_file_per_edid_named_exactly_and_records_hashes() {
     let shas = m.sets_doc.as_ref().unwrap().cs_pbr_shas();
     assert_eq!(shas.len(), 3);
     assert_eq!(
-        shas.get("PBRTextureSets/LandscapeRock01.json").cloned(),
+        shas.get(&record_key(&txst_file(&m, "LandscapeRock01")))
+            .cloned(),
         sdc_gui::model::history::sha256_of(&txst_file(&m, "LandscapeRock01"))
     );
     assert!(!m.is_dirty(), "the record was saved");
@@ -230,7 +232,7 @@ fn an_unbound_file_is_reported_not_deleted() {
         .as_ref()
         .unwrap()
         .cs_pbr_shas()
-        .contains_key("PBRTextureSets/LandscapeRock01Landscape.json"));
+        .contains_key(&record_key(&gone)));
 }
 
 /// Review focus (O6): CS keys on the exact stem, so a corrected case renames sdc's own file.
@@ -254,9 +256,9 @@ fn an_edid_whose_case_changed_renames_sdcs_own_file() {
     let shas = m.sets_doc.as_ref().unwrap().cs_pbr_shas();
     let txst: Vec<&String> = shas
         .keys()
-        .filter(|k| k.starts_with("PBRTextureSets"))
+        .filter(|k| k.contains("/pbrtexturesets/"))
         .collect();
-    assert_eq!(txst, ["PBRTextureSets/landscapeRock01.json"]);
+    assert_eq!(txst, [&record_key(&txst_file(&m, "landscapeRock01"))]);
 }
 
 /// Review focus: refusals are per file; EDIDs differing only in case collide on Windows.
@@ -441,5 +443,51 @@ fn a_refused_recorded_file_is_not_reported_as_unbound() {
         .as_ref()
         .unwrap()
         .cs_pbr_shas()
-        .contains_key("PBRMaterialObjects/SnowMaterialObject1P.json"));
+        .contains_key(&record_key(
+            &m.export_root()
+                .join("PBRMaterialObjects/SnowMaterialObject1P.json")
+        )));
+}
+
+/// Audit 08c-1: a hash record names its file (absolute path), so exporting to B and back to A still finds A's own
+/// files: A's JSON is rewritten, not kept as edited outside Tessalith.
+#[test]
+fn switching_export_folders_keeps_each_folders_records() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_blocks(d.path());
+    let a = m.export_root();
+    export_and_wait(&mut m);
+    m.set_export_folder(d.path().join("b"));
+    m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.03)));
+    export_and_wait(&mut m);
+    m.set_export_folder(a);
+    m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.05)));
+    export_and_wait(&mut m);
+    let text = std::fs::read_to_string(txst_file(&m, "LandscapeRock01")).unwrap();
+    assert!(text.contains("0.05"), "{text}; notes {:?}", m.export.notes);
+    assert!(
+        !m.export.notes.iter().any(|n| n.contains("kept as edited")),
+        "{:?}",
+        m.export.notes
+    );
+}
+
+/// Audit 08c-1: a record from before absolute keys (relative to the export folder) is read as under the current
+/// export folder.
+#[test]
+fn a_relative_record_is_read_under_the_export_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_blocks(d.path());
+    export_and_wait(&mut m);
+    let f = txst_file(&m, "LandscapeRock01");
+    let sha = sdc_gui::model::history::sha256_of(&f).unwrap();
+    let old = std::collections::BTreeMap::from([(
+        "PBRTextureSets/LandscapeRock01.json".to_string(),
+        sha,
+    )]);
+    m.sets_doc.as_mut().unwrap().set_cs_pbr_shas(&old);
+    m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.05)));
+    export_and_wait(&mut m);
+    let text = std::fs::read_to_string(&f).unwrap();
+    assert!(text.contains("0.05"), "{text}; notes {:?}", m.export.notes);
 }

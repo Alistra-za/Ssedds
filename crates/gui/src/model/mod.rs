@@ -1506,30 +1506,31 @@ impl AppModel {
             return;
         }
         self.copy_files(&p);
-        let rel = self.json_rel(&p.path);
+        let root = self.export_root();
+        let key = history::record_key(&p.path);
         let shas = self
             .sets_doc
             .as_ref()
-            .map(|d| d.pgp_json_shas())
+            .map(|d| history::records_at(&d.pgp_json_shas(), &root))
             .unwrap_or_default();
         // #43: the record of this name; a project from before per-name records has only the legacy one.
         let last = if shas.is_empty() {
             self.sets_doc.as_ref().and_then(|d| d.last_json_sha256())
         } else {
-            shas.iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(&rel))
-                .map(|(_, s)| s.clone())
+            shas.get(&key).cloned()
         };
-        let root = self.export_root();
-        for k in shas.keys().filter(|k| !k.eq_ignore_ascii_case(&rel)) {
-            let old = root.join(k);
-            if old.is_file() {
-                self.export.notes.push(format!(
-                    "{}: the PGPatcher JSON is now {}; the old file was left in place and PGPatcher still reads it",
-                    old.display(),
-                    p.path.display()
-                ));
-            }
+        let named: Vec<String> = vec![p
+            .path
+            .strip_prefix(&root)
+            .unwrap_or(&p.path)
+            .to_string_lossy()
+            .into_owned()];
+        for old in history::orphans(&shas, &root, named.iter()) {
+            self.export.notes.push(format!(
+                "{}: the PGPatcher JSON is now {}; the old file was left in place and PGPatcher still reads it",
+                old.display(),
+                p.path.display()
+            ));
         }
         match pbr_export::finish(
             &p,
@@ -1537,7 +1538,7 @@ impl AppModel {
             last.as_deref(),
             &mut self.export.notes,
         ) {
-            pbr_export::Finish::Written(sha) => self.record_json_sha(&rel, &sha),
+            pbr_export::Finish::Written(sha) => self.record_json_sha(&key, &sha),
             pbr_export::Finish::Overwrite(text) => {
                 self.pending_text = Some(text);
                 self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
@@ -1578,16 +1579,10 @@ impl AppModel {
         self.save_hash_record(was_dirty);
     }
 
-    /// The PGPatcher JSON's path under the export root, `/`-separated (the key of its hash record).
-    fn json_rel(&self, path: &std::path::Path) -> String {
-        let rel = path.strip_prefix(self.export_root()).unwrap_or(path);
-        rel.to_string_lossy().replace('\\', "/")
-    }
-
     /// Record the hash of the JSON just written and save `sdc-project.toml`, so the record matches the disk. While
     /// the project file is read-only (a bad `sdc-project.toml`, ruling P8) the JSON is still written but no hash is
     /// recorded: the next export then asks before overwriting it.
-    fn record_json_sha(&mut self, rel: &str, sha: &str) {
+    fn record_json_sha(&mut self, key: &str, sha: &str) {
         let root = self.export_root();
         let Some(d) = self.sets_doc.as_mut() else {
             return;
@@ -1599,10 +1594,9 @@ impl AppModel {
             return;
         }
         let was_dirty = d.is_dirty();
-        // #43: one record per name; a name whose file is gone is dropped.
-        let mut shas = d.pgp_json_shas();
-        shas.retain(|k, _| !k.eq_ignore_ascii_case(rel) && root.join(k).is_file());
-        shas.insert(rel.to_string(), sha.to_string());
+        // #43: one record per name; audit 08c-1: keyed by `record_key`, and kept when its file is gone.
+        let mut shas = history::records_at(&d.pgp_json_shas(), &root);
+        shas.insert(key.to_string(), sha.to_string());
         d.set_last_json_sha256(sha);
         d.set_pgp_json_shas(&shas);
         self.save_hash_record(was_dirty);
@@ -1648,8 +1642,7 @@ impl AppModel {
         };
         if overwrite {
             if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
-                let rel = self.json_rel(&p.path);
-                self.record_json_sha(&rel, &sha);
+                self.record_json_sha(&history::record_key(&p.path), &sha);
             }
         } else {
             self.export.notes.push(format!(

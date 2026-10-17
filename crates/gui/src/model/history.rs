@@ -111,6 +111,56 @@ pub fn record_key(p: &std::path::Path) -> String {
         .to_lowercase()
 }
 
+/// Audit 08c-1: a hash record map with every key a `record_key`. A key from before (a path relative to the export
+/// folder) is read as a file under `root`.
+pub fn records_at(
+    shas: &std::collections::BTreeMap<String, String>,
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<String, String> {
+    shas.iter()
+        .map(|(k, v)| {
+            let p = std::path::Path::new(k);
+            let k = if p.is_absolute() {
+                k.clone()
+            } else {
+                record_key(&root.join(p))
+            };
+            (k, v.clone())
+        })
+        .collect()
+}
+
+/// The file on disk whose name equals `path`'s apart from case, when the case differs (Note O6: a case-only
+/// rename). Records are lower-case (audit 08c-1), so the old spelling is read from the folder.
+pub fn case_twin(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    std::fs::read_dir(path.parent()?)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| *n != name && n.to_lowercase() == name.to_lowercase())
+        .map(|n| path.with_file_name(n))
+}
+
+/// The recorded files under `root` this run did not write (`this_run`, relative to `root`) that are still on disk,
+/// spelled as on disk. They are reported, never deleted, and their records stay.
+pub fn orphans<'a>(
+    shas: &std::collections::BTreeMap<String, String>,
+    root: &std::path::Path,
+    this_run: impl Iterator<Item = &'a String>,
+) -> Vec<std::path::PathBuf> {
+    let prefix = format!("{}/", record_key(root));
+    let mine: std::collections::BTreeSet<String> =
+        this_run.map(|r| record_key(&root.join(r))).collect();
+    shas.keys()
+        .filter(|k| !mine.contains(*k))
+        .filter_map(|k| k.strip_prefix(&prefix))
+        .map(|rest| root.join(rest))
+        .filter(|p| p.is_file())
+        .map(|p| case_twin(&p).unwrap_or(p))
+        .collect()
+}
+
 /// `ours` for `engine::dds::may_replace`: the bytes on disk are the ones whose hash is recorded (`last`).
 pub fn recorded(last: Option<&str>) -> impl FnOnce(&[u8]) -> bool + '_ {
     use sha2::{Digest, Sha256};

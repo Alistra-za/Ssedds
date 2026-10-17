@@ -151,6 +151,7 @@ use engine::config::{Subtype, Target};
 use engine::shader::Shader;
 use image::{ImageBuffer, Luma, Rgb, Rgba};
 use sdc_gui::model::cm_json::*;
+use sdc_gui::model::history::record_key;
 use sdc_gui::model::sets::{set_views, SetView};
 use sdc_gui::model::AppModel;
 use sdc_gui::pgp::validate::validate_cm;
@@ -541,7 +542,10 @@ fn export_writes_the_json_next_to_the_m_and_records_its_hash() {
     );
     assert!(!out(&m, "m/axe_em.json").exists(), "axe's set exports none");
     let shas = m.sets_doc.as_ref().unwrap().cm_json_shas();
-    assert_eq!(shas.keys().collect::<Vec<_>>(), ["m/iron_m.json"]);
+    assert_eq!(
+        shas.keys().collect::<Vec<_>>(),
+        [&record_key(&out(&m, "m/iron_m.json"))]
+    );
     assert!(
         notes(&m).contains("Complex material JSON written: 1 file"),
         "{}",
@@ -589,7 +593,7 @@ fn unticking_leaves_the_file_in_place_with_a_note() {
         .as_ref()
         .unwrap()
         .cm_json_shas()
-        .contains_key("m/iron_m.json"));
+        .contains_key(&record_key(&out(&m, "m/iron_m.json"))));
 }
 
 /// Review focus 3.
@@ -926,7 +930,10 @@ fn finish_case_only_rename_rewrites_own_json_and_keeps_record() {
         let mut n = vec![];
         rec = finish(&p, &rec, &mut n);
         assert!(!n.iter().any(|x| x.contains("edited outside")), "{n:?}");
-        assert_eq!(rec.keys().collect::<Vec<_>>(), ["m/iron_m.json"]);
+        assert_eq!(
+            rec.keys().collect::<Vec<_>>(),
+            [&record_key(&d.path().join("m/iron_m.json"))]
+        );
         assert_eq!(
             std::fs::read_to_string(d.path().join("m/iron_m.json")).unwrap(),
             p.files[0].1

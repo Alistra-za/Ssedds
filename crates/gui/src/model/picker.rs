@@ -240,6 +240,14 @@ impl AppModel {
         self.picker.request(ctx, purpose, scope, spec)
     }
 
+    /// The export folder chosen in the picker.
+    pub fn set_export_folder(&mut self, path: std::path::PathBuf) {
+        self.settings.export_folder = Some(path);
+        self.save_settings();
+        // Existing outputs decide which textures are up to date.
+        self.replan();
+    }
+
     /// Route one finished picker to its handler. A result for a folder that is no longer open is dropped; a cancel
     /// does nothing.
     pub fn picked(&mut self, d: Picked) {
@@ -262,12 +270,7 @@ impl AppModel {
                 self.messages
                     .notify(super::messages::Severity::Warning, note);
             }
-            PickerPurpose::ExportFolder => {
-                self.settings.export_folder = Some(path);
-                self.save_settings();
-                // Existing outputs decide which textures are up to date.
-                self.replan();
-            }
+            PickerPurpose::ExportFolder => self.set_export_folder(path),
             PickerPurpose::NvttPath => self.set_nvtt_path(Some(path)),
             PickerPurpose::SaveReport => self.save_report(path),
             // The meshes and 3D models handle their own.
