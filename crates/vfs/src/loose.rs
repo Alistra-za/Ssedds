@@ -21,7 +21,10 @@ pub fn walk(root: &Path, top: &[&str], ext: &[&str]) -> Vec<LooseFile> {
         if !top.contains(&name.as_str()) || !d.path().is_dir() {
             continue;
         }
+        // MO2/Vortex deploys use junctions and symlinks: follow them wherever they point; the
+        // path stays the link path. walkdir's ancestor check reports cycles as Err (dropped below).
         let it = walkdir::WalkDir::new(d.path())
+            .follow_links(true)
             .into_iter()
             .filter_entry(|e| {
                 !(e.file_type().is_dir() && e.file_name().eq_ignore_ascii_case("facegendata"))

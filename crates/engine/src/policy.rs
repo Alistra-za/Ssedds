@@ -322,6 +322,20 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
+/// Whether a `[files]` entry or file-scoped `--set` names this input's sub-type (any value). Trace-debug 2026-10-16
+/// #4: a raw map given one is an ordinary file (spec §4.4) and names no packing role.
+pub fn subtype_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
+    let forms = LazyForms::new();
+    ranked_overrides(ctx).into_iter().any(|o| {
+        o.field == "subtype"
+            && match &o.scope {
+                Scope::All => true,
+                Scope::File(g) => glob_match_input(g, input),
+                Scope::Path(k) => path_matches(ctx, &forms, input, k),
+                Scope::Subtype(_) | Scope::Set(_) => false,
+            }
+    })
+}
 /// M6 Track F2 (DECISIONS Note W3): the `rnm.target` a layer file asked for, by the highest-precedence override that
 /// reaches it (`[files]`, then unscoped, file-glob and path `--set`); `None` = the default from its name.
 pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTarget> {
@@ -762,6 +776,25 @@ fn layered_profile_with(
         if let Some(src) = prov.get("channels.green_convention").cloned() {
             prov.insert("channels.flip_green".into(), src);
         }
+    }
+    // Trace-debug 2026-10-16 #5: a BC5 or RG8 source decodes with B = 0 (Z = -1), which the clamp in Preprocess would
+    // turn into a sideways vector. Rebuild Z from X and Y, as for any two-channel normal, unless the user set it.
+    let two_channel = f
+        .analysis
+        .dds_dxgi
+        .and_then(crate::dds::from_dxgi)
+        .is_some_and(|d| {
+            matches!(
+                d,
+                crate::dds::DdsPixelFormat::Bc5 | crate::dds::DdsPixelFormat::Rg8
+            )
+        });
+    if takes_green(st) && two_channel && !field_explicit(ctx, &prov, "channels.reconstruct_z") {
+        profile.channels.reconstruct_z = true;
+        prov.insert(
+            "channels.reconstruct_z".into(),
+            Provenance::AnalysisFact("two-channel-dds".into()),
+        );
     }
     // DECISIONS Note W6: only a base normal reads `rnm`, so another sub-type keeps the default (and its hash).
     if st.rnm_base().is_none() && !profile.rnm.is_default() {

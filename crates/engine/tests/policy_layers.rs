@@ -487,3 +487,58 @@ fn every_matching_rule_of_a_source_layers_in_file_order() {
     assert_eq!(prov["resize"], Provenance::Rule("project#0".into()));
     assert_eq!(prov["mips.levels"], Provenance::Rule("project#2".into()));
 }
+
+/// Trace-debug 2026-10-16 #5: a two-channel DDS normal (BC5, RG8) decodes with B = 0, so Z is rebuilt from X and Y
+/// unless the user set `channels.reconstruct_z`.
+#[test]
+fn two_channel_dds_normal_turns_on_reconstruct_z() {
+    let reg = PresetRegistry::builtin().unwrap();
+    let allow = BTreeSet::new();
+    let rz = |dxgi: Option<u32>, sets: &[&str]| {
+        let overrides: Vec<_> = sets.iter().map(|s| parse_set(s).unwrap()).collect();
+        let ctx = ResolveCtx {
+            target: Target::Cs,
+            registry: &reg,
+            preset: "cs-quality",
+            user_config: None,
+            project_config: None,
+            overrides: &overrides,
+            accept: AcceptSuggestions::None,
+            allow: &allow,
+            files: &NO_FILE_SCOPES,
+            shaders: &NO_SHADERS,
+            mesh_alpha: &NO_MESH_ALPHA,
+            nvtt: None,
+        };
+        let mut a = analyse(&Rgba32F::new(4, 4, [0.5, 0.5, 0.0, 1.0]), &RGB8);
+        a.dds_dxgi = dxgi;
+        let mut f = input("textures/a/x_n.dds");
+        f.kind = InputKind::Dds;
+        let set = TextureSet {
+            key: "x".into(),
+            members: vec![0],
+            suffixes: ["n".to_string()].into(),
+        };
+        let facts = FileFacts {
+            input: &f,
+            suffix: Some("n"),
+            alias: None,
+            set: &set,
+            analysis: &a,
+            info: &RGB8,
+        };
+        layered_profile(&ctx, &facts, Subtype::Normal)
+            .unwrap()
+            .0
+            .channels
+            .reconstruct_z
+    };
+    assert!(rz(Some(49), &[]), "RG8");
+    assert!(rz(Some(83), &[]), "BC5");
+    assert!(!rz(Some(28), &[]), "RGBA8");
+    assert!(!rz(None, &[]), "not a DDS");
+    assert!(!rz(
+        Some(83),
+        &["file:**/x_n.dds.channels.reconstruct_z=false"]
+    ));
+}
