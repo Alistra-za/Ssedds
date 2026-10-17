@@ -626,7 +626,7 @@ impl SetsDoc {
         }
         let t = self.table_mut(id);
         let mut items = strings(t.get(key));
-        items.retain(|f| !same_id(f, file));
+        items.retain(|f| !names_file(f, file));
         if add {
             items.push(file.to_string());
         }
@@ -646,10 +646,10 @@ impl SetsDoc {
     pub fn add_member(&mut self, id: &str, file: &str) {
         for e in self.parse_entries() {
             if !same_id(&e.id, id) {
-                if e.add.iter().any(|f| same_id(f, file)) {
+                if e.add.iter().any(|f| names_file(f, file)) {
                     self.list_edit(&e.id, "add", file, false);
                 }
-                if e.remove.iter().any(|f| same_id(f, file)) {
+                if e.remove.iter().any(|f| names_file(f, file)) {
                     self.list_edit(&e.id, "remove", file, false);
                 }
             }
@@ -659,7 +659,7 @@ impl SetsDoc {
         let removed_here = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| same_id(f, file)));
+            .any(|e| same_id(&e.id, id) && e.remove.iter().any(|f| names_file(f, file)));
         if removed_here {
             self.list_edit(id, "remove", file, false);
         } else {
@@ -672,7 +672,7 @@ impl SetsDoc {
         let moved_in = self
             .parse_entries()
             .iter()
-            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| same_id(f, file)));
+            .any(|e| same_id(&e.id, id) && e.add.iter().any(|f| names_file(f, file)));
         if moved_in {
             self.list_edit(id, "add", file, false);
         } else {
@@ -991,6 +991,12 @@ fn write_json(t: &mut dyn TableLike, path: &str, v: &Json) -> bool {
         }),
         _ => write_path(t, path, Some(v.clone())),
     }
+}
+
+/// #37: whether an `add`/`remove` key names file `file` as the engine reads it (`path_key_matches`: case-folded, the
+/// extension optional).
+pub(crate) fn names_file(key: &str, file: &str) -> bool {
+    same_id(key, file) || engine::overrides::path_key_matches(key, file)
 }
 
 #[cfg(test)]

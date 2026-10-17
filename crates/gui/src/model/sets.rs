@@ -1540,7 +1540,8 @@ impl AppModel {
             return Err(format!("{item} is not in {}", v.id));
         }
         let moved_in = self.sets_doc.as_ref().is_some_and(|d| {
-            entry_of(&d.entries(), &v.id).is_some_and(|e| e.add.iter().any(|f| same_id(f, item)))
+            entry_of(&d.entries(), &v.id)
+                .is_some_and(|e| e.add.iter().any(|f| crate::sets_doc::names_file(f, item)))
         });
         if v.members.len() == 1 && !moved_in {
             return Err(format!("{item} is the only texture in {}", v.id));
