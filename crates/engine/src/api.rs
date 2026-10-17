@@ -2120,7 +2120,11 @@ fn map_members(
         if pack::plan::raw_role(f).is_some() {
             continue;
         }
+        // Trace-debug #25 (Note BQ): an RNM layer or mask is never converted on its own, as the shader pick knows.
         if let Some(j) = jobs.by_input(&f.path).find(|j| j.pack.is_none()) {
+            if matches!(j.status, JobStatus::NormalLayer { .. }) {
+                continue;
+            }
             out.push(crate::shader::MemberMap {
                 name: name(&j.output),
                 suffix: suffix(f),
