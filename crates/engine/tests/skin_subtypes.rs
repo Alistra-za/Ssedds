@@ -454,3 +454,30 @@ fn rename_keeps_joined_skin_wet() {
     assert_eq!(top(&p, "x_wet.png"), (Subtype::SkinWet, Confidence::High));
     assert_eq!(top(&p, "x.png").0, Subtype::SkinAlbedo);
 }
+
+/// Trace-debug 2026-10-16 #4: a fuzz map given a sub-type is an ordinary file (spec §4.4), so it neither picks the
+/// `_rfaos` recipe nor makes the set Advanced skin.
+#[test]
+fn a_fuzz_map_given_a_sub_type_does_not_make_the_set_advanced_skin() {
+    let d = tempfile::tempdir().unwrap();
+    put(d.path(), "rock.png", colour(64));
+    put(d.path(), "rock_n.png", wet_normal(64));
+    put(d.path(), "rock_roughness.png", grey(64));
+    put(d.path(), "rock_fuzz.png", grey(64));
+    let p = plan(
+        &d,
+        Target::Cs,
+        &["file:**/rock_fuzz.png.subtype=generic_data"],
+    );
+    let outs: Vec<_> = p
+        .jobs
+        .iter()
+        .filter_map(|j| j.output.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect();
+    assert!(outs.iter().any(|n| n == "rock_rmaos.dds"), "{outs:?}");
+    assert!(!outs.iter().any(|n| n == "rock_rfaos.dds"), "{outs:?}");
+    let albedo = job(&p, "rock.png");
+    assert_eq!(albedo.profile.subtype, Subtype::PbrAlbedo);
+    assert!(albedo.profile.srgb_tag());
+}

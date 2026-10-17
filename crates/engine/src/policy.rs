@@ -322,6 +322,20 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
+/// Whether a `[files]` entry or file-scoped `--set` names this input's sub-type (any value). Trace-debug 2026-10-16
+/// #4: a raw map given one is an ordinary file (spec §4.4) and names no packing role.
+pub fn subtype_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
+    let forms = LazyForms::new();
+    ranked_overrides(ctx).into_iter().any(|o| {
+        o.field == "subtype"
+            && match &o.scope {
+                Scope::All => true,
+                Scope::File(g) => glob_match_input(g, input),
+                Scope::Path(k) => path_matches(ctx, &forms, input, k),
+                Scope::Subtype(_) | Scope::Set(_) => false,
+            }
+    })
+}
 /// M6 Track F2 (DECISIONS Note W3): the `rnm.target` a layer file asked for, by the highest-precedence override that
 /// reaches it (`[files]`, then unscoped, file-glob and path `--set`); `None` = the default from its name.
 pub fn rnm_target_requested(ctx: &ResolveCtx, input: &InputFile) -> Option<RnmTarget> {
