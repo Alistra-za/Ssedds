@@ -283,6 +283,12 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
     };
     let dims: Vec<(u32, u32)> = f.levels.iter().map(|(w, h, _)| (*w, *h)).collect();
     let first_level = engine::session::first_level_within(&dims, max);
+    // `first_level_within` falls back to the last mip; a short chain can end above the limit (trace-debug #16).
+    if let Some(&(w, h)) = dims.get(first_level).filter(|(w, h)| *w.max(h) > max) {
+        return Err(format!(
+            "{w}x{h} (the smallest mip) is above the preview limit of {max}"
+        ));
+    }
     let levels: Vec<Vec<u8>> = f.levels[first_level..]
         .iter()
         .map(|(_, _, r)| f.data[r.clone()].to_vec())

@@ -360,3 +360,25 @@ fn full_scale_sets_where_the_heatmap_ramp_ends() {
     assert_eq!(FULL_SCALE_DEFAULT, 0.1);
     assert_eq!(FULL_SCALE_RANGE, (0.005, 0.5));
 }
+
+/// Trace-debug #16: a single-mip DDS above the limit is refused, not decoded at full size.
+#[test]
+fn dds_preview_refuses_when_no_mip_fits_the_limit() {
+    use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("big.dds");
+    let desc = DdsDesc {
+        width: 64,
+        height: 64,
+        format: Format::Rgba8,
+        srgb: false,
+        header: ResolvedHeader::Dx10,
+    };
+    std::fs::write(&path, dds_bytes(&desc, &[vec![0; 64 * 64 * 4]]).unwrap()).unwrap();
+    let err = sdc_gui::model::preview::dds_preview(&path, 16, encoders_sys::Bc1Model::Ideal)
+        .err()
+        .expect("refused");
+    assert!(err.contains("above the preview limit"), "{err}");
+    // A chain that reaches the limit still previews from the first mip within it.
+    assert!(sdc_gui::model::preview::dds_preview(&path, 64, encoders_sys::Bc1Model::Ideal).is_ok());
+}
