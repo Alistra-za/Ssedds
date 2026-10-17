@@ -105,7 +105,15 @@ pub fn recovery_path(file: &Path) -> PathBuf {
 /// Writes each unsaved document to its recovery file; the original is left alone.
 pub fn write_recovery(files: &[(PathBuf, String)]) {
     for (path, text) in files {
-        let _ = std::fs::write(recovery_path(path), text);
+        let rec = recovery_path(path);
+        // #47: an earlier crash's unrestored file is kept under a stamped name.
+        // shortcut: the stamped copies are never cleaned up and get no banner line; add both if they pile up.
+        if rec.exists() {
+            let mut kept = rec.clone().into_os_string();
+            kept.push(format!(".{}", now_stamp()));
+            let _ = std::fs::rename(&rec, kept);
+        }
+        let _ = std::fs::write(rec, text);
     }
 }
 
@@ -198,5 +206,22 @@ mod tests {
         assert_eq!(stamp(0), "19700101-000000");
         assert_eq!(stamp(1_760_000_000), "20251009-085320");
         assert_eq!(stamp(951_782_400 + 3661), "20000229-010101");
+    }
+
+    /// Trace-debug 2026-10-16 #47: a second crash keeps the first crash's unrestored `.recovery` beside the new one.
+    #[test]
+    fn a_second_crash_keeps_the_first_unrestored_recovery() {
+        let d = tempfile::tempdir().unwrap();
+        let doc = d.path().join("sdc.toml");
+        write_recovery(&[(doc.clone(), "A".into())]);
+        write_recovery(&[(doc.clone(), "B".into())]);
+        assert_eq!(std::fs::read_to_string(recovery_path(&doc)).unwrap(), "B");
+        let kept: Vec<String> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p != &recovery_path(&doc))
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        assert_eq!(kept, vec!["A".to_string()]);
     }
 }
