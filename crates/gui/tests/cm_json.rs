@@ -913,7 +913,11 @@ fn finish_case_only_rename_rewrites_own_json_and_keeps_record() {
     std::fs::create_dir_all(d.path().join("m")).unwrap();
     std::fs::write(d.path().join("m/Iron_M.dds"), b"dds").unwrap();
     let mut n = vec![];
-    let mut rec = finish(&cm_pending(d.path(), "m/Iron_M.json", 1.0), &BTreeMap::new(), &mut n);
+    let mut rec = finish(
+        &cm_pending(d.path(), "m/Iron_M.json", 1.0),
+        &BTreeMap::new(),
+        &mut n,
+    );
     std::fs::rename(d.path().join("m/Iron_M.dds"), d.path().join("m/iron_m.dds")).unwrap();
     for strength in [2.0, 3.0] {
         let p = cm_pending(d.path(), "m/iron_m.json", strength);
@@ -921,7 +925,10 @@ fn finish_case_only_rename_rewrites_own_json_and_keeps_record() {
         rec = finish(&p, &rec, &mut n);
         assert!(!n.iter().any(|x| x.contains("edited outside")), "{n:?}");
         assert_eq!(rec.keys().collect::<Vec<_>>(), ["m/iron_m.json"]);
-        assert_eq!(std::fs::read_to_string(d.path().join("m/iron_m.json")).unwrap(), p.files[0].1);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("m/iron_m.json")).unwrap(),
+            p.files[0].1
+        );
         assert_eq!(files_in(&d.path().join("m")), ["iron_m.dds", "iron_m.json"]);
     }
 }
@@ -933,7 +940,11 @@ fn finish_case_only_rename_keeps_a_hand_edit_and_its_record() {
     std::fs::create_dir_all(d.path().join("m")).unwrap();
     std::fs::write(d.path().join("m/iron_m.dds"), b"dds").unwrap();
     let mut n = vec![];
-    let r1 = finish(&cm_pending(d.path(), "m/Iron_M.json", 1.0), &BTreeMap::new(), &mut n);
+    let r1 = finish(
+        &cm_pending(d.path(), "m/Iron_M.json", 1.0),
+        &BTreeMap::new(),
+        &mut n,
+    );
     std::fs::write(d.path().join("m/Iron_M.json"), "{ \"hand\": 1 }\n").unwrap();
     let mut n = vec![];
     let r2 = finish(&cm_pending(d.path(), "m/iron_m.json", 2.0), &r1, &mut n);

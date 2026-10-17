@@ -190,7 +190,10 @@ fn removing_a_texture_set_block_moves_its_mapped_values_back() {
     assert!(!s.text().contains("cs_txst"), "{}", s.text());
     // The old 0-255 colour comes back in the float form (AG133); everything else is unchanged.
     let mut back = e.settings.clone();
-    assert_eq!(back.remove("subsurface_color"), Some(json!([1.0, 0.0, 0.2])));
+    assert_eq!(
+        back.remove("subsurface_color"),
+        Some(json!([1.0, 0.0, 0.2]))
+    );
     let mut before = before;
     before.remove("subsurface_color");
     assert_eq!(floats(&json!(back)), floats(&json!(before)));
@@ -675,7 +678,11 @@ fn a_float_colour_edit_reaches_the_block_unscaled_and_reads_back_as_floats() {
         "subsurface_color",
         Some(json!([0.5, 0.5, 0.5])),
     );
-    s.set_value("landscape/snow", "coat_color", Some(json!([0.08, 1.25, 1.0])));
+    s.set_value(
+        "landscape/snow",
+        "coat_color",
+        Some(json!([0.08, 1.25, 1.0])),
+    );
     let e = &s.entries()[0];
     let t = e.cs_txst.as_ref().unwrap();
     assert_eq!(t.values["subsurfaceColor"], json!([0.5, 0.5, 0.5]));
@@ -683,7 +690,11 @@ fn a_float_colour_edit_reaches_the_block_unscaled_and_reads_back_as_floats() {
     assert_eq!(e.settings["subsurface_color"], json!([0.5, 0.5, 0.5]));
     assert_eq!(e.settings["coat_color"], json!([0.08, 1.25, 1.0]));
     // The old 0-255 form still converts.
-    s.set_value("landscape/snow", "subsurface_color", Some(json!([255, 0, 51])));
+    s.set_value(
+        "landscape/snow",
+        "subsurface_color",
+        Some(json!([255, 0, 51])),
+    );
     let t = s.entries()[0].cs_txst.clone().unwrap();
     assert_eq!(t.values["subsurfaceColor"], json!([1.0, 0.0, 0.2]));
 }
