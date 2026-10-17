@@ -129,7 +129,9 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
         .clicked();
         copy = ui
             .button("Copy CLI command")
-            .on_hover_text("The command that reproduces this export from the saved sdc.toml")
+            .on_hover_text(
+                "The command that reproduces this export from the saved sdc.toml. Set edits in                  sdc-project.toml and mesh evidence are not carried",
+            )
             .clicked();
         let r = ui.add_enabled(folder.is_ok(), egui::Button::new("Open export folder"));
         open = match &folder {

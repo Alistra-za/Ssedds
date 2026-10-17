@@ -137,7 +137,7 @@ fn the_cli_command_reproduces_the_export() {
     );
     assert_eq!(
         c,
-        r#"sdc convert "C:/mods/x/textures" --recursive -o "D:/out dir" --bc1-decoder nvidia"#
+        r#"sdc convert "C:/mods/x/textures" --recursive -o "D:/out dir" --accept-suggestions high --bc1-decoder nvidia"#
     );
     let c = cli_command(Path::new("C:/a"), Path::new("C:/b"), Bc1Choice::Ideal, 6);
     assert!(c.ends_with("--bc1-decoder ideal --jobs 6"));
