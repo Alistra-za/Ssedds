@@ -616,6 +616,10 @@ pub struct AlphaSpec {
     /// off); `true` keeps the source alpha as height. Resolve sets it from the source alpha; `None` elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallax: Option<bool>,
+    /// An OpenEXR source with alpha is straight alpha, read as stored: no un-premultiply on load (trace-debug #30,
+    /// Note BQ15). Off: RGB / A, as OpenEXR stores premultiplied colour. Read only for an `.exr` source with alpha.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exr_straight: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

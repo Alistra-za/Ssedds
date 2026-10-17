@@ -14,7 +14,7 @@ use crate::dds::{dds_bytes, resolve_header, write_atomic, DdsDesc};
 use crate::encode::{encode_level, EncodeCtx};
 use crate::events::{EventKind, Reporter, Stage};
 use crate::image::Rgba32F;
-use crate::load::load_image;
+use crate::load::load_image_as;
 use crate::manifest::{
     bc1_model_id, dispatched_isa, engine_commit, now_rfc3339, output_key, profile_sha256,
     sha256_file, EncoderVersions, Manifest, ManifestRecord, PresetRef, SourceRef, ENGINE_VERSION,
@@ -224,7 +224,8 @@ fn prepare_then<T>(
             let asm = assemble(pk, pk.gray).map_err(|e| fail(Stage::Load)(e.to_string()))?;
             (asm.image, asm.info)
         }
-        None => load_image(&job.input).map_err(|e| fail(Stage::Load)(e.to_string()))?,
+        None => load_image_as(&job.input, p.alpha.exr_straight)
+            .map_err(|e| fail(Stage::Load)(e.to_string()))?,
     };
     let transfer = SourceTransfer::of(&info);
     if crate::ops::complex_alpha_zero(p, info.has_alpha) {
