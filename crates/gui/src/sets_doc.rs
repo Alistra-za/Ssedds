@@ -5,7 +5,7 @@ use crate::model::cm_json::{block_of as cm_block_of, CmBlock};
 use crate::model::cs_pbr::{self, block_of, field, fields, CsBlock, Kind, Template};
 use crate::pgp::settings::Settings;
 use crate::project::{
-    dotted_table, json_to_toml, set_value, sub_table, toml_to_json, SaveError, TomlFile,
+    dotted_table, item_json, json_to_toml, set_value, sub_table, toml_to_json, SaveError, TomlFile,
 };
 use engine::sets::{fold_id, same_id};
 use serde_json::Value as Json;
@@ -280,7 +280,7 @@ impl SetsDoc {
             .doc
             .get("project")
             .and_then(|p| p.get(key))
-            .and_then(toml_to_json);
+            .and_then(item_json); // review M7: a hand-written `[project.<key>]` table too
         let same = match &v {
             None => now.is_none(),
             Some(x) => now.is_some() && toml_to_json(&Item::Value(x.clone())) == now,
@@ -1074,6 +1074,26 @@ pub(crate) fn names_file(key: &str, file: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Review M7 (#58, Note BS11): a hash record written by hand as a standard `[project.cs_pbr_sha256]` table is
+    /// compared like the inline form: an equal rewrite is no edit, and clearing it removes the table.
+    #[test]
+    fn a_standard_table_hash_record_compares_and_clears() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join(FILE_NAME),
+            "[project.cs_pbr_sha256]\n\"a.json\" = \"x\"\n",
+        )
+        .unwrap();
+        let mut s = SetsDoc::open(d.path());
+        let shas = s.cs_pbr_shas();
+        assert_eq!(shas.len(), 1);
+        s.set_cs_pbr_shas(&shas);
+        assert!(!s.is_dirty(), "an equal map is no edit");
+        s.set_cs_pbr_shas(&BTreeMap::new());
+        assert!(s.cs_pbr_shas().is_empty(), "the table is removed");
+        assert!(s.is_dirty());
+    }
 
     /// Trace-debug #58: writing what is already stored (a focused field left unchanged) is no edit.
     #[test]
