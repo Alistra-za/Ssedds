@@ -49,8 +49,8 @@ pub struct State {
     pub gpu: preview::GpuStatus,
     /// The set preview (P1-A). `Default` is disabled and does no IO; `SdcApp::new` builds the enabled one.
     pub set3d: crate::model::set_preview::SetPreview,
-    /// The `model.folder_epoch` `drops` and `slot_cmds` belong to.
-    pub folder_epoch: u64,
+    /// The `model.folder_epoch` `drops` and `slot_cmds` belong to; `None` until the first frame adopts it.
+    pub folder_epoch: Option<u64>,
 }
 
 thread_local! {
@@ -75,8 +75,11 @@ pub fn draw_with_scan(
 ) {
     state.thumbs.sweep(model.items_rev());
     // Trace-debug #52: a modal or Slot commands left open would act on the new folder's set of the same id.
-    if state.folder_epoch != model.folder_epoch {
-        state.folder_epoch = model.folder_epoch;
+    if state
+        .folder_epoch
+        .replace(model.folder_epoch)
+        .is_some_and(|e| e != model.folder_epoch)
+    {
         state.drops = Default::default();
         state.slot_cmds = Default::default();
     }
