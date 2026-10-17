@@ -253,6 +253,8 @@ pub struct AppModel {
     recovery_key: Option<RecoveryKey>,
     /// Bumped by `open_folder` and a new export: the drawer then forgets its cached file checks.
     pub drawer_epoch: u64,
+    /// Bumped by `open_folder`: the UI then drops its Sets column modal and Slot commands (trace-debug #52).
+    pub folder_epoch: u64,
     /// `%APPDATA%\sdc\config.toml`, set by `main`; `None` in tests so a developer's own config cannot leak in.
     pub user_config: Option<PathBuf>,
     /// `%APPDATA%\sdc\presets`, set by `main`; `None` in tests so a developer's own presets cannot leak in.
@@ -466,6 +468,7 @@ impl AppModel {
             settings_error: None,
             recovery_key: None,
             drawer_epoch: 0,
+            folder_epoch: 0,
             user_config: None,
             user_presets: None,
             loaded_user_presets: vec![],
@@ -642,6 +645,7 @@ impl AppModel {
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
         self.drawer_epoch += 1;
+        self.folder_epoch += 1;
         self.dropped_fills.clear();
         // Audit GM-6: the previous folder's header-patch result, tag choices and open confirmation.
         self.dds_patch = Default::default();

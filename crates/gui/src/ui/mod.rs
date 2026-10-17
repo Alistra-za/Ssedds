@@ -49,6 +49,8 @@ pub struct State {
     pub gpu: preview::GpuStatus,
     /// The set preview (P1-A). `Default` is disabled and does no IO; `SdcApp::new` builds the enabled one.
     pub set3d: crate::model::set_preview::SetPreview,
+    /// The `model.folder_epoch` `drops` and `slot_cmds` belong to.
+    pub folder_epoch: u64,
 }
 
 thread_local! {
@@ -72,6 +74,12 @@ pub fn draw_with_scan(
     scan: Option<&mut crate::model::meshes::MeshesModel>,
 ) {
     state.thumbs.sweep(model.items_rev());
+    // Trace-debug #52: a modal or Slot commands left open would act on the new folder's set of the same id.
+    if state.folder_epoch != model.folder_epoch {
+        state.folder_epoch = model.folder_epoch;
+        state.drops = Default::default();
+        state.slot_cmds = Default::default();
+    }
     // Item 17: files dropped from Explorer wait for a slot card to take them (see the end of this function).
     let paths: Vec<std::path::PathBuf> = ui.input(|i| {
         i.raw

@@ -258,3 +258,25 @@ fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
         h.state().0.dialog
     );
 }
+
+/// Trace-debug #52: a folder change closes the Sets column's modal and the Slot commands window.
+#[test]
+fn a_folder_change_closes_the_sets_modals_and_slot_commands() {
+    use sdc_gui::ui::sets_column::Pending;
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_opened(d.path());
+    let mut h = harness(m);
+    h.run();
+    h.state_mut().1.drops.pending = Some(Pending::ConfirmDelete {
+        id: LEAF.into(),
+        members: 1,
+    });
+    h.state_mut().1.slot_cmds.open = Some(LEAF.into());
+    h.run();
+    let root = h.state().0.root.clone().unwrap();
+    h.state_mut().0.open_folder(root);
+    idle(&mut h.state_mut().0);
+    h.run();
+    assert!(h.state().1.drops.pending.is_none());
+    assert!(h.state().1.slot_cmds.open.is_none());
+}
