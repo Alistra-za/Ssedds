@@ -1036,10 +1036,10 @@ impl AppModel {
                 return;
             }
             // The plan without `sdc.toml` failed too: the config is not the project's (the user config, say).
-            // Put the project back as the file has it, and raise the error.
+            // Put the project back as it was, unsaved edits included (trace-debug #9), and raise the error.
             if std::mem::take(&mut self.ignored_by_plan) {
                 if let Some(p) = self.project.as_mut() {
-                    p.reload();
+                    p.unblame();
                     self.drop_undo_note();
                     self.history.clear();
                     self.refresh_banner();

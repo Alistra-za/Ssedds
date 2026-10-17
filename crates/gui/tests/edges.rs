@@ -424,6 +424,35 @@ fn a_user_config_the_engine_rejects_is_not_blamed_on_sdc_toml() {
     assert!(!m.project.as_ref().unwrap().read_only());
 }
 
+/// Trace-debug #9: the user config goes bad while `sdc.toml` has unsaved edits. The first failure is tentatively
+/// blamed on `sdc.toml`; when the retry without it fails too, its unsaved edits must come back.
+#[test]
+fn a_rejected_user_config_keeps_unsaved_sdc_toml_edits() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let user = d.path().join("config.toml");
+    std::fs::write(&user, "# fine\n").unwrap();
+    std::fs::write(root.join("sdc.toml"), "# fine\n").unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.user_config = Some(user.clone());
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.dialog, None);
+    m.set_target(engine::config::Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let edited = m.project.as_ref().unwrap().text();
+    assert!(m.project.as_ref().unwrap().is_dirty());
+    std::fs::write(&user, "[defaults]\nalpha.threshold = 1000\n").unwrap();
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(matches!(m.dialog, Some(Dialog::Error(ref e)) if e.contains("1000")));
+    let p = m.project.as_ref().unwrap();
+    assert!(!p.read_only());
+    assert!(p.is_dirty(), "the unsaved edit must survive");
+    assert_eq!(p.text(), edited);
+}
+
 /// Pretend an export is running: a token the model treats as the running export (no engine work starts).
 fn fake_running(m: &mut sdc_gui::model::AppModel) {
     m.export.running = Some(engine::api::CancelToken::default());
