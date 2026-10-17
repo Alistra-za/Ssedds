@@ -1214,3 +1214,33 @@ fn a_sidecar_write_failure_keeps_the_dds() {
         .iter()
         .any(|e| matches!(&e.kind, EventKind::Warning(w) if w.code == Code::OutSidecarKept)));
 }
+
+/// Review m10 (Note BV4): after a failed sidecar write leaves the previous output's sidecar, the next
+/// `if-changed --sidecar` run rewrites it from the current record.
+#[cfg(windows)]
+#[test]
+fn a_stale_sdc_sidecar_is_rewritten_on_the_next_run() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = tempfile::tempdir().unwrap();
+    fixtures(d.path());
+    let side = d.path().join("out/armor/iron.dds.json");
+    let mut with = request(d.path());
+    with.sidecar = true;
+    run(with.clone());
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&side)
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([y as u8 * 4, x as u8 * 4, 9]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    run(with.clone());
+    drop(hold);
+    let (s, ev) = run(with);
+    assert_eq!(s.failed, 0, "{ev:?}");
+    let m = Manifest::at(&d.path().join("out")).load().unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&side).unwrap()).unwrap();
+    assert_eq!(v, m["armor/iron.dds"].raw);
+}

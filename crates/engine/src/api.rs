@@ -583,12 +583,26 @@ fn pack_roles_match(e: &ManifestEntry, job: &ResolvedJob) -> bool {
 }
 
 /// `--sidecar` on an up-to-date output (audit 15, DECISIONS Note Y2): write the stored record when the sidecar is
-/// missing. `false` when it cannot be written, so the file re-encodes and the encode reports the error.
+/// missing, or when it is sdc's record of an earlier output (a failed write left it, review m10 / Note BV4). A file
+/// sdc did not write is left alone (BV3). `false` when the record cannot be written, so the file re-encodes and the
+/// encode reports the error.
 fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
     let side = output.with_extension("dds.json");
-    side.exists()
-        || serde_json::to_string_pretty(&e.raw)
-            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
+    match std::fs::read(&side) {
+        Ok(b) => {
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) else {
+                return true;
+            };
+            let stale_ours =
+                v != e.raw && v["output"] == e.raw["output"] && v.get("profile_sha256").is_some();
+            !stale_ours
+                || serde_json::to_string_pretty(&e.raw)
+                    .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok())
+        }
+        Err(e2) if e2.kind() != std::io::ErrorKind::NotFound => true,
+        Err(_) => serde_json::to_string_pretty(&e.raw)
+            .is_ok_and(|t| crate::dds::write_atomic(&side, t.as_bytes()).is_ok()),
+    }
 }
 
 /// Whether a manifest entry proves the existing output is current (spec §8 `if-changed`, carry 13): same source
