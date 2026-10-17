@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Preflight', detail: 'plan checks, CS version, disk, journal, game not running; back up SettingsUser.json and apply the profile atomically (dry_run: plan only)' },
     { title: 'Session', detail: 'launch via MO2, wait DevBench + a positive shader-compile signal, coc, per group: place, frame, draw check, capture; qqq' },
-    { title: 'Keep', detail: 'copy each .rdc to the fixture folder (sha256), delete the Captures copy, copy the CS log' },
+    { title: 'Keep', detail: 'copy each .rdc to the fixture folder (sha256; Captures is never touched), copy the CS log' },
     { title: 'Restore', detail: 'always: wait for exit (up to 30 min), atomic byte-restore of settings from the journal backup (sha256)' },
     { title: 'Analyse', detail: 'per capture, one at a time: the x_extract stages, then draws mapped to placed refs' },
     { title: 'Report', detail: 'fixture completeness per subject, draw mapping, probe/light answers, retests, restore status' },
@@ -45,16 +45,19 @@ export const meta = {
 //   A group with empty forms and tags is a probe (W8); a question without "outcomes" is a fixture goal (W8).
 //
 // RESTORE GUARANTEES
-//   - Preflight backs SettingsUser.json up next to the recovery journal (outside run dirs) and marks the journal
-//     "applied" before the first edit. Every run, whatever its profile or run_dir, refuses to start while the
-//     journal has a pending entry for the same SettingsUser.json. Settings, backup and journal are written
-//     atomically (temp file, flush, rename).
+//   - Preflight takes an exclusive journal lock (<journal>.lock, created with 'wx'; a leftover lock is never broken
+//     automatically), backs SettingsUser.json up next to the recovery journal (outside run dirs) and marks the
+//     journal "applied" with a fresh run id before the first edit. Every run, whatever its profile or run_dir,
+//     refuses to start while the journal has a pending entry for the same SettingsUser.json. Settings, backup and
+//     journal are written atomically (temp file, flush, rename).
 //   - Restore runs in a finally block after Preflight, Session and Keep, whatever happened (agent failure, thrown
-//     error, crash). It waits up to 30 min for the game to exit, never edits while it runs, copies the backup back
-//     byte for byte and checks the sha256. If it cannot, the journal stays pending and settings_restored is false.
+//     error, crash), but only for the run id this run's preflight reported: it never restores another run's entry.
+//     It waits up to 30 min for the game to exit, never edits while it runs, copies the backup back byte for byte
+//     and checks the sha256. If it cannot, or the preflight output was lost, the journal stays pending,
+//     settings_restored is false/null, and only an explicit {mo2, restore_only: true} run restores it.
 //     Anything CS wrote to the file during the run is discarded on purpose.
-//   - Only .rdc files inside the Captures folder are kept; each is copied to the keep folder and the Captures copy
-//     is deleted only after the copy's sha256 matches. Nothing else is ever deleted.
+//   - Only .rdc files inside the Captures folder are kept: each is copied to the keep folder and its sha256 checked.
+//     Nothing is ever deleted; the report lists each Captures file with its kept copy for the owner to clear.
 // All file work is done by golden-capture-lib.mjs (same folder; workflow scripts have no filesystem).
 
 const a = args || {}
@@ -63,6 +66,7 @@ const RESTORE_ONLY = a.restore_only === true
 if (!RESTORE_ONLY && !a.plan) throw new Error('golden-capture needs args.plan (path to the phase-d capture plan JSON)')
 if (!RESTORE_ONLY && !a.tools) throw new Error('golden-capture needs args.tools (tools folder with rdc-scripts and RenderDoc)')
 const DRY = a.dry_run === true
+if (DRY && RESTORE_ONLY) throw new Error('golden-capture: dry_run and restore_only cannot be combined (restore_only writes the settings file)')
 if (!DRY && !RESTORE_ONLY && a.owner_ok !== true) throw new Error('golden-capture needs args.owner_ok: true (owner permission to edit CS settings for this run and enable RenderDoc capture)')
 const PROFILE_ARG = a.profile || ''
 const RUN_DIR = a.run_dir || `.superpowers/sdd/captures/golden-${PROFILE_ARG || 'default'}`
@@ -73,10 +77,11 @@ const MO2 = a.mo2
 const TOOLS = a.tools
 const node = (cmd) => `node ${LIB} ${cmd}`
 
-const RULES = `Owner data under ${MO2} is read-only except what golden-capture-lib.mjs writes (SettingsUser.json via preflight/restore, deletion of kept Captures .rdc via keep). Do not edit SettingsUser.json or delete anything yourself. Never write into ${MO2}\\mods. Never run \`python -\` heredocs (write a script file, run \`python -I file\`). Never send DevBench console \`help ... 4\` (stalls the main thread), \`tm\` (hides the overlay markers the scripts need), \`save\`/\`savegame\`, \`set timescale to 0\` or DevBench game setTimeScale/freeze. Never kill processes you did not start. A DevBench 504 is not fatal: poll GET /api/health until "frame" advances, then continue.`
+const RULES = `Owner data under ${MO2} is read-only except what golden-capture-lib.mjs writes (SettingsUser.json via preflight/restore). Do not edit SettingsUser.json or delete anything yourself; never delete from the Captures folder. Never write into ${MO2}\\mods. Never run \`python -\` heredocs (write a script file, run \`python -I file\`). Never send DevBench console \`help ... 4\` (stalls the main thread), \`tm\` (hides the overlay markers the scripts need), \`save\`/\`savegame\`, \`set timescale to 0\` or DevBench game setTimeScale/freeze. Never kill processes you did not start. A DevBench 504 is not fatal: poll GET /api/health until "frame" advances, then continue.`
 
-// Restore of the CS settings from the recovery journal. Safe when nothing is pending (nothing_to_restore).
-async function restoreSettings() {
+// Restore of the CS settings from the recovery journal. With a run id only that run's pending entry is restored
+// (automatic cleanup); without one (restore_only) any pending entry. Safe when nothing is pending.
+async function restoreSettings(runId) {
   const R_SCHEMA = { type: 'object', properties: { game_running: { type: 'boolean' }, stdout_json: { type: 'string', description: 'the command stdout verbatim, or "" if not run' } }, required: ['game_running', 'stdout_json'] }
   let r = null
   try {
@@ -84,7 +89,7 @@ async function restoreSettings() {
       `Restore the CS settings after a golden capture run. ${RULES}
 1. Wait until Get-Process SkyrimSE is not running: poll every 15 s for up to 30 minutes. Never kill it. If it still runs after 30 minutes, return game_running=true and stdout_json "" without running anything else.
 2. Run this once from the repository root:
-${node(`restore --mo2 "${MO2}" --journal "${JOURNAL}"`)}
+${node(`restore --mo2 "${MO2}" --journal "${JOURNAL}"${runId ? ` --run-id ${runId}` : ''}`)}
 Return game_running=false and its stdout verbatim. Do not edit any file yourself.`,
       { label: 'restore settings', phase: 'Restore', schema: R_SCHEMA })
   } catch (e) { return { restored: false, reason: `restore agent failed: ${e && e.message}` } }
@@ -200,10 +205,10 @@ and return its "dst" as cs_log ("" if not found). Finally list any other .rdc in
     }
   }
 } finally {
-  // Runs after any outcome above (agent failure or throw included), except the dry run.
-  // Only when this run may have applied settings (preflight unknown, or it made a backup). A preflight that refused
-  // before backing up leaves another run's pending journal entry alone: that run, or restore_only, owns it.
-  if (!DRY && (!pre || pre.backup)) { phase('Restore'); restore = await restoreSettings(); warnRestore(restore) }
+  // Runs after any outcome above (agent failure or throw included), except the dry run, and only for the run id
+  // this run's preflight reported (also on {ok:false} after applying). No run id = this run owns nothing.
+  if (!DRY && pre && pre.run_id) { phase('Restore'); restore = await restoreSettings(pre.run_id); warnRestore(restore) }
+  else if (!DRY && !pre) log(`WARNING: preflight output was lost. If it applied settings, the journal ${JOURNAL} holds them pending: run golden-capture with {mo2, restore_only: true} after the game exits.`)
 }
 const settings_restored = restore ? !!restore.restored : null // null: this run never touched the settings
 if (stopped) {
@@ -280,7 +285,7 @@ Sections:
 2. Draw mapping: per capture the ${RUN_DIR}/drawmap_<label>.json counts, and every ambiguous or unmatched draw with its nearest candidates (the fixture writer does not record this mapping; this report and those files do).
 3. Questions from the plan: fixture goals (no "outcomes") list missing tags/files per subject; questions with outcomes (P0 cell probe, point light) get the outcome per the plan. For P0: if DirLightColor is 0, say the next runs must pass args.cell = the plan's x_cell_fallback[0] (P0 is not analysed in-session). Time gaps use SharedData Timer, not the wall clock (the game stalls while an .rdc is written).
 4. Retests: subjects missing, shadow-only, ambiguous or incomplete, with what to change (camera, position, NPC instead of static, x_shape_offsets).
-5. Restore status: ${JSON.stringify(restore)}; captures not kept: ${JSON.stringify(kept.filter(k => !k.keep.ok).map(k => k.capture.file))}; other .rdc left in Captures: ${JSON.stringify(keepRes ? keepRes.other_rdc : [])}.
+5. Restore status: ${JSON.stringify(restore)}. Captures folder files the owner can delete now that they are kept (source -> kept copy, sha256): ${JSON.stringify(kept.filter(k => k.keep.ok).map(k => [k.capture.file, k.keep.dst, k.keep.sha256]))}; captures not kept: ${JSON.stringify(kept.filter(k => !k.keep.ok).map(k => k.capture.file))}; other .rdc left in Captures: ${JSON.stringify(keepRes ? keepRes.other_rdc : [])}.
 Return the report path and one line per question.`,
   { label: 'report', phase: 'Report' })
 

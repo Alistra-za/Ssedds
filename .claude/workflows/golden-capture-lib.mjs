@@ -7,9 +7,10 @@
 //       edits; without --dry-run also back up SettingsUser.json, record it in the recovery journal J and apply the
 //       edits atomically. Writes D/resolved.json and D/plan.txt (every edit, placement, command and capture).
 //   steps --run-dir D --group L --origin x,y,z      W3/W4: the exact DevBench requests for one group.
-//   restore --mo2 M [--journal J]                   W1: atomic byte-copy of the journal's backup, verify sha256.
+//   restore --mo2 M [--journal J] [--run-id ID]     W1: atomic byte-copy of the journal's backup, verify sha256;
+//       with --run-id only when the pending entry is that run's (automatic cleanup); without it: restore_only.
 //   keep --run-dir D --file F [--group L --label X --frame N]
-//       W6: copy a Captures .rdc to keep_dir, verify sha256, then delete the Captures copy.
+//       W6: copy a Captures .rdc to keep_dir and verify sha256. Never deletes anything.
 //   copy --run-dir D --file F                       copy (never delete) e.g. the CS log into keep_dir.
 //   map-draws --run-dir D --group G --draws F [--label X]   W9: draw -> placed ref, writes D/drawmap_<X>.json.
 // Env (tests only): GOLDEN_GAME_PROCESS = process name checked for "game running" (default SkyrimSE.exe);
@@ -290,6 +291,24 @@ const writeJson = (p, v) => writeAtomic(p, JSON.stringify(v, null, 2) + '\n')
 // state "applied" = settings edited and not yet restored; every run refuses to start while one is pending.
 const journalLoad = j => (fs.existsSync(j) ? readJson(j) : { entries: {} })
 function journalSet(j, key, entry) { const d = journalLoad(j); d.entries[key] = entry; fs.mkdirSync(path.dirname(j), { recursive: true }); writeJson(j, d) }
+// Exclusive journal access: <journal>.lock is created with 'wx' (fails if it exists) before any journal check and
+// removed when done. A leftover lock is never broken automatically: the caller must check that no run is active.
+export async function withJournalLock(j, owner, fn) {
+  const lock = `${j}.lock`
+  fs.mkdirSync(path.dirname(j), { recursive: true })
+  let fd
+  try { fd = fs.openSync(lock, 'wx') } catch (e) {
+    if (e.code === 'EEXIST') return { ok: false, locked: true, reason: `journal lock ${lock} exists: another golden-capture preflight/restore is running, or one was killed. Check that no run is active, then delete the lock by hand` }
+    throw e
+  }
+  try {
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, owner }) + '\n'); fs.closeSync(fd); fd = undefined
+    return await fn()
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+    fs.rmSync(lock, { force: true })
+  }
+}
 
 function mo2Facts(mo2, csModArg) {
   const ini = fs.readFileSync(path.join(mo2, 'ModOrganizer.ini'), 'utf8')
@@ -390,7 +409,12 @@ async function preflight(o) {
   if (missingMods.length) stop.push(`not enabled in MO2 profile ${mo.profile}: ${missingMods.join(', ')}`)
   if (running !== false) stop.push(running ? 'the game is running' : 'cannot tell whether the game is running')
   if (o['dry-run']) return { ok: true, dry_run: true, would_stop: stop, ...summary }
-  if (stop.length) return { ok: false, reason: stop.join('; '), ...summary }
+  // The lock comes first: the pending check and the apply happen under it.
+  return withJournalLock(journal, `preflight ${profile} ${o['run-dir']}`, async () => {
+  const pe = journalLoad(journal).entries[key] // re-read under the lock
+  if (pe && pe.state === 'applied') return { ok: false, reason: `recovery journal ${journal}: profile ${pe.profile} (run ${pe.run_id}) applied settings and never restored them; run with restore_only first`, ...summary }
+  const other = stop.filter(x => !x.startsWith('recovery journal'))
+  if (other.length) return { ok: false, reason: other.join('; '), ...summary }
   // Backup next to the journal (outside run dirs), then journal "applied" BEFORE the live file changes.
   const backupSha = sha256Buf(origBuf)
   const backupDir = path.join(path.dirname(journal), 'settings-backups')
@@ -398,8 +422,12 @@ async function preflight(o) {
   const backup = path.join(backupDir, `SettingsUser.${profile}.${backupSha.slice(0, 12)}.json`)
   writeAtomic(backup, origBuf)
   if (await sha256(backup) !== backupSha) return { ok: false, reason: 'backup copy does not match the live file', ...summary }
-  const entry = { state: 'applied', settings_path: settingsPath, backup, backup_sha256: backupSha, profile, run_dir: o['run-dir'] }
+  // The run id is how this run's automatic cleanup recognises its own entry (restore --run-id).
+  const runId = crypto.randomUUID()
+  summary.run_id = runId
+  const entry = { state: 'applied', run_id: runId, settings_path: settingsPath, backup, backup_sha256: backupSha, profile, run_dir: o['run-dir'] }
   journalSet(journal, key, entry)
+  try {
   const unchanged = async why => {
     if (await sha256(settingsPath) === backupSha) { journalSet(journal, key, { ...entry, state: 'restored', note: why }); return true }
     return false
@@ -413,6 +441,11 @@ async function preflight(o) {
   const reread = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
   if (canon(deepMerge(reread, overlay)) !== canon(reread)) return { ok: false, reason: 'live file lacks overlay values after writing; run restore_only', ...summary, backup }
   return { ok: true, ...summary, backup, backup_sha256: backupSha, applied: true }
+  } catch (e) {
+    // Any failure after the journal entry exists still names the run id, so the workflow restores it.
+    return { ok: false, reason: `after applying settings: ${e.message}; journal entry ${runId} pending`, ...summary, backup, applied: true }
+  }
+  })
 }
 
 function planText(r, dry) {
@@ -433,16 +466,21 @@ function planText(r, dry) {
     if (g.optional) L.push(`  optional ${g.optional.form}: ${g.optional.used ? 'used' : 'skipped'} (${g.optional.why})`)
     for (const s of groupSteps(g, [0, 0, 0])) L.push(`  ${s.only_if ? `[if ${s.only_if}] ` : ''}${s.tool ? `${s.tool} ${JSON.stringify(s.body)}` : `wait ${s.wait_s}s`}${s.save ? ` => $${s.save}` : ''}${s.note ? `  # ${s.note}` : ''}`)
   }
-  L.push('quit: console qqq; then restore settings (atomic byte copy of the backup, sha256 checked), keep each .rdc (copy, sha256, then delete the Captures copy)')
+  L.push('quit: console qqq; then restore settings (atomic byte copy of the backup, sha256 checked), keep each .rdc (copy + sha256; the Captures copies stay for the owner to delete)')
   return L.join('\n') + '\n'
 }
 
+// --run-id: automatic cleanup, restores only the entry this run applied. Without it (restore_only): any pending entry.
 async function restore(o) {
   const journal = o.journal || DEFAULT_JOURNAL
   const settingsPath = settingsPathOf(o.mo2)
   const key = canonPath(settingsPath)
+  return withJournalLock(journal, `restore ${o['run-id'] || 'unscoped'}`, () => restoreLocked(o, journal, settingsPath, key))
+}
+async function restoreLocked(o, journal, settingsPath, key) {
   const st = journalLoad(journal).entries[key]
   if (!st || st.state !== 'applied') return { ok: true, restored: false, nothing_to_restore: true, reason: 'no pending settings in the recovery journal' }
+  if (o['run-id'] && st.run_id !== o['run-id']) return { ok: true, restored: false, not_owner: true, reason: `pending entry belongs to run ${st.run_id} (profile ${st.profile}), not ${o['run-id']}; left alone` }
   const running = gameRunning()
   if (running !== false) return { ok: false, restored: false, game_running: running, reason: 'game running (or unknown): CS may rewrite the file on exit; not touching it; journal stays pending' }
   const backupBuf = fs.readFileSync(st.backup)
@@ -470,8 +508,8 @@ async function copyInto(src, dir, name) {
   return { ok: true, dst, sha256: dstSha }
 }
 
-// W6: only .rdc files inside the Captures folder; the destination must be another file under keep_dir; the source
-// is deleted only after the destination hash matches. No other command deletes anything.
+// W6: only .rdc files inside the Captures folder are copied to keep_dir; the destination must resolve outside Captures
+// and differ from the source. Nothing is ever deleted: the owner clears Captures by hand from the report's list.
 async function keep(o) {
   const r = readJson(path.join(o['run-dir'], 'resolved.json'))
   const src = o.file
@@ -483,7 +521,9 @@ async function keep(o) {
   fs.mkdirSync(r.keep_dir, { recursive: true })
   const keepC = canonPath(r.keep_dir)
   if (keepC === capC || inside(keepC, capC)) return { ok: false, reason: `keep folder ${r.keep_dir} is inside the Captures folder; refused` }
-  if (path.join(keepC, path.basename(srcC)) === srcC) return { ok: false, reason: 'destination is the source; refused' }
+  const dst = path.join(r.keep_dir, path.basename(src))
+  const dstC = fs.existsSync(dst) ? canonPath(dst) : path.join(keepC, path.basename(src)).toLowerCase()
+  if (dstC === srcC || inside(dstC, capC)) return { ok: false, reason: `destination ${dst} resolves to the source or into Captures; refused` }
   const c = await copyInto(src, r.keep_dir, path.basename(src))
   if (!c.ok) return c
   writeAtomic(`${c.dst}.sha256`, `${c.sha256}  ${path.basename(c.dst)}\n`)
@@ -491,9 +531,8 @@ async function keep(o) {
   const list = fs.existsSync(manifest) ? readJson(manifest) : []
   if (!list.some(x => x.file === path.basename(c.dst))) list.push({ file: path.basename(c.dst), sha256: c.sha256, bytes: fs.statSync(c.dst).size, profile: r.profile, cell: r.cell, cs: r.cs_version, group: o.group || null, label: o.label || null, frame: o.frame ? +o.frame : null })
   writeJson(manifest, list)
-  if (await sha256(src) !== c.sha256) return { ok: false, reason: 'source changed during the copy; source kept', dst: c.dst }
-  fs.unlinkSync(src)
-  return { ok: true, dst: c.dst, sha256: c.sha256, source_deleted: true }
+  if (await sha256(src) !== c.sha256) return { ok: false, reason: 'source changed during the copy', dst: c.dst }
+  return { ok: true, source: src, dst: c.dst, sha256: c.sha256, source_deleted: false }
 }
 
 // Copy any file (the CS log) into keep_dir under a content-addressed name. Never deletes.
@@ -507,8 +546,9 @@ async function copy(o) {
 
 // W9: map draws to placed refs. Expected position = ref position, plus the shape's model offset rotated by the
 // ref's Z angle when the plan gives one (x_shape_offsets {form: {shapePrefix: [x,y,z]}}): then 3D distance;
-// otherwise XY distance (model offsets are mostly height). Nothing is dropped: ambiguous and unmatched draws are
-// listed with their nearest candidates.
+// otherwise XY distance (model offsets are mostly height). Without an offset a draw is "matched" only when it is
+// within tol/2 of its nearest ref and the next ref is at least 2x and tol away; anything else within 4*tol is
+// "ambiguous", beyond that "unmatched". Nothing is dropped: every draw keeps its nearest candidates.
 const rotZ = (v, deg) => { const a = deg * Math.PI / 180; return [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a), v[2]] } // shortcut: sign convention only checked for 0/180 degrees
 export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
   return draws.map(d => {
@@ -519,7 +559,10 @@ export function mapDraws(draws, refs, { tol = 60, offsets = {} } = {}) {
       return { form: r.form, ref: r.ref, dist: +dist.toFixed(1), mode: off ? '3d+offset' : 'xy' }
     }).sort((x, y) => x.dist - y.dist)
     const [a, b] = c
-    const status = !a || a.dist > tol ? 'unmatched' : b && b.dist < Math.max(a.dist * 1.5, a.dist + 10) ? 'ambiguous' : 'matched'
+    let status
+    if (!a || a.dist > 4 * tol) status = 'unmatched'
+    else if (a.mode === '3d+offset') status = a.dist <= tol && !(b && b.dist < Math.max(a.dist * 1.5, a.dist + 10)) ? 'matched' : 'ambiguous'
+    else status = a.dist <= tol / 2 && !(b && b.dist < Math.max(2 * a.dist, tol)) ? 'matched' : 'ambiguous'
     return { ...d, status, form: status === 'matched' ? a.form : null, ref: status === 'matched' ? a.ref : null, candidates: c.slice(0, 3) }
   })
 }
