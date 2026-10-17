@@ -1012,9 +1012,7 @@ impl AppModel {
                     "save-report" => self.report_saving = false,
                     _ => {}
                 }
-                self.dialog = Some(Dialog::Error(format!(
-                    "internal error in {what}: {message}"
-                )));
+                self.raise_error(format!("internal error in {what}: {message}"));
             }
             other => self.handle_more(other),
         }
@@ -1053,7 +1051,17 @@ impl AppModel {
             }
         }
         self.status_line = format!("Planning failed: {}", f.message);
-        self.dialog = Some(Dialog::Error(f.message));
+        self.raise_error(f.message);
+    }
+
+    /// An error dialog, unless the PGPatcher overwrite question is open (#48): an answer is pending there, so the
+    /// error goes to the export notes and the question stays.
+    fn raise_error(&mut self, msg: String) {
+        if matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
+            self.export.notes.push(msg);
+        } else {
+            self.dialog = Some(Dialog::Error(msg));
+        }
     }
 
     /// Messages the export and the preview handle.
@@ -2721,5 +2729,103 @@ mod tests {
             "{:?}",
             m.dialog
         );
+    }
+
+    /// A TruePBR rock set exported once, its PGPatcher JSON edited by hand, a setting changed and a second export
+    /// started: the returned model is mid-export; `run_export` drives it.
+    fn hand_edited_json_and_a_second_export(d: &std::path::Path) -> (AppModel, PathBuf) {
+        let root = d.join("textures/landscape");
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbImage::from_fn(64, 64, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 4) as u8, 90])
+        })
+        .save(root.join("rock01.png"))
+        .unwrap();
+        image::RgbImage::from_pixel(64, 64, image::Rgb([128, 128, 255]))
+            .save(root.join("rock01_normal.png"))
+            .unwrap();
+        let settings = GuiSettings {
+            export_folder: Some(d.join("export")),
+            ..GuiSettings::default()
+        };
+        let session =
+            Arc::new(Session::new(encoders_sys::Bc1Model::Ideal).expect("an encoder session"));
+        let mut m = AppModel::new(settings, None, session);
+        m.accept = AcceptSuggestions::None;
+        m.open_folder(d.join("textures"));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
+        m.decide(
+            "landscape/rock01_normal.png",
+            Answer::Subtype(Subtype::PbrNormal),
+        );
+        m.decide(
+            "landscape/rock01_normal.png",
+            Answer::Green(GreenConvention::Directx),
+        );
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        let export = |m: &mut AppModel| {
+            m.export_clicked();
+            if matches!(m.dialog, Some(Dialog::ProceedAnyway(_))) {
+                m.proceed_anyway();
+            }
+        };
+        export(&mut m);
+        assert!(m.wait_idle(Duration::from_secs(120)));
+        let p = m
+            .export_root()
+            .join("PBRNIFPatcher")
+            .join(format!("{}.json", pbr_export::json_name(&m)));
+        assert!(p.exists(), "{p:?}: {:?}", m.export.notes);
+        std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
+        m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        export(&mut m);
+        assert!(m.export.running.is_some(), "{:?}", m.dialog);
+        (m, p)
+    }
+
+    /// Handle worker messages until the export has ended; `before_done` runs just before `ExportDone` is handled.
+    fn run_export(m: &mut AppModel, before_done: impl FnOnce(&mut AppModel)) {
+        let end = Instant::now() + Duration::from_secs(120);
+        let mut before_done = Some(before_done);
+        while m.export.running.is_some() {
+            assert!(Instant::now() < end, "the export never ended");
+            let Ok(msg) = m.rx.recv_timeout(Duration::from_millis(50)) else {
+                continue;
+            };
+            if matches!(msg, WorkerMsg::ExportDone(_)) {
+                if let Some(f) = before_done.take() {
+                    f(m);
+                }
+            }
+            m.handle(msg);
+        }
+    }
+
+    /// Trace-debug 2026-10-16 #48: a plan failure or a worker panic while the overwrite question is open goes to
+    /// the export notes; the question stays.
+    #[test]
+    fn plan_failure_and_worker_panic_keep_open_overwrite_json_question() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
+        run_export(&mut m, |_| {});
+        assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+        m.plan_failed(PlanFailure {
+            message: "plan broke".into(),
+            config: false,
+        });
+        m.handle(WorkerMsg::Panicked {
+            what: "preview",
+            message: "preview broke".into(),
+        });
+        assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p)));
+        for e in ["plan broke", "preview broke"] {
+            assert!(
+                m.export.notes.iter().any(|n| n.contains(e)),
+                "{e}: {:?}",
+                m.export.notes
+            );
+        }
     }
 }
