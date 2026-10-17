@@ -1125,4 +1125,12 @@ fn stale_sidecar_is_not_kept_after_a_run_without_sidecar() {
     assert!(!side.exists(), "the stale sidecar was kept");
     run(with);
     assert_ne!(std::fs::read_to_string(&side).unwrap(), first);
+    // A `.dds.json` sdc did not write stays.
+    std::fs::write(&side, "{\"mine\": true}").unwrap();
+    ImageBuffer::from_fn(64, 64, |x, y| Rgb([x as u8, y as u8, 99]))
+        .save(d.path().join("textures/armor/iron.png"))
+        .unwrap();
+    let (s, _) = run(request(d.path()));
+    assert_eq!(s.converted, 1);
+    assert_eq!(std::fs::read_to_string(&side).unwrap(), "{\"mine\": true}");
 }
