@@ -96,8 +96,18 @@ pub fn draw(
                         .add_enabled(model.is_dirty(), egui::Button::new("Save").min_size(size))
                         .clicked()
                     {
-                        // A failed save raises its own dialog.
-                        let _ = model.save();
+                        // AG23, trace-debug #54: as Ctrl+S, wait for a focused field to commit.
+                        if ui.ctx().egui_wants_keyboard_input() {
+                            model.status_line = "Save: leave the text field first".into();
+                            // The commit's plan replaces the status line at once; the log keeps it.
+                            model.messages.log(
+                                crate::model::messages::Severity::Info,
+                                model.status_line.clone(),
+                            );
+                        } else {
+                            // A failed save raises its own dialog.
+                            let _ = model.save();
+                        }
                     }
                 },
             );
