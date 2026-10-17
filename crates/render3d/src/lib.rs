@@ -1384,11 +1384,13 @@ impl Renderer {
             return Ok(kind);
         }
         let evicted = &mut self.evicted_missing;
+        // Only missing entries are asked again; a decode error stays (begin_all never asks, so it would turn missing).
         self.tex_cache.retain(|p, e| {
-            if e.missing && !e.any() {
+            let evict = e.missing && !e.any();
+            if evict {
                 evicted.insert(p.clone());
             }
-            e.any()
+            !evict
         });
         let mut scratch = LoadReport::default();
         if rebuild {
