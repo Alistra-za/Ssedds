@@ -146,6 +146,28 @@ fn retarget_moves_an_automatic_sets_entry_and_a_renamed_ones_source() {
     assert_eq!(c.borrow.get(&6).map(String::as_str), Some("a/uno"));
 }
 
+/// Trace-debug 2026-10-16 #2: a retarget onto an id another entry already has is not done (never two entries).
+#[test]
+fn retarget_onto_an_existing_entry_leaves_both() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("sdc-project.toml"),
+        "[[sets]]
+id = \"a/one\"
+parallax = true
+
+[[sets]]
+id = \"a/uno\"
+hair = true
+",
+    )
+    .unwrap();
+    let mut s = SetsDoc::open(d.path());
+    s.retarget_auto("a/one", "a/uno");
+    let ids: Vec<String> = s.entries().iter().map(|e| e.id.clone()).collect();
+    assert_eq!(ids, ["a/one", "a/uno"]);
+}
+
 #[test]
 fn a_delete_section_is_written_last_with_only_its_keys() {
     let mut s = sdc_gui::pgp::settings::Settings::new();

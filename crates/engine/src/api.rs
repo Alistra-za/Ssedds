@@ -904,6 +904,29 @@ impl Engine {
             mesh_alpha: &req.mesh_alpha,
             nvtt: Some(&nvtt),
         };
+        // Trace-debug 2026-10-16 #4: a raw map whose sub-type was requested is an ordinary file (spec §4.4), as
+        // `plan_packing` treats it, so its role leaves the set's suffixes (unless another raw member has it) and
+        // Advanced skin detection and the `auto` prediction below follow the recipe actually built.
+        // shortcut: rule-named sub-types are not seen here (rules need the analysis); revisit if a rule names one.
+        let typed: BTreeSet<usize> = (0..files.len())
+            .filter(|&i| {
+                pack::plan::raw_role(&files[i]).is_some()
+                    && crate::policy::subtype_requested(&ctx, &files[i])
+            })
+            .collect();
+        let drop_typed_roles = |sets: &mut Vec<TextureSet>| {
+            for set in sets.iter_mut() {
+                let role = |i: usize| pack::plan::raw_role(&files[i]).map(|r| r.id());
+                let (typed_m, raw_m): (Vec<usize>, Vec<usize>) =
+                    set.members.iter().partition(|i| typed.contains(i));
+                for r in typed_m.into_iter().filter_map(role) {
+                    if !raw_m.iter().any(|&j| role(j).as_ref() == Some(&r)) {
+                        set.suffixes.remove(&r);
+                    }
+                }
+            }
+        };
+        drop_typed_roles(&mut sets);
         // Final review I3 (DECISIONS Note R): `x_wet` joins set `x` as its skin `_wet` member only on cs and only
         // when `x` is Advanced skin. Before set edits, so they see the joined set like any automatic one.
         if target == Target::Cs {
@@ -921,6 +944,8 @@ impl Engine {
             registry.alias_table(),
             &req.set_edits,
         );
+        // A touched set's suffixes were rebuilt from its members' names.
+        drop_typed_roles(&mut sets);
         for s in &stale {
             rep.emit(
                 None,
@@ -965,6 +990,7 @@ impl Engine {
             let roles: BTreeSet<RawMap> = set
                 .members
                 .iter()
+                .filter(|i| !typed.contains(i))
                 .filter_map(|&i| pack::plan::raw_role(&files[i]))
                 .collect();
             let complex = explicit.get(&set.key) == Some(&Shader::ComplexMaterial);

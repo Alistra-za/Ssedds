@@ -611,6 +611,8 @@ impl SetsDoc {
         } else if entries
             .iter()
             .any(|e| !e.created && e.renamed_from.is_none() && same_id(&e.id, from))
+            // Never two entries under one id: an entry already at `to` keeps this one where it is.
+            && !entries.iter().any(|e| same_id(&e.id, to))
         {
             self.rename_set(from, to);
             self.table_mut(to).remove("renamed_from");

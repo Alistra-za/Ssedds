@@ -1,5 +1,5 @@
 //! PGPatcher 1.2.0 TruePBR patch, simulated in memory for the 3D preview (P1 spec §2.1), plus the 2.2.0 `alphaprop_*` keys.
-//! Rules: `F:\ai\dds\nifparseref\plan\p1\01-pgpatcher-truepbr-rules.md` ("01"). Pure: no GPU, no egui, no IO.
+//! Rules: the PGPatcher 1.2.0 TruePBR rule notes ("01", NIF team plan p1). Pure: no GPU, no egui, no IO.
 //! It stops at "the NIF as PGPatcher leaves it", a `MaterialState`; CS's load-time remap belongs to render3d.
 mod check;
 mod json;

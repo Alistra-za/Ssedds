@@ -342,6 +342,8 @@ impl PresetsModel {
     }
 
     pub fn select(&mut self, id: &str) {
+        // The table, source and stamp must all be from now, or a save writes back a table older than the stamp.
+        self.rescan();
         let Some(t) = self.registry.table(id).cloned() else {
             return;
         };
@@ -972,7 +974,6 @@ impl PresetsModel {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         engine::dds::write_atomic(&path, text.as_bytes())
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        self.rescan();
         self.select(&id);
         Ok(path)
     }

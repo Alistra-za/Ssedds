@@ -16,3 +16,50 @@ fn walks_case_insensitively_and_skips_facegen() {
         .collect();
     assert_eq!(got, ["meshes/armor/a.nif"]);
 }
+
+/// Directory link that needs no admin rights: a junction on Windows, a symlink elsewhere.
+fn link_dir(target: &std::path::Path, link: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        let st = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            // cmd reads `/` as a switch
+            .arg(link.to_string_lossy().replace('/', "\\"))
+            .arg(target.to_string_lossy().replace('/', "\\"))
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "mklink /J failed: {st:?}");
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[test]
+fn walk_follows_nested_junction() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("root");
+    let target = d.path().join("target");
+    std::fs::create_dir_all(root.join("meshes")).unwrap();
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(root.join("meshes/b.nif"), b"x").unwrap();
+    std::fs::write(target.join("a.nif"), b"x").unwrap();
+    link_dir(&target, &root.join("meshes/sub"));
+    let got = vfs::loose::walk(&root, &["meshes"], &["nif"]);
+    let norms: Vec<_> = got.iter().map(|f| f.norm.as_str()).collect();
+    assert_eq!(norms, ["meshes/b.nif", "meshes/sub/a.nif"]);
+    assert!(got[1].abs.starts_with(root.join("meshes").join("sub")));
+}
+
+#[test]
+fn walk_survives_a_link_cycle() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    std::fs::create_dir_all(root.join("meshes/a")).unwrap();
+    std::fs::write(root.join("meshes/a/x.nif"), b"x").unwrap();
+    link_dir(&root.join("meshes"), &root.join("meshes/a/loop"));
+    let norms: Vec<_> = vfs::loose::walk(root, &["meshes"], &["nif"])
+        .into_iter()
+        .map(|f| f.norm)
+        .collect();
+    assert_eq!(norms, ["meshes/a/x.nif"]);
+}

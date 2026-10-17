@@ -893,3 +893,73 @@ fn the_card_ticks_export_and_a_key_in_one_undo_step_each() {
     let b = m.cm_block(&v.id).unwrap();
     assert!(b.export && !b.values.contains_key("glossiness"), "{b:?}");
 }
+
+fn cm_pending(root: &Path, rel: &str, strength: f64) -> PendingCm {
+    PendingCm {
+        root: root.to_path_buf(),
+        files: vec![(
+            rel.into(),
+            to_text(&obj(json!({ "specular_strength": strength }))),
+        )],
+        notes: vec![],
+    }
+}
+
+/// Trace-debug 2026-10-16 #8: a case-only rename of the `_m` rewrites sdc's own JSON under the new name and keeps
+/// the hash record, on this export and every later one.
+#[test]
+fn finish_case_only_rename_rewrites_own_json_and_keeps_record() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("m")).unwrap();
+    std::fs::write(d.path().join("m/Iron_M.dds"), b"dds").unwrap();
+    let mut n = vec![];
+    let mut rec = finish(
+        &cm_pending(d.path(), "m/Iron_M.json", 1.0),
+        &BTreeMap::new(),
+        &mut n,
+    );
+    std::fs::rename(d.path().join("m/Iron_M.dds"), d.path().join("m/iron_m.dds")).unwrap();
+    for strength in [2.0, 3.0] {
+        let p = cm_pending(d.path(), "m/iron_m.json", strength);
+        let mut n = vec![];
+        rec = finish(&p, &rec, &mut n);
+        assert!(!n.iter().any(|x| x.contains("edited outside")), "{n:?}");
+        assert_eq!(rec.keys().collect::<Vec<_>>(), ["m/iron_m.json"]);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("m/iron_m.json")).unwrap(),
+            p.files[0].1
+        );
+        assert_eq!(files_in(&d.path().join("m")), ["iron_m.dds", "iron_m.json"]);
+    }
+}
+
+/// The negative case: a real hand edit is kept, and its record survives the case-only rename.
+#[test]
+fn finish_case_only_rename_keeps_a_hand_edit_and_its_record() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("m")).unwrap();
+    std::fs::write(d.path().join("m/iron_m.dds"), b"dds").unwrap();
+    let mut n = vec![];
+    let r1 = finish(
+        &cm_pending(d.path(), "m/Iron_M.json", 1.0),
+        &BTreeMap::new(),
+        &mut n,
+    );
+    std::fs::write(d.path().join("m/Iron_M.json"), "{ \"hand\": 1 }\n").unwrap();
+    let mut n = vec![];
+    let r2 = finish(&cm_pending(d.path(), "m/iron_m.json", 2.0), &r1, &mut n);
+    assert!(n.iter().any(|x| x.contains("edited outside")), "{n:?}");
+    assert_eq!(r2, r1);
+    let kept = d.path().join("m/Iron_M.json");
+    assert_eq!(std::fs::read_to_string(kept).unwrap(), "{ \"hand\": 1 }\n");
+}
+
+fn files_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
